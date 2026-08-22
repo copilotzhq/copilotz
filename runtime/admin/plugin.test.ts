@@ -12,15 +12,12 @@ import { createUsageWorkflowPlugin } from "../../plugins/usage/index.ts";
 import { createAdminPlugin } from "./plugin.ts";
 import { createTestDomainContext } from "../../runtime/testing/domain-context.ts";
 import {
-  projectLlmAttempts,
   projectMessageById,
   projectMessages,
   projectParticipants,
   projectThreadByExternalId,
   projectThreadById,
   projectThreads,
-  projectToolExecutionById,
-  projectToolExecutions,
 } from "../../runtime/testing/projections.ts";
 
 const SCHEMA = "copilotz_admin_plugin";

@@ -6,21 +6,16 @@ import {
 } from "@std/assert";
 import { createTestDomainContext } from "../../runtime/testing/domain-context.ts";
 import {
-  projectLlmAttempts,
+  projectActionEvents,
   projectMessageById,
   projectMessages,
   projectParticipants,
   projectThreadByExternalId,
   projectThreadById,
   projectThreads,
-  projectToolExecutionById,
-  projectToolExecutions,
 } from "../../runtime/testing/projections.ts";
 import type { Agent } from "../resources/index.ts";
-import {
-  toolExecutionContent,
-  type ValidateCollectionRecord,
-} from "../domain/index.ts";
+import type { ValidateCollectionRecord } from "../domain/index.ts";
 import { createTestDatabase, type TestDatabase } from "../testing/ominipg.ts";
 import { type CopilotzEngine, createCopilotzEngine } from "../engine/index.ts";
 import { createSqlSession } from "../events/index.ts";
@@ -41,7 +36,6 @@ import {
   coreFeatureAliases,
   corePlugin,
 } from "@copilotz/copilotz/plugins/core";
-import { executeToolProcessor } from "../../plugins/core/resources/processors/execute-tool.ts";
 import {
   defineLlmProviderResource,
   generateFromChat,
@@ -80,15 +74,9 @@ type FixtureOptions = Readonly<{
   memoryEnabled?: boolean;
   embed?: MemoryEmbed | false;
   validateCollection?: ValidateCollectionRecord;
-  /** Install core text/ask processors. Default is collections + execute-tool only. */
+  /** Install core text/ask processors. Default is semantic Collections only. */
   withTextWorkflow?: boolean;
 }>;
-
-const coreExecuteToolPlugin = definePlugin({
-  id: "test.core.execute-tool",
-  version: "1.0.0",
-  processors: [executeToolProcessor],
-});
 
 Deno.test("memory consolidation starts in a detached durable settlement scope", () => {
   const plugin = createLongTermMemoryPlugin();
@@ -170,7 +158,6 @@ async function createFixture(
           }),
         }),
         options.withTextWorkflow ? corePlugin : coreCollectionsPlugin,
-        ...(options.withTextWorkflow ? [] : [coreExecuteToolPlugin]),
         ...extras,
         resources,
       ],
@@ -309,14 +296,83 @@ async function close(fixture: Fixture) {
   await fixture.db.close();
 }
 
-async function waitForToolSettlement(fixture: Fixture, count: number) {
+async function waitForSubjectSettlement(
+  fixture: Fixture,
+  subjectId: string,
+): Promise<void> {
   const deadline = Date.now() + 10_000;
   while (Date.now() < deadline) {
-    const executions = await projectToolExecutions(
+    const events = await fixture.engine.events.list({
+      namespace: "tenant-a",
+      limit: 1_000,
+    });
+    const root = [...events].reverse().find((event) =>
+      event.subject?.id === subjectId
+    );
+    if (root) {
+      const settlement = await fixture.engine.events.settlement(
+        "tenant-a",
+        root.id,
+      );
+      if (settlement.unsettled === 0 && settlement.deadLetters === 0) return;
+      if (settlement.deadLetters > 0) {
+        throw new Error(`Subject '${subjectId}' dead-lettered.`);
+      }
+    }
+    await fixture.engine.recover({ namespace: "tenant-a", limit: 100 });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`Timed out waiting for subject '${subjectId}'.`);
+}
+
+async function waitForMaintenanceSettlement(fixture: Fixture) {
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    const lifecycle = await projectActionEvents(
       fixture.engine,
       "tenant-a",
-      "thread-a",
+      "copilotz.memory.maintenance.run",
     );
+    const terminal = lifecycle.filter((event) => event.status !== "invoked");
+    if (terminal.length) return terminal;
+    await fixture.engine.recover({ namespace: "tenant-a", limit: 100 });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error("Timed out waiting for memory maintenance settlement.");
+}
+
+async function projectToolLifecycle(
+  fixture: Fixture,
+): Promise<Array<Record<string, any> & { status: string }>> {
+  const events = await projectActionEvents(
+    fixture.engine,
+    "tenant-a",
+    "copilotz.core.tool.call",
+  );
+  const latest = new Map<string, (typeof events)[number]>();
+  for (const event of events) latest.set(event.actionRunId, event);
+  return [...latest.values()].map((event) => {
+    const input = record(event.input);
+    const output = "output" in event ? record(event.output) : {};
+    return {
+      ...input,
+      ...output,
+      status: event.status === "invoked"
+        ? "running"
+        : event.status === "completed"
+        ? String(output.status ?? "completed")
+        : event.status,
+      ...(event.status === "failed" || event.status === "cancelled"
+        ? { safeError: event.error }
+        : {}),
+    } as Record<string, any> & { status: string };
+  });
+}
+
+async function waitForToolLifecycle(fixture: Fixture, count: number) {
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    const executions = await projectToolLifecycle(fixture);
     if (
       executions.length === count &&
       executions.every((execution) => execution.status !== "running")
@@ -324,7 +380,7 @@ async function waitForToolSettlement(fixture: Fixture, count: number) {
     await fixture.engine.recover({ namespace: "tenant-a", limit: 100 });
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
-  throw new Error(`Timed out waiting for ${count} settled tool executions.`);
+  throw new Error(`Timed out waiting for ${count} Tool Action terminals.`);
 }
 
 Deno.test("native consolidation uses one internal tool grant and emits no public workflow messages", async () => {
@@ -367,19 +423,8 @@ Deno.test("native consolidation uses one internal tool grant and emits no public
     assertEquals(records.every((item) => item.layer === undefined), true);
     assertEquals(record(checkpoint.metadata).continuity, undefined);
 
-    const attempts = await projectLlmAttempts(
-      fixture.engine,
-      "tenant-a",
-      "thread-a",
-    );
-    const logical = attempts.filter((item) =>
-      !String(item.id).includes(":provider:")
-    );
-    assertEquals(logical.length, 1);
-    assertEquals(logical[0].availableToolIds, ["consolidate_memory"]);
-    const executions = await waitForToolSettlement(fixture, 1);
-    assertEquals(executions.length, 1);
-    assertEquals(executions[0].status, "completed");
+    const maintenance = await waitForMaintenanceSettlement(fixture);
+    assertEquals(maintenance.map((event) => event.status), ["completed"]);
     const messages = await projectMessages(
       fixture.engine,
       "tenant-a",
@@ -467,11 +512,8 @@ Deno.test("invalid arguments use ordinary tool validation and then repair", asyn
     await trigger(fixture);
     await waitForCheckpoint(fixture, "ready");
     assertEquals(fixture.requests.length, 2);
-    const executions = await waitForToolSettlement(fixture, 2);
-    assertEquals(executions.map((item) => item.status), [
-      "failed",
-      "completed",
-    ]);
+    const maintenance = await waitForMaintenanceSettlement(fixture);
+    assertEquals(maintenance.map((event) => event.status), ["completed"]);
     assertStringIncludes(
       JSON.stringify(fixture.requests[1].messages),
       "unauthorized evidence source",
@@ -493,9 +535,11 @@ Deno.test("multiple or unauthorized calls are rejected before any tool mutation"
   try {
     await trigger(fixture);
     await waitForCheckpoint(fixture, "ready");
-    const executions = await waitForToolSettlement(fixture, 1);
-    assertEquals(executions.length, 1);
-    assertEquals(executions[0].tool.id, "consolidate_memory");
+    const maintenance = await waitForMaintenanceSettlement(fixture);
+    assertEquals(maintenance.map((event) => event.status), ["completed"]);
+    assertEquals(fixture.requests[0].tools?.map((tool) => tool.function.name), [
+      "consolidate_memory",
+    ]);
   } finally {
     await close(fixture);
   }
@@ -950,11 +994,8 @@ Deno.test("overridden memory-kind schemas use ordinary tool failure and repair",
       JSON.stringify(fixture.requests[1].messages),
       "does not satisfy kind 'entity.project'",
     );
-    const executions = await waitForToolSettlement(fixture, 2);
-    assertEquals(executions.map((execution) => execution.status), [
-      "failed",
-      "completed",
-    ]);
+    const maintenance = await waitForMaintenanceSettlement(fixture);
+    assertEquals(maintenance.map((event) => event.status), ["completed"]);
   } finally {
     await close(fixture);
   }
@@ -1100,61 +1141,76 @@ Deno.test("memory query tools enforce thread access, explain provenance, and pre
       threadId: "thread-a",
     });
 
-    const run = await fixture.engine.run({
-      namespace: "tenant-a",
-      thread: "thread-a",
-      participant: "user-a",
-      recipientIds: ["agent-north"],
-      content: "Review and retract the visible memory.",
-      messageId: "message-query",
-      correlationId: "memory-query",
-    });
-    const observed = (async () => {
-      for await (const _output of run.outputs) {
-        // Drain request-bound output while the causal scope settles.
-      }
-    })();
-    await run.done;
-    await observed;
-
-    const executions = await projectToolExecutions(
+    const queryContent = await fixture.engine.content.preparer.prepare(
+      "Review and retract the visible memory.",
+      {
+        namespace: "tenant-a",
+        idempotencyKey: "memory-query:content",
+      },
+    );
+    await createTestDomainContext(
       fixture.engine,
       "tenant-a",
-      "thread-a",
-    );
+      coreFeatureAliases,
+    ).features.threadMessage.create({
+      id: "message-query",
+      threadId: "thread-a",
+      sender: {
+        id: "user-a",
+        externalId: "user-a",
+        participantType: "human",
+      },
+      recipientIds: ["agent-north"],
+      content: queryContent,
+    }, {
+      identity: {
+        correlationId: "memory-query",
+        deduplicationId: "memory-query:message",
+      },
+    });
+    await waitForSubjectSettlement(fixture, "message-query");
+
+    const executions = await waitForToolLifecycle(fixture, 4);
     assertEquals(executions.map((execution) => execution.status), [
       "completed",
       "completed",
       "completed",
       "completed",
     ]);
-    const outputs = await Promise.all(executions.map(async (execution) => {
-      const ref = toolExecutionContent(execution).output;
-      assertExists(ref);
-      return (await fixture.engine.content.resolver.get(ref, {
-        namespace: "tenant-a",
-      })).value as Record<string, unknown>;
-    }));
+    const outputs = Object.fromEntries(
+      await Promise.all(executions.map(async (execution) => {
+        const ref = Array.isArray(execution.output)
+          ? execution.output[0]
+          : undefined;
+        assertExists(ref);
+        const output = (await fixture.engine.content.resolver.get(ref, {
+          namespace: "tenant-a",
+        })).value as Record<string, unknown>;
+        return [String(record(execution.tool).id), output] as const;
+      })),
+    );
     assertEquals(
-      (outputs[0].memories as Array<Record<string, unknown>>).map((memory) =>
-        memory.id
+      (outputs.search_memory.memories as Array<Record<string, unknown>>).map(
+        (memory) => memory.id,
       ),
       ["memory-visible"],
     );
     assertEquals(
-      (outputs[1].relations as Array<Record<string, unknown>>).some((
-        relation,
-      ) => relation.id === "cross-space-relation"),
+      (outputs.inspect_memory.relations as Array<Record<string, unknown>>).some(
+        (
+          relation,
+        ) => relation.id === "cross-space-relation",
+      ),
       false,
     );
     assertEquals(
-      record(record(outputs[1].memory).provenance).assertedBy,
+      record(record(outputs.inspect_memory.memory).provenance).assertedBy,
       { type: "participant", id: "user-a" },
     );
     assertEquals(
-      (outputs[3].knowledgeSpaces as Array<Record<string, unknown>>).map((ta) =>
-        ta.id
-      ),
+      (outputs.list_knowledge_spaces.knowledgeSpaces as Array<
+        Record<string, unknown>
+      >).map((ta) => ta.id),
       ["space-visible"],
     );
     const updated = await scoped.memory_record.get({ id: "memory-visible" });

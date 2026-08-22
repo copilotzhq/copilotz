@@ -32,8 +32,9 @@ import type {
 import type {
   AttachmentOutput,
   AttachmentStreamOutput,
-  RunHandle,
 } from "@copilotz/copilotz/attachments";
+import type { ApplicationSendHandle } from "@copilotz/copilotz/application";
+import { message as coreMessage } from "@copilotz/copilotz/plugins/core";
 import type {
   AnyFeatureDefinition,
   FeatureActionsFor,
@@ -816,7 +817,7 @@ export function createGoalRuntime(
     const prepared = await prepareGoal(options, input, goalId);
     const startedAt = now().getTime();
     const completion = deferred<GoalResult>();
-    const activeRuns = new Set<RunHandle>();
+    const activeRuns = new Set<ApplicationSendHandle>();
     const abort = new AbortController();
     let cancellationReason: string | undefined;
     let settled = false;
@@ -843,7 +844,7 @@ export function createGoalRuntime(
     let orchestrationErrors = 0;
 
     const observeRun = async (
-      run: RunHandle,
+      run: ApplicationSendHandle,
       phase: GoalPhase,
       turn: number,
       expectedParticipantId?: string,
@@ -930,20 +931,24 @@ export function createGoalRuntime(
       if (abort.signal.aborted) throw abort.signal.reason;
       const correlationId = input.correlationId?.trim() ||
         `${goalId}:${input.phase}:${input.turn}:${createId()}`;
-      const run = await options.run({
-        namespace: prepared.namespace,
-        databaseSchema: prepared.databaseSchema,
-        thread: input.thread,
-        participant: input.participant,
-        recipientIds: [input.recipient.id],
-        content: input.content,
-        correlationId,
-        deduplicationId: `${correlationId}:input`,
-        metadata: goalMetadata(input.metadata, {
-          id: goalId,
-          phase: input.phase,
-          turn: input.turn,
+      const run = await options.send({
+        ...coreMessage({
+          thread: input.thread.id,
+          participant: input.participant,
+          recipientIds: [input.recipient.id],
+          content: input.content,
+          correlationId,
+          deduplicationId: `${correlationId}:input`,
+          metadata: goalMetadata(input.metadata, {
+            id: goalId,
+            phase: input.phase,
+            turn: input.turn,
+          }),
         }),
+        namespace: prepared.namespace,
+        ...(prepared.databaseSchema
+          ? { databaseSchema: prepared.databaseSchema }
+          : {}),
       });
       return await observeRun(
         run,
@@ -1129,8 +1134,8 @@ export function createGoalRuntime(
       if (summary.status && status !== "cancelled") status = summary.status;
       const failedEvents =
         observations.filter(({ payload }) =>
-          payload.event.type === "llm_attempt.failed" ||
-          payload.event.type === "tool_execution.failed"
+          payload.event.type.endsWith(".failed") ||
+          payload.event.type.endsWith(".cancelled")
         ).length;
       const result: GoalResult = Object.freeze({
         id: goalId,
@@ -1151,7 +1156,7 @@ export function createGoalRuntime(
           judgeRuns,
           messages: transcript.length,
           toolCalls: observations.filter(({ payload }) =>
-            payload.event.type === "tool_execution.created"
+            payload.event.type === "copilotz.core.tool.call.invoked"
           ).length,
           errors: orchestrationErrors + failedEvents,
         }),

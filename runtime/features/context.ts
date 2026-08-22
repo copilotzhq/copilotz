@@ -23,8 +23,35 @@ import type {
 import { isFeatureDefinition } from "./define.ts";
 import type { PluginContextValues } from "../plugins/index.ts";
 import type { ContextResource } from "../context/types.ts";
+import {
+  type ActionLifecycleEmitter,
+  createActionLifecycleEmitter,
+  sameActionValue,
+  type SerializedActionError,
+} from "../actions/index.ts";
 
 const ALIAS_PATTERN = /^[a-z][a-zA-Z0-9_]*$/;
+const settledActionErrors = new WeakSet<object>();
+
+function settledActionError(error: unknown): unknown {
+  if (
+    (typeof error === "object" && error !== null) ||
+    typeof error === "function"
+  ) {
+    settledActionErrors.add(error as object);
+    return error;
+  }
+  const wrapped = new Error(String(error), { cause: error });
+  settledActionErrors.add(wrapped);
+  return wrapped;
+}
+
+/** True only after the Action's failed/cancelled lifecycle Event is durable. */
+export function isSettledFeatureActionError(error: unknown): boolean {
+  return ((typeof error === "object" && error !== null) ||
+    typeof error === "function") &&
+    settledActionErrors.has(error as object);
+}
 
 function requireAlias(alias: string, label: string): string {
   const normalized = alias.trim();
@@ -46,23 +73,14 @@ function requireFeature(
   return value;
 }
 
-function requireAction(
-  feature: AnyFeatureDefinition,
-  actionName: string,
-): ErasedFeatureAction {
-  const action = feature.actions[actionName];
-  if (!action) {
-    throw new TypeError(
-      `Feature '${feature.id}' action '${actionName}' is not registered.`,
-    );
-  }
-  return action;
-}
-
 function throwIfAborted(signal: AbortSignal | undefined): void {
   if (!signal?.aborted) return;
   if (signal.reason instanceof Error) throw signal.reason;
   throw new DOMException("This operation was aborted.", "AbortError");
+}
+
+function isCancellationError(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
 }
 
 export type FeatureTransaction = CollectionRuntime["transaction"];
@@ -70,6 +88,8 @@ export type FeatureTransaction = CollectionRuntime["transaction"];
 export type CreateFeatureInvokerOptions = Readonly<{
   isTransactionActive?: () => boolean;
   createInvocationKey?: () => string;
+  identity?: FeatureCallOptions["identity"];
+  actionLifecycle?: ActionLifecycleEmitter;
   upsertRelation?: FeatureContextBindings["relations"]["upsert"];
 }>;
 
@@ -79,6 +99,7 @@ type InvocationFrame = Readonly<{
   identity?: FeatureCallOptions["identity"];
   signal?: AbortSignal;
   transactionActive: boolean;
+  parentActionRunId?: string;
   nextTransactionIndex(): number;
 }>;
 
@@ -120,27 +141,37 @@ function createFrame(
   invokerOptions: CreateFeatureInvokerOptions,
 ): InvocationFrame {
   const segment = invocationSegment(feature, actionName);
-  const suffix = options.operationKey?.trim() || undefined;
-  const deduplicationRoot = options.identity?.deduplicationId?.trim() ||
+  const explicitOperationKey = options.operationKey?.trim() || undefined;
+  const identity = mergeIdentity(
+    parent?.identity ?? invokerOptions.identity,
+    options.identity,
+  );
+  const deduplicationRoot = identity?.deduplicationId?.trim() ||
     undefined;
-  const localPath = suffix ? `${segment}/${suffix}` : segment;
   const transactionActive = invokerOptions.isTransactionActive?.() ?? false;
+  const hostInvocationKey = parent || transactionActive
+    ? undefined
+    : invokerOptions.createInvocationKey?.();
+  const localPath = (parent || hostInvocationKey) && explicitOperationKey
+    ? `${segment}/${explicitOperationKey}`
+    : segment;
   const rootKey = parent?.rootKey ??
-    (transactionActive ? "" : suffix ?? deduplicationRoot) ??
-    invokerOptions.createInvocationKey?.() ??
+    (transactionActive ? "" : hostInvocationKey) ??
+    explicitOperationKey ?? deduplicationRoot ??
     `invocation:${crypto.randomUUID()}`;
   const path = parent
     ? `${parent.path}/${localPath}`
     : transactionActive
     ? localPath
-    : `${rootKey}/${segment}`;
+    : `${rootKey}/${localPath}`;
   let transactionIndex = 0;
   return Object.freeze({
     rootKey,
     path,
-    identity: mergeIdentity(parent?.identity, options.identity),
+    identity,
     signal: mergeSignal(parent?.signal, options.signal),
     transactionActive,
+    ...(parent ? { parentActionRunId: parent.path } : {}),
     nextTransactionIndex: () => ++transactionIndex,
   });
 }
@@ -154,6 +185,80 @@ function collectionHandle(
     throw new TypeError(`Collection '${definition.name}' is not bound.`);
   }
   return collection;
+}
+
+function safeError(error: unknown): SerializedActionError {
+  if (error instanceof Error) {
+    return Object.freeze({
+      name: error.name || "Error",
+      message: error.message || error.name || "Action failed.",
+      ...(error.stack ? { stack: error.stack } : {}),
+    });
+  }
+  return Object.freeze({ name: "Error", message: String(error) });
+}
+
+function restoredActionError(
+  status: "failed" | "cancelled",
+  serialized: SerializedActionError,
+): Error {
+  const error = new Error(serialized.message);
+  error.name = status === "cancelled" ? "AbortError" : serialized.name;
+  if (serialized.stack) error.stack = serialized.stack;
+  return error;
+}
+
+async function emitFeatureActionLifecycle(
+  options: CreateFeatureInvokerOptions,
+  frame: InvocationFrame,
+  feature: AnyFeatureDefinition,
+  actionName: string,
+  status: "invoked" | "completed" | "failed" | "cancelled",
+  input: unknown,
+  output?: unknown,
+  error?: unknown,
+): Promise<void> {
+  if (!options.actionLifecycle) return;
+  const actionRunId = frame.path;
+  const actionId = `${feature.id}.${actionName}`;
+  const common = {
+    actionRunId,
+    actionId,
+    ...(frame.parentActionRunId
+      ? { parentActionRunId: frame.parentActionRunId }
+      : {}),
+    input,
+    ...(frame.identity?.causationId
+      ? { causationId: frame.identity.causationId }
+      : {}),
+    ...(frame.identity?.correlationId
+      ? { correlationId: frame.identity.correlationId }
+      : {}),
+    deduplicationId: `${actionRunId}:action:${status}`,
+    ...(frame.identity?.settlementScopeId
+      ? { settlementScopeId: frame.identity.settlementScopeId }
+      : {}),
+  };
+  if (status === "completed") {
+    await options.actionLifecycle.emit({
+      ...common,
+      status,
+      output,
+    });
+    return;
+  }
+  if (status === "failed" || status === "cancelled") {
+    await options.actionLifecycle.emit({
+      ...common,
+      status,
+      error: safeError(error),
+    });
+    return;
+  }
+  await options.actionLifecycle.emit({
+    ...common,
+    status,
+  });
 }
 
 export function createFeatureContextValues(
@@ -236,6 +341,27 @@ function createExecuteContext(
   invokerOptions: CreateFeatureInvokerOptions,
   frame: InvocationFrame,
 ): FeatureExecuteContext {
+  const content = Object.freeze({
+    ...hostContext.content,
+    prepare(
+      input: Parameters<FeatureExecuteContext["content"]["prepare"]>[0],
+      options: Parameters<FeatureExecuteContext["content"]["prepare"]>[1],
+    ) {
+      return hostContext.content.prepare(input, {
+        ...options,
+        operationKey: `${frame.path}/${options.operationKey}`,
+      });
+    },
+    publish(
+      input: Parameters<FeatureExecuteContext["content"]["publish"]>[0],
+      options: Parameters<FeatureExecuteContext["content"]["publish"]>[1],
+    ) {
+      return hostContext.content.publish(input, {
+        ...options,
+        operationKey: `${frame.path}/${options.operationKey}`,
+      });
+    },
+  });
   return Object.freeze({
     ...hostContext,
     namespace: hostContext.namespace,
@@ -270,7 +396,7 @@ function createExecuteContext(
       throwIfAborted(signal);
       return result.value;
     },
-    content: hostContext.content,
+    content,
     agents: hostContext.agents,
     tools: hostContext.tools,
     llm: hostContext.llm,
@@ -282,7 +408,13 @@ function createExecuteContext(
     featureDefinitions: hostContext.featureDefinitions,
     features: hostContext.features,
     feature(definition) {
-      return featureActions(definition, host, transaction, invokerOptions);
+      return featureActions(
+        definition,
+        host,
+        transaction,
+        invokerOptions,
+        frame,
+      );
     },
     events: hostContext.events,
     deliveries: hostContext.deliveries,
@@ -317,26 +449,79 @@ function actionInvoker(
       invokerOptions,
       frame,
     );
-    if (action.inputSchema) {
-      validateAgainstJsonSchema(
-        action.inputSchema as object,
-        input,
-        `Feature '${feature.id}' action '${actionName}' input`,
+    const terminal = await invokerOptions.actionLifecycle?.terminal(frame.path);
+    if (terminal) {
+      const actionId = `${feature.id}.${actionName}`;
+      if (terminal.actionId !== actionId) {
+        throw new Error(
+          `Action run '${frame.path}' belongs to '${terminal.actionId}', not '${actionId}'.`,
+        );
+      }
+      if (!sameActionValue(terminal.input, input)) {
+        throw new Error(
+          `Action run '${frame.path}' was retried with different input.`,
+        );
+      }
+      if (terminal.status === "completed") {
+        return structuredClone(terminal.output);
+      }
+      throw settledActionError(
+        restoredActionError(terminal.status, terminal.error),
       );
     }
-    throwIfAborted(frame.signal);
-    const output = await action.execute(
-      input as never,
-      executeContext as never,
+    await emitFeatureActionLifecycle(
+      invokerOptions,
+      frame,
+      feature,
+      actionName,
+      "invoked",
+      input,
     );
-    if (action.outputSchema) {
-      validateAgainstJsonSchema(
-        action.outputSchema as object,
-        output,
-        `Feature '${feature.id}' action '${actionName}' output`,
+    try {
+      if (action.inputSchema) {
+        validateAgainstJsonSchema(
+          action.inputSchema as object,
+          input,
+          `Feature '${feature.id}' action '${actionName}' input`,
+        );
+      }
+      throwIfAborted(frame.signal);
+      const output = await action.execute(
+        input as never,
+        executeContext as never,
       );
+      if (action.outputSchema) {
+        validateAgainstJsonSchema(
+          action.outputSchema as object,
+          output,
+          `Feature '${feature.id}' action '${actionName}' output`,
+        );
+      }
+      await emitFeatureActionLifecycle(
+        invokerOptions,
+        frame,
+        feature,
+        actionName,
+        "completed",
+        input,
+        output,
+      );
+      return output;
+    } catch (error) {
+      await emitFeatureActionLifecycle(
+        invokerOptions,
+        frame,
+        feature,
+        actionName,
+        frame.signal?.aborted || isCancellationError(error)
+          ? "cancelled"
+          : "failed",
+        input,
+        undefined,
+        error,
+      );
+      throw settledActionError(error);
     }
-    return output;
   };
 }
 
@@ -379,37 +564,19 @@ export function createFeatureInvoker(
   return Object.freeze(Object.fromEntries(entries));
 }
 
-export async function invokeFeatureAction(
-  feature: AnyFeatureDefinition,
-  actionName: string,
-  input: unknown,
-  host: FeatureHostContext,
-  transaction: FeatureTransaction,
-  options: FeatureCallOptions = {},
-): Promise<unknown> {
-  const definition = requireFeature(feature, "Feature");
-  const action = requireAction(definition, actionName);
-  return await actionInvoker(
-    definition,
-    actionName,
-    action,
-    () => host,
-    transaction,
-    {},
-  )(input, options);
-}
-
 function featureActions<F extends AnyFeatureDefinition>(
   definition: F,
   host: () => FeatureHostContext,
   transaction: FeatureTransaction,
   options: CreateFeatureInvokerOptions = {},
+  parent?: InvocationFrame,
 ): FeatureActionsFor<F> {
   return createFeatureInvoker(
     { bound: definition },
     host,
     transaction,
     options,
+    parent,
   ).bound as FeatureActionsFor<F>;
 }
 
@@ -438,6 +605,13 @@ export function createFeatureContext(
     }
     return holder.current;
   };
+  const actions = bindings.actionLifecycle
+    ? createActionLifecycleEmitter({
+      namespace,
+      append: bindings.actionLifecycle.append,
+      load: bindings.actionLifecycle.load,
+    })
+    : undefined;
   const features = createFeatureInvoker(
     bindings.featureAliases ?? {},
     host,
@@ -445,6 +619,7 @@ export function createFeatureContext(
     {
       isTransactionActive: () =>
         activeCollectionTransaction(bindings.collectionRuntime) !== undefined,
+      actionLifecycle: actions,
       upsertRelation: bindings.relations.upsert,
     },
   );
@@ -480,11 +655,32 @@ export function createFeatureContext(
     },
     content: bindings.content?.(namespace) ?? Object.freeze({
       resolver: bindings.contentResolver,
+      prepare() {
+        throw new Error("Feature content preparation is not configured.");
+      },
       materialize() {
         throw new Error("Feature content materialization is not configured.");
       },
       linkOwner() {
         throw new Error("Feature content ownership is not configured.");
+      },
+      publish() {
+        throw new Error("Feature content publication is not configured.");
+      },
+      get() {
+        throw new Error("Feature content lookup is not configured.");
+      },
+      getMany() {
+        throw new Error("Feature content lookup is not configured.");
+      },
+      resolve() {
+        throw new Error("Feature content resolution is not configured.");
+      },
+      resolveMany() {
+        throw new Error("Feature content resolution is not configured.");
+      },
+      open() {
+        throw new Error("Feature content streaming is not configured.");
       },
     }),
     features,
@@ -492,6 +688,7 @@ export function createFeatureContext(
       return featureActions(definition, host, transaction, {
         isTransactionActive: () =>
           activeCollectionTransaction(bindings.collectionRuntime) !== undefined,
+        actionLifecycle: actions,
         upsertRelation: bindings.relations.upsert,
       });
     },

@@ -6,13 +6,11 @@ import {
 } from "@copilotz/copilotz/collections";
 import {
   CORE_COLLECTION_NAMES,
-  llmAttemptCollection,
   messageCollection,
   messageRevisionFrom,
   participantCollection,
   projectActiveMessageBranch,
   threadCollection,
-  toolExecutionCollection,
 } from "./index.ts";
 import {
   createTestDatabase,
@@ -64,8 +62,6 @@ type Fixture = Readonly<{
     : never;
   threads: ReturnType<ReturnType<typeof createCollectionRuntime>["bind"]>;
   messages: ReturnType<ReturnType<typeof createCollectionRuntime>["bind"]>;
-  attempts: ReturnType<ReturnType<typeof createCollectionRuntime>["bind"]>;
-  tools: ReturnType<ReturnType<typeof createCollectionRuntime>["bind"]>;
 }>;
 
 async function count(
@@ -91,10 +87,6 @@ async function createFixture(url: string, schema: string): Promise<Fixture> {
       { eventType: "thread.created" },
       { eventType: "thread.updated" },
       { eventType: "message.created" },
-      { eventType: "llm_attempt.created" },
-      { eventType: "llm_attempt.updated" },
-      { eventType: "tool_execution.created" },
-      { eventType: "tool_execution.updated" },
     ],
     handle: () => undefined,
   });
@@ -145,8 +137,6 @@ async function createFixture(url: string, schema: string): Promise<Fixture> {
     participants: runtime.bind(participantCollection),
     threads: runtime.bind(threadCollection),
     messages: runtime.bind(messageCollection),
-    attempts: runtime.bind(llmAttemptCollection),
-    tools: runtime.bind(toolExecutionCollection),
   });
 }
 
@@ -155,13 +145,11 @@ async function closeFixture(fixture: Fixture): Promise<void> {
   await fixture.db.close();
 }
 
-Deno.test("core collections cover the five native names and have no relation collection", () => {
+Deno.test("core collections cover semantic conversation state only", () => {
   assertEquals([...CORE_COLLECTION_NAMES], [
     "participant",
     "thread",
     "message",
-    "llm_attempt",
-    "tool_execution",
   ]);
   assertEquals(
     CORE_COLLECTION_NAMES.includes(
@@ -178,8 +166,6 @@ async function runCoreSuite(url: string, schema: string): Promise<void> {
     participants,
     threads,
     messages,
-    attempts,
-    tools,
     store,
     session,
   } = fixture;
@@ -409,68 +395,7 @@ async function runCoreSuite(url: string, schema: string): Promise<void> {
     );
     assertEquals(active.map((row) => row.id), ["message-1-rev"]);
 
-    const attempt = await attempts.create({
-      id: "attempt-1",
-      threadId: "thread-a",
-      messageId: "message-1-rev",
-      participantId: "participant-agent",
-      provider: "test",
-      model: "tiny",
-    }, { namespace: NAMESPACE });
-    await Promise.all(attempt.dispatch.handles.map((handle) => handle.done));
-    assertEquals(attempt.event.eventType, "llm_attempt.created");
-    assertEquals(attempt.event.threadId, "thread-a");
-    const completedAttempt = await attempts.mutate("attempt-1", "complete", {
-      finishedAt: NOW,
-      finishReason: "stop",
-    }, { namespace: NAMESPACE });
-    assertEquals(completedAttempt.noop, undefined);
-    if (!completedAttempt.noop) {
-      assertEquals(completedAttempt.event.eventType, "llm_attempt.updated");
-      assertEquals(completedAttempt.record.status, "completed");
-    }
-    await assertRejects(
-      () =>
-        attempts.mutate("attempt-1", "fail", { message: "too late" }, {
-          namespace: NAMESPACE,
-        }),
-      Error,
-      "already 'completed'",
-    );
-
-    const execution = await tools.create({
-      id: "tool-1",
-      threadId: "thread-a",
-      messageId: "message-1-rev",
-      participantId: "participant-agent",
-      toolCallId: "call-1",
-      tool: { name: "search" },
-    }, { namespace: NAMESPACE });
-    await Promise.all(execution.dispatch.handles.map((handle) => handle.done));
-    assertEquals(execution.event.eventType, "tool_execution.created");
-    const completedTool = await tools.mutate("tool-1", "complete", {
-      finishedAt: NOW,
-    }, { namespace: NAMESPACE });
-    if (!completedTool.noop) {
-      assertEquals(completedTool.event.eventType, "tool_execution.updated");
-      assertEquals(completedTool.record.status, "completed");
-    }
-    await assertRejects(
-      () =>
-        tools.mutate("tool-1", "cancel", { reason: "too late" }, {
-          namespace: NAMESPACE,
-        }),
-      Error,
-      "already 'completed'",
-    );
-
     assertEquals(await runtime.verify(messageCollection, NAMESPACE), {
-      ok: true,
-    });
-    assertEquals(await runtime.verify(llmAttemptCollection, NAMESPACE), {
-      ok: true,
-    });
-    assertEquals(await runtime.verify(toolExecutionCollection, NAMESPACE), {
       ok: true,
     });
 
@@ -485,8 +410,6 @@ async function runCoreSuite(url: string, schema: string): Promise<void> {
     await runtime.rebuild(participantCollection, NAMESPACE);
     await runtime.rebuild(threadCollection, NAMESPACE);
     await runtime.rebuild(messageCollection, NAMESPACE);
-    await runtime.rebuild(llmAttemptCollection, NAMESPACE);
-    await runtime.rebuild(toolExecutionCollection, NAMESPACE);
     assertEquals(await runtime.verify(messageCollection, NAMESPACE), {
       ok: true,
     });
@@ -494,12 +417,6 @@ async function runCoreSuite(url: string, schema: string): Promise<void> {
       ok: true,
     });
     assertEquals(await runtime.verify(participantCollection, NAMESPACE), {
-      ok: true,
-    });
-    assertEquals(await runtime.verify(llmAttemptCollection, NAMESPACE), {
-      ok: true,
-    });
-    assertEquals(await runtime.verify(toolExecutionCollection, NAMESPACE), {
       ok: true,
     });
     assertEquals(

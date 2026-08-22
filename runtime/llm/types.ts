@@ -321,15 +321,6 @@ export interface ChatRequest {
    */
   deadlineAt?: number;
   /**
-   * Internal provider-attempt lifecycle hook. The runtime owns attempt IDs;
-   * persistence adapters may use them as durable child record IDs.
-   */
-  onAttemptLifecycle?: (
-    event: LLMAttemptLifecycleEvent,
-  ) => Promise<void> | void;
-  /** Propagate lifecycle callback failures instead of treating them as diagnostics. */
-  strictAttemptLifecycle?: boolean;
-  /**
    * Internal stream-only hook for canonical tool-call JSON drafts. Drafts are
    * never persisted and may be discarded when a provider attempt is retried.
    */
@@ -535,30 +526,6 @@ export type LLMRecoveryAction =
   | "fallback"
   | "finalize_partial"
   | "fail";
-
-export type LLMAttemptLifecycleEvent =
-  | {
-    phase: "started";
-    attemptId: string;
-    attemptIndex: number;
-    provider?: ProviderName;
-    model?: string;
-    config: LLMConfig;
-    messages: ChatMessage[];
-    startedAt: string;
-  }
-  | {
-    phase: "settled";
-    attemptId: string;
-    attemptIndex: number;
-    provider?: ProviderName;
-    model?: string;
-    status: "completed" | "failed" | "superseded";
-    statusReason?: TokenUsageStatusReason;
-    recoveryAction: LLMRecoveryAction;
-    record: LLMUsageAttempt;
-    finishedAt: string;
-  };
 
 export interface LLMUsageAttempt {
   attemptId?: string;

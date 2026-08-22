@@ -22,8 +22,6 @@ export type {
   ScopedEphemeralEventInput,
   ScopedEvents,
   ScopedEventWaitOptions,
-  ScopedLlmAttempts,
   ScopedMutationOptions,
   ScopedRelations,
-  ScopedToolExecutions,
 } from "./types.ts";

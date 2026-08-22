@@ -13,15 +13,12 @@ import {
 } from "../../index.ts";
 import { createTestDomainContext } from "../../runtime/testing/domain-context.ts";
 import {
-  projectLlmAttempts,
   projectMessageById,
   projectMessages,
   projectParticipants,
   projectThreadByExternalId,
   projectThreadById,
   projectThreads,
-  projectToolExecutionById,
-  projectToolExecutions,
 } from "../../runtime/testing/projections.ts";
 import { createTestDatabase } from "../../runtime/testing/ominipg.ts";
 import { loadMessageRecord } from "../../runtime/engine/collection-graph.ts";

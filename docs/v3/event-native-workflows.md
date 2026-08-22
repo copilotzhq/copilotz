@@ -1,11 +1,21 @@
 ---
 title: Copilotz v3 Event-Native Workflows
-description: Graph-native LLM attempts and tool executions on canonical content, immutable events, and durable deliveries.
+description: Superseded graph-native LLM/tool workflow notes; durable Actions are the target execution model.
 section: Internal Design
-status: implementation
+status: superseded
 ---
 
 # Copilotz v3 Event-Native Workflows
+
+> Superseded: the target model no longer treats `llm_attempt` and
+> `tool_execution` as semantic graph Collections. LLM and tool calls are durable
+> Actions that emit generic persisted lifecycle Event Bodies whose terminal
+> transitions repeat the input and carry the output or safe error directly to
+> Processors. Provider retry accounting stays in the parent LLM Action output
+> unless it is a deliberately declared Feature. See
+> [durable-actions](durable-actions.md). This document remains only as
+> historical context for the workflow behavior that 10D7 must preserve while
+> deleting the specialized Collections.
 
 Tool execution and LLM inference are durable domain workflows, not queue rows or
 worker state. Their searchable control plane lives inline on graph nodes; their
@@ -133,11 +143,11 @@ those capabilities. It contributes five ordinary durable subscriptions:
 5. terminal tool executions project tool messages addressed back to their
    producing agent.
 
-An agent's `runtime` selects its provider/model; `fallbacks` stay in the
-same mode and are consumed by `runGenerateChain`. Existing low-level provider factories are
-wrapped by `defineLlmProviderResource()`, so the mature chat fallback and
-recovery orchestrator remains reusable without making provider placement part of
-the database model.
+An agent's `runtime` selects its provider/model; `fallbacks` stay in the same
+mode and are consumed by `runGenerateChain`. Existing low-level provider
+factories are wrapped by `defineLlmProviderResource()`, so the mature chat
+fallback and recovery orchestrator remains reusable without making provider
+placement part of the database model.
 
 Parallel calls from one model response execute independently. Every result is a
 labelled tool message. Only the last committed result for a fully present batch

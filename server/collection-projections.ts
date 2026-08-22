@@ -5,16 +5,12 @@ import type {
 import type {
   ConversationMessage,
   ConversationThread,
-  LlmAttempt,
   Participant,
-  ToolExecution,
 } from "../runtime/domain/index.ts";
 import {
-  mapLlmAttemptRecord,
   mapMessageRecord,
   mapParticipantRecord,
   mapThreadRecord,
-  mapToolExecutionRecord,
 } from "../runtime/engine/collection-graph.ts";
 
 function strings(value: unknown): readonly string[] {
@@ -119,12 +115,4 @@ export async function listMessages(
 
 export function projectParticipant(record: CollectionRecord): Participant {
   return mapParticipantRecord(record);
-}
-
-export function projectLlmAttempt(record: CollectionRecord): LlmAttempt {
-  return mapLlmAttemptRecord(record);
-}
-
-export function projectToolExecution(record: CollectionRecord): ToolExecution {
-  return mapToolExecutionRecord(record);
 }

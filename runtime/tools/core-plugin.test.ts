@@ -6,7 +6,6 @@ import {
 } from "../engine/index.ts";
 import { createTestDomainContext } from "../../runtime/testing/domain-context.ts";
 import {
-  projectLlmAttempts,
   projectMessageById,
   projectMessages,
   projectParticipantById,
@@ -14,8 +13,6 @@ import {
   projectThreadByExternalId,
   projectThreadById,
   projectThreads,
-  projectToolExecutionById,
-  projectToolExecutions,
 } from "../../runtime/testing/projections.ts";
 import { createSqlSession } from "../events/index.ts";
 import {
@@ -25,11 +22,7 @@ import {
   type PluginRegistry,
 } from "../plugins/index.ts";
 import { coreCollectionsPlugin } from "../../plugins/core/plugin.ts";
-import {
-  threadMessageFeature,
-  toolExecutionFeature,
-} from "@copilotz/copilotz/plugins/core";
-import { loadToolExecutionRecord } from "../engine/collection-graph.ts";
+import { threadMessageFeature } from "@copilotz/copilotz/plugins/core";
 import type { WorkflowTool, WorkflowToolExecutionContext } from "./types.ts";
 import {
   BUILT_IN_CORE_TOOL_IDS,
@@ -80,7 +73,6 @@ async function createFixture(
     on: [{ eventType: "message.created" }],
     requires: {
       features: {
-        toolExecution: toolExecutionFeature,
         threadMessage: threadMessageFeature,
       },
     },
@@ -203,23 +195,16 @@ async function toolContext(
   context: CopilotzProcessorContext,
   id: string,
 ): Promise<WorkflowToolExecutionContext> {
-  const argumentsContent = await context.content.prepare({
-    type: "json",
-    role: "tool.arguments",
-    value: {},
-  }, { operationKey: `fixture:${id}:arguments` });
-  const created = await context.features.toolExecution.create({
+  const execution = Object.freeze({
     id,
+    namespace: context.namespace,
     threadId: "thread-a",
     participantId: "agent-participant",
     agentId: agent.id,
     toolCallId: `call:${id}`,
     tool: { id: "fixture", name: "Fixture" },
-    status: "running",
-    arguments: argumentsContent,
-  }, { operationKey: `fixture:${id}:create` }) as { id: string };
-  const execution = await loadToolExecutionRecord(context, created.id);
-  assertExists(execution);
+    metadata: {},
+  });
   return {
     namespace: context.namespace,
     correlationId: context.event.correlationId ?? context.event.id,
@@ -262,7 +247,7 @@ Deno.test("built-in tools exclude optional plugin-owned skill tools", () => {
   assert(!plugin.manifest.provides.tools?.includes("load_skill"));
 });
 
-Deno.test("asset, result, skill, clock, and wait tools use typed capabilities", async () => {
+Deno.test("asset, skill, clock, and wait tools use typed capabilities", async () => {
   const waits: number[] = [];
   const fixture = await createFixture(createBuiltInToolsPlugin({
     now: () => new Date("2026-08-06T12:34:56.000Z"),
@@ -286,57 +271,6 @@ Deno.test("asset, result, skill, clock, and wait tools use typed capabilities", 
         ctx,
       ) as Record<string, unknown>;
 
-      const targetArguments = await processor.content.prepare({
-        type: "json",
-        role: "tool.arguments",
-        value: {},
-      }, { operationKey: "target:arguments" });
-      await processor.features.toolExecution.create({
-        id: "target-execution",
-        threadId: "thread-a",
-        participantId: "agent-participant",
-        agentId: agent.id,
-        toolCallId: "target-call",
-        tool: { id: "target", name: "Target" },
-        status: "running",
-        arguments: targetArguments,
-      }, { operationKey: "target:create" });
-      const targetOutput = await processor.content.prepare({
-        type: "json",
-        role: "tool.output",
-        value: { text: "needle", large: "x".repeat(100) },
-      }, { operationKey: "target:output" });
-      const materializedOutput = await processor.content.materialize(
-        targetOutput,
-        {
-          origin: {
-            scope: { type: "thread", id: "thread-a" },
-            producer: { type: "tool_execution", id: "target-execution" },
-          },
-        },
-      );
-      const targetExecution = await processor.collections.tool_execution.get({
-        id: "target-execution",
-      });
-      assertExists(targetExecution);
-      const existingContent = Array.isArray(targetExecution.content)
-        ? targetExecution.content
-        : [];
-      await processor.collections.tool_execution.commands.complete({
-        id: "target-execution",
-        content: [...existingContent, ...materializedOutput],
-        finishedAt: new Date().toISOString(),
-      }, { operationKey: "target:complete", threadId: "thread-a" });
-      if (materializedOutput.length) {
-        await processor.content.linkOwner(
-          "target-execution",
-          materializedOutput,
-        );
-      }
-      const read = await tool(processor, "read_tool_result").execute!(
-        { toolExecutionId: "target-execution", regex: "needle", limit: 40 },
-        ctx,
-      ) as Record<string, unknown>;
       const listed = await tool(processor, "list_skills").execute!(
         {},
         ctx,
@@ -365,13 +299,11 @@ Deno.test("asset, result, skill, clock, and wait tools use typed capabilities", 
         { seconds: 0.25 },
         ctx,
       );
-      return { saved, fetched, read, listed, loaded, resource, clock, waited };
+      return { saved, fetched, listed, loaded, resource, clock, waited };
     });
 
     assertEquals(result.saved.mimeType, "text/plain");
     assertEquals(atob(String(result.fetched.base64)), "canonical body");
-    assertEquals(result.read.matchFound, true);
-    assert(String(result.read.excerpt).includes("needle"));
     assertEquals(result.listed.count, 1);
     assertEquals(result.loaded.content, "Follow the contract.");
     assertEquals(result.resource.content, "Contract guide");

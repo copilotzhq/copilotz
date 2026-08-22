@@ -11,6 +11,8 @@ export type AgentAskMetadata = Readonly<{
   askId: string;
   phase: AgentAskPhase;
   toolExecutionId: string;
+  toolCallId?: string;
+  toolInvocation?: Readonly<Record<string, unknown>>;
   questionMessageId: string;
   askingParticipantId: string;
   askingAgentId: string;
@@ -19,13 +21,14 @@ export type AgentAskMetadata = Readonly<{
   callingAttemptId?: string;
   answerAttemptId?: string;
   parentAskId?: string;
+  parentAsk?: AgentAskMetadata;
   depth: number;
 }>;
 
 export type WorkflowMetadata = Readonly<{
   kind:
     | "agent_output"
-    | "tool_execution"
+    | "tool_action"
     | "tool_result"
     | "provider_attempt"
     | "memory_consolidation"
@@ -71,7 +74,7 @@ export function workflowMetadata(value: unknown): WorkflowMetadata | null {
   const kind = candidate.kind;
   if (
     kind !== "agent_output" && kind !== "tool_result" &&
-    kind !== "tool_execution" && kind !== "provider_attempt" &&
+    kind !== "tool_action" && kind !== "provider_attempt" &&
     kind !== "memory_consolidation" && kind !== "realtime_message"
   ) return null;
   return candidate as WorkflowMetadata;
@@ -115,11 +118,18 @@ export function agentAskMetadata(value: unknown): AgentAskMetadata | null {
       "callingAttemptId",
       "answerAttemptId",
       "parentAskId",
+      "toolCallId",
     ] as const
   ) {
     if (candidate[key] !== undefined && !optionalMetadataText(candidate[key])) {
       return null;
     }
+  }
+  if (
+    candidate.parentAsk !== undefined &&
+    !agentAskMetadata({ [AGENT_ASK_METADATA_KEY]: candidate.parentAsk })
+  ) {
+    return null;
   }
   return candidate as AgentAskMetadata;
 }

@@ -1,29 +1,20 @@
 import type { ReasoningHistoryOptions } from "../resources/index.ts";
 import { bytesToBase64, formatAssetRef, toDataUrl } from "../content/index.ts";
 import type { ContentRef } from "../content/index.ts";
-import type {
-  ConversationMessage,
-  LlmAttempt,
-  ToolExecution,
-} from "../domain/index.ts";
-import { llmAttemptContent, toolExecutionContent } from "../domain/index.ts";
+import type { ConversationMessage } from "../domain/index.ts";
 import type { CopilotzProcessorCapabilities } from "../engine/index.ts";
 import {
   listThreadMessageRecords,
-  loadLlmAttemptRecord,
   loadThreadRecord,
-  loadToolExecutionRecord,
 } from "../engine/collection-graph.ts";
 import type {
   ChatContentPart,
   ChatMessage,
   ToolInvocation,
 } from "../llm/types.ts";
-import { truncateToolOutputForHistory } from "../tools/history.ts";
 import { workflowMetadata } from "../events/workflow-metadata.ts";
 
 const DEFAULT_REASONING_HISTORY_MAX_ESTIMATED_TOKENS = 750;
-const DEFAULT_TOOL_RESULT_HISTORY_MAX_ESTIMATED_TOKENS = 2_500;
 
 function record(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -111,30 +102,14 @@ async function contentParts(
   return { content, text: text.join("\n") };
 }
 
-async function attemptToolCalls(
+async function messageReasoning(
   context: CopilotzProcessorCapabilities,
-  attempt: LlmAttempt,
-): Promise<readonly ToolInvocation[]> {
-  const ref = llmAttemptContent(attempt).toolCalls;
-  if (!ref) return Object.freeze([]);
-  const resolved = await context.content.resolve(ref);
-  const value = resolved.value ?? (() => {
-    try {
-      return JSON.parse(
-        resolved.text ?? new TextDecoder().decode(resolved.bytes),
-      );
-    } catch {
-      return undefined;
-    }
-  })();
-  return Object.freeze(Array.isArray(value) ? value as ToolInvocation[] : []);
-}
-
-async function attemptReasoning(
-  context: CopilotzProcessorCapabilities,
-  attempt: LlmAttempt,
+  message: ConversationMessage,
 ): Promise<string | undefined> {
-  const ref = llmAttemptContent(attempt).reasoning;
+  const refs = Array.isArray(message.metadata.llmReasoning)
+    ? message.metadata.llmReasoning as readonly ContentRef[]
+    : [];
+  const ref = refs[0];
   if (!ref) return undefined;
   const resolved = await context.content.resolve(ref);
   const value = resolved.text ?? new TextDecoder().decode(resolved.bytes);
@@ -163,61 +138,6 @@ function speakerMetadata(
   };
 }
 
-async function resolvedContentValue(
-  context: CopilotzProcessorCapabilities,
-  ref: ReturnType<typeof toolExecutionContent>["arguments"],
-): Promise<unknown> {
-  const resolved = await context.content.resolve(ref);
-  if (resolved.value !== undefined) return resolved.value;
-  const text = resolved.text ?? new TextDecoder().decode(resolved.bytes);
-  if (resolved.ref.kind !== "json") return text;
-  try {
-    return JSON.parse(text);
-  } catch {
-    return text;
-  }
-}
-
-async function toolResultInvocation(
-  context: CopilotzProcessorCapabilities,
-  execution: ToolExecution,
-  maxEstimatedTokens: number | undefined,
-): Promise<ToolInvocation> {
-  const content = toolExecutionContent(execution);
-  const workflow = workflowMetadata(execution.metadata);
-  const pipelineRoot = workflow?.pipeline?.stages[0];
-  const rootTool = pipelineRoot?.type === "tool" ? pipelineRoot : undefined;
-  const args = await resolvedContentValue(context, content.arguments);
-  const outputRef = content.projectedOutput ?? content.output;
-  const output = outputRef
-    ? truncateToolOutputForHistory(
-      maxEstimatedTokens,
-      await resolvedContentValue(context, outputRef),
-      { toolExecutionId: execution.id },
-    )
-    : undefined;
-  const status = workflow?.pipelineFailure
-    ? "failed"
-    : execution.status === "running"
-    ? "processing"
-    : execution.status === "cancelled"
-    ? "failed"
-    : execution.status;
-  return {
-    id: workflow?.pipeline?.rootToolCallId ?? execution.toolCallId,
-    tool: {
-      id: rootTool?.tool.id ?? String(execution.tool.id),
-      ...((rootTool?.tool.name ?? execution.tool.name)
-        ? { name: String(rootTool?.tool.name ?? execution.tool.name) }
-        : {}),
-    },
-    args: rootTool?.args ??
-      (typeof args === "string" ? args : JSON.stringify(args ?? {})),
-    ...(output !== undefined ? { output } : {}),
-    status,
-  };
-}
-
 async function toChatMessage(
   context: CopilotzProcessorCapabilities,
   message: ConversationMessage,
@@ -241,16 +161,16 @@ async function toChatMessage(
         metadata: speakerMetadata(message, options.labelPeers),
       };
     }
-    const attempt = metadata?.llmAttemptId
-      ? await loadLlmAttemptRecord(context, metadata.llmAttemptId)
-      : null;
-    const toolCalls = attempt ? await attemptToolCalls(context, attempt) : [];
+    const embeddedToolCalls = Array.isArray(message.metadata.llmToolCalls)
+      ? message.metadata.llmToolCalls as readonly ToolInvocation[]
+      : [];
+    const toolCalls = embeddedToolCalls;
     const policy = reasoningPolicy(options.reasoningHistory);
-    const includeReasoning = policy.include !== "none" && attempt &&
+    const includeReasoning = policy.include !== "none" &&
       (policy.include === "all" ||
-        attempt.participantId === targetParticipantId);
+        message.sender.id === targetParticipantId);
     const reasoning = includeReasoning
-      ? await attemptReasoning(context, attempt)
+      ? await messageReasoning(context, message)
       : undefined;
     return {
       role: "assistant",
@@ -287,17 +207,28 @@ async function toChatMessage(
         metadata: speakerMetadata(message, options.labelPeers),
       };
     }
-    const execution = metadata?.toolExecutionId
-      ? await loadToolExecutionRecord(context, metadata.toolExecutionId)
-      : null;
-    const invocation = execution
-      ? await toolResultInvocation(
-        context,
-        execution,
-        options.maxToolResultEstimatedTokens ??
-          DEFAULT_TOOL_RESULT_HISTORY_MAX_ESTIMATED_TOKENS,
-      )
-      : null;
+    const embedded = record(fields.toolInvocation);
+    const embeddedTool = record(embedded.tool);
+    const embeddedInvocation: ToolInvocation | null =
+      typeof embedded.id === "string" && typeof embeddedTool.id === "string"
+        ? {
+          id: embedded.id,
+          tool: {
+            id: embeddedTool.id,
+            ...(typeof embeddedTool.name === "string"
+              ? { name: embeddedTool.name }
+              : {}),
+          },
+          args: typeof embedded.args === "string"
+            ? embedded.args
+            : JSON.stringify(embedded.args ?? {}),
+          output: body.text,
+          status: typeof fields.toolStatus === "string"
+            ? fields.toolStatus as ToolInvocation["status"]
+            : "completed",
+        }
+        : null;
+    const invocation = embeddedInvocation;
     const isRequester = requesterId === targetParticipantId;
     return {
       role: isRequester ? "tool" : "user",
@@ -310,7 +241,9 @@ async function toChatMessage(
           : {}),
       },
       ...(invocation ? { toolCalls: [invocation] } : {}),
-      ...(metadata?.toolCallId ? { tool_call_id: metadata.toolCallId } : {}),
+      ...(metadata?.toolCallId ?? embeddedInvocation?.id
+        ? { tool_call_id: metadata?.toolCallId ?? embeddedInvocation!.id }
+        : {}),
     };
   }
   return {

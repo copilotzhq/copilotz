@@ -1,23 +1,21 @@
-import type { CollectionRecord } from "@copilotz/copilotz/collections";
-import type { SafeWorkflowError } from "@copilotz/copilotz/domain";
 import type { AgentAskMetadata } from "@copilotz/copilotz/events";
-import { agentAskMetadata } from "@copilotz/copilotz/events";
+import {
+  agentAskMetadata,
+  deriveWorkflowId,
+  withAgentAskMetadata,
+  withWorkflowMetadata,
+} from "@copilotz/copilotz/events";
 import type { CopilotzProcessorContext } from "@copilotz/copilotz/engine";
 import { defineProcessor, type Processor } from "@copilotz/copilotz/plugins";
-import { toolExecutionFeature } from "../features/tool-execution.ts";
-import {
-  asRecord,
-  collectionEventRecord,
-  optionalText,
-  requireCollection,
-} from "./helpers.ts";
+import { threadMessageFeature } from "../features/thread-message.ts";
+import { asRecord, optionalText } from "./helpers.ts";
 
 function askFailure(
-  attempt: CollectionRecord,
+  error: Record<string, unknown>,
   ask: AgentAskMetadata,
   cancelled: boolean,
-): SafeWorkflowError {
-  const cause = optionalText(asRecord(attempt.safeError).message) ??
+) {
+  const cause = optionalText(error.message) ??
     (cancelled ? "The asked agent was cancelled." : "The asked agent failed.");
   return Object.freeze({
     name: cancelled ? "AgentAskCancelled" : "AgentAskFailed",
@@ -34,52 +32,30 @@ export const failAskProcessor: Processor<CopilotzProcessorContext> =
     id: "copilotz.core.fail-agent-ask",
     on: [
       {
-        eventType: "llm_attempt.updated",
-        data: { record: { status: "failed" } },
+        eventType: "copilotz.core.llm.generate.failed",
       },
       {
-        eventType: "llm_attempt.updated",
-        data: { record: { status: "cancelled" } },
+        eventType: "copilotz.core.llm.generate.cancelled",
+      },
+      {
+        eventType: "copilotz.core.llm.session.failed",
+      },
+      {
+        eventType: "copilotz.core.llm.session.cancelled",
       },
     ],
-    requires: {
-      features: { toolExecution: toolExecutionFeature },
-    },
+    requires: { features: { threadMessage: threadMessageFeature } },
     async handle(event, context) {
-      const record = collectionEventRecord(event);
-      const attempt = record;
-      if (
-        String(attempt.status) !== "failed" &&
-        String(attempt.status) !== "cancelled"
-      ) {
-        return;
-      }
+      const lifecycle = asRecord(event.data);
+      const attempt = asRecord(lifecycle.input);
+      const error = asRecord(lifecycle.error);
       const ask = agentAskMetadata(asRecord(attempt.metadata));
       if (!ask || ask.phase === "answer") return;
       if (optionalText(attempt.participantId) !== ask.askedParticipantId) {
         throw new Error(`Ask '${ask.askId}' failure ownership does not match.`);
       }
-      const executionRecord = await requireCollection(context, "tool_execution")
-        .get({ id: ask.toolExecutionId });
-      if (!executionRecord) {
-        throw new Error(
-          `Ask tool execution '${ask.toolExecutionId}' was not found.`,
-        );
-      }
-      const execution = executionRecord;
-      if (
-        String(execution.status) !== "running" &&
-        String(execution.status) !== "pending"
-      ) {
-        return;
-      }
-      const cancelled = String(attempt.status) === "cancelled";
-      const failure = askFailure(attempt, ask, cancelled);
-      const detail = await context.content.prepare({
-        type: "text",
-        text: failure.message,
-        role: "tool.error_detail",
-      }, { operationKey: `ask:${ask.askId}:failure-detail` });
+      const cancelled = lifecycle.status === "cancelled";
+      const failure = askFailure(error, ask, cancelled);
       const projected = await context.content.prepare({
         type: "json",
         value: {
@@ -90,24 +66,54 @@ export const failAskProcessor: Processor<CopilotzProcessorContext> =
         },
         role: "tool.projected_output",
       }, { operationKey: `ask:${ask.askId}:failure-output` });
-      if (cancelled) {
-        await context.features.toolExecution.cancel({
-          id: execution.id,
-          reason: failure.message,
-          errorDetail: detail,
-          projectedOutput: projected,
-          historyVisibility: optionalText(execution.historyVisibility) ??
-            "public_status",
-        }, { operationKey: `ask:${ask.askId}:cancel` });
-        return;
-      }
-      await context.features.toolExecution.fail({
-        id: execution.id,
-        safeError: failure,
-        errorDetail: detail,
-        projectedOutput: projected,
-        historyVisibility: optionalText(execution.historyVisibility) ??
-          "public_status",
-      }, { operationKey: `ask:${ask.askId}:fail` });
+      await context.features.threadMessage.create({
+        id: await deriveWorkflowId("message", ask.toolExecutionId, "result"),
+        threadId: String(attempt.threadId),
+        sender: {
+          externalId: "tool:ask",
+          participantType: "tool",
+          name: "Ask Agent",
+        },
+        recipientIds: [ask.askingParticipantId],
+        content: projected,
+        visibility: {
+          kind: "tool",
+          policy: "public_status",
+          requesterId: ask.askingParticipantId,
+        },
+        metadata: withWorkflowMetadata(
+          ask.parentAsk
+            ? withAgentAskMetadata({
+              historyVisibility: "public_status",
+              requesterId: ask.askingParticipantId,
+              toolStatus: cancelled ? "cancelled" : "failed",
+              toolId: "ask",
+              toolInvocation: ask.toolInvocation,
+            }, ask.parentAsk)
+            : {
+              historyVisibility: "public_status",
+              requesterId: ask.askingParticipantId,
+              toolStatus: cancelled ? "cancelled" : "failed",
+              toolId: "ask",
+              ...(ask.toolInvocation
+                ? { toolInvocation: ask.toolInvocation }
+                : {}),
+            },
+          {
+            kind: "tool_result",
+            llmAttemptId: ask.callingAttemptId,
+            parentLlmAttemptId: ask.callingAttemptId,
+            toolExecutionId: ask.toolExecutionId,
+            toolCallId: ask.toolCallId,
+            batchId: ask.toolExecutionId,
+            batchSize: 1,
+            batchIndex: 0,
+            sourceMessageId: ask.questionMessageId,
+            agentParticipantId: ask.askingParticipantId,
+          },
+        ),
+      }, {
+        operationKey: `ask:${ask.askId}:${cancelled ? "cancel" : "fail"}`,
+      });
     },
   });

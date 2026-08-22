@@ -1,15 +1,13 @@
 import { assertEquals } from "@std/assert";
 import { createTestDomainContext } from "../../runtime/testing/domain-context.ts";
 import {
-  projectLlmAttempts,
+  projectActionEvents,
   projectMessageById,
   projectMessages,
   projectParticipants,
   projectThreadByExternalId,
   projectThreadById,
   projectThreads,
-  projectToolExecutionById,
-  projectToolExecutions,
 } from "../../runtime/testing/projections.ts";
 
 import type { Agent } from "../../runtime/resources/index.ts";
@@ -180,6 +178,21 @@ async function createUserMessage(
   });
 }
 
+async function projectLlmEvents(fixture: Fixture) {
+  return [
+    ...await projectActionEvents(
+      fixture.engine,
+      NAMESPACE,
+      "copilotz.core.llm.generate",
+    ),
+    ...await projectActionEvents(
+      fixture.engine,
+      NAMESPACE,
+      "copilotz.core.llm.session",
+    ),
+  ];
+}
+
 async function waitForRun(
   fixture: Fixture,
   rootEventId: string,
@@ -207,12 +220,12 @@ async function waitForRun(
       });
       throw new Error(`Run dead-lettered: ${JSON.stringify(deliveries)}`);
     }
-    const attempts = await projectLlmAttempts(
-      fixture.engine,
-      NAMESPACE,
-      "thread-a",
-    );
-    if (attempts.some((attempt) => attempt.status === "failed")) {
+    const attempts = await projectLlmEvents(fixture);
+    if (
+      attempts.some((attempt) =>
+        attempt.status === "failed" || attempt.status === "cancelled"
+      )
+    ) {
       break;
     }
     await new Promise((resolve) => setTimeout(resolve, 20));
@@ -222,42 +235,17 @@ async function waitForRun(
     limit: 100,
   });
   const messages = await projectMessages(fixture.engine, NAMESPACE, "thread-a");
-  const attempts = await projectLlmAttempts(
-    fixture.engine,
-    NAMESPACE,
-    "thread-a",
-  );
-  const attemptRecords = await Promise.all(
-    attempts.map((attempt) =>
-      boundCollection(fixture.engine, "llm_attempt").get(attempt.id, NAMESPACE)
-    ),
-  );
-  const errorDetails = await Promise.all(
-    attemptRecords.map(async (record) => {
-      const content = Array.isArray(record?.content) ? record.content : [];
-      const resolved = await fixture.engine.content.resolver.getMany(
-        content as never,
-        { namespace: NAMESPACE },
-      );
-      return resolved.map((part) => ({
-        role: part.ref?.role,
-        text: part.text,
-        value: part.value,
-      }));
-    }),
-  );
+  const attempts = await projectLlmEvents(fixture);
   throw new Error(
     `Timed out waiting for the session workflow to settle: ${
       JSON.stringify({
         expectedMessages,
         actualMessages: messages.length,
         attempts: attempts.map((attempt) => ({
-          id: attempt.id,
+          id: attempt.actionRunId,
           status: attempt.status,
-          safeError: attempt.safeError,
+          error: "error" in attempt ? attempt.error : undefined,
         })),
-        attemptRecords,
-        errorDetails,
         deliveries,
       })
     }`,
@@ -277,12 +265,14 @@ async function waitUntil(
 }
 
 Deno.test("session routing does not start a second attempt while one is running", async () => {
+  let sessionCalls = 0;
   let release!: () => void;
   const held = new Promise<void>((resolve) => {
     release = resolve;
   });
   const fixture = await createFixture(
     sessionFromHandler(async (input, emit) => {
+      sessionCalls += 1;
       await held;
       emit({ type: "text", payload: "done" });
       return sessionResponse(input, "done");
@@ -296,12 +286,8 @@ Deno.test("session routing does not start a second attempt while one is running"
       "message:user",
     );
     await waitUntil(async () => {
-      const attempts = await projectLlmAttempts(
-        fixture.engine,
-        NAMESPACE,
-        "thread-a",
-      );
-      return attempts.length === 1 && attempts[0]?.status === "running";
+      const attempts = await projectLlmEvents(fixture);
+      return attempts.length === 1 && attempts[0]?.status === "invoked";
     }, "the first session attempt");
     const second = await createUserMessage(
       fixture,
@@ -320,22 +306,25 @@ Deno.test("session routing does not start a second attempt while one is running"
       }
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
-    const during = await projectLlmAttempts(
-      fixture.engine,
-      NAMESPACE,
-      "thread-a",
-    );
-    assertEquals(during.length, 1);
-    assertEquals(during[0]?.status, "running");
+    const during = await projectLlmEvents(fixture);
+    assertEquals(during.map((event) => event.status), [
+      "invoked",
+      "invoked",
+      "completed",
+    ]);
+    assertEquals(sessionCalls, 1);
     release();
     await waitForRun(fixture, first.event.id, 3);
-    const after = await projectLlmAttempts(
-      fixture.engine,
-      NAMESPACE,
-      "thread-a",
+    const after = await projectLlmEvents(fixture);
+    assertEquals(
+      after.filter((event) => event.status === "invoked").length,
+      2,
     );
-    assertEquals(after.length, 1);
-    assertEquals(after[0]?.status, "completed");
+    assertEquals(
+      after.filter((event) => event.status === "completed").length,
+      2,
+    );
+    assertEquals(sessionCalls, 1);
   } finally {
     await fixture.close();
   }

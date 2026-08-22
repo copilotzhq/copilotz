@@ -220,11 +220,18 @@ export function defineAskTool(
         execution.id,
         "ask",
       );
+      const toolInvocation = Object.freeze({
+        id: execution.toolCallId,
+        tool: structuredClone(execution.tool),
+        args: JSON.stringify(input),
+      });
       const ask: AgentAskMetadata = Object.freeze({
         schema: "copilotz.ask.v1",
         askId,
         phase: "question",
         toolExecutionId: execution.id,
+        toolCallId: execution.toolCallId,
+        toolInvocation,
         questionMessageId,
         askingParticipantId: askingParticipant.id,
         askingAgentId: askingAgent.id,
@@ -233,7 +240,12 @@ export function defineAskTool(
         ...(workflow?.llmAttemptId
           ? { callingAttemptId: workflow.llmAttemptId }
           : {}),
-        ...(parentAsk ? { parentAskId: parentAsk.askId } : {}),
+        ...(parentAsk
+          ? {
+            parentAskId: parentAsk.askId,
+            parentAsk: structuredClone(parentAsk),
+          }
+          : {}),
         depth,
       });
       const metadata = withAgentAskMetadata(undefined, ask);

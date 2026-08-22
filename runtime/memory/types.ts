@@ -1,11 +1,8 @@
 import type { Agent } from "../resources/index.ts";
-import type {
-  ConversationThread,
-  LlmAttempt,
-  Participant,
-} from "../domain/index.ts";
+import type { ConversationThread, Participant } from "../domain/index.ts";
 import type { CopilotzProcessorContext } from "../engine/index.ts";
 import type { CopilotzEvent } from "../events/index.ts";
+import type { AgentTextActionInput } from "../llm/chat-types.ts";
 import type { ChatMessage, ProviderConfig } from "../llm/types.ts";
 import type { LongTermMemoryConfig } from "./resources.ts";
 
@@ -25,7 +22,7 @@ export type ResolveMemoryLlmConfig = (
   input: Readonly<{
     agent: Agent;
     participant: Participant;
-    attempt: LlmAttempt;
+    operation: AgentTextActionInput;
     thread: ConversationThread;
     messages: readonly ChatMessage[];
     sourceEvent: CopilotzEvent;

@@ -32,6 +32,7 @@ export type TestDomainHost = Pick<
   | "events"
   | "deliveries"
   | "relations"
+  | "bindTransient"
 >;
 
 async function materialize(
@@ -68,6 +69,13 @@ export function createTestDomainContext(
     content: (scopedNamespace) =>
       Object.freeze({
         resolver: host.content.resolver,
+        prepare: (input, prepareOptions) =>
+          host.content.preparer.prepare(input, {
+            namespace: scopedNamespace,
+            idempotencyKey:
+              `test-feature:${scopedNamespace}:${prepareOptions.operationKey}`,
+            origin: prepareOptions.origin,
+          }),
         materialize: (input, options) =>
           materialize(host, scopedNamespace, input, options?.origin),
         async linkOwner(ownerId, content) {
@@ -84,6 +92,22 @@ export function createTestDomainContext(
             tables: createCoreTableNames(host.databaseSchema),
           }, { namespace: scopedNamespace, ownerId, content });
         },
+        publish: (input, publishOptions) =>
+          host.content.assets.publish({
+            ...input,
+            namespace: scopedNamespace,
+            idempotencyKey:
+              `test-feature:${scopedNamespace}:${publishOptions.operationKey}`,
+          }),
+        get: (assetId) => host.content.assets.get(scopedNamespace, assetId),
+        getMany: (assetIds) =>
+          host.content.assets.getMany(scopedNamespace, assetIds),
+        resolve: (ref) =>
+          host.content.resolver.get(ref, { namespace: scopedNamespace }),
+        resolveMany: (refs) =>
+          host.content.resolver.getMany(refs, { namespace: scopedNamespace }),
+        open: (ref) =>
+          host.content.resolver.open(ref, { namespace: scopedNamespace }),
       }),
     events: host.events,
     deliveries: host.deliveries,

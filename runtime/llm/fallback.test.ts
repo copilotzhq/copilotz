@@ -1398,7 +1398,6 @@ Deno.test("durable recovery preserves reasoning-only partial output", async () =
 Deno.test("durable recovery sends zero-output fallback the unchanged transcript", async () => {
   const originalFetch = globalThis.fetch;
   let calls = 0;
-  const attemptMessages: unknown[] = [];
   globalThis.fetch = () => {
     calls += 1;
     if (calls === 1) {
@@ -1417,9 +1416,6 @@ Deno.test("durable recovery sends zero-output fallback the unchanged transcript"
       {
         messages: [{ role: "user", content: "hello" }],
         durableRecovery: { enabled: true, count: 0 },
-        onAttemptLifecycle: (event) => {
-          if (event.phase === "started") attemptMessages.push(event.messages);
-        },
       },
       {
         provider: "anthropic",
@@ -1435,6 +1431,9 @@ Deno.test("durable recovery sends zero-output fallback the unchanged transcript"
 
     assertEquals(calls, 2);
     assertEquals(response.answer, "fallback answer");
+    const attemptMessages = response.usageAttempts?.map((attempt) =>
+      attempt.messages
+    ) ?? [];
     assertEquals(attemptMessages[0], attemptMessages[1]);
     assertEquals(
       JSON.stringify(attemptMessages).includes("recovery_cue"),
@@ -1599,7 +1598,6 @@ Deno.test("chat accepts cleaned output after extracting reasoning markup", async
   const warnings: unknown[][] = [];
   let calls = 0;
   let streamed = "";
-  const lifecycle: Array<{ phase: string; recoveryAction?: string }> = [];
 
   console.warn = (...args: unknown[]) => {
     warnings.push(args);
@@ -1639,14 +1637,6 @@ Deno.test("chat accepts cleaned output after extracting reasoning markup", async
     const response = await chat(
       {
         messages: [{ role: "user", content: "hello" }],
-        onAttemptLifecycle: (event) => {
-          lifecycle.push({
-            phase: event.phase,
-            ...(event.phase === "settled"
-              ? { recoveryAction: event.recoveryAction }
-              : {}),
-          });
-        },
       },
       {
         provider: "anthropic",
@@ -1675,10 +1665,7 @@ Deno.test("chat accepts cleaned output after extracting reasoning markup", async
       ),
       false,
     );
-    assertEquals(lifecycle, [
-      { phase: "started" },
-      { phase: "settled", recoveryAction: "accept" },
-    ]);
+    assertEquals(response.usageAttempts?.[0]?.recoveryAction, "accept");
   } finally {
     globalThis.fetch = originalFetch;
     console.warn = originalWarn;

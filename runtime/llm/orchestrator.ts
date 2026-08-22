@@ -12,7 +12,7 @@ import type {
   TokenUsageStatusReason,
   ToolInvocation,
 } from "./types.ts";
-import { resolveProviderApiKey, toLLMConfig } from "./config.ts";
+import { resolveProviderApiKey } from "./config.ts";
 import {
   composeWireContent,
   createMockResponse,
@@ -509,17 +509,6 @@ export async function chat(
     }, remainingMs) as unknown as number;
   }
 
-  const notifyLifecycle = async (
-    event: Parameters<NonNullable<ChatRequest["onAttemptLifecycle"]>>[0],
-  ) => {
-    try {
-      await request.onAttemptLifecycle?.(event);
-    } catch (error) {
-      if (request.strictAttemptLifecycle) throw error;
-      console.warn("[llm] Attempt lifecycle observer failed:", error);
-    }
-  };
-
   const finalResponse = (
     record: LLMUsageAttempt,
     attemptConfig: ProviderConfig,
@@ -629,16 +618,6 @@ export async function chat(
       const silentAttempt = state.silentNextAttempt;
       state.silentNextAttempt = false;
 
-      await notifyLifecycle({
-        phase: "started",
-        attemptId,
-        attemptIndex,
-        provider: attemptProvider,
-        model: attemptConfig.model,
-        config: toLLMConfig(attemptConfig),
-        messages: attemptMessages,
-        startedAt: attemptStartedAt,
-      });
       logProviderAttempt("started", attemptConfig, {
         llmCallId,
         attemptId,
@@ -726,18 +705,6 @@ export async function chat(
         });
         usageAttempts.push(record);
         lastUsageRecord = record;
-        await notifyLifecycle({
-          phase: "settled",
-          attemptId,
-          attemptIndex,
-          provider: attemptProvider,
-          model: attemptConfig.model,
-          status: record.status ?? "completed",
-          ...(statusReason ? { statusReason } : {}),
-          recoveryAction: recoveryActionOf(decision),
-          record,
-          finishedAt,
-        });
         logProviderAttempt("completed", attemptConfig, {
           llmCallId,
           attemptId,
@@ -945,7 +912,7 @@ export async function chat(
           classifyLLMError(error),
         ) ?? "unknown";
         const finishedAt = new Date().toISOString();
-        const record = await accountFailedAttempt({
+        await accountFailedAttempt({
           attemptId,
           attemptIndex,
           providerConfig: attemptConfig,
@@ -964,18 +931,6 @@ export async function chat(
           startedAt: attemptStartedAt,
           finishedAt,
           status: "superseded",
-        });
-        await notifyLifecycle({
-          phase: "settled",
-          attemptId,
-          attemptIndex,
-          provider: attemptProvider,
-          model: attemptConfig.model,
-          status: "superseded",
-          statusReason: failedStatusReason,
-          recoveryAction: "fail",
-          record,
-          finishedAt,
         });
         throw error;
       }
@@ -1060,18 +1015,6 @@ export async function chat(
       });
       usageAttempts.push(failedRecord);
       lastUsageRecord = failedRecord;
-      await notifyLifecycle({
-        phase: "settled",
-        attemptId,
-        attemptIndex,
-        provider: attemptProvider,
-        model: attemptConfig.model,
-        status: "failed",
-        statusReason: failedStatusReason,
-        recoveryAction: recoveryActionOf(decision),
-        record: failedRecord,
-        finishedAt,
-      });
       attempts.push({
         provider: attemptProvider,
         model: attemptConfig.model,

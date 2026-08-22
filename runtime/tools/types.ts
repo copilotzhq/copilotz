@@ -1,10 +1,9 @@
 import type { Agent, API, MCPServer, Skill, Tool } from "../resources/index.ts";
 import type { ToolPipelineStage, ToolPipelineToolStage } from "../llm/types.ts";
-import type { ToolExecution } from "../domain/index.ts";
 import type { ScopedCollections } from "../collections/index.ts";
 import type { CopilotzEvent } from "../events/types.ts";
-import type { CopilotzProcessorContext } from "../engine/index.ts";
 import type { ContentInput } from "../content/index.ts";
+import type { CopilotzProcessorContext } from "../engine/index.ts";
 
 /** Existing custom/native tool shape required by the event-native executor. */
 export type WorkflowTool =
@@ -92,12 +91,29 @@ export type WorkflowPipelineAdvance =
     message: string;
   }>;
 
+/** Event-Body-safe input describing one Tool Action. */
+export type ToolActionInput = Readonly<{
+  id: string;
+  namespace: string;
+  threadId: string;
+  messageId?: string;
+  participantId?: string;
+  initiatorParticipantId?: string;
+  agentId?: string;
+  toolCallId: string;
+  tool: Readonly<Record<string, unknown>>;
+  invocation?: Readonly<Record<string, unknown>>;
+  availableToolIds?: readonly string[];
+  historyVisibility?: string;
+  metadata: Readonly<Record<string, unknown>>;
+}>;
+
 export type WorkflowToolExecutionContext = {
   namespace: string;
   correlationId: string;
   idempotencyKey: string;
-  execution: ToolExecution;
-  processor: CopilotzProcessorContext;
+  execution: ToolActionInput;
+  processor: WorkflowToolHostContext;
   threadId: string;
   toolExecutionId: string;
   toolCallId: string;
@@ -121,6 +137,9 @@ export type WorkflowToolExecutionContext = {
   cancelled: boolean;
   cancelReason?: string;
 };
+
+/** Runtime-neutral capabilities exposed to a Tool by its owning Feature. */
+export type WorkflowToolHostContext = CopilotzProcessorContext;
 
 export type WorkflowToolOutputOptions = Readonly<{
   channel?: string;

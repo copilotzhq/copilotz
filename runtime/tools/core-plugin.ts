@@ -1,10 +1,7 @@
 import type { CollectionRecord } from "../collections/index.ts";
 import type { Agent } from "../resources/index.ts";
 import { assetIdFromRef, formatAssetRef } from "../content/index.ts";
-import {
-  type ParticipantInput,
-  toolExecutionContent,
-} from "../domain/index.ts";
+import type { ParticipantInput } from "../domain/index.ts";
 import { type CopilotzPlugin, definePlugin } from "../plugins/index.ts";
 import { requireFeatureActions } from "../features/context.ts";
 import type {
@@ -17,7 +14,6 @@ export const BUILT_IN_CORE_TOOL_IDS = [
   "wait",
   "save_asset",
   "fetch_asset",
-  "read_tool_result",
   "update_my_memory",
   "update_user_memory",
   "create_thread",
@@ -164,64 +160,6 @@ function defaultSleep(
     }, milliseconds);
     signal.addEventListener("abort", abort, { once: true });
   });
-}
-
-function serialize(value: unknown): string {
-  if (value === undefined || value === null) return "";
-  if (typeof value === "string") return value;
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return String(value);
-  }
-}
-
-function slicedResult(
-  serialized: string,
-  input: Readonly<{ offset?: unknown; limit?: unknown; regex?: unknown }>,
-): JsonRecord {
-  const offset = input.offset === undefined ? 0 : Number(input.offset);
-  const limit = input.limit === undefined ? 4_000 : Number(input.limit);
-  if (!Number.isSafeInteger(offset) || offset < 0) {
-    throw new TypeError("offset must be a non-negative integer.");
-  }
-  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 10_000) {
-    throw new TypeError("limit must be an integer between 1 and 10000.");
-  }
-  if (input.regex !== undefined) {
-    const pattern = requiredText(input.regex, "regex");
-    if (pattern.length > 256) throw new TypeError("regex is too long.");
-    let expression: RegExp;
-    try {
-      expression = new RegExp(pattern);
-    } catch (cause) {
-      throw new TypeError("regex is invalid.", { cause });
-    }
-    const match = expression.exec(serialized);
-    if (!match) return { matchFound: false, totalLength: serialized.length };
-    const excerptOffset = Math.max(0, match.index - Math.floor(limit / 2));
-    const excerpt = serialized.slice(excerptOffset, excerptOffset + limit);
-    return {
-      matchFound: true,
-      matchIndex: match.index,
-      matchLength: match[0].length,
-      excerptOffset,
-      excerpt,
-      excerptLength: excerpt.length,
-      totalLength: serialized.length,
-    };
-  }
-  const content = serialized.slice(offset, offset + limit);
-  return {
-    offset,
-    content,
-    length: content.length,
-    totalLength: serialized.length,
-    hasMore: offset + content.length < serialized.length,
-    nextOffset: offset + content.length < serialized.length
-      ? offset + content.length
-      : null,
-  };
 }
 
 function participantInputFromRecord(
@@ -446,64 +384,6 @@ function fetchAssetTool(): WorkflowTool {
       return input.format === "base64"
         ? { ...common, base64 }
         : { ...common, dataUrl: `data:${asset.mediaType};base64,${base64}` };
-    },
-  });
-}
-
-function readToolResultTool(): WorkflowTool {
-  return defineTool({
-    key: "read_tool_result",
-    name: "Read Tool Result",
-    description:
-      "Read a bounded slice of a canonical tool execution result in the active thread.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        toolExecutionId: { type: "string" },
-        offset: { type: "integer", minimum: 0, default: 0 },
-        limit: { type: "integer", minimum: 1, maximum: 10_000, default: 4_000 },
-        regex: { type: "string", maxLength: 256 },
-      },
-      required: ["toolExecutionId"],
-    },
-    async execute(raw, value) {
-      const ctx = context(value);
-      const input = record(raw);
-      const executionId = requiredText(
-        input.toolExecutionId,
-        "toolExecutionId",
-      );
-      const execution = await ctx.processor.collections.tool_execution.get({
-        id: executionId,
-      });
-      if (!execution || String(execution.threadId) !== ctx.execution.threadId) {
-        throw new Error(
-          `Tool execution '${executionId}' was not found in this thread.`,
-        );
-      }
-      const content = toolExecutionContent(execution);
-      const selected = content.projectedOutput ?? content.output ??
-        content.errorDetail;
-      let serialized = "";
-      if (selected) {
-        const resolved = await ctx.processor.content.resolve(selected);
-        serialized = serialize(
-          resolved.value !== undefined
-            ? resolved.value
-            : resolved.text ?? (selected.kind === "text"
-              ? new TextDecoder().decode(resolved.bytes)
-              : `data:${selected.mediaType};base64,${
-                bytesToBase64(resolved.bytes)
-              }`),
-        );
-      }
-      return {
-        toolExecutionId: execution.id,
-        toolCallId: execution.toolCallId,
-        tool: execution.tool,
-        status: execution.status,
-        ...slicedResult(serialized, input),
-      };
     },
   });
 }
@@ -892,7 +772,6 @@ function toolFactories(options: CreateBuiltInToolsPluginOptions): Readonly<
     wait: () => waitTool(sleep),
     save_asset: saveAssetTool,
     fetch_asset: fetchAssetTool,
-    read_tool_result: readToolResultTool,
     update_my_memory: updateMyMemoryTool,
     update_user_memory: () => updateUserMemoryTool(now),
     create_thread: createThreadTool,

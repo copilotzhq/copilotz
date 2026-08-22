@@ -6,15 +6,12 @@ import {
 } from "@std/assert";
 import { createTestDomainContext } from "../../runtime/testing/domain-context.ts";
 import {
-  projectLlmAttempts,
   projectMessageById,
   projectMessages,
   projectParticipants,
   projectThreadByExternalId,
   projectThreadById,
   projectThreads,
-  projectToolExecutionById,
-  projectToolExecutions,
 } from "../../runtime/testing/projections.ts";
 
 import type { Agent } from "../../runtime/resources/index.ts";
@@ -22,10 +19,7 @@ import {
   createTestDatabase,
   type TestDatabase,
 } from "../../runtime/testing/ominipg.ts";
-import {
-  type ConversationMessage,
-  toolExecutionContent,
-} from "../../runtime/domain/index.ts";
+import type { ConversationMessage } from "../../runtime/domain/index.ts";
 import {
   type CopilotzEngine,
   createCopilotzEngine,
@@ -417,31 +411,26 @@ Deno.test("public ask resumes its caller without occupying worker capacity", asy
     assertEquals(answer?.askId, question?.askId);
     assertEquals(question?.depth, 1);
 
-    const executions = await projectToolExecutions(
-      fixture.engine,
-      "tenant-a",
-      "thread-a",
-    );
-    assertEquals(executions.length, 1);
-    assertEquals(executions[0].status, "completed");
-    const output = await fixture.engine.content.resolver.get(
-      toolExecutionContent(executions[0]).output!,
-      { namespace: "tenant-a" },
-    );
-    assertEquals(
-      (output.value as Record<string, unknown>).answerMessageId,
-      messages[3].id,
-    );
     const events = await fixture.engine.events.list({
       namespace: "tenant-a",
       correlationId: "ask-run",
       limit: 1_000,
     });
     assertEquals(
+      events.filter((event) =>
+        event.type === "copilotz.core.tool.call.completed"
+      ).length,
+      1,
+    );
+    assertEquals(
       events.filter((event) => event.type === "thread.created").length,
       0,
     );
-    assert(events.every((event) => event.threadId === "thread-a"));
+    assert(
+      events.filter((event) => event.threadId).every((event) =>
+        event.threadId === "thread-a"
+      ),
+    );
   } finally {
     await closeFixture(fixture);
   }
@@ -528,15 +517,17 @@ Deno.test("nested public asks return through each caller in one thread", async (
       agentAskMetadata(publicAgentMessages[5].metadata)?.askId,
       firstAsk.askId,
     );
-    const executions = await projectToolExecutions(
-      fixture.engine,
-      "tenant-a",
-      "thread-a",
+    const events = await fixture.engine.events.list({
+      namespace: "tenant-a",
+      correlationId: "ask-run",
+      limit: 1_000,
+    });
+    assertEquals(
+      events.filter((event) =>
+        event.type === "copilotz.core.tool.call.completed"
+      ).length,
+      2,
     );
-    assertEquals(executions.map((execution) => execution.status), [
-      "completed",
-      "completed",
-    ]);
   } finally {
     await closeFixture(fixture);
   }
@@ -569,13 +560,23 @@ Deno.test("asked-agent failure settles the ask and resumes the caller", async ()
     const root = await startRun(fixture, "Exercise ask failure.");
     await waitForRun(fixture, root.event.id, 5);
     assertEquals(calls, ["a", "b", "a"]);
-    const executions = await projectToolExecutions(
-      fixture.engine,
-      "tenant-a",
-      "thread-a",
+    const events = await fixture.engine.events.list({
+      namespace: "tenant-a",
+      correlationId: "ask-run",
+      limit: 1_000,
+    });
+    assertEquals(
+      events.filter((event) =>
+        event.type === "copilotz.core.tool.call.completed"
+      ).length,
+      1,
     );
-    assertEquals(executions.length, 1);
-    assertEquals(executions[0].status, "failed");
+    assertEquals(
+      events.filter((event) =>
+        event.type === "copilotz.core.llm.generate.failed"
+      ).length,
+      1,
+    );
     const messages = await projectMessages(
       fixture.engine,
       "tenant-a",

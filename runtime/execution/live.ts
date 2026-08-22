@@ -62,6 +62,8 @@ export type InvokeLiveProcessorsOptions = Readonly<{
   registry: PluginRegistry;
   transients?: TransientProcessorSet;
   event: CopilotzEvent;
+  /** Resolved durable Event Body; ephemeral events use their payload. */
+  eventData?: unknown;
   signal: AbortSignal;
   settlementScopeId?: string;
   createContext?: LiveProcessorContextFactory;
@@ -208,9 +210,12 @@ function lookupProcessor(
 }
 
 function matchingTransient(
-  options: Pick<InvokeLiveProcessorsOptions, "transients" | "event">,
+  options: Pick<
+    InvokeLiveProcessorsOptions,
+    "transients" | "event" | "eventData"
+  >,
 ): readonly Processor[] {
-  return options.transients?.match(options.event) ?? [];
+  return options.transients?.match(options.event, options.eventData) ?? [];
 }
 
 function sourceEventId(event: CopilotzEvent): string | undefined {
@@ -247,7 +252,10 @@ async function invokeOne(
   dispatchAttemptId: string,
 ): Promise<void> {
   const processor = lookupProcessor(options, processorId);
-  if (!isProcessor(processor) || !matchProcessor(processor, options.event)) {
+  if (
+    !isProcessor(processor) ||
+    !matchProcessor(processor, options.event, options.eventData)
+  ) {
     throw new Error(
       `Live processor '${processorId}' is unavailable or no longer matches.`,
     );
@@ -273,7 +281,12 @@ async function invokeOne(
   const context = Object.freeze({ ...(extension ?? {}), ...base });
   options.signal.throwIfAborted();
   await processor.handle(
-    withProcessorEventData(options.event, options.event.payload),
+    withProcessorEventData(
+      options.event,
+      options.eventData === undefined
+        ? options.event.payload
+        : options.eventData,
+    ),
     context,
   );
   options.signal.throwIfAborted();

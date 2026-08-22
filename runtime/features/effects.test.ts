@@ -12,9 +12,16 @@ import {
 } from "../events/index.ts";
 import { createDeliveryExecutor } from "../execution/index.ts";
 import {
+  type ActionEventData,
+  createActionLifecycleAppender,
+  createActionLifecycleLoader,
+} from "../actions/index.ts";
+import { eventDataRef, readEventBody } from "../events/body-store.ts";
+import {
   createPluginRegistry,
   definePlugin,
   defineProcessor,
+  resolveProcessorEvent,
 } from "../plugins/index.ts";
 import { createTestDatabase } from "../testing/ominipg.ts";
 import { createAdminPlugin } from "../admin/plugin.ts";
@@ -252,9 +259,9 @@ Deno.test("feature context validates optional schemas and runs explicit transact
         seen.signal = context.signal;
         assertEquals(context.tools.search, searchTool);
         assertEquals(
-          ((context as unknown as {
+          (context as unknown as {
             customAdapters: Record<string, unknown>;
-          }).customAdapters).primary,
+          }).customAdapters.primary,
           customAdapter,
         );
         assertEquals("resource" in context, false);
@@ -267,8 +274,13 @@ Deno.test("feature context validates optional schemas and runs explicit transact
     namespace: NAMESPACE,
     plugins: registry,
     collectionRuntime: runtime,
+    now: () => new Date(NOW),
+    actionLifecycle: {
+      append: createActionLifecycleAppender({ coordinator }),
+      load: createActionLifecycleLoader({ store }),
+    },
     contentResolver: { getMany: async () => [] },
-    events: { list: async () => [] },
+    events: { list: (options) => store.listEvents(options) },
     deliveries: { list: async () => [] },
     relations: { list: async () => [] },
   });
@@ -291,8 +303,28 @@ Deno.test("feature context validates optional schemas and runs explicit transact
     await context.collection(noteCollection).get({ id: "note-1" }),
     created,
   );
+  assertEquals(
+    await actions.create(
+      { id: "note-1", title: "hello" },
+      { operationKey: "root-key" },
+    ),
+    created,
+  );
+  assertEquals(seen.operationKeys.length, 1);
+  await assertRejects(
+    () =>
+      actions.create(
+        { id: "note-1", title: "different" },
+        { operationKey: "root-key" },
+      ),
+    Error,
+    "retried with different input",
+  );
 
-  assertEquals(await actions.passthrough("raw"), "raw");
+  assertEquals(
+    await actions.passthrough("raw", { operationKey: "plain" }),
+    "raw",
+  );
   await assertRejects(
     () => actions.create({ id: "missing-title" } as never),
     Error,
@@ -307,4 +339,70 @@ Deno.test("feature context validates optional schemas and runs explicit transact
   const controller = new AbortController();
   await actions.signal({}, { signal: controller.signal });
   assertEquals(seen.signal, controller.signal);
+
+  const lifecycle = (await store.listEvents({
+    namespace: NAMESPACE,
+    limit: 100,
+  })).filter((event) =>
+    event.subject?.type === "test.note-writer.create" &&
+    event.subject.id === "root-key/feature:test.note-writer:create"
+  );
+  assertEquals(lifecycle.map((event) => event.type), [
+    "test.note-writer.create.invoked",
+    "test.note-writer.create.completed",
+  ]);
+  const [invoked, completed] = await Promise.all(
+    lifecycle.map((event) =>
+      readEventBody<ActionEventData>(
+        { transaction: session, tables: store.tables },
+        event.namespace,
+        eventDataRef(event.payload),
+      )
+    ),
+  );
+  assertEquals(invoked, {
+    actionRunId: "root-key/feature:test.note-writer:create",
+    actionId: "test.note-writer.create",
+    status: "invoked",
+    input: { id: "note-1", title: "hello" },
+  });
+  assertEquals(completed.actionRunId, invoked.actionRunId);
+  assertEquals(completed.actionId, invoked.actionId);
+  assertEquals(completed.status, "completed");
+  assertEquals(completed.input, invoked.input);
+  assertEquals("output" in completed ? completed.output : undefined, created);
+  const resolved = await resolveProcessorEvent(store, lifecycle[1]);
+  assertEquals(resolved.data, completed);
+
+  const unvalidatedLifecycle = (await store.listEvents({
+    namespace: NAMESPACE,
+    limit: 100,
+  })).filter((event) =>
+    event.subject?.id ===
+      "plain/feature:test.note-writer:passthrough"
+  );
+  const unvalidatedData = await Promise.all(
+    unvalidatedLifecycle.map((event) =>
+      readEventBody<ActionEventData>(
+        { transaction: session, tables: store.tables },
+        event.namespace,
+        eventDataRef(event.payload),
+      )
+    ),
+  );
+  assertEquals(unvalidatedData, [
+    {
+      actionRunId: "plain/feature:test.note-writer:passthrough",
+      actionId: "test.note-writer.passthrough",
+      status: "invoked",
+      input: "raw",
+    },
+    {
+      actionRunId: "plain/feature:test.note-writer:passthrough",
+      actionId: "test.note-writer.passthrough",
+      status: "completed",
+      input: "raw",
+      output: "raw",
+    },
+  ]);
 });

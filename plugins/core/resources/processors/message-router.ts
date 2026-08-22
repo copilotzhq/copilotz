@@ -2,7 +2,6 @@ import {
   agentAskMetadata,
   deriveWorkflowId,
   withAgentAskMetadata,
-  type WorkflowMetadata,
   workflowMetadata,
 } from "@copilotz/copilotz/events";
 import type { CopilotzProcessorContext } from "@copilotz/copilotz/engine";
@@ -15,54 +14,18 @@ import {
   loadParticipant,
   participantAgentId,
   policyOptions,
-  requireCollection,
   requiredText,
   stringArray,
   toolCatalogFor,
 } from "./helpers.ts";
-
-const TERMINAL_TOOL_STATUSES = new Set(["completed", "failed", "cancelled"]);
-
-async function isLastSettledToolResult(
-  context: CopilotzProcessorContext,
-  threadId: string,
-  metadata: WorkflowMetadata,
-): Promise<boolean> {
-  const batchSize = metadata.batchSize ?? 1;
-  if (batchSize <= 1) return true;
-  const batchId = requiredText(metadata.batchId, "Tool batch id");
-  const executionId = requiredText(
-    metadata.toolExecutionId,
-    "Tool execution id",
-  );
-  const executions = requireCollection(context, "tool_execution");
-  const history = await executions.list({
-    where: { threadId },
-    order: { field: "createdAt", direction: "asc" },
-    limit: 1_000,
-  });
-  const batch = history.filter((record) =>
-    workflowMetadata(asRecord(record.metadata))?.batchId === batchId
-  );
-  const terminal = batch.filter((record) =>
-    TERMINAL_TOOL_STATUSES.has(String(record.status))
-  );
-  if (terminal.length < batchSize) return false;
-  const last = [...terminal].sort((left, right) => {
-    const finished = String(left.finishedAt ?? left.updatedAt).localeCompare(
-      String(right.finishedAt ?? right.updatedAt),
-    );
-    return finished !== 0
-      ? finished
-      : String(left.id).localeCompare(String(right.id));
-  }).at(-1);
-  return last?.id === executionId;
-}
+import { llmFeature } from "../features/llm.ts";
+import { isSettledFeatureActionError } from "@copilotz/copilotz/features";
 
 export const messageRouterProcessor: Processor<CopilotzProcessorContext> =
   defineProcessor<CopilotzProcessorContext>({
     id: "copilotz.core.message-to-text-attempt",
     on: [{ eventType: "message.created" }],
+    requires: { features: { llm: llmFeature } },
     async handle(event, context) {
       if (!event.routing?.recipientIds?.length) return;
       if (!event.durable || !event.threadId) return;
@@ -77,15 +40,6 @@ export const messageRouterProcessor: Processor<CopilotzProcessorContext> =
         metadata?.continuation === "realtime" ||
         metadata?.continuation === "none"
       ) return;
-      if (
-        metadata?.kind === "tool_result" &&
-        !await isLastSettledToolResult(
-          context,
-          String(record.threadId),
-          metadata,
-        )
-      ) return;
-
       const history = await listThreadMessages(
         context,
         String(record.threadId),
@@ -103,15 +57,7 @@ export const messageRouterProcessor: Processor<CopilotzProcessorContext> =
         const agentId = participantAgentId(participant);
         const agent = context.agents[agentId];
         if (!agent) continue;
-        if (agentUsesSessionRuntime(agent)) {
-          const running = await requireCollection(context, "llm_attempt")
-            .queries.byThreadParticipantStatus({
-              threadId: String(record.threadId),
-              participantId: participant.id,
-              status: "running",
-            });
-          if (running.length > 0) continue;
-        }
+        const useSession = agentUsesSessionRuntime(agent);
         const options = policyOptions(agent);
         const toolCatalog = toolCatalogFor(context, agent);
         const available = await toolCatalog.forAgent(context, agent);
@@ -146,8 +92,9 @@ export const messageRouterProcessor: Processor<CopilotzProcessorContext> =
           ...(metadata?.batchId ? { batchId: metadata.batchId } : {}),
         };
         const id = await deriveWorkflowId("llm", continuationKey);
-        await context.collections.llm_attempt.create({
+        const input = {
           id,
+          namespace: context.namespace,
           threadId: String(record.threadId),
           messageId: record.id,
           participantId: participant.id,
@@ -162,18 +109,30 @@ export const messageRouterProcessor: Processor<CopilotzProcessorContext> =
           inputMessageIds: [...historyIds],
           availableToolIds: tools.map((tool) => tool.key),
           status: "running",
+          attemptIndex: 0,
+          content: [],
+          startedAt: event.createdAt,
+          createdAt: event.createdAt,
+          updatedAt: event.createdAt,
           metadata: ask
             ? withAgentAskMetadata(attemptMetadata, ask)
             : attemptMetadata,
-        }, {
-          operationKey: `route:${continuationKey}`,
-          threadId: String(record.threadId),
-          identity: {
-            metadata: ask
-              ? withAgentAskMetadata(attemptMetadata, ask)
-              : attemptMetadata,
-          },
-        });
+          sourceEvent: event,
+        };
+        const action = useSession
+          ? context.features.llm.session
+          : context.features.llm.generate;
+        try {
+          await action(input, {
+            operationKey: `route:${continuationKey}`,
+            identity: {
+              correlationId: event.correlationId,
+              causationId: event.id,
+            },
+          });
+        } catch (error) {
+          if (!isSettledFeatureActionError(error)) throw error;
+        }
       }
     },
   });

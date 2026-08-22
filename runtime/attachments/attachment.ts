@@ -4,16 +4,8 @@ import type {
   DatabaseAssetRepository,
 } from "../content/index.ts";
 import { createContentStreamRuntime } from "../content/index.ts";
-import {
-  activeCollectionTransaction,
-  type CollectionRuntime,
-} from "../collections/kernel.ts";
-import {
-  type CollectionMutation,
-  type CollectionRecord,
-  type CollectionWrite,
-  isCollectionNoop,
-} from "../collections/index.ts";
+import type { CollectionRuntime } from "../collections/kernel.ts";
+import type { CollectionRecord } from "../collections/index.ts";
 import type {
   ConversationThread,
   Participant,
@@ -23,15 +15,10 @@ import { workflowMutationId } from "../domain/workflow-support.ts";
 import {
   createEphemeralEvent,
   type EventCoordinator,
-  type EventMutationContext,
   type EventStore,
   type SqlExecutor,
 } from "../events/index.ts";
-import type {
-  CopilotzEvent,
-  CopilotzEventHub,
-  DurableEvent,
-} from "../events/index.ts";
+import type { CopilotzEvent, CopilotzEventHub } from "../events/index.ts";
 import type { DeliveryExecutor } from "../execution/index.ts";
 import {
   createFeatureContext,
@@ -212,60 +199,6 @@ function mapThread(
     createdAt: String(record.createdAt),
     updatedAt: String(record.updatedAt),
   });
-}
-
-function mutationContext(
-  runtime: CollectionRuntime,
-  session: SqlExecutor,
-  tables: EventStore["tables"],
-): EventMutationContext {
-  return {
-    transaction: activeCollectionTransaction(runtime) ?? session,
-    tables,
-  };
-}
-
-function toDurableEvent(
-  event: CollectionMutation<CollectionRecord>["event"],
-): DurableEvent {
-  return Object.freeze({
-    durable: true as const,
-    id: event.id,
-    position: event.position,
-    schemaVersion: event.schemaVersion,
-    type: event.eventType,
-    namespace: event.namespace,
-    ...(event.threadId ? { threadId: event.threadId } : {}),
-    ...(event.subject ? { subject: event.subject } : {}),
-    payload: { dataRef: event.dataRef },
-    routing: event.routing,
-    visibility: event.visibility,
-    metadata: event.metadata,
-    ...(event.causationId ? { causationId: event.causationId } : {}),
-    correlationId: event.correlationId,
-    ...(event.deduplicationId
-      ? { deduplicationId: event.deduplicationId }
-      : {}),
-    createdAt: event.createdAt,
-  });
-}
-
-function writeForSubject(
-  writes: readonly CollectionWrite<CollectionRecord>[],
-  eventType: string,
-  id: string,
-): CollectionWrite<CollectionRecord> {
-  const matched = writes.filter((write) => String(write.record.id) === id);
-  for (const write of matched) {
-    if (!isCollectionNoop(write) && write.event.eventType === eventType) {
-      return write;
-    }
-  }
-  const noop = matched.find((write) => isCollectionNoop(write));
-  if (noop) return noop;
-  throw new Error(
-    `Record '${id}' was created without a ${eventType} collection write.`,
-  );
 }
 
 function participantInput(participant: Participant): ParticipantInput {
@@ -970,90 +903,55 @@ export function createAttachmentRuntime(
         settlementScopeId,
         metadata,
       };
-      const tx = await options.collectionRuntime.transaction({
-        operationKey: deduplicationId,
+      const features = createFeatureContext({
+        ...options.featureBindings,
         namespace,
-        identity,
-        execute: async () => {
-          const context = mutationContext(
-            options.collectionRuntime,
-            options.session,
-            options.store.tables,
-          );
-          const content = await options.assets.materialize(context, {
-            namespace,
-            content: prepared,
-            origin: {
-              scope: { type: "thread", id: thread.id },
-              producer: { type: "message", id: messageId },
-            },
-          });
-          const features = createFeatureContext({
-            ...options.featureBindings,
-            namespace,
-          });
-          const record = await requireFeatureActions(
-            features,
-            "copilotz.core.thread-message",
-          ).create(
-            {
-              id: messageId,
-              threadId: thread.id,
-              sender: participantInput(participant),
-              recipientIds: [...recipientIds],
-              content,
-              metadata,
-              visibility: message.visibility ?? { kind: "public" },
-            },
-            { operationKey: deduplicationId, identity },
-          ) as CollectionRecord;
-          if (content.length) {
-            await options.assets.linkOwner(context, {
-              namespace,
-              ownerId: String(record.id),
-              content,
-            });
-          }
-          return record;
-        },
       });
-      const write = writeForSubject(tx.writes, "message.created", messageId);
-      const created = isCollectionNoop(write)
-        ? (await options.store.listEvents({
-          namespace,
-          threadId: thread.id,
-          limit: 1_000,
-        })).find((event) =>
-          event.type === "message.created" && event.subject?.id === messageId
-        )
-        : toDurableEvent(write.event);
+      const record = await requireFeatureActions(
+        features,
+        "copilotz.core.thread-message",
+      ).create({
+        id: messageId,
+        threadId: thread.id,
+        sender: participantInput(participant),
+        recipientIds: [...recipientIds],
+        content: prepared,
+        metadata,
+        visibility: message.visibility ?? { kind: "public" },
+      }, { operationKey: deduplicationId, identity }) as CollectionRecord;
+      const created = (await options.store.listEvents({
+        namespace,
+        threadId: thread.id,
+        limit: 1_000,
+      })).find((event) =>
+        event.type === "message.created" && event.subject?.id === messageId
+      );
       if (!created) {
         throw new Error(
           `Message '${messageId}' was created without a durable event.`,
         );
       }
-      const deliveries = isCollectionNoop(write)
-        ? await options.store.listDeliveries({
-          namespace,
-          eventId: created.id,
-          limit: 1_000,
-        })
-        : write.deliveries;
+      const deliveries = await options.store.listDeliveries({
+        namespace,
+        eventId: created.id,
+        limit: 1_000,
+      });
+      const placed = await Promise.allSettled(
+        deliveries.filter((delivery) =>
+          delivery.settlementScopeId === settlementScopeId &&
+          (delivery.status === "pending" || delivery.status === "leased" ||
+            delivery.status === "retry_wait")
+        ).map((delivery) => options.executor.dispatchDelivery(delivery)),
+      );
       const base = scopeHandle(created, {
-        settlementScopeId: isCollectionNoop(write)
-          ? tx.settlementScopeId
-          : write.settlementScopeId,
-        operations: dispatchedOperationsForScope({
-          settlementScopeId: isCollectionNoop(write)
-            ? tx.settlementScopeId
-            : write.settlementScopeId,
-          deliveries,
-          dispatch: tx.dispatch,
-        }),
+        settlementScopeId,
+        operations: placed.flatMap((result) =>
+          result.status === "fulfilled" ? [result.value] : []
+        ),
       });
       return Object.freeze({
         ...base,
-        messageId: String(write.record.id),
+        messageId: String(record.id),
       }) as AttachmentMessageHandle;
     };
 

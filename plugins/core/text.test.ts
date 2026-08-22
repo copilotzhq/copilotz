@@ -6,15 +6,13 @@ import {
 } from "@std/assert";
 import { createTestDomainContext } from "../../runtime/testing/domain-context.ts";
 import {
-  projectLlmAttempts,
+  projectActionEvents,
   projectMessageById,
   projectMessages,
   projectParticipants,
   projectThreadByExternalId,
   projectThreadById,
   projectThreads,
-  projectToolExecutionById,
-  projectToolExecutions,
 } from "../../runtime/testing/projections.ts";
 
 import type { Agent, API, MCPServer } from "../../runtime/resources/index.ts";
@@ -27,10 +25,7 @@ import {
   type ContextResource,
   defineContextResource,
 } from "../../runtime/context/index.ts";
-import {
-  type ConversationMessage,
-  toolExecutionContent,
-} from "../../runtime/domain/index.ts";
+import type { ConversationMessage } from "../../runtime/domain/index.ts";
 import type { ProviderAPI } from "../../runtime/llm/types.ts";
 import {
   createSkillsPlugin,
@@ -39,7 +34,7 @@ import {
 import type {
   ChatRequest,
   ChatResponse,
-  LLMAttemptLifecycleEvent,
+  LLMUsageAttempt,
   TokenUsage,
   ToolInvocation,
 } from "../../runtime/llm/types.ts";
@@ -83,6 +78,8 @@ const usage: TokenUsage = {
   source: "provider",
   status: "completed",
 };
+
+const usageAttempts = new WeakMap<ChatRequest, LLMUsageAttempt[]>();
 
 function argumentsRecord(value: unknown): Record<string, unknown> {
   assert(value && typeof value === "object" && !Array.isArray(value));
@@ -146,19 +143,10 @@ function namedToolCall(
 
 async function lifecycleStarted(
   request: ChatRequest,
-  attemptIndex: number,
-  model: string,
+  _attemptIndex: number,
+  _model: string,
 ): Promise<void> {
-  await request.onAttemptLifecycle?.({
-    phase: "started",
-    attemptId: `runtime-${model}-${attemptIndex}`,
-    attemptIndex,
-    provider: "openai",
-    model,
-    config: { provider: "openai", model },
-    messages: request.messages,
-    startedAt: "2026-08-10T00:00:00.000Z",
-  });
+  if (!usageAttempts.has(request)) usageAttempts.set(request, []);
 }
 
 async function lifecycleSettled(
@@ -170,40 +158,30 @@ async function lifecycleSettled(
     recoveryAction: "accept" | "fallback" | "retry_same" | "fail";
   }>,
 ): Promise<void> {
-  const event: LLMAttemptLifecycleEvent = {
-    phase: "settled",
+  const record: LLMUsageAttempt = {
     attemptId: `runtime-${input.model}-${input.attemptIndex}`,
     attemptIndex: input.attemptIndex,
     provider: "openai",
     model: input.model,
+    messages: request.messages,
     status: input.status,
-    ...(input.status === "failed"
-      ? { statusReason: "server_error" as const }
-      : {}),
     recoveryAction: input.recoveryAction,
-    record: {
-      attemptId: `runtime-${input.model}-${input.attemptIndex}`,
-      attemptIndex: input.attemptIndex,
-      provider: "openai",
-      model: input.model,
-      usage,
-      status: input.status,
-      recoveryAction: input.recoveryAction,
-      ...(input.status === "failed"
-        ? {
-          error: {
-            reason: "server_error" as const,
-            status: 503,
-            message: "temporary provider failure",
-          },
-        }
-        : {}),
-      startedAt: "2026-08-10T00:00:00.000Z",
-      finishedAt: "2026-08-10T00:00:01.000Z",
-    },
+    usage,
+    ...(input.status === "failed"
+      ? {
+        error: {
+          reason: "server_error" as const,
+          status: 503,
+          message: "temporary provider failure",
+        },
+      }
+      : {}),
+    startedAt: "2026-08-10T00:00:00.000Z",
     finishedAt: "2026-08-10T00:00:01.000Z",
   };
-  await request.onAttemptLifecycle?.(event);
+  const records = usageAttempts.get(request) ?? [];
+  records.push(record);
+  usageAttempts.set(request, records);
 }
 
 function response(
@@ -220,6 +198,9 @@ function response(
     answer: input.answer,
     tokens: usage.totalTokens ?? 0,
     usage,
+    ...(usageAttempts.get(request)?.length
+      ? { usageAttempts: [...usageAttempts.get(request)!] }
+      : {}),
     provider: "openai",
     model: input.model,
     finishReason: input.finishReason ?? "stop",
@@ -235,6 +216,105 @@ type Fixture = Readonly<{
   toolCalls: () => number;
   toolContexts: readonly WorkflowToolExecutionContext[];
 }>;
+
+type LifecycleRecord = {
+  id: string;
+  status: string;
+  safeError?: { name: string; message: string; stack?: string };
+  [key: string]: any;
+};
+
+function object(value: unknown): Record<string, any> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, any>
+    : {};
+}
+
+function latestLifecycle(
+  events: readonly import("../../runtime/actions/index.ts").ActionEventData[],
+) {
+  const latest = new Map<
+    string,
+    import("../../runtime/actions/index.ts").ActionEventData
+  >();
+  for (const event of events) latest.set(event.actionRunId, event);
+  return [...latest.values()];
+}
+
+async function projectLlmLifecycle(
+  engine: CopilotzEngine,
+  namespace: string,
+  threadId: string,
+): Promise<LifecycleRecord[]> {
+  const events = [
+    ...await projectActionEvents(
+      engine,
+      namespace,
+      "copilotz.core.llm.generate",
+      { threadId },
+    ),
+    ...await projectActionEvents(
+      engine,
+      namespace,
+      "copilotz.core.llm.session",
+      { threadId },
+    ),
+  ];
+  return latestLifecycle(events).flatMap((event) => {
+    const input = object(event.input);
+    const output = "output" in event ? object(event.output) : {};
+    const logical: LifecycleRecord = {
+      ...input,
+      ...output,
+      id: String(input.id ?? event.actionRunId),
+      status: event.status === "invoked" ? "running" : event.status,
+      ...(event.status === "failed" || event.status === "cancelled"
+        ? { safeError: event.error }
+        : {}),
+    };
+    const providers = Array.isArray(output.usageAttempts)
+      ? output.usageAttempts.map((value: unknown, index: number) => {
+        const attempt = object(value);
+        return {
+          ...attempt,
+          id: `${logical.id}:provider:${String(attempt.attemptId ?? index)}`,
+          status: String(attempt.status ?? "completed"),
+        } satisfies LifecycleRecord;
+      })
+      : [];
+    return [logical, ...providers];
+  });
+}
+
+async function projectToolLifecycle(
+  engine: CopilotzEngine,
+  namespace: string,
+  threadId: string,
+): Promise<LifecycleRecord[]> {
+  const events = await projectActionEvents(
+    engine,
+    namespace,
+    "copilotz.core.tool.call",
+    { threadId },
+  );
+  return latestLifecycle(events).map((event) => {
+    const input = object(event.input);
+    const output = "output" in event ? object(event.output) : {};
+    return {
+      ...input,
+      ...output,
+      id: String(input.id ?? output.id ?? event.actionRunId),
+      status: event.status === "invoked"
+        ? "running"
+        : event.status === "completed"
+        ? String(output.status ?? "completed")
+        : event.status,
+      ...(event.status === "failed" || event.status === "cancelled"
+        ? { safeError: event.error }
+        : {}),
+    };
+  });
+}
 
 async function createFixture(
   chat: LlmChat,
@@ -462,7 +542,7 @@ async function waitForRun(
     "tenant-a",
     "thread-a",
   );
-  const attempts = await projectLlmAttempts(
+  const attempts = await projectLlmLifecycle(
     fixture.engine,
     "tenant-a",
     "thread-a",
@@ -614,7 +694,8 @@ Deno.test("text workflow writes ordered content, reasoning, and tool-call stream
       assertEquals(next.value.type, "stream.output");
       const streamId = next.value.streamId;
       assertExists(streamId);
-      const payload = next.value.payload && typeof next.value.payload === "object"
+      const payload =
+        next.value.payload && typeof next.value.payload === "object"
           ? next.value.payload as Record<string, unknown>
           : {};
       created.push({ id: streamId, lane: String(payload.role) });
@@ -687,7 +768,6 @@ Deno.test("event-native text workflow preserves user -> tool -> same-agent conti
   let logicalCalls = 0;
   const chat: LlmChat = async (request) => {
     logicalCalls += 1;
-    assertEquals(request.strictAttemptLifecycle, true);
     assert(
       typeof request.idempotencyKey === "string" &&
         request.idempotencyKey.length > 0,
@@ -778,7 +858,7 @@ Deno.test("event-native text workflow preserves user -> tool -> same-agent conti
       "north retry-safe public final",
     );
 
-    const attempts = await projectLlmAttempts(
+    const attempts = await projectLlmLifecycle(
       fixture.engine,
       "tenant-a",
       "thread-a",
@@ -795,7 +875,7 @@ Deno.test("event-native text workflow preserves user -> tool -> same-agent conti
       providerAttempts.map((attempt) => attempt.status),
       ["completed", "failed", "completed"],
     );
-    const executions = await projectToolExecutions(
+    const executions = await projectToolLifecycle(
       fixture.engine,
       "tenant-a",
       "thread-a",
@@ -844,12 +924,12 @@ Deno.test("text workflow bounds synthesized identities across a long tool chain"
     const root = await startRun(fixture, "Run a deeply identified tool.");
     await waitForRun(fixture, root.event.id, 4);
 
-    const attempts = await projectLlmAttempts(
+    const attempts = await projectLlmLifecycle(
       fixture.engine,
       "tenant-a",
       "thread-a",
     );
-    const executions = await projectToolExecutions(
+    const executions = await projectToolLifecycle(
       fixture.engine,
       "tenant-a",
       "thread-a",
@@ -943,13 +1023,13 @@ Deno.test("tool attachments persist and remain addressable in the next model tur
     await waitForRun(fixture, root.event.id, 4);
     assertEquals(logicalCalls, 2);
 
-    const executions = await projectToolExecutions(
+    const executions = await projectToolLifecycle(
       fixture.engine,
       "tenant-a",
       "thread-a",
     );
     assertEquals(executions.length, 1);
-    const executionContent = toolExecutionContent(executions[0]);
+    const executionContent = executions[0];
     assertEquals(executionContent.attachments.length, 1);
     assertEquals(executionContent.attachments[0].name, "report.csv");
     assertEquals(executionContent.attachments[0].mediaType, "text/csv");
@@ -1063,7 +1143,7 @@ Deno.test("revising a human turn runs the agent from the projected branch", asyn
       "Answer to the superseded branch",
     );
     assertEquals(
-      (await projectLlmAttempts(fixture.engine, "tenant-a", "thread-a"))
+      (await projectLlmLifecycle(fixture.engine, "tenant-a", "thread-a"))
         .filter((attempt) => !attempt.id.includes(":provider:")).length,
       2,
     );
@@ -1192,7 +1272,7 @@ Deno.test("invalid and unknown tool calls settle as labelled failures and resume
         await waitForRun(fixture, root.event.id, 4);
         assertEquals(logicalCalls, 2);
         assertEquals(fixture.toolCalls(), 0);
-        const executions = await projectToolExecutions(
+        const executions = await projectToolLifecycle(
           fixture.engine,
           "tenant-a",
           "thread-a",
@@ -1256,7 +1336,7 @@ Deno.test("tool timeout cancels the durable execution and resumes the agent", as
     await waitForRun(fixture, root.event.id, 4);
     assertEquals(logicalCalls, 2);
     assertEquals(observedCancellation, true);
-    const executions = await projectToolExecutions(
+    const executions = await projectToolLifecycle(
       fixture.engine,
       "tenant-a",
       "thread-a",
@@ -1416,7 +1496,7 @@ Deno.test("agent tool policy is resolved once and persisted on the text attempt"
   try {
     const root = await startRun(fixture, "Apply the tenant tool policy.");
     await waitForRun(fixture, root.event.id, 2);
-    const attempts = await projectLlmAttempts(
+    const attempts = await projectLlmLifecycle(
       fixture.engine,
       "tenant-a",
       "thread-a",
@@ -1503,13 +1583,6 @@ Deno.test("participant-relative history labels peer agents and enforces tool and
     north,
     [south],
   );
-  const providerMetadata = {
-    copilotzWorkflow: {
-      kind: "provider_attempt",
-      parentLlmAttemptId: "seed-parent",
-      agentParticipantId: "agent-south",
-    },
-  };
   try {
     const namespace = "tenant-a";
     await boundCollection(fixture.engine, "participant").create({
@@ -1530,9 +1603,20 @@ Deno.test("participant-relative history labels peer agents and enforces tool and
       agentId: "south",
       name: "south",
     }, { namespace });
+    await boundCollection(fixture.engine, "participant").create({
+      id: "tool-contract",
+      externalId: "contract_tool",
+      participantType: "tool",
+      name: "Contract Tool",
+    }, { namespace });
     await boundCollection(fixture.engine, "thread").create({
       id: "thread-a",
-      participantIds: ["user-a", "agent-north", "agent-south"],
+      participantIds: [
+        "user-a",
+        "agent-north",
+        "agent-south",
+        "tool-contract",
+      ],
     }, {
       namespace,
       identity: { deduplicationId: "peer-thread:create" },
@@ -1546,36 +1630,9 @@ Deno.test("participant-relative history labels peer agents and enforces tool and
       text: "south private reasoning",
       role: "reasoning",
     }, { namespace: "tenant-a", idempotencyKey: "peer:reasoning" });
-    const domain = createTestDomainContext(
+    const peerReasoningRefs = await persistPreparedContent(
       fixture.engine,
-      "tenant-a",
-      coreFeatureAliases,
-    );
-    await domain.features.llmAttempt.create({
-      id: "seed-peer-attempt",
-      threadId: "thread-a",
-      participantId: "agent-south",
-      agentId: "south",
-      status: "running",
-      inputMessageIds: [],
-      metadata: providerMetadata,
-    }, {
-      identity: {
-        deduplicationId: "seed-peer-attempt:create",
-      },
-    });
-    await domain.features.llmAttempt.complete({
-      id: "seed-peer-attempt",
-      answer: peerAnswer,
-      reasoning: peerReasoning,
-    }, {
-      identity: {
-        deduplicationId: "seed-peer-attempt:complete",
-      },
-    });
-    await waitForSettlement(
-      fixture,
-      await latestSubjectEventId(fixture, "seed-peer-attempt"),
+      peerReasoning,
     );
     await boundCollection(fixture.engine, "message").create({
       id: "message:peer",
@@ -1584,6 +1641,7 @@ Deno.test("participant-relative history labels peer agents and enforces tool and
       recipientIds: [],
       content: await persistPreparedContent(fixture.engine, peerAnswer),
       metadata: {
+        llmReasoning: peerReasoningRefs,
         copilotzWorkflow: {
           kind: "agent_output",
           llmAttemptId: "seed-peer-attempt",
@@ -1602,62 +1660,44 @@ Deno.test("participant-relative history labels peer agents and enforces tool and
       visibility: "public_status" | "requester_only" | "public",
       output: string,
     ) => {
-      const metadata = {
-        copilotzWorkflow: {
-          kind: "tool_execution",
-          llmAttemptId: "seed-peer-attempt",
-          parentLlmAttemptId: "seed-peer-attempt",
-          toolCallId: id,
-          batchId: `incomplete:${id}`,
-          batchSize: 2,
-          batchIndex: 0,
-          agentParticipantId: "agent-south",
-        },
-      };
-      const args = await fixture.engine.content.preparer.prepare({
-        type: "json",
-        value: { id },
-        role: "tool.arguments",
-      }, { namespace: "tenant-a", idempotencyKey: `${id}:args` });
-      await domain.features.toolExecution.create({
-        id: `execution:${id}`,
-        threadId: "thread-a",
-        participantId: "agent-south",
-        agentId: "south",
-        toolCallId: id,
-        tool: { id: "contract_tool", name: "Contract Tool" },
-        arguments: args,
-        status: "pending",
-        historyVisibility: visibility,
-        metadata,
-      }, {
-        identity: {
-          deduplicationId: `execution:${id}:create`,
-        },
-      });
-      await waitForSettlement(
-        fixture,
-        await latestSubjectEventId(fixture, `execution:${id}`),
-      );
       const projected = await fixture.engine.content.preparer.prepare({
         type: "json",
         value: { output },
         role: "tool.projected_output",
       }, { namespace: "tenant-a", idempotencyKey: `${id}:output` });
-      await domain.features.toolExecution.complete({
-        id: `execution:${id}`,
-        output: projected,
-        projectedOutput: projected,
-        historyVisibility: visibility,
-      }, {
-        identity: {
-          deduplicationId: `execution:${id}:complete`,
+      await boundCollection(fixture.engine, "message").create({
+        id: `message:tool:${id}`,
+        threadId: "thread-a",
+        senderId: "tool-contract",
+        recipientIds: [],
+        content: await persistPreparedContent(fixture.engine, projected),
+        metadata: {
+          requesterId: "agent-south",
+          historyVisibility: visibility,
+          toolId: "contract_tool",
+          toolStatus: "completed",
+          toolInvocation: {
+            id,
+            tool: { id: "contract_tool", name: "Contract Tool" },
+            args: { id },
+          },
+          copilotzWorkflow: {
+            kind: "tool_action",
+            llmAttemptId: "seed-peer-attempt",
+            parentLlmAttemptId: "seed-peer-attempt",
+            toolCallId: id,
+            batchId: `incomplete:${id}`,
+            batchSize: 2,
+            batchIndex: 0,
+            agentParticipantId: "agent-south",
+          },
         },
+      }, {
+        namespace: "tenant-a",
+        threadId: "thread-a",
+        routing: { senderId: "tool-contract", recipientIds: [] },
+        identity: { deduplicationId: `message:tool:${id}:create` },
       });
-      await waitForSettlement(
-        fixture,
-        await latestSubjectEventId(fixture, `execution:${id}`),
-      );
     };
     await seedTool("status-call", "public_status", "status-secret");
     await seedTool("private-call", "requester_only", "requester-secret");
@@ -1893,7 +1933,7 @@ Deno.test("OpenAPI and MCP descriptors resolve worker-locally for both prompt an
     assertEquals(generatedContext?.senderId, generatedAgent.id);
     assert(typeof generatedContext?.idempotencyKey === "string");
     assert(typeof generatedContext?.resolveAsset === "function");
-    const executions = await projectToolExecutions(
+    const executions = await projectToolLifecycle(
       fixture.engine,
       "tenant-a",
       "thread-a",
@@ -2040,7 +2080,7 @@ Deno.test("tool pipelines keep jq internal, persist actual stages, and resume on
       { region: "south" },
       { records: [{ id: 1, status: "paid" }], mode: "priority" },
     ]);
-    const executions = await projectToolExecutions(
+    const executions = await projectToolLifecycle(
       fixture.engine,
       "tenant-a",
       "thread-a",
@@ -2090,7 +2130,6 @@ Deno.test("A55 relocated workflow owners remain factory-first and runtime-neutra
       "tools/types.ts",
       "llm/provider-resource.ts",
       "llm/chat-types.ts",
-      "llm/attempt-lifecycle.ts",
     ]
   ) {
     const source = await Deno.readTextFile(new URL(module, owners));

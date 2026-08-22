@@ -9,11 +9,17 @@ import type {
 } from "../collections/index.ts";
 import type {
   AssetOrigin,
+  AssetRecord,
   BodyStore,
+  ContentInput,
+  ContentRef,
   ContentResolver,
   ContentSequence,
   ContentStreamRuntime,
   DurableContentInput,
+  PreparedContent,
+  PublishAssetInput,
+  ResolvedContent,
 } from "../content/index.ts";
 import type {
   DomainRelation,
@@ -25,6 +31,10 @@ import type { LlmResource } from "../llm/index.ts";
 import type { ContextResource } from "../context/types.ts";
 import type { PluginRegistry } from "../plugins/index.ts";
 import type { Agent, API, MCPServer, Skill, Tool } from "../resources/index.ts";
+import type {
+  ActionLifecycleAppender,
+  ActionLifecycleLoader,
+} from "../actions/index.ts";
 
 /** HTTP projection of a feature invoke. Not the feature action signature. */
 export type FeatureRequest = Readonly<{
@@ -152,11 +162,24 @@ export type FeatureContentHandle = Readonly<{
   stream?: ContentStreamRuntime;
   /** Protected workflow body authority. Not exposed on application content scope. */
   bodies?: BodyStore;
+  prepare(
+    input: ContentInput | readonly ContentInput[],
+    options: { operationKey: string; origin?: AssetOrigin },
+  ): Promise<PreparedContent>;
   materialize(
     input: DurableContentInput,
     options?: { origin?: AssetOrigin },
   ): Promise<ContentSequence>;
   linkOwner(ownerId: string, content: ContentSequence): Promise<void>;
+  publish(
+    input: Omit<PublishAssetInput, "namespace" | "idempotencyKey">,
+    options: { operationKey: string },
+  ): Promise<AssetRecord>;
+  get(assetId: string): Promise<AssetRecord | null>;
+  getMany(assetIds: readonly string[]): Promise<readonly AssetRecord[]>;
+  resolve(ref: ContentRef): Promise<ResolvedContent>;
+  resolveMany(refs: readonly ContentRef[]): Promise<readonly ResolvedContent[]>;
+  open(ref: ContentRef): Promise<ReadableStream<Uint8Array>>;
 }>;
 
 export type FeatureTransactionOptions = Readonly<{
@@ -315,6 +338,10 @@ export type FeatureContextBindings = Readonly<{
   };
   collectionRuntime: CollectionRuntime;
   transaction?: CollectionRuntime["transaction"];
+  actionLifecycle?: Readonly<{
+    append: ActionLifecycleAppender;
+    load?: ActionLifecycleLoader;
+  }>;
   now?: () => Date;
   /** Consumer-local Feature aliases. Never derived from a global Feature field. */
   featureAliases?: Readonly<Record<string, AnyFeatureDefinition>>;

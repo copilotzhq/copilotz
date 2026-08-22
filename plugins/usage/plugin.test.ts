@@ -6,17 +6,13 @@ import {
 } from "./index.ts";
 import { createCopilotz } from "../../index.ts";
 import { createTestDomainContext } from "../../runtime/testing/domain-context.ts";
-import { waitForTestDelivery } from "../../runtime/testing/deliveries.ts";
 import {
-  projectLlmAttempts,
   projectMessageById,
   projectMessages,
   projectParticipants,
   projectThreadByExternalId,
   projectThreadById,
   projectThreads,
-  projectToolExecutionById,
-  projectToolExecutions,
 } from "../../runtime/testing/projections.ts";
 import {
   createTestDatabase,
@@ -24,14 +20,67 @@ import {
 } from "../../runtime/testing/ominipg.ts";
 import {
   type CopilotzEngine,
+  type CopilotzProcessorContext,
   createCopilotzEngine,
 } from "../../runtime/engine/index.ts";
 import { createSqlSession } from "../../runtime/events/index.ts";
-import { createPluginRegistry } from "../../runtime/plugins/index.ts";
+import {
+  createPluginRegistry,
+  definePlugin,
+  defineProcessor,
+} from "../../runtime/plugins/index.ts";
+import { defineFeature } from "../../runtime/features/index.ts";
 import { coreCollectionsPlugin } from "../core/plugin.ts";
 
 const NAMESPACE = "tenant-a";
 const THREAD_ID = "thread-a";
+
+const usageLlmFeature = defineFeature({
+  id: "copilotz.core.llm",
+  actions: {
+    generate: {
+      execute(input: unknown) {
+        const value = input as Record<string, unknown>;
+        if (value.fail) throw new Error(String(value.fail));
+        return value.result;
+      },
+    },
+  },
+});
+
+const usageToolFeature = defineFeature({
+  id: "copilotz.core.tool",
+  actions: {
+    call: {
+      execute(input: unknown) {
+        return (input as Record<string, unknown>).result;
+      },
+    },
+  },
+});
+
+const usageActionDriverPlugin = definePlugin({
+  id: "test.usage-action-driver",
+  version: "1.0.0",
+  processors: [defineProcessor<CopilotzProcessorContext>({
+    id: "test.usage-action-driver",
+    on: [
+      { eventType: "test.usage.llm" },
+      { eventType: "test.usage.tool" },
+    ],
+    async handle(event, context) {
+      if (event.type === "test.usage.llm") {
+        await context.feature(usageLlmFeature).generate(event.data, {
+          operationKey: String((event.data as Record<string, unknown>).key),
+        }).catch(() => undefined);
+        return;
+      }
+      await context.feature(usageToolFeature).call(event.data, {
+        operationKey: String((event.data as Record<string, unknown>).key),
+      });
+    },
+  })],
+});
 
 type Fixture = Readonly<{
   db: TestDatabase;
@@ -43,7 +92,11 @@ async function createFixture(
 ): Promise<Fixture> {
   const db = await createTestDatabase({ url: ":memory:" });
   const registry = await createPluginRegistry({
-    plugins: [coreCollectionsPlugin, createUsageWorkflowPlugin(options)],
+    plugins: [
+      coreCollectionsPlugin,
+      createUsageWorkflowPlugin(options),
+      usageActionDriverPlugin,
+    ],
   });
   const engine = await createCopilotzEngine({
     session: createSqlSession(db),
@@ -75,16 +128,6 @@ async function createFixture(
 async function closeFixture(fixture: Fixture): Promise<void> {
   await fixture.engine.shutdown();
   await fixture.db.close();
-}
-
-function providerMetadata(parentLlmAttemptId: string) {
-  return {
-    copilotzWorkflow: {
-      kind: "provider_attempt",
-      parentLlmAttemptId,
-      agentParticipantId: "agent-node",
-    },
-  };
 }
 
 Deno.test("usage workflow is a factory-created plugin and can disable metering", () => {
@@ -126,7 +169,7 @@ Deno.test("package-root core.usage composes the usage plugin without runtime own
   }
 });
 
-Deno.test("usage workflow records physical provider attempts and tools once without payload copies", async () => {
+Deno.test("usage workflow records Action terminals once without payload copies", async () => {
   const hookKinds: string[] = [];
   const fixture = await createFixture({
     async resolveCost(event, context) {
@@ -150,190 +193,89 @@ Deno.test("usage workflow records physical provider attempts and tools once with
     },
   });
   try {
-    const domain = createTestDomainContext(
-      fixture.engine,
-      NAMESPACE,
-      coreFeatureAliases,
-    );
-    const logical = await domain.features.llmAttempt.create({
-      id: "logical-1",
+    const invoke = async (
+      type: "test.usage.llm" | "test.usage.tool",
+      payload: Record<string, unknown>,
+    ) => {
+      const appended = await fixture.engine.events.append({
+        type,
+        namespace: NAMESPACE,
+        threadId: THREAD_ID,
+        payload,
+        correlationId: `usage:${String(payload.key)}`,
+        deduplicationId: `usage:${String(payload.key)}:requested`,
+      });
+      await Promise.all(appended.dispatch.handles.map((handle) => handle.done));
+    };
+    const common = {
       threadId: THREAD_ID,
+      messageId: "message-1",
       participantId: "agent-node",
       initiatorParticipantId: "user-node",
       agentId: "north",
-      status: "running",
-    }) as { id: string };
-    const logicalAnswer = await fixture.engine.content.preparer.prepare(
-      "logical output must not be copied into usage",
-      { namespace: NAMESPACE, idempotencyKey: "logical-1:answer" },
-    );
-    await domain.features.llmAttempt.complete({
-      id: logical.id,
-      answer: logicalAnswer,
-      usage: { inputTokens: 20, outputTokens: 10, totalTokens: 30 },
-    });
-
-    await domain.features.llmAttempt.create({
-      id: "logical-1:provider:0",
-      threadId: THREAD_ID,
-      participantId: "agent-node",
-      initiatorParticipantId: "user-node",
-      agentId: "north",
-      provider: "openai",
-      model: "primary-model",
-      parentAttemptId: logical.id,
-      status: "running",
-      metadata: providerMetadata(logical.id),
-    });
-    const providerAnswer = await fixture.engine.content.preparer.prepare(
-      "provider output must not be copied into usage",
-      { namespace: NAMESPACE, idempotencyKey: "provider-0:answer" },
-    );
-    await domain.features.llmAttempt.complete({
-      id: "logical-1:provider:0",
-      answer: providerAnswer,
-      usage: {
-        inputTokens: 10,
-        outputTokens: 5,
-        totalTokens: 15,
-        source: "provider",
-        rawUsage: { requestId: "req-safe" },
-      },
-      cost: {
-        source: "openrouter",
-        currency: "USD",
-        pricingModelId: "openai/primary-model",
-        inputCostUsd: 0.01,
-        outputCostUsd: 0.01,
-        totalCostUsd: 0.02,
-      },
-      finishedAt: "2026-08-06T12:00:01.000Z",
-      metricsFinalizedAt: "2026-08-06T12:00:01.000Z",
-    });
-    const completedEvent = (await fixture.engine.events.list({
-      namespace: NAMESPACE,
-      threadId: THREAD_ID,
-      limit: 1_000,
-    })).filter((event) => event.subject?.id === "logical-1:provider:0").at(-1)!;
-
-    await domain.features.llmAttempt.create({
-      id: "logical-1:provider:1",
-      threadId: THREAD_ID,
-      participantId: "agent-node",
-      initiatorParticipantId: "user-node",
-      agentId: "north",
-      provider: "openai",
-      model: "fallback-model",
-      parentAttemptId: logical.id,
-      attemptIndex: 1,
-      status: "running",
-      metadata: providerMetadata(logical.id),
-    });
-    await domain.features.llmAttempt.fail({
-      id: "logical-1:provider:1",
-      safeError: { message: "provider unavailable", code: "server_error" },
-      usage: { inputTokens: 4, totalTokens: 4, source: "provider" },
-      finishedAt: "2026-08-06T12:00:02.000Z",
-    });
-    const failedEvent = (await fixture.engine.events.list({
-      namespace: NAMESPACE,
-      threadId: THREAD_ID,
-      limit: 1_000,
-    })).filter((event) => event.subject?.id === "logical-1:provider:1").at(-1)!;
-
-    await domain.features.llmAttempt.create({
-      id: "logical-1:provider:2",
-      threadId: THREAD_ID,
-      participantId: "agent-node",
-      initiatorParticipantId: "user-node",
-      agentId: "north",
-      provider: "openai",
-      model: "hedged-model",
-      parentAttemptId: logical.id,
-      attemptIndex: 2,
-      status: "running",
-      metadata: providerMetadata(logical.id),
-    });
-    await domain.collections.llm_attempt.update({
-      id: "logical-1:provider:2",
-      set: {
-        status: "superseded",
-        usage: { inputTokens: 2, totalTokens: 2, source: "provider" },
-        metricsFinalizedAt: "2026-08-06T12:00:03.000Z",
-      },
-    });
-    const supersededEvent = (await fixture.engine.events.list({
-      namespace: NAMESPACE,
-      threadId: THREAD_ID,
-      limit: 1_000,
-    })).filter((event) => event.subject?.id === "logical-1:provider:2").at(-1)!;
-
-    const argumentsContent = await fixture.engine.content.preparer.prepare(
-      { type: "json", value: { secretPrompt: "do not duplicate" } },
-      { namespace: NAMESPACE, idempotencyKey: "tool-1:arguments" },
-    );
-    await domain.features.toolExecution.create({
-      id: "tool-1",
-      threadId: THREAD_ID,
-      participantId: "agent-node",
-      agentId: "north",
-      toolCallId: "call-1",
-      tool: { id: "lookup", name: "Lookup" },
-      arguments: argumentsContent,
-      status: "running",
-      metadata: {
-        copilotzWorkflow: {
-          kind: "tool_execution",
-          llmAttemptId: logical.id,
+    };
+    await invoke("test.usage.llm", {
+      ...common,
+      key: "provider-0",
+      result: {
+        provider: "openai",
+        model: "primary-model",
+        answer: "provider output must not be copied into usage",
+        usage: {
+          inputTokens: 10,
+          outputTokens: 5,
+          totalTokens: 15,
+          source: "provider",
+          rawUsage: { requestId: "req-safe" },
         },
+        cost: {
+          source: "openrouter",
+          currency: "USD",
+          pricingModelId: "openai/primary-model",
+          inputCostUsd: 0.01,
+          outputCostUsd: 0.01,
+          totalCostUsd: 0.02,
+        },
+        metricsFinalizedAt: "2026-08-06T12:00:01.000Z",
       },
     });
-    const toolOutput = await fixture.engine.content.preparer.prepare(
-      { type: "json", value: { privateResult: "do not duplicate" } },
-      { namespace: NAMESPACE, idempotencyKey: "tool-1:output" },
-    );
-    await domain.features.toolExecution.complete({
-      id: "tool-1",
-      output: toolOutput,
-      durationMs: 25,
-      finishedAt: "2026-08-06T12:00:04.000Z",
+    await invoke("test.usage.llm", {
+      ...common,
+      key: "provider-1",
+      fail: "provider unavailable",
     });
-    const toolEvent = (await fixture.engine.events.list({
-      namespace: NAMESPACE,
-      threadId: THREAD_ID,
-      limit: 1_000,
-    })).filter((event) => event.subject?.id === "tool-1").at(-1)!;
+    await invoke("test.usage.tool", {
+      ...common,
+      key: "tool-1",
+      tool: { id: "lookup", name: "Lookup" },
+      arguments: { secretPrompt: "do not duplicate" },
+      result: {
+        status: "completed",
+        output: { privateResult: "do not duplicate" },
+        durationMs: 25,
+      },
+    });
 
-    await Promise.all([
-      completedEvent,
-      failedEvent,
-      supersededEvent,
-      toolEvent,
-    ].map((event) =>
-      waitForTestDelivery(
-        fixture.engine,
-        NAMESPACE,
-        event.id,
-        "succeeded",
-        10_000,
-      )
-    ));
+    const deadline = Date.now() + 10_000;
+    while (
+      (await fixture.engine.collections.get("usage").list(NAMESPACE)).length < 3
+    ) {
+      if (Date.now() >= deadline) {
+        throw new Error("Usage Actions did not settle.");
+      }
+      await fixture.engine.recover({ namespace: NAMESPACE });
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
 
     const rows = [
       ...await fixture.engine.collections.get("usage").list(
         NAMESPACE,
       ),
     ].sort((left, right) => left.id.localeCompare(right.id));
-    assertEquals(rows.length, 4);
-    assertEquals(rows.map((row) => row.id), [
-      "usage:llm:logical-1:provider:0",
-      "usage:llm:logical-1:provider:1",
-      "usage:llm:logical-1:provider:2",
-      "usage:tool:tool-1",
-    ]);
-    assertEquals(hookKinds.sort(), ["llm", "llm", "llm", "tool"]);
+    assertEquals(rows.length, 3);
+    assertEquals(hookKinds.sort(), ["llm", "llm", "tool"]);
 
-    const first = rows[0];
+    const first = rows.find((row) => row.resource === "primary-model")!;
     assertEquals(first.kind, "llm");
     assertEquals(first.resource, "primary-model");
     assertEquals(first.initiatedById, "user-external");
@@ -348,12 +290,16 @@ Deno.test("usage workflow records physical provider attempts and tools once with
     assertEquals(first.pricingSource, "contract-pricing");
     assertEquals(first.rawUsage, { requestId: "req-safe" });
 
-    const tool = rows[3];
-    assertEquals(tool.kind, "tool");
-    assertEquals(tool.resource, "lookup");
-    assertEquals(tool.metrics, { calls: 1, durationMs: 25, hookObserved: 1 });
-    assertEquals(tool.totalCostUsd, 0.5);
-    assertEquals(tool.initiatedById, "user-external");
+    const toolRow = rows.find((row) => row.kind === "tool")!;
+    assertEquals(toolRow.resource, "lookup");
+    assertEquals(toolRow.metrics, {
+      calls: 1,
+      durationMs: 25,
+      hookObserved: 1,
+    });
+    assertEquals(toolRow.totalCostUsd, 0.5);
+    assertEquals(toolRow.initiatedById, "user-external");
+    assertEquals(rows.some((row) => row.status === "failed"), true);
 
     const serialized = JSON.stringify(rows);
     assert(!serialized.includes("provider output must not be copied"));
@@ -362,7 +308,7 @@ Deno.test("usage workflow records physical provider attempts and tools once with
     await fixture.engine.recover({ namespace: NAMESPACE });
     assertEquals(
       (await fixture.engine.collections.get("usage").list(NAMESPACE)).length,
-      4,
+      3,
     );
   } finally {
     await closeFixture(fixture);

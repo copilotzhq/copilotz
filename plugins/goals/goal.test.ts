@@ -15,7 +15,6 @@ import {
   loadMessageRecord,
   loadParticipantRecord,
 } from "../../runtime/engine/collection-graph.ts";
-import { message as coreMessage } from "../core/index.ts";
 import { coreCollectionsPlugin } from "../core/plugin.ts";
 import type { GoalStreamEvent } from "./types.ts";
 import { createGoalRuntime } from "./index.ts";
@@ -176,28 +175,7 @@ async function createFixture(
         relations: { list: (input) => scope.relations.list(input) },
       }),
     resolver: scope.content.resolver,
-    run: async (input) => {
-      const handle = await application.send({
-        ...coreMessage({
-          thread: typeof input.thread === "string"
-            ? input.thread
-            : input.thread.id,
-          participant: input.participant,
-          recipientIds: input.recipientIds,
-          content: input.content,
-          ...(input.messageId ? { id: input.messageId } : {}),
-          ...(input.metadata ? { metadata: input.metadata } : {}),
-          ...(input.visibility ? { visibility: input.visibility } : {}),
-        }),
-        databaseSchema: schema,
-      });
-      return Object.freeze({
-        ...handle,
-        threadId: typeof input.thread === "string"
-          ? input.thread
-          : input.thread.id,
-      });
-    },
+    send: (input) => application.send(input),
     defaultNamespace: NAMESPACE,
     defaultDatabaseSchema: schema,
   });

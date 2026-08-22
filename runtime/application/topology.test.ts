@@ -18,15 +18,12 @@ import { isCopilotzPersistenceError } from "./persistence.ts";
 import { coreCollectionsPlugin } from "../../plugins/core/plugin.ts";
 import { createTestDomainContext } from "../testing/domain-context.ts";
 import {
-  projectLlmAttempts,
   projectMessageById,
   projectMessages,
   projectParticipants,
   projectThreadByExternalId,
   projectThreadById,
   projectThreads,
-  projectToolExecutionById,
-  projectToolExecutions,
 } from "../testing/projections.ts";
 
 const namespace = "copilotz-topology-test";
@@ -184,9 +181,9 @@ Deno.test("Gateway and Worker preserve live output and cascading durable work", 
       3,
     );
     assertEquals(worker.snapshot().transport, "in-process");
-    assertEquals(accepted, 2);
+    assertEquals(accepted, 3);
     assertEquals(ready, 1);
-    assertEquals(started, 2);
+    assertEquals(started, 3);
     assertEquals("execution" in gateway, false);
     assertEquals("engine" in gateway, false);
   } finally {

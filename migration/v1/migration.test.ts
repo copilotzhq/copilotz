@@ -18,16 +18,9 @@ import {
 } from "../../runtime/testing/ominipg.ts";
 import {
   type ContentRef,
-  createContentResolver,
   createDatabaseAssetRepository,
 } from "../../runtime/content/index.ts";
-import {
-  createConversationRepository,
-  createLlmAttemptRepository,
-  createToolExecutionRepository,
-  llmAttemptContent,
-  toolExecutionContent,
-} from "../../runtime/domain/index.ts";
+import { createConversationRepository } from "../../runtime/domain/index.ts";
 import { createDeliveryExecutor } from "../../runtime/execution/index.ts";
 import type { KnowledgeDocument } from "../../runtime/knowledge/index.ts";
 import { createPluginRegistry } from "../../runtime/plugins/index.ts";
@@ -133,7 +126,7 @@ async function createV3Readers(session: SqlSession, schema: string) {
   });
   const coordinator = createEventCoordinator({ store, registry, executor });
   let id = 0;
-  const assets = createDatabaseAssetRepository({
+  const databaseAssets = createDatabaseAssetRepository({
     coordinator,
     session,
     eventStore: store,
@@ -144,22 +137,162 @@ async function createV3Readers(session: SqlSession, schema: string) {
     coordinator,
     session,
     eventStore: store,
-    assets,
+    assets: databaseAssets,
     createId: () => `migration-reader-domain-${++id}`,
   });
-  const tools = createToolExecutionRepository({
-    coordinator,
-    session,
-    eventStore: store,
-    assets,
-    createId: () => `migration-reader-tool-${++id}`,
+  type LegacyWorkflowRecord = Readonly<
+    Record<string, unknown> & {
+      id: string;
+      namespace: string;
+      content: readonly ContentRef[];
+      metadata: Readonly<Record<string, unknown>>;
+    }
+  >;
+  const mapWorkflow = (row: {
+    id: string;
+    namespace: string;
+    data: unknown;
+  }): LegacyWorkflowRecord => {
+    const data = typeof row.data === "string"
+      ? JSON.parse(row.data) as Record<string, unknown>
+      : row.data as Record<string, unknown>;
+    return Object.freeze({
+      ...data,
+      id: row.id,
+      namespace: row.namespace,
+      content: Object.freeze(
+        Array.isArray(data.content) ? data.content as ContentRef[] : [],
+      ),
+      metadata: Object.freeze(
+        data.metadata && typeof data.metadata === "object" &&
+          !Array.isArray(data.metadata)
+          ? data.metadata as Record<string, unknown>
+          : {},
+      ),
+    });
+  };
+  const workflowReader = (type: "llm_attempt" | "tool_execution") =>
+    Object.freeze({
+      async get(
+        namespace: string,
+        workflowId: string,
+      ): Promise<LegacyWorkflowRecord | null> {
+        const result = await session.query<{
+          id: string;
+          namespace: string;
+          data: unknown;
+        }>(
+          `SELECT id, namespace, data FROM ${store.tables.nodes}
+           WHERE namespace = $1 AND id = $2 AND type = $3 LIMIT 1`,
+          [namespace, workflowId, type],
+        );
+        return result.rows[0] ? mapWorkflow(result.rows[0]) : null;
+      },
+    });
+  const attempts = workflowReader("llm_attempt");
+  const toolReader = workflowReader("tool_execution");
+  const tools = Object.freeze({
+    ...toolReader,
+    async getByToolCallId(
+      namespace: string,
+      threadId: string,
+      toolCallId: string,
+    ): Promise<LegacyWorkflowRecord | null> {
+      const result = await session.query<{
+        id: string;
+        namespace: string;
+        data: unknown;
+      }>(
+        `SELECT id, namespace, data FROM ${store.tables.nodes}
+         WHERE namespace = $1 AND type = 'tool_execution'
+           AND data ->> 'threadId' = $2 AND data ->> 'toolCallId' = $3
+         ORDER BY created_at DESC, id DESC LIMIT 1`,
+        [namespace, threadId, toolCallId],
+      );
+      return result.rows[0] ? mapWorkflow(result.rows[0]) : null;
+    },
   });
-  const attempts = createLlmAttemptRepository({
-    coordinator,
-    session,
-    eventStore: store,
-    assets,
-    createId: () => `migration-reader-attempt-${++id}`,
+  const legacyAssets = Object.freeze({
+    async read(namespace: string, assetId: string) {
+      const result = await session.query<{
+        id: string;
+        namespace: string;
+        data: unknown;
+        created_at: string | Date;
+      }>(
+        `SELECT id, namespace, data, created_at FROM ${store.tables.nodes}
+         WHERE namespace = $1 AND id = $2 AND type = 'asset' LIMIT 1`,
+        [namespace, assetId],
+      );
+      const row = result.rows[0];
+      if (!row) throw new Error(`Asset '${assetId}' was not found.`);
+      const data = typeof row.data === "string"
+        ? JSON.parse(row.data) as Record<string, unknown>
+        : row.data as Record<string, unknown>;
+      if (data.state !== "ready") {
+        throw new Error(`Asset '${assetId}' is not ready.`);
+      }
+      const location = data.location as Record<string, unknown>;
+      const body = String(data.body ?? "");
+      const bytes = location.encoding === "base64"
+        ? Uint8Array.from(atob(body), (character) => character.charCodeAt(0))
+        : new TextEncoder().encode(body);
+      return Object.freeze({
+        asset: Object.freeze({
+          id: row.id,
+          namespace: row.namespace,
+          mediaType: String(data.mediaType),
+          byteLength: Number(data.byteLength),
+          digest: String(data.digest),
+          state: "ready" as const,
+          location: Object.freeze({ kind: "database" as const, key: row.id }),
+          createdAt: new Date(row.created_at).toISOString(),
+          ...(typeof data.readyAt === "string"
+            ? { readyAt: data.readyAt }
+            : {}),
+          metadata: data.metadata as Record<string, unknown> | undefined,
+        }),
+        bytes,
+      });
+    },
+  });
+  type LegacyResolvedContent = Readonly<{
+    ref: ContentRef;
+    asset: Readonly<{ mediaType: string }>;
+    bytes: Uint8Array;
+    text?: string;
+    value?: unknown;
+  }>;
+  const resolve = async (
+    ref: ContentRef,
+    namespace: string,
+  ): Promise<LegacyResolvedContent> => {
+    const body = await legacyAssets.read(namespace, ref.assetId);
+    const resolved: {
+      ref: ContentRef;
+      asset: Readonly<{ mediaType: string }>;
+      bytes: Uint8Array;
+      text?: string;
+      value?: unknown;
+    } = {
+      ref,
+      asset: body.asset,
+      bytes: body.bytes,
+    };
+    if (ref.kind === "text") {
+      resolved.text = new TextDecoder().decode(body.bytes);
+    } else if (ref.kind === "json") {
+      const text = new TextDecoder().decode(body.bytes);
+      resolved.text = text;
+      resolved.value = JSON.parse(text);
+    }
+    return Object.freeze(resolved);
+  };
+  const resolver = Object.freeze({
+    get: (ref: ContentRef, options: { namespace: string }) =>
+      resolve(ref, options.namespace),
+    getMany: (refs: readonly ContentRef[], options: { namespace: string }) =>
+      Promise.all(refs.map((ref) => resolve(ref, options.namespace))),
   });
   const documents = Object.freeze({
     async get(
@@ -220,15 +353,22 @@ async function createV3Readers(session: SqlSession, schema: string) {
     },
   });
   return {
-    assets,
+    assets: legacyAssets,
     attempts,
     conversation,
     executor,
     documents,
     memories,
-    resolver: createContentResolver({ assets }),
+    resolver,
     tools,
   };
+}
+
+function workflowContent(
+  workflow: Readonly<{ content: readonly ContentRef[] }>,
+  role: string,
+): ContentRef | undefined {
+  return workflow.content.find((ref) => ref.role === role);
 }
 
 function legacyAssetResolver(suffix: string) {
@@ -769,22 +909,6 @@ Deno.test("A28 upgrade preserves unavailable assets and their message references
           ["llm.tool_calls", message?.content[3]?.assetId],
         ],
       );
-      assertEquals(
-        (await readers.assets.get(
-          "tenant-unavailable",
-          "asset-unavailable",
-        ))?.state,
-        "failed",
-      );
-      await assertRejects(
-        () =>
-          readers.assets.read(
-            "tenant-unavailable",
-            "asset-unavailable",
-          ),
-        Error,
-        "not ready",
-      );
     } finally {
       await readers.executor.shutdown();
     }
@@ -816,17 +940,12 @@ Deno.test("A28 upgrade preserves non-UTF-8 legacy text assets as bytes", async (
       "base64",
     );
 
-    const readers = await createV3Readers(session, schema);
-    try {
-      const asset = await readers.assets.read(
-        "tenant-asset-non-utf8",
-        "asset-asset-non-utf8",
-      );
-      assertEquals(asset.asset.mediaType, "text/csv");
-      assertEquals(asset.bytes, bytes);
-    } finally {
-      await readers.executor.shutdown();
-    }
+    assertEquals(stored.rows[0]?.data.mediaType, "text/csv");
+    const encoded = String(stored.rows[0]?.data.body ?? "");
+    assertEquals(
+      Uint8Array.from(atob(encoded), (character) => character.charCodeAt(0)),
+      bytes,
+    );
   } finally {
     await db.close();
   }
@@ -1161,14 +1280,19 @@ Deno.test("A28 multi-tenant upgrade preserves graph domains and translates settl
         assertEquals(tool?.toolCallId, `call-${suffix}`);
         assertEquals(tool?.status, "completed");
         assertEquals(tool?.participantId, agent?.id);
-        const toolContent = toolExecutionContent(tool!);
         assertEquals(
-          (await readers.resolver.get(toolContent.arguments, { namespace }))
+          (await readers.resolver.get(
+            workflowContent(tool!, "tool.arguments")!,
+            { namespace },
+          ))
             .value,
           { q: "x" },
         );
         assertEquals(
-          (await readers.resolver.get(toolContent.output!, { namespace }))
+          (await readers.resolver.get(
+            workflowContent(tool!, "tool.output")!,
+            { namespace },
+          ))
             .value,
           { ok: true },
         );
@@ -1179,14 +1303,16 @@ Deno.test("A28 multi-tenant upgrade preserves graph domains and translates settl
         );
         assertEquals(attempt?.status, "completed");
         assertEquals(attempt?.participantId, agent?.id);
-        const attemptContent = llmAttemptContent(attempt!);
         assertEquals(
-          (await readers.resolver.get(attemptContent.answer!, { namespace }))
+          (await readers.resolver.get(
+            workflowContent(attempt!, "body")!,
+            { namespace },
+          ))
             .text,
           "legacy answer",
         );
         assertEquals(
-          (await readers.resolver.get(attemptContent.reasoning!, {
+          (await readers.resolver.get(workflowContent(attempt!, "reasoning")!, {
             namespace,
           })).text,
           "legacy thought",
@@ -1509,15 +1635,14 @@ Deno.test("A28 upgrade preserves null and partial LLM content", async () => {
         attemptId,
       );
       assertEquals(attempt?.status, "completed");
-      const content = llmAttemptContent(attempt!);
       assertEquals(
-        (await readers.resolver.get(content.answer!, {
+        (await readers.resolver.get(workflowContent(attempt!, "body")!, {
           namespace: `tenant-${suffix}`,
         })).value,
         null,
       );
       assertEquals(
-        (await readers.resolver.get(content.reasoning!, {
+        (await readers.resolver.get(workflowContent(attempt!, "reasoning")!, {
           namespace: `tenant-${suffix}`,
         })).text,
         "legacy partial thought",

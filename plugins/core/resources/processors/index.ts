@@ -1,6 +1,4 @@
 export { completeAskProcessor } from "./complete-ask.ts";
-export { executeTextAttemptProcessor } from "./execute-text-attempt.ts";
-export { executeToolProcessor } from "./execute-tool.ts";
 export { failAskProcessor } from "./fail-ask.ts";
 export { messageInputProcessor } from "./message-input.ts";
 export { messageRouterProcessor } from "./message-router.ts";

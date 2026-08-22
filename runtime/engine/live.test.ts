@@ -7,15 +7,12 @@ import {
 } from "../plugins/index.ts";
 import { createTestDomainContext } from "../../runtime/testing/domain-context.ts";
 import {
-  projectLlmAttempts,
   projectMessageById,
   projectMessages,
   projectParticipants,
   projectThreadByExternalId,
   projectThreadById,
   projectThreads,
-  projectToolExecutionById,
-  projectToolExecutions,
 } from "../../runtime/testing/projections.ts";
 import { createSqlSession } from "../events/index.ts";
 import { coreCollectionsPlugin } from "../../plugins/core/plugin.ts";

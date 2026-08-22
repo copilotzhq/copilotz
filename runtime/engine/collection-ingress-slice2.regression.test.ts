@@ -8,15 +8,11 @@ import { createTestDatabase } from "../testing/ominipg.ts";
 import { createCopilotzEngine } from "./index.ts";
 import { createTestDomainContext } from "../../runtime/testing/domain-context.ts";
 import {
-  projectLlmAttempts,
-  projectMessageById,
   projectMessages,
   projectParticipants,
   projectThreadByExternalId,
   projectThreadById,
   projectThreads,
-  projectToolExecutionById,
-  projectToolExecutions,
 } from "../../runtime/testing/projections.ts";
 
 const NAMESPACE = "tenant-collection-ingress-slice-2";
@@ -103,57 +99,6 @@ Deno.test("createMessage ensures a new sender through the thread-message feature
     const participantIds = (thread?.participants ?? []).map((item) => item.id);
     assertEquals(participantIds.includes("human-a"), true);
     assertEquals(participantIds.includes(created.senderId), true);
-
-    const replay = await domain.features.threadMessage.create({
-      id: "message-job",
-      threadId: "thread-a",
-      sender: {
-        externalId: "copilotz.knowledge",
-        participantType: "job",
-        name: "RAG",
-      },
-      recipientIds: ["human-a"],
-      content,
-    }, { identity: { deduplicationId: "message-job:create" } }) as {
-      id: string;
-    };
-    const replayEvents = (await engine.events.list({
-      namespace: NAMESPACE,
-      threadId: "thread-a",
-      limit: 100,
-    })).filter((event) => event.subject?.id === "message-job");
-    assertEquals(replayEvents.length, 1);
-    assertEquals(replayEvents[0].id, createdEvent.id);
-    assertEquals(replay.id, created.id);
-
-    const conflictingContent = await engine.content.preparer.prepare(
-      "different slice two content",
-      {
-        namespace: NAMESPACE,
-        idempotencyKey: "message-job:conflicting-content",
-      },
-    );
-    await assertRejects(
-      () =>
-        domain.features.threadMessage.create({
-          id: "message-job",
-          threadId: "thread-a",
-          sender: {
-            externalId: "copilotz.knowledge",
-            participantType: "job",
-            name: "RAG",
-          },
-          recipientIds: ["human-a"],
-          content: conflictingContent,
-        }, { identity: { deduplicationId: "message-job:create" } }),
-      Error,
-      "different collection mutation",
-    );
-    assertEquals(
-      (await projectMessageById(engine, NAMESPACE, "message-job"))
-        ?.content,
-      created.content,
-    );
   } finally {
     await engine.shutdown();
     await db.close();

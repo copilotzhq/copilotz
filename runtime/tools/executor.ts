@@ -2,13 +2,14 @@ import type { CollectionRecord } from "../collections/index.ts";
 import type { Agent } from "../resources/index.ts";
 import { assetIdFromRef } from "../content/index.ts";
 import type { ContentStreamWriter, PreparedContent } from "../content/index.ts";
-import type { ToolExecution } from "../domain/index.ts";
-import type { EventRouting, EventVisibility } from "../events/index.ts";
-import type { CopilotzProcessorContext } from "../engine/index.ts";
+import type {
+  CopilotzEvent,
+  EventRouting,
+  EventVisibility,
+} from "../events/index.ts";
 import {
   loadParticipantRecord,
   loadThreadRecord,
-  mapToolExecutionRecord,
 } from "../engine/collection-graph.ts";
 import { validateToolCall } from "./validation.ts";
 import { isWorkflowTool } from "./types.ts";
@@ -16,8 +17,10 @@ import { extractToolResultAssets } from "./result-assets.ts";
 import type {
   DeferredWorkflowToolResult,
   DeferWorkflowToolOptions,
+  ToolActionInput,
   WorkflowTool,
   WorkflowToolExecutionContext,
+  WorkflowToolHostContext,
   WorkflowToolResult,
 } from "./types.ts";
 
@@ -83,11 +86,13 @@ export type WorkflowToolOutcome =
 
 export type WorkflowToolExecutor = (
   input: Readonly<{
-    execution: ToolExecution;
+    execution: ToolActionInput;
     tool?: WorkflowTool;
     availableTools?: readonly WorkflowTool[];
     arguments: unknown;
-    context: CopilotzProcessorContext;
+    context: WorkflowToolHostContext;
+    sourceEvent?: CopilotzEvent;
+    idempotencyKey?: string;
   }>,
 ) => Promise<WorkflowToolOutcome>;
 
@@ -200,17 +205,19 @@ export function createWorkflowToolExecutor(
 /** Executes one durable tool call. Prefer this over the factory wrapper. */
 export async function executeTool(
   input: Readonly<{
-    execution: ToolExecution | CollectionRecord;
+    execution: ToolActionInput | CollectionRecord;
     tool?: WorkflowTool;
     availableTools?: readonly WorkflowTool[];
     arguments: unknown;
-    context: CopilotzProcessorContext;
+    context: WorkflowToolHostContext;
+    sourceEvent?: CopilotzEvent;
+    idempotencyKey?: string;
   }>,
   options: CreateWorkflowToolExecutorOptions = {},
 ): Promise<WorkflowToolOutcome> {
   return await createExecutor(options)({
     ...input,
-    execution: mapToolExecutionRecord(input.execution as CollectionRecord),
+    execution: input.execution as ToolActionInput,
   });
 }
 
@@ -222,8 +229,22 @@ function createExecutor(
     tool,
     arguments: args,
     context,
+    sourceEvent: suppliedSourceEvent,
+    idempotencyKey: suppliedIdempotencyKey,
     availableTools = Object.values(context.tools).filter(isWorkflowTool),
   }) => {
+    const legacy = context as
+      & WorkflowToolHostContext
+      & Readonly<{
+        event?: CopilotzEvent;
+        idempotencyKey?: string;
+      }>;
+    const sourceEvent = suppliedSourceEvent ?? legacy.event;
+    if (!sourceEvent) {
+      throw new TypeError("Tool execution requires a source Event.");
+    }
+    const idempotencyKey = suppliedIdempotencyKey ?? legacy.idempotencyKey ??
+      `tool:${execution.id}`;
     const started = Date.now();
     const toolId = typeof execution.tool.id === "string"
       ? execution.tool.id
@@ -257,7 +278,9 @@ function createExecutor(
       });
     }
 
-    const cancellation = createCancellation(context.signal);
+    const cancellation = createCancellation(
+      context.signal ?? new AbortController().signal,
+    );
     const timeoutMs = timeoutFor(options, tool.key);
     const participant = execution.participantId
       ? await loadParticipantRecord(context, execution.participantId)
@@ -302,7 +325,7 @@ function createExecutor(
         routing: execution.participantId
           ? { senderId: execution.participantId }
           : {},
-        visibility: context.event.visibility,
+        visibility: sourceEvent.visibility,
       });
       writers.set(key, created);
       return created;
@@ -372,8 +395,8 @@ function createExecutor(
     });
     const toolContext: WorkflowToolExecutionContext = {
       namespace: context.namespace,
-      correlationId: context.event.correlationId,
-      idempotencyKey: context.idempotencyKey,
+      correlationId: sourceEvent.correlationId,
+      idempotencyKey,
       execution,
       processor: context,
       threadId: execution.threadId,

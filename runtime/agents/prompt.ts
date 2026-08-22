@@ -7,14 +7,12 @@ import type { Agent, Skill } from "../resources/index.ts";
 import type {
   ConversationMessage,
   ConversationThread,
-  LlmAttempt,
   Participant,
 } from "../domain/index.ts";
 import type { CopilotzProcessorContext } from "../engine/index.ts";
 import {
   listThreadMessageRecords,
   loadThreadRecord,
-  mapLlmAttemptRecord,
   mapParticipantRecord,
 } from "../engine/collection-graph.ts";
 import type { CopilotzEvent } from "../events/index.ts";
@@ -29,6 +27,7 @@ import { getPublicThreadMetadata } from "../thread-metadata.ts";
 import { formatToolsForPrompt } from "../tools/format-tools-for-prompt.ts";
 import { buildTextTranscript } from "./transcript.ts";
 import type {
+  AgentTextActionInput,
   AgentTextPrompt,
   WorkflowPromptContextContribution,
 } from "../llm/chat-types.ts";
@@ -342,7 +341,7 @@ export async function buildAgentTextPrompt(
     options: CreateTextWorkflowPluginOptions;
     agent: Agent;
     participant: Participant | CollectionRecord;
-    attempt: LlmAttempt | CollectionRecord;
+    operation: AgentTextActionInput;
     sourceEvent: CopilotzEvent;
     tools: readonly WorkflowTool[];
     purpose?: ContextPurpose;
@@ -358,14 +357,14 @@ export async function buildAgentTextPrompt(
   const participant = mapParticipantRecord(
     input.participant as CollectionRecord,
   );
-  const attempt = mapLlmAttemptRecord(input.attempt as CollectionRecord);
-  const thread = await loadThreadRecord(context, attempt.threadId);
+  const operation = input.operation;
+  const thread = await loadThreadRecord(context, operation.threadId);
   if (!thread) {
-    throw new Error(`Thread '${attempt.threadId}' was not found.`);
+    throw new Error(`Thread '${operation.threadId}' was not found.`);
   }
-  const human = attempt.initiatorParticipantId
+  const human = operation.initiatorParticipantId
     ? thread.participants.find((candidate) =>
-      candidate.id === attempt.initiatorParticipantId &&
+      candidate.id === operation.initiatorParticipantId &&
       candidate.participantType === "human"
     )
     : thread.participants.find((candidate) =>
@@ -383,7 +382,7 @@ export async function buildAgentTextPrompt(
   );
   const rawHistory = await listThreadMessageRecords(
     context,
-    attempt.threadId,
+    operation.threadId,
   );
   const contextContributions = await promptContext(context, {
     purpose: input.purpose ?? "conversation",
@@ -397,17 +396,17 @@ export async function buildAgentTextPrompt(
     ...(input.sourceRange ? { sourceRange: input.sourceRange } : {}),
   });
   const selectedMessageIds = historyIdsAfterMemory(
-    attempt.inputMessageIds,
+    operation.inputMessageIds,
     rawHistory,
     contextContributions,
   );
   const rawMessages = selectedRawMessages(
     rawHistory,
     selectedMessageIds,
-    attempt.threadId,
+    operation.threadId,
   );
   const generated = await buildTextTranscript(context, {
-    threadId: attempt.threadId,
+    threadId: operation.threadId,
     messageIds: selectedMessageIds,
     participantId: participant.id,
     reasoningHistory: input.options.reasoningHistory,

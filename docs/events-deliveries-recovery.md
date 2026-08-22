@@ -11,16 +11,14 @@ mutation delta/reference, and creation time. They do not have processing status.
 Common facts include:
 
 - `message.created`
-- `llm_attempt.created`, `llm_attempt.completed`, `llm_attempt.failed`
-- `tool_execution.created`, `tool_execution.completed`, `tool_execution.failed`
+- `<featureId>.<action>.invoked|completed|failed|cancelled`
 - `<collection>.created`, `<collection>.updated`, `<collection>.deleted`
 
-Ephemeral events such as `text.delta`, `reasoning.delta`, `audio.delta`,
-`tool_call.delta`, and `tool_output.delta` are published live and never inserted
-into the events table. `tool_output.delta` carries ordered logical channels such
-as `stdout`, `stderr`, `progress`, and `result`; the corresponding
-`tool_execution.*` durable events own lifecycle settlement, while the final tool
-result remains asset-backed durable content.
+Runtime-native stream output is published live and never inserted into the
+events table. It carries ordered bytes through logical lanes such as content,
+reasoning, tool calls, stdout, stderr, progress, and result. The corresponding
+Feature Action lifecycle owns durable execution settlement; final values and
+semantic messages remain asset-backed durable content.
 
 ## Durable deliveries
 
@@ -52,9 +50,9 @@ when calling non-idempotent systems.
 
 ## Explicit settlement scopes
 
-`run.done` and attachment send handles wait for deliveries in their explicit
-settlement scope, not every causally related event or every event sharing a
-correlation ID. Durable processor work inherits its triggering scope by default.
+Application `send(...).done` waits for deliveries in its explicit settlement
+scope, not every causally related event or every event sharing a correlation ID.
+Durable processor work inherits its triggering scope by default.
 A processor can declare `settlement: "detached"` to fork a durable, recoverable
 scope whose completion and failure do not block the caller.
 

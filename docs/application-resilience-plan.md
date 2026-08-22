@@ -451,7 +451,6 @@ call is validated by the existing Copilotz tool-call and execution machinery.
 ```ts
 type MemorySourceRef =
   | Readonly<{ type: "message"; id: string }>
-  | Readonly<{ type: "tool_execution"; id: string }>
   | Readonly<{ type: "asset"; id: string }>
   | Readonly<{ type: "external"; id: string }>
   | Readonly<{

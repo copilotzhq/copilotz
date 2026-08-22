@@ -234,11 +234,7 @@ export function createCoreSchemaStatements(
         AND source_type = 'asset_idempotency'
         AND source_id IS NOT NULL`,
     `DROP INDEX IF EXISTS ${schema}."nodes_tool_call_unique_idx"`,
-    `CREATE INDEX IF NOT EXISTS "nodes_tool_call_idx"
-      ON ${tables.nodes} (namespace, source_id)
-      WHERE type = 'tool_execution'
-        AND source_type = 'tool_call'
-        AND source_id IS NOT NULL`,
+    `DROP INDEX IF EXISTS ${schema}."nodes_tool_call_idx"`,
     `CREATE INDEX IF NOT EXISTS "nodes_data_gin_idx"
       ON ${tables.nodes} USING GIN (data)`,
     `CREATE TABLE IF NOT EXISTS ${tables.edges} (

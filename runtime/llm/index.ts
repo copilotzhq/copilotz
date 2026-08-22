@@ -46,6 +46,7 @@ export type {
   SessionChainTarget,
 } from "./generate-chain.ts";
 export type {
+  AgentTextActionInput,
   AgentTextPrompt,
   CreateAgentAskPluginOptions,
   CreateTextWorkflowPluginOptions,
@@ -56,11 +57,6 @@ export type {
   WorkflowHistoryTransform,
   WorkflowPromptContextContribution,
 } from "./chat-types.ts";
-export {
-  providerAttemptId,
-  providerAttemptMetadata,
-  recordProviderAttemptLifecycle,
-} from "./attempt-lifecycle.ts";
 export { withInclusiveInputTokens } from "./usage.ts";
 export { processStream, resolveProviderStopSequences } from "./utils.ts";
 export {

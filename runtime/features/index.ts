@@ -2,7 +2,7 @@ export {
   createFeatureContext,
   createFeatureContextValues,
   createFeatureInvoker,
-  invokeFeatureAction,
+  isSettledFeatureActionError,
 } from "./context.ts";
 export { defineFeature, isFeatureDefinition } from "./define.ts";
 export type {

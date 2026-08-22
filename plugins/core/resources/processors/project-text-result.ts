@@ -1,5 +1,5 @@
 import type { CollectionRecord } from "@copilotz/copilotz/collections";
-import { llmAttemptContent } from "@copilotz/copilotz/content";
+import type { ContentRef } from "@copilotz/copilotz/content";
 import {
   agentAskMetadata,
   deriveWorkflowId,
@@ -13,10 +13,9 @@ import { requireAgent } from "@copilotz/copilotz/agents";
 import type { ToolInvocation } from "@copilotz/copilotz/llm";
 import { createWorkflowPipelineMetadata } from "@copilotz/copilotz/tools";
 import { threadMessageFeature } from "../features/thread-message.ts";
-import { toolExecutionFeature } from "../features/tool-execution.ts";
+import { toolBatchFeature } from "../features/tool.ts";
 import {
   asRecord,
-  collectionEventRecord,
   loadParticipant,
   optionalText,
   parseJsonText,
@@ -30,9 +29,12 @@ import {
 
 async function toolCallsFromAttempt(
   context: CopilotzProcessorContext,
-  attempt: CollectionRecord,
+  output: Record<string, unknown>,
 ): Promise<readonly ToolInvocation[]> {
-  const ref = llmAttemptContent(attempt).toolCalls;
+  const refs = Array.isArray(output.toolCalls)
+    ? output.toolCalls as readonly ContentRef[]
+    : [];
+  const ref = refs[0];
   if (!ref) return Object.freeze([]);
   const resolved = await context.content.resolve(ref);
   const value = resolvedValue(resolved);
@@ -42,21 +44,23 @@ async function toolCallsFromAttempt(
 export const projectTextResultProcessor: Processor<CopilotzProcessorContext> =
   defineProcessor<CopilotzProcessorContext>({
     id: "copilotz.core.project-text-result",
-    on: [{
-      eventType: "llm_attempt.updated",
-      data: { record: { status: "completed" } },
-    }],
+    on: [
+      { eventType: "copilotz.core.llm.generate.completed" },
+      { eventType: "copilotz.core.llm.session.completed" },
+    ],
     requires: {
       features: {
         threadMessage: threadMessageFeature,
-        toolExecution: toolExecutionFeature,
+        toolBatch: toolBatchFeature,
       },
     },
     async handle(event, context) {
-      const record = collectionEventRecord(event);
-      const attempt = record;
+      const lifecycle = asRecord(event.data);
+      const input = asRecord(lifecycle.input);
+      const output = asRecord(lifecycle.output);
+      if (output.status === "coalesced") return;
+      const attempt = { ...input, ...output } as CollectionRecord;
       if (!textWorkflowAttemptEventMetadata(asRecord(attempt.metadata))) return;
-      if (String(attempt.status) !== "completed") return;
       const participant = optionalText(attempt.participantId)
         ? await loadParticipant(context, optionalText(attempt.participantId)!)
         : null;
@@ -65,8 +69,7 @@ export const projectTextResultProcessor: Processor<CopilotzProcessorContext> =
           `LLM attempt '${attempt.id}' has no agent participant.`,
         );
       }
-      const content = llmAttemptContent(attempt);
-      const toolCalls = await toolCallsFromAttempt(context, attempt);
+      const toolCalls = await toolCallsFromAttempt(context, output);
       const activeAsk = agentAskMetadata(attempt.metadata);
       const outputAsk = activeAsk
         ? Object.freeze({
@@ -75,8 +78,16 @@ export const projectTextResultProcessor: Processor<CopilotzProcessorContext> =
           answerAttemptId: attempt.id,
         })
         : null;
+      const semanticOutputMetadata = {
+        llmToolCalls: toolCalls,
+        ...(Array.isArray(output.reasoning)
+          ? { llmReasoning: structuredClone(output.reasoning) }
+          : {}),
+      };
       const messageMetadata = withWorkflowMetadata(
-        outputAsk ? withAgentAskMetadata(undefined, outputAsk) : undefined,
+        outputAsk
+          ? withAgentAskMetadata(semanticOutputMetadata, outputAsk)
+          : semanticOutputMetadata,
         {
           kind: "agent_output",
           llmAttemptId: attempt.id,
@@ -88,7 +99,7 @@ export const projectTextResultProcessor: Processor<CopilotzProcessorContext> =
         threadId: recordThreadId(attempt),
         sender: participant,
         recipientIds: [],
-        content: content.answer ? [content.answer] : [],
+        content: Array.isArray(output.answer) ? output.answer : [],
         visibility: { kind: "public" },
         metadata: messageMetadata,
       }, {
@@ -123,10 +134,13 @@ export const projectTextResultProcessor: Processor<CopilotzProcessorContext> =
           valueContent(parsedArguments, "tool.arguments"),
           { operationKey: `project:tool:${call.id}:arguments` },
         );
+        const argumentsContent = await context.content.materialize(
+          preparedArguments,
+        );
         const executionMetadata = withWorkflowMetadata(
           activeAsk ? withAgentAskMetadata(undefined, activeAsk) : undefined,
           {
-            kind: "tool_execution",
+            kind: "tool_action",
             llmAttemptId: attempt.id,
             parentLlmAttemptId: attempt.id,
             toolCallId: call.id,
@@ -145,13 +159,21 @@ export const projectTextResultProcessor: Processor<CopilotzProcessorContext> =
           : call.tool?.name ?? toolId;
         items.push({
           id: await deriveWorkflowId("tool", attempt.id, call.id),
+          namespace: context.namespace,
+          threadId: recordThreadId(attempt),
           ...(outputMessageId ? { messageId: outputMessageId } : {}),
           participantId: participant.id,
           agentId: optionalText(attempt.agentId),
           toolCallId: call.id,
+          invocation: structuredClone(call),
           tool: { id: toolId, name: toolName },
-          arguments: preparedArguments,
+          arguments: argumentsContent,
+          availableToolIds: stringArray(attempt.availableToolIds),
           status: "running",
+          content: [],
+          startedAt: event.createdAt,
+          createdAt: event.createdAt,
+          updatedAt: event.createdAt,
           historyVisibility: tool?.historyPolicy?.visibility ?? "public_status",
           metadata: executionMetadata,
           sender: {
@@ -159,11 +181,15 @@ export const projectTextResultProcessor: Processor<CopilotzProcessorContext> =
             participantType: "tool" as const,
             name: toolName,
           },
+          sourceEvent: event,
         });
       }
-      await context.features.toolExecution.createBatch({
-        threadId: recordThreadId(attempt),
+      await context.features.toolBatch.execute({
+        batchId,
         items,
-      }, { operationKey: `project:tools:${attempt.id}:create` });
+      }, {
+        operationKey: `project:tools:${attempt.id}:call-batch`,
+        signal: context.signal,
+      });
     },
   });

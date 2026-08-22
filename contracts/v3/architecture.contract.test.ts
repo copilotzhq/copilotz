@@ -89,8 +89,9 @@ Deno.test("createCopilotz returns one frozen factory-created application", async
     assert(Object.isFrozen(application.config));
     for (
       const member of [
-        "connect",
-        "run",
+        "send",
+        "observe",
+        "close",
         "recover",
         "maintenance",
         "shutdown",

@@ -282,7 +282,7 @@ export async function extractToolResultAssets(
       ...(item.name ? { name: item.name } : {}),
       origin: {
         scope: { type: "thread" as const, id: options.threadId },
-        producer: { type: "tool_execution", id: options.toolExecutionId },
+        producer: { type: "tool_action", id: options.toolExecutionId },
         path: item.path || "/",
       },
     })),

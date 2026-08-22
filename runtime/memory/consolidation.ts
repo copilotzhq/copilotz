@@ -120,7 +120,7 @@ function parseSource(value: unknown): MemorySourceRef {
     });
   }
   if (
-    type !== "message" && type !== "tool_execution" && type !== "asset" &&
+    type !== "message" && type !== "asset" &&
     type !== "external"
   ) {
     throw new TypeError(`Unsupported memory source type '${type}'.`);

@@ -11,8 +11,9 @@ import {
 
 const CORE_FEATURE_IDS = [
   "copilotz.core.thread-message",
-  "copilotz.core.llm-attempt",
-  "copilotz.core.tool-execution",
+  "copilotz.core.llm",
+  "copilotz.core.tool",
+  "copilotz.core.tool-batch",
   "copilotz.core.thread",
   "copilotz.core.message",
 ];
@@ -32,8 +33,7 @@ Deno.test("core plugin is static data and provides its domain resources", () => 
     corePlugin.resources.processors?.map((item) => (item as { id: string }).id),
     [
       "copilotz.core.message-to-text-attempt",
-      "copilotz.core.execute-text-attempt",
-      "copilotz.core.execute-tool",
+      "copilotz.core.message-input",
       "copilotz.core.project-text-result",
       "copilotz.core.project-tool-result",
       "copilotz.core.complete-agent-ask",
@@ -137,11 +137,14 @@ Deno.test("core plugin production files import Copilotz through public subpaths"
     "manifest.ts",
     "resources/llm/index.ts",
     "resources/features/thread-message.ts",
+    "resources/features/llm.ts",
+    "resources/features/tool.ts",
+    "resources/features/thread.ts",
+    "resources/features/message.ts",
     "resources/processors/helpers.ts",
     "resources/processors/index.ts",
     "resources/processors/message-router.ts",
-    "resources/processors/execute-text-attempt.ts",
-    "resources/processors/execute-tool.ts",
+    "resources/processors/message-input.ts",
     "resources/processors/project-text-result.ts",
     "resources/processors/project-tool-result.ts",
     "resources/processors/complete-ask.ts",
@@ -150,8 +153,6 @@ Deno.test("core plugin production files import Copilotz through public subpaths"
     "resources/collections/participant.ts",
     "resources/collections/thread.ts",
     "resources/collections/message.ts",
-    "resources/collections/llm-attempt.ts",
-    "resources/collections/tool-execution.ts",
   ];
   for (const file of files) {
     const source = await Deno.readTextFile(new URL(file, import.meta.url));

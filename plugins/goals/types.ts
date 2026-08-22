@@ -12,7 +12,10 @@ import type {
 import type { CopilotzEvent } from "@copilotz/copilotz/events";
 import type { PluginRegistry } from "@copilotz/copilotz/plugins";
 import type { FeatureHostContext } from "@copilotz/copilotz/features";
-import type { RunHandle, RunInput } from "@copilotz/copilotz/attachments";
+import type {
+  ApplicationSendHandle,
+  ApplicationSendInput,
+} from "@copilotz/copilotz/application";
 
 export type GoalStatus =
   | "completed"
@@ -111,7 +114,7 @@ export type GoalJudgeRunInput = Readonly<{
 }>;
 
 export type GoalRunResult = Readonly<{
-  handle: RunHandle;
+  handle: ApplicationSendHandle;
   events: readonly GoalObservedEvent[];
   finalMessage?: GoalTranscriptMessage;
   text: string;
@@ -219,7 +222,7 @@ export type CreateGoalRuntimeOptions = Readonly<{
   collectionRuntime: CollectionRuntime;
   features(namespace: string): FeatureHostContext;
   resolver: Pick<ContentResolver, "getMany">;
-  run(input: RunInput): Promise<RunHandle>;
+  send(input: ApplicationSendInput): Promise<ApplicationSendHandle>;
   defaultNamespace?: string;
   defaultDatabaseSchema?: string;
   createId?: () => string;

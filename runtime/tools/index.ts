@@ -56,6 +56,7 @@ export {
   type GenerateMcpWorkflowTools,
   isWorkflowTool,
   type ResolveWorkflowAgentTools,
+  type ToolActionInput,
   type WorkflowJqEvaluator,
   type WorkflowPipelineAdvance,
   type WorkflowPipelineMetadata,
@@ -63,6 +64,7 @@ export {
   type WorkflowToolCatalog,
   type WorkflowToolCatalogContext,
   type WorkflowToolExecutionContext,
+  type WorkflowToolHostContext,
   type WorkflowToolOutputOptions,
   type WorkflowToolResult,
 } from "./types.ts";

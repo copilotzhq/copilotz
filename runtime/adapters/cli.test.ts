@@ -52,7 +52,7 @@ Deno.test("portable CLI preserves interactive run, rendering, and session comman
         eventId: "event-a",
         threadId: "thread-a",
         correlationId: "correlation-a",
-        events: new ReadableStream({
+        outputs: new ReadableStream({
           start(controller) {
             controller.enqueue(event);
             controller.close();
@@ -154,7 +154,7 @@ Deno.test("portable CLI renders one labelled line for a streamed tool-call draft
         eventId: "event-a",
         threadId: "thread-a",
         correlationId: "correlation-a",
-        events: new ReadableStream({
+        outputs: new ReadableStream({
           start(controller) {
             for (const event of events) controller.enqueue(event);
             controller.close();

@@ -77,7 +77,7 @@ export interface UsageEvent {
   /** Optional pre-computed cost (e.g. LLM cost already estimated upstream). */
   cost?: UsageCost | null;
 
-  /** Idempotency key (attemptId, toolExecutionId, ...) to dedupe retries. */
+  /** Stable Action or semantic operation key used to dedupe retries. */
   dedupeKey?: string | null;
   /** When the metered operation occurred. Defaults to now at write time. */
   occurredAt?: string | null;

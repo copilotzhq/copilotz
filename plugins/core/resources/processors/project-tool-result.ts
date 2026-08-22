@@ -4,14 +4,13 @@ import type {
   ContentSequence,
   PreparedContent,
 } from "@copilotz/copilotz/content";
-import { toolExecutionContent } from "@copilotz/copilotz/content";
 import type { EventVisibility } from "@copilotz/copilotz/events";
 import {
   agentAskMetadata,
   deriveWorkflowId,
-  type WorkflowMetadata,
   withAgentAskMetadata,
   withWorkflowMetadata,
+  type WorkflowMetadata,
   workflowMetadata,
 } from "@copilotz/copilotz/events";
 import type { CopilotzProcessorContext } from "@copilotz/copilotz/engine";
@@ -24,14 +23,12 @@ import {
   type WorkflowJqEvaluator,
 } from "@copilotz/copilotz/tools";
 import { threadMessageFeature } from "../features/thread-message.ts";
-import { toolExecutionFeature } from "../features/tool-execution.ts";
+import { toolBatchFeature } from "../features/tool.ts";
 import {
   asRecord,
-  collectionEventRecord,
   historyVisibilityOf,
   optionalText,
   recordThreadId,
-  requireCollection,
   requiredText,
   resolvedValue,
   stringArray,
@@ -68,19 +65,28 @@ async function resultContent(
   override?: ContentSequence | PreparedContent,
 ): Promise<ContentSequence | PreparedContent> {
   if (override) return override;
-  const content = toolExecutionContent(execution);
-  const selected: ContentRef | undefined = content.projectedOutput ??
-    content.output;
-  if (selected || content.attachments.length > 0) {
+  const projected = Array.isArray(execution.projectedOutput)
+    ? execution.projectedOutput as ContentSequence
+    : undefined;
+  const output = Array.isArray(execution.output)
+    ? execution.output as ContentSequence
+    : undefined;
+  const attachments = Array.isArray(execution.attachments)
+    ? execution.attachments as ContentSequence
+    : [];
+  const selected = projected ?? output ?? [];
+  if (selected.length || attachments.length) {
     return Object.freeze([
-      ...(selected ? [selected] : []),
-      ...content.attachments,
+      ...selected,
+      ...attachments,
     ]);
   }
   const error = asRecord(execution.safeError);
+  const failed = String(execution.status) === "failed" ||
+    String(execution.status) === "cancelled";
   return await context.content.prepare({
     type: "text",
-    text: String(execution.status) === "failed"
+    text: failed
       ? optionalText(error.message) ?? "Tool execution failed."
       : "No output returned",
     role: "tool.projected_output",
@@ -91,246 +97,276 @@ async function executionOutput(
   context: CopilotzProcessorContext,
   execution: CollectionRecord,
 ): Promise<unknown> {
-  const content = toolExecutionContent(execution);
-  const selected = content.projectedOutput ?? content.output;
+  const sequence = Array.isArray(execution.projectedOutput)
+    ? execution.projectedOutput as readonly ContentRef[]
+    : Array.isArray(execution.output)
+    ? execution.output as readonly ContentRef[]
+    : [];
+  const selected = sequence[0];
   return selected
     ? resolvedValue(await context.content.resolve(selected))
     : undefined;
 }
 
+async function projectExecution(
+  event: Parameters<Processor<CopilotzProcessorContext>["handle"]>[0],
+  context: CopilotzProcessorContext,
+  initial: CollectionRecord,
+  continueAfter: boolean,
+) {
+  let execution = initial;
+  if (String(execution.status) === "running") return;
+  let metadata = workflowMetadata(execution.metadata);
+  if (metadata?.kind === "memory_consolidation") return;
+  const agent = optionalText(execution.agentId)
+    ? context.agents[optionalText(execution.agentId)!]
+    : undefined;
+  const toolCatalog = toolCatalogFor(context, agent);
+  const evaluateJq = jqFor(context, agent);
+  let projectedStatus = String(execution.status);
+  let projectedContent: ContentSequence | PreparedContent | undefined;
+
+  if (
+    metadata?.pipeline && String(execution.status) === "completed" &&
+    metadata.pipeline.stageIndex < metadata.pipeline.stages.length - 1
+  ) {
+    const advancement = await advanceWorkflowPipeline({
+      pipeline: metadata.pipeline,
+      output: await executionOutput(context, execution),
+      upstreamToolExecutionId: execution.id,
+      evaluateJq,
+    });
+    if (advancement.kind === "next_tool") {
+      let availableTools = agent
+        ? await toolCatalog.forAgent(context, agent)
+        : await toolCatalog.all(context);
+      const granted = new Set(stringArray(execution.availableToolIds));
+      if (granted.size) {
+        availableTools = availableTools.filter((tool) => granted.has(tool.key));
+      }
+      const nextTool = availableTools.find((candidate) =>
+        candidate.key === advancement.stage.tool.id
+      );
+      const preparedArguments = await context.content.prepare(
+        valueContent(advancement.arguments, "tool.arguments"),
+        {
+          operationKey:
+            `pipeline:${advancement.pipeline.id}:${advancement.stageIndex}:arguments`,
+        },
+      );
+      const argumentsContent = await context.content.materialize(
+        preparedArguments,
+      );
+      const { toolExecutionId: _completedToolExecutionId, ...workflow } =
+        metadata;
+      const nextWorkflow: WorkflowMetadata = {
+        ...workflow,
+        kind: "tool_action",
+        toolCallId: advancement.stage.id,
+        pipeline: advancement.pipeline,
+      };
+      const activeAsk = agentAskMetadata(execution.metadata);
+      const nextMetadata = withWorkflowMetadata(
+        activeAsk ? withAgentAskMetadata(undefined, activeAsk) : undefined,
+        nextWorkflow,
+      );
+      const parentAttemptId = metadata.parentLlmAttemptId ??
+        metadata.llmAttemptId ?? "pipeline";
+      const nextId = await deriveWorkflowId(
+        "tool",
+        parentAttemptId,
+        "pipeline",
+        advancement.pipeline.id,
+        String(advancement.stageIndex),
+      );
+      await context.features.toolBatch.execute({
+        batchId: nextId,
+        items: [{
+          id: nextId,
+          namespace: context.namespace,
+          threadId: recordThreadId(execution),
+          messageId: optionalText(execution.messageId),
+          participantId: optionalText(execution.participantId),
+          agentId: optionalText(execution.agentId),
+          toolCallId: advancement.stage.id,
+          invocation: structuredClone(execution.invocation),
+          tool: {
+            id: advancement.stage.tool.id,
+            name: nextTool?.name ?? advancement.stage.tool.name ??
+              advancement.stage.tool.id,
+          },
+          arguments: argumentsContent,
+          availableToolIds: stringArray(execution.availableToolIds),
+          status: "running",
+          content: [],
+          startedAt: event.createdAt,
+          createdAt: event.createdAt,
+          updatedAt: event.createdAt,
+          historyVisibility: nextTool?.historyPolicy?.visibility ??
+            historyVisibilityOf(execution),
+          metadata: nextMetadata,
+          sourceEvent: event,
+        }],
+      }, {
+        operationKey:
+          `pipeline:${advancement.pipeline.id}:${advancement.stageIndex}:call`,
+        signal: context.signal,
+      });
+      return;
+    }
+
+    if (advancement.kind === "settled" && advancement.projected) {
+      const prepared = await context.content.prepare(
+        valueContent(advancement.output, "tool.projected_output"),
+        {
+          operationKey: `pipeline:${metadata.pipeline.id}:final-projection`,
+        },
+      );
+      projectedContent = await context.content.materialize(prepared);
+      execution = {
+        ...execution,
+        projectedOutput: projectedContent,
+      } as CollectionRecord;
+    }
+
+    if (advancement.kind === "failed") {
+      projectedStatus = "failed";
+      const prepared = await context.content.prepare({
+        type: "json",
+        value: {
+          ok: false,
+          status: "failed",
+          code: "pipeline_error",
+          error: advancement.message,
+        },
+        role: "tool.projected_output",
+      }, {
+        operationKey: `pipeline:${metadata.pipeline.id}:failure-projection`,
+      });
+      projectedContent = await context.content.materialize(prepared);
+      const failedWorkflow: WorkflowMetadata = {
+        ...metadata,
+        pipelineFailure: {
+          stageIndex: advancement.stageIndex,
+          message: advancement.message,
+        },
+      };
+      execution = {
+        ...execution,
+        projectedOutput: projectedContent,
+        metadata: withWorkflowMetadata(undefined, failedWorkflow),
+      } as CollectionRecord;
+      metadata = failedWorkflow;
+    }
+  }
+
+  const recipientId = optionalText(execution.participantId) ??
+    metadata?.agentParticipantId;
+  if (!recipientId) {
+    throw new Error(`Tool execution '${execution.id}' has no requester.`);
+  }
+  const toolId = requiredText(
+    typeof toolField(execution, "id") === "string"
+      ? toolField(execution, "id") as string
+      : undefined,
+    "Tool execution tool id",
+  );
+  const activeAsk = agentAskMetadata(execution.metadata);
+  const resultBaseMetadata = activeAsk
+    ? withAgentAskMetadata({
+      historyVisibility: historyVisibilityOf(execution),
+      requesterId: recipientId,
+      toolStatus: projectedStatus,
+      toolId,
+      toolInvocation: structuredClone(execution.invocation),
+    }, activeAsk)
+    : {
+      historyVisibility: historyVisibilityOf(execution),
+      requesterId: recipientId,
+      toolStatus: projectedStatus,
+      toolId,
+      toolInvocation: structuredClone(execution.invocation),
+    };
+  const messageMetadata = withWorkflowMetadata(resultBaseMetadata, {
+    kind: "tool_result",
+    continuation: continueAfter ? metadata?.continuation : "none",
+    realtimeStreamId: metadata?.realtimeStreamId,
+    llmAttemptId: metadata?.llmAttemptId,
+    parentLlmAttemptId: metadata?.parentLlmAttemptId ??
+      metadata?.llmAttemptId,
+    toolExecutionId: execution.id,
+    toolCallId: optionalText(asRecord(execution.invocation).id) ??
+      metadata?.pipeline?.rootToolCallId ??
+      optionalText(execution.toolCallId),
+    batchId: metadata?.batchId ?? execution.id,
+    batchSize: metadata?.batchSize ?? 1,
+    batchIndex: metadata?.batchIndex ?? 0,
+    sourceMessageId: metadata?.sourceMessageId,
+    agentParticipantId: recipientId,
+    ...(metadata?.pipeline ? { pipeline: metadata.pipeline } : {}),
+    ...(metadata?.pipelineFailure
+      ? { pipelineFailure: metadata.pipelineFailure }
+      : {}),
+  });
+  await context.features.threadMessage.create({
+    id: await deriveWorkflowId("message", execution.id, "result"),
+    threadId: recordThreadId(execution),
+    sender: {
+      externalId: `tool:${toolId}`,
+      participantType: "tool",
+      name: typeof toolField(execution, "name") === "string"
+        ? toolField(execution, "name") as string
+        : toolId,
+    },
+    recipientIds: [recipientId],
+    content: await resultContent(context, execution, projectedContent),
+    visibility: resultVisibility(execution),
+    metadata: messageMetadata,
+  }, {
+    operationKey: `project:tool-result:message:${execution.id}`,
+  });
+}
+
 export const projectToolResultProcessor: Processor<CopilotzProcessorContext> =
   defineProcessor<CopilotzProcessorContext>({
     id: "copilotz.core.project-tool-result",
-    on: [
-      {
-        eventType: "tool_execution.updated",
-        data: { record: { status: "completed" } },
-      },
-      {
-        eventType: "tool_execution.updated",
-        data: { record: { status: "failed" } },
-      },
-      {
-        eventType: "tool_execution.updated",
-        data: { record: { status: "cancelled" } },
-      },
-    ],
+    on: [{ eventType: "copilotz.core.tool-batch.execute.completed" }],
     requires: {
       features: {
         threadMessage: threadMessageFeature,
-        toolExecution: toolExecutionFeature,
+        toolBatch: toolBatchFeature,
       },
     },
     async handle(event, context) {
-      const record = collectionEventRecord(event);
-      let execution = record;
-      if (String(execution.status) === "running") return;
-      let metadata = workflowMetadata(execution.metadata);
-      if (metadata?.kind === "memory_consolidation") return;
-      const agent = optionalText(execution.agentId)
-        ? context.agents[optionalText(execution.agentId)!]
-        : undefined;
-      const toolCatalog = toolCatalogFor(context, agent);
-      const evaluateJq = jqFor(context, agent);
-      let projectedStatus = String(execution.status);
-      let projectedContent: ContentSequence | PreparedContent | undefined;
-
-      if (
-        metadata?.pipeline && String(execution.status) === "completed" &&
-        metadata.pipeline.stageIndex < metadata.pipeline.stages.length - 1
-      ) {
-        const advancement = await advanceWorkflowPipeline({
-          pipeline: metadata.pipeline,
-          output: await executionOutput(context, execution),
-          upstreamToolExecutionId: execution.id,
-          evaluateJq,
-        });
-        if (advancement.kind === "next_tool") {
-          let availableTools = agent
-            ? await toolCatalog.forAgent(context, agent)
-            : await toolCatalog.all(context);
-          const attemptId = metadata.parentLlmAttemptId ??
-            metadata.llmAttemptId;
-          if (attemptId) {
-            const attemptRecord = await requireCollection(
-              context,
-              "llm_attempt",
-            )
-              .get({ id: attemptId });
-            if (attemptRecord) {
-              const attempt = attemptRecord;
-              const granted = new Set(stringArray(attempt.availableToolIds));
-              availableTools = availableTools.filter((tool) =>
-                granted.has(tool.key)
-              );
-            }
-          }
-          const nextTool = availableTools.find((candidate) =>
-            candidate.key === advancement.stage.tool.id
-          );
-          const preparedArguments = await context.content.prepare(
-            valueContent(advancement.arguments, "tool.arguments"),
-            {
-              operationKey:
-                `pipeline:${advancement.pipeline.id}:${advancement.stageIndex}:arguments`,
-            },
-          );
-          const { toolExecutionId: _completedToolExecutionId, ...workflow } =
-            metadata;
-          const nextWorkflow: WorkflowMetadata = {
-            ...workflow,
-            kind: "tool_execution",
-            toolCallId: advancement.stage.id,
-            pipeline: advancement.pipeline,
-          };
-          const activeAsk = agentAskMetadata(execution.metadata);
-          const nextMetadata = withWorkflowMetadata(
-            activeAsk ? withAgentAskMetadata(undefined, activeAsk) : undefined,
-            nextWorkflow,
-          );
-          const parentAttemptId = metadata.parentLlmAttemptId ??
-            metadata.llmAttemptId ?? "pipeline";
-          await context.features.toolExecution.create({
-            id: await deriveWorkflowId(
-              "tool",
-              parentAttemptId,
-              "pipeline",
-              advancement.pipeline.id,
-              String(advancement.stageIndex),
-            ),
-            threadId: recordThreadId(execution),
-            messageId: optionalText(execution.messageId),
-            participantId: optionalText(execution.participantId),
-            agentId: optionalText(execution.agentId),
-            toolCallId: advancement.stage.id,
-            tool: {
-              id: advancement.stage.tool.id,
-              name: nextTool?.name ?? advancement.stage.tool.name ??
-                advancement.stage.tool.id,
-            },
-            arguments: preparedArguments,
-            status: "running",
-            historyVisibility: nextTool?.historyPolicy?.visibility ??
-              historyVisibilityOf(execution),
-            metadata: nextMetadata,
-          }, {
-            operationKey:
-              `pipeline:${advancement.pipeline.id}:${advancement.stageIndex}:create`,
-          });
-          return;
-        }
-
-        if (advancement.kind === "settled" && advancement.projected) {
-          projectedContent = await context.content.prepare(
-            valueContent(advancement.output, "tool.projected_output"),
-            {
-              operationKey: `pipeline:${metadata.pipeline.id}:final-projection`,
-            },
-          );
-          const updated = await context.features.toolExecution.patch({
-            id: execution.id,
-            projectedOutput: projectedContent,
-          }, {
-            operationKey:
-              `pipeline:${metadata.pipeline.id}:persist-final-projection`,
-          }) as CollectionRecord;
-          if (updated) execution = updated;
-        }
-
-        if (advancement.kind === "failed") {
-          projectedStatus = "failed";
-          projectedContent = await context.content.prepare({
-            type: "json",
-            value: {
-              ok: false,
-              status: "failed",
-              code: "pipeline_error",
-              error: advancement.message,
-            },
-            role: "tool.projected_output",
-          }, {
-            operationKey: `pipeline:${metadata.pipeline.id}:failure-projection`,
-          });
-          const failedWorkflow: WorkflowMetadata = {
-            ...metadata,
-            pipelineFailure: {
-              stageIndex: advancement.stageIndex,
-              message: advancement.message,
-            },
-          };
-          const updated = await context.features.toolExecution.patch({
-            id: execution.id,
-            projectedOutput: projectedContent,
-            metadataPatch: withWorkflowMetadata(undefined, failedWorkflow),
-          }, {
-            operationKey: `pipeline:${metadata.pipeline.id}:persist-failure`,
-          }) as CollectionRecord;
-          if (updated) execution = updated;
-          metadata = failedWorkflow;
-        }
-      }
-
-      const recipientId = optionalText(execution.participantId) ??
-        metadata?.agentParticipantId;
-      if (!recipientId) {
-        throw new Error(`Tool execution '${execution.id}' has no requester.`);
-      }
-      const toolId = requiredText(
-        typeof toolField(execution, "id") === "string"
-          ? toolField(execution, "id") as string
-          : undefined,
-        "Tool execution tool id",
+      const lifecycle = asRecord(event.data);
+      const input = asRecord(lifecycle.input);
+      const output = asRecord(lifecycle.output);
+      const items = Array.isArray(input.items) ? input.items.map(asRecord) : [];
+      const outcomes = Array.isArray(output.outcomes)
+        ? output.outcomes.map(asRecord)
+        : [];
+      const itemsById = new Map(items.map((item) => [String(item.id), item]));
+      const projectable = outcomes.filter((outcome) =>
+        asRecord(outcome.output).status !== "deferred"
       );
-      const activeAsk = agentAskMetadata(execution.metadata);
-      const resultBaseMetadata = activeAsk
-        ? withAgentAskMetadata({
-          historyVisibility: historyVisibilityOf(execution),
-          requesterId: recipientId,
-          toolStatus: projectedStatus,
-          toolId,
-        }, activeAsk)
-        : {
-          historyVisibility: historyVisibilityOf(execution),
-          requesterId: recipientId,
-          toolStatus: projectedStatus,
-          toolId,
-        };
-      const messageMetadata = withWorkflowMetadata(resultBaseMetadata, {
-        kind: "tool_result",
-        continuation: metadata?.continuation,
-        realtimeStreamId: metadata?.realtimeStreamId,
-        llmAttemptId: metadata?.llmAttemptId,
-        parentLlmAttemptId: metadata?.parentLlmAttemptId ??
-          metadata?.llmAttemptId,
-        toolExecutionId: execution.id,
-        toolCallId: metadata?.pipeline?.rootToolCallId ??
-          optionalText(execution.toolCallId),
-        batchId: metadata?.batchId ?? execution.id,
-        batchSize: metadata?.batchSize ?? 1,
-        batchIndex: metadata?.batchIndex ?? 0,
-        sourceMessageId: metadata?.sourceMessageId,
-        agentParticipantId: recipientId,
-        ...(metadata?.pipeline ? { pipeline: metadata.pipeline } : {}),
-        ...(metadata?.pipelineFailure
-          ? { pipelineFailure: metadata.pipelineFailure }
-          : {}),
-      });
-      await context.features.threadMessage.create({
-        id: await deriveWorkflowId("message", execution.id, "result"),
-        threadId: recordThreadId(execution),
-        sender: {
-          externalId: `tool:${toolId}`,
-          participantType: "tool",
-          name: typeof toolField(execution, "name") === "string"
-            ? toolField(execution, "name") as string
-            : toolId,
-        },
-        recipientIds: [recipientId],
-        content: await resultContent(context, execution, projectedContent),
-        visibility: resultVisibility(execution),
-        metadata: messageMetadata,
-      }, {
-        operationKey: `project:tool-result:message:${execution.id}`,
-      });
+      for (const [index, outcome] of projectable.entries()) {
+        const original = itemsById.get(String(outcome.id));
+        if (!original) continue;
+        const result = asRecord(outcome.output);
+        const execution = {
+          ...original,
+          ...result,
+          status: outcome.status === "completed"
+            ? result.status ?? "completed"
+            : outcome.status,
+          ...(outcome.error ? { safeError: outcome.error } : {}),
+        } as unknown as CollectionRecord;
+        await projectExecution(
+          event,
+          context,
+          execution,
+          index === projectable.length - 1,
+        );
+      }
     },
   });

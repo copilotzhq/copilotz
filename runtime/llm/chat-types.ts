@@ -11,7 +11,6 @@ import type {
 import type {
   ConversationMessage,
   ConversationThread,
-  LlmAttempt,
   Participant,
 } from "../domain/index.ts";
 import type { CopilotzEvent } from "../events/index.ts";
@@ -32,10 +31,25 @@ export type LlmChat = (
   providers?: ProviderRegistry,
 ) => Promise<ChatResponse>;
 
+/** Stable, Event-Body-safe input describing one agent text Action. */
+export type AgentTextActionInput = Readonly<{
+  id: string;
+  namespace: string;
+  threadId: string;
+  messageId?: string;
+  participantId?: string;
+  initiatorParticipantId?: string;
+  agentId?: string;
+  parentActionRunId?: string;
+  inputMessageIds: readonly string[];
+  availableToolIds: readonly string[];
+  metadata: Readonly<Record<string, unknown>>;
+}>;
+
 export type ResolveAgentTextConfig = (
   input: Readonly<{
     agent: Agent;
-    attempt: LlmAttempt;
+    operation: AgentTextActionInput;
     sourceEvent: CopilotzEvent;
     context: CopilotzProcessorContext;
     baseConfig: ProviderConfig;

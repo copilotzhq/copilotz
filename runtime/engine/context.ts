@@ -295,7 +295,7 @@ export function createCopilotzProcessorCapabilities(
       relations,
       schedules,
       memoryKinds,
-  });
+    });
   const attached = attachProcessorFeatures(options, capabilities);
   return Object.freeze({
     ...capabilities,
@@ -347,13 +347,30 @@ function attachProcessorFeatures(
     if (!holder.current) throw new Error("Feature context is not ready.");
     return holder.current;
   };
+  const invocationKey = options.base.source?.id ??
+    (options.base.event.durable
+      ? options.base.event.id
+      : options.base.event.correlationId);
+  const invocation = {
+    createInvocationKey: () => invocationKey,
+    identity: {
+      causationId: options.base.event.durable
+        ? options.base.event.id
+        : options.base.event.causationId,
+      correlationId: options.base.event.correlationId,
+      deduplicationId: invocationKey,
+      settlementScopeId: options.base.settlementScopeId,
+    },
+  } as const;
   const features = createFeatureInvoker(
     processorFeatureAliases(options),
     host,
     transaction,
     {
+      ...invocation,
       isTransactionActive: () =>
         activeCollectionTransaction(options.collectionRuntime) !== undefined,
+      actionLifecycle: options.actionLifecycle,
       upsertRelation: (input) => {
         const tx = activeCollectionTransaction(options.collectionRuntime);
         if (!tx) {
@@ -367,8 +384,10 @@ function attachProcessorFeatures(
   );
   const feature = <F extends AnyFeatureDefinition>(definition: F) =>
     createFeatureInvoker({ bound: definition }, host, transaction, {
+      ...invocation,
       isTransactionActive: () =>
         activeCollectionTransaction(options.collectionRuntime) !== undefined,
+      actionLifecycle: options.actionLifecycle,
       upsertRelation: (input) => {
         const tx = activeCollectionTransaction(options.collectionRuntime);
         if (!tx) {
@@ -380,6 +399,7 @@ function attachProcessorFeatures(
       },
     }).bound as FeatureActionsFor<F>;
   holder.current = Object.freeze({
+    ...options.base,
     ...(capabilities as unknown as Record<string, unknown>),
     namespace: capabilities.namespace,
     now: options.now ?? (() => new Date()),
@@ -492,8 +512,15 @@ function attachProcessorFeatures(
         },
       }),
       bodies: options.streamBodyStore,
+      prepare: capabilities.content.prepare,
       materialize: capabilities.content.materialize,
       linkOwner: capabilities.content.linkOwner,
+      publish: capabilities.content.publish,
+      get: capabilities.content.get,
+      getMany: capabilities.content.getMany,
+      resolve: capabilities.content.resolve,
+      resolveMany: capabilities.content.resolveMany,
+      open: capabilities.content.open,
     }),
     features,
     feature,

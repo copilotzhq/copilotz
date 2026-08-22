@@ -13,7 +13,6 @@ import {
   createSqlSession,
   type EventStore,
   isEventStoreError,
-  quoteEventIdentifier,
   type SqlSession,
 } from "./index.ts";
 
@@ -99,24 +98,9 @@ Deno.test("A20 clean v3 baseline contains only the six core tables", async () =>
   }
 });
 
-Deno.test("A20 schema provisioning replaces the obsolete unique tool-call index", async () => {
+Deno.test("schema provisioning contains no operational tool-execution indexes", async () => {
   const fixture = await createFixture();
   try {
-    await fixture.session.query(
-      `DROP INDEX ${quoteEventIdentifier(TEST_SCHEMA)}."nodes_tool_call_idx"`,
-    );
-    await fixture.session.query(
-      `CREATE UNIQUE INDEX "nodes_tool_call_unique_idx"
-       ON ${fixture.store.tables.nodes} (namespace, source_id)
-       WHERE type = 'tool_execution'
-         AND source_type = 'tool_call'
-         AND source_id IS NOT NULL`,
-    );
-
-    for (const statement of createCoreSchemaStatements(TEST_SCHEMA)) {
-      await fixture.session.query(statement);
-    }
-
     const indexes = await fixture.session.query<{ indexname: string }>(
       `SELECT indexname FROM pg_indexes
        WHERE schemaname = $1
@@ -124,19 +108,7 @@ Deno.test("A20 schema provisioning replaces the obsolete unique tool-call index"
        ORDER BY indexname`,
       [TEST_SCHEMA],
     );
-    assertEquals(indexes.rows.map((row) => row.indexname), [
-      "nodes_tool_call_idx",
-    ]);
-
-    await fixture.session.query(
-      `INSERT INTO ${fixture.store.tables.nodes} (
-         id, namespace, type, name, data, source_type, source_id
-       ) VALUES
-         ('tool-a', 'tenant-a', 'tool_execution', 'A', '{}',
-          'tool_call', '["thread-a","provider-call-a"]'),
-         ('tool-b', 'tenant-a', 'tool_execution', 'B', '{}',
-          'tool_call', '["thread-a","provider-call-a"]')`,
-    );
+    assertEquals(indexes.rows, []);
   } finally {
     await closeFixture(fixture);
   }

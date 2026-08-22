@@ -19,38 +19,26 @@ import type {
 } from "../content/index.ts";
 import type {
   AddThreadParticipantInput,
-  CancelLlmAttemptInput,
-  CancelToolExecutionInput,
-  CompleteLlmAttemptInput,
-  CompleteToolExecutionInput,
   ConversationMessage,
   ConversationRepository,
   ConversationThread,
   CreateDomainRelationInput,
-  CreateLlmAttemptInput,
   CreateMessageInput,
   CreateParticipantInput,
   CreateThreadInput,
-  CreateToolExecutionInput,
   DeleteDomainRelationInput,
   DeleteThreadMessagesResult,
   DeleteThreadResult,
   DomainRelation,
   DomainRelationRepository,
   EventCollections,
-  FailLlmAttemptInput,
-  FailToolExecutionInput,
   ListDomainRelationsOptions,
-  LlmAttempt,
   MessageRevisionResult,
   MutationIdentity,
   Participant,
   ParticipantPatch,
   ReviseMessageInput,
   ThreadPatch,
-  ToolExecution,
-  UpdateLlmAttemptInput,
-  UpdateToolExecutionInput,
   ValidateCollectionRecord,
 } from "../domain/index.ts";
 import type {
@@ -103,6 +91,7 @@ import type {
 } from "../schedules/index.ts";
 import type { ProgressiveBodyMaintenanceResult } from "../content/index.ts";
 import type { MemoryKindDefinition } from "../memory/ontology.ts";
+import type { ActionLifecycleEmitter } from "../actions/index.ts";
 
 export type ScopedMutationOptions = Readonly<{
   operationKey?: string;
@@ -221,72 +210,6 @@ export type ScopedConversation = Readonly<{
   listMessageRevisions(
     rootMessageId: string,
   ): Promise<readonly ConversationMessage[]>;
-}>;
-
-export type ScopedLlmAttempts = Readonly<{
-  create(
-    input: Omit<CreateLlmAttemptInput, "namespace" | "identity">,
-    options?: ScopedMutationOptions,
-  ): Promise<CoordinatedMutationResult<LlmAttempt>>;
-  update(
-    input: Omit<UpdateLlmAttemptInput, "namespace" | "identity">,
-    options?: ScopedMutationOptions,
-  ): Promise<CoordinatedMutationResult<LlmAttempt>>;
-  complete(
-    input: Omit<CompleteLlmAttemptInput, "namespace" | "identity">,
-    options?: ScopedMutationOptions,
-  ): Promise<CoordinatedMutationResult<LlmAttempt>>;
-  fail(
-    input: Omit<FailLlmAttemptInput, "namespace" | "identity">,
-    options?: ScopedMutationOptions,
-  ): Promise<CoordinatedMutationResult<LlmAttempt>>;
-  cancel(
-    input: Omit<CancelLlmAttemptInput, "namespace" | "identity">,
-    options?: ScopedMutationOptions,
-  ): Promise<CoordinatedMutationResult<LlmAttempt>>;
-  get(id: string): Promise<LlmAttempt | null>;
-  list(
-    threadId: string,
-    options?: { after?: string; limit?: number },
-  ): Promise<readonly LlmAttempt[]>;
-}>;
-
-export type ScopedToolExecutions = Readonly<{
-  create(
-    input: Omit<CreateToolExecutionInput, "namespace" | "identity">,
-    options?: ScopedMutationOptions,
-  ): Promise<CoordinatedMutationResult<ToolExecution>>;
-  update(
-    input: Omit<UpdateToolExecutionInput, "namespace" | "identity">,
-    options?: ScopedMutationOptions,
-  ): Promise<CoordinatedMutationResult<ToolExecution>>;
-  complete(
-    input: Omit<CompleteToolExecutionInput, "namespace" | "identity">,
-    options?: ScopedMutationOptions,
-  ): Promise<CoordinatedMutationResult<ToolExecution>>;
-  fail(
-    input: Omit<FailToolExecutionInput, "namespace" | "identity">,
-    options?: ScopedMutationOptions,
-  ): Promise<CoordinatedMutationResult<ToolExecution>>;
-  cancel(
-    input: Omit<CancelToolExecutionInput, "namespace" | "identity">,
-    options?: ScopedMutationOptions,
-  ): Promise<CoordinatedMutationResult<ToolExecution>>;
-  get(id: string): Promise<ToolExecution | null>;
-  /** Returns the latest execution carrying this provider call label. */
-  getByToolCallId(
-    threadId: string,
-    toolCallId: string,
-  ): Promise<ToolExecution | null>;
-  getByMessageToolCallId(
-    threadId: string,
-    messageId: string,
-    toolCallId: string,
-  ): Promise<ToolExecution | null>;
-  list(
-    threadId: string,
-    options?: { after?: string; limit?: number },
-  ): Promise<readonly ToolExecution[]>;
 }>;
 
 export type ScopedRelations = Readonly<{
@@ -550,6 +473,7 @@ export type CreateCopilotzProcessorCapabilitiesOptions = Readonly<{
   eventHub: CopilotzEventHub;
   publishEvent?: (event: CopilotzEvent) => Promise<void>;
   eventStore: Pick<EventStore, "listDeliveries" | "listEvents" | "tables">;
+  actionLifecycle?: ActionLifecycleEmitter;
   session: SqlExecutor;
   now?: () => Date;
   collectionRuntime: CollectionRuntime;

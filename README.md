@@ -1,19 +1,44 @@
 # Copilotz
 
-Copilotz v3 is a factory-first framework for durable multi-agent applications.
-It combines graph-native conversation state, immutable semantic events,
-guaranteed processor deliveries, canonical content/assets, and realtime Web
-Streams. Oxian places work; Ominipg persists state and recovery obligations.
+Copilotz v3 is an event-native runtime for durable, plugin-composed agent
+applications.
 
-```text
-threads + participants
-          │
-    routed events
-          │
- durable deliveries ── Oxian workers
-          │
- plugin resources ─── agents, tools, processors, providers, channels…
+Runtime owns the event backbone. Plugins own business meaning. The core loop is:
+
+```mermaid
+flowchart LR
+  app["createCopilotz(context)"]
+  event[("Event")]
+
+  app -- "send(plugin input envelope)" --> event
+  event -- "observe()" --> app
+
+  subgraph plugins["Plugins"]
+    direction LR
+    processor["Processor<br/><small>listens to events</small>"]
+    actions["Actions<br/><small>Features</small>"]
+    mutations["Mutations<br/><small>Collections</small>"]
+
+    processor -- "runs" --> actions
+    processor -- "runs" --> mutations
+  end
+
+  event -- "dispatches to" --> processor
+  actions -- "emits<br/><small>&lt;actionId&gt;.invoked / completed / failed / cancelled</small>" --> event
+  mutations -- "emits<br/><small>&lt;collection&gt;.created / updated / deleted</small>" --> event
 ```
+
+Essential boundaries:
+
+- `copilotz.send(...)` is runtime-neutral ingress; it is not a Feature call.
+- Processors listen to Events and run plugin-owned Features or Collections.
+- Features are executable actions and emit `<actionId>.invoked/completed/...`.
+- Collections are semantic graph state and emit
+  `<collection>.created/updated/...`.
+- Action events carry self-contained input and output Event Bodies; Processors
+  receive the resolved body as `event.data`.
+- Messages remain the canonical semantic conversation history. LLM attempts and
+  tool executions are operational Actions rather than graph Collections.
 
 ## Install
 
@@ -26,44 +51,28 @@ The root package is runtime-neutral. Host capabilities such as MCP stdio,
 filesystem access, subprocesses, CLI terminal I/O, and HTTP mounting live on
 explicit package subpaths.
 
-## Minimal application
+## Minimal application shape
 
 ```ts
 import { createCopilotz } from "jsr:@copilotz/copilotz@^0.61.0";
+import { core } from "jsr:@copilotz/copilotz@^0.61.0/core";
 
-const namespace = "example";
 const copilotz = await createCopilotz({
-  namespace,
+  namespace: "example",
   database: { url: ":memory:" },
   context: {
+    llm: {
+      default: myLlmAdapter,
+    },
     agents: {
       support: {
         id: "support",
         name: "Support",
         role: "Helpful support agent",
-        capabilities: {}, // omission also grants no tools, agents, or skills
-        runtime: {
-          provider: "openai",
-          model: "gpt-5-mini",
-          apiKey,
-        },
+        capabilities: {},
       },
     },
   },
-});
-
-await copilotz.conversation.createThread({
-  namespace,
-  id: "thread-1",
-  participants: [
-    { id: "user-1", externalId: "user-1", participantType: "human" },
-    {
-      id: "agent-support",
-      externalId: "support",
-      participantType: "agent",
-      agentId: "support",
-    },
-  ],
 });
 
 const sent = await copilotz.send(core.message({
@@ -78,13 +87,15 @@ for await (const event of copilotz.observe()) {
   if (event.correlationId === sent.correlationId) break;
 }
 await sent.done;
-await copilotz.shutdown();
+await copilotz.close();
 ```
 
 `send()` accepts one plugin-owned input envelope. Helpers such as
 `core.message(...)` are exported by their owning plugin; the runtime persists
 the envelope opaquely and processors decide what it means. `observe()` is the
-live session output stream; `events` remains the durable event-store API.
+application observation stream. Durable event persistence, replay, delivery, and
+deduplication remain runtime infrastructure rather than a second public workflow
+API.
 
 ## Core guarantees
 

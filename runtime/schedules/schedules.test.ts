@@ -13,15 +13,12 @@ import type {
 } from "../tools/index.ts";
 import { createTestDomainContext } from "../../runtime/testing/domain-context.ts";
 import {
-  projectLlmAttempts,
   projectMessageById,
   projectMessages,
   projectParticipants,
   projectThreadByExternalId,
   projectThreadById,
   projectThreads,
-  projectToolExecutionById,
-  projectToolExecutions,
 } from "../../runtime/testing/projections.ts";
 import {
   createScheduledJobsPlugin,
@@ -219,7 +216,6 @@ Deno.test("scheduled_jobs tool uses scoped capabilities for the complete lifecyc
       if (!event.durable) return;
       const tool = processor.tools.scheduled_jobs as WorkflowTool | undefined;
       if (!tool) throw new Error("Unknown tool 'scheduled_jobs'.");
-      const timestamp = event.createdAt;
       const context: WorkflowToolExecutionContext = {
         namespace: processor.namespace,
         correlationId: event.correlationId,
@@ -231,12 +227,7 @@ Deno.test("scheduled_jobs tool uses scoped capabilities for the complete lifecyc
           threadId: event.threadId!,
           toolCallId: `call:${event.id}`,
           tool: { id: tool.id, key: tool.key },
-          status: "running",
-          content: [],
-          startedAt: timestamp,
           metadata: {},
-          createdAt: timestamp,
-          updatedAt: timestamp,
         },
         threadId: event.threadId!,
         toolExecutionId: `execution:${event.id}`,

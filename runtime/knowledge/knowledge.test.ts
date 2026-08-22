@@ -8,15 +8,12 @@ import {
 } from "@std/assert";
 import { createTestDomainContext } from "../../runtime/testing/domain-context.ts";
 import {
-  projectLlmAttempts,
   projectMessageById,
   projectMessages,
   projectParticipants,
   projectThreadByExternalId,
   projectThreadById,
   projectThreads,
-  projectToolExecutionById,
-  projectToolExecutions,
 } from "../../runtime/testing/projections.ts";
 
 import { createCopilotz } from "../../index.ts";
@@ -284,10 +281,21 @@ Deno.test("knowledge indexing keeps one canonical source asset and atomic search
       event.type === "document.created" && event.subject?.id === "document-a"
     );
     assertExists(createdEvent);
-    const deliveries = await application.deliveries.list({
+    let deliveries = await application.deliveries.list({
       namespace: NAMESPACE,
       eventId: createdEvent.id,
     });
+    const deliveryDeadline = Date.now() + 5_000;
+    while (
+      deliveries.some((item) => item.status !== "succeeded") &&
+      Date.now() < deliveryDeadline
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      deliveries = await application.deliveries.list({
+        namespace: NAMESPACE,
+        eventId: createdEvent.id,
+      });
+    }
     assertEquals(deliveries.map((item) => item.status), ["succeeded"]);
     assert(calls.length > 0);
     assert(calls.every((call) => call.signal instanceof AbortSignal));
@@ -500,7 +508,6 @@ Deno.test("knowledge tools execute through scoped factory capabilities", async (
       };
       const tool = processor.tools[payload.toolId] as WorkflowTool | undefined;
       if (!tool) throw new Error(`Unknown tool '${payload.toolId}'.`);
-      const timestamp = event.createdAt;
       const toolContext: WorkflowToolExecutionContext = {
         namespace: processor.namespace,
         correlationId: event.correlationId,
@@ -514,12 +521,7 @@ Deno.test("knowledge tools execute through scoped factory capabilities", async (
           agentId: "support",
           toolCallId: `call:${event.id}`,
           tool: { id: tool.id, key: tool.key },
-          status: "running",
-          content: [],
-          startedAt: timestamp,
           metadata: {},
-          createdAt: timestamp,
-          updatedAt: timestamp,
         },
         threadId: event.threadId,
         toolExecutionId: `execution:${event.id}`,

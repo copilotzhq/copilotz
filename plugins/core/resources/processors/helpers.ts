@@ -10,10 +10,7 @@ import type {
 import type {
   ConversationMessage,
   ConversationThread,
-  LlmAttempt,
   Participant,
-  SafeWorkflowError,
-  ToolExecution,
 } from "@copilotz/copilotz/domain";
 import type { CopilotzProcessorContext } from "@copilotz/copilotz/engine";
 import {
@@ -160,98 +157,6 @@ export function mapThread(
   });
 }
 
-export function mapLlmAttempt(record: CollectionRecord): LlmAttempt {
-  return Object.freeze({
-    id: String(record.id),
-    namespace: String(record.namespace),
-    threadId: String(record.threadId),
-    ...(optionalText(record.messageId)
-      ? { messageId: optionalText(record.messageId) }
-      : {}),
-    ...(optionalText(record.participantId)
-      ? { participantId: optionalText(record.participantId) }
-      : {}),
-    ...(optionalText(record.initiatorParticipantId)
-      ? { initiatorParticipantId: optionalText(record.initiatorParticipantId) }
-      : {}),
-    ...(optionalText(record.agentId)
-      ? { agentId: optionalText(record.agentId) }
-      : {}),
-    ...(optionalText(record.provider)
-      ? { provider: optionalText(record.provider) }
-      : {}),
-    ...(optionalText(record.model)
-      ? { model: optionalText(record.model) }
-      : {}),
-    status: record.status as LlmAttempt["status"],
-    attemptIndex: Number(record.attemptIndex ?? 0),
-    ...(optionalText(record.parentAttemptId)
-      ? { parentAttemptId: optionalText(record.parentAttemptId) }
-      : {}),
-    inputMessageIds: stringArray(record.inputMessageIds),
-    availableToolIds: stringArray(record.availableToolIds),
-    content:
-      (Array.isArray(record.content) ? record.content : []) as ContentSequence,
-    ...(optionalText(record.finishReason)
-      ? { finishReason: optionalText(record.finishReason) }
-      : {}),
-    ...(record.usage && typeof record.usage === "object"
-      ? { usage: record.usage as Record<string, unknown> }
-      : {}),
-    ...(record.cost && typeof record.cost === "object"
-      ? { cost: record.cost as Record<string, unknown> }
-      : {}),
-    ...(record.safeError && typeof record.safeError === "object"
-      ? { safeError: record.safeError as LlmAttempt["safeError"] }
-      : {}),
-    startedAt: String(record.startedAt ?? record.createdAt),
-    ...(optionalText(record.finishedAt)
-      ? { finishedAt: optionalText(record.finishedAt) }
-      : {}),
-    metadata: asRecord(record.metadata),
-    createdAt: String(record.createdAt),
-    updatedAt: String(record.updatedAt),
-  });
-}
-
-export function mapToolExecution(record: CollectionRecord): ToolExecution {
-  return Object.freeze({
-    id: String(record.id),
-    namespace: String(record.namespace),
-    threadId: String(record.threadId),
-    ...(optionalText(record.messageId)
-      ? { messageId: optionalText(record.messageId) }
-      : {}),
-    ...(optionalText(record.participantId)
-      ? { participantId: optionalText(record.participantId) }
-      : {}),
-    ...(optionalText(record.agentId)
-      ? { agentId: optionalText(record.agentId) }
-      : {}),
-    toolCallId: String(record.toolCallId),
-    tool: asRecord(record.tool),
-    status: record.status as ToolExecution["status"],
-    content:
-      (Array.isArray(record.content) ? record.content : []) as ContentSequence,
-    ...(optionalText(record.historyVisibility)
-      ? { historyVisibility: optionalText(record.historyVisibility) }
-      : {}),
-    ...(record.safeError && typeof record.safeError === "object"
-      ? { safeError: record.safeError as ToolExecution["safeError"] }
-      : {}),
-    startedAt: String(record.startedAt ?? record.createdAt),
-    ...(optionalText(record.finishedAt)
-      ? { finishedAt: optionalText(record.finishedAt) }
-      : {}),
-    ...(typeof record.durationMs === "number"
-      ? { durationMs: record.durationMs }
-      : {}),
-    metadata: asRecord(record.metadata),
-    createdAt: String(record.createdAt),
-    updatedAt: String(record.updatedAt),
-  });
-}
-
 export function participantAgentId(participant: CollectionRecord): string {
   return optionalText(participant.agentId) ??
     String(participant.externalId ?? participant.id);
@@ -333,19 +238,6 @@ export function policyOptions(
   agent: Agent,
 ): CreateTextWorkflowPluginOptions {
   return policyFromAgent(agent);
-}
-
-export function safeError(
-  code: string,
-  message: string,
-  error?: unknown,
-): SafeWorkflowError {
-  return Object.freeze({
-    name: error instanceof Error ? error.name : undefined,
-    message,
-    code,
-    retryable: false,
-  });
 }
 
 export function parseJsonText(text: string): unknown {

@@ -19,10 +19,12 @@ import {
   defineFeature,
   type FeatureExecuteContext,
 } from "../features/index.ts";
+import type { ActionCompletedData } from "../actions/index.ts";
 
 Deno.test("features see the same deliveries from processor and direct contexts", async () => {
   const namespace = "tenant-feature-deliveries";
   let processorDeliveryIds: readonly string[] | undefined;
+  let completedData: ActionCompletedData | undefined;
   const customAdapter = Object.freeze({ id: "adapter-a" });
   const feature = defineFeature({
     id: "test.delivery-probe",
@@ -31,9 +33,9 @@ Deno.test("features see the same deliveries from processor and direct contexts",
         inputSchema: { type: "object" } as const,
         async execute(_input: unknown, context: FeatureExecuteContext) {
           assertEquals(
-            ((context as unknown as {
+            (context as unknown as {
               customAdapters: Record<string, unknown>;
-            }).customAdapters).primary,
+            }).customAdapters.primary,
             customAdapter,
           );
           return (await context.deliveries.list()).map((delivery) =>
@@ -51,20 +53,27 @@ Deno.test("features see the same deliveries from processor and direct contexts",
     },
     async handle(_event, context) {
       assertEquals(
-        ((context as unknown as {
+        (context as unknown as {
           customAdapters: Record<string, unknown>;
-        }).customAdapters).primary,
+        }).customAdapters.primary,
         customAdapter,
       );
       processorDeliveryIds = await context.features.deliveryProbe
         .list({}) as readonly string[];
     },
   });
+  const completionProcessor = defineProcessor<CopilotzProcessorContext>({
+    id: "test.delivery-probe-completed",
+    on: [{ eventType: "test.delivery-probe.list.completed" }],
+    handle(event) {
+      completedData = event.data as ActionCompletedData;
+    },
+  });
   const plugin = definePlugin({
     id: "test.feature-delivery-parity",
     version: "1.0.0",
     features: [feature],
-    processors: [processor],
+    processors: [processor, completionProcessor],
     context: {
       customAdapters: { primary: customAdapter },
     },
@@ -93,9 +102,22 @@ Deno.test("features see the same deliveries from processor and direct contexts",
     );
     assertExists(created);
     await waitForTestDelivery(engine, namespace, created.id, "succeeded");
+    const completed = (await engine.events.list({ namespace, limit: 100 }))
+      .find(
+        (event) => event.type === "test.delivery-probe.list.completed",
+      );
+    assertExists(completed);
+    await waitForTestDelivery(engine, namespace, completed.id, "succeeded");
     assertExists(processorDeliveryIds);
+    assertExists(completedData);
+    assertEquals(completedData.status, "completed");
+    assertEquals(completedData.input, {});
+    assertEquals(completedData.output, processorDeliveryIds);
 
     const directDeliveryIds = (await engine.deliveries.list({ namespace }))
+      .filter((delivery) =>
+        delivery.consumerId !== "processor:test.delivery-probe-completed"
+      )
       .map((delivery) => delivery.id);
     assertEquals(processorDeliveryIds, directDeliveryIds);
   } finally {

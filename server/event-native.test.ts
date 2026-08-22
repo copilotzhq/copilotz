@@ -268,7 +268,7 @@ Deno.test("event-native app exposes graph, event, asset, collection, and plugin 
       resource: "threads",
       method: "GET",
       path: ["thread-a", "messages"],
-      query: { include: "content,workflow" },
+      query: { include: "content" },
     });
     const messages = array(messagesResponse.data);
     assertEquals(messages.length, 1);
@@ -278,8 +278,6 @@ Deno.test("event-native app exposes graph, event, asset, collection, and plugin 
     const assetId = object(content[0]).assetId;
     assertEquals(typeof assetId, "string");
     const included = object(messagesResponse.included);
-    assertEquals(included.llmAttempts, []);
-    assertEquals(included.toolExecutions, []);
     const includedContent = array(included.content);
     assertEquals(includedContent.length, 1);
     assertEquals(object(object(includedContent[0]).ref).assetId, assetId);
@@ -330,7 +328,12 @@ Deno.test("event-native app exposes graph, event, asset, collection, and plugin 
     const durableEvents = array(runEvents.data);
     assertEquals(
       durableEvents.map((event) => object(event).type),
-      ["copilotz.core.message.input", "message.created"],
+      [
+        "copilotz.core.message.input",
+        "copilotz.core.thread-message.create.invoked",
+        "message.created",
+        "copilotz.core.thread-message.create.completed",
+      ],
     );
     const messageEvent = object(
       durableEvents.find((event) => object(event).type === "message.created"),
@@ -620,7 +623,7 @@ Deno.test("event-native app exposes graph, event, asset, collection, and plugin 
   }
 });
 
-Deno.test("message history compounds canonical LLM, tool, and content resources without flattening", async () => {
+Deno.test("message history resolves canonical semantic content without operational projections", async () => {
   const application = await createCopilotz({
     namespace: NAMESPACE,
     databaseSchema: `${SCHEMA}_history`,
@@ -663,39 +666,31 @@ Deno.test("message history compounds canonical LLM, tool, and content resources 
         idempotencyKey: "history:user:body",
       }),
     });
-    await domain.features.llmAttempt.create({
-      id: "history-attempt",
-      threadId: "history-thread",
-      messageId: "history-user-message",
-      participantId: "history-agent",
-      initiatorParticipantId: "history-human",
-      agentId: "support",
-      inputMessageIds: ["history-user-message"],
+    const reasoning = await application.content.preparer.prepare({
+      type: "text",
+      text: "I should run lookup.",
+      role: "reasoning",
+    }, {
+      namespace: NAMESPACE,
+      idempotencyKey: "history:attempt:reasoning",
     });
-    await domain.features.llmAttempt.complete({
-      id: "history-attempt",
-      reasoning: await application.content.preparer.prepare({
-        type: "text",
-        text: "I should run lookup.",
-        role: "reasoning",
-      }, {
-        namespace: NAMESPACE,
-        idempotencyKey: "history:attempt:reasoning",
-      }),
-      toolCalls: await application.content.preparer.prepare({
-        type: "json",
-        value: [{
-          id: "history-call",
-          tool: { id: "lookup", name: "Lookup" },
-          args: JSON.stringify({ query: "canonical" }),
-        }],
-        role: "llm.tool_calls",
-      }, {
-        namespace: NAMESPACE,
-        idempotencyKey: "history:attempt:tool-calls",
-      }),
-      finishReason: "tool_calls",
-    });
+    for (const asset of reasoning.assets) {
+      await application.content.assets.publish({
+        namespace: asset.namespace,
+        id: asset.id,
+        mediaType: asset.mediaType,
+        body: asset.body,
+        ...(asset.idempotencyKey
+          ? { idempotencyKey: asset.idempotencyKey }
+          : {}),
+      });
+    }
+    const toolCalls = [{
+      id: "history-call",
+      tool: { id: "lookup", name: "Lookup" },
+      args: JSON.stringify({ query: "canonical" }),
+      status: "pending",
+    }];
     await domain.features.threadMessage.create({
       id: "history-agent-message",
       threadId: "history-thread",
@@ -710,6 +705,8 @@ Deno.test("message history compounds canonical LLM, tool, and content resources 
         idempotencyKey: "history:agent:body",
       }),
       metadata: {
+        llmReasoning: reasoning.content,
+        llmToolCalls: toolCalls,
         copilotzWorkflow: {
           kind: "agent_output",
           llmAttemptId: "history-attempt",
@@ -717,34 +714,13 @@ Deno.test("message history compounds canonical LLM, tool, and content resources 
         },
       },
     });
-    await domain.features.toolExecution.create({
-      id: "history-execution",
-      threadId: "history-thread",
-      messageId: "history-agent-message",
-      participantId: "history-agent",
-      agentId: "support",
-      toolCallId: "history-call",
-      tool: { id: "lookup", name: "Lookup" },
-      arguments: await application.content.preparer.prepare({
-        type: "json",
-        value: { query: "canonical" },
-        role: "tool.arguments",
-      }, {
-        namespace: NAMESPACE,
-        idempotencyKey: "history:execution:arguments",
-      }),
-    });
-    await domain.features.toolExecution.fail({
-      id: "history-execution",
-      safeError: { message: "Lookup unavailable", code: "lookup_failed" },
-      projectedOutput: await application.content.preparer.prepare({
-        type: "json",
-        value: { ok: false, error: "Lookup unavailable" },
-        role: "tool.projected_output",
-      }, {
-        namespace: NAMESPACE,
-        idempotencyKey: "history:execution:output",
-      }),
+    const toolOutput = await application.content.preparer.prepare({
+      type: "json",
+      value: { ok: false, error: "Lookup unavailable" },
+      role: "tool.projected_output",
+    }, {
+      namespace: NAMESPACE,
+      idempotencyKey: "history:execution:output",
     });
     await domain.features.threadMessage.create({
       id: "history-tool-message",
@@ -755,14 +731,13 @@ Deno.test("message history compounds canonical LLM, tool, and content resources 
         name: "Lookup",
       },
       recipientIds: ["history-agent"],
-      content: ((await domain.collections.tool_execution.get({
-        id: "history-execution",
-      }))!.content as { role?: string }[]).filter((ref) =>
-        ref.role === "tool.projected_output"
-      ),
+      content: toolOutput,
       metadata: {
         toolId: "lookup",
         toolStatus: "failed",
+        requesterId: "history-agent",
+        historyVisibility: "public",
+        toolInvocation: toolCalls[0],
         copilotzWorkflow: {
           kind: "tool_result",
           llmAttemptId: "history-attempt",
@@ -778,21 +753,13 @@ Deno.test("message history compounds canonical LLM, tool, and content resources 
       resource: "threads",
       method: "GET",
       path: ["history-thread", "messages"],
-      query: { include: "content,workflow", order: "desc", limit: "2" },
+      query: { include: "content", order: "desc", limit: "2" },
     });
     assertEquals(response.pageInfo, {
       next: "history-agent-message",
       hasMore: true,
     });
     const included = object(response.included);
-    assertEquals(
-      array(included.llmAttempts).map((value) => object(value).id),
-      ["history-attempt"],
-    );
-    assertEquals(
-      array(included.toolExecutions).map((value) => object(value).id),
-      ["history-execution"],
-    );
     const roles = array(included.content).map((value) =>
       object(object(value).ref).role
     );
@@ -800,8 +767,6 @@ Deno.test("message history compounds canonical LLM, tool, and content resources 
       const role of [
         "body",
         "reasoning",
-        "llm.tool_calls",
-        "tool.arguments",
         "tool.projected_output",
       ]
     ) {
@@ -825,7 +790,7 @@ Deno.test("message history compounds canonical LLM, tool, and content resources 
       method: "GET",
       path: ["history-thread", "messages"],
       query: {
-        include: "content,workflow",
+        include: "content",
         order: "desc",
         limit: "2",
         before: "history-agent-message",
@@ -836,8 +801,7 @@ Deno.test("message history compounds canonical LLM, tool, and content resources 
       ["history-user-message"],
     );
     assertEquals(older.pageInfo, { hasMore: false });
-    assertEquals(object(older.included).llmAttempts, []);
-    assertEquals(object(older.included).toolExecutions, []);
+    assertEquals(array(object(older.included).content).length, 1);
   } finally {
     await application.shutdown();
   }

@@ -1,27 +1,59 @@
 # Architecture
 
-Copilotz separates durable meaning from execution placement.
+Copilotz separates durable meaning from execution placement. The north-star loop
+is: applications send plugin-owned input envelopes, runtime persists and
+dispatches Events, plugin Processors react, and plugin-owned Features/actions or
+Collections emit more Events.
 
 ```mermaid
-flowchart TD
-  A["Application or channel"] --> B["send() / application events"]
-  B --> C["Typed graph/domain mutation"]
-  C --> D["Atomic Ominipg transaction"]
-  D --> E["nodes + edges"]
-  D --> F["immutable event"]
-  D --> G["sparse durable deliveries"]
-  G --> H["Oxian dispatcher"]
-  H --> I["plugin processor"]
-  I --> C
-  B <--> J["ephemeral Web Streams"]
+flowchart LR
+  app["createCopilotz(context)"]
+  event[("Event")]
+
+  app -- "send(plugin input envelope)" --> event
+  event -- "observe()" --> app
+
+  subgraph plugins["Plugins"]
+    direction LR
+    processor["Processor<br/><small>listens to events</small>"]
+    actions["Actions<br/><small>Features</small>"]
+    mutations["Mutations<br/><small>Collections</small>"]
+
+    processor -- "runs" --> actions
+    processor -- "runs" --> mutations
+  end
+
+  event -- "dispatches to" --> processor
+  actions -- "emits<br/><small>&lt;actionId&gt;.invoked / completed / failed / cancelled</small>" --> event
+  mutations -- "emits<br/><small>&lt;collection&gt;.created / updated / deleted</small>" --> event
 ```
+
+Important boundaries:
+
+- `copilotz.send(...)` is runtime-neutral application ingress. It is not a
+  Feature call and does not promote plugin APIs onto the application object.
+- Plugins may export typed helpers that build input envelopes, such as
+  `core.message(...)`; runtime persists those envelopes opaquely.
+- Inside Processors and Features, business operations run through
+  `context.features.<featureKey>.<actionName>(...)` or
+  `context.feature(definition).<actionName>(...)`.
+- Action lifecycle Event Bodies contain the invocation input and the terminal
+  output or error. Processors receive that resolved data directly; there is no
+  separate Action invocation or query API.
 
 ## Domain model
 
-A conversation is a thread plus participant graph. Messages, LLM attempts, tool
-executions, assets, memories, knowledge records, schedules, and custom
-collections are graph nodes with typed edges. Thread activity and ordering are
-updated transactionally; there is no separate thread table.
+A conversation is a thread plus participant graph. Messages, assets, memories,
+knowledge records, schedules, and custom collections are graph nodes with typed
+edges. Thread activity and ordering are updated transactionally; there is no
+separate thread table.
+
+LLM generations, sessions, and tool executions are durable Actions, not semantic
+graph nodes. Their persisted lifecycle events are self-contained and can drive
+later Processors directly. Internal provider retries remain accounting inside
+the LLM Action output unless a plugin deliberately declares a separate provider
+Feature action. Messages remain graph records because they are the canonical
+transcript used to reconstruct a thread or conversation.
 
 ## Event model
 
@@ -29,6 +61,11 @@ A durable event is an immutable fact with a ULID and database-assigned monotonic
 position. An envelope is simply an event carrying routing, visibility,
 causation, correlation, and subject metadata. Ephemeral deltas share the event
 vocabulary but have no database ID or position.
+
+Collection mutations emit events derived from the Collection name, such as
+`message.created`. Executable work emits lifecycle events derived from the
+Action identity, such as `llm.generate.invoked`, `tool.call.completed`, and
+`tool.call.failed`. Both use the same durable event and delivery backbone.
 
 Recipients are not persisted as work merely because they can observe an event.
 Only matched durable processors create delivery rows. UI listeners, public
@@ -58,9 +95,11 @@ transport can retain byte arrays without WebSocket encoding.
 
 ## Plugin model
 
-Everything extensible is a plugin resource: agents, tools, processors,
-collections, providers, channels, skills, memory, APIs, MCP servers, features,
-and storage capabilities. Composition is deterministic:
+Everything extensible is a plugin declaration or context value. Collections,
+Features, and Processors are executable plugin declarations. Agents, tools, LLM
+adapters, channels, skills, memory kinds, APIs, MCP servers, and host
+capabilities are typed context values or ordinary plugin code. Composition is
+deterministic:
 
 1. built-in core plugins
 2. declared plugins in order

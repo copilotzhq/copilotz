@@ -1,7 +1,6 @@
 import {
   coreCollectionsPlugin,
   coreFeatureAliases,
-  llmAttemptFeature,
 } from "@copilotz/copilotz/plugins/core";
 import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
 import {
@@ -12,15 +11,13 @@ import {
 import { createTestDomainContext } from "../../runtime/testing/domain-context.ts";
 import { waitForTestDelivery } from "../../runtime/testing/deliveries.ts";
 import {
-  projectLlmAttempts,
+  projectActionEvents,
   projectMessageById,
   projectMessages,
   projectParticipants,
   projectThreadByExternalId,
   projectThreadById,
   projectThreads,
-  projectToolExecutionById,
-  projectToolExecutions,
 } from "../../runtime/testing/projections.ts";
 import {
   createPluginRegistry,
@@ -35,12 +32,9 @@ import {
 import { createTestDatabase, type TestDatabase } from "../testing/ominipg.ts";
 import { createHypervisor } from "../../dependencies/oxian-hypervisor.ts";
 import { createWorker } from "../../dependencies/oxian-worker.ts";
-import {
-  composeRoleContent,
-  defineCollection,
-  LLM_CONTENT_ROLE,
-  llmAttemptContent,
-} from "../domain/index.ts";
+import { defineCollection } from "../domain/index.ts";
+import { defineFeature } from "../features/index.ts";
+import type { ContentRef } from "../content/index.ts";
 
 const TEST_SCHEMA = "copilotz_factory_engine";
 
@@ -57,6 +51,13 @@ const auditCollection = defineCollection({
     },
     required: ["id", "sourceEventId"],
   } as const,
+});
+
+const engineEchoFeature = defineFeature({
+  id: "test.engine.echo",
+  actions: {
+    run: { execute: (input: unknown) => structuredClone(input) },
+  },
 });
 
 type Fixture = Readonly<{
@@ -80,9 +81,6 @@ async function createFixture(): Promise<Fixture> {
   const processor = defineProcessor<CopilotzProcessorContext>({
     id: "engine.message.to-attempt",
     on: [{ eventType: "message.created", routing: { senderId: "user-a" } }],
-    requires: {
-      features: { llmAttempt: llmAttemptFeature },
-    },
     async handle(event, context) {
       if (!event.durable) throw new Error("Durable delivery received a frame.");
       calls += 1;
@@ -107,22 +105,15 @@ async function createFixture(): Promise<Fixture> {
         { operationKey: "logical-input" },
       );
       const attemptId = `attempt:${message.id}`;
-      if (
-        !await context.collections.llm_attempt.get({ id: attemptId })
-      ) {
-        await context.features.llmAttempt.create({
-          id: attemptId,
-          threadId: message.threadId,
-          messageId: message.id,
-          participantId: "agent-a",
-          agentId: "support",
-          content: composeRoleContent([{
-            role: LLM_CONTENT_ROLE.input,
-            input: prepared,
-            cardinality: "one",
-          }]),
-        }, { operationKey: "logical-attempt" });
-      }
+      const content = await context.content.materialize(prepared);
+      await context.feature(engineEchoFeature).run({
+        id: attemptId,
+        threadId: message.threadId,
+        messageId: message.id,
+        participantId: "agent-a",
+        agentId: "support",
+        content,
+      }, { operationKey: "logical-attempt" });
       await context.collections.engine_audit.create({
         id: `audit:${event.id}`,
         sourceEventId: event.id,
@@ -146,6 +137,7 @@ async function createFixture(): Promise<Fixture> {
         version: "1.0.0",
         processors: [processor],
         collections: [auditCollection],
+        features: [engineEchoFeature],
         tools: [echoTool],
       }),
     ],
@@ -281,14 +273,18 @@ Deno.test("factory engine scopes typed processor capabilities and deduplicates r
     assertEquals(fixture.processorCalls(), 2);
     assertEquals(fixture.leakedStorage(), false);
 
-    const attempts = await projectLlmAttempts(
+    const attempts = await projectActionEvents(
       fixture.engine,
       "tenant-a",
-      "thread-a",
+      "test.engine.echo.run",
     );
-    assertEquals(attempts.length, 1);
-    assertEquals(attempts[0].id, "attempt:message-a");
-    const attemptInput = llmAttemptContent(attempts[0]).input;
+    assertEquals(attempts.map((event) => event.status), [
+      "invoked",
+      "completed",
+    ]);
+    const attemptInput = (attempts[1].input as {
+      content: readonly ContentRef[];
+    }).content;
     assertEquals(attemptInput.length, 1);
     assertEquals(
       (await fixture.engine.content.resolver.get(attemptInput[0], {
@@ -305,7 +301,7 @@ Deno.test("factory engine scopes typed processor capabilities and deduplicates r
     const events = await fixture.engine.events.list({ namespace: "tenant-a" });
     assertEquals(events.some((event) => event.type === "text.delta"), false);
     const attemptEvent = events.find((event) =>
-      event.type === "llm_attempt.created"
+      event.type === "test.engine.echo.run.invoked"
     );
     const auditEvent = events.find((event) =>
       event.type === "engine_audit.created"

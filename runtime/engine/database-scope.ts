@@ -5,12 +5,12 @@ import {
 import {
   type BodyStore,
   type ContentPreparer,
-  createContentStreamRuntime,
   createContentResolver,
+  createContentStreamRuntime,
   createDatabaseAssetRepository,
   createDatabaseBodyStore,
-  maintainProgressiveBodies,
   type DatabaseAssetRepository,
+  maintainProgressiveBodies,
 } from "../content/index.ts";
 import {
   createDomainRelationRepository,
@@ -19,6 +19,10 @@ import {
   type EventCollections,
   projectDomainRelation,
 } from "../domain/index.ts";
+import {
+  createActionLifecycleAppender,
+  createActionLifecycleLoader,
+} from "../actions/index.ts";
 import {
   type CopilotzEvent,
   type CopilotzEventHub,
@@ -178,6 +182,9 @@ export function createDatabaseScope(
     eventStore: store,
     createId: engine.createId,
   });
+  const actionLifecycleAppender = createActionLifecycleAppender({
+    coordinator,
+  });
   const streamBodyStore = engine.assetStorage?.adapter?.forScope({
     namespace: "@copilotz/stream",
     databaseSchema,
@@ -216,8 +223,9 @@ export function createDatabaseScope(
                     : {}),
                 },
                 routing: output.routing as EventRouting | undefined,
-                visibility: (output.visibility as EventVisibility | undefined) ??
-                  { kind: "public" },
+                visibility:
+                  (output.visibility as EventVisibility | undefined) ??
+                    { kind: "public" },
                 correlationId: output.correlationId ??
                   `content-stream:${output.id}`,
                 metadata: {
@@ -230,6 +238,13 @@ export function createDatabaseScope(
             },
           }),
           bodies: streamBodyStore,
+          prepare: (input, prepareOptions) =>
+            options.preparer.prepare(input, {
+              namespace,
+              idempotencyKey:
+                `feature:${namespace}:${prepareOptions.operationKey}`,
+              origin: prepareOptions.origin,
+            }),
           materialize: (input, materializeOptions = {}) =>
             assets.materialize({
               transaction: activeCollectionTransaction(collectionRuntime) ??
@@ -246,9 +261,25 @@ export function createDatabaseScope(
                 engine.session,
               tables: store.tables,
             }, { namespace, ownerId, content }),
+          publish: (input, publishOptions) =>
+            assets.publish({
+              ...input,
+              namespace,
+              idempotencyKey:
+                `feature:${namespace}:${publishOptions.operationKey}`,
+            }),
+          get: (assetId) => assets.get(namespace, assetId),
+          getMany: (assetIds) => assets.getMany(namespace, assetIds),
+          resolve: (ref) => resolver.get(ref, { namespace }),
+          resolveMany: (refs) => resolver.getMany(refs, { namespace }),
+          open: (ref) => resolver.open(ref, { namespace }),
         }),
       events: {
         list: (listOptions) => store.listEvents(listOptions),
+      },
+      actionLifecycle: {
+        append: actionLifecycleAppender,
+        load: createActionLifecycleLoader({ store }),
       },
       deliveries: {
         list: (listOptions) => store.listDeliveries(listOptions),

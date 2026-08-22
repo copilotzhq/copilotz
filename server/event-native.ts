@@ -16,7 +16,6 @@ import {
   type FeatureRequest,
   type FeatureResource,
   type FeatureResponse,
-  invokeFeatureAction,
 } from "../runtime/features/index.ts";
 import { requireFeatureActions } from "../runtime/features/context.ts";
 import {
@@ -394,10 +393,7 @@ async function messageList(
     },
   );
   const includeValues = queryTexts(request.query, "include") ?? [];
-  const allowedIncludes = new Set<EventNativeHistoryInclude>([
-    "content",
-    "workflow",
-  ]);
+  const allowedIncludes = new Set<EventNativeHistoryInclude>(["content"]);
   const invalidInclude = includeValues.find((value) =>
     !allowedIncludes.has(value as EventNativeHistoryInclude)
   );
@@ -411,7 +407,6 @@ async function messageList(
   const included = await createEventNativeMessageHistoryIncluded(
     application,
     namespace,
-    threadId,
     messages,
     new Set(includeValues as readonly EventNativeHistoryInclude[]),
   );
@@ -966,13 +961,7 @@ async function handleFeatures(
   const context = featureContext(application, namespace);
   let output: unknown;
   try {
-    output = await invokeFeatureAction(
-      feature,
-      path[1],
-      request,
-      context,
-      application.collectionRuntime.transaction,
-    );
+    output = await context.feature(feature)[path[1]](request);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (message.includes("is not registered")) {

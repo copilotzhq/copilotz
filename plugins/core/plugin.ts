@@ -6,22 +6,18 @@ import {
 } from "@copilotz/copilotz/plugins";
 import { corePluginManifest } from "./manifest.ts";
 import { threadMessageFeature } from "./resources/features/thread-message.ts";
-import { llmAttemptFeature } from "./resources/features/llm-attempt.ts";
-import { toolExecutionFeature } from "./resources/features/tool-execution.ts";
 import { threadFeature } from "./resources/features/thread.ts";
 import { messageFeature } from "./resources/features/message.ts";
+import { llmFeature } from "./resources/features/llm.ts";
+import { toolBatchFeature, toolFeature } from "./resources/features/tool.ts";
 import { coreLlmResources } from "./resources/llm/index.ts";
 import {
-  llmAttemptCollection,
   messageCollection,
   participantCollection,
   threadCollection,
-  toolExecutionCollection,
 } from "./resources/collections/index.ts";
 import {
   completeAskProcessor,
-  executeTextAttemptProcessor,
-  executeToolProcessor,
   failAskProcessor,
   messageInputProcessor,
   messageRouterProcessor,
@@ -34,8 +30,6 @@ const processors: readonly Processor<CopilotzProcessorContext>[] = Object
   .freeze([
     messageRouterProcessor,
     messageInputProcessor,
-    executeTextAttemptProcessor,
-    executeToolProcessor,
     projectTextResultProcessor,
     projectToolResultProcessor,
     completeAskProcessor,
@@ -46,14 +40,13 @@ const collections = Object.freeze([
   participantCollection,
   threadCollection,
   messageCollection,
-  llmAttemptCollection,
-  toolExecutionCollection,
 ]);
 
 const features = Object.freeze([
   threadMessageFeature,
-  llmAttemptFeature,
-  toolExecutionFeature,
+  llmFeature,
+  toolFeature,
+  toolBatchFeature,
   threadFeature,
   messageFeature,
 ]);

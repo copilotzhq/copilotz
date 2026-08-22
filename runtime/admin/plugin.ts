@@ -233,7 +233,9 @@ const activity: AdminAction = async (input, context) => {
     if (!inDateRange(event.createdAt, dates.from, dates.to)) continue;
     const current = point(event.createdAt);
     if (event.type === "message.created") current.messageCount += 1;
-    if (event.type === "tool_execution.created") current.toolCallCount += 1;
+    if (event.type === "copilotz.core.tool.call.invoked") {
+      current.toolCallCount += 1;
+    }
   }
   for (const value of usage) {
     if (value.kind !== "llm" || !createdInRange(value, dates)) continue;

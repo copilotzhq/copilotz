@@ -8,19 +8,22 @@ mechanism and does not own a vendor catalog.
 
 ### Added
 
-- Static `corePlugin` / `coreCollectionsPlugin` with participant, thread,
-  message, llm_attempt, tool_execution, and stream collections.
+- Static `corePlugin` / `coreCollectionsPlugin` with participant, thread, and
+  message Collections plus LLM and Tool Features.
 - `llm` resources expose `generate()`. Shipped adapters live on the core plugin
   as `{ id, type: "llm", generate }`.
 - `copilotz.core.thread-message` `create` feature for ensure-participant,
   thread membership, and `message.create` in one transaction.
-- Processor `context.features.invoke` and `FeatureContext` over the same
-  primitives as processors.
+- Direct Feature action calls through `context.features.<alias>.<action>(...)`
+  and `context.feature(definition).<action>(...)`.
+- Persisted Feature Action lifecycle events derived automatically from the
+  Feature/action identity; operational LLM/tool Collections are gone.
 
 ### Changed
 
 - Core processors and writes use bound collections and `CollectionRecord`.
-  Characterization ingress is `message.create` via `collectionRuntime`.
+  Application ingress is `send(core.message(...))`; session output is observed
+  through `observe()`.
 - `chat()` requires an explicit provider registry. No hardcoded vendor map in
   runtime. `generateFromFactory` binds one adapter as one resource.
 - Package-root `createCopilotz` injects `canonicalCore: [corePlugin]`.

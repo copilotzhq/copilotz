@@ -114,7 +114,7 @@ const longTermMemorySchema = {
     strategy: { type: "string" },
     status: {
       type: "string",
-      enum: ["pending", "ready", "failed"],
+      enum: ["pending", "ready", "failed", "cancelled"],
     },
     memorySpaceId: { type: ["string", "null"] },
     readMemorySpaceIds: { type: "array", items: { type: "string" } },

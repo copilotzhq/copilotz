@@ -1,8 +1,5 @@
 import type { ContentInput } from "@copilotz/copilotz/content";
-import {
-  type CopilotzPlugin,
-  definePlugin,
-} from "@copilotz/copilotz/plugins";
+import { type CopilotzPlugin, definePlugin } from "@copilotz/copilotz/plugins";
 import {
   channelMetadata,
   collectByteStream,

@@ -1,4 +1,5 @@
 import { message as coreMessage } from "@copilotz/copilotz/core";
+import type { LlmAdapter } from "@copilotz/copilotz/llm";
 import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
 import {
   type AnyCopilotzPlugin,
@@ -401,12 +402,9 @@ Deno.test("createCopilotz owns its default private database", async () => {
 
 Deno.test("application Adapters overlay plugin Adapters", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
-  const replacement = Object.freeze({
-    id: "openai",
-    type: "llm",
-    marker: "application",
-    generate: () => {
-      throw new Error("application llm is not invoked");
+  const replacement: LlmAdapter = Object.freeze({
+    call: () => {
+      throw new Error("application LLM Adapter is not invoked");
     },
   });
   const application = await createCopilotzApplication({
@@ -418,6 +416,7 @@ Deno.test("application Adapters overlay plugin Adapters", async () => {
   });
   try {
     assertEquals(application.config.pluginIds, [
+      "@copilotz/llm",
       "@copilotz/core",
     ]);
     assertEquals(

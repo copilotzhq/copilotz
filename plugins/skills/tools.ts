@@ -1,5 +1,6 @@
-import { resolveSkillGrants } from "@copilotz/copilotz/capabilities";
-import type { Agent, Skill } from "@copilotz/copilotz/resources";
+import { resolveSkillGrants } from "@copilotz/copilotz/core";
+import type { AgentResource } from "@copilotz/copilotz/core";
+import type { Skill } from "./contracts.ts";
 import type {
   WorkflowTool,
   WorkflowToolExecutionContext,
@@ -53,7 +54,7 @@ function availableSkills(ctx: WorkflowToolExecutionContext): readonly Skill[] {
   const agent = ctx.agent ??
     (ctx.execution.agentId
       ? ctx.processor.resources.agents?.[ctx.execution.agentId] as
-        | Agent
+        | AgentResource
         | undefined
       : undefined);
   if (!agent) return values;

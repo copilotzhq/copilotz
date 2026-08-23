@@ -48,7 +48,8 @@ Deno.test("portable smoke contract uses only Web and injected capabilities", asy
       "TextEncoder",
       "Response",
       "definePlugin",
-      "defineLlmProviderResource",
+      "defineModel",
+      "LlmAdapter",
     ]
   ) assertStringIncludes(smoke, capability);
 });
@@ -64,10 +65,10 @@ Deno.test("optional skills implementation stays off the root runtime graph", asy
 Deno.test("agent capability resolution remains factory-first and host-neutral", async () => {
   for (
     const module of [
-      "runtime/capabilities/grants.ts",
-      "runtime/capabilities/resolver.ts",
-      "runtime/capabilities/selection.ts",
-      "runtime/capabilities/types.ts",
+      "plugins/core/internal/capabilities/grants.ts",
+      "plugins/core/internal/capabilities/resolver.ts",
+      "plugins/core/internal/capabilities/selection.ts",
+      "plugins/core/internal/capabilities/types.ts",
     ]
   ) {
     const value = await source(module);

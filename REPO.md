@@ -14,10 +14,12 @@ tags:
 entrypoints:
   - index.ts
   - runtime/application/index.ts
-  - runtime/capabilities/index.ts
+  - runtime/actions/index.ts
+  - runtime/collections/index.ts
   - runtime/plugins/index.ts
   - runtime/events/index.ts
-  - runtime/attachments/index.ts
+  - plugins/core/index.ts
+  - plugins/llm/index.ts
   - server/index.ts
 status: active
 ---
@@ -42,19 +44,23 @@ deleted during the refactor.
 
 ## Current Code Map
 
-This map describes the transitional worktree, not target ownership. Use
-`IMPLEMENTATION_PLAN.md` for the destination and move order.
+This map describes the current implementation. Use `IMPLEMENTATION_PLAN.md`
+for the remaining cut order.
 
 - Public application assembly: `runtime/application/`
-- Agent authority and capability introspection: `runtime/capabilities/`
+- Action definition, lifecycle, and invocation: `runtime/actions/`
+- Canonical graph Collections and mutation planning: `runtime/collections/`
 - Canonical content/assets: `runtime/content/`
-- Graph-native domains and collections: `runtime/domain/`
+- Runtime-neutral conversation DTOs: `runtime/domain/`
 - Immutable events/deliveries: `runtime/events/`
 - Oxian placement: `runtime/execution/`
-- Plugins/resources: `runtime/plugins/`, `runtime/resources/`
-- Agents, prompt, and transcript: `runtime/agents/`
-- LLM providers and attempt lifecycle: `runtime/llm/`
-- Tool catalog, executor, and jq pipelines: `runtime/tools/`
+- Plugin definition/composition: `runtime/plugins/`
+- Semantic Resources: their owning plugin (`plugins/core/agent.ts`,
+  `plugins/llm/contracts.ts`, `plugins/tools/`, `plugins/skills/contracts.ts`)
+- Agent contract, prompt policy, and conversation loop: `plugins/core/`
+- Provider-neutral LLM Action, Model/Adapter contracts, and providers:
+  `plugins/llm/`
+- Legacy Tool catalog, executor, and jq pipelines: `plugins/tools/internal/`
 - Concrete Tool plugins and host/protocol integrations: `plugins/tools/`
 - Text/ask processors: `plugins/core/`
 - Persistent text/realtime attachments: `runtime/attachments/`

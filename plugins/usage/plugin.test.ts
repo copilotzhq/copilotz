@@ -1,18 +1,10 @@
-import { assert, assertEquals, assertExists } from "@std/assert";
+import { assert, assertEquals } from "@std/assert";
 import {
   createUsageWorkflowPlugin,
   type CreateUsageWorkflowPluginOptions,
 } from "./index.ts";
 import { createCopilotz } from "../../index.ts";
 import { createTestDomainContext } from "../../runtime/testing/domain-context.ts";
-import {
-  projectMessageById,
-  projectMessages,
-  projectParticipants,
-  projectThreadByExternalId,
-  projectThreadById,
-  projectThreads,
-} from "../../runtime/testing/projections.ts";
 import {
   createTestDatabase,
   type TestDatabase,
@@ -33,16 +25,144 @@ import {
   defineAction,
 } from "../../runtime/actions/index.ts";
 import { coreCollections, createThreadAction } from "../core/index.ts";
+import type { LlmCallInput, LlmCallOutput } from "../llm/contracts.ts";
 
 const NAMESPACE = "tenant-a";
 const THREAD_ID = "thread-a";
 
-const usageLlmAction = defineAction<unknown, unknown>({
-  id: "copilotz.core.llm.generate",
-  execute(input: unknown) {
-    const value = input as Record<string, unknown>;
-    if (value.fail) throw new Error(String(value.fail));
-    return value.result;
+function llmOutput(
+  model: string,
+  input: Readonly<{
+    usage: NonNullable<LlmCallOutput["usage"]>;
+    attempts?: NonNullable<LlmCallOutput["attempts"]>;
+    secret?: string;
+  }>,
+): LlmCallOutput {
+  const secret = input.secret ?? "provider-output-must-not-be-copied";
+  return Object.freeze({
+    model,
+    adapter: "openai-primary",
+    providerModel: "gpt-5-mini-test",
+    content: Object.freeze([Object.freeze({
+      assetId: secret,
+      kind: "text" as const,
+      mediaType: "text/plain",
+      role: "body" as const,
+    })]),
+    toolCalls: Object.freeze([Object.freeze({
+      id: "tool-call-1",
+      action: "lookup",
+      input: Object.freeze({ secretPrompt: "tool-call-must-not-be-copied" }),
+    })]),
+    usage: input.usage,
+    ...(input.attempts ? { attempts: input.attempts } : {}),
+    finishReason: "stop",
+  });
+}
+
+const usageLlmAction = defineAction<LlmCallInput, LlmCallOutput>({
+  id: "llm.call",
+  execute(input) {
+    if (input.model === "failing-model") {
+      throw new Error("provider unavailable");
+    }
+    if (input.model === "cancelled-model") {
+      throw new DOMException("cancelled by caller", "AbortError");
+    }
+    if (input.model === "aggregate-model") {
+      return llmOutput(input.model, {
+        usage: Object.freeze({
+          inputTokens: 23,
+          outputTokens: 7,
+          reasoningTokens: 2,
+          cachedInputTokens: 5,
+          totalTokens: 32,
+          cost: Object.freeze({ amount: 0.031, currency: "USD" }),
+        }),
+        attempts: Object.freeze([
+          Object.freeze({
+            id: "aggregate-attempt-0",
+            index: 0,
+            adapter: "openai-primary",
+            providerModel: "fallback-a",
+            status: "failed" as const,
+            usage: Object.freeze({
+              inputTokens: 100,
+              totalTokens: 100,
+              cost: Object.freeze({ amount: 9, currency: "EUR" }),
+            }),
+            error: Object.freeze({
+              code: "attempt_secret_code",
+              message: "attempt-secret-must-not-be-copied",
+            }),
+          }),
+          Object.freeze({
+            id: "aggregate-attempt-1",
+            index: 1,
+            adapter: "openai-primary",
+            providerModel: "gpt-5-mini-test",
+            status: "completed" as const,
+            usage: Object.freeze({
+              inputTokens: 200,
+              outputTokens: 80,
+              totalTokens: 280,
+              cost: Object.freeze({ amount: 12, currency: "GBP" }),
+            }),
+            finishReason: "stop",
+          }),
+        ]),
+        secret: "aggregate-content-must-not-be-copied",
+      });
+    }
+    if (input.model === "uncosted-model") {
+      return llmOutput(input.model, {
+        usage: Object.freeze({
+          inputTokens: 4,
+          outputTokens: 3,
+          cachedInputTokens: 1,
+          totalTokens: 7,
+        }),
+        attempts: Object.freeze([
+          Object.freeze({
+            id: "uncosted-attempt-0",
+            index: 0,
+            adapter: "openai-primary",
+            providerModel: "fallback-usd",
+            status: "failed" as const,
+            usage: Object.freeze({
+              inputTokens: 40,
+              totalTokens: 40,
+              cost: Object.freeze({ amount: 1, currency: "USD" }),
+            }),
+            error: Object.freeze({ message: "first currency failed" }),
+          }),
+          Object.freeze({
+            id: "uncosted-attempt-1",
+            index: 1,
+            adapter: "openai-primary",
+            providerModel: "fallback-eur",
+            status: "completed" as const,
+            usage: Object.freeze({
+              inputTokens: 50,
+              outputTokens: 20,
+              totalTokens: 70,
+              cost: Object.freeze({ amount: 2, currency: "EUR" }),
+            }),
+          }),
+        ]),
+        secret: "uncosted-content-must-not-be-copied",
+      });
+    }
+    return llmOutput(input.model, {
+      usage: Object.freeze({
+        inputTokens: 10,
+        outputTokens: 5,
+        reasoningTokens: 2,
+        cachedInputTokens: 3,
+        totalTokens: 17,
+        cost: Object.freeze({ amount: 0.02, currency: "USD" }),
+      }),
+    });
   },
 });
 
@@ -86,8 +206,14 @@ const usageActionDriverPlugin = definePlugin({
       ],
       async handle(event, context) {
         if (event.type === "test.usage.llm") {
-          await context.actions.usageLlm(event.data, {
-            operationKey: String((event.data as Record<string, unknown>).key),
+          const data = event.data as Record<string, unknown>;
+          const metadata = data.metadata && typeof data.metadata === "object" &&
+              !Array.isArray(data.metadata)
+            ? data.metadata as Readonly<Record<string, unknown>>
+            : Object.freeze({});
+          await context.actions.usageLlm(data.input as LlmCallInput, {
+            operationKey: String(data.key),
+            metadata,
           }).catch(() => undefined);
           return;
         }
@@ -153,6 +279,10 @@ Deno.test("usage workflow is a factory-created plugin and can disable metering",
     "recordLlmUsage",
     "recordToolUsage",
   ]);
+  assertEquals(
+    enabled.processors.recordLlmUsage?.on.map((clause) => clause.eventType),
+    ["llm.call.completed", "llm.call.failed", "llm.call.cancelled"],
+  );
 
   const disabled = createUsageWorkflowPlugin({ enabled: false });
   assertEquals(Object.keys(disabled.collections), ["usage"]);
@@ -213,7 +343,7 @@ Deno.test("usage workflow records Action terminals once without payload copies",
       });
       await Promise.all(appended.dispatch.handles.map((handle) => handle.done));
     };
-    const common = {
+    const toolCommon = {
       threadId: THREAD_ID,
       messageId: "message-1",
       participantId: "agent-node",
@@ -221,37 +351,34 @@ Deno.test("usage workflow records Action terminals once without payload copies",
       agentId: "north",
     };
     await invoke("test.usage.llm", {
-      ...common,
       key: "provider-0",
-      result: {
-        provider: "openai",
+      input: {
         model: "primary-model",
-        answer: "provider output must not be copied into usage",
-        usage: {
-          inputTokens: 10,
-          outputTokens: 5,
-          totalTokens: 15,
-          source: "provider",
-          rawUsage: { requestId: "req-safe" },
+        request: {
+          instructions: "prompt-must-not-be-copied",
+          messages: [],
         },
-        cost: {
-          source: "openrouter",
-          currency: "USD",
-          pricingModelId: "openai/primary-model",
-          inputCostUsd: 0.01,
-          outputCostUsd: 0.01,
-          totalCostUsd: 0.02,
-        },
-        metricsFinalizedAt: "2026-08-06T12:00:01.000Z",
+      },
+      metadata: {
+        schema: "copilotz.core.llm-call.v1",
+        threadId: THREAD_ID,
+        triggerMessageId: "message-1",
+        agentId: "north",
+        agentParticipantId: "agent-node",
+        initiatorParticipantId: "user-node",
+        availableToolIds: [],
       },
     });
     await invoke("test.usage.llm", {
-      ...common,
       key: "provider-1",
-      fail: "provider unavailable",
+      input: {
+        model: "failing-model",
+        request: { messages: [] },
+      },
+      metadata: { source: "standalone-test" },
     });
     await invoke("test.usage.tool", {
-      ...common,
+      ...toolCommon,
       key: "tool-1",
       tool: { id: "lookup", name: "Lookup" },
       arguments: { secretPrompt: "do not duplicate" },
@@ -282,17 +409,36 @@ Deno.test("usage workflow records Action terminals once without payload copies",
     const first = rows.find((row) => row.resource === "primary-model")!;
     assertEquals(first.kind, "llm");
     assertEquals(first.resource, "primary-model");
+    assertEquals(first.model, "primary-model");
+    assertEquals(first.adapter, "openai-primary");
+    assertEquals(first.providerModel, "gpt-5-mini-test");
+    assertEquals(first.provider, null);
+    assertEquals(first.operation, "llm.call");
+    assertEquals(first.threadId, THREAD_ID);
+    assertEquals(first.messageId, "message-1");
+    assertEquals(first.agentId, "north");
     assertEquals(first.initiatedById, "user-external");
     assertEquals(first.metrics, {
       calls: 1,
+      cachedInputTokens: 3,
       hookObserved: 1,
       inputTokens: 10,
       outputTokens: 5,
-      totalTokens: 15,
+      reasoningTokens: 2,
+      totalTokens: 17,
     });
     assertEquals(first.totalCostUsd, 0.04);
+    assertEquals(first.pricingCurrency, "USD");
+    assertEquals(first.pricingModelId, "gpt-5-mini-test");
     assertEquals(first.pricingSource, "contract-pricing");
-    assertEquals(first.rawUsage, { requestId: "req-safe" });
+    assertEquals(first.rawUsage, null);
+
+    const unattributed = rows.find((row) => row.resource === "failing-model")!;
+    assertEquals(unattributed.status, "failed");
+    assertEquals(unattributed.threadId, null);
+    assertEquals(unattributed.messageId, null);
+    assertEquals(unattributed.agentId, null);
+    assertEquals(unattributed.initiatedById, null);
 
     const toolRow = rows.find((row) => row.kind === "tool")!;
     assertEquals(toolRow.resource, "lookup");
@@ -303,10 +449,10 @@ Deno.test("usage workflow records Action terminals once without payload copies",
     });
     assertEquals(toolRow.totalCostUsd, 0.5);
     assertEquals(toolRow.initiatedById, "user-external");
-    assertEquals(rows.some((row) => row.status === "failed"), true);
-
     const serialized = JSON.stringify(rows);
-    assert(!serialized.includes("provider output must not be copied"));
+    assert(!serialized.includes("prompt-must-not-be-copied"));
+    assert(!serialized.includes("provider-output-must-not-be-copied"));
+    assert(!serialized.includes("tool-call-must-not-be-copied"));
     assert(!serialized.includes("do not duplicate"));
 
     await fixture.engine.recover({ namespace: NAMESPACE });
@@ -314,6 +460,111 @@ Deno.test("usage workflow records Action terminals once without payload copies",
       (await usage.list()).length,
       3,
     );
+  } finally {
+    await closeFixture(fixture);
+  }
+});
+
+Deno.test("usage persists only llm.call aggregate accounting", async () => {
+  const fixture = await createFixture();
+  try {
+    const invoke = async (model: string) => {
+      const key = `aggregate:${model}`;
+      const appended = await fixture.engine.events.append({
+        type: "test.usage.llm",
+        namespace: NAMESPACE,
+        threadId: THREAD_ID,
+        payload: {
+          key,
+          input: {
+            model,
+            request: {
+              instructions: `${model}-prompt-must-not-be-copied`,
+              messages: [],
+            },
+          },
+          metadata: {},
+        },
+        correlationId: key,
+        deduplicationId: `${key}:requested`,
+      });
+      await Promise.all(appended.dispatch.handles.map((handle) => handle.done));
+    };
+
+    await invoke("aggregate-model");
+    await invoke("uncosted-model");
+    await invoke("failing-model");
+    await invoke("cancelled-model");
+
+    const usage = fixture.engine.collections.withScope({ namespace: NAMESPACE })
+      .usage;
+    const deadline = Date.now() + 10_000;
+    while ((await usage.list()).length < 4) {
+      if (Date.now() >= deadline) {
+        throw new Error("Aggregate Usage Actions did not settle.");
+      }
+      await fixture.engine.recover({ namespace: NAMESPACE });
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+
+    const rows = await usage.list();
+    assertEquals(rows.length, 4);
+
+    const aggregate = rows.find((row) => row.resource === "aggregate-model")!;
+    assertEquals(aggregate.metrics, {
+      calls: 1,
+      inputTokens: 23,
+      outputTokens: 7,
+      reasoningTokens: 2,
+      cachedInputTokens: 5,
+      totalTokens: 32,
+    });
+    assertEquals(aggregate.totalCostUsd, 0.031);
+    assertEquals(aggregate.pricingCurrency, "USD");
+    assertEquals(aggregate.pricingSource, "openai-primary");
+    assertEquals(aggregate.pricingModelId, "gpt-5-mini-test");
+
+    const uncosted = rows.find((row) => row.resource === "uncosted-model")!;
+    assertEquals(uncosted.metrics, {
+      calls: 1,
+      inputTokens: 4,
+      outputTokens: 3,
+      cachedInputTokens: 1,
+      totalTokens: 7,
+    });
+    assertEquals(uncosted.totalCostUsd, null);
+    assertEquals(uncosted.pricingCurrency, null);
+    assertEquals(uncosted.pricingSource, null);
+    assertEquals(uncosted.pricingModelId, null);
+
+    for (
+      const [model, status] of [
+        ["failing-model", "failed"],
+        ["cancelled-model", "cancelled"],
+      ] as const
+    ) {
+      const terminal = rows.find((row) => row.resource === model)!;
+      assertEquals(terminal.model, model);
+      assertEquals(terminal.status, status);
+      assertEquals(terminal.adapter, null);
+      assertEquals(terminal.providerModel, null);
+      assertEquals(terminal.metrics, { calls: 1 });
+      assertEquals(terminal.totalCostUsd, null);
+      assertEquals(terminal.threadId, null);
+    }
+
+    const serialized = JSON.stringify(rows);
+    assert(!serialized.includes("aggregate-attempt-0"));
+    assert(!serialized.includes("uncosted-attempt-0"));
+    assert(!serialized.includes("attempt-secret-must-not-be-copied"));
+    assert(!serialized.includes("prompt-must-not-be-copied"));
+    assert(!serialized.includes("content-must-not-be-copied"));
+    assert(!serialized.includes("tool-call-must-not-be-copied"));
+    assert(!serialized.includes("EUR"));
+    assert(!serialized.includes("GBP"));
+
+    await fixture.engine.recover({ namespace: NAMESPACE });
+    assertEquals((await usage.list()).length, 4);
   } finally {
     await closeFixture(fixture);
   }

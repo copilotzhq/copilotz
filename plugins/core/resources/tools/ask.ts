@@ -1,13 +1,13 @@
 import type { CollectionRecord } from "@copilotz/copilotz/collections";
-import type { Agent } from "@copilotz/copilotz/resources";
-import { resolveAgentGrants } from "@copilotz/copilotz/capabilities";
+import type { AgentResource } from "../../agent.ts";
+import { deriveWorkflowId } from "@copilotz/copilotz/events";
 import {
   type AgentAskMetadata,
   agentAskMetadata,
-  deriveWorkflowId,
+  resolveAgentGrants,
   withAgentAskMetadata,
   workflowMetadata,
-} from "@copilotz/copilotz/events";
+} from "@copilotz/copilotz/core";
 import {
   deferWorkflowTool,
   type WorkflowTool,
@@ -51,22 +51,25 @@ function normalizedIdentity(value: string | null | undefined): string | null {
   return normalized || null;
 }
 
-function agentIdentities(agent: Agent): readonly string[] {
+function agentIdentities(agent: AgentResource): readonly string[] {
   return Object.freeze(
-    [agent.id, agent.externalId, agent.name]
+    [agent.id, agent.name]
       .map(normalizedIdentity)
       .filter((value): value is string => value !== null),
   );
 }
 
-function matchesAgent(value: string, agent: Agent): boolean {
+function matchesAgent(value: string, agent: AgentResource): boolean {
   return agentIdentities(agent).includes(value.trim().toLowerCase());
 }
 
-function resolveTargetAgent(target: string, agents: readonly Agent[]): Agent {
+function resolveTargetAgent(
+  target: string,
+  agents: readonly AgentResource[],
+): AgentResource {
   const normalized = target.toLowerCase();
   const preferred = agents.filter((agent) =>
-    [agent.id, agent.externalId]
+    [agent.id]
       .map(normalizedIdentity)
       .includes(normalized)
   );
@@ -89,9 +92,9 @@ function resolveTargetAgent(target: string, agents: readonly Agent[]): Agent {
 }
 
 function assertAgentAllowed(
-  asking: Agent,
-  asked: Agent,
-  agents: readonly Agent[],
+  asking: AgentResource,
+  asked: AgentResource,
+  agents: readonly AgentResource[],
 ): void {
   if (matchesAgent(asking.id, asked) || matchesAgent(asking.name, asked)) {
     throw new Error("An agent cannot ask itself.");
@@ -107,7 +110,7 @@ function assertAgentAllowed(
 
 function participantForAgent(
   participants: readonly CollectionRecord[],
-  agent: Agent,
+  agent: AgentResource,
 ): CollectionRecord | undefined {
   const identities = new Set(agentIdentities(agent));
   return participants.find((participant) =>
@@ -178,7 +181,7 @@ export function defineAskTool(
       const resources = context.processor.resources as CoreResources;
       const agents = Object.values(resources.agents ?? {})
         .filter(
-          (value): value is Agent => !!value,
+          (value): value is AgentResource => !!value,
         );
       const askingAgent = context.agent ??
         (execution.agentId

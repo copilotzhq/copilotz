@@ -2,7 +2,7 @@ import { assert, assertEquals, assertRejects } from "@std/assert";
 
 import { createFinanceProviderRegistry } from "./provider/registry.ts";
 import type { FinanceDataProvider } from "./provider/types.ts";
-import type { WorkflowTool } from "@copilotz/copilotz/tools";
+import type { WorkflowTool } from "../internal/types.ts";
 import { createFinanceToolsPlugin } from "./plugin.ts";
 
 function provider(): FinanceDataProvider {

@@ -13,8 +13,6 @@ import type {
   Participant,
 } from "@copilotz/copilotz/domain";
 import type { ProcessorContext } from "@copilotz/copilotz/plugins";
-import type { CreateTextWorkflowPluginOptions } from "@copilotz/copilotz/llm";
-import type { Agent } from "@copilotz/copilotz/resources";
 import {
   createWorkflowToolCatalog,
   type WorkflowToolCatalog,
@@ -202,23 +200,8 @@ export function historyVisibilityOf(record: CollectionRecord): string {
   return optionalText(record.historyVisibility) ?? "public_status";
 }
 
-export function toolCatalogFor(
-  agent?: Agent,
-): WorkflowToolCatalog {
-  const extra = agent as
-    | Agent & Partial<CreateTextWorkflowPluginOptions>
-    | undefined;
-  return extra?.toolCatalog ?? defaultToolCatalog;
-}
-
-export function policyFromAgent(agent: Agent): CreateTextWorkflowPluginOptions {
-  return agent as Agent & CreateTextWorkflowPluginOptions;
-}
-
-export function policyOptions(
-  agent: Agent,
-): CreateTextWorkflowPluginOptions {
-  return policyFromAgent(agent);
+export function toolCatalogFor(): WorkflowToolCatalog {
+  return defaultToolCatalog;
 }
 
 export function parseJsonText(text: string): unknown {

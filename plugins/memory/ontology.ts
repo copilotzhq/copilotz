@@ -1,5 +1,5 @@
 import type { ContentRef } from "@copilotz/copilotz/content";
-import type { ContextSourceRef } from "@copilotz/copilotz/context";
+import type { ContextSourceRef } from "@copilotz/copilotz/core";
 
 export const MEMORY_FORMS: readonly [
   "entity",

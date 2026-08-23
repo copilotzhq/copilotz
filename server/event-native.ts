@@ -1,4 +1,4 @@
-import type { Agent } from "../runtime/resources/index.ts";
+import type { AgentResource } from "@copilotz/copilotz/core";
 import {
   type ChannelRuntime,
   createChannelRuntime,
@@ -227,13 +227,12 @@ function base64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
-function publicAgent(agent: Agent): Readonly<Record<string, unknown>> {
+function publicAgent(agent: AgentResource): Readonly<Record<string, unknown>> {
   return Object.freeze({
     id: agent.id ?? agent.name,
     name: agent.name,
     role: agent.role ?? null,
     ...(agent.description ? { description: agent.description } : {}),
-    ...(agent.runtime ? { runtime: structuredClone(agent.runtime) } : {}),
     ...(agent.capabilities
       ? { capabilities: structuredClone(agent.capabilities) }
       : {}),
@@ -929,7 +928,7 @@ export function createEventNativeApp(
           return {
             status: 200,
             data: Object.values(scoped.plugins.resources.agents ?? {})
-              .filter((candidate): candidate is Agent =>
+              .filter((candidate): candidate is AgentResource =>
                 !!candidate && typeof candidate === "object"
               )
               .map(publicAgent),

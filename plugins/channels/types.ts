@@ -1,4 +1,4 @@
-import type { Agent } from "@copilotz/copilotz/resources";
+import type { AgentResource } from "@copilotz/copilotz/core";
 import type {
   ApplicationSendHandle,
   ApplicationSendInput,
@@ -129,4 +129,4 @@ export type CreateWebChannelPluginOptions =
     version?: string;
   }>;
 
-export type ChannelAgent = Pick<Agent, "id" | "name" | "externalId">;
+export type ChannelAgent = Pick<AgentResource, "id" | "name">;

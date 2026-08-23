@@ -1,10 +1,10 @@
-import type { API } from "@copilotz/copilotz/resources";
+import type { API } from "../resources.ts";
 import {
   createWorkflowToolCatalog,
   type GenerateApiWorkflowTools,
   isWorkflowTool,
   type WorkflowToolCatalog,
-} from "@copilotz/copilotz/tools";
+} from "../internal/index.ts";
 import { createMcpWorkflowToolGenerator } from "../mcp/generator.ts";
 import type { CreateServerWorkflowToolCatalogOptions } from "./types.ts";
 

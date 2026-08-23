@@ -1,4 +1,5 @@
 import { type CopilotzPlugin, definePlugin } from "@copilotz/copilotz/plugins";
+import { llmPlugin } from "@copilotz/copilotz/llm";
 import {
   messageCollection,
   participantCollection,
@@ -20,17 +21,9 @@ import {
 } from "./resources/actions/thread.ts";
 import { reviseMessageAction } from "./resources/actions/message.ts";
 import {
-  generateLlmAction,
-  runLlmSessionAction,
-} from "./resources/actions/llm.ts";
-import {
   callToolAction,
   executeToolBatchAction,
 } from "./resources/actions/tool.ts";
-import {
-  type CoreLlmAdapters,
-  coreLlmAdapters,
-} from "./resources/llm/index.ts";
 import { askTool } from "./resources/tools/ask.ts";
 
 export const CORE_PLUGIN_ID = "@copilotz/core";
@@ -48,8 +41,6 @@ export type CoreActions = Readonly<{
   deleteThreadMessages: typeof deleteThreadMessagesAction;
   reviseMessage: typeof reviseMessageAction;
   createThreadMessage: typeof createThreadMessageAction;
-  generateLlm: typeof generateLlmAction;
-  runLlmSession: typeof runLlmSessionAction;
   callTool: typeof callToolAction;
   executeToolBatch: typeof executeToolBatchAction;
 }>;
@@ -71,10 +62,6 @@ type CorePluginResources = Readonly<{
   tools: Readonly<{ ask: typeof askTool }>;
 }>;
 
-type CorePluginAdapters = Readonly<{
-  llm: CoreLlmAdapters;
-}>;
-
 type EmptyPluginNamespaces = Readonly<Record<never, never>>;
 
 export const coreCollections: CoreCollections = Object.freeze({
@@ -89,8 +76,6 @@ export const coreActions: CoreActions = Object.freeze({
   deleteThreadMessages: deleteThreadMessagesAction,
   reviseMessage: reviseMessageAction,
   createThreadMessage: createThreadMessageAction,
-  generateLlm: generateLlmAction,
-  runLlmSession: runLlmSessionAction,
   callTool: callToolAction,
   executeToolBatch: executeToolBatchAction,
 });
@@ -126,18 +111,18 @@ export const coreCollectionsPlugin: CopilotzPlugin<
 export const corePlugin: CopilotzPlugin<
   typeof CORE_PLUGIN_ID,
   typeof CORE_PLUGIN_VERSION,
-  readonly [],
+  readonly [typeof llmPlugin],
   CoreCollections,
   CoreActions,
   CoreProcessors,
   CorePluginResources,
-  CorePluginAdapters
+  EmptyPluginNamespaces
 > = definePlugin({
   id: CORE_PLUGIN_ID,
   version: CORE_PLUGIN_VERSION,
+  plugins: [llmPlugin],
   collections: coreCollections,
   actions: coreActions,
   processors: coreProcessors,
   resources: { tools: { ask: askTool } },
-  adapters: { llm: coreLlmAdapters },
 });

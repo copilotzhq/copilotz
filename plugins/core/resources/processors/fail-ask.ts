@@ -1,10 +1,11 @@
-import type { AgentAskMetadata } from "@copilotz/copilotz/events";
+import { deriveWorkflowId } from "@copilotz/copilotz/events";
 import {
-  agentAskMetadata,
-  deriveWorkflowId,
+  type AgentAskMetadata,
+  CORE_LLM_CALL_METADATA_SCHEMA,
+  coreLlmCallMetadata,
   withAgentAskMetadata,
   withWorkflowMetadata,
-} from "@copilotz/copilotz/events";
+} from "../../internal/workflow-metadata.ts";
 import { defineProcessor, type Processor } from "@copilotz/copilotz/plugins";
 import type { CoreProcessorContext } from "../../context.ts";
 import { asRecord, optionalText } from "./helpers.ts";
@@ -31,25 +32,22 @@ export const failAskProcessor: Processor<CoreProcessorContext> =
     id: "copilotz.core.fail-agent-ask",
     on: [
       {
-        eventType: "copilotz.core.llm.generate.failed",
+        eventType: "llm.call.failed",
+        data: { metadata: { schema: CORE_LLM_CALL_METADATA_SCHEMA } },
       },
       {
-        eventType: "copilotz.core.llm.generate.cancelled",
-      },
-      {
-        eventType: "copilotz.core.llm.session.failed",
-      },
-      {
-        eventType: "copilotz.core.llm.session.cancelled",
+        eventType: "llm.call.cancelled",
+        data: { metadata: { schema: CORE_LLM_CALL_METADATA_SCHEMA } },
       },
     ],
     async handle(event, context) {
       const lifecycle = asRecord(event.data);
-      const attempt = asRecord(lifecycle.input);
+      const metadata = coreLlmCallMetadata(lifecycle.metadata);
+      if (!metadata) return;
       const error = asRecord(lifecycle.error);
-      const ask = agentAskMetadata(asRecord(attempt.metadata));
+      const ask = metadata.ask;
       if (!ask || ask.phase === "answer") return;
-      if (optionalText(attempt.participantId) !== ask.askedParticipantId) {
+      if (metadata.agentParticipantId !== ask.askedParticipantId) {
         throw new Error(`Ask '${ask.askId}' failure ownership does not match.`);
       }
       const cancelled = lifecycle.status === "cancelled";
@@ -66,7 +64,7 @@ export const failAskProcessor: Processor<CoreProcessorContext> =
       } as const;
       await context.actions.createThreadMessage({
         id: await deriveWorkflowId("message", ask.toolExecutionId, "result"),
-        threadId: String(attempt.threadId),
+        threadId: metadata.threadId,
         sender: {
           externalId: "tool:ask",
           participantType: "tool",

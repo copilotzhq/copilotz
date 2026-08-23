@@ -140,3 +140,24 @@ Deno.test("runtime Action aliases accept unknown input and invocation metadata",
 
   assertEquals(await callers.dynamic(input, { metadata }), input);
 });
+
+Deno.test("semantic contexts retain exact Action caller inputs", () => {
+  const search = defineAction({
+    id: "search.exact-context",
+    execute(input: Readonly<{ query: string }>) {
+      return input.query.length;
+    },
+  });
+  type ExactCallers = ActionCallers<{ search: typeof search }>;
+  type ExactContext = ActionContext<
+    SearchContext["resources"],
+    SearchContext["adapters"],
+    ExactCallers
+  >;
+  const accepts = (context: ExactContext): void => {
+    void context.actions.search({ query: "typed" });
+    // @ts-expect-error A narrowed semantic caller must not regain unknown input.
+    void context.actions.search(42);
+  };
+  assertEquals(typeof accepts, "function");
+});

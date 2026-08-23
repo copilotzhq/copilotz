@@ -3,4 +3,5 @@ export {
   listThreadMessageRecords,
   loadParticipantRecord,
   loadThreadRecord,
+  mapParticipantRecord,
 } from "./collection-graph.ts";

@@ -3,7 +3,7 @@ import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
 import type { ActionCallers } from "../../runtime/actions/index.ts";
 import { createTestDatabase } from "../../runtime/testing/ominipg.ts";
 import { createTestDomainContext } from "../../runtime/testing/domain-context.ts";
-import type { Agent } from "../../runtime/resources/index.ts";
+import type { AgentResource } from "@copilotz/copilotz/core";
 import { createCopilotzApplication } from "../../runtime/application/index.ts";
 import type { CopilotzApplication } from "../../runtime/application/index.ts";
 import {
@@ -23,22 +23,25 @@ import type { GoalRuntime } from "./index.ts";
 
 const NAMESPACE = "goal-tenant";
 
-const testedAgent: Agent = Object.freeze({
+const testedAgent: AgentResource = Object.freeze({
   id: "tested",
   name: "Tested agent",
   role: "assistant under test",
+  models: {},
 });
 
-const simulatorAgent: Agent = Object.freeze({
+const simulatorAgent: AgentResource = Object.freeze({
   id: "simulator",
   name: "Simulated customer",
   role: "goal simulator",
+  models: {},
 });
 
-const judgeAgent: Agent = Object.freeze({
+const judgeAgent: AgentResource = Object.freeze({
   id: "judge",
   name: "Goal judge",
   role: "goal evaluator",
+  models: {},
 });
 
 type ScriptMode = "normal" | "tool-isolation";

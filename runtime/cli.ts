@@ -349,16 +349,6 @@ export function createInteractiveCli(options: InteractiveCliOptions): Readonly<{
       renderToolCall(event);
       return;
     }
-    if (
-      event.type === "copilotz.core.llm.generate.invoked" ||
-      event.type === "copilotz.core.llm.session.invoked"
-    ) {
-      printLine(color("thinking… " + eventAgentName(event), "dim"));
-      return;
-    }
-    if (event.type === "copilotz.core.tool.call.failed") {
-      printLine(color("tool execution failed", "yellow"));
-    }
   };
 
   const renderOutput = async (output: AttachmentOutput): Promise<void> => {

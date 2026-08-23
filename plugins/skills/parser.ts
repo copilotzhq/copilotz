@@ -1,5 +1,5 @@
 import { parse } from "../../dependencies/std-yaml.ts";
-import type { SkillManifest } from "@copilotz/copilotz/resources";
+import type { SkillManifest } from "./contracts.ts";
 
 const FRONTMATTER_FIELDS = new Set([
   "name",

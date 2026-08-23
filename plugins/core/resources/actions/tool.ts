@@ -22,7 +22,6 @@ import {
   asRecord,
   historyVisibilityOf,
   optionalText,
-  policyOptions,
   recordThreadId,
   requiredText,
   resolvedValue,
@@ -53,8 +52,7 @@ async function executeCall(
   const agent = optionalText(execution.agentId)
     ? coreAgent(context.resources, optionalText(execution.agentId)!)
     : undefined;
-  const toolCatalog = toolCatalogFor(agent);
-  const options = agent ? policyOptions(agent) : {};
+  const toolCatalog = toolCatalogFor();
   const toolId = requiredText(
     typeof toolField(execution, "id") === "string"
       ? toolField(execution, "id") as string
@@ -86,9 +84,7 @@ async function executeCall(
     context: toolContext,
     sourceEvent: event,
   }, {
-    defaultTimeoutMs: options.toolExecutionTimeoutMs ??
-      DEFAULT_TOOL_TIMEOUT_MS,
-    timeoutsMs: options.toolExecutionTimeoutsMs,
+    defaultTimeoutMs: DEFAULT_TOOL_TIMEOUT_MS,
     openStream: (input) => {
       if (!streamRuntime) {
         throw new Error("Runtime content stream is not configured.");

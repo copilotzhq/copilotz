@@ -3,14 +3,14 @@ import type {
   APIPrepareRequestContext,
   APIPrepareRequestInput,
   APIResponseAssetMapping,
-} from "@copilotz/copilotz/resources";
+} from "../resources.ts";
 import { base64ToBytes, type ContentInput } from "@copilotz/copilotz/content";
 import { parse as parseYaml } from "../../../dependencies/yaml.ts";
 import type {
   WorkflowTool,
   WorkflowToolExecutionContext,
   WorkflowToolResult,
-} from "@copilotz/copilotz/tools";
+} from "../internal/types.ts";
 
 class ToolExecutionError extends Error {
   readonly response: unknown;
@@ -827,7 +827,6 @@ function createApiExecutor(
           senderId: executionContext?.senderId,
           senderType: executionContext?.senderType,
           userExternalId: executionContext?.userExternalId,
-          agent: executionContext?.agent ?? null,
           namespace: executionContext?.namespace,
           collections: executionContext?.collections,
           userMetadata: executionContext?.userMetadata,

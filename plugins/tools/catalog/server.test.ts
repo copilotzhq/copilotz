@@ -5,12 +5,12 @@ import {
   assertStringIncludes,
 } from "@std/assert";
 
-import type { API, MCPServer } from "@copilotz/copilotz/resources";
+import type { API, MCPServer } from "../resources.ts";
 import { createPluginRegistry, definePlugin } from "@copilotz/copilotz/plugins";
 import {
   createWorkflowToolCatalog,
   type WorkflowTool,
-} from "@copilotz/copilotz/tools";
+} from "../internal/index.ts";
 import { createMcpWorkflowToolGenerator } from "../mcp/generator.ts";
 import type { McpRuntimeConnection } from "../mcp/types.ts";
 import { createServerWorkflowToolCatalog } from "./server.ts";
@@ -173,7 +173,7 @@ Deno.test("generic server catalog never grants stdio implicitly", async () => {
 
 Deno.test("adapter boundary is factory-first and leaves runtime APIs out of core", async () => {
   const core = await Deno.readTextFile(
-    new URL("../../../runtime/tools/catalog.ts", import.meta.url),
+    new URL("../internal/catalog.ts", import.meta.url),
   );
   assert(!core.includes('import("../api/index.ts")'));
   assert(!core.includes('import("../mcp/index.ts")'));

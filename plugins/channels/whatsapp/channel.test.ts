@@ -8,7 +8,7 @@ import {
   projectThreadByExternalId,
   projectThreads,
 } from "../../../runtime/testing/projections.ts";
-import type { Agent } from "@copilotz/copilotz/resources";
+import type { AgentResource } from "@copilotz/copilotz/core";
 import { createCopilotzApplication } from "../../../runtime/application/index.ts";
 import {
   loadMessageRecord,
@@ -41,7 +41,12 @@ const CONFIG: WhatsAppConfig = {
   appSecret: "test-secret",
   webhookVerifyToken: "verify-me",
 };
-const agent: Agent = { id: "support", name: "Support", role: "support" };
+const agent: AgentResource = {
+  id: "support",
+  name: "Support",
+  role: "support",
+  models: {},
+};
 
 function bytes(...values: number[]): Uint8Array {
   return new Uint8Array(values);

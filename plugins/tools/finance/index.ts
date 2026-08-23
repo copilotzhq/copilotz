@@ -1,4 +1,4 @@
-import type { Tool } from "@copilotz/copilotz/resources";
+import type { Tool } from "../internal/types.ts";
 import { getProvider } from "./provider/registry.ts";
 import type { FinanceDataProvider } from "./provider/types.ts";
 import { FinanceError } from "./client/errors.ts";

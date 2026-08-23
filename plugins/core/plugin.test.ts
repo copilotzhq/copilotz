@@ -1,5 +1,6 @@
 import { assert, assertEquals, assertStrictEquals } from "@std/assert";
 import { createPluginRegistry } from "@copilotz/copilotz/plugins";
+import { llmPlugin } from "@copilotz/copilotz/llm";
 import {
   CORE_COLLECTION_NAMES,
   coreCollectionsPlugin,
@@ -12,8 +13,6 @@ const CORE_ACTION_IDS = [
   "copilotz.core.thread.deleteMessages",
   "copilotz.core.message.revise",
   "copilotz.core.thread-message.create",
-  "copilotz.core.llm.generate",
-  "copilotz.core.llm.session",
   "copilotz.core.tool.call",
   "copilotz.core.tool-batch.execute",
 ];
@@ -36,20 +35,8 @@ Deno.test("core plugin is direct static plugin composition", () => {
     "completeAsk",
     "failAsk",
   ]);
-  assertEquals(Object.keys(corePlugin.adapters.llm), [
-    "openai",
-    "anthropic",
-    "gemini",
-    "groq",
-    "deepseek",
-    "ollama",
-    "minimax",
-  ]);
-  assert(
-    Object.values(corePlugin.adapters.llm).every((adapter) =>
-      typeof adapter.generate === "function"
-    ),
-  );
+  assertEquals(corePlugin.plugins, [llmPlugin]);
+  assertEquals(corePlugin.adapters, {});
   assertStrictEquals(corePlugin.resources.tools.ask.id, "ask");
   assertEquals("manifest" in corePlugin, false);
   assertEquals("features" in corePlugin, false);
@@ -59,28 +46,31 @@ Deno.test("core plugin is direct static plugin composition", () => {
   );
 });
 
-Deno.test("application LLM Adapters overlay Core by alias", () => {
-  const replacement = {
-    id: "openai",
-    type: "llm",
-    generate: () => {
-      throw new Error("replacement generate");
+Deno.test("application owns every Model Resource and LLM Adapter", () => {
+  const adapter = {
+    call: () => {
+      throw new Error("not invoked by composition");
     },
   };
   const registry = createPluginRegistry({
     plugins: [corePlugin],
-    adapters: { llm: { openai: replacement } },
+    resources: {
+      models: { default: { adapter: "test", model: "test-model" } },
+    },
+    adapters: { llm: { test: adapter } },
   });
-  assertStrictEquals(registry.adapters.llm.openai, replacement);
+  assertStrictEquals(registry.adapters.llm.test, adapter);
+  assertEquals(registry.resources.models.default, {
+    adapter: "test",
+    model: "test-model",
+  });
 });
 
 Deno.test("core production modules consume public Copilotz subpaths", async () => {
   const files = [
     "plugin.ts",
     "context.ts",
-    "resources/llm/index.ts",
     "resources/actions/thread-message.ts",
-    "resources/actions/llm.ts",
     "resources/actions/tool.ts",
     "resources/actions/thread.ts",
     "resources/actions/message.ts",
@@ -96,6 +86,8 @@ Deno.test("core production modules consume public Copilotz subpaths", async () =
     "resources/collections/participant.ts",
     "resources/collections/thread.ts",
     "resources/collections/message.ts",
+    "internal/agents/prompt.ts",
+    "internal/agents/transcript.ts",
   ];
   for (const file of files) {
     const source = await Deno.readTextFile(new URL(file, import.meta.url));

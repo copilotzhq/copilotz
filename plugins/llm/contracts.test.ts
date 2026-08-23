@@ -180,6 +180,7 @@ Deno.test("adapter request is resolved and may carry runtime bytes and streams",
   let seen: LlmAdapterCallInput | undefined;
   const result: LlmAdapterResult = {
     content: { type: "text", text: "done" },
+    attempts: [{ status: "completed" }],
     finishReason: "stop",
   };
   const adapter: LlmAdapter = {
@@ -207,6 +208,7 @@ Deno.test("adapter request is resolved and may carry runtime bytes and streams",
     adapter: "openai",
     providerModel: "gpt-5",
     mode: "session",
+    fallbackAvailable: false,
     options: {},
     request: {
       instructions: request.instructions,

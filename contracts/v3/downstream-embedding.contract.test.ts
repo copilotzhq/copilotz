@@ -3,11 +3,11 @@ import { assertEquals, assertExists } from "@std/assert";
 import {
   createCopilotzGateway,
   createCopilotzWorker,
-  defineLlmProviderResource,
   definePlugin,
   defineProcessor,
   type ProcessorContext,
 } from "../../index.ts";
+import { defineModel, type LlmAdapter } from "@copilotz/copilotz/llm";
 import { createTestDomainContext } from "../../runtime/testing/domain-context.ts";
 import { projectMessages } from "../../runtime/testing/projections.ts";
 import { createTestDatabase } from "../../runtime/testing/ominipg.ts";
@@ -19,12 +19,22 @@ import { createWorker } from "../../dependencies/oxian-worker.ts";
 const NAMESPACE = "downstream-embedding";
 
 function migratedApplicationPlugin() {
-  const provider = defineLlmProviderResource({
-    id: "downstream-injected",
-    type: "llm",
-    generate: () => {
-      throw new Error("downstream llm is not invoked");
-    },
+  const adapter: LlmAdapter = Object.freeze({
+    call: () => ({
+      frames: new ReadableStream({
+        start(controller) {
+          controller.close();
+        },
+      }),
+      result: Promise.resolve({
+        content: "downstream llm is not invoked",
+        attempts: [{ status: "completed" as const }],
+      }),
+    }),
+  });
+  const model = defineModel({
+    adapter: "downstreamInjected",
+    model: "injected",
   });
   const processor = defineProcessor<ProcessorContext>({
     id: "downstream.reply",
@@ -58,11 +68,12 @@ function migratedApplicationPlugin() {
           id: "support",
           name: "Support",
           role: "Support agent",
-          runtime: { provider: provider.id, model: "injected" },
+          models: { generate: "injected" },
         },
       },
+      models: { injected: model },
     },
-    adapters: { llm: { downstreamInjected: provider } },
+    adapters: { llm: { downstreamInjected: adapter } },
     processors: { reply: processor },
   });
 }
@@ -104,10 +115,9 @@ Deno.test("downstream app embeds Copilotz with app-owned database, Hypervisor, a
     assertEquals("engine" in application, false);
     assertEquals("execution" in application, false);
     assertEquals(
-      (application.plugins.adapters.llm.downstreamInjected as {
-        id: string;
-      }).id,
-      "downstream-injected",
+      typeof (application.plugins.adapters.llm.downstreamInjected as LlmAdapter)
+        .call,
+      "function",
     );
     await createTestDomainContext(application, NAMESPACE).actions.createThread(
       {

@@ -1,8 +1,5 @@
 import { base64ToBytes, parseDataUrl } from "@copilotz/copilotz/content";
-import {
-  type CopilotzPlugin,
-  definePlugin,
-} from "@copilotz/copilotz/plugins";
+import { type CopilotzPlugin, definePlugin } from "@copilotz/copilotz/plugins";
 import type {
   ChannelEgressContext,
   ChannelIngressEnvelope,

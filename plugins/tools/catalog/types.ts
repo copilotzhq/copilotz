@@ -1,7 +1,7 @@
 import type {
   GenerateApiWorkflowTools,
   WorkflowToolCatalog,
-} from "@copilotz/copilotz/tools";
+} from "../internal/types.ts";
 import type { ConnectMcpRuntime } from "../mcp/types.ts";
 
 export type CreateServerWorkflowToolCatalogOptions = Readonly<{

@@ -1,10 +1,13 @@
 import {
   createMemoryAssetRepository,
   createPluginRegistry,
-  defineLlmProviderResource,
   definePlugin,
-  type LlmProviderResource,
 } from "../../index.ts";
+import {
+  defineModel,
+  type LlmAdapter,
+  type ModelResource,
+} from "@copilotz/copilotz/llm";
 
 export type RuntimeNeutralSmokeResult = Readonly<{
   assetId: string;
@@ -39,23 +42,38 @@ export async function runRuntimeNeutralSmoke(): Promise<
   const assetText = await new Response(body).text();
 
   const providerEndpoint = "https://runtime-smoke.invalid/v1/chat";
-  const provider = defineLlmProviderResource({
-    id: "runtime-smoke",
-    type: "llm",
-    generate: () => {
-      throw new Error("runtime-smoke generate is not invoked");
-    },
+  const adapter: LlmAdapter = Object.freeze({
+    call: () => ({
+      frames: new ReadableStream({
+        start(controller) {
+          controller.close();
+        },
+      }),
+      result: Promise.resolve({
+        content: "runtime-smoke is not invoked",
+        attempts: [{ status: "completed" as const }],
+      }),
+    }),
+  });
+  const model = defineModel({
+    adapter: "runtimeSmoke",
+    model: "runtime-smoke-model",
   });
   const plugin = definePlugin({
     id: "@copilotz/runtime-smoke",
     version: "3.0.0",
-    adapters: { llm: { runtimeSmoke: provider } },
+    resources: { models: { runtimeSmoke: model } },
+    adapters: { llm: { runtimeSmoke: adapter } },
   });
   const registry = await createPluginRegistry({ plugins: [plugin] });
-  const resolved: LlmProviderResource = registry.adapters.llm.runtimeSmoke;
-  if (typeof resolved.generate !== "function") {
+  const resolvedAdapter: LlmAdapter = registry.adapters.llm.runtimeSmoke;
+  const resolvedModel: ModelResource = registry.resources.models.runtimeSmoke;
+  if (
+    typeof resolvedAdapter.call !== "function" ||
+    resolvedModel.adapter !== "runtimeSmoke"
+  ) {
     throw new TypeError(
-      "Runtime-smoke llm resource must implement generate().",
+      "Runtime-smoke LLM composition must include its Model and Adapter.",
     );
   }
 

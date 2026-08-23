@@ -78,5 +78,4 @@ export type {
   MemoryEmbeddingInput,
   MemoryResources,
   MemoryRuntimeContext,
-  ResolveMemoryLlmConfig,
 } from "./types.ts";

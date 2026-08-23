@@ -4,18 +4,17 @@ import type {
   ContentRef,
   ContentSequence,
 } from "@copilotz/copilotz/content";
+import { deriveWorkflowId } from "@copilotz/copilotz/events";
 import type { EventVisibility } from "@copilotz/copilotz/events";
 import {
   agentAskMetadata,
-  deriveWorkflowId,
   withAgentAskMetadata,
   withWorkflowMetadata,
   type WorkflowMetadata,
   workflowMetadata,
-} from "@copilotz/copilotz/events";
+} from "@copilotz/copilotz/core";
 import { defineProcessor, type Processor } from "@copilotz/copilotz/plugins";
-import type { CreateTextWorkflowPluginOptions } from "@copilotz/copilotz/llm";
-import type { Agent } from "@copilotz/copilotz/resources";
+import type { AgentResource } from "../../agent.ts";
 import {
   advanceWorkflowPipeline,
   evaluateJq as defaultEvaluateJq,
@@ -41,12 +40,9 @@ import {
 
 function jqFor(
   _context: CoreProcessorContext,
-  agent?: Agent,
+  _agent?: AgentResource,
 ): WorkflowJqEvaluator {
-  const extra = agent as
-    | Agent & Partial<CreateTextWorkflowPluginOptions>
-    | undefined;
-  return extra?.evaluateJq ?? defaultEvaluateJq;
+  return defaultEvaluateJq;
 }
 
 function resultVisibility(execution: CollectionRecord): EventVisibility {
@@ -123,7 +119,7 @@ async function projectExecution(
   const agent = optionalText(execution.agentId)
     ? coreAgent(context.resources, optionalText(execution.agentId)!)
     : undefined;
-  const toolCatalog = toolCatalogFor(agent);
+  const toolCatalog = toolCatalogFor();
   const evaluateJq = jqFor(context, agent);
   let projectedStatus = String(execution.status);
   let projectedContent: ContentSequence | ContentInput | undefined;

@@ -5,10 +5,7 @@ import {
   resolve,
 } from "../../dependencies/std-path.ts";
 import { parseSkillMarkdown, skillFileMediaType } from "./index.ts";
-import type {
-  SkillFileDescriptor,
-  SkillManifest,
-} from "@copilotz/copilotz/resources";
+import type { SkillFileDescriptor, SkillManifest } from "./contracts.ts";
 
 const DEFAULT_RUNTIME_IMPORT = "jsr:@copilotz/copilotz@^0.61.0/skills";
 

@@ -20,7 +20,7 @@ import {
 import { coreCollectionsPlugin } from "../../plugins/core/plugin.ts";
 import type { AttachmentOutput, AttachmentStreamOutput } from "./index.ts";
 import { createTestDatabase, type TestDatabase } from "../testing/ominipg.ts";
-import type { Agent } from "../resources/index.ts";
+import type { AgentResource } from "@copilotz/copilotz/core";
 import type { SqlSession } from "../events/index.ts";
 import { createSqlSession } from "../events/index.ts";
 import type { CopilotzEngine } from "../engine/index.ts";
@@ -35,19 +35,19 @@ type Fixture = Readonly<{
   engine: CopilotzEngine;
 }>;
 
-function agent(id: string): Agent {
+function agent(id: string): AgentResource {
   return Object.freeze(
     {
       id,
       name: id,
       role: `${id} agent`,
-      runtime: { provider: "openai", model: "gpt-4.1-mini" },
-    } satisfies Agent,
+      models: {},
+    } satisfies AgentResource,
   );
 }
 
 async function registryFor(options: {
-  agents?: readonly Agent[];
+  agents?: readonly AgentResource[];
   processors?: readonly AnyProcessor[];
 } = {}): Promise<PluginRegistry> {
   const agents = options.agents ?? [agent("support")];

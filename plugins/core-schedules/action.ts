@@ -102,7 +102,7 @@ async function resolveAgentParticipant(
   agent: CoreAgent,
   context: CoreSchedulesActionContext,
 ): Promise<ParticipantPlan> {
-  const externalId = agent.externalId?.trim() || agent.id;
+  const externalId = agent.id;
   const existing = await byExternalId(context, "participant", externalId);
   if (existing) {
     if (existing.participantType !== "agent") {
@@ -133,9 +133,7 @@ async function resolveRecipient(
   if (existing) return existingParticipant(existing);
   const agents = context.resources.agents ?? {};
   const agent = agents[id] ??
-    Object.values(agents).find((value) =>
-      value?.id === id || value?.externalId === id
-    );
+    Object.values(agents).find((value) => value?.id === id);
   if (agent) return await resolveAgentParticipant(agent, context);
   throw new Error(`Scheduled recipient '${id}' was not found.`);
 }

@@ -21,9 +21,9 @@ import { coreCollectionsPlugin } from "@copilotz/copilotz/core";
 import type {
   WorkflowTool,
   WorkflowToolExecutionContext,
-} from "@copilotz/copilotz/tools";
+} from "../internal/types.ts";
 import { BUILT_IN_CORE_TOOL_IDS, createBuiltInToolsPlugin } from "./plugin.ts";
-import type { Agent } from "@copilotz/copilotz/resources";
+import type { AgentResource } from "@copilotz/copilotz/core";
 import {
   createTestDatabase,
   type TestDatabase,
@@ -35,10 +35,11 @@ import {
 
 const TEST_SCHEMA = "copilotz_core_tools";
 
-const agent: Agent = {
+const agent: AgentResource = {
   id: "agent-a",
   name: "Agent A",
   role: "assistant",
+  models: {},
   instructions: "Exercise built-in tools.",
   capabilities: { skills: ["contract-skill"] },
 };

@@ -1,4 +1,4 @@
-import type { MCPServer } from "@copilotz/copilotz/resources";
+import type { MCPServer } from "../resources.ts";
 import type {
   ConnectMcpRuntime,
   McpRuntimeConnection,

@@ -1,5 +1,5 @@
 import type {
-  RuntimeActionCallers,
+  RuntimeActionCallerMap,
   RuntimeCollections,
   RuntimeContext,
   RuntimeContextNamespaces,
@@ -18,7 +18,7 @@ export type ProcessorSettlement = "inherit" | "detached";
 export type ProcessorContext<
   TResources extends RuntimeContextNamespaces = RuntimeContextNamespaces,
   TAdapters extends RuntimeContextNamespaces = RuntimeContextNamespaces,
-  TActions extends RuntimeActionCallers = RuntimeActionCallers,
+  TActions extends RuntimeActionCallerMap = RuntimeActionCallerMap,
   TCollections extends RuntimeCollections = RuntimeCollections,
 > = RuntimeContext<TResources, TAdapters, TActions, TCollections>;
 

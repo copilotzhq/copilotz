@@ -1,6 +1,6 @@
 import { assert, assertEquals, assertThrows } from "@std/assert";
 
-import type { WorkflowTool } from "@copilotz/copilotz/tools";
+import type { WorkflowTool } from "../internal/types.ts";
 import { createWebToolsPlugin, WEB_TOOL_IDS } from "./plugin.ts";
 
 Deno.test("Web tools compose as stable plugin resources", () => {

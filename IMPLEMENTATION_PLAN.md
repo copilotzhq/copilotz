@@ -658,7 +658,7 @@ const corePlugin = definePlugin({
 
 Neither plugin contributes a configured Model or LLM Adapter. The application
 must provide `resources.models` and `adapters.llm`; Core resolves its selected
-Agent and prompt policy, then calls `context.actions.llmCall(...)` with semantic
+Agent and prompt policy, then calls `context.actions.callLlm(...)` with semantic
 provenance in `ActionCallOptions.metadata`.
 
 When `llm.call` returns multiple tool calls, Core derives one deterministic plan

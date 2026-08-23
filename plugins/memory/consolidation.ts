@@ -1,7 +1,7 @@
 import type {
   ContextSourceRef,
   FrozenContextContribution,
-} from "@copilotz/copilotz/context";
+} from "@copilotz/copilotz/core";
 import { estimateTextTokens } from "@copilotz/copilotz/tokens";
 import {
   type AssertionMemoryDraft,

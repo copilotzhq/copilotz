@@ -1,9 +1,9 @@
+import { deriveWorkflowId } from "@copilotz/copilotz/events";
 import {
   agentAskMetadata,
-  deriveWorkflowId,
   withAgentAskMetadata,
   withWorkflowMetadata,
-} from "@copilotz/copilotz/events";
+} from "@copilotz/copilotz/core";
 import { defineProcessor, type Processor } from "@copilotz/copilotz/plugins";
 import type { CoreProcessorContext } from "../../context.ts";
 import {

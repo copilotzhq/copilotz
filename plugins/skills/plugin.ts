@@ -1,5 +1,5 @@
 import { type CopilotzPlugin, definePlugin } from "@copilotz/copilotz/plugins";
-import type { Skill } from "@copilotz/copilotz/resources";
+import type { Skill } from "./contracts.ts";
 import { createSkillTools, SKILL_TOOL_IDS, type SkillToolId } from "./tools.ts";
 
 export type CreateSkillsPluginOptions = Readonly<{

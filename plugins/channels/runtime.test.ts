@@ -24,17 +24,18 @@ import {
   createTestDatabase,
   type TestDatabase,
 } from "../../runtime/testing/ominipg.ts";
-import type { Agent } from "@copilotz/copilotz/resources";
+import type { AgentResource } from "@copilotz/copilotz/core";
 import { createEventNativeApp } from "../../server/event-native.ts";
 import { createCopilotzApplication } from "../../runtime/application/index.ts";
 
 const SCHEMA = "copilotz_channel_runtime";
 const NAMESPACE = "tenant-a";
 
-const supportAgent: Agent = {
+const supportAgent: AgentResource = {
   id: "support",
   name: "Support",
   role: "support",
+  models: {},
 };
 
 function replyPlugin() {

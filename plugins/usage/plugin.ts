@@ -17,8 +17,7 @@ const TOKEN_METRICS = [
   "inputTokens",
   "outputTokens",
   "reasoningTokens",
-  "cacheReadInputTokens",
-  "cacheCreationInputTokens",
+  "cachedInputTokens",
   "totalTokens",
 ] as const;
 
@@ -117,10 +116,43 @@ async function participantExternalId(
   participantId: string | undefined,
 ): Promise<string | null> {
   if (!participantId) return null;
-  const participant = await context.collections.participant.get({
+  const participants = context.collections.participant;
+  if (!participants) return participantId;
+  const participant = await participants.get({
     id: participantId,
   });
   return optionalText(participant?.externalId) ?? participantId;
+}
+
+type LlmAttribution = Readonly<{
+  threadId: string | null;
+  messageId: string | null;
+  agentId: string | null;
+  initiatorParticipantId?: string;
+}>;
+
+/**
+ * Usage is independent of Core. It recognizes Core's durable discriminator
+ * structurally when present; every other `llm.call` is valid and un-attributed.
+ */
+function llmAttribution(value: unknown): LlmAttribution {
+  const metadata = record(value);
+  if (metadata.schema !== "copilotz.core.llm-call.v1") {
+    return Object.freeze({
+      threadId: null,
+      messageId: null,
+      agentId: null,
+    });
+  }
+  const initiatorParticipantId = optionalText(
+    metadata.initiatorParticipantId,
+  );
+  return Object.freeze({
+    threadId: optionalText(metadata.threadId) ?? null,
+    messageId: optionalText(metadata.triggerMessageId) ?? null,
+    agentId: optionalText(metadata.agentId) ?? null,
+    ...(initiatorParticipantId ? { initiatorParticipantId } : {}),
+  });
 }
 
 function costFields(cost: UsageCost | null | undefined) {
@@ -148,10 +180,12 @@ function usageData(value: UsageRecord): Record<string, unknown> {
     kind: value.kind,
     resource: value.resource,
     provider: value.provider ?? null,
+    adapter: value.adapter ?? null,
+    providerModel: value.providerModel ?? null,
     operation: value.operation ?? null,
     status: value.status ?? null,
     statusReason: value.statusReason ?? null,
-    model: value.kind === "llm" ? value.resource : null,
+    model: value.kind === "llm" ? value.model ?? value.resource : null,
     threadId: value.threadId,
     eventId: value.eventId ?? null,
     messageId: value.messageId ?? null,
@@ -161,8 +195,7 @@ function usageData(value: UsageRecord): Record<string, unknown> {
     inputTokens: metrics.inputTokens ?? null,
     outputTokens: metrics.outputTokens ?? null,
     reasoningTokens: metrics.reasoningTokens ?? null,
-    cacheReadInputTokens: metrics.cacheReadInputTokens ?? null,
-    cacheCreationInputTokens: metrics.cacheCreationInputTokens ?? null,
+    cachedInputTokens: metrics.cachedInputTokens ?? null,
     totalTokens: metrics.totalTokens ?? null,
     ...costFields(value.cost),
     source: optionalText(raw.source) ?? null,
@@ -232,6 +265,7 @@ async function persistUsage(
 function llmUsageRecord(
   lifecycle: Record<string, unknown>,
   event: CopilotzEvent,
+  attribution: LlmAttribution,
   initiatedById: string | null,
 ): UsageRecord {
   const input = record(lifecycle.input);
@@ -239,33 +273,44 @@ function llmUsageRecord(
   const error = record(lifecycle.error);
   const usage = record(output.usage);
   const actionRunId = optionalText(lifecycle.actionRunId) ??
-    optionalText(input.id) ?? (event.durable ? event.id : event.correlationId);
+    (event.durable ? event.id : event.correlationId);
   const id = `usage:llm:${actionRunId}`;
+  const model = optionalText(output.model) ?? optionalText(input.model) ??
+    "unknown";
+  const adapter = optionalText(output.adapter) ?? null;
+  const providerModel = optionalText(output.providerModel) ?? null;
+  const reportedCost = record(usage.cost);
+  const costAmount = finiteNumber(reportedCost.amount);
+  const costCurrency = optionalText(reportedCost.currency);
   return {
     id,
     kind: "llm",
-    resource: optionalText(output.model) ?? optionalText(output.provider) ??
-      "unknown",
-    provider: optionalText(output.provider) ?? null,
-    operation: "chat",
+    resource: model,
+    model,
+    provider: null,
+    adapter,
+    providerModel,
+    operation: "llm.call",
     status: optionalText(lifecycle.status) ?? null,
-    statusReason: optionalText(usage.statusReason) ??
+    statusReason: optionalText(output.finishReason) ??
       optionalText(error.name) ?? null,
-    threadId: String(input.threadId),
+    threadId: attribution.threadId,
     eventId: event.durable ? event.id : null,
-    messageId: optionalText(input.messageId) ?? null,
-    agentId: optionalText(input.agentId) ?? null,
+    messageId: attribution.messageId,
+    agentId: attribution.agentId,
     initiatedById,
     metrics: tokenMetrics(usage),
-    cost: normalizedCost(output.cost),
+    cost: costAmount !== undefined && costCurrency
+      ? {
+        total: costAmount,
+        currency: costCurrency,
+        source: adapter ?? "llm.call",
+        ...(providerModel ? { pricingModelId: providerModel } : {}),
+      }
+      : null,
     dedupeKey: actionRunId,
     occurredAt: event.createdAt,
-    raw: {
-      source: usage.source,
-      rawUsage: usage.rawUsage,
-      stopSequence: usage.stopSequence,
-      metricsFinalizedAt: output.metricsFinalizedAt,
-    },
+    raw: { source: "llm.call" },
   };
 }
 
@@ -310,25 +355,22 @@ function llmUsageProcessor(
   options: CreateUsageWorkflowPluginOptions,
 ): Processor<ProcessorContext> {
   return defineProcessor<ProcessorContext>({
-    id: "copilotz.core.record-llm-usage",
+    id: "copilotz.usage.record-llm-call",
     on: [
-      { eventType: "copilotz.core.llm.generate.completed" },
-      { eventType: "copilotz.core.llm.generate.failed" },
-      { eventType: "copilotz.core.llm.generate.cancelled" },
-      { eventType: "copilotz.core.llm.session.completed" },
-      { eventType: "copilotz.core.llm.session.failed" },
-      { eventType: "copilotz.core.llm.session.cancelled" },
+      { eventType: "llm.call.completed" },
+      { eventType: "llm.call.failed" },
+      { eventType: "llm.call.cancelled" },
     ],
     async handle(event, context) {
       if (!event.durable) return;
       const lifecycle = record(event.data);
-      const input = record(lifecycle.input);
+      const attribution = llmAttribution(lifecycle.metadata);
       const initiatedById = await participantExternalId(
         context,
-        optionalText(input.initiatorParticipantId),
+        attribution.initiatorParticipantId,
       );
       await persistUsage(
-        llmUsageRecord(lifecycle, event, initiatedById),
+        llmUsageRecord(lifecycle, event, attribution, initiatedById),
         lifecycle,
         context,
         options,

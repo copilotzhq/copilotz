@@ -5,7 +5,7 @@ import type {
   SkillFileDescriptor,
   SkillManifest,
   SkillReadOptions,
-} from "@copilotz/copilotz/resources";
+} from "./contracts.ts";
 import { parseSkillMarkdown, validateSkillManifest } from "./parser.ts";
 
 export type SkillFileLoader = (

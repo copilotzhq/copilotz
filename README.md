@@ -131,12 +131,11 @@ API.
 | `@copilotz/copilotz`               | Normal runtime-neutral application API                                 |
 | `/application`                     | Embedded, Gateway, and Worker role factories                           |
 | `/core`                            | Minimal semantic AI harness plugin                                     |
-| `/plugins`, `/resources`           | Plugin composition and logical resource types                          |
-| `/capabilities`                    | Explicit agent grants and canonical introspection                      |
+| `/plugins`                         | Plugin definition and composition primitives                           |
 | `/events`                          | Immutable events and durable delivery contracts                        |
 | `/content`, `/domain`              | Canonical assets and graph-native repositories                         |
 | `/attachments`                     | Persistent text/realtime ingress                                       |
-| `/agents`, `/llm`, `/tools`        | Agent prompt/config, LLM providers, and generic Tool contracts         |
+| `/llm`, `/tools`                   | LLM and Tool plugin contracts and integrations                         |
 | `/tools/*`                         | Optional Tool plugins, protocol integrations, and host implementations |
 | `/skills`                          | Optional Open Skill resources and portable disclosure tools            |
 | `/skills/deno`                     | Deno build-time Open Skill packer                                      |

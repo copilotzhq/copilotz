@@ -1,4 +1,4 @@
-import type { Agent } from "@copilotz/copilotz/resources";
+import type { AgentResource } from "@copilotz/copilotz/core";
 import type { CollectionRecord } from "@copilotz/copilotz/collections";
 import type {
   CreateGoalRuntimeOptions,
@@ -49,8 +49,8 @@ type StreamChannel<T> = Readonly<{
 type PreparedGoal = Readonly<{
   namespace: string;
   databaseSchema?: string;
-  targetAgent: Agent;
-  leadAgent: Agent;
+  targetAgent: AgentResource;
+  leadAgent: AgentResource;
   targetThread: ConversationThread;
   leadThread: ConversationThread;
   sender: Participant;
@@ -198,9 +198,9 @@ function mapMessageRecord(
 function requireAgentContext(
   options: CreateGoalRuntimeOptions,
   id: string,
-): Agent {
+): AgentResource {
   const agents = (options.registry.resources.agents ?? {}) as Readonly<
-    Record<string, Agent | undefined>
+    Record<string, AgentResource | undefined>
   >;
   const agent = agents[id];
   if (!agent) throw new Error(`Unknown agent context '${id}'.`);
@@ -292,11 +292,11 @@ function threadDescriptor(value: GoalThreadRef | undefined): GoalThreadInput {
     : {};
 }
 
-function agentExternalId(agent: Agent): string {
-  return requiredText(agent.externalId ?? agent.id, `Agent '${agent.id}' ID`);
+function agentExternalId(agent: AgentResource): string {
+  return requiredText(agent.id, `Agent '${agent.id}' ID`);
 }
 
-function agentParticipant(agent: Agent): ParticipantInput {
+function agentParticipant(agent: AgentResource): ParticipantInput {
   return Object.freeze({
     externalId: agentExternalId(agent),
     participantType: "agent" as const,

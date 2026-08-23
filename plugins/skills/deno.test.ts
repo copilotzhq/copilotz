@@ -94,7 +94,7 @@ Deno.test("Deno-specific APIs stay outside generic adapter and core entrypoints"
   for (
     const module of [
       "../../runtime/adapters/index.ts",
-      "../../runtime/tools/index.ts",
+      "../tools/index.ts",
     ]
   ) {
     const source = await Deno.readTextFile(new URL(module, import.meta.url));

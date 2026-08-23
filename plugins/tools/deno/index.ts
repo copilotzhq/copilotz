@@ -8,8 +8,7 @@ import searchFiles from "./search-files.ts";
 import showFileDiff from "./show-file-diff.ts";
 import writeFile from "./write-file.ts";
 import { type CopilotzPlugin, definePlugin } from "@copilotz/copilotz/plugins";
-import type { NewTool } from "@copilotz/copilotz/resources";
-import type { WorkflowTool } from "@copilotz/copilotz/tools";
+import type { NewTool, WorkflowTool } from "../internal/types.ts";
 
 export const WORKSPACE_TOOL_IDS = [
   "read_file",

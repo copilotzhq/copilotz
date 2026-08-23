@@ -175,6 +175,8 @@ export type LlmAdapterCallInput = Readonly<{
   /** Provider-specific model identifier from the selected Model Resource. */
   providerModel: string;
   mode: LlmMode;
+  /** Whether `llm.call` has another validated Model candidate after this one. */
+  fallbackAvailable: boolean;
   options: LlmJsonObject;
   request: LlmAdapterRequest;
   signal: AbortSignal;
@@ -188,13 +190,56 @@ export type LlmAdapterFrame = Readonly<{
   bytes: Uint8Array;
 }>;
 
+/** Runtime-only, credential-safe accounting for one provider attempt. */
+export type LlmAdapterAttempt = Readonly<{
+  status: LlmAttemptStatus;
+  usage?: LlmUsage;
+  finishReason?: string;
+  error?: Readonly<{
+    code?: string;
+    message: string;
+  }>;
+  startedAt?: string;
+  finishedAt?: string;
+}>;
+
+/**
+ * Runtime-only Adapter failure carrying only sanitized accounting. The cause is
+ * never persisted; `llm.call` validates and re-identifies every attempt before
+ * it crosses the durable boundary.
+ */
+export class LlmAdapterCallError extends Error {
+  readonly attempts: readonly LlmAdapterAttempt[];
+
+  constructor(
+    message: string,
+    options: Readonly<{
+      attempts?: readonly LlmAdapterAttempt[];
+      cause?: unknown;
+      name?: string;
+    }> = {},
+  ) {
+    super(
+      message,
+      options.cause === undefined ? undefined : {
+        cause: options.cause,
+      },
+    );
+    this.name = options.name?.trim() || "LlmAdapterCallError";
+    this.attempts = Object.freeze([...(options.attempts ?? [])]);
+  }
+}
+
 /** Runtime-only normalized result which `llm.call` materializes before return. */
 export type LlmAdapterResult = Readonly<{
   content: ContentInput | readonly ContentInput[];
   reasoning?: ContentInput | readonly ContentInput[];
   toolCalls?: readonly LlmToolCall[];
-  usage?: LlmUsage;
-  attempt?: LlmAttemptUsage;
+  /**
+   * Non-empty provider-attempt history. An accepted partial result may contain
+   * only failed attempts; Action lifecycle state records semantic completion.
+   */
+  attempts: readonly LlmAdapterAttempt[];
   finishReason?: string;
 }>;
 

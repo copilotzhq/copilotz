@@ -47,6 +47,7 @@ export type {
   ActionTransactionOptions,
   AnyActionDefinition,
   RuntimeActionCallers,
+  RuntimeActionCallerMap,
   RuntimeCollections,
   RuntimeContent,
   RuntimeContext,

@@ -1,9 +1,6 @@
 import { ulid } from "../../dependencies/ulid.ts";
-import {
-  workflowMutationId,
-  workflowObject,
-} from "@copilotz/copilotz/domain";
-import type { Agent } from "@copilotz/copilotz/resources";
+import { workflowMutationId, workflowObject } from "@copilotz/copilotz/domain";
+import type { AgentResource } from "@copilotz/copilotz/core";
 import type {
   ChannelParticipantRef,
   ChannelResource,
@@ -261,9 +258,9 @@ async function ensureParticipant(
 async function agentParticipant(
   application: CopilotzApplication,
   namespace: string,
-  agent: Agent,
+  agent: AgentResource,
 ): Promise<Participant> {
-  const externalId = agent.externalId?.trim() || agent.id;
+  const externalId = agent.id;
   const existing = await getParticipantByExternalId(
     application.collections,
     namespace,
@@ -297,7 +294,7 @@ export async function resolveChannelParticipant(
       await getParticipantByExternalId(runtime, namespace, id);
     if (existing) return existing;
     const agent = (application.plugins.resources.agents ?? {})[id] as
-      | Agent
+      | AgentResource
       | undefined;
     if (agent) return await agentParticipant(application, namespace, agent);
     throw new Error(`Channel participant '${id}' was not found.`);

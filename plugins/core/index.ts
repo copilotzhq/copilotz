@@ -1,3 +1,14 @@
+export { defineAgent } from "./agent.ts";
+export type {
+  AgentCapabilities,
+  AgentCapabilitySelection,
+  AgentModels,
+  AgentResource,
+} from "./agent.ts";
+export type {
+  ReasoningHistoryInclude,
+  ReasoningHistoryOptions,
+} from "./reasoning.ts";
 export {
   CORE_PLUGIN_ID,
   CORE_PLUGIN_VERSION,
@@ -23,12 +34,6 @@ export {
   REVISE_MESSAGE_ACTION_ID,
   reviseMessageAction,
 } from "./resources/actions/message.ts";
-export {
-  GENERATE_LLM_ACTION_ID,
-  generateLlmAction,
-  RUN_LLM_SESSION_ACTION_ID,
-  runLlmSessionAction,
-} from "./resources/actions/llm.ts";
 export {
   CALL_TOOL_ACTION_ID,
   callToolAction,
@@ -57,3 +62,7 @@ export type {
   MessageRecord,
   MessageRevision,
 } from "./resources/collections/index.ts";
+export * from "./internal/capabilities/index.ts";
+export * from "./internal/context/index.ts";
+export * from "./internal/thread-metadata.ts";
+export * from "./internal/workflow-metadata.ts";

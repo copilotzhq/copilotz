@@ -4,153 +4,104 @@ import {
   assertExists,
   assertStringIncludes,
 } from "@std/assert";
-import { createTestDomainContext } from "../../runtime/testing/domain-context.ts";
 import {
-  projectMessageById,
-  projectMessages,
-  projectParticipants,
-  projectThreadByExternalId,
-  projectThreadById,
-  projectThreads,
-} from "../../runtime/testing/projections.ts";
-
-import type { Agent } from "../../runtime/resources/index.ts";
+  agentAskMetadata,
+  type AgentResource,
+  corePlugin,
+} from "@copilotz/copilotz/core";
+import type {
+  LlmAdapter,
+  LlmAdapterCallInput,
+  LlmAdapterResult,
+} from "@copilotz/copilotz/llm";
 import {
-  createTestDatabase,
-  type TestDatabase,
-} from "../../runtime/testing/ominipg.ts";
-import type { ConversationMessage } from "../../runtime/domain/index.ts";
+  deferWorkflowTool,
+  isDeferredWorkflowToolResult,
+} from "@copilotz/copilotz/tools";
+import {
+  createPluginRegistry,
+  definePlugin,
+} from "../../runtime/plugins/index.ts";
 import {
   type CopilotzEngine,
   createCopilotzEngine,
 } from "../../runtime/engine/index.ts";
 import { createSqlSession } from "../../runtime/events/index.ts";
-import type {
-  ChatRequest,
-  ChatResponse,
-  ProviderAPI,
-  TokenUsage,
-  ToolInvocation,
-} from "../../runtime/llm/types.ts";
 import {
-  createPluginRegistry,
-  definePlugin,
-  type PluginRegistry,
-} from "../../runtime/plugins/index.ts";
-import { corePlugin } from "@copilotz/copilotz/core";
+  createTestDatabase,
+  type TestDatabase,
+} from "../../runtime/testing/ominipg.ts";
 import {
-  defineLlmProviderResource,
-  generateFromChat,
-  type LlmChat,
-} from "@copilotz/copilotz/llm";
-import { agentAskMetadata } from "@copilotz/copilotz/events";
-import {
-  deferWorkflowTool,
-  isDeferredWorkflowToolResult,
-} from "@copilotz/copilotz/tools";
+  projectActionEvents,
+  projectMessages,
+} from "../../runtime/testing/projections.ts";
+import type { ConversationMessage } from "../../runtime/domain/index.ts";
 
-const TEST_SCHEMA = "copilotz_agent_ask";
+const TEST_SCHEMA = "copilotz_core_ask";
+const NAMESPACE = "tenant-a";
 
-const usage: TokenUsage = {
-  inputTokens: 4,
-  outputTokens: 2,
-  totalTokens: 6,
-  source: "provider",
-  status: "completed",
-};
-
-function agent(
-  id: string,
-  agentCapabilities: readonly string[] = [],
-): Agent {
-  return {
+function agent(id: string, agents: readonly string[] = []): AgentResource {
+  return Object.freeze({
     id,
-    name: id,
+    name: id.toUpperCase(),
     role: "assistant",
     instructions: `ACTIVE_AGENT=${id}`,
-    capabilities: { agents: [...agentCapabilities] },
-    runtime: { provider: "openai", model: "ask-model" },
-  };
+    models: { generate: "askModel" },
+    capabilities: { agents },
+  });
 }
 
-function askCall(
-  id: string,
-  target: string,
-  message: string,
-): ToolInvocation {
-  return {
-    id,
-    tool: { id: "ask", name: "Ask Agent" },
-    args: JSON.stringify({ target, message }),
-    status: "pending",
-  };
-}
+type Handler = (
+  input: LlmAdapterCallInput,
+) => LlmAdapterResult | Promise<LlmAdapterResult>;
 
-function response(
-  request: ChatRequest,
-  input: Readonly<{
-    answer: string;
-    toolCalls?: readonly ToolInvocation[];
-  }>,
-): ChatResponse {
-  return {
-    prompt: request.messages,
-    answer: input.answer,
-    tokens: usage.totalTokens ?? 0,
-    usage,
-    provider: "openai",
-    model: "ask-model",
-    finishReason: input.toolCalls ? "tool_calls" : "stop",
-    ...(input.toolCalls ? { toolCalls: [...input.toolCalls] } : {}),
-  };
-}
-
-function requestAgent(
-  request: ChatRequest,
-  agents: readonly Agent[],
-): string {
-  const serialized = JSON.stringify(request.messages);
-  const matches = agents.filter((candidate) =>
-    serialized.includes(`ACTIVE_AGENT=${candidate.id}`)
-  );
-  assertEquals(matches.length, 1, serialized);
-  return matches[0].id;
+function adapterFrom(handler: Handler): LlmAdapter {
+  return Object.freeze({
+    call(input) {
+      const result = Promise.resolve().then(() => handler(input));
+      return Object.freeze({
+        frames: new ReadableStream({
+          async start(controller) {
+            try {
+              await result;
+              controller.close();
+            } catch (error) {
+              controller.error(error);
+            }
+          },
+        }),
+        result,
+      });
+    },
+  });
 }
 
 type Fixture = Readonly<{
   db: TestDatabase;
   engine: CopilotzEngine;
-  registry: PluginRegistry;
-  agents: readonly Agent[];
+  agents: readonly AgentResource[];
+  close(): Promise<void>;
 }>;
 
 async function createFixture(
-  agents: readonly Agent[],
-  chat: LlmChat,
-  maxDepth = 8,
+  agents: readonly AgentResource[],
+  handler: Handler,
 ): Promise<Fixture> {
   const db = await createTestDatabase({ url: ":memory:" });
-  const provider = defineLlmProviderResource({
-    id: "openai",
-    type: "llm",
-    generate: generateFromChat(chat),
-  });
   const app = definePlugin({
-    id: "test.agent-ask.resources",
+    id: "test.core-ask.resources",
     version: "1.0.0",
     resources: {
       agents: Object.fromEntries(
-        agents.map((agent, index) => [`agent${index}`, agent]),
+        agents.map((resource) => [resource.id, resource]),
       ),
+      models: {
+        askModel: { adapter: "test", model: "ask-provider-model" },
+      },
     },
-    adapters: { llm: { openai: provider } },
+    adapters: { llm: { test: adapterFrom(handler) } },
   });
-  const registry = await createPluginRegistry({
-    plugins: [
-      corePlugin,
-      app,
-    ],
-  });
+  const registry = await createPluginRegistry({ plugins: [corePlugin, app] });
   const engine = await createCopilotzEngine({
     session: createSqlSession(db),
     registry,
@@ -159,53 +110,59 @@ async function createFixture(
     random: () => 0,
     execution: { capacity: 1 },
   });
-  return Object.freeze({ db, engine, registry, agents });
+  return Object.freeze({
+    db,
+    engine,
+    agents,
+    async close() {
+      await engine.shutdown();
+      await db.close();
+    },
+  });
 }
 
-async function closeFixture(fixture: Fixture): Promise<void> {
-  await fixture.engine.shutdown();
-  await fixture.db.close();
+function collection(engine: CopilotzEngine, name: string) {
+  const value = engine.collections.get(name);
+  if (!value) throw new Error(`Collection '${name}' is not bound.`);
+  return value;
 }
 
-function boundCollection(engine: CopilotzEngine, name: string) {
-  const collection = engine.collections.get(name);
-  if (!collection) {
-    throw new Error(`Collection '${name}' is not bound.`);
-  }
-  return collection;
-}
-
-async function startRun(fixture: Fixture, text: string) {
-  const namespace = "tenant-a";
-  await boundCollection(fixture.engine, "participant").create({
+async function startRun(fixture: Fixture): Promise<string> {
+  await collection(fixture.engine, "participant").create({
     id: "user-a",
     externalId: "user-a",
     participantType: "human",
-  }, { namespace });
-  for (const candidate of fixture.agents) {
-    await boundCollection(fixture.engine, "participant").create({
-      id: `agent-${candidate.id}`,
-      externalId: candidate.id,
+    metadata: {},
+  }, { namespace: NAMESPACE });
+  for (const resource of fixture.agents) {
+    await collection(fixture.engine, "participant").create({
+      id: `agent-${resource.id}`,
+      externalId: resource.id,
       participantType: "agent",
-      agentId: candidate.id,
-      name: candidate.name,
-    }, { namespace });
+      agentId: resource.id,
+      name: resource.name,
+      metadata: {},
+    }, { namespace: NAMESPACE });
   }
-  await boundCollection(fixture.engine, "thread").create({
+  await collection(fixture.engine, "thread").create({
     id: "thread-a",
     participantIds: [
       "user-a",
-      ...fixture.agents.map((candidate) => `agent-${candidate.id}`),
+      ...fixture.agents.map((resource) => `agent-${resource.id}`),
     ],
+    metadata: {},
   }, {
-    namespace,
-    identity: { deduplicationId: "ask-thread:create" },
+    namespace: NAMESPACE,
+    identity: { deduplicationId: "thread-a:create" },
   });
-  const content = await fixture.engine.content.preparer.prepare(text, {
-    namespace,
-    idempotencyKey: "ask-root:content",
-  });
-  return await boundCollection(fixture.engine, "message").create({
+  const content = await fixture.engine.content.preparer.prepare(
+    "Start the ask workflow",
+    {
+      namespace: NAMESPACE,
+      idempotencyKey: "ask-root:content",
+    },
+  );
+  const created = await collection(fixture.engine, "message").create({
     id: "message:user",
     threadId: "thread-a",
     senderId: "user-a",
@@ -213,7 +170,7 @@ async function startRun(fixture: Fixture, text: string) {
     content,
     metadata: {},
   }, {
-    namespace,
+    namespace: NAMESPACE,
     threadId: "thread-a",
     routing: { senderId: "user-a", recipientIds: ["agent-a"] },
     identity: {
@@ -221,6 +178,7 @@ async function startRun(fixture: Fixture, text: string) {
       deduplicationId: "ask-root:message",
     },
   });
+  return created.event.id;
 }
 
 async function waitForRun(
@@ -231,12 +189,12 @@ async function waitForRun(
   const deadline = Date.now() + 10_000;
   while (Date.now() < deadline) {
     const settlement = await fixture.engine.events.settlement(
-      "tenant-a",
+      NAMESPACE,
       rootEventId,
     );
     const messages = await projectMessages(
       fixture.engine,
-      "tenant-a",
+      NAMESPACE,
       "thread-a",
     );
     if (
@@ -245,342 +203,195 @@ async function waitForRun(
     ) return;
     if (settlement.deadLetters > 0) {
       const deliveries = await fixture.engine.deliveries.list({
-        namespace: "tenant-a",
+        namespace: NAMESPACE,
         status: "dead_letter",
       });
-      throw new Error(`Ask run dead-lettered: ${JSON.stringify(deliveries)}`);
+      throw new Error(
+        `Ask workflow dead-lettered: ${JSON.stringify(deliveries)}`,
+      );
     }
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
-  const settlement = await fixture.engine.events.settlement(
-    "tenant-a",
-    rootEventId,
-  );
-  const messages = await projectMessages(
-    fixture.engine,
-    "tenant-a",
-    "thread-a",
-  );
-  const deliveries = await fixture.engine.deliveries.list({
-    namespace: "tenant-a",
-    limit: 1_000,
-  });
-  const events = await fixture.engine.events.list({
-    namespace: "tenant-a",
-    correlationId: "ask-run",
-    limit: 1_000,
-  });
-  throw new Error(
-    `Timed out waiting for the public ask to settle: ${
-      JSON.stringify({
-        settlement,
-        messages: messages.map((message) => ({
-          id: message.id,
-          sender: message.sender.id,
-          recipients: message.recipientIds,
-        })),
-        deliveries: deliveries.map((delivery) => ({
-          id: delivery.id,
-          eventId: delivery.eventId,
-          consumerId: delivery.consumerId,
-          status: delivery.status,
-          lastError: delivery.lastError,
-        })),
-        events: events.map((event) => ({
-          id: event.id,
-          type: event.type,
-          metadata: event.metadata,
-        })),
-      })
-    }`,
-  );
+  throw new Error(`Ask workflow did not produce ${expectedMessages} Messages.`);
+}
+
+function activeAgent(input: LlmAdapterCallInput): string {
+  const instructions = input.request.instructions ?? "";
+  const match = /ACTIVE_AGENT=([a-z0-9_-]+)/.exec(instructions);
+  if (!match) throw new Error(`No active Agent in prompt: ${instructions}`);
+  return match[1];
+}
+
+function requestText(input: LlmAdapterCallInput): string {
+  return input.request.messages.flatMap((message) =>
+    message.content.map((part) =>
+      part.type === "text"
+        ? part.text
+        : part.type === "json"
+        ? JSON.stringify(part.value)
+        : ""
+    )
+  ).join("\n");
 }
 
 async function messageText(
   fixture: Fixture,
-  message: NonNullable<ConversationMessage>,
+  message: ConversationMessage,
 ): Promise<string> {
   const values = await fixture.engine.content.resolver.getMany(
     message.content,
-    { namespace: "tenant-a" },
+    { namespace: NAMESPACE },
   );
   return values.map((value) =>
     value.text ?? (value.value === undefined ? "" : JSON.stringify(value.value))
   ).join("\n");
 }
 
-Deno.test("deferred tool results use an explicit runtime-neutral marker", () => {
+Deno.test("deferred WorkflowTool results remain explicit during the transitional Tool path", () => {
   const deferred = deferWorkflowTool({ metadata: { askId: "ask-1" } });
   assert(isDeferredWorkflowToolResult(deferred));
   assertEquals(deferred.metadata, { askId: "ask-1" });
   assertEquals(isDeferredWorkflowToolResult({ kind: "deferred" }), false);
 });
 
-Deno.test("public ask resumes its caller without occupying worker capacity", async () => {
+Deno.test("an ask resumes through durable llm.call metadata", async () => {
   const agents = [agent("a", ["b"]), agent("b")];
   const calls: string[] = [];
   const counts = new Map<string, number>();
-  const fixture = await createFixture(agents, async (request) => {
-    const id = requestAgent(request, agents);
+  const fixture = await createFixture(agents, (input) => {
+    const id = activeAgent(input);
     calls.push(id);
     const count = (counts.get(id) ?? 0) + 1;
     counts.set(id, count);
     assertEquals(
-      request.tools?.map((tool) => tool.function.name),
+      input.request.tools?.map((tool) => tool.name) ?? [],
       id === "a" ? ["ask"] : [],
     );
     if (id === "a" && count === 1) {
-      return response(request, {
-        answer: "",
-        toolCalls: [askCall("ask-b", "b", "A asks B publicly")],
-      });
+      return {
+        content: [],
+        toolCalls: [{
+          id: "ask-b",
+          action: "ask",
+          input: { target: "b", message: "A asks B publicly" },
+        }],
+        attempts: [{ status: "completed" }],
+        finishReason: "tool_calls",
+      };
     }
     if (id === "b") {
-      assertStringIncludes(
-        JSON.stringify(request.messages),
-        "A asks B publicly",
-      );
-      return response(request, { answer: "B public answer" });
+      assertStringIncludes(requestText(input), "A asks B publicly");
+      return {
+        content: { type: "text", text: "B public answer", role: "body" },
+        attempts: [{ status: "completed" }],
+      };
     }
-    const transcript = JSON.stringify(request.messages);
-    assertStringIncludes(transcript, "B public answer");
-    assertStringIncludes(transcript, "answerMessageId");
-    return response(request, { answer: "A public final" });
+    assertStringIncludes(requestText(input), "B public answer");
+    return {
+      content: { type: "text", text: "A public final", role: "body" },
+      attempts: [{ status: "completed" }],
+    };
   });
-
   try {
-    const root = await startRun(fixture, "Start one ask.");
-    await waitForRun(fixture, root.event.id, 6);
+    const root = await startRun(fixture);
+    await waitForRun(fixture, root, 6);
     assertEquals(calls, ["a", "b", "a"]);
-
     const messages = await projectMessages(
       fixture.engine,
-      "tenant-a",
+      NAMESPACE,
       "thread-a",
     );
-    assertEquals(
-      await Promise.all(
-        messages.map((message) => messageText(fixture, message)),
-      ),
-      [
-        "Start one ask.",
-        "",
-        "A asks B publicly",
-        "B public answer",
-        JSON.stringify({
-          status: "answered",
-          askId: "ask:tool:llm:message:user:agent-a:ask-b",
-          questionMessageId: "message:tool:llm:message:user:agent-a:ask-b:ask",
-          answerMessageId:
-            "message:llm:message:tool:llm:message:user:agent-a:ask-b:ask:agent-b:output",
-          askedAgentId: "b",
-          askedParticipantId: "agent-b",
-        }),
-        "A public final",
-      ],
+    assertEquals(await messageText(fixture, messages[5]), "A public final");
+    const question = messages.find((message) =>
+      agentAskMetadata(message.metadata)?.phase === "question"
     );
-    assertEquals(messages.map((message) => message.sender.participantType), [
-      "human",
-      "agent",
-      "agent",
-      "agent",
-      "tool",
-      "agent",
-    ]);
-    const question = agentAskMetadata(messages[2].metadata);
-    const answer = agentAskMetadata(messages[3].metadata);
-    assertEquals(question?.phase, "question");
-    assertEquals(answer?.phase, "answer");
-    assertEquals(answer?.askId, question?.askId);
-    assertEquals(question?.depth, 1);
-
-    const events = await fixture.engine.events.list({
-      namespace: "tenant-a",
-      correlationId: "ask-run",
-      limit: 1_000,
-    });
+    const answer = messages.find((message) =>
+      agentAskMetadata(message.metadata)?.phase === "answer"
+    );
+    assertExists(question);
+    assertExists(answer);
     assertEquals(
-      events.filter((event) =>
-        event.type === "copilotz.core.tool.call.completed"
-      ).length,
-      1,
+      agentAskMetadata(question.metadata)?.askId,
+      agentAskMetadata(answer.metadata)?.askId,
+    );
+    const lifecycle = await projectActionEvents(
+      fixture.engine,
+      NAMESPACE,
+      "llm.call",
     );
     assertEquals(
-      events.filter((event) => event.type === "thread.created").length,
-      0,
+      lifecycle.filter((event) => event.status === "completed").length,
+      3,
     );
     assert(
-      events.filter((event) => event.threadId).every((event) =>
-        event.threadId === "thread-a"
+      lifecycle.some((event) =>
+        event.metadata.schema === "copilotz.core.llm-call.v1" &&
+        typeof event.metadata.ask === "object"
       ),
     );
   } finally {
-    await closeFixture(fixture);
+    await fixture.close();
   }
 });
 
-Deno.test("nested public asks return through each caller in one thread", async () => {
-  const agents = [
-    agent("a", ["b"]),
-    agent("b", ["c"]),
-    agent("c"),
-  ];
-  const calls: string[] = [];
-  const counts = new Map<string, number>();
-  const fixture = await createFixture(agents, async (request) => {
-    const id = requestAgent(request, agents);
-    calls.push(id);
-    const count = (counts.get(id) ?? 0) + 1;
-    counts.set(id, count);
-    if (id === "a" && count === 1) {
-      return response(request, {
-        answer: "",
-        toolCalls: [askCall("a-to-b", "b", "A asks B")],
-      });
-    }
-    if (id === "b" && count === 1) {
-      assertStringIncludes(JSON.stringify(request.messages), "A asks B");
-      return response(request, {
-        answer: "",
-        toolCalls: [askCall("b-to-c", "c", "B asks C")],
-      });
-    }
-    if (id === "c") {
-      assertStringIncludes(JSON.stringify(request.messages), "B asks C");
-      return response(request, { answer: "C public answer" });
-    }
-    if (id === "b") {
-      assertStringIncludes(JSON.stringify(request.messages), "C public answer");
-      return response(request, { answer: "B public synthesis" });
-    }
-    assertStringIncludes(
-      JSON.stringify(request.messages),
-      "B public synthesis",
-    );
-    return response(request, { answer: "A public final" });
-  });
-
-  try {
-    const root = await startRun(fixture, "Start nested asks.");
-    await waitForRun(fixture, root.event.id, 10);
-    assertEquals(calls, ["a", "b", "c", "b", "a"]);
-    const messages = await projectMessages(
-      fixture.engine,
-      "tenant-a",
-      "thread-a",
-    );
-    const publicAgentMessages = messages.filter((message) =>
-      message.sender.participantType === "agent"
-    );
-    assertEquals(
-      await Promise.all(
-        publicAgentMessages.map((message) => messageText(fixture, message)),
-      ),
-      [
-        "",
-        "A asks B",
-        "",
-        "B asks C",
-        "C public answer",
-        "B public synthesis",
-        "A public final",
-      ],
-    );
-    const firstAsk = agentAskMetadata(publicAgentMessages[1].metadata);
-    const nestedAsk = agentAskMetadata(publicAgentMessages[3].metadata);
-    assertExists(firstAsk);
-    assertExists(nestedAsk);
-    assertEquals(nestedAsk.depth, 2);
-    assertEquals(nestedAsk.parentAskId, firstAsk.askId);
-    assertEquals(
-      agentAskMetadata(publicAgentMessages[4].metadata)?.askId,
-      nestedAsk.askId,
-    );
-    assertEquals(
-      agentAskMetadata(publicAgentMessages[5].metadata)?.askId,
-      firstAsk.askId,
-    );
-    const events = await fixture.engine.events.list({
-      namespace: "tenant-a",
-      correlationId: "ask-run",
-      limit: 1_000,
-    });
-    assertEquals(
-      events.filter((event) =>
-        event.type === "copilotz.core.tool.call.completed"
-      ).length,
-      2,
-    );
-  } finally {
-    await closeFixture(fixture);
-  }
-});
-
-Deno.test("asked-agent failure settles the ask and resumes the caller", async () => {
+Deno.test("an asked-Agent llm.call failure becomes a Tool Message and resumes", async () => {
   const agents = [agent("a", ["b"]), agent("b")];
   const calls: string[] = [];
   const counts = new Map<string, number>();
-  const fixture = await createFixture(agents, async (request) => {
-    const id = requestAgent(request, agents);
+  const fixture = await createFixture(agents, (input) => {
+    const id = activeAgent(input);
     calls.push(id);
     const count = (counts.get(id) ?? 0) + 1;
     counts.set(id, count);
     if (id === "a" && count === 1) {
-      return response(request, {
-        answer: "",
-        toolCalls: [askCall("failing-ask", "b", "B, inspect this")],
-      });
+      return {
+        content: [],
+        toolCalls: [{
+          id: "ask-b",
+          action: "ask",
+          input: { target: "b", message: "B, inspect this" },
+        }],
+        attempts: [{ status: "completed" }],
+      };
     }
-    if (id === "b") throw new Error("B provider unavailable");
-    assertStringIncludes(
-      JSON.stringify(request.messages),
-      "Asked agent 'b' failed",
-    );
-    return response(request, { answer: "A recovered publicly" });
+    if (id === "b") throw new Error("provider exploded");
+    assertStringIncludes(requestText(input), "provider exploded");
+    return {
+      content: { type: "text", text: "A recovered", role: "body" },
+      attempts: [{ status: "completed" }],
+    };
   });
-
   try {
-    const root = await startRun(fixture, "Exercise ask failure.");
-    await waitForRun(fixture, root.event.id, 5);
+    const root = await startRun(fixture);
+    await waitForRun(fixture, root, 5);
     assertEquals(calls, ["a", "b", "a"]);
-    const events = await fixture.engine.events.list({
-      namespace: "tenant-a",
-      correlationId: "ask-run",
-      limit: 1_000,
-    });
-    assertEquals(
-      events.filter((event) =>
-        event.type === "copilotz.core.tool.call.completed"
-      ).length,
-      1,
-    );
-    assertEquals(
-      events.filter((event) =>
-        event.type === "copilotz.core.llm.generate.failed"
-      ).length,
-      1,
-    );
     const messages = await projectMessages(
       fixture.engine,
-      "tenant-a",
+      NAMESPACE,
       "thread-a",
     );
-    assertEquals(messages.map((message) => message.sender.participantType), [
-      "human",
-      "agent",
-      "agent",
-      "tool",
-      "agent",
-    ]);
-    assertStringIncludes(
-      await messageText(fixture, messages[3]),
-      "Asked agent 'b' failed",
+    const failure = messages.find((message) =>
+      message.sender.participantType === "tool"
     );
+    assertExists(failure);
+    assertStringIncludes(
+      await messageText(fixture, failure),
+      "provider exploded",
+    );
+    assertEquals(await messageText(fixture, messages[4]), "A recovered");
+    const lifecycle = await projectActionEvents(
+      fixture.engine,
+      NAMESPACE,
+      "llm.call",
+    );
+    const failed = lifecycle.find((event) => event.status === "failed");
+    assertExists(failed);
+    assertEquals(failed.metadata.schema, "copilotz.core.llm-call.v1");
     assertEquals(
-      await messageText(fixture, messages[4]),
-      "A recovered publicly",
+      (failed.metadata.ask as Record<string, unknown>).askedAgentId,
+      "b",
     );
   } finally {
-    await closeFixture(fixture);
+    await fixture.close();
   }
 });

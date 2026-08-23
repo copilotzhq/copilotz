@@ -1,9 +1,8 @@
 import fetchText from "./fetch-text.ts";
 import httpRequest from "./http-request.ts";
 import webSearch from "./web-search.ts";
-import type { NewTool } from "@copilotz/copilotz/resources";
+import type { NewTool, WorkflowTool } from "../internal/types.ts";
 import { type CopilotzPlugin, definePlugin } from "@copilotz/copilotz/plugins";
-import type { WorkflowTool } from "@copilotz/copilotz/tools";
 
 export const WEB_TOOL_IDS = [
   "http_request",

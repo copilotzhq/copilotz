@@ -3,7 +3,7 @@ import { assetIdFromRef, formatAssetRef } from "@copilotz/copilotz/content";
 import type {
   WorkflowTool,
   WorkflowToolExecutionContext,
-} from "@copilotz/copilotz/tools";
+} from "../internal/types.ts";
 
 export type PersistentTerminalScope = "agent" | "project" | "tenant";
 

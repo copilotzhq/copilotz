@@ -7,7 +7,6 @@ import * as nodeAdapters from "../../runtime/adapters/node/index.ts";
 import * as application from "../../runtime/application/public.ts";
 import * as actions from "../../runtime/actions/index.ts";
 import * as attachments from "../../runtime/attachments/index.ts";
-import * as capabilities from "../../runtime/capabilities/index.ts";
 import * as content from "../../runtime/content/index.ts";
 import * as domain from "../../runtime/domain/index.ts";
 import * as events from "../../runtime/events/index.ts";
@@ -30,6 +29,7 @@ import * as admin from "../../plugins/admin/index.ts";
 import * as knowledge from "../../plugins/knowledge/index.ts";
 import * as memory from "../../plugins/memory/index.ts";
 import * as core from "@copilotz/copilotz/core";
+import * as llm from "@copilotz/copilotz/llm";
 import * as coreSchedules from "@copilotz/copilotz/schedules/core";
 import * as goals from "@copilotz/copilotz/goals";
 import * as schedules from "@copilotz/copilotz/schedules";
@@ -76,7 +76,6 @@ Deno.test("v3 root exposes the factory-first application vocabulary", () => {
     "createAttachmentRuntime",
     "createContentPreparer",
     "createEventStore",
-    "createAgentCapabilityResolver",
   ]);
   for (
     const removed of [
@@ -103,6 +102,14 @@ Deno.test("v3 root exposes the factory-first application vocabulary", () => {
       "createUsageWorkflowPlugin",
       "schedulesPlugin",
       "coreSchedulesPlugin",
+      "defineLlmProviderResource",
+      "defineAgent",
+      "defineModel",
+      "llmPlugin",
+      "createAgentCapabilityResolver",
+      "defineContextResource",
+      "requireAgent",
+      "workflowMetadata",
     ]
   ) assertEquals(removed in copilotz, false, removed);
 });
@@ -162,8 +169,28 @@ Deno.test("v3 package subpaths expose cohesive factories", () => {
   assertFunctions(admin, ["createAdminPlugin"]);
   assertFunctions(knowledge, ["createKnowledgePlugin"]);
   assertFunctions(memory, ["createLongTermMemoryPlugin"]);
-  assertFunctions(core, ["message"]);
+  assertFunctions(core, [
+    "message",
+    "createAgentCapabilityResolver",
+    "defineAgent",
+    "defineContextResource",
+    "normalizeThreadMetadata",
+    "selectCapabilityResources",
+    "workflowMetadata",
+  ]);
   assertEquals(typeof core.corePlugin, "object");
+  assertFunctions(llm, [
+    "createAnthropicAdapter",
+    "createDeepSeekAdapter",
+    "createGeminiAdapter",
+    "createGroqAdapter",
+    "createMinimaxAdapter",
+    "createOllamaAdapter",
+    "createOpenAiAdapter",
+    "defineModel",
+  ]);
+  assertEquals(typeof llm.callLlmAction, "object");
+  assertEquals(typeof llm.llmPlugin, "object");
   assertFunctions(goals, ["createGoalRuntime"]);
   assertFunctions(usage, ["createUsageWorkflowPlugin"]);
   assertEquals(typeof usage.usageCollection, "object");
@@ -180,10 +207,6 @@ Deno.test("v3 package subpaths expose cohesive factories", () => {
   assertEquals(typeof coreSchedules.coreSchedulesPlugin, "object");
   assertFunctions(attachments, [
     "createAttachmentRuntime",
-  ]);
-  assertFunctions(capabilities, [
-    "createAgentCapabilityResolver",
-    "selectCapabilityResources",
   ]);
   assertFunctions(content, [
     "createContentPreparer",

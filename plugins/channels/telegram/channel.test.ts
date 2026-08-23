@@ -7,7 +7,7 @@ import {
   projectMessages,
   projectThreadByExternalId,
 } from "../../../runtime/testing/projections.ts";
-import type { Agent } from "@copilotz/copilotz/resources";
+import type { AgentResource } from "@copilotz/copilotz/core";
 import { createCopilotzApplication } from "../../../runtime/application/index.ts";
 import {
   loadMessageRecord,
@@ -33,7 +33,12 @@ const config: TelegramConfig = {
   botToken: "bot-token",
   secretToken: "webhook-token",
 };
-const agent: Agent = { id: "support", name: "Support", role: "support" };
+const agent: AgentResource = {
+  id: "support",
+  name: "Support",
+  role: "support",
+  models: {},
+};
 
 function fakeTransport() {
   const downloads: string[] = [];

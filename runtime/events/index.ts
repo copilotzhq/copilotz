@@ -60,16 +60,3 @@ export {
   deriveWorkflowId,
   MAX_DERIVED_WORKFLOW_ID_LENGTH,
 } from "./workflow-id.ts";
-export {
-  agentAskMetadata,
-  providerAttemptEventMetadata,
-  textWorkflowAttemptEventMetadata,
-  withAgentAskMetadata,
-  withWorkflowMetadata,
-  workflowMetadata,
-} from "./workflow-metadata.ts";
-export type {
-  AgentAskMetadata,
-  AgentAskPhase,
-  WorkflowMetadata,
-} from "./workflow-metadata.ts";

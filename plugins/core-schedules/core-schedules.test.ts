@@ -19,7 +19,7 @@ import {
 import type {
   WorkflowTool,
   WorkflowToolExecutionContext,
-} from "../../runtime/tools/index.ts";
+} from "@copilotz/copilotz/tools";
 import { createScheduledJob, scheduleTick } from "../schedules/index.ts";
 import {
   CORE_SCHEDULED_MESSAGE_PAYLOAD_TYPE,

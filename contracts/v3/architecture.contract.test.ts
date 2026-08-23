@@ -16,9 +16,8 @@ const canonicalEntries = [
   "runtime/execution",
   "runtime/actions",
   "runtime/plugins",
-  "runtime/tools",
-  "runtime/agents",
-  "runtime/llm",
+  "plugins/tools",
+  "plugins/llm",
   "plugins",
 ] as const;
 
@@ -71,7 +70,7 @@ Deno.test("v3 root is a runtime-neutral composition barrel", async () => {
   );
   assert(!/\bclass\s+\w+/.test(source));
   assert(
-    !/plugins\/(?:admin|channels|core(?:-schedules)?|goals|knowledge|memory|schedules|skills|usage)/
+    !/plugins\/(?:admin|channels|core(?:-schedules)?|goals|knowledge|llm|memory|schedules|skills|tools|usage)/
       .test(source),
   );
 });
@@ -88,6 +87,17 @@ Deno.test("retired runtime and v1 server modules are deleted", async () => {
       "../../runtime/schedules/index.ts",
       "../../runtime/skills/index.ts",
       "../../runtime/usage/index.ts",
+      "../../runtime/llm/index.ts",
+      "../../runtime/tools/index.ts",
+      "../../runtime/agents/index.ts",
+      "../../runtime/context/index.ts",
+      "../../runtime/capabilities/index.ts",
+      "../../runtime/resources/index.ts",
+      "../../plugins/core/internal/resources/index.ts",
+      "../../runtime/events/workflow-metadata.ts",
+      "../../runtime/thread-metadata.ts",
+      "../../runtime/tokens/chat.ts",
+      "../../runtime/http.ts",
       "../../server/v1-fetch.ts",
       "../../server/v1-sse.ts",
     ]

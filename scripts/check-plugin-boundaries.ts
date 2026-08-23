@@ -1,4 +1,8 @@
 const repositoryRoot = new URL("../", import.meta.url);
+const denoConfig = JSON.parse(
+  await Deno.readTextFile(new URL("../deno.json", import.meta.url)),
+) as Readonly<{ imports?: Readonly<Record<string, string>> }>;
+const selfImports = denoConfig.imports ?? {};
 
 async function* productionSources(
   directory: URL,
@@ -30,8 +34,9 @@ function posixJoin(fromFile: string, spec: string): string {
 }
 
 function resolvedImport(fromFile: string, spec: string): string | undefined {
-  if (spec === "@copilotz/copilotz/core") {
-    return "plugins/core/index.ts";
+  const selfTarget = selfImports[spec];
+  if (selfTarget) {
+    return selfTarget.startsWith("./") ? selfTarget.slice(2) : selfTarget;
   }
   if (spec.startsWith("./") || spec.startsWith("../")) {
     return posixJoin(fromFile, spec);
@@ -49,6 +54,7 @@ for await (const file of productionSources(repositoryRoot)) {
   }
   for (const match of file.text.matchAll(importSpec)) {
     const spec = match[1];
+    const isRelative = spec.startsWith("./") || spec.startsWith("../");
     const resolved = resolvedImport(file.path, spec);
     if (!resolved) continue;
     const normalized = resolved.replace(/\.ts$/, "");
@@ -59,7 +65,7 @@ for await (const file of productionSources(repositoryRoot)) {
       failures.push(`${file.path}: runtime imports plugins (${spec})`);
     }
     if (
-      file.path.startsWith("plugins/") &&
+      isRelative && file.path.startsWith("plugins/") &&
       (normalized === "runtime" || normalized.startsWith("runtime/"))
     ) {
       failures.push(`${file.path}: plugin relative-imports runtime (${spec})`);

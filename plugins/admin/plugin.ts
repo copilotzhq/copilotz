@@ -5,7 +5,7 @@ import {
 } from "@copilotz/copilotz/actions";
 import type { CollectionRecord } from "@copilotz/copilotz/collections";
 import { type CopilotzPlugin, definePlugin } from "@copilotz/copilotz/plugins";
-import type { Agent } from "@copilotz/copilotz/resources";
+import type { AgentResource } from "@copilotz/copilotz/core";
 import {
   allCollectionRecords,
   allMessages,
@@ -36,7 +36,7 @@ const ACTION_ID_PREFIX = "copilotz.admin";
 type AdminActionContext = ActionContext<
   & RuntimeContextNamespaces
   & Readonly<{
-    agents: Readonly<Record<string, Agent | undefined>>;
+    agents: Readonly<Record<string, AgentResource | undefined>>;
   }>
 >;
 
@@ -426,12 +426,11 @@ const usage: AdminAction = async (input, context) => {
   };
 };
 
-function publicAgent(agent: Agent): Record<string, unknown> {
+function publicAgent(agent: AgentResource): Record<string, unknown> {
   return {
     id: agent.id,
     name: agent.name,
     role: agent.role,
-    runtime: structuredClone(agent.runtime ?? null),
     capabilities: structuredClone(agent.capabilities ?? {}),
   };
 }
@@ -444,7 +443,7 @@ const agents: AdminAction = (input, context) => {
     status: 200,
     data: Object.values(context.resources.agents).filter((
       agent,
-    ): agent is Agent => Boolean(agent)).map(publicAgent),
+    ): agent is AgentResource => Boolean(agent)).map(publicAgent),
   };
 };
 

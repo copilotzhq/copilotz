@@ -1,0 +1,329 @@
+import type {
+  ChatMessage,
+  ProviderAPI,
+  ProviderConfig,
+  ProviderFinishReason,
+  ProviderUsageUpdate,
+  StreamCallback,
+} from "./types.ts";
+import { attachLLMStreamDiagnostics, LLMStreamTimeoutError } from "./errors.ts";
+import {
+  getLocalStopSequences,
+  isStopDebugEnabled,
+  processStream,
+} from "./utils.ts";
+import { streamPost, type StreamResponse } from "./http.ts";
+
+const DEFAULT_FIRST_TOKEN_TIMEOUT_MS = 90_000;
+const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 120_000;
+const DEFAULT_ATTEMPT_TIMEOUT_MS = 1_800_000;
+const SAFE_RESPONSE_ID_HEADERS = [
+  "x-request-id",
+  "request-id",
+  "openai-request-id",
+  "x-openai-request-id",
+  "cf-ray",
+  "traceparent",
+] as const;
+
+function safeResponseRequestIds(
+  headers: Headers,
+): Record<string, string> | undefined {
+  const requestIds = Object.fromEntries(
+    SAFE_RESPONSE_ID_HEADERS.flatMap((name) => {
+      const value = headers.get(name)?.trim();
+      return value ? [[name, value.slice(0, 512)]] : [];
+    }),
+  );
+  return Object.keys(requestIds).length > 0 ? requestIds : undefined;
+}
+
+export interface StreamResult {
+  content: string;
+  reasoning: string;
+  usage?: ProviderUsageUpdate;
+  usageFinalized?: Promise<{
+    usage?: ProviderUsageUpdate;
+    finishReason: ProviderFinishReason | null;
+  }>;
+  finishReason: ProviderFinishReason | null;
+  stoppedByLocalStop: boolean;
+  localStopReason?: "local_stop_sequence";
+  localStopSequence?: string;
+}
+
+function resolveTimeoutMs(
+  value: number | undefined,
+  defaultValue: number,
+): number | undefined {
+  if (value === undefined) return defaultValue;
+  return Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+/**
+ * Executes a single LLM provider streaming call with timeout management.
+ */
+export async function runProviderStream(
+  messages: ChatMessage[],
+  onStream: StreamCallback | undefined,
+  config: ProviderConfig,
+  providerAPI: ProviderAPI,
+  extractTags?: string[],
+  signal?: AbortSignal,
+  onHiddenBlockChunk?: (
+    tagName: string,
+    chunk: string,
+    phase: "start" | "content" | "end",
+  ) => void,
+): Promise<StreamResult> {
+  const requestStartedAtMs = Date.now();
+  const localStopSequences = getLocalStopSequences(config);
+  const finalMessages = providerAPI.transformMessages
+    ? providerAPI.transformMessages(messages)
+    : messages;
+
+  // Stop sequences are always enforced client-side in `processStream`. We also
+  // forward the resolved set to providers with native stop support (Anthropic,
+  // Gemini, MiniMax) via `nativeStopSequences` so they can halt server-side and
+  // avoid generating tokens we would otherwise discard. The public `stop`/
+  // `stopSequences` fields stay stripped so providers without opt-in handling
+  // (e.g. OpenAI's 4-stop limit) are unaffected.
+  const requestConfig = {
+    ...config,
+    stop: undefined,
+    stopSequences: undefined,
+    nativeStopSequences: localStopSequences.length > 0
+      ? localStopSequences
+      : undefined,
+  } satisfies ProviderConfig;
+
+  if (isStopDebugEnabled(config)) {
+    console.log("[stop-debug] provider request", {
+      provider: config.provider,
+      model: config.model,
+      nativeStopSequences: requestConfig.nativeStopSequences,
+    });
+  }
+
+  const abortController = new AbortController();
+  const firstTokenTimeoutMs = resolveTimeoutMs(
+    config.firstTokenTimeoutMs,
+    DEFAULT_FIRST_TOKEN_TIMEOUT_MS,
+  );
+  const streamIdleTimeoutMs = resolveTimeoutMs(
+    config.streamIdleTimeoutMs,
+    DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+  );
+  const attemptTimeoutMs = resolveTimeoutMs(
+    config.attemptTimeoutMs,
+    DEFAULT_ATTEMPT_TIMEOUT_MS,
+  );
+
+  let firstTokenTimer: number | undefined;
+  let streamIdleTimer: number | undefined;
+  let attemptTimer: number | undefined;
+  let rejectTimeout: ((error: Error) => void) | undefined;
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  let streamTimeout:
+    | { kind: "first_token" | "idle" | "attempt"; timeoutMs: number }
+    | undefined;
+  let firstContentReceived = false;
+  let response: StreamResponse | undefined;
+  let responseHeadersAtMs: number | undefined;
+  let lastStreamActivityAtMs: number | undefined;
+
+  const clearFirstTokenTimer = () => {
+    if (firstTokenTimer !== undefined) {
+      clearTimeout(firstTokenTimer);
+      firstTokenTimer = undefined;
+    }
+  };
+  const clearStreamIdleTimer = () => {
+    if (streamIdleTimer !== undefined) {
+      clearTimeout(streamIdleTimer);
+      streamIdleTimer = undefined;
+    }
+  };
+  const clearAttemptTimer = () => {
+    if (attemptTimer !== undefined) {
+      clearTimeout(attemptTimer);
+      attemptTimer = undefined;
+    }
+  };
+
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    rejectTimeout = reject;
+  });
+
+  const abortForTimeout = (
+    kind: "first_token" | "idle" | "attempt",
+    timeoutMs: number,
+  ) => {
+    if (streamTimeout) return;
+    streamTimeout = { kind, timeoutMs };
+    abortController.abort();
+    void reader?.cancel().catch(() => undefined);
+    rejectTimeout?.(new LLMStreamTimeoutError(kind, timeoutMs));
+  };
+  const abortForExternalSignal = () => {
+    abortController.abort();
+    void reader?.cancel().catch(() => undefined);
+  };
+  if (signal?.aborted) {
+    abortForExternalSignal();
+  }
+  signal?.addEventListener("abort", abortForExternalSignal, { once: true });
+
+  const startFirstTokenTimer = () => {
+    if (!firstTokenTimeoutMs) return;
+    clearFirstTokenTimer();
+    firstTokenTimer = setTimeout(() => {
+      abortForTimeout("first_token", firstTokenTimeoutMs);
+    }, firstTokenTimeoutMs) as unknown as number;
+  };
+
+  const resetStreamIdleTimer = () => {
+    if (!streamIdleTimeoutMs || !firstContentReceived) return;
+    clearStreamIdleTimer();
+    streamIdleTimer = setTimeout(() => {
+      abortForTimeout("idle", streamIdleTimeoutMs);
+    }, streamIdleTimeoutMs) as unknown as number;
+  };
+
+  // Provider is alive (metadata events) — reset the first-token timer
+  // to extend the deadline, but don't switch to idle mode yet.
+  const recordStreamActivity = () => {
+    lastStreamActivityAtMs = Date.now();
+    if (!firstContentReceived) {
+      startFirstTokenTimer();
+    }
+    resetStreamIdleTimer();
+  };
+
+  // Actual content extracted — switch from first-token to idle mode.
+  const recordContentReceived = () => {
+    lastStreamActivityAtMs = Date.now();
+    if (!firstContentReceived) {
+      firstContentReceived = true;
+      clearFirstTokenTimer();
+    }
+    resetStreamIdleTimer();
+  };
+
+  startFirstTokenTimer();
+  if (attemptTimeoutMs) {
+    attemptTimer = setTimeout(() => {
+      abortForTimeout("attempt", attemptTimeoutMs);
+    }, attemptTimeoutMs) as unknown as number;
+  }
+  try {
+    response = await Promise.race([
+      streamPost(
+        providerAPI.endpoint,
+        await providerAPI.body(
+          Array.isArray(finalMessages) ? finalMessages : messages,
+          requestConfig,
+        ),
+        {
+          headers: providerAPI.headers(requestConfig),
+          signal: abortController.signal,
+        },
+      ) as Promise<StreamResponse>,
+      timeoutPromise,
+    ]);
+    responseHeadersAtMs = Date.now();
+
+    reader = response.stream.getReader();
+    const streamPromise = processStream(
+      reader,
+      onStream || (() => {}),
+      (data) => {
+        if (providerAPI.isStreamActivity?.(data)) {
+          recordStreamActivity();
+        }
+        const parts = providerAPI.extractContent(data);
+        if (parts) {
+          const hasVisibleContent = parts.some(
+            (p) =>
+              typeof p.text === "string" && p.text.length > 0 && !p.isReasoning,
+          );
+          if (hasVisibleContent) {
+            recordContentReceived();
+          } else if (
+            parts.some(
+              (p) => typeof p.text === "string" && p.text.length > 0,
+            )
+          ) {
+            // Reasoning-only tokens: model is working, extend the first-token
+            // deadline but don't switch to idle mode.
+            recordStreamActivity();
+          }
+        }
+        return parts;
+      },
+      {
+        ...providerAPI.streamOptions,
+        config,
+        extractedBlockTags: extractTags,
+        extractUsage: providerAPI.extractUsage,
+        extractFinishReason: providerAPI.extractFinishReason,
+        localStopSequences,
+        continueAfterLocalStop: true,
+        onHiddenBlockChunk,
+      },
+    );
+    const result = await Promise.race([streamPromise, timeoutPromise]);
+    if (signal?.aborted) {
+      throw signal.reason ??
+        new DOMException("LLM request aborted", "AbortError");
+    }
+    return result;
+  } catch (error) {
+    const failedAtMs = Date.now();
+    const receivedResponse = response;
+    const headersReceivedAtMs = responseHeadersAtMs;
+    const responseRequestIds = receivedResponse
+      ? safeResponseRequestIds(receivedResponse.headers)
+      : undefined;
+    const withStreamDiagnostics = receivedResponse &&
+        headersReceivedAtMs !== undefined
+      ? (failure: unknown) =>
+        attachLLMStreamDiagnostics(failure, {
+          responseStatus: receivedResponse.status,
+          ...(receivedResponse.statusText
+            ? { responseStatusText: receivedResponse.statusText }
+            : {}),
+          ...(responseRequestIds ? { requestIds: responseRequestIds } : {}),
+          requestDurationMs: Math.max(0, failedAtMs - requestStartedAtMs),
+          responseHeadersAfterMs: Math.max(
+            0,
+            headersReceivedAtMs - requestStartedAtMs,
+          ),
+          streamDurationMs: Math.max(0, failedAtMs - headersReceivedAtMs),
+          ...(lastStreamActivityAtMs !== undefined
+            ? {
+              timeSinceLastActivityMs: Math.max(
+                0,
+                failedAtMs - lastStreamActivityAtMs,
+              ),
+            }
+            : {}),
+          contentReceived: firstContentReceived,
+        })
+      : (failure: unknown) => failure;
+    if (streamTimeout) {
+      throw withStreamDiagnostics(
+        new LLMStreamTimeoutError(
+          streamTimeout.kind,
+          streamTimeout.timeoutMs,
+        ),
+      );
+    }
+    throw withStreamDiagnostics(error);
+  } finally {
+    clearFirstTokenTimer();
+    clearStreamIdleTimer();
+    clearAttemptTimer();
+    signal?.removeEventListener("abort", abortForExternalSignal);
+  }
+}

@@ -1,0 +1,93 @@
+// deno-lint-ignore-file no-explicit-any
+// Private vendor-wire decoder: payload shapes are provider-controlled JSON.
+import type {
+  ChatContentPart,
+  ChatMessage,
+  ExtractedPart,
+  ProviderConfig,
+  ProviderFactory,
+  ProviderFinishReason,
+} from "../../internal/types.ts";
+import { providerEndpoint } from "../transport.ts";
+
+function extractOpenAICompatibleFinishReason(
+  data: any,
+): ProviderFinishReason | null {
+  const reason = data?.choices?.[0]?.finish_reason;
+  if (reason === "length") return "length";
+  if (reason === "stop") return "stop";
+  if (reason === "tool_calls" || reason === "function_call") {
+    return "tool_calls";
+  }
+  if (reason === "content_filter") return "content_filter";
+  return typeof reason === "string" ? "unknown" : null;
+}
+
+export const groqProvider: ProviderFactory = (config: ProviderConfig) => {
+  return {
+    endpoint: providerEndpoint(
+      config.baseUrl,
+      "https://api.groq.com/openai/v1",
+      "chat/completions",
+    ),
+
+    headers: (config: ProviderConfig) => ({
+      ...(config.extraHeaders ?? {}),
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${config.apiKey}`,
+    }),
+
+    body: (messages: ChatMessage[], config: ProviderConfig) => {
+      const groqMessages = messages.map((msg) => {
+        if (Array.isArray(msg.content)) {
+          const parts = (msg.content as ChatContentPart[]).flatMap((p) => {
+            if (p.type === "text") return [{ type: "text", text: p.text }];
+            if (p.type === "image_url" && p.image_url?.url) {
+              return [{
+                type: "image_url",
+                image_url: { url: p.image_url.url },
+              }];
+            }
+            if (
+              p.type === "file" && p.file?.file_data &&
+              typeof p.file.file_data === "string" &&
+              p.file.file_data.startsWith("data:")
+            ) {
+              return [{
+                type: "image_url",
+                image_url: { url: p.file.file_data },
+              }];
+            }
+            // Groq likely does not support input_audio in Chat Completions yet; drop silently
+            return [] as any[];
+          });
+          return { role: msg.role, content: parts } as any;
+        }
+        return { role: msg.role, content: msg.content } as any;
+      });
+
+      return {
+        model: config.model || "llama3-8b-8192",
+        messages: groqMessages,
+        stream: true,
+        temperature: config.temperature || 0,
+        max_tokens: config.maxTokens || 1000,
+        top_p: config.topP,
+        presence_penalty: config.presencePenalty,
+        frequency_penalty: config.frequencyPenalty,
+        stop: config.stop,
+        response_format: config.responseType === "json"
+          ? { type: "json_object" }
+          : undefined,
+      };
+    },
+
+    extractContent: (data: any): ExtractedPart[] | null => {
+      const content = data?.choices?.[0]?.delta?.content;
+      if (!content) return null;
+      return [{ text: content }];
+    },
+
+    extractFinishReason: extractOpenAICompatibleFinishReason,
+  };
+};

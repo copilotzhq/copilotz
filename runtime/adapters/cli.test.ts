@@ -178,4 +178,5 @@ Deno.test("portable CLI is factory-first and imports no host terminal API", asyn
   const source = await Deno.readTextFile(new URL("../cli.ts", import.meta.url));
   assert(!/^\s*(?:export\s+)?class\s/m.test(source));
   assert(!/from\s+["']node:|\bDeno\.|\bBun\.|\bprocess\./.test(source));
+  assert(!/copilotz\.core|llm\.call/.test(source));
 });

@@ -28,4 +28,4 @@ export type {
   SkillIndexEntry,
   SkillManifest,
   SkillReadOptions,
-} from "@copilotz/copilotz/resources";
+} from "./contracts.ts";

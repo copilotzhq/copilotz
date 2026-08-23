@@ -47,6 +47,11 @@ export type RuntimeActionCallers = Readonly<
   >
 >;
 
+/** Structural constraint accepted by a statically narrowed Action caller map. */
+export type RuntimeActionCallerMap = Readonly<
+  Record<string, (...args: never[]) => unknown>
+>;
+
 /** Runtime-native durable content operations available to Actions. */
 export type RuntimeContent = Readonly<{
   prepare(
@@ -112,7 +117,7 @@ export type ActionTransactionContext<
 export interface RuntimeContext<
   TResources extends RuntimeContextNamespaces = RuntimeContextNamespaces,
   TAdapters extends RuntimeContextNamespaces = RuntimeContextNamespaces,
-  TActions extends RuntimeActionCallers = RuntimeActionCallers,
+  TActions extends RuntimeActionCallerMap = RuntimeActionCallers,
   TCollections extends RuntimeCollections = RuntimeCollections,
 > {
   readonly namespace: string;
@@ -138,7 +143,7 @@ export interface RuntimeContext<
 export interface ActionContext<
   TResources extends RuntimeContextNamespaces = RuntimeContextNamespaces,
   TAdapters extends RuntimeContextNamespaces = RuntimeContextNamespaces,
-  TActions extends RuntimeActionCallers = RuntimeActionCallers,
+  TActions extends RuntimeActionCallerMap = RuntimeActionCallers,
   TCollections extends RuntimeCollections = RuntimeCollections,
 > extends RuntimeContext<TResources, TAdapters, TActions, TCollections> {
   readonly action: Readonly<{

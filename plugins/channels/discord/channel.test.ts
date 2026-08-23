@@ -7,7 +7,7 @@ import {
   projectMessages,
   projectThreadByExternalId,
 } from "../../../runtime/testing/projections.ts";
-import type { Agent } from "@copilotz/copilotz/resources";
+import type { AgentResource } from "@copilotz/copilotz/core";
 import { createCopilotzApplication } from "../../../runtime/application/index.ts";
 import {
   loadMessageRecord,
@@ -28,7 +28,12 @@ import type {
 } from "./types.ts";
 
 const NAMESPACE = "tenant-discord";
-const agent: Agent = { id: "support", name: "Support", role: "support" };
+const agent: AgentResource = {
+  id: "support",
+  name: "Support",
+  role: "support",
+  models: {},
+};
 
 function hex(bytes: Uint8Array): string {
   return [...bytes].map((value) => value.toString(16).padStart(2, "0")).join(

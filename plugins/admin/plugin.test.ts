@@ -1,6 +1,6 @@
 import { assert, assertEquals, assertExists } from "@std/assert";
 
-import type { Agent } from "@copilotz/copilotz/resources";
+import type { AgentResource } from "@copilotz/copilotz/core";
 import { createCopilotzApplication } from "../../runtime/application/index.ts";
 import {
   createTestDatabase,
@@ -14,10 +14,11 @@ import { createTestDomainContext } from "../../runtime/testing/domain-context.ts
 const SCHEMA = "copilotz_admin_plugin";
 const NAMESPACE = "tenant-a";
 
-const supportAgent: Agent = {
+const supportAgent: AgentResource = {
   id: "support",
   name: "Support",
   role: "support",
+  models: {},
   instructions: "Private instructions",
 };
 

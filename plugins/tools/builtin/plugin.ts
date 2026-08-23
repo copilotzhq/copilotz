@@ -1,5 +1,5 @@
 import type { CollectionRecord } from "@copilotz/copilotz/collections";
-import type { Agent } from "@copilotz/copilotz/resources";
+import type { AgentResource } from "@copilotz/copilotz/core";
 import { assetIdFromRef, formatAssetRef } from "@copilotz/copilotz/content";
 import type { ParticipantInput } from "@copilotz/copilotz/domain";
 import { type CopilotzPlugin, definePlugin } from "@copilotz/copilotz/plugins";
@@ -7,7 +7,7 @@ import type { ActionCallOptions } from "@copilotz/copilotz/actions";
 import type {
   WorkflowTool,
   WorkflowToolExecutionContext,
-} from "@copilotz/copilotz/tools";
+} from "../internal/types.ts";
 
 export const BUILT_IN_CORE_TOOL_IDS = [
   "get_current_time",
@@ -561,17 +561,18 @@ async function resolveThreadParticipant(
     await byExternalId(ctx, id);
   if (existing) return participantInput(existing);
   const agents = (ctx.processor.resources.agents ?? {}) as Readonly<
-    Record<string, Agent | undefined>
+    Record<string, AgentResource | undefined>
   >;
   const agent = agents[id] ??
-    Object.values(agents).filter((value): value is Agent => !!value).find((
-      candidate,
-    ) => candidate.name === id || candidate.externalId === id);
+    Object.values(agents).filter((value): value is AgentResource => !!value)
+      .find((
+        candidate,
+      ) => candidate.name === id || candidate.id === id);
   if (!agent) {
     throw new Error(`Thread participant '${id}' was not found.`);
   }
   return Object.freeze({
-    externalId: agent.externalId?.trim() || agent.id,
+    externalId: agent.id,
     participantType: "agent",
     agentId: agent.id,
     name: agent.name,

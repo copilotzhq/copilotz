@@ -1,10 +1,7 @@
 import type { AttachmentOutput } from "@copilotz/copilotz/attachments";
 import type { ContentInput } from "@copilotz/copilotz/content";
 import type { ConversationMessage } from "@copilotz/copilotz/domain";
-import {
-  type CopilotzPlugin,
-  definePlugin,
-} from "@copilotz/copilotz/plugins";
+import { type CopilotzPlugin, definePlugin } from "@copilotz/copilotz/plugins";
 import { coreMessageEnvelope } from "../helpers.ts";
 import { loadChannelMessage } from "../identity.ts";
 import type {

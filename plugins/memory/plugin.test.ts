@@ -2,22 +2,33 @@ import {
   assert,
   assertEquals,
   assertExists,
+  assertRejects,
   assertStringIncludes,
+  assertThrows,
 } from "@std/assert";
 import { createTestDomainContext } from "../../runtime/testing/domain-context.ts";
 import {
   projectActionEvents,
   projectMessages,
 } from "../../runtime/testing/projections.ts";
-import { defineContextResource } from "@copilotz/copilotz/context";
-import { createSqlSession } from "@copilotz/copilotz/events";
-import type {
-  ChatRequest,
-  ChatResponse,
-  TokenUsage,
+import { defineContextResource } from "@copilotz/copilotz/core";
+import {
+  createSqlSession,
+  type SqlExecutor,
+  type SqlSession,
+} from "@copilotz/copilotz/events";
+import {
+  LLM_CALL_ACTION_ID,
+  type LlmAdapter,
+  type LlmAdapterCallInput,
+  type LlmAdapterResult,
+  type LlmJsonObject,
+  llmPlugin,
+  type LlmToolCall,
+  type LlmUsage,
 } from "@copilotz/copilotz/llm";
 import { createPluginRegistry, definePlugin } from "@copilotz/copilotz/plugins";
-import type { Agent } from "@copilotz/copilotz/resources";
+import type { AgentResource } from "@copilotz/copilotz/core";
 import {
   type CopilotzEngine,
   createCopilotzEngine,
@@ -28,51 +39,48 @@ import {
 } from "../../runtime/testing/ominipg.ts";
 import { coreCollectionsPlugin, corePlugin } from "@copilotz/copilotz/core";
 import {
-  defineLlmProviderResource,
-  generateFromChat,
-  type LlmChat,
-} from "@copilotz/copilotz/llm";
-import {
   CONSOLIDATE_MEMORY_ACTION_ID,
   createLongTermMemoryPlugin,
 } from "./plugin.ts";
 import { type MemoryKindDefinition, memorySourceKey } from "./ontology.ts";
 import type { MemoryEmbed } from "./types.ts";
 
-const agent: Agent = {
+const agent: AgentResource = {
   id: "north",
   name: "North",
   role: "assistant",
   instructions: "Preserve durable meaning and provenance.",
-  runtime: { provider: "openai", model: "contract-model" },
+  models: { generate: "contractModel" },
 };
 
-const usage: TokenUsage = {
+const usage: LlmUsage = {
   inputTokens: 1,
   outputTokens: 1,
   totalTokens: 2,
-  source: "provider",
-  status: "completed",
 };
 
-type Responder = (request: ChatRequest, index: number) => ChatResponse;
+type Responder = (
+  request: LlmAdapterCallInput,
+  index: number,
+) => LlmAdapterResult;
 
 type Fixture = Readonly<{
   db: TestDatabase;
   engine: CopilotzEngine;
-  requests: ChatRequest[];
+  requests: LlmAdapterCallInput[];
 }>;
 
 type FixtureOptions = Readonly<{
-  agent?: Agent;
+  agent?: AgentResource;
   memoryEnabled?: boolean;
   embed?: MemoryEmbed | false;
   /** Install core text/ask processors. Default is semantic Collections only. */
   withTextWorkflow?: boolean;
+  wrapSession?: (session: SqlSession) => SqlSession;
 }>;
 
 Deno.test("memory plugin exposes final maps and detached reservation", () => {
-  const plugin = createLongTermMemoryPlugin();
+  const plugin = createLongTermMemoryPlugin({ model: "contractModel" });
   assertEquals(Object.keys(plugin.collections).sort(), [
     "longTermMemory",
     "memoryRecord",
@@ -91,6 +99,9 @@ Deno.test("memory plugin exposes final maps and detached reservation", () => {
     "setMemoryStatus",
   ]);
   assertEquals(plugin.adapters.memoryEmbedding, {});
+  assertEquals(plugin.plugins, [llmPlugin]);
+  assertEquals("models" in plugin.resources, false);
+  assertEquals("llm" in plugin.adapters, false);
   const processors = Object.values(plugin.processors);
   const reservation = processors.find((processor) =>
     processor.id === "copilotz.memory.reserve"
@@ -99,29 +110,51 @@ Deno.test("memory plugin exposes final maps and detached reservation", () => {
   assertEquals(reservation.settlement, "detached");
 });
 
+Deno.test("memory plugin requires an explicit Model Resource alias", () => {
+  assertThrows(
+    () => createLongTermMemoryPlugin({} as never),
+    TypeError,
+    "Memory LLM model alias",
+  );
+});
+
+Deno.test("disabled memory defers its Model alias requirement", async () => {
+  const plugin = createLongTermMemoryPlugin({ enabled: false });
+  assertEquals(plugin.processors, {});
+  await assertRejects(
+    async () =>
+      await plugin.actions.maintainMemory.execute({
+        checkpointId: "checkpoint-disabled",
+        sourceEvent: {} as never,
+      }, {} as never),
+    TypeError,
+    "Memory LLM model alias",
+  );
+});
+
 function response(
-  request: ChatRequest,
-  toolCalls?: ChatResponse["toolCalls"],
+  _request: LlmAdapterCallInput,
+  toolCalls?: readonly LlmToolCall[],
   answer = "",
-): ChatResponse {
+): LlmAdapterResult {
   return {
-    prompt: request.messages,
-    answer,
+    content: answer ? answer : [],
     toolCalls,
-    tokens: 2,
-    usage,
-    provider: "openai",
-    model: "contract-model",
+    attempts: [{
+      status: "completed",
+      usage,
+      finishReason: toolCalls?.length ? "tool_calls" : "stop",
+    }],
     finishReason: toolCalls?.length ? "tool_calls" : "stop",
   };
 }
 
 function call(id: string, args: unknown, toolId = "consolidate_memory") {
-  return {
+  return Object.freeze({
     id,
-    tool: { id: toolId, name: toolId },
-    args: JSON.stringify(args),
-  };
+    action: toolId,
+    input: structuredClone(args) as LlmJsonObject,
+  });
 }
 
 async function createFixture(
@@ -132,28 +165,41 @@ async function createFixture(
   let stage = "database";
   try {
     const db = await createTestDatabase({ url: ":memory:" });
-    const requests: ChatRequest[] = [];
-    const chat: LlmChat = (request) => {
-      const index = requests.length;
-      requests.push(request);
-      return Promise.resolve(responder(request, index));
+    const requests: LlmAdapterCallInput[] = [];
+    const llm: LlmAdapter = {
+      call(request) {
+        const index = requests.length;
+        requests.push(request);
+        return Object.freeze({
+          frames: new ReadableStream({
+            start(controller) {
+              controller.close();
+            },
+          }),
+          result: Promise.resolve().then(() => responder(request, index)),
+        });
+      },
     };
-    const provider = defineLlmProviderResource({
-      id: "openai",
-      type: "llm",
-      generate: generateFromChat(chat),
-    });
     const configuredAgent = options.agent ?? agent;
     const resources = definePlugin({
       id: "test.memory.resources",
       version: "1.0.0",
-      resources: { agents: { [configuredAgent.id]: configuredAgent } },
-      adapters: { llm: { [provider.id]: provider } },
+      resources: {
+        agents: { [configuredAgent.id]: configuredAgent },
+        models: {
+          contractModel: {
+            adapter: "contract",
+            model: "contract-model",
+          },
+        },
+      },
+      adapters: { llm: { contract: llm } },
     });
     stage = "registry";
     const registry = await createPluginRegistry({
       plugins: [
         createLongTermMemoryPlugin({
+          model: "contractModel",
           enabled: options.memoryEnabled,
           config: {
             triggerEstimatedTokens: 1,
@@ -172,8 +218,9 @@ async function createFixture(
       ],
     });
     stage = "engine";
+    const baseSession = createSqlSession(db);
     const engine = await createCopilotzEngine({
-      session: createSqlSession(db),
+      session: options.wrapSession?.(baseSession) ?? baseSession,
       registry,
       defaultDatabaseSchema: `memory_${
         crypto.randomUUID().replaceAll("-", "")
@@ -256,7 +303,7 @@ async function trigger(fixture: Fixture, suffix = "a") {
 
 async function waitForCheckpoint(
   fixture: Fixture,
-  status: "ready" | "failed",
+  status: "ready" | "failed" | "cancelled",
   sequence = 1,
 ) {
   const scoped = fixture.engine.collections.withScope({
@@ -441,6 +488,16 @@ Deno.test("native consolidation uses one internal tool grant and emits no public
       "invoked",
       "completed",
     ]);
+    const llm = await projectActionEvents(
+      fixture.engine,
+      "tenant-a",
+      LLM_CALL_ACTION_ID,
+    );
+    assertEquals(llm.map((event) => event.status), ["invoked", "completed"]);
+    assertEquals(record(llm[0].metadata).schema, "copilotz.memory.llm-call.v1");
+    assertEquals(record(llm[0].input).model, "contractModel");
+    assertEquals(record(record(llm[1]).output).adapter, "contract");
+    assertEquals(record(record(llm[1]).output).providerModel, "contract-model");
     const messages = await projectMessages(
       fixture.engine,
       "tenant-a",
@@ -451,9 +508,9 @@ Deno.test("native consolidation uses one internal tool grant and emits no public
       "message-user-a",
       "message-agent-a",
     ]);
-    assertEquals(fixture.requests[0].tools?.length, 1);
+    assertEquals(fixture.requests[0].request.tools?.length, 1);
     assertStringIncludes(
-      JSON.stringify(fixture.requests[0].messages),
+      JSON.stringify(fixture.requests[0].request.messages),
       "Internal memory maintenance",
     );
   } finally {
@@ -494,7 +551,7 @@ Deno.test("a missing consolidation call receives one bounded internal repair", a
     await waitForCheckpoint(fixture, "ready");
     assertEquals(fixture.requests.length, 2);
     assertStringIncludes(
-      JSON.stringify(fixture.requests[1].messages),
+      JSON.stringify(fixture.requests[1].request.messages),
       "did not call consolidate_memory",
     );
     const messages = await projectMessages(
@@ -509,19 +566,10 @@ Deno.test("a missing consolidation call receives one bounded internal repair", a
   }
 });
 
-Deno.test("invalid arguments use ordinary tool validation and then repair", async () => {
+Deno.test("invalid tool input receives one bounded contract repair", async () => {
   const fixture = await createFixture((request, index) =>
     index === 0
-      ? response(request, [call("invalid", {
-        outcome: "changes",
-        entities: [{
-          localId: "bad",
-          kind: "entity.project",
-          summary: "Unauthorized evidence",
-          name: "Bad",
-          sources: [{ type: "message", id: "outside-range" }],
-        }],
-      })])
+      ? response(request, [call("invalid", { entities: [] })])
       : response(request, [call("valid", { outcome: "no_changes" })])
   );
   try {
@@ -531,31 +579,57 @@ Deno.test("invalid arguments use ordinary tool validation and then repair", asyn
     const maintenance = await waitForMaintenanceSettlement(fixture);
     assertEquals(maintenance.map((event) => event.status), ["completed"]);
     assertStringIncludes(
-      JSON.stringify(fixture.requests[1].messages),
-      "unauthorized evidence source",
+      JSON.stringify(fixture.requests[1].request.messages),
+      "consolidate_memory input is invalid",
     );
   } finally {
     await close(fixture);
   }
 });
 
-Deno.test("multiple or unauthorized calls are rejected before any tool mutation", async () => {
+Deno.test("an unauthorized tool call receives one bounded contract repair", async () => {
   const fixture = await createFixture((request, index) =>
     index === 0
-      ? response(request, [
-        call("one", { outcome: "no_changes" }),
-        call("two", {}, "terminal"),
-      ])
+      ? response(request, [call("unauthorized", {}, "terminal")])
       : response(request, [call("repair", { outcome: "no_changes" })])
   );
   try {
     await trigger(fixture);
     await waitForCheckpoint(fixture, "ready");
+    assertEquals(fixture.requests.length, 2);
     const maintenance = await waitForMaintenanceSettlement(fixture);
     assertEquals(maintenance.map((event) => event.status), ["completed"]);
-    assertEquals(fixture.requests[0].tools?.map((tool) => tool.function.name), [
+    assertEquals(fixture.requests[0].request.tools?.map((tool) => tool.name), [
       "consolidate_memory",
     ]);
+  } finally {
+    await close(fixture);
+  }
+});
+
+Deno.test("semantic consolidation errors propagate without another LLM call", async () => {
+  const fixture = await createFixture((request) =>
+    response(request, [call("invalid-semantics", {
+      outcome: "changes",
+      entities: [{
+        localId: "bad",
+        kind: "entity.project",
+        summary: "Unauthorized evidence",
+        name: "Bad",
+        sources: [{ type: "message", id: "outside-range" }],
+      }],
+    })])
+  );
+  try {
+    await trigger(fixture);
+    const checkpoint = await waitForCheckpoint(fixture, "failed");
+    assertEquals(fixture.requests.length, 1);
+    assertStringIncludes(
+      String(record(checkpoint.error).message),
+      "unauthorized evidence source",
+    );
+    const maintenance = await waitForMaintenanceSettlement(fixture);
+    assertEquals(maintenance.map((event) => event.status), ["failed"]);
   } finally {
     await close(fixture);
   }
@@ -632,15 +706,17 @@ Deno.test("frozen application evidence is captured once and reused across repair
     assertEquals(captures, 1);
     assertEquals(Array.isArray(checkpoint.contextSnapshot), true);
     assertStringIncludes(
-      JSON.stringify(fixture.requests[0].messages),
+      JSON.stringify(fixture.requests[0].request.messages),
       "frozen version 1",
     );
     assertStringIncludes(
-      JSON.stringify(fixture.requests[1].messages),
+      JSON.stringify(fixture.requests[1].request.messages),
       "frozen version 1",
     );
     assertEquals(
-      JSON.stringify(fixture.requests[1].messages).includes("frozen version 2"),
+      JSON.stringify(fixture.requests[1].request.messages).includes(
+        "frozen version 2",
+      ),
       false,
     );
     const recordValue =
@@ -765,15 +841,24 @@ Deno.test("corrections preserve temporal history and create explicit supersessio
   }
 });
 
-Deno.test("provider failure receives one internal repair without publishing an answer", async () => {
-  const fixture = await createFixture((request, index) => {
-    if (index === 0) throw new Error("temporary provider failure");
-    return response(request, [call("repair", { outcome: "no_changes" })]);
+Deno.test("a settled provider failure propagates without another LLM call", async () => {
+  const fixture = await createFixture(() => {
+    throw new Error("temporary provider failure");
   });
   try {
     await trigger(fixture);
-    await waitForCheckpoint(fixture, "ready");
-    assertEquals(fixture.requests.length, 2);
+    const checkpoint = await waitForCheckpoint(fixture, "failed");
+    assertEquals(fixture.requests.length, 1);
+    assertStringIncludes(
+      String(record(checkpoint.error).message),
+      "temporary provider failure",
+    );
+    const llm = await projectActionEvents(
+      fixture.engine,
+      "tenant-a",
+      LLM_CALL_ACTION_ID,
+    );
+    assertEquals(llm.map((event) => event.status), ["invoked", "failed"]);
     const messages = await projectMessages(
       fixture.engine,
       "tenant-a",
@@ -781,6 +866,97 @@ Deno.test("provider failure receives one internal repair without publishing an a
       { limit: 100 },
     );
     assertEquals(messages.length, 2);
+  } finally {
+    await close(fixture);
+  }
+});
+
+Deno.test("AbortError cancels the checkpoint without contract repair", async () => {
+  const fixture = await createFixture(() => {
+    throw new DOMException("provider call aborted", "AbortError");
+  });
+  try {
+    await trigger(fixture);
+    const checkpoint = await waitForCheckpoint(fixture, "cancelled");
+    assertEquals(fixture.requests.length, 1);
+    assertEquals(record(checkpoint.error).name, "AbortError");
+    const llm = await projectActionEvents(
+      fixture.engine,
+      "tenant-a",
+      LLM_CALL_ACTION_ID,
+    );
+    assertEquals(llm.map((event) => event.status), ["invoked", "cancelled"]);
+    const maintenance = await waitForMaintenanceSettlement(fixture);
+    assertEquals(maintenance.map((event) => event.status), ["cancelled"]);
+  } finally {
+    await close(fixture);
+  }
+});
+
+Deno.test("delivery retry settles a checkpoint from its durable cancelled Action", async () => {
+  let settlementInterruptions = 0;
+  let cancellationReachedProvider = false;
+  const fixture = await createFixture(
+    () => {
+      cancellationReachedProvider = true;
+      throw new DOMException("provider call aborted", "AbortError");
+    },
+    [],
+    {
+      wrapSession(session) {
+        return {
+          query: session.query,
+          transaction(operation) {
+            return session.transaction((transaction) => {
+              const query: SqlExecutor["query"] = (sql, params) => {
+                const eventBody = params?.[3];
+                if (
+                  cancellationReachedProvider &&
+                  settlementInterruptions === 0 &&
+                  typeof eventBody === "string" &&
+                  eventBody.includes('"operation":"update"') &&
+                  eventBody.includes('"id":"memory:thread-a:north:1"') &&
+                  eventBody.includes('"status":"cancelled"')
+                ) {
+                  settlementInterruptions++;
+                  throw new Error(
+                    "injected interruption after durable Action cancellation",
+                  );
+                }
+                return transaction.query(sql, params);
+              };
+              return operation({ query });
+            });
+          },
+        };
+      },
+    },
+  );
+  try {
+    await trigger(fixture);
+    const checkpoint = await waitForCheckpoint(fixture, "cancelled");
+    assertEquals(record(checkpoint.error).name, "AbortError");
+    assertEquals(settlementInterruptions, 1);
+    assertEquals(fixture.requests.length, 1);
+
+    const maintenance = await projectActionEvents(
+      fixture.engine,
+      "tenant-a",
+      "copilotz.memory.maintenance.run",
+    );
+    assertEquals(maintenance.map((event) => event.status), [
+      "invoked",
+      "cancelled",
+    ]);
+    const deliveries = await fixture.engine.deliveries.list({
+      namespace: "tenant-a",
+    });
+    const preparation = deliveries.find((delivery) =>
+      delivery.consumerId === "processor:copilotz.memory.prepare-attempt"
+    );
+    assertExists(preparation);
+    assertEquals(preparation.status, "succeeded");
+    assertEquals(preparation.attempts, 2);
   } finally {
     await close(fixture);
   }
@@ -818,7 +994,7 @@ Deno.test("failed context capture retries before provider execution and freezes 
     assertEquals(captures, 2);
     assertEquals(fixture.requests.length, 1);
     assertStringIncludes(
-      JSON.stringify(fixture.requests[0].messages),
+      JSON.stringify(fixture.requests[0].request.messages),
       "captured version 2",
     );
     assertEquals(Array.isArray(checkpoint.contextSnapshot), true);
@@ -966,7 +1142,7 @@ Deno.test("ambiguous lifecycle matches remain unresolved without mutating histor
   }
 });
 
-Deno.test("overridden memory-kind schemas use ordinary tool failure and repair", async () => {
+Deno.test("memory-kind validation failures propagate without LLM repair", async () => {
   const kind: MemoryKindDefinition = {
     id: "entity.project",
     form: "entity",
@@ -983,41 +1159,40 @@ Deno.test("overridden memory-kind schemas use ordinary tool failure and repair",
     resources: { memoryKinds: { [kind.id]: kind } },
   });
   const fixture = await createFixture(
-    (request, index) =>
-      index === 0
-        ? response(request, [call("invalid-kind", {
-          outcome: "changes",
-          entities: [{
-            localId: "project",
-            kind: "entity.project",
-            summary: "The project has a non-canonical name.",
-            name: "Other",
-            sources: [{ type: "message", id: "message-agent-a" }],
-          }],
-        })])
-        : response(request, [call("repair", { outcome: "no_changes" })]),
+    (request) =>
+      response(request, [call("invalid-kind", {
+        outcome: "changes",
+        entities: [{
+          localId: "project",
+          kind: "entity.project",
+          summary: "The project has a non-canonical name.",
+          name: "Other",
+          sources: [{ type: "message", id: "message-agent-a" }],
+        }],
+      })]),
     [plugin],
   );
   try {
     await trigger(fixture);
-    await waitForCheckpoint(fixture, "ready");
+    const checkpoint = await waitForCheckpoint(fixture, "failed");
+    assertEquals(fixture.requests.length, 1);
     assertStringIncludes(
-      JSON.stringify(fixture.requests[0].messages),
+      JSON.stringify(fixture.requests[0].request.messages),
       "A Compass project with a canonical name.",
     );
     assertStringIncludes(
-      JSON.stringify(fixture.requests[1].messages),
+      String(record(checkpoint.error).message),
       "does not satisfy kind 'entity.project'",
     );
     const maintenance = await waitForMaintenanceSettlement(fixture);
-    assertEquals(maintenance.map((event) => event.status), ["completed"]);
+    assertEquals(maintenance.map((event) => event.status), ["failed"]);
   } finally {
     await close(fixture);
   }
 });
 
 Deno.test("memory query tools enforce thread access, explain provenance, and preserve retracted history", async () => {
-  const queryAgent: Agent = {
+  const queryAgent: AgentResource = {
     ...agent,
     capabilities: {
       tools: [

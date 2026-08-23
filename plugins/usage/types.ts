@@ -54,6 +54,12 @@ export interface UsageEvent {
   resource: string;
   /** Vendor/provider name when applicable (e.g. "openai", "anthropic"). */
   provider?: string | null;
+  /** Selected Model Resource alias for an LLM call. */
+  model?: string | null;
+  /** Selected LLM Adapter alias for an LLM call. */
+  adapter?: string | null;
+  /** Provider-specific model identifier selected by the Model Resource. */
+  providerModel?: string | null;
   /** Operation performed, e.g. "chat", "embed", "tool.exec". */
   operation?: string | null;
   /** Terminal status of the operation. */
@@ -62,7 +68,8 @@ export interface UsageEvent {
   statusReason?: string | null;
 
   // Scope / attribution (stored flat for cheap grouping + filtering).
-  threadId: string;
+  /** Semantic thread attribution, when supplied by the invoking plugin. */
+  threadId: string | null;
   eventId?: string | null;
   messageId?: string | null;
   /** Generating participant (the agent that performed the operation). */
@@ -101,14 +108,9 @@ export const METRIC_DESCRIPTORS: Record<string, MetricDescriptor> = {
   inputTokens: { unit: "tokens", label: "Input tokens", kind: "llm" },
   outputTokens: { unit: "tokens", label: "Output tokens", kind: "llm" },
   reasoningTokens: { unit: "tokens", label: "Reasoning tokens", kind: "llm" },
-  cacheReadInputTokens: {
+  cachedInputTokens: {
     unit: "tokens",
-    label: "Cache read input tokens",
-    kind: "llm",
-  },
-  cacheCreationInputTokens: {
-    unit: "tokens",
-    label: "Cache creation input tokens",
+    label: "Cached input tokens",
     kind: "llm",
   },
   totalTokens: { unit: "tokens", label: "Total tokens", kind: "llm" },
@@ -121,9 +123,9 @@ export const METRIC_DESCRIPTORS: Record<string, MetricDescriptor> = {
 
 /**
  * Context handed to a {@link UsageResolveCost} hook. `source` carries the
- * originating payload (the LLM usage attempt, tool execution result, ...) so
- * callers can price based on it; `defaultResolve` returns the framework's
- * built-in estimate (OpenRouter LLM pricing) so user code can compose with it.
+ * originating lifecycle payload so callers can price based on it;
+ * `defaultResolve` returns the cost already reported by the originating
+ * capability, when present, so user code can compose with it.
  */
 export interface UsageResolveCostContext {
   source: unknown;
@@ -156,8 +158,8 @@ export interface UsageOptions {
   enabled?: boolean;
   /**
    * Resolve cost for a metered event. The native LLM path already supplies a
-   * cost computed from OpenRouter pricing; override here to price tools/assets
-   * or to adjust LLM pricing (e.g. markups, negotiated rates).
+   * cost reported by `llm.call`; override here to price tools/assets or to
+   * adjust LLM pricing (e.g. markups or negotiated rates).
    */
   resolveCost?: UsageResolveCost;
   /** Optional final veto/transform before the ledger row is written. */

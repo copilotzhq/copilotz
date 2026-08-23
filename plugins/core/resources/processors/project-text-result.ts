@@ -1,82 +1,88 @@
 import type { CollectionRecord } from "@copilotz/copilotz/collections";
-import type { ContentRef } from "@copilotz/copilotz/content";
+import { deriveWorkflowId } from "@copilotz/copilotz/events";
 import {
-  agentAskMetadata,
-  deriveWorkflowId,
-  textWorkflowAttemptEventMetadata,
+  CORE_LLM_CALL_METADATA_SCHEMA,
+  coreLlmCallMetadata,
   withAgentAskMetadata,
   withWorkflowMetadata,
-} from "@copilotz/copilotz/events";
+} from "../../internal/workflow-metadata.ts";
+import type {
+  LlmCallOutput,
+  LlmJsonObject,
+  LlmToolCall,
+} from "@copilotz/copilotz/llm";
 import { defineProcessor, type Processor } from "@copilotz/copilotz/plugins";
-import { requireAgent } from "@copilotz/copilotz/agents";
-import type { ToolInvocation } from "@copilotz/copilotz/llm";
-import { createWorkflowPipelineMetadata } from "@copilotz/copilotz/tools";
 import {
+  coreAgent,
   type CoreProcessorContext,
   coreWorkflowContext,
 } from "../../context.ts";
 import {
   asRecord,
   loadParticipant,
-  optionalText,
-  parseJsonText,
-  recordThreadId,
-  requiredText,
-  resolvedValue,
-  stringArray,
   toolCatalogFor,
   valueContent,
 } from "./helpers.ts";
 
-async function toolCallsFromAttempt(
-  context: CoreProcessorContext,
-  output: Record<string, unknown>,
-): Promise<readonly ToolInvocation[]> {
-  const refs = Array.isArray(output.toolCalls)
-    ? output.toolCalls as readonly ContentRef[]
-    : [];
-  const ref = refs[0];
-  if (!ref) return Object.freeze([]);
-  const resolved = await context.content.resolve(ref);
-  const value = resolvedValue(resolved);
-  return Object.freeze(Array.isArray(value) ? value as ToolInvocation[] : []);
+function llmOutput(value: unknown): LlmCallOutput {
+  const output = asRecord(value);
+  if (
+    typeof output.model !== "string" || typeof output.adapter !== "string" ||
+    typeof output.providerModel !== "string" || !Array.isArray(output.content)
+  ) throw new TypeError("llm.call completed without a valid settled output.");
+  return output as LlmCallOutput;
+}
+
+function legacyInvocation(
+  call: LlmToolCall,
+  name: string,
+): Readonly<Record<string, unknown>> {
+  return Object.freeze({
+    id: call.id,
+    tool: Object.freeze({ id: call.action, name }),
+    args: JSON.stringify(call.input),
+  });
 }
 
 export const projectTextResultProcessor: Processor<CoreProcessorContext> =
   defineProcessor<CoreProcessorContext>({
-    id: "copilotz.core.project-text-result",
-    on: [
-      { eventType: "copilotz.core.llm.generate.completed" },
-      { eventType: "copilotz.core.llm.session.completed" },
-    ],
+    id: "copilotz.core.project-llm-result",
+    on: [{
+      eventType: "llm.call.completed",
+      data: {
+        status: "completed",
+        metadata: { schema: CORE_LLM_CALL_METADATA_SCHEMA },
+      },
+    }],
     async handle(event, context) {
-      const workflowContext = coreWorkflowContext(context);
       const lifecycle = asRecord(event.data);
-      const input = asRecord(lifecycle.input);
-      const output = asRecord(lifecycle.output);
-      if (output.status === "coalesced") return;
-      const attempt = { ...input, ...output } as CollectionRecord;
-      if (!textWorkflowAttemptEventMetadata(asRecord(attempt.metadata))) return;
-      const participant = optionalText(attempt.participantId)
-        ? await loadParticipant(context, optionalText(attempt.participantId)!)
-        : null;
+      const metadata = coreLlmCallMetadata(lifecycle.metadata);
+      if (!metadata) return;
+      const actionRunId = String(lifecycle.actionRunId ?? "").trim();
+      if (!actionRunId) throw new Error("llm.call lifecycle has no run ID.");
+      const output = llmOutput(lifecycle.output);
+      const participant = await loadParticipant(
+        context,
+        metadata.agentParticipantId,
+      );
       if (!participant || participant.participantType !== "agent") {
         throw new Error(
-          `LLM attempt '${attempt.id}' has no agent participant.`,
+          `LLM call '${actionRunId}' has no agent participant.`,
         );
       }
-      const toolCalls = await toolCallsFromAttempt(context, output);
-      const activeAsk = agentAskMetadata(attempt.metadata);
-      const outputAsk = activeAsk
+      const toolCalls = Object.freeze(
+        structuredClone(output.toolCalls ?? []) as readonly LlmToolCall[],
+      );
+      const outputAsk = metadata.ask
         ? Object.freeze({
-          ...activeAsk,
+          ...metadata.ask,
           phase: toolCalls.length ? "progress" as const : "answer" as const,
-          answerAttemptId: attempt.id,
+          answerAttemptId: actionRunId,
         })
         : null;
       const semanticOutputMetadata = {
         llmToolCalls: toolCalls,
-        ...(Array.isArray(output.reasoning)
+        ...(output.reasoning
           ? { llmReasoning: structuredClone(output.reasoning) }
           : {}),
       };
@@ -86,105 +92,100 @@ export const projectTextResultProcessor: Processor<CoreProcessorContext> =
           : semanticOutputMetadata,
         {
           kind: "agent_output",
-          llmAttemptId: attempt.id,
+          llmAttemptId: actionRunId,
+          parentLlmAttemptId: metadata.parentActionRunId,
+          sourceMessageId: metadata.triggerMessageId,
           agentParticipantId: participant.id,
         },
       );
       const outputMessage = await context.actions.createThreadMessage({
-        id: await deriveWorkflowId("message", attempt.id, "output"),
-        threadId: recordThreadId(attempt),
+        id: await deriveWorkflowId("message", actionRunId, "output"),
+        threadId: metadata.threadId,
         sender: participant,
         recipientIds: [],
-        content: Array.isArray(output.answer) ? output.answer : [],
+        content: output.content,
         visibility: { kind: "public" },
         metadata: messageMetadata,
       }, {
         operationKey: "project:agent-message",
       }) as CollectionRecord;
-      const outputMessageId = String(outputMessage.id);
       if (!toolCalls.length) return;
 
-      const agent = requireAgent(
-        workflowContext,
-        requiredText(optionalText(attempt.agentId), "LLM attempt agent id"),
-      );
-      const toolCatalog = toolCatalogFor(agent);
-      const granted = new Set(stringArray(attempt.availableToolIds));
-      const availableTools = (await toolCatalog.forAgent(
-        workflowContext,
+      const agent = coreAgent(context.resources, metadata.agentId);
+      if (!agent) {
+        throw new Error(`Unknown agent resource '${metadata.agentId}'.`);
+      }
+      const availableTools = (await toolCatalogFor().forAgent(
+        coreWorkflowContext(context),
         agent,
-      )).filter((tool) => granted.has(tool.key));
+      )).filter((tool) => metadata.availableToolIds.includes(tool.key));
       const toolsByKey = new Map(
         availableTools.map((tool) => [tool.key, tool]),
       );
-
-      const batchId = attempt.id;
       const items = [];
       for (const [index, call] of toolCalls.entries()) {
-        const toolId = requiredText(call.tool?.id, "Tool call tool id");
-        const tool = toolsByKey.get(toolId);
-        const parsedArguments = typeof call.args === "string"
-          ? parseJsonText(call.args)
-          : call.args;
+        const tool = toolsByKey.get(call.action);
+        if (!tool) {
+          throw new Error(
+            `LLM call '${actionRunId}' requested unavailable tool '${call.action}'.`,
+          );
+        }
         const preparedArguments = await context.content.prepare(
-          valueContent(parsedArguments, "tool.arguments"),
+          valueContent(call.input as LlmJsonObject, "tool.arguments"),
           { operationKey: `project:tool:${call.id}:arguments` },
         );
         const argumentsContent = await context.content.materialize(
           preparedArguments,
         );
+        const invocation = legacyInvocation(call, tool.name);
         const executionMetadata = withWorkflowMetadata(
-          activeAsk ? withAgentAskMetadata(undefined, activeAsk) : undefined,
+          metadata.ask
+            ? withAgentAskMetadata(undefined, metadata.ask)
+            : undefined,
           {
             kind: "tool_action",
-            llmAttemptId: attempt.id,
-            parentLlmAttemptId: attempt.id,
+            llmAttemptId: actionRunId,
+            parentLlmAttemptId: actionRunId,
             toolCallId: call.id,
-            batchId,
+            batchId: actionRunId,
             batchSize: toolCalls.length,
             batchIndex: index,
-            ...(outputMessageId ? { sourceMessageId: outputMessageId } : {}),
+            sourceMessageId: String(outputMessage.id),
             agentParticipantId: participant.id,
-            ...(call.pipeline
-              ? { pipeline: createWorkflowPipelineMetadata(call.pipeline) }
-              : {}),
           },
         );
-        const toolName = typeof tool?.name === "string"
-          ? tool.name
-          : call.tool?.name ?? toolId;
         items.push({
-          id: await deriveWorkflowId("tool", attempt.id, call.id),
+          id: await deriveWorkflowId("tool", actionRunId, call.id),
           namespace: context.namespace,
-          threadId: recordThreadId(attempt),
-          ...(outputMessageId ? { messageId: outputMessageId } : {}),
+          threadId: metadata.threadId,
+          messageId: String(outputMessage.id),
           participantId: participant.id,
-          agentId: optionalText(attempt.agentId),
+          agentId: metadata.agentId,
           toolCallId: call.id,
-          invocation: structuredClone(call),
-          tool: { id: toolId, name: toolName },
+          invocation,
+          tool: { id: call.action, name: tool.name },
           arguments: argumentsContent,
-          availableToolIds: stringArray(attempt.availableToolIds),
+          availableToolIds: metadata.availableToolIds,
           status: "running",
           content: [],
           startedAt: event.createdAt,
           createdAt: event.createdAt,
           updatedAt: event.createdAt,
-          historyVisibility: tool?.historyPolicy?.visibility ?? "public_status",
+          historyVisibility: tool.historyPolicy?.visibility ?? "public_status",
           metadata: executionMetadata,
           sender: {
-            externalId: `tool:${toolId}`,
+            externalId: `tool:${call.action}`,
             participantType: "tool" as const,
-            name: toolName,
+            name: tool.name,
           },
           sourceEvent: event,
         });
       }
       await context.actions.executeToolBatch({
-        batchId,
+        batchId: actionRunId,
         items,
       }, {
-        operationKey: `project:tools:${attempt.id}:call-batch`,
+        operationKey: `project:tools:${actionRunId}:call-batch`,
         signal: context.signal,
       });
     },

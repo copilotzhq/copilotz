@@ -1,0 +1,655 @@
+/**
+ * Multimodal content parts accepted by providers.
+ *
+ * Provider notes:
+ * - Asset refs are materialized per provider attempt before adapter calls.
+ * - OpenAI/Groq: supports `text`, `image_url` (http(s) or data URL), and selected audio/file shapes by model.
+ * - Anthropic: supports `text` and images via URL or base64 data URL (mapped internally to Claude schema). System is text-only.
+ * - Gemini: supports `text` and inline_data derived from image/audio parts. Generic file inlining is intentionally conservative.
+ * - Ollama: accepts text and base64 images (we extract from data URLs into `images` array).
+ * - DeepSeek: text only (non-text parts are ignored).
+ * - MiniMax (Anthropic-compatible Messages API): supports `text`, `image`, and `video` (MiniMax-M3 only).
+ *   The `video` part carries a data URL, public URL, or `mm_file://{file_id}` reference.
+ */
+import type { TokenMediaMetadata } from "@copilotz/copilotz/tokens";
+import type { ChatTokenEstimate } from "./chat-tokens.ts";
+
+export type ChatContentPart =
+  | { type: "text"; text: string }
+  | {
+    type: "image_url";
+    image_url: {
+      url: string;
+      detail?: "low" | "high" | "original" | "auto";
+    };
+    tokenMetadata?: TokenMediaMetadata;
+  }
+  | {
+    type: "video";
+    video: { url: string; mime_type?: string };
+    tokenMetadata?: TokenMediaMetadata;
+  }
+  | {
+    type: "input_audio";
+    input_audio: { data: string; format?: string; filename?: string };
+    tokenMetadata?: TokenMediaMetadata;
+  }
+  | {
+    type: "file";
+    file: { file_data: string; mime_type?: string; filename?: string };
+    tokenMetadata?: TokenMediaMetadata;
+  };
+
+export interface ChatMessage {
+  role: "system" | "user" | "assistant" | "tool" | "tool_result";
+  /**
+   * Either a plain text string or an array of multimodal parts.
+   *
+   * Examples:
+   * - "Explain this image"
+   * - [ { type: 'text', text: 'Describe this:' }, { type: 'image_url', image_url: { url: 'https://...' } } ]
+   * - [ { type: 'input_audio', input_audio: { data: '<base64>', format: 'wav' } } ]
+   */
+  content: string | ChatContentPart[];
+  /** Internal sender identity used for history-aware message normalization. */
+  senderId?: string;
+  /** Internal metadata used to reconstruct hidden control blocks for model-facing history. */
+  metadata?: Record<string, unknown>;
+  tool_call_id?: string;
+  // Prefer passing tool calls explicitly for assistant messages
+  toolCalls?: ToolInvocation[];
+  /**
+   * Persisted reasoning materialized as `<think>` during wire
+   * composition. Not sent to providers until {@link formatMessages} runs.
+   */
+  reasoning?: string;
+  /** Character cap when materializing {@link reasoning}. */
+  reasoningMaxEstimatedTokens?: number;
+}
+
+/**
+ * Provider-facing message after Copilotz materializes its text protocol.
+ *
+ * Tool execution remains represented as `tool`/`tool_result` internally, but
+ * results are external input to the model and are lowered to `user` turns
+ * before provider adapters receive the transcript.
+ */
+export type WireChatMessage =
+  & Omit<ChatMessage, "role">
+  & { role: "system" | "user" | "assistant" };
+
+export type ProviderFallbackReason =
+  | "timeout"
+  | "network"
+  | "auth_error"
+  | "billing_error"
+  | "rate_limit"
+  | "server_error"
+  | "provider_error"
+  | "invalid_transcript"
+  | "unknown";
+
+export type LLMCredentialSource =
+  | "connected_account"
+  | "service_api_key"
+  | "environment"
+  | "explicit";
+
+/**
+ * Opt-in, runtime-only provider-attempt diagnostics. These fields are safe to
+ * log and are removed by `toLLMConfig` before configuration is persisted.
+ */
+export interface LLMRuntimeDiagnostics {
+  enabled?: boolean;
+  credentialSource?: LLMCredentialSource;
+}
+
+export type ToolSystemPromptVariant =
+  | "baseline"
+  | "no-visible-ack"
+  | "tool-only-turn"
+  | "useful-visible-contract"
+  | "tool-call-contract"
+  | "lifecycle-explicit"
+  | "strict-minimal";
+
+export interface ProviderConfigBase {
+  // Provider selection
+  provider?: ProviderName;
+  apiKey?: string;
+  runtimeDiagnostics?: LLMRuntimeDiagnostics;
+  /** Explicit prompt protocol selection; defaults to the useful-visible contract. */
+  toolSystemPromptVariant?: ToolSystemPromptVariant;
+
+  // Model configuration
+  model?: string;
+  temperature?: number;
+
+  // Token limits
+  maxTokens?: number;
+  maxCompletionTokens?: number;
+  /** Calibrated estimated input budget; history is removed at whole-message boundaries. */
+  limitEstimatedInputTokens?: number;
+
+  // Response format
+  responseType?: "text" | "json";
+  stream?: boolean;
+  /** Abort a provider attempt if no model stream activity arrives before this many milliseconds. Defaults to 90_000. Set <= 0 to disable. */
+  firstTokenTimeoutMs?: number;
+  /** Abort a provider attempt if model stream activity stalls for this many milliseconds after the first activity. Defaults to 120_000. Set <= 0 to disable. */
+  streamIdleTimeoutMs?: number;
+  /** Abort one provider attempt after this absolute duration even while reasoning/activity continues. Defaults to 1_800_000. Set <= 0 to disable. */
+  attemptTimeoutMs?: number;
+  /** Bound the complete logical chat, including retries, fallbacks, and routing correction. Defaults to 3_600_000. Set <= 0 to disable. */
+  totalTimeoutMs?: number;
+  outputReasoning?: boolean; // Whether to output thinking/reasoning tokens during stream (default true)
+  estimateCost?: boolean; // Whether to estimate cost using OpenRouter pricing data (default true)
+  pricingModelId?: string; // Explicit OpenRouter model id override for cost estimation
+  // Advanced sampling parameters
+  topP?: number;
+  topK?: number;
+  presencePenalty?: number;
+  frequencyPenalty?: number;
+
+  // Stop sequences
+  stop?: string | string[];
+  stopSequences?: string[];
+  /**
+   * Internal, runtime-resolved stop sequences forwarded to providers that
+   * support native stop handling (Anthropic, Gemini, MiniMax).
+   *
+   * Set by {@link runProviderStream} to the merged client-side stop set
+   * (user `stop`/`stopSequences` plus Copilotz control tags like
+   * `<tool_results>`), so providers can halt generation server-side in
+   * addition to the always-on client-side enforcement. Not part of the
+   * public config surface; callers should use `stop`/`stopSequences`.
+   */
+  nativeStopSequences?: string[];
+
+  // Randomization
+  seed?: number;
+
+  /* Provider-specific parameters */
+
+  // Custom base URL (Ollama, self-hosted)
+  baseUrl?: string; // Custom base URL (Ollama, self-hosted)
+  /** Extra headers merged into every provider request (e.g., ChatGPT-Account-ID for subscription OAuth). */
+  extraHeaders?: Record<string, string>;
+
+  // Gemini-specific parameters
+  candidateCount?: number; // Gemini
+  responseMimeType?: string; // Gemini JSON format
+  /**
+   * Merged into `generationConfig.thinkingConfig` when streaming thoughts is enabled.
+   * Use `includeThoughts: false` to disable even on thinking-capable models.
+   * Use `includeThoughts: true` to force-enable on models you know support thinking.
+   *
+   * @see https://ai.google.dev/api/generate-content#ThinkingConfig
+   */
+  geminiThinkingConfig?: {
+    includeThoughts?: boolean;
+    thinkingBudget?: number;
+    thinkingLevel?: string;
+  };
+
+  // Ollama-specific parameters
+  repeatPenalty?: number; // Ollama
+  numCtx?: number; // Ollama context window
+
+  // Anthropic-specific parameters
+  metadata?: Record<string, any>; // Anthropic
+
+  /**
+   * Unified reasoning effort across providers. Each provider maps this to its native param:
+   * - OpenAI: `reasoning_effort`
+   * - Gemini 3.x: `thinkingConfig.thinkingLevel`
+   * - Anthropic legacy models: `thinking.budget_tokens` (approximate mapping)
+   * - Anthropic adaptive-thinking models: `thinking.type="adaptive"` plus
+   *   `output_config.effort`
+   *
+   * Provider-specific overrides (geminiThinkingConfig, etc.) take precedence when set.
+   */
+  reasoningEffort?: "minimal" | "low" | "medium" | "high";
+
+  // OpenAI-specific parameters
+  user?: string; // OpenAI user identifier
+  /** OpenAI transport selection. Defaults to `auto`: Responses API for current supported families, Chat Completions otherwise. */
+  openaiApi?: "auto" | "responses" | "chat_completions";
+  /** OpenAI Responses reasoning summary mode. Defaults to `auto` for reasoning-capable Responses models; set false to omit. */
+  openaiReasoningSummary?: "auto" | "concise" | "detailed" | false;
+  verbosity?: "none" | "low" | "medium" | "high"; // OpenAI reasoning models (o3, o4)
+}
+
+export type LLMConfigBase = Omit<
+  ProviderConfigBase,
+  "apiKey" | "runtimeDiagnostics"
+>;
+
+export type LLMFallbackConfig =
+  & Omit<LLMConfigBase, "provider">
+  & { provider: ProviderName };
+
+/** Persisted LLM configuration that omits secret API keys. */
+export interface LLMConfig extends LLMConfigBase {
+  /** Ordered fallback models/providers to try when the primary attempt fails before any visible streaming output. */
+  fallbacks?: LLMFallbackConfig[];
+}
+
+export type ProviderFallbackConfig =
+  & Omit<ProviderConfigBase, "provider">
+  & { provider: ProviderName };
+
+// Comprehensive configuration for AI providers with multimodal support
+export interface ProviderConfig extends ProviderConfigBase {
+  /** Ordered fallback models/providers to try when the primary attempt fails before any visible streaming output. */
+  fallbacks?: ProviderFallbackConfig[];
+}
+
+/** Runtime LLM provider configuration, including provider credentials. */
+export type LLMRuntimeConfig = ProviderConfig;
+
+// Tool definition for standardized tool calling
+export interface ToolDefinition {
+  type: "function";
+  function: {
+    name: string;
+    description: string;
+    /** Generated TypeScript types rendered in the agent tool catalog prompt. */
+    inputTypes: string;
+  };
+}
+
+// Input for chat requests with multimodal support
+export interface ChatRequest {
+  messages: ChatMessage[];
+  instructions?: string;
+  /** Stable caller-owned key that provider adapters may forward when supported. */
+  idempotencyKey?: string;
+  config?: ProviderConfig;
+  answer?: string; // For mock responses
+  tools?: ToolDefinition[]; // Tool definitions for standardized tool calling
+  tool_call_id?: string;
+  /**
+   * Custom XML-like block tags to extract and remove from assistant output.
+   * Example: ["think"] extracts `<think>...</think>`.
+   */
+  extractTags?: string[];
+  /**
+   * Optional late materialization hook for provider-attempt-specific message
+   * shaping. Used for asset refs so fallbacks do not inherit another
+   * provider's media/file wire format.
+   */
+  materializeMessages?: (
+    messages: ChatMessage[],
+    config: ProviderConfig,
+  ) => Promise<ChatMessage[]> | ChatMessage[];
+  /**
+   * Number of leading provider-ready messages expected to be reusable.
+   * Used only for content-free cache diagnostics.
+   */
+  debugPromptPrefixMessageCount?: number;
+  /**
+   * Controls whether reasoning from an interrupted/recovered same-agent attempt
+   * is included in the synthetic retry context. Defaults to the framework
+   * history policy: `{ include: "self", maxEstimatedTokens: 750 }`.
+   */
+  reasoningHistory?: {
+    include?: "none" | "self" | "all";
+    maxEstimatedTokens?: number;
+  };
+  /**
+   * Internal durable checkpoint used only when a logical LLM event is replayed
+   * after losing its in-memory provider attempt.
+   */
+  continuation?: {
+    partialAnswer?: string;
+    partialReasoning?: string;
+    reason?: TokenUsageStatusReason;
+  };
+  /** Internal durable recovery state propagated by persisted recovery cues. */
+  durableRecovery?: {
+    enabled: true;
+    chainId?: string;
+    count?: number;
+    providerIndex?: number;
+  };
+  /** Optional external signal for cancelling active provider work. */
+  signal?: AbortSignal;
+  /**
+   * Internal absolute deadline shared by multiple `chat()` calls that belong
+   * to one logical run (for example a routing correction).
+   */
+  deadlineAt?: number;
+  /**
+   * Internal stream-only hook for canonical tool-call JSON drafts. Drafts are
+   * never persisted and may be discarded when a provider attempt is retried.
+   */
+  onToolCallDelta?: (delta: ToolCallStreamDelta) => void;
+}
+
+export type ToolCallStreamDeltaPhase =
+  | "start"
+  | "delta"
+  | "complete"
+  | "discarded";
+
+/** Internal canonical tool-call draft emitted while provider text is parsed. */
+export interface ToolCallStreamDelta {
+  providerAttemptId: string;
+  draftId: string;
+  callIndex: number;
+  sequence: number;
+  toolName: string;
+  phase: ToolCallStreamDeltaPhase;
+  delta: string;
+  toolCallId?: string;
+}
+
+export interface ToolPipelineToolStage {
+  type: "tool";
+  id: string;
+  tool: {
+    id: string;
+    name?: string;
+  };
+  args: string;
+}
+
+export interface ToolPipelineJqStage {
+  type: "jq";
+  filter: string;
+}
+
+export type ToolPipelineStage = ToolPipelineToolStage | ToolPipelineJqStage;
+
+export interface ToolPipeline {
+  id: string;
+  stages: ToolPipelineStage[];
+}
+
+// Unified Tool Invocation payload mapping executions end-to-end
+export interface ToolInvocation {
+  /** Framework-owned correlation ID. Model/provider-supplied IDs are ignored. */
+  id: string;
+  tool: {
+    id: string; // The programmatic tool key
+    name?: string; // Optional human-readable tool title
+  };
+  args: string; // JSON string of arguments
+  output?: unknown; // Present when the tool completes
+  status?:
+    | "pending"
+    | "processing"
+    | "completed"
+    | "failed"
+    | "expired"
+    | "overwritten";
+  // Internal batch aggregator metadata
+  batchId?: string | null;
+  batchSize?: number | null;
+  batchIndex?: number | null;
+  /** Internal sequential pipeline plan. Present only on the root tool call. */
+  pipeline?: ToolPipeline;
+}
+
+// Response from chat completions with media processing results
+export interface ChatResponse {
+  prompt: ChatMessage[];
+  answer: string;
+  reasoning?: string;
+  tokens: number;
+  finishReason?: ProviderFinishReason | null;
+  usage?: TokenUsage;
+  usageFinalized?: Promise<FinalizedTokenUsage | null>;
+  usageAttempts?: LLMUsageAttempt[];
+  cost?: CostBreakdown;
+  provider?: ProviderName;
+  model?: string;
+  toolCalls?: ToolInvocation[];
+  extractedTags?: Record<string, string[]>;
+  /** Internal instruction for the event runtime to persist and resume output. */
+  recovery?: {
+    reason: TokenUsageStatusReason;
+    cue: string;
+    answer: string;
+    reasoning?: string;
+    toolCalls?: ToolInvocation[];
+    joinSeparator: string;
+    nextProviderIndex: number;
+  };
+  debug?: LLMDebugSnapshot;
+  metadata?: {
+    provider?: ProviderName;
+    timestamp: string;
+    messageCount: number;
+  };
+}
+
+export interface LLMDebugSnapshot {
+  inputMessages: ChatMessage[];
+  inputTokenEstimate?: ChatTokenEstimate;
+  /** SHA-256 of the provider-ready input. Contains no prompt content. */
+  promptFingerprint?: string;
+  /** SHA-256 of the reusable provider-ready prefix. */
+  promptPrefixFingerprint?: string;
+  promptPrefixMessageCount?: number;
+  rawOutput: {
+    /** Raw assistant content after continuation-prefix join, before parser cleanup. */
+    content: string;
+    /** Raw assistant content from the final provider attempt only. */
+    currentAttemptContent: string;
+    /** Provider reasoning/thinking stream, before parser cleanup. */
+    reasoning?: string;
+  };
+  parsedOutput: {
+    answer: string;
+    reasoning?: string;
+    toolCalls: ToolInvocation[];
+    extractedTags: Record<string, string[]>;
+    finishReason: ProviderFinishReason | null;
+  };
+}
+
+// Stream callback function options
+export interface StreamCallbackOptions {
+  isReasoning?: boolean;
+}
+
+// Stream callback function
+export type StreamCallback = (
+  chunk: string,
+  options?: StreamCallbackOptions,
+) => void;
+
+// A single extracted chunk from a parsed SSE/JSONL event.
+// Providers return an array of these from extractContent so the shared
+// processStream can handle reasoning vs content uniformly.
+export interface ExtractedPart {
+  text: string;
+  isReasoning?: boolean;
+}
+
+export interface ProviderUsageUpdate {
+  /**
+   * Total prompt tokens for the request, including cache reads and cache
+   * writes. Cache fields are subsets of this total (OpenAI/Gemini style).
+   * Anthropic-compatible providers are normalized to this inclusive shape in
+   * their adapters before cost and cache-hit math run.
+   */
+  inputTokens?: number;
+  outputTokens?: number;
+  reasoningTokens?: number;
+  cacheReadInputTokens?: number;
+  cacheCreationInputTokens?: number;
+  totalTokens?: number;
+  rawUsage?: Record<string, unknown> | null;
+}
+
+export type ProviderFinishReason =
+  | "stop"
+  | "length"
+  | "content_filter"
+  | "tool_calls"
+  | "error"
+  | "unknown";
+
+export interface TokenUsage extends ProviderUsageUpdate {
+  source: "provider" | "estimated";
+  status: "completed" | "locally_stopped" | "aborted";
+  statusReason?: TokenUsageStatusReason;
+  stopSequence?: string;
+}
+
+export type TokenUsageStatusReason =
+  | "local_stop_sequence"
+  | "length"
+  | "error"
+  | "timeout"
+  | "network"
+  | "auth_error"
+  | "billing_error"
+  | "rate_limit"
+  | "server_error"
+  | "provider_error"
+  | "invalid_transcript"
+  | "unknown"
+  | "content_filter"
+  | "empty_response"
+  | "malformed_tool_call"
+  | "orphaned_tool_result"
+  | "visible_reasoning_markup"
+  | "degenerate_repetition";
+
+export type LLMRecoveryAction =
+  | "accept"
+  | "retry_same"
+  | "fallback"
+  | "finalize_partial"
+  | "fail";
+
+export interface LLMUsageAttempt {
+  attemptId?: string;
+  attemptIndex?: number;
+  provider?: ProviderName;
+  model?: string;
+  messages?: ChatMessage[];
+  debug?: LLMDebugSnapshot;
+  error?: {
+    reason: ProviderFallbackReason | null;
+    status?: number;
+    message: string;
+    details?: ProviderErrorDetails;
+  };
+  usage: TokenUsage;
+  cost?: CostBreakdown;
+  visibleOutputStarted?: boolean;
+  partialAnswer?: string;
+  partialReasoning?: string;
+  startedAt?: string;
+  finishedAt?: string;
+  status?: "completed" | "failed" | "superseded";
+  recoveryAction?: LLMRecoveryAction;
+  usageFinalized?: Promise<FinalizedTokenUsage | null>;
+}
+
+export interface ProviderErrorDetails {
+  type?: string;
+  code?: string;
+  message?: string;
+  param?: string;
+}
+
+export interface FinalizedTokenUsage {
+  usage: TokenUsage;
+  cost?: CostBreakdown;
+  tokens: number;
+  finishReason: ProviderFinishReason | null;
+  finalizedAt: string;
+}
+
+export interface CostBreakdown {
+  source: "openrouter";
+  currency: "USD";
+  pricingModelId: string;
+  inputCostUsd?: number;
+  outputCostUsd?: number;
+  reasoningCostUsd?: number;
+  cacheReadInputCostUsd?: number;
+  cacheCreationInputCostUsd?: number;
+  totalCostUsd: number;
+}
+
+// Options for the shared processStream in utils.ts
+export interface ProcessStreamOptions {
+  config?: ProviderConfig;
+  /** 'sse' (default) for `data: {...}` lines, 'jsonl' for raw JSON-per-line (Ollama). */
+  format?: "sse" | "jsonl";
+  /** Transform the accumulated raw response before returning (e.g. strip wrapper tags). */
+  postProcess?: (raw: string) => string;
+  /** Additional block tags to hide from visible streaming output while preserving raw content. */
+  extractedBlockTags?: string[];
+  /** Local stop sequences enforced client-side across all providers. */
+  localStopSequences?: string[];
+  /** Called when a local stop sequence is matched. */
+  onLocalStop?: (matchedStop: string) => void;
+  /** Continue draining the provider stream for final usage after local stop. */
+  continueAfterLocalStop?: boolean;
+  /** Extract provider-reported usage from a parsed SSE or JSONL event. */
+  extractUsage?: (data: any) => ProviderUsageUpdate | null;
+  /** Extract provider finish reason from a parsed SSE or JSONL event. */
+  extractFinishReason?: (data: any) => ProviderFinishReason | null;
+  /** Observe exact text hidden inside structured protocol blocks. */
+  onHiddenBlockChunk?: (
+    tagName: string,
+    chunk: string,
+    phase: "start" | "content" | "end",
+  ) => void;
+}
+
+// Provider API interface with multimodal support
+export interface ProviderAPI {
+  endpoint: string;
+  headers: (config: ProviderConfig) => Record<string, string>;
+  body: (messages: ChatMessage[], config: ProviderConfig) => any | Promise<any>;
+  /** Extract content/reasoning parts from a single parsed SSE or JSONL event. */
+  extractContent: (data: any) => ExtractedPart[] | null;
+  /** Report whether a parsed stream event represents provider/model progress even without text. */
+  isStreamActivity?: (data: any) => boolean;
+  /** Extract usage from a single parsed SSE or JSONL event when the provider exposes it. */
+  extractUsage?: (data: any) => ProviderUsageUpdate | null;
+  /** Extract a normalized finish reason from a single parsed SSE or JSONL event. */
+  extractFinishReason?: (data: any) => ProviderFinishReason | null;
+  transformMessages?: (messages: ChatMessage[]) => any;
+  /** Options passed to the shared processStream (format, config, postProcess). */
+  streamOptions?: Omit<ProcessStreamOptions, "config">;
+}
+
+// Provider factory function signature - now much simpler
+export interface ProviderFactory {
+  (config: ProviderConfig): ProviderAPI;
+}
+
+// LLM-specific providers
+export type LLMProviderName =
+  | "openai"
+  | "anthropic"
+  | "gemini"
+  | "groq"
+  | "deepseek"
+  | "minimax"
+  | "ollama"
+  | "xai";
+
+// All supported providers (includes LLM, embedding, image generation, speech-to-text, and text-to-speech providers)
+export type ProviderName = // LLM providers
+  LLMProviderName;
+
+// Provider registry
+export interface ProviderRegistry {
+  [key: string]: ProviderFactory;
+}
+
+// Base connector interface (now unused, keeping for backwards compatibility)
+export interface ChatConnector {
+  (request: ChatRequest, stream?: StreamCallback): Promise<ChatResponse>;
+}

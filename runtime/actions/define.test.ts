@@ -6,7 +6,9 @@ import type {
   ActionContext,
   ActionContextOf,
   ActionInput,
+  ActionInvocationMetadata,
   ActionOutput,
+  RuntimeActionCallers,
 } from "./types.ts";
 
 interface SearchContext extends ActionContext {
@@ -123,4 +125,18 @@ Deno.test("defineAction accepts only the one Action descriptor shape", () => {
     }),
     false,
   );
+});
+
+Deno.test("runtime Action aliases accept unknown input and invocation metadata", async () => {
+  const callers: RuntimeActionCallers = Object.freeze({
+    dynamic(input: unknown) {
+      return Promise.resolve(input);
+    },
+  });
+  const metadata: ActionInvocationMetadata = Object.freeze({
+    source: "dynamic-resource",
+  });
+  const input: unknown = { query: "hello" };
+
+  assertEquals(await callers.dynamic(input, { metadata }), input);
 });

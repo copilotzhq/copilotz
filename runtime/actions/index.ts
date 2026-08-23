@@ -31,6 +31,7 @@ export type {
   ActionEventData,
   ActionFailedData,
   ActionInput,
+  ActionInvocationMetadata,
   ActionInvokedData,
   ActionLifecycleAppender,
   ActionLifecycleAppendInput,

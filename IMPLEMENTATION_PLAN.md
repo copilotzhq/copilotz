@@ -201,12 +201,31 @@ const search = defineAction({
 });
 ```
 
+The optional call envelope is generic runtime plumbing:
+
+```ts
+type ActionCallOptions = Readonly<{
+  operationKey?: string;
+  identity?: RuntimeIdentity;
+  metadata?: Readonly<Record<string, unknown>>;
+  signal?: AbortSignal;
+}>;
+```
+
 Rules:
 
 - `execute` may return any value. It is not required to return a Collection
   record.
 - schemas only validate their corresponding value when supplied;
 - every invocation persists input and its terminal output or normalized error;
+- the runtime canonicalizes `options.metadata` once as durable data; every
+  lifecycle Event Body has a required `metadata` object, using `{}` when the
+  caller omits it;
+- `context.action.metadata` is that same canonical invocation metadata, and a
+  retry of one Action run must match both its original input and metadata;
+- Action-call metadata lives only in lifecycle Event data. It is not mirrored
+  into generic Event-envelope metadata, and a nested Action call receives `{}`
+  unless its caller passes metadata explicitly;
 - the runtime automatically emits `<actionId>.invoked`, `.completed`, `.failed`,
   and `.cancelled`;
 - progress, when needed, is explicitly emitted as `<actionId>.progress` through
@@ -438,6 +457,27 @@ operations usually belong in Actions so they receive lifecycle Events, retry
 identity, and durable input/output. This is architectural guidance rather than
 runtime access control.
 
+Static durable Processors may use `eventType: "*"` only when that same clause
+contains at least one non-empty plain structural matcher in `subject`, generic
+Event-envelope `metadata`, or resolved `data`. Namespace, `threadId`, routing,
+and visibility do not qualify by themselves; `{}` and arrays are not guards. The
+canonical cross-Action lifecycle subscription is therefore guarded in the
+resolved body, for example:
+
+```ts
+on: [{
+  eventType: "*",
+  data: {
+    status: "completed",
+    metadata: { schema: "copilotz.core.tool-action.v1" },
+  },
+}];
+```
+
+This rule permits semantic lifecycle orchestration without registering an
+unbounded static catch-all. Transient observation may retain its own wildcard
+rules because it creates no durable delivery fan-out.
+
 ### 4.5 Resources and Adapters
 
 Resources and Adapters are registered separately:
@@ -527,6 +567,14 @@ copy the Action schemas for inference, but its result is structurally equivalent
 to the plain object. A Tool has no `execute` method, host context, independent
 validator, wrapper Action, catalog entry, or second lifecycle.
 
+`resources.tools` is the complete composed Tool set; there is no second catalog
+or resolver. Agent policy may select a deterministic subset of that map, but
+selection never manufactures another executable definition. A model-produced
+tool call invokes its Action directly with Core provenance in
+`ActionCallOptions.metadata`, including the canonical discriminator
+`schema: "copilotz.core.tool-action.v1"`; the resulting Action Events are the
+sole durable execution record.
+
 The provider-neutral LLM boundary follows the same reference rule:
 
 ```ts
@@ -541,6 +589,11 @@ type ModelResource<TOptions = unknown> = Readonly<{
 type LlmAdapter = Readonly<{
   call(input: LlmAdapterCallInput): LlmInvocation;
 }>;
+
+type LlmInvocation = Readonly<{
+  frames: ReadableStream<LlmAdapterFrame>;
+  result: Promise<LlmAdapterResult>;
+}>;
 ```
 
 The common Action boundary is provider-neutral and JSON-safe:
@@ -551,7 +604,6 @@ type LlmCallInput = Readonly<{
   request: LlmRequest;
   stream?: LlmStreamDescriptor;
   inputStreamId?: string;
-  metadata?: Readonly<Record<string, unknown>>;
   options?: Readonly<Record<string, unknown>>;
 }>;
 
@@ -568,22 +620,66 @@ type LlmCallOutput = Readonly<{
 }>;
 ```
 
-Core correlation such as thread, agent, participant, and originating message is
-carried in `metadata`; it is not part of LLM semantics. Raw tokens and provider
-frames are Stream output, not Action progress. `llm.call` closes/materializes
-those Streams and awaits final usage before completing, so its lifecycle output
-contains neither a live Stream nor a Promise.
+`LlmAdapterCallInput`, `LlmAdapterFrame`, and `LlmAdapterResult` are the
+provider-neutral normalized contracts owned by the LLM plugin. An Adapter call
+returns the frame stream and final-result promise together; `llm.call` consumes
+both before its own completion. Core correlation such as thread, agent,
+participant, originating message, and tool-plan position is passed only through
+`ActionCallOptions.metadata`; it is not part of `LlmCallInput` or LLM semantics.
+Raw tokens and provider frames are Stream output, not Action progress.
+`llm.call` closes/materializes those Streams and awaits final usage before
+completing, so its lifecycle output contains neither a live Stream nor a
+Promise.
 
 `llm.call` resolves the requested Model Resource and Adapter, emits the one
 Action lifecycle, uses `context.streams` for raw frames, and returns a fully
 settled JSON-safe result containing canonical content, tool calls, usage, and
 provider/model identities. Provider credentials, clients, endpoints, and
-protocol quirks exist only in Adapter construction. `llmPlugin` installs no
-configured model or provider; applications add them explicitly. Optional
-provider plugins/factories are composition conveniences around the same plain
-Adapter values and never install a hidden default Model.
+protocol quirks exist only in Adapter construction and must never enter a Model
+Resource, `LlmCallInput`, Action-call metadata, or lifecycle input/output.
+`llmPlugin` installs no configured model or provider; applications add every
+`resources.models` value and `adapters.llm` value explicitly. Optional provider
+plugins/factories are composition conveniences around the same plain Adapter
+values and never install a hidden default Model or Adapter.
 
-### 4.6 Plugin
+### 4.6 Reference AI harness
+
+Core owns participant/thread/message Collections, the Agent Resource contract,
+prompt construction, typed message ingress, and the Processors that implement
+the agent loop. Its dependency is explicit and ordinary:
+
+```ts
+const corePlugin = definePlugin({
+  id: "@copilotz/core",
+  plugins: [llmPlugin],
+  // Core Collections, Actions, Processors, and Resources
+});
+```
+
+Neither plugin contributes a configured Model or LLM Adapter. The application
+must provide `resources.models` and `adapters.llm`; Core resolves its selected
+Agent and prompt policy, then calls `context.actions.llmCall(...)` with semantic
+provenance in `ActionCallOptions.metadata`.
+
+When `llm.call` returns multiple tool calls, Core derives one deterministic plan
+from their provider order. It invokes each referenced Action sequentially with a
+stable operation key and plan/call provenance in Action metadata. Retries run
+the same ordered plan and recover already-terminal Action calls rather than
+duplicating effects. Parallel `Promise.all` execution is not part of this
+contract because tool order and preceding mutations may be semantically
+significant.
+
+A normal tool result is projected from that Action's terminal Event and the plan
+continues. The Core-owned ask Action durably creates its question and completes
+normally with its plugin-owned `{ status: "deferred" }` output. Core's terminal
+Processor recognizes that semantic output and neither projects a result nor
+advances the plan. The later answer or failure Event supplies the durable resume
+trigger. The originating Action lifecycle data plus Core-owned Message metadata
+must preserve the plan identity and cursor needed to resume remaining calls and
+issue exactly one next `llm.call`. No Action promise stays open across that
+wait; the generic runtime has no deferred settlement or Tool-executor status.
+
+### 4.7 Plugin
 
 The target plugin shape is:
 
@@ -629,7 +725,7 @@ Directories follow ownership of behavior, not names of resource kinds. The
 initial Agent contract and policies belong to the Core harness plugin unless a
 genuinely reusable behavioral plugin later justifies its own package.
 
-### 4.7 Application
+### 4.8 Application
 
 The public application boundary remains runtime-neutral:
 
@@ -809,15 +905,14 @@ executable API or fixed AI resource bucket remains.
 Exit: adding a Resource namespace, Adapter kind, or semantic service requires no
 runtime context edit, and transaction callbacks hold no SQL connection open.
 
-### Slice 4 — Extract the AI harness as vertical plugins
+### Slice 4 — Extract the AI harness as vertical plugins (in progress)
 
-Begin with one ownership-evacuation checkpoint. Move Admin, Channels, Knowledge,
+The ownership-evacuation checkpoint is closed. Admin, Channels, Knowledge,
 Memory, Schedules, Skills, Usage, Goals, existing Tool integrations, and their
-semantic adapters physically beneath `plugins/` before deleting fixed AI runtime
-modules. This move changes ownership and imports directly—there is no forwarding
-barrel or compatibility layer—and keeps the invariant that `runtime/` never
-imports a concrete plugin. The later semantic cuts then happen vertically so
-each behavior moves with its definitions, implementation, tests, and exports:
+semantic adapters moved physically beneath `plugins/` without a forwarding
+barrel or compatibility layer. `runtime/` imports no concrete plugin. The
+remaining work is one generic prerequisite followed by two ordered semantic
+checkpoints: LLM, then Tool+Core.
 
 The concrete Tool-integration portion of this checkpoint is closed. Built-in,
 web, finance, persistent-terminal, OpenAPI, MCP, catalog, and Deno host code now
@@ -856,29 +951,50 @@ Skills are available only through their explicit package subpaths. Core has one
 public path, `/core`; the transitional `/plugins/core` path and every caller of
 it were removed without an alias.
 
-1. LLM: common `llm.call` Action, Model Resources, the LLM Adapter contract,
+0. **Generic prerequisite (in progress):** add canonical durable
+   `ActionCallOptions.metadata`, required lifecycle `data.metadata`, and
+   `context.action.metadata`; reject retry metadata drift and do not inherit
+   metadata into nested calls. Replace the blanket static wildcard prohibition
+   with the guarded structural rule from section 4.4. This checkpoint changes no
+   AI semantics.
+1. **LLM vertical:** move the common `llm.call` Action, Model Resource and LLM
+   Adapter contracts, provider normalization/recovery, usage output, and
    first-party OpenAI/Anthropic/Google-Gemini/Groq/DeepSeek/Ollama/MiniMax
-   Adapter factories, prompt/response normalization, and usage output.
-2. Tools: Tool Resources that point to existing Actions, optional concrete Tool
-   Actions, OpenAPI/MCP integrations, and tool host implementations. Convert all
-   concrete Tools to Actions in the same cut that removes `Tool.execute`, the
-   generic executor/catalog, Core wrapper Actions, and bespoke Tool contexts;
-   there is never a dual execution path. `plugins/tools` owns contracts and
-   integrations but need not export an empty marker plugin.
-3. Core harness: participant/thread/message Collections, Agent Resources, the
-   typed message ingress helper, routing Processors, message projection, prompt
-   policy, and the agent loop. `corePlugin.plugins` includes `llmPlugin`; Core
-   contributes no hidden configured provider.
+   Adapter factories to `plugins/llm/**`. The application remains the only owner
+   of configured Models, Adapters, clients, and credentials. Migrate Core's LLM
+   callers to the one `llm.call` Action, make `corePlugin.plugins` include
+   `llmPlugin`, and delete `runtime/llm/**`, the old Core LLM wrapper Actions
+   and provider directories, and their obsolete exports before closing this
+   checkpoint. The single legacy WorkflowTool path may remain temporarily and
+   must remain the only Tool execution path; this checkpoint does not introduce
+   Action-backed Tools beside it.
+2. **Tool + Core checkpoint:** make every concrete Tool an Action and every Tool
+   Resource a data-only Action presentation. OpenAPI and MCP generate Actions
+   plus Tool Resources, not executable Tool objects. In the same atomic cut,
+   move Agent Resources and prompt policy fully into Core; implement
+   deterministic sequential tool planning, the
+   `schema: "copilotz.core.tool-action.v1"` lifecycle Processors, and ask
+   continuation; and migrate all callers. Then remove `Tool.execute`, the
+   WorkflowTool type, catalog, executor, host/execution contexts, generic
+   deferred result protocol, independent validation, and Core `callTool`/batch
+   wrapper Actions. Also delete `runtime/tools/**`, `runtime/agents/**`,
+   `runtime/context/**`, and `runtime/capabilities/**` plus their obsolete
+   exports before this checkpoint closes.
+
+Each semantic checkpoint migrates every affected production caller, test,
+package export, and self-import before deleting its replaced path. No
+compatibility forwarder, alias, wrapper, empty marker plugin, or temporarily
+published second LLM or Tool executor is allowed.
 
 The application explicitly selects and configures its LLM Adapters. Concrete
 tools, memory, knowledge, schedules, channels, goals, usage accounting, and
 admin behavior remain optional first-party plugins. Only actual Skill Resources
 and their loaders belong to the Skills vocabulary.
 
-Delete the corresponding `runtime/llm`, `runtime/tools`, `runtime/agents`,
-`runtime/context`, and `runtime/capabilities` code as each vertical cutover
-closes. Do not create a mechanical Agents plugin or retain a runtime capability
-resolver.
+At the end of both semantic checkpoints, `/llm`, `/tools`, and `/core` point
+directly to their plugin-owned implementations; `/agents`, `/context`, and
+`/capabilities` no longer exist. Do not create a mechanical Agents plugin or
+retain a runtime capability resolver.
 
 Exit: the generic runtime can run without importing or installing the AI
 harness.
@@ -1000,7 +1116,21 @@ Architecture-specific closure checks must prove:
 - ordinary maintenance compacts only settled deliveries and preserves Events,
   Event Bodies, and their deduplication identities;
 - Action lifecycle input/output persistence is independent of schema presence;
+- Action lifecycle metadata is canonical, required as `{}` when omitted,
+  retry-stable, visible as `context.action.metadata`, absent from the generic
+  Event envelope, and never implicitly inherited;
+- a static `eventType: "*"` Processor is accepted only with a non-empty plain
+  structural `subject`, Event-envelope `metadata`, or resolved `data` guard;
 - Processor retries reproduce or observe one stable Action result;
+- Tool Resources are data-only Action aliases, and no Tool executor, catalog,
+  wrapper Action, host context, or second lifecycle remains;
+- Core Tool Action lifecycle metadata uses the stable
+  `schema: "copilotz.core.tool-action.v1"` discriminator;
+- multi-tool plans run sequentially in stable provider order, retry without
+  repeating terminal Actions, and resume ask continuations from durable data;
+- `llm.call` settles its frame stream and final result before completion, while
+  Models and LLM Adapters are application-configured and no credential or client
+  enters durable Action data;
 - Collection content fields assetize automatically;
 - namespace-global replay restores all historical Asset manifests, declared
   cross-Collection edges, and live generic relations while removing stale edges;
@@ -1021,7 +1151,9 @@ Architecture-specific closure checks must prove:
 
 ## 8. Immediate next slice
 
-Slices 1 through 3 and the semantic ownership-evacuation checkpoint are closed.
-Continue Slice 4 by cutting the Tool/LLM/Core semantic SCC vertically: introduce
-the final Action/Resource/Adapter contracts and delete the single legacy
-executor/catalog in that same change so no dual execution path exists.
+Slices 1 through 3 and Slice 4's ownership-evacuation checkpoint are closed.
+Continue Slice 4 with the generic Action-metadata/guarded-wildcard prerequisite,
+then close the LLM vertical before atomically cutting Tool execution and Core
+Tool orchestration in the exact order specified above. Each checkpoint is
+complete only after its replaced execution path and fixed AI runtime modules are
+deleted.

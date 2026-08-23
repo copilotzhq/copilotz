@@ -1,5 +1,6 @@
 import type {
   ActionEventData,
+  ActionInvokedData,
   ActionLifecycleAppender,
   ActionLifecycleEmitter,
   ActionLifecycleInput,
@@ -7,7 +8,7 @@ import type {
   ActionStatus,
   SerializedActionError,
 } from "./types.ts";
-import { durableActionValue } from "./value.ts";
+import { durableActionMetadata, durableActionValue } from "./value.ts";
 
 const ACTION_STATUSES = new Set<ActionStatus>([
   "invoked",
@@ -44,6 +45,7 @@ function eventData(input: ActionLifecycleInput): ActionEventData {
     ...(optionalText(input.parentActionRunId)
       ? { parentActionRunId: input.parentActionRunId!.trim() }
       : {}),
+    metadata: durableActionMetadata(input.metadata),
     input: durableActionValue(input.input),
   };
   switch (input.status) {
@@ -90,6 +92,19 @@ export function createActionLifecycleEmitter(
 ): ActionLifecycleEmitter {
   const namespace = requireText(input.namespace, "Action namespace");
   const originMetadata = Object.freeze(structuredClone(input.metadata ?? {}));
+  const load = async (
+    actionRunId: string,
+    suffix: "invoked" | "terminal",
+  ): Promise<ActionEventData | null> => {
+    const id = requireText(actionRunId, "Action run id");
+    if (!input.load) return null;
+    const data = await input.load(namespace, `${id}:action:${suffix}`);
+    if (!data) return null;
+    if (data.actionRunId !== id || data.actionId.trim().length === 0) {
+      throw new Error(`Action ${suffix} event '${id}' is inconsistent.`);
+    }
+    return data;
+  };
   return Object.freeze({
     emit(event) {
       const data = eventData(event);
@@ -120,18 +135,26 @@ export function createActionLifecycleEmitter(
         data,
       });
     },
+    async invoked(actionRunId): Promise<ActionInvokedData | null> {
+      const data = await load(actionRunId, "invoked");
+      if (!data) return null;
+      if (data.status !== "invoked") {
+        throw new Error(
+          `Action invoked event '${data.actionRunId}' is inconsistent.`,
+        );
+      }
+      return data;
+    },
     async terminal(actionRunId) {
-      const id = requireText(actionRunId, "Action run id");
-      if (!input.load) return null;
-      const data = await input.load(namespace, `${id}:action:terminal`);
+      const data = await load(actionRunId, "terminal");
       if (!data) return null;
       if (
-        data.actionRunId !== id ||
         (data.status !== "completed" && data.status !== "failed" &&
-          data.status !== "cancelled") ||
-        data.actionId.trim().length === 0
+          data.status !== "cancelled")
       ) {
-        throw new Error(`Action terminal event '${id}' is inconsistent.`);
+        throw new Error(
+          `Action terminal event '${data.actionRunId}' is inconsistent.`,
+        );
       }
       return data;
     },

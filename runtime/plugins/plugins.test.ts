@@ -12,6 +12,7 @@ import {
   createTransientProcessorSet,
   definePlugin,
   defineProcessor,
+  type ProcessorMatchClause,
 } from "./index.ts";
 
 function action(id: string) {
@@ -309,22 +310,163 @@ Deno.test("processor matching and durable consumer identity use direct registrie
   );
 });
 
-Deno.test("static wildcard processors remain invalid while transient processors may use them", () => {
+Deno.test("static wildcard processors require a semantic structural guard", () => {
+  const guarded = [
+    defineProcessor({
+      id: "audit.by-subject",
+      on: [{ eventType: "*", subject: { type: "search.query" } }],
+      handle: () => undefined,
+    }),
+    defineProcessor({
+      id: "audit.by-metadata",
+      on: [{ eventType: "*", metadata: { actionStatus: "completed" } }],
+      handle: () => undefined,
+    }),
+    defineProcessor({
+      id: "audit.by-data",
+      on: [{ eventType: "*", data: { status: "completed" } }],
+      handle: () => undefined,
+    }),
+  ] as const;
+  const registry = createPluginRegistry({
+    plugins: [definePlugin({
+      id: "acme.guarded-wildcards",
+      version: "1.0.0",
+      processors: {
+        bySubject: guarded[0],
+        byMetadata: guarded[1],
+        byData: guarded[2],
+      },
+    })],
+  });
+  assertEquals(Object.values(registry.processors), [...guarded]);
+  assertEquals(
+    registry.matchDurable({
+      type: "search.query.completed",
+      namespace: "tenant-a",
+      subject: { type: "search.query", id: "run-a" },
+      metadata: { actionStatus: "completed", trace: "trace-a" },
+      payload: { status: "completed", output: { count: 3 } },
+    }),
+    [...guarded],
+  );
+
+  const invalidClauses = [
+    { eventType: "*" },
+    { eventType: "*", subject: {} },
+    { eventType: "*", metadata: {} },
+    { eventType: "*", data: {} },
+    { eventType: "*", subject: [] },
+    { eventType: "*", metadata: [] },
+    { eventType: "*", data: [] },
+    {
+      eventType: "*",
+      namespace: "tenant-a",
+      threadId: "thread-a",
+      routing: { senderId: "user-a" },
+      visibility: { kind: "public" as const },
+    },
+  ] as const;
+  for (const [index, clause] of invalidClauses.entries()) {
+    const wildcard = defineProcessor({
+      id: `audit.invalid-${index}`,
+      on: [clause as ProcessorMatchClause],
+      handle: () => undefined,
+    });
+    const plugin = definePlugin({
+      id: `acme.invalid-wildcard-${index}`,
+      version: "1.0.0",
+      processors: { wildcard },
+    });
+    assertThrows(
+      () => createPluginRegistry({ plugins: [plugin] }),
+      TypeError,
+      "cannot register static eventType '*' without a non-empty plain subject, metadata, or data matcher",
+    );
+  }
+});
+
+Deno.test("guarded durable wildcards match hydrated Action lifecycle data", () => {
+  const completed = defineProcessor({
+    id: "audit.action-completed",
+    on: [{
+      eventType: "*",
+      data: { status: "completed", input: { tool: "search" } },
+    }],
+    settlement: "detached",
+    handle: () => undefined,
+  });
+  const exact = defineProcessor({
+    id: "audit.search-completed",
+    on: [{ eventType: "search.query.completed" }],
+    handle: () => undefined,
+  });
+  const registry = createPluginRegistry({
+    plugins: [definePlugin({
+      id: "acme.action-observers",
+      version: "1.0.0",
+      processors: { completed, exact },
+    })],
+  });
+  const draft = {
+    type: "search.query.completed",
+    namespace: "tenant-a",
+    payload: {
+      dataRef: {
+        eventBodyId: "action-body-a",
+        schemaVersion: 1,
+        mediaType: "application/json",
+      },
+    },
+  } as const;
+
+  assertEquals(registry.durableConsumers(draft), [{
+    consumerId: "processor:audit.search-completed",
+    settlement: "inherit",
+  }]);
+  assertEquals(
+    registry.durableConsumers(draft, {
+      actionRunId: "run-a",
+      actionId: "search.query",
+      status: "completed",
+      input: { tool: "search", query: "weather" },
+      output: { resultCount: 3 },
+    }),
+    [
+      {
+        consumerId: "processor:audit.action-completed",
+        settlement: "detached",
+      },
+      {
+        consumerId: "processor:audit.search-completed",
+        settlement: "inherit",
+      },
+    ],
+  );
+  assertEquals(
+    registry.durableConsumers({
+      ...draft,
+      type: "other.action.completed",
+    }, {
+      actionRunId: "run-b",
+      actionId: "other.action",
+      status: "completed",
+      input: { tool: "search" },
+      output: {},
+    }),
+    [{
+      consumerId: "processor:audit.action-completed",
+      settlement: "detached",
+    }],
+  );
+});
+
+Deno.test("transient processors retain unrestricted wildcard observation", () => {
   const wildcard = defineProcessor({
-    id: "audit.all",
+    id: "audit.all-transient",
     on: [{ eventType: "*" }],
     handle: () => undefined,
   });
-  const plugin = definePlugin({
-    id: "acme.wildcard",
-    version: "1.0.0",
-    processors: { wildcard },
-  });
-  assertThrows(
-    () => createPluginRegistry({ plugins: [plugin] }),
-    TypeError,
-    "cannot register eventType '*'",
-  );
 
   const transients = createTransientProcessorSet([wildcard]);
   const event = {

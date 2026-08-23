@@ -93,7 +93,7 @@ Deno.test("matching ignores dataRef-only payloads unless match data is provided"
   );
 });
 
-Deno.test("eventType * matches any type when other clause fields match", () => {
+Deno.test("transient eventType * matches any type when clause fields match", () => {
   const processor = defineProcessor({
     id: "transient.thread-observer",
     on: [{ eventType: "*", namespace: "tenant-a", threadId: "thread-a" }],

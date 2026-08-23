@@ -1,9 +1,14 @@
 import { validateAgainstJsonSchema } from "../collections/validate.ts";
-import { durableActionValue, sameActionValue } from "./value.ts";
+import {
+  durableActionMetadata,
+  durableActionValue,
+  sameActionValue,
+} from "./value.ts";
 import type {
   ActionCallers,
   ActionCallOptions,
   ActionContext,
+  ActionInvocationMetadata,
   ActionMap,
   ActionTransactionOptions,
   AnyActionDefinition,
@@ -11,6 +16,7 @@ import type {
 } from "./types.ts";
 import type {
   ActionEventData,
+  ActionInvokedData,
   ActionLifecycleEmitter,
   SerializedActionError,
 } from "./types.ts";
@@ -24,6 +30,7 @@ export type ActionInvocationFrame = Readonly<{
   rootKey: string;
   operationKey: string;
   parentActionRunId?: string;
+  metadata: ActionInvocationMetadata;
   identity?: RuntimeIdentity;
   signal: AbortSignal;
   nextActionIndex(): number;
@@ -156,6 +163,7 @@ function createFrame(
   parent: ActionInvocationFrame | undefined,
   invoker: CreateActionCallersOptions,
 ): ActionInvocationFrame {
+  const metadata = durableActionMetadata(options.metadata ?? {});
   const explicitKey = options.operationKey?.trim() || undefined;
   const identity = mergeIdentity(
     parent?.identity ?? invoker.identity,
@@ -185,6 +193,7 @@ function createFrame(
     rootKey,
     operationKey: actionRunId,
     ...(parent ? { parentActionRunId: parent.actionRunId } : {}),
+    metadata,
     ...(identity ? { identity } : {}),
     signal,
     nextActionIndex: () => ++actionIndex,
@@ -201,6 +210,7 @@ function lifecycleCommon(
     ...(frame.parentActionRunId
       ? { parentActionRunId: frame.parentActionRunId }
       : {}),
+    metadata: frame.metadata,
     input,
     ...(frame.identity?.causationId
       ? { causationId: frame.identity.causationId }
@@ -221,17 +231,46 @@ async function loadTerminal(
 ): Promise<ActionEventData | null> {
   const terminal = await lifecycle.terminal(frame.actionRunId);
   if (!terminal) return null;
-  if (terminal.actionId !== frame.actionId) {
+  validateReceipt(terminal, frame, input);
+  return terminal;
+}
+
+function validateReceipt(
+  receipt: ActionEventData,
+  frame: ActionInvocationFrame,
+  input: unknown,
+): void {
+  if (receipt.actionId !== frame.actionId) {
     throw new Error(
-      `Action run '${frame.actionRunId}' belongs to '${terminal.actionId}', not '${frame.actionId}'.`,
+      `Action run '${frame.actionRunId}' belongs to '${receipt.actionId}', not '${frame.actionId}'.`,
     );
   }
-  if (!sameActionValue(terminal.input, input)) {
+  if (receipt.parentActionRunId !== frame.parentActionRunId) {
+    throw new Error(
+      `Action run '${frame.actionRunId}' was retried with a different parent.`,
+    );
+  }
+  if (!sameActionValue(receipt.input, input)) {
     throw new Error(
       `Action run '${frame.actionRunId}' was retried with different input.`,
     );
   }
-  return terminal;
+  if (!sameActionValue(receipt.metadata, frame.metadata)) {
+    throw new Error(
+      `Action run '${frame.actionRunId}' was retried with different metadata.`,
+    );
+  }
+}
+
+async function loadInvoked(
+  lifecycle: ActionLifecycleEmitter,
+  frame: ActionInvocationFrame,
+  input: unknown,
+): Promise<ActionInvokedData | null> {
+  const invoked = await lifecycle.invoked(frame.actionRunId);
+  if (!invoked) return null;
+  validateReceipt(invoked, frame, input);
+  return invoked;
 }
 
 function restoreTerminal(terminal: ActionEventData): unknown {
@@ -265,11 +304,18 @@ function actionCaller(
     );
     if (existing) return restoreTerminal(existing);
 
-    await invoker.actionLifecycle.emit({
-      ...lifecycleCommon(frame, durableInput),
-      status: "invoked",
-      deduplicationId: `${frame.actionRunId}:action:invoked`,
-    });
+    const invoked = await loadInvoked(
+      invoker.actionLifecycle,
+      frame,
+      durableInput,
+    );
+    if (!invoked) {
+      await invoker.actionLifecycle.emit({
+        ...lifecycleCommon(frame, durableInput),
+        status: "invoked",
+        deduplicationId: `${frame.actionRunId}:action:invoked`,
+      });
+    }
 
     let progressIndex = 0;
     let progressTail: Promise<void> = Promise.resolve();

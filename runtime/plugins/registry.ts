@@ -55,10 +55,27 @@ export type RegistryComposition<
   >
   : never;
 
-function rejectStaticWildcardProcessor(value: AnyProcessor): void {
-  if (value.on.some((clause) => clause.eventType === "*")) {
+function isNonEmptyPlainMatcher(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const prototype = Object.getPrototypeOf(value);
+  return (prototype === Object.prototype || prototype === null) &&
+    Object.keys(value).length > 0;
+}
+
+function rejectUnguardedStaticWildcardProcessor(value: AnyProcessor): void {
+  for (const [index, clause] of value.on.entries()) {
+    if (clause.eventType !== "*") continue;
+    if (
+      isNonEmptyPlainMatcher(clause.subject) ||
+      isNonEmptyPlainMatcher(clause.metadata) ||
+      isNonEmptyPlainMatcher(clause.data)
+    ) {
+      continue;
+    }
     throw new TypeError(
-      `Processor '${value.id}' cannot register eventType '*' as a static definition.`,
+      `Processor '${value.id}' on[${index}] cannot register static eventType '*' without a non-empty plain subject, metadata, or data matcher.`,
     );
   }
 }
@@ -217,7 +234,7 @@ export function createPluginRegistry<
       (definition) => definition.id,
     );
     for (const processor of Object.values(plugin.processors)) {
-      rejectStaticWildcardProcessor(processor);
+      rejectUnguardedStaticWildcardProcessor(processor);
     }
     addDefinitions(
       "processor",

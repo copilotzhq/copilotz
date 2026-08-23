@@ -45,12 +45,28 @@ and can respond by invoking another action or mutating another collection. More
 complex behavior therefore emerges as a sequence of small event-driven
 transitions rather than from one monolithic control loop.
 
+An Action call may carry plugin-owned metadata. The runtime canonicalizes it
+once and persists the same required metadata object in every lifecycle Event
+Body; omission becomes `{}`. The executing Action receives it as
+`context.action.metadata`. Metadata is not copied into the generic Event
+envelope and is not inherited by nested Action calls: a caller that wants to
+propagate it passes it explicitly. This makes provenance durable without making
+the runtime interpret it or silently couple two capabilities.
+
+A durable Processor may use `eventType: "*"` only with a non-empty structural
+guard in `subject`, Event-envelope `metadata`, or resolved `data`. Namespace,
+thread, routing, or visibility alone are not sufficient guards, and empty
+objects or arrays do not qualify. A Processor that reacts to a class of Action
+lifecycle Events normally guards on `data.status` and `data.metadata`; it does
+not require a second action registry or a special lifecycle-query API.
+
 An AI harness is built on top of these generic primitives rather than being
-hard-coded into the runtime. Messages, threads, participants, and execution
-records can be represented as collections. LLM calls, tool invocations, or other
-capabilities can be actions. The agent loop itself is expressed through
-processors that react to conversation and execution events and determine the
-next operation to perform.
+hard-coded into the runtime. Messages, threads, and participants can be
+represented as collections. LLM calls, tool invocations, or other capabilities
+are Actions, and their durable lifecycle Events are their operational record;
+they do not require parallel `llm_attempt` or `tool_execution` Collections. The
+agent loop is expressed through Processors that react to conversation and Action
+Events and determine the next operation to perform.
 
 Concepts such as **agents**, **tools**, and **models** primarily enter the
 system as resources. An agent resource can describe its identity, instructions,
@@ -70,7 +86,9 @@ another provider are delegated to their respective LLM adapters. Consequently,
 the orchestration and business logic remains unchanged when the underlying
 provider changes. The LLM plugin installs only the provider-neutral Action and
 contracts; applications explicitly contribute Model Resources and provider
-Adapters, including credentials and clients, through ordinary composition.
+Adapters through ordinary composition. Credentials and clients live only inside
+those runtime Adapter values; they never enter Model Resources, Action input,
+Action-call metadata, or durable lifecycle output.
 
 The runtime acts as the **composition boundary** for all of this. When plugins
 are installed, their collections, actions, processors, resources, and adapters
@@ -96,9 +114,9 @@ Every `context.streams.open(...)` publishes one generic transient
 `stream.output` observation. The lower-level Body primitive may be constructed
 without observation wiring for internal storage and following. The emitted
 descriptor contains content metadata and correlation only—never thread,
-participant, routing, visibility, Collection, or plugin fields. Semantic
-plugins may place opaque hints in metadata, but the runtime never interprets
-those hints.
+participant, routing, visibility, Collection, or plugin fields. Semantic plugins
+may place opaque hints in metadata, but the runtime never interprets those
+hints.
 
 Application observation is bound by runtime correlation, never by semantic
 thread or participant fields. A `send` operation installs its observation sink
@@ -113,9 +131,9 @@ generic durable and transient Events independently of any active `send`.
 not open SQL around arbitrary plugin code. Its Collection surface is
 mutation-only and returns stable `{ id }` references rather than speculative
 records. The runtime prepares declared content before opening SQL, then adopts
-the prepared Bodies and Assets inside the same commit as
-graph projections, Event Bodies, Events, and delivery obligations. Work is
-dispatched only after that commit succeeds.
+the prepared Bodies and Assets inside the same commit as graph projections,
+Event Bodies, Events, and delivery obligations. Work is dispatched only after
+that commit succeeds.
 
 Every BodyStore Adapter declares its durability, reach, minimum protection, and
 Ready-GC capability. On an Adapter with `readyGarbageCollection: true`, `put` is
@@ -135,11 +153,11 @@ and projection rebuild hold the shared side through graph commit; physical Body
 deletion holds the exclusive side while it rechecks the indexed Ready Asset
 nodes. The graph transaction validates the captured protection deadline but
 performs no external BodyStore I/O. A Ready Asset node's indexed `bodyId` is the
-sole durable liveness authority. Collections have no `bodyRefs` declaration,
-and no `body_references` table exists.
+sole durable liveness authority. Collections have no `bodyRefs` declaration, and
+no `body_references` table exists.
 
-Asset provenance is runtime-neutral. Its scope is one opaque provenance
-identity `{ type, id }`; semantic plugins may use values such as `thread`, while
+Asset provenance is runtime-neutral. Its scope is one opaque provenance identity
+`{ type, id }`; semantic plugins may use values such as `thread`, while
 standalone runtime publication may use the namespace. The runtime neither
 enumerates those types nor gives them special storage behavior.
 
@@ -188,15 +206,15 @@ settled delivery obligations are compactable. Event retention can change only
 with an explicit snapshot and deduplication-receipt model that preserves replay
 and retry semantics; the current architecture has no such second model.
 
-Graph nodes and edges are projections of those facts.
-Projection rebuild is therefore one namespace-wide reduction over the complete
-registered Collection set, never a destructive rebuild of one Collection in
-isolation. It folds every Collection Event Body and every historical Asset
-manifest, reconstructs Assets and nodes before their derived edges, and replaces
-the namespace's complete authoritative edge set. Generic relation events are
-folded in global Event order: deleting either endpoint retires the relation,
-recreating that endpoint does not resurrect it, and a later `relation.upserted`
-Event is required to make it live again.
+Graph nodes and edges are projections of those facts. Projection rebuild is
+therefore one namespace-wide reduction over the complete registered Collection
+set, never a destructive rebuild of one Collection in isolation. It folds every
+Collection Event Body and every historical Asset manifest, reconstructs Assets
+and nodes before their derived edges, and replaces the namespace's complete
+authoritative edge set. Generic relation events are folded in global Event
+order: deleting either endpoint retires the relation, recreating that endpoint
+does not resurrect it, and a later `relation.upserted` Event is required to make
+it live again.
 
 Plain typed objects are the canonical way to declare resources and adapters.
 Semantic plugins may export optional helpers such as `defineAgent`,
@@ -215,14 +233,36 @@ author to consider whether that operation belongs in an action so it receives
 the normal action lifecycle, retry identity, and durable input/output.
 
 The reference AI harness follows the same composition rules. The minimal Core
-plugin owns conversation state, agent resources, ingress helpers, and the
-processors that implement the agent loop. Core depends on the first-party LLM
-plugin through ordinary plugin composition. The LLM plugin owns the common
-`llm.call` action, model-resource contract, LLM-adapter contract, and
-first-party provider adapter factories. Applications choose and configure
-provider adapters explicitly. Memory, knowledge, schedules, channels, concrete
-tools, goals, usage accounting, and admin behavior remain optional first-party
-plugins rather than hidden Core behavior.
+plugin owns conversation state, agent resources, ingress helpers, and the prompt
+policy and Processors that implement the agent loop. Core depends on the
+first-party LLM plugin through ordinary plugin composition. The LLM plugin owns
+the common `llm.call` Action, Model Resource contract, LLM Adapter contract, and
+first-party provider Adapter factories. Applications choose and configure every
+Model and provider Adapter explicitly; neither LLM nor Core installs a default
+Model, Adapter, client, or credential.
+
+Core exposes an LLM tool by mapping a data-only Tool Resource to an existing
+Action alias. It invokes that Action directly, so the Action's ordinary durable
+lifecycle is the only tool-execution lifecycle. Core marks these calls with
+plugin-owned Action metadata whose discriminator is
+`schema: "copilotz.core.tool-action.v1"`; lifecycle Processors match that
+durable body data. Multiple tool calls from one LLM result form one
+deterministic plan and execute sequentially in provider order with retry-stable
+identities. A Core-owned ask Action durably creates its question and completes
+normally with the plugin-owned semantic output `{ status: "deferred" }`. Core's
+terminal Processor recognizes that output and does not project a result or
+advance the plan until the later answer or failure Event. The originating
+lifecycle data and Core Message metadata carry enough plan identity to resume
+the remaining calls and produce exactly one subsequent LLM continuation. No
+in-memory Action stays open, and the generic runtime gains no deferred
+settlement or Tool-outcome concept.
+
+There is consequently no `Tool.execute`, Tool catalog, Tool executor, Tool host
+context, Core wrapper Action, or second validation/lifecycle path. The composed
+`resources.tools` and `context.actions` maps are the one definition and
+execution path. Memory, knowledge, schedules, channels, concrete tools, goals,
+usage accounting, and admin behavior remain optional first-party plugins rather
+than hidden Core behavior.
 
 Optional semantic plugins receive no runtime back doors. The base Schedules
 plugin, for example, owns only timing/status, opaque JSON payload, optional

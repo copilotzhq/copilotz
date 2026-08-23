@@ -3,17 +3,20 @@ import type { CollectionRuntime } from "../collections/index.ts";
 import { createPluginRegistry, definePlugin } from "../plugins/index.ts";
 import { defineAction } from "./define.ts";
 import { createActionContext } from "./host.ts";
-import type { ActionContext } from "./types.ts";
+import type { ActionContext, ActionEventData } from "./types.ts";
 
 Deno.test("Action transactions expose atomic relation projection", async () => {
   const projected: unknown[] = [];
+  const lifecycleData: ActionEventData[] = [];
   let transactionIdentity: unknown;
+  let actionMetadata: ActionContext["action"]["metadata"] | undefined;
   const upsertRelation = defineAction({
     id: "test.relation.upsert",
     execute(
       input: Readonly<{ from: string; to: string }>,
       context: ActionContext,
     ) {
+      actionMetadata = context.action.metadata;
       return context.transaction((transaction) =>
         transaction.relations.upsert({
           id: "memory-a:related:memory-b",
@@ -71,7 +74,10 @@ Deno.test("Action transactions expose atomic relation projection", async () => {
     plugins,
     collections,
     actionLifecycle: {
-      append: () => Promise.resolve(undefined as never),
+      append({ data }) {
+        lifecycleData.push(data);
+        return Promise.resolve(undefined as never);
+      },
       load: () => Promise.resolve(null),
     },
     content: () =>
@@ -112,10 +118,12 @@ Deno.test("Action transactions expose atomic relation projection", async () => {
       }),
   });
 
-  const result = await context.actions.upsertRelation({
+  const invocationMetadata = { trace: { tags: ["initial"] } };
+  const resultPromise = context.actions.upsertRelation({
     from: "memory-a",
     to: "memory-b",
   }, {
+    metadata: invocationMetadata,
     identity: {
       causationId: "event-a",
       correlationId: "run-a",
@@ -123,6 +131,8 @@ Deno.test("Action transactions expose atomic relation projection", async () => {
       settlementScopeId: "scope-a",
     },
   });
+  invocationMetadata.trace.tags.push("mutated-after-call");
+  const result = await resultPromise;
 
   assertEquals(projected, [{
     id: "memory-a:related:memory-b",
@@ -131,6 +141,16 @@ Deno.test("Action transactions expose atomic relation projection", async () => {
     target: { type: "memory_record", id: "memory-b" },
   }]);
   assertEquals(result, { id: "memory-a:related:memory-b" });
+  assertEquals(actionMetadata, { trace: { tags: ["initial"] } });
+  assertEquals(Object.isFrozen(actionMetadata), true);
+  assertEquals(Object.isFrozen(actionMetadata?.trace), true);
+  assertEquals(
+    lifecycleData.map((event) => event.metadata),
+    [
+      { trace: { tags: ["initial"] } },
+      { trace: { tags: ["initial"] } },
+    ],
+  );
   assertEquals(transactionIdentity, {
     causationId: "event-a",
     correlationId: "run-a",

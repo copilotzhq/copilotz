@@ -181,6 +181,7 @@ export function createActionInvocationContext(
     action: Object.freeze({
       id: frame.actionId,
       runId: frame.actionRunId,
+      metadata: frame.metadata,
       ...(frame.parentActionRunId
         ? { parentRunId: frame.parentActionRunId }
         : {}),

@@ -43,7 +43,7 @@ export type RuntimeTransactionCollections<
 export type RuntimeActionCallers = Readonly<
   Record<
     string,
-    (input: never, options?: ActionCallOptions) => Promise<unknown>
+    (input: unknown, options?: ActionCallOptions) => Promise<unknown>
   >
 >;
 
@@ -77,9 +77,13 @@ export type RuntimeIdentity = Readonly<{
   settlementScopeId?: string;
 }>;
 
+/** Caller-owned, JSON-safe data carried by one Action invocation. */
+export type ActionInvocationMetadata = Readonly<Record<string, unknown>>;
+
 export type ActionCallOptions = Readonly<{
   operationKey?: string;
   identity?: RuntimeIdentity;
+  metadata?: ActionInvocationMetadata;
   signal?: AbortSignal;
 }>;
 
@@ -141,6 +145,7 @@ export interface ActionContext<
     id: string;
     runId: string;
     parentRunId?: string;
+    metadata: ActionInvocationMetadata;
   }>;
   /** Persists one self-contained `<actionId>.progress` lifecycle Event. */
   progress(value: unknown): Promise<void>;
@@ -228,6 +233,7 @@ type ActionEventBase<I> = Readonly<{
   actionRunId: string;
   actionId: string;
   parentActionRunId?: string;
+  metadata: ActionInvocationMetadata;
   input: I;
 }>;
 
@@ -283,6 +289,7 @@ export type ActionLifecycleEmitter = Readonly<{
   emit<I = unknown, O = unknown, P = unknown>(
     input: ActionLifecycleInput<I, O, P>,
   ): Promise<CoordinatedMutationResult<void> | DurableEvent>;
+  invoked(actionRunId: string): Promise<ActionInvokedData | null>;
   terminal(
     actionRunId: string,
   ): Promise<ActionCompletedData | ActionFailedData | null>;

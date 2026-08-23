@@ -3,6 +3,7 @@ import {
   CORE_LLM_CALL_METADATA_SCHEMA,
   coreLlmCallMetadata,
 } from "../../internal/workflow-metadata.ts";
+import { parseActionLifecycleEvent } from "@copilotz/copilotz/actions";
 import { defineProcessor, type Processor } from "@copilotz/copilotz/plugins";
 import type { CoreToolProcessorContext } from "../../context.ts";
 import { resumeDeferredToolPlan } from "../../internal/tool-plan.ts";
@@ -37,7 +38,15 @@ export const failAskProcessor: Processor<CoreToolProcessorContext> =
       },
     ],
     async handle(event, context) {
-      const lifecycle = asRecord(event.data);
+      const lifecycle = parseActionLifecycleEvent(event, {
+        actionId: "llm.call",
+        statuses: ["failed", "cancelled"],
+        requireRoot: true,
+      });
+      if (
+        !lifecycle ||
+        (lifecycle.status !== "failed" && lifecycle.status !== "cancelled")
+      ) return;
       const metadata = coreLlmCallMetadata(lifecycle.metadata);
       if (!metadata) return;
       const ask = metadata.ask;

@@ -1,4 +1,5 @@
 import type { CollectionRecord } from "@copilotz/copilotz/collections";
+import { parseActionLifecycleEvent } from "@copilotz/copilotz/actions";
 import { deriveWorkflowId } from "@copilotz/copilotz/events";
 import {
   CORE_LLM_CALL_METADATA_SCHEMA,
@@ -40,11 +41,15 @@ export const projectTextResultProcessor: Processor<
     },
   }],
   async handle(event, context) {
-    const lifecycle = asRecord(event.data);
+    const lifecycle = parseActionLifecycleEvent(event, {
+      actionId: "llm.call",
+      statuses: ["completed"],
+      requireRoot: true,
+    });
+    if (!lifecycle || lifecycle.status !== "completed") return;
     const metadata = coreLlmCallMetadata(lifecycle.metadata);
     if (!metadata) return;
-    const actionRunId = String(lifecycle.actionRunId ?? "").trim();
-    if (!actionRunId) throw new Error("llm.call lifecycle has no run ID.");
+    const actionRunId = lifecycle.actionRunId;
     const output = llmOutput(lifecycle.output);
     const participant = await loadParticipant(
       context,

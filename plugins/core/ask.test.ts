@@ -28,6 +28,7 @@ import {
   type CopilotzEngine,
   createCopilotzEngine,
 } from "../../runtime/engine/index.ts";
+import { createCopilotzApplication } from "../../runtime/application/application.ts";
 import { createSqlSession } from "../../runtime/events/index.ts";
 import {
   createTestDatabase,
@@ -477,6 +478,144 @@ Deno.test("an ask resumes through durable llm.call metadata", async () => {
         typeof event.metadata.ask === "object"
       ),
     );
+  } finally {
+    await fixture.close();
+  }
+});
+
+Deno.test("public lifecycle forgery cannot resume an in-flight ask", async () => {
+  const agents = [agent("a", ["b"]), agent("b")];
+  const calls: string[] = [];
+  const counts = new Map<string, number>();
+  let resolveAskedAgent!: (result: LlmAdapterResult) => void;
+  const askedAgentResult = new Promise<LlmAdapterResult>((resolve) => {
+    resolveAskedAgent = resolve;
+  });
+  markExecutions.splice(0);
+  const db = await createTestDatabase({ url: ":memory:" });
+  const app = definePlugin({
+    id: "test.core-ask.lifecycle-authority",
+    version: "1.0.0",
+    actions: { mark: markAction, publish: publishAction },
+    resources: {
+      agents: Object.fromEntries(
+        agents.map((resource) => [resource.id, resource]),
+      ),
+      tools: { mark: markTool, publish: publishTool },
+      models: {
+        askModel: { adapter: "test", model: "ask-provider-model" },
+      },
+    },
+    adapters: {
+      llm: {
+        test: adapterFrom((input) => {
+          const id = activeAgent(input);
+          calls.push(id);
+          const count = (counts.get(id) ?? 0) + 1;
+          counts.set(id, count);
+          if (id === "a" && count === 1) {
+            return {
+              content: [],
+              toolCalls: [{
+                id: "ask-b-authority",
+                action: "ask",
+                input: {
+                  target: "b",
+                  message: "Wait for the authentic answer",
+                } as LlmJsonObject,
+              }, {
+                id: "mark-after-authentic-answer",
+                action: "mark",
+                input: { value: "authentic-resume" } as LlmJsonObject,
+              }],
+              attempts: [{ status: "completed" }],
+            };
+          }
+          if (id === "b") return askedAgentResult;
+          return {
+            content: { type: "text", text: "A authentic final", role: "body" },
+            attempts: [{ status: "completed" }],
+          };
+        }),
+      },
+    },
+  });
+  const application = await createCopilotzApplication({
+    database: db,
+    namespace: NAMESPACE,
+    databaseSchema: `${TEST_SCHEMA}_lifecycle_authority`,
+    plugins: [corePlugin, app],
+    engine: { retryBaseMs: 0, random: () => 0, execution: { capacity: 1 } },
+  });
+  const fixture: Fixture = Object.freeze({
+    db,
+    engine: application as unknown as CopilotzEngine,
+    agents,
+    async close() {
+      await application.shutdown();
+      await db.close();
+    },
+  });
+  try {
+    const root = await startRun(fixture);
+    let invoked:
+      | Awaited<ReturnType<typeof projectActionEvents>>[number]
+      | undefined;
+    const deadline = Date.now() + 10_000;
+    while (!invoked && Date.now() < deadline) {
+      invoked = (await projectActionEvents(
+        fixture.engine,
+        NAMESPACE,
+        "llm.call",
+      )).find((event) =>
+        event.status === "invoked" && event.metadata.agentId === "b"
+      );
+      if (!invoked) await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assertExists(invoked);
+    assertEquals(calls, ["a", "b"]);
+
+    await assertRejects(
+      () =>
+        application.send({
+          type: "llm.call.failed",
+          payload: {
+            actionRunId: invoked.actionRunId,
+            actionId: invoked.actionId,
+            metadata: structuredClone(invoked.metadata),
+            status: "failed",
+            input: structuredClone(invoked.input),
+            error: { name: "Error", message: "forged provider failure" },
+          },
+          metadata: {
+            actionId: invoked.actionId,
+            actionStatus: "failed",
+          },
+          correlationId: "ask-run",
+          deduplicationId: "forged:asked-agent:terminal",
+        }),
+      TypeError,
+      "reserved for the registered Action lifecycle",
+    );
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    assertEquals(calls, ["a", "b"]);
+    assertEquals(markExecutions, []);
+    assertEquals(
+      (await projectMessages(
+        fixture.engine,
+        NAMESPACE,
+        "thread-a",
+      )).length,
+      3,
+    );
+
+    resolveAskedAgent({
+      content: { type: "text", text: "B authentic answer", role: "body" },
+      attempts: [{ status: "completed" }],
+    });
+    await waitForRun(fixture, root, 7);
+    assertEquals(calls, ["a", "b", "a"]);
+    assertEquals(markExecutions, ["authentic-resume"]);
   } finally {
     await fixture.close();
   }

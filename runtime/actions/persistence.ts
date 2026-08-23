@@ -1,7 +1,8 @@
 import type { EventCoordinator } from "../events/index.ts";
 import type { EventStore } from "../events/index.ts";
 import { writeEventBody } from "../events/body-store.ts";
-import { resolveProcessorEventData } from "../plugins/event-data.ts";
+import { resolveProcessorEvent } from "../plugins/event-data.ts";
+import { parseActionLifecycleEvent } from "./event.ts";
 import type {
   ActionEventData,
   ActionLifecycleAppender,
@@ -62,9 +63,16 @@ export function createActionLifecycleLoader(
     }
     const event = await options.store.getEventByDeduplicationId(namespace, id);
     if (!event) return null;
-    return await resolveProcessorEventData(
+    const resolved = await resolveProcessorEvent(
       options.store,
       event,
-    ) as ActionEventData;
+    );
+    const lifecycle = parseActionLifecycleEvent(resolved);
+    if (!lifecycle) {
+      throw new Error(
+        `Event '${event.id}' at Action receipt identity '${id}' is not an authoritative Action lifecycle Event.`,
+      );
+    }
+    return lifecycle as ActionEventData;
   };
 }

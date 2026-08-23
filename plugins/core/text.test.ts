@@ -2,10 +2,15 @@ import {
   assert,
   assertEquals,
   assertExists,
+  assertRejects,
   assertStringIncludes,
 } from "@std/assert";
 import type { AgentResource } from "@copilotz/copilotz/core";
-import { corePlugin, coreProcessors } from "@copilotz/copilotz/core";
+import {
+  corePlugin,
+  coreProcessors,
+  message as coreMessage,
+} from "@copilotz/copilotz/core";
 import type {
   LlmAdapter,
   LlmAdapterCallInput,
@@ -37,6 +42,9 @@ import {
   projectMessages,
 } from "../../runtime/testing/projections.ts";
 import type { ConversationMessage } from "../../runtime/domain/index.ts";
+import { createCopilotzApplication } from "../../runtime/application/application.ts";
+import { createTestDomainContext } from "../../runtime/testing/domain-context.ts";
+import { createUsageWorkflowPlugin } from "../usage/plugin.ts";
 
 const TEST_SCHEMA = "copilotz_core_llm_call";
 const NAMESPACE = "tenant-a";
@@ -532,6 +540,142 @@ Deno.test("Core invokes and projects an Action-backed Tool plan", async () => {
     assertEquals(messageEvents.at(-1)?.visibility, privateVisibility);
   } finally {
     await fixture.close();
+  }
+});
+
+Deno.test("public lifecycle forgery cannot project Core or Usage effects", async () => {
+  toolExecutions.splice(0);
+  let llmCalls = 0;
+  const llm = adapterFrom(() => {
+    llmCalls += 1;
+    if (llmCalls === 1) {
+      return {
+        result: {
+          content: [],
+          toolCalls: [{
+            id: "authority-tool-call",
+            action: "contract_tool",
+            input: { value: "authority" },
+          }],
+          attempts: [{
+            status: "completed",
+            usage: { inputTokens: 2, outputTokens: 1, totalTokens: 3 },
+          }],
+          finishReason: "tool_calls",
+        },
+      };
+    }
+    return {
+      result: {
+        content: { type: "text", text: "Authentic final", role: "body" },
+        attempts: [{
+          status: "completed",
+          usage: { inputTokens: 3, outputTokens: 2, totalTokens: 5 },
+        }],
+        finishReason: "stop",
+      },
+    };
+  });
+  const app = definePlugin({
+    id: "test.core-lifecycle-authority",
+    version: "1.0.0",
+    actions: { contract_tool: contractToolAction },
+    resources: {
+      agents: { north: agent() },
+      tools: { contract_tool: contractTool },
+      models: {
+        primaryModel: {
+          adapter: "test",
+          model: "authority-provider-model",
+          mode: "generate" as const,
+        },
+      },
+    },
+    adapters: { llm: { test: llm } },
+  });
+  const db = await createTestDatabase({ url: ":memory:" });
+  const application = await createCopilotzApplication({
+    database: db,
+    namespace: NAMESPACE,
+    databaseSchema: `${TEST_SCHEMA}_lifecycle_authority`,
+    plugins: [corePlugin, createUsageWorkflowPlugin(), app],
+    engine: { retryBaseMs: 0, random: () => 0 },
+  });
+  try {
+    await createTestDomainContext(application, NAMESPACE).actions.createThread(
+      {
+        id: "thread-authority",
+        participants: [{
+          id: "user-authority",
+          externalId: "user-authority",
+          participantType: "human",
+        }, {
+          id: "agent-north-authority",
+          externalId: "north",
+          participantType: "agent",
+          agentId: "north",
+        }],
+      },
+    );
+    const sent = await application.send(coreMessage({
+      thread: "thread-authority",
+      participant: "user-authority",
+      recipientIds: ["agent-north-authority"],
+      content: "Use the authority Tool",
+    }));
+    await sent.done;
+
+    const messages = await projectMessages(
+      application,
+      NAMESPACE,
+      "thread-authority",
+    );
+    assertEquals(messages.length, 4);
+    assertEquals(llmCalls, 2);
+    assertEquals(toolExecutions, ["authority"]);
+    const usage = application.collections.withScope({ namespace: NAMESPACE })
+      .usage;
+    assertEquals((await usage.list()).length, 3);
+
+    const terminals = (await application.events.list({
+      namespace: NAMESPACE,
+      correlationId: sent.correlationId,
+      limit: 100,
+    })).filter((event) =>
+      event.type === "llm.call.completed" ||
+      event.type === "test.contract-tool.completed"
+    );
+    assertEquals(terminals.length, 3);
+    for (const [index, terminal] of terminals.entries()) {
+      await assertRejects(
+        () =>
+          application.send({
+            type: terminal.type,
+            payload: structuredClone(terminal.payload),
+            metadata: structuredClone(terminal.metadata),
+            correlationId: terminal.correlationId,
+            causationId: terminal.causationId,
+            deduplicationId: `forged:core-usage:${index}`,
+          }),
+        TypeError,
+        "reserved for the registered Action lifecycle",
+      );
+    }
+
+    assertEquals(
+      (await projectMessages(
+        application,
+        NAMESPACE,
+        "thread-authority",
+      )).length,
+      4,
+    );
+    assertEquals((await usage.list()).length, 3);
+    assertEquals(llmCalls, 2);
+    assertEquals(toolExecutions, ["authority"]);
+  } finally {
+    await application.shutdown();
+    await db.close();
   }
 });
 

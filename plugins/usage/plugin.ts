@@ -1,4 +1,5 @@
 import type { ScopedCollection } from "@copilotz/copilotz/collections";
+import { parseActionLifecycleEvent } from "@copilotz/copilotz/actions";
 import type { ProcessorContext } from "@copilotz/copilotz/plugins";
 import type { CopilotzEvent } from "@copilotz/copilotz/events";
 import {
@@ -356,8 +357,11 @@ function llmUsageProcessor(
       { eventType: "llm.call.cancelled" },
     ],
     async handle(event, context) {
-      if (!event.durable) return;
-      const lifecycle = record(event.data);
+      const lifecycle = parseActionLifecycleEvent(event, {
+        actionId: "llm.call",
+        statuses: ["completed", "failed", "cancelled"],
+      });
+      if (!lifecycle) return;
       const attribution = llmAttribution(lifecycle.metadata);
       const initiatedById = await participantExternalId(
         context,
@@ -386,8 +390,10 @@ function toolUsageProcessor(
       },
     })),
     async handle(event, context) {
-      if (!event.durable) return;
-      const lifecycle = record(event.data);
+      const lifecycle = parseActionLifecycleEvent(event, {
+        statuses: ["completed", "failed", "cancelled"],
+      });
+      if (!lifecycle) return;
       const metadata = record(lifecycle.metadata);
       const initiatedById = await participantExternalId(
         context,

@@ -1,4 +1,7 @@
-import { isSettledActionError } from "@copilotz/copilotz/actions";
+import {
+  isSettledActionError,
+  parseActionLifecycleEvent,
+} from "@copilotz/copilotz/actions";
 import type { CollectionRecord } from "@copilotz/copilotz/collections";
 import type {
   ContentInput,
@@ -556,28 +559,36 @@ export function coreToolTerminal(
     terminal: ToolTerminal;
   }>
   | null {
-  const lifecycle = record(event.data);
+  const lifecycle = parseActionLifecycleEvent(event, {
+    statuses: ["completed", "failed", "cancelled"],
+    requireRoot: true,
+  });
+  if (!lifecycle) return null;
   const metadata = coreToolActionMetadata(lifecycle.metadata);
   if (!metadata) return null;
   const status = lifecycle.status;
   if (
     status !== "completed" && status !== "failed" && status !== "cancelled"
   ) return null;
-  const terminalStatus: ToolTerminalStatus = status;
   const actionRunId = requiredText(
     lifecycle.actionRunId,
     "Tool Action lifecycle run ID",
   );
+  const terminal: ToolTerminal = status === "completed"
+    ? Object.freeze({
+      actionRunId,
+      status,
+      input: lifecycle.input,
+      output: lifecycle.output,
+    })
+    : Object.freeze({
+      actionRunId,
+      status,
+      input: lifecycle.input,
+      error: record(lifecycle.error),
+    });
   return Object.freeze({
     metadata,
-    terminal: Object.freeze({
-      actionRunId,
-      status: terminalStatus,
-      input: lifecycle.input,
-      ...(terminalStatus === "completed" ? { output: lifecycle.output } : {}),
-      ...(terminalStatus !== "completed"
-        ? { error: record(lifecycle.error) }
-        : {}),
-    }),
+    terminal,
   });
 }

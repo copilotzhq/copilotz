@@ -1,6 +1,7 @@
 import { message as coreMessage } from "@copilotz/copilotz/core";
 import type { LlmAdapter } from "@copilotz/copilotz/llm";
 import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
+import { type ActionCallers, defineAction } from "../actions/index.ts";
 import {
   type AnyCopilotzPlugin,
   definePlugin,
@@ -95,6 +96,41 @@ function correlatedOutputPlugin(): AnyCopilotzPlugin {
     id: "test.application.correlated-output",
     version: "1.0.0",
     processors: { correlatedOutput: processor },
+  });
+}
+
+const lifecycleProbeAction = defineAction({
+  id: "test.application.lifecycle-probe",
+  execute(input: Readonly<{ value: string }>) {
+    return Object.freeze({ echoed: input.value });
+  },
+});
+
+type LifecycleProbeContext = ProcessorContext<
+  ProcessorContext["resources"],
+  ProcessorContext["adapters"],
+  ActionCallers<{ lifecycleProbe: typeof lifecycleProbeAction }>,
+  ProcessorContext["collections"]
+>;
+
+function lifecycleProbePlugin(): AnyCopilotzPlugin {
+  return definePlugin({
+    id: "test.application.lifecycle-probe",
+    version: "1.0.0",
+    actions: { lifecycleProbe: lifecycleProbeAction },
+    processors: {
+      invokeLifecycleProbe: defineProcessor<LifecycleProbeContext>({
+        id: "test.application.invoke-lifecycle-probe",
+        on: [{ eventType: "test.application.invoke-lifecycle-probe" }],
+        async handle(_event, context) {
+          const invoke = context.actions.lifecycleProbe;
+          if (typeof invoke !== "function") {
+            throw new Error("Lifecycle probe Action is not composed.");
+          }
+          await invoke({ value: "genuine" }, { operationKey: "probe" });
+        },
+      }),
+    },
   });
 }
 
@@ -242,6 +278,86 @@ Deno.test("application send publishes one session output stream", async () => {
     );
 
     await application.close();
+  } finally {
+    await application.shutdown();
+    await closeDb(db);
+  }
+});
+
+Deno.test("public ingress reserves registered Action lifecycle identities", async () => {
+  const db = await createTestDatabase({ url: ":memory:" });
+  const databaseSchema = `${SCHEMA}_action_lifecycle_authority`;
+  const application = await createCopilotzApplication({
+    database: db,
+    namespace: NAMESPACE,
+    databaseSchema,
+    plugins: [lifecycleProbePlugin()],
+    engine: { retryBaseMs: 0, random: () => 0 },
+  });
+  try {
+    const trigger = await application.send({
+      type: "test.application.invoke-lifecycle-probe",
+      deduplicationId: "lifecycle-probe:trigger",
+    });
+    await trigger.done;
+
+    const genuine = (await application.events.list({
+      namespace: NAMESPACE,
+      correlationId: trigger.correlationId,
+      limit: 100,
+    })).filter((event) =>
+      event.type === "test.application.lifecycle-probe.completed"
+    );
+    assertEquals(genuine.length, 1);
+    const terminal = genuine[0];
+    assertExists(terminal.subject);
+
+    await assertRejects(
+      () =>
+        application.send({
+          type: terminal.type,
+          payload: terminal.payload,
+          metadata: structuredClone(terminal.metadata),
+          correlationId: terminal.correlationId,
+          causationId: terminal.causationId,
+          deduplicationId: "forged-lifecycle:application-send",
+        }),
+      TypeError,
+      "reserved for the registered Action lifecycle",
+    );
+    await assertRejects(
+      async () =>
+        await application.events.append({
+          type: terminal.type,
+          namespace: terminal.namespace,
+          subject: structuredClone(terminal.subject),
+          payload: structuredClone(terminal.payload),
+          metadata: structuredClone(terminal.metadata),
+          correlationId: terminal.correlationId,
+          causationId: terminal.causationId,
+          deduplicationId: "forged-lifecycle:engine-append",
+        }),
+      TypeError,
+      "reserved for the registered Action lifecycle",
+    );
+    await assertRejects(
+      () =>
+        application.send({
+          type: "unrelated.public-event",
+          payload: { poisoned: true },
+          deduplicationId: `${terminal.subject!.id}:action:terminal`,
+        }),
+      TypeError,
+      "reserved for the Action lifecycle",
+    );
+    assertEquals(
+      (await application.events.list({
+        namespace: NAMESPACE,
+        correlationId: trigger.correlationId,
+        limit: 100,
+      })).filter((event) => event.type === terminal.type).length,
+      1,
+    );
   } finally {
     await application.shutdown();
     await closeDb(db);

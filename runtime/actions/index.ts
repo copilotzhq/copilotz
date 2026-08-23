@@ -7,6 +7,11 @@ export {
 } from "./invoker.ts";
 export { createActionLifecycleEmitter } from "./lifecycle.ts";
 export {
+  isRegisteredActionLifecycleEventType,
+  isReservedActionLifecycleDeduplicationId,
+  parseActionLifecycleEvent,
+} from "./event.ts";
+export {
   createActionLifecycleAppender,
   createActionLifecycleLoader,
 } from "./persistence.ts";
@@ -46,8 +51,8 @@ export type {
   ActionTransactionContext,
   ActionTransactionOptions,
   AnyActionDefinition,
-  RuntimeActionCallers,
   RuntimeActionCallerMap,
+  RuntimeActionCallers,
   RuntimeCollections,
   RuntimeContent,
   RuntimeContext,
@@ -58,3 +63,4 @@ export type {
   RuntimeTransactionCollections,
   SerializedActionError,
 } from "./types.ts";
+export type { ParseActionLifecycleEventOptions } from "./event.ts";

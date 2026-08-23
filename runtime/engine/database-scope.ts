@@ -16,6 +16,8 @@ import {
   type ActionContextBindings,
   createActionLifecycleAppender,
   createActionLifecycleLoader,
+  isRegisteredActionLifecycleEventType,
+  isReservedActionLifecycleDeduplicationId,
 } from "../actions/index.ts";
 import {
   type CopilotzEvent,
@@ -258,7 +260,28 @@ export function createDatabaseScope(
     return event?.namespace === namespace ? delivery : null;
   };
   const events: CopilotzEngineDatabaseScope["events"] = Object.freeze({
-    append: (draft, appendOptions) => coordinator.append(draft, appendOptions),
+    append(draft, appendOptions) {
+      if (
+        isReservedActionLifecycleDeduplicationId(draft.deduplicationId)
+      ) {
+        throw new TypeError(
+          `Event deduplication identity '${
+            draft.deduplicationId!.trim()
+          }' is reserved for the Action lifecycle.`,
+        );
+      }
+      if (
+        isRegisteredActionLifecycleEventType(
+          draft.type,
+          options.registry.actions,
+        )
+      ) {
+        throw new TypeError(
+          `Event type '${draft.type.trim()}' is reserved for the registered Action lifecycle.`,
+        );
+      }
+      return coordinator.append(draft, appendOptions);
+    },
     async emit(input) {
       const event = createEphemeralEvent(input, options.now);
       const dispatched = await options.publishLive(event);

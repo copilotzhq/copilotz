@@ -27,6 +27,7 @@ import {
   createCopilotzEngine,
 } from "../../runtime/engine/index.ts";
 import { createSqlSession } from "../../runtime/events/index.ts";
+import type { EventVisibility } from "../../runtime/events/index.ts";
 import {
   createTestDatabase,
   type TestDatabase,
@@ -171,7 +172,11 @@ function collection(engine: CopilotzEngine, name: string) {
   return value;
 }
 
-async function startRun(fixture: Fixture, text = "Hello"): Promise<string> {
+async function startRun(
+  fixture: Fixture,
+  text = "Hello",
+  visibility?: EventVisibility,
+): Promise<string> {
   await collection(fixture.engine, "participant").create({
     id: "user-a",
     externalId: "user-a",
@@ -209,6 +214,7 @@ async function startRun(fixture: Fixture, text = "Hello"): Promise<string> {
     namespace: NAMESPACE,
     threadId: "thread-a",
     routing: { senderId: "user-a", recipientIds: ["agent-north"] },
+    ...(visibility ? { visibility } : {}),
     identity: {
       correlationId: "core-run",
       deduplicationId: "message:user:create",
@@ -339,11 +345,42 @@ Deno.test("Core invokes llm.call with explicit application Models and Adapters",
       agentParticipantId: "agent-north",
       initiatorParticipantId: "user-a",
       availableToolIds: ["contract_tool"],
+      responseVisibility: { kind: "public" },
     });
     assertEquals(
       "threadId" in (completed.input as Record<string, unknown>),
       false,
     );
+  } finally {
+    await fixture.close();
+  }
+});
+
+Deno.test("Core never widens the trigger Message visibility", async () => {
+  const fixture = await createFixture(() => ({
+    result: {
+      content: { type: "text", text: "Private answer", role: "body" },
+      attempts: [{ status: "completed" }],
+      finishReason: "stop",
+    },
+  }));
+  const visibility = {
+    kind: "participants" as const,
+    participantIds: ["user-a", "agent-north"],
+  };
+  try {
+    const root = await startRun(fixture, "Private question", visibility);
+    await waitForRun(fixture, root, 2);
+    const output = (await fixture.engine.events.list({
+      namespace: NAMESPACE,
+      threadId: "thread-a",
+      limit: 100,
+    })).find((event) =>
+      event.type === "message.created" &&
+      event.subject?.id !== "message:user"
+    );
+    assertExists(output);
+    assertEquals(output.visibility, visibility);
   } finally {
     await fixture.close();
   }
@@ -388,7 +425,15 @@ Deno.test("Core invokes and projects an Action-backed Tool plan", async () => {
     };
   });
   try {
-    const root = await startRun(fixture, "Use the contract tool");
+    const privateVisibility = {
+      kind: "participants" as const,
+      participantIds: ["user-a", "agent-north"],
+    };
+    const root = await startRun(
+      fixture,
+      "Use the contract tool",
+      privateVisibility,
+    );
     await waitForRun(fixture, root, 6);
     assertEquals(call, 2);
     assertEquals(toolExecutions, ["first", "second", "empty-array"]);
@@ -447,6 +492,7 @@ Deno.test("Core invokes and projects an Action-backed Tool plan", async () => {
         "planIndex",
         "planMessageId",
         "planSize",
+        "responseVisibility",
         "schema",
         "threadId",
         "toolCallId",
@@ -470,6 +516,20 @@ Deno.test("Core invokes and projects an Action-backed Tool plan", async () => {
         .actionRunId,
       "string",
     );
+    const messageEvents = (await fixture.engine.events.list({
+      namespace: NAMESPACE,
+      threadId: "thread-a",
+      limit: 100,
+    })).filter((event) => event.type === "message.created");
+    assertEquals(messageEvents.map((event) => event.visibility.kind), [
+      "participants",
+      "participants",
+      "tool",
+      "tool",
+      "tool",
+      "participants",
+    ]);
+    assertEquals(messageEvents.at(-1)?.visibility, privateVisibility);
   } finally {
     await fixture.close();
   }

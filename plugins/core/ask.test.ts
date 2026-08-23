@@ -315,6 +315,7 @@ Deno.test("missing or forged parent ask cursors reject every retry", async () =>
     agentParticipantId,
     initiatorParticipantId: "user-a",
     availableToolIds: ["ask"],
+    responseVisibility: { kind: "public" as const },
     parentLlmActionRunId: `llm-${agentId}`,
   });
   const parent: AgentAskMetadata = {

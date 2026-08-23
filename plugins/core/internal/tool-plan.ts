@@ -5,7 +5,10 @@ import type {
   ContentRef,
   ContentSequence,
 } from "@copilotz/copilotz/content";
-import { deriveWorkflowId } from "@copilotz/copilotz/events";
+import {
+  deriveWorkflowId,
+  type EventVisibility,
+} from "@copilotz/copilotz/events";
 import type { LlmJsonObject, LlmToolCall } from "@copilotz/copilotz/llm";
 import type { Processor } from "@copilotz/copilotz/plugins";
 import { coreAgent, type CoreToolProcessorContext } from "../context.ts";
@@ -34,6 +37,7 @@ export type CoreToolPlanBase = Readonly<{
   agentParticipantId: string;
   initiatorParticipantId: string;
   availableToolIds: readonly string[];
+  responseVisibility: EventVisibility;
   parentLlmActionRunId: string;
   ask?: AgentAskMetadata;
 }>;
@@ -193,6 +197,7 @@ export function toolActionMetadataAt(
     agentParticipantId: plan.agentParticipantId,
     initiatorParticipantId: plan.initiatorParticipantId,
     availableToolIds: plan.availableToolIds,
+    responseVisibility: plan.responseVisibility,
     parentLlmActionRunId: plan.parentLlmActionRunId,
     ...(plan.ask ? { ask: plan.ask } : {}),
   });
@@ -265,10 +270,10 @@ export async function invokeToolPlanAction(
   }
 }
 
-function visibility(
+function configuredToolVisibility(
   value: unknown,
   requesterId: string,
-) {
+): EventVisibility {
   const policy = value === "requester_only" || value === "public"
     ? value
     : "public_status";
@@ -277,6 +282,42 @@ function visibility(
     policy,
     requesterId,
   });
+}
+
+function toolResultVisibility(
+  baseline: EventVisibility,
+  configuredPolicy: unknown,
+  requesterId: string,
+): EventVisibility {
+  const configured = configuredToolVisibility(configuredPolicy, requesterId);
+  if (baseline.kind === "internal") return Object.freeze({ kind: "internal" });
+  if (baseline.kind === "public") return configured;
+  if (baseline.kind === "participants") {
+    if (!baseline.participantIds.includes(requesterId)) {
+      return Object.freeze({ kind: "internal" });
+    }
+    return configured.kind === "tool" && configured.policy === "public"
+      ? Object.freeze({
+        kind: "participants",
+        participantIds: Object.freeze([...baseline.participantIds]),
+      })
+      : Object.freeze({
+        kind: "tool",
+        policy: "requester_only",
+        requesterId,
+      });
+  }
+  if (baseline.requesterId !== requesterId) {
+    return Object.freeze({ kind: "internal" });
+  }
+  const rank = { requester_only: 0, public_status: 1, public: 2 } as const;
+  const configuredPolicyValue = configured.kind === "tool"
+    ? configured.policy
+    : "requester_only";
+  const policy = rank[baseline.policy] <= rank[configuredPolicyValue]
+    ? baseline.policy
+    : configuredPolicyValue;
+  return Object.freeze({ kind: "tool", policy, requesterId });
 }
 
 function isContentRef(value: unknown): value is ContentRef {
@@ -337,6 +378,7 @@ function planBase(
     agentParticipantId: metadata.agentParticipantId,
     initiatorParticipantId: metadata.initiatorParticipantId,
     availableToolIds: metadata.availableToolIds,
+    responseVisibility: metadata.responseVisibility,
     parentLlmActionRunId: metadata.parentLlmActionRunId,
     ...(metadata.ask ? { ask: metadata.ask } : {}),
   });
@@ -465,7 +507,8 @@ export async function projectAndAdvanceToolPlan(
     },
     recipientIds: [metadata.agentParticipantId],
     content: resultContent(terminal),
-    visibility: visibility(
+    visibility: toolResultVisibility(
+      metadata.responseVisibility,
       tool.history?.visibility,
       metadata.agentParticipantId,
     ),

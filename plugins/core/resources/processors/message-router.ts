@@ -87,6 +87,9 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
           initiatorParticipantId: toolAction?.initiatorParticipantId ??
             String(sender.id),
           availableToolIds,
+          responseVisibility: structuredClone(
+            toolAction?.responseVisibility ?? event.visibility,
+          ),
           ...(toolAction?.parentLlmActionRunId ??
               workflow?.parentLlmAttemptId ?? ask?.callingAttemptId
             ? {

@@ -113,7 +113,7 @@ export const projectTextResultProcessor: Processor<
       sender: participant,
       recipientIds: [],
       content: output.content,
-      visibility: { kind: "public" },
+      visibility: structuredClone(metadata.responseVisibility),
       metadata: messageMetadata,
     }, {
       operationKey: "project:agent-message",
@@ -131,6 +131,7 @@ export const projectTextResultProcessor: Processor<
       agentParticipantId: metadata.agentParticipantId,
       initiatorParticipantId: metadata.initiatorParticipantId,
       availableToolIds: metadata.availableToolIds,
+      responseVisibility: metadata.responseVisibility,
       parentLlmActionRunId: actionRunId,
       ...(metadata.ask ? { ask: metadata.ask } : {}),
     });

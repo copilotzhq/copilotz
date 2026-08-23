@@ -1,3 +1,5 @@
+import type { EventVisibility } from "@copilotz/copilotz/events";
+
 const WORKFLOW_METADATA_KEY = "copilotzWorkflow";
 const AGENT_ASK_METADATA_KEY = "copilotzAsk";
 const TOOL_PLAN_METADATA_KEY = "copilotzToolPlan";
@@ -38,6 +40,8 @@ export type CoreLlmCallMetadata = Readonly<{
   agentParticipantId: string;
   initiatorParticipantId: string;
   availableToolIds: readonly string[];
+  /** Audience baseline for the projected assistant response. */
+  responseVisibility: EventVisibility;
   parentActionRunId?: string;
   ask?: AgentAskMetadata;
 }>;
@@ -57,6 +61,8 @@ export type CoreToolActionOrigin = Readonly<{
   agentParticipantId: string;
   initiatorParticipantId: string;
   availableToolIds: readonly string[];
+  /** Original response audience retained across every Tool continuation. */
+  responseVisibility: EventVisibility;
   parentLlmActionRunId: string;
 }>;
 
@@ -214,12 +220,30 @@ export function agentAskMetadata(value: unknown): AgentAskMetadata | null {
   return validAgentAsk(record(record(value)[AGENT_ASK_METADATA_KEY]));
 }
 
+const CORE_LLM_CALL_KEYS = new Set([
+  "schema",
+  "threadId",
+  "triggerMessageId",
+  "agentId",
+  "agentParticipantId",
+  "initiatorParticipantId",
+  "availableToolIds",
+  "responseVisibility",
+  "parentActionRunId",
+  "ask",
+]);
+
 /** Reads the self-contained provenance of a Core-owned `llm.call`. */
 export function coreLlmCallMetadata(
   value: unknown,
 ): CoreLlmCallMetadata | null {
   const candidate = record(value);
   if (candidate.schema !== CORE_LLM_CALL_METADATA_SCHEMA) return null;
+  if (
+    Reflect.ownKeys(candidate).some((key) =>
+      typeof key !== "string" || !CORE_LLM_CALL_KEYS.has(key)
+    )
+  ) return null;
   const required = [
     "threadId",
     "triggerMessageId",
@@ -240,6 +264,7 @@ export function coreLlmCallMetadata(
     new Set(candidate.availableToolIds).size !==
       candidate.availableToolIds.length
   ) return null;
+  if (!coreEventVisibility(candidate.responseVisibility)) return null;
   if (
     candidate.ask !== undefined &&
     !validAgentAsk(record(candidate.ask))
@@ -257,8 +282,39 @@ export function defineCoreLlmCallMetadata(
   return Object.freeze({
     ...validated,
     availableToolIds: Object.freeze([...validated.availableToolIds]),
+    responseVisibility: freezeCoreEventVisibility(
+      validated.responseVisibility,
+    ),
     ...(validated.ask ? { ask: Object.freeze(validated.ask) } : {}),
   });
+}
+
+function coreEventVisibility(value: unknown): value is EventVisibility {
+  const candidate = record(value);
+  const keys = Object.keys(candidate).sort();
+  if (candidate.kind === "public" || candidate.kind === "internal") {
+    return keys.length === 1 && keys[0] === "kind";
+  }
+  if (candidate.kind === "participants") {
+    return keys.length === 2 && keys[0] === "kind" &&
+      keys[1] === "participantIds" &&
+      validStringArray(candidate.participantIds);
+  }
+  return candidate.kind === "tool" && keys.length === 3 &&
+    keys[0] === "kind" && keys[1] === "policy" &&
+    keys[2] === "requesterId" &&
+    (candidate.policy === "requester_only" ||
+      candidate.policy === "public_status" || candidate.policy === "public") &&
+    Boolean(optionalMetadataText(candidate.requesterId));
+}
+
+function freezeCoreEventVisibility(value: EventVisibility): EventVisibility {
+  return value.kind === "participants"
+    ? Object.freeze({
+      kind: "participants",
+      participantIds: Object.freeze([...value.participantIds]),
+    })
+    : Object.freeze({ ...value });
 }
 
 function validStringArray(value: unknown): value is readonly string[] {
@@ -289,6 +345,7 @@ const TOOL_ACTION_ORIGIN_KEYS = new Set([
   "agentParticipantId",
   "initiatorParticipantId",
   "availableToolIds",
+  "responseVisibility",
   "parentLlmActionRunId",
 ]);
 
@@ -311,7 +368,8 @@ function validToolActionOrigin(
   if (
     required.some((key) => !optionalMetadataText(candidate[key])) ||
     !validPlanPosition(candidate) ||
-    !validStringArray(candidate.availableToolIds)
+    !validStringArray(candidate.availableToolIds) ||
+    !coreEventVisibility(candidate.responseVisibility)
   ) return null;
   return candidate as CoreToolActionOrigin;
 }
@@ -356,6 +414,9 @@ export function defineCoreToolActionMetadata(
   return Object.freeze({
     ...validated,
     availableToolIds: Object.freeze([...validated.availableToolIds]),
+    responseVisibility: freezeCoreEventVisibility(
+      validated.responseVisibility,
+    ),
     ...(validated.ask ? { ask: Object.freeze(validated.ask) } : {}),
   });
 }

@@ -24,7 +24,11 @@ import {
   type ProcessorEvent,
 } from "@copilotz/copilotz/plugins";
 import { BUILT_IN_CORE_TOOL_IDS, createBuiltInToolsPlugin } from "./plugin.ts";
-import type { AgentResource } from "@copilotz/copilotz/core";
+import {
+  type AgentResource,
+  coreCollectionsPlugin,
+  corePlugin,
+} from "@copilotz/copilotz/core";
 import type { ActionCallOptions } from "@copilotz/copilotz/actions";
 import type { ToolResource } from "../contracts.ts";
 import {
@@ -106,6 +110,7 @@ async function createFixture(
   });
   const registry = await createPluginRegistry({
     plugins: [
+      coreCollectionsPlugin,
       builtIns,
       createSkillsPlugin({
         id: "test.core-tools.skills",
@@ -237,6 +242,22 @@ Deno.test("built-in tools exclude optional plugin-owned skill tools", () => {
       }),
     TypeError,
     "duplicate IDs",
+  );
+});
+
+Deno.test("built-in tools compose beside Core without owning Core state", async () => {
+  const builtIns = createBuiltInToolsPlugin({
+    include: ["get_current_time"],
+  });
+  assertEquals(builtIns.plugins, []);
+  const registry = await createPluginRegistry({
+    plugins: [corePlugin, builtIns],
+  });
+  assertEquals(registry.collections.participant.name, "participant");
+  const clock = registry.resources.tools.get_current_time as ToolResource;
+  assertEquals(
+    clock.action,
+    "get_current_time",
   );
 });
 

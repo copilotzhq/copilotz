@@ -1,8 +1,5 @@
 import type { CollectionRecord } from "@copilotz/copilotz/collections";
-import {
-  type AgentResource,
-  coreCollectionsPlugin,
-} from "@copilotz/copilotz/core";
+import type { AgentResource } from "@copilotz/copilotz/core";
 import {
   assetIdFromRef,
   type ContentRef,
@@ -862,7 +859,6 @@ export function createBuiltInToolsPlugin(
   return definePlugin({
     id: options.id ?? "@copilotz/built-in-tools",
     version: options.version ?? "3.0.0",
-    plugins: [coreCollectionsPlugin],
     actions: Object.fromEntries(
       definitions.map((
         definition,

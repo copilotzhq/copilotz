@@ -15,7 +15,7 @@ import type { ActionCaller } from "@copilotz/copilotz/actions";
 import type {
   addThreadParticipantAction,
   createThreadAction,
-} from "@copilotz/copilotz/plugins/core";
+} from "@copilotz/copilotz/core";
 import type {
   ApplicationSendHandle,
   ApplicationSendInput,

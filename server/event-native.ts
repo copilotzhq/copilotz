@@ -2,7 +2,7 @@ import type { Agent } from "../runtime/resources/index.ts";
 import {
   type ChannelRuntime,
   createChannelRuntime,
-} from "../runtime/channels/index.ts";
+} from "../plugins/channels/index.ts";
 import {
   getThread,
   listMessages,

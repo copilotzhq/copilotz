@@ -24,6 +24,16 @@ import * as openApiTools from "../../plugins/tools/openapi/generator.ts";
 import * as persistentTerminalTools from "../../plugins/tools/persistent-terminal/plugin.ts";
 import * as denoPersistentTerminal from "../../plugins/tools/persistent-terminal/deno.ts";
 import * as webTools from "../../plugins/tools/web/plugin.ts";
+import * as skills from "../../plugins/skills/index.ts";
+import * as denoSkills from "../../plugins/skills/deno.ts";
+import * as admin from "../../plugins/admin/index.ts";
+import * as knowledge from "../../plugins/knowledge/index.ts";
+import * as memory from "../../plugins/memory/index.ts";
+import * as core from "@copilotz/copilotz/core";
+import * as coreSchedules from "@copilotz/copilotz/schedules/core";
+import * as goals from "@copilotz/copilotz/goals";
+import * as schedules from "@copilotz/copilotz/schedules";
+import * as usage from "@copilotz/copilotz/usage";
 import type {
   AnyCopilotzPlugin,
   CopilotzApplication,
@@ -85,6 +95,14 @@ Deno.test("v3 root exposes the factory-first application vocabulary", () => {
       "createFinanceToolsPlugin",
       "createPersistentTerminalToolsPlugin",
       "createWebToolsPlugin",
+      "createAdminPlugin",
+      "createKnowledgePlugin",
+      "createLongTermMemoryPlugin",
+      "corePlugin",
+      "createGoalRuntime",
+      "createUsageWorkflowPlugin",
+      "schedulesPlugin",
+      "coreSchedulesPlugin",
     ]
   ) assertEquals(removed in copilotz, false, removed);
 });
@@ -106,15 +124,13 @@ Deno.test("v3 package subpaths expose cohesive factories", () => {
     "createInteractiveCliIo",
     "startInteractiveCli",
   ]);
-  assertFunctions(denoAdapters, [
-    "buildOpenSkillsPlugin",
-    "listen",
-  ]);
+  assertFunctions(denoAdapters, ["listen"]);
   for (
     const moved of [
       "createPersistentTerminalService",
       "createProcessToolsPlugin",
       "createWorkspaceToolsPlugin",
+      "buildOpenSkillsPlugin",
     ]
   ) assertEquals(moved in denoAdapters, false, moved);
   assertFunctions(builtinTools, ["createBuiltInToolsPlugin"]);
@@ -137,6 +153,31 @@ Deno.test("v3 package subpaths expose cohesive factories", () => {
     "createPersistentTerminalService",
   ]);
   assertFunctions(webTools, ["createWebToolsPlugin"]);
+  assertFunctions(skills, [
+    "createSkillsPlugin",
+    "defineInlineSkill",
+    "defineSkill",
+  ]);
+  assertFunctions(denoSkills, ["buildOpenSkillsPlugin"]);
+  assertFunctions(admin, ["createAdminPlugin"]);
+  assertFunctions(knowledge, ["createKnowledgePlugin"]);
+  assertFunctions(memory, ["createLongTermMemoryPlugin"]);
+  assertFunctions(core, ["message"]);
+  assertEquals(typeof core.corePlugin, "object");
+  assertFunctions(goals, ["createGoalRuntime"]);
+  assertFunctions(usage, ["createUsageWorkflowPlugin"]);
+  assertEquals(typeof usage.usageCollection, "object");
+  assertFunctions(schedules, [
+    "createScheduledJob",
+    "getNextScheduledRunAt",
+    "scheduleTick",
+  ]);
+  assertEquals(typeof schedules.schedulesPlugin, "object");
+  assertFunctions(coreSchedules, [
+    "normalizeCoreScheduledMessagePayload",
+    "scheduledMessageJob",
+  ]);
+  assertEquals(typeof coreSchedules.coreSchedulesPlugin, "object");
   assertFunctions(attachments, [
     "createAttachmentRuntime",
   ]);

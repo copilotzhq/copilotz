@@ -130,6 +130,7 @@ API.
 | ---------------------------------- | ---------------------------------------------------------------------- |
 | `@copilotz/copilotz`               | Normal runtime-neutral application API                                 |
 | `/application`                     | Embedded, Gateway, and Worker role factories                           |
+| `/core`                            | Minimal semantic AI harness plugin                                     |
 | `/plugins`, `/resources`           | Plugin composition and logical resource types                          |
 | `/capabilities`                    | Explicit agent grants and canonical introspection                      |
 | `/events`                          | Immutable events and durable delivery contracts                        |
@@ -138,6 +139,10 @@ API.
 | `/agents`, `/llm`, `/tools`        | Agent prompt/config, LLM providers, and generic Tool contracts         |
 | `/tools/*`                         | Optional Tool plugins, protocol integrations, and host implementations |
 | `/skills`                          | Optional Open Skill resources and portable disclosure tools            |
+| `/skills/deno`                     | Deno build-time Open Skill packer                                      |
+| `/knowledge`                       | Optional Knowledge plugin primitives                                   |
+| `/memory`, `/goals`, `/usage`      | Optional semantic state and workflow plugins                           |
+| `/schedules`, `/schedules/core`    | Generic scheduling and optional Core-message integration               |
 | `/channels`, `/actions`, `/admin`  | Transport plugins, executable primitives, and admin APIs               |
 | `/adapters`                        | Ominipg adaptation and portable CLI mechanics                          |
 | `/adapters/deno`, `/adapters/node` | Generic host/runtime adapters                                          |

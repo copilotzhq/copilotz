@@ -430,7 +430,7 @@ deterministic conversion for existing resource directories and manifests.
 `runtime/loaders/agents-file.test.ts`,
 `runtime/create-copilotz-resources.test.ts`, `utils/merge-resources.test.ts`,
 `resources/core.test.ts`, `runtime/plugins/plugins.test.ts`, and
-`runtime/skills/plugin.test.ts`.
+`plugins/skills/plugin.test.ts`.
 
 ### F04 — Built-in resource catalog
 
@@ -445,7 +445,7 @@ parity row. The generic development-skill catalog is an approved retirement from
 core: those skills belong in a separately versioned optional plugin and must not
 be installed into unrelated applications by default.
 
-**Coverage:** `resources/core.test.ts`, `runtime/skills/plugin.test.ts`, tool,
+**Coverage:** `resources/core.test.ts`, `plugins/skills/plugin.test.ts`, tool,
 provider, channel, memory, and processor tests listed in the appendix. Add A04,
 which compares the declared manifest with loadable resources.
 
@@ -664,9 +664,9 @@ explicit memory tools, and participant identity migration.
 **Disposition:** Keep, P0. Execution may move to Oxian workloads; the memory
 model, boundaries, retry safety, and agent-scoped visibility remain.
 
-**Coverage:** `runtime/memory/long-term.test.ts`, memory processor tests,
-`resources/tools/update_user_memory/index.test.ts`, participant lifecycle tests,
-and migration tests.
+**Coverage:** `plugins/memory/plugin.test.ts`,
+`plugins/memory/consolidation.test.ts`, participant lifecycle tests, and
+migration tests.
 
 ### F18 — RAG, documents, chunks, and graph memory
 
@@ -730,9 +730,8 @@ remain identity-based across in-process and hypervisor placement.
 **Coverage:** `plugins/goals/goal.test.ts` covers bounded turns, stop/result
 reporting, canonical asset handoff, tool-result isolation, judge runs,
 cancellation, declared agent identities, lowercase stream items, factory style,
-and runtime neutrality. `runtime/goal.test.ts` remains legacy characterization
-until the final public switch. Goal documentation/examples and Mobizap's QA
-scripts remain downstream release gates.
+and runtime neutrality. Goal documentation/examples and Mobizap's QA scripts
+remain downstream release gates.
 
 ### F22 — Scheduled and background work
 
@@ -743,8 +742,10 @@ background thread creation, recovery, and process-independent durable work.
 events create deliveries; Oxian places execution. Do not confuse a background
 task with a private agent consultation.
 
-**Coverage:** manifest/resource checks and new A43–A44. Current coverage is
-insufficient, so deletion is blocked until characterization exists.
+**Coverage:** `plugins/schedules/schedules.test.ts` and
+`plugins/core-schedules/core-schedules.test.ts` cover generic due occurrences,
+manual runs, ingress, Core-message dispatch, and plugin composition. A43–A44
+remain downstream release gates.
 
 ### F23 — Usage, cost, observability, and admin
 
@@ -757,8 +758,8 @@ queries move to semantic events/deliveries without presenting obsolete queue
 states as canonical. A compatibility response may translate delivery activity
 during client migration.
 
-**Coverage:** runtime usage/token/pricing tests, all admin feature tests,
-chat-admin client contract, and A45–A47.
+**Coverage:** `runtime/llm/usage.test.ts`, `plugins/usage/plugin.test.ts`,
+`plugins/admin/plugin.test.ts`, the chat-admin client contract, and A45–A47.
 
 ### F24 — Channels and server facade
 
@@ -847,7 +848,7 @@ narrow `FinanceError` remains a class.
 
 **Coverage:** skill, filesystem, fetch, terminal, web-search, jq, pipeline, and
 tool-formatting tests plus manifest completeness,
-`runtime/skills/plugin.test.ts`, `plugins/tools/builtin/plugin.test.ts`, and
+`plugins/skills/plugin.test.ts`, `plugins/tools/builtin/plugin.test.ts`, and
 `plugins/tools/web/plugin.test.ts`, plus `plugins/tools/finance/plugin.test.ts`
 and the persistent-terminal plugin/Deno service tests under
 `plugins/tools/persistent-terminal`.
@@ -957,25 +958,24 @@ behavior; it means the test must stop asserting an obsolete physical mechanism.
 
 ### Runtime composition, execution, and routing — 22 files
 
-| Test family                                                                  | Disposition                                  | V3 owner                                         |
-| ---------------------------------------------------------------------------- | -------------------------------------------- | ------------------------------------------------ |
-| `runtime/create-copilotz-resources.test.ts`                                  | Keep/Adapt                                   | F01–F04                                          |
-| `runtime/loaders/resources.test.ts`, `runtime/loaders/agents-file.test.ts`   | Adapt                                        | Plugin adapter and agent instructions (F03)      |
-| `utils/merge-resources.test.ts`                                              | Keep/Adapt                                   | Stable-ID composition (F03)                      |
-| `runtime/event-engine.test.ts`, `runtime/event-priority.test.ts`             | Characterize/Adapt                           | F06/F12/F14                                      |
-| `runtime/processors/coerce.test.ts`                                          | Adapt, then remove with downstream migration | F12                                              |
-| `runtime/recovery.test.ts`, `runtime/run-generation.test.ts`                 | Adapt                                        | F14                                              |
-| `runtime/run-thread.test.ts`                                                 | Keep/Adapt                                   | F05–F08                                          |
-| `runtime/routing/index.test.ts`                                              | Keep/Adapt                                   | F07/F08                                          |
-| `runtime/goal.test.ts`                                                       | Keep as legacy characterization until switch | F21; replacement in `plugins/goals/goal.test.ts` |
-| `runtime/stream-redaction.test.ts`                                           | Keep                                         | F06/F09/F23                                      |
-| `runtime/thread-metadata.test.ts`                                            | Keep                                         | F07                                              |
-| `runtime/collections/native.test.ts`                                         | Keep/Adapt                                   | F13/F16                                          |
-| `runtime/memory/long-term.test.ts`                                           | Keep                                         | F17/F18                                          |
-| `plugins/usage/attribution.test.ts`                                          | Keep/Adapt                                   | F23                                              |
-| `server/app.test.ts`, `server/channels.test.ts`, `server/migrations.test.ts` | Keep/Adapt                                   | F15/F16/F24                                      |
-| `utils/inbound-message.test.ts`                                              | Keep/Adapt                                   | F07/F19                                          |
-| `utils/document-parser.test.ts`                                              | Keep                                         | F18/F19                                          |
+| Test family                                                                  | Disposition                                  | V3 owner                                    |
+| ---------------------------------------------------------------------------- | -------------------------------------------- | ------------------------------------------- |
+| `runtime/create-copilotz-resources.test.ts`                                  | Keep/Adapt                                   | F01–F04                                     |
+| `runtime/loaders/resources.test.ts`, `runtime/loaders/agents-file.test.ts`   | Adapt                                        | Plugin adapter and agent instructions (F03) |
+| `utils/merge-resources.test.ts`                                              | Keep/Adapt                                   | Stable-ID composition (F03)                 |
+| `runtime/event-engine.test.ts`, `runtime/event-priority.test.ts`             | Characterize/Adapt                           | F06/F12/F14                                 |
+| `runtime/processors/coerce.test.ts`                                          | Adapt, then remove with downstream migration | F12                                         |
+| `runtime/recovery.test.ts`, `runtime/run-generation.test.ts`                 | Adapt                                        | F14                                         |
+| `runtime/run-thread.test.ts`                                                 | Keep/Adapt                                   | F05–F08                                     |
+| `runtime/routing/index.test.ts`                                              | Keep/Adapt                                   | F07/F08                                     |
+| `runtime/stream-redaction.test.ts`                                           | Keep                                         | F06/F09/F23                                 |
+| `runtime/thread-metadata.test.ts`                                            | Keep                                         | F07                                         |
+| `runtime/collections/native.test.ts`                                         | Keep/Adapt                                   | F13/F16                                     |
+| `plugins/memory/plugin.test.ts`, `plugins/memory/consolidation.test.ts`      | Keep                                         | F17/F18                                     |
+| `plugins/usage/plugin.test.ts`                                               | Keep/Adapt                                   | F23                                         |
+| `server/app.test.ts`, `server/channels.test.ts`, `server/migrations.test.ts` | Keep/Adapt                                   | F15/F16/F24                                 |
+| `utils/inbound-message.test.ts`                                              | Keep/Adapt                                   | F07/F19                                     |
+| `utils/document-parser.test.ts`                                              | Keep                                         | F18/F19                                     |
 
 ### LLM and prompt construction — 24 files
 
@@ -1037,8 +1037,8 @@ Keep behavior; adapt event/content representations and persistence queries:
 - `resources/features/admin/brain.test.ts`
 - `resources/features/admin/events.test.ts`
 - `resources/features/admin/usage.test.ts`
-- `runtime/skills/plugin.test.ts`
-- `runtime/adapters/deno/deno-adapter.test.ts` (Open Skill pack/build contract)
+- `plugins/skills/plugin.test.ts`
+- `plugins/skills/deno.test.ts` (Open Skill pack/build contract)
 - `plugins/tools/deno/fs-utils.test.ts`
 - `plugins/tools/web/fetch-text.test.ts`
 - `plugins/tools/persistent-terminal/plugin.test.ts`
@@ -1047,7 +1047,7 @@ Keep behavior; adapt event/content representations and persistence queries:
 - `runtime/tools/format-tools-for-prompt.test.ts`
 - `runtime/tools/jq.test.ts`
 - `runtime/tools/pipeline.test.ts`
-- `plugins/usage/attribution.test.ts` (also listed with plugin ownership)
+- `plugins/usage/plugin.test.ts` (also listed with plugin ownership)
 - `utils/document-parser.test.ts` (also listed with content ownership)
 
 The two cross-owned files are intentionally listed in both owning sections; the

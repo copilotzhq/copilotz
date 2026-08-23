@@ -4,15 +4,16 @@ Plugin resources describe logical behavior; they do not grant filesystem,
 subprocess, package-loader, or server access. The embedding worker grants those
 capabilities explicitly.
 
-| Subpath                           | Capability                                                       |
-| --------------------------------- | ---------------------------------------------------------------- |
-| `/adapters`                       | Ominipg adaptation and the portable CLI state machine            |
-| `/adapters/deno`                  | Deno listener, filesystem BodyStore, and Open Skill build packer |
-| `/adapters/node`                  | Node terminal I/O for the interactive CLI                        |
-| `/tools/catalog`                  | Portable Web-fetch OpenAPI catalog with injected MCP transport   |
-| `/tools/mcp/stdio`                | Official MCP SDK subprocess connector                            |
-| `/tools/deno`                     | Deno workspace and process Tool plugins                          |
-| `/tools/persistent-terminal/deno` | Deno persistent-terminal service                                 |
+| Subpath                           | Capability                                                     |
+| --------------------------------- | -------------------------------------------------------------- |
+| `/adapters`                       | Ominipg adaptation and the portable CLI state machine          |
+| `/adapters/deno`                  | Deno listener and filesystem BodyStore                         |
+| `/skills/deno`                    | Deno build-time Open Skill packer                              |
+| `/adapters/node`                  | Node terminal I/O for the interactive CLI                      |
+| `/tools/catalog`                  | Portable Web-fetch OpenAPI catalog with injected MCP transport |
+| `/tools/mcp/stdio`                | Official MCP SDK subprocess connector                          |
+| `/tools/deno`                     | Deno workspace and process Tool plugins                        |
+| `/tools/persistent-terminal/deno` | Deno persistent-terminal service                               |
 
 Generic OpenAPI with an application-owned MCP transport:
 

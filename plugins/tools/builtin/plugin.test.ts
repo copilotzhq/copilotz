@@ -17,7 +17,7 @@ import {
   type ProcessorContext,
   type ProcessorEvent,
 } from "@copilotz/copilotz/plugins";
-import { coreCollectionsPlugin } from "@copilotz/copilotz/plugins/core";
+import { coreCollectionsPlugin } from "@copilotz/copilotz/core";
 import type {
   WorkflowTool,
   WorkflowToolExecutionContext,
@@ -31,7 +31,7 @@ import {
 import {
   createSkillsPlugin,
   defineInlineSkill,
-} from "../../../runtime/skills/index.ts";
+} from "@copilotz/copilotz/skills";
 
 const TEST_SCHEMA = "copilotz_core_tools";
 

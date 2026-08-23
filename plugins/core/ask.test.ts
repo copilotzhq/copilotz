@@ -37,7 +37,7 @@ import {
   definePlugin,
   type PluginRegistry,
 } from "../../runtime/plugins/index.ts";
-import { corePlugin } from "@copilotz/copilotz/plugins/core";
+import { corePlugin } from "@copilotz/copilotz/core";
 import {
   defineLlmProviderResource,
   generateFromChat,

@@ -34,7 +34,7 @@ import type {
   AttachmentStreamOutput,
 } from "@copilotz/copilotz/attachments";
 import type { ApplicationSendHandle } from "@copilotz/copilotz/application";
-import { message as coreMessage } from "@copilotz/copilotz/plugins/core";
+import { message as coreMessage } from "@copilotz/copilotz/core";
 
 const GOAL_METADATA_KEY = "copilotzGoal";
 const DEFAULT_MAX_TURNS = 20;

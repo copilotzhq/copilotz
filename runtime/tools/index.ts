@@ -1,6 +1,7 @@
 export { formatToolsForPrompt } from "./format-tools-for-prompt.ts";
 export { truncateToolOutputForHistory } from "./history.ts";
 export { evaluateJq, resetJqRuntime } from "./jq.ts";
+export { validateToolCall } from "./validation.ts";
 export {
   advanceWorkflowPipeline,
   createWorkflowPipelineMetadata,

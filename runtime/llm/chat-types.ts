@@ -15,7 +15,7 @@ import type {
 } from "../domain/index.ts";
 import type { CopilotzEvent } from "../events/index.ts";
 import type { ProcessorContext } from "../plugins/index.ts";
-import type { MemorySourceRef } from "../memory/ontology.ts";
+import type { ContextSourceRef } from "../context/index.ts";
 import type {
   ResolveWorkflowAgentTools,
   WorkflowJqEvaluator,
@@ -92,7 +92,7 @@ export type WorkflowPromptContextContribution = Readonly<{
   title: string;
   role: "context" | "evidence";
   text: string;
-  source?: MemorySourceRef;
+  source?: ContextSourceRef;
   capturedAt?: string;
   historyAfterMessageId?: string;
 }>;

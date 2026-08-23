@@ -9,5 +9,6 @@ export type {
   ContextContributionInput,
   ContextPurpose,
   ContextResource,
+  ContextSourceRef,
   FrozenContextContribution,
 } from "./types.ts";

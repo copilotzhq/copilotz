@@ -1,2 +1,6 @@
-/** Processor contracts live in `runtime/plugins`; the engine has no public context layer. */
-export {};
+/** Transitional semantic projections consumed by vertical plugins. */
+export {
+  listThreadMessageRecords,
+  loadParticipantRecord,
+  loadThreadRecord,
+} from "./collection-graph.ts";

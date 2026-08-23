@@ -1,4 +1,4 @@
-import { message as coreMessage } from "@copilotz/copilotz/plugins/core";
+import { message as coreMessage } from "@copilotz/copilotz/core";
 import { assertEquals, assertExists } from "@std/assert";
 import {
   createCopilotzGateway,

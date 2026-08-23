@@ -6,10 +6,8 @@ import { createCopilotz } from "../../index.ts";
 const repositoryRoot = fromFileUrl(new URL("../../", import.meta.url));
 const canonicalEntries = [
   "runtime/adapters",
-  "runtime/admin",
   "runtime/application",
   "runtime/attachments",
-  "runtime/channels",
   "runtime/collections",
   "runtime/content",
   "runtime/domain",
@@ -17,10 +15,7 @@ const canonicalEntries = [
   "runtime/events",
   "runtime/execution",
   "runtime/actions",
-  "runtime/knowledge",
-  "runtime/memory",
   "runtime/plugins",
-  "runtime/skills",
   "runtime/tools",
   "runtime/agents",
   "runtime/llm",
@@ -75,12 +70,24 @@ Deno.test("v3 root is a runtime-neutral composition barrel", async () => {
     ),
   );
   assert(!/\bclass\s+\w+/.test(source));
+  assert(
+    !/plugins\/(?:admin|channels|core(?:-schedules)?|goals|knowledge|memory|schedules|skills|usage)/
+      .test(source),
+  );
 });
 
-Deno.test("retired executable and v1 server modules are deleted", async () => {
+Deno.test("retired runtime and v1 server modules are deleted", async () => {
   for (
     const path of [
       "../../runtime/features/index.ts",
+      "../../runtime/admin/index.ts",
+      "../../runtime/channels/index.ts",
+      "../../runtime/goals/index.ts",
+      "../../runtime/knowledge/index.ts",
+      "../../runtime/memory/index.ts",
+      "../../runtime/schedules/index.ts",
+      "../../runtime/skills/index.ts",
+      "../../runtime/usage/index.ts",
       "../../server/v1-fetch.ts",
       "../../server/v1-sse.ts",
     ]

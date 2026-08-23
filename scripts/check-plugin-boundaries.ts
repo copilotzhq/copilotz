@@ -30,7 +30,7 @@ function posixJoin(fromFile: string, spec: string): string {
 }
 
 function resolvedImport(fromFile: string, spec: string): string | undefined {
-  if (spec.startsWith("@copilotz/copilotz/plugins/core")) {
+  if (spec === "@copilotz/copilotz/core") {
     return "plugins/core/index.ts";
   }
   if (spec.startsWith("./") || spec.startsWith("../")) {

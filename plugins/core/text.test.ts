@@ -30,7 +30,7 @@ import type { ProviderAPI } from "../../runtime/llm/types.ts";
 import {
   createSkillsPlugin,
   defineInlineSkill,
-} from "../../runtime/skills/index.ts";
+} from "@copilotz/copilotz/skills";
 import type {
   ChatRequest,
   ChatResponse,
@@ -52,7 +52,7 @@ import {
   definePlugin,
   type PluginRegistry,
 } from "../../runtime/plugins/index.ts";
-import { corePlugin } from "@copilotz/copilotz/plugins/core";
+import { corePlugin } from "@copilotz/copilotz/core";
 import {
   type CreateTextWorkflowPluginOptions,
   defineLlmProviderResource,

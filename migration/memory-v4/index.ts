@@ -8,7 +8,7 @@ import {
   validateEventSchemaName,
 } from "../../runtime/events/schema.ts";
 import type { SqlExecutor, SqlSession } from "../../runtime/events/session.ts";
-import type { MemoryForm } from "../../runtime/memory/ontology.ts";
+import type { MemoryForm } from "../../plugins/memory/ontology.ts";
 
 type NodeRow = Readonly<{
   id: string;

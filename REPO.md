@@ -58,8 +58,11 @@ This map describes the transitional worktree, not target ownership. Use
 - Concrete Tool plugins and host/protocol integrations: `plugins/tools/`
 - Text/ask processors: `plugins/core/`
 - Persistent text/realtime attachments: `runtime/attachments/`
-- Memory, knowledge, schedules, usage, goals: corresponding `runtime/` modules
-- Channels/admin: corresponding `runtime/` modules
+- Admin, knowledge, and skills: `plugins/admin/`, `plugins/knowledge/`,
+  `plugins/skills/`
+- Schedules, usage, and goals: corresponding `plugins/` modules
+- Channel plugins and transports: `plugins/channels/`
+- Semantic memory plugin: `plugins/memory/`
 - Host capabilities: `runtime/adapters/`
 - Web Fetch boundary: `server/`
 - Isolated legacy upgrade: `migration/v1/`

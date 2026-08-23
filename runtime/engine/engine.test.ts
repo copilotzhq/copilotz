@@ -1,4 +1,4 @@
-import { coreCollectionsPlugin } from "@copilotz/copilotz/plugins/core";
+import { coreCollectionsPlugin } from "@copilotz/copilotz/core";
 import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
 import {
   createSqlSession,

@@ -2,8 +2,11 @@ import { assertEquals, assertRejects } from "@std/assert";
 
 import { createPluginRegistry, definePlugin } from "../plugins/index.ts";
 import type { Agent, CapabilitySelection } from "../resources/index.ts";
-import { createSkillsPlugin, defineInlineSkill } from "../skills/index.ts";
-import { corePlugin } from "@copilotz/copilotz/plugins/core";
+import {
+  createSkillsPlugin,
+  defineInlineSkill,
+} from "@copilotz/copilotz/skills";
+import { corePlugin } from "@copilotz/copilotz/core";
 import {
   createWorkflowToolCatalog,
   type WorkflowTool,

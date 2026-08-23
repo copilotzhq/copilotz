@@ -55,7 +55,7 @@ Deno.test("portable smoke contract uses only Web and injected capabilities", asy
 
 Deno.test("optional skills implementation stays off the root runtime graph", async () => {
   const root = await source("index.ts");
-  const skills = await source("runtime/skills/index.ts");
+  const skills = await source("plugins/skills/index.ts");
   assert(!/runtime\/skills/.test(root));
   assertStringIncludes(skills, "parseSkillMarkdown");
   assertStringIncludes(skills, "createSkillsPlugin");

@@ -8,3 +8,4 @@ export type {
   ParticipantInput,
   ParticipantType,
 } from "./types.ts";
+export { workflowMutationId, workflowObject } from "./workflow-support.ts";

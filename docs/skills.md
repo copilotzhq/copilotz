@@ -43,7 +43,7 @@ Directory enumeration belongs to the build host. The Deno adapter validates and
 packs source directories into a catalog module plus one lazy chunk per skill:
 
 ```ts
-import { buildOpenSkillsPlugin } from "@copilotz/copilotz/adapters/deno";
+import { buildOpenSkillsPlugin } from "@copilotz/copilotz/skills/deno";
 
 await buildOpenSkillsPlugin({
   root: "./plugins/support/skills",

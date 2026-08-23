@@ -6,9 +6,21 @@ import type {
 } from "../domain/index.ts";
 import type { ScopedCollections } from "../collections/index.ts";
 import type { ContentInput, ContentRef } from "../content/index.ts";
-import type { MemorySourceRef } from "../memory/ontology.ts";
 
 export type ContextPurpose = "conversation" | "memory_consolidation";
+
+export type ContextSourceRef =
+  | Readonly<{ type: "message"; id: string }>
+  | Readonly<{ type: "asset"; id: string }>
+  | Readonly<{ type: "external"; id: string }>
+  | Readonly<{
+    type: "collection_record";
+    collection: string;
+    id: string;
+    version?: string | number;
+    updatedAt?: string;
+    fragment?: string;
+  }>;
 
 export type ContextContributionInput = Readonly<{
   purpose: ContextPurpose;
@@ -30,7 +42,7 @@ export type ContextContribution = Readonly<{
   title: string;
   role: "context" | "evidence";
   content: ContentInput | ContentRef;
-  source?: MemorySourceRef;
+  source?: ContextSourceRef;
   capturedAt?: string;
 }>;
 
@@ -53,7 +65,7 @@ export type FrozenContextContribution = Readonly<{
   title: string;
   role: "context" | "evidence";
   content: readonly ContentRef[];
-  source?: MemorySourceRef;
+  source?: ContextSourceRef;
   capturedAt: string;
   /** Reserved for the built-in long-term-memory context resource. */
   historyAfterMessageId?: string;

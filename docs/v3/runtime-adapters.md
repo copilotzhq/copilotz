@@ -94,8 +94,9 @@ a plain factory product. Applications can inject another provider resolver
 without changing the logical `finance` tool ID.
 
 Deno-specific workspace and process Tools live on
-`@copilotz/copilotz/tools/deno`; the separate `@copilotz/copilotz/adapters/deno`
-subpath retains the Deno listener, filesystem BodyStore, and
+`@copilotz/copilotz/tools/deno`; `@copilotz/copilotz/adapters/deno` retains only
+generic Deno host mechanisms such as the listener and filesystem BodyStore. The
+Skill-owned `@copilotz/copilotz/skills/deno` subpath exports
 `buildOpenSkillsPlugin()`. Applications import the generated Skill plugin and
 never inject a Deno skill source. MCP stdio is isolated on
 `@copilotz/copilotz/tools/mcp/stdio`; it is not imported by the generic adapter

@@ -115,12 +115,11 @@ application observation.
 Semantic context types still need to move beside their owning plugins as the AI
 harness verticals leave `runtime/`.
 
-### 3.5 Business plugins physically live under `runtime/`
+### 3.5 Business plugin ownership has moved out of `runtime/`
 
-Production `definePlugin(...)` calls currently exist under runtime modules for
-admin, channels, knowledge, memory, schedules, skills, tools, and Deno tools.
-LLM orchestration, agent prompt policy, tool execution, and domain repositories
-also live under `runtime/`.
+No production semantic plugin definition remains under `runtime/`. LLM
+orchestration, agent prompt policy, tool execution, and domain repositories also
+live under `runtime/`.
 
 Their semantic boundaries have started moving ahead of the physical extraction:
 
@@ -161,8 +160,8 @@ must not become permanent framework APIs.
 
 ### 3.8 Event retention and namespace rebuild are closed
 
-Event maintenance now compacts only settled delivery obligations. Durable
-Events and Event Bodies remain immutable replay and deduplication authority.
+Event maintenance now compacts only settled delivery obligations. Durable Events
+and Event Bodies remain immutable replay and deduplication authority.
 `CollectionRuntime.rebuild(namespace)` performs one atomic namespace-global
 replay over all bound Collections, standalone Asset lifecycle Events, and
 generic relation Events in global Event order. The former partial
@@ -365,9 +364,8 @@ Collection API. The kernel canonicalizes content, materializes or verifies
 Assets, creates ownership relations, and emits the Collection event in the same
 logical mutation.
 
-Collections do not declare `bodyRefs`, and no `body_references` table exists.
-A Ready Asset node's indexed `bodyId` is the sole durable Body-liveness
-authority.
+Collections do not declare `bodyRefs`, and no `body_references` table exists. A
+Ready Asset node's indexed `bodyId` is the sole durable Body-liveness authority.
 Asset provenance uses one opaque scope `{ type, id }`; a semantic plugin may use
 `thread`, while standalone publication may use the namespace. Storage and the
 kernel neither enumerate nor branch on those values.
@@ -829,6 +827,35 @@ applications compose the generic catalog with the MCP stdio connector
 explicitly. The one pre-existing WorkflowTool executor/catalog remains only
 until item 2 replaces that entire semantic path atomically.
 
+The Admin and Knowledge ownership moves are also closed. Their complete
+implementations, tests, and public entrypoints now live only under
+`plugins/admin/**` and `plugins/knowledge/**`; the runtime has no forwarding
+module and the runtime-neutral root does not re-export either optional plugin.
+
+The Channels ownership move is closed as one vertical. Shared dispatch and
+identity behavior, Web, Discord, Telegram, WhatsApp, Zendesk, their transports,
+tests, and the `/channels` entrypoint now live only under `plugins/channels/**`.
+The server consumes that plugin entrypoint explicitly; neither `runtime/` nor
+the runtime-neutral root imports or re-exports Channels.
+
+The Skills ownership move is closed with its host boundary intact. Portable
+Skill definitions, disclosure Tools, tests, and the `/skills` entrypoint live
+under `plugins/skills/**`; the Deno build packer moved with them to the explicit
+`/skills/deno` entrypoint. Generic `/adapters/deno` no longer imports or exports
+Skill behavior.
+
+The Memory ownership move is closed. Collections, ontology, consolidation
+Actions and Processors, tests, and the `/memory` entrypoint now live only under
+`plugins/memory/**`. The shared context evidence source union is the neutral
+`ContextSourceRef`; no runtime module imports Memory and the optional plugin is
+not re-exported from the runtime-neutral root.
+
+The root ownership cleanup is closed for extracted semantic packages. Core,
+Goals, Usage, Schedules, Core-Schedules, Memory, Admin, Channels, Knowledge, and
+Skills are available only through their explicit package subpaths. Core has one
+public path, `/core`; the transitional `/plugins/core` path and every caller of
+it were removed without an alias.
+
 1. LLM: common `llm.call` Action, Model Resources, the LLM Adapter contract,
    first-party OpenAI/Anthropic/Google-Gemini/Groq/DeepSeek/Ollama/MiniMax
    Adapter factories, prompt/response normalization, and usage output.
@@ -877,8 +904,8 @@ Exit: no production `definePlugin(...)` call exists under `runtime/`.
   observation, then delete the attachment API;
 - keep Asset/Body/EventBody/Stream lifecycle runtime-owned and domain-neutral;
 - make every `context.streams.open(...)` emit one generic `stream.output`
-  observation and keep thread, participant, routing, visibility, Collection,
-  and plugin vocabulary out of the Stream contract and runtime emitter; the
+  observation and keep thread, participant, routing, visibility, Collection, and
+  plugin vocabulary out of the Stream contract and runtime emitter; the
   lower-level Body primitive may omit observation wiring;
 - make Asset-manifest replay storage-neutral and prove that rebuilt Assets
   remain readable through database, filesystem, and object BodyStores;
@@ -983,10 +1010,10 @@ Architecture-specific closure checks must prove:
 - transaction planning prepares external content before SQL and adopts its
   durable records atomically with graph, Event, and delivery state;
 - idempotent Body puts renew protection where Ready GC is advertised, stale
-  maintenance versions cannot delete, and idle/protection guards are enforced
-  by every enabled maintenance backend;
-- Asset adoption/rebuild and maintenance races never commit a live reference
-  to a missing Body, and graph SQL performs no external BodyStore call;
+  maintenance versions cannot delete, and idle/protection guards are enforced by
+  every enabled maintenance backend;
+- Asset adoption/rebuild and maintenance races never commit a live reference to
+  a missing Body, and graph SQL performs no external BodyStore call;
 - custom BodyStore adapters declare truthful deployment guarantees, and unsafe
   Ready-Body garbage collection stays disabled;
 - stream chunks are not durable Events, while settled content is durable;
@@ -994,9 +1021,7 @@ Architecture-specific closure checks must prove:
 
 ## 8. Immediate next slice
 
-Slices 1 through 3 and the concrete Tool-integration ownership checkpoint are
-closed. Continue Slice 4 by moving the remaining semantic plugin verticals out
-of `runtime/`, with no runtime-to-plugin imports or forwarding modules. Then cut
-the Tool/LLM/Core semantic SCC vertically: introduce the final Action/Resource/
-Adapter contracts and delete the single legacy executor/catalog in that same
-change so no dual execution path exists.
+Slices 1 through 3 and the semantic ownership-evacuation checkpoint are closed.
+Continue Slice 4 by cutting the Tool/LLM/Core semantic SCC vertically: introduce
+the final Action/Resource/Adapter contracts and delete the single legacy
+executor/catalog in that same change so no dual execution path exists.

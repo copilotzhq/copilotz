@@ -24,7 +24,7 @@ import {
 } from "../../runtime/engine/collection-graph.ts";
 import { createDeliveryExecutor } from "../../runtime/execution/index.ts";
 import { createTestProcessorContext } from "../../runtime/testing/processor-context.ts";
-import type { KnowledgeDocument } from "../../runtime/knowledge/index.ts";
+import type { KnowledgeDocument } from "../../plugins/knowledge/index.ts";
 import { createPluginRegistry } from "../../runtime/plugins/index.ts";
 import {
   discoverV1Schemas,

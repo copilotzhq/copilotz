@@ -1,4 +1,4 @@
-import { message as coreMessage } from "@copilotz/copilotz/plugins/core";
+import { message as coreMessage } from "@copilotz/copilotz/core";
 import {
   assert,
   assertEquals,
@@ -13,7 +13,7 @@ import type {
   ChannelRequest,
   ChannelResource,
   ChannelRuntime,
-} from "../runtime/channels/index.ts";
+} from "../plugins/channels/index.ts";
 import { defineCollection } from "../runtime/collections/index.ts";
 import {
   createEphemeralEvent,

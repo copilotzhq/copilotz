@@ -22,7 +22,7 @@ import {
   createPluginRegistry,
   definePlugin,
 } from "../../runtime/plugins/index.ts";
-import { corePlugin } from "@copilotz/copilotz/plugins/core";
+import { corePlugin } from "@copilotz/copilotz/core";
 import {
   defineLlmProviderResource,
   type LlmSession,

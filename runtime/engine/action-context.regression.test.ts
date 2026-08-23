@@ -15,7 +15,7 @@ import {
 import { createTestDomainContext } from "../testing/domain-context.ts";
 import { waitForTestDelivery } from "../testing/deliveries.ts";
 import { createTestDatabase } from "../testing/ominipg.ts";
-import { coreCollectionsPlugin } from "@copilotz/copilotz/plugins/core";
+import { coreCollectionsPlugin } from "@copilotz/copilotz/core";
 import { createCopilotzEngine } from "./index.ts";
 
 const EXECUTOR_FIELDS = Object.freeze([

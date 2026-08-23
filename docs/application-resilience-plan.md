@@ -319,7 +319,7 @@ or what it concerns, who owns an intent, and who may read it:
 
 ```ts
 type MemoryProvenance = Readonly<{
-  sources: readonly MemorySourceRef[];
+  sources: readonly ContextSourceRef[];
   assertedBy?: NodeRef;
   recordedBy: NodeRef;
   derivedFromMemoryIds?: readonly string[];
@@ -449,7 +449,7 @@ call is validated by the existing Copilotz tool-call and execution machinery.
 ### Source references
 
 ```ts
-type MemorySourceRef =
+type ContextSourceRef =
   | Readonly<{ type: "message"; id: string }>
   | Readonly<{ type: "asset"; id: string }>
   | Readonly<{ type: "external"; id: string }>
@@ -504,7 +504,7 @@ type MemoryDraftBase = Readonly<{
   kind: string;
   summary: string;
   spaceId?: string;
-  sources: readonly MemorySourceRef[];
+  sources: readonly ContextSourceRef[];
 }>;
 ```
 
@@ -592,7 +592,7 @@ type MemoryRelationDraft = Readonly<{
     | "blocks"
     | "answers";
   to: ProposedMemoryRef;
-  sources?: readonly MemorySourceRef[];
+  sources?: readonly ContextSourceRef[];
 }>;
 ```
 
@@ -625,7 +625,7 @@ type MemoryLifecycleDraft = Readonly<{
     | "obsolete"
     | "deprecated";
   replacement?: ProposedMemoryRef;
-  sources: readonly MemorySourceRef[];
+  sources: readonly ContextSourceRef[];
 }>;
 ```
 
@@ -790,7 +790,7 @@ type ContextContribution = Readonly<{
   title: string;
   role: "context" | "evidence";
   content: ContentInput | ContentRef;
-  source?: MemorySourceRef;
+  source?: ContextSourceRef;
   capturedAt?: string;
 }>;
 ```

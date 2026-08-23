@@ -204,7 +204,7 @@ for await (const output of copilotz.observe()) {
 
 `@copilotz/copilotz/skills` exports `defineSkill()`, `defineInlineSkill()`,
 `createSkillsPlugin()`, strict `SKILL.md` parsing, and portable skill/file
-types. `@copilotz/copilotz/adapters/deno` exports `buildOpenSkillsPlugin()` for
+types. `@copilotz/copilotz/skills/deno` exports `buildOpenSkillsPlugin()` for
 build-time conversion of standard Agent Skills directories into a portable
 plugin. Filesystem directory loading is not an application runtime API.
 
@@ -225,10 +225,11 @@ types. It does not contain a legacy route or wire-protocol adapter.
 
 ## Package exports
 
-The authoritative subpath list is `deno.json`. Public groups are application,
-capabilities, plugins, resources, content, domain, events, attachments, agents,
-llm, memory, knowledge, schedules, usage, skills, tools, channels, actions,
-admin, goals, adapters, event-native server types, and isolated migrations.
+The authoritative subpath list is `deno.json`. Runtime primitives use explicit
+groups such as `/application`, `/actions`, `/collections`, `/content`,
+`/events`, and `/plugins`. Optional semantic packages use `/core`, `/admin`,
+`/channels`, `/goals`, `/knowledge`, `/memory`, `/schedules`, `/schedules/core`,
+`/skills`, and `/usage`; none is re-exported by the runtime-neutral root.
 
 Internal engine assembly, delivery executors, framed Worker protocol, and raw
 workload maps are implementation details rather than package entry points. Every

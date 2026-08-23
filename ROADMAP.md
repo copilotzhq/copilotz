@@ -42,9 +42,9 @@
 - Revisit `update_my_memory`, prompt/history injection, and memory retrieval
   APIs so they compose around one explicit resource model instead of separate ad
   hoc mechanisms.
-- Keep shared memory-oriented generation logic in a runtime layer such as
-  `runtime/agent-llm-input`/`runtime/memory`, similar to how LLM and storage
-  logic already live under `runtime/*`.
+- Keep shared memory-oriented generation logic in `plugins/memory`, composed
+  over the LLM and Core semantic contracts rather than owned by the generic
+  runtime.
 - Apply the same organizational boundary to API and MCP execution helpers so
   resource-family runtime logic can move toward `runtime/api` and `runtime/mcp`,
   leaving processors focused on orchestration rather than owning resource

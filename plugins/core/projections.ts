@@ -1,11 +1,12 @@
-import type { CollectionRecord } from "../collections/index.ts";
-import type { ContentSequence } from "../content/index.ts";
+import type { CollectionRecord } from "@copilotz/copilotz/collections";
+import type { ContentSequence } from "@copilotz/copilotz/content";
+import type { ProcessorContext } from "@copilotz/copilotz/plugins";
 import type {
   ConversationMessage,
   ConversationThread,
+  MessageBranch,
   Participant,
-} from "../domain/index.ts";
-import type { ProcessorContext } from "../plugins/index.ts";
+} from "./contracts.ts";
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -31,9 +32,19 @@ function contentSequence(value: unknown): ContentSequence {
   return Object.freeze(value) as ContentSequence;
 }
 
-export function projectActiveBranch<T extends { id: string }>(
+function requireScopedCollection(
+  context: Pick<ProcessorContext, "collections">,
+  name: string,
+) {
+  const bound = context.collections[name];
+  if (!bound) throw new Error(`Collection '${name}' is not bound.`);
+  return bound;
+}
+
+/** Active-branch view over a thread's messages. */
+export function projectActiveMessageBranch<T extends { id: string }>(
   messages: readonly T[],
-  branch: ConversationThread["activeMessageBranch"],
+  branch: MessageBranch | undefined,
 ): readonly T[] {
   if (!branch) return messages;
   const rootIndex = messages.findIndex((message) =>
@@ -48,15 +59,6 @@ export function projectActiveBranch<T extends { id: string }>(
     messages[headIndex],
     ...messages.slice(headIndex + 1),
   ]);
-}
-
-export function requireScopedCollection(
-  context: ProcessorContext,
-  name: string,
-) {
-  const bound = context.collections[name];
-  if (!bound) throw new Error(`Collection '${name}' is not bound.`);
-  return bound;
 }
 
 export function mapParticipantRecord(record: CollectionRecord): Participant {
@@ -140,7 +142,7 @@ export function mapThreadRecord(
 }
 
 export async function loadParticipantRecord(
-  context: ProcessorContext,
+  context: Pick<ProcessorContext, "collections">,
   id: string,
 ): Promise<Participant | null> {
   const bound = context.collections.participant;
@@ -150,7 +152,7 @@ export async function loadParticipantRecord(
 }
 
 export async function loadThreadRecord(
-  context: ProcessorContext,
+  context: Pick<ProcessorContext, "collections">,
   threadId: string,
 ): Promise<ConversationThread | null> {
   const threads = context.collections.thread;
@@ -158,9 +160,8 @@ export async function loadThreadRecord(
   if (!threads || !participants) return null;
   const record = await threads.get({ id: threadId });
   if (!record) return null;
-  const ids = stringArray(record.participantIds);
   const loaded = await Promise.all(
-    ids.map((id) => participants.get({ id })),
+    stringArray(record.participantIds).map((id) => participants.get({ id })),
   );
   return mapThreadRecord(
     record,
@@ -171,7 +172,7 @@ export async function loadThreadRecord(
 }
 
 export async function listThreadMessageRecords(
-  context: ProcessorContext,
+  context: Pick<ProcessorContext, "collections">,
   threadId: string,
 ): Promise<readonly ConversationMessage[]> {
   const messages = requireScopedCollection(context, "message");
@@ -185,16 +186,14 @@ export async function listThreadMessageRecords(
   const hydrated: ConversationMessage[] = [];
   for (const record of records) {
     const sender = await participants.get({ id: String(record.senderId) });
-    if (!sender) {
-      throw new Error(`Message '${record.id}' sender was not found.`);
-    }
+    if (!sender) throw new Error(`Message '${record.id}' sender was not found.`);
     hydrated.push(mapMessageRecord(record, mapParticipantRecord(sender)));
   }
-  return projectActiveBranch(hydrated, thread?.activeMessageBranch);
+  return projectActiveMessageBranch(hydrated, thread?.activeMessageBranch);
 }
 
 export async function loadMessageRecord(
-  context: ProcessorContext,
+  context: Pick<ProcessorContext, "collections">,
   id: string,
 ): Promise<ConversationMessage | null> {
   const record = await requireScopedCollection(context, "message").get({ id });
@@ -202,8 +201,6 @@ export async function loadMessageRecord(
   const sender = await requireScopedCollection(context, "participant").get({
     id: String(record.senderId),
   });
-  if (!sender) {
-    throw new Error(`Message '${id}' sender was not found.`);
-  }
+  if (!sender) throw new Error(`Message '${id}' sender was not found.`);
   return mapMessageRecord(record, mapParticipantRecord(sender));
 }

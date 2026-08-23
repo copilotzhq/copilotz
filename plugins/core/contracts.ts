@@ -1,4 +1,4 @@
-import type { ContentSequence } from "../content/index.ts";
+import type { ContentSequence } from "@copilotz/copilotz/content";
 
 export type ParticipantType = "human" | "agent" | "tool" | "job";
 
@@ -25,6 +25,20 @@ export type ParticipantInput = Readonly<{
   metadata?: Record<string, unknown>;
 }>;
 
+export type MessageBranch = Readonly<{
+  rootMessageId: string;
+  headMessageId: string;
+  previousRevisionMessageId: string;
+  revisionIndex: number;
+}>;
+
+export type MessageRevision = Readonly<{
+  rootMessageId: string;
+  previousRevisionMessageId: string;
+  revisionIndex: number;
+  revisedAt: string;
+}>;
+
 export type ConversationThread = Readonly<{
   id: string;
   namespace: string;
@@ -43,20 +57,6 @@ export type ConversationThread = Readonly<{
   updatedAt: string;
 }>;
 
-export type MessageBranch = Readonly<{
-  rootMessageId: string;
-  headMessageId: string;
-  previousRevisionMessageId: string;
-  revisionIndex: number;
-}>;
-
-export type MessageRevision = Readonly<{
-  rootMessageId: string;
-  previousRevisionMessageId: string;
-  revisionIndex: number;
-  revisedAt: string;
-}>;
-
 export type ConversationMessage = Readonly<{
   id: string;
   namespace: string;
@@ -68,13 +68,4 @@ export type ConversationMessage = Readonly<{
   revision?: MessageRevision;
   createdAt: string;
   updatedAt: string;
-}>;
-
-export type MutationIdentity = Readonly<{
-  causationId?: string;
-  correlationId?: string;
-  deduplicationId?: string;
-  /** Runtime-owned completion scope propagated across durable descendants. */
-  settlementScopeId?: string;
-  metadata?: Record<string, unknown>;
 }>;

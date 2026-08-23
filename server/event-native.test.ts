@@ -5,10 +5,12 @@ import {
   assertRejects,
   assertStringIncludes,
 } from "@std/assert";
-import { createTestDomainContext } from "../runtime/testing/domain-context.ts";
+import { createTestDomainContext } from "../plugins/core/testing/context.ts";
 
-import { createCopilotz } from "../runtime/application/index.ts";
-import type { AttachmentOutput } from "../runtime/attachments/index.ts";
+import {
+  type ApplicationOutput,
+  createCopilotzApplication,
+} from "../runtime/application/index.ts";
 import {
   channelsPlugin,
   createWebChannelAdapter,
@@ -77,9 +79,9 @@ function array(value: unknown): readonly unknown[] {
 }
 
 async function collect(
-  stream: ReadableStream<AttachmentOutput>,
-): Promise<readonly AttachmentOutput[]> {
-  const events: AttachmentOutput[] = [];
+  stream: ReadableStream<ApplicationOutput>,
+): Promise<readonly ApplicationOutput[]> {
+  const events: ApplicationOutput[] = [];
   for await (const event of stream) events.push(event);
   return events;
 }
@@ -96,7 +98,7 @@ async function expectAppError(
 }
 
 Deno.test("event-native app exposes graph, event, asset, collection, and plugin capabilities without legacy storage routes", async () => {
-  const application = await createCopilotz({
+  const application = await createCopilotzApplication({
     namespace: NAMESPACE,
     databaseSchema: SCHEMA,
     plugins: [coreCollectionsPlugin, adapterPlugin],
@@ -469,7 +471,7 @@ Deno.test("event-native app exposes graph, event, asset, collection, and plugin 
 });
 
 Deno.test("message history resolves canonical semantic content without operational projections", async () => {
-  const application = await createCopilotz({
+  const application = await createCopilotzApplication({
     namespace: NAMESPACE,
     databaseSchema: `${SCHEMA}_history`,
     plugins: [coreCollectionsPlugin],
@@ -657,7 +659,7 @@ Deno.test("trusted schema resolution isolates identical HTTP resource identities
   const alternateSchema = `${SCHEMA}_trusted_alternate`;
   const database = await createTestDatabase({ url: ":memory:" });
   await provisionCopilotzSchema(database, alternateSchema);
-  const application = await createCopilotz({
+  const application = await createCopilotzApplication({
     namespace: NAMESPACE,
     databaseSchema: defaultSchema,
     plugins: [coreCollectionsPlugin],
@@ -751,7 +753,7 @@ Deno.test("event-native app returns request-bound channel output before delivery
       },
     },
   });
-  const application = await createCopilotz({
+  const application = await createCopilotzApplication({
     namespace: NAMESPACE,
     databaseSchema: `${SCHEMA}_request_bound`,
     plugins: [channelProvider, blocker],
@@ -848,7 +850,7 @@ Deno.test("event-native Channel host validates every occurrence before persisten
       },
     },
   });
-  const application = await createCopilotz({
+  const application = await createCopilotzApplication({
     namespace: NAMESPACE,
     databaseSchema: `${SCHEMA}_channel_host_prevalidation`,
     plugins: [provider],

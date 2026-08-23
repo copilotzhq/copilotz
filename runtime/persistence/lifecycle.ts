@@ -2,8 +2,8 @@ import {
   type CopilotzOminipgOptions,
   type OminipgDatabaseLike,
   openManagedOminipgDatabase,
-} from "../adapters/ominipg.ts";
-import { createOminipgSqlSession } from "../adapters/ominipg.ts";
+} from "./ominipg.ts";
+import { createOminipgSqlSession } from "./ominipg.ts";
 import type { SqlSession } from "../events/index.ts";
 
 export type CopilotzDatabase = OminipgDatabaseLike;

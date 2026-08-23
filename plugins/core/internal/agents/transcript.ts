@@ -1,4 +1,4 @@
-import type { ConversationMessage } from "@copilotz/copilotz/domain";
+import type { ConversationMessage } from "../../contracts.ts";
 import type { ProcessorContext } from "@copilotz/copilotz/plugins";
 import type {
   LlmJsonObject,
@@ -8,7 +8,7 @@ import type {
 import {
   listThreadMessageRecords,
   loadThreadRecord,
-} from "@copilotz/copilotz/engine";
+} from "../../projections.ts";
 import {
   coreToolActionMessageMetadata,
   workflowMetadata,

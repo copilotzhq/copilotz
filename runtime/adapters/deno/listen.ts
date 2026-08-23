@@ -1,11 +1,19 @@
 import { serve } from "../../../dependencies/oxian-deno.ts";
-import type { HypervisorListener } from "../../../dependencies/oxian-hypervisor.ts";
-import type { CopilotzGateway } from "../../application/index.ts";
+import type {
+  Hypervisor,
+  HypervisorListener,
+} from "../../../dependencies/oxian-hypervisor.ts";
 
-export type ListenCopilotzGatewayOptions = Readonly<{
+export type ListenCopilotzOptions = Readonly<{
   hostname?: string;
   port?: number;
   signal?: AbortSignal;
+}>;
+
+/** Structural host boundary: application factories are not adapter dependencies. */
+export type FetchCapableHost = Readonly<{
+  fetch?: (request: Request) => Promise<Response>;
+  hypervisor?: Hypervisor;
 }>;
 
 function listenerUrl(hostname: string, port: number): URL {
@@ -17,8 +25,8 @@ function listenerUrl(hostname: string, port: number): URL {
 
 /** Starts a Deno listener while keeping the public operation name portable. */
 export function listen(
-  gateway: CopilotzGateway,
-  options: ListenCopilotzGatewayOptions = {},
+  gateway: FetchCapableHost,
+  options: ListenCopilotzOptions = {},
 ): HypervisorListener {
   if (gateway.hypervisor) {
     return serve({
@@ -27,6 +35,9 @@ export function listen(
       port: options.port,
       signal: options.signal,
     });
+  }
+  if (!gateway.fetch) {
+    throw new TypeError("Copilotz listener requires a Fetch-capable host.");
   }
 
   const hostname = options.hostname ?? "127.0.0.1";

@@ -1,86 +1,72 @@
 # API and Package Reference
 
-## Application roles
+## One application factory
 
-### `createCopilotz(options?)`
-
-The normal embedded factory. It creates one private Gateway and Worker over an
-in-process Oxian event fabric and opens a private Ominipg database unless a
-database is injected. Its result exposes Copilotz domain/application semantics,
-not the private Hypervisor, transport, engine, or Worker workload closures.
-
-Main options:
-
-- `namespace`, `databaseSchema`
-- `database`: Ominipg configuration, a reconnect connector, or an existing
-  Ominipg-compatible instance
-- `databaseRecovery`: bounded wait, retry hint, reconnect delay, and optional
-  availability-error classifier
-- `databaseLifecycle`: persistence callbacks for explicit Gateway/Worker roles
-- `plugins`, plus final `resources` and `adapters` overlays
-- `assets` and runtime-neutral `engine` policy
-- `worker: { id?, capacity? }`
-
-Configuration-created databases are closed by the application. Injected database
-instances are never closed by Copilotz.
-
-Configuration and connector inputs are reconnectable. `createCopilotz()` also
-accepts persistence lifecycle callbacks as its second argument:
+`createCopilotz()` is the only public application factory. Its `role` option is
+discriminated:
 
 ```ts
-const app = await createCopilotz({
-  database: {
-    connect: () => Ominipg.connect({ url }),
-  },
-  databaseRecovery: {
-    waitMs: 2_000,
-    retryAfterSeconds: 1,
-  },
-}, {
-  onUnavailable(context) {
-    logger.warn("database unavailable", context);
-  },
-  onReconnecting(context) {
-    logger.info("database reconnecting", context);
-  },
-  onReady(context) {
-    logger.info("database ready", context);
-  },
+import { createCopilotz } from "@copilotz/copilotz";
+
+const embedded = await createCopilotz({ namespace: "acme", plugins });
+const gateway = await createCopilotz({
+  role: "gateway",
+  namespace: "acme",
+  plugins,
+  transports,
+  target: { workerId: "acme-worker" },
+});
+const worker = await createCopilotz({
+  role: "worker",
+  namespace: "acme",
+  plugins,
+  id: "acme-worker",
+  transport,
 });
 ```
 
-One failing in-flight operation returns `persistence_indeterminate` and is never
-replayed automatically. New application operations wait only for `waitMs` and
-then return `persistence_unavailable`. Gateway HTTP responses map both to 503
-and include `Retry-After`. Active attachments terminate with the availability
-error; after reconnection, Copilotz recovers durable deliveries from every
-database scope already opened by the application.
+Omitting `role` selects the embedded topology. It owns a private in-process
+Gateway and Worker unless the caller injects database or dispatch infrastructure.
+Gateway and Worker options use the same plugin, resource, adapter, asset, and
+persistence configuration; `Gateway` adds dispatch/transport placement and
+`Worker` adds the Oxian worker connection options.
 
-### `createCopilotzPersistence(options?, lifecycle?)`
+## Returned role surfaces
 
-Creates a frozen stable database facade for explicit co-located roles and
-application services. Pass the returned `persistence` record to each Gateway or
-Worker. Those roles observe recovery but never close the shared record; the
-creator calls `persistence.close()` once during application shutdown. The public
-record deliberately exposes the stable `database`, ownership, recovery state,
-and close capability—not Copilotz's private SQL session adapter.
+The embedded application has exactly:
 
-### `createCopilotzGateway(options?, lifecycle?)`
+```ts
+{ send, observe, close }
+```
 
-Creates durable ingress, event/output relay, recovery APIs, plugin/resource
-introspection, and the runtime-neutral HTTP boundary. It hosts no plugin work.
+Gateway returns that same base surface plus `fetch(request)`. Worker returns
+only `{ ready, closed, close }`. Neither result exposes configuration, database
+scopes, collections, content, events, deliveries, plugins, recovery, an Engine,
+or a shutdown alias.
 
-Pass either:
+`send()` returns a stable operation handle:
 
-- `transports`, which makes the Gateway own its Oxian Hypervisor; or
-- `dispatcher`, which remains owned by the embedding application.
+```ts
+type ApplicationSendHandle = Readonly<{
+  eventId: string;
+  correlationId: string;
+  outputs: ReadableStream<ApplicationOutput>;
+  done: Promise<void>;
+  cancel(reason?: string): Promise<void>;
+}>;
+```
 
-`target` and `workloadTargets` declare placement without exposing Worker
-closures. The optional second argument receives Oxian Hypervisor lifecycle
-callbacks such as `onWorkAccepted`.
+`observe()` receives the same generic durable Events and transient stream output
+independently of any one operation. `close()` is idempotent.
 
-The result has `fetch(request)`, and a Gateway-owned `hypervisor` is present
-only when Copilotz created it. Deno can listen with:
+## Gateway Fetch
+
+`gateway.fetch` is the portable event-native HTTP boundary, rooted at `/v3` by
+default. Gateway options may provide `http` options and a trusted
+`resolveDatabaseSchema(request)` callback. The resolver is the physical-schema
+authorization boundary; request context cannot override it.
+
+The Deno listener accepts any structural Fetch-capable host:
 
 ```ts
 import { listen } from "@copilotz/copilotz/adapters/deno";
@@ -88,152 +74,22 @@ import { listen } from "@copilotz/copilotz/adapters/deno";
 const listener = listen(gateway, { hostname: "0.0.0.0", port: 8080 });
 ```
 
-Other runtimes mount `gateway.fetch` in their native server boundary.
+## Persistence
 
-### `createCopilotzWorker(options, lifecycle?)`
+`@copilotz/copilotz/persistence` is the explicit persistence contract subpath.
+It exports Ominipg connection options plus `createCopilotzPersistence()` for an
+application that deliberately shares one reconnectable database facade across
+several internal roles. The public application factory accepts that facade in
+its `persistence` option; its creator retains the final `close()` ownership.
 
-Creates an outbound Worker that reconstructs plugin executors locally and
-registers only Copilotz workloads with Oxian. Required topology fields are the
-plain Worker primitives: `id` and `transport`. WebSocket deployments also pass
-`activate`, `register`, and `handshake`; the optional second argument observes
-the Worker lifecycle.
+## Explicit primitive and plugin packages
 
-The result exposes `ready`, `closed`, `events`, `snapshot()`, and `stop()`. It
-does not expose the internal application used to host workload closures.
+The root exports only `createCopilotz`, `CreateCopilotzOptions`, and generic
+application/operation types. Import reusable primitives from their deliberate
+subpaths: `/actions`, `/collections`, `/content`, `/events`, `/plugins`, and
+`/persistence`. Import semantic composition from plugin packages such as
+`/core`, `/llm`, `/channels`, `/knowledge`, `/schedules`, and `/usage`.
 
-## Shared role configuration
-
-Gateway and Worker should receive equivalent domain composition and reachable
-persistence. Explicit co-located roles can share one reconnectable persistence
-record without duplicating pools:
-
-```ts
-const persistence = await createCopilotzPersistence({
-  database: { connect: () => Ominipg.connect({ url }) },
-});
-const composition = {
-  namespace: "acme",
-  persistence,
-  plugins,
-};
-const transport = {
-  type: "in-process",
-  config: { topic: "acme.copilotz" },
-} as const;
-const workerId = "acme-worker";
-
-const gateway = await createCopilotzGateway({
-  ...composition,
-  transports: [transport],
-  target: { workerId },
-});
-const worker = await createCopilotzWorker({
-  ...composition,
-  id: workerId,
-  transport,
-});
-await worker.ready;
-
-await Promise.all([gateway.shutdown(), worker.stop()]);
-await persistence.close();
-```
-
-The roles observe and admit through the shared persistence but do not close it.
-Its creator retains ownership. No opaque domain-composition factory is required.
-
-## `CopilotzApplication`
-
-Important members:
-
-- `config`, `plugins`
-- `content`, `collections`
-- `events`, `deliveries`
-- `databaseSchema`, `databaseScope(name)`
-- `send(input)`, `observe()`, `close(reason?)`
-- `recover(options)`, `recoverAll(options)`, `maintenance(options)`,
-  `shutdown(reason?)`
-
-All products are factory-created frozen records. Infer their type or import
-`CopilotzApplication`; do not subclass them.
-
-`application.plugins.resources.tools` is the composed data-only Tool Resource
-map, and every Resource names a matching definition in
-`application.plugins.actions`. Core selects the Agent's explicitly granted
-aliases and invokes those Actions through the ordinary Action context. An
-adapter that needs an effective-grant view may create
-`createAgentCapabilityResolver({ registry: application.plugins })`; the
-application exposes no Tool catalog, Tool executor, or Tool-execution query
-surface.
-
-`application.events` is the durable event-store query surface (`append`, `list`,
-`get`, `subscribe`, settlement helpers). `application.observe()` is the
-application-session output stream:
-
-```ts
-for await (const output of application.observe()) {
-  // committed CopilotzEvent or runtime stream output
-}
-```
-
-`databaseScope(name)` returns a lightweight physical-schema-bound view of the
-domain repositories, events, deliveries, attachments, and maintenance APIs.
-Scopes share the application's Ominipg database and Oxian execution runtime.
-Applications must run `provisionCopilotzSchema(database, name)` explicitly
-during tenant onboarding or migration. Set
-`engine.provisionDefaultDatabaseSchema` to `false` when an application-owned
-migration also owns the default schema lifecycle.
-
-## Send handle
-
-```ts
-type ApplicationSendHandle = {
-  eventId: string;
-  correlationId: string;
-  outputs: ReadableStream<AttachmentOutput>;
-  done: Promise<void>;
-  cancel(reason?: string): Promise<void>;
-};
-```
-
-## Application outputs
-
-```ts
-for await (const output of copilotz.observe()) {
-  // committed semantic event or runtime stream output
-}
-```
-
-## Skills
-
-`@copilotz/copilotz/skills` exports `defineSkill()`, `defineInlineSkill()`,
-`createSkillsPlugin()`, strict `SKILL.md` parsing, and portable skill/file
-types. `@copilotz/copilotz/skills/deno` exports `buildOpenSkillsPlugin()` for
-build-time conversion of standard Agent Skills directories into a portable
-plugin. Filesystem directory loading is not an application runtime API.
-
-## HTTP
-
-`gateway.fetch` is the v3 Web Fetch API. It serves the Copilotz application at
-`/v3` by default and also handles Worker upgrades when the Gateway owns a
-WebSocket transport.
-
-`resolveDatabaseSchema(request)` on `createCopilotzGateway()` is the explicit
-tenant-authorization boundary for multi-schema HTTP routing. Request context
-cannot override the resolver. Actions may return `headers` alongside `status`
-and `data`; the Fetch adapter preserves those headers for JSON, 204, and SSE
-responses.
-
-`@copilotz/copilotz/server` exposes bounded event-native server projection
-types. It does not contain a legacy route or wire-protocol adapter.
-
-## Package exports
-
-The authoritative subpath list is `deno.json`. Runtime primitives use explicit
-groups such as `/application`, `/actions`, `/collections`, `/content`,
-`/events`, and `/plugins`. Optional semantic packages use `/core`, `/admin`,
-`/channels`, `/goals`, `/knowledge`, `/memory`, `/schedules`, `/schedules/core`,
-`/skills`, and `/usage`; none is re-exported by the runtime-neutral root.
-
-Internal engine assembly, delivery executors, framed Worker protocol, and raw
-workload maps are implementation details rather than package entry points. Every
-declared subpath is checked independently in CI.
+`/application` exports generic application types only; it does not expose a
+factory or runtime authority. `/server` remains an explicit server-projection
+package for host integrations, not a backdoor to runtime internals.

@@ -22,7 +22,7 @@ import type { CreateCopilotzApplicationOptions } from "./types.ts";
 import {
   type CopilotzPersistenceOptions,
   openCopilotzPersistence,
-} from "./persistence.ts";
+} from "@copilotz/copilotz/persistence";
 
 type WorkerEngineOptions = Omit<
   NonNullable<CreateCopilotzApplicationOptions["engine"]>,
@@ -38,7 +38,8 @@ export type CreateCopilotzWorkerOptions =
   & Omit<WorkerOptions, "workloads">
   & Readonly<{ engine?: WorkerEngineOptions }>;
 
-export type CopilotzWorker =
+/** Private execution-role authority projected by the package factory. */
+export type InternalCopilotzWorker =
   & Omit<Worker, "closed" | "stop">
   & Readonly<{
     role: "worker";
@@ -99,7 +100,7 @@ function createDeferredDeliveryDispatcher(): DeliveryDispatcher {
 export async function createCopilotzWorker(
   options: CreateCopilotzWorkerOptions,
   lifecycle: WorkerLifecycleCallbacks = {},
-): Promise<CopilotzWorker> {
+): Promise<InternalCopilotzWorker> {
   const persistence = await openCopilotzPersistence(options);
   const relay = createCopilotzWorkOutputRelay();
   let application;

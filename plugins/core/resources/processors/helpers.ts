@@ -7,16 +7,14 @@ import type {
   ConversationMessage,
   ConversationThread,
   Participant,
-} from "@copilotz/copilotz/domain";
+} from "../../contracts.ts";
 import type { ProcessorContext } from "@copilotz/copilotz/plugins";
 import type { ToolResource } from "@copilotz/copilotz/tools";
 import type { AgentResource } from "../../agent.ts";
 import type { CoreResources } from "../../context.ts";
 import { resolveToolGrants } from "../../internal/capabilities/grants.ts";
-import {
-  type MessageBranch,
-  projectActiveMessageBranch,
-} from "../collections/message.ts";
+import type { MessageBranch } from "../../contracts.ts";
+import { projectActiveMessageBranch } from "../../projections.ts";
 
 export type CoreToolEntry = Readonly<{
   alias: string;

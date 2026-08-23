@@ -95,8 +95,7 @@ const THREAD_KEYS = new Set([
   "externalId",
   "parentThreadId",
 ]);
-const ORIGIN_KEYS = new Set(["scope", "producer", "path", "inferred"]);
-const ORIGIN_OWNER_KEYS = new Set(["type", "id"]);
+const ORIGIN_KEYS = new Set(["type", "id"]);
 
 function dataObject(
   value: unknown,
@@ -201,28 +200,8 @@ function validateContentFields(raw: Record<string, unknown>): void {
   if (raw.origin !== undefined) {
     dataObject(raw.origin, ORIGIN_KEYS, "Goal content origin");
     const origin = raw.origin;
-    dataObject(origin.scope, ORIGIN_OWNER_KEYS, "Goal content origin scope");
-    dataObject(
-      origin.producer,
-      ORIGIN_OWNER_KEYS,
-      "Goal content origin producer",
-    );
-    exactContentText(origin.scope.type, "Goal content origin scope type", true);
-    exactContentText(origin.scope.id, "Goal content origin scope id", true);
-    exactContentText(
-      origin.producer.type,
-      "Goal content origin producer type",
-      true,
-    );
-    exactContentText(
-      origin.producer.id,
-      "Goal content origin producer id",
-      true,
-    );
-    exactContentText(origin.path, "Goal content origin path");
-    if (
-      origin.inferred !== undefined && typeof origin.inferred !== "boolean"
-    ) throw new TypeError("Goal content origin inferred must be boolean.");
+    exactContentText(origin.type, "Goal content origin type", true);
+    exactContentText(origin.id, "Goal content origin id", true);
   }
 }
 

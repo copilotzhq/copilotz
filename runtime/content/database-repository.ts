@@ -66,12 +66,6 @@ export type AssetMutationInput = Readonly<{
   origin?: AssetOrigin;
 }>;
 
-export type LinkAssetOwnerInput = Readonly<{
-  namespace: string;
-  ownerId: string;
-  content: ContentSequence;
-}>;
-
 export type AssetBodyMaintenanceResult = Readonly<{
   orphanedBodiesDeleted: number;
 }>;
@@ -79,51 +73,10 @@ export type AssetBodyMaintenanceResult = Readonly<{
 export type DatabaseAssetRepository =
   & AssetRepository
   & Readonly<{
-    /** Prepares external bodies and a deterministic graph adoption plan. */
-    prepareMaterialization(
-      input: AssetMutationInput,
-    ): Promise<AssetMaterializationPlan>;
-    /** Adopts prepared database bodies and Asset graph metadata atomically. */
-    adoptMaterialization(
-      context: EventMutationContext,
-      plan: AssetMaterializationPlan,
-    ): Promise<void>;
     /** Makes prepared bodies durable in one short repository transaction. */
     materialize(
       input: AssetMutationInput,
     ): Promise<ContentSequence>;
-    /** Makes prepared bodies durable inside an aggregate's open transaction. */
-    materializeInTransaction(
-      context: EventMutationContext,
-      input: AssetMutationInput,
-    ): Promise<ContentSequence>;
-    /** Makes prepared bodies durable and reports replay metadata for new Assets. */
-    materializeWithManifestInTransaction(
-      context: EventMutationContext,
-      input: AssetMutationInput,
-    ): Promise<
-      Readonly<{
-        content: ContentSequence;
-        assets: readonly AssetManifestEntry[];
-      }>
-    >;
-    /** Resolves a replay to existing bodies without writing. */
-    resolvePreparedInTransaction(
-      context: EventMutationContext,
-      input: AssetMutationInput,
-    ): Promise<ContentSequence>;
-    /** Adds typed owner links after the owner node exists. */
-    linkOwner(input: LinkAssetOwnerInput): Promise<void>;
-    /** Adds typed owner links inside an aggregate's open transaction. */
-    linkOwnerInTransaction(
-      context: EventMutationContext,
-      input: LinkAssetOwnerInput,
-    ): Promise<void>;
-    /** Replaces an owner's liveness links after a typed record update. */
-    syncOwner(
-      context: EventMutationContext,
-      input: LinkAssetOwnerInput,
-    ): Promise<void>;
     /** Retries deleted bodies and removes old uploads without graph metadata. */
     maintainBodies(
       options?: Readonly<{
@@ -133,6 +86,30 @@ export type DatabaseAssetRepository =
       }>,
     ): Promise<AssetBodyMaintenanceResult>;
   }>;
+
+type CollectionAssetAdopter = Readonly<{
+  prepareMaterialization(
+    input: AssetMutationInput,
+  ): Promise<AssetMaterializationPlan>;
+  adoptMaterialization(
+    context: EventMutationContext,
+    plan: AssetMaterializationPlan,
+  ): Promise<void>;
+}>;
+
+const collectionAssetAdopters = new WeakMap<
+  DatabaseAssetRepository,
+  CollectionAssetAdopter
+>();
+
+/** @internal Collection-kernel-only adoption capability. */
+export function collectionAssetAdopterFor(
+  assets: DatabaseAssetRepository,
+): CollectionAssetAdopter {
+  const adopter = collectionAssetAdopters.get(assets);
+  if (!adopter) throw new TypeError("Unknown database AssetRepository.");
+  return adopter;
+}
 
 export type CreateDatabaseAssetRepositoryOptions = Readonly<{
   coordinator: EventCoordinator;
@@ -170,27 +147,33 @@ function cloneMetadata(value: unknown): Record<string, unknown> | undefined {
 }
 
 function cloneOrigin(value: unknown): AssetOrigin | undefined {
-  const fields = record(value);
-  const scope = record(fields.scope);
-  const producer = record(fields.producer);
-  const validScope = typeof scope.type === "string" &&
-      scope.type.trim() && typeof scope.id === "string" && scope.id.trim()
-    ? { type: scope.type, id: scope.id }
-    : undefined;
-  if (
-    !validScope || typeof producer.type !== "string" ||
-    typeof producer.id !== "string"
-  ) {
-    return undefined;
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw createContentError(
+      "asset_corrupted",
+      "Asset origin must be an object.",
+    );
   }
-  return Object.freeze({
-    scope: validScope,
-    producer: { type: producer.type, id: producer.id },
-    ...(typeof fields.path === "string" ? { path: fields.path } : {}),
-    ...(typeof fields.inferred === "boolean"
-      ? { inferred: fields.inferred }
-      : {}),
-  });
+  const fields = value as Record<string, unknown>;
+  const prototype = Object.getPrototypeOf(fields);
+  const keys = Reflect.ownKeys(fields);
+  if (
+    (prototype !== Object.prototype && prototype !== null) ||
+    keys.length !== 2 || !keys.includes("type") || !keys.includes("id") ||
+    keys.some((key) => {
+      if (typeof key !== "string") return true;
+      const descriptor = Object.getOwnPropertyDescriptor(fields, key);
+      return !descriptor?.enumerable || !("value" in descriptor);
+    }) ||
+    typeof fields.type !== "string" || !fields.type.trim() ||
+    typeof fields.id !== "string" || !fields.id.trim()
+  ) {
+    throw createContentError(
+      "asset_corrupted",
+      "Asset origin must contain exactly non-empty type and id.",
+    );
+  }
+  return Object.freeze({ type: fields.type.trim(), id: fields.id.trim() });
 }
 
 function requiredText(value: string, name: string): string {
@@ -471,6 +454,7 @@ export function createDatabaseAssetRepository(
         { namespace, assetId: candidate.id },
       );
     }
+    cloneOrigin(candidate.origin);
     if (candidate.readyBody) {
       if (!candidate.location) {
         throw createContentError(
@@ -539,10 +523,17 @@ export function createDatabaseAssetRepository(
     }>
   > => {
     const namespace = requiredText(input.namespace, "Asset namespace");
+    cloneOrigin(input.origin);
     const prepared = preparedInput(input.content);
     const candidates = new Map<string, PreparedAsset>();
     const referenced = new Set(prepared.content.map((ref) => ref.assetId));
-    for (const candidate of prepared.assets) {
+    for (const source of prepared.assets) {
+      const candidate = Object.freeze({
+        ...source,
+        ...(cloneOrigin(source.origin)
+          ? { origin: cloneOrigin(source.origin) }
+          : {}),
+      }) as PreparedAsset;
       if (candidates.has(candidate.id)) {
         throw createContentError(
           "content_invalid",
@@ -619,7 +610,9 @@ export function createDatabaseAssetRepository(
       ...(source.location
         ? { location: structuredClone(source.location) }
         : {}),
-      ...(source.origin ? { origin: structuredClone(source.origin) } : {}),
+      ...(cloneOrigin(source.origin)
+        ? { origin: cloneOrigin(source.origin) }
+        : {}),
       ...(source.metadata
         ? { metadata: structuredClone(source.metadata) }
         : {}),
@@ -649,8 +642,8 @@ export function createDatabaseAssetRepository(
         { namespace, assetId: candidate.id },
       );
     }
-    const origin = candidate.origin ??
-      (fallbackOrigin ? structuredClone(fallbackOrigin) : undefined);
+    const origin = candidate.origin ?? cloneOrigin(fallbackOrigin) ??
+      Object.freeze({ type: "namespace", id: namespace });
     try {
       JSON.stringify({
         ...(origin ? { origin } : {}),
@@ -732,7 +725,7 @@ export function createDatabaseAssetRepository(
       digest: candidate.digest,
       state: "ready",
       location: Object.freeze(storedLocation),
-      ...(origin ? { origin: Object.freeze(structuredClone(origin)) } : {}),
+      origin: Object.freeze(structuredClone(origin)),
       createdAt: readyAt,
       readyAt,
       ...(cloneMetadata(candidate.metadata)
@@ -1021,44 +1014,6 @@ export function createDatabaseAssetRepository(
     }
   };
 
-  const resolvePreparedContent = async (
-    context: EventMutationContext,
-    input: AssetMutationInput,
-  ): Promise<ContentSequence> => {
-    const { namespace, prepared, candidates } = await validateMutationInput(
-      input,
-    );
-    const resolved = new Map<string, AssetRecord>();
-    const remapped = new Map<string, string>();
-    for (const candidate of candidates.values()) {
-      const row = candidate.idempotencyKey?.trim()
-        ? await findByIdempotency(
-          context.transaction,
-          namespace,
-          candidate.idempotencyKey.trim(),
-        )
-        : await findById(context.transaction, namespace, candidate.id);
-      if (!row) {
-        throw createContentError(
-          "asset_not_found",
-          `Prepared asset replay could not be resolved: ${candidate.id}`,
-          { namespace, assetId: candidate.id },
-        );
-      }
-      const asset = mapAsset(row);
-      assertRecordMatches(asset, candidate, candidate.idempotencyKey?.trim());
-      resolved.set(asset.id, asset);
-      remapped.set(candidate.id, asset.id);
-    }
-    return await resolveRefs(
-      context.transaction,
-      namespace,
-      prepared,
-      resolved,
-      remapped,
-    );
-  };
-
   const getRows = async (
     executor: SqlExecutor,
     namespace: string,
@@ -1154,24 +1109,6 @@ export function createDatabaseAssetRepository(
     ));
   };
 
-  const linkOwnerInTransaction = async (
-    context: EventMutationContext,
-    input: LinkAssetOwnerInput,
-  ): Promise<void> => {
-    const namespace = requiredText(input.namespace, "Asset namespace");
-    const ownerId = requiredText(input.ownerId, "Asset owner ID");
-    const assetIds = [...new Set(input.content.map((ref) => ref.assetId))];
-    for (const assetId of assetIds) {
-      await context.transaction.query(
-        `INSERT INTO ${context.tables.edges} (
-           id, namespace, source_node_id, target_node_id, type, data, weight
-         ) VALUES ($1, $2, $3, $4, 'has_asset', '{}', 1)
-         ON CONFLICT DO NOTHING`,
-        [createId(), namespace, ownerId, assetId],
-      );
-    }
-  };
-
   const repository: DatabaseAssetRepository = {
     async publish(input: PublishAssetInput) {
       const namespace = requiredText(input.namespace, "Asset namespace");
@@ -1187,8 +1124,8 @@ export function createDatabaseAssetRepository(
       const body = input.body.slice();
       const assetId = input.id?.trim() || createId();
       const defaultOrigin: AssetOrigin = {
-        scope: { type: "namespace", id: namespace },
-        producer: { type: "asset", id: assetId },
+        type: "namespace",
+        id: namespace,
       };
       const candidate: PreparedAsset = Object.freeze({
         id: assetId,
@@ -1201,7 +1138,7 @@ export function createDatabaseAssetRepository(
         ...(input.metadata
           ? { metadata: structuredClone(input.metadata) }
           : {}),
-        origin: structuredClone(input.origin ?? defaultOrigin),
+        origin: cloneOrigin(input.origin) ?? defaultOrigin,
       });
       await validateCandidate(namespace, candidate);
       const preparedCandidate = await prepareCandidate(
@@ -1491,12 +1428,6 @@ export function createDatabaseAssetRepository(
       return Object.freeze({ orphanedBodiesDeleted });
     },
 
-    prepareMaterialization(input) {
-      return prepareMaterializationOn(options.session, input);
-    },
-
-    adoptMaterialization,
-
     async materialize(input) {
       let plan = await prepareMaterializationOn(options.session, input);
       const attempted = new Set<string>();
@@ -1536,55 +1467,16 @@ export function createDatabaseAssetRepository(
       }
       return plan.content;
     },
-
-    async materializeInTransaction(context, input) {
-      const plan = await prepareMaterializationOn(context.transaction, input);
-      await adoptMaterialization(context, plan);
-      return plan.content;
-    },
-
-    async materializeWithManifestInTransaction(context, input) {
-      const plan = await prepareMaterializationOn(context.transaction, input);
-      await adoptMaterialization(context, plan);
-      return Object.freeze({
-        content: plan.content,
-        assets: plan.assets,
-      });
-    },
-
-    resolvePreparedInTransaction(context, input) {
-      return resolvePreparedContent(context, input);
-    },
-
-    async linkOwner(input) {
-      await options.session.transaction((transaction) =>
-        linkOwnerInTransaction({ transaction, tables }, input)
-      );
-    },
-
-    linkOwnerInTransaction,
-
-    async syncOwner(context, input) {
-      const namespace = requiredText(input.namespace, "Asset namespace");
-      const ownerId = requiredText(input.ownerId, "Asset owner ID");
-      const assetIds = [...new Set(input.content.map((ref) => ref.assetId))];
-      if (assetIds.length === 0) {
-        await context.transaction.query(
-          `DELETE FROM ${context.tables.edges}
-           WHERE namespace = $1 AND source_node_id = $2 AND type = 'has_asset'`,
-          [namespace, ownerId],
-        );
-      } else {
-        await context.transaction.query(
-          `DELETE FROM ${context.tables.edges}
-           WHERE namespace = $1 AND source_node_id = $2 AND type = 'has_asset'
-             AND NOT (target_node_id = ANY($3::text[]))`,
-          [namespace, ownerId, assetIds],
-        );
-      }
-      await linkOwnerInTransaction(context, input);
-    },
   };
 
-  return Object.freeze(repository);
+  const frozenRepository = Object.freeze(repository);
+  collectionAssetAdopters.set(
+    frozenRepository,
+    Object.freeze({
+      prepareMaterialization: (input) =>
+        prepareMaterializationOn(options.session, input),
+      adoptMaterialization,
+    }),
+  );
+  return frozenRepository;
 }

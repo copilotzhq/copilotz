@@ -80,8 +80,9 @@ await worker.ready;
 The handler has the same Oxian workload contract when the Worker's transport is
 changed to an outbound WebSocket descriptor.
 
-At the public application boundary, `createCopilotzWorker()` reconstructs and
-registers the complete worker-local map (delivery, live, and stream workloads).
+At the public application boundary, `createCopilotz({ role: "worker" })`
+reconstructs and registers the complete worker-local map (delivery, live, and
+stream workloads).
 The closures remain module-private within that Worker process. Gateway and
 Worker exchange identities, versioned output frames, and streams only.
 

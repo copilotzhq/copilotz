@@ -2,17 +2,17 @@ import type {
   ConversationMessage,
   ConversationThread,
   Participant,
-} from "../domain/index.ts";
-import type { ActionEventData } from "../actions/index.ts";
-import { mapParticipantRecord } from "../engine/collection-graph.ts";
-import type { ProcessorEvent } from "../plugins/index.ts";
+} from "../contracts.ts";
+import { mapParticipantRecord } from "../projections.ts";
+import type { ActionEventData } from "@copilotz/copilotz/actions";
+import type { ProcessorEvent } from "@copilotz/copilotz/plugins";
 import {
   createTestDomainContext,
   projectTestMessage,
   projectTestMessages,
   projectTestThread,
   type TestDomainHost,
-} from "./domain-context.ts";
+} from "./context.ts";
 
 export async function projectMessages(
   host: TestDomainHost,

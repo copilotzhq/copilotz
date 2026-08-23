@@ -3,7 +3,7 @@ import type {
   ConversationMessage,
   ConversationThread,
   Participant,
-} from "@copilotz/copilotz/domain";
+} from "../../contracts.ts";
 import type { ScopedCollections } from "@copilotz/copilotz/collections";
 import type { ContentInput, ContentRef } from "@copilotz/copilotz/content";
 

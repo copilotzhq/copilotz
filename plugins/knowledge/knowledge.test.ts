@@ -5,10 +5,9 @@ import {
   assertRejects,
   assertStringIncludes,
 } from "@std/assert";
-import { createTestDomainContext } from "../../runtime/testing/domain-context.ts";
-import { projectMessages } from "../../runtime/testing/projections.ts";
+import { createTestDomainContext } from "../core/testing/context.ts";
+import { projectMessages } from "../core/testing/projections.ts";
 
-import { createCopilotz } from "@copilotz/copilotz/application";
 import type { ActionCallOptions } from "@copilotz/copilotz/actions";
 import { createCopilotzApplication } from "../../runtime/application/index.ts";
 import {
@@ -212,7 +211,7 @@ async function createThread(
 }
 
 Deno.test("package root composes the explicit Knowledge plugin", async () => {
-  const application = await createCopilotz({
+  const application = await createCopilotzApplication({
     namespace: "knowledge-root",
     plugins: [
       coreCollectionsPlugin,

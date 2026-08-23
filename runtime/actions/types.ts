@@ -7,7 +7,7 @@ import type {
   ScopedCollections,
   TransactionCollection,
 } from "../collections/kernel.ts";
-import type { ContentStreamRuntime } from "../content/stream.ts";
+import type { ContentStreamRuntime } from "../streams/index.ts";
 import type {
   AssetOrigin,
   AssetRecord,

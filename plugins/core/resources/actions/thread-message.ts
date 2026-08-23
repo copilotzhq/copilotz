@@ -4,10 +4,7 @@ import type {
   ScopedCollectionCallOptions,
   ScopedCollections,
 } from "@copilotz/copilotz/collections";
-import type {
-  ParticipantInput,
-  ParticipantType,
-} from "@copilotz/copilotz/domain";
+import type { ParticipantInput, ParticipantType } from "../../contracts.ts";
 import type { EventVisibility } from "@copilotz/copilotz/events";
 import {
   type ActionContext,

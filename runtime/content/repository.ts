@@ -2,6 +2,7 @@ import { digestContent } from "./digest.ts";
 import { createContentError } from "./errors.ts";
 import type {
   AssetBody,
+  AssetOrigin,
   AssetRecord,
   AssetRepository,
   PublishAssetInput,
@@ -19,10 +20,34 @@ function cloneMetadata(
   return metadata === undefined ? undefined : structuredClone(metadata);
 }
 
+function cloneOrigin(origin: AssetOrigin | undefined): AssetOrigin | undefined {
+  if (!origin) return undefined;
+  const prototype = Object.getPrototypeOf(origin);
+  const keys = Reflect.ownKeys(origin);
+  if (
+    (prototype !== Object.prototype && prototype !== null) ||
+    keys.length !== 2 || !keys.includes("type") || !keys.includes("id") ||
+    keys.some((key) => {
+      if (typeof key !== "string") return true;
+      const descriptor = Object.getOwnPropertyDescriptor(origin, key);
+      return !descriptor?.enumerable || !("value" in descriptor);
+    }) ||
+    typeof origin.type !== "string" || !origin.type.trim() ||
+    typeof origin.id !== "string" || !origin.id.trim()
+  ) {
+    throw createContentError(
+      "content_invalid",
+      "Asset origin must contain exactly non-empty type and id.",
+    );
+  }
+  return Object.freeze({ type: origin.type.trim(), id: origin.id.trim() });
+}
+
 function cloneRecord(record: AssetRecord): AssetRecord {
   return {
     ...record,
     location: { ...record.location },
+    origin: cloneOrigin(record.origin),
     metadata: cloneMetadata(record.metadata),
   };
 }
@@ -181,6 +206,10 @@ export function createMemoryAssetRepository(
         location: input.location ?? { kind: "memory" },
         createdAt: timestamp,
         readyAt: timestamp,
+        origin: cloneOrigin(input.origin) ?? Object.freeze({
+          type: "namespace",
+          id: namespace,
+        }),
         metadata: cloneMetadata(input.metadata),
       };
       records.set(key, record);

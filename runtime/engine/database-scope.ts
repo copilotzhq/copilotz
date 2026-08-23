@@ -1,21 +1,18 @@
 import {
-  type AttachmentRuntime,
-  createAttachmentRuntime,
-} from "../attachments/index.ts";
-import {
   type BodyStore,
   type ContentPreparer,
   createContentResolver,
-  createContentStreamRuntime,
   createDatabaseAssetRepository,
   createDatabaseBodyStore,
   type DatabaseAssetRepository,
   maintainProgressiveBodies,
 } from "../content/index.ts";
+import { collectionAssetAdopterFor } from "../content/database-repository.ts";
 import {
-  type ActionContextBindings,
-  createActionLifecycleAppender,
-  createActionLifecycleLoader,
+  type ContentStreamFollowInput,
+  createContentStreamRuntime,
+} from "../streams/index.ts";
+import {
   isRegisteredActionLifecycleEventType,
   isReservedActionLifecycleDeduplicationId,
 } from "../actions/index.ts";
@@ -58,7 +55,6 @@ export type DatabaseScopeRuntime = Readonly<{
   public: CopilotzEngineDatabaseScope;
   store: EventStore;
   coordinator: EventCoordinator;
-  attachmentRuntime: AttachmentRuntime;
   capabilities: DatabaseScopeCapabilities;
   streamBodyStore: BodyStore;
   transients: TransientProcessorSet;
@@ -140,16 +136,13 @@ export function createDatabaseScope(
     coordinator,
     session: engine.session,
     eventStore: store,
-    assets,
+    assets: collectionAssetAdopterFor(assets),
     createId: engine.createId,
     now: options.now,
   });
   for (const resource of Object.values(options.registry.collections)) {
     if (isKernelCollection(resource)) collections.bind(resource);
   }
-  const actionLifecycleAppender = createActionLifecycleAppender({
-    coordinator,
-  });
   const streamBodyStore = engine.assetStorage?.adapter?.forScope({
     namespace: "@copilotz/stream",
     databaseSchema,
@@ -158,101 +151,11 @@ export function createDatabaseScope(
       session: engine.session,
       schema: databaseSchema,
     });
-  const actionBindings: Omit<ActionContextBindings, "namespace"> = Object
-    .freeze({
-      plugins: options.registry,
-      collections,
-      now: options.now,
-      content: (namespace) =>
-        Object.freeze({
-          resolver,
-          stream: createContentStreamRuntime({
-            namespace,
-            store: streamBodyStore,
-            createId: engine.createId,
-            async onOpen(output) {
-              const event = createEphemeralEvent({
-                type: "stream.output",
-                namespace,
-                streamId: output.id,
-                payload: {
-                  streamId: output.id,
-                  mediaType: output.mediaType,
-                  kind: output.kind,
-                  role: output.role,
-                  ...(output.name ? { name: output.name } : {}),
-                  ...(output.alt ? { alt: output.alt } : {}),
-                  ...(output.language ? { language: output.language } : {}),
-                  ...(output.disposition
-                    ? { disposition: output.disposition }
-                    : {}),
-                },
-                correlationId: output.correlationId ??
-                  `content-stream:${output.id}`,
-                metadata: {
-                  ...structuredClone(output.metadata),
-                  contentStream: true,
-                  role: output.role,
-                },
-              }, options.now);
-              await options.publishLive(event);
-            },
-          }),
-          bodies: streamBodyStore,
-          prepare: (input, prepareOptions) =>
-            options.preparer.prepare(input, {
-              namespace,
-              idempotencyKey:
-                `action:${namespace}:${prepareOptions.operationKey}`,
-              origin: prepareOptions.origin,
-            }),
-          materialize: (input, materializeOptions = {}) =>
-            assets.materialize({
-              namespace,
-              content: input,
-              origin: materializeOptions.origin,
-            }),
-          publish: (input, publishOptions) =>
-            assets.publish({
-              ...input,
-              namespace,
-              idempotencyKey:
-                `action:${namespace}:${publishOptions.operationKey}`,
-            }),
-          get: (assetId) => assets.get(namespace, assetId),
-          getMany: (assetIds) => assets.getMany(namespace, assetIds),
-          resolve: (ref) => resolver.get(ref, { namespace }),
-          resolveMany: (refs) => resolver.getMany(refs, { namespace }),
-          open: (ref) => resolver.open(ref, { namespace }),
-        }),
-      actionLifecycle: {
-        append: actionLifecycleAppender,
-        load: createActionLifecycleLoader({ store }),
-      },
-    });
   const capabilities: DatabaseScopeCapabilities = Object.freeze({
     assets,
     collections,
     streamBodyStore,
   });
-  const attachmentRuntime = createAttachmentRuntime({
-    databaseSchema,
-    coordinator,
-    store,
-    session: engine.session,
-    assets,
-    eventHub: options.eventHub,
-    executor: options.executor,
-    collections,
-    transients: options.transients,
-    actionBindings,
-    streamBodyStore,
-    dispatchEvent: options.publishLive,
-    createId: engine.createId,
-    now: options.now,
-    settlementPollMs: engine.attachments?.settlementPollMs,
-  });
-
   const deliveryInNamespace = async (namespace: string, id: string) => {
     const delivery = await store.getDelivery(id);
     if (!delivery) return null;
@@ -372,23 +275,16 @@ export function createDatabaseScope(
     databaseSchema,
     content: Object.freeze({ assets, preparer: options.preparer, resolver }),
     collections,
-    connect(input) {
-      return attachmentRuntime.connect({
-        ...input,
-        databaseSchema: input.databaseSchema ?? databaseSchema,
-      });
-    },
-    run(input) {
-      return attachmentRuntime.run({
-        ...input,
-        databaseSchema: input.databaseSchema ?? databaseSchema,
-      });
-    },
-    disconnectAttachments(
-      error: unknown = new Error("Application persistence is unavailable."),
-    ) {
-      return attachmentRuntime.terminate(error);
-    },
+    streams: Object.freeze({
+      async follow(namespace: string, input: ContentStreamFollowInput) {
+        const follower = await createContentStreamRuntime({
+          namespace,
+          store: streamBodyStore,
+          createId: engine.createId,
+        }).follow(input);
+        return follower.body;
+      },
+    }),
     events,
     deliveries,
     recover,
@@ -399,7 +295,6 @@ export function createDatabaseScope(
     public: publicScope,
     store,
     coordinator,
-    attachmentRuntime,
     capabilities,
     streamBodyStore,
     transients: options.transients,

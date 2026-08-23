@@ -8,11 +8,13 @@ import {
 import type { ActionContext } from "@copilotz/copilotz/actions";
 import type {
   ContentRef,
-  ContentStreamAppendInput,
-  ContentStreamOpenInput,
   PreparedContent,
   PublishAssetInput,
 } from "@copilotz/copilotz/content";
+import type {
+  ContentStreamAppendInput,
+  ContentStreamOpenInput,
+} from "@copilotz/copilotz/streams";
 import type { API } from "../resources.ts";
 import { createOpenApiToolsPlugin } from "./generator.ts";
 

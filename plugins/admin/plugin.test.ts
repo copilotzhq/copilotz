@@ -9,7 +9,7 @@ import {
 import { corePlugin, message } from "../core/index.ts";
 import { createUsageWorkflowPlugin } from "../usage/index.ts";
 import { createAdminPlugin } from "./plugin.ts";
-import { createTestDomainContext } from "../../runtime/testing/domain-context.ts";
+import { createTestDomainContext } from "../core/testing/context.ts";
 
 const SCHEMA = "copilotz_admin_plugin";
 const NAMESPACE = "tenant-a";

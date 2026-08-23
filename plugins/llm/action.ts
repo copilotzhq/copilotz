@@ -460,27 +460,12 @@ function contentCommon(
     const value = plainRecord(record.origin, `${path}.origin`);
     exactKeys(
       value,
-      new Set(["scope", "producer", "path", "inferred"]),
+      new Set(["type", "id"]),
       `${path}.origin`,
     );
-    const endpoint = (key: "scope" | "producer") => {
-      const target = plainRecord(value[key], `${path}.origin.${key}`);
-      exactKeys(target, new Set(["type", "id"]), `${path}.origin.${key}`);
-      return Object.freeze({
-        type: requiredText(target.type, `${path}.origin.${key}.type`),
-        id: requiredText(target.id, `${path}.origin.${key}.id`),
-      });
-    };
-    if (value.inferred !== undefined && typeof value.inferred !== "boolean") {
-      throw new TypeError(`${path}.origin.inferred must be boolean.`);
-    }
     origin = Object.freeze({
-      scope: endpoint("scope"),
-      producer: endpoint("producer"),
-      ...(optionalText(value.path, `${path}.origin.path`)
-        ? { path: optionalText(value.path, `${path}.origin.path`) }
-        : {}),
-      ...(value.inferred !== undefined ? { inferred: value.inferred } : {}),
+      type: requiredText(value.type, `${path}.origin.type`),
+      id: requiredText(value.id, `${path}.origin.id`),
     });
   }
   return Object.freeze({

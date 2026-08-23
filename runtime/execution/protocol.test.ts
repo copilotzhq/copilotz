@@ -70,6 +70,20 @@ Deno.test("Copilotz work framing relays semantic events, metadata, and bytes", a
           payload: { text: "hello" },
           metadata: { sourceDeliveryId: metadata.deliveryId },
         }));
+        await relay.publish(Object.freeze({
+          type: "stream.output" as const,
+          namespace: "protocol-test",
+          streamId: "protocol-stream-a",
+          mediaType: "text/plain",
+          kind: "text" as const,
+          role: "assistant",
+          causationId: "event-a",
+          correlationId: "correlation-1",
+          metadata: Object.freeze({
+            sourceDeliveryId: metadata.deliveryId,
+            lane: "protocol",
+          }),
+        }));
         return {
           metadata: { status: "succeeded" },
           body: encoder.encode("framed output"),
@@ -80,7 +94,7 @@ Deno.test("Copilotz work framing relays semantic events, metadata, and bytes", a
 
   try {
     await worker.ready;
-    const events: unknown[] = [];
+    const outputs: unknown[] = [];
     const dispatched = await hypervisor.dispatch({
       workload: "copilotz.delivery.v1",
       metadata: {
@@ -89,17 +103,37 @@ Deno.test("Copilotz work framing relays semantic events, metadata, and bytes", a
       },
     });
     const work = relayCopilotzWorkHandle(dispatched, {
-      onEvent(event) {
-        events.push(event);
+      onOutput(output) {
+        outputs.push(output);
       },
     });
 
     assertEquals(await work.metadata, { status: "succeeded" });
     assertEquals(await new Response(work.output).text(), "framed output");
     assertEquals((await work.completed).status, "completed");
-    assertEquals(events.map((event) => (event as { type: string }).type), [
+    assertEquals(outputs.map((output) => (output as { type: string }).type), [
       "text.delta",
+      "stream.output",
     ]);
+    assertEquals(outputs.at(1), {
+      type: "stream.output",
+      namespace: "protocol-test",
+      streamId: "protocol-stream-a",
+      mediaType: "text/plain",
+      kind: "text",
+      role: "assistant",
+      causationId: "event-a",
+      correlationId: "correlation-1",
+      metadata: {
+        sourceDeliveryId: "delivery-1",
+        lane: "protocol",
+      },
+    });
+    assertEquals(Object.isFrozen(outputs.at(1)), true);
+    assertEquals(
+      Object.isFrozen((outputs.at(1) as { metadata: object }).metadata),
+      true,
+    );
   } finally {
     await worker.stop("protocol test complete");
     await worker.closed;

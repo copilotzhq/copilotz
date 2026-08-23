@@ -9,32 +9,26 @@ import type {
   DeliveryDispatcher,
   ExecutionWorkTarget,
 } from "../execution/index.ts";
-import { createEventNativeApp } from "../../server/event-native.ts";
-import type { CreateEventNativeAppOptions } from "../../server/event-native.ts";
-import {
-  createEventNativeFetchHandler,
-  type CreateEventNativeFetchHandlerOptions,
-} from "../../server/fetch.ts";
 import {
   createCopilotzApplication,
   observeApplicationPersistence,
 } from "./application.ts";
 import type {
-  CopilotzApplication,
+  ApplicationSendHandle,
+  ApplicationSendInput,
+  CopilotzApplicationObservation,
   CreateCopilotzApplicationOptions,
   InternalCopilotzApplication,
 } from "./types.ts";
 import {
   type CopilotzPersistenceOptions,
   openCopilotzPersistence,
-} from "./persistence.ts";
+} from "@copilotz/copilotz/persistence";
 
 type GatewayEngineOptions = Omit<
   NonNullable<CreateCopilotzApplicationOptions["engine"]>,
   "eventHub" | "execution"
 >;
-
-export type CopilotzGatewayHttpOptions = CreateEventNativeFetchHandlerOptions;
 
 export type CreateCopilotzGatewayOptions =
   & Omit<
@@ -55,22 +49,26 @@ export type CreateCopilotzGatewayOptions =
     signal?: AbortSignal;
     hypervisorConfig?: HypervisorOptions["config"];
     engine?: GatewayEngineOptions;
-    http?: CopilotzGatewayHttpOptions;
-    /** Authorizes and resolves the physical database schema for one request. */
-    resolveDatabaseSchema?:
-      CreateEventNativeAppOptions["resolveDatabaseSchema"];
   }>;
 
-export type CopilotzGateway =
-  & CopilotzApplication
-  & Readonly<{
-    role: "gateway";
-    transports: readonly HypervisorTransport[];
-    /** Present only when this Gateway created the Hypervisor. */
-    hypervisor?: Hypervisor;
-    /** Runtime-neutral application Fetch boundary. */
-    fetch(request: Request): Promise<Response>;
-  }>;
+type GatewayFetchFallback = (request: Request) => Promise<Response>;
+
+/**
+ * Private role authority. The package composition root projects this into the
+ * public base application plus Fetch; runtime code never constructs server
+ * routes or imports semantic server modules.
+ */
+export type InternalCopilotzGateway = Readonly<{
+  application: InternalCopilotzApplication;
+  transports: readonly HypervisorTransport[];
+  hypervisor?: Hypervisor;
+  send(input: ApplicationSendInput): Promise<ApplicationSendHandle>;
+  observe(): CopilotzApplicationObservation;
+  admit(): Promise<void>;
+  installFetchFallback(fallback: GatewayFetchFallback): void;
+  close(reason?: string): Promise<void>;
+  shutdown(reason?: string): Promise<void>;
+}>;
 
 function uniqueTransport(): HypervisorTransport {
   return Object.freeze({
@@ -99,7 +97,7 @@ async function settleAll(
 export async function createCopilotzGateway(
   options: CreateCopilotzGatewayOptions = {},
   lifecycle: HypervisorLifecycleCallbacks = {},
-): Promise<CopilotzGateway> {
+): Promise<InternalCopilotzGateway> {
   if (options.dispatcher && options.transports) {
     throw new TypeError("Configure either dispatcher or transports, not both.");
   }
@@ -117,11 +115,9 @@ export async function createCopilotzGateway(
   const transports = options.dispatcher
     ? Object.freeze([])
     : Object.freeze([...(options.transports ?? [uniqueTransport()])]);
-  let fetchApplication = (_request: Request): Promise<Response> =>
+  let fetchFallback: GatewayFetchFallback = (_request) =>
     Promise.resolve(
-      new Response("Copilotz Gateway is initializing.", {
-        status: 503,
-      }),
+      new Response("Copilotz Gateway is initializing.", { status: 503 }),
     );
   const hypervisor = options.dispatcher ? undefined : createHypervisor({
     transports,
@@ -130,7 +126,7 @@ export async function createCopilotzGateway(
     sessions: options.sessions,
     signal: options.signal,
     config: options.hypervisorConfig,
-    fallback: (request) => fetchApplication(request),
+    fallback: (request) => fetchFallback(request),
   }, lifecycle);
   const dispatcher = options.dispatcher ?? hypervisor!;
   let application: InternalCopilotzApplication | undefined;
@@ -163,22 +159,6 @@ export async function createCopilotzGateway(
     throw error;
   }
 
-  const native = createEventNativeApp(application, {
-    resolveDatabaseSchema: options.resolveDatabaseSchema,
-  });
-  fetchApplication = createEventNativeFetchHandler(
-    Object.freeze({
-      resources: native.resources,
-      async handle(request) {
-        await persistence.recovery?.admit();
-        return await native.handle(request);
-      },
-    }),
-    {
-      basePath: "/v3",
-      ...(options.http ?? {}),
-    },
-  );
   const stopObservingPersistence = observeApplicationPersistence(
     persistence,
     application,
@@ -196,30 +176,19 @@ export async function createCopilotzGateway(
     return shutdownTask;
   };
 
-  const {
-    engine: _internalEngine,
-    execution: _internalExecution,
-    ...publicApplication
-  } = application;
-
   return Object.freeze({
-    ...publicApplication,
-    config: Object.freeze({
-      ...application.config,
-      databaseOwnership: persistence.ownership,
-    }),
-    role: "gateway",
+    application,
     transports,
     ...(hypervisor ? { hypervisor } : {}),
-    async databaseScope(databaseSchema: string) {
-      await persistence.recovery?.admit();
-      return await application!.databaseScope(databaseSchema);
-    },
-    async send(input: Parameters<CopilotzApplication["send"]>[0]) {
+    async send(input) {
       await persistence.recovery?.admit();
       return await application!.send(input);
     },
-    fetch: (request: Request) => fetchApplication(request),
+    observe: () => application!.observe(),
+    admit: () => persistence.recovery?.admit() ?? Promise.resolve(),
+    installFetchFallback(fallback) {
+      fetchFallback = fallback;
+    },
     close: shutdown,
     shutdown,
   });

@@ -6,7 +6,7 @@ infrastructure.
 
 ```ts
 import { createCopilotz } from "jsr:@copilotz/copilotz@^0.61.0";
-import { core, corePlugin } from "jsr:@copilotz/copilotz@^0.61.0/core";
+import { corePlugin, message } from "jsr:@copilotz/copilotz@^0.61.0/core";
 
 const namespace = "acme";
 const app = await createCopilotz({
@@ -30,28 +30,9 @@ const app = await createCopilotz({
   adapters: { llm: { default: myLlmAdapter } },
 });
 
-const collections = app.collections.withScope({ namespace });
-await Promise.all([
-  collections.participant.create({
-    id: "user-1",
-    externalId: "user-1",
-    participantType: "human",
-  }),
-  collections.participant.create({
-    id: "support-1",
-    externalId: "support",
-    participantType: "agent",
-    agentId: "support",
-  }),
-]);
-await collections.thread.create({
-  id: "thread-1",
-  status: "active",
-  metadata: {},
-  participantIds: ["user-1", "support-1"],
-});
-
-const sent = await app.send(core.message({
+// The channel or onboarding flow has already created this thread and its
+// user/agent participants.
+const sent = await app.send(message({
   thread: "thread-1",
   participant: "user-1",
   recipientIds: ["support-1"],
@@ -64,17 +45,7 @@ for await (const output of app.observe()) {
 }
 await sent.done;
 
-const messages = await collections.message.queries.history({
-  threadId: "thread-1",
-});
-const answer = messages.at(-1);
-if (answer) {
-  console.log(
-    await app.content.resolver.getMany(answer.content, { namespace }),
-  );
-}
-
-await app.shutdown();
+await app.close();
 ```
 
 ## What happened
@@ -84,7 +55,7 @@ await app.shutdown();
 2. Matching durable processors received sparse delivery obligations.
 3. Oxian executed the text workflow. LLM and Tool Actions emitted their ordinary
    durable lifecycle Events, while public output became a Message graph record.
-4. `run.done` settled only after the message's causal delivery scope completed.
+4. `sent.done` settled only after the message's causal delivery scope completed.
 
 ## Add a plugin
 

@@ -40,10 +40,10 @@ import {
 import {
   projectActionEvents,
   projectMessages,
-} from "../../runtime/testing/projections.ts";
-import type { ConversationMessage } from "../../runtime/domain/index.ts";
+} from "./testing/projections.ts";
+import type { ConversationMessage } from "@copilotz/copilotz/core";
 import { createCopilotzApplication } from "../../runtime/application/application.ts";
-import { createTestDomainContext } from "../../runtime/testing/domain-context.ts";
+import { createTestDomainContext } from "./testing/context.ts";
 import { createUsageWorkflowPlugin } from "../usage/plugin.ts";
 
 const TEST_SCHEMA = "copilotz_core_llm_call";

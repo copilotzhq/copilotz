@@ -1,16 +1,13 @@
 import { assertEquals } from "@std/assert";
 
 import * as copilotz from "../../index.ts";
-import * as adapters from "../../runtime/adapters/index.ts";
 import * as denoAdapters from "../../runtime/adapters/deno/index.ts";
-import * as nodeAdapters from "../../runtime/adapters/node/index.ts";
 import * as application from "../../runtime/application/public.ts";
 import * as actions from "../../runtime/actions/index.ts";
-import * as attachments from "../../runtime/attachments/index.ts";
 import * as content from "../../runtime/content/index.ts";
-import * as domain from "../../runtime/domain/index.ts";
 import * as events from "../../runtime/events/index.ts";
 import * as plugins from "../../runtime/plugins/index.ts";
+import * as persistence from "../../runtime/persistence/index.ts";
 import * as server from "../../server/index.ts";
 import * as migration from "../../migration/v1/index.ts";
 import * as builtinTools from "../../plugins/tools/builtin/plugin.ts";
@@ -28,31 +25,20 @@ import * as admin from "../../plugins/admin/index.ts";
 import * as knowledge from "../../plugins/knowledge/index.ts";
 import * as memory from "../../plugins/memory/index.ts";
 import * as core from "@copilotz/copilotz/core";
+import * as coreCli from "@copilotz/copilotz/core/cli";
 import * as llm from "@copilotz/copilotz/llm";
 import * as coreSchedules from "@copilotz/copilotz/schedules/core";
 import * as goals from "@copilotz/copilotz/goals";
 import * as schedules from "@copilotz/copilotz/schedules";
 import * as usage from "@copilotz/copilotz/usage";
 import type {
-  AnyCopilotzPlugin,
   CopilotzApplication,
-  CopilotzEvent,
-  CopilotzGateway,
-  CopilotzWorker,
   CreateCopilotzOptions,
-  RunHandle,
-  ThreadAttachment,
 } from "../../index.ts";
 
 function compilePublicTypes(
   _application: CopilotzApplication,
   _options: CreateCopilotzOptions,
-  _event: CopilotzEvent,
-  _gateway: CopilotzGateway,
-  _worker: CopilotzWorker,
-  _run: RunHandle,
-  _attachment: ThreadAttachment,
-  _plugin: AnyCopilotzPlugin,
 ): void {}
 void compilePublicTypes;
 
@@ -63,19 +49,9 @@ function assertFunctions(
   for (const name of names) assertEquals(typeof module[name], "function", name);
 }
 
-Deno.test("v3 root exposes the factory-first application vocabulary", () => {
-  assertFunctions(copilotz, [
-    "createCopilotz",
-    "createCopilotzGateway",
-    "createCopilotzWorker",
-    "definePlugin",
-    "defineProcessor",
-    "defineCollection",
-    "defineAction",
-    "createAttachmentRuntime",
-    "createContentPreparer",
-    "createEventStore",
-  ]);
+Deno.test("v3 root exposes only the application factory", () => {
+  assertFunctions(copilotz, ["createCopilotz"]);
+  assertEquals(Object.keys(copilotz).sort(), ["createCopilotz"]);
   for (
     const removed of [
       "createDatabase",
@@ -85,6 +61,9 @@ Deno.test("v3 root exposes the factory-first application vocabulary", () => {
       "createAssetStoreForNamespace",
       "createUsageService",
       "createCopilotzApplication",
+      "createCopilotzGateway",
+      "createCopilotzWorker",
+      "createCopilotzPersistence",
       "createCopilotzEngine",
       "createDeliveryExecutor",
       "createManagedOminipgSession",
@@ -114,22 +93,10 @@ Deno.test("v3 root exposes the factory-first application vocabulary", () => {
 });
 
 Deno.test("v3 package subpaths expose cohesive factories", () => {
-  assertFunctions(application, [
-    "createCopilotz",
-    "createCopilotzGateway",
-    "createCopilotzPersistence",
-    "createCopilotzWorker",
-  ]);
+  assertEquals(Object.keys(application), []);
   assertEquals("createCopilotzApplication" in application, false);
-  assertEquals("createServerWorkflowToolCatalog" in adapters, false);
-  assertEquals("createModulePluginResolver" in adapters, false);
-  assertEquals("createManagedOminipgSession" in adapters, false);
-  assertEquals("createOminipgSqlSession" in adapters, false);
-  assertEquals("connectMcp" in adapters, false);
-  assertFunctions(nodeAdapters, [
-    "createInteractiveCliIo",
-    "startInteractiveCli",
-  ]);
+  assertFunctions(persistence, ["createCopilotzPersistence"]);
+  assertFunctions(coreCli, ["createInteractiveCli", "startInteractiveCli"]);
   assertFunctions(denoAdapters, ["listen"]);
   for (
     const moved of [
@@ -172,6 +139,9 @@ Deno.test("v3 package subpaths expose cohesive factories", () => {
     "normalizeThreadMetadata",
     "selectCapabilityResources",
     "workflowMetadata",
+    "mapMessageRecord",
+    "mapParticipantRecord",
+    "mapThreadRecord",
   ]);
   assertEquals(typeof core.corePlugin, "object");
   assertFunctions(llm, [
@@ -208,17 +178,11 @@ Deno.test("v3 package subpaths expose cohesive factories", () => {
     "scheduledMessageJob",
   ]);
   assertEquals(typeof coreSchedules.coreSchedulesPlugin, "object");
-  assertFunctions(attachments, [
-    "createAttachmentRuntime",
-  ]);
   assertFunctions(content, [
     "createContentPreparer",
     "createContentResolver",
     "createDatabaseAssetRepository",
   ]);
-  assertEquals("defineCollection" in domain, false);
-  assertEquals("createEventCollections" in domain, false);
-  assertEquals("createDomainRelationRepository" in domain, false);
   assertFunctions(events, ["createEventStore", "createEventCoordinator"]);
   assertFunctions(plugins, ["definePlugin", "defineProcessor"]);
   assertFunctions(actions, ["defineAction"]);

@@ -7,19 +7,18 @@ import {
   createEventCoordinator,
   createEventStore,
   createSqlSession,
+  type EventMutationContext,
   type SqlSession,
 } from "../events/index.ts";
 import { createDeliveryExecutor } from "../execution/index.ts";
 import { createPluginRegistry } from "../plugins/index.ts";
 import type {
   AssetMaterializationPlan,
+  AssetMutationInput,
   ContentSequence,
   DurableContentInput,
 } from "../content/index.ts";
-import {
-  type CollectionContentAssets,
-  createCollectionRuntime,
-} from "./kernel.ts";
+import { createCollectionRuntime } from "./kernel.ts";
 import { defineCollection } from "./definition.ts";
 
 function canonicalContent(input: DurableContentInput): ContentSequence {
@@ -62,8 +61,16 @@ Deno.test("collection mutations prepare once before SQL and only adopt inside co
   });
   const coordinator = createEventCoordinator({ store, registry, executor });
   const phases: string[] = [];
-  const assets: CollectionContentAssets = {
-    async prepareMaterialization(input) {
+  const assets: Readonly<{
+    prepareMaterialization(
+      input: AssetMutationInput,
+    ): Promise<AssetMaterializationPlan>;
+    adoptMaterialization(
+      context: EventMutationContext,
+      plan: AssetMaterializationPlan,
+    ): Promise<void>;
+  }> = {
+    async prepareMaterialization(input: AssetMutationInput) {
       assertEquals(sqlOpen, false);
       phases.push("prepare");
       const plan: AssetMaterializationPlan = Object.freeze({
@@ -74,7 +81,10 @@ Deno.test("collection mutations prepare once before SQL and only adopt inside co
       });
       return plan;
     },
-    async adoptMaterialization(context, plan) {
+    async adoptMaterialization(
+      context: EventMutationContext,
+      plan: AssetMaterializationPlan,
+    ) {
       assert(sqlOpen);
       phases.push("adopt");
       for (const ref of plan.content) {

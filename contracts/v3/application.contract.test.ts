@@ -1,122 +1,29 @@
-import { message as coreMessage } from "@copilotz/copilotz/core";
-import { assert, assertEquals, assertExists } from "@std/assert";
-import {
-  type CopilotzPlugin,
-  createCopilotz,
-  definePlugin,
-  defineProcessor,
-  type ProcessorContext,
-} from "../../index.ts";
-import { createTestDomainContext } from "../../runtime/testing/domain-context.ts";
-import { projectMessages } from "../../runtime/testing/projections.ts";
-import { loadMessageRecord } from "../../runtime/engine/collection-graph.ts";
-import { coreCollectionsPlugin } from "../../plugins/core/plugin.ts";
+import { assert, assertEquals } from "@std/assert";
+import { createCopilotz } from "../../index.ts";
 
 const NAMESPACE = "v3-root-contract";
 
-function publicReplyPlugin(): CopilotzPlugin {
-  const processor = defineProcessor<ProcessorContext>({
-    id: "contract.public-reply",
-    on: [{
-      eventType: "message.created",
-      routing: { senderId: "contract-user" },
-    }],
-    async handle(event, context) {
-      assert(event.durable);
-      assertExists(event.subject);
-      const source = await loadMessageRecord(context, event.subject.id);
-      assertExists(source);
-      const content = await context.content.prepare("Hello from v3", {
-        operationKey: "reply-content",
-      });
-      await context.collections.message.create({
-        id: "contract-reply",
-        threadId: source.threadId,
-        senderId: "contract-agent",
-        recipientIds: [source.sender.id],
-        content,
-      }, { operationKey: "reply-message" });
-    },
-  });
-  return definePlugin({
-    id: "contract.public-reply",
-    version: "3.0.0",
-    processors: { reply: processor },
-  });
-}
-
-async function collect<T>(stream: ReadableStream<T>): Promise<T[]> {
-  const values: T[] = [];
-  for await (const value of stream) values.push(value);
-  return values;
-}
-
-Deno.test("root createCopilotz runs one causal event scope without queue state", async () => {
-  const copilotz = await createCopilotz({
-    namespace: NAMESPACE,
-    plugins: [coreCollectionsPlugin, publicReplyPlugin()],
-    engine: { retryBaseMs: 0, random: () => 0 },
-  });
+Deno.test("root createCopilotz exposes one causal send handle without queue state", async () => {
+  const copilotz = await createCopilotz({ namespace: NAMESPACE });
   try {
-    assertEquals(copilotz.role, "embedded");
-    assertEquals("engine" in copilotz, false);
-    assertEquals("execution" in copilotz, false);
-    assertEquals("hypervisor" in copilotz, false);
-    assertEquals("transports" in copilotz, false);
-    await createTestDomainContext(copilotz, NAMESPACE).actions.createThread({
-      id: "contract-thread",
-      participants: [
-        {
-          id: "contract-user",
-          externalId: "user-1",
-          participantType: "human",
-        },
-        {
-          id: "contract-agent",
-          externalId: "support",
-          participantType: "agent",
-          agentId: "support",
-        },
-      ],
+    assertEquals(Object.keys(copilotz).sort(), ["close", "observe", "send"]);
+    const run = await copilotz.send({
+      type: "contract.public-input",
+      namespace: NAMESPACE,
+      payload: { value: "Hello" },
     });
-
-    const run = await copilotz.send(coreMessage({
-      thread: "contract-thread",
-      participant: "contract-user",
-      recipientIds: ["contract-agent"],
-      content: "Hello",
-    }));
-    const observed = collect(run.outputs);
     await run.done;
 
     assert(run.eventId.length > 0);
     assert(run.correlationId.length > 0);
-    assertEquals("queueId" in run, false);
-    assertEquals("status" in run, false);
-    assertEquals(
-      (await observed).filter((event) => event.type === "message.created")
-        .length,
-      2,
-    );
-    const messages = await projectMessages(
-      copilotz,
-      NAMESPACE,
-      "contract-thread",
-    );
-    assertEquals(messages.length, 2);
-    assertEquals(
-      (await copilotz.content.resolver.getMany(messages[1].content, {
-        namespace: NAMESPACE,
-      }))[0].text,
-      "Hello from v3",
-    );
-    const settlement = await copilotz.events.settlement(
-      NAMESPACE,
-      run.eventId,
-    );
-    assertEquals(settlement.unsettled, 0);
-    assertEquals(settlement.deadLetters, 0);
+    assertEquals(Object.keys(run).sort(), [
+      "cancel",
+      "correlationId",
+      "done",
+      "eventId",
+      "outputs",
+    ]);
   } finally {
-    await copilotz.shutdown();
+    await copilotz.close();
   }
 });

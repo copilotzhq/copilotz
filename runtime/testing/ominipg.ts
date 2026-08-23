@@ -1,7 +1,7 @@
 import {
   type CopilotzOminipgOptions,
   openManagedOminipgDatabase,
-} from "../adapters/ominipg.ts";
+} from "@copilotz/copilotz/persistence";
 import type { SqlSession } from "../events/index.ts";
 
 /** Test-owned clean Ominipg database exposing the narrow SQL session seam. */

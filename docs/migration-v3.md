@@ -14,8 +14,8 @@ plugins/processors, database state, and HTTP clients explicitly.
 | uppercase internal event vocabulary                                    | semantic lowercase durable events plus ephemeral deltas                                 |
 | `unsafeGraph` and public raw graph writes                              | typed domain/collection mutations and relations                                         |
 | ambient `withSchema()`                                                 | explicit namespace/schema on application or operation scope                             |
-| `withApp()`                                                            | `createCopilotzGateway().fetch`                                                         |
-| public engine/application assembly and workload maps                   | `createCopilotz()`, `createCopilotzGateway()`, and `createCopilotzWorker()`             |
+| `withApp()`                                                            | `createCopilotz({ role: "gateway" }).fetch`                                            |
+| public engine/application assembly and workload maps                   | one `createCopilotz()` factory with embedded, Gateway, and Worker `role` options         |
 | hidden agent consultation/delegation                                   | public same-thread `ask` conversation                                                   |
 | Web Worker/inline runtime switches                                     | private/shared/injected Oxian placement                                                 |
 | separate large message/tool payloads                                   | canonical content assets and references                                                 |

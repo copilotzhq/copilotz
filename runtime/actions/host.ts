@@ -12,12 +12,12 @@ import type {
   ContentRef,
   ContentResolver,
   ContentSequence,
-  ContentStreamRuntime,
   DurableContentInput,
   PreparedContent,
   PublishAssetInput,
   ResolvedContent,
 } from "../content/index.ts";
+import type { ContentStreamRuntime } from "../streams/index.ts";
 import type { PluginRegistry } from "../plugins/index.ts";
 import { createActionLifecycleEmitter } from "./lifecycle.ts";
 import {

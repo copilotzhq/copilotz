@@ -1,8 +1,8 @@
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 
-import type { RunInput } from "../attachments/index.ts";
-import { type InteractiveCliIo, startInteractiveCli } from "../cli.ts";
-import { createEphemeralEvent } from "../events/index.ts";
+import { type InteractiveCliIo, startInteractiveCli } from "./cli.ts";
+import { createEphemeralEvent } from "@copilotz/copilotz/events";
+import type { CoreMessageInputEnvelope } from "../resources/inputs/index.ts";
 
 Deno.test("portable CLI preserves interactive run, rendering, and session commands", async () => {
   const answers = [
@@ -23,12 +23,11 @@ Deno.test("portable CLI preserves interactive run, rendering, and session comman
     },
     cwd: () => "/workspace",
   });
-  const messages: RunInput[] = [];
+  const messages: CoreMessageInputEnvelope[] = [];
   const handle = startInteractiveCli({
     io,
     now: () => new Date("2026-08-06T00:00:00.000Z"),
     scope: {
-      namespace: "tenant-a",
       thread: "thread-a",
       participant: "user-a",
       recipientIds: ["agent-a"],
@@ -39,37 +38,38 @@ Deno.test("portable CLI preserves interactive run, rendering, and session comman
       tools: [{ key: "lookup" }],
       skills: [{ name: "support-guide", description: "Support guidance" }],
     }),
-    performRun(message) {
-      messages.push(message);
-      const event = createEphemeralEvent({
-        type: "text.delta",
-        namespace: "tenant-a",
-        threadId: "thread-a",
-        payload: { text: "hi", agent: { name: "Support" } },
-        correlationId: "correlation-a",
-      });
-      return Promise.resolve({
-        eventId: "event-a",
-        threadId: "thread-a",
-        correlationId: "correlation-a",
-        outputs: new ReadableStream({
-          start(controller) {
-            controller.enqueue(event);
-            controller.close();
-          },
-        }),
-        done: Promise.resolve(),
-        cancel: () => Promise.resolve(),
-      });
-    },
+    application: Object.freeze({
+      namespace: "tenant-a",
+      send(input: CoreMessageInputEnvelope) {
+        messages.push(input);
+        const event = createEphemeralEvent({
+          type: "text.delta",
+          namespace: "tenant-a",
+          threadId: "thread-a",
+          payload: { text: "hi", agent: { name: "Support" } },
+          correlationId: "correlation-a",
+        });
+        return Promise.resolve({
+          eventId: "event-a",
+          correlationId: "correlation-a",
+          outputs: new ReadableStream({
+            start(controller) {
+              controller.enqueue(event);
+              controller.close();
+            },
+          }),
+          done: Promise.resolve(),
+          cancel: () => Promise.resolve(),
+        });
+      },
+    }),
   });
 
   await handle.closed;
   assertEquals(ioClosed, 1);
   assertEquals(messages.length, 1);
-  assertEquals(messages[0].content, "hello");
-  assertEquals(messages[0].thread, "thread-a");
-  assertEquals(messages[0].namespace, "tenant-a");
+  assertEquals(messages.at(0)!.payload!.content, "hello");
+  assertEquals(messages.at(0)!.payload!.thread, "thread-a");
   const rendered = output.join("");
   assertStringIncludes(rendered, "Copilotz Interactive Session");
   assertStringIncludes(rendered, "assistant Support");
@@ -144,26 +144,27 @@ Deno.test("portable CLI renders one labelled line for a streamed tool-call draft
   const handle = startInteractiveCli({
     io,
     scope: {
-      namespace: "tenant-a",
       thread: "thread-a",
       participant: "user-a",
       recipientIds: ["agent-a"],
     },
-    performRun() {
-      return Promise.resolve({
-        eventId: "event-a",
-        threadId: "thread-a",
-        correlationId: "correlation-a",
-        outputs: new ReadableStream({
-          start(controller) {
-            for (const event of events) controller.enqueue(event);
-            controller.close();
-          },
-        }),
-        done: Promise.resolve(),
-        cancel: () => Promise.resolve(),
-      });
-    },
+    application: Object.freeze({
+      namespace: "tenant-a",
+      send() {
+        return Promise.resolve({
+          eventId: "event-a",
+          correlationId: "correlation-a",
+          outputs: new ReadableStream({
+            start(controller) {
+              for (const event of events) controller.enqueue(event);
+              controller.close();
+            },
+          }),
+          done: Promise.resolve(),
+          cancel: () => Promise.resolve(),
+        });
+      },
+    }),
   });
 
   await handle.closed;
@@ -175,8 +176,9 @@ Deno.test("portable CLI renders one labelled line for a streamed tool-call draft
 });
 
 Deno.test("portable CLI is factory-first and imports no host terminal API", async () => {
-  const source = await Deno.readTextFile(new URL("../cli.ts", import.meta.url));
+  const source = await Deno.readTextFile(new URL("cli.ts", import.meta.url));
   assert(!/^\s*(?:export\s+)?class\s/m.test(source));
   assert(!/from\s+["']node:|\bDeno\.|\bBun\.|\bprocess\./.test(source));
-  assert(!/copilotz\.core|llm\.call/.test(source));
+  assert(!/attachments|performRun|RunInput/.test(source));
+  assert(/application\.send\(message/.test(source));
 });

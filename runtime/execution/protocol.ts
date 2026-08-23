@@ -5,6 +5,11 @@ import type {
 } from "../../dependencies/oxian-worker.ts";
 import type { WorkHandle } from "../../dependencies/oxian-work.ts";
 import type { CopilotzEvent } from "../events/index.ts";
+import {
+  createStreamOutputDescriptor,
+  isStreamOutputDescriptor,
+  type RuntimeOutputDescriptor,
+} from "../streams/index.ts";
 
 export const COPILOTZ_WORK_OUTPUT_SCHEMA = "copilotz.work.output.v1";
 export const COPILOTZ_WORK_FRAME_SCHEMA = "copilotz.work.frame.v1";
@@ -28,14 +33,14 @@ export type CopilotzWorkOutputMetadata = Readonly<{
 }>;
 
 export type CopilotzWorkOutputRelay = Readonly<{
-  publish(event: CopilotzEvent): Promise<void>;
+  publish(output: RuntimeOutputDescriptor): Promise<void>;
   wrap(
     workloads: Readonly<Record<string, WorkerWorkHandler>>,
   ): Readonly<Record<string, WorkerWorkHandler>>;
 }>;
 
 export type RelayCopilotzWorkHandleOptions = Readonly<{
-  onEvent?: (event: CopilotzEvent) => void | Promise<void>;
+  onOutput?: (output: RuntimeOutputDescriptor) => void | Promise<void>;
 }>;
 
 function jsonRecord(value: unknown, name: string): JsonRecord {
@@ -69,8 +74,8 @@ function jsonFrame(kind: number, value: unknown): Uint8Array {
   return frame(kind, payload);
 }
 
-function eventFrame(event: CopilotzEvent): Uint8Array {
-  return jsonFrame(EVENT_FRAME, event);
+function eventFrame(output: RuntimeOutputDescriptor): Uint8Array {
+  return jsonFrame(EVENT_FRAME, output);
 }
 
 function metadataFrame(metadata: JsonRecord): Uint8Array {
@@ -166,8 +171,26 @@ async function* decodeFrames(
   }
 }
 
-function parseEvent(payload: Uint8Array): CopilotzEvent {
+function parseOutput(payload: Uint8Array): RuntimeOutputDescriptor {
   const value = jsonRecord(JSON.parse(decoder.decode(payload)), "Event frame");
+  if (isStreamOutputDescriptor(value)) {
+    return createStreamOutputDescriptor({
+      id: value.streamId,
+      mediaType: value.mediaType,
+      kind: value.kind,
+      role: value.role,
+      ...(value.name ? { name: value.name } : {}),
+      ...(value.alt ? { alt: value.alt } : {}),
+      ...(value.language ? { language: value.language } : {}),
+      ...(value.disposition ? { disposition: value.disposition } : {}),
+      metadata: value.metadata,
+      ...(value.correlationId ? { correlationId: value.correlationId } : {}),
+    }, {
+      namespace: value.namespace,
+      ...(value.causationId ? { causationId: value.causationId } : {}),
+      ...(value.correlationId ? { correlationId: value.correlationId } : {}),
+    });
+  }
   if (
     typeof value.durable !== "boolean" ||
     typeof value.type !== "string" || !value.type.trim() ||
@@ -218,8 +241,19 @@ function workSourceKey(metadata: JsonRecord): string | undefined {
   return undefined;
 }
 
-function eventSourceKey(event: CopilotzEvent): string | undefined {
-  const metadata = event.metadata;
+function eventSourceKey(output: RuntimeOutputDescriptor): string | undefined {
+  if (isStreamOutputDescriptor(output)) {
+    const sourceDeliveryId = output.metadata.sourceDeliveryId;
+    const sourceLiveDispatchId = output.metadata.sourceLiveDispatchId;
+    if (typeof sourceDeliveryId === "string") {
+      return `delivery:${sourceDeliveryId}`;
+    }
+    if (typeof sourceLiveDispatchId === "string") {
+      return `live:${sourceLiveDispatchId}`;
+    }
+    return undefined;
+  }
+  const metadata = output.metadata;
   if (typeof metadata.sourceDeliveryId === "string") {
     return `delivery:${metadata.sourceDeliveryId}`;
   }
@@ -406,12 +440,12 @@ export function createCopilotzWorkOutputRelay(): CopilotzWorkOutputRelay {
   };
 
   return Object.freeze({
-    async publish(event) {
-      const key = eventSourceKey(event);
+    async publish(output) {
+      const key = eventSourceKey(output);
       if (!key) return;
       const active = [...(channels.get(key) ?? [])];
       await Promise.all(
-        active.map((channel) => channel.write(eventFrame(event))),
+        active.map((channel) => channel.write(eventFrame(output))),
       );
     },
     wrap(workloads) {
@@ -477,7 +511,7 @@ export function relayCopilotzWorkHandle(
       let metadataReceived = false;
       for await (const decoded of decodeFrames(work.output)) {
         if (decoded.kind === EVENT_FRAME) {
-          await options.onEvent?.(parseEvent(decoded.payload));
+          await options.onOutput?.(parseOutput(decoded.payload));
           continue;
         }
         if (decoded.kind === METADATA_FRAME) {

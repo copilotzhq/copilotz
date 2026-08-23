@@ -13,7 +13,7 @@ import {
   projectMessages,
   projectParticipantById,
   projectThreadById,
-} from "../../../runtime/testing/projections.ts";
+} from "../../core/testing/projections.ts";
 import { createSqlSession } from "@copilotz/copilotz/events";
 import {
   createPluginRegistry,

@@ -3,9 +3,9 @@ import type { LlmAdapter } from "@copilotz/copilotz/llm";
 import { definePlugin } from "@copilotz/copilotz/plugins";
 import { assertEquals, assertExists } from "@std/assert";
 import { createCopilotzApplication } from "../../runtime/application/application.ts";
-import { createTestDomainContext } from "../../runtime/testing/domain-context.ts";
+import { createTestDomainContext } from "../core/testing/context.ts";
 import { createTestDatabase } from "../../runtime/testing/ominipg.ts";
-import { projectActionEvents } from "../../runtime/testing/projections.ts";
+import { projectActionEvents } from "../core/testing/projections.ts";
 import { createEventNativeApp } from "../../server/event-native.ts";
 import { CHANNEL_INGRESS_ACTION_ID } from "./actions.ts";
 import {

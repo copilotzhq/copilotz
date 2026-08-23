@@ -1,4 +1,4 @@
-import { assertEquals } from "@std/assert";
+import { assertEquals, assertRejects } from "@std/assert";
 
 import { createTestDatabase } from "../testing/ominipg.ts";
 import { createTestProcessorContext } from "../testing/processor-context.ts";
@@ -11,12 +11,14 @@ import {
 import { createDeliveryExecutor } from "../execution/index.ts";
 import { createPluginRegistry } from "../plugins/index.ts";
 import {
-  type ContentStreamOpened,
   createBodyStorageRuntime,
-  createContentStreamRuntime,
   createDatabaseAssetRepository,
   createDatabaseBodyStore,
   createMemoryBodyStore,
+} from "../content/index.ts";
+import {
+  type ContentStreamOpened,
+  createContentStreamRuntime,
 } from "./index.ts";
 
 const TEST_SCHEMA = "copilotz_content_streams";
@@ -72,6 +74,63 @@ Deno.test("content stream open reports only its normalized runtime-neutral descr
     false,
   );
   await writer.abort();
+});
+
+Deno.test("content stream open rejects unsafe metadata before opening a Body", async () => {
+  let opened = 0;
+  let reservations = 0;
+  const backing = createMemoryBodyStore();
+  const store = new Proxy(backing, {
+    get(target, property, receiver) {
+      if (property === "reserve") {
+        return async (...args: Parameters<typeof target.reserve>) => {
+          reservations += 1;
+          return await target.reserve(...args);
+        };
+      }
+      return Reflect.get(target, property, receiver);
+    },
+  });
+  const stream = createContentStreamRuntime({
+    namespace: "tenant-a",
+    store,
+    onOpen() {
+      opened += 1;
+    },
+  });
+  let read = false;
+  const accessor = {};
+  Object.defineProperty(accessor, "value", {
+    enumerable: true,
+    get() {
+      read = true;
+      return "forbidden";
+    },
+  });
+
+  await assertRejects(
+    () =>
+      stream.open({
+        mediaType: "text/plain",
+        role: "assistant",
+        metadata: accessor,
+      }),
+    TypeError,
+    "enumerable data",
+  );
+  await assertRejects(
+    () =>
+      stream.open({
+        mediaType: "text/plain",
+        role: "assistant",
+        metadata: { date: new Date() },
+      }),
+    TypeError,
+    "plain",
+  );
+  assertEquals(read, false);
+  assertEquals(opened, 0);
+  assertEquals(reservations, 0);
 });
 
 Deno.test("content stream close returns prepared content without creating an Asset node", async () => {
@@ -138,26 +197,11 @@ Deno.test("content stream close returns prepared content without creating an Ass
           storage: { type: "database" },
         }),
       });
-      await coordinator.commitMutation({
-        draft: {
-          type: "message.created",
-          namespace: "tenant-a",
-          subject: { type: "message", id: "message-a" },
-          payload: { id: "message-a" },
-        },
-        mutate: async (context) => {
-          const adopted = await assets.materializeWithManifestInTransaction(
-            context,
-            {
-              namespace: "tenant-a",
-              content: prepared,
-            },
-          );
-          assertEquals(adopted.content, prepared.content);
-          assertEquals(adopted.assets.length, 1);
-          return adopted;
-        },
+      const adopted = await assets.materialize({
+        namespace: "tenant-a",
+        content: prepared,
       });
+      assertEquals(adopted, prepared.content);
     } finally {
       await executor.shutdown();
     }

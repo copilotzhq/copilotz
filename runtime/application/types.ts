@@ -2,15 +2,17 @@ import type {
   CopilotzEngine,
   CreateCopilotzEngineOptions,
 } from "../engine/index.ts";
-import type { CopilotzEvent } from "../events/index.ts";
 import type {
   AnyCopilotzPlugin,
   PluginAdapters,
   PluginResources,
 } from "../plugins/index.ts";
-import type { CopilotzPersistenceOptions } from "./persistence.ts";
+import type { CopilotzPersistenceOptions } from "@copilotz/copilotz/persistence";
 import type { BodyStorageOptions } from "../content/index.ts";
 import type { EventVisibility } from "../events/index.ts";
+import type { ApplicationOutput } from "../streams/index.ts";
+
+export type { ApplicationOutput } from "../streams/index.ts";
 
 export type CreateCopilotzApplicationOptions =
   & Readonly<{
@@ -66,29 +68,27 @@ export type ApplicationSendInput = CopilotzInputEnvelope;
 export type ApplicationSendHandle = Readonly<{
   eventId: string;
   correlationId: string;
-  outputs: ReadableStream<CopilotzEvent>;
+  outputs: ReadableStream<ApplicationOutput>;
   done: Promise<void>;
   cancel(reason?: string): Promise<void>;
 }>;
 
-export type CopilotzApplicationObservation = ReadableStream<CopilotzEvent>;
+export type CopilotzApplicationObservation = ReadableStream<ApplicationOutput>;
 
-export type CopilotzApplication =
-  & Omit<
-    CopilotzEngine,
-    "connect" | "events" | "run" | "shutdown" | "execution"
-  >
-  & Readonly<{
-    config: CopilotzApplicationConfig;
-    events: CopilotzEngine["events"];
-    send(input: ApplicationSendInput): Promise<ApplicationSendHandle>;
-    observe(): CopilotzApplicationObservation;
-    close(reason?: string): Promise<void>;
-    shutdown(reason?: string): Promise<void>;
-  }>;
+/** The complete runtime-neutral application surface exposed to callers. */
+export type CopilotzApplication = Readonly<{
+  send(input: ApplicationSendInput): Promise<ApplicationSendHandle>;
+  observe(): CopilotzApplicationObservation;
+  close(reason?: string): Promise<void>;
+}>;
 
 /** Internal composition result used only while assembling runtime roles. */
 export type InternalCopilotzApplication =
   & CopilotzApplication
-  & Pick<CopilotzEngine, "execution">
-  & Readonly<{ engine: CopilotzEngine }>;
+  & Omit<CopilotzEngine, "connect" | "run">
+  & Readonly<{
+    config: CopilotzApplicationConfig;
+    engine: CopilotzEngine;
+    /** Internal-only transport interruption used by persistence recovery. */
+    interruptActiveSends(error: unknown): void;
+  }>;

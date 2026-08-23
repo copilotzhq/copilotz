@@ -50,14 +50,28 @@ export {
   messageCollection,
   messageRevisionFrom,
   participantCollection,
-  projectActiveMessageBranch,
   threadCollection,
 } from "./resources/collections/index.ts";
 export type {
+  ConversationMessage,
+  ConversationThread,
   MessageBranch,
-  MessageRecord,
   MessageRevision,
-} from "./resources/collections/index.ts";
+  Participant,
+  ParticipantInput,
+  ParticipantType,
+} from "./contracts.ts";
+export type { MessageRecord } from "./resources/collections/index.ts";
+export {
+  listThreadMessageRecords,
+  loadMessageRecord,
+  loadParticipantRecord,
+  loadThreadRecord,
+  mapMessageRecord,
+  mapParticipantRecord,
+  mapThreadRecord,
+  projectActiveMessageBranch,
+} from "./projections.ts";
 export * from "./internal/capabilities/index.ts";
 export * from "./internal/context/index.ts";
 export * from "./internal/thread-metadata.ts";

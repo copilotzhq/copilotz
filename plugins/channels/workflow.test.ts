@@ -1,7 +1,7 @@
 import { assertEquals, assertExists, assertNotEquals } from "@std/assert";
 import type { ActionCaller } from "@copilotz/copilotz/actions";
 import { createCopilotzApplication } from "../../runtime/application/application.ts";
-import { createTestDomainContext } from "../../runtime/testing/domain-context.ts";
+import { createTestDomainContext } from "../core/testing/context.ts";
 import { createTestDatabase } from "../../runtime/testing/ominipg.ts";
 import { deriveWorkflowId } from "../../runtime/events/workflow-id.ts";
 import { channelIngress } from "./input.ts";

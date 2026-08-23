@@ -1,5 +1,5 @@
-import type { CopilotzApplication } from "../runtime/application/index.ts";
-import type { ConversationMessage } from "../runtime/domain/index.ts";
+import type { InternalCopilotzApplication as CopilotzApplication } from "../runtime/application/types.ts";
+import type { ConversationMessage } from "@copilotz/copilotz/core";
 import type { ContentRef } from "../runtime/content/index.ts";
 import { type EventNativeAsset, eventNativeAsset } from "./assets.ts";
 

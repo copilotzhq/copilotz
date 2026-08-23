@@ -1,6 +1,6 @@
 import type { CollectionDefinition } from "../collections/index.ts";
-import { createContentStreamRuntime } from "../content/index.ts";
-import { createEphemeralEvent } from "../events/index.ts";
+import { createContentStreamRuntime } from "../streams/index.ts";
+import { createStreamOutputDescriptor } from "../streams/index.ts";
 import {
   type ActionTransactionContext,
   type ActionTransactionOptions,
@@ -51,34 +51,18 @@ export function createProcessorContext(
     namespace,
     store: options.streamBodyStore,
     async onOpen(output) {
-      const event = createEphemeralEvent({
-        type: "stream.output",
+      const descriptor = createStreamOutputDescriptor(output, {
         namespace,
-        streamId: output.id,
-        payload: {
-          streamId: output.id,
-          mediaType: output.mediaType,
-          kind: output.kind,
-          role: output.role,
-          ...(output.name ? { name: output.name } : {}),
-          ...(output.alt ? { alt: output.alt } : {}),
-          ...(output.language ? { language: output.language } : {}),
-          ...(output.disposition ? { disposition: output.disposition } : {}),
-        },
-        metadata: {
-          ...structuredClone(output.metadata),
-          ...capabilitySourceMetadata(options.base),
-          contentStream: true,
-          role: output.role,
-        },
         causationId: options.base.event.durable
           ? options.base.event.id
           : options.base.event.causationId,
-        correlationId: output.correlationId ??
-          options.base.event.correlationId,
-      }, options.now);
-      if (options.publishEvent) await options.publishEvent(event);
-      else await options.eventHub.publish(event);
+        correlationId: output.correlationId ?? options.base.event.correlationId,
+        metadata: {
+          ...capabilitySourceMetadata(options.base),
+          contentStream: true,
+        },
+      });
+      await options.publishOutput?.(descriptor);
     },
   });
 

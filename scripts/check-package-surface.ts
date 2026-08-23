@@ -62,6 +62,7 @@ async function* productionSources(
       !path.startsWith("contracts/") &&
       !path.startsWith("scripts/") &&
       !path.startsWith("runtime/testing/") &&
+      !path.startsWith("plugins/core/testing/") &&
       path !== "migration/v1/fixture.ts"
     ) yield { path, text: await Deno.readTextFile(url) };
   }

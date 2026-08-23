@@ -15,7 +15,7 @@ import type {
 import type {
   ContentStreamOpenInput,
   ContentStreamWriter,
-} from "@copilotz/copilotz/content";
+} from "@copilotz/copilotz/streams";
 import {
   callLlmAction,
   LLM_CALL_ACTION_ALIAS,

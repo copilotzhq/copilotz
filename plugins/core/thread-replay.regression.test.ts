@@ -5,7 +5,7 @@ import { createCopilotzEngine } from "../../runtime/engine/index.ts";
 import { createPluginRegistry } from "../../runtime/plugins/index.ts";
 import { createTestDatabase } from "../../runtime/testing/ominipg.ts";
 import { coreCollectionsPlugin } from "./plugin.ts";
-import { createTestDomainContext } from "../../runtime/testing/domain-context.ts";
+import { createTestDomainContext } from "./testing/context.ts";
 
 Deno.test("thread replay does not derive mutable state from related Events", async () => {
   const namespace = "tenant-thread-replay-cursor";

@@ -80,8 +80,8 @@ Oxian dispatches logical workload identities. Copilotz dispatch payloads contain
 delivery/resource IDs, never serialized closures or physical worker identity.
 The default `createCopilotz()` application composes a private Gateway and Worker
 over one uniquely addressed in-process event-fabric transport. Explicit
-topologies use `createCopilotzGateway()` and `createCopilotzWorker()` with the
-same plain transport vocabulary:
+topologies use the same factory with `role: "gateway"` and `role: "worker"`
+and the same plain transport vocabulary:
 
 ```text
 embedded      Gateway ── in-process fabric ── Worker

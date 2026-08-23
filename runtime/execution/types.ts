@@ -10,12 +10,12 @@ import type {
   WorkerWorkHandler,
 } from "../../dependencies/oxian-worker.ts";
 import type {
-  CopilotzEvent,
   DurableEvent,
   EventDelivery,
   EventStore,
 } from "../events/index.ts";
 import type { PluginRegistry, ProcessorContext } from "../plugins/index.ts";
+import type { RuntimeOutputDescriptor } from "../streams/index.ts";
 
 export const COPILOTZ_DELIVERY_WORKLOAD = "copilotz.delivery.v1";
 
@@ -149,9 +149,9 @@ export type CreateDeliveryExecutorOptions = Readonly<{
   heartbeatMs?: number;
   scheduler?: DeliveryWorkloadScheduler;
   createDispatchAttemptId?: () => string;
-  /** Relays semantic events framed by a remote Copilotz Worker. */
-  onOutputEvent?: (
-    event: CopilotzEvent,
+  /** Relays generic event and stream descriptors from a remote Worker. */
+  onOutput?: (
+    output: RuntimeOutputDescriptor,
     context: Readonly<{
       databaseSchema: string;
       settlementScopeId?: string;

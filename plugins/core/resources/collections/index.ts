@@ -1,13 +1,12 @@
 export {
   messageCollection,
   messageRevisionFrom,
-  projectActiveMessageBranch,
 } from "./message.ts";
 export type {
-  MessageBranch,
   MessageRecord,
-  MessageRevision,
 } from "./message.ts";
+export type { MessageBranch, MessageRevision } from "../../contracts.ts";
+export { projectActiveMessageBranch } from "../../projections.ts";
 export { participantCollection } from "./participant.ts";
 export { threadCollection } from "./thread.ts";
 

@@ -7,12 +7,12 @@ import type {
 } from "./event-native.ts";
 import { isEventNativeOutputStream } from "./event-native.ts";
 import type {
-  AttachmentOutput,
-  AttachmentStreamOutput,
-} from "../runtime/attachments/index.ts";
+  ApplicationOutput,
+  StreamOutput,
+} from "../runtime/streams/index.ts";
 
 export type EventNativeSseProjector = (
-  output: AttachmentOutput,
+  output: ApplicationOutput,
   request: Request,
 ) =>
   | unknown
@@ -154,9 +154,9 @@ function jsonResponse(
   );
 }
 
-function isAttachmentStreamOutput(
-  output: AttachmentOutput,
-): output is AttachmentStreamOutput {
+function isStreamOutput(
+  output: ApplicationOutput,
+): output is StreamOutput {
   const payload = (output as { payload?: unknown }).payload;
   return output.type === "stream.output" && Boolean(payload) &&
     typeof (payload as { getReader?: unknown }).getReader === "function";
@@ -168,21 +168,14 @@ function isAttachmentStreamOutput(
  * remains on the transport-specific stream path.
  */
 export function projectEventNativeSseOutput(
-  output: AttachmentOutput,
+  output: ApplicationOutput,
 ): unknown {
-  if (!isAttachmentStreamOutput(output)) return output;
-  return Object.freeze({
-    type: output.type,
-    streamId: output.streamId,
-    participant: output.participant,
-    mediaType: output.mediaType,
-    ...(output.causationId ? { causationId: output.causationId } : {}),
-    correlationId: output.correlationId,
-    metadata: output.metadata,
-  });
+  if (!isStreamOutput(output)) return output;
+  const { payload: _payload, ...descriptor } = output;
+  return Object.freeze(descriptor);
 }
 
-function durablePosition(output: AttachmentOutput): string | undefined {
+function durablePosition(output: ApplicationOutput): string | undefined {
   if (
     !("durable" in output) || output.durable !== true ||
     !("position" in output) || typeof output.position !== "string"

@@ -1,33 +1,51 @@
 import type {
   AssetOrigin,
+  ContentPreparer,
+  ContentResolver,
   ContentSequence,
+  DatabaseAssetRepository,
   DurableContentInput,
-} from "../content/index.ts";
-import type { CopilotzEngine } from "../engine/index.ts";
-import type { CollectionRecord } from "../collections/index.ts";
+} from "@copilotz/copilotz/content";
 import type {
-  ConversationMessage,
-  ConversationThread,
-} from "../domain/index.ts";
-import {
-  mapMessageRecord,
-  mapParticipantRecord,
-  mapThreadRecord,
-} from "../engine/collection-graph.ts";
+  CollectionRecord,
+  CollectionRuntime,
+} from "@copilotz/copilotz/collections";
 import {
   type ActionEventData,
   type ActionHostContext,
   createActionContext,
-} from "../actions/index.ts";
+} from "@copilotz/copilotz/actions";
+import type { PluginRegistry, Processor } from "@copilotz/copilotz/plugins";
+import type {
+  ConversationMessage,
+  ConversationThread,
+} from "../contracts.ts";
+import {
+  mapMessageRecord,
+  mapParticipantRecord,
+  mapThreadRecord,
+} from "../projections.ts";
 
-export type TestDomainHost = Pick<
-  CopilotzEngine,
-  | "plugins"
-  | "databaseSchema"
-  | "collections"
-  | "content"
-  | "bindTransient"
->;
+export type TestDomainHost = Readonly<{
+  plugins: PluginRegistry;
+  collections: CollectionRuntime;
+  content: Readonly<{
+    assets: Pick<
+      DatabaseAssetRepository,
+      "get" | "getMany" | "materialize" | "publish"
+    >;
+    preparer: ContentPreparer;
+    resolver: ContentResolver;
+  }>;
+  bindTransient(
+    processor: Processor,
+    options?: Readonly<{
+      namespace?: string;
+      afterPosition?: string;
+      signal?: AbortSignal;
+    }>,
+  ): Promise<() => void>;
+}>;
 
 async function materialize(
   host: TestDomainHost,
@@ -42,7 +60,7 @@ async function materialize(
   });
 }
 
-/** Builds the real namespace-scoped domain context for tests. */
+/** Builds the real namespace-scoped Core context for tests. */
 export function createTestDomainContext(
   host: TestDomainHost,
   namespace: string,
@@ -92,7 +110,7 @@ export function createTestDomainContext(
           host.content.resolver.open(ref, { namespace: scopedNamespace }),
       }),
     actionLifecycle: {
-      async append({ draft, data }) {
+      append({ draft, data }) {
         const id = draft.deduplicationId?.trim();
         if (!id) {
           throw new TypeError(
@@ -106,7 +124,7 @@ export function createTestDomainContext(
           );
         }
         lifecycle.set(id, structuredClone(data));
-        return undefined as never;
+        return Promise.resolve(undefined as never);
       },
       load(_namespace, id) {
         return Promise.resolve(lifecycle.get(id) ?? null);
@@ -153,7 +171,6 @@ export async function projectTestMessages(
   return Object.freeze(
     (await Promise.all(
       records.map((record) => projectTestMessage(context, record)),
-    ))
-      .filter((message): message is ConversationMessage => message !== null),
+    )).filter((message): message is ConversationMessage => message !== null),
   );
 }

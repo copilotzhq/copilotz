@@ -368,9 +368,9 @@ export function createDeliveryExecutor(
         metadata,
       });
       const work = relayCopilotzWorkHandle(dispatched, {
-        onEvent: options.onOutputEvent
-          ? (event) =>
-            options.onOutputEvent!(event, {
+        onOutput: options.onOutput
+          ? (output) =>
+            options.onOutput!(output, {
               databaseSchema: delivery.databaseSchema,
               settlementScopeId: delivery.settlementScopeId,
             })
@@ -429,8 +429,8 @@ export function createDeliveryExecutor(
         ? input.metadata.databaseSchema.trim() || defaultDatabaseSchema
         : defaultDatabaseSchema;
       return relayCopilotzWorkHandle(dispatched, {
-        onEvent: options.onOutputEvent
-          ? (event) => options.onOutputEvent!(event, { databaseSchema })
+        onOutput: options.onOutput
+          ? (output) => options.onOutput!(output, { databaseSchema })
           : undefined,
       });
     },

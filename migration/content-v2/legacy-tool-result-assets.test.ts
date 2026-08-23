@@ -59,9 +59,8 @@ Deno.test("tool result extraction replaces nested data URLs, preserves metadata,
     },
   });
   assertEquals(result.attachments?.assets[0].origin, {
-    scope: { type: "thread", id: "thread-a" },
-    producer: { type: "tool_action", id: "tool-a" },
-    path: "/imageUrl",
+    type: "thread",
+    id: "thread-a",
   });
   assertEquals(JSON.stringify(result.output).includes("base64"), false);
 });

@@ -30,7 +30,8 @@ Deno.test("content-v2 repairs tool messages, extracts data URLs, relocates bodie
        ('agent-a', 'tenant-a', 'participant', 'Agent', $2::jsonb),
        ('legacy-body', 'tenant-a', 'asset', 'text/plain', $3::jsonb),
        ('message-tool', 'tenant-a', 'message', 'Tool', $4::jsonb),
-       ('execution-a', 'tenant-a', 'tool_execution', 'browser', $5::jsonb)`,
+       ('execution-a', 'tenant-a', 'tool_execution', 'browser', $5::jsonb),
+       ('standalone-origin', 'tenant-a', 'asset', 'text/plain', $6::jsonb)`,
       [
         JSON.stringify({ threadId: "thread-a", metadata: {} }),
         JSON.stringify({
@@ -46,6 +47,12 @@ Deno.test("content-v2 repairs tool messages, extracts data URLs, relocates bodie
           state: "ready",
           location: { kind: "database", encoding: "utf8" },
           body: "legacy",
+          origin: {
+            scope: { type: "thread", id: " thread-a " },
+            producer: { type: "tool_execution", id: "tool-a" },
+            path: "/legacy",
+            inferred: true,
+          },
           readyAt: "2026-08-01T00:00:00.000Z",
           metadata: { migratedFromV1: { ownerId: "message-tool" } },
         }),
@@ -87,6 +94,23 @@ Deno.test("content-v2 repairs tool messages, extracts data URLs, relocates bodie
           startedAt: "2026-08-01T00:00:00.000Z",
           metadata: { migratedFromV1: {} },
         }),
+        JSON.stringify({
+          mediaType: "text/plain",
+          byteLength: 6,
+          digest:
+            "sha256:c49fea7425fa7f8699897a97c159c6690267d9003bb78c53fafa8fc15c325d84",
+          state: "ready",
+          location: { kind: "database", encoding: "utf8" },
+          body: "legacy",
+          origin: {
+            scope: { type: "thread", id: " thread-a " },
+            producer: { type: "tool_execution", id: "tool-a" },
+            path: "/standalone",
+            inferred: true,
+          },
+          readyAt: "2026-08-01T00:00:00.000Z",
+          metadata: {},
+        }),
       ],
     );
     await session.query(
@@ -125,7 +149,7 @@ Deno.test("content-v2 repairs tool messages, extracts data URLs, relocates bodie
     assertEquals(dryRun.mergedExecutions, 1);
     assertEquals(dryRun.extractedAssets, 1);
     assertEquals(dryRun.deletedMessages, 1);
-    assertEquals(dryRun.databaseAssets, 3);
+    assertEquals(dryRun.databaseAssets, 4);
     assertEquals(dryRunTransactions, 0);
     assertEquals(dryRunQueries <= 20, true);
 
@@ -163,6 +187,18 @@ Deno.test("content-v2 repairs tool messages, extracts data URLs, relocates bodie
       true,
     );
     assertEquals(JSON.stringify(executionData).includes("data:image"), false);
+    const migratedLegacy = await session.query<{ data: unknown }>(
+      `SELECT data FROM ${q("nodes")} WHERE id = 'standalone-origin'`,
+    );
+    const migratedLegacyData = migratedLegacy.rows[0]?.data;
+    const migratedLegacyOrigin = typeof migratedLegacyData === "string"
+      ? JSON.parse(migratedLegacyData).origin
+      : (migratedLegacyData as { origin?: unknown } | undefined)?.origin;
+    assertEquals(
+      migratedLegacyOrigin,
+      { type: "thread", id: "thread-a" },
+      "released rich origins collapse to the exact opaque thread identity",
+    );
 
     const second = await migrateContentV2Schema(session, SCHEMA, {
       mode: "apply",

@@ -1,10 +1,8 @@
 import { assertEquals } from "@std/assert";
 
-import {
-  createCopilotz,
-  type CreateCopilotzOptions,
-  definePlugin,
-} from "../../index.ts";
+import { createCopilotz, type CreateCopilotzOptions } from "../../index.ts";
+import { definePlugin } from "@copilotz/copilotz/plugins";
+import { createCopilotzApplication } from "../../runtime/application/application.ts";
 
 type RemovedConfigurationKeys = Extract<
   keyof CreateCopilotzOptions,
@@ -49,14 +47,21 @@ const validConfiguration = {
 Deno.test("v3 configuration composes plugins, resources, persistence, and engine policy", async () => {
   const application = await createCopilotz(validConfiguration);
   try {
-    assertEquals(application.config.databaseSchema, "public");
-    assertEquals(application.config.pluginIds, ["contract.empty"]);
-    assertEquals(application.config.databaseOwnership, "application");
-    assertEquals(application.plugins.resources.agents.support, {
+    assertEquals(Object.keys(application).sort(), ["close", "observe", "send"]);
+  } finally {
+    await application.close();
+  }
+
+  const internal = await createCopilotzApplication(validConfiguration);
+  try {
+    assertEquals(internal.config.databaseSchema, "public");
+    assertEquals(internal.config.pluginIds, ["contract.empty"]);
+    assertEquals(internal.config.databaseOwnership, "application");
+    assertEquals(internal.plugins.resources.agents.support, {
       id: "support",
       name: "Support",
     });
   } finally {
-    await application.shutdown();
+    await internal.shutdown();
   }
 });

@@ -2,10 +2,14 @@ import {
   type CopilotzPersistenceLifecycleCallbacks,
   type OpenCopilotzPersistence,
   openCopilotzPersistence,
-} from "./persistence.ts";
+} from "@copilotz/copilotz/persistence";
 import { type CopilotzEngine, createCopilotzEngine } from "../engine/index.ts";
 import { createPluginRegistry } from "../plugins/index.ts";
-import type { CopilotzEvent } from "../events/index.ts";
+import {
+  type ApplicationOutput,
+  isStreamOutputDescriptor,
+  type RuntimeOutputDescriptor,
+} from "../streams/index.ts";
 import type {
   ApplicationSendHandle,
   ApplicationSendInput,
@@ -17,12 +21,12 @@ export function observeApplicationPersistence(
   persistence: OpenCopilotzPersistence,
   application: Pick<
     InternalCopilotzApplication,
-    "disconnectAttachments" | "recoverAll"
+    "interruptActiveSends" | "recoverAll"
   >,
   options: Readonly<{ recoverDurable?: boolean }> = {},
 ): () => void {
   return persistence.recovery?.register({
-    onUnavailable: (error) => application.disconnectAttachments(error),
+    onUnavailable: (error) => application.interruptActiveSends(error),
     async onReady() {
       if (options.recoverDurable === false) return;
       await application.recoverAll({ limit: 1_000 });
@@ -64,6 +68,29 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
       clearTimeout(timer);
       reject(signal.reason);
     }, { once: true });
+  });
+}
+
+function lazyStreamFollower(
+  open: () => Promise<ReadableStream<Uint8Array>>,
+): ReadableStream<Uint8Array> {
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  let opening: Promise<ReadableStreamDefaultReader<Uint8Array>> | undefined;
+  const getReader = () =>
+    opening ??= open().then((stream) => {
+      reader = stream.getReader();
+      return reader;
+    });
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      const next = await getReader().then((value) => value.read());
+      if (next.done) controller.close();
+      else controller.enqueue(next.value);
+    },
+    async cancel(reason) {
+      const active = reader ?? await opening?.catch(() => undefined);
+      await active?.cancel(reason).catch(() => undefined);
+    },
   });
 }
 
@@ -127,21 +154,26 @@ type ApplicationOutputFilter = Readonly<{
 }>;
 
 type ApplicationOutputSubscription = Readonly<{
-  outputs: ReadableStream<CopilotzEvent>;
+  outputs: ReadableStream<ApplicationOutput>;
   close(): void;
   error(reason: unknown): void;
 }>;
 
 type ApplicationOutputHub = Readonly<{
   subscribe(filter?: ApplicationOutputFilter): ApplicationOutputSubscription;
-  emit(output: CopilotzEvent, databaseSchema: string): void;
+  emit(output: RuntimeOutputDescriptor, databaseSchema: string): Promise<void>;
   close(): void;
 }>;
 
-function createApplicationOutputHub(): ApplicationOutputHub {
+function createApplicationOutputHub(
+  projectStream: (
+    output: Extract<RuntimeOutputDescriptor, { type: "stream.output" }>,
+    databaseSchema: string,
+  ) => Promise<ApplicationOutput>,
+): ApplicationOutputHub {
   type SubscriptionState = {
     filter: ApplicationOutputFilter;
-    controller?: ReadableStreamDefaultController<CopilotzEvent>;
+    controller?: ReadableStreamDefaultController<ApplicationOutput>;
     closed: boolean;
   };
   const subscriptions = new Set<SubscriptionState>();
@@ -167,7 +199,7 @@ function createApplicationOutputHub(): ApplicationOutputHub {
         filter: Object.freeze({ ...filter }),
         closed: false,
       };
-      const outputs = new ReadableStream<CopilotzEvent>({
+      const outputs = new ReadableStream<ApplicationOutput>({
         start(controller) {
           subscription.controller = controller;
           if (closed) {
@@ -199,7 +231,7 @@ function createApplicationOutputHub(): ApplicationOutputHub {
         error: finish,
       });
     },
-    emit(output, databaseSchema) {
+    async emit(output, databaseSchema) {
       if (closed) return;
       for (const subscription of subscriptions) {
         const { filter } = subscription;
@@ -216,10 +248,18 @@ function createApplicationOutputHub(): ApplicationOutputHub {
           filter.correlationId !== output.correlationId
         ) continue;
         try {
-          subscription.controller?.enqueue(output);
-        } catch {
+          const projected = isStreamOutputDescriptor(output)
+            ? await projectStream(output, databaseSchema)
+            : output;
+          subscription.controller?.enqueue(projected);
+        } catch (error) {
           subscription.closed = true;
           subscriptions.delete(subscription);
+          try {
+            subscription.controller?.error(error);
+          } catch {
+            // A consumer may have already cancelled its observation stream.
+          }
         }
       }
     },
@@ -247,10 +287,22 @@ export async function createCopilotzApplication(
     resources: options.resources,
     adapters: options.adapters,
   });
-  const outputHub = createApplicationOutputHub();
   const configuredPublish = options.engine?.publish;
 
-  let engine;
+  let engine: CopilotzEngine;
+  const outputHub = createApplicationOutputHub(async (output, schema) => {
+    const scoped = schema === databaseSchema
+      ? engine
+      : await engine.databaseScope(schema);
+    return Object.freeze({
+      ...output,
+      payload: lazyStreamFollower(() =>
+        scoped.streams.follow(output.namespace, {
+          id: output.streamId,
+        })
+      ),
+    });
+  });
   try {
     engine = await createCopilotzEngine({
       ...(options.engine ?? {}),
@@ -259,7 +311,7 @@ export async function createCopilotzApplication(
       defaultDatabaseSchema: databaseSchema,
       assets: options.assets,
       async publish(event, context) {
-        outputHub.emit(event, context?.databaseSchema ?? databaseSchema);
+        await outputHub.emit(event, context?.databaseSchema ?? databaseSchema);
         await configuredPublish?.(event, context);
       },
     });
@@ -271,14 +323,26 @@ export async function createCopilotzApplication(
     throw error;
   }
 
-  const activeSends = new Set<ApplicationSendHandle>();
+  const activeSends = new Map<
+    ApplicationSendHandle,
+    Readonly<{
+      subscription: ApplicationOutputSubscription;
+      abort: AbortController;
+    }>
+  >();
+  const interruptActiveSends = (error: unknown): void => {
+    for (const { subscription, abort } of activeSends.values()) {
+      subscription.error(error);
+      if (!abort.signal.aborted) abort.abort(error);
+    }
+  };
   let shutdownTask: Promise<void> | undefined;
   let stopObservingPersistence: () => void = () => undefined;
   const shutdown = (reason = "copilotz_application_shutdown") => {
     if (shutdownTask) return shutdownTask;
     stopObservingPersistence();
     shutdownTask = (async () => {
-      const active = [...activeSends];
+      const active = [...activeSends.keys()];
       activeSends.clear();
       const settled = await Promise.allSettled([
         ...active.map((handle) => handle.cancel(reason)),
@@ -372,15 +436,13 @@ export async function createCopilotzApplication(
         await done.catch(() => undefined);
       },
     });
-    activeSends.add(sendHandle);
+    activeSends.set(sendHandle, Object.freeze({ subscription, abort }));
     return sendHandle;
   };
 
   const pluginIds = registry.plugins.map((plugin) => plugin.id);
   const {
-    connect: _engineConnect,
     events: _engineEvents,
-    run: _engineRun,
     shutdown: _engineShutdown,
     ...publicEngine
   } = engine;
@@ -395,6 +457,7 @@ export async function createCopilotzApplication(
     events: engine.events,
     engine,
     execution: engine.execution,
+    interruptActiveSends,
     async databaseScope(requestedDatabaseSchema) {
       await persistence.recovery?.admit();
       return await engine.databaseScope(requestedDatabaseSchema);

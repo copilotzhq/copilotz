@@ -1,27 +1,15 @@
 import type {
-  AttachmentOutput,
-  AttachmentStreamOutput,
-  RunInput,
-} from "./attachments/index.ts";
-import type { ContentInput } from "./content/index.ts";
-import type { CopilotzEvent } from "./events/index.ts";
+  ApplicationOutput,
+  CopilotzApplication,
+} from "@copilotz/copilotz/application";
+import type { ContentInput } from "@copilotz/copilotz/content";
+import type { CopilotzEvent } from "@copilotz/copilotz/events";
+import { type CoreMessageInput, message } from "../resources/inputs/index.ts";
 
-export type CliRunHandle = Readonly<{
-  eventId: string;
-  correlationId: string;
-  outputs: ReadableStream<AttachmentOutput>;
-  done: Promise<void>;
-  cancel(reason?: string): Promise<void>;
-}>;
-
-export type CliPerformRun = (
-  input: RunInput,
-) => Promise<CliRunHandle>;
-
-export type CliRunScope = Readonly<
+export type CliMessageScope = Readonly<
   Omit<
-    RunInput,
-    "content" | "messageId" | "correlationId" | "deduplicationId"
+    CoreMessageInput,
+    "content" | "id" | "correlationId" | "deduplicationId"
   >
 >;
 
@@ -62,9 +50,14 @@ export type InteractiveCliIo = Readonly<{
 
 export interface InteractiveCliOptions {
   io: InteractiveCliIo;
-  performRun: CliPerformRun;
-  /** Existing thread and participant scope used for every prompt. */
-  scope: CliRunScope;
+  /** Application ingress used for every typed Core message. */
+  application:
+    & Pick<CopilotzApplication, "send">
+    & Readonly<{
+      namespace?: string;
+    }>;
+  /** Existing Core thread and participant scope used for every prompt. */
+  scope: CliMessageScope;
   initialContent?: ContentInput | readonly ContentInput[];
   /** Canonical effective-capability lookup used by terminal commands. */
   inspect?: CliInspect;
@@ -113,8 +106,8 @@ function eventPayload(event: CopilotzEvent): Record<string, unknown> {
 }
 
 function isStreamOutput(
-  output: AttachmentOutput,
-): output is AttachmentStreamOutput {
+  output: ApplicationOutput,
+): output is Extract<ApplicationOutput, { type: "stream.output" }> {
   return output.type === "stream.output" && "payload" in output &&
     Boolean(
       output.payload && typeof output.payload === "object" &&
@@ -131,9 +124,9 @@ function eventAgentName(event: CopilotzEvent): string {
     : "assistant";
 }
 
-function threadLabel(scope: CliRunScope): string {
+function threadLabel(scope: CliMessageScope): string {
   if (typeof scope.thread === "string") return scope.thread;
-  return scope.thread.externalId ?? scope.thread.id;
+  return scope.thread.externalId ?? scope.thread.id ?? "(new thread)";
 }
 
 /** Creates the interactive state machine over injected terminal I/O. */
@@ -253,7 +246,7 @@ export function createInteractiveCli(options: InteractiveCliOptions): Readonly<{
     printLine([
       color("Session Status", "bold"),
       "cwd: " + cwd(),
-      "namespace: " + options.scope.namespace,
+      "namespace: " + (options.application.namespace ?? "(default)"),
       "thread: " + threadLabel(options.scope),
       "last event id: " + (activeEventId || "(none yet)"),
       "history entries: " + history.length,
@@ -351,7 +344,7 @@ export function createInteractiveCli(options: InteractiveCliOptions): Readonly<{
     }
   };
 
-  const renderOutput = async (output: AttachmentOutput): Promise<void> => {
+  const renderOutput = async (output: ApplicationOutput): Promise<void> => {
     if (!isStreamOutput(output)) {
       renderEvent(output);
       return;
@@ -387,10 +380,10 @@ export function createInteractiveCli(options: InteractiveCliOptions): Readonly<{
         : "[rich content]");
     resetRenderState();
     printLine("");
-    const handle = await options.performRun({
+    const handle = await options.application.send(message({
       ...options.scope,
       content,
-    });
+    }));
     activeEventId = handle.eventId;
     history.push({
       input: label,

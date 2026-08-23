@@ -8,20 +8,11 @@ import {
   metadataSchema,
   timestampsSchema,
 } from "./schema.ts";
+import type { MessageBranch, MessageRevision } from "../../contracts.ts";
+import { projectActiveMessageBranch } from "../../projections.ts";
 
-export type MessageRevision = Readonly<{
-  rootMessageId: string;
-  previousRevisionMessageId: string;
-  revisionIndex: number;
-  revisedAt: string;
-}>;
-
-export type MessageBranch = Readonly<{
-  rootMessageId: string;
-  headMessageId: string;
-  previousRevisionMessageId: string;
-  revisionIndex: number;
-}>;
+export type { MessageBranch, MessageRevision } from "../../contracts.ts";
+export { projectActiveMessageBranch } from "../../projections.ts";
 
 export type MessageRecord = Readonly<{
   id: string;
@@ -39,26 +30,6 @@ export function messageRevisionFrom(
     revisionIndex: (previous.revision?.revisionIndex ?? 0) + 1,
     revisedAt,
   });
-}
-
-/** Active-branch view over a thread's messages. Not a conversation helper. */
-export function projectActiveMessageBranch<T extends MessageRecord>(
-  messages: readonly T[],
-  branch: MessageBranch | undefined,
-): readonly T[] {
-  if (!branch) return messages;
-  const rootIndex = messages.findIndex((message) =>
-    message.id === branch.rootMessageId
-  );
-  const headIndex = messages.findIndex((message) =>
-    message.id === branch.headMessageId
-  );
-  if (rootIndex < 0 || headIndex <= rootIndex) return messages;
-  return Object.freeze([
-    ...messages.slice(0, rootIndex),
-    messages[headIndex],
-    ...messages.slice(headIndex + 1),
-  ]);
 }
 
 export const messageCollection: CollectionDefinition = defineCollection({

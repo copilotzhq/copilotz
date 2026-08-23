@@ -448,15 +448,15 @@ export function assetBodyKey(
     "namespaces",
     cleanSegment(input.namespace),
   );
-  const origin = input.origin;
-  if (!origin) return join(root, "assets", cleanSegment(input.assetId));
+  const origin = input.origin ?? {
+    type: "namespace",
+    id: input.namespace,
+  };
   return join(
     root,
     "origins",
-    cleanSegment(origin.scope.type),
-    cleanSegment(origin.scope.id),
-    cleanSegment(origin.producer.type),
-    cleanSegment(origin.producer.id),
+    cleanSegment(origin.type),
+    cleanSegment(origin.id),
     "assets",
     cleanSegment(input.assetId),
   );

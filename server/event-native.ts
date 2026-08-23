@@ -19,14 +19,11 @@ import {
 } from "./history.ts";
 import { eventNativeAsset } from "./assets.ts";
 import type {
+  ApplicationOutput,
   ApplicationSendHandle,
-  CopilotzApplication,
-} from "../runtime/application/index.ts";
-import type { AttachmentOutput } from "../runtime/attachments/index.ts";
-import type {
-  ConversationThread,
-  Participant,
-} from "../runtime/domain/index.ts";
+  InternalCopilotzApplication as CopilotzApplication,
+} from "../runtime/application/types.ts";
+import type { ConversationThread, Participant } from "@copilotz/copilotz/core";
 import type { CollectionMutationIdentity } from "../runtime/collections/index.ts";
 import type {
   DeliveryStatus,
@@ -72,7 +69,7 @@ export const EVENT_NATIVE_OUTPUT_STREAM = "copilotz.output-stream.v1";
 /** Framework-neutral request-bound channel output. */
 export type EventNativeOutputStream = Readonly<{
   type: typeof EVENT_NATIVE_OUTPUT_STREAM;
-  outputs: ReadableStream<AttachmentOutput>;
+  outputs: ReadableStream<ApplicationOutput>;
   done: Promise<void>;
   cancel(reason?: string): Promise<void>;
 }>;

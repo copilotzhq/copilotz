@@ -1,6 +1,6 @@
 import type { CopilotzInputEnvelope } from "@copilotz/copilotz/application";
 import { bytesToBase64, type ContentInput } from "@copilotz/copilotz/content";
-import type { Participant, ParticipantInput } from "@copilotz/copilotz/domain";
+import type { Participant, ParticipantInput } from "../../contracts.ts";
 import type { EventVisibility } from "@copilotz/copilotz/events";
 
 export const CORE_MESSAGE_INPUT_EVENT = "copilotz.core.message.input";

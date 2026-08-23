@@ -2,17 +2,34 @@ import { ulid } from "../../dependencies/ulid.ts";
 import {
   createProgressiveBodyWriter,
   openProgressiveBodyFollower,
-  type ProgressiveBodyFollower,
   type ProgressiveBodyWriter,
-} from "./progressive.ts";
-import type { BodyHead, BodyStore } from "./body-store.ts";
+} from "../content/progressive.ts";
+import type { BodyHead, BodyStore } from "../content/body-store.ts";
 import type {
   AssetBodyLocation,
-  AssetOrigin,
   ContentKind,
   ContentRef,
-  ContentRole,
   PreparedContent,
+} from "../content/types.ts";
+import type {
+  ContentStreamAbortInput,
+  ContentStreamAppendInput,
+  ContentStreamCloseInput,
+  ContentStreamRuntime,
+  CreateContentStreamRuntimeOptions,
+} from "./types.ts";
+import { snapshotStreamMetadata } from "./json.ts";
+export type {
+  ContentStreamAbortInput,
+  ContentStreamAppendInput,
+  ContentStreamAppendResult,
+  ContentStreamCloseInput,
+  ContentStreamFollowInput,
+  ContentStreamOpened,
+  ContentStreamOpenInput,
+  ContentStreamRuntime,
+  ContentStreamWriter,
+  CreateContentStreamRuntimeOptions,
 } from "./types.ts";
 
 function cleanSegment(value: string): string {
@@ -68,95 +85,6 @@ function throwIfAborted(signal: AbortSignal | undefined): void {
     : new DOMException("Operation was aborted.", "AbortError");
 }
 
-export type ContentStreamOpenInput = Readonly<{
-  id?: string;
-  mediaType: string;
-  kind?: ContentKind;
-  role: ContentRole | string;
-  name?: string;
-  alt?: string;
-  language?: string;
-  disposition?: "inline" | "attachment";
-  metadata?: Readonly<Record<string, unknown>>;
-  correlationId?: string;
-}>;
-
-export type ContentStreamOpened = Readonly<{
-  id: string;
-  mediaType: string;
-  kind: ContentKind;
-  role: string;
-  name?: string;
-  alt?: string;
-  language?: string;
-  disposition?: "inline" | "attachment";
-  metadata: Readonly<Record<string, unknown>>;
-  correlationId?: string;
-}>;
-
-export type ContentStreamAppendInput = Readonly<{
-  bytes: Uint8Array;
-  appendId: string;
-}>;
-
-export type ContentStreamAppendResult = Readonly<{
-  startOffset: number;
-  endOffset: number;
-}>;
-
-export type ContentStreamCloseInput = Readonly<{
-  assetId: string;
-  origin?: AssetOrigin;
-  metadata?: Readonly<Record<string, unknown>>;
-}>;
-
-export type ContentStreamAbortInput = Readonly<{
-  reason?: string;
-}>;
-
-export type ContentStreamFollowInput = Readonly<{
-  id: string;
-  offset?: number;
-}>;
-
-export type ContentStreamWriter = Readonly<
-  & AsyncDisposable
-  & {
-    readonly id: string;
-    offset(): number;
-    append(
-      input: ContentStreamAppendInput,
-      options?: { signal?: AbortSignal },
-    ): Promise<ContentStreamAppendResult>;
-    close(
-      input: ContentStreamCloseInput,
-      options?: { signal?: AbortSignal },
-    ): Promise<PreparedContent>;
-    abort(
-      input?: ContentStreamAbortInput,
-      options?: { signal?: AbortSignal },
-    ): Promise<void>;
-  }
->;
-
-export type ContentStreamRuntime = Readonly<{
-  open(
-    input: ContentStreamOpenInput,
-    options?: { signal?: AbortSignal },
-  ): Promise<ContentStreamWriter>;
-  follow(
-    input: ContentStreamFollowInput,
-    options?: { signal?: AbortSignal },
-  ): Promise<ProgressiveBodyFollower>;
-}>;
-
-export type CreateContentStreamRuntimeOptions = Readonly<{
-  namespace: string;
-  store: BodyStore;
-  createId?: () => string;
-  onOpen?(input: ContentStreamOpened): void | Promise<void>;
-}>;
-
 export function createContentStreamRuntime(
   options: CreateContentStreamRuntimeOptions,
 ): ContentStreamRuntime {
@@ -178,7 +106,7 @@ export function createContentStreamRuntime(
       const alt = input.alt?.trim();
       const language = input.language?.trim();
       const correlationId = input.correlationId?.trim();
-      const metadata = Object.freeze(structuredClone(input.metadata ?? {}));
+      const metadata = snapshotStreamMetadata(input.metadata ?? {});
       const bodyId = contentStreamBodyId({ namespace, streamId: id });
       const body: ProgressiveBodyWriter = await createProgressiveBodyWriter(
         options.store,
@@ -208,7 +136,9 @@ export function createContentStreamRuntime(
           ...(alt ? { alt } : {}),
           ...(language ? { language } : {}),
           ...(input.disposition ? { disposition: input.disposition } : {}),
-          ...(input.metadata ? { metadata: structuredClone(metadata) } : {}),
+          ...(input.metadata
+            ? { metadata: metadata as Record<string, unknown> }
+            : {}),
         });
 
       const close = async (
@@ -244,7 +174,7 @@ export function createContentStreamRuntime(
               ? { origin: structuredClone(closeInput.origin) }
               : {}),
             metadata: {
-              ...(input.metadata ? structuredClone(input.metadata) : {}),
+              ...metadata,
               ...(closeInput.metadata
                 ? structuredClone(closeInput.metadata)
                 : {}),

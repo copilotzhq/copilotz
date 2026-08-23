@@ -13,7 +13,9 @@ tags:
   - database
 entrypoints:
   - index.ts
-  - runtime/application/index.ts
+  - create-copilotz.ts
+  - runtime/application/public.ts
+  - runtime/persistence/index.ts
   - runtime/actions/index.ts
   - runtime/collections/index.ts
   - runtime/plugins/index.ts
@@ -47,7 +49,8 @@ deleted during the refactor.
 This map describes the current implementation. Use `IMPLEMENTATION_PLAN.md` for
 the remaining cut order.
 
-- Public application assembly: `runtime/application/`
+- Public application composition: `create-copilotz.ts`; generic application
+  contracts: `runtime/application/public.ts`
 - Action definition, lifecycle, and invocation: `runtime/actions/`
 - Canonical graph Collections and mutation planning: `runtime/collections/`
 - Canonical content/assets: `runtime/content/`
@@ -69,7 +72,7 @@ the remaining cut order.
 - Schedules, usage, and goals: corresponding `plugins/` modules
 - Channel plugins and transports: `plugins/channels/`
 - Semantic memory plugin: `plugins/memory/`
-- Host capabilities: `runtime/adapters/`
+- Physical persistence: `runtime/persistence/`; host listeners: `runtime/adapters/`
 - Web Fetch boundary: `server/`
 - Isolated legacy upgrade: `migration/v1/`
 

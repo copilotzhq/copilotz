@@ -1,9 +1,9 @@
 import { assert, assertEquals } from "@std/assert";
 
 import type {
-  AttachmentOutput,
-  AttachmentStreamOutput,
-} from "../runtime/attachments/index.ts";
+  ApplicationOutput,
+  StreamOutput,
+} from "../runtime/streams/index.ts";
 import {
   createEphemeralEvent,
   type DurableEvent,
@@ -124,7 +124,7 @@ Deno.test("Fetch adapter preserves application response headers for JSON, empty,
   let mode: "json" | "empty" | "sse" = "json";
   const stream: EventNativeOutputStream = Object.freeze({
     type: EVENT_NATIVE_OUTPUT_STREAM,
-    outputs: new ReadableStream<AttachmentOutput>({
+    outputs: new ReadableStream<ApplicationOutput>({
       start(controller) {
         controller.close();
       },
@@ -192,16 +192,13 @@ Deno.test("Fetch adapter incrementally projects request-bound outputs as SSE wit
     payload: { text: "Hello" },
     correlationId: "correlation-a",
   });
-  const media: AttachmentStreamOutput = Object.freeze({
+  const media: StreamOutput = Object.freeze({
     type: "stream.output",
+    namespace: "tenant-a",
     streamId: "audio-a",
-    participant: Object.freeze({
-      id: "agent-a",
-      externalId: "support",
-      type: "agent",
-      name: "Support",
-    }),
     mediaType: "audio/pcm;rate=24000",
+    kind: "audio",
+    role: "assistant.audio",
     correlationId: "correlation-a",
     metadata: Object.freeze({ voice: "alloy" }),
     payload: new ReadableStream<Uint8Array>({
@@ -213,7 +210,7 @@ Deno.test("Fetch adapter incrementally projects request-bound outputs as SSE wit
   });
   const stream: EventNativeOutputStream = Object.freeze({
     type: EVENT_NATIVE_OUTPUT_STREAM,
-    outputs: new ReadableStream<AttachmentOutput>({
+    outputs: new ReadableStream<ApplicationOutput>({
       start(controller) {
         controller.enqueue(semantic);
         controller.enqueue(media);
@@ -240,14 +237,11 @@ Deno.test("Fetch adapter incrementally projects request-bound outputs as SSE wit
   assertEquals(sseId(frames[0]), undefined);
   assertEquals(sseData(frames[1]), {
     type: "stream.output",
+    namespace: "tenant-a",
     streamId: "audio-a",
-    participant: {
-      id: "agent-a",
-      externalId: "support",
-      type: "agent",
-      name: "Support",
-    },
     mediaType: "audio/pcm;rate=24000",
+    kind: "audio",
+    role: "assistant.audio",
     correlationId: "correlation-a",
     metadata: { voice: "alloy" },
   });
@@ -258,7 +252,7 @@ Deno.test("Fetch adapter supports versioned SSE projection and cancels request w
   let workCancelled: string | undefined;
   const stream: EventNativeOutputStream = Object.freeze({
     type: EVENT_NATIVE_OUTPUT_STREAM,
-    outputs: new ReadableStream<AttachmentOutput>({
+    outputs: new ReadableStream<ApplicationOutput>({
       start(controller) {
         controller.enqueue(createEphemeralEvent({
           type: "text.delta",
@@ -320,7 +314,7 @@ Deno.test("Fetch adapter emits durable event position as SSE id", async () => {
   });
   const stream: EventNativeOutputStream = Object.freeze({
     type: EVENT_NATIVE_OUTPUT_STREAM,
-    outputs: new ReadableStream<AttachmentOutput>({
+    outputs: new ReadableStream<ApplicationOutput>({
       start(controller) {
         controller.enqueue(durable);
         controller.close();

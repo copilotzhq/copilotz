@@ -1,12 +1,12 @@
 import { assert, assertEquals, assertRejects } from "@std/assert";
 
-import type { CopilotzDatabase } from "./persistence.ts";
+import type { CopilotzDatabase } from "./lifecycle.ts";
 import {
   createCopilotzPersistence,
   isCopilotzPersistenceError,
   isPersistenceUnavailable,
   openCopilotzPersistence,
-} from "./persistence.ts";
+} from "./lifecycle.ts";
 
 type Deferred<T> = Readonly<{
   promise: Promise<T>;

@@ -6,11 +6,11 @@ import {
   assertStringIncludes,
   assertThrows,
 } from "@std/assert";
-import { createTestDomainContext } from "../../runtime/testing/domain-context.ts";
+import { createTestDomainContext } from "../core/testing/context.ts";
 import {
   projectActionEvents,
   projectMessages,
-} from "../../runtime/testing/projections.ts";
+} from "../core/testing/projections.ts";
 import { defineContextResource } from "@copilotz/copilotz/core";
 import {
   createSqlSession,

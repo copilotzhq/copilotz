@@ -5,7 +5,7 @@ import { createCoreTableNames, type SqlSession } from "../events/index.ts";
 import { createPluginRegistry, defineProcessor } from "../plugins/index.ts";
 import { createTestDatabase } from "../testing/ominipg.ts";
 import { createCopilotzEngine } from "./index.ts";
-import { createTestDomainContext } from "../../runtime/testing/domain-context.ts";
+import { createTestDomainContext } from "../../plugins/core/testing/context.ts";
 
 const NAMESPACE = "tenant-transient-regression";
 

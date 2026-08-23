@@ -1,5 +1,5 @@
 import { assertEquals } from "@std/assert";
-import { createTestDomainContext } from "../../../../runtime/testing/domain-context.ts";
+import { createTestDomainContext } from "../../testing/context.ts";
 import { createCopilotzApplication } from "../../../../runtime/application/index.ts";
 import { createTestDatabase } from "../../../../runtime/testing/ominipg.ts";
 import { coreCollectionsPlugin } from "../../plugin.ts";

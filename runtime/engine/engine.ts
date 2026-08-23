@@ -1,4 +1,4 @@
-import type { AttachmentRuntime } from "../attachments/index.ts";
+import { isStreamOutputDescriptor } from "../streams/index.ts";
 import {
   createActionLifecycleAppender,
   createActionLifecycleEmitter,
@@ -156,13 +156,19 @@ export async function createCopilotzEngine(
       collections: scopedCapabilities.collections,
       streamBodyStore: scopedCapabilities.streamBodyStore,
       eventHub: scopedEventHub,
-      async publishEvent(event) {
-        const dispatched = await publishLive(event, {
-          inline: true,
-          signal: base.signal,
-          databaseSchema: base.databaseSchema,
-          eventHub: scopedEventHub,
-          settlementScopeId: base.settlementScopeId,
+      async publishOutput(output) {
+        if (isStreamOutputDescriptor(output)) {
+          await options.publish?.(output, {
+            databaseSchema: base.databaseSchema,
+            ...(base.settlementScopeId
+              ? { settlementScopeId: base.settlementScopeId }
+              : {}),
+          });
+          return;
+        }
+        const dispatched = await publishLive(output, {
+          inline: true, signal: base.signal, databaseSchema: base.databaseSchema,
+          eventHub: scopedEventHub, settlementScopeId: base.settlementScopeId,
         });
         await dispatched.done;
       },
@@ -257,7 +263,13 @@ export async function createCopilotzEngine(
     defaultDatabaseSchema: databaseSchema,
     registry: options.registry,
     createContext,
-    async onOutputEvent(event, context) {
+    async onOutput(output, context) {
+      if (isStreamOutputDescriptor(output)) {
+        await options.publish?.(output, context);
+        await options.execution?.onOutput?.(output, context);
+        return;
+      }
+      const event = output;
       const additional = context.databaseSchema === databaseSchema
         ? undefined
         : await resolveAdditionalScope(context.databaseSchema);
@@ -292,7 +304,7 @@ export async function createCopilotzEngine(
           createContext: createLiveContext,
         }).catch(() => undefined);
         await options.publish?.(event, context);
-        await options.execution?.onOutputEvent?.(event, context);
+        await options.execution?.onOutput?.(event, context);
       }
       if (!event.durable) return;
       const deliveries = await scoped.store.listDeliveries({
@@ -373,8 +385,6 @@ export async function createCopilotzEngine(
       },
     });
   };
-  let attachmentRuntime: AttachmentRuntime | undefined;
-
   try {
     const scope = createDatabaseScope({
       databaseSchema,
@@ -392,7 +402,6 @@ export async function createCopilotzEngine(
     primaryRuntime = scope;
     capabilities = scope.capabilities;
     resolver = scope.public.content.resolver;
-    attachmentRuntime = scope.attachmentRuntime;
 
     resolveAdditionalScope = (requested: string) => {
       const normalized = requested.trim();
@@ -459,43 +468,6 @@ export async function createCopilotzEngine(
         dispatchWork: (input) => executor.dispatchWork(input),
         settleOutputs: (scope) => executor.settleOutputs(scope),
       }),
-      connect(input) {
-        const requested = input.databaseSchema?.trim() || databaseSchema;
-        if (requested === databaseSchema) {
-          return attachmentRuntime!.connect({
-            ...input,
-            databaseSchema: requested,
-          });
-        }
-        return resolveAdditionalScope(requested).then((scope) =>
-          scope.runtime.public.connect(input)
-        );
-      },
-      run(input) {
-        const requested = input.databaseSchema?.trim() || databaseSchema;
-        if (requested === databaseSchema) {
-          return attachmentRuntime!.run({
-            ...input,
-            databaseSchema: requested,
-          });
-        }
-        return resolveAdditionalScope(requested).then((scope) =>
-          scope.runtime.public.run(input)
-        );
-      },
-      async disconnectAttachments(
-        error: unknown = new Error("Application persistence is unavailable."),
-      ) {
-        const scoped = await Promise.allSettled([...additionalScopes.values()]);
-        await Promise.all([
-          attachmentRuntime!.terminate(error),
-          ...scoped.flatMap((result) =>
-            result.status === "fulfilled"
-              ? [result.value.runtime.attachmentRuntime.terminate(error)]
-              : []
-          ),
-        ]);
-      },
       async recoverAll(recovery = {}) {
         const scoped = await Promise.allSettled([...additionalScopes.values()]);
         const unavailableScopes = scoped.flatMap((result) =>
@@ -592,18 +564,6 @@ export async function createCopilotzEngine(
         if (closed) return;
         closed = true;
         const scoped = await Promise.allSettled([...additionalScopes.values()]);
-        await Promise.all(
-          scoped.flatMap((result) =>
-            result.status === "fulfilled"
-              ? [
-                result.value.runtime.attachmentRuntime.shutdown(reason).catch(
-                  () => undefined,
-                ),
-              ]
-              : []
-          ),
-        );
-        await attachmentRuntime?.shutdown(reason);
         await executor.shutdown(reason);
         for (const result of scoped) {
           if (result.status === "fulfilled") result.value.hub.close();
@@ -613,9 +573,6 @@ export async function createCopilotzEngine(
     };
     return Object.freeze(engine);
   } catch (error) {
-    await attachmentRuntime?.shutdown(
-      "copilotz_engine_initialization_failed",
-    ).catch(() => undefined);
     await executor.shutdown("copilotz_engine_initialization_failed").catch(
       () => undefined,
     );

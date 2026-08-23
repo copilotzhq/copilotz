@@ -4,7 +4,7 @@ import {
   type ActionDefinition,
   defineAction,
 } from "@copilotz/copilotz/actions";
-import type { ParticipantInput } from "@copilotz/copilotz/domain";
+import type { ParticipantInput } from "../../contracts.ts";
 import {
   addSenderToThreadInTransaction,
   ensureParticipantInTransaction,

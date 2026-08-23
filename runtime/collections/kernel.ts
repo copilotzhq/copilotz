@@ -64,12 +64,13 @@ export type CreateCollectionRuntimeOptions = Readonly<{
   coordinator: EventCoordinator;
   session: SqlSession;
   eventStore: EventStore;
-  assets?: CollectionContentAssets;
+  assets?: CollectionAssetAdopter;
   createId?: () => string;
   now?: () => Date;
 }>;
 
-export type CollectionContentAssets = Readonly<{
+/** Internal content-adoption seam used only by the Collection kernel. */
+type CollectionAssetAdopter = Readonly<{
   prepareMaterialization(
     input: Readonly<{
       namespace: string;
@@ -1135,14 +1136,7 @@ export function createCollectionRuntime(
                   content: Object.freeze(pendingRefs),
                   assets: Object.freeze(pendingAssets),
                 }),
-              origin: {
-                scope: {
-                  type: name,
-                  id: write.record.id,
-                },
-                producer: { type: name, id: write.record.id },
-                path: field,
-              },
+              origin: { type: name, id: write.record.id },
             });
             if (pending.content.length !== pendingIndexes.length) {
               throw new Error(
@@ -1170,14 +1164,7 @@ export function createCollectionRuntime(
         const input = {
           namespace,
           content: value as DurableContentInput,
-          origin: {
-            scope: {
-              type: name,
-              id: write.record.id,
-            },
-            producer: { type: name, id: write.record.id },
-            path: field,
-          },
+          origin: { type: name, id: write.record.id },
         } as const;
         const prepared = await options.assets.prepareMaterialization(input);
         content.push(prepared);

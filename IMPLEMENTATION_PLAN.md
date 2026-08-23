@@ -385,7 +385,7 @@ logical mutation.
 
 Collections do not declare `bodyRefs`, and no `body_references` table exists. A
 Ready Asset node's indexed `bodyId` is the sole durable Body-liveness authority.
-Asset provenance uses one opaque scope `{ type, id }`; a semantic plugin may use
+Asset provenance uses one opaque identity `{ type, id }`; a semantic plugin may use
 `thread`, while standalone publication may use the namespace. Storage and the
 kernel neither enumerate nor branch on those values.
 

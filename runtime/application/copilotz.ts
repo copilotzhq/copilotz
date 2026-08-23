@@ -4,7 +4,7 @@ import type { CreateCopilotzGatewayOptions } from "./gateway.ts";
 import {
   type CopilotzPersistenceLifecycleCallbacks,
   openCopilotzPersistence,
-} from "./persistence.ts";
+} from "@copilotz/copilotz/persistence";
 import { createCopilotzWorker } from "./worker.ts";
 import type { CopilotzApplication } from "./types.ts";
 
@@ -30,9 +30,7 @@ export type CreateCopilotzOptions =
   >
   & Readonly<{ worker?: EmbeddedWorkerOptions }>;
 
-export type CopilotzEmbeddedApplication =
-  & CopilotzApplication
-  & Readonly<{ role: "embedded" }>;
+export type CopilotzEmbeddedApplication = CopilotzApplication;
 
 /**
  * Creates the normal factory-first Copilotz application.
@@ -123,30 +121,11 @@ export async function createCopilotz(
     return shutdownTask;
   };
 
-  const {
-    role: _gatewayRole,
-    transports: _gatewayTransports,
-    hypervisor: _gatewayHypervisor,
-    fetch: _gatewayFetch,
-    ...application
-  } = gateway;
-
   return Object.freeze({
-    ...application,
-    config: Object.freeze({
-      ...gateway.config,
-      databaseOwnership: persistence.ownership,
-    }),
-    role: "embedded",
-    async databaseScope(databaseSchema: string) {
-      await persistence.recovery?.admit();
-      return await gateway!.databaseScope(databaseSchema);
-    },
     async send(input: Parameters<CopilotzApplication["send"]>[0]) {
-      await persistence.recovery?.admit();
       return await gateway!.send(input);
     },
+    observe: () => gateway!.observe(),
     close: shutdown,
-    shutdown,
   });
 }

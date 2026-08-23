@@ -8,23 +8,24 @@ import {
   defineProcessor,
   type ProcessorContext,
 } from "../plugins/index.ts";
-import { createTestDomainContext } from "../../runtime/testing/domain-context.ts";
+import { createTestDomainContext } from "../../plugins/core/testing/context.ts";
 import { waitForTestDelivery } from "../../runtime/testing/deliveries.ts";
-import { projectMessages } from "../../runtime/testing/projections.ts";
+import { projectMessages } from "../../plugins/core/testing/projections.ts";
 import { createCopilotzApplication } from "./application.ts";
-import { createCopilotz } from "./copilotz.ts";
-import type { CopilotzDatabase } from "./persistence.ts";
-import { isCopilotzPersistenceError } from "./persistence.ts";
-import { loadMessageRecord } from "../engine/collection-graph.ts";
+import type { CopilotzDatabase } from "@copilotz/copilotz/persistence";
+import { isCopilotzPersistenceError } from "@copilotz/copilotz/persistence";
+import { loadMessageRecord } from "@copilotz/copilotz/core";
 import {
   coreCollectionsPlugin,
   corePlugin,
 } from "../../plugins/core/plugin.ts";
 import type { TestDatabase } from "../testing/ominipg.ts";
 import { createTestDatabase } from "../testing/ominipg.ts";
+import type { ApplicationOutput, StreamOutput } from "../streams/index.ts";
 
 const SCHEMA = "copilotz_application";
 const NAMESPACE = "tenant-a";
+const LARGE_STREAM_BYTES = 1024 * 1024 + 1;
 
 function replyPlugin(): AnyCopilotzPlugin {
   const processor = defineProcessor<ProcessorContext>({
@@ -69,7 +70,11 @@ function runtimeNeutralStreamPlugin(): AnyCopilotzPlugin {
         metadata: { source: "test-plugin" },
         correlationId: event.correlationId,
       });
-      await writer.abort();
+      await writer.append({
+        bytes: new Uint8Array(LARGE_STREAM_BYTES).fill(0x78),
+        appendId: "runtime-neutral-stream-chunk",
+      });
+      await writer.close({ assetId: "runtime-neutral-stream-asset" });
     },
   });
   return definePlugin({
@@ -89,7 +94,13 @@ function correlatedOutputPlugin(): AnyCopilotzPlugin {
         mediaType: "text/plain",
         role: "output",
       });
-      await writer.abort();
+      await writer.append({
+        bytes: new TextEncoder().encode(`output:${event.correlationId}`),
+        appendId: `correlated-output:${event.correlationId}:chunk`,
+      });
+      await writer.close({
+        assetId: `correlated-output:${event.correlationId}:asset`,
+      });
     },
   });
   return definePlugin({
@@ -384,18 +395,23 @@ Deno.test("application observes streams opened from events with no thread semant
     const outputs = await observed;
     const stream = outputs.find((output) => output.type === "stream.output");
     assertExists(stream);
-    assert("durable" in stream && !stream.durable);
-    assertEquals(stream.durable, false);
-    assertEquals(stream.threadId, undefined);
-    assertEquals(stream.streamId, "runtime-neutral-stream-a");
-    assertEquals(stream.correlationId, "runtime-neutral-correlation");
-    assertEquals(stream.payload, {
-      streamId: "runtime-neutral-stream-a",
-      mediaType: "text/plain",
-      kind: "text",
-      role: "output",
-    });
-    assertEquals(stream.metadata.source, "test-plugin");
+    const streamOutput = stream as StreamOutput;
+    assertEquals("durable" in streamOutput, false);
+    assertEquals("threadId" in streamOutput, false);
+    assertEquals(streamOutput.namespace, NAMESPACE);
+    assertEquals(streamOutput.streamId, "runtime-neutral-stream-a");
+    assertEquals(streamOutput.mediaType, "text/plain");
+    assertEquals(streamOutput.kind, "text");
+    assertEquals(streamOutput.role, "output");
+    assertEquals(streamOutput.correlationId, "runtime-neutral-correlation");
+    assertEquals(typeof streamOutput.payload.getReader, "function");
+    const payload = new Uint8Array(
+      await new Response(streamOutput.payload).arrayBuffer(),
+    );
+    assertEquals(payload.byteLength, LARGE_STREAM_BYTES);
+    assertEquals(payload[0], 0x78);
+    assertEquals(payload.at(-1), 0x78);
+    assertEquals(streamOutput.metadata.source, "test-plugin");
   } finally {
     await application.shutdown();
     await closeDb(db);
@@ -413,7 +429,8 @@ Deno.test("application isolates simultaneous causal outputs and preserves the fi
     engine: { retryBaseMs: 0, random: () => 0 },
   });
   try {
-    const global = application.observe().getReader();
+    const globalFirst = application.observe().getReader();
+    const globalSecond = application.observe().getReader();
     const [first, second] = await Promise.all([
       application.send({
         type: "test.correlated-output",
@@ -453,18 +470,51 @@ Deno.test("application isolates simultaneous causal outputs and preserves the fi
       ),
       true,
     );
+    const firstStream = firstOutputs.find((output) =>
+      output.type === "stream.output"
+    ) as StreamOutput;
+    const secondStream = secondOutputs.find((output) =>
+      output.type === "stream.output"
+    ) as StreamOutput;
+    assertEquals(
+      await new Response(firstStream.payload).text(),
+      "output:correlation-first",
+    );
+    assertEquals(
+      await new Response(secondStream.payload).text(),
+      "output:correlation-second",
+    );
 
-    const globallyObserved = [];
-    while (globallyObserved.length < 4) {
-      const next = await global.read();
-      assertEquals(next.done, false);
-      globallyObserved.push(next.value!);
-    }
+    const collectGlobal = async (
+      reader: ReadableStreamDefaultReader<ApplicationOutput>,
+    ) => {
+      const globallyObserved = [];
+      while (globallyObserved.length < 4) {
+        const next = await reader.read();
+        assertEquals(next.done, false);
+        globallyObserved.push(next.value!);
+      }
+      return globallyObserved;
+    };
+    const [globallyObserved, independentlyObserved] = await Promise.all([
+      collectGlobal(globalFirst),
+      collectGlobal(globalSecond),
+    ]);
     assertEquals(
       new Set(globallyObserved.map((event) => event.correlationId)),
       new Set(["correlation-first", "correlation-second"]),
     );
-    await global.cancel();
+    const globalFirstStream = globallyObserved.find((output) =>
+      output.type === "stream.output"
+    ) as StreamOutput;
+    const globalSecondStream = independentlyObserved.find((output) =>
+      output.type === "stream.output"
+    ) as StreamOutput;
+    assertEquals(
+      await new Response(globalFirstStream.payload).text(),
+      await new Response(globalSecondStream.payload).text(),
+    );
+    await Promise.all([globalFirst.cancel(), globalSecond.cancel()]);
 
     const direct = application.observe().getReader();
     await application.events.emit({
@@ -483,8 +533,8 @@ Deno.test("application isolates simultaneous causal outputs and preserves the fi
   }
 });
 
-Deno.test("createCopilotz owns a configured Ominipg database", async () => {
-  const application = await createCopilotz({
+Deno.test("internal application owns a configured Ominipg database", async () => {
+  const application = await createCopilotzApplication({
     namespace: NAMESPACE,
     databaseSchema: "public",
     plugins: [coreCollectionsPlugin],
@@ -506,8 +556,8 @@ Deno.test("createCopilotz owns a configured Ominipg database", async () => {
   }
 });
 
-Deno.test("createCopilotz owns its default private database", async () => {
-  const application = await createCopilotz({
+Deno.test("internal application owns its default private database", async () => {
+  const application = await createCopilotzApplication({
     namespace: NAMESPACE,
     plugins: [coreCollectionsPlugin],
   });
@@ -571,11 +621,19 @@ Deno.test("application never closes an injected database", async () => {
   assertEquals(closes, 1);
 });
 
-Deno.test("application terminates attachments and resumes durable deliveries after reconnect", async () => {
+Deno.test("persistence outage interrupts active send observers without cancelling durable work", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   let generation = 0;
   let failNextQuery = false;
   let processorCalls = 0;
+  let releaseActiveSend = () => {};
+  let activeSendStarted = () => {};
+  const activeSendStartedPromise = new Promise<void>((resolve) => {
+    activeSendStarted = resolve;
+  });
+  const activeSendReleasePromise = new Promise<void>((resolve) => {
+    releaseActiveSend = resolve;
+  });
   const closedGenerations: number[] = [];
   const lifecycle: string[] = [];
   const processor = defineProcessor<ProcessorContext>({
@@ -589,7 +647,17 @@ Deno.test("application terminates attachments and resumes durable deliveries aft
   const plugin = definePlugin({
     id: "test.application.recovery",
     version: "1.0.0",
-    processors: { recovery: processor },
+    processors: {
+      recovery: processor,
+      activeSend: defineProcessor<ProcessorContext>({
+        id: "application.active-send",
+        on: [{ eventType: "application.persistence-active-send" }],
+        async handle() {
+          activeSendStarted();
+          await activeSendReleasePromise;
+        },
+      }),
+    },
   });
   const application = await createCopilotzApplication({
     database: {
@@ -670,24 +738,32 @@ Deno.test("application terminates attachments and resumes durable deliveries aft
     assertEquals(messageDelivery.status, "retry_wait");
     assertEquals(processorCalls, 1);
 
-    const attachment = await application.engine.connect({
+    const activeSend = await application.send({
+      type: "application.persistence-active-send",
       namespace: NAMESPACE,
-      thread: "recovery-thread",
-      participant: "recovery-user",
     });
-    const reader = attachment.outputs.getReader();
-    const terminal = assertRejects(() => reader.read());
+    const reader = activeSend.outputs.getReader();
+    await activeSendStartedPromise;
     failNextQuery = true;
     const error = await assertRejects(() =>
       projectMessages(application, NAMESPACE, "recovery-thread")
     );
     assert(isCopilotzPersistenceError(error));
     assertEquals(error.code, "persistence_indeterminate");
-    const attachmentError = await terminal;
-    assert(isCopilotzPersistenceError(attachmentError));
-    assertEquals(attachmentError.code, "persistence_indeterminate");
+    const outputError = await assertRejects(() => reader.read());
+    assert(isCopilotzPersistenceError(outputError));
+    assertEquals(outputError.code, "persistence_indeterminate");
+    const doneError = await assertRejects(() => activeSend.done);
+    assert(isCopilotzPersistenceError(doneError));
+    assertEquals(doneError.code, "persistence_indeterminate");
 
     await waitFor(() => lifecycle.includes("ready:2"));
+    const activeSettlement = await application.events.settlement(
+      NAMESPACE,
+      activeSend.eventId,
+    );
+    assertEquals(activeSettlement.cancelled, 0);
+    releaseActiveSend();
     await waitFor(() => processorCalls === 2);
     const delivery = await application.deliveries.get(
       NAMESPACE,

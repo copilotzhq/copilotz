@@ -20,9 +20,9 @@ import type {
   EphemeralEventDraft,
   EventDelivery,
   EventDispatchReport,
-  EventPublisher,
   SqlSession,
 } from "../events/index.ts";
+import type { RuntimeOutputDescriptor } from "../streams/index.ts";
 import type {
   CreateDeliveryExecutorOptions,
   DeliveryExecutorOwnership,
@@ -40,16 +40,15 @@ import type {
   PluginRegistry,
   Processor,
 } from "../plugins/index.ts";
-import type {
-  ConnectAttachmentInput,
-  RunHandle,
-  RunInput,
-  ThreadAttachment,
-} from "../attachments/index.ts";
 import type { ProgressiveBodyMaintenanceResult } from "../content/index.ts";
+import type { ContentStreamFollowInput } from "../streams/index.ts";
 import type { ActionLifecycleEmitter } from "../actions/index.ts";
 
 export type EphemeralEventInput = EphemeralEventDraft;
+export type RuntimeOutputPublisher = (
+  output: RuntimeOutputDescriptor,
+  context?: Readonly<{ databaseSchema: string; settlementScopeId?: string }>,
+) => void | Promise<void>;
 export type EngineMutationIdentityFactory = (
   operationKey: string,
   metadata?: Record<string, unknown>,
@@ -81,11 +80,6 @@ export type CopilotzEngineExecutionOptions = Omit<
   | "createContext"
 >;
 
-export type CopilotzEngineAttachmentOptions = Readonly<{
-  /** Poll interval used while observing delivery settlement. */
-  settlementPollMs?: number;
-}>;
-
 export type CreateCopilotzEngineOptions = Readonly<{
   session: SqlSession;
   registry: PluginRegistry;
@@ -93,9 +87,8 @@ export type CreateCopilotzEngineOptions = Readonly<{
   /** Provision the default schema during engine startup. Set false to validate it only. */
   provisionDefaultDatabaseSchema?: boolean;
   execution?: CopilotzEngineExecutionOptions;
-  attachments?: CopilotzEngineAttachmentOptions;
   eventHub?: CopilotzEventHub;
-  publish?: EventPublisher;
+  publish?: RuntimeOutputPublisher;
   onDispatchFailure?: (failure: {
     deliveryId: string;
     error: unknown;
@@ -134,10 +127,12 @@ export type CopilotzEngineDatabaseScope = Readonly<{
     resolver: ContentResolver;
   }>;
   collections: CollectionRuntime;
-  connect(input: ConnectAttachmentInput): Promise<ThreadAttachment>;
-  run(input: RunInput): Promise<RunHandle>;
-  /** Terminates active text/realtime attachments without shutting down execution. */
-  disconnectAttachments(error?: unknown): Promise<void>;
+  streams: Readonly<{
+    follow(
+      namespace: string,
+      input: ContentStreamFollowInput,
+    ): Promise<ReadableStream<Uint8Array>>;
+  }>;
   events: CopilotzEngine["events"];
   deliveries: CopilotzEngine["deliveries"];
   recover(options?: {
@@ -179,9 +174,7 @@ export type CopilotzEngine = Readonly<{
     resolver: ContentResolver;
   }>;
   collections: CollectionRuntime;
-  connect(input: ConnectAttachmentInput): Promise<ThreadAttachment>;
-  run(input: RunInput): Promise<RunHandle>;
-  disconnectAttachments(error?: unknown): Promise<void>;
+  streams: CopilotzEngineDatabaseScope["streams"];
   events: Readonly<{
     append(
       draft: DurableEventDraft,
@@ -265,7 +258,7 @@ export type CreateProcessorContextOptions = Readonly<{
   resolver: ContentResolver;
   collections: CollectionRuntime;
   eventHub: CopilotzEventHub;
-  publishEvent?: (event: CopilotzEvent) => Promise<void>;
+  publishOutput?: (output: RuntimeOutputDescriptor) => Promise<void>;
   actionLifecycle: ActionLifecycleEmitter;
   now?: () => Date;
   streamBodyStore: BodyStore;

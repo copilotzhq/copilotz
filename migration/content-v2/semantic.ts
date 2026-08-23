@@ -673,8 +673,8 @@ async function prepareRole(
     value: extracted.output,
     role,
     origin: {
-      scope: { type: "thread", id: threadId },
-      producer: { type: "tool_execution", id: executionId },
+      type: "thread",
+      id: threadId,
     },
   }, { namespace, idempotencyKey: `${executionId}:${role}` });
   return {

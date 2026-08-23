@@ -9,22 +9,19 @@ import { createSqlSession } from "../events/index.ts";
 import { createPluginRegistry, definePlugin } from "../plugins/index.ts";
 import { createTestDatabase } from "../testing/ominipg.ts";
 import { createCopilotzEngine } from "./index.ts";
-import { createTestDomainContext } from "../../runtime/testing/domain-context.ts";
-import { projectThreadById } from "../../runtime/testing/projections.ts";
+import { createTestDomainContext } from "../../plugins/core/testing/context.ts";
+import { projectThreadById } from "../../plugins/core/testing/projections.ts";
 
 const NAMESPACE = "tenant-collection-ingress-slice-2";
 
-Deno.test("engine conversation factories are gone; messages use the registered Action", async () => {
+Deno.test("engine conversation factories and attachment ingress are gone", async () => {
   await assertRejects(
     () => Deno.stat(new URL("./core-records.ts", import.meta.url)),
     Deno.errors.NotFound,
   );
-  const attachment = await Deno.readTextFile(
-    new URL("../attachments/attachment.ts", import.meta.url),
-  );
-  assertEquals(
-    attachment.includes("actions.createThreadMessage"),
-    true,
+  await assertRejects(
+    () => Deno.stat(new URL("../attachments/attachment.ts", import.meta.url)),
+    Deno.errors.NotFound,
   );
 });
 

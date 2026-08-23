@@ -156,7 +156,7 @@ performs no external BodyStore I/O. A Ready Asset node's indexed `bodyId` is the
 sole durable liveness authority. Collections have no `bodyRefs` declaration, and
 no `body_references` table exists.
 
-Asset provenance is runtime-neutral. Its scope is one opaque provenance identity
+Asset provenance is runtime-neutral. It is one opaque provenance identity
 `{ type, id }`; semantic plugins may use values such as `thread`, while
 standalone runtime publication may use the namespace. The runtime neither
 enumerates those types nor gives them special storage behavior.

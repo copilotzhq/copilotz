@@ -37,8 +37,8 @@ import {
 import {
   projectActionEvents,
   projectMessages,
-} from "../../runtime/testing/projections.ts";
-import type { ConversationMessage } from "../../runtime/domain/index.ts";
+} from "./testing/projections.ts";
+import type { ConversationMessage } from "@copilotz/copilotz/core";
 import type { CoreToolProcessorContext } from "./context.ts";
 import { resumeDeferredToolPlan } from "./internal/tool-plan.ts";
 import {

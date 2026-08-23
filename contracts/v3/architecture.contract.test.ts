@@ -7,10 +7,8 @@ const repositoryRoot = fromFileUrl(new URL("../../", import.meta.url));
 const canonicalEntries = [
   "runtime/adapters",
   "runtime/application",
-  "runtime/attachments",
   "runtime/collections",
   "runtime/content",
-  "runtime/domain",
   "runtime/engine",
   "runtime/events",
   "runtime/execution",
@@ -93,6 +91,9 @@ Deno.test("retired runtime and v1 server modules are deleted", async () => {
       "../../runtime/context/index.ts",
       "../../runtime/capabilities/index.ts",
       "../../runtime/resources/index.ts",
+      "../../runtime/attachments/index.ts",
+      "../../runtime/domain/index.ts",
+      "../../runtime/cli.ts",
       "../../plugins/core/internal/resources/index.ts",
       "../../runtime/events/workflow-metadata.ts",
       "../../runtime/thread-metadata.ts",
@@ -116,22 +117,28 @@ Deno.test("createCopilotz returns one frozen factory-created application", async
   try {
     assertEquals(Object.getPrototypeOf(application), Object.prototype);
     assert(Object.isFrozen(application));
-    assert(Object.isFrozen(application.config));
+    assertEquals(Object.keys(application).sort(), ["close", "observe", "send"]);
+    for (const member of ["send", "observe", "close"] as const) {
+      assertEquals(typeof application[member], "function", member);
+    }
     for (
-      const member of [
-        "send",
-        "observe",
-        "close",
+      const removed of [
+        "config",
+        "databaseScope",
+        "events",
+        "collections",
+        "content",
+        "deliveries",
+        "plugins",
         "recover",
-        "maintenance",
+        "engine",
         "shutdown",
-      ] as const
-    ) assertEquals(typeof application[member], "function", member);
-    for (const removed of ["db", "ops", "start", "embeddings", "schema"]) {
+      ]
+    ) {
       assertEquals(removed in application, false, removed);
     }
   } finally {
-    await application.shutdown();
-    await application.shutdown();
+    await application.close();
+    await application.close();
   }
 });

@@ -28,7 +28,7 @@ import {
 import {
   projectActionEvents,
   projectMessages,
-} from "../../runtime/testing/projections.ts";
+} from "../core/testing/projections.ts";
 import {
   asGoalRecord,
   cancelGoal,
@@ -523,9 +523,8 @@ Deno.test("Goals is an ordinary typed plugin with strict data-only ingress", () 
       bytes: new Uint8Array([1, 2, 3]),
       mediaType: "image/png",
       origin: {
-        scope: { type: "request", id: "goal-input" },
-        producer: { type: "client", id: "client" },
-        path: "attachment",
+        type: "request",
+        id: "goal-input",
       },
     },
     sender: { externalId: "client" },
@@ -540,9 +539,8 @@ Deno.test("Goals is an ordinary typed plugin with strict data-only ingress", () 
     type: "image",
     mediaType: "image/png",
     origin: {
-      scope: { type: "request", id: "goal-input" },
-      producer: { type: "client", id: "client" },
-      path: "attachment",
+      type: "request",
+      id: "goal-input",
     },
     dataBase64: "AQID",
   });

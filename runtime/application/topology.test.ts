@@ -1,10 +1,8 @@
 import { message as coreMessage } from "@copilotz/copilotz/core";
 import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
-import {
-  createCopilotzGateway,
-  createCopilotzPersistence,
-  createCopilotzWorker,
-} from "./index.ts";
+import { createCopilotzGateway, createCopilotzWorker } from "./index.ts";
+import { createCopilotz } from "../../create-copilotz.ts";
+import { createCopilotzPersistence } from "@copilotz/copilotz/persistence";
 import { createTestDatabase } from "../testing/ominipg.ts";
 import { listen } from "../adapters/deno/listen.ts";
 import {
@@ -13,11 +11,12 @@ import {
   type ProcessorContext,
 } from "../plugins/index.ts";
 import { defineProcessor } from "../plugins/processor.ts";
-import type { CopilotzDatabase } from "./persistence.ts";
-import { isCopilotzPersistenceError } from "./persistence.ts";
+import type { CopilotzDatabase } from "@copilotz/copilotz/persistence";
+import { isCopilotzPersistenceError } from "@copilotz/copilotz/persistence";
 import { coreCollectionsPlugin } from "../../plugins/core/plugin.ts";
-import { createTestDomainContext } from "../testing/domain-context.ts";
-import { projectMessages } from "../testing/projections.ts";
+import { createTestDomainContext } from "../../plugins/core/testing/context.ts";
+import { projectMessages } from "../../plugins/core/testing/projections.ts";
+import type { StreamOutput } from "../streams/index.ts";
 
 const namespace = "copilotz-topology-test";
 function cascadingPlugin(): AnyCopilotzPlugin {
@@ -112,6 +111,14 @@ Deno.test("Gateway and Worker preserve live output and cascading durable work", 
   } as const;
   const plugin = cascadingPlugin();
   const workerId = "copilotz-topology-worker";
+  let streamOutputTransientCalls = 0;
+  const streamOutputTransient = defineProcessor({
+    id: "topology.stream-output-must-not-be-live",
+    on: [{ eventType: "stream.output" }],
+    handle() {
+      streamOutputTransientCalls += 1;
+    },
+  });
   let accepted = 0;
   let ready = 0;
   let started = 0;
@@ -121,7 +128,11 @@ Deno.test("Gateway and Worker preserve live output and cascading durable work", 
     plugins: [coreCollectionsPlugin, plugin],
     transports: [transport],
     target: { workerId },
-    engine: { retryBaseMs: 0, random: () => 0 },
+    engine: {
+      retryBaseMs: 0,
+      random: () => 0,
+      transientProcessors: [streamOutputTransient],
+    },
   }, {
     onWorkAccepted() {
       accepted += 1;
@@ -146,24 +157,25 @@ Deno.test("Gateway and Worker preserve live output and cascading durable work", 
 
   try {
     await worker.ready;
-    await createTestDomainContext(gateway, namespace).actions.createThread({
-      id: "topology-thread",
-      participants: [{
-        id: "topology-user",
-        externalId: "topology-user",
-        participantType: "human",
-      }, {
-        id: "topology-agent",
-        externalId: "topology-agent",
-        participantType: "agent",
-        agentId: "topology-agent",
-      }, {
-        id: "topology-second-agent",
-        externalId: "topology-second-agent",
-        participantType: "agent",
-        agentId: "topology-second-agent",
-      }],
-    });
+    await createTestDomainContext(gateway.application, namespace).actions
+      .createThread({
+        id: "topology-thread",
+        participants: [{
+          id: "topology-user",
+          externalId: "topology-user",
+          participantType: "human",
+        }, {
+          id: "topology-agent",
+          externalId: "topology-agent",
+          participantType: "agent",
+          agentId: "topology-agent",
+        }, {
+          id: "topology-second-agent",
+          externalId: "topology-second-agent",
+          participantType: "agent",
+          agentId: "topology-second-agent",
+        }],
+      });
     const run = await gateway.send(coreMessage({
       thread: "topology-thread",
       participant: "topology-user",
@@ -182,8 +194,22 @@ Deno.test("Gateway and Worker preserve live output and cascading durable work", 
       observed.filter((event) => event.type === "stream.output").length,
       1,
     );
+    const stream = observed.find((event) =>
+      event.type === "stream.output"
+    ) as StreamOutput;
+    assertEquals("threadId" in stream, false);
+    assertEquals(stream.namespace, namespace);
+    assertEquals(stream.streamId, "topology-first-stream");
+    assertEquals(stream.mediaType, "text/plain");
+    assertEquals(stream.kind, "text");
+    assertEquals(stream.role, "assistant");
     assertEquals(
-      (await projectMessages(gateway, namespace, "topology-thread"))
+      await new Response(stream.payload).text(),
+      "first worker reply",
+    );
+    assertEquals(streamOutputTransientCalls, 0);
+    assertEquals(
+      (await projectMessages(gateway.application, namespace, "topology-thread"))
         .length,
       3,
     );
@@ -191,8 +217,6 @@ Deno.test("Gateway and Worker preserve live output and cascading durable work", 
     assertEquals(accepted, 3);
     assertEquals(ready, 1);
     assertEquals(started, 3);
-    assertEquals("execution" in gateway, false);
-    assertEquals("engine" in gateway, false);
   } finally {
     await Promise.allSettled([
       gateway.shutdown("topology test complete"),
@@ -238,16 +262,16 @@ Deno.test("Gateway bounds persistence outages as retryable HTTP 503 responses", 
     },
     databaseRecovery: { waitMs: 5, retryAfterSeconds: 3 },
   });
-  const gateway = await createCopilotzGateway({
+  const gateway = await createCopilotz({
+    role: "gateway",
     namespace,
     plugins: [coreCollectionsPlugin],
     persistence,
   });
   try {
-    assertEquals(gateway.config.databaseOwnership, "injected");
     failNextQuery = true;
     const failure = await assertRejects(() =>
-      projectMessages(gateway, namespace, "missing-thread")
+      persistence.database.query("SELECT 1")
     );
     assert(isCopilotzPersistenceError(failure));
     assertEquals(failure.code, "persistence_indeterminate");
@@ -260,7 +284,7 @@ Deno.test("Gateway bounds persistence outages as retryable HTTP 503 responses", 
     assertEquals((await response.json()).error.code, "persistence_unavailable");
     assertEquals(generation, 2);
   } finally {
-    await gateway.shutdown();
+    await gateway.close();
     await persistence.close();
     await database.close();
   }
@@ -364,24 +388,25 @@ Deno.test({
 
     try {
       await worker.ready;
-      await createTestDomainContext(gateway, namespace).actions.createThread({
-        id: "topology-thread",
-        participants: [{
-          id: "topology-user",
-          externalId: "topology-user",
-          participantType: "human",
-        }, {
-          id: "topology-agent",
-          externalId: "topology-agent",
-          participantType: "agent",
-          agentId: "topology-agent",
-        }, {
-          id: "topology-second-agent",
-          externalId: "topology-second-agent",
-          participantType: "agent",
-          agentId: "topology-second-agent",
-        }],
-      });
+      await createTestDomainContext(gateway.application, namespace).actions
+        .createThread({
+          id: "topology-thread",
+          participants: [{
+            id: "topology-user",
+            externalId: "topology-user",
+            participantType: "human",
+          }, {
+            id: "topology-agent",
+            externalId: "topology-agent",
+            participantType: "agent",
+            agentId: "topology-agent",
+          }, {
+            id: "topology-second-agent",
+            externalId: "topology-second-agent",
+            participantType: "agent",
+            agentId: "topology-second-agent",
+          }],
+        });
       const run = await gateway.send(coreMessage({
         thread: "topology-thread",
         participant: "topology-user",
@@ -398,6 +423,16 @@ Deno.test({
       assertEquals(
         observed.filter((event) => event.type === "stream.output").length,
         1,
+      );
+      const stream = observed.find((event) =>
+        event.type === "stream.output"
+      ) as StreamOutput;
+      assertEquals("threadId" in stream, false);
+      assertEquals(stream.namespace, namespace);
+      assertEquals(stream.streamId, "topology-first-stream");
+      assertEquals(
+        await new Response(stream.payload).text(),
+        "first worker reply",
       );
       assertEquals(worker.snapshot().transport, "websocket");
     } finally {

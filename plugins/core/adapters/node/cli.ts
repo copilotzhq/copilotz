@@ -6,7 +6,7 @@ import {
   type InteractiveCliIo,
   type InteractiveCliOptions,
   startInteractiveCli as startPortableInteractiveCli,
-} from "../../cli.ts";
+} from "../cli.ts";
 
 const COMMANDS = [
   "/help",

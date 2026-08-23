@@ -18,7 +18,7 @@ import {
   coreToolPlanMetadata,
   workflowMetadata,
 } from "@copilotz/copilotz/core";
-import type { ParticipantInput } from "@copilotz/copilotz/domain";
+import type { ParticipantInput } from "@copilotz/copilotz/core";
 import { deriveWorkflowId } from "@copilotz/copilotz/events";
 import { asGoalRecord } from "./collection.ts";
 import { finalToolStep, resolveGoalCausality } from "./causality.ts";
@@ -374,9 +374,8 @@ async function executeStartGoal(
     {
       operationKey: `goal:${goalId}:target:1:content`,
       origin: {
-        scope: { type: "goal", id: goalId },
-        producer: { type: "goal", id: goalId },
-        path: "target/1/input",
+        type: "goal",
+        id: goalId,
       },
     },
   );
@@ -861,9 +860,8 @@ async function prepareJudgePrompt(
   return await context.content.prepare(prompt, {
     operationKey: `goal:${goal.id}:judge:${goal.turn}:content`,
     origin: {
-      scope: { type: "goal", id: goal.id },
-      producer: { type: "goal", id: goal.id },
-      path: `judge/${goal.turn}/input`,
+      type: "goal",
+      id: goal.id,
     },
   });
 }

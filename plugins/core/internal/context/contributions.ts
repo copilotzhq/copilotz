@@ -7,7 +7,7 @@ import type {
   ConversationMessage,
   ConversationThread,
   Participant,
-} from "@copilotz/copilotz/domain";
+} from "../../contracts.ts";
 
 function requiredText(value: unknown, label: string): string {
   const normalized = typeof value === "string" ? value.trim() : "";

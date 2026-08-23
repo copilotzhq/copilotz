@@ -1,7 +1,6 @@
 export { createCopilotzEngine } from "./engine.ts";
 export type {
   CopilotzEngine,
-  CopilotzEngineAttachmentOptions,
   CopilotzEngineDatabaseScope,
   CopilotzEngineDispatchReport,
   CopilotzEngineExecutionOptions,

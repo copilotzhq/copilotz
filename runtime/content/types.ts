@@ -9,14 +9,8 @@ export type AssetState =
   | "abandoned"
   | "deleted";
 
-/** Immutable provenance used for storage layout and operational correlation. */
-export type AssetOrigin = Readonly<{
-  /** Runtime-neutral graph identity that scoped the producing work. */
-  scope: Readonly<{ type: string; id: string }>;
-  producer: Readonly<{ type: string; id: string }>;
-  path?: string;
-  inferred?: boolean;
-}>;
+/** Opaque provenance identity used for storage layout and correlation. */
+export type AssetOrigin = Readonly<{ type: string; id: string }>;
 
 /** Replay authority for one Asset materialized by a stable graph mutation. */
 export type AssetManifestEntry = Readonly<{

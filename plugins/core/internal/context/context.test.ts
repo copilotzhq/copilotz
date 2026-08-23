@@ -3,7 +3,7 @@ import type { AgentResource } from "../../agent.ts";
 import type {
   ConversationThread,
   Participant,
-} from "@copilotz/copilotz/domain";
+} from "../../contracts.ts";
 import type { ProcessorContext } from "@copilotz/copilotz/plugins";
 import {
   collectContextContributions,

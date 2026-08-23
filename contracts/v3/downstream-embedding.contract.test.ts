@@ -1,18 +1,18 @@
 import { message as coreMessage } from "@copilotz/copilotz/core";
 import { assertEquals, assertExists } from "@std/assert";
+import { createCopilotz } from "../../index.ts";
 import {
-  createCopilotzGateway,
-  createCopilotzWorker,
   definePlugin,
   defineProcessor,
   type ProcessorContext,
-} from "../../index.ts";
+} from "@copilotz/copilotz/plugins";
 import { defineModel, type LlmAdapter } from "@copilotz/copilotz/llm";
-import { createTestDomainContext } from "../../runtime/testing/domain-context.ts";
-import { projectMessages } from "../../runtime/testing/projections.ts";
+import { createTestDomainContext } from "../../plugins/core/testing/context.ts";
+import { projectMessages } from "../../plugins/core/testing/projections.ts";
 import { createTestDatabase } from "../../runtime/testing/ominipg.ts";
-import { loadMessageRecord } from "../../runtime/engine/collection-graph.ts";
+import { loadMessageRecord } from "@copilotz/copilotz/core";
 import { coreCollectionsPlugin } from "../../plugins/core/plugin.ts";
+import { createCopilotzApplication } from "../../runtime/application/application.ts";
 import { createHypervisor } from "../../dependencies/oxian-hypervisor.ts";
 import { createWorker } from "../../dependencies/oxian-worker.ts";
 
@@ -89,7 +89,32 @@ Deno.test("downstream app embeds Copilotz with app-owned database, Hypervisor, a
   });
   const plugin = migratedApplicationPlugin();
   const workerId = "downstream-copilotz";
-  const application = await createCopilotzGateway({
+  const authoring = await createCopilotzApplication({
+    database,
+    namespace: NAMESPACE,
+    plugins: [coreCollectionsPlugin, plugin],
+  });
+  await createTestDomainContext(authoring, NAMESPACE).actions.createThread({
+    id: "downstream-thread",
+    namespace: NAMESPACE,
+    participants: [
+      {
+        id: "downstream-user",
+        externalId: "user-1",
+        participantType: "human",
+      },
+      {
+        id: "downstream-agent",
+        externalId: "support",
+        participantType: "agent",
+        agentId: "support",
+      },
+    ],
+  });
+  await authoring.shutdown();
+
+  const application = await createCopilotz({
+    role: "gateway",
     database,
     namespace: NAMESPACE,
     plugins: [coreCollectionsPlugin, plugin],
@@ -100,7 +125,8 @@ Deno.test("downstream app embeds Copilotz with app-owned database, Hypervisor, a
       random: () => 0,
     },
   });
-  const worker = await createCopilotzWorker({
+  const worker = await createCopilotz({
+    role: "worker",
     database,
     namespace: NAMESPACE,
     plugins: [coreCollectionsPlugin, plugin],
@@ -111,33 +137,13 @@ Deno.test("downstream app embeds Copilotz with app-owned database, Hypervisor, a
   });
   try {
     await worker.ready;
-    assertEquals(application.config.databaseOwnership, "injected");
-    assertEquals("engine" in application, false);
-    assertEquals("execution" in application, false);
-    assertEquals(
-      typeof (application.plugins.adapters.llm.downstreamInjected as LlmAdapter)
-        .call,
-      "function",
-    );
-    await createTestDomainContext(application, NAMESPACE).actions.createThread(
-      {
-        id: "downstream-thread",
-        namespace: NAMESPACE,
-        participants: [
-          {
-            id: "downstream-user",
-            externalId: "user-1",
-            participantType: "human",
-          },
-          {
-            id: "downstream-agent",
-            externalId: "support",
-            participantType: "agent",
-            agentId: "support",
-          },
-        ],
-      },
-    );
+    assertEquals(Object.keys(application).sort(), [
+      "close",
+      "fetch",
+      "observe",
+      "send",
+    ]);
+    assertEquals(Object.keys(worker).sort(), ["close", "closed", "ready"]);
     const run = await application.send(coreMessage({
       thread: "downstream-thread",
       participant: "downstream-user",
@@ -145,15 +151,21 @@ Deno.test("downstream app embeds Copilotz with app-owned database, Hypervisor, a
       content: "hello",
     }));
     await run.done;
+    const inspector = await createCopilotzApplication({
+      database,
+      namespace: NAMESPACE,
+      plugins: [coreCollectionsPlugin, plugin],
+    });
     assertEquals(
-      (await projectMessages(application, NAMESPACE, "downstream-thread"))
+      (await projectMessages(inspector, NAMESPACE, "downstream-thread"))
         .length,
       2,
     );
+    await inspector.shutdown();
   } finally {
     await Promise.allSettled([
-      application.shutdown(),
-      worker.stop(),
+      application.close(),
+      worker.close(),
     ]);
   }
 

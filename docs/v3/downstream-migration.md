@@ -24,16 +24,16 @@ including ID-only dispatch payloads and app-owned worker lifetime.
 
 | v0.x integration                                                                     | v3 destination                                                                                             |
 | ------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------- |
-| `createCopilotz({...legacy config})`                                                 | `createCopilotz()` for embedded use or explicit `createCopilotzGateway()` + `createCopilotzWorker()` roles |
+| `createCopilotz({...legacy config})`                                                 | `createCopilotz()` for embedded use or `createCopilotz({ role: "gateway" })` / `createCopilotz({ role: "worker" })` |
 | `Copilotz` service type                                                              | inferred `CopilotzApplication` factory product                                                             |
 | resource directories and `loadResources()`                                           | `definePlugin({ manifest, resources })`, with an injected module resolver for package/path sources         |
 | `ProcessorDeps`, priority, `shouldProcess`, replacement events, and `producedEvents` | independent `defineProcessor()` subscriptions using typed context and collection/domain mutations          |
 | uppercase queue/live events                                                          | semantic durable events and ephemeral lowercase deltas                                                     |
 | `withSchema()` ambient context                                                       | explicit namespace/schema on application or operation scope                                                |
 | direct database operations and `CopilotzDb`                                          | typed conversation, collection, event, content, workflow, and admin capabilities                           |
-| `withApp()`                                                                          | `gateway.fetch`                                                                                            |
+| `withApp()`                                                                          | `createCopilotz({ role: "gateway" }).fetch`                                                             |
 | legacy asset store and `resolveAsset` plumbing                                       | canonical content preparer/resolver and asset references                                                   |
-| `start().closed`                                                                     | embedding application owns its server lifecycle; Copilotz exposes idempotent `shutdown()`                  |
+| `start().closed`                                                                     | embedding application owns its server lifecycle; Copilotz exposes idempotent `close()`                     |
 
 ## First-Party Status
 

@@ -1,32 +1,114 @@
+import { createEventNativeApp } from "./server/event-native.ts";
+import type { CreateEventNativeAppOptions } from "./server/event-native.ts";
+import {
+  createEventNativeFetchHandler,
+  type CreateEventNativeFetchHandlerOptions,
+} from "./server/fetch.ts";
 import { createCopilotz as createEmbeddedCopilotz } from "./runtime/application/copilotz.ts";
-import type { CreateCopilotzOptions as RuntimeCreateCopilotzOptions } from "./runtime/application/copilotz.ts";
-import { createCopilotzGateway as createGateway } from "./runtime/application/gateway.ts";
-import type { CreateCopilotzGatewayOptions as RuntimeCreateCopilotzGatewayOptions } from "./runtime/application/gateway.ts";
-import { createCopilotzWorker as createWorker } from "./runtime/application/worker.ts";
-import type { CreateCopilotzWorkerOptions as RuntimeCreateCopilotzWorkerOptions } from "./runtime/application/worker.ts";
+import type { CreateCopilotzOptions as RuntimeEmbeddedOptions } from "./runtime/application/copilotz.ts";
+import {
+  createCopilotzGateway as createGateway,
+  createCopilotzWorker as createWorker,
+} from "./runtime/application/index.ts";
+import type {
+  CreateCopilotzGatewayOptions as RuntimeGatewayOptions,
+  CreateCopilotzWorkerOptions as RuntimeWorkerOptions,
+} from "./runtime/application/index.ts";
+import type { CopilotzApplication } from "./runtime/application/types.ts";
 
-export type CreateCopilotzOptions = RuntimeCreateCopilotzOptions;
-export type CreateCopilotzGatewayOptions = RuntimeCreateCopilotzGatewayOptions;
-export type CreateCopilotzWorkerOptions = RuntimeCreateCopilotzWorkerOptions;
+type EmbeddedOptions = RuntimeEmbeddedOptions & Readonly<{ role?: "embedded" }>;
 
-/** Composes exactly the plugins, resources, and adapters supplied by the caller. */
+type GatewayOptions =
+  & RuntimeGatewayOptions
+  & Readonly<{
+    role: "gateway";
+    /** Fetch projection options installed at the package composition root. */
+    http?: CreateEventNativeFetchHandlerOptions;
+    /** Trusted authorization boundary for each request's physical schema. */
+    resolveDatabaseSchema?:
+      CreateEventNativeAppOptions["resolveDatabaseSchema"];
+  }>;
+
+type WorkerOptions = RuntimeWorkerOptions & Readonly<{ role: "worker" }>;
+
+/** One discriminated factory contract for embedded, Gateway, and Worker roles. */
+export type CreateCopilotzOptions =
+  | EmbeddedOptions
+  | GatewayOptions
+  | WorkerOptions;
+
+type GatewayApplication =
+  & CopilotzApplication
+  & Readonly<{
+    fetch(request: Request): Promise<Response>;
+  }>;
+
+type WorkerFactoryResult = Readonly<{
+  ready: Promise<void>;
+  closed: Promise<void>;
+  close(reason?: string): Promise<void>;
+}>;
+
 export function createCopilotz(
+  options: GatewayOptions,
+): Promise<GatewayApplication>;
+export function createCopilotz(
+  options: WorkerOptions,
+): Promise<WorkerFactoryResult>;
+export function createCopilotz(
+  options?: EmbeddedOptions,
+): Promise<CopilotzApplication>;
+/** Composes exactly the plugins, resources, and adapters supplied by the caller. */
+export async function createCopilotz(
   options: CreateCopilotzOptions = {},
-  lifecycle?: Parameters<typeof createEmbeddedCopilotz>[1],
-): ReturnType<typeof createEmbeddedCopilotz> {
-  return createEmbeddedCopilotz(options, lifecycle);
-}
+): Promise<CopilotzApplication | GatewayApplication | WorkerFactoryResult> {
+  if (options.role === "worker") {
+    const { role: _role, ...workerOptions } = options;
+    const worker = await createWorker(workerOptions);
+    return Object.freeze({
+      ready: worker.ready.then(() => undefined),
+      closed: worker.closed.then(() => undefined),
+      close: (reason?: string) => worker.stop(reason),
+    });
+  }
 
-export function createCopilotzGateway(
-  options: CreateCopilotzGatewayOptions = {},
-  lifecycle?: Parameters<typeof createGateway>[1],
-): ReturnType<typeof createGateway> {
-  return createGateway(options, lifecycle);
-}
+  if (options.role === "gateway") {
+    const {
+      role: _role,
+      http,
+      resolveDatabaseSchema,
+      ...gatewayOptions
+    } = options;
+    const gateway = await createGateway(gatewayOptions);
+    try {
+      const native = createEventNativeApp(gateway.application, {
+        resolveDatabaseSchema,
+      });
+      const fetch = createEventNativeFetchHandler(
+        Object.freeze({
+          resources: native.resources,
+          async handle(request) {
+            await gateway.admit();
+            return await native.handle(request);
+          },
+        }),
+        { basePath: "/v3", ...(http ?? {}) },
+      );
+      gateway.installFetchFallback(fetch);
+      return Object.freeze({
+        send: gateway.send,
+        observe: gateway.observe,
+        close: gateway.close,
+        fetch,
+      });
+    } catch (error) {
+      await gateway.close("copilotz_gateway_initialization_failed").catch(() =>
+        undefined
+      );
+      throw error;
+    }
+  }
 
-export function createCopilotzWorker(
-  options: CreateCopilotzWorkerOptions,
-  lifecycle?: Parameters<typeof createWorker>[1],
-): ReturnType<typeof createWorker> {
-  return createWorker(options, lifecycle);
+  const { role: _role, ...embeddedOptions } = options;
+  return await createEmbeddedCopilotz(embeddedOptions);
 }

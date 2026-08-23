@@ -1,6 +1,7 @@
 import { assert, assertEquals, assertRejects, assertThrows } from "@std/assert";
 
 import {
+  assetBodyKey,
   assetIdFromRef,
   type AssetRepository,
   type ContentError,
@@ -12,6 +13,18 @@ import {
   digestContent,
   formatAssetRef,
 } from "./index.ts";
+
+Deno.test("asset body keys always include one opaque origin", () => {
+  assertEquals(
+    assetBodyKey({
+      prefix: "copilotz",
+      databaseSchema: "content",
+      namespace: "tenant-a",
+      assetId: "asset-a",
+    }),
+    "copilotz/schemas/content/namespaces/tenant-a/origins/namespace/tenant-a/assets/asset-a",
+  );
+});
 import { definePlugin } from "../plugins/index.ts";
 
 function createFixture() {

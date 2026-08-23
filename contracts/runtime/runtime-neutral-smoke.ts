@@ -1,8 +1,5 @@
-import {
-  createMemoryAssetRepository,
-  createPluginRegistry,
-  definePlugin,
-} from "../../index.ts";
+import { createMemoryAssetRepository } from "@copilotz/copilotz/content";
+import { createPluginRegistry, definePlugin } from "@copilotz/copilotz/plugins";
 import {
   defineModel,
   type LlmAdapter,

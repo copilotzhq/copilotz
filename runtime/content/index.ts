@@ -50,19 +50,6 @@ export type {
   ProgressiveBodyFollower,
   ProgressiveBodyWriter,
 } from "./progressive.ts";
-export { createContentStreamRuntime } from "./stream.ts";
-export type {
-  ContentStreamAbortInput,
-  ContentStreamAppendInput,
-  ContentStreamAppendResult,
-  ContentStreamCloseInput,
-  ContentStreamFollowInput,
-  ContentStreamOpened,
-  ContentStreamOpenInput,
-  ContentStreamRuntime,
-  ContentStreamWriter,
-  CreateContentStreamRuntimeOptions,
-} from "./stream.ts";
 export {
   EMPTY_PROGRESSIVE_BODY_MAINTENANCE,
   maintainProgressiveBodies,

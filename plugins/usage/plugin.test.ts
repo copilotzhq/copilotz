@@ -3,8 +3,8 @@ import {
   createUsageWorkflowPlugin,
   type CreateUsageWorkflowPluginOptions,
 } from "./index.ts";
-import { createCopilotz } from "../../index.ts";
-import { createTestDomainContext } from "../../runtime/testing/domain-context.ts";
+import { createCopilotzApplication } from "../../runtime/application/application.ts";
+import { createTestDomainContext } from "../core/testing/context.ts";
 import {
   createTestDatabase,
   type TestDatabase,
@@ -297,7 +297,7 @@ Deno.test("usage workflow is a factory-created plugin and can disable metering",
 });
 
 Deno.test("package-root composes an explicitly supplied usage plugin", async () => {
-  const application = await createCopilotz({
+  const application = await createCopilotzApplication({
     namespace: "usage-root",
     plugins: [createUsageWorkflowPlugin({ enabled: false })],
   });

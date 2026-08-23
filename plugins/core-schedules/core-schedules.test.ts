@@ -10,7 +10,7 @@ import {
   defineProcessor,
   type ProcessorContext,
 } from "../../runtime/plugins/index.ts";
-import { createTestDomainContext } from "../../runtime/testing/domain-context.ts";
+import { createTestDomainContext } from "../core/testing/context.ts";
 import {
   createTestDatabase,
   type TestDatabase,
@@ -18,7 +18,7 @@ import {
 import {
   projectMessages,
   projectThreads,
-} from "../../runtime/testing/projections.ts";
+} from "../core/testing/projections.ts";
 import { createScheduledJob, scheduleTick } from "../schedules/index.ts";
 import {
   CORE_SCHEDULED_MESSAGE_PAYLOAD_TYPE,

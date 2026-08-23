@@ -6,12 +6,12 @@ import type {
   ConversationMessage,
   ConversationThread,
   Participant,
-} from "../runtime/domain/index.ts";
+} from "@copilotz/copilotz/core";
 import {
   mapMessageRecord,
   mapParticipantRecord,
   mapThreadRecord,
-} from "../runtime/engine/collection-graph.ts";
+} from "@copilotz/copilotz/core";
 
 function strings(value: unknown): readonly string[] {
   return Array.isArray(value)

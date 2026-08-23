@@ -21,7 +21,7 @@ import {
   mapMessageRecord,
   mapParticipantRecord,
   mapThreadRecord,
-} from "../../runtime/engine/collection-graph.ts";
+} from "@copilotz/copilotz/core";
 import { createDeliveryExecutor } from "../../runtime/execution/index.ts";
 import { createTestProcessorContext } from "../../runtime/testing/processor-context.ts";
 import type { KnowledgeDocument } from "../../plugins/knowledge/index.ts";

@@ -266,41 +266,29 @@ function databaseBytes(assetId: string, row: AssetBodyRow): Uint8Array {
     : new TextEncoder().encode(row.body);
 }
 
-function storedOrigin(value: unknown): AssetOrigin | undefined {
+function storedOrigin(
+  value: unknown,
+  namespace: string,
+): AssetOrigin {
   const fields = record(value);
+  if (
+    Object.keys(fields).length === 2 && typeof fields.type === "string" &&
+    fields.type.trim() && typeof fields.id === "string" && fields.id.trim()
+  ) return { type: fields.type.trim(), id: fields.id.trim() };
   const scope = record(fields.scope);
-  const producer = record(fields.producer);
-  if (typeof producer.type !== "string" || typeof producer.id !== "string") {
-    return undefined;
-  }
   if (scope.type === "thread" && typeof scope.id === "string") {
-    return {
-      scope: { type: "thread", id: scope.id },
-      producer: { type: producer.type, id: producer.id },
-      ...(typeof fields.path === "string" ? { path: fields.path } : {}),
-      ...(fields.inferred === true ? { inferred: true } : {}),
-    };
+    const id = scope.id.trim();
+    if (id) return { type: "thread", id };
   }
   if (
     scope.type === "collection" && typeof scope.collection === "string" &&
     typeof scope.id === "string"
   ) {
-    return {
-      scope: { type: scope.collection, id: scope.id },
-      producer: { type: producer.type, id: producer.id },
-      ...(typeof fields.path === "string" ? { path: fields.path } : {}),
-      ...(fields.inferred === true ? { inferred: true } : {}),
-    };
+    const type = scope.collection.trim();
+    const id = scope.id.trim();
+    if (type && id) return { type, id };
   }
-  if (scope.type === "namespace" && typeof scope.id === "string") {
-    return {
-      scope: { type: "namespace", id: scope.id },
-      producer: { type: producer.type, id: producer.id },
-      ...(typeof fields.path === "string" ? { path: fields.path } : {}),
-      ...(fields.inferred === true ? { inferred: true } : {}),
-    };
-  }
-  return undefined;
+  return { type: "namespace", id: namespace };
 }
 
 async function inferOrigins(
@@ -311,9 +299,10 @@ async function inferOrigins(
   const origins = new Map<string, AssetOrigin>();
   const unresolved: AssetRow[] = [];
   for (const row of rows) {
-    const existing = storedOrigin(record(row.data).origin);
-    if (existing) origins.set(row.id, existing);
-    else unresolved.push(row);
+    const origin = record(row.data).origin;
+    if (origin !== undefined) {
+      origins.set(row.id, storedOrigin(origin, row.namespace));
+    } else unresolved.push(row);
   }
   if (unresolved.length === 0) return origins;
   const owners = await session.query<
@@ -335,9 +324,8 @@ async function inferOrigins(
     const found = ownersByAsset.get(row.id);
     if (!found) {
       origins.set(row.id, {
-        scope: { type: "namespace", id: row.namespace },
-        producer: { type: "asset", id: row.id },
-        inferred: true,
+        type: "namespace",
+        id: row.namespace,
       });
       continue;
     }
@@ -346,11 +334,8 @@ async function inferOrigins(
       ? data.threadId
       : undefined;
     origins.set(row.id, {
-      scope: threadId
-        ? { type: "thread", id: threadId }
-        : { type: found.type, id: found.id },
-      producer: { type: found.type, id: found.id },
-      inferred: true,
+      type: threadId ? "thread" : found.type,
+      id: threadId ?? found.id,
     });
   }
   return origins;

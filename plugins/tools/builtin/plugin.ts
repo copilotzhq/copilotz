@@ -8,7 +8,7 @@ import {
   type ContentRef,
   formatAssetRef,
 } from "@copilotz/copilotz/content";
-import type { ParticipantInput } from "@copilotz/copilotz/domain";
+import type { ParticipantInput } from "@copilotz/copilotz/core";
 import { type CopilotzPlugin, definePlugin } from "@copilotz/copilotz/plugins";
 import {
   type ActionContext,

@@ -4,12 +4,12 @@ import type {
   ConversationMessage,
   ConversationThread,
   Participant,
-} from "@copilotz/copilotz/domain";
+} from "../../contracts.ts";
 import {
   listThreadMessageRecords,
   loadThreadRecord,
   mapParticipantRecord,
-} from "@copilotz/copilotz/engine";
+} from "../../projections.ts";
 import type {
   LlmJsonObject,
   LlmRequest,

@@ -12,7 +12,7 @@ import type {
   ConversationMessage,
   ConversationThread,
   Participant,
-} from "@copilotz/copilotz/domain";
+} from "@copilotz/copilotz/core";
 import {
   type ActionCallOptions,
   type ActionContext,
@@ -26,7 +26,7 @@ import {
   listThreadMessageRecords,
   loadParticipantRecord,
   loadThreadRecord,
-} from "@copilotz/copilotz/engine";
+} from "@copilotz/copilotz/core";
 import {
   type LlmCallInput,
   type LlmCallOutput,

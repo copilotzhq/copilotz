@@ -710,25 +710,33 @@ Provider-specific codecs, VAD, and production audio providers are P2.
 
 ### F21 — Goals and simulation
 
-**Current contract:** `goal()` drives bounded multi-turn journeys with a lead
-agent, streams progress/results, supports stopping, and is used for application
-QA. The lead thread is currently private.
+**Current contract:** `createGoalsPlugin()` composes immutable named
+`resources.goals`, one `goal` Collection, JSON-safe Actions, and durable
+Processors. `startGoal()` and `cancelGoal()` produce typed input envelopes for
+the ordinary application `send()` path; `observe()` exposes their causal Events
+and `close()` ends the application. `send(...).done` means causal settlement
+only. A terminal Collection record is projected with `goalResult()`; the generic
+Collection GET remains the retrieval path rather than a Goal handle or
+process-local result promise.
 
-**Disposition:** Keep and Adapt, P0. Goal remains a first-class simulation
-primitive exposed by the factory-created application. Target, lead, and judge
-phases use ordinary event-native `run()` scopes and Oxian deliveries. The lead
-thread remains deliberately separate from the tested conversation, and receives
-only the target's final canonical message assets—not tool-result or reasoning
-payloads. Goal stream items wrap canonical events with phase/turn coordinates
-instead of mutating immutable events or reintroducing uppercase schemas.
-Declared agent resource IDs replace inline lead-agent closures so execution can
-remain identity-based across in-process and hypervisor placement.
+**Disposition:** Keep and Adapt, P0. Target, lead, and optional judge phases are
+driven only by durable Message, Collection, LLM, and configured-Action lifecycle
+facts. The Goal record snapshots selected resource and Agent identities, phase,
+turn, awaited causal cursor, private thread/participant IDs, transcript Message
+coordinates, cancellation, assessments, metrics, and terminal result refs.
+Configured stop/evaluate aliases run as durable root Actions whose receipts are
+applied idempotently, including restart recovery and a bounded cancelled receipt
+retry. Lead and judge threads remain participant-private. Phase handoff reuses
+only the accepted final assistant Message's canonical ContentRefs—never Tool,
+reasoning, or provider-trace content.
 
-**Coverage:** `plugins/goals/goal.test.ts` covers bounded turns, stop/result
-reporting, canonical asset handoff, tool-result isolation, judge runs,
-cancellation, declared agent identities, lowercase stream items, factory style,
-and runtime neutrality. Goal documentation/examples and Mobizap's QA scripts
-remain downstream release gates.
+**Coverage:** `plugins/goals/goal.test.ts` covers strict typed ingress and
+resource aliases, bounded turns, exact final-asset handoff, consecutive
+Tool-plan ancestry under reordered delivery, LLM failure/cancellation, explicit
+cancellation races, private lead/judge visibility, one-shot stop/evaluation,
+invalid receipt/report hardening, bounded cancelled Action attempts, in-flight
+database restart recovery, durable terminal projection, and duplicate/late
+ingress. Goal examples and Mobizap's QA scripts remain downstream release gates.
 
 ### F22 — Scheduled and background work
 

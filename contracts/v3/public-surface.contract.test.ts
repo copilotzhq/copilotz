@@ -186,7 +186,15 @@ Deno.test("v3 package subpaths expose cohesive factories", () => {
   ]);
   assertEquals(typeof llm.callLlmAction, "object");
   assertEquals(typeof llm.llmPlugin, "object");
-  assertFunctions(goals, ["createGoalRuntime"]);
+  assertFunctions(goals, [
+    "createGoalsPlugin",
+    "defineGoal",
+    "startGoal",
+    "cancelGoal",
+    "goalResult",
+  ]);
+  assertEquals(typeof goals.goalCollection, "object");
+  assertEquals("createGoalRuntime" in goals, false);
   assertFunctions(usage, ["createUsageWorkflowPlugin"]);
   assertEquals(typeof usage.usageCollection, "object");
   assertFunctions(schedules, [

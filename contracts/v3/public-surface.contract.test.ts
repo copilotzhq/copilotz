@@ -9,7 +9,7 @@ import * as events from "../../runtime/events/index.ts";
 import * as plugins from "../../runtime/plugins/index.ts";
 import * as persistence from "../../runtime/persistence/index.ts";
 import * as server from "../../server/index.ts";
-import * as migration from "../../migration/v1/index.ts";
+import * as migration from "../../migration/v4/index.ts";
 import * as builtinTools from "../../plugins/tools/builtin/plugin.ts";
 import * as denoTools from "../../plugins/tools/deno/index.ts";
 import * as financeTools from "../../plugins/tools/finance/plugin.ts";
@@ -188,7 +188,7 @@ Deno.test("v3 package subpaths expose cohesive factories", () => {
   assertFunctions(actions, ["defineAction"]);
 });
 
-Deno.test("server and migration remain explicit bounded subpaths", () => {
+Deno.test("server and the single published-data migration remain explicit bounded subpaths", () => {
   for (
     const removed of [
       "withApp",
@@ -200,5 +200,5 @@ Deno.test("server and migration remain explicit bounded subpaths", () => {
       "createV1RouteAdapter",
     ]
   ) assertEquals(removed in server, false, removed);
-  assertFunctions(migration, ["upgradeV1Schema", "upgradeV1Schemas"]);
+  assertFunctions(migration, ["migrateToV4"]);
 });

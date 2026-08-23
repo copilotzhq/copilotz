@@ -325,7 +325,6 @@ export async function rebuildNamespaceProjections(
     `LOCK TABLE ${store.tables.nodes}, ${store.tables.edges}
      IN ACCESS EXCLUSIVE MODE`,
   );
-  const events = await loadNamespaceEvents(executor, store, namespace);
   const context: EventMutationContext = {
     transaction: executor,
     tables: store.tables,
@@ -355,26 +354,43 @@ export async function rebuildNamespaceProjections(
     );
   }
 
-  const bodies = new Map<string, unknown>();
   const bodyFor = async (event: DurableEvent): Promise<unknown | undefined> => {
-    if (bodies.has(event.id)) return bodies.get(event.id);
     const payload = event.payload && typeof event.payload === "object" &&
         !Array.isArray(event.payload)
       ? event.payload as Record<string, unknown>
       : {};
     if (!payload.dataRef) return undefined;
-    const body = await readEventBody<unknown>(
+    return await readEventBody<unknown>(
       context,
       namespace,
       eventDataRef(event.payload),
     );
-    bodies.set(event.id, body);
-    return body;
   };
-  for (const event of events) {
-    if (!event.subject || event.subject.type === "asset") continue;
+  const eachEvent = async (
+    visit: (event: DurableEvent) => Promise<void>,
+  ): Promise<void> => {
+    let afterPosition: string | undefined;
+    while (true) {
+      const page = await store.listEvents({
+        namespace,
+        ...(afterPosition ? { afterPosition } : {}),
+        limit: replayPageSize,
+      }, executor);
+      for (const event of page) await visit(event);
+      if (page.length < replayPageSize) return;
+      const next = page.at(-1)?.position;
+      if (!next || next === afterPosition) {
+        throw new Error("Projection rebuild pagination did not advance.");
+      }
+      afterPosition = next;
+    }
+  };
+  // First bounded pass rejects an unknown collection before clearing a single
+  // projection row. A second bounded pass below performs the actual replay.
+  await eachEvent(async (event) => {
+    if (!event.subject || event.subject.type === "asset") return;
     if (byName.has(event.subject.type) || isRelationLifecycleEvent(event)) {
-      continue;
+      return;
     }
     const body = await bodyFor(event);
     if (isCollectionEventBody(body)) {
@@ -382,7 +398,7 @@ export async function rebuildNamespaceProjections(
         `Namespace rebuild is missing Collection definition '${event.subject.type}'.`,
       );
     }
-  }
+  });
 
   await executor.query(
     `DELETE FROM ${store.tables.edges} WHERE namespace = $1`,
@@ -392,7 +408,7 @@ export async function rebuildNamespaceProjections(
     `DELETE FROM ${store.tables.nodes} WHERE namespace = $1`,
     [namespace],
   );
-  for (const event of events) {
+  await eachEvent(async (event) => {
     if (isRelationLifecycleEvent(event)) {
       const body = await bodyFor(event) as GraphRelationEventBody;
       if (
@@ -406,23 +422,23 @@ export async function rebuildNamespaceProjections(
         );
       }
       await projectGraphRelation(context, body.relation);
-      continue;
+      return;
     }
     if (isAssetLifecycleEvent(event)) {
       const body = await bodyFor(event) as AssetEventBody;
       await projectAssetLifecycle(context, namespace, event, body);
-      continue;
+      return;
     }
     const subject = event.subject;
-    if (!subject) continue;
+    if (!subject) return;
     const definition = byName.get(subject.type);
     if (!definition || !collectionEventNames(definition).has(event.type)) {
-      continue;
+      return;
     }
     const body = await bodyFor(event) as CollectionEventBody<CollectionRecord>;
     assertCollectionEventBody(body, event, definition);
     await projectCollectionEvent(context, definition, body);
-  }
+  });
 }
 
 export function isCollectionEvent(

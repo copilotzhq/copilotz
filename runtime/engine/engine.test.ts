@@ -170,6 +170,7 @@ Deno.test("factory engine scopes typed processor capabilities and deduplicates r
     assertEquals(
       tables.rows.map((row) => row.table_name),
       [
+        "copilotz_schema_metadata",
         "edges",
         "event_bodies",
         "event_deliveries",
@@ -448,9 +449,15 @@ Deno.test("lazy database scopes validate with read-only SQL and reject unprovisi
   try {
     observed.length = 0;
     await engine.databaseScope(tenantSchema);
-    assertEquals(observed.length, 1);
+    assertEquals(observed.length, 3);
     assertEquals(/information_schema\.columns/i.test(observed[0]), true);
-    assertEquals(/\b(CREATE|ALTER|DROP|TRUNCATE)\b/i.test(observed[0]), false);
+    assertEquals(/copilotz_schema_metadata/i.test(observed[1]), true);
+    assertEquals(/information_schema\.tables/i.test(observed[2]), true);
+    assert(
+      observed.every((sql) =>
+        !/\b(CREATE|ALTER|DROP|TRUNCATE)\b/i.test(sql)
+      ),
+    );
 
     await assertRejects(
       () => engine.databaseScope("copilotz_scope_validation_missing"),

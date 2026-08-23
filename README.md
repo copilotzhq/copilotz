@@ -126,27 +126,27 @@ API.
 
 ## Package map
 
-| Subpath                            | Purpose                                                                |
-| ---------------------------------- | ---------------------------------------------------------------------- |
-| `@copilotz/copilotz`               | Normal runtime-neutral application API                                 |
-| `/application`                     | Embedded, Gateway, and Worker role factories                           |
-| `/core`                            | Minimal semantic AI harness plugin                                     |
-| `/plugins`                         | Plugin definition and composition primitives                           |
-| `/events`                          | Immutable events and durable delivery contracts                        |
-| `/content`, `/domain`              | Canonical assets and graph-native repositories                         |
-| `/attachments`                     | Persistent text/realtime ingress                                       |
-| `/llm`, `/tools`                   | LLM and Tool plugin contracts and integrations                         |
-| `/tools/*`                         | Optional Tool plugins, protocol integrations, and host implementations |
-| `/skills`                          | Optional Open Skill resources and portable disclosure tools            |
-| `/skills/deno`                     | Deno build-time Open Skill packer                                      |
-| `/knowledge`                       | Optional Knowledge plugin primitives                                   |
-| `/memory`, `/goals`, `/usage`      | Optional semantic state and workflow plugins                           |
-| `/schedules`, `/schedules/core`    | Generic scheduling and optional Core-message integration               |
-| `/channels`, `/actions`, `/admin`  | Transport plugins, executable primitives, and admin APIs               |
-| `/adapters`                        | Ominipg adaptation and portable CLI mechanics                          |
-| `/adapters/deno`, `/adapters/node` | Generic host/runtime adapters                                          |
-| `/server`                          | Event-native server projection types                                   |
-| `/migration/v1`                    | Isolated one-way database upgrade; never imported by normal runtime    |
+| Subpath                            | Purpose                                                                              |
+| ---------------------------------- | ------------------------------------------------------------------------------------ |
+| `@copilotz/copilotz`               | Normal runtime-neutral application API                                               |
+| `/application`                     | Embedded, Gateway, and Worker role factories                                         |
+| `/core`                            | Minimal semantic AI harness plugin                                                   |
+| `/plugins`                         | Plugin definition and composition primitives                                         |
+| `/events`                          | Immutable events and durable delivery contracts                                      |
+| `/content`, `/domain`              | Canonical assets and graph-native repositories                                       |
+| `/attachments`                     | Persistent text/realtime ingress                                                     |
+| `/llm`, `/tools`                   | LLM and Tool plugin contracts and integrations                                       |
+| `/tools/*`                         | Optional Tool plugins, protocol integrations, and host implementations               |
+| `/skills`                          | Optional Open Skill resources and portable disclosure tools                          |
+| `/skills/deno`                     | Deno build-time Open Skill packer                                                    |
+| `/knowledge`                       | Optional Knowledge plugin primitives                                                 |
+| `/memory`, `/goals`, `/usage`      | Optional semantic state and workflow plugins                                         |
+| `/schedules`, `/schedules/core`    | Generic scheduling and optional Core-message integration                             |
+| `/channels`, `/actions`, `/admin`  | Transport plugins, executable primitives, and admin APIs                             |
+| `/adapters`                        | Ominipg adaptation and portable CLI mechanics                                        |
+| `/adapters/deno`, `/adapters/node` | Generic host/runtime adapters                                                        |
+| `/server`                          | Event-native server projection types                                                 |
+| `/migration/v4`                    | Isolated legacy-graph-v1 (0.47/0.48) to v4 upgrade; never imported by normal runtime |
 
 ## Documentation
 

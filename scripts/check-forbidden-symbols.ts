@@ -120,9 +120,7 @@ const ignoredDirectories = new Set([
 ]);
 
 function allowed(path: string): boolean {
-  return path.startsWith("migration/v1/") ||
-    path.startsWith("migration/memory-v4/") ||
-    path.startsWith("contracts/") ||
+  return path.startsWith("contracts/") ||
     path.endsWith(".test.ts") ||
     path === "CHANGELOG.md" ||
     path === "docs/migration-v3.md" ||
@@ -166,12 +164,6 @@ for await (const file of files(repositoryRoot)) {
   if (allowed(file.path)) continue;
   for (let index = 0; index < lines.length; index += 1) {
     for (const symbol of forbidden) {
-      if (
-        symbol === "toolExecutionId" &&
-        file.path.startsWith("migration/content-v2/")
-      ) {
-        continue;
-      }
       const pattern = new RegExp(`\\b${symbol}\\b`);
       if (pattern.test(lines[index])) {
         violations.push(`${file.path}:${index + 1}: ${symbol}`);

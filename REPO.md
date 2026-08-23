@@ -72,9 +72,10 @@ the remaining cut order.
 - Schedules, usage, and goals: corresponding `plugins/` modules
 - Channel plugins and transports: `plugins/channels/`
 - Semantic memory plugin: `plugins/memory/`
-- Physical persistence: `runtime/persistence/`; host listeners: `runtime/adapters/`
+- Physical persistence: `runtime/persistence/`; host listeners:
+  `runtime/adapters/`
 - Web Fetch boundary: `server/`
-- Isolated legacy upgrade: `migration/v1/`
+- Isolated legacy-graph-v1 (0.47/0.48) upgrade: `migration/v4/`
 
 ## Invariants
 

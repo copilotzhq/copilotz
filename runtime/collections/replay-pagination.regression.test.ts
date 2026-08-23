@@ -3,7 +3,7 @@ import { assertEquals } from "@std/assert";
 import { digestContent } from "../content/digest.ts";
 import type { DurableEvent, EventStore, SqlExecutor } from "../events/index.ts";
 import { defineCollection } from "./definition.ts";
-import { loadCollectionEventBodies } from "./replay.ts";
+import { loadCollectionEventBodies, rebuildNamespaceProjections } from "./replay.ts";
 
 const EVENT_COUNT = 10_001;
 const EVENT_BODY = JSON.stringify({
@@ -126,4 +126,47 @@ Deno.test("collection replay reads every event page beyond 10,000 events", async
   );
 
   assertEquals(bodies.length, EVENT_COUNT);
+});
+
+Deno.test("namespace rebuild uses two bounded event scans without eager loading", async () => {
+  const events = Array.from({ length: 1_001 }, (_, index) =>
+    Object.freeze({
+      ...durableEvent(index + 1),
+      subject: undefined,
+    })
+  );
+  let listCalls = 0;
+  const store = {
+    databaseSchema: "tenant-replay-schema",
+    tables: {
+      nodes: "nodes",
+      edges: "edges",
+      events: "events",
+      event_bodies: "event_bodies",
+      event_deliveries: "event_deliveries",
+      copilotz_schema_metadata: "copilotz_schema_metadata",
+    },
+    listEvents(options: { afterPosition?: string; limit?: number }) {
+      listCalls++;
+      const after = Number(options.afterPosition ?? 0);
+      const limit = options.limit ?? 1_000;
+      return Promise.resolve(events.filter((event) =>
+        Number(event.position) > after
+      ).slice(0, limit));
+    },
+  } as unknown as EventStore;
+  const executor: SqlExecutor = {
+    async query<TRow extends Record<string, unknown>>() {
+      return { rows: [] as TRow[] };
+    },
+  };
+  await rebuildNamespaceProjections(
+    executor,
+    store,
+    [auditRecordCollection],
+    "tenant-replay",
+  );
+  // Two 1,000-row pages plus the empty terminal page, once for validation and
+  // once for replay. No all-events helper is involved.
+  assertEquals(listCalls, 4);
 });

@@ -16,9 +16,8 @@ Deno.test("every declared package export resolves to a source file", async () =>
   }
 });
 
-Deno.test("generic package and generated Tool factories exclude host-only MCP stdio", async () => {
+Deno.test("root and generated Tool factories exclude host-only MCP stdio", async () => {
   const root = await source("index.ts");
-  const genericAdapters = await source("runtime/adapters/index.ts");
   const openApiFactory = await source("plugins/tools/openapi/generator.ts");
   const mcpFactory = await source("plugins/tools/mcp/generator.ts");
   const stdioMcp = await source("plugins/tools/mcp/stdio.ts");
@@ -26,7 +25,6 @@ Deno.test("generic package and generated Tool factories exclude host-only MCP st
   for (
     const [name, value] of [
       ["root", root],
-      ["generic adapters", genericAdapters],
       ["OpenAPI factory", openApiFactory],
       ["MCP factory", mcpFactory],
     ] as const

@@ -11,6 +11,8 @@ import {
   createCoreTableNames,
   createEventStore,
   createSqlSession,
+  provisionCopilotzSchema,
+  validateCopilotzSchema,
   type EventStore,
   isEventStoreError,
   type SqlSession,
@@ -27,9 +29,7 @@ type Fixture = {
 async function createFixture(): Promise<Fixture> {
   const db = await createTestDatabase({ url: ":memory:" });
   const session = createSqlSession(db);
-  for (const statement of createCoreSchemaStatements(TEST_SCHEMA)) {
-    await session.query(statement);
-  }
+  await provisionCopilotzSchema(session, TEST_SCHEMA);
   return {
     db,
     session,
@@ -63,7 +63,7 @@ async function failThreeTimes(
   }
 }
 
-Deno.test("A20 clean v3 baseline contains only the six core tables", async () => {
+Deno.test("A20 clean v4 baseline contains the marker and no body-reference table", async () => {
   const fixture = await createFixture();
   try {
     const result = await fixture.session.query<{ table_name: string }>(
@@ -75,6 +75,7 @@ Deno.test("A20 clean v3 baseline contains only the six core tables", async () =>
     assertEquals(
       result.rows.map((row) => row.table_name),
       [
+        "copilotz_schema_metadata",
         "edges",
         "event_bodies",
         "event_deliveries",
@@ -92,8 +93,97 @@ Deno.test("A20 clean v3 baseline contains only the six core tables", async () =>
       columns.rows.some((row) => row.column_name === "status"),
       false,
     );
+    const bodyReferences = await fixture.session.query<{ table_name: string }>(
+      `SELECT table_name FROM information_schema.tables
+       WHERE table_schema = $1 AND table_name = 'body_references'`,
+      [TEST_SCHEMA],
+    );
+    assertEquals(bodyReferences.rows, []);
   } finally {
     await closeFixture(fixture);
+  }
+});
+
+Deno.test("normal provisioning refuses a released v3 schema without writing v4 tables", async () => {
+  const db = await createTestDatabase({ url: ":memory:" });
+  const session = createSqlSession(db);
+  const schema = "copilotz_released_v3_refusal";
+  try {
+    await session.query(`CREATE SCHEMA "${schema}"`);
+    // Literal released-v3 shape: no marker and no event_bodies table.
+    await session.query(
+      `CREATE TABLE "${schema}"."events" (
+        position BIGSERIAL PRIMARY KEY,
+        id TEXT NOT NULL UNIQUE,
+        schema_version INTEGER NOT NULL,
+        type TEXT NOT NULL,
+        namespace TEXT NOT NULL,
+        payload JSONB NOT NULL,
+        routing JSONB NOT NULL DEFAULT '{}'::jsonb,
+        visibility JSONB NOT NULL DEFAULT '{"kind":"public"}'::jsonb,
+        metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+        correlation_id TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`,
+    );
+    await assertRejects(
+      () => provisionCopilotzSchema(session, schema),
+      Error,
+      "requires the explicit v4 migration",
+    );
+    const tables = await session.query<{ table_name: string }>(
+      `SELECT table_name FROM information_schema.tables
+       WHERE table_schema = $1 ORDER BY table_name`,
+      [schema],
+    );
+    assertEquals(tables.rows.map((row) => row.table_name), ["events"]);
+  } finally {
+    await db.close();
+  }
+});
+
+Deno.test("atomic provisioning creates and validates a fresh v4 marker", async () => {
+  const db = await createTestDatabase({ url: ":memory:" });
+  const session = createSqlSession(db);
+  const schema = "copilotz_fresh_v4_marker";
+  try {
+    assertEquals((await provisionCopilotzSchema(session, schema)).version, 4);
+    const marker = await session.query<{ version: number }>(
+      `SELECT version FROM "${schema}"."copilotz_schema_metadata"`,
+    );
+    assertEquals(marker.rows, [{ version: 4 }]);
+    assertEquals((await provisionCopilotzSchema(session, schema)).version, 4);
+  } finally {
+    await db.close();
+  }
+});
+
+Deno.test("direct validation rejects an in-progress migration despite a v4 marker", async () => {
+  const db = await createTestDatabase({ url: ":memory:" });
+  const session = createSqlSession(db);
+  const schema = "copilotz_v4_in_progress";
+  try {
+    await provisionCopilotzSchema(session, schema);
+    await session.query(
+      `CREATE TABLE "${schema}"."copilotz_v4_migration_state" (
+        singleton BOOLEAN PRIMARY KEY, stage TEXT NOT NULL
+      )`,
+    );
+    await session.query(
+      `INSERT INTO "${schema}"."copilotz_v4_migration_state"
+        (singleton, stage) VALUES (TRUE, 'sources')`,
+    );
+    await assertRejects(
+      () => validateCopilotzSchema(session, schema),
+      Error,
+      "in-progress v4 migration",
+    );
+    await session.query(
+      `UPDATE "${schema}"."copilotz_v4_migration_state" SET stage = 'complete'`,
+    );
+    assertEquals((await validateCopilotzSchema(session, schema)).version, 4);
+  } finally {
+    await db.close();
   }
 });
 

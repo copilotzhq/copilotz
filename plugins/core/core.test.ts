@@ -34,6 +34,7 @@ import {
   createBodyStorageRuntime,
   createDatabaseAssetRepository,
 } from "../../runtime/content/index.ts";
+import { collectionAssetAdopterFor } from "../../runtime/content/database-repository.ts";
 import {
   createPluginRegistry,
   definePlugin,
@@ -125,7 +126,7 @@ async function createFixture(url: string, schema: string): Promise<Fixture> {
     coordinator,
     session,
     eventStore: store,
-    assets,
+    assets: collectionAssetAdopterFor(assets),
     createId: () => `core-${++nextId}`,
     now: () => new Date(NOW),
   });

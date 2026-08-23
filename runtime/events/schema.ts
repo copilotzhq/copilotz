@@ -1,13 +1,14 @@
-import type { SqlExecutor } from "./session.ts";
+import type { SqlExecutor, SqlSession } from "./session.ts";
 
-export const EVENT_SCHEMA_VERSION = 3;
+export const EVENT_SCHEMA_VERSION = 4;
 
 export type CoreTableName =
   | "nodes"
   | "edges"
   | "events"
   | "event_bodies"
-  | "event_deliveries";
+  | "event_deliveries"
+  | "copilotz_schema_metadata";
 
 export function validateEventSchemaName(value: string): string {
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(value)) {
@@ -32,6 +33,7 @@ export function createCoreTableNames(schemaName = "public"): Readonly<
     events: table("events"),
     event_bodies: table("event_bodies"),
     event_deliveries: table("event_deliveries"),
+    copilotz_schema_metadata: table("copilotz_schema_metadata"),
   });
 }
 
@@ -104,6 +106,7 @@ const CORE_SCHEMA_COLUMNS = Object.freeze(
       "updated_at",
       "settled_at",
     ]),
+    copilotz_schema_metadata: Object.freeze(["singleton", "version"]),
   } satisfies Readonly<Record<CoreTableName, readonly string[]>>,
 );
 
@@ -133,7 +136,8 @@ export async function validateCopilotzSchema(
           'edges',
           'events',
           'event_bodies',
-          'event_deliveries'
+          'event_deliveries',
+          'copilotz_schema_metadata'
         )`,
     [schema],
   );
@@ -166,23 +170,135 @@ export async function validateCopilotzSchema(
     });
     throw error;
   }
+  const marker = await executor.query<{ version: string | number }>(
+    `SELECT version FROM ${createCoreTableNames(schema).copilotz_schema_metadata}
+      WHERE singleton = TRUE LIMIT 1`,
+  );
+  if (Number(marker.rows[0]?.version) !== EVENT_SCHEMA_VERSION) {
+    const error = new Error(
+      `Copilotz database schema '${schema}' is not marked as v${EVENT_SCHEMA_VERSION}. Run the explicit v4 migration before serving requests.`,
+    );
+    Object.assign(error, {
+      name: "CopilotzSchemaError",
+      code: "copilotz_schema_migration_required",
+      schema,
+      version: EVENT_SCHEMA_VERSION,
+    });
+    throw error;
+  }
+  const migration = await executor.query<{ table_name: string }>(
+    `SELECT table_name FROM information_schema.tables
+      WHERE table_schema = $1 AND table_name = 'copilotz_v4_migration_state'`,
+    [schema],
+  );
+  if (migration.rows[0]) {
+    const state = await executor.query<{ stage: string }>(
+      `SELECT stage FROM ${quoteEventIdentifier(schema)}."copilotz_v4_migration_state"
+        WHERE singleton = TRUE LIMIT 1`,
+    );
+    if (state.rows[0]?.stage !== "complete") {
+      const error = new Error(
+        `Copilotz database schema '${schema}' has an in-progress v4 migration and cannot serve requests.`,
+      );
+      Object.assign(error, {
+        name: "CopilotzSchemaError",
+        code: "copilotz_schema_migration_required",
+        schema,
+        version: EVENT_SCHEMA_VERSION,
+      });
+      throw error;
+    }
+  }
   return Object.freeze({ schema, version: EVENT_SCHEMA_VERSION });
 }
 
-/** Explicit lifecycle operation for creating or upgrading a Copilotz schema. */
-export async function provisionCopilotzSchema(
+type SchemaClassification = "fresh" | "v4" | "migration_required";
+
+async function classifySchema(
   executor: SqlExecutor,
-  schemaName = "public",
-): Promise<CoreSchemaValidation> {
-  for (const statement of createCoreSchemaStatements(schemaName)) {
-    await executor.query(statement);
+  schemaName: string,
+): Promise<SchemaClassification> {
+  const schema = validateEventSchemaName(schemaName);
+  const result = await executor.query<{ table_name: string }>(
+    `SELECT table_name
+       FROM information_schema.tables
+      WHERE table_schema = $1
+        AND table_name IN (
+          'nodes', 'edges', 'events', 'event_bodies', 'event_deliveries',
+          'copilotz_schema_metadata', 'copilotz_v4_migration_state'
+        )`,
+    [schema],
+  );
+  const tables = new Set(result.rows.map((row) => row.table_name));
+  if (tables.size === 0) return "fresh";
+  if (!tables.has("copilotz_schema_metadata")) {
+    return "migration_required";
   }
-  return await validateCopilotzSchema(executor, schemaName);
+  const marker = await executor.query<{ version: string | number }>(
+    `SELECT version FROM ${createCoreTableNames(schema).copilotz_schema_metadata}
+      WHERE singleton = TRUE LIMIT 1`,
+  );
+  if (Number(marker.rows[0]?.version) !== EVENT_SCHEMA_VERSION) {
+    return "migration_required";
+  }
+  if (!tables.has("copilotz_v4_migration_state")) return "v4";
+  const state = await executor.query<{ stage: string }>(
+    `SELECT stage FROM ${quoteEventIdentifier(schema)}."copilotz_v4_migration_state"
+      WHERE singleton = TRUE LIMIT 1`,
+  );
+  return state.rows[0]?.stage === "complete" ? "v4" : "migration_required";
 }
 
-/** Clean v3 baseline. The v1 upgrader is deliberately isolated elsewhere. */
+function migrationRequired(schemaName: string): Error {
+  const schema = validateEventSchemaName(schemaName);
+  const error = new Error(
+    `Copilotz database schema '${schema}' requires the explicit v4 migration; normal provisioning will not modify it.`,
+  );
+  Object.assign(error, {
+    name: "CopilotzSchemaError",
+    code: "copilotz_schema_migration_required",
+    schema,
+    version: EVENT_SCHEMA_VERSION,
+  });
+  return error;
+}
+
+/** Creates a clean v4 schema only; released schemas require the isolated migration. */
+export async function provisionCopilotzSchema(
+  session: SqlSession,
+  schemaName = "public",
+): Promise<CoreSchemaValidation> {
+  const schema = validateEventSchemaName(schemaName);
+  const classification = await classifySchema(session, schema);
+  if (classification === "v4") return await validateCopilotzSchema(session, schema);
+  if (classification !== "fresh") throw migrationRequired(schema);
+  return await session.transaction(async (transaction) => {
+    // Recheck inside the DDL transaction so a competing provisioner cannot turn
+    // a released schema into a partial upgrade between classification and DDL.
+    await transaction.query(
+      "SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))",
+      [schema, "copilotz-schema-provision"],
+    );
+    if (await classifySchema(transaction, schema) !== "fresh") {
+      throw migrationRequired(schema);
+    }
+    for (const statement of createCoreSchemaStatements(schema)) {
+      await transaction.query(statement);
+    }
+    await transaction.query(
+      `INSERT INTO ${createCoreTableNames(schema).copilotz_schema_metadata}
+         (singleton, version) VALUES (TRUE, $1)
+       ON CONFLICT (singleton) DO UPDATE SET version = EXCLUDED.version`,
+      [EVENT_SCHEMA_VERSION],
+    );
+    return await validateCopilotzSchema(transaction, schema);
+  });
+}
+
+/** Clean v4 tables. Only atomic provisioning writes the ready marker. */
 export function createCoreSchemaStatements(
   schemaName = "public",
+  options: Readonly<{ marker?: boolean }> = {},
 ): readonly string[] {
   const schemaId = validateEventSchemaName(schemaName);
   const schema = quoteEventIdentifier(schemaId);
@@ -277,6 +393,10 @@ export function createCoreSchemaStatements(
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       PRIMARY KEY (namespace, event_body_id)
     )`,
+    `CREATE TABLE IF NOT EXISTS ${tables.copilotz_schema_metadata} (
+      singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
+      version INTEGER NOT NULL
+    )`,
     `CREATE TABLE IF NOT EXISTS ${tables.event_deliveries} (
       id TEXT PRIMARY KEY,
       event_id TEXT NOT NULL REFERENCES ${tables.events}(id) ON DELETE CASCADE,
@@ -353,5 +473,12 @@ export function createCoreSchemaStatements(
     `CREATE TRIGGER "copilotz_events_immutable"
       BEFORE UPDATE ON ${tables.events}
       FOR EACH ROW EXECUTE FUNCTION ${immutableFunction}()`,
+    ...(options.marker === true
+      ? [
+        `INSERT INTO ${tables.copilotz_schema_metadata} (singleton, version)
+          VALUES (TRUE, ${EVENT_SCHEMA_VERSION})
+          ON CONFLICT (singleton) DO UPDATE SET version = EXCLUDED.version`,
+      ]
+      : []),
   ];
 }

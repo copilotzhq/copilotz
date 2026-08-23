@@ -385,9 +385,9 @@ logical mutation.
 
 Collections do not declare `bodyRefs`, and no `body_references` table exists. A
 Ready Asset node's indexed `bodyId` is the sole durable Body-liveness authority.
-Asset provenance uses one opaque identity `{ type, id }`; a semantic plugin may use
-`thread`, while standalone publication may use the namespace. Storage and the
-kernel neither enumerate nor branch on those values.
+Asset provenance uses one opaque identity `{ type, id }`; a semantic plugin may
+use `thread`, while standalone publication may use the namespace. Storage and
+the kernel neither enumerate nor branch on those values.
 
 Projection rebuild is namespace-global and receives every bound Collection
 definition. In one locked transaction it clears the namespace projections and
@@ -968,11 +968,11 @@ it were removed without an alias.
    `llmPlugin`, and delete `runtime/llm/**`, the old Core LLM wrapper Actions
    and provider directories, and their obsolete exports before closing this
    checkpoint. This checkpoint introduced no parallel Tool execution path.
-2. **Tool + Core checkpoint (closed):** make every concrete Tool an Action
-   and every Tool Resource a data-only Action presentation. OpenAPI and MCP
-   generate Actions plus Tool Resources, not executable Tool objects. In the
-   same atomic cut, move Agent Resources and prompt policy fully into Core;
-   implement deterministic sequential tool planning, the
+2. **Tool + Core checkpoint (closed):** make every concrete Tool an Action and
+   every Tool Resource a data-only Action presentation. OpenAPI and MCP generate
+   Actions plus Tool Resources, not executable Tool objects. In the same atomic
+   cut, move Agent Resources and prompt policy fully into Core; implement
+   deterministic sequential tool planning, the
    `schema: "copilotz.core.tool-action.v1"` lifecycle Processors, and ask
    continuation; and migrate all callers. Then remove `Tool.execute`, the
    executable Tool object type, catalog, executor, host/execution contexts,
@@ -1052,23 +1052,20 @@ composition invariant.
 Exit: a caller can understand the public package without knowing the internal
 directory tree.
 
-### Slice 8 — Published-data migration
+### Slice 8 — Deployed-data migration
 
 Only after target schemas and ownership are frozen:
 
-- inventory the last released durable formats from `v0.60.18`, not from
-  unreleased refactor code;
-- `v0.60.18` never had `body_references`; final schema v4 neither creates nor
-  migrates it;
-- advance the final storage schema from released version 3 to version 4; normal
-  provisioning must never turn a released v3 database into a partially upgraded
-  final schema;
+- inventory the exact `legacy-graph-v1` format deployed by the critical Gilpinna
+  `0.47/0.48` database, using a real persistent fixture rather than unreleased
+  refactor code;
+- move the final storage schema to version 4; normal provisioning must never
+  turn a legacy or partially migrated database into a ready final schema;
 - migrate released Events, graph records, Asset nodes, BodyStore data and
   locations, and required projections;
 - treat released live graph and Asset state as migration baseline authority,
-  because v0.60.18 could already have compacted its non-authoritative Event
-  history; synthesize final source Event Bodies rather than pretending that old
-  history is complete;
+  because legacy Event history is not authoritative; synthesize final source
+  Event Bodies rather than pretending that old history is complete;
 - preserve any retained released Events as historical data without interpreting
   their legacy payloads as final projection-source Events;
 - make the migration resumable, idempotent, verifiable by digest/count, and
@@ -1078,6 +1075,21 @@ Only after target schemas and ownership are frozen:
 
 Exit: released durable data opens in the final runtime without a normal-runtime
 fallback reader.
+
+Rollout decision: Mobizap (`0.55.x`) and Compass (`0.60.x`) start on fresh v4
+schemas, so this release does not claim an in-place database transform for those
+profiles. Gilpinna is the sole in-place client database migration.
+
+Checkpoint: the sole public migration entrypoint is `migration/v4` and exports
+`migrateToV4`; historical `v1`, `content-v2`, and `memory-v4` entrypoints are
+removed with their required transforms folded into that release migration.
+
+Acceptance: a real Gilpinna-shaped `0.48` PGlite fixture migrates to 18 retained
+records, 15 archived retired workflow records, 43 source Events, and 14 Assets;
+all 12 Message bodies and two original Asset byte streams verify exactly. A
+pre-marker crash resumes safely, reconstructed legacy LLM history passes through
+the final Core/LLM seam locally, and a separate fresh synthetic thread completes
+against the real Gemini Adapter without exporting legacy history.
 
 ### Slice 9 — Documentation and release closure
 

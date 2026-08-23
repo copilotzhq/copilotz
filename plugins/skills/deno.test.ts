@@ -93,7 +93,8 @@ description: Invalid directory identity.
 Deno.test("Deno-specific APIs stay outside generic adapter and core entrypoints", async () => {
   for (
     const module of [
-      "../../runtime/adapters/index.ts",
+      "../../index.ts",
+      "../core/index.ts",
       "../tools/index.ts",
     ]
   ) {

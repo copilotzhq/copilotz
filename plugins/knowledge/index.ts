@@ -10,11 +10,13 @@ export {
 } from "./collections.ts";
 export {
   createIndexKnowledgeDocumentAction,
+  createSearchKnowledgeAction,
   DELETE_KNOWLEDGE_DOCUMENT_ACTION_ID,
   deleteKnowledgeDocumentAction,
   INDEX_KNOWLEDGE_DOCUMENT_ACTION_ID,
+  INGEST_KNOWLEDGE_DOCUMENT_ACTION_ID,
+  ingestKnowledgeDocumentAction,
   SEARCH_KNOWLEDGE_ACTION_ID,
-  searchKnowledgeAction,
 } from "./actions.ts";
 export type {
   CreateIndexKnowledgeDocumentActionOptions,
@@ -22,9 +24,14 @@ export type {
   DeleteKnowledgeDocumentResult,
   IndexKnowledgeDocumentAction,
   IndexKnowledgeDocumentInput,
+  IngestKnowledgeDocumentInput,
+  IngestKnowledgeDocumentResult,
   KnowledgeActionCallers,
   KnowledgeActionContext,
+  KnowledgeIndexActionCallers,
+  SearchKnowledgeAction,
   SearchKnowledgeActionInput,
+  SearchKnowledgeActionResult,
 } from "./actions.ts";
 export { createKnowledgePlugin } from "./plugin.ts";
 export type { KnowledgePlugin } from "./plugin.ts";
@@ -37,10 +44,10 @@ export {
   createDefaultKnowledgeSourceLoader,
   createDefaultKnowledgeTextExtractor,
 } from "./source.ts";
-export {
-  createDeleteDocumentTool,
-  createIngestDocumentTool,
-  createSearchKnowledgeTool,
+export { createKnowledgeActionResources } from "./tools.ts";
+export type {
+  KnowledgeActionResourcesContribution,
+  KnowledgeToolAliases,
 } from "./tools.ts";
 export type {
   CompleteKnowledgeDocumentInput,

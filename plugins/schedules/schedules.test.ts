@@ -241,7 +241,7 @@ Deno.test("base schedules compose without Core semantics or runtime ownership", 
   ) {
     const source = await Deno.readTextFile(new URL(file, import.meta.url));
     assertEquals(
-      /(?:\.\.\/core|collections\.(?:participant|thread|message)|resources\.agents|WorkflowTool)/
+      /(?:\.\.\/core|copilotz\/tools|collections\.(?:participant|thread|message)|resources\.(?:agents|tools)|defineTool|ToolResource|WorkflowTool)/
         .test(
           source,
         ),

@@ -9,7 +9,10 @@ import {
   listThreadMessageRecords,
   loadThreadRecord,
 } from "@copilotz/copilotz/engine";
-import { workflowMetadata } from "../workflow-metadata.ts";
+import {
+  coreToolActionMessageMetadata,
+  workflowMetadata,
+} from "../workflow-metadata.ts";
 
 function record(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -47,8 +50,8 @@ function embeddedToolCalls(value: unknown): readonly LlmToolCall[] {
 }
 
 function toolCallId(message: ConversationMessage): string | undefined {
-  const workflow = workflowMetadata(message.metadata);
-  if (workflow?.toolCallId) return workflow.toolCallId;
+  const toolAction = coreToolActionMessageMetadata(message.metadata);
+  if (toolAction?.toolCallId) return toolAction.toolCallId;
   return optionalText(record(record(message.metadata).toolInvocation).id);
 }
 
@@ -56,7 +59,7 @@ function toolCallId(message: ConversationMessage): string | undefined {
 function toLlmMessage(
   message: ConversationMessage,
   targetParticipantId?: string,
-): LlmMessage {
+): LlmMessage | null {
   const content = Object.freeze(structuredClone(message.content));
   const name = messageName(message);
   if (message.sender.participantType === "agent") {
@@ -83,6 +86,10 @@ function toLlmMessage(
         ...(name ? { name } : {}),
       });
     }
+    const historyVisibility = optionalText(
+      message.metadata.historyVisibility,
+    ) ?? "public_status";
+    if (historyVisibility !== "public") return null;
   }
   return Object.freeze({ role: "user", content, ...(name ? { name } : {}) });
 }
@@ -114,6 +121,9 @@ export async function buildLlmTranscript(
     })()
     : history;
   return Object.freeze(
-    selected.map((message) => toLlmMessage(message, input.participantId)),
+    selected.flatMap((message) => {
+      const projected = toLlmMessage(message, input.participantId);
+      return projected ? [projected] : [];
+    }),
   );
 }

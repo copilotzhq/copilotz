@@ -540,28 +540,25 @@ custom `historyTransform`.
 
 **Disposition:** Keep with content-representation adaptations, P0.
 
-**Coverage:** all `runtime/agent-llm-input/*.test.ts`,
-`runtime/llm/agent-request.test.ts`,
-`runtime/llm/asset-materialization.test.ts`,
-`resources/processors/tool_call/history-policy.test.ts`, and
-`runtime/tools/format-tools-for-prompt.test.ts`.
+**Coverage:** Core prompt, transcript, capability-resolution, history-policy,
+and LLM request/materialization tests under `plugins/core/**` and
+`plugins/llm/**`.
 
 ### F11 — Tool definitions and execution lifecycle
 
-**Current contract:** custom tools, built-in tools, JSON-schema formatting,
-OpenAPI-generated tools, MCP-generated tools, pipelines/jq, per-tool timeouts,
-context injection (`db`, collections, thread, agent, assets, resolver),
-incremental tool-call JSON, durable execution records, projected/history-safe
-output, assets, idempotent result handling, and errors returned to the agent.
+**Current contract:** every Tool is a native Action plus a matching data-only
+Resource. Builtin, OpenAPI, MCP, host-backed, and custom Actions receive the
+ordinary typed Action context, validation, cancellation, durable lifecycle,
+projected/history-safe output, content refs, idempotent result handling, and
+bounded errors returned to the agent.
 
 **Disposition:** Keep, P0. Large args/results may be content assets; tool name,
 call ID, status, visibility, attempts, timing, causation, and idempotency remain
 inline. External calls receive an idempotency key.
 
-**Coverage:** all `runtime/tools/*.test.ts`,
-`resources/processors/tool_call/*.test.ts`,
-`resources/processors/tool_result/*.test.ts`, and built-in tool tests. Add A13
-for a complete user → agent → tool → same agent → public answer loop.
+**Coverage:** `plugins/tools/**/*.test.ts`, Core tool-plan and terminal
+Processor tests, public-surface contracts, and A13's complete user → agent →
+tool → same agent → public answer loop.
 
 ### F12 — Custom processor behavior
 
@@ -805,16 +802,15 @@ errors are bounded and safe for the agent.
 **Disposition:** Keep, P0. These remain plugin resource types and execute
 through logical Oxian resource IDs rather than serialized closures.
 
-**V3 implementation:** static, OpenAPI, and MCP tools resolve in a worker-local
-catalog. Core no longer dynamically imports legacy generators. Descriptor
-resources require an explicit adapter; the first-party server catalog grants
-Web-fetch OpenAPI and factory-created MCP stdio behavior. MCP discovery and each
-execution own and close short-lived connections, while Oxian payloads retain
-only logical identities.
+**V3 implementation:** static, OpenAPI, and MCP integrations contribute native
+Actions and matching data-only Tool Resources. OpenAPI and MCP factories finish
+discovery before composition; generated alias/Action-ID collisions fail. MCP
+discovery and each invocation own and close short-lived connections, while Oxian
+payloads retain only logical identities.
 
-**Coverage:** API generator, safe API error, MCP/tool formatting, server
-feature, downstream sandbox/feature tests, workflow catalog tests, and
-`runtime/adapters/tool-catalog.test.ts`.
+**Coverage:** OpenAPI generation/error/content-stream tests, MCP discovery and
+connection-lifecycle tests, Core capability tests, server feature tests, and
+downstream sandbox/feature tests.
 
 ### F26 — Skills and built-in operational tools
 
@@ -846,12 +842,9 @@ worker-local shell state. Finance is now a factory-created plugin with a
 closure-backed provider registry and a factory-created Yahoo provider; only the
 narrow `FinanceError` remains a class.
 
-**Coverage:** skill, filesystem, fetch, terminal, web-search, jq, pipeline, and
-tool-formatting tests plus manifest completeness,
-`plugins/skills/plugin.test.ts`, `plugins/tools/builtin/plugin.test.ts`, and
-`plugins/tools/web/plugin.test.ts`, plus `plugins/tools/finance/plugin.test.ts`
-and the persistent-terminal plugin/Deno service tests under
-`plugins/tools/persistent-terminal`.
+**Coverage:** Skill, Builtin, Web, Finance, Deno workspace/process,
+persistent-terminal, OpenAPI, and MCP plugin tests plus manifest completeness
+and public-surface contracts.
 
 ### F27 — Runtime portability and Oxian placement
 
@@ -872,9 +865,9 @@ injected providers and storage; they need not promise local filesystem or CLI
 capabilities.
 
 **V3 progress:** application, engine, attachment, event, execution, plugin, and
-tool-catalog cores use Web/runtime-neutral APIs. API/MCP host access is now an
-explicit adapter choice. Full Node, Bun, browser, and Cloudflare smoke matrices
-remain release gates.
+native Tool Action paths use Web/runtime-neutral APIs. API/MCP host access is an
+explicit pre-composition factory choice. Full Node, Bun, browser, and Cloudflare
+smoke matrices remain release gates.
 
 ## P0 Characterization Tests to Add Before Refactoring
 
@@ -1044,9 +1037,9 @@ Keep behavior; adapt event/content representations and persistence queries:
 - `plugins/tools/persistent-terminal/plugin.test.ts`
 - `plugins/tools/builtin/plugin.test.ts`
 - `plugins/tools/web/web-search.test.ts`
-- `runtime/tools/format-tools-for-prompt.test.ts`
-- `runtime/tools/jq.test.ts`
-- `runtime/tools/pipeline.test.ts`
+- `plugins/tools/openapi/generator.test.ts`
+- `plugins/tools/mcp/generator.test.ts`
+- `plugins/core/internal/capabilities/capabilities.test.ts`
 - `plugins/usage/plugin.test.ts` (also listed with plugin ownership)
 - `utils/document-parser.test.ts` (also listed with content ownership)
 

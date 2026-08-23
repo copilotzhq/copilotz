@@ -1,12 +1,15 @@
-import type { ActionCaller } from "@copilotz/copilotz/actions";
+import {
+  type ActionCaller,
+  type ActionContext,
+  type ActionDefinition,
+  type ActionSchema,
+  defineAction,
+} from "@copilotz/copilotz/actions";
 import type {
   ContentInput,
   DurableContentInput,
 } from "@copilotz/copilotz/content";
-import type {
-  WorkflowTool,
-  WorkflowToolExecutionContext,
-} from "@copilotz/copilotz/tools";
+import { defineTool, type ToolResource } from "@copilotz/copilotz/tools";
 import type { runScheduledJobNowAction } from "../schedules/actions.ts";
 import {
   createScheduledJob,
@@ -39,6 +42,14 @@ type ScheduledJobsToolAction =
   | "resume"
   | "cancel"
   | "run_now";
+
+type ScheduledJobsActionContext = ActionContext<
+  ActionContext["resources"],
+  ActionContext["adapters"],
+  Readonly<{
+    runScheduledJobNow: ActionCaller<typeof runScheduledJobNowAction>;
+  }>
+>;
 
 type ParsedMessage = Readonly<{
   thread?: CoreScheduledMessageThread;
@@ -192,25 +203,16 @@ function message(
   });
 }
 
-function executionContext(
-  value: WorkflowToolExecutionContext | undefined,
-): WorkflowToolExecutionContext {
-  if (!value?.processor) {
-    throw new Error("This tool requires an event-native Copilotz context.");
-  }
-  return value;
-}
-
 async function prepareMessageContent(
   input: ParsedMessage,
-  context: WorkflowToolExecutionContext,
+  context: ScheduledJobsActionContext,
   operationKey: string,
 ): Promise<Omit<ParsedMessage, "content"> & { content?: DurableContentInput }> {
   const { content, ...message } = input;
   if (content === undefined) return Object.freeze(message);
   return Object.freeze({
     ...message,
-    content: await context.processor.content.prepare(content, {
+    content: await context.content.prepare(content, {
       operationKey: `${operationKey}:content`,
     }),
   });
@@ -290,55 +292,68 @@ const runSchema = {
   },
 } as const;
 
-/** Current single Tool execution surface; Slice 4 will make it Action-backed. */
-export const scheduledMessagesTool: WorkflowTool = Object.freeze({
-  id: "scheduled_jobs",
-  key: "scheduled_jobs",
-  name: "Scheduled Jobs",
-  description:
-    "Create and manage recurring jobs that send public messages to Copilotz agents. Supports create, get, list, update, pause, resume, cancel, and run_now.",
-  inputSchema: {
-    type: "object",
-    additionalProperties: false,
-    properties: {
-      action: {
-        type: "string",
-        enum: [
-          "create",
-          "get",
-          "list",
-          "update",
-          "pause",
-          "resume",
-          "cancel",
-          "run_now",
-        ],
-      },
-      jobId: { type: "string" },
-      name: { type: "string" },
-      status: {
-        type: "string",
-        enum: ["active", "paused", "cancelled"],
-      },
-      schedule: scheduleSchema,
-      run: runSchema,
-      metadata: { type: "object", additionalProperties: true },
-      threadId: { type: "string" },
-      after: { type: "string" },
-      limit: { type: "integer", minimum: 1, maximum: 100 },
+const scheduledJobsInputSchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    action: {
+      type: "string",
+      enum: [
+        "create",
+        "get",
+        "list",
+        "update",
+        "pause",
+        "resume",
+        "cancel",
+        "run_now",
+      ],
     },
-    required: ["action"],
+    jobId: { type: "string" },
+    name: { type: "string" },
+    status: {
+      type: "string",
+      enum: ["active", "paused", "cancelled"],
+    },
+    schedule: scheduleSchema,
+    run: runSchema,
+    metadata: { type: "object", additionalProperties: true },
+    threadId: { type: "string" },
+    after: { type: "string" },
+    limit: { type: "integer", minimum: 1, maximum: 100 },
   },
-  async execute(raw: unknown, value?: WorkflowToolExecutionContext) {
-    const context = executionContext(value);
+  required: ["action"],
+} as const;
+
+/** Native capability used by the matching `scheduled_jobs` Tool Resource. */
+export const scheduledJobsAction: ActionDefinition<
+  unknown,
+  unknown,
+  ScheduledJobsActionContext,
+  ActionSchema,
+  undefined
+> = defineAction<
+  unknown,
+  unknown,
+  ScheduledJobsActionContext,
+  ActionSchema
+>({
+  id: "copilotz.core-schedules.scheduled-jobs",
+  inputSchema: scheduledJobsInputSchema,
+  async execute(raw, context) {
     const input = record(raw);
     const action = selectedAction(input.action);
-    const operation = `scheduled_jobs:${action}`;
+    const operation = `${context.operationKey}:${action}`;
+    const defaultThreadId =
+      typeof context.action.metadata.threadId === "string" &&
+        context.action.metadata.threadId.trim()
+        ? context.action.metadata.threadId.trim()
+        : undefined;
     if (action === "create") {
       const parsed = await prepareMessageContent(
         message(input.run, {
           partial: false,
-          defaultThreadId: context.execution.threadId,
+          defaultThreadId,
         }),
         context,
         operation,
@@ -364,7 +379,7 @@ export const scheduledMessagesTool: WorkflowTool = Object.freeze({
             ),
           }),
         }),
-        context.processor,
+        context,
       );
       return { job };
     }
@@ -380,7 +395,7 @@ export const scheduledMessagesTool: WorkflowTool = Object.freeze({
         ...(positiveLimit(input.limit)
           ? { limit: positiveLimit(input.limit) }
           : {}),
-      }, context.processor);
+      }, context);
       const threadId = optionalText(input.threadId, "Scheduled thread ID");
       return {
         jobs: jobs
@@ -397,7 +412,7 @@ export const scheduledMessagesTool: WorkflowTool = Object.freeze({
 
     const jobId = requiredText(input.jobId, "Scheduled job ID");
     const existing = coreJob(
-      await getScheduledJob({ id: jobId }, context.processor),
+      await getScheduledJob({ id: jobId }, context),
       jobId,
     );
     if (!existing) {
@@ -413,20 +428,15 @@ export const scheduledMessagesTool: WorkflowTool = Object.freeze({
       return {
         job: await updateScheduledJob(
           { id: jobId, patch: { status } },
-          context.processor,
+          context,
         ),
       };
     }
     if (action === "run_now") {
-      const caller = context.processor.actions.runScheduledJobNow as unknown as
-        | ActionCaller<typeof runScheduledJobNowAction>
-        | undefined;
-      if (typeof caller !== "function") {
-        throw new Error(
-          "Scheduled run_now requires the runScheduledJobNow Action.",
-        );
-      }
-      return await caller({ id: jobId }, { operationKey: operation });
+      return await context.actions.runScheduledJobNow({ id: jobId }, {
+        operationKey: `${operation}:run`,
+        signal: context.signal,
+      });
     }
 
     const patch: Record<string, unknown> = {};
@@ -461,8 +471,15 @@ export const scheduledMessagesTool: WorkflowTool = Object.freeze({
     return {
       job: await updateScheduledJob(
         { id: jobId, patch },
-        context.processor,
+        context,
       ),
     };
   },
 });
+
+export const scheduledJobsToolResource: ToolResource<"scheduled_jobs"> =
+  defineTool("scheduled_jobs", scheduledJobsAction, {
+    name: "Scheduled Jobs",
+    description:
+      "Create and manage recurring jobs that send public messages to Copilotz agents. Supports create, get, list, update, pause, resume, cancel, and run_now.",
+  });

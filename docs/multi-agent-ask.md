@@ -6,21 +6,21 @@ agent in the same thread. The answer is another public participant message.
 Causation metadata resumes the asking agent after the answer settles.
 
 ```ts
-context: {
+resources: {
   agents: {
     coordinator: {
       id: "coordinator",
       name: "Coordinator",
       role: "Coordinate specialists and synthesize the final answer.",
+      models: { generate: "default" },
       capabilities: { agents: ["researcher", "writer"] },
-      runtime: { provider: "openai" },
     },
     researcher: {
       id: "researcher",
       name: "Researcher",
       role: "Research facts and answer peers publicly.",
+      models: { generate: "default" },
       capabilities: { agents: ["coordinator"] },
-      runtime: { provider: "openai" },
     },
   },
 }
@@ -36,12 +36,14 @@ The model invokes:
 
 - The target must be an agent participant in the same thread.
 - `capabilities.agents` constrains who an agent may ask. Omitted or empty means
-  none; `{ all: true }` deliberately grants every declared peer.
-- The `ask` tool is derived from a non-empty agent grant. Applications enable
-  its resource/processor plugin explicitly with `core: { ask: {} }`.
+  none; grants are exact Agent alias lists.
+- The `ask` Tool is derived from a non-empty Agent grant. `corePlugin`
+  contributes its native Action, Tool Resource, and continuation Processors.
 - Questions, progress, and answers are public messages with stable ask metadata.
 - Nested asks are allowed up to a configurable depth (default 8).
-- Parallel asks and tools settle independently, then resume their callers.
+- Calls in one model-produced Tool plan execute sequentially in provider order.
+  An `ask` completion pauses that plan until its durable answer or failure Event
+  resumes the remaining calls and one final LLM continuation.
 - An asked-agent failure produces durable failure state and still resumes the
   caller with a labelled outcome.
 - No global single-speaker lock is imposed. Concurrent realtime output remains
@@ -50,5 +52,6 @@ The model invokes:
 Background work that should not be part of the public conversation belongs in a
 separate application-defined thread/workflow, not a hidden consultation API.
 
-The same `context.ask()` capability is available inside realtime providers, so
-audio interaction and text interaction share the multi-agent semantics.
+Realtime orchestration uses the same composed `context.actions.ask` Action when
+it deliberately participates in Core's ask protocol. There is no separate ask
+capability method or second continuation path.

@@ -112,8 +112,8 @@ API.
   application context. Later context values replace earlier values by namespace
   and key.
 - Installed resources do not create ambient agent authority. Exact
-  `capabilities` grants are required; broad access uses explicit
-  `{ all: true }`.
+  `capabilities` alias lists are required; installing another Resource never
+  broadens an existing Agent grant.
 - Injected Ominipg databases, Oxian Hypervisors, and dispatchers remain owned by
   the embedding application.
 - Copilotz-owned database configurations and connection capabilities recover

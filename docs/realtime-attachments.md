@@ -56,12 +56,13 @@ Raw input/output chunks respect Web Stream backpressure. Progressive stream
 bytes are durable through the runtime BodyStore while the stream is active or
 until they are adopted as canonical content; semantic collections create the
 Asset node when declared content adopts a closed stream. Interruptions, final
-transcripts/messages, tool execution, public agent ask, and errors are semantic
-events.
+transcripts/messages, public ask messages, and errors are semantic Events; Tool
+calls use their native Action lifecycle Events.
 
-Realtime provider resources receive typed `context.send()`, `context.tool()`,
-and `context.ask()` capabilities. This lets an audio model call tools or other
-agents without routing through an artificial text-only processor path.
+A semantic realtime plugin receives the ordinary composed runtime context. Its
+Actions and Processors call native capabilities through `context.actions` just
+like the text loop; the runtime does not inject special `send`, `tool`, or `ask`
+context methods.
 
 Production codecs, VAD/turn detection, and provider-specific audio protocols are
 adapters layered on this foundation.

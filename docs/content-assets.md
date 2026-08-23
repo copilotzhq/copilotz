@@ -100,41 +100,41 @@ with its name, media type, raw asset ID, and tenant-scoped canonical reference:
 asset://<encoded namespace>/<encoded asset ID>
 ```
 
-Native asset tools and `WorkflowToolExecutionContext.resolveAsset()` accept
-either the raw ID or this canonical reference. Cross-namespace references are
+Native asset Actions accept either the raw ID or this canonical reference and
+resolve it through `ActionContext.content`. Cross-namespace references are
 rejected. The descriptor remains available even when a provider cannot consume
 the file's media type directly, so an agent can pass the identifier to an
-import, inspection, or transformation tool instead of asking the user to upload
-the file again.
+import, inspection, or transformation Action instead of asking the user to
+upload the file again.
 
-Tools that create files return a bounded projection separately from durable
-attachments:
+Actions that create files publish bytes through the content capability and
+return a bounded projection containing the canonical reference:
 
 ```ts
-import type { WorkflowToolResult } from "@copilotz/copilotz/tools";
+const asset = await context.content.publish({
+  body: bytes,
+  mediaType: "text/csv",
+  metadata: { name: "report.csv" },
+}, { operationKey: "report:publish" });
 
-const result: WorkflowToolResult = {
-  kind: "copilotz.workflow-tool.result.v1",
-  output: { path: "outputs/report.csv", size: bytes.byteLength },
-  attachments: [{
-    type: "file",
-    bytes,
+return {
+  path: "outputs/report.csv",
+  size: bytes.byteLength,
+  asset: {
+    assetId: asset.id,
+    kind: "file",
+    role: "attachment",
     mediaType: "text/csv",
     name: "report.csv",
-    role: "attachment",
-  }],
+  },
 };
 ```
 
-Copilotz persists those attachments on the tool execution timeline. Attachment
-bytes never enter `tool_output.delta` or other live event frames; clients
-resolve them through the canonical asset API.
-
-Tool returns are also inspected recursively for complete `data:` URLs,
-`{ dataUrl }`, and `{ mimeType, dataBase64 }`. Copilotz replaces each body with
-an `asset://` descriptor before automatic live output, durable JSON, and the
-next LLM turn. Malformed data, cycles, or bounded extraction-limit violations
-fail the tool result instead of persisting raw base64.
+The Action lifecycle persists the reference, never the body bytes. Live output,
+durable JSON, and the next LLM turn therefore reuse the same canonical content.
+The isolated content-v2 migration can extract historical encoded Tool results;
+new Action inputs and outputs do not use `data:` URLs or base64 objects as a
+binary transport.
 
 ## Streams
 

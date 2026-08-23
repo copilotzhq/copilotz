@@ -13,8 +13,7 @@ const CORE_ACTION_IDS = [
   "copilotz.core.thread.deleteMessages",
   "copilotz.core.message.revise",
   "copilotz.core.thread-message.create",
-  "copilotz.core.tool.call",
-  "copilotz.core.tool-batch.execute",
+  "copilotz.core.ask",
 ];
 
 Deno.test("core plugin is direct static plugin composition", () => {
@@ -37,7 +36,7 @@ Deno.test("core plugin is direct static plugin composition", () => {
   ]);
   assertEquals(corePlugin.plugins, [llmPlugin]);
   assertEquals(corePlugin.adapters, {});
-  assertStrictEquals(corePlugin.resources.tools.ask.id, "ask");
+  assertStrictEquals(corePlugin.resources.tools.ask.action, "ask");
   assertEquals("manifest" in corePlugin, false);
   assertEquals("features" in corePlugin, false);
   assertEquals(
@@ -71,7 +70,6 @@ Deno.test("core production modules consume public Copilotz subpaths", async () =
     "plugin.ts",
     "context.ts",
     "resources/actions/thread-message.ts",
-    "resources/actions/tool.ts",
     "resources/actions/thread.ts",
     "resources/actions/message.ts",
     "resources/processors/helpers.ts",
@@ -88,6 +86,7 @@ Deno.test("core production modules consume public Copilotz subpaths", async () =
     "resources/collections/message.ts",
     "internal/agents/prompt.ts",
     "internal/agents/transcript.ts",
+    "internal/tool-plan.ts",
   ];
   for (const file of files) {
     const source = await Deno.readTextFile(new URL(file, import.meta.url));

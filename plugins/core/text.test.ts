@@ -5,7 +5,7 @@ import {
   assertStringIncludes,
 } from "@std/assert";
 import type { AgentResource } from "@copilotz/copilotz/core";
-import { corePlugin } from "@copilotz/copilotz/core";
+import { corePlugin, coreProcessors } from "@copilotz/copilotz/core";
 import type {
   LlmAdapter,
   LlmAdapterCallInput,
@@ -13,11 +13,15 @@ import type {
   LlmAdapterResult,
   LlmMode,
 } from "@copilotz/copilotz/llm";
-import type { WorkflowTool } from "@copilotz/copilotz/tools";
+import { defineAction } from "@copilotz/copilotz/actions";
+import { defineTool } from "@copilotz/copilotz/tools";
 import {
+  type CopilotzPlugin,
   createPluginRegistry,
   definePlugin,
+  defineProcessor,
 } from "../../runtime/plugins/index.ts";
+import type { CoreToolProcessorContext } from "./context.ts";
 import {
   type CopilotzEngine,
   createCopilotzEngine,
@@ -69,21 +73,26 @@ function adapterFrom(handler: AdapterHandler): LlmAdapter {
   });
 }
 
-const contractTool: WorkflowTool = Object.freeze({
-  id: "contract-tool",
-  key: "contract_tool",
-  name: "Contract Tool",
-  description: "Returns the supplied value with a stable marker.",
+const toolExecutions: string[] = [];
+
+const contractToolAction = defineAction({
+  id: "test.contract-tool",
   inputSchema: {
     type: "object",
     additionalProperties: false,
     properties: { value: { type: "string" } },
     required: ["value"],
+  } as const,
+  execute(input: Readonly<{ value: string }>) {
+    toolExecutions.push(input.value);
+    if (input.value === "empty-array") return [];
+    return { marker: `tool-result:${input.value}` };
   },
-  execute(input) {
-    const record = input as Record<string, unknown>;
-    return { marker: `tool-result:${String(record.value)}` };
-  },
+});
+
+const contractTool = defineTool("contract_tool", contractToolAction, {
+  name: "Contract Tool",
+  description: "Returns the supplied value with a stable marker.",
 });
 
 function agent(mode: LlmMode = "generate"): AgentResource {
@@ -109,7 +118,9 @@ type Fixture = Readonly<{
 async function createFixture(
   handler: AdapterHandler,
   mode: LlmMode = "generate",
+  semanticPlugin: CopilotzPlugin = corePlugin,
 ): Promise<Fixture> {
+  toolExecutions.splice(0);
   const db = await createTestDatabase({ url: ":memory:" });
   const inputs: LlmAdapterCallInput[] = [];
   const llm = adapterFrom(async (input) => {
@@ -119,9 +130,10 @@ async function createFixture(
   const app = definePlugin({
     id: `test.core-llm.${mode}`,
     version: "1.0.0",
+    actions: { contract_tool: contractToolAction },
     resources: {
       agents: { north: agent(mode) },
-      tools: { contractTool },
+      tools: { contract_tool: contractTool },
       models: {
         primaryModel: {
           adapter: "test",
@@ -133,7 +145,7 @@ async function createFixture(
     adapters: { llm: { test: llm } },
   });
   const registry = await createPluginRegistry({
-    plugins: [corePlugin, app],
+    plugins: [semanticPlugin, app],
   });
   const engine = await createCopilotzEngine({
     session: createSqlSession(db),
@@ -234,6 +246,7 @@ async function waitForRun(
         `Core LLM run dead-lettered: ${JSON.stringify(deliveries)}`,
       );
     }
+    await fixture.engine.recover({ namespace: NAMESPACE });
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   throw new Error(`Core LLM run did not produce ${expectedMessages} Messages.`);
@@ -336,7 +349,7 @@ Deno.test("Core invokes llm.call with explicit application Models and Adapters",
   }
 });
 
-Deno.test("Core projects final LLM tool calls through the sole legacy executor", async () => {
+Deno.test("Core invokes and projects an Action-backed Tool plan", async () => {
   let call = 0;
   const fixture = await createFixture((input) => {
     call += 1;
@@ -347,7 +360,15 @@ Deno.test("Core projects final LLM tool calls through the sole legacy executor",
           toolCalls: [{
             id: "call-1",
             action: "contract_tool",
-            input: { value: "marker" },
+            input: { value: "first" },
+          }, {
+            id: "call-2",
+            action: "contract_tool",
+            input: { value: "second" },
+          }, {
+            id: "call-3",
+            action: "contract_tool",
+            input: { value: "empty-array" },
           }],
           attempts: [{ status: "completed" }],
           finishReason: "tool_calls",
@@ -355,7 +376,9 @@ Deno.test("Core projects final LLM tool calls through the sole legacy executor",
       };
     }
     assert(input.request.messages.some((message) => message.role === "tool"));
-    assertStringIncludes(inputText(input), "tool-result:marker");
+    assertStringIncludes(inputText(input), "tool-result:first");
+    assertStringIncludes(inputText(input), "tool-result:second");
+    assertStringIncludes(inputText(input), "[]");
     return {
       result: {
         content: { type: "text", text: "Tool observed", role: "body" },
@@ -366,8 +389,9 @@ Deno.test("Core projects final LLM tool calls through the sole legacy executor",
   });
   try {
     const root = await startRun(fixture, "Use the contract tool");
-    await waitForRun(fixture, root, 4);
+    await waitForRun(fixture, root, 6);
     assertEquals(call, 2);
+    assertEquals(toolExecutions, ["first", "second", "empty-array"]);
     const messages = await projectMessages(
       fixture.engine,
       NAMESPACE,
@@ -377,17 +401,165 @@ Deno.test("Core projects final LLM tool calls through the sole legacy executor",
       "human",
       "agent",
       "tool",
+      "tool",
+      "tool",
       "agent",
     ]);
-    assertEquals(await messageText(fixture, messages[3]), "Tool observed");
+    assertEquals(await messageText(fixture, messages[5]), "Tool observed");
+    assertEquals(messages[1].metadata.llmToolCalls, [{
+      id: "call-1",
+      action: "contract_tool",
+      input: { value: "first" },
+    }, {
+      id: "call-2",
+      action: "contract_tool",
+      input: { value: "second" },
+    }, {
+      id: "call-3",
+      action: "contract_tool",
+      input: { value: "empty-array" },
+    }]);
+    assertEquals(
+      "calls" in (messages[1].metadata.copilotzToolPlan as Record<
+        string,
+        unknown
+      >),
+      false,
+    );
     const toolCalls = await projectActionEvents(
       fixture.engine,
       NAMESPACE,
-      "copilotz.core.tool.call",
+      "test.contract-tool",
     );
     assertEquals(
       toolCalls.filter((event) => event.status === "completed").length,
-      1,
+      3,
+    );
+    for (const event of toolCalls) {
+      assertEquals(Object.keys(event.metadata).sort(), [
+        "action",
+        "agentId",
+        "agentParticipantId",
+        "availableToolIds",
+        "initiatorParticipantId",
+        "parentLlmActionRunId",
+        "planId",
+        "planIndex",
+        "planMessageId",
+        "planSize",
+        "schema",
+        "threadId",
+        "toolCallId",
+        "triggerMessageId",
+      ]);
+      assertEquals(
+        event.metadata.schema,
+        "copilotz.core.tool-action.v1",
+      );
+    }
+    const firstToolMetadata = messages[2].metadata;
+    const firstWorkflow = firstToolMetadata.copilotzWorkflow as Record<
+      string,
+      unknown
+    >;
+    assertEquals(firstWorkflow.continuation, "none");
+    assertEquals("batchId" in firstWorkflow, false);
+    assertEquals("toolExecutionId" in firstWorkflow, false);
+    assertEquals(
+      typeof (firstToolMetadata.copilotzToolAction as Record<string, unknown>)
+        .actionRunId,
+      "string",
+    );
+  } finally {
+    await fixture.close();
+  }
+});
+
+Deno.test("Tool terminal delivery retry recovers effects and one continuation", async () => {
+  let injectedFailures = 0;
+  const flakyProjectToolResult = defineProcessor<CoreToolProcessorContext>({
+    id: coreProcessors.projectToolResult.id,
+    on: coreProcessors.projectToolResult.on,
+    async handle(event, context) {
+      await coreProcessors.projectToolResult.handle(event, context);
+      if (injectedFailures === 0) {
+        injectedFailures += 1;
+        throw new Error("injected failure after Tool result projection");
+      }
+    },
+  });
+  const retryingCore = definePlugin({
+    id: "test.core-tool-retry",
+    version: "1.0.0",
+    plugins: corePlugin.plugins,
+    collections: corePlugin.collections,
+    actions: corePlugin.actions,
+    processors: {
+      ...corePlugin.processors,
+      projectToolResult: flakyProjectToolResult,
+    },
+    resources: corePlugin.resources,
+    adapters: corePlugin.adapters,
+  });
+  let llmCalls = 0;
+  const fixture = await createFixture(
+    (_input) => {
+      llmCalls += 1;
+      if (llmCalls === 1) {
+        return {
+          result: {
+            content: [],
+            toolCalls: [{
+              id: "retry-call-1",
+              action: "contract_tool",
+              input: { value: "first" },
+            }, {
+              id: "retry-call-2",
+              action: "contract_tool",
+              input: { value: "second" },
+            }],
+            attempts: [{ status: "completed" }],
+          },
+        };
+      }
+      return {
+        result: {
+          content: { type: "text", text: "Retried once", role: "body" },
+          attempts: [{ status: "completed" }],
+        },
+      };
+    },
+    "generate",
+    retryingCore,
+  );
+  try {
+    const root = await startRun(fixture, "Exercise retry recovery");
+    await waitForRun(fixture, root, 5);
+    assertEquals(injectedFailures, 1);
+    assertEquals(toolExecutions, ["first", "second"]);
+    assertEquals(llmCalls, 2);
+    const messages = await projectMessages(
+      fixture.engine,
+      NAMESPACE,
+      "thread-a",
+    );
+    const toolMessages = messages.filter((message) =>
+      message.sender.participantType === "tool"
+    );
+    assertEquals(toolMessages.length, 2);
+    assertEquals(new Set(toolMessages.map((message) => message.id)).size, 2);
+    const lifecycle = await projectActionEvents(
+      fixture.engine,
+      NAMESPACE,
+      "test.contract-tool",
+    );
+    assertEquals(
+      lifecycle.filter((event) => event.status === "invoked").length,
+      2,
+    );
+    assertEquals(
+      lifecycle.filter((event) => event.status === "completed").length,
+      2,
     );
   } finally {
     await fixture.close();

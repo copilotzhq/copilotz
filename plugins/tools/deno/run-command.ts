@@ -1,3 +1,6 @@
+import { type ActionContext, defineAction } from "@copilotz/copilotz/actions";
+import { defineTool } from "../contracts.ts";
+
 interface RunCommandParams {
   command: string;
   args?: string[];
@@ -5,10 +8,8 @@ interface RunCommandParams {
   timeout?: number;
 }
 
-export default {
-  key: "run_command",
-  name: "Run Command",
-  description: "Execute a system command safely with timeout protection.",
+export const runCommandAction = defineAction({
+  id: "copilotz.tools.deno.run_command",
   inputSchema: {
     type: "object",
     properties: {
@@ -36,10 +37,7 @@ export default {
   },
   execute: async (
     { command, args = [], cwd = ".", timeout }: RunCommandParams,
-    context?: {
-      onCancel?: (cb: () => void) => () => void;
-      cancelled?: boolean;
-    },
+    context: ActionContext,
   ) => {
     try {
       // Security check - block dangerous commands
@@ -113,79 +111,98 @@ export default {
         }
       };
 
-      const unsubscribe = context?.onCancel?.(() => {
-        killChild("SIGTERM");
-        setTimeout(() => killChild("SIGKILL"), 500);
-      });
-
-      if (context?.cancelled) {
-        killChild("SIGTERM");
-        setTimeout(() => killChild("SIGKILL"), 500);
-      }
-
-      const timeoutMs = typeof timeout === "number" && timeout > 0
-        ? timeout * 1000
-        : undefined;
-      const timeoutPromise = typeof timeoutMs === "number"
-        ? new Promise<never>((_, reject) => {
-          const id = setTimeout(() => {
-            killChild("SIGTERM");
-            setTimeout(() => killChild("SIGKILL"), 500);
-            reject(new Error(`Command timeout after ${timeout} seconds`));
-          }, timeoutMs);
-          // Ensure we clear if the process ends first
-          child.status.finally(() => clearTimeout(id)).catch(() =>
-            clearTimeout(id)
+      let cancel!: () => void;
+      const cancellationPromise = new Promise<never>((_, reject) => {
+        cancel = () => {
+          killChild("SIGTERM");
+          setTimeout(() => killChild("SIGKILL"), 500);
+          const reason = context.signal.reason;
+          reject(
+            reason instanceof DOMException && reason.name === "AbortError"
+              ? reason
+              : new DOMException(
+                reason instanceof Error ? reason.message : "Action cancelled",
+                "AbortError",
+              ),
           );
-        })
-        : null;
+        };
+      });
+      context.signal.addEventListener("abort", cancel, { once: true });
 
-      const statusPromise = child.status;
-      const stdoutPromise = child.stdout
-        ? new Response(child.stdout).arrayBuffer().then((b) =>
-          new Uint8Array(b)
-        )
-        : Promise.resolve(new Uint8Array());
-      const stderrPromise = child.stderr
-        ? new Response(child.stderr).arrayBuffer().then((b) =>
-          new Uint8Array(b)
-        )
-        : Promise.resolve(new Uint8Array());
+      try {
+        if (context.signal.aborted) cancel();
 
-      const result = (timeoutPromise
-        ? await Promise.race([
-          Promise.all([statusPromise, stdoutPromise, stderrPromise]),
-          timeoutPromise,
-        ])
-        : await Promise.all([
+        const timeoutMs = typeof timeout === "number" && timeout > 0
+          ? timeout * 1000
+          : undefined;
+        const timeoutPromise = typeof timeoutMs === "number"
+          ? new Promise<never>((_, reject) => {
+            const id = setTimeout(() => {
+              killChild("SIGTERM");
+              setTimeout(() => killChild("SIGKILL"), 500);
+              reject(new Error(`Command timeout after ${timeout} seconds`));
+            }, timeoutMs);
+            // Ensure we clear if the process ends first
+            child.status.finally(() => clearTimeout(id)).catch(() =>
+              clearTimeout(id)
+            );
+          })
+          : null;
+
+        const statusPromise = child.status;
+        const stdoutPromise = child.stdout
+          ? new Response(child.stdout).arrayBuffer().then((b) =>
+            new Uint8Array(b)
+          )
+          : Promise.resolve(new Uint8Array());
+        const stderrPromise = child.stderr
+          ? new Response(child.stderr).arrayBuffer().then((b) =>
+            new Uint8Array(b)
+          )
+          : Promise.resolve(new Uint8Array());
+
+        const execution = Promise.all([
           statusPromise,
           stdoutPromise,
           stderrPromise,
+        ]);
+        const result = (await Promise.race([
+          execution,
+          cancellationPromise,
+          ...(timeoutPromise ? [timeoutPromise] : []),
         ])) as unknown as [
           { code: number; success: boolean },
           Uint8Array,
           Uint8Array,
         ];
 
-      const status = result[0];
-      const stdout = new TextDecoder().decode(result[1]);
-      const stderr = new TextDecoder().decode(result[2]);
-      unsubscribe?.();
+        const status = result[0];
+        const stdout = new TextDecoder().decode(result[1]);
+        const stderr = new TextDecoder().decode(result[2]);
 
-      return {
-        command,
-        args,
-        cwd,
-        stdout,
-        stderr,
-        exitCode: status.code,
-        success: status.success,
-      };
+        return {
+          command,
+          args,
+          cwd,
+          stdout,
+          stderr,
+          exitCode: status.code,
+          success: status.success,
+        };
+      } finally {
+        context.signal.removeEventListener("abort", cancel);
+      }
     } catch (error) {
+      if ((error as Error).name === "AbortError") throw error;
       if ((error as Error).message.includes("timeout")) {
         throw error; // Re-throw timeout errors as-is
       }
       throw new Error(`Command execution failed: ${(error as Error).message}`);
     }
   },
-};
+});
+
+export const runCommandTool = defineTool("run_command", runCommandAction, {
+  name: "Run Command",
+  description: "Execute a system command safely with timeout protection.",
+});

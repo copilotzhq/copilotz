@@ -2,27 +2,26 @@ import type {
   CollectionRecord,
   ScopedCollection,
 } from "@copilotz/copilotz/collections";
-import type {
-  ContentInput,
-  ContentSequence,
-  ResolvedContent,
-} from "@copilotz/copilotz/content";
+import type { ContentSequence } from "@copilotz/copilotz/content";
 import type {
   ConversationMessage,
   ConversationThread,
   Participant,
 } from "@copilotz/copilotz/domain";
 import type { ProcessorContext } from "@copilotz/copilotz/plugins";
-import {
-  createWorkflowToolCatalog,
-  type WorkflowToolCatalog,
-} from "@copilotz/copilotz/tools";
+import type { ToolResource } from "@copilotz/copilotz/tools";
+import type { AgentResource } from "../../agent.ts";
+import type { CoreResources } from "../../context.ts";
+import { resolveToolGrants } from "../../internal/capabilities/grants.ts";
 import {
   type MessageBranch,
   projectActiveMessageBranch,
 } from "../collections/message.ts";
 
-const defaultToolCatalog = createWorkflowToolCatalog();
+export type CoreToolEntry = Readonly<{
+  alias: string;
+  resource: ToolResource;
+}>;
 
 export function requiredText(value: string | undefined, name: string): string {
   const normalized = value?.trim();
@@ -161,15 +160,6 @@ export function participantInput(participant: CollectionRecord) {
   } as const;
 }
 
-export function preparedContent(
-  value: { content?: unknown } | unknown,
-): unknown {
-  if (value && typeof value === "object" && "content" in value) {
-    return (value as { content: unknown }).content;
-  }
-  return value;
-}
-
 export async function listThreadMessages(
   context: Pick<ProcessorContext, "collections">,
   threadId: string,
@@ -188,48 +178,48 @@ export async function listThreadMessages(
   );
 }
 
-export function recordThreadId(record: CollectionRecord): string {
-  return requiredText(optionalText(record.threadId), "thread id");
-}
-
-export function toolField(record: CollectionRecord, field: string): unknown {
-  return asRecord(record.tool)[field];
-}
-
-export function historyVisibilityOf(record: CollectionRecord): string {
-  return optionalText(record.historyVisibility) ?? "public_status";
-}
-
-export function toolCatalogFor(): WorkflowToolCatalog {
-  return defaultToolCatalog;
-}
-
-export function parseJsonText(text: string): unknown {
-  try {
-    return JSON.parse(text);
-  } catch {
-    return text;
-  }
-}
-
-export function resolvedValue(resolved: ResolvedContent): unknown {
-  if (resolved.value !== undefined) return resolved.value;
-  const text = resolved.text ?? new TextDecoder().decode(resolved.bytes);
-  return resolved.ref.kind === "json" ? parseJsonText(text) : text;
-}
-
-export function valueContent(value: unknown, role: string): ContentInput {
-  if (typeof value === "string") return { type: "text", text: value, role };
-  if (value instanceof Uint8Array) {
-    return {
-      type: "file",
-      bytes: value,
-      mediaType: "application/octet-stream",
-      role,
-      disposition: "attachment",
-    };
-  }
-  return { type: "json", value, role };
+/** Resolves one Agent's least-authority Tool Resources in stable grant order. */
+export function toolsForAgent(
+  context:
+    & Pick<ProcessorContext, "actions">
+    & Readonly<{
+      resources: CoreResources;
+    }>,
+  agent: AgentResource,
+): readonly CoreToolEntry[] {
+  const entries = Object.entries(context.resources.tools ?? {}).flatMap(
+    ([alias, resource]): readonly CoreToolEntry[] => {
+      if (!resource) return Object.freeze([]);
+      if (resource.action !== alias) {
+        throw new TypeError(
+          `Tool Resource '${alias}' must reference Action alias '${alias}'.`,
+        );
+      }
+      if (
+        typeof resource.name !== "string" || !resource.name.trim() ||
+        typeof resource.description !== "string" ||
+        !resource.description.trim()
+      ) {
+        throw new TypeError(
+          `Tool Resource '${alias}' requires a name and description.`,
+        );
+      }
+      if (typeof context.actions[alias] !== "function") {
+        throw new Error(
+          `Tool Resource '${alias}' has no composed Action '${alias}'.`,
+        );
+      }
+      return Object.freeze([Object.freeze({ alias, resource })]);
+    },
+  );
+  return resolveToolGrants(agent, entries, {
+    agents: Object.values(context.resources.agents ?? {}).filter(
+      (value): value is AgentResource => Boolean(value),
+    ),
+    skills: Object.values(context.resources.skills ?? {}).filter(
+      (value): value is NonNullable<typeof value> => Boolean(value),
+    ),
+  });
 }
 
 export async function loadParticipant(

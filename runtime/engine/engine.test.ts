@@ -59,15 +59,15 @@ async function createFixture(): Promise<Fixture> {
   let calls = 0;
   let leakedStorage = false;
   const echoTool = Object.freeze({
-    key: "echo",
+    action: "echo",
     name: "Echo",
-    execute: (value: unknown) => value,
+    description: "Echo the supplied Action input.",
   });
   type FixtureProcessorContext =
     & Omit<ProcessorContext, "actions">
     & Readonly<{
       actions: Readonly<{
-        engineEcho: ActionCaller<typeof engineEchoAction>;
+        echo: ActionCaller<typeof engineEchoAction>;
       }>;
     }>;
   const processor = defineProcessor<FixtureProcessorContext>({
@@ -82,7 +82,7 @@ async function createFixture(): Promise<Fixture> {
         "collectionRuntime" in context;
       assertEquals(context.namespace, "tenant-a");
       assertEquals(
-        (context.resources.tools?.echo as typeof echoTool | undefined)?.key,
+        (context.resources.tools?.echo as typeof echoTool | undefined)?.action,
         "echo",
       );
 
@@ -100,7 +100,7 @@ async function createFixture(): Promise<Fixture> {
       );
       const attemptId = `attempt:${message.id}`;
       const content = await context.content.materialize(prepared);
-      await context.actions.engineEcho({
+      await context.actions.echo({
         id: attemptId,
         threadId: message.threadId,
         messageId: message.id,
@@ -125,7 +125,7 @@ async function createFixture(): Promise<Fixture> {
         version: "1.0.0",
         processors: { messageToAttempt: processor },
         collections: { engineAudit: auditCollection },
-        actions: { engineEcho: engineEchoAction },
+        actions: { echo: engineEchoAction },
         resources: { tools: { echo: echoTool } },
       }),
     ],

@@ -15,8 +15,8 @@ import type {
   LlmRequest,
   LlmToolDefinition,
 } from "@copilotz/copilotz/llm";
-import type { WorkflowTool } from "@copilotz/copilotz/tools";
 import type { CoreProcessorContext } from "../../context.ts";
+import type { CoreToolEntry } from "../../resources/processors/helpers.ts";
 import {
   resolveAgentGrants,
   resolveSkillGrants,
@@ -223,14 +223,19 @@ function historyIdsAfterContext(
 }
 
 function llmTools(
-  tools: readonly WorkflowTool[],
+  tools: readonly CoreToolEntry[],
 ): readonly LlmToolDefinition[] {
   return Object.freeze(tools.map((tool) =>
     Object.freeze({
-      name: tool.key,
-      description: tool.description,
-      ...(tool.inputSchema && typeof tool.inputSchema === "object"
-        ? { inputSchema: structuredClone(tool.inputSchema) as LlmJsonObject }
+      name: tool.alias,
+      description: tool.resource.description,
+      ...(tool.resource.inputSchema &&
+          typeof tool.resource.inputSchema === "object"
+        ? {
+          inputSchema: structuredClone(
+            tool.resource.inputSchema,
+          ) as LlmJsonObject,
+        }
         : {}),
     })
   ));
@@ -244,7 +249,7 @@ export async function buildCoreLlmRequest(
     participant: CollectionRecord;
     threadId: string;
     messageIds: readonly string[];
-    tools: readonly WorkflowTool[];
+    tools: readonly CoreToolEntry[];
   }>,
 ): Promise<LlmRequest> {
   const participant = mapParticipantRecord(input.participant);

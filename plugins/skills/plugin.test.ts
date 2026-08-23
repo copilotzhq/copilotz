@@ -139,19 +139,26 @@ Deno.test("skills plugins own disclosure tools and preserve stable-ID overrides"
     id: "@acme/base-skills",
     version: "1.0.0",
     skills: [first],
+    tools: false,
   });
   const overriding = createSkillsPlugin({
     id: "@acme/overriding-skills",
     version: "1.0.0",
     skills: [replacement],
   });
-  assertEquals(Object.keys(base.resources.tools ?? {}), [
-    "list_skills",
-    "load_skill",
-  ]);
+  assertEquals(Object.keys(base.resources.tools ?? {}), []);
+  assertEquals(Object.keys(base.actions), []);
   assertEquals(Object.keys(overriding.resources.tools ?? {}), [
     ...SKILL_TOOL_IDS,
   ]);
+  assertEquals(Object.keys(overriding.actions), [...SKILL_TOOL_IDS]);
+  for (const alias of SKILL_TOOL_IDS) {
+    assertEquals(
+      (overriding.resources.tools?.[alias] as { action?: string }).action,
+      alias,
+    );
+    assert(overriding.actions[alias]);
+  }
 
   const registry = await createPluginRegistry({
     plugins: [base, overriding],
@@ -165,6 +172,7 @@ Deno.test("skills plugins own disclosure tools and preserve stable-ID overrides"
     Object.keys(registry.resources.tools),
     [...SKILL_TOOL_IDS],
   );
+  assertEquals(Object.keys(registry.actions), [...SKILL_TOOL_IDS]);
 });
 
 Deno.test("skill core remains factory-first and runtime-neutral", async () => {

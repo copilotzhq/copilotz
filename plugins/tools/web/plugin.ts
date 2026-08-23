@@ -1,7 +1,8 @@
-import fetchText from "./fetch-text.ts";
-import httpRequest from "./http-request.ts";
-import webSearch from "./web-search.ts";
-import type { NewTool, WorkflowTool } from "../internal/types.ts";
+import { fetchTextAction, fetchTextTool } from "./fetch-text.ts";
+import { httpRequestAction, httpRequestTool } from "./http-request.ts";
+import { webSearchAction, webSearchTool } from "./web-search.ts";
+import type { AnyActionDefinition } from "@copilotz/copilotz/actions";
+import type { ToolResource } from "../contracts.ts";
 import { type CopilotzPlugin, definePlugin } from "@copilotz/copilotz/plugins";
 
 export const WEB_TOOL_IDS = [
@@ -18,23 +19,16 @@ export type CreateWebToolsPluginOptions = Readonly<{
   include?: readonly WebToolId[];
 }>;
 
-const definitions: Readonly<Record<WebToolId, NewTool>> = Object.freeze({
-  http_request: httpRequest,
-  fetch_text: fetchText,
-  web_search: webSearch,
+const definitions: Readonly<
+  Record<
+    WebToolId,
+    Readonly<{ action: AnyActionDefinition; tool: ToolResource }>
+  >
+> = Object.freeze({
+  http_request: { action: httpRequestAction, tool: httpRequestTool },
+  fetch_text: { action: fetchTextAction, tool: fetchTextTool },
+  web_search: { action: webSearchAction, tool: webSearchTool },
 });
-
-function workflowTool(id: WebToolId): WorkflowTool {
-  const value = definitions[id];
-  if (typeof value.execute !== "function") {
-    throw new TypeError(`Web tool '${id}' has no executor.`);
-  }
-  return Object.freeze({
-    ...value,
-    id: value.id || value.key,
-    execute: value.execute,
-  }) as WorkflowTool;
-}
 
 /** Provides Web API-based network tools without filesystem or process access. */
 export function createWebToolsPlugin(
@@ -44,17 +38,22 @@ export function createWebToolsPlugin(
   if (new Set(include).size !== include.length) {
     throw new TypeError("Web tool selection contains duplicate IDs.");
   }
-  const tools = include.map((id) => {
+  const selected = include.map((id) => {
     if (!WEB_TOOL_IDS.includes(id)) {
       throw new TypeError(`Unknown Web tool '${id}'.`);
     }
-    return workflowTool(id);
+    return [id, definitions[id]] as const;
   });
   return definePlugin({
     id: options.id ?? "@copilotz/web-tools",
     version: options.version ?? "3.0.0",
+    actions: Object.fromEntries(
+      selected.map(([alias, definition]) => [alias, definition.action]),
+    ),
     resources: {
-      tools: Object.fromEntries(tools.map((tool) => [tool.key, tool])),
+      tools: Object.fromEntries(
+        selected.map(([alias, definition]) => [alias, definition.tool]),
+      ),
     },
   });
 }

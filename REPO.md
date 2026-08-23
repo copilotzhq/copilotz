@@ -44,8 +44,8 @@ deleted during the refactor.
 
 ## Current Code Map
 
-This map describes the current implementation. Use `IMPLEMENTATION_PLAN.md`
-for the remaining cut order.
+This map describes the current implementation. Use `IMPLEMENTATION_PLAN.md` for
+the remaining cut order.
 
 - Public application assembly: `runtime/application/`
 - Action definition, lifecycle, and invocation: `runtime/actions/`
@@ -60,8 +60,8 @@ for the remaining cut order.
 - Agent contract, prompt policy, and conversation loop: `plugins/core/`
 - Provider-neutral LLM Action, Model/Adapter contracts, and providers:
   `plugins/llm/`
-- Legacy Tool catalog, executor, and jq pipelines: `plugins/tools/internal/`
-- Concrete Tool plugins and host/protocol integrations: `plugins/tools/`
+- Native Tool Actions, data-only Tool Resources, and generated integration
+  factories: `plugins/tools/`
 - Text/ask processors: `plugins/core/`
 - Persistent text/realtime attachments: `runtime/attachments/`
 - Admin, knowledge, and skills: `plugins/admin/`, `plugins/knowledge/`,

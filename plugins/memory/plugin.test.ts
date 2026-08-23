@@ -88,16 +88,39 @@ Deno.test("memory plugin exposes final maps and detached reservation", () => {
     "memorySpaceAccess",
   ]);
   assertEquals(Object.keys(plugin.actions).sort(), [
-    "consolidateMemory",
+    "consolidate_memory",
+    "inspect_memory",
+    "list_knowledge_spaces",
     "maintainMemory",
+    "search_memory",
+    "set_memory_status",
   ]);
   assertEquals(Object.keys(plugin.resources.tools).sort(), [
-    "consolidateMemory",
-    "inspectMemory",
-    "listMemorySpaces",
-    "searchMemory",
-    "setMemoryStatus",
+    "consolidate_memory",
+    "inspect_memory",
+    "list_knowledge_spaces",
+    "search_memory",
+    "set_memory_status",
   ]);
+  assertEquals(
+    plugin.actions.consolidate_memory.id,
+    CONSOLIDATE_MEMORY_ACTION_ID,
+  );
+  assertEquals(
+    plugin.actions.list_knowledge_spaces.id,
+    "copilotz.memory.spaces.list",
+  );
+  assertEquals(plugin.actions.search_memory.id, "copilotz.memory.search");
+  assertEquals(plugin.actions.inspect_memory.id, "copilotz.memory.inspect");
+  assertEquals(
+    plugin.actions.set_memory_status.id,
+    "copilotz.memory.status.set",
+  );
+  const actions = plugin.actions as Readonly<Record<string, unknown>>;
+  for (const [alias, resource] of Object.entries(plugin.resources.tools)) {
+    assertEquals(resource.action, alias);
+    assertExists(actions[alias]);
+  }
   assertEquals(plugin.adapters.memoryEmbedding, {});
   assertEquals(plugin.plugins, [llmPlugin]);
   assertEquals("models" in plugin.resources, false);
@@ -394,29 +417,32 @@ async function waitForMaintenanceSettlement(fixture: Fixture) {
 async function projectToolLifecycle(
   fixture: Fixture,
 ): Promise<Array<Record<string, unknown> & { status: string }>> {
-  const events = await projectActionEvents(
-    fixture.engine,
-    "tenant-a",
-    "copilotz.core.tool.call",
-  );
-  const latest = new Map<string, (typeof events)[number]>();
-  for (const event of events) latest.set(event.actionRunId, event);
-  return [...latest.values()].map((event) => {
-    const input = record(event.input);
-    const output = "output" in event ? record(event.output) : {};
-    return {
-      ...input,
-      ...output,
-      status: event.status === "invoked"
-        ? "running"
-        : event.status === "completed"
-        ? String(output.status ?? "completed")
-        : event.status,
+  const definitions = [
+    ["search_memory", "copilotz.memory.search"],
+    ["inspect_memory", "copilotz.memory.inspect"],
+    ["set_memory_status", "copilotz.memory.status.set"],
+    ["list_knowledge_spaces", "copilotz.memory.spaces.list"],
+  ] as const;
+  const projected: Array<Record<string, unknown> & { status: string }> = [];
+  for (const [alias, actionId] of definitions) {
+    const events = await projectActionEvents(
+      fixture.engine,
+      "tenant-a",
+      actionId,
+    );
+    const latest = new Map<string, (typeof events)[number]>();
+    for (const event of events) latest.set(event.actionRunId, event);
+    projected.push(...[...latest.values()].map((event) => ({
+      tool: { id: alias },
+      input: event.input,
+      ...(event.status === "completed" ? { output: event.output } : {}),
+      status: event.status === "invoked" ? "running" : event.status,
       ...(event.status === "failed" || event.status === "cancelled"
         ? { safeError: event.error }
         : {}),
-    } as Record<string, unknown> & { status: string };
-  });
+    })));
+  }
+  return projected;
 }
 
 async function waitForToolLifecycle(fixture: Fixture, count: number) {
@@ -488,6 +514,9 @@ Deno.test("native consolidation uses one internal tool grant and emits no public
       "invoked",
       "completed",
     ]);
+    assertEquals(consolidation[0].metadata, {
+      memoryCheckpointId: checkpoint.id,
+    });
     const llm = await projectActionEvents(
       fixture.engine,
       "tenant-a",
@@ -1364,16 +1393,12 @@ Deno.test("memory query tools enforce thread access, explain provenance, and pre
       "completed",
     ]);
     const outputs = Object.fromEntries(
-      await Promise.all(executions.map(async (execution) => {
-        const ref = Array.isArray(execution.output)
-          ? execution.output[0]
-          : undefined;
-        assertExists(ref);
-        const output = (await fixture.engine.content.resolver.get(ref, {
-          namespace: "tenant-a",
-        })).value as Record<string, unknown>;
-        return [String(record(execution.tool).id), output] as const;
-      })),
+      executions.map((execution) =>
+        [
+          String(record(execution.tool).id),
+          record(execution.output),
+        ] as const
+      ),
     );
     assertEquals(
       (outputs.search_memory.memories as Array<Record<string, unknown>>).map(

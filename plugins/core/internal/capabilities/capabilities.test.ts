@@ -1,25 +1,25 @@
 import { assertEquals, assertRejects } from "@std/assert";
 
 import { createPluginRegistry, definePlugin } from "@copilotz/copilotz/plugins";
+import { defineAction } from "@copilotz/copilotz/actions";
 import type { AgentCapabilitySelection, AgentResource } from "../../agent.ts";
 import {
   createSkillsPlugin,
   defineInlineSkill,
 } from "@copilotz/copilotz/skills";
 import { corePlugin } from "@copilotz/copilotz/core";
-import {
-  createWorkflowToolCatalog,
-  type WorkflowTool,
-} from "@copilotz/copilotz/tools";
+import { defineTool } from "@copilotz/copilotz/tools";
 import { createAgentCapabilityResolver } from "./resolver.ts";
 import { selectCapabilityResources } from "./selection.ts";
 
-const clock: WorkflowTool = Object.freeze({
-  id: "clock",
-  key: "clock",
+const clockAction = defineAction({
+  id: "test.clock",
+  execute: () => "12:00",
+});
+
+const clock = defineTool("clock", clockAction, {
   name: "Clock",
   description: "Returns a contract time.",
-  execute: () => "12:00",
 });
 
 const guide = defineInlineSkill({
@@ -39,7 +39,7 @@ function agents(): readonly AgentResource[] {
     role: "Coordinates work.",
     models: {},
     capabilities: {
-      tools: [clock.key],
+      tools: [clock.action],
       agents: ["researcher"],
       skills: [guide.name],
     },
@@ -56,9 +56,10 @@ async function registry() {
   const application = definePlugin({
     id: "test.capabilities.application",
     version: "1.0.0",
+    actions: { clock: clockAction },
     resources: {
       agents: Object.fromEntries(values.map((agent) => [agent.id, agent])),
-      tools: { [clock.key]: clock },
+      tools: { clock },
     },
   });
   return await createPluginRegistry({
@@ -93,7 +94,6 @@ Deno.test("resolver derives ask and skill mechanisms from higher-level grants", 
   const resources = await registry();
   const resolver = createAgentCapabilityResolver({
     registry: resources,
-    toolCatalog: createWorkflowToolCatalog(),
   });
   const resolved = await resolver.resolve({ agent: "coordinator" });
 
@@ -109,7 +109,7 @@ Deno.test("resolver derives ask and skill mechanisms from higher-level grants", 
       ["read_skill_resource", "derived"],
     ],
   );
-  assertEquals(resolved.tools[0].resource.key, "clock");
+  assertEquals(resolved.tools[0].resource.action, "clock");
   assertEquals("origin" in resolved.tools[0], false);
 
   const restricted = await resolver.resolve({ agent: "researcher" });
@@ -137,7 +137,6 @@ Deno.test("resolver rejects unknown grants instead of silently broadening access
   });
   const resolver = createAgentCapabilityResolver({
     registry: combined,
-    toolCatalog: createWorkflowToolCatalog(),
   });
   await assertRejects(
     () => resolver.resolve({ agent: invalid.id }),

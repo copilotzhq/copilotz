@@ -1131,9 +1131,6 @@ export function createGoalRuntime(
           leadRuns,
           judgeRuns,
           messages: transcript.length,
-          toolCalls: observations.filter(({ payload }) =>
-            payload.event.type === "copilotz.core.tool.call.invoked"
-          ).length,
           errors: orchestrationErrors + failedEvents,
         }),
       });

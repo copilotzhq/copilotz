@@ -1,50 +1,60 @@
+import {
+  type ActionDefinition,
+  defineAction,
+} from "@copilotz/copilotz/actions";
 import type { CollectionRecord } from "@copilotz/copilotz/collections";
-import type { AgentResource } from "../../agent.ts";
 import { deriveWorkflowId } from "@copilotz/copilotz/events";
+import { defineTool, type ToolResource } from "@copilotz/copilotz/tools";
+import type { AgentResource } from "../../agent.ts";
+import { type CoreActionContext, coreAgent } from "../../context.ts";
 import {
   type AgentAskMetadata,
-  agentAskMetadata,
-  resolveAgentGrants,
+  coreToolActionMetadata,
+  coreToolActionOriginFrom,
   withAgentAskMetadata,
-  workflowMetadata,
-} from "@copilotz/copilotz/core";
-import {
-  deferWorkflowTool,
-  type WorkflowTool,
-  type WorkflowToolExecutionContext,
-} from "@copilotz/copilotz/tools";
+} from "../../internal/workflow-metadata.ts";
+import { resolveAgentGrants } from "../../internal/capabilities/grants.ts";
 import {
   asRecord,
   optionalText,
   requireCollection,
   requiredText,
 } from "../processors/helpers.ts";
-import {
-  coreAgent,
-  type CoreProcessorContext,
-  type CoreResources,
-} from "../../context.ts";
 
-const DEFAULT_TOOL_ID = "ask";
-const DEFAULT_MAX_DEPTH = 8;
+export const ASK_ACTION_ID = "copilotz.core.ask";
+const MAX_ASK_DEPTH = 8;
 
-type AskToolExecutionContext =
-  & Omit<WorkflowToolExecutionContext, "processor">
-  & Readonly<{ processor: CoreProcessorContext }>;
+export type AskInput = Readonly<{
+  target: string;
+  message: string;
+}>;
 
-function executionContext(
-  value: WorkflowToolExecutionContext | undefined,
-): AskToolExecutionContext {
-  if (
-    !value?.processor ||
-    typeof value.processor.actions.createThreadMessage !== "function"
-  ) {
-    throw new Error(
-      "The ask capability requires the createThreadMessage Action.",
-    );
-  }
-  return value as AskToolExecutionContext;
-}
+export type AskOutput = Readonly<{ status: "deferred" }>;
+
+const askInputSchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    target: {
+      type: "string",
+      minLength: 1,
+      description: "Stable ID or name of another agent in this thread.",
+    },
+    message: {
+      type: "string",
+      minLength: 1,
+      description: "The complete public question for that agent.",
+    },
+  },
+  required: ["target", "message"],
+} as const;
+
+const askOutputSchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: { status: { const: "deferred" } },
+  required: ["status"],
+} as const;
 
 function normalizedIdentity(value: string | null | undefined): string | null {
   const normalized = value?.trim().toLowerCase();
@@ -59,24 +69,18 @@ function agentIdentities(agent: AgentResource): readonly string[] {
   );
 }
 
-function matchesAgent(value: string, agent: AgentResource): boolean {
-  return agentIdentities(agent).includes(value.trim().toLowerCase());
-}
-
 function resolveTargetAgent(
   target: string,
   agents: readonly AgentResource[],
 ): AgentResource {
-  const normalized = target.toLowerCase();
+  const normalized = target.trim().toLowerCase();
   const preferred = agents.filter((agent) =>
-    [agent.id]
-      .map(normalizedIdentity)
-      .includes(normalized)
+    normalizedIdentity(agent.id) === normalized
   );
-  const matches = preferred.length > 0
+  const matches = preferred.length
     ? preferred
     : agents.filter((agent) => normalizedIdentity(agent.name) === normalized);
-  if (matches.length === 0) {
+  if (!matches.length) {
     throw new Error(
       `Target agent '${target}' was not found. Available agents: ${
         agents.map((agent) => agent.id).sort().join(", ") || "none"
@@ -96,9 +100,7 @@ function assertAgentAllowed(
   asked: AgentResource,
   agents: readonly AgentResource[],
 ): void {
-  if (matchesAgent(asking.id, asked) || matchesAgent(asking.name, asked)) {
-    throw new Error("An agent cannot ask itself.");
-  }
+  if (asking.id === asked.id) throw new Error("An agent cannot ask itself.");
   if (
     !resolveAgentGrants(asking, agents).some((agent) => agent.id === asked.id)
   ) {
@@ -121,168 +123,137 @@ function participantForAgent(
   );
 }
 
-export function defineAskTool(
-  toolId = DEFAULT_TOOL_ID,
-  maxDepth = DEFAULT_MAX_DEPTH,
-): WorkflowTool {
-  return Object.freeze({
-    id: toolId,
-    key: toolId,
-    name: "Ask Agent",
-    description:
-      "Ask another agent in this thread a public question and resume after its public answer.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        target: {
-          type: "string",
-          minLength: 1,
-          description: "Stable ID or name of another agent in this thread.",
-        },
-        message: {
-          type: "string",
-          minLength: 1,
-          description: "The complete public question for that agent.",
-        },
-      },
-      required: ["target", "message"],
-      additionalProperties: false,
-    },
-    historyPolicy: { visibility: "public_status" },
-    async execute(raw, value) {
-      const context = executionContext(value);
-      const input = asRecord(raw);
-      const target = requiredText(
-        typeof input.target === "string" ? input.target : undefined,
-        "Ask target",
-      );
-      const message = requiredText(
-        typeof input.message === "string" ? input.message : undefined,
-        "Ask message",
-      );
-      const execution = context.execution;
-      const askingParticipantId = requiredText(
-        execution.participantId,
-        "Asking participant ID",
-      );
-      const askingRecord = await requireCollection(
-        context.processor,
-        "participant",
-      )
-        .get({ id: askingParticipantId });
-      const askingParticipant = askingRecord;
-      if (
-        !askingParticipant || askingParticipant.participantType !== "agent"
-      ) {
-        throw new Error(
-          `Asking participant '${askingParticipantId}' is not an agent.`,
-        );
-      }
-      const resources = context.processor.resources as CoreResources;
-      const agents = Object.values(resources.agents ?? {})
-        .filter(
-          (value): value is AgentResource => !!value,
-        );
-      const askingAgent = context.agent ??
-        (execution.agentId
-          ? coreAgent(resources, execution.agentId)
-          : undefined);
-      if (!askingAgent) {
-        throw new Error(
-          `Asking agent '${execution.agentId ?? "unknown"}' was not found.`,
-        );
-      }
-      const askedAgent = resolveTargetAgent(target, agents);
-      assertAgentAllowed(askingAgent, askedAgent, agents);
+async function executeAsk(
+  raw: AskInput,
+  context: CoreActionContext,
+): Promise<AskOutput> {
+  const input = asRecord(raw);
+  const target = requiredText(
+    typeof input.target === "string" ? input.target : undefined,
+    "Ask target",
+  );
+  const message = requiredText(
+    typeof input.message === "string" ? input.message : undefined,
+    "Ask message",
+  );
+  const metadata = coreToolActionMetadata(context.action.metadata);
+  if (!metadata || metadata.action !== "ask") {
+    throw new Error("The ask Action requires Core Tool plan metadata.");
+  }
+  const askingParticipant = await requireCollection(
+    context,
+    "participant",
+  ).get({ id: metadata.agentParticipantId });
+  if (!askingParticipant || askingParticipant.participantType !== "agent") {
+    throw new Error(
+      `Asking participant '${metadata.agentParticipantId}' is not an agent.`,
+    );
+  }
+  const agents = Object.values(context.resources.agents ?? {}).filter(
+    (value): value is AgentResource => Boolean(value),
+  );
+  const askingAgent = coreAgent(context.resources, metadata.agentId);
+  if (!askingAgent) {
+    throw new Error(`Asking agent '${metadata.agentId}' was not found.`);
+  }
+  const askedAgent = resolveTargetAgent(target, agents);
+  assertAgentAllowed(askingAgent, askedAgent, agents);
 
-      const threadRecord = await requireCollection(context.processor, "thread")
-        .get({ id: execution.threadId });
-      if (!threadRecord) {
-        throw new Error(`Thread '${execution.threadId}' was not found.`);
-      }
-      const participantIds = Array.isArray(threadRecord.participantIds)
-        ? threadRecord.participantIds.filter((id): id is string =>
-          typeof id === "string"
-        )
-        : [];
-      const participants = (await Promise.all(
-        participantIds.map((id) =>
-          requireCollection(context.processor, "participant").get(
-            { id },
-          )
-        ),
-      )).filter((item): item is NonNullable<typeof item> => item !== null);
-      if (!participants.some((item) => item.id === askingParticipant.id)) {
-        throw new Error(
-          `Asking agent '${askingAgent.id}' is not a participant in thread '${execution.threadId}'.`,
-        );
-      }
-      const askedParticipant = participantForAgent(participants, askedAgent);
-      if (!askedParticipant) {
-        throw new Error(
-          `Target agent '${askedAgent.id}' is not a participant in thread '${execution.threadId}'.`,
-        );
-      }
+  const thread = await requireCollection(context, "thread").get({
+    id: metadata.threadId,
+  });
+  if (!thread) throw new Error(`Thread '${metadata.threadId}' was not found.`);
+  const participantIds = Array.isArray(thread.participantIds)
+    ? thread.participantIds.filter((id): id is string => typeof id === "string")
+    : [];
+  const participants = (await Promise.all(
+    participantIds.map((id) =>
+      requireCollection(context, "participant").get({ id })
+    ),
+  )).filter((value): value is CollectionRecord => value !== null);
+  if (!participants.some((value) => value.id === askingParticipant.id)) {
+    throw new Error(
+      `Asking agent '${askingAgent.id}' is not a participant in thread '${metadata.threadId}'.`,
+    );
+  }
+  const askedParticipant = participantForAgent(participants, askedAgent);
+  if (!askedParticipant) {
+    throw new Error(
+      `Target agent '${askedAgent.id}' is not a participant in thread '${metadata.threadId}'.`,
+    );
+  }
 
-      const parentAsk = agentAskMetadata(execution.metadata);
-      const depth = (parentAsk?.depth ?? 0) + 1;
-      if (depth > maxDepth) {
-        throw new Error(
-          `Agent ask depth ${depth} exceeds the configured maximum of ${maxDepth}.`,
-        );
+  const parentAsk = metadata.ask;
+  const depth = (parentAsk?.depth ?? 0) + 1;
+  if (depth > MAX_ASK_DEPTH) {
+    throw new Error(
+      `Agent ask depth ${depth} exceeds the configured maximum of ${MAX_ASK_DEPTH}.`,
+    );
+  }
+  const askId = await deriveWorkflowId("ask", context.action.runId);
+  const questionMessageId = await deriveWorkflowId(
+    "message",
+    context.action.runId,
+    "ask",
+  );
+  const toolInvocation = Object.freeze({
+    id: metadata.toolCallId,
+    tool: Object.freeze({ id: "ask", name: "Ask Agent" }),
+    args: JSON.stringify(input),
+  });
+  const ask: AgentAskMetadata = Object.freeze({
+    schema: "copilotz.ask.v1",
+    askId,
+    phase: "question",
+    toolActionRunId: context.action.runId,
+    toolCallId: metadata.toolCallId,
+    toolInvocation,
+    questionMessageId,
+    askingParticipantId: String(askingParticipant.id),
+    askingAgentId: askingAgent.id,
+    askedParticipantId: String(askedParticipant.id),
+    askedAgentId: askedAgent.id,
+    callingAttemptId: metadata.parentLlmActionRunId,
+    ...(parentAsk
+      ? {
+        parentAskId: parentAsk.askId,
+        parentQuestionMessageId: parentAsk.questionMessageId,
       }
-      const workflow = workflowMetadata(execution.metadata);
-      const askId = await deriveWorkflowId("ask", execution.id);
-      const questionMessageId = await deriveWorkflowId(
-        "message",
-        execution.id,
-        "ask",
-      );
-      const toolInvocation = Object.freeze({
-        id: execution.toolCallId,
-        tool: structuredClone(execution.tool),
-        args: JSON.stringify(input),
-      });
-      const ask: AgentAskMetadata = Object.freeze({
-        schema: "copilotz.ask.v1",
-        askId,
-        phase: "question",
-        toolExecutionId: execution.id,
-        toolCallId: execution.toolCallId,
-        toolInvocation,
-        questionMessageId,
-        askingParticipantId: askingParticipant.id,
-        askingAgentId: askingAgent.id,
-        askedParticipantId: askedParticipant.id,
-        askedAgentId: askedAgent.id,
-        ...(workflow?.llmAttemptId
-          ? { callingAttemptId: workflow.llmAttemptId }
-          : {}),
-        ...(parentAsk
-          ? {
-            parentAskId: parentAsk.askId,
-            parentAsk: structuredClone(parentAsk),
-          }
-          : {}),
-        depth,
-      });
-      const metadata = withAgentAskMetadata(undefined, ask);
-      await context.processor.actions.createThreadMessage({
-        id: questionMessageId,
-        threadId: execution.threadId,
-        sender: askingParticipant,
-        recipientIds: [askedParticipant.id],
-        content: message,
-        visibility: { kind: "public" },
-        metadata,
-      }, {
-        operationKey: `ask:${askId}:question`,
-      });
-      return deferWorkflowTool({
-        metadata: { askId, questionMessageId, askedAgentId: askedAgent.id },
-      });
-    },
-  } as WorkflowTool);
+      : {}),
+    origin: coreToolActionOriginFrom(metadata),
+    depth,
+  });
+  await context.actions.createThreadMessage({
+    id: questionMessageId,
+    threadId: metadata.threadId,
+    sender: askingParticipant,
+    recipientIds: [String(askedParticipant.id)],
+    content: message,
+    visibility: { kind: "public" },
+    metadata: withAgentAskMetadata(undefined, ask),
+  }, {
+    operationKey: `ask:${askId}:question`,
+    signal: context.signal,
+  });
+  return Object.freeze({ status: "deferred" });
 }
 
-export const askTool: WorkflowTool = defineAskTool();
+export const askAction: ActionDefinition<
+  AskInput,
+  AskOutput,
+  CoreActionContext,
+  typeof askInputSchema,
+  typeof askOutputSchema
+> = defineAction({
+  id: ASK_ACTION_ID,
+  inputSchema: askInputSchema,
+  outputSchema: askOutputSchema,
+  execute: executeAsk,
+});
+
+export const askTool: ToolResource<"ask"> = defineTool("ask", askAction, {
+  name: "Ask Agent",
+  description:
+    "Ask another agent in this thread a public question and resume after its public answer.",
+  history: { visibility: "public_status" },
+});

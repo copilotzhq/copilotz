@@ -1,22 +1,43 @@
-import type { Tool } from "../internal/types.ts";
+import {
+  type ActionContext,
+  type ActionDefinition,
+  defineAction,
+} from "@copilotz/copilotz/actions";
 import { getProvider } from "./provider/registry.ts";
 import type { FinanceDataProvider } from "./provider/types.ts";
+import type {
+  GetAnalystRatingsInput,
+  GetCalendarEventsInput,
+  GetCompanyProfileInput,
+  GetFinancialStatementsInput,
+  GetHistoricalPricesInput,
+  GetMarketSnapshotInput,
+  GetOwnershipInput,
+  ScreenSecuritiesInput,
+  SearchAssetsInput,
+} from "./provider/types.ts";
 import { FinanceError } from "./client/errors.ts";
+import { cloneLosslessJson } from "../lifecycle-json.ts";
 
-export type CreateFinanceToolOptions = Readonly<{
+export type CreateFinanceActionOptions = Readonly<{
   getProvider?: (name?: string) => FinanceDataProvider;
 }>;
 
-export function createFinanceTool(
-  options: CreateFinanceToolOptions = {},
-): Tool {
-  const resolveProvider = options.getProvider ?? getProvider;
-  return {
-    id: "finance",
-    key: "finance",
-    name: "Finance Data",
-    description:
-      `Finance data tool backed by Yahoo Finance with a swappable provider interface.
+export type FinanceActionInput =
+  & Record<string, unknown>
+  & Readonly<{
+    action?: string;
+    provider?: string;
+    symbol?: string;
+    query?: string;
+    quoteType?: string;
+    statement_type?: string;
+    period_type?: string;
+  }>;
+
+export const FINANCE_TOOL_NAME = "Finance Data";
+export const FINANCE_TOOL_DESCRIPTION =
+  `Finance data tool backed by Yahoo Finance with a swappable provider interface.
 
 Actions:
 - search_assets: Discover tickers by free-text query (with optional quote_type/exchange/sector/industry filters).
@@ -28,8 +49,14 @@ Actions:
 - get_ownership: Institutional, fund, and insider ownership positions.
 - get_financial_statements: Income statement / balance sheet / cash flow / key stats by period (annual/quarterly/trailing) with explicit coverage metadata.
 
-Always returns bounded outputs. Supports cancellation via framework context.onCancel.`,
+Always returns bounded outputs. Supports cancellation through the Action context.`;
 
+export function createFinanceAction(
+  options: CreateFinanceActionOptions = {},
+): ActionDefinition<FinanceActionInput, unknown, ActionContext> {
+  const resolveProvider = options.getProvider ?? getProvider;
+  return defineAction({
+    id: "copilotz.tools.finance",
     inputSchema: {
       type: "object",
       properties: {
@@ -2726,7 +2753,10 @@ Always returns bounded outputs. Supports cancellation via framework context.onCa
       ],
     },
 
-    async execute(args: any, context?: any): Promise<any> {
+    async execute(
+      args: FinanceActionInput,
+      context: ActionContext,
+    ): Promise<unknown> {
       const action = args.action;
       if (!action) {
         throw new FinanceError({
@@ -2737,9 +2767,7 @@ Always returns bounded outputs. Supports cancellation via framework context.onCa
 
       const providerName = args.provider || "yahoo";
       const provider = resolveProvider(providerName);
-      const controller = new AbortController();
-      const unsubscribe = context?.onCancel?.(() => controller.abort());
-      const signal = controller.signal;
+      const signal = context.signal;
 
       // Action-specific validation
       if (action !== "search_assets" && action !== "screen_securities") {
@@ -2767,57 +2795,100 @@ Always returns bounded outputs. Supports cancellation via framework context.onCa
       }
 
       try {
-        try {
-          switch (action) {
-            case "search_assets":
-              return await provider.searchAssets(args, signal);
-            case "get_market_snapshot":
-              return await provider.getMarketSnapshot(args, signal);
-            case "get_company_profile":
-              return await provider.getCompanyProfile(args, signal);
-            case "get_historical_prices":
-              return await provider.getHistoricalPrices(args, signal);
-            case "get_analyst_ratings":
-              return await provider.getAnalystRatings(args, signal);
-            case "get_calendar_events":
-              return await provider.getCalendarEvents(args, signal);
-            case "get_ownership":
-              return await provider.getOwnership(args, signal);
-            case "get_financial_statements":
-              if (!args.statement_type || !args.period_type) {
-                throw new FinanceError({
-                  code: "bad_request",
-                  message:
-                    "Parameters 'statement_type' and 'period_type' are required for action 'get_financial_statements'",
-                });
-              }
-              return await provider.getFinancialStatements(args, signal);
-            case "screen_securities":
-              if (args.quoteType === "ETF") {
-                throw new FinanceError({
-                  code: "bad_request",
-                  message:
-                    "ETF support is not available in screen_securities v2.0; planned for v2.1",
-                });
-              }
-              if (args.quoteType === "MUTUALFUND") {
-                throw new FinanceError({
-                  code: "bad_request",
-                  message:
-                    "MUTUALFUND support is not available in screen_securities v2.0; planned for v2.2",
-                });
-              }
-              return await provider.screenSecurities(args, signal);
-            default:
+        let result: unknown;
+        switch (action) {
+          case "search_assets":
+            result = await provider.searchAssets(
+              args as unknown as SearchAssetsInput,
+              signal,
+            );
+            break;
+          case "get_market_snapshot":
+            result = await provider.getMarketSnapshot(
+              args as unknown as GetMarketSnapshotInput,
+              signal,
+            );
+            break;
+          case "get_company_profile":
+            result = await provider.getCompanyProfile(
+              args as unknown as GetCompanyProfileInput,
+              signal,
+            );
+            break;
+          case "get_historical_prices":
+            result = await provider.getHistoricalPrices(
+              args as unknown as GetHistoricalPricesInput,
+              signal,
+            );
+            break;
+          case "get_analyst_ratings":
+            result = await provider.getAnalystRatings(
+              args as unknown as GetAnalystRatingsInput,
+              signal,
+            );
+            break;
+          case "get_calendar_events":
+            result = await provider.getCalendarEvents(
+              args as unknown as GetCalendarEventsInput,
+              signal,
+            );
+            break;
+          case "get_ownership":
+            result = await provider.getOwnership(
+              args as unknown as GetOwnershipInput,
+              signal,
+            );
+            break;
+          case "get_financial_statements":
+            if (!args.statement_type || !args.period_type) {
               throw new FinanceError({
                 code: "bad_request",
-                message: `Unknown action: ${action}`,
+                message:
+                  "Parameters 'statement_type' and 'period_type' are required for action 'get_financial_statements'",
               });
-          }
-        } finally {
-          unsubscribe?.();
+            }
+            result = await provider.getFinancialStatements(
+              args as unknown as GetFinancialStatementsInput,
+              signal,
+            );
+            break;
+          case "screen_securities":
+            if (args.quoteType === "ETF") {
+              throw new FinanceError({
+                code: "bad_request",
+                message:
+                  "ETF support is not available in screen_securities v2.0; planned for v2.1",
+              });
+            }
+            if (args.quoteType === "MUTUALFUND") {
+              throw new FinanceError({
+                code: "bad_request",
+                message:
+                  "MUTUALFUND support is not available in screen_securities v2.0; planned for v2.2",
+              });
+            }
+            result = await provider.screenSecurities(
+              args as unknown as ScreenSecuritiesInput,
+              signal,
+            );
+            break;
+          default:
+            throw new FinanceError({
+              code: "bad_request",
+              message: `Unknown action: ${action}`,
+            });
         }
+        return cloneLosslessJson(result, "Finance provider result");
       } catch (err) {
+        if ((err as Error)?.name === "AbortError") throw err;
+        if (signal.aborted) {
+          throw new DOMException(
+            signal.reason instanceof Error
+              ? signal.reason.message
+              : "Finance Action cancelled",
+            "AbortError",
+          );
+        }
         if (err instanceof FinanceError) {
           throw err;
         }
@@ -2828,8 +2899,5 @@ Always returns bounded outputs. Supports cancellation via framework context.onCa
         });
       }
     },
-  };
+  });
 }
-
-const financeTool = createFinanceTool();
-export default financeTool;

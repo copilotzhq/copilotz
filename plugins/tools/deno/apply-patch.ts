@@ -1,3 +1,5 @@
+import { defineAction } from "@copilotz/copilotz/actions";
+import { defineTool } from "../contracts.ts";
 import {
   applyWorkspacePatch,
   type PatchOperation,
@@ -9,13 +11,8 @@ interface ApplyPatchParams {
   operations: PatchOperation[];
 }
 
-export default {
-  key: "apply_patch",
-  name: "Apply Patch",
-  description:
-    "Apply targeted text edits to a file while capturing a restorable snapshot first. " +
-    "All operations use text-anchored matching — not line numbers. " +
-    "Always read the file first so your anchor text is current.",
+export const applyPatchAction = defineAction({
+  id: "copilotz.tools.deno.apply_patch",
   inputSchema: {
     type: "object",
     properties: {
@@ -82,4 +79,12 @@ export default {
       summary: summarizePatchOperations(operations),
     };
   },
-};
+});
+
+export const applyPatchTool = defineTool("apply_patch", applyPatchAction, {
+  name: "Apply Patch",
+  description:
+    "Apply targeted text edits to a file while capturing a restorable snapshot first. " +
+    "All operations use text-anchored matching — not line numbers. " +
+    "Always read the file first so your anchor text is current.",
+});

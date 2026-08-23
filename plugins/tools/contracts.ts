@@ -2,6 +2,7 @@ import type {
   ActionSchema,
   AnyActionDefinition,
 } from "@copilotz/copilotz/actions";
+import { cloneLosslessJson } from "./lifecycle-json.ts";
 
 const ALIAS_PATTERN = /^[a-z][a-zA-Z0-9_]*$/;
 const UNSAFE_ALIASES = new Set(["__proto__", "constructor", "prototype"]);
@@ -102,10 +103,11 @@ function schema(
   name: "inputSchema" | "outputSchema",
 ): ActionSchema | undefined {
   if (value === undefined) return undefined;
-  if (!isPlainRecord(value)) {
+  const cloned = cloneLosslessJson(value, `Tool Action ${name}`);
+  if (!isPlainRecord(cloned)) {
     throw new TypeError(`Tool Action ${name} must be a JSON Schema object.`);
   }
-  return value as ActionSchema;
+  return cloned as ActionSchema;
 }
 
 function history(value: unknown): ToolHistory | undefined {
@@ -135,10 +137,11 @@ function metadata(
   value: unknown,
 ): Readonly<Record<string, unknown>> | undefined {
   if (value === undefined) return undefined;
-  if (!isPlainRecord(value)) {
+  const cloned = cloneLosslessJson(value, "Tool metadata");
+  if (!isPlainRecord(cloned)) {
     throw new TypeError("Tool metadata must be an object.");
   }
-  return Object.freeze({ ...value });
+  return cloned;
 }
 
 /**

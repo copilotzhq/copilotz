@@ -13,7 +13,6 @@ import type {
   ToolCallStreamDelta,
   ToolDefinition,
   ToolInvocation,
-  ToolPipelineStage,
   ToolSystemPromptVariant,
   WireChatMessage,
 } from "./types.ts";
@@ -264,16 +263,11 @@ export function formatMessagesDetailed(
     ? [{ role: "system", content: systemContent }]
     : [];
 
-  let formattedMessages: ChatMessage[] = [
+  const formattedMessages: ChatMessage[] = [
     ...systemMessage,
     ...messages.filter((m) => m.role !== "system"),
   ];
   const toolCycleUnitKeys = buildToolCycleUnitKeys(formattedMessages);
-  const coalescedHistory = coalesceBatchedToolResults(
-    formattedMessages,
-    toolCycleUnitKeys,
-  );
-  formattedMessages = coalescedHistory.messages;
 
   const systemEstimatedTokens = estimateChatMessages(systemMessage, config)
     .estimatedTokens;
@@ -300,7 +294,7 @@ export function formatMessagesDetailed(
       formattedMessages,
       historyTarget,
       config,
-      coalescedHistory.unitKeys,
+      toolCycleUnitKeys,
     );
     normalizedMessages = limited.messages;
     cutoffSourceMessageId = limited.cutoffSourceMessageId;
@@ -442,12 +436,6 @@ function escapeWireTextPayload(value: string): string {
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
-}
-
-function escapeWireAttribute(value: string): string {
-  return escapeWireTextPayload(value)
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&apos;");
 }
 
 export function buildRedactedThinkingBlock(
@@ -631,76 +619,6 @@ function buildToolCycleUnitKeys(
     }
   }
   return unitKeys;
-}
-
-function commonBatchId(toolCalls: ToolInvocation[]): string | null {
-  const first = toolCalls[0]?.batchId;
-  if (typeof first !== "string" || first.length === 0) return null;
-  return toolCalls.every((call) => call.batchId === first) ? first : null;
-}
-
-/**
- * Lifecycle tool results are persisted independently as they settle. Collapse
- * adjacent slots from the same batch for the model-facing transcript, sorting
- * by the framework-owned slot rather than completion time.
- */
-function coalesceBatchedToolResults(
-  messages: ChatMessage[],
-  unitKeys: Array<string | undefined>,
-): { messages: ChatMessage[]; unitKeys: Array<string | undefined> } {
-  const coalesced: ChatMessage[] = [];
-  const coalescedUnitKeys: Array<string | undefined> = [];
-
-  for (let index = 0; index < messages.length; index++) {
-    const message = messages[index];
-    const calls = isToolResultRole(message.role) &&
-        Array.isArray(message.toolCalls)
-      ? message.toolCalls
-      : [];
-    const batchId = commonBatchId(calls);
-    if (!batchId) {
-      coalesced.push(message);
-      coalescedUnitKeys.push(unitKeys[index]);
-      continue;
-    }
-
-    const batchMessages = [message];
-    let nextIndex = index + 1;
-    while (nextIndex < messages.length) {
-      const candidate = messages[nextIndex];
-      const candidateCalls = isToolResultRole(candidate.role) &&
-          Array.isArray(candidate.toolCalls)
-        ? candidate.toolCalls
-        : [];
-      if (commonBatchId(candidateCalls) !== batchId) break;
-      batchMessages.push(candidate);
-      nextIndex += 1;
-    }
-
-    const batchCalls = batchMessages
-      .flatMap((candidate) =>
-        (candidate.toolCalls ?? []).map((call) =>
-          typeof call.output === "undefined" &&
-            typeof candidate.content === "string" &&
-            candidate.content.length > 0
-            ? { ...call, output: candidate.content }
-            : call
-        )
-      )
-      .toSorted((left, right) =>
-        (left.batchIndex ?? Number.MAX_SAFE_INTEGER) -
-        (right.batchIndex ?? Number.MAX_SAFE_INTEGER)
-      );
-    coalesced.push({
-      ...message,
-      content: "",
-      toolCalls: batchCalls,
-    });
-    coalescedUnitKeys.push(unitKeys[index]);
-    index = nextIndex - 1;
-  }
-
-  return { messages: coalesced, unitKeys: coalescedUnitKeys };
 }
 
 function collectWireSegmentsFromMessage(
@@ -2160,15 +2078,10 @@ You have access to tools. Copilotz, not the provider, executes tools.
 When a tool is needed, emit exactly one <tool_calls> block. Optional visible text may appear before or after it. Inside the block, emit one JSON object per line:
 { "name": "tool_name", "arguments": { ... } }
 
-To pipe one tool into another on the same line, separate stages with |. Use { "jq": "filter" } to reshape JSON between tools:
-{ "name": "first_tool", "arguments": { ... } } | { "jq": "{input:.data}" } | { "name": "next_tool", "arguments": { ... } }
-
 Rules:
 - Each object must have exactly "name" and "arguments".
 - "arguments" must be a JSON object.
-- Never emit batch_id or tool_call_id; Copilotz owns correlation metadata.
-- New lines run in parallel; stages joined by | run sequentially.
-- A piped object is deep-merged into the next tool's arguments; the next tool's explicit arguments win.
+- Each line is one call. Calls run sequentially in line order.
 - Use only tool names from the catalog.
 - Do not use provider-native tool syntax or any non-Copilotz tool format.
 - Do not emit <tool_results>; Copilotz provides tool results as external input in a later user turn.
@@ -2249,12 +2162,7 @@ In this environment you have access to a set of tools you can use to answer the 
 2. To call a tool, emit one JSON object per line between a single <tool_calls> ... </tool_calls> block.
    - Each object has exactly two keys: "name" (string) and "arguments" (object). No other keys.
    - "arguments" is a JSON object and may contain nested objects/arrays.
-   - Never emit batch_id or tool_call_id. Batch attributes in history are framework-owned.
-   - New lines run in parallel.
-   - Join JSON stages with | on the same line to run them sequentially.
-   - A transform stage has exactly one key: { "jq": "filter" }.
-   - A piped object is deep-merged into the next tool's arguments; explicit arguments in the later stage win.
-   - If a piped value is not an object, use jq to shape it into one before the next tool.
+   - Each line is one call. Calls run sequentially in line order.
 3. Use ONLY this <tool_calls> JSON format for tool calls.
 ${extraRuleText}${exampleRuleNumber}. 
 
@@ -2284,7 +2192,6 @@ export function buildToolCallsBlock(
   toolCalls: ToolInvocation[],
   format: WireToolFormat = "request",
 ): string {
-  const batchId = commonBatchId(toolCalls);
   const objects = toolCalls.flatMap((call) => {
     if (format === "peer") {
       const visibility = readPeerToolVisibility(call);
@@ -2296,29 +2203,8 @@ export function buildToolCallsBlock(
           ? parseToolCallArgs(call.args)
           : OMITTED_PEER_TOOL_VALUE,
       };
-      if (!batchId && call.id) obj.tool_call_id = call.id;
+      if (call.id) obj.tool_call_id = call.id;
       return [stringifyWireJson(obj)];
-    }
-
-    if (call.pipeline?.stages?.length) {
-      return [
-        call.pipeline.stages.map((stage) => {
-          if (stage.type === "jq") {
-            return stringifyWireJson({ jq: stage.filter });
-          }
-          let stageArgs: unknown;
-          try {
-            stageArgs = JSON.parse(stage.args);
-          } catch {
-            stageArgs = stage.args;
-          }
-          return stringifyWireJson({
-            name: stage.tool.id,
-            arguments: stageArgs,
-            ...(!batchId && stage.id ? { tool_call_id: stage.id } : {}),
-          });
-        }).join(" | "),
-      ];
     }
 
     let args: unknown;
@@ -2331,16 +2217,12 @@ export function buildToolCallsBlock(
       name: call.tool.id,
       arguments: args,
     };
-    if (!batchId && call.id) obj.tool_call_id = call.id;
+    if (call.id) obj.tool_call_id = call.id;
     return [stringifyWireJson(obj)];
   });
 
   if (objects.length === 0) return "";
-
-  const openTag = batchId
-    ? `<tool_calls batch_id="${escapeWireAttribute(batchId)}">`
-    : "<tool_calls>";
-  return [openTag, ...objects, `</tool_calls>`].join("\n");
+  return ["<tool_calls>", ...objects, `</tool_calls>`].join("\n");
 }
 
 function normalizeToolResultOutput(
@@ -2363,7 +2245,6 @@ export function buildToolResultsBlock(
   fallbackContent?: string,
   format: WireToolFormat = "request",
 ): string {
-  const batchId = commonBatchId(toolResults);
   const objects = toolResults.flatMap((call) => {
     if (format === "peer") {
       const visibility = readPeerToolVisibility(call);
@@ -2375,7 +2256,7 @@ export function buildToolResultsBlock(
           ? ("output" in call ? call.output : null)
           : OMITTED_PEER_TOOL_VALUE,
       };
-      if (!batchId && call.id) obj.tool_call_id = call.id;
+      if (call.id) obj.tool_call_id = call.id;
       return [stringifyWireJson(obj)];
     }
 
@@ -2389,17 +2270,13 @@ export function buildToolResultsBlock(
     ) {
       obj.output = normalizeToolResultOutput(call, fallback);
     }
-    if (!batchId && call.id) obj.tool_call_id = call.id;
+    if (call.id) obj.tool_call_id = call.id;
     if (call.status) obj.status = call.status;
     return [stringifyWireJson(obj)];
   });
 
   if (objects.length === 0) return "";
-
-  const openTag = batchId
-    ? `<tool_results batch_id="${escapeWireAttribute(batchId)}">`
-    : "<tool_results>";
-  return [openTag, ...objects, `</tool_results>`].join("\n");
+  return ["<tool_results>", ...objects, `</tool_results>`].join("\n");
 }
 
 function isPlainJsonObject(value: unknown): value is Record<string, unknown> {
@@ -2452,73 +2329,46 @@ function parseCanonicalToolCallLines(blockContent: string): ToolInvocation[] {
 
   const calls: ToolInvocation[] = [];
   for (const line of lines) {
-    const segments = splitPipelineSegments(line);
-    if (!segments || segments.length === 0) return [];
-
-    const stages: ToolPipelineStage[] = [];
-    for (let index = 0; index < segments.length; index += 1) {
-      let obj: unknown;
+    let obj: unknown;
+    try {
+      obj = JSON.parse(line);
+    } catch {
+      const repaired = closeTruncatedJsonContainers(line);
+      if (!repaired) return [];
       try {
-        obj = JSON.parse(segments[index]);
+        obj = JSON.parse(repaired);
       } catch {
-        if (segments.length !== 1) return [];
-        const repaired = closeTruncatedJsonContainers(segments[index]);
-        if (!repaired) return [];
-        try {
-          obj = JSON.parse(repaired);
-        } catch {
-          return [];
-        }
-      }
-
-      if (!isPlainJsonObject(obj)) return [];
-      const keys = Object.keys(obj).sort();
-      if (keys.length === 1 && keys[0] === "jq") {
-        if (index === 0 || typeof obj.jq !== "string" || !obj.jq.trim()) {
-          return [];
-        }
-        stages.push({ type: "jq", filter: obj.jq });
-        continue;
-      }
-
-      const hasOnlyCanonicalKeys =
-        (keys.length === 2 && keys[0] === "arguments" && keys[1] === "name") ||
-        (keys.length === 3 && keys[0] === "arguments" && keys[1] === "name" &&
-          keys[2] === "tool_call_id");
-      if (!hasOnlyCanonicalKeys) return [];
-      if (typeof obj.name !== "string" || !isPlainJsonObject(obj.arguments)) {
         return [];
       }
-      if (
-        "tool_call_id" in obj && typeof obj.tool_call_id !== "string"
-      ) return [];
-
-      stages.push({
-        type: "tool",
-        // Provider/model IDs are accepted for backwards-compatible parsing
-        // but never trusted as orchestration identity.
-        id: crypto.randomUUID(),
-        tool: { id: obj.name },
-        args: JSON.stringify(obj.arguments),
-      });
     }
 
-    const root = stages[0];
-    if (root.type !== "tool") return [];
+    if (!isPlainJsonObject(obj)) return [];
+    const keys = Object.keys(obj).sort();
+    const hasOnlyCanonicalKeys =
+      (keys.length === 2 && keys[0] === "arguments" && keys[1] === "name") ||
+      (keys.length === 3 && keys[0] === "arguments" && keys[1] === "name" &&
+        keys[2] === "tool_call_id");
+    if (!hasOnlyCanonicalKeys) return [];
+    if (typeof obj.name !== "string" || !isPlainJsonObject(obj.arguments)) {
+      return [];
+    }
+    if (
+      "tool_call_id" in obj && typeof obj.tool_call_id !== "string"
+    ) return [];
+
     calls.push({
-      id: root.id,
-      tool: root.tool,
-      args: root.args,
-      ...(stages.length > 1
-        ? { pipeline: { id: crypto.randomUUID(), stages } }
-        : {}),
+      // Provider/model IDs are accepted for transcript recovery but never
+      // trusted as orchestration identity.
+      id: crypto.randomUUID(),
+      tool: { id: obj.name },
+      args: JSON.stringify(obj.arguments),
     });
   }
 
   return calls;
 }
 
-function hasOnlyCompleteJsonPipelineSegments(blockContent: string): boolean {
+function hasOnlyCompleteJsonLines(blockContent: string): boolean {
   const lines = blockContent
     .split(/\r?\n/)
     .map((line) => line.trim())
@@ -2526,59 +2376,13 @@ function hasOnlyCompleteJsonPipelineSegments(blockContent: string): boolean {
   if (lines.length === 0) return false;
 
   return lines.every((line) => {
-    const segments = splitPipelineSegments(line);
-    if (!segments || segments.length === 0) return false;
-    return segments.every((segment) => {
-      try {
-        JSON.parse(segment);
-        return true;
-      } catch {
-        return false;
-      }
-    });
+    try {
+      JSON.parse(line);
+      return true;
+    } catch {
+      return false;
+    }
   });
-}
-
-function splitPipelineSegments(line: string): string[] | null {
-  const segments: string[] = [];
-  let start = 0;
-  let objectDepth = 0;
-  let arrayDepth = 0;
-  let inString = false;
-  let escaped = false;
-  let sawSeparator = false;
-
-  for (let index = 0; index < line.length; index += 1) {
-    const char = line[index];
-    if (inString) {
-      if (escaped) escaped = false;
-      else if (char === "\\") escaped = true;
-      else if (char === '"') inString = false;
-      continue;
-    }
-    if (char === '"') inString = true;
-    else if (char === "{") objectDepth += 1;
-    else if (char === "}") objectDepth -= 1;
-    else if (char === "[") arrayDepth += 1;
-    else if (char === "]") arrayDepth -= 1;
-    else if (char === "|" && objectDepth === 0 && arrayDepth === 0) {
-      const segment = line.slice(start, index).trim();
-      if (!segment) return null;
-      segments.push(segment);
-      start = index + 1;
-      sawSeparator = true;
-    }
-    if (objectDepth < 0 || arrayDepth < 0) {
-      return sawSeparator ? null : [line];
-    }
-  }
-  if (inString || objectDepth !== 0 || arrayDepth !== 0) {
-    return sawSeparator ? null : [line];
-  }
-  const finalSegment = line.slice(start).trim();
-  if (!finalSegment) return null;
-  segments.push(finalSegment);
-  return segments;
 }
 
 /** Remove the structural special-token literals that some servers leak. */
@@ -2709,16 +2513,11 @@ export function parseToolCallsFromResponse(
     const parsedCalls = parseCanonicalToolCallLines(blockContent);
     const knownNames = new Set(knownToolNames);
     const usesOnlyKnownTools = knownNames.size > 0 &&
-      parsedCalls.every((call) =>
-        knownNames.has(call.tool.id) &&
-        (call.pipeline?.stages ?? []).every((stage) =>
-          stage.type !== "tool" || knownNames.has(stage.tool.id)
-        )
-      );
+      parsedCalls.every((call) => knownNames.has(call.tool.id));
 
     if (
       options?.recoverCompleteUnclosed === true &&
-      hasOnlyCompleteJsonPipelineSegments(blockContent) &&
+      hasOnlyCompleteJsonLines(blockContent) &&
       parsedCalls.length > 0 &&
       usesOnlyKnownTools
     ) {

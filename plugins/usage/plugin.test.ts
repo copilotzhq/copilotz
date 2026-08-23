@@ -167,9 +167,14 @@ const usageLlmAction = defineAction<LlmCallInput, LlmCallOutput>({
 });
 
 const usageToolAction = defineAction<unknown, unknown>({
-  id: "copilotz.core.tool.call",
+  id: "test.lookup",
   execute(input: unknown) {
-    return (input as Record<string, unknown>).result;
+    const value = input as Record<string, unknown>;
+    if (value.mode === "failed") throw new Error("lookup failed");
+    if (value.mode === "cancelled") {
+      throw new DOMException("lookup cancelled", "AbortError");
+    }
+    return value.result;
   },
 });
 
@@ -217,9 +222,11 @@ const usageActionDriverPlugin = definePlugin({
           }).catch(() => undefined);
           return;
         }
-        await context.actions.usageTool(event.data, {
-          operationKey: String((event.data as Record<string, unknown>).key),
-        });
+        const data = event.data as Record<string, unknown>;
+        await context.actions.usageTool(data.input, {
+          operationKey: String(data.key),
+          metadata: data.metadata as Readonly<Record<string, unknown>>,
+        }).catch(() => undefined);
       },
     }),
   },
@@ -343,12 +350,21 @@ Deno.test("usage workflow records Action terminals once without payload copies",
       });
       await Promise.all(appended.dispatch.handles.map((handle) => handle.done));
     };
-    const toolCommon = {
+    const toolMetadata = {
+      schema: "copilotz.core.tool-action.v1",
+      planId: "plan-1",
+      planMessageId: "plan-message-1",
+      planIndex: 0,
+      planSize: 1,
+      toolCallId: "lookup-call-1",
+      action: "lookup",
       threadId: THREAD_ID,
-      messageId: "message-1",
-      participantId: "agent-node",
+      triggerMessageId: "message-1",
+      agentParticipantId: "agent-node",
       initiatorParticipantId: "user-node",
       agentId: "north",
+      availableToolIds: ["lookup"],
+      parentLlmActionRunId: "llm-run-1",
     };
     await invoke("test.usage.llm", {
       key: "provider-0",
@@ -378,14 +394,15 @@ Deno.test("usage workflow records Action terminals once without payload copies",
       metadata: { source: "standalone-test" },
     });
     await invoke("test.usage.tool", {
-      ...toolCommon,
       key: "tool-1",
-      tool: { id: "lookup", name: "Lookup" },
-      arguments: { secretPrompt: "do not duplicate" },
-      result: {
-        status: "completed",
-        output: { privateResult: "do not duplicate" },
-        durationMs: 25,
+      metadata: toolMetadata,
+      input: {
+        arguments: { secretPrompt: "do not duplicate" },
+        result: {
+          status: "completed",
+          output: { privateResult: "do not duplicate" },
+          durationMs: 25,
+        },
       },
     });
 
@@ -444,9 +461,9 @@ Deno.test("usage workflow records Action terminals once without payload copies",
     assertEquals(toolRow.resource, "lookup");
     assertEquals(toolRow.metrics, {
       calls: 1,
-      durationMs: 25,
       hookObserved: 1,
     });
+    assertEquals(toolRow.operation, "lookup");
     assertEquals(toolRow.totalCostUsd, 0.5);
     assertEquals(toolRow.initiatedById, "user-external");
     const serialized = JSON.stringify(rows);
@@ -460,6 +477,70 @@ Deno.test("usage workflow records Action terminals once without payload copies",
       (await usage.list()).length,
       3,
     );
+  } finally {
+    await closeFixture(fixture);
+  }
+});
+
+Deno.test("usage recognizes failed and cancelled Tool Actions structurally", async () => {
+  const fixture = await createFixture();
+  try {
+    for (const mode of ["failed", "cancelled"] as const) {
+      const key = `tool:${mode}`;
+      const appended = await fixture.engine.events.append({
+        type: "test.usage.tool",
+        namespace: NAMESPACE,
+        threadId: THREAD_ID,
+        payload: {
+          key,
+          input: { mode, secret: `${mode}-must-not-be-copied` },
+          metadata: {
+            schema: "copilotz.core.tool-action.v1",
+            planId: "plan-terminal",
+            planMessageId: "plan-message-terminal",
+            planIndex: 0,
+            planSize: 1,
+            toolCallId: `lookup-${mode}`,
+            action: "lookup",
+            threadId: THREAD_ID,
+            triggerMessageId: "message-terminal",
+            agentId: "north",
+            agentParticipantId: "agent-node",
+            initiatorParticipantId: "user-node",
+            availableToolIds: ["lookup"],
+            parentLlmActionRunId: "llm-terminal",
+          },
+        },
+        correlationId: key,
+        deduplicationId: `${key}:requested`,
+      });
+      await Promise.all(appended.dispatch.handles.map((handle) => handle.done));
+    }
+
+    const usage = fixture.engine.collections.withScope({ namespace: NAMESPACE })
+      .usage;
+    const deadline = Date.now() + 10_000;
+    while ((await usage.list()).length < 2) {
+      if (Date.now() >= deadline) {
+        throw new Error("Tool terminal Usage records did not settle.");
+      }
+      await fixture.engine.recover({ namespace: NAMESPACE });
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    const rows = await usage.list();
+    assertEquals(
+      rows.map((row) => row.status).sort(),
+      ["cancelled", "failed"],
+    );
+    for (const row of rows) {
+      assertEquals(row.resource, "lookup");
+      assertEquals(row.operation, "lookup");
+      assertEquals(row.metrics, { calls: 1 });
+      assertEquals(row.threadId, THREAD_ID);
+      assertEquals(row.messageId, "message-terminal");
+      assertEquals(row.initiatedById, "user-external");
+    }
+    assert(!JSON.stringify(rows).includes("must-not-be-copied"));
   } finally {
     await closeFixture(fixture);
   }

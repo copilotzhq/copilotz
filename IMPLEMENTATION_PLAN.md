@@ -905,22 +905,24 @@ executable API or fixed AI resource bucket remains.
 Exit: adding a Resource namespace, Adapter kind, or semantic service requires no
 runtime context edit, and transaction callbacks hold no SQL connection open.
 
-### Slice 4 — Extract the AI harness as vertical plugins (in progress)
+### Slice 4 — Extract the AI harness as vertical plugins (complete)
 
-The ownership-evacuation checkpoint is closed. Admin, Channels, Knowledge,
-Memory, Schedules, Skills, Usage, Goals, existing Tool integrations, and their
-semantic adapters moved physically beneath `plugins/` without a forwarding
-barrel or compatibility layer. `runtime/` imports no concrete plugin. The
-remaining work is one generic prerequisite followed by two ordered semantic
-checkpoints: LLM, then Tool+Core.
+The ownership evacuation, generic Action-metadata prerequisite, LLM vertical,
+and Tool+Core checkpoints are closed. Admin, Channels, Knowledge, Memory,
+Schedules, Skills, Usage, Goals, concrete Tool integrations, and their semantic
+adapters live beneath `plugins/` without a forwarding barrel or compatibility
+layer. Every Tool is a native Action paired with a data-only Resource, Core
+orchestrates those Actions from durable lifecycle facts, and `runtime/` imports
+no concrete plugin.
 
 The concrete Tool-integration portion of this checkpoint is closed. Built-in,
-web, finance, persistent-terminal, OpenAPI, MCP, catalog, and Deno host code now
-lives only under `plugins/tools/**`, with deliberate `/tools/*` package exports.
-There is no forwarding runtime barrel and no duplicate stdio catalog wrapper:
-applications compose the generic catalog with the MCP stdio connector
-explicitly. The one pre-existing WorkflowTool executor/catalog remains only
-until item 2 replaces that entire semantic path atomically.
+web, finance, persistent-terminal, OpenAPI, MCP, and Deno host code now lives
+only under `plugins/tools/**`, with deliberate `/tools/*` package exports. Each
+Tool is a native Action plus a matching data-only Resource. OpenAPI and MCP
+factories complete generation and collision checks before composition, and
+applications inject the MCP stdio connector explicitly. The retired catalog,
+executor, host contexts, and internal pipelines have been deleted rather than
+forwarded.
 
 The Admin and Knowledge ownership moves are also closed. Their complete
 implementations, tests, and public entrypoints now live only under
@@ -951,33 +953,31 @@ Skills are available only through their explicit package subpaths. Core has one
 public path, `/core`; the transitional `/plugins/core` path and every caller of
 it were removed without an alias.
 
-0. **Generic prerequisite (in progress):** add canonical durable
+0. **Generic prerequisite (closed):** add canonical durable
    `ActionCallOptions.metadata`, required lifecycle `data.metadata`, and
    `context.action.metadata`; reject retry metadata drift and do not inherit
    metadata into nested calls. Replace the blanket static wildcard prohibition
    with the guarded structural rule from section 4.4. This checkpoint changes no
    AI semantics.
-1. **LLM vertical:** move the common `llm.call` Action, Model Resource and LLM
-   Adapter contracts, provider normalization/recovery, usage output, and
+1. **LLM vertical (closed):** move the common `llm.call` Action, Model Resource
+   and LLM Adapter contracts, provider normalization/recovery, usage output, and
    first-party OpenAI/Anthropic/Google-Gemini/Groq/DeepSeek/Ollama/MiniMax
    Adapter factories to `plugins/llm/**`. The application remains the only owner
    of configured Models, Adapters, clients, and credentials. Migrate Core's LLM
    callers to the one `llm.call` Action, make `corePlugin.plugins` include
    `llmPlugin`, and delete `runtime/llm/**`, the old Core LLM wrapper Actions
    and provider directories, and their obsolete exports before closing this
-   checkpoint. The single legacy WorkflowTool path may remain temporarily and
-   must remain the only Tool execution path; this checkpoint does not introduce
-   Action-backed Tools beside it.
-2. **Tool + Core checkpoint:** make every concrete Tool an Action and every Tool
-   Resource a data-only Action presentation. OpenAPI and MCP generate Actions
-   plus Tool Resources, not executable Tool objects. In the same atomic cut,
-   move Agent Resources and prompt policy fully into Core; implement
-   deterministic sequential tool planning, the
+   checkpoint. This checkpoint introduced no parallel Tool execution path.
+2. **Tool + Core checkpoint (closed):** make every concrete Tool an Action
+   and every Tool Resource a data-only Action presentation. OpenAPI and MCP
+   generate Actions plus Tool Resources, not executable Tool objects. In the
+   same atomic cut, move Agent Resources and prompt policy fully into Core;
+   implement deterministic sequential tool planning, the
    `schema: "copilotz.core.tool-action.v1"` lifecycle Processors, and ask
    continuation; and migrate all callers. Then remove `Tool.execute`, the
-   WorkflowTool type, catalog, executor, host/execution contexts, generic
-   deferred result protocol, independent validation, and Core `callTool`/batch
-   wrapper Actions. Also delete `runtime/tools/**`, `runtime/agents/**`,
+   executable Tool object type, catalog, executor, host/execution contexts,
+   generic deferred result protocol, independent validation, and Core wrapper
+   Actions. Also delete `runtime/tools/**`, `runtime/agents/**`,
    `runtime/context/**`, and `runtime/capabilities/**` plus their obsolete
    exports before this checkpoint closes.
 
@@ -1151,9 +1151,7 @@ Architecture-specific closure checks must prove:
 
 ## 8. Immediate next slice
 
-Slices 1 through 3 and Slice 4's ownership-evacuation checkpoint are closed.
-Continue Slice 4 with the generic Action-metadata/guarded-wildcard prerequisite,
-then close the LLM vertical before atomically cutting Tool execution and Core
-Tool orchestration in the exact order specified above. Each checkpoint is
-complete only after its replaced execution path and fixed AI runtime modules are
-deleted.
+Slices 1 through 4 are closed. Audit and finish Slice 5's already plugin-owned
+semantic verticals, then proceed to the generic runtime consolidation in Slice
+6. Do not preserve a semantic repository, manager, or runtime export merely to
+keep a moved plugin working.

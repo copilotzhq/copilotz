@@ -1,8 +1,12 @@
 import type { AgentResource } from "../../agent.ts";
 import type { Skill } from "@copilotz/copilotz/skills";
-import type { WorkflowToolCatalogContext } from "@copilotz/copilotz/tools";
-import { selectCapabilityResources } from "./selection.ts";
-import { resolveAgentGrants, resolveSkillGrants } from "./grants.ts";
+import type { ToolResource } from "@copilotz/copilotz/tools";
+import {
+  type AliasedToolResource,
+  resolveAgentGrants,
+  resolveSkillGrants,
+  resolveToolGrants,
+} from "./grants.ts";
 import type {
   AgentCapabilityResolver,
   CapabilityGrantSource,
@@ -48,16 +52,37 @@ function descriptor<T extends object>(
   });
 }
 
-function catalogContext(
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function toolEntries(
   options: CreateAgentCapabilityResolverOptions,
-): WorkflowToolCatalogContext {
-  return Object.freeze({
-    agents: Object.freeze({ ...(options.registry.resources.agents ?? {}) }),
-    skills: Object.freeze({ ...(options.registry.resources.skills ?? {}) }),
-    tools: Object.freeze({ ...(options.registry.resources.tools ?? {}) }),
-    apis: Object.freeze({ ...(options.registry.resources.apis ?? {}) }),
-    mcp: Object.freeze({ ...(options.registry.resources.mcp ?? {}) }),
-  }) as unknown as WorkflowToolCatalogContext;
+): readonly AliasedToolResource[] {
+  return Object.freeze(
+    Object.entries(options.registry.resources.tools ?? {})
+      .filter((entry): entry is [string, ToolResource] =>
+        entry[1] !== undefined
+      )
+      .map(([alias, resource]) => {
+        if (
+          !isRecord(resource) || resource.action !== alias ||
+          typeof resource.name !== "string" || !resource.name.trim() ||
+          typeof resource.description !== "string" ||
+          !resource.description.trim()
+        ) {
+          throw new TypeError(
+            `Tool Resource '${alias}' must present the same Action alias.`,
+          );
+        }
+        if (!options.registry.actions[alias]) {
+          throw new Error(
+            `Tool Resource '${alias}' has no composed Action '${alias}'.`,
+          );
+        }
+        return Object.freeze({ alias, resource });
+      }),
+  );
 }
 
 /** Creates canonical application/adapter introspection over effective grants. */
@@ -65,51 +90,49 @@ export function createAgentCapabilityResolver(
   options: CreateAgentCapabilityResolverOptions,
 ): AgentCapabilityResolver {
   return Object.freeze({
-    async resolve(input) {
-      const id = input.agent.trim();
-      if (!id) throw new TypeError("Agent capability lookup requires an ID.");
-      const agentsContext = agentContext(options);
-      const skillsContext = skillContext(options);
-      const agent = agentsContext[id];
-      if (!agent) throw new Error(`Unknown agent context '${id}'.`);
-      const availableAgents = definedValues<AgentResource>(agentsContext);
-      const availableSkills = definedValues<Skill>(skillsContext);
-      const agents = resolveAgentGrants(agent, availableAgents);
-      const skills = resolveSkillGrants(agent, availableSkills);
-      const toolContext = catalogContext(options);
-      const allTools = await options.toolCatalog.all(toolContext);
-      const explicitTools = selectCapabilityResources({
-        agentId: agent.id,
-        kind: "tool",
-        selection: agent.capabilities?.tools,
-        resources: allTools,
-        id: (tool) => tool.key,
-      });
-      const explicitToolKeys = new Set(explicitTools.map((tool) => tool.key));
-      const tools = await options.toolCatalog.forAgent(toolContext, agent);
-      return Object.freeze({
-        agent,
-        tools: Object.freeze(tools.map((tool) =>
-          descriptor(
-            tool.key,
-            tool,
-            explicitToolKeys.has(tool.key) ? "explicit" : "derived",
-          )
-        )),
-        agents: Object.freeze(agents.map((candidate) =>
-          descriptor(
-            candidate.id,
-            candidate,
-            "explicit",
-          )
-        )),
-        skills: Object.freeze(skills.map((skill) =>
-          descriptor(
-            skill.name,
-            skill,
-            "explicit",
-          )
-        )),
+    resolve(input) {
+      return Promise.resolve().then(() => {
+        const id = input.agent.trim();
+        if (!id) {
+          throw new TypeError("Agent capability lookup requires an ID.");
+        }
+        const agentsContext = agentContext(options);
+        const skillsContext = skillContext(options);
+        const agent = agentsContext[id];
+        if (!agent) throw new Error(`Unknown agent context '${id}'.`);
+        const availableAgents = definedValues<AgentResource>(agentsContext);
+        const availableSkills = definedValues<Skill>(skillsContext);
+        const agents = resolveAgentGrants(agent, availableAgents);
+        const skills = resolveSkillGrants(agent, availableSkills);
+        const explicitToolKeys = new Set(agent.capabilities?.tools ?? []);
+        const tools = resolveToolGrants(agent, toolEntries(options), {
+          agents: availableAgents,
+          skills: availableSkills,
+        });
+        return Object.freeze({
+          agent,
+          tools: Object.freeze(tools.map((tool) =>
+            descriptor(
+              tool.alias,
+              tool.resource,
+              explicitToolKeys.has(tool.alias) ? "explicit" : "derived",
+            )
+          )),
+          agents: Object.freeze(agents.map((candidate) =>
+            descriptor(
+              candidate.id,
+              candidate,
+              "explicit",
+            )
+          )),
+          skills: Object.freeze(skills.map((skill) =>
+            descriptor(
+              skill.name,
+              skill,
+              "explicit",
+            )
+          )),
+        });
       });
     },
   });

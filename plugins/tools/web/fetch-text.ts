@@ -1,3 +1,7 @@
+import { type ActionContext, defineAction } from "@copilotz/copilotz/actions";
+import { defineTool } from "../contracts.ts";
+import { actionAbortError } from "./abort.ts";
+
 interface FetchTextParams {
   url: string;
   timeout?: number;
@@ -139,11 +143,8 @@ export function shapeFetchedText(
   };
 }
 
-export default {
-  key: "fetch_text",
-  name: "Fetch Text",
-  description:
-    "Fetch text content from a URL and optionally filter or extract relevant text.",
+export const fetchTextAction = defineAction({
+  id: "copilotz.tools.web.fetch_text",
   inputSchema: {
     type: "object",
     properties: {
@@ -190,14 +191,28 @@ export default {
     },
     required: ["url"],
   },
-  execute: async (params: FetchTextParams) => {
+  execute: async (params: FetchTextParams, context: ActionContext) => {
     const { url, timeout = 15 } = params;
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    let removeAbortListener: (() => void) | undefined;
+    let callerCancelled = false;
+    let timedOut = false;
     try {
       new URL(url); // Validate URL
 
       const controller = new AbortController();
-      timeoutId = setTimeout(() => controller.abort(), timeout * 1000);
+      const abort = () => {
+        callerCancelled = true;
+        controller.abort();
+      };
+      context.signal.addEventListener("abort", abort, { once: true });
+      removeAbortListener = () =>
+        context.signal.removeEventListener("abort", abort);
+      if (context.signal.aborted) abort();
+      timeoutId = setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+      }, timeout * 1000);
 
       const response = await fetch(url, {
         signal: controller.signal,
@@ -222,12 +237,22 @@ export default {
         status: response.status,
       };
     } catch (error) {
-      if ((error as Error).name === "AbortError") {
+      if (callerCancelled || context.signal.aborted) {
+        throw actionAbortError(context.signal);
+      }
+      if (timedOut || (error as Error).name === "AbortError") {
         throw new Error(`Request timeout after ${timeout} seconds`);
       }
       throw new Error(`Failed to fetch text: ${(error as Error).message}`);
     } finally {
       if (timeoutId) clearTimeout(timeoutId);
+      removeAbortListener?.();
     }
   },
-};
+});
+
+export const fetchTextTool = defineTool("fetch_text", fetchTextAction, {
+  name: "Fetch Text",
+  description:
+    "Fetch text content from a URL and optionally filter or extract relevant text.",
+});

@@ -1,13 +1,23 @@
 import type { CollectionRecord } from "@copilotz/copilotz/collections";
-import type { AgentResource } from "@copilotz/copilotz/core";
-import { assetIdFromRef, formatAssetRef } from "@copilotz/copilotz/content";
+import {
+  type AgentResource,
+  coreCollectionsPlugin,
+} from "@copilotz/copilotz/core";
+import {
+  assetIdFromRef,
+  type ContentRef,
+  formatAssetRef,
+} from "@copilotz/copilotz/content";
 import type { ParticipantInput } from "@copilotz/copilotz/domain";
 import { type CopilotzPlugin, definePlugin } from "@copilotz/copilotz/plugins";
-import type { ActionCallOptions } from "@copilotz/copilotz/actions";
-import type {
-  WorkflowTool,
-  WorkflowToolExecutionContext,
-} from "../internal/types.ts";
+import {
+  type ActionContext,
+  type ActionSchema,
+  type AnyActionDefinition,
+  defineAction,
+} from "@copilotz/copilotz/actions";
+import { defineTool as defineToolResource } from "../contracts.ts";
+import type { ToolResource } from "../contracts.ts";
 
 export const BUILT_IN_CORE_TOOL_IDS = [
   "get_current_time",
@@ -45,84 +55,72 @@ function requiredText(value: unknown, name: string): string {
   return value.trim();
 }
 
-function context(
-  value: WorkflowToolExecutionContext | undefined,
-): WorkflowToolExecutionContext {
-  if (!value?.processor) {
-    throw new Error("This tool requires an event-native Copilotz context.");
-  }
-  return value;
+function optionalText(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 async function byExternalId(
-  ctx: WorkflowToolExecutionContext,
+  ctx: ActionContext,
   externalId: string,
 ): Promise<CollectionRecord | null> {
-  return (await ctx.processor.collections.participant.queries.byExternalId({
+  return (await ctx.collections.participant.queries.byExternalId({
     externalId,
   }))[0] ?? null;
 }
 
-async function ensureParticipant(
-  ctx: WorkflowToolExecutionContext,
-  input: ParticipantInput,
-  operationKey: string,
-  threadId?: string,
-): Promise<CollectionRecord> {
-  const existing = input.id
-    ? await ctx.processor.collections.participant.get({ id: input.id })
-    : await byExternalId(ctx, input.externalId);
-  if (existing) return existing;
-  return await ctx.processor.collections.participant.create({
-    ...input,
-    metadata: structuredClone(input.metadata ?? {}),
-  }, { operationKey, ...(threadId ? { threadId } : {}) });
+type NativeToolDefinition = Readonly<{
+  action: AnyActionDefinition;
+  tool: ToolResource;
+}>;
+
+function nativeTool(
+  alias: BuiltInCoreToolId,
+  presentation: Readonly<{ name: string; description: string }>,
+  definition: Readonly<{
+    inputSchema?: ActionSchema;
+    execute(input: unknown, context: ActionContext): unknown | Promise<unknown>;
+  }>,
+): NativeToolDefinition {
+  const action = defineAction({
+    id: `copilotz.tools.builtin.${alias}`,
+    ...(definition.inputSchema ? { inputSchema: definition.inputSchema } : {}),
+    execute: definition.execute,
+  });
+  return Object.freeze({
+    action,
+    tool: defineToolResource(alias, action, presentation),
+  });
 }
 
-function defineTool(
-  input: Omit<WorkflowTool, "id"> & { id?: string },
-): WorkflowTool {
-  return Object.freeze({ ...input, id: input.id ?? input.key }) as WorkflowTool;
+function metadataText(context: ActionContext, key: string): string | undefined {
+  const value = context.action.metadata[key];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-function bytesToBase64(bytes: Uint8Array): string {
-  if (typeof btoa !== "function") {
-    throw new Error("This runtime does not provide the Web btoa API.");
-  }
-  let binary = "";
-  const chunkSize = 0x8000;
-  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
-    binary += String.fromCharCode(
-      ...bytes.subarray(offset, offset + chunkSize),
-    );
-  }
-  return btoa(binary);
-}
-
-function base64ToBytes(value: string): Uint8Array {
-  if (typeof atob !== "function") {
-    throw new Error("This runtime does not provide the Web atob API.");
-  }
-  let binary: string;
-  try {
-    binary = atob(value);
-  } catch (cause) {
-    throw new TypeError("dataBase64 must contain valid base64 data.", {
-      cause,
-    });
-  }
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index++) {
-    bytes[index] = binary.charCodeAt(index);
-  }
-  return bytes;
-}
-
-function assetKind(mediaType: string): "image" | "audio" | "video" | "file" {
+function assetKind(
+  mediaType: string,
+): "image" | "audio" | "video" | "text" | "json" | "file" {
   if (mediaType.startsWith("image/")) return "image";
   if (mediaType.startsWith("audio/")) return "audio";
   if (mediaType.startsWith("video/")) return "video";
+  if (mediaType === "application/json" || mediaType.endsWith("+json")) {
+    return "json";
+  }
+  if (mediaType.startsWith("text/")) return "text";
   return "file";
+}
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(stableJson).join(",")}]`;
+  }
+  if (value && typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, child]) => `${JSON.stringify(key)}:${stableJson(child)}`);
+    return `{${entries.join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
 }
 
 function assetIdFrom(
@@ -188,24 +186,27 @@ function participantInputFromRecord(
 }
 
 async function loadCallerParticipant(
-  ctx: WorkflowToolExecutionContext,
+  ctx: ActionContext,
 ): Promise<CollectionRecord | null> {
-  if (ctx.execution.participantId) {
-    return await ctx.processor.collections.participant.get({
-      id: ctx.execution.participantId,
+  const participantId = metadataText(ctx, "agentParticipantId") ??
+    metadataText(ctx, "participantId");
+  if (participantId) {
+    return await ctx.collections.participant.get({
+      id: participantId,
     });
   }
-  if (ctx.execution.agentId) {
-    return await byExternalId(ctx, ctx.execution.agentId);
+  const agentId = metadataText(ctx, "agentId");
+  if (agentId) {
+    return await byExternalId(ctx, agentId);
   }
   return null;
 }
 
-function getCurrentTimeTool(now: () => Date): WorkflowTool {
-  return defineTool({
-    key: "get_current_time",
+function getCurrentTimeTool(now: () => Date): NativeToolDefinition {
+  return nativeTool("get_current_time", {
     name: "Get Current Time",
     description: "Get the current date and time in a portable format.",
+  }, {
     inputSchema: {
       type: "object",
       properties: {
@@ -257,71 +258,52 @@ function getCurrentTimeTool(now: () => Date): WorkflowTool {
 
 function waitTool(
   sleep: (milliseconds: number, signal: AbortSignal) => Promise<void>,
-): WorkflowTool {
-  return defineTool({
-    key: "wait",
+): NativeToolDefinition {
+  return nativeTool("wait", {
     name: "Wait",
     description: "Wait for up to 60 seconds, respecting cancellation.",
+  }, {
     inputSchema: {
       type: "object",
       properties: {
         seconds: { type: "number", minimum: 0.1, maximum: 60, default: 1 },
       },
     },
-    async execute(raw, value) {
-      const ctx = context(value);
+    async execute(raw, ctx) {
       const seconds = Number(record(raw).seconds ?? 1);
       if (!Number.isFinite(seconds) || seconds < 0.1 || seconds > 60) {
         throw new TypeError("seconds must be between 0.1 and 60.");
       }
       const startedAt = Date.now();
-      await sleep(seconds * 1_000, ctx.processor.signal);
+      await sleep(seconds * 1_000, ctx.signal);
       const actual = Date.now() - startedAt;
       return { requested: seconds, actual: actual / 1_000 };
     },
   });
 }
 
-function saveAssetTool(): WorkflowTool {
-  return defineTool({
-    key: "save_asset",
+function saveAssetTool(): NativeToolDefinition {
+  return nativeTool("save_asset", {
     name: "Save Asset",
     description:
-      "Publish base64 media as canonical Copilotz content, or inspect an existing asset.",
+      "Validate and return a canonical Copilotz ContentRef for an existing asset.",
+  }, {
     inputSchema: {
       type: "object",
       properties: {
-        mimeType: { type: "string" },
-        dataBase64: { type: "string" },
         assetId: { type: "string" },
         ref: { type: "string" },
       },
       oneOf: [
-        { required: ["mimeType", "dataBase64"] },
         { required: ["assetId"] },
         { required: ["ref"] },
       ],
     },
-    async execute(raw, value) {
-      const ctx = context(value);
+    async execute(raw, ctx) {
       const input = record(raw);
-      let asset;
-      if (input.assetId !== undefined || input.ref !== undefined) {
-        const id = assetIdFrom(ctx.namespace, input);
-        asset = await ctx.processor.content.get(id);
-        if (!asset) throw new Error(`Asset '${id}' was not found.`);
-      } else {
-        const mediaType = requiredText(input.mimeType, "mimeType");
-        const bytes = base64ToBytes(
-          requiredText(input.dataBase64, "dataBase64"),
-        );
-        asset = await ctx.processor.content.publish(
-          { mediaType, body: bytes },
-          {
-            operationKey: "save_asset",
-          },
-        );
-      }
+      const id = assetIdFrom(ctx.namespace, input);
+      const asset = await ctx.content.get(id);
+      if (!asset) throw new Error(`Asset '${id}' was not found.`);
       const kind = assetKind(asset.mediaType);
       return {
         assetId: asset.id,
@@ -340,59 +322,51 @@ function saveAssetTool(): WorkflowTool {
   });
 }
 
-function fetchAssetTool(): WorkflowTool {
-  return defineTool({
-    key: "fetch_asset",
+function fetchAssetTool(): NativeToolDefinition {
+  return nativeTool("fetch_asset", {
     name: "Fetch Asset",
-    description: "Read canonical asset content by ID or asset:// reference.",
+    description:
+      "Return a canonical ContentRef and metadata by asset ID or asset:// reference.",
+  }, {
     inputSchema: {
       type: "object",
       properties: {
         assetId: { type: "string" },
         id: { type: "string" },
         ref: { type: "string" },
-        format: {
-          type: "string",
-          enum: ["dataUrl", "base64"],
-          default: "dataUrl",
-        },
       },
       anyOf: [{ required: ["assetId"] }, { required: ["id"] }, {
         required: ["ref"],
       }],
     },
-    async execute(raw, value) {
-      const ctx = context(value);
+    async execute(raw, ctx) {
       const input = record(raw);
       const id = assetIdFrom(ctx.namespace, input);
-      const asset = await ctx.processor.content.get(id);
+      const asset = await ctx.content.get(id);
       if (!asset) throw new Error(`Asset '${id}' was not found.`);
       const kind = assetKind(asset.mediaType);
-      const resolved = await ctx.processor.content.resolve({
+      const content = Object.freeze({
         assetId: id,
         kind,
         role: "attachment",
         mediaType: asset.mediaType,
       });
-      const base64 = bytesToBase64(resolved.bytes);
-      const common = {
+      return {
         assetId: id,
         assetRef: formatAssetRef(ctx.namespace, id),
+        content,
         mimeType: asset.mediaType,
         size: asset.byteLength,
       };
-      return input.format === "base64"
-        ? { ...common, base64 }
-        : { ...common, dataUrl: `data:${asset.mediaType};base64,${base64}` };
     },
   });
 }
 
-function updateMyMemoryTool(): WorkflowTool {
-  return defineTool({
-    key: "update_my_memory",
+function updateMyMemoryTool(): NativeToolDefinition {
+  return nativeTool("update_my_memory", {
     name: "Update My Memory",
     description: "Update the calling agent participant's durable metadata.",
+  }, {
     inputSchema: {
       type: "object",
       properties: {
@@ -406,8 +380,7 @@ function updateMyMemoryTool(): WorkflowTool {
       },
       required: ["key"],
     },
-    async execute(raw, value) {
-      const ctx = context(value);
+    async execute(raw, ctx) {
       const input = record(raw);
       const key = requiredText(input.key, "key");
       const operation = input.operation ?? "set";
@@ -435,10 +408,10 @@ function updateMyMemoryTool(): WorkflowTool {
             : [previous, item];
         } else metadata[key] = item;
       }
-      await ctx.processor.collections.participant.update({
+      await ctx.collections.participant.update({
         id: participant.id,
         set: { metadata },
-      }, { operationKey: `update_my_memory:${key}` });
+      }, { operationKey: `update_my_memory:${ctx.action.runId}:${key}` });
       return {
         success: true,
         key,
@@ -470,12 +443,12 @@ function userMemoryItems(metadata: JsonRecord): UserMemoryItem[] {
     : [];
 }
 
-function updateUserMemoryTool(now: () => Date): WorkflowTool {
-  return defineTool({
-    key: "update_user_memory",
+function updateUserMemoryTool(now: () => Date): NativeToolDefinition {
+  return nativeTool("update_user_memory", {
     name: "Update User Memory",
     description:
       "Add or remove a durable memory item on the current human participant.",
+  }, {
     inputSchema: {
       type: "object",
       properties: {
@@ -489,18 +462,19 @@ function updateUserMemoryTool(now: () => Date): WorkflowTool {
         memoryId: { type: "string" },
       },
     },
-    async execute(raw, value) {
-      const ctx = context(value);
+    async execute(raw, ctx) {
       const input = record(raw);
       const operation = input.operation ?? "add";
       if (operation !== "add" && operation !== "remove") {
         throw new TypeError("operation must be add or remove.");
       }
-      const externalId = requiredText(
-        ctx.userExternalId,
-        "Current user external ID",
+      const initiatorParticipantId = requiredText(
+        metadataText(ctx, "initiatorParticipantId"),
+        "Initiator participant ID",
       );
-      const participant = await byExternalId(ctx, externalId);
+      const participant = await ctx.collections.participant.get({
+        id: initiatorParticipantId,
+      });
       if (!participant || participant.participantType !== "human") {
         throw new Error("The current human participant was not found.");
       }
@@ -516,7 +490,7 @@ function updateUserMemoryTool(now: () => Date): WorkflowTool {
           ? input.category
           : "other";
         item = Object.freeze({
-          id: `memory:${ctx.execution.id}`,
+          id: `memory:${ctx.action.runId}`,
           content,
           category,
           source: "agent",
@@ -534,10 +508,14 @@ function updateUserMemoryTool(now: () => Date): WorkflowTool {
       }
       metadata.memories = { ...record(metadata.memories), items };
       metadata.updatedAt = now().toISOString();
-      await ctx.processor.collections.participant.update({
+      await ctx.collections.participant.update({
         id: participant.id,
         set: { metadata },
-      }, { operationKey: `update_user_memory:${String(operation)}` });
+      }, {
+        operationKey: `update_user_memory:${ctx.action.runId}:${
+          String(operation)
+        }`,
+      });
       return {
         success: true,
         operation,
@@ -553,14 +531,14 @@ function participantInput(participant: CollectionRecord): ParticipantInput {
 }
 
 async function resolveThreadParticipant(
-  ctx: WorkflowToolExecutionContext,
+  ctx: ActionContext,
   reference: unknown,
 ): Promise<ParticipantInput> {
   const id = requiredText(reference, "participant");
-  const existing = await ctx.processor.collections.participant.get({ id }) ??
+  const existing = await ctx.collections.participant.get({ id }) ??
     await byExternalId(ctx, id);
   if (existing) return participantInput(existing);
-  const agents = (ctx.processor.resources.agents ?? {}) as Readonly<
+  const agents = (ctx.resources.agents ?? {}) as Readonly<
     Record<string, AgentResource | undefined>
   >;
   const agent = agents[id] ??
@@ -579,12 +557,12 @@ async function resolveThreadParticipant(
   });
 }
 
-function createThreadTool(): WorkflowTool {
-  return defineTool({
-    key: "create_thread",
+function createThreadTool(): NativeToolDefinition {
+  return nativeTool("create_thread", {
     name: "Create Thread",
     description:
       "Create an explicitly separate public conversation and start it through normal durable routing.",
+  }, {
     inputSchema: {
       type: "object",
       properties: {
@@ -607,8 +585,7 @@ function createThreadTool(): WorkflowTool {
       },
       required: ["name", "participants"],
     },
-    async execute(raw, value) {
-      const ctx = context(value);
+    async execute(raw, ctx) {
       const input = record(raw);
       const name = requiredText(input.name, "name");
       if (!Array.isArray(input.participants)) {
@@ -633,20 +610,103 @@ function createThreadTool(): WorkflowTool {
       }
       const threadId = typeof input.id === "string" && input.id.trim()
         ? input.id.trim()
-        : `thread:${ctx.execution.id}`;
+        : `thread:${ctx.action.runId}`;
+      const externalId = optionalText(input.externalId);
+      const description = optionalText(input.description);
+      const summary = optionalText(input.summary);
+      const parentThreadId = metadataText(ctx, "threadId");
       const initialMessageId = `message:${threadId}:initial`;
-      const existingThread = await ctx.processor.collections.thread.get({
-        id: threadId,
-      });
-      const existingInitialMessage = await ctx.processor.collections.message
-        ?.get({ id: initialMessageId });
+      const initialMessage = typeof input.initialMessage === "string" &&
+          input.initialMessage.trim()
+        ? input.initialMessage
+        : `Started thread: ${name}`;
+      const participantPlans = await Promise.all(
+        [...participants.values()].map(async (participant) => {
+          const existing = participant.id
+            ? await ctx.collections.participant.get({ id: participant.id })
+            : await byExternalId(ctx, participant.externalId);
+          return { participant, existing };
+        }),
+      );
+      const [existingThread, existingInitialMessage] = await Promise.all([
+        ctx.collections.thread.get({ id: threadId }),
+        ctx.collections.message.get({ id: initialMessageId }),
+      ]);
+      if (Boolean(existingThread) !== Boolean(existingInitialMessage)) {
+        throw new Error(
+          `Thread '${threadId}' has inconsistent initial-message state.`,
+        );
+      }
       if (existingThread && existingInitialMessage) {
+        const expectedParticipantIds = participantPlans.map(({ existing }) => {
+          if (!existing) {
+            throw new Error(
+              `Existing thread '${threadId}' does not match requested participants.`,
+            );
+          }
+          return existing.id;
+        }).sort();
+        const actualParticipantIds =
+          Array.isArray(existingThread.participantIds)
+            ? existingThread.participantIds.map(String).sort()
+            : [];
+        const resolved = await ctx.content.resolveMany(
+          Array.isArray(existingInitialMessage.content)
+            ? existingInitialMessage.content as unknown as readonly ContentRef[]
+            : [],
+        );
+        const existingText = resolved.map((part) => part.text ?? "").join("");
+        const declarationMetadata = {
+          ...structuredClone(record(input.metadata)),
+          name,
+          mode,
+          ...(description ? { description } : {}),
+          ...(summary ? { summary } : {}),
+        };
+        const existingMetadata = structuredClone(
+          record(existingThread.metadata),
+        );
+        const createdByActionRunId = optionalText(
+          existingMetadata.createdByActionRunId,
+        );
+        delete existingMetadata.createdByActionRunId;
+        const expectedRecipientIds = expectedParticipantIds
+          .filter((id) => id !== caller.id)
+          .sort();
+        const actualRecipientIds = Array.isArray(
+            existingInitialMessage.recipientIds,
+          )
+          ? existingInitialMessage.recipientIds.map(String).sort()
+          : [];
+        const messageMetadata = record(existingInitialMessage.metadata);
+        if (
+          existingThread.name !== name ||
+          optionalText(existingThread.externalId) !== externalId ||
+          optionalText(existingThread.parentThreadId) !== parentThreadId ||
+          optionalText(existingThread.description) !== description ||
+          existingThread.status !== "active" ||
+          stableJson(existingMetadata) !== stableJson(declarationMetadata) ||
+          JSON.stringify(actualParticipantIds) !==
+            JSON.stringify(expectedParticipantIds) ||
+          existingInitialMessage.threadId !== threadId ||
+          existingInitialMessage.senderId !== caller.id ||
+          JSON.stringify(actualRecipientIds) !==
+            JSON.stringify(expectedRecipientIds) ||
+          messageMetadata.kind !== "thread_initial_message" ||
+          messageMetadata.mode !== mode ||
+          !createdByActionRunId ||
+          optionalText(messageMetadata.createdByActionRunId) !==
+            createdByActionRunId ||
+          existingText !== initialMessage
+        ) {
+          throw new Error(
+            `Existing thread '${threadId}' does not match the requested declaration.`,
+          );
+        }
         return {
           threadId,
           name,
-          participantIds: Array.isArray(existingThread.participantIds)
-            ? [...existingThread.participantIds]
-            : [],
+          participantIds: expectedParticipantIds,
           mode,
           status: "started",
           eventId: existingThread.id,
@@ -657,116 +717,115 @@ function createThreadTool(): WorkflowTool {
         ...structuredClone(record(input.metadata)),
         name,
         mode,
-        ...(typeof input.description === "string" && input.description.trim()
-          ? { description: input.description.trim() }
-          : {}),
-        ...(typeof input.summary === "string" && input.summary.trim()
-          ? { summary: input.summary.trim() }
-          : {}),
-        createdByToolExecutionId: ctx.execution.id,
+        ...(description ? { description } : {}),
+        ...(summary ? { summary } : {}),
+        createdByActionRunId: ctx.action.runId,
       };
-      const ensured: CollectionRecord[] = [];
-      for (const participant of participants.values()) {
-        ensured.push(
-          await ensureParticipant(
-            ctx,
-            {
-              ...(participant.id ? { id: participant.id } : {}),
-              externalId: participant.externalId,
-              participantType: participant.participantType,
-              ...(participant.name ? { name: participant.name } : {}),
-              ...(participant.email ? { email: participant.email } : {}),
-              ...(participant.agentId ? { agentId: participant.agentId } : {}),
-              metadata: structuredClone(participant.metadata ?? {}),
-            },
-            `create_thread:${threadId}:participant:${participant.externalId}`,
-            threadId,
-          ),
-        );
-      }
-      const created = existingThread ??
-        await ctx.processor.collections.thread.create({
+      const preparedContent = await ctx.content.prepare(initialMessage, {
+        operationKey: `create_thread:${ctx.action.runId}:initial-content`,
+      });
+      const created = await ctx.transaction(async (transaction) => {
+        const ensuredIds: string[] = [];
+        for (const { participant, existing } of participantPlans) {
+          if (existing) {
+            ensuredIds.push(existing.id);
+            continue;
+          }
+          const participantId = participant.id?.trim() ||
+            `participant:${encodeURIComponent(participant.externalId)}`;
+          const ref = await transaction.collections.participant.create({
+            id: participantId,
+            externalId: participant.externalId,
+            participantType: participant.participantType,
+            ...(participant.name ? { name: participant.name } : {}),
+            ...(participant.email ? { email: participant.email } : {}),
+            ...(participant.agentId ? { agentId: participant.agentId } : {}),
+            metadata: structuredClone(participant.metadata ?? {}),
+          }, { threadId });
+          ensuredIds.push(ref.id);
+        }
+        const thread = await transaction.collections.thread.create({
           id: threadId,
-          ...(typeof input.externalId === "string" && input.externalId.trim()
-            ? { externalId: input.externalId.trim() }
-            : {}),
-          parentThreadId: ctx.execution.threadId,
+          ...(externalId ? { externalId } : {}),
+          ...(parentThreadId ? { parentThreadId } : {}),
           name,
-          participantIds: ensured.map((item) => item.id),
+          ...(description ? { description } : {}),
+          participantIds: ensuredIds,
           metadata,
-        }, { operationKey: `create_thread:${threadId}` });
-
-      const initialMessage = typeof input.initialMessage === "string" &&
-          input.initialMessage.trim()
-        ? input.initialMessage
-        : `Started thread: ${name}`;
-      const recipientIds = ensured
-        .filter((participant) => participant.id !== caller.id)
-        .map((participant) => participant.id);
-      const createThreadMessage = ctx.processor.actions
-        .createThreadMessage as unknown as (
-          input: Record<string, unknown>,
-          options?: ActionCallOptions,
-        ) => Promise<CollectionRecord>;
-      const message = await createThreadMessage({
-        id: initialMessageId,
-        threadId,
-        sender: caller,
-        recipientIds,
-        content: initialMessage,
-        visibility: { kind: "public" },
-        metadata: {
+        }, { threadId });
+        const recipientIds = ensuredIds.filter((id) => id !== caller.id);
+        const messageMetadata = {
           kind: "thread_initial_message",
           mode,
-          createdByToolExecutionId: ctx.execution.id,
-        },
+          createdByActionRunId: ctx.action.runId,
+        };
+        const message = await transaction.collections.message.create({
+          id: initialMessageId,
+          threadId,
+          senderId: caller.id,
+          recipientIds,
+          content: preparedContent,
+          metadata: messageMetadata,
+        }, {
+          threadId,
+          routing: { senderId: caller.id, recipientIds },
+          visibility: { kind: "public" },
+          identity: { metadata: messageMetadata },
+        });
+        return { thread, message, participantIds: ensuredIds };
       }, {
-        operationKey: `create_thread:${threadId}:initial-message`,
+        operationKey: `create_thread:${ctx.action.runId}`,
       });
       return {
         threadId,
         name,
-        participantIds: ensured.map((item) => item.id),
+        participantIds: created.participantIds,
         mode,
         status: "started",
-        eventId: created.id,
-        messageEventId: message.id,
+        eventId: created.thread.id,
+        messageEventId: created.message.id,
       };
     },
   });
 }
 
-function endThreadTool(): WorkflowTool {
-  return defineTool({
-    key: "end_thread",
+function endThreadTool(): NativeToolDefinition {
+  return nativeTool("end_thread", {
     name: "End Thread",
     description: "Archive the active thread with a public durable summary.",
+  }, {
     inputSchema: {
       type: "object",
       properties: { summary: { type: "string", minLength: 1 } },
       required: ["summary"],
     },
-    async execute(raw, value) {
-      const ctx = context(value);
+    async execute(raw, ctx) {
       const summary = requiredText(record(raw).summary, "summary");
-      const thread = await ctx.processor.collections.thread.get({
-        id: ctx.execution.threadId,
+      const threadId = requiredText(
+        metadataText(ctx, "threadId"),
+        "Thread ID",
+      );
+      const thread = await ctx.collections.thread.get({
+        id: threadId,
       });
       if (!thread) throw new Error("The active thread was not found.");
-      await ctx.processor.collections.thread.update({
+      await ctx.collections.thread.update({
         id: thread.id,
         set: {
           status: "archived",
           metadata: { ...record(thread.metadata), summary },
         },
-      }, { operationKey: "end_thread", threadId: thread.id });
+      }, {
+        operationKey: `end_thread:${ctx.action.runId}`,
+        threadId: thread.id,
+      });
       return { threadId: thread.id, summary, status: "archived" };
     },
   });
 }
 
 function toolFactories(options: CreateBuiltInToolsPluginOptions): Readonly<
-  Record<BuiltInCoreToolId, (() => WorkflowTool) | undefined>
+  Record<BuiltInCoreToolId, (() => NativeToolDefinition) | undefined>
 > {
   const now = options.now ?? (() => new Date());
   const sleep = options.sleep ?? defaultSleep;
@@ -786,9 +845,12 @@ function toolFactories(options: CreateBuiltInToolsPluginOptions): Readonly<
 export function createBuiltInToolsPlugin(
   options: CreateBuiltInToolsPluginOptions = {},
 ): CopilotzPlugin {
-  const ids = [...new Set(options.include ?? BUILT_IN_CORE_TOOL_IDS)];
+  const ids = options.include ?? BUILT_IN_CORE_TOOL_IDS;
+  if (new Set(ids).size !== ids.length) {
+    throw new TypeError("Built-in tool selection contains duplicate IDs.");
+  }
   const factories = toolFactories(options);
-  const tools = Object.freeze(ids.map((id) => {
+  const definitions = Object.freeze(ids.map((id) => {
     const factory = factories[id];
     if (!factory) {
       throw new TypeError(
@@ -800,8 +862,18 @@ export function createBuiltInToolsPlugin(
   return definePlugin({
     id: options.id ?? "@copilotz/built-in-tools",
     version: options.version ?? "3.0.0",
+    plugins: [coreCollectionsPlugin],
+    actions: Object.fromEntries(
+      definitions.map((
+        definition,
+      ) => [definition.tool.action, definition.action]),
+    ),
     resources: {
-      tools: Object.fromEntries(tools.map((tool) => [tool.key, tool])),
+      tools: Object.fromEntries(
+        definitions.map((
+          definition,
+        ) => [definition.tool.action, definition.tool]),
+      ),
     },
   });
 }

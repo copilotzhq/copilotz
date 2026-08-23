@@ -1,6 +1,7 @@
 import type {
   ActionCaller,
   ActionContext,
+  RuntimeActionCallers,
   RuntimeContextNamespaces,
 } from "@copilotz/copilotz/actions";
 import type { ProcessorContext } from "@copilotz/copilotz/plugins";
@@ -10,19 +11,16 @@ import type {
   ModelResource,
 } from "@copilotz/copilotz/llm";
 import type { AgentResource } from "./agent.ts";
-import type { API, MCPServer, Tool } from "@copilotz/copilotz/tools";
+import type { ToolResource } from "@copilotz/copilotz/tools";
 import type { Skill } from "@copilotz/copilotz/skills";
 import type { createThreadMessageAction } from "./resources/actions/thread-message.ts";
-import type { executeToolBatchAction } from "./resources/actions/tool.ts";
 
 export type CoreResources =
   & RuntimeContextNamespaces
   & Readonly<{
     agents: Readonly<Record<string, AgentResource | undefined>>;
-    tools: Readonly<Record<string, Tool | undefined>>;
+    tools: Readonly<Record<string, ToolResource | undefined>>;
     skills: Readonly<Record<string, Skill | undefined>>;
-    apis: Readonly<Record<string, API | undefined>>;
-    mcp: Readonly<Record<string, MCPServer | undefined>>;
     models: Readonly<Record<string, ModelResource | undefined>>;
   }>;
 
@@ -40,26 +38,26 @@ export type CoreComposedContext = Readonly<{
 export type CoreActionCallers = Readonly<{
   createThreadMessage: ActionCaller<typeof createThreadMessageAction>;
   callLlm: ActionCaller<typeof callLlmAction>;
-  executeToolBatch: ActionCaller<typeof executeToolBatchAction>;
 }>;
 
-export type CoreWorkflowContext =
-  & ProcessorContext<CoreResources, CoreAdapters, CoreActionCallers>
-  & Readonly<{
-    agents: CoreResources["agents"];
-    tools: CoreResources["tools"];
-    skills: CoreResources["skills"];
-    apis: CoreResources["apis"];
-    mcp: CoreResources["mcp"];
-  }>;
-
 /** Runtime capabilities plus the composed namespaces used by Core semantics. */
-export type CoreActionContext = ActionContext<CoreResources, CoreAdapters>;
+export type CoreActionContext = ActionContext<
+  CoreResources,
+  CoreAdapters,
+  CoreActionCallers
+>;
 
 export type CoreProcessorContext = ProcessorContext<
   CoreResources,
   CoreAdapters,
   CoreActionCallers
+>;
+
+/** Core orchestration context for dynamically selected Tool Action aliases. */
+export type CoreToolProcessorContext = ProcessorContext<
+  CoreResources,
+  CoreAdapters,
+  RuntimeActionCallers
 >;
 
 export function coreAgent(
@@ -80,19 +78,4 @@ export function requireCoreAgent(
   const agent = coreAgent(resources, id);
   if (!agent) throw new Error(`Unknown agent resource '${id}'.`);
   return agent;
-}
-
-/** Projects composed namespaces into Core's workflow helper context. */
-export function coreWorkflowContext(
-  context: CoreActionContext | CoreProcessorContext,
-): CoreWorkflowContext {
-  const empty = Object.freeze({});
-  return Object.freeze({
-    ...context,
-    agents: context.resources.agents ?? empty,
-    tools: context.resources.tools ?? empty,
-    skills: context.resources.skills ?? empty,
-    apis: context.resources.apis ?? empty,
-    mcp: context.resources.mcp ?? empty,
-  }) as unknown as CoreWorkflowContext;
 }

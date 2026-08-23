@@ -276,35 +276,26 @@ message should normally reuse its output asset rather than copy it.
 Reasoning is a content reference with role `reasoning` and existing visibility
 policy. Making it an asset does not make it public.
 
-### Tool executions
+### Tool Actions
 
-Tool control state stays inline. Bodies become references:
+Every concrete tool is a durable Action paired with a data-only `ToolResource`
+whose `action` field names that Action alias. The Action lifecycle Event Body is
+the sole execution record; there is no generic tool-execution node, wrapper
+Action, catalog, or executor result envelope.
 
-```ts
-interface ToolExecutionContentFields {
-  arguments: ContentRef; // application/json
-  output?: ContentRef;
-  projectedOutput?: ContentRef;
-  errorDetail?: ContentRef;
-  assets?: ContentSequence;
-}
-```
+Action input and output cross a strict, lossless JSON boundary. A tool that
+accepts or returns binary/media content must prepare and atomically materialize
+it through the Content capability, then persist only canonical `ContentRef`
+values in its lifecycle. Host clients, streams, typed arrays, credentials, and
+other non-data objects are rejected rather than serialized into Event Bodies.
 
-The provider tool-call ID, tool resource ID, agent ID, status, timing,
-`historyVisibility`, idempotency key, and safe error summary remain inline. The
-provider label is not the durable execution identity and may recur in later
-attempts. The tool-execution node/event ID remains canonical; lookup by provider
-tool-call ID returns the latest matching execution in the thread.
-
-The runtime resolves `arguments` before invoking a tool. A local or remote
-worker receives either the already-resolved value under an explicit size limit
-or the content reference plus a scoped resolver capability. It never receives a
-serialized closure.
-
-Tool output is encoded as `application/json` when it is JSON-compatible,
-`text/plain` for text, or its declared media type for binary/media output. The
-projected output used in model history is a separate reference only when its
-body differs. Otherwise it reuses the output reference.
+Core records model call order on the assistant Message, invokes the declared
+tool Actions sequentially with stable operation identities, and projects each
+terminal lifecycle into a Tool-result Message. That Message reuses any returned
+Content references; text remains text and other lossless JSON output becomes a
+JSON content part. Invocation-scoped Core metadata carries the provider tool
+call ID, plan position, participants, history policy, and continuation cursor
+without changing the tool's native model-facing input.
 
 ### LLM attempts
 
@@ -386,9 +377,9 @@ Initial policy:
 The event-native history endpoint resolves a page as one compound document, so
 clients do not issue one HTTP request per content part. Canonical messages stay
 in `data`; `included.content` contains each requested immutable body alongside
-its original ref and asset record. `included.llmAttempts` and
-`included.toolExecutions` preserve workflow identity for reasoning, tool calls,
-progressive tool state, and final projected output.
+its original ref and asset record. LLM and Tool operational history remains in
+their ordinary Action lifecycle Events and compact Message metadata; there are
+no included attempt or Tool-execution graph collections.
 
 ## Write and Transaction Protocol
 

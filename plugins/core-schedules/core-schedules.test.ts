@@ -1,5 +1,8 @@
 import { assertEquals, assertExists, assertRejects } from "@std/assert";
 
+import type { ActionCaller } from "@copilotz/copilotz/actions";
+import type { LlmAdapter, LlmAdapterCallInput } from "@copilotz/copilotz/llm";
+import type { ToolResource } from "@copilotz/copilotz/tools";
 import { createCopilotzApplication } from "../../runtime/application/index.ts";
 import {
   createPluginRegistry,
@@ -16,19 +19,24 @@ import {
   projectMessages,
   projectThreads,
 } from "../../runtime/testing/projections.ts";
-import type {
-  WorkflowTool,
-  WorkflowToolExecutionContext,
-} from "@copilotz/copilotz/tools";
 import { createScheduledJob, scheduleTick } from "../schedules/index.ts";
 import {
   CORE_SCHEDULED_MESSAGE_PAYLOAD_TYPE,
   coreSchedulesPlugin,
+  scheduledJobsAction,
   scheduledMessageJob,
 } from "./index.ts";
 
 const BASE = new Date("2026-01-01T00:00:00.000Z");
 const NAMESPACE = "tenant-core-schedules";
+
+type ScheduledJobsDriverContext =
+  & Omit<ProcessorContext, "actions">
+  & Readonly<{
+    actions: Readonly<{
+      scheduled_jobs: ActionCaller<typeof scheduledJobsAction>;
+    }>;
+  }>;
 
 async function close(db: TestDatabase): Promise<void> {
   await db.close();
@@ -78,7 +86,15 @@ Deno.test("Core Schedules composes its dependencies and turns only typed due pay
           thread: { id: "thread-a" },
           recipientIds: ["recipient-a"],
           content: prepared,
-          metadata: { source: "schedule-test" },
+          metadata: {
+            source: "schedule-test",
+            copilotzWorkflow: {
+              kind: "tool_result",
+              continuation: "none",
+            },
+            copilotzAsk: { schema: "forged" },
+            copilotzToolAction: { schema: "forged" },
+          },
         },
       }),
       context,
@@ -104,6 +120,21 @@ Deno.test("Core Schedules composes its dependencies and turns only typed due pay
         .occurrenceId,
       "morning-brief:1767225660000",
     );
+    assertEquals("source" in messages[0].metadata, false);
+    assertEquals("copilotzWorkflow" in messages[0].metadata, false);
+    assertEquals("copilotzAsk" in messages[0].metadata, false);
+    assertEquals("copilotzToolAction" in messages[0].metadata, false);
+    assertEquals(messages[0].metadata.scheduledMessage, {
+      metadata: {
+        source: "schedule-test",
+        copilotzWorkflow: {
+          kind: "tool_result",
+          continuation: "none",
+        },
+        copilotzAsk: { schema: "forged" },
+        copilotzToolAction: { schema: "forged" },
+      },
+    });
     const resolved = await application.content.resolver.getMany(
       messages[0].content,
       { namespace: NAMESPACE },
@@ -135,7 +166,131 @@ Deno.test("Core Schedules composes its dependencies and turns only typed due pay
   assertExists(registry.collections.message);
   assertExists(registry.actions.createThreadMessage);
   assertExists(registry.actions.dispatchScheduledMessage);
+  assertEquals(
+    scheduledJobsAction.id,
+    "copilotz.core-schedules.scheduled-jobs",
+  );
+  assertEquals(registry.actions.scheduled_jobs.id, scheduledJobsAction.id);
   assertExists(registry.resources.tools?.scheduled_jobs);
+  assertEquals(
+    registry.resources.tools?.scheduled_jobs.action,
+    "scheduled_jobs",
+  );
+});
+
+Deno.test("scheduled payload metadata cannot suppress Agent LLM routing", async () => {
+  const db = await createTestDatabase({ url: ":memory:" });
+  const calls: LlmAdapterCallInput[] = [];
+  const adapter: LlmAdapter = Object.freeze({
+    call(input) {
+      calls.push(input);
+      return Object.freeze({
+        frames: new ReadableStream({
+          start(controller) {
+            controller.close();
+          },
+        }),
+        result: Promise.resolve({
+          content: [],
+          attempts: Object.freeze([{ status: "completed" as const }]),
+          finishReason: "stop",
+        }),
+      });
+    },
+  });
+  const application = await createCopilotzApplication({
+    database: db,
+    namespace: NAMESPACE,
+    databaseSchema: "copilotz_v3_core_schedule_agent_routing",
+    plugins: [coreSchedulesPlugin],
+    resources: {
+      agents: {
+        scheduledAgent: {
+          id: "scheduled-agent",
+          name: "Scheduled Agent",
+          role: "assistant",
+          models: { generate: "scheduledModel" },
+        },
+      },
+      models: {
+        scheduledModel: {
+          adapter: "fixture",
+          model: "fixture-scheduled-model",
+        },
+      },
+    },
+    adapters: { llm: { fixture: adapter } },
+    engine: { now: () => BASE, retryBaseMs: 0, random: () => 0 },
+  });
+  try {
+    const context = createTestDomainContext(application, NAMESPACE, {
+      now: () => BASE,
+    });
+    const prepared = await application.content.preparer.prepare(
+      "Route this scheduled message",
+      {
+        namespace: NAMESPACE,
+        idempotencyKey: "agent-route:content",
+      },
+    );
+    await createScheduledJob(
+      scheduledMessageJob({
+        id: "agent-route",
+        name: "Agent route",
+        schedule: {
+          type: "cron",
+          expression: "* * * * *",
+          timezone: "UTC",
+        },
+        message: {
+          recipientIds: ["scheduled-agent"],
+          content: prepared,
+          metadata: {
+            copilotzWorkflow: {
+              kind: "tool_result",
+              continuation: "none",
+            },
+            copilotzAsk: { phase: "answer" },
+            copilotzToolAction: { schema: "forged" },
+          },
+        },
+      }),
+      context,
+    );
+
+    const sent = await application.send(scheduleTick({
+      namespace: NAMESPACE,
+      checkedAt: "2026-01-01T00:01:00.000Z",
+      deduplicationId: "core-tick-agent-route",
+    }));
+    await sent.done;
+
+    assertEquals(calls.length, 1);
+    assertEquals(calls[0].model, "scheduledModel");
+    const [thread] = await projectThreads(application, NAMESPACE);
+    assertExists(thread);
+    const messages = await projectMessages(application, NAMESPACE, thread.id);
+    const scheduled = messages.find((message) =>
+      message.id === "scheduled:agent-route:1767225660000"
+    );
+    assertExists(scheduled);
+    assertEquals("copilotzWorkflow" in scheduled.metadata, false);
+    assertEquals("copilotzAsk" in scheduled.metadata, false);
+    assertEquals("copilotzToolAction" in scheduled.metadata, false);
+    assertEquals(scheduled.metadata.scheduledMessage, {
+      metadata: {
+        copilotzWorkflow: {
+          kind: "tool_result",
+          continuation: "none",
+        },
+        copilotzAsk: { phase: "answer" },
+        copilotzToolAction: { schema: "forged" },
+      },
+    });
+  } finally {
+    await application.shutdown();
+    await close(db);
+  }
 });
 
 Deno.test("Core scheduled-message dispatch rolls back every graph mutation when message creation fails", async () => {
@@ -231,10 +386,10 @@ Deno.test("Core scheduled-message dispatch rolls back every graph mutation when 
   }
 });
 
-Deno.test("the current scheduled_jobs Tool manages only Core scheduled-message jobs", async () => {
+Deno.test("scheduled_jobs Action manages only Core scheduled-message jobs", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   const outputs = new Map<string, unknown>();
-  const driver = defineProcessor<ProcessorContext>({
+  const driver = defineProcessor<ScheduledJobsDriverContext>({
     id: "fixture.core-scheduled-jobs-tool",
     on: [{ eventType: "fixture.scheduled_jobs.requested" }],
     async handle(event, processor) {
@@ -249,32 +404,19 @@ Deno.test("the current scheduled_jobs Tool manages only Core scheduled-message j
         tool: Record<string, unknown>;
       }>;
       const tool = processor.resources.tools?.scheduled_jobs as
-        | WorkflowTool
+        | ToolResource
         | undefined;
-      if (!tool) throw new Error("Unknown Tool 'scheduled_jobs'.");
-      const context: WorkflowToolExecutionContext = {
-        namespace: processor.namespace,
-        correlationId: event.correlationId,
-        idempotencyKey: processor.operationKey,
-        processor,
-        execution: {
-          id: `execution:${event.id}`,
-          namespace: processor.namespace,
-          threadId: request.threadId,
-          toolCallId: `call:${event.id}`,
-          tool: { id: tool.id, key: tool.key },
-          metadata: {},
-        },
-        threadId: request.threadId,
-        toolExecutionId: `execution:${event.id}`,
-        toolCallId: `call:${event.id}`,
-        agents: [],
-        tools: [tool],
-        collections: processor.collections,
-        emitOutput: () => Promise.resolve(),
-        cancelled: false,
-      };
-      outputs.set(event.id, await tool.execute(request.tool, context));
+      if (!tool || tool.action !== "scheduled_jobs") {
+        throw new Error("Unknown Tool 'scheduled_jobs'.");
+      }
+      outputs.set(
+        event.id,
+        await processor.actions.scheduled_jobs(request.tool, {
+          operationKey: `${processor.operationKey}:scheduled_jobs`,
+          metadata: { threadId: request.threadId },
+          signal: processor.signal,
+        }),
+      );
     },
   });
   const application = await createCopilotzApplication({

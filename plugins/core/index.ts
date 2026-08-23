@@ -34,12 +34,8 @@ export {
   REVISE_MESSAGE_ACTION_ID,
   reviseMessageAction,
 } from "./resources/actions/message.ts";
-export {
-  CALL_TOOL_ACTION_ID,
-  callToolAction,
-  EXECUTE_TOOL_BATCH_ACTION_ID,
-  executeToolBatchAction,
-} from "./resources/actions/tool.ts";
+export { ASK_ACTION_ID, askAction, askTool } from "./resources/tools/ask.ts";
+export type { AskInput, AskOutput } from "./resources/tools/ask.ts";
 export {
   core,
   CORE_MESSAGE_INPUT_EVENT,

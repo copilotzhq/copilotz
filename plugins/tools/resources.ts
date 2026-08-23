@@ -1,4 +1,8 @@
 import type { ScopedCollection } from "@copilotz/copilotz/collections";
+import type {
+  ActionInvocationMetadata,
+  RuntimeIdentity,
+} from "@copilotz/copilotz/actions";
 import type { ToolHistory } from "./contracts.ts";
 
 export type APIAuth =
@@ -50,22 +54,19 @@ export type APIPrepareRequestInput = {
 };
 
 export type APIPrepareRequestContext = Readonly<{
+  apiId: string;
   apiName: string;
-  toolKey: string;
-  toolExecutionId?: string;
-  toolCallId?: string;
-  correlationId?: string;
-  idempotencyKey?: string;
-  threadId?: string;
-  senderId?: string;
-  senderType?: "human" | "agent" | "tool" | "system" | "job";
-  userExternalId?: string;
-  namespace?: string;
-  /** Tenant-scoped graph collections available to this tool execution. */
-  collections?: Readonly<Record<string, ScopedCollection>>;
-  userMetadata?: Readonly<Record<string, unknown>>;
-  threadMetadata?: Readonly<Record<string, unknown>>;
-  resolveAsset?: (
+  actionAlias: string;
+  actionId: string;
+  actionRunId: string;
+  operationKey: string;
+  identity: RuntimeIdentity;
+  actionMetadata: ActionInvocationMetadata;
+  signal: AbortSignal;
+  namespace: string;
+  /** Tenant-scoped graph collections available to this Action execution. */
+  collections: Readonly<Record<string, ScopedCollection>>;
+  resolveAsset: (
     assetId: string,
   ) => Promise<{ bytes: Uint8Array; mime: string }>;
 }>;
@@ -83,6 +84,8 @@ export type APIResponseAssetMapping = Readonly<{
   dataBase64Field: string;
   mediaTypeField: string;
   nameField?: string;
+  /** Response field receiving the canonical ContentRef. Defaults to `asset`. */
+  outputField?: string;
 }>;
 
 /** OpenAPI-backed Tool Resource definition owned by the Tools plugin. */
@@ -97,7 +100,7 @@ export type API = Readonly<{
   auth?: APIAuth | null;
   timeout?: number | null;
   includeResponseHeaders?: boolean | null;
-  /** Consume application/x-ndjson records as live tool output plus one result. */
+  /** Consume append-only application/x-ndjson output records plus one result. */
   streamNdjson?: boolean | null;
   prepareRequest?: APIPrepareRequest | null;
   /** Tool key to response-field mapping for automatic canonical attachments. */

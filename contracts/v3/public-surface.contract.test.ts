@@ -14,7 +14,6 @@ import * as plugins from "../../runtime/plugins/index.ts";
 import * as server from "../../server/index.ts";
 import * as migration from "../../migration/v1/index.ts";
 import * as builtinTools from "../../plugins/tools/builtin/plugin.ts";
-import * as toolCatalog from "../../plugins/tools/catalog/server.ts";
 import * as denoTools from "../../plugins/tools/deno/index.ts";
 import * as financeTools from "../../plugins/tools/finance/plugin.ts";
 import * as mcpTools from "../../plugins/tools/mcp/generator.ts";
@@ -141,18 +140,14 @@ Deno.test("v3 package subpaths expose cohesive factories", () => {
     ]
   ) assertEquals(moved in denoAdapters, false, moved);
   assertFunctions(builtinTools, ["createBuiltInToolsPlugin"]);
-  assertFunctions(toolCatalog, [
-    "createOpenApiWorkflowToolGenerator",
-    "createServerWorkflowToolCatalog",
-  ]);
   assertFunctions(denoTools, [
     "createProcessToolsPlugin",
     "createWorkspaceToolsPlugin",
   ]);
   assertFunctions(financeTools, ["createFinanceToolsPlugin"]);
-  assertFunctions(mcpTools, ["createMcpWorkflowToolGenerator"]);
+  assertFunctions(mcpTools, ["createMcpToolsPlugin"]);
   assertFunctions(stdioMcpTools, ["connectMcp"]);
-  assertFunctions(openApiTools, ["generateAllApiTools", "generateApiTools"]);
+  assertFunctions(openApiTools, ["createOpenApiToolsPlugin"]);
   assertFunctions(persistentTerminalTools, [
     "createPersistentTerminalToolsPlugin",
   ]);

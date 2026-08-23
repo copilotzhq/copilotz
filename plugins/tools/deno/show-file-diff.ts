@@ -1,3 +1,5 @@
+import { defineAction } from "@copilotz/copilotz/actions";
+import { defineTool } from "../contracts.ts";
 import { getWorkspaceFileDiff } from "./fs-utils.ts";
 
 interface ShowFileDiffParams {
@@ -5,11 +7,8 @@ interface ShowFileDiffParams {
   snapshotId?: string;
 }
 
-export default {
-  key: "show_file_diff",
-  name: "Show File Diff",
-  description:
-    "Show the difference between the current file and a previously captured in-process snapshot.",
+export const showFileDiffAction = defineAction({
+  id: "copilotz.tools.deno.show_file_diff",
   inputSchema: {
     type: "object",
     properties: {
@@ -37,4 +36,14 @@ export default {
       hunks: result.hunks,
     };
   },
-};
+});
+
+export const showFileDiffTool = defineTool(
+  "show_file_diff",
+  showFileDiffAction,
+  {
+    name: "Show File Diff",
+    description:
+      "Show the difference between the current file and a previously captured in-process snapshot.",
+  },
+);

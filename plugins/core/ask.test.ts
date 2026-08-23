@@ -2,22 +2,24 @@ import {
   assert,
   assertEquals,
   assertExists,
+  assertRejects,
   assertStringIncludes,
 } from "@std/assert";
 import {
   agentAskMetadata,
   type AgentResource,
+  askAction,
+  askTool,
   corePlugin,
 } from "@copilotz/copilotz/core";
 import type {
   LlmAdapter,
   LlmAdapterCallInput,
   LlmAdapterResult,
+  LlmJsonObject,
 } from "@copilotz/copilotz/llm";
-import {
-  deferWorkflowTool,
-  isDeferredWorkflowToolResult,
-} from "@copilotz/copilotz/tools";
+import { defineAction } from "@copilotz/copilotz/actions";
+import { defineTool } from "@copilotz/copilotz/tools";
 import {
   createPluginRegistry,
   definePlugin,
@@ -36,6 +38,12 @@ import {
   projectMessages,
 } from "../../runtime/testing/projections.ts";
 import type { ConversationMessage } from "../../runtime/domain/index.ts";
+import type { CoreToolProcessorContext } from "./context.ts";
+import { resumeDeferredToolPlan } from "./internal/tool-plan.ts";
+import {
+  type AgentAskMetadata,
+  withAgentAskMetadata,
+} from "./internal/workflow-metadata.ts";
 
 const TEST_SCHEMA = "copilotz_core_ask";
 const NAMESPACE = "tenant-a";
@@ -47,9 +55,41 @@ function agent(id: string, agents: readonly string[] = []): AgentResource {
     role: "assistant",
     instructions: `ACTIVE_AGENT=${id}`,
     models: { generate: "askModel" },
-    capabilities: { agents },
+    capabilities: {
+      agents,
+      ...(id === "a" ? { tools: ["mark", "publish"] } : {}),
+    },
   });
 }
+
+const markExecutions: string[] = [];
+const markAction = defineAction({
+  id: "test.ask.mark",
+  execute(input: Readonly<{ value: string }>) {
+    markExecutions.push(input.value);
+    return {
+      marked: input.value === "PRIVATE_TOOL_ARGUMENT"
+        ? "PRIVATE_TOOL_OUTPUT"
+        : input.value,
+    };
+  },
+});
+const markTool = defineTool("mark", markAction, {
+  name: "Mark",
+  description: "Marks the ordered ask continuation.",
+});
+
+const publishAction = defineAction({
+  id: "test.ask.publish",
+  execute(input: Readonly<{ value: string }>) {
+    return { published: input.value };
+  },
+});
+const publishTool = defineTool("publish", publishAction, {
+  name: "Publish",
+  description: "Publishes one Tool result to the whole thread.",
+  history: { visibility: "public" },
+});
 
 type Handler = (
   input: LlmAdapterCallInput,
@@ -87,14 +127,17 @@ async function createFixture(
   agents: readonly AgentResource[],
   handler: Handler,
 ): Promise<Fixture> {
+  markExecutions.splice(0);
   const db = await createTestDatabase({ url: ":memory:" });
   const app = definePlugin({
     id: "test.core-ask.resources",
     version: "1.0.0",
+    actions: { mark: markAction, publish: publishAction },
     resources: {
       agents: Object.fromEntries(
         agents.map((resource) => [resource.id, resource]),
       ),
+      tools: { mark: markTool, publish: publishTool },
       models: {
         askModel: { adapter: "test", model: "ask-provider-model" },
       },
@@ -247,11 +290,109 @@ async function messageText(
   ).join("\n");
 }
 
-Deno.test("deferred WorkflowTool results remain explicit during the transitional Tool path", () => {
-  const deferred = deferWorkflowTool({ metadata: { askId: "ask-1" } });
-  assert(isDeferredWorkflowToolResult(deferred));
-  assertEquals(deferred.metadata, { askId: "ask-1" });
-  assertEquals(isDeferredWorkflowToolResult({ kind: "deferred" }), false);
+Deno.test("ask is one native Action with a data-only Tool presentation", () => {
+  assertEquals(askAction.id, "copilotz.core.ask");
+  assertEquals(askTool.action, "ask");
+  assertEquals("execute" in askTool, false);
+});
+
+Deno.test("missing or forged parent ask cursors reject every retry", async () => {
+  const origin = (
+    agentId: string,
+    agentParticipantId: string,
+    callId: string,
+  ) => ({
+    schema: "copilotz.core.tool-action.v1" as const,
+    planId: `plan-${agentId}`,
+    planMessageId: `message-plan-${agentId}`,
+    planIndex: 0,
+    planSize: 1,
+    toolCallId: callId,
+    action: "ask",
+    threadId: "thread-a",
+    triggerMessageId: `message-trigger-${agentId}`,
+    agentId,
+    agentParticipantId,
+    initiatorParticipantId: "user-a",
+    availableToolIds: ["ask"],
+    parentLlmActionRunId: `llm-${agentId}`,
+  });
+  const parent: AgentAskMetadata = {
+    schema: "copilotz.ask.v1",
+    askId: "ask-parent",
+    phase: "question",
+    toolActionRunId: "action-parent",
+    toolCallId: "call-parent",
+    questionMessageId: "message-parent-question",
+    askingParticipantId: "agent-a",
+    askingAgentId: "a",
+    askedParticipantId: "agent-forged",
+    askedAgentId: "forged",
+    origin: origin("a", "agent-a", "call-parent"),
+    depth: 1,
+  };
+  const child: AgentAskMetadata = {
+    schema: "copilotz.ask.v1",
+    askId: "ask-child",
+    phase: "answer",
+    toolActionRunId: "action-child",
+    toolCallId: "call-child",
+    questionMessageId: "message-child-question",
+    askingParticipantId: "agent-b",
+    askingAgentId: "b",
+    askedParticipantId: "agent-c",
+    askedAgentId: "c",
+    parentAskId: parent.askId,
+    parentQuestionMessageId: parent.questionMessageId,
+    origin: origin("b", "agent-b", "call-child"),
+    depth: 2,
+  };
+  const forgedParentQuestion = {
+    id: parent.questionMessageId,
+    threadId: "thread-a",
+    senderId: parent.askingParticipantId,
+    recipientIds: [parent.askedParticipantId],
+    metadata: withAgentAskMetadata(undefined, parent),
+  };
+
+  for (
+    const scenario of [
+      { message: null, error: "was not found" },
+      { message: forgedParentQuestion, error: "forged parent cursor" },
+    ]
+  ) {
+    let reads = 0;
+    let effects = 0;
+    const context = {
+      collections: {
+        message: {
+          get() {
+            reads += 1;
+            return Promise.resolve(scenario.message);
+          },
+        },
+      },
+      actions: new Proxy({}, {
+        get() {
+          effects += 1;
+          return undefined;
+        },
+      }),
+    } as unknown as CoreToolProcessorContext;
+    for (let retry = 0; retry < 2; retry += 1) {
+      await assertRejects(
+        () =>
+          resumeDeferredToolPlan(context, child, {
+            status: "completed",
+            output: { status: "answered" },
+          }),
+        Error,
+        scenario.error,
+      );
+    }
+    assertEquals(reads, 2);
+    assertEquals(effects, 0);
+  }
 });
 
 Deno.test("an ask resumes through durable llm.call metadata", async () => {
@@ -265,7 +406,7 @@ Deno.test("an ask resumes through durable llm.call metadata", async () => {
     counts.set(id, count);
     assertEquals(
       input.request.tools?.map((tool) => tool.name) ?? [],
-      id === "a" ? ["ask"] : [],
+      id === "a" ? ["mark", "publish", "ask"] : [],
     );
     if (id === "a" && count === 1) {
       return {
@@ -273,7 +414,11 @@ Deno.test("an ask resumes through durable llm.call metadata", async () => {
         toolCalls: [{
           id: "ask-b",
           action: "ask",
-          input: { target: "b", message: "A asks B publicly" },
+          input: { target: "b", message: "A asks B publicly" } as LlmJsonObject,
+        }, {
+          id: "mark-after-ask",
+          action: "mark",
+          input: { value: "after-answer" } as LlmJsonObject,
         }],
         attempts: [{ status: "completed" }],
         finishReason: "tool_calls",
@@ -287,6 +432,7 @@ Deno.test("an ask resumes through durable llm.call metadata", async () => {
       };
     }
     assertStringIncludes(requestText(input), "B public answer");
+    assertStringIncludes(requestText(input), "after-answer");
     return {
       content: { type: "text", text: "A public final", role: "body" },
       attempts: [{ status: "completed" }],
@@ -294,14 +440,15 @@ Deno.test("an ask resumes through durable llm.call metadata", async () => {
   });
   try {
     const root = await startRun(fixture);
-    await waitForRun(fixture, root, 6);
+    await waitForRun(fixture, root, 7);
     assertEquals(calls, ["a", "b", "a"]);
+    assertEquals(markExecutions, ["after-answer"]);
     const messages = await projectMessages(
       fixture.engine,
       NAMESPACE,
       "thread-a",
     );
-    assertEquals(await messageText(fixture, messages[5]), "A public final");
+    assertEquals(await messageText(fixture, messages[6]), "A public final");
     const question = messages.find((message) =>
       agentAskMetadata(message.metadata)?.phase === "question"
     );
@@ -334,6 +481,154 @@ Deno.test("an ask resumes through durable llm.call metadata", async () => {
   }
 });
 
+Deno.test("nested asks reload non-recursive durable parent cursors", async () => {
+  const agents = [agent("a", ["b"]), agent("b", ["c"]), agent("c")];
+  const calls: string[] = [];
+  const counts = new Map<string, number>();
+  const fixture = await createFixture(agents, (input) => {
+    const id = activeAgent(input);
+    calls.push(id);
+    const count = (counts.get(id) ?? 0) + 1;
+    counts.set(id, count);
+    if (id === "a" && count === 1) {
+      return {
+        content: [],
+        toolCalls: [{
+          id: "ask-b",
+          action: "ask",
+          input: { target: "b", message: "A asks B" } as LlmJsonObject,
+        }, {
+          id: "mark-after-b",
+          action: "mark",
+          input: { value: "outer-resumed" } as LlmJsonObject,
+        }],
+        attempts: [{ status: "completed" }],
+      };
+    }
+    if (id === "b" && count === 1) {
+      assertStringIncludes(requestText(input), "A asks B");
+      return {
+        content: [],
+        toolCalls: [{
+          id: "ask-c",
+          action: "ask",
+          input: { target: "c", message: "B asks C" } as LlmJsonObject,
+        }],
+        attempts: [{ status: "completed" }],
+      };
+    }
+    if (id === "c") {
+      assertStringIncludes(requestText(input), "B asks C");
+      return {
+        content: { type: "text", text: "C answers B", role: "body" },
+        attempts: [{ status: "completed" }],
+      };
+    }
+    if (id === "b") {
+      assertStringIncludes(requestText(input), "C answers B");
+      return {
+        content: { type: "text", text: "B answers A", role: "body" },
+        attempts: [{ status: "completed" }],
+      };
+    }
+    assertStringIncludes(requestText(input), "B answers A");
+    return {
+      content: { type: "text", text: "A nested final", role: "body" },
+      attempts: [{ status: "completed" }],
+    };
+  });
+  try {
+    const root = await startRun(fixture);
+    await waitForRun(fixture, root, 11);
+    assertEquals(calls, ["a", "b", "c", "b", "a"]);
+    assertEquals(markExecutions, ["outer-resumed"]);
+    const messages = await projectMessages(
+      fixture.engine,
+      NAMESPACE,
+      "thread-a",
+    );
+    const questions = messages
+      .flatMap((message) => {
+        const ask = agentAskMetadata(message.metadata);
+        return ask?.phase === "question" && ask.questionMessageId === message.id
+          ? [ask]
+          : [];
+      });
+    assertEquals(questions.map((ask) => ask.depth), [1, 2]);
+    assertEquals(questions[1].parentAskId, questions[0].askId);
+    assertEquals(
+      questions[1].parentQuestionMessageId,
+      questions[0].questionMessageId,
+    );
+    for (const message of messages) {
+      const rawAsk = (message.metadata.copilotzAsk ?? {}) as Record<
+        string,
+        unknown
+      >;
+      assertEquals("parentAsk" in rawAsk, false);
+    }
+    assertEquals(await messageText(fixture, messages[10]), "A nested final");
+  } finally {
+    await fixture.close();
+  }
+});
+
+Deno.test("Tool history visibility is participant-relative across agents", async () => {
+  const agents = [agent("a", ["b"]), agent("b")];
+  const calls: string[] = [];
+  const counts = new Map<string, number>();
+  const fixture = await createFixture(agents, (input) => {
+    const id = activeAgent(input);
+    calls.push(id);
+    const count = (counts.get(id) ?? 0) + 1;
+    counts.set(id, count);
+    if (id === "a" && count === 1) {
+      return {
+        content: [],
+        toolCalls: [{
+          id: "private-call",
+          action: "mark",
+          input: { value: "PRIVATE_TOOL_ARGUMENT" } as LlmJsonObject,
+        }, {
+          id: "public-call",
+          action: "publish",
+          input: { value: "PUBLIC_TOOL_RESULT" } as LlmJsonObject,
+        }, {
+          id: "ask-b",
+          action: "ask",
+          input: {
+            target: "b",
+            message: "Review only what your history permits.",
+          } as LlmJsonObject,
+        }],
+        attempts: [{ status: "completed" }],
+      };
+    }
+    if (id === "b") {
+      const transcript = requestText(input);
+      assert(!transcript.includes("PRIVATE_TOOL_ARGUMENT"));
+      assert(!transcript.includes("PRIVATE_TOOL_OUTPUT"));
+      assertStringIncludes(transcript, "PUBLIC_TOOL_RESULT");
+      return {
+        content: { type: "text", text: "Visibility verified", role: "body" },
+        attempts: [{ status: "completed" }],
+      };
+    }
+    return {
+      content: { type: "text", text: "A final", role: "body" },
+      attempts: [{ status: "completed" }],
+    };
+  });
+  try {
+    const root = await startRun(fixture);
+    await waitForRun(fixture, root, 8);
+    assertEquals(calls, ["a", "b", "a"]);
+    assertEquals(markExecutions, ["PRIVATE_TOOL_ARGUMENT"]);
+  } finally {
+    await fixture.close();
+  }
+});
+
 Deno.test("an asked-Agent llm.call failure becomes a Tool Message and resumes", async () => {
   const agents = [agent("a", ["b"]), agent("b")];
   const calls: string[] = [];
@@ -349,7 +644,11 @@ Deno.test("an asked-Agent llm.call failure becomes a Tool Message and resumes", 
         toolCalls: [{
           id: "ask-b",
           action: "ask",
-          input: { target: "b", message: "B, inspect this" },
+          input: { target: "b", message: "B, inspect this" } as LlmJsonObject,
+        }, {
+          id: "mark-after-failure",
+          action: "mark",
+          input: { value: "after-failure" } as LlmJsonObject,
         }],
         attempts: [{ status: "completed" }],
       };
@@ -363,8 +662,9 @@ Deno.test("an asked-Agent llm.call failure becomes a Tool Message and resumes", 
   });
   try {
     const root = await startRun(fixture);
-    await waitForRun(fixture, root, 5);
+    await waitForRun(fixture, root, 6);
     assertEquals(calls, ["a", "b", "a"]);
+    assertEquals(markExecutions, ["after-failure"]);
     const messages = await projectMessages(
       fixture.engine,
       NAMESPACE,
@@ -378,7 +678,7 @@ Deno.test("an asked-Agent llm.call failure becomes a Tool Message and resumes", 
       await messageText(fixture, failure),
       "provider exploded",
     );
-    assertEquals(await messageText(fixture, messages[4]), "A recovered");
+    assertEquals(await messageText(fixture, messages[5]), "A recovered");
     const lifecycle = await projectActionEvents(
       fixture.engine,
       NAMESPACE,

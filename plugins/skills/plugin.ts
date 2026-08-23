@@ -1,6 +1,10 @@
 import { type CopilotzPlugin, definePlugin } from "@copilotz/copilotz/plugins";
 import type { Skill } from "./contracts.ts";
-import { createSkillTools, SKILL_TOOL_IDS, type SkillToolId } from "./tools.ts";
+import {
+  createSkillActionResources,
+  SKILL_TOOL_IDS,
+  type SkillToolId,
+} from "./tools.ts";
 
 export type CreateSkillsPluginOptions = Readonly<{
   id?: string;
@@ -32,17 +36,18 @@ export function createSkillsPlugin(
   const known = new Set<string>(SKILL_TOOL_IDS);
   const unknown = toolIds.find((id) => !known.has(id));
   if (unknown) throw new TypeError(`Unknown skill tool '${unknown}'.`);
-  const tools = createSkillTools({
+  const contribution = createSkillActionResources({
     include: toolIds,
     maximumTextBytes: options.maximumTextBytes,
   });
   return definePlugin({
     id: options.id ?? "@copilotz/skills",
     version: options.version ?? "0.57.0",
+    actions: contribution.actions,
     resources: {
       skills: Object.fromEntries(skills.map((skill) => [skill.name, skill])),
-      ...(tools.length
-        ? { tools: Object.fromEntries(tools.map((tool) => [tool.key, tool])) }
+      ...(Object.keys(contribution.tools).length
+        ? { tools: contribution.tools }
         : {}),
     },
   });

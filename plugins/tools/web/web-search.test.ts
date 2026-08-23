@@ -1,6 +1,7 @@
 import { assertEquals } from "@std/assert";
 
-import web_search, {
+import { type ActionContext } from "@copilotz/copilotz/actions";
+import {
   browserHeaderProfiles,
   buildBrowserHeaders,
   resolveAcceptLanguage,
@@ -11,6 +12,7 @@ import {
   isBotChallenge,
   parseDuckDuckGoHtml,
 } from "./web-search.ts";
+import { webSearchAction } from "./web-search.ts";
 
 Deno.test("web_search parses DuckDuckGo html results", () => {
   const html = `
@@ -108,11 +110,13 @@ Deno.test("web_search retries blocked responses with rotated headers and date fi
       );
     }) as typeof fetch;
 
-    const result = await web_search.execute?.({
+    const result = await webSearchAction.execute({
       query: "fresh docs",
       region: "br-pt",
       timeRange: "week",
-    });
+    }, {
+      signal: new AbortController().signal,
+    } as ActionContext);
 
     assertEquals((result as { count: number }).count, 1);
     assertEquals(calls.length, 2);

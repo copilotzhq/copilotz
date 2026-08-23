@@ -1,3 +1,5 @@
+import { defineAction } from "@copilotz/copilotz/actions";
+import { defineTool } from "../contracts.ts";
 import { searchWorkspaceCode } from "./fs-utils.ts";
 
 interface SearchCodeParams {
@@ -16,13 +18,8 @@ interface SearchCodeParams {
   includeMatch?: boolean;
 }
 
-export default {
-  key: "search_code",
-  name: "Search Code",
-  description:
-    "Search file contents in the current workspace and return line-level matches. " +
-    "Common noise directories (node_modules, .git, dist, etc.) are excluded by default. " +
-    "Narrow searches with directory and filePattern for faster, cleaner results.",
+export const searchCodeAction = defineAction({
+  id: "copilotz.tools.deno.search_code",
   inputSchema: {
     type: "object",
     properties: {
@@ -127,4 +124,12 @@ export default {
       includeMatch,
     });
   },
-};
+});
+
+export const searchCodeTool = defineTool("search_code", searchCodeAction, {
+  name: "Search Code",
+  description:
+    "Search file contents in the current workspace and return line-level matches. " +
+    "Common noise directories (node_modules, .git, dist, etc.) are excluded by default. " +
+    "Narrow searches with directory and filePattern for faster, cleaner results.",
+});

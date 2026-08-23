@@ -1,9 +1,6 @@
 import type { AgentResource } from "../../agent.ts";
 import type { Skill } from "@copilotz/copilotz/skills";
-import type {
-  WorkflowTool,
-  WorkflowToolCatalog,
-} from "@copilotz/copilotz/tools";
+import type { ToolResource } from "@copilotz/copilotz/tools";
 import type { PluginRegistry } from "@copilotz/copilotz/plugins";
 
 export type CapabilityGrantSource = "explicit" | "derived";
@@ -16,7 +13,7 @@ export type ResolvedCapabilityResource<T extends object> = Readonly<{
 
 export type ResolvedAgentCapabilities = Readonly<{
   agent: AgentResource;
-  tools: readonly ResolvedCapabilityResource<WorkflowTool>[];
+  tools: readonly ResolvedCapabilityResource<ToolResource>[];
   agents: readonly ResolvedCapabilityResource<AgentResource>[];
   skills: readonly ResolvedCapabilityResource<Skill>[];
 }>;
@@ -33,5 +30,4 @@ export type AgentCapabilityResolver = Readonly<{
 
 export type CreateAgentCapabilityResolverOptions = Readonly<{
   registry: PluginRegistry;
-  toolCatalog: WorkflowToolCatalog;
 }>;

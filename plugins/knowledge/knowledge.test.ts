@@ -6,16 +6,10 @@ import {
   assertStringIncludes,
 } from "@std/assert";
 import { createTestDomainContext } from "../../runtime/testing/domain-context.ts";
-import {
-  projectMessageById,
-  projectMessages,
-  projectParticipants,
-  projectThreadByExternalId,
-  projectThreadById,
-  projectThreads,
-} from "../../runtime/testing/projections.ts";
+import { projectMessages } from "../../runtime/testing/projections.ts";
 
 import { createCopilotz } from "@copilotz/copilotz/application";
+import type { ActionCallOptions } from "@copilotz/copilotz/actions";
 import { createCopilotzApplication } from "../../runtime/application/index.ts";
 import {
   createTestDatabase,
@@ -27,21 +21,44 @@ import {
   type ProcessorContext,
 } from "@copilotz/copilotz/plugins";
 import { coreCollectionsPlugin } from "../core/plugin.ts";
-import type {
-  WorkflowTool,
-  WorkflowToolExecutionContext,
-} from "@copilotz/copilotz/tools";
+import type { ToolResource } from "@copilotz/copilotz/tools";
 import {
-  createDeleteDocumentTool,
-  createIngestDocumentTool,
   createKnowledgePlugin,
-  createSearchKnowledgeTool,
   defineKnowledgeEmbeddingProvider,
 } from "./index.ts";
-import type { KnowledgeActionCallers } from "./actions.ts";
+import {
+  deleteKnowledgeDocumentAction,
+  type KnowledgeActionCallers,
+  type KnowledgeActionContext,
+} from "./actions.ts";
 import type { KnowledgeChunk, KnowledgeDocument } from "./types.ts";
 
 const NAMESPACE = "tenant-knowledge";
+
+function record(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+type KnowledgeToolActionCallers = Readonly<{
+  ingest_document(
+    input: unknown,
+    options?: ActionCallOptions,
+  ): Promise<unknown>;
+  search_knowledge(
+    input: unknown,
+    options?: ActionCallOptions,
+  ): Promise<unknown>;
+  delete_document(
+    input: unknown,
+    options?: ActionCallOptions,
+  ): Promise<unknown>;
+}>;
+
+type KnowledgeToolProcessorContext =
+  & Omit<ProcessorContext, "actions">
+  & Readonly<{ actions: KnowledgeToolActionCallers }>;
 
 async function close(db: TestDatabase): Promise<void> {
   await db.close();
@@ -123,24 +140,56 @@ Deno.test("knowledge plugin exposes keyed Collections, Actions, Processors, and 
   assertEquals(Object.keys(plugin.collections), ["document", "chunk"]);
   assertEquals(Object.keys(plugin.actions), [
     "indexKnowledgeDocument",
-    "searchKnowledge",
-    "deleteKnowledgeDocument",
+    "ingest_document",
+    "search_knowledge",
+    "delete_document",
   ]);
   assertEquals(
     Object.values(plugin.actions).map((action) => action.id),
     [
       "copilotz.knowledge.indexDocument",
+      "copilotz.knowledge.ingestDocument",
       "copilotz.knowledge.searchDocuments",
       "copilotz.knowledge.deleteDocument",
     ],
   );
   assertEquals(Object.keys(plugin.processors), ["indexKnowledgeDocument"]);
   assertEquals(Object.keys(plugin.resources.tools), [
-    "ingestKnowledge",
-    "searchKnowledge",
-    "deleteKnowledgeDocument",
+    "ingest_document",
+    "search_knowledge",
+    "delete_document",
   ]);
+  for (const [alias, resource] of Object.entries(plugin.resources.tools)) {
+    assertEquals(resource.action, alias);
+    assertEquals(plugin.actions[alias]?.inputSchema, resource.inputSchema);
+  }
   assertEquals("features" in plugin, false);
+});
+
+Deno.test("knowledge configured Tool aliases populate both plugin maps", () => {
+  const plugin = createKnowledgePlugin({
+    embedding: { provider: "fixture.embedding" },
+    tools: {
+      ingestId: "add_source",
+      searchId: "find_source",
+      deleteId: "remove_source",
+    },
+  });
+  assertEquals(Object.keys(plugin.actions), [
+    "indexKnowledgeDocument",
+    "add_source",
+    "find_source",
+    "remove_source",
+  ]);
+  assertEquals(Object.keys(plugin.resources.tools), [
+    "add_source",
+    "find_source",
+    "remove_source",
+  ]);
+  for (const [alias, resource] of Object.entries(plugin.resources.tools)) {
+    assertEquals(resource.action, alias);
+    assertExists(plugin.actions[alias]);
+  }
 });
 
 async function createThread(
@@ -271,18 +320,18 @@ Deno.test("knowledge indexing keeps one canonical source asset and atomic search
     assertStringIncludes(chunks[0].content, "Copilotz stores");
     assertEquals(chunks[0].embedding, [1, 0]);
     assertEquals(
-      (await knowledge.actions.searchKnowledge({
-        embedding: [1, 0],
+      (await knowledge.actions.search_knowledge({
+        query: "durable semantics",
         scope: { threadId: "thread-a" },
         threshold: 0.5,
-      })).map((result) => result.document.id),
+      })).results.map((result) => result.documentId),
       ["document-a"],
     );
     assertEquals(
-      await knowledge.actions.searchKnowledge({
-        embedding: [1, 0],
+      (await knowledge.actions.search_knowledge({
+        query: "durable semantics",
         scope: { threadId: "another-thread" },
-      }),
+      })).results,
       [],
     );
 
@@ -344,7 +393,10 @@ Deno.test("knowledge indexing keeps one canonical source asset and atomic search
     assert(calls.length > 0);
     assert(calls.every((call) => call.signal instanceof AbortSignal));
     assert(
-      calls.every((call) => call.idempotencyKey.includes("knowledge-embed")),
+      calls.some((call) => call.idempotencyKey.includes("knowledge-embed")),
+    );
+    assert(
+      calls.some((call) => call.idempotencyKey.includes("knowledge-query")),
     );
 
     const messages = await projectMessages(application, NAMESPACE, "thread-a");
@@ -388,7 +440,7 @@ Deno.test("knowledge indexing keeps one canonical source asset and atomic search
     assertEquals(duplicateDocument.chunkCount, 0);
     assertEquals(duplicateDocument.source, document.source);
 
-    const deleted = await knowledge.actions.deleteKnowledgeDocument({
+    const deleted = await knowledge.actions.delete_document({
       documentId: document.id,
     }, { operationKey: "document-a:delete" });
     assertEquals(deleted.success, true);
@@ -540,10 +592,10 @@ Deno.test("knowledge source failure settles once as document and Action failure"
   }
 });
 
-Deno.test("knowledge tools execute through scoped factory capabilities", async () => {
+Deno.test("knowledge Tool Actions execute through durable callers", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   const outputs = new Map<string, unknown>();
-  const driver = defineProcessor<ProcessorContext>({
+  const driver = defineProcessor<KnowledgeToolProcessorContext>({
     id: "fixture.knowledge-tools",
     on: [{ eventType: "fixture.knowledge_tool.requested" }],
     async handle(event, processor) {
@@ -552,38 +604,31 @@ Deno.test("knowledge tools execute through scoped factory capabilities", async (
         toolId: string;
         arguments: Record<string, unknown>;
       };
-      const tool = Object.values(processor.resources.tools ?? {}).find(
-        (candidate) => (candidate as WorkflowTool).key === payload.toolId,
-      ) as WorkflowTool | undefined;
-      if (!tool) throw new Error(`Unknown tool '${payload.toolId}'.`);
-      const toolContext: WorkflowToolExecutionContext = {
-        namespace: processor.namespace,
-        correlationId: event.correlationId,
-        idempotencyKey: processor.operationKey,
-        processor,
-        execution: {
-          id: `execution:${event.id}`,
-          namespace: processor.namespace,
+      const resource = processor.resources.tools?.[payload.toolId] as
+        | ToolResource
+        | undefined;
+      if (!resource || resource.action !== payload.toolId) {
+        throw new Error(`Unknown tool '${payload.toolId}'.`);
+      }
+      const options: ActionCallOptions = {
+        operationKey: `${processor.operationKey}:${payload.toolId}`,
+        metadata: {
           threadId: event.threadId,
-          participantId: "agent-a",
           agentId: "support",
-          toolCallId: `call:${event.id}`,
-          tool: { id: tool.id, key: tool.key },
-          metadata: {},
+          initiatorParticipantId: "agent-a",
         },
-        threadId: event.threadId,
-        toolExecutionId: `execution:${event.id}`,
-        toolCallId: `call:${event.id}`,
-        agents: [],
-        tools: [tool],
-        collections: processor.collections,
-        emitOutput: () => Promise.resolve(),
-        cancelled: false,
+        signal: processor.signal,
       };
-      outputs.set(
-        event.id,
-        await tool.execute(payload.arguments, toolContext),
-      );
+      const output = resource.action === "ingest_document"
+        ? await processor.actions.ingest_document(payload.arguments, options)
+        : resource.action === "search_knowledge"
+        ? await processor.actions.search_knowledge(payload.arguments, options)
+        : resource.action === "delete_document"
+        ? await processor.actions.delete_document(payload.arguments, options)
+        : (() => {
+          throw new Error(`Unknown tool '${payload.toolId}'.`);
+        })();
+      outputs.set(event.id, output);
     },
   });
   const driverPlugin = definePlugin({
@@ -636,6 +681,16 @@ Deno.test("knowledge tools execute through scoped factory capabilities", async (
       source:
         "text:Workers keep semantic state durable and execution portable.",
       title: "Portable workers",
+      metadata: {
+        threadId: "forged-thread",
+        agentId: "forged-agent",
+        initiatorParticipantId: "forged-participant",
+        scope: {
+          threadId: "forged-thread",
+          agentId: "forged-agent",
+          initiatorParticipantId: "forged-participant",
+        },
+      },
     });
     assertEquals(ingestion.status, "pending");
     const documentId = String(ingestion.documentId);
@@ -646,253 +701,224 @@ Deno.test("knowledge tools execute through scoped factory capabilities", async (
       timeoutMs: 5_000,
       pollIntervalMs: 10,
     });
+    const document = await knowledge.documents.get({ id: documentId }) as
+      | KnowledgeDocument
+      | null;
+    assertExists(document);
+    assertEquals(document.threadId, "thread-a");
+    assertEquals(document.requestedByParticipantId, "agent-a");
+    assertEquals(record(document.metadata).threadId, "thread-a");
+    assertEquals(record(document.metadata).agentId, "support");
+    assertEquals(
+      record(record(document.metadata).scope).initiatorParticipantId,
+      "agent-a",
+    );
     const search = await invoke("search_knowledge", {
       query: "How is worker state stored?",
       threshold: 0.5,
+      scope: { threadId: "forged-thread", agentId: "forged-agent" },
     });
     const results = search.results as Array<Record<string, unknown>>;
     assertEquals(results.length, 1);
     assertEquals(results[0].documentId, documentId);
     assertStringIncludes(String(results[0].content), "Workers keep");
+    const crossThreadDeletion = await knowledge.actions.delete_document({
+      documentId,
+    }, {
+      operationKey: "portable-workers:delete:cross-thread",
+      metadata: {
+        threadId: "thread-b",
+        agentId: "support",
+        initiatorParticipantId: "agent-b",
+      },
+    });
+    assertEquals(crossThreadDeletion.success, false);
+    assertExists(await knowledge.documents.get({ id: documentId }));
+    const crossAgentDeletion = await knowledge.actions.delete_document({
+      documentId,
+    }, {
+      operationKey: "portable-workers:delete:cross-agent",
+      metadata: {
+        threadId: "thread-a",
+        agentId: "other-agent",
+        initiatorParticipantId: "agent-a",
+      },
+    });
+    assertEquals(crossAgentDeletion.success, false);
+    assertExists(await knowledge.documents.get({ id: documentId }));
     const deletion = await invoke("delete_document", { documentId });
     assertEquals(deletion.success, true);
     assertEquals(deletion.documentId, documentId);
     assertEquals(await knowledge.documents.get({ id: documentId }), null);
+
+    const repeatedSourceUri = "https://example.test/shared-source";
+    for (
+      const [id, agentId] of [
+        ["document-shared-agent-a", "agent-a"],
+        ["document-shared-agent-b", "agent-b"],
+      ] as const
+    ) {
+      await knowledge.documents.create({
+        id,
+        title: `Shared source for ${agentId}`,
+        source: [],
+        sourceType: "url",
+        sourceUri: repeatedSourceUri,
+        mediaType: null,
+        contentHash: null,
+        status: "indexed",
+        chunkCount: 0,
+        duplicateOfDocumentId: null,
+        threadId: null,
+        requestedByParticipantId: null,
+        forceReindex: false,
+        error: null,
+        externalId: null,
+        metadata: { scope: { agentId } },
+      }, { operationKey: `${id}:create` });
+    }
+    const scopedSourceDeletion = await knowledge.actions.delete_document({
+      sourceUri: repeatedSourceUri,
+    }, {
+      operationKey: "shared-source:delete:agent-a",
+      metadata: { agentId: "agent-a" },
+    });
+    assertEquals(scopedSourceDeletion.success, true);
+    if (!scopedSourceDeletion.success) {
+      throw new Error(scopedSourceDeletion.message);
+    }
+    assertEquals(scopedSourceDeletion.documentId, "document-shared-agent-a");
+    assertEquals(
+      await knowledge.documents.get({ id: "document-shared-agent-a" }),
+      null,
+    );
+    assertExists(
+      await knowledge.documents.get({ id: "document-shared-agent-b" }),
+    );
   } finally {
     await application.shutdown();
     await close(db);
   }
 });
 
-Deno.test("knowledge ingest tool creates documents through collections without knowledge capability", async () => {
-  const createdInputs: Record<string, unknown>[] = [];
-  const tool = createIngestDocumentTool();
-  const output = await tool.execute({
-    source: "text:Collection-native ingestion",
-    title: "Collection native",
-    metadata: { scope: { documentIds: ["doc-a"] } },
-  }, {
-    namespace: NAMESPACE,
-    idempotencyKey: "ingest-unit",
-    correlationId: "ingest-unit",
-    processor: {
+Deno.test("knowledge source deletion searches every page without crossing scope", async () => {
+  const sourceUri = "https://example.test/paginated-source";
+  const document = (
+    id: string,
+    threadId: string,
+    agentId: string,
+  ): KnowledgeDocument =>
+    Object.freeze({
+      id,
       namespace: NAMESPACE,
-      content: {
-        prepare: async () =>
-          Object.freeze({
-            content: Object.freeze([{
-              assetId: "asset-a",
-              kind: "text",
-              role: "document.source",
-              mediaType: "text/plain",
-            }]),
-            assets: Object.freeze([]),
-          }),
+      sourceType: "url",
+      sourceUri,
+      title: id,
+      mediaType: null,
+      contentHash: null,
+      source: Object.freeze([]),
+      status: "indexed",
+      chunkCount: 0,
+      duplicateOfDocumentId: null,
+      threadId,
+      requestedByParticipantId: null,
+      forceReindex: false,
+      error: null,
+      externalId: null,
+      metadata: Object.freeze({ scope: { agentId } }),
+      createdAt: "2026-08-23T00:00:00.000Z",
+      updatedAt: "2026-08-23T00:00:00.000Z",
+    });
+  const documents = Object.freeze([
+    ...Array.from(
+      { length: 1_000 },
+      (_, index) =>
+        document(
+          `document:${String(index).padStart(4, "0")}`,
+          "thread-b",
+          "agent-b",
+        ),
+    ),
+    document("document:z-authorized", "thread-a", "agent-a"),
+  ]);
+  const cursors: Array<string | undefined> = [];
+  const limits: number[] = [];
+  const deleted: string[] = [];
+  const context = {
+    namespace: NAMESPACE,
+    operationKey: "paginated-delete",
+    action: {
+      id: deleteKnowledgeDocumentAction.id,
+      runId: "paginated-delete-run",
+      metadata: { threadId: "thread-a", agentId: "agent-a" },
+    },
+    collections: {
+      document: {
+        get: () => Promise.resolve(null),
+        list(query: Readonly<{ after?: string; limit?: number }>) {
+          cursors.push(query.after);
+          limits.push(query.limit ?? 0);
+          const after = query.after ?? "";
+          return Promise.resolve(
+            documents.filter((candidate) => candidate.id > after).slice(
+              0,
+              query.limit,
+            ),
+          );
+        },
       },
-      collections: {
-        document: {
-          queries: {
-            byExternalId: async () => [],
+      chunk: { list: () => Promise.resolve([]) },
+    },
+    async transaction(
+      execute: (
+        transaction: Readonly<{
+          collections: Readonly<{
+            chunk: Readonly<{
+              delete(input: Readonly<{ id: string }>): Promise<unknown>;
+            }>;
+            document: Readonly<{
+              delete(input: Readonly<{ id: string }>): Promise<unknown>;
+            }>;
+          }>;
+          relations: Readonly<Record<string, never>>;
+        }>,
+      ) => unknown,
+    ) {
+      return await execute({
+        collections: {
+          chunk: { delete: () => Promise.resolve({ deleted: true }) },
+          document: {
+            delete(input) {
+              deleted.push(input.id);
+              return Promise.resolve({ deleted: true });
+            },
           },
-          async create(input: Record<string, unknown>) {
-            createdInputs.push(input);
-            return {
-              ...input,
-              namespace: NAMESPACE,
-              createdAt: "2026-08-21T00:00:00.000Z",
-              updatedAt: "2026-08-21T00:00:00.000Z",
-            };
-          },
         },
-      },
+        relations: {},
+      });
     },
-    execution: {
-      id: "execution-a",
-      namespace: NAMESPACE,
-      threadId: "thread-a",
-      participantId: "human-a",
-      agentId: "support",
-      toolCallId: "call-a",
-      tool: { id: tool.id, key: tool.key },
-      status: "running",
-      content: [],
-      startedAt: "2026-08-21T00:00:00.000Z",
-      metadata: {},
-      createdAt: "2026-08-21T00:00:00.000Z",
-      updatedAt: "2026-08-21T00:00:00.000Z",
-    },
-    threadId: "thread-a",
-    toolExecutionId: "execution-a",
-    toolCallId: "call-a",
-    agents: [],
-    tools: [tool],
-    collections: {},
-    emitOutput: () => Promise.resolve(),
-    cancelled: false,
-  } as unknown as WorkflowToolExecutionContext) as Record<string, unknown>;
+  } as unknown as KnowledgeActionContext;
 
-  assertEquals(output.documentId, "document:execution-a");
-  assertEquals(output.title, "Collection native");
-  assertEquals(createdInputs.length, 1);
-  assertEquals(createdInputs[0].sourceType, "text");
-  assertEquals(createdInputs[0].sourceUri, null);
-  assertEquals(createdInputs[0].status, "pending");
-  assertEquals(createdInputs[0].source, {
-    content: [{
-      assetId: "asset-a",
-      kind: "text",
-      role: "document.source",
-      mediaType: "text/plain",
-    }],
-    assets: [],
-  });
-});
-
-Deno.test("knowledge delete tool delegates to its Action alias", async () => {
-  const tool = createDeleteDocumentTool();
-  const calls: unknown[] = [];
-  const output = await tool.execute({
-    documentId: "document-a",
-  }, {
-    namespace: NAMESPACE,
-    idempotencyKey: "delete-unit",
-    correlationId: "delete-unit",
-    processor: {
-      signal: new AbortController().signal,
-      actions: {
-        async deleteKnowledgeDocument(input: unknown) {
-          calls.push(input);
-          return {
-            success: true,
-            message: "Document deleted.",
-            documentId: "document-a",
-            title: "Document A",
-            namespace: NAMESPACE,
-          };
-        },
-      },
-    },
-    execution: {
-      id: "execution-delete",
-      namespace: NAMESPACE,
-      threadId: "thread-a",
-      participantId: "human-a",
-      agentId: "support",
-      toolCallId: "call-delete",
-      tool: { id: tool.id, key: tool.key },
-      status: "running",
-      content: [],
-      startedAt: "2026-08-21T00:00:00.000Z",
-      metadata: {},
-      createdAt: "2026-08-21T00:00:00.000Z",
-      updatedAt: "2026-08-21T00:00:00.000Z",
-    },
-    threadId: "thread-a",
-    toolExecutionId: "execution-delete",
-    toolCallId: "call-delete",
-    agents: [],
-    tools: [tool],
-    collections: {},
-    emitOutput: () => Promise.resolve(),
-    cancelled: false,
-  } as unknown as WorkflowToolExecutionContext) as Record<string, unknown>;
-
-  assertEquals(calls, [{ documentId: "document-a" }]);
-  assertEquals(output.success, true);
-  assertEquals(output.documentId, "document-a");
-});
-
-Deno.test("knowledge search tool delegates to its Action alias", async () => {
-  const tool = createSearchKnowledgeTool({
-    provider: "fixture.embedding",
-    dimensions: 2,
-  });
-  const calls: unknown[] = [];
-  const embeddingCalls: unknown[] = [];
-  const output = await tool.execute({
-    query: "durable semantics",
-    threshold: 0.5,
-  }, {
-    namespace: NAMESPACE,
-    idempotencyKey: "search-unit",
-    correlationId: "search-unit",
-    processor: {
-      signal: new AbortController().signal,
-      adapters: {
-        embedding: {
-          "fixture.embedding": defineKnowledgeEmbeddingProvider({
-            id: "fixture.embedding",
-            type: "embedding",
-            embed(input) {
-              embeddingCalls.push(input);
-              return Promise.resolve({
-                embeddings: [[1, 0]],
-                model: "fixture-embedding-v1",
-                dimensions: 2,
-              });
-            },
-          }),
-        },
-      },
-      actions: {
-        async searchKnowledge(input: unknown) {
-          calls.push(input);
-          return [{
-            similarity: 0.95,
-            document: {
-              id: "document-a",
-              namespace: NAMESPACE,
-              title: "Document A",
-              sourceUri: "text:document-a",
-            },
-            chunk: {
-              id: "chunk-a",
-              namespace: NAMESPACE,
-              documentId: "document-a",
-              chunkIndex: 0,
-              content: "Durable semantic content.",
-            },
-          }];
-        },
-      },
-    },
-    execution: {
-      id: "execution-search",
-      namespace: NAMESPACE,
-      threadId: "thread-a",
-      participantId: "human-a",
-      agentId: "support",
-      toolCallId: "call-search",
-      tool: { id: tool.id, key: tool.key },
-      status: "running",
-      content: [],
-      startedAt: "2026-08-21T00:00:00.000Z",
-      metadata: {},
-      createdAt: "2026-08-21T00:00:00.000Z",
-      updatedAt: "2026-08-21T00:00:00.000Z",
-    },
-    threadId: "thread-a",
-    toolExecutionId: "execution-search",
-    toolCallId: "call-search",
-    agents: [],
-    tools: [tool],
-    collections: {},
-    emitOutput: () => Promise.resolve(),
-    cancelled: false,
-  } as unknown as WorkflowToolExecutionContext) as Record<string, unknown>;
-
-  assertEquals(embeddingCalls.length, 1);
-  assertEquals(calls, [{
-    embedding: [1, 0],
-    scope: { threadId: "thread-a", agentId: "support" },
-    limit: 5,
-    threshold: 0.5,
-  }]);
-  assertEquals(output.totalResults, 1);
-  assertEquals(
-    (output.results as Array<Record<string, unknown>>)[0].documentId,
-    "document-a",
+  const result = await deleteKnowledgeDocumentAction.execute(
+    { sourceUri },
+    context,
   );
+
+  assertEquals(result.success, true);
+  if (!result.success) throw new Error(result.message);
+  assertEquals(result.documentId, "document:z-authorized");
+  assertEquals(deleted, ["document:z-authorized"]);
+  assertEquals(cursors, [undefined, "document:0999"]);
+  assertEquals(limits, [1_000, 1_000]);
+});
+
+Deno.test("knowledge can disable every model-facing Action and Tool Resource", () => {
+  const plugin = createKnowledgePlugin({
+    embedding: { provider: "fixture.embedding" },
+    tools: false,
+  });
+  assertEquals(Object.keys(plugin.actions), ["indexKnowledgeDocument"]);
+  assertEquals(plugin.resources.tools, {});
 });
 
 Deno.test("knowledge modules remain factory-first and runtime-neutral", async () => {

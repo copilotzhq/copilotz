@@ -1,4 +1,7 @@
 import {
+  type ContentInput,
+  type ContentKind,
+  type ContentRef,
   digestContent,
   type DurableContentInput,
 } from "@copilotz/copilotz/content";
@@ -16,6 +19,7 @@ import type {
   KnowledgeChunk,
   KnowledgeChunkingConfig,
   KnowledgeDocument,
+  KnowledgeDocumentSourceInput,
   KnowledgeEmbeddingConfig,
   KnowledgeEmbeddingProviderResource,
   KnowledgeSearchInput,
@@ -28,6 +32,8 @@ import type {
 
 export const INDEX_KNOWLEDGE_DOCUMENT_ACTION_ID =
   "copilotz.knowledge.indexDocument";
+export const INGEST_KNOWLEDGE_DOCUMENT_ACTION_ID =
+  "copilotz.knowledge.ingestDocument";
 export const SEARCH_KNOWLEDGE_ACTION_ID = "copilotz.knowledge.searchDocuments";
 export const DELETE_KNOWLEDGE_DOCUMENT_ACTION_ID =
   "copilotz.knowledge.deleteDocument";
@@ -49,10 +55,42 @@ export type KnowledgeActionContext =
   }>;
 
 export type IndexKnowledgeDocumentInput = Readonly<{ id: string }>;
-export type SearchKnowledgeActionInput = Omit<
-  KnowledgeSearchInput,
-  "namespace"
->;
+export type IngestKnowledgeDocumentInput = Readonly<{
+  source?: string;
+  assetId?: string;
+  title?: string;
+  externalId?: string;
+  forceReindex?: boolean;
+  metadata?: Readonly<Record<string, unknown>>;
+}>;
+export type IngestKnowledgeDocumentResult = Readonly<{
+  status: "pending";
+  message: string;
+  documentId: string;
+  source: string;
+  title: string;
+  namespace: string;
+}>;
+export type SearchKnowledgeActionInput = Readonly<{
+  query: string;
+  scope?: Omit<KnowledgeSearchInput, "namespace" | "embedding">["scope"];
+  limit?: number;
+  threshold?: number;
+}>;
+export type SearchKnowledgeActionResult = Readonly<{
+  results: readonly Readonly<{
+    content: string;
+    score: number;
+    source: string;
+    namespace: string;
+    documentId: string;
+    chunkIndex: number;
+  }>[];
+  query: string;
+  namespace: string;
+  totalResults?: number;
+  message?: string;
+}>;
 export type DeleteKnowledgeDocumentInput = Readonly<{
   documentId?: string;
   sourceUri?: string;
@@ -78,6 +116,44 @@ function optional(value: unknown, name: string): string | undefined {
     throw new TypeError(`${name} must be non-empty.`);
   }
   return value.trim();
+}
+
+function kind(mediaType: string): ContentKind {
+  if (mediaType.startsWith("text/")) return "text";
+  if (mediaType.startsWith("image/")) return "image";
+  if (mediaType.startsWith("audio/")) return "audio";
+  if (mediaType.startsWith("video/")) return "video";
+  if (mediaType === "application/json") return "json";
+  return "file";
+}
+
+function sourceTitle(
+  input: Readonly<{
+    title?: string;
+    source?: string;
+    assetId?: string;
+  }>,
+): string {
+  if (input.title?.trim()) return input.title.trim();
+  const source = input.source?.trim();
+  if (!source || source.startsWith("text:")) return "Document";
+  if (/^https?:\/\//i.test(source)) {
+    try {
+      const parsed = new URL(source);
+      return parsed.pathname.split("/").filter(Boolean).at(-1) ||
+        parsed.hostname;
+    } catch {
+      return source;
+    }
+  }
+  return source.split(/[\\/]/).filter(Boolean).at(-1) || source ||
+    input.assetId || "Document";
+}
+
+function sourceType(source: string | undefined, assetId: string | undefined) {
+  if (assetId) return "asset" as const;
+  if (!source || source.startsWith("text:")) return "text" as const;
+  return /^https?:\/\//i.test(source) ? "url" as const : "file" as const;
 }
 
 function errorMessage(error: unknown): string {
@@ -434,6 +510,73 @@ async function searchDocuments(
   return Object.freeze(results.slice(0, limit));
 }
 
+async function searchKnowledge(
+  raw: unknown,
+  context: KnowledgeActionContext,
+  embedding: KnowledgeEmbeddingConfig,
+): Promise<SearchKnowledgeActionResult> {
+  const input = record(raw);
+  const query = requireText(input.query, "Knowledge query");
+  const explicitScope = searchScope(input.scope);
+  const actionMetadata = record(context.action.metadata, "Action metadata");
+  const threadId = optional(actionMetadata.threadId, "Action thread ID");
+  const agentId = optional(actionMetadata.agentId, "Action agent ID");
+  const response = await embedKnowledgeTexts(
+    { embeddings: context.adapters.embedding ?? Object.freeze({}) },
+    embedding,
+    [query],
+    {
+      signal: context.signal,
+      idempotencyKey: `${context.operationKey}:knowledge-query`,
+    },
+  );
+  const results = await searchDocuments({
+    embedding: response.embeddings[0],
+    scope: {
+      ...explicitScope,
+      ...(threadId ? { threadId } : {}),
+      ...(agentId ? { agentId } : {}),
+    },
+    limit: boundedInteger(
+      input.limit,
+      5,
+      "Knowledge result limit",
+      1,
+      20,
+    ),
+    threshold: boundedNumber(
+      input.threshold,
+      0.5,
+      "Knowledge similarity threshold",
+      -1,
+      1,
+    ),
+  }, context);
+  if (results.length === 0) {
+    return Object.freeze({
+      results: Object.freeze([]),
+      message: "No relevant documents found for the query.",
+      query,
+      namespace: context.namespace,
+    });
+  }
+  return Object.freeze({
+    results: Object.freeze(results.map((result) =>
+      Object.freeze({
+        content: result.chunk.content,
+        score: Math.round(result.similarity * 100) / 100,
+        source: result.document.title || result.document.sourceUri || "Unknown",
+        namespace: result.document.namespace,
+        documentId: result.document.id,
+        chunkIndex: result.chunk.chunkIndex,
+      })
+    )),
+    query,
+    namespace: context.namespace,
+    totalResults: results.length,
+  });
+}
+
 async function beginIndex(
   input: unknown,
   context: KnowledgeActionContext,
@@ -739,9 +882,130 @@ async function indexDocument(
   }
 }
 
+async function ingestDocument(
+  raw: unknown,
+  context: ActionContext,
+): Promise<IngestKnowledgeDocumentResult> {
+  const input = record(raw);
+  const source = optional(input.source, "Document source");
+  const assetId = optional(input.assetId, "Document asset ID");
+  if (Boolean(source) === Boolean(assetId)) {
+    throw new TypeError("Provide exactly one of source or assetId.");
+  }
+
+  let sourceInput: KnowledgeDocumentSourceInput;
+  let content: DurableContentInput = [];
+  if (assetId) {
+    const asset = await context.content.get(assetId);
+    if (!asset) throw new Error(`Asset '${assetId}' was not found.`);
+    const ref: ContentRef = Object.freeze({
+      assetId,
+      kind: kind(asset.mediaType),
+      role: "document.source",
+      mediaType: asset.mediaType,
+    });
+    sourceInput = {
+      kind: "content",
+      content: ref,
+      sourceType: "asset",
+      sourceUri: `asset:${assetId}`,
+    };
+    content = await context.content.prepare(ref, {
+      operationKey: `${context.operationKey}:source`,
+    });
+  } else if (source!.startsWith("text:")) {
+    const sourceContent: ContentInput = {
+      type: "text",
+      text: source!.slice("text:".length),
+      role: "document.source",
+    };
+    sourceInput = {
+      kind: "content",
+      content: sourceContent,
+      sourceType: "text",
+    };
+    content = await context.content.prepare(sourceContent, {
+      operationKey: `${context.operationKey}:source`,
+    });
+  } else {
+    sourceInput = { kind: "uri", uri: source! };
+  }
+
+  const actionMetadata = record(context.action.metadata, "Action metadata");
+  const threadId = optional(actionMetadata.threadId, "Action thread ID");
+  const agentId = optional(actionMetadata.agentId, "Action agent ID");
+  const participantId = optional(
+    actionMetadata.initiatorParticipantId,
+    "Action initiator participant ID",
+  );
+  const suppliedMetadata = input.metadata === undefined
+    ? {}
+    : structuredClone(record(input.metadata, "Document metadata"));
+  const suppliedScope = suppliedMetadata.scope === undefined
+    ? {}
+    : record(suppliedMetadata.scope, "Document metadata scope");
+  const metadata = {
+    ...suppliedMetadata,
+    ...(threadId ? { threadId } : {}),
+    ...(agentId ? { agentId } : {}),
+    ...(participantId ? { initiatorParticipantId: participantId } : {}),
+    scope: {
+      ...suppliedScope,
+      ...(threadId ? { threadId } : {}),
+      ...(agentId ? { agentId } : {}),
+      ...(participantId ? { initiatorParticipantId: participantId } : {}),
+    },
+  };
+  const externalId = optional(input.externalId, "Document external ID");
+  if (externalId && context.collections.document.queries.byExternalId) {
+    const [existing] = await context.collections.document.queries.byExternalId({
+      externalId,
+    });
+    if (existing) {
+      throw new Error(`Document external ID '${externalId}' already exists.`);
+    }
+  }
+
+  const documentId = `document:${context.action.runId}`;
+  const title = sourceTitle({
+    title: optional(input.title, "Document title"),
+    source,
+    assetId,
+  });
+  const created = await context.collections.document.create({
+    id: documentId,
+    sourceType: sourceType(source, assetId),
+    sourceUri: sourceInput.kind === "uri"
+      ? sourceInput.uri
+      : sourceInput.sourceUri ?? (assetId ? `asset:${assetId}` : null),
+    title,
+    mediaType: null,
+    contentHash: null,
+    source: content,
+    status: "pending",
+    chunkCount: 0,
+    duplicateOfDocumentId: null,
+    threadId: threadId ?? null,
+    requestedByParticipantId: participantId ?? null,
+    forceReindex: input.forceReindex === true,
+    error: null,
+    externalId: externalId ?? null,
+    metadata,
+  }, { operationKey: `${context.operationKey}:document` });
+  const createdTitle = String(created.title);
+  return Object.freeze({
+    status: "pending",
+    message: `Document "${createdTitle}" accepted for ingestion.`,
+    documentId: created.id,
+    source: source ?? `asset:${assetId}`,
+    title: createdTitle,
+    namespace: context.namespace,
+  });
+}
+
 async function deleteDocument(
   input: unknown,
-  context: ActionContext,
+  context: KnowledgeActionContext,
 ): Promise<DeleteKnowledgeDocumentResult> {
   const data = record(input);
   const documentId = optional(data.documentId, "Document ID");
@@ -749,11 +1013,38 @@ async function deleteDocument(
   if (Boolean(documentId) === Boolean(sourceUri)) {
     throw new TypeError("Provide exactly one of documentId or sourceUri.");
   }
-  const document = documentId
-    ? await context.collections.document.get({ id: documentId })
-    : (await context.collections.document.queries.bySourceUri({
-      sourceUri: sourceUri!,
-    }))[0];
+  const actionMetadata = record(context.action.metadata, "Action metadata");
+  const threadId = optional(actionMetadata.threadId, "Action thread ID");
+  const agentId = optional(actionMetadata.agentId, "Action agent ID");
+  const candidates = [];
+  if (documentId) {
+    const exact = await context.collections.document.get({ id: documentId });
+    if (exact) candidates.push(exact);
+  } else {
+    let after: string | undefined;
+    while (true) {
+      const page = await context.collections.document.list({
+        where: { sourceUri: sourceUri! },
+        order: { field: "id" },
+        ...(after ? { after } : {}),
+        limit: 1_000,
+      });
+      candidates.push(...page);
+      if (page.length < 1_000) break;
+      after = page.at(-1)!.id;
+    }
+    candidates.sort((left, right) =>
+      String(right.createdAt).localeCompare(String(left.createdAt)) ||
+      right.id.localeCompare(left.id)
+    );
+  }
+  const document = candidates.find((candidate) =>
+    !threadId && !agentId ||
+    documentMatchesScope(candidate as KnowledgeDocument, {
+      ...(threadId ? { threadId } : {}),
+      ...(agentId ? { agentId } : {}),
+    })
+  );
   if (!document) {
     return {
       success: false,
@@ -805,15 +1096,46 @@ const deleteDocumentOutputSchema = {
   required: ["success", "message"],
 } as const;
 
-const searchDocumentsInputSchema = {
+const ingestDocumentInputSchema = {
   type: "object",
   additionalProperties: false,
   properties: {
-    embedding: {
-      type: "array",
-      items: { type: "number" },
-      minItems: 1,
-    },
+    source: { type: "string" },
+    assetId: { type: "string" },
+    title: { type: "string" },
+    externalId: { type: "string" },
+    forceReindex: { type: "boolean", default: false },
+    metadata: { type: "object", additionalProperties: true },
+  },
+  oneOf: [{ required: ["source"] }, { required: ["assetId"] }],
+} as const;
+
+const ingestDocumentOutputSchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    status: { const: "pending" },
+    message: { type: "string" },
+    documentId: { type: "string" },
+    source: { type: "string" },
+    title: { type: "string" },
+    namespace: { type: "string" },
+  },
+  required: [
+    "status",
+    "message",
+    "documentId",
+    "source",
+    "title",
+    "namespace",
+  ],
+} as const;
+
+const searchKnowledgeInputSchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    query: { type: "string", minLength: 1 },
     scope: {
       type: "object",
       additionalProperties: false,
@@ -824,24 +1146,45 @@ const searchDocumentsInputSchema = {
         documentIds: { type: "array", items: { type: "string" } },
       },
     },
-    limit: { type: "integer", minimum: 1, maximum: 100, default: 100 },
-    threshold: { type: "number", minimum: -1, maximum: 1, default: -1 },
+    limit: { type: "integer", minimum: 1, maximum: 20, default: 5 },
+    threshold: { type: "number", minimum: -1, maximum: 1, default: 0.5 },
   },
-  required: ["embedding"],
+  required: ["query"],
 } as const;
 
-const searchDocumentsOutputSchema = {
-  type: "array",
-  items: {
-    type: "object",
-    additionalProperties: true,
-    required: ["chunk", "document", "similarity"],
-    properties: {
-      chunk: { type: "object", additionalProperties: true },
-      document: { type: "object", additionalProperties: true },
-      similarity: { type: "number" },
+const searchKnowledgeOutputSchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    results: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          content: { type: "string" },
+          score: { type: "number" },
+          source: { type: "string" },
+          namespace: { type: "string" },
+          documentId: { type: "string" },
+          chunkIndex: { type: "integer", minimum: 0 },
+        },
+        required: [
+          "content",
+          "score",
+          "source",
+          "namespace",
+          "documentId",
+          "chunkIndex",
+        ],
+      },
     },
+    query: { type: "string" },
+    namespace: { type: "string" },
+    totalResults: { type: "integer", minimum: 0 },
+    message: { type: "string" },
   },
+  required: ["results", "query", "namespace"],
 } as const;
 
 const indexKnowledgeDocumentInputSchema = {
@@ -875,39 +1218,63 @@ export function createIndexKnowledgeDocumentAction(
   });
 }
 
-/** Searches the durable Knowledge Collections using a precomputed embedding. */
-export const searchKnowledgeAction: ActionDefinition<
-  SearchKnowledgeActionInput,
-  readonly KnowledgeSearchResult[],
+/** Accepts a document source and schedules it through the durable indexer. */
+export const ingestKnowledgeDocumentAction: ActionDefinition<
+  IngestKnowledgeDocumentInput,
+  IngestKnowledgeDocumentResult,
   ActionContext,
-  typeof searchDocumentsInputSchema,
-  typeof searchDocumentsOutputSchema
+  typeof ingestDocumentInputSchema,
+  typeof ingestDocumentOutputSchema
 > = defineAction<
-  SearchKnowledgeActionInput,
-  readonly KnowledgeSearchResult[],
+  IngestKnowledgeDocumentInput,
+  IngestKnowledgeDocumentResult,
   ActionContext,
-  typeof searchDocumentsInputSchema,
-  typeof searchDocumentsOutputSchema
+  typeof ingestDocumentInputSchema,
+  typeof ingestDocumentOutputSchema
 >({
-  id: SEARCH_KNOWLEDGE_ACTION_ID,
-  inputSchema: searchDocumentsInputSchema,
-  outputSchema: searchDocumentsOutputSchema,
-  async execute(input, context: ActionContext) {
-    return [...await searchDocuments(input, context)];
-  },
+  id: INGEST_KNOWLEDGE_DOCUMENT_ACTION_ID,
+  inputSchema: ingestDocumentInputSchema,
+  outputSchema: ingestDocumentOutputSchema,
+  execute: ingestDocument,
 });
+
+/** Creates the configured provider-backed semantic search Action. */
+export function createSearchKnowledgeAction(
+  embedding: KnowledgeEmbeddingConfig,
+): ActionDefinition<
+  SearchKnowledgeActionInput,
+  SearchKnowledgeActionResult,
+  KnowledgeActionContext,
+  typeof searchKnowledgeInputSchema,
+  typeof searchKnowledgeOutputSchema
+> {
+  return defineAction<
+    SearchKnowledgeActionInput,
+    SearchKnowledgeActionResult,
+    KnowledgeActionContext,
+    typeof searchKnowledgeInputSchema,
+    typeof searchKnowledgeOutputSchema
+  >({
+    id: SEARCH_KNOWLEDGE_ACTION_ID,
+    inputSchema: searchKnowledgeInputSchema,
+    outputSchema: searchKnowledgeOutputSchema,
+    async execute(input, context) {
+      return await searchKnowledge(input, context, embedding);
+    },
+  });
+}
 
 /** Deletes one document and its derived chunks atomically. */
 export const deleteKnowledgeDocumentAction: ActionDefinition<
   DeleteKnowledgeDocumentInput,
   DeleteKnowledgeDocumentResult,
-  ActionContext,
+  KnowledgeActionContext,
   typeof deleteDocumentInputSchema,
   typeof deleteDocumentOutputSchema
 > = defineAction<
   DeleteKnowledgeDocumentInput,
   DeleteKnowledgeDocumentResult,
-  ActionContext,
+  KnowledgeActionContext,
   typeof deleteDocumentInputSchema,
   typeof deleteDocumentOutputSchema
 >({
@@ -920,11 +1287,19 @@ export const deleteKnowledgeDocumentAction: ActionDefinition<
 export type IndexKnowledgeDocumentAction = ReturnType<
   typeof createIndexKnowledgeDocumentAction
 >;
+export type SearchKnowledgeAction = ReturnType<
+  typeof createSearchKnowledgeAction
+>;
 
-export type KnowledgeActionCallers = Readonly<{
+export type KnowledgeIndexActionCallers = Readonly<{
   indexKnowledgeDocument: ActionCaller<IndexKnowledgeDocumentAction>;
-  searchKnowledge: ActionCaller<typeof searchKnowledgeAction>;
-  deleteKnowledgeDocument: ActionCaller<
-    typeof deleteKnowledgeDocumentAction
-  >;
 }>;
+
+/** Default aliases exposed when Knowledge Tool resources are enabled. */
+export type KnowledgeActionCallers =
+  & KnowledgeIndexActionCallers
+  & Readonly<{
+    ingest_document: ActionCaller<typeof ingestKnowledgeDocumentAction>;
+    search_knowledge: ActionCaller<SearchKnowledgeAction>;
+    delete_document: ActionCaller<typeof deleteKnowledgeDocumentAction>;
+  }>;

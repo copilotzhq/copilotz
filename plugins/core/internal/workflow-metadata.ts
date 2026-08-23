@@ -1,8 +1,10 @@
-import type { WorkflowPipelineMetadata } from "@copilotz/copilotz/tools";
-
 const WORKFLOW_METADATA_KEY = "copilotzWorkflow";
 const AGENT_ASK_METADATA_KEY = "copilotzAsk";
+const TOOL_PLAN_METADATA_KEY = "copilotzToolPlan";
+const TOOL_ACTION_METADATA_KEY = "copilotzToolAction";
 export const CORE_LLM_CALL_METADATA_SCHEMA = "copilotz.core.llm-call.v1";
+export const CORE_TOOL_ACTION_METADATA_SCHEMA = "copilotz.core.tool-action.v1";
+export const CORE_TOOL_PLAN_METADATA_SCHEMA = "copilotz.core.tool-plan.v1";
 
 export type AgentAskPhase = "question" | "progress" | "answer";
 
@@ -11,7 +13,7 @@ export type AgentAskMetadata = Readonly<{
   schema: "copilotz.ask.v1";
   askId: string;
   phase: AgentAskPhase;
-  toolExecutionId: string;
+  toolActionRunId: string;
   toolCallId?: string;
   toolInvocation?: Readonly<Record<string, unknown>>;
   questionMessageId: string;
@@ -22,7 +24,8 @@ export type AgentAskMetadata = Readonly<{
   callingAttemptId?: string;
   answerAttemptId?: string;
   parentAskId?: string;
-  parentAsk?: AgentAskMetadata;
+  parentQuestionMessageId?: string;
+  origin: CoreToolActionOrigin;
   depth: number;
 }>;
 
@@ -39,10 +42,48 @@ export type CoreLlmCallMetadata = Readonly<{
   ask?: AgentAskMetadata;
 }>;
 
+/** Stable plan cursor retained by an ask while another agent answers. */
+export type CoreToolActionOrigin = Readonly<{
+  schema: typeof CORE_TOOL_ACTION_METADATA_SCHEMA;
+  planId: string;
+  planMessageId: string;
+  planIndex: number;
+  planSize: number;
+  toolCallId: string;
+  action: string;
+  threadId: string;
+  triggerMessageId: string;
+  agentId: string;
+  agentParticipantId: string;
+  initiatorParticipantId: string;
+  availableToolIds: readonly string[];
+  parentLlmActionRunId: string;
+}>;
+
+/** Core provenance attached directly to each ordinary Tool Action call. */
+export type CoreToolActionMetadata =
+  & CoreToolActionOrigin
+  & Readonly<{
+    ask?: AgentAskMetadata;
+  }>;
+
+/** Self-contained provider-order plan persisted on its assistant Message. */
+export type CoreToolPlanMetadata = Readonly<{
+  schema: typeof CORE_TOOL_PLAN_METADATA_SCHEMA;
+  planId: string;
+  planSize: number;
+}>;
+
+/** Tool cursor embedded in a Message after one terminal Action lifecycle. */
+export type CoreToolActionMessageMetadata =
+  & CoreToolActionMetadata
+  & Readonly<{
+    actionRunId: string;
+  }>;
+
 export type WorkflowMetadata = Readonly<{
   kind:
     | "agent_output"
-    | "tool_action"
     | "tool_result"
     | "provider_attempt"
     | "memory_consolidation"
@@ -51,15 +92,8 @@ export type WorkflowMetadata = Readonly<{
   realtimeStreamId?: string;
   llmAttemptId?: string;
   parentLlmAttemptId?: string;
-  toolExecutionId?: string;
-  toolCallId?: string;
-  batchId?: string;
-  batchSize?: number;
-  batchIndex?: number;
   sourceMessageId?: string;
   agentParticipantId?: string;
-  pipeline?: WorkflowPipelineMetadata;
-  pipelineFailure?: Readonly<{ stageIndex: number; message: string }>;
 }>;
 
 function record(value: unknown): Record<string, unknown> {
@@ -88,7 +122,7 @@ export function workflowMetadata(value: unknown): WorkflowMetadata | null {
   const kind = candidate.kind;
   if (
     kind !== "agent_output" && kind !== "tool_result" &&
-    kind !== "tool_action" && kind !== "provider_attempt" &&
+    kind !== "provider_attempt" &&
     kind !== "memory_consolidation" && kind !== "realtime_message"
   ) return null;
   return candidate as WorkflowMetadata;
@@ -106,10 +140,31 @@ export function withAgentAskMetadata(
 }
 
 /** Reads validated ask metadata from a domain record or event. */
+const AGENT_ASK_KEYS = new Set([
+  "schema",
+  "askId",
+  "phase",
+  "toolActionRunId",
+  "toolCallId",
+  "toolInvocation",
+  "questionMessageId",
+  "askingParticipantId",
+  "askingAgentId",
+  "askedParticipantId",
+  "askedAgentId",
+  "callingAttemptId",
+  "answerAttemptId",
+  "parentAskId",
+  "parentQuestionMessageId",
+  "origin",
+  "depth",
+]);
+
 function validAgentAsk(
   candidate: Record<string, unknown>,
 ): AgentAskMetadata | null {
   if (
+    Object.keys(candidate).some((key) => !AGENT_ASK_KEYS.has(key)) ||
     candidate.schema !== "copilotz.ask.v1" ||
     (candidate.phase !== "question" && candidate.phase !== "progress" &&
       candidate.phase !== "answer") ||
@@ -117,7 +172,7 @@ function validAgentAsk(
   ) return null;
   const required = [
     "askId",
-    "toolExecutionId",
+    "toolActionRunId",
     "questionMessageId",
     "askingParticipantId",
     "askingAgentId",
@@ -132,6 +187,7 @@ function validAgentAsk(
       "callingAttemptId",
       "answerAttemptId",
       "parentAskId",
+      "parentQuestionMessageId",
       "toolCallId",
     ] as const
   ) {
@@ -139,12 +195,18 @@ function validAgentAsk(
       return null;
     }
   }
+  const hasParentAsk = candidate.parentAskId !== undefined;
+  const hasParentQuestion = candidate.parentQuestionMessageId !== undefined;
+  if (hasParentAsk !== hasParentQuestion) return null;
+  if (Number(candidate.depth) === 1 && hasParentAsk) return null;
+  if (Number(candidate.depth) > 1 && !hasParentAsk) return null;
   if (
-    candidate.parentAsk !== undefined &&
-    !validAgentAsk(record(candidate.parentAsk))
-  ) {
-    return null;
-  }
+    candidate.toolInvocation !== undefined &&
+    (typeof candidate.toolInvocation !== "object" ||
+      candidate.toolInvocation === null ||
+      Array.isArray(candidate.toolInvocation))
+  ) return null;
+  if (!coreToolActionOrigin(candidate.origin)) return null;
   return candidate as AgentAskMetadata;
 }
 
@@ -197,6 +259,181 @@ export function defineCoreLlmCallMetadata(
     availableToolIds: Object.freeze([...validated.availableToolIds]),
     ...(validated.ask ? { ask: Object.freeze(validated.ask) } : {}),
   });
+}
+
+function validStringArray(value: unknown): value is readonly string[] {
+  return Array.isArray(value) &&
+    value.every((entry) => Boolean(optionalMetadataText(entry))) &&
+    new Set(value).size === value.length;
+}
+
+function validPlanPosition(candidate: Record<string, unknown>): boolean {
+  return Number.isSafeInteger(candidate.planIndex) &&
+    Number(candidate.planIndex) >= 0 &&
+    Number.isSafeInteger(candidate.planSize) &&
+    Number(candidate.planSize) > 0 &&
+    Number(candidate.planIndex) < Number(candidate.planSize);
+}
+
+const TOOL_ACTION_ORIGIN_KEYS = new Set([
+  "schema",
+  "planId",
+  "planMessageId",
+  "planIndex",
+  "planSize",
+  "toolCallId",
+  "action",
+  "threadId",
+  "triggerMessageId",
+  "agentId",
+  "agentParticipantId",
+  "initiatorParticipantId",
+  "availableToolIds",
+  "parentLlmActionRunId",
+]);
+
+function validToolActionOrigin(
+  candidate: Record<string, unknown>,
+): CoreToolActionOrigin | null {
+  if (candidate.schema !== CORE_TOOL_ACTION_METADATA_SCHEMA) return null;
+  const required = [
+    "planId",
+    "planMessageId",
+    "toolCallId",
+    "action",
+    "threadId",
+    "triggerMessageId",
+    "agentId",
+    "agentParticipantId",
+    "initiatorParticipantId",
+    "parentLlmActionRunId",
+  ] as const;
+  if (
+    required.some((key) => !optionalMetadataText(candidate[key])) ||
+    !validPlanPosition(candidate) ||
+    !validStringArray(candidate.availableToolIds)
+  ) return null;
+  return candidate as CoreToolActionOrigin;
+}
+
+/** Reads the non-recursive durable cursor of one Tool Action call. */
+export function coreToolActionOrigin(
+  value: unknown,
+): CoreToolActionOrigin | null {
+  const candidate = record(value);
+  if (Object.keys(candidate).some((key) => !TOOL_ACTION_ORIGIN_KEYS.has(key))) {
+    return null;
+  }
+  return validToolActionOrigin(candidate);
+}
+
+/** Reads validated Core Tool Action provenance from lifecycle data. */
+export function coreToolActionMetadata(
+  value: unknown,
+): CoreToolActionMetadata | null {
+  const candidate = record(value);
+  if (
+    Object.keys(candidate).some((key) =>
+      key !== "ask" && !TOOL_ACTION_ORIGIN_KEYS.has(key)
+    )
+  ) return null;
+  const origin = validToolActionOrigin(candidate);
+  if (!origin) return null;
+  if (
+    candidate.ask !== undefined &&
+    !validAgentAsk(record(candidate.ask))
+  ) return null;
+  return candidate as CoreToolActionMetadata;
+}
+
+/** Validates and freezes metadata before invoking a Tool Action. */
+export function defineCoreToolActionMetadata(
+  value: CoreToolActionMetadata,
+): CoreToolActionMetadata {
+  const copy = structuredClone(value);
+  const validated = coreToolActionMetadata(copy);
+  if (!validated) throw new TypeError("Invalid Core Tool Action metadata.");
+  return Object.freeze({
+    ...validated,
+    availableToolIds: Object.freeze([...validated.availableToolIds]),
+    ...(validated.ask ? { ask: Object.freeze(validated.ask) } : {}),
+  });
+}
+
+/** Drops recursive ask state before retaining a plan cursor in an ask. */
+export function coreToolActionOriginFrom(
+  metadata: CoreToolActionMetadata,
+): CoreToolActionOrigin {
+  const { ask: _ask, ...origin } = metadata;
+  return Object.freeze(structuredClone(origin));
+}
+
+/** Embeds one Tool plan cursor in a Core Message without changing its shape. */
+export function withCoreToolActionMessageMetadata(
+  metadata: Readonly<Record<string, unknown>> | undefined,
+  value: CoreToolActionMetadata,
+  actionRunId: string,
+): Record<string, unknown> {
+  const validated = coreToolActionMetadata(value);
+  if (!validated) throw new TypeError("Invalid Core Tool Action metadata.");
+  const runId = optionalMetadataText(actionRunId);
+  if (!runId) throw new TypeError("Tool Action run ID must be non-empty.");
+  return {
+    ...structuredClone(metadata ?? {}),
+    [TOOL_ACTION_METADATA_KEY]: {
+      ...structuredClone(validated),
+      actionRunId: runId,
+    },
+  };
+}
+
+/** Reads the Tool plan cursor embedded in a Core Message. */
+export function coreToolActionMessageMetadata(
+  value: unknown,
+): CoreToolActionMessageMetadata | null {
+  const candidate = record(record(value)[TOOL_ACTION_METADATA_KEY]);
+  const actionRunId = optionalMetadataText(candidate.actionRunId);
+  if (!actionRunId) return null;
+  const { actionRunId: _actionRunId, ...rawMetadata } = candidate;
+  const metadata = coreToolActionMetadata(rawMetadata);
+  if (!metadata) return null;
+  return candidate as CoreToolActionMessageMetadata;
+}
+
+/** Stores a complete immutable Tool plan on its assistant Message. */
+export function withCoreToolPlanMetadata(
+  metadata: Readonly<Record<string, unknown>> | undefined,
+  plan: CoreToolPlanMetadata,
+): Record<string, unknown> {
+  const validated = validCoreToolPlanMetadata(record(plan));
+  if (!validated) throw new TypeError("Invalid Core Tool plan metadata.");
+  return {
+    ...structuredClone(metadata ?? {}),
+    [TOOL_PLAN_METADATA_KEY]: structuredClone(validated),
+  };
+}
+
+/** Reads and validates the complete Tool plan persisted on a Message. */
+export function coreToolPlanMetadata(
+  value: unknown,
+): CoreToolPlanMetadata | null {
+  const candidate = record(record(value)[TOOL_PLAN_METADATA_KEY]);
+  return validCoreToolPlanMetadata(candidate);
+}
+
+function validCoreToolPlanMetadata(
+  candidate: Record<string, unknown>,
+): CoreToolPlanMetadata | null {
+  if (
+    Object.keys(candidate).some((key) =>
+      key !== "schema" && key !== "planId" && key !== "planSize"
+    ) ||
+    candidate.schema !== CORE_TOOL_PLAN_METADATA_SCHEMA ||
+    !optionalMetadataText(candidate.planId) ||
+    !Number.isSafeInteger(candidate.planSize) ||
+    Number(candidate.planSize) < 1
+  ) return null;
+  return candidate as CoreToolPlanMetadata;
 }
 
 export function providerAttemptEventMetadata(value: unknown): boolean {

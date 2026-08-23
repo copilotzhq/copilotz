@@ -1,3 +1,5 @@
+import { defineAction } from "@copilotz/copilotz/actions";
+import { defineTool } from "../contracts.ts";
 import { restoreWorkspaceFileVersion } from "./fs-utils.ts";
 
 interface RestoreFileVersionParams {
@@ -5,10 +7,8 @@ interface RestoreFileVersionParams {
   snapshotId?: string;
 }
 
-export default {
-  key: "restore_file_version",
-  name: "Restore File Version",
-  description: "Restore a file from a previously captured in-process snapshot.",
+export const restoreFileVersionAction = defineAction({
+  id: "copilotz.tools.deno.restore_file_version",
   inputSchema: {
     type: "object",
     properties: {
@@ -31,4 +31,14 @@ export default {
       restoredFromSnapshotId: result.restoredFromSnapshotId,
     };
   },
-};
+});
+
+export const restoreFileVersionTool = defineTool(
+  "restore_file_version",
+  restoreFileVersionAction,
+  {
+    name: "Restore File Version",
+    description:
+      "Restore a file from a previously captured in-process snapshot.",
+  },
+);

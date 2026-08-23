@@ -2,17 +2,14 @@ import { isSettledActionError } from "@copilotz/copilotz/actions";
 import {
   agentAskMetadata,
   CORE_LLM_CALL_METADATA_SCHEMA,
+  coreToolActionMessageMetadata,
   defineCoreLlmCallMetadata,
   workflowMetadata,
 } from "../../internal/workflow-metadata.ts";
 import { defineProcessor, type Processor } from "@copilotz/copilotz/plugins";
 import { buildCoreLlmRequest } from "../../internal/agents/prompt.ts";
 import type { AgentResource } from "../../agent.ts";
-import {
-  coreAgent,
-  type CoreProcessorContext,
-  coreWorkflowContext,
-} from "../../context.ts";
+import { coreAgent, type CoreProcessorContext } from "../../context.ts";
 import {
   asRecord,
   collectionEventRecord,
@@ -21,7 +18,7 @@ import {
   participantAgentId,
   requiredText,
   stringArray,
-  toolCatalogFor,
+  toolsForAgent,
 } from "./helpers.ts";
 
 function modelFor(agent: AgentResource): string {
@@ -45,6 +42,7 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
       }
       const workflow = workflowMetadata(asRecord(record.metadata));
       const ask = agentAskMetadata(asRecord(record.metadata));
+      const toolAction = coreToolActionMessageMetadata(record.metadata);
       if (
         workflow?.continuation === "realtime" ||
         workflow?.continuation === "none"
@@ -60,19 +58,15 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
       const historyIds = Object.freeze(
         history.slice(0, triggerIndex + 1).map((item) => String(item.id)),
       );
-      const workflowContext = coreWorkflowContext(context);
       for (const recipientId of new Set(stringArray(record.recipientIds))) {
         const participant = await loadParticipant(context, recipientId);
         if (!participant || participant.participantType !== "agent") continue;
         const agentId = participantAgentId(participant);
         const agent = coreAgent(context.resources, agentId);
         if (!agent) continue;
-        const availableTools = await toolCatalogFor().forAgent(
-          workflowContext,
-          agent,
-        );
+        const availableTools = toolsForAgent(context, agent);
         const availableToolIds = Object.freeze(
-          availableTools.map((tool) => tool.key),
+          availableTools.map((tool) => tool.alias),
         );
         const request = await buildCoreLlmRequest(context, {
           agent,
@@ -82,7 +76,7 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
           tools: availableTools,
         });
         const continuationKey = workflow?.kind === "tool_result"
-          ? `${requiredText(workflow.batchId, "Tool batch id")}:${recipientId}`
+          ? `${requiredText(toolAction?.planId, "Tool plan id")}:${recipientId}`
           : `${record.id}:${recipientId}`;
         const metadata = defineCoreLlmCallMetadata({
           schema: CORE_LLM_CALL_METADATA_SCHEMA,
@@ -90,12 +84,14 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
           triggerMessageId: String(record.id),
           agentId,
           agentParticipantId: String(participant.id),
-          initiatorParticipantId: String(sender.id),
+          initiatorParticipantId: toolAction?.initiatorParticipantId ??
+            String(sender.id),
           availableToolIds,
-          ...(workflow?.parentLlmAttemptId ?? ask?.callingAttemptId
+          ...(toolAction?.parentLlmActionRunId ??
+              workflow?.parentLlmAttemptId ?? ask?.callingAttemptId
             ? {
-              parentActionRunId: workflow?.parentLlmAttemptId ??
-                ask?.callingAttemptId,
+              parentActionRunId: toolAction?.parentLlmActionRunId ??
+                workflow?.parentLlmAttemptId ?? ask?.callingAttemptId,
             }
             : {}),
           ...(ask ? { ask: structuredClone(ask) } : {}),

@@ -1,5 +1,6 @@
 import type { AgentResource } from "../../agent.ts";
 import type { Skill } from "@copilotz/copilotz/skills";
+import type { ToolResource } from "@copilotz/copilotz/tools";
 import { selectCapabilityResources } from "./selection.ts";
 
 export const AGENT_CAPABILITY_TOOL_IDS = ["ask"] as const;
@@ -9,7 +10,10 @@ export const SKILL_CAPABILITY_TOOL_IDS = [
   "read_skill_resource",
 ] as const;
 
-type KeyedTool = Readonly<{ key: string }>;
+export type AliasedToolResource = Readonly<{
+  alias: string;
+  resource: ToolResource;
+}>;
 
 export function resolveAgentGrants(
   agent: AgentResource,
@@ -37,7 +41,7 @@ export function resolveSkillGrants(
   });
 }
 
-function requireMechanismTool<T extends KeyedTool>(
+function requireMechanismTool<T extends AliasedToolResource>(
   agent: AgentResource,
   toolsByKey: ReadonlyMap<string, T>,
   key: string,
@@ -53,7 +57,7 @@ function requireMechanismTool<T extends KeyedTool>(
 }
 
 /** Resolves explicit tools and derives framework mechanism tools from grants. */
-export function resolveToolGrants<T extends KeyedTool>(
+export function resolveToolGrants<T extends AliasedToolResource>(
   agent: AgentResource,
   tools: readonly T[],
   resources: Readonly<{
@@ -66,13 +70,13 @@ export function resolveToolGrants<T extends KeyedTool>(
     kind: "tool",
     selection: agent.capabilities?.tools,
     resources: tools,
-    id: (tool) => tool.key,
+    id: (tool) => tool.alias,
   })];
-  const selectedKeys = new Set(selected.map((tool) => tool.key));
-  const toolsByKey = new Map(tools.map((tool) => [tool.key, tool]));
+  const selectedKeys = new Set(selected.map((tool) => tool.alias));
+  const toolsByKey = new Map(tools.map((tool) => [tool.alias, tool]));
   const append = (tool: T): void => {
-    if (selectedKeys.has(tool.key)) return;
-    selectedKeys.add(tool.key);
+    if (selectedKeys.has(tool.alias)) return;
+    selectedKeys.add(tool.alias);
     selected.push(tool);
   };
 

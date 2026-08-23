@@ -1,5 +1,5 @@
 import { assert, assertEquals, assertThrows } from "@std/assert";
-import { defineAction } from "@copilotz/copilotz/actions";
+import { type ActionSchema, defineAction } from "@copilotz/copilotz/actions";
 import { defineTool, type ToolResource } from "./contracts.ts";
 
 const inputSchema = {
@@ -63,7 +63,7 @@ Deno.test("ToolResource is an ordinary data-only Action presentation", () => {
   assertEquals(forbidden, [false, false, false, false]);
 });
 
-Deno.test("defineTool preserves its alias and copies optional Action schemas", () => {
+Deno.test("defineTool preserves its alias and snapshots optional Action schemas", () => {
   const tool = defineTool("search", searchAction, {
     name: "Search",
     description: "Search indexed documents.",
@@ -80,8 +80,8 @@ Deno.test("defineTool preserves its alias and copies optional Action schemas", (
   assertEquals(inferredName, "Search");
   assertEquals(inferredInputSchema, inputSchema);
   assertEquals(inferredOutputSchema, outputSchema);
-  assert(tool.inputSchema === searchAction.inputSchema);
-  assert(tool.outputSchema === searchAction.outputSchema);
+  assert(tool.inputSchema !== searchAction.inputSchema);
+  assert(tool.outputSchema !== searchAction.outputSchema);
   assertEquals(Object.keys(tool), [
     "action",
     "name",
@@ -92,8 +92,96 @@ Deno.test("defineTool preserves its alias and copies optional Action schemas", (
     "metadata",
   ]);
   assert(Object.isFrozen(tool));
+  assert(Object.isFrozen(tool.inputSchema));
+  assert(Object.isFrozen(tool.inputSchema?.properties));
+  assert(Object.isFrozen(tool.outputSchema));
+  assert(Object.isFrozen(tool.outputSchema?.properties));
   assert(Object.isFrozen(tool.history));
   assert(Object.isFrozen(tool.metadata));
+});
+
+Deno.test("defineTool isolates schema and metadata mutations deeply", () => {
+  const mutableInput = {
+    type: "object",
+    properties: { query: { type: "string" } },
+  };
+  const mutableOutput = {
+    type: "object",
+    properties: { answer: { type: "string" } },
+  };
+  const mutableMetadata = { provider: { id: "original" } };
+  const action = defineAction({
+    id: "search.mutable",
+    inputSchema: mutableInput as ActionSchema,
+    outputSchema: mutableOutput as ActionSchema,
+    execute() {
+      return { answer: "ok" };
+    },
+  });
+  const tool = defineTool("mutableSearch", action, {
+    name: "Mutable search",
+    description: "Prove Resource isolation.",
+    metadata: mutableMetadata,
+  });
+
+  mutableInput.properties.query.type = "number";
+  mutableOutput.properties.answer.type = "boolean";
+  mutableMetadata.provider.id = "mutated";
+  assertEquals(tool.inputSchema?.properties?.query, { type: "string" });
+  assertEquals(tool.outputSchema?.properties?.answer, { type: "string" });
+  assertEquals(tool.metadata, { provider: { id: "original" } });
+  assert(Object.isFrozen(tool.inputSchema?.properties?.query));
+  assert(Object.isFrozen(tool.outputSchema?.properties?.answer));
+  assert(Object.isFrozen((tool.metadata as { provider: object }).provider));
+});
+
+Deno.test("defineTool rejects non-data schema and metadata graphs", () => {
+  const cycle: Record<string, unknown> = {};
+  cycle.self = cycle;
+  class ClientHandle {}
+  const unsafe = [
+    () => "client",
+    new ClientHandle(),
+    new Uint8Array([1, 2, 3]),
+    cycle,
+  ];
+  for (const candidate of unsafe) {
+    const action = {
+      id: "search.unsafe",
+      inputSchema: { type: "object", nested: candidate },
+      execute() {},
+    } as never;
+    assertThrows(
+      () =>
+        defineTool("unsafeSearch", action, {
+          name: "Unsafe search",
+          description: "Reject unsafe schema data.",
+        }),
+      TypeError,
+    );
+    assertThrows(
+      () =>
+        defineTool("unsafeSearch", searchAction, {
+          name: "Unsafe search",
+          description: "Reject unsafe metadata.",
+          metadata: { nested: candidate },
+        }),
+      TypeError,
+    );
+  }
+  const outputAction = {
+    id: "search.unsafe-output",
+    outputSchema: { type: "object", nested: new Uint8Array([1]) },
+    execute() {},
+  } as never;
+  assertThrows(
+    () =>
+      defineTool("unsafeOutput", outputAction, {
+        name: "Unsafe output",
+        description: "Reject unsafe output schema data.",
+      }),
+    TypeError,
+  );
 });
 
 Deno.test("defineTool omits schemas when its Action omits them", () => {

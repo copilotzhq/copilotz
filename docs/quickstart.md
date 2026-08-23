@@ -6,41 +6,49 @@ infrastructure.
 
 ```ts
 import { createCopilotz } from "jsr:@copilotz/copilotz@^0.61.0";
-import { core } from "jsr:@copilotz/copilotz@^0.61.0/core";
+import { core, corePlugin } from "jsr:@copilotz/copilotz@^0.61.0/core";
 
 const namespace = "acme";
 const app = await createCopilotz({
   namespace,
   database: { url: ":memory:" },
-  context: {
+  plugins: [corePlugin],
+  resources: {
     agents: {
       support: {
         id: "support",
         name: "Support",
         role: "Answer clearly and use tools when useful.",
+        models: { generate: "default" },
         capabilities: {},
-        runtime: {
-          provider: "openai",
-          model: "gpt-5-mini",
-          apiKey,
-        },
       },
     },
+    models: {
+      default: { adapter: "default", model: "gpt-5-mini" },
+    },
   },
+  adapters: { llm: { default: myLlmAdapter } },
 });
 
-await app.conversation.createThread({
-  namespace,
+const collections = app.collections.withScope({ namespace });
+await Promise.all([
+  collections.participant.create({
+    id: "user-1",
+    externalId: "user-1",
+    participantType: "human",
+  }),
+  collections.participant.create({
+    id: "support-1",
+    externalId: "support",
+    participantType: "agent",
+    agentId: "support",
+  }),
+]);
+await collections.thread.create({
   id: "thread-1",
-  participants: [
-    { id: "user-1", externalId: "user-1", participantType: "human" },
-    {
-      id: "support-1",
-      externalId: "support",
-      participantType: "agent",
-      agentId: "support",
-    },
-  ],
+  status: "active",
+  metadata: {},
+  participantIds: ["user-1", "support-1"],
 });
 
 const sent = await app.send(core.message({
@@ -56,7 +64,9 @@ for await (const output of app.observe()) {
 }
 await sent.done;
 
-const messages = await app.conversation.listMessages(namespace, "thread-1");
+const messages = await collections.message.queries.history({
+  threadId: "thread-1",
+});
 const answer = messages.at(-1);
 if (answer) {
   console.log(
@@ -72,54 +82,68 @@ await app.shutdown();
 1. The user message and its canonical content were committed with a
    `message.created` event.
 2. Matching durable processors received sparse delivery obligations.
-3. Oxian executed the text workflow. Provider attempts, tool executions, and
-   public output became graph records and semantic events.
+3. Oxian executed the text workflow. LLM and Tool Actions emitted their ordinary
+   durable lifecycle Events, while public output became a Message graph record.
 4. `run.done` settled only after the message's causal delivery scope completed.
 
 ## Add a plugin
 
-Use plugins for reusable packages and explicit top-level context for
+Use plugins for reusable packages and explicit Resource or Adapter overlays for
 application-local values.
 
 ```ts
+import { defineAction } from "jsr:@copilotz/copilotz@^0.61.0/actions";
+import { corePlugin } from "jsr:@copilotz/copilotz@^0.61.0/core";
 import { definePlugin } from "jsr:@copilotz/copilotz@^0.61.0/plugins";
+import { defineTool } from "jsr:@copilotz/copilotz@^0.61.0/tools";
+
+const lookupCustomer = defineAction({
+  id: "acme.customer.lookup",
+  inputSchema: {
+    type: "object",
+    properties: { id: { type: "string" } },
+    required: ["id"],
+  },
+  execute: async (input: Readonly<{ id: string }>) =>
+    await lookupCustomerById(input.id),
+});
+
+const lookupCustomerTool = defineTool("lookup_customer", lookupCustomer, {
+  name: "Lookup customer",
+  description: "Fetch a customer by ID.",
+});
 
 const customerPlugin = definePlugin({
   id: "@acme/customer-support",
   version: "1.0.0",
-  tools: [{
-    id: "lookup_customer",
-    key: "lookup_customer",
-    name: "Lookup customer",
-    description: "Fetch a customer by ID.",
-    inputSchema: {
-      type: "object",
-      properties: { id: { type: "string" } },
-      required: ["id"],
-    },
-    execute: async (input) => lookupCustomer(input),
-  }],
+  actions: { lookup_customer: lookupCustomer },
+  resources: { tools: { lookup_customer: lookupCustomerTool } },
 });
 
 const app = await createCopilotz({
   namespace: "acme",
-  plugins: [customerPlugin],
-  context: {
+  plugins: [corePlugin, customerPlugin],
+  resources: {
     agents: {
       support: {
         id: "support",
         name: "Support",
         role: "Customer support",
+        models: { generate: "default" },
         capabilities: { tools: ["lookup_customer"] },
       },
     },
+    models: {
+      default: { adapter: "default", model: "gpt-5-mini" },
+    },
   },
+  adapters: { llm: { default: myLlmAdapter } },
 });
 ```
 
-Installing a tool and granting it are separate. Omitted capabilities grant
-nothing; see [agent capabilities](agent-capabilities.md) for exact and explicit
-all-resource selections.
+Installing a Tool Resource and its matching Action is separate from granting its
+Action alias to an Agent. Omitted capabilities grant nothing; see
+[agent capabilities](agent-capabilities.md) for exact alias selections.
 
 Next: [plugins and processors](plugins-and-processors.md) or
 [persistent/realtime attachments](realtime-attachments.md).

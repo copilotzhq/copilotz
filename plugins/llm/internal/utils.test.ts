@@ -8,6 +8,7 @@ import {
   filterTaggedControlTokensStreaming,
   formatMessages,
   formatMessagesDetailed,
+  generateToolSystemPromptVariant,
   getLocalStopSequences,
   parseToolCallsFromResponse,
   processStream,
@@ -94,6 +95,29 @@ Deno.test("formatMessages keeps deterministic system and tool ordering", () => {
   assertEquals(String(first[0].content).endsWith("Stable context"), true);
   assertEquals(JSON.stringify(first).includes("turn_control"), false);
   assertEquals(JSON.stringify(first).includes("prompt_cache"), false);
+});
+
+Deno.test("tool prompts describe sequential JSON-lines without retired syntax", () => {
+  const tools = [{
+    type: "function" as const,
+    function: {
+      name: "lookup",
+      description: "Look up one record.",
+      inputTypes: "{ id: string }",
+    },
+  }];
+
+  for (const variant of ["baseline", "strict-minimal"] as const) {
+    const prompt = generateToolSystemPromptVariant(tools, variant);
+    assertEquals(
+      prompt.includes("Calls run sequentially in line order."),
+      true,
+    );
+    assertEquals(prompt.toLowerCase().includes("parallel"), false);
+    assertEquals(prompt.includes(" | "), false);
+    assertEquals(prompt.includes("jq"), false);
+    assertEquals(prompt.includes("batch_id"), false);
+  }
 });
 
 Deno.test("formatMessages emits current-agent tool results as the following user turn", () => {
@@ -198,7 +222,7 @@ Deno.test("formatMessages preserves graph chronology across interleaved tool cyc
   assertEquals(formatted[2]?.senderId, undefined);
 });
 
-Deno.test("formatMessages batches adjacent parallel results without moving peer text", () => {
+Deno.test("formatMessages preserves recorded tool result order without batch attributes", () => {
   const formatted = formatMessages({
     messages: [
       {
@@ -210,17 +234,11 @@ Deno.test("formatMessages batches adjacent parallel results without moving peer 
             id: "call-1",
             tool: { id: "first" },
             args: "{}",
-            batchId: "batch-1",
-            batchSize: 2,
-            batchIndex: 0,
           },
           {
             id: "call-2",
             tool: { id: "second" },
             args: "{}",
-            batchId: "batch-1",
-            batchSize: 2,
-            batchIndex: 1,
           },
         ],
       },
@@ -239,9 +257,6 @@ Deno.test("formatMessages batches adjacent parallel results without moving peer 
           args: "{}",
           output: { second: true },
           status: "completed",
-          batchId: "batch-1",
-          batchSize: 2,
-          batchIndex: 1,
         }],
       },
       {
@@ -254,9 +269,6 @@ Deno.test("formatMessages batches adjacent parallel results without moving peer 
           args: "{}",
           output: { first: true },
           status: "completed",
-          batchId: "batch-1",
-          batchSize: 2,
-          batchIndex: 0,
         }],
       },
     ],
@@ -264,20 +276,20 @@ Deno.test("formatMessages batches adjacent parallel results without moving peer 
 
   assertEquals(formatted.map((message) => message.role), ["assistant", "user"]);
   const callTurn = formatted[0]?.content as string;
-  assertEquals(callTurn.includes('<tool_calls batch_id="batch-1">'), true);
-  assertEquals(callTurn.includes("tool_call_id"), false);
+  assertEquals(callTurn.includes("<tool_calls>"), true);
+  assertEquals(callTurn.includes("batch_"), false);
   const resultTurn = formatted[1]?.content as string;
   assertEquals(
-    (resultTurn.match(/<tool_results batch_id="batch-1">/g) ?? []).length,
-    1,
+    (resultTurn.match(/<tool_results>/g) ?? []).length,
+    2,
   );
-  assertEquals(resultTurn.includes("tool_call_id"), false);
+  assertEquals(resultTurn.includes("batch_"), false);
   assertEquals(
-    resultTurn.indexOf('"first":true') < resultTurn.indexOf('"second":true'),
+    resultTurn.indexOf('"second":true') < resultTurn.indexOf('"first":true'),
     true,
   );
   assertEquals(
-    resultTurn.indexOf("[North]") < resultTurn.indexOf('"first":true'),
+    resultTurn.indexOf("[North]") < resultTurn.indexOf('"second":true'),
     true,
   );
 });
@@ -821,49 +833,64 @@ Deno.test("parseToolCallsFromResponse only accepts strict JSON-lines calls", () 
     ).toolCalls.length,
     0,
   );
+  for (const attribute of ["batch_id", "batch_size", "batch_index"]) {
+    assertEquals(
+      parseToolCallsFromResponse(
+        `<tool_calls>\n{"name":"known","arguments":{},"${attribute}":"retired"}\n</tool_calls>`,
+        ["known"],
+      ).toolCalls.length,
+      0,
+    );
+  }
 });
 
-Deno.test("parseToolCallsFromResponse parses sequential pipelines and parallel lines", () => {
+Deno.test("parseToolCallsFromResponse preserves JSON-line provider order", () => {
   const response =
-    '<tool_calls>\n{"name":"extract","arguments":{"source":"crm"}} | {"jq":".items | map({id})"} | {"name":"analyze","arguments":{"mode":"deep"}}\n{"name":"independent","arguments":{}}\n</tool_calls>';
+    '<tool_calls>\n{"name":"extract","arguments":{"source":"crm"}}\n{"name":"analyze","arguments":{"mode":"deep"}}\n{"name":"save","arguments":{"notify":true}}\n</tool_calls>';
 
   const parsed = parseToolCallsFromResponse(response);
 
-  assertEquals(parsed.toolCalls.length, 2);
-  assertEquals(parsed.toolCalls[0].tool.id, "extract");
-  assertEquals(parsed.toolCalls[0].pipeline?.stages.length, 3);
-  assertEquals(parsed.toolCalls[0].pipeline?.stages[1], {
-    type: "jq",
-    filter: ".items | map({id})",
-  });
-  assertEquals(parsed.toolCalls[1].tool.id, "independent");
-  assertEquals(parsed.toolCalls[1].pipeline, undefined);
+  assertEquals(parsed.toolCalls.map((call) => call.tool.id), [
+    "extract",
+    "analyze",
+    "save",
+  ]);
+  assertEquals(parsed.toolCalls.map((call) => JSON.parse(call.args)), [
+    { source: "crm" },
+    { mode: "deep" },
+    { notify: true },
+  ]);
 });
 
-Deno.test("pipeline tool calls rehydrate to canonical pipe syntax", () => {
-  const parsed = parseToolCallsFromResponse(
-    '<tool_calls>\n{"name":"extract","arguments":{}} | {"jq":".items[] | select(.active) | {item:.}"} | {"name":"save","arguments":{"notify":true}}\n</tool_calls>',
-  );
-
-  const block = buildToolCallsBlock(parsed.toolCalls);
+Deno.test("recorded tool calls rehydrate as ordered ordinary JSON lines", () => {
+  const block = buildToolCallsBlock([
+    { id: "call-1", tool: { id: "extract" }, args: "{}" },
+    {
+      id: "call-2",
+      tool: { id: "save" },
+      args: '{"notify":true}',
+    },
+  ]);
   const reparsed = parseToolCallsFromResponse(block);
 
-  assertEquals(reparsed.toolCalls.length, 1);
-  assertEquals(
-    reparsed.toolCalls[0].pipeline?.stages.map((stage) => stage.type),
-    ["tool", "jq", "tool"],
-  );
-  assertEquals(
-    reparsed.toolCalls[0].pipeline?.stages[1],
-    { type: "jq", filter: ".items[] | select(.active) | {item:.}" },
-  );
+  assertEquals(block.includes(" | "), false);
+  assertEquals(block.includes("batch_"), false);
+  assertEquals(reparsed.toolCalls.map((call) => call.tool.id), [
+    "extract",
+    "save",
+  ]);
 });
 
-Deno.test("parseToolCallsFromResponse rejects jq as the first pipeline stage", () => {
-  const parsed = parseToolCallsFromResponse(
-    '<tool_calls>\n{"jq":"."} | {"name":"save","arguments":{}}\n</tool_calls>',
+Deno.test("parseToolCallsFromResponse rejects pipe and jq syntax", () => {
+  const piped = parseToolCallsFromResponse(
+    '<tool_calls>\n{"name":"extract","arguments":{}} | {"name":"save","arguments":{}}\n</tool_calls>',
   );
-  assertEquals(parsed.toolCalls.length, 0);
+  const transformed = parseToolCallsFromResponse(
+    '<tool_calls>\n{"jq":"."}\n</tool_calls>',
+  );
+
+  assertEquals(piped.toolCalls.length, 0);
+  assertEquals(transformed.toolCalls.length, 0);
 });
 
 Deno.test("parseToolCallsFromResponse closes truncated JSON-line containers", () => {
@@ -1133,7 +1160,7 @@ Deno.test("canonical tool draft tracker preserves escaped JSON across chunks", (
   assertEquals(deltas.at(-1)?.toolCallId, "call-1");
 });
 
-Deno.test("canonical tool draft tracker handles calls, pipelines, and private names", () => {
+Deno.test("canonical tool draft tracker handles ordered calls and private names", () => {
   const deltas: Array<{
     callIndex: number;
     toolName: string;
@@ -1150,7 +1177,7 @@ Deno.test("canonical tool draft tracker handles calls, pipelines, and private na
     [
       '{"name":"unknown","arguments":{}}',
       '{"name":"search","arguments":{"q":"one"}}',
-      '{"name":"terminal","arguments":{"stdin":"pwd"}} | {"jq":"{cwd:.stdout}"}',
+      '{"name":"terminal","arguments":{"stdin":"pwd"}}',
     ].join("\n"),
     "content",
   );

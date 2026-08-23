@@ -164,13 +164,12 @@ hub and attachment outputs, carry their logical attempt or execution as stream
 identity, and are never inserted into durable event storage. Final messages and
 tool results remain asset-backed durable state.
 
-An ordinary tool may return `WorkflowToolResult` when it produces one or more
-files or media bodies. Its `output` remains the bounded result used for model
-history and live `result` projection, while `attachments` are prepared and
-committed as canonical content on the tool execution. The public tool-result
-message reuses those refs. OpenAPI resources can create the same result
-declaratively with `API.responseAssets`, mapping response fields for base64
-data, media type, and optional filename.
+An Action that produces files or media publishes the bodies through
+`context.content` and returns ordinary JSON containing canonical `ContentRef`
+values. The Action lifecycle and public Tool-result Message reuse those refs;
+body bytes never enter lifecycle JSON. OpenAPI definitions can request the same
+promotion declaratively with `API.responseAssets`, mapping response fields for
+base64 data, media type, optional filename, and the output ref field.
 
 Input attachments follow the inverse path. Transcript projection emits a compact
 identity descriptor before each attachment, including both `assetId` and a
@@ -181,13 +180,11 @@ import it without another upload.
 
 Tests now prove user → agent → tool → same agent → public final output, one
 external tool execution after recovery, explicit provider fallback children,
-concurrent tools, and one post-batch continuation. The plugin is exported from
-the root and `@copilotz/copilotz/{agents,llm,tools,events}` package surfaces.
+concurrent tool calls, deterministic sequential plans, and one post-plan
+continuation. Core, LLM, and Tools are available through their explicit package
+subpaths.
 
-The public `createCopilotz()` adapter and bundled core catalog still retain a
-legacy composition path while downstream migration gates remain. The
-event-native vertical already owns prompt/history hooks, API/MCP tool
-generation, schema diagnostics and pipelines, usage integration, live frames,
-and built-in provider packaging. Supersession policy and final downstream
-cutover remain explicit parity work; the equivalent legacy workflow is deleted
-only after those gates are green.
+The event-native path is the sole execution path. Core invokes native Actions
+through composed aliases, while each Tool Resource is only its model-facing
+presentation. OpenAPI and MCP factories finish discovery before composition and
+contribute the same Action-plus-Resource shape as static integrations.

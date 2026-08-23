@@ -3,7 +3,7 @@ import { createContentPreparer } from "@copilotz/copilotz/content";
 import {
   extractToolResultAssets,
   type ToolResultAssetError,
-} from "./result-assets.ts";
+} from "./legacy-tool-result-assets.ts";
 
 function fixture() {
   let id = 0;

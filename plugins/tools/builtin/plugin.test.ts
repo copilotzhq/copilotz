@@ -1,4 +1,10 @@
-import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
+import {
+  assert,
+  assertEquals,
+  assertExists,
+  assertRejects,
+  assertThrows,
+} from "@std/assert";
 import {
   type CopilotzEngine,
   createCopilotzEngine,
@@ -17,13 +23,10 @@ import {
   type ProcessorContext,
   type ProcessorEvent,
 } from "@copilotz/copilotz/plugins";
-import { coreCollectionsPlugin } from "@copilotz/copilotz/core";
-import type {
-  WorkflowTool,
-  WorkflowToolExecutionContext,
-} from "../internal/types.ts";
 import { BUILT_IN_CORE_TOOL_IDS, createBuiltInToolsPlugin } from "./plugin.ts";
 import type { AgentResource } from "@copilotz/copilotz/core";
+import type { ActionCallOptions } from "@copilotz/copilotz/actions";
+import type { ToolResource } from "../contracts.ts";
 import {
   createTestDatabase,
   type TestDatabase,
@@ -42,6 +45,14 @@ const agent: AgentResource = {
   models: {},
   instructions: "Exercise built-in tools.",
   capabilities: { skills: ["contract-skill"] },
+};
+
+const secondaryAgent: AgentResource = {
+  id: "agent-b",
+  name: "Agent B",
+  role: "assistant",
+  models: {},
+  instructions: "Exercise atomic thread creation.",
 };
 
 const skill = defineInlineSkill({
@@ -89,11 +100,12 @@ async function createFixture(
     id: "test.core-tools.resources",
     version: "1.0.0",
     processors: { runner },
-    resources: { agents: { [agent.id]: agent } },
+    resources: {
+      agents: { [agent.id]: agent, [secondaryAgent.id]: secondaryAgent },
+    },
   });
   const registry = await createPluginRegistry({
     plugins: [
-      coreCollectionsPlugin,
       builtIns,
       createSkillsPlugin({
         id: "test.core-tools.skills",
@@ -175,64 +187,57 @@ async function closeFixture(fixture: Fixture): Promise<void> {
   await fixture.db.close();
 }
 
-async function toolContext(
+function actionOptions(
   context: ProcessorContext,
   sourceEvent: ProcessorEvent,
   id: string,
-): Promise<WorkflowToolExecutionContext> {
-  const execution = Object.freeze({
-    id,
-    namespace: context.namespace,
-    threadId: "thread-a",
-    participantId: "agent-participant",
-    agentId: agent.id,
-    toolCallId: `call:${id}`,
-    tool: { id: "fixture", name: "Fixture" },
-    metadata: {},
-  });
+): ActionCallOptions {
   return {
-    namespace: context.namespace,
-    correlationId: sourceEvent.correlationId,
-    idempotencyKey: context.operationKey,
-    execution,
-    processor: context,
-    threadId: "thread-a",
-    toolExecutionId: id,
-    toolCallId: `call:${id}`,
-    senderId: agent.id,
-    senderType: "agent",
-    userExternalId: "user-a",
-    agent,
-    agents: [agent],
-    tools: Object.values(context.resources.tools ?? {}).filter(
-      (value): value is WorkflowTool => !!value,
-    ),
-    collections: context.collections,
-    emitOutput: () => Promise.resolve(),
-    cancelled: false,
+    operationKey: `built-in-test:${id}`,
+    identity: { correlationId: sourceEvent.correlationId },
+    metadata: {
+      threadId: "thread-a",
+      agentId: agent.id,
+      agentParticipantId: "agent-participant",
+      initiatorParticipantId: "user-participant",
+    },
   };
 }
 
-function tool(
+async function invoke(
   context: ProcessorContext,
   id: string,
-): WorkflowTool {
-  const found = context.resources.tools?.[id];
-  if (!found) throw new Error(`Unknown tool '${id}'.`);
-  return found as WorkflowTool;
+  input: unknown,
+  sourceEvent: ProcessorEvent,
+): Promise<unknown> {
+  const found = context.actions[id] as
+    | ((input: unknown, options?: ActionCallOptions) => Promise<unknown>)
+    | undefined;
+  if (!found) throw new Error(`Unknown Action '${id}'.`);
+  return await found(input, actionOptions(context, sourceEvent, id));
 }
 
 Deno.test("built-in tools exclude optional plugin-owned skill tools", () => {
   const plugin = createBuiltInToolsPlugin();
   const tools = plugin.resources.tools as
-    | Readonly<Record<string, WorkflowTool>>
+    | Readonly<Record<string, ToolResource>>
     | undefined;
   assertEquals(Object.keys(tools ?? {}), [...BUILT_IN_CORE_TOOL_IDS]);
   assertEquals(
-    Object.values(tools ?? {}).map((value) => value.key),
+    Object.values(tools ?? {}).map((value) => value.action),
     [...BUILT_IN_CORE_TOOL_IDS],
   );
+  assertEquals(Object.keys(plugin.actions), [...BUILT_IN_CORE_TOOL_IDS]);
+  assert(Object.values(tools ?? {}).every((value) => !("execute" in value)));
   assert(!Object.hasOwn(tools ?? {}, "load_skill"));
+  assertThrows(
+    () =>
+      createBuiltInToolsPlugin({
+        include: ["wait", "wait"],
+      }),
+    TypeError,
+    "duplicate IDs",
+  );
 });
 
 Deno.test("asset, skill, clock, and wait tools use typed capabilities", async () => {
@@ -246,56 +251,71 @@ Deno.test("asset, skill, clock, and wait tools use typed capabilities", async ()
   }));
   try {
     const result = await fixture.run(async (processor, sourceEvent) => {
-      const ctx = await toolContext(
-        processor,
-        sourceEvent,
-        "execution-built-ins",
+      const largeBody = new TextEncoder().encode(
+        "large-asset-marker:".repeat(32_768),
       );
-      const saved = await tool(processor, "save_asset").execute!(
-        {
-          mimeType: "text/plain",
-          dataBase64: btoa("canonical body"),
-        },
-        ctx,
+      const published = await processor.content.publish({
+        mediaType: "text/plain",
+        body: largeBody,
+      }, { operationKey: "built-in-test:large-asset" });
+      const saved = await invoke(
+        processor,
+        "save_asset",
+        { assetId: published.id },
+        sourceEvent,
       ) as Record<string, unknown>;
-      const fetched = await tool(processor, "fetch_asset").execute!(
-        { assetId: saved.assetId, format: "base64" },
-        ctx,
+      const fetched = await invoke(
+        processor,
+        "fetch_asset",
+        { assetId: saved.assetId },
+        sourceEvent,
       ) as Record<string, unknown>;
 
-      const listed = await tool(processor, "list_skills").execute!(
+      const listed = await invoke(
+        processor,
+        "list_skills",
         {},
-        ctx,
+        sourceEvent,
       ) as Record<string, unknown>;
-      const loaded = await tool(processor, "load_skill").execute!(
+      const loaded = await invoke(
+        processor,
+        "load_skill",
         { name: "contract-skill" },
-        ctx,
+        sourceEvent,
       ) as Record<string, unknown>;
-      const resource = await tool(processor, "read_skill_resource").execute!(
+      const resource = await invoke(
+        processor,
+        "read_skill_resource",
         { skill: "contract-skill", path: "references/guide.md" },
-        ctx,
+        sourceEvent,
       ) as Record<string, unknown>;
       await assertRejects(
         async () =>
-          await tool(processor, "read_skill_resource").execute!(
+          await invoke(
+            processor,
+            "read_skill_resource",
             { skill: "contract-skill", path: "../secret" },
-            ctx,
+            sourceEvent,
           ),
         TypeError,
       );
-      const clock = await tool(processor, "get_current_time").execute!(
+      const clock = await invoke(
+        processor,
+        "get_current_time",
         { format: "iso", timezone: "UTC" },
-        ctx,
+        sourceEvent,
       ) as Record<string, unknown>;
-      const waited = await tool(processor, "wait").execute!(
+      const waited = await invoke(
+        processor,
+        "wait",
         { seconds: 0.25 },
-        ctx,
+        sourceEvent,
       );
       return { saved, fetched, listed, loaded, resource, clock, waited };
     });
 
     assertEquals(result.saved.mimeType, "text/plain");
-    assertEquals(atob(String(result.fetched.base64)), "canonical body");
+    assertEquals(result.fetched.content, result.saved.content);
     assertEquals(result.listed.count, 1);
     assertEquals(result.loaded.content, "Follow the contract.");
     assertEquals(result.resource.content, "Contract guide");
@@ -305,7 +325,9 @@ Deno.test("asset, skill, clock, and wait tools use typed capabilities", async ()
     const assets = await fixture.engine.events.list({ namespace: "tenant-a" });
     const assetEvent = assets.find((event) => event.type === "asset.created");
     assertExists(assetEvent);
-    assert(!JSON.stringify(assetEvent).includes("canonical body"));
+    const durable = JSON.stringify(assets);
+    assert(!durable.includes("large-asset-marker"));
+    assert(!durable.includes("dataBase64"));
   } finally {
     await closeFixture(fixture);
   }
@@ -315,52 +337,77 @@ Deno.test("memory and thread tools mutate domain state idempotently", async () =
   const fixture = await createFixture(createBuiltInToolsPlugin({
     now: () => new Date("2026-08-06T12:00:00.000Z"),
   }));
+  const childDeclaration = {
+    id: "thread:separate-research",
+    externalId: "separate-research",
+    name: "Separate research",
+    participants: [agent.id],
+    initialMessage: "Investigate independently.",
+    mode: "background",
+    description: "A public child conversation",
+    summary: "Independent research work",
+    metadata: { purpose: "research" },
+  } as const;
   try {
     const result = await fixture.run(async (processor, sourceEvent) => {
-      const ctx = await toolContext(
+      await invoke(
         processor,
-        sourceEvent,
-        "execution-memory",
-      );
-      await tool(processor, "update_my_memory").execute!(
+        "update_my_memory",
         { key: "architecture", value: "event-native", operation: "set" },
-        ctx,
+        sourceEvent,
       );
-      const first = await tool(processor, "update_user_memory").execute!(
+      const first = await invoke(
+        processor,
+        "update_user_memory",
         { content: "Prefers factory APIs", category: "preference" },
-        ctx,
+        sourceEvent,
       );
-      const replay = await tool(processor, "update_user_memory").execute!(
-        { content: "Prefers factory APIs", category: "preference" },
-        ctx,
+      const separate = await invoke(
+        processor,
+        "create_thread",
+        childDeclaration,
+        sourceEvent,
       );
-      const separate = await tool(processor, "create_thread").execute!(
-        {
-          name: "Separate research",
-          participants: [agent.id],
-          initialMessage: "Investigate independently.",
-          mode: "background",
-          description: "A public child conversation",
-        },
-        ctx,
+      const separateReplay = await invoke(
+        processor,
+        "create_thread",
+        childDeclaration,
+        sourceEvent,
       );
-      const separateReplay = await tool(processor, "create_thread").execute!(
-        {
-          name: "Separate research",
-          participants: [agent.id],
-          initialMessage: "Investigate independently.",
-          mode: "background",
-          description: "A public child conversation",
-        },
-        ctx,
-      );
-      await tool(processor, "end_thread").execute!(
+      await invoke(
+        processor,
+        "end_thread",
         { summary: "Core tool migration complete" },
-        ctx,
+        sourceEvent,
       );
-      return { first, replay, separate, separateReplay };
+      return { first, separate, separateReplay };
     });
     assertEquals(result.separate, result.separateReplay);
+    const recovered = await fixture.run(async (processor, sourceEvent) =>
+      await invoke(processor, "create_thread", childDeclaration, sourceEvent)
+    );
+    assertEquals(recovered, result.separate);
+    for (
+      const mismatch of [
+        { mode: "immediate" },
+        { externalId: "different-external-id" },
+        { description: "Different description" },
+        { summary: "Different summary" },
+        { metadata: { purpose: "different" } },
+      ] as const
+    ) {
+      await assertRejects(
+        () =>
+          fixture.run(async (processor, sourceEvent) =>
+            await invoke(processor, "create_thread", {
+              ...childDeclaration,
+              ...mismatch,
+            }, sourceEvent)
+          ),
+        Error,
+        "does not match the requested declaration",
+      );
+    }
 
     const agentParticipant = await projectParticipantById(
       fixture.engine,
@@ -385,24 +432,28 @@ Deno.test("memory and thread tools mutate domain state idempotently", async () =
       items: unknown[];
     }).items;
     assertEquals(items.length, 1);
-    assertEquals((items[0] as { id: string }).id, "memory:execution-memory");
+    assert((items[0] as { id: string }).id.startsWith("memory:"));
     assertEquals(thread?.status, "archived");
     assertEquals(thread?.metadata.summary, "Core tool migration complete");
     const child = await projectThreadById(
       fixture.engine,
       "tenant-a",
-      "thread:execution-memory",
+      String((result.separate as { threadId: string }).threadId),
     );
     assertEquals(child?.parentThreadId, "thread-a");
     assertEquals(child?.metadata.name, "Separate research");
     assertEquals(child?.metadata.mode, "background");
+    assertEquals(child?.externalId, "separate-research");
+    assertEquals(child?.description, "A public child conversation");
+    assertEquals(child?.metadata.summary, "Independent research work");
+    assertEquals(child?.metadata.purpose, "research");
     assertEquals(child?.participants.map((item) => item.id), [
       "agent-participant",
     ]);
     const childMessages = await projectMessages(
       fixture.engine,
       "tenant-a",
-      "thread:execution-memory",
+      String((result.separate as { threadId: string }).threadId),
     );
     assertEquals(childMessages.length, 1);
     assertEquals(
@@ -424,6 +475,68 @@ Deno.test("memory and thread tools mutate domain state idempotently", async () =
     assertEquals(
       events.filter((event) => event.type === "thread.created").length,
       2,
+    );
+  } finally {
+    await closeFixture(fixture);
+  }
+});
+
+Deno.test("create_thread fails closed on an initial Message conflict without partial graph writes", async () => {
+  const fixture = await createFixture();
+  const namespace = "tenant-a";
+  const threadId = "thread:atomic-conflict";
+  const messageId = `message:${threadId}:initial`;
+  try {
+    const messages = fixture.engine.collections.get("message");
+    const threads = fixture.engine.collections.get("thread");
+    assertExists(messages);
+    assertExists(threads);
+    const conflictThreadId = "thread:conflict-holder";
+    await threads.create({
+      id: conflictThreadId,
+      participantIds: ["user-participant"],
+    }, { namespace });
+    const content = await fixture.engine.content.preparer.prepare(
+      "pre-existing conflict",
+      { namespace, idempotencyKey: "atomic-conflict:content" },
+    );
+    await messages.create({
+      id: messageId,
+      threadId: conflictThreadId,
+      senderId: "user-participant",
+      recipientIds: [],
+      content,
+      metadata: {},
+    }, {
+      namespace,
+      threadId: conflictThreadId,
+      routing: { senderId: "user-participant", recipientIds: [] },
+    });
+
+    await assertRejects(
+      () =>
+        fixture.run(async (processor, sourceEvent) =>
+          await invoke(processor, "create_thread", {
+            id: threadId,
+            name: "Must stay atomic",
+            participants: [secondaryAgent.id],
+            initialMessage: "This must not partially commit.",
+          }, sourceEvent)
+        ),
+      Error,
+      "inconsistent initial-message state",
+    );
+    assertEquals(
+      await projectThreadById(fixture.engine, namespace, threadId),
+      null,
+    );
+    assertEquals(
+      await projectParticipantById(
+        fixture.engine,
+        namespace,
+        `participant:${secondaryAgent.id}`,
+      ),
+      null,
     );
   } finally {
     await closeFixture(fixture);

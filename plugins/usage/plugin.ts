@@ -319,35 +319,29 @@ function toolUsageRecord(
   event: CopilotzEvent,
   initiatedById: string | null,
 ): UsageRecord {
-  const input = record(lifecycle.input);
-  const output = record(lifecycle.output);
+  const metadata = record(lifecycle.metadata);
   const error = record(lifecycle.error);
   const actionRunId = optionalText(lifecycle.actionRunId) ??
-    optionalText(input.id) ?? (event.durable ? event.id : event.correlationId);
+    (event.durable ? event.id : event.correlationId);
   const id = `usage:tool:${actionRunId}`;
-  const tool = record(input.tool);
-  const durationMs = finiteNumber(output.durationMs);
+  const action = optionalText(metadata.action) ?? "unknown";
   return {
     id,
     kind: "tool",
-    resource: optionalText(tool.id) ?? optionalText(tool.name) ?? "unknown",
-    operation: "tool.exec",
-    status: optionalText(output.status) ?? optionalText(lifecycle.status) ??
-      null,
+    resource: action,
+    operation: action,
+    status: optionalText(lifecycle.status) ?? null,
     statusReason: optionalText(error.name) ?? null,
-    threadId: String(input.threadId),
+    threadId: optionalText(metadata.threadId) ?? null,
     eventId: event.durable ? event.id : null,
-    messageId: optionalText(input.messageId) ?? null,
-    agentId: optionalText(input.agentId) ?? null,
+    messageId: optionalText(metadata.triggerMessageId) ?? null,
+    agentId: optionalText(metadata.agentId) ?? null,
     initiatedById,
-    metrics: {
-      calls: 1,
-      ...(durationMs === undefined ? {} : { durationMs }),
-    },
+    metrics: { calls: 1 },
     cost: null,
     dedupeKey: actionRunId,
     occurredAt: event.createdAt,
-    raw: { source: "copilotz" },
+    raw: { source: "core.tool-action" },
   };
 }
 
@@ -383,19 +377,21 @@ function toolUsageProcessor(
   options: CreateUsageWorkflowPluginOptions,
 ): Processor<ProcessorContext> {
   return defineProcessor<ProcessorContext>({
-    id: "copilotz.core.record-tool-usage",
-    on: [
-      { eventType: "copilotz.core.tool.call.completed" },
-      { eventType: "copilotz.core.tool.call.failed" },
-      { eventType: "copilotz.core.tool.call.cancelled" },
-    ],
+    id: "copilotz.usage.record-tool-action",
+    on: ["completed", "failed", "cancelled"].map((status) => ({
+      eventType: "*" as const,
+      data: {
+        status,
+        metadata: { schema: "copilotz.core.tool-action.v1" },
+      },
+    })),
     async handle(event, context) {
       if (!event.durable) return;
       const lifecycle = record(event.data);
-      const input = record(lifecycle.input);
+      const metadata = record(lifecycle.metadata);
       const initiatedById = await participantExternalId(
         context,
-        optionalText(input.initiatorParticipantId),
+        optionalText(metadata.initiatorParticipantId),
       );
       await persistUsage(
         toolUsageRecord(lifecycle, event, initiatedById),

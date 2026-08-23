@@ -3,7 +3,7 @@ import { corePlugin } from "../core/plugin.ts";
 import { schedulesPlugin } from "../schedules/plugin.ts";
 import { dispatchScheduledMessageAction } from "./action.ts";
 import { dispatchScheduledMessageProcessor } from "./processor.ts";
-import { scheduledMessagesTool } from "./tool.ts";
+import { scheduledJobsAction, scheduledJobsToolResource } from "./tool.ts";
 
 export const CORE_SCHEDULES_PLUGIN_ID = "@copilotz/core-schedules";
 export const CORE_SCHEDULES_PLUGIN_VERSION = "0.61.0";
@@ -11,12 +11,13 @@ export const CORE_SCHEDULES_PLUGIN_VERSION = "0.61.0";
 type EmptyMap = Readonly<Record<never, never>>;
 type CoreSchedulesActions = Readonly<{
   dispatchScheduledMessage: typeof dispatchScheduledMessageAction;
+  scheduled_jobs: typeof scheduledJobsAction;
 }>;
 type CoreSchedulesProcessors = Readonly<{
   dispatchScheduledMessage: typeof dispatchScheduledMessageProcessor;
 }>;
 type CoreSchedulesResources = Readonly<{
-  tools: Readonly<{ scheduled_jobs: typeof scheduledMessagesTool }>;
+  tools: Readonly<{ scheduled_jobs: typeof scheduledJobsToolResource }>;
 }>;
 
 /** Core conversation integration over generic due Events. */
@@ -35,11 +36,12 @@ export const coreSchedulesPlugin: CopilotzPlugin<
   plugins: [schedulesPlugin, corePlugin] as const,
   actions: {
     dispatchScheduledMessage: dispatchScheduledMessageAction,
+    scheduled_jobs: scheduledJobsAction,
   },
   processors: {
     dispatchScheduledMessage: dispatchScheduledMessageProcessor,
   },
   resources: {
-    tools: { scheduled_jobs: scheduledMessagesTool },
+    tools: { scheduled_jobs: scheduledJobsToolResource },
   },
 });

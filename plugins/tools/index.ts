@@ -1,6 +1,3 @@
-// The single relocated legacy executor/catalog remains public only until the
-// atomic Action-backed Tool checkpoint deletes that implementation.
-export * from "./internal/index.ts";
 export { defineTool } from "./contracts.ts";
 export type {
   DefinedToolResource,

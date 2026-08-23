@@ -17,9 +17,11 @@ import {
   type ActionCallOptions,
   type ActionContext,
   type ActionDefinition,
+  type ActionSchema,
   defineAction,
   isSettledActionError,
 } from "@copilotz/copilotz/actions";
+import { addFormats, Ajv } from "../../dependencies/ajv.ts";
 import {
   listThreadMessageRecords,
   loadParticipantRecord,
@@ -50,11 +52,7 @@ import {
   type ProcessorContext,
   type ProcessorEvent,
 } from "@copilotz/copilotz/plugins";
-import type {
-  WorkflowTool,
-  WorkflowToolExecutionContext,
-} from "@copilotz/copilotz/tools";
-import { validateToolCall } from "@copilotz/copilotz/tools";
+import { defineTool, type ToolResource } from "@copilotz/copilotz/tools";
 import {
   buildMemoryConsolidationInstruction,
   type MemoryRecordProjection,
@@ -138,10 +136,8 @@ function isMemoryLlmContractError(
     error[memoryLlmContractError] === true;
 }
 
-export type ConsolidateMemoryActionInput = Readonly<{
-  checkpointId: string;
-  proposal: unknown;
-}>;
+/** Model-facing proposal accepted directly by `consolidate_memory`. */
+export type ConsolidateMemoryActionInput = unknown;
 
 export type ConsolidateMemoryActionResult = Readonly<
   & {
@@ -162,7 +158,7 @@ export type MaintainMemoryActionResult = Readonly<{
 }>;
 
 export type MemoryActionCallers = Readonly<{
-  consolidateMemory(
+  consolidate_memory(
     input: ConsolidateMemoryActionInput,
     options?: ActionCallOptions,
   ): Promise<ConsolidateMemoryActionResult>;
@@ -170,6 +166,16 @@ export type MemoryActionCallers = Readonly<{
     input: MaintainMemoryActionInput,
     options?: ActionCallOptions,
   ): Promise<MaintainMemoryActionResult>;
+  list_knowledge_spaces(
+    input: unknown,
+    options?: ActionCallOptions,
+  ): Promise<unknown>;
+  search_memory(input: unknown, options?: ActionCallOptions): Promise<unknown>;
+  inspect_memory(input: unknown, options?: ActionCallOptions): Promise<unknown>;
+  set_memory_status(
+    input: unknown,
+    options?: ActionCallOptions,
+  ): Promise<unknown>;
   callLlm(
     input: LlmCallInput,
     options?: ActionCallOptions,
@@ -214,6 +220,37 @@ function nonNegativeInteger(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0
     ? Math.floor(value)
     : fallback;
+}
+
+type AjvValidator = ((value: unknown) => boolean) & {
+  errors?: readonly unknown[] | null;
+};
+
+const memoryKindValidators = new WeakMap<object, AjvValidator>();
+// deno-lint-ignore no-explicit-any
+const memoryKindAjv = new (Ajv as any)({
+  strict: false,
+  allErrors: true,
+  useDefaults: false,
+});
+// deno-lint-ignore no-explicit-any
+(addFormats as any)(memoryKindAjv);
+
+function validateMemoryKindData(
+  schema: object,
+  value: unknown,
+  label: string,
+): void {
+  let validator = memoryKindValidators.get(schema);
+  if (!validator) {
+    validator = memoryKindAjv.compile(schema) as AjvValidator;
+    memoryKindValidators.set(schema, validator);
+  }
+  if (validator(structuredClone(value))) return;
+  const details = memoryKindAjv.errorsText(validator.errors ?? [], {
+    separator: "; ",
+  });
+  throw new TypeError(`${label}: ${details}`);
 }
 
 function normalizedConfig(
@@ -772,24 +809,24 @@ function memoryKinds(
   );
 }
 
-type MemoryWorkflowToolContext =
-  & Omit<
-    WorkflowToolExecutionContext,
-    "processor"
-  >
-  & Readonly<{ processor: MemoryProcessorContext }>;
-
-function workflowToolContext(
-  value?: WorkflowToolExecutionContext,
-): MemoryWorkflowToolContext {
-  if (!value?.processor) {
-    throw new Error("This tool requires an event-native Copilotz context.");
-  }
-  return value as MemoryWorkflowToolContext;
-}
-
 function memoryCheckpointId(value: unknown): string {
   return requiredText(record(value).memoryCheckpointId, "Memory checkpoint id");
+}
+
+function memoryActionProvenance(context: MemoryActionContext): Readonly<{
+  threadId: string;
+  agentId: string;
+}> {
+  return Object.freeze({
+    threadId: requiredText(
+      context.action.metadata.threadId,
+      "Memory Action thread id",
+    ),
+    agentId: requiredText(
+      context.action.metadata.agentId,
+      "Memory Action agent id",
+    ),
+  });
 }
 
 async function materializeMemoryText(
@@ -804,12 +841,12 @@ async function materializeMemoryText(
   return await context.content.materialize(prepared);
 }
 
-function memoryToolDefinition(tool: WorkflowTool): LlmToolDefinition {
+function memoryToolDefinition(tool: ToolResource): LlmToolDefinition {
   const inputSchema = tool.inputSchema
     ? structuredClone(tool.inputSchema) as LlmJsonObject
     : undefined;
   return Object.freeze({
-    name: requiredText(tool.key, "Memory consolidation Tool key"),
+    name: requiredText(tool.action, "Memory consolidation Tool Action alias"),
     description: requiredText(
       tool.description,
       "Memory consolidation Tool description",
@@ -820,7 +857,7 @@ function memoryToolDefinition(tool: WorkflowTool): LlmToolDefinition {
 
 function memoryConsolidationToolCall(
   output: LlmCallOutput,
-  tool: WorkflowTool,
+  tool: ToolResource,
 ): LlmToolCall {
   const calls = output.toolCalls ?? [];
   if (calls.length === 0) {
@@ -836,24 +873,10 @@ function memoryConsolidationToolCall(
     );
   }
   const call = calls[0];
-  if (call.action !== tool.key) {
+  if (call.action !== tool.action) {
     throw new MemoryLlmContractError(
       "unauthorized_tool_call",
       `The model called unauthorized tool '${call.action}'. Call consolidate_memory exactly once.`,
-    );
-  }
-  const validation = validateToolCall({
-    name: call.action,
-    arguments: call.input,
-  }, {
-    inputSchema: tool.inputSchema ?? undefined,
-  });
-  if (!validation.valid) {
-    throw new MemoryLlmContractError(
-      "invalid_tool_input",
-      `The consolidate_memory input is invalid: ${
-        validation.error ?? "invalid arguments"
-      }`,
     );
   }
   return call;
@@ -883,7 +906,7 @@ async function buildMemoryLlmRequest(
     instruction: string;
     messages: readonly ConversationMessage[];
     snapshot: readonly FrozenContextContribution[];
-    tool: WorkflowTool;
+    tool: ToolResource;
   }>,
 ): Promise<LlmRequest> {
   const identity = [
@@ -1195,7 +1218,7 @@ async function settleCheckpoint(
   );
 }
 
-function consolidationInputSchema() {
+function consolidationInputSchema(): ActionSchema {
   const source = {
     type: "object",
     required: ["type", "id"],
@@ -1243,7 +1266,7 @@ function consolidationInputSchema() {
       lifecycle: { type: "array", items: { type: "object" } },
     },
     additionalProperties: false,
-  } as const;
+  } as unknown as ActionSchema;
 }
 
 function createConsolidateMemoryAction(
@@ -1251,19 +1274,23 @@ function createConsolidateMemoryAction(
 ): ActionDefinition<
   ConsolidateMemoryActionInput,
   ConsolidateMemoryActionResult,
-  MemoryActionContext
+  MemoryActionContext,
+  ActionSchema
 > {
-  return defineAction({
+  return defineAction<
+    ConsolidateMemoryActionInput,
+    ConsolidateMemoryActionResult,
+    MemoryActionContext,
+    ActionSchema
+  >({
     id: CONSOLIDATE_MEMORY_ACTION_ID,
+    inputSchema: consolidationInputSchema(),
     async execute(
-      input: ConsolidateMemoryActionInput,
+      proposal: ConsolidateMemoryActionInput,
       context: MemoryActionContext,
     ): Promise<ConsolidateMemoryActionResult> {
-      const checkpointId = requiredText(
-        input.checkpointId,
-        "Memory checkpoint id",
-      );
-      const raw = input.proposal;
+      const checkpointId = memoryCheckpointId(context.action.metadata);
+      const raw = proposal;
       const embed = context.adapters.memoryEmbedding.default;
       const checkpoint = await context.collections.longTermMemory.get({
         id: checkpointId,
@@ -1414,17 +1441,11 @@ function createConsolidateMemoryAction(
           kind.id === draft.kind
         );
         if (kindDefinition?.schema) {
-          const validation = validateToolCall({
-            name: draft.kind,
-            arguments: data,
-          }, { inputSchema: kindDefinition.schema });
-          if (!validation.valid) {
-            throw new TypeError(
-              `Memory '${draft.localId}' does not satisfy kind '${draft.kind}': ${
-                validation.error ?? "invalid kind data"
-              }`,
-            );
-          }
+          validateMemoryKindData(
+            kindDefinition.schema,
+            data,
+            `Memory '${draft.localId}' does not satisfy kind '${draft.kind}'`,
+          );
         }
         const candidates = retrieved.get(draft.localId) ?? [];
         candidates.forEach((item) => retrievedIds.add(item.record.id));
@@ -1711,33 +1732,25 @@ function createConsolidateMemoryAction(
   });
 }
 
-function consolidateMemoryTool(): WorkflowTool {
-  return Object.freeze({
-    id: CONSOLIDATE_MEMORY_TOOL_ID,
-    key: CONSOLIDATE_MEMORY_TOOL_ID,
+function consolidateMemoryTool(
+  action: ActionDefinition<
+    ConsolidateMemoryActionInput,
+    ConsolidateMemoryActionResult,
+    MemoryActionContext,
+    ActionSchema
+  >,
+): ToolResource<typeof CONSOLIDATE_MEMORY_TOOL_ID> {
+  return defineTool(CONSOLIDATE_MEMORY_TOOL_ID, action, {
     name: "Consolidate Memory",
     description:
       "Persist one internal, provenance-aware semantic memory consolidation. This tool is granted only during Copilotz memory maintenance.",
-    inputSchema: consolidationInputSchema(),
-    historyPolicy: { visibility: "requester_only" },
-    execute(proposal: unknown, value?: WorkflowToolExecutionContext) {
-      const toolContext = workflowToolContext(value);
-      const checkpointId = memoryCheckpointId(
-        toolContext.execution.metadata,
-      );
-      const context = toolContext.processor as MemoryProcessorContext;
-      return context.actions.consolidateMemory({ checkpointId, proposal }, {
-        operationKey:
-          `memory:${checkpointId}:consolidate:${toolContext.execution.id}`,
-        signal: context.signal,
-      });
-    },
-  }) as WorkflowTool;
+    history: { visibility: "requester_only" },
+  });
 }
 
 function createMemoryMaintenanceAction(
   model: string | undefined,
-  consolidateTool: WorkflowTool,
+  consolidateTool: ToolResource<typeof CONSOLIDATE_MEMORY_TOOL_ID>,
   maxRepairAttempts: number,
 ): ActionDefinition<
   MaintainMemoryActionInput,
@@ -1827,8 +1840,6 @@ function createMemoryMaintenanceAction(
           context: snapshot,
           repair: repairReason,
         });
-        const now = sourceEvent.createdAt;
-
         const request = await buildMemoryLlmRequest(context, {
           agent,
           checkpointId,
@@ -1863,53 +1874,33 @@ function createMemoryMaintenanceAction(
           repairReason = error.message;
           continue;
         }
-        const toolActionId = `${checkpointId}:tool:${repairIndex}`;
-        const toolContext = {
-          namespace: context.namespace,
-          correlationId: sourceEvent.correlationId,
-          idempotencyKey: `${actionContext.operationKey}:tool:${repairIndex}`,
-          execution: {
-            id: toolActionId,
-            namespace: context.namespace,
-            threadId,
-            participantId,
-            agentId,
-            toolCallId: call.id,
-            tool: {
-              id: CONSOLIDATE_MEMORY_TOOL_ID,
-              name: "Consolidate Memory",
+        let result: ConsolidateMemoryActionResult;
+        try {
+          result = await context.actions.consolidate_memory(
+            structuredClone(call.input),
+            {
+              operationKey:
+                `memory:${checkpointId}:consolidate:${repairIndex}:${call.id}`,
+              metadata: {
+                memoryCheckpointId: checkpointId,
+              },
+              signal: actionContext.signal,
             },
-            status: "running",
-            content: [],
-            historyVisibility: "requester_only",
-            startedAt: now,
-            metadata: {
-              memoryCheckpointId: checkpointId,
-              memoryRepairIndex: repairIndex,
-            },
-            createdAt: now,
-            updatedAt: now,
-          },
-          processor: context,
-          threadId,
-          toolExecutionId: toolActionId,
-          toolCallId: call.id,
-          agent,
-          agents: Object.values(context.resources.agents).filter(
-            (value): value is AgentResource => !!value,
-          ),
-          tools: [consolidateTool],
-          collections: context.collections,
-          emitOutput: async () => {},
-          cancelled: actionContext.signal?.aborted ?? false,
-          ...(actionContext.signal?.aborted
-            ? { cancelReason: String(actionContext.signal.reason) }
-            : {}),
-        } as WorkflowToolExecutionContext;
-        const result = await consolidateTool.execute(
-          structuredClone(call.input),
-          toolContext,
-        );
+          );
+        } catch (error) {
+          if (
+            isSettledActionError(error) && error instanceof TypeError &&
+            error.message.includes("input failed schema validation")
+          ) {
+            lastContractError = new MemoryLlmContractError(
+              "invalid_tool_input",
+              `The consolidate_memory input is invalid: ${error.message}`,
+            );
+            repairReason = lastContractError.message;
+            continue;
+          }
+          throw error;
+        }
         return Object.freeze({
           checkpointId,
           repairIndex,
@@ -1924,35 +1915,46 @@ function createMemoryMaintenanceAction(
   });
 }
 
-function listSpacesTool(): WorkflowTool {
-  return Object.freeze({
-    id: LIST_MEMORY_SPACES_TOOL_ID,
-    key: LIST_MEMORY_SPACES_TOOL_ID,
-    name: "List Knowledge Spaces",
-    description: "List durable memory spaces visible in the active tenant.",
+function listSpacesAction(): ActionDefinition<
+  unknown,
+  unknown,
+  MemoryActionContext,
+  ActionSchema
+> {
+  return defineAction<unknown, unknown, MemoryActionContext, ActionSchema>({
+    id: "copilotz.memory.spaces.list",
     inputSchema: {
       type: "object",
       properties: { limit: { type: "integer", minimum: 1, maximum: 1_000 } },
     },
-    async execute(raw, value) {
-      const context = workflowToolContext(value);
+    async execute(raw, context) {
       const limit = positiveInteger(record(raw).limit, 100);
       const values = (await threadMemorySpaces(
-        context.processor,
-        context.threadId,
+        context,
+        memoryActionProvenance(context).threadId,
       )).slice(0, Math.min(limit, 1_000));
       return { knowledgeSpaces: values, totalKnowledgeSpaces: values.length };
     },
-  }) as WorkflowTool;
+  });
 }
 
-function searchMemoryTool(): WorkflowTool {
-  return Object.freeze({
-    id: SEARCH_MEMORY_TOOL_ID,
-    key: SEARCH_MEMORY_TOOL_ID,
-    name: "Search Memory",
-    description:
-      "Search accessible semantic memory by meaning, form, kind, and lifecycle status.",
+function listSpacesResource(
+  action: ReturnType<typeof listSpacesAction>,
+): ToolResource<typeof LIST_MEMORY_SPACES_TOOL_ID> {
+  return defineTool(LIST_MEMORY_SPACES_TOOL_ID, action, {
+    name: "List Knowledge Spaces",
+    description: "List durable memory spaces visible in the active tenant.",
+  });
+}
+
+function searchMemoryAction(): ActionDefinition<
+  unknown,
+  unknown,
+  MemoryActionContext,
+  ActionSchema
+> {
+  return defineAction<unknown, unknown, MemoryActionContext, ActionSchema>({
+    id: "copilotz.memory.search",
     inputSchema: {
       type: "object",
       properties: {
@@ -1964,12 +1966,14 @@ function searchMemoryTool(): WorkflowTool {
         limit: { type: "integer", minimum: 1, maximum: 100 },
       },
     },
-    async execute(raw, value) {
-      const tool = workflowToolContext(value);
+    async execute(raw, context) {
       const input = record(raw);
-      const spaces = await threadMemorySpaces(tool.processor, tool.threadId);
+      const spaces = await threadMemorySpaces(
+        context,
+        memoryActionProvenance(context).threadId,
+      );
       const readable = new Set(spaces.map((space) => space.id));
-      const values = await tool.processor.collections.memoryRecord.list({
+      const values = await context.collections.memoryRecord.list({
         limit: 1_000,
       });
       const query = optionalText(input.query) ?? "";
@@ -1996,44 +2000,57 @@ function searchMemoryTool(): WorkflowTool {
       );
       return { memories: selected, total: selected.length };
     },
-  }) as WorkflowTool;
+  });
 }
 
-function inspectMemoryTool(): WorkflowTool {
-  return Object.freeze({
-    id: INSPECT_MEMORY_TOOL_ID,
-    key: INSPECT_MEMORY_TOOL_ID,
-    name: "Inspect Memory",
+function searchMemoryResource(
+  action: ReturnType<typeof searchMemoryAction>,
+): ToolResource<typeof SEARCH_MEMORY_TOOL_ID> {
+  return defineTool(SEARCH_MEMORY_TOOL_ID, action, {
+    name: "Search Memory",
     description:
-      "Inspect one accessible semantic memory, its provenance, time, and graph relations.",
+      "Search accessible semantic memory by meaning, form, kind, and lifecycle status.",
+  });
+}
+
+function inspectMemoryAction(): ActionDefinition<
+  unknown,
+  unknown,
+  MemoryActionContext,
+  ActionSchema
+> {
+  return defineAction<unknown, unknown, MemoryActionContext, ActionSchema>({
+    id: "copilotz.memory.inspect",
     inputSchema: {
       type: "object",
       required: ["id"],
       properties: { id: { type: "string" } },
       additionalProperties: false,
     },
-    async execute(raw, value) {
-      const tool = workflowToolContext(value);
+    async execute(raw, context) {
       const id = requiredText(record(raw).id, "Memory id");
-      const item = await tool.processor.collections.memoryRecord
+      const item = await context.collections.memoryRecord
         .get({ id });
       if (!item) throw new Error(`Memory '${id}' was not found.`);
       const spaces = new Set(
-        (await threadMemorySpaces(tool.processor, tool.threadId)).map((space) =>
-          space.id
-        ),
+        (await threadMemorySpaces(
+          context,
+          memoryActionProvenance(context).threadId,
+        )).map((
+          space,
+        ) => space.id),
       );
       if (!spaces.has(String(item.memorySpaceId))) {
         throw new Error(`Memory '${id}' is not accessible from this thread.`);
       }
-      const relations = await tool.processor.collections.memoryRecord.relations
+      const relations = await context.collections.memoryRecord.relations
         .list({
           id,
           direction: "both",
           limit: 1_000,
         });
       const accessibleMemoryIds = new Set(
-        (await tool.processor.collections.memoryRecord.list({
+        (await context.collections.memoryRecord.list({
           limit: 1_000,
         })).filter((candidate) => spaces.has(String(candidate.memorySpaceId)))
           .map((candidate) => candidate.id),
@@ -2046,33 +2063,46 @@ function inspectMemoryTool(): WorkflowTool {
       );
       return { memory: item, relations: visibleRelations };
     },
-  }) as WorkflowTool;
+  });
 }
 
-function setMemoryStatusTool(): WorkflowTool {
-  return Object.freeze({
-    id: SET_MEMORY_STATUS_TOOL_ID,
-    key: SET_MEMORY_STATUS_TOOL_ID,
-    name: "Set Memory Status",
+function inspectMemoryResource(
+  action: ReturnType<typeof inspectMemoryAction>,
+): ToolResource<typeof INSPECT_MEMORY_TOOL_ID> {
+  return defineTool(INSPECT_MEMORY_TOOL_ID, action, {
+    name: "Inspect Memory",
     description:
-      "Retract, close, complete, cancel, answer, obsolete, deprecate, or archive one accessible memory without erasing history.",
+      "Inspect one accessible semantic memory, its provenance, time, and graph relations.",
+  });
+}
+
+function setMemoryStatusAction(): ActionDefinition<
+  unknown,
+  unknown,
+  MemoryActionContext,
+  ActionSchema
+> {
+  return defineAction<unknown, unknown, MemoryActionContext, ActionSchema>({
+    id: "copilotz.memory.status.set",
     inputSchema: {
       type: "object",
       required: ["id", "status"],
       properties: { id: { type: "string" }, status: { type: "string" } },
       additionalProperties: false,
     },
-    async execute(raw, value) {
-      const tool = workflowToolContext(value);
+    async execute(raw, context) {
       const input = record(raw);
       const id = requiredText(input.id, "Memory id");
       const status = requiredText(input.status, "Memory status");
-      const item = await tool.processor.collections.memoryRecord
+      const item = await context.collections.memoryRecord
         .get({ id });
       const mapped = item ? memoryRecord(item) : null;
       if (!mapped) throw new Error(`Memory '${id}' was not found.`);
       const spaces = new Set(
-        (await threadMemorySpaces(tool.processor, tool.threadId)).filter((
+        (await threadMemorySpaces(
+          context,
+          memoryActionProvenance(context).threadId,
+        )).filter((
           space,
         ) => space.access === "read_write").map((space) => space.id),
       );
@@ -2084,21 +2114,31 @@ function setMemoryStatusTool(): WorkflowTool {
           `Status '${status}' is invalid for '${mapped.form}'.`,
         );
       }
-      await tool.processor.collections.memoryRecord.update({
+      await context.collections.memoryRecord.update({
         id,
         set: {
           status,
           temporal: {
             ...record(item!.temporal),
             invalidatedAt: terminalStatus(status)
-              ? new Date().toISOString()
+              ? context.now().toISOString()
               : undefined,
           },
         },
       }, { operationKey: `memory-status:${id}:${status}` });
       return { id, status };
     },
-  }) as WorkflowTool;
+  });
+}
+
+function setMemoryStatusResource(
+  action: ReturnType<typeof setMemoryStatusAction>,
+): ToolResource<typeof SET_MEMORY_STATUS_TOOL_ID> {
+  return defineTool(SET_MEMORY_STATUS_TOOL_ID, action, {
+    name: "Set Memory Status",
+    description:
+      "Retract, close, complete, cancel, answer, obsolete, deprecate, or archive one accessible memory without erasing history.",
+  });
 }
 
 function memoryReservationProcessor(
@@ -2332,16 +2372,21 @@ type LongTermMemoryCollections = Readonly<{
 }>;
 
 type LongTermMemoryActions = Readonly<{
-  consolidateMemory: ActionDefinition<
+  consolidate_memory: ActionDefinition<
     ConsolidateMemoryActionInput,
     ConsolidateMemoryActionResult,
-    MemoryActionContext
+    MemoryActionContext,
+    ActionSchema
   >;
   maintainMemory: ActionDefinition<
     MaintainMemoryActionInput,
     MaintainMemoryActionResult,
     MemoryActionContext
   >;
+  list_knowledge_spaces: ReturnType<typeof listSpacesAction>;
+  search_memory: ReturnType<typeof searchMemoryAction>;
+  inspect_memory: ReturnType<typeof inspectMemoryAction>;
+  set_memory_status: ReturnType<typeof setMemoryStatusAction>;
 }>;
 
 type LongTermMemoryProcessors =
@@ -2360,11 +2405,11 @@ type LongTermMemoryResources = Readonly<{
   >;
   memoryKinds: Readonly<Record<string, MemoryKindDefinition>>;
   tools: Readonly<{
-    consolidateMemory: WorkflowTool;
-    listMemorySpaces: WorkflowTool;
-    searchMemory: WorkflowTool;
-    inspectMemory: WorkflowTool;
-    setMemoryStatus: WorkflowTool;
+    consolidate_memory: ToolResource<typeof CONSOLIDATE_MEMORY_TOOL_ID>;
+    list_knowledge_spaces: ToolResource<typeof LIST_MEMORY_SPACES_TOOL_ID>;
+    search_memory: ToolResource<typeof SEARCH_MEMORY_TOOL_ID>;
+    inspect_memory: ToolResource<typeof INSPECT_MEMORY_TOOL_ID>;
+    set_memory_status: ToolResource<typeof SET_MEMORY_STATUS_TOOL_ID>;
   }>;
 }>;
 
@@ -2393,13 +2438,17 @@ export function createLongTermMemoryPlugin(
   }
   const config = normalizedConfig(options.config);
   const consolidateMemory = createConsolidateMemoryAction(config);
-  const consolidateTool = consolidateMemoryTool();
+  const consolidateTool = consolidateMemoryTool(consolidateMemory);
+  const listMemorySpaces = listSpacesAction();
+  const searchMemory = searchMemoryAction();
+  const inspectMemory = inspectMemoryAction();
+  const setMemoryStatus = setMemoryStatusAction();
   const tools = Object.freeze({
-    consolidateMemory: consolidateTool,
-    listMemorySpaces: listSpacesTool(),
-    searchMemory: searchMemoryTool(),
-    inspectMemory: inspectMemoryTool(),
-    setMemoryStatus: setMemoryStatusTool(),
+    consolidate_memory: consolidateTool,
+    list_knowledge_spaces: listSpacesResource(listMemorySpaces),
+    search_memory: searchMemoryResource(searchMemory),
+    inspect_memory: inspectMemoryResource(inspectMemory),
+    set_memory_status: setMemoryStatusResource(setMemoryStatus),
   });
   const maxRepairAttempts = nonNegativeInteger(options.maxRepairAttempts, 1);
   const maintainMemory = createMemoryMaintenanceAction(
@@ -2425,7 +2474,14 @@ export function createLongTermMemoryPlugin(
       longTermMemory: longTermMemoryCollection,
       memoryRecord: memoryRecordCollection,
     },
-    actions: { consolidateMemory, maintainMemory },
+    actions: {
+      consolidate_memory: consolidateMemory,
+      maintainMemory,
+      list_knowledge_spaces: listMemorySpaces,
+      search_memory: searchMemory,
+      inspect_memory: inspectMemory,
+      set_memory_status: setMemoryStatus,
+    },
     processors,
     resources: {
       promptContext: { [context.id]: context },

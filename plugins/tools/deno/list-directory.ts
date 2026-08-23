@@ -8,14 +8,12 @@ interface ListDirectoryParams {
   details?: boolean;
 }
 
+import { defineAction } from "@copilotz/copilotz/actions";
+import { defineTool } from "../contracts.ts";
 import { listWorkspaceDirectory } from "./fs-utils.ts";
 
-export default {
-  key: "list_directory",
-  name: "List Directory",
-  description:
-    "List files and folders in the current workspace, optionally traversing recursively. " +
-    "Common noise directories (node_modules, .git, dist, build, etc.) are excluded by default.",
+export const listDirectoryAction = defineAction({
+  id: "copilotz.tools.deno.list_directory",
   inputSchema: {
     type: "object",
     properties: {
@@ -90,4 +88,15 @@ export default {
       throw new Error(`Failed to list directory: ${(error as Error).message}`);
     }
   },
-};
+});
+
+export const listDirectoryTool = defineTool(
+  "list_directory",
+  listDirectoryAction,
+  {
+    name: "List Directory",
+    description:
+      "List files and folders in the current workspace, optionally traversing recursively. " +
+      "Common noise directories (node_modules, .git, dist, build, etc.) are excluded by default.",
+  },
+);

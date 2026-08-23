@@ -98,7 +98,26 @@ function scriptedGoalPlugin(mode: ScriptMode = "normal"): CopilotzPlugin {
           senderId: toolSender.id,
           recipientIds: [],
           content: toolContent,
-          metadata: { historyVisibility: "public_status" },
+          metadata: {
+            historyVisibility: "public_status",
+            copilotzToolAction: {
+              schema: "copilotz.core.tool-action.v1",
+              planId: "fixture-plan",
+              planMessageId: incoming.id,
+              planIndex: 0,
+              planSize: 1,
+              toolCallId: "fixture-secret-call",
+              action: "fixtureSecret",
+              threadId: incoming.threadId,
+              triggerMessageId: incoming.id,
+              agentId,
+              agentParticipantId: recipient.id,
+              initiatorParticipantId: incoming.sender.id,
+              availableToolIds: ["fixtureSecret"],
+              parentLlmActionRunId: "fixture-llm-run",
+              actionRunId: "fixture-tool-run",
+            },
+          },
         }, { operationKey: "fixture:secret-tool-message" });
       }
 
@@ -230,6 +249,20 @@ Deno.test("event-native goal runs bounded target and simulator threads", async (
     assertEquals(result.metrics.targetRuns, 2);
     assertEquals(result.metrics.leadRuns, 1);
     assertEquals(result.metrics.judgeRuns, 0);
+    const observed = items.filter((item) => item.type === "goal.event");
+    assert(
+      observed.some(({ payload }) =>
+        payload.event.durable &&
+        payload.event.payload !== null &&
+        typeof payload.event.payload === "object" &&
+        "dataRef" in payload.event.payload
+      ),
+    );
+    assert(
+      observed.some(({ payload }) =>
+        payload.event.durable && payload.event.type.endsWith(".completed")
+      ),
+    );
     assertEquals(
       result.transcript.map((message) => [
         message.phase,

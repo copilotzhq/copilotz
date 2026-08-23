@@ -11,19 +11,17 @@ never inherits everything currently installed.
 | Introspection      | Adapters can report the effective, resolved grant |
 
 ```ts
-type CapabilitySelection =
-  | readonly string[]
-  | { all: true; except?: readonly string[] };
+type AgentCapabilitySelection = readonly string[];
 
 type AgentCapabilities = {
-  tools?: CapabilitySelection;
-  agents?: CapabilitySelection;
-  skills?: CapabilitySelection;
+  tools?: AgentCapabilitySelection;
+  agents?: AgentCapabilitySelection;
+  skills?: AgentCapabilitySelection;
 };
 ```
 
 An omitted `capabilities` object or omitted key means none. An array is an exact
-stable-ID grant and preserves its declared order. Broad access must be explicit:
+alias grant and preserves its declared order:
 
 ```ts
 const agent = {
@@ -33,14 +31,13 @@ const agent = {
   capabilities: {
     tools: ["lookup_customer"],
     agents: ["billing-specialist"],
-    skills: { all: true, except: ["internal-release"] },
+    skills: ["triage"],
   },
 };
 ```
 
-Unknown IDs fail during capability resolution. Adding another plugin therefore
-does not silently expand an existing agent unless that agent deliberately uses
-`{ all: true }`.
+Unknown aliases fail during capability resolution. Adding another plugin
+therefore never silently expands an existing Agent.
 
 ## Derived framework mechanisms
 
@@ -51,41 +48,49 @@ does not silently expand an existing agent unless that agent deliberately uses
 - An installed `read_skill_resource` tool is also derived; it is required when
   any granted skill has supporting files.
 
-The required plugin must still be installed. For example, enable the built-in
-ask plugin with `core: { ask: {} }`, and install skills through a skills plugin.
-If a higher-level grant lacks its mechanism resource, resolution fails with a
-bounded configuration error.
+The required plugin must still be installed. `corePlugin` contributes the native
+`ask` Action and its Tool Resource; a Skills plugin contributes its disclosure
+Actions and Tool Resources. If a higher-level grant lacks a required mechanism,
+resolution fails with a bounded configuration error.
 
-Copilotz enables only the provider and text workflow plugins by default. Native
-tools, web tools, finance, memory, usage, public ask, schedules, knowledge, and
-skills are explicit opt-ins.
+The generic runtime installs no semantic plugins implicitly. Applications
+compose `corePlugin` and any native tools, web tools, finance, memory, usage,
+schedules, knowledge, or skills explicitly.
 
 ## Canonical introspection
 
-The application resolves static, OpenAPI-generated, and MCP-generated tools
-through the same worker-local catalog used for prompting and execution:
+Core resolves static, OpenAPI-generated, and MCP-generated Tool Resources from
+the composed registry. Each selected Resource names the same alias in the
+composed Action map, and Core invokes that Action directly. There is no second
+Tool catalog or execution registry.
+
+An application or adapter that needs the same effective-grant view can construct
+the optional Core resolver over that registry:
 
 ```ts
-const view = await app.capabilities.resolve({ agent: "support" });
+import { createAgentCapabilityResolver } from "@copilotz/copilotz/core";
 
-view.tools; // resource, stable ID, plugin origin, explicit/all/derived grant
+const capabilities = createAgentCapabilityResolver({
+  registry: app.plugins,
+});
+const view = await capabilities.resolve({ agent: "support" });
+
+view.tools; // alias, data-only Resource, and explicit/derived grant
 view.agents;
 view.skills;
 ```
 
-Pass an application-wide `toolCatalog` when generated tools need a runtime
-adapter. The text workflow and `app.capabilities` then share that exact catalog.
-
-The Node-compatible terminal adapter consumes this introspection directly:
+The portable CLI accepts an injected `inspect` callback. An embedding adapter
+may back that callback with this resolver so its `/tools`, `/agents`, and
+`/skills` views cannot drift from Core's grant rules:
 
 ```ts
 startInteractiveCli({
-  application: app,
-  agent: "support",
+  performRun,
   scope,
+  inspect,
 });
 ```
 
-`/tools`, `/agents`, and `/skills` cannot drift from the effective agent grant.
-The lower-level portable CLI remains available with injected `performRun` and
-`inspect` callbacks for remote clients.
+The terminal adapter supplies only host I/O. It does not add a Tool catalog or a
+second execution path.

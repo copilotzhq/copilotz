@@ -1,3 +1,5 @@
+import { defineAction } from "@copilotz/copilotz/actions";
+import { defineTool } from "../contracts.ts";
 import { globToRegex, listWorkspaceDirectory } from "./fs-utils.ts";
 
 interface SearchFilesParams {
@@ -11,11 +13,8 @@ interface SearchFilesParams {
   includeAll?: boolean;
 }
 
-export default {
-  key: "search_files",
-  name: "Search Files",
-  description: "Search for files by name pattern in the current workspace. " +
-    "Common noise directories (node_modules, .git, dist, etc.) are excluded by default.",
+export const searchFilesAction = defineAction({
+  id: "copilotz.tools.deno.search_files",
   inputSchema: {
     type: "object",
     properties: {
@@ -109,4 +108,10 @@ export default {
       throw new Error(`File search failed: ${(error as Error).message}`);
     }
   },
-};
+});
+
+export const searchFilesTool = defineTool("search_files", searchFilesAction, {
+  name: "Search Files",
+  description: "Search for files by name pattern in the current workspace. " +
+    "Common noise directories (node_modules, .git, dist, etc.) are excluded by default.",
+});

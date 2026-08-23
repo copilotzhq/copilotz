@@ -103,7 +103,10 @@ function malformed(path: string): never {
   );
 }
 
-/** Extracts nested encoded bodies before live output, persistence, and LLM reuse. */
+/**
+ * Legacy migration helper for extracting encoded bodies produced by v2 Tool
+ * results. Native v3 Actions publish canonical content directly.
+ */
 export async function extractToolResultAssets(
   value: unknown,
   options: ExtractToolResultAssetsOptions,

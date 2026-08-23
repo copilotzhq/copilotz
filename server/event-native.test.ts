@@ -569,8 +569,6 @@ Deno.test("message history resolves canonical semantic content without operation
         copilotzWorkflow: {
           kind: "tool_result",
           llmAttemptId: "history-attempt",
-          toolCallId: "history-call",
-          toolExecutionId: "history-execution",
           sourceMessageId: "history-agent-message",
           agentParticipantId: "history-agent",
         },

@@ -113,15 +113,6 @@ export const knowledgeDocumentCollection: CollectionDefinition<
         };
       },
     },
-    bySourceUri: {
-      query({ input }) {
-        return {
-          where: { sourceUri: String(input.sourceUri ?? "") },
-          order: { field: "createdAt", direction: "desc" },
-          limit: 1,
-        };
-      },
-    },
     byContentHash: {
       query({ input }) {
         return {

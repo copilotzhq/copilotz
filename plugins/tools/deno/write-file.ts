@@ -6,6 +6,8 @@ interface WriteFileParams {
   append?: boolean;
 }
 
+import { defineAction } from "@copilotz/copilotz/actions";
+import { defineTool } from "../contracts.ts";
 import {
   ensureSnapshot,
   listSnapshots,
@@ -13,12 +15,8 @@ import {
   writeWorkspaceFile,
 } from "./fs-utils.ts";
 
-export default {
-  key: "write_file",
-  name: "Write File",
-  description:
-    "Write or append UTF-8 text inside the current workspace, capturing a restorable snapshot before edits. " +
-    "Use apply_patch instead when modifying an existing file.",
+export const writeFileAction = defineAction({
+  id: "copilotz.tools.deno.write_file",
   inputSchema: {
     type: "object",
     properties: {
@@ -89,4 +87,11 @@ export default {
       throw new Error(`Failed to write file: ${(error as Error).message}`);
     }
   },
-};
+});
+
+export const writeFileTool = defineTool("write_file", writeFileAction, {
+  name: "Write File",
+  description:
+    "Write or append UTF-8 text inside the current workspace, capturing a restorable snapshot before edits. " +
+    "Use apply_patch instead when modifying an existing file.",
+});

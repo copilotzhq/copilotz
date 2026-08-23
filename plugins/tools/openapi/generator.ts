@@ -4,13 +4,24 @@ import type {
   APIPrepareRequestInput,
   APIResponseAssetMapping,
 } from "../resources.ts";
-import { base64ToBytes, type ContentInput } from "@copilotz/copilotz/content";
+import {
+  assetIdFromRef,
+  base64ToBytes,
+  type ContentRef,
+} from "@copilotz/copilotz/content";
+import {
+  type ActionContext,
+  type AnyActionDefinition,
+  defineAction,
+} from "@copilotz/copilotz/actions";
+import { type CopilotzPlugin, definePlugin } from "@copilotz/copilotz/plugins";
 import { parse as parseYaml } from "../../../dependencies/yaml.ts";
-import type {
-  WorkflowTool,
-  WorkflowToolExecutionContext,
-  WorkflowToolResult,
-} from "../internal/types.ts";
+import { defineTool, type ToolResource } from "../contracts.ts";
+import {
+  assertGeneratedEntryUnique,
+  generatedActionAlias,
+  generatedActionIdSegment,
+} from "../generated.ts";
 
 class ToolExecutionError extends Error {
   readonly response: unknown;
@@ -34,7 +45,17 @@ interface CachedToken {
   refreshToken?: string;
 }
 
-const tokenCache = new Map<string, CachedToken>();
+function actionAbortError(signal: AbortSignal): DOMException {
+  if (
+    signal.reason instanceof DOMException && signal.reason.name === "AbortError"
+  ) {
+    return signal.reason;
+  }
+  return new DOMException(
+    signal.reason instanceof Error ? signal.reason.message : "Action cancelled",
+    "AbortError",
+  );
+}
 
 interface OpenAPIOperation {
   operationId?: string;
@@ -94,10 +115,12 @@ function attachmentName(value: string): string {
   return value.split(/[\\/]/).filter(Boolean).at(-1) ?? value;
 }
 
-function promoteResponseAsset(
+async function promoteResponseAsset(
   value: unknown,
   mapping: APIResponseAssetMapping,
-): WorkflowToolResult {
+  context: ActionContext,
+  actionAlias: string,
+): Promise<Readonly<Record<string, unknown>>> {
   const response = responseRecord(value);
   const dataBase64 = responseField(
     response,
@@ -117,18 +140,25 @@ function promoteResponseAsset(
       field !== mapping.dataBase64Field
     ),
   );
-  const attachment: ContentInput = {
-    type: attachmentKind(mediaType),
-    bytes: base64ToBytes(dataBase64),
+  const name = nameValue ? attachmentName(nameValue) : undefined;
+  const asset = await context.content.publish({
+    body: base64ToBytes(dataBase64),
     mediaType,
+    ...(name ? { metadata: { name } } : {}),
+  }, {
+    operationKey: `openapi:${actionAlias}:response-asset`,
+  });
+  const ref: ContentRef = Object.freeze({
+    assetId: asset.id,
+    kind: attachmentKind(mediaType),
     role: "attachment",
+    mediaType,
     disposition: "attachment",
-    ...(nameValue ? { name: attachmentName(nameValue) } : {}),
-  };
+    ...(name ? { name } : {}),
+  });
   return Object.freeze({
-    kind: "copilotz.workflow-tool.result.v1",
-    output: Object.freeze(output),
-    attachments: Object.freeze([attachment]),
+    ...output,
+    [mapping.outputField?.trim() || "asset"]: ref,
   });
 }
 
@@ -159,9 +189,10 @@ function convertParameterToJsonSchema(
   // Process path, query, and header parameters
   parameters.forEach((param) => {
     if (param.name && param.schema) {
+      const description = param.description || param.schema.description;
       properties[param.name] = {
         ...param.schema,
-        description: param.description || param.schema.description,
+        ...(description !== undefined ? { description } : {}),
       };
 
       if (param.required) {
@@ -210,7 +241,7 @@ function convertParameterToJsonSchema(
     schema: {
       type: "object",
       properties,
-      required: required.length > 0 ? required : undefined,
+      ...(required.length > 0 ? { required } : {}),
       ...(additionalProperties !== undefined ? { additionalProperties } : {}),
     },
     parameterMetadata: {
@@ -330,7 +361,7 @@ function sanitizeToolJsonValue<T>(value: T, seen = new WeakSet<object>()): T {
 type NdjsonRecord = Readonly<{
   type: "output" | "result" | "error";
   channel?: string;
-  mode?: "append" | "replace";
+  mode?: "append";
   mediaType?: string;
   delta?: unknown;
   value?: unknown;
@@ -346,11 +377,13 @@ function ndjsonRecord(value: unknown): NdjsonRecord {
     if (typeof record.channel !== "string" || !record.channel.trim()) {
       throw new TypeError("NDJSON tool output requires a channel.");
     }
-    if (
-      record.mode !== undefined && record.mode !== "append" &&
-      record.mode !== "replace"
-    ) {
-      throw new TypeError("NDJSON tool output mode must be append or replace.");
+    if (record.mode === "replace") {
+      throw new TypeError(
+        "NDJSON tool output mode 'replace' is unsupported; use append records.",
+      );
+    }
+    if (record.mode !== undefined && record.mode !== "append") {
+      throw new TypeError("NDJSON tool output mode must be append.");
     }
     return record as NdjsonRecord;
   }
@@ -362,11 +395,20 @@ function ndjsonRecord(value: unknown): NdjsonRecord {
 
 async function consumeNdjsonToolResponse(
   response: Response,
-  context: WorkflowToolExecutionContext | undefined,
+  context: ActionContext,
 ): Promise<unknown> {
   if (!response.body) throw new TypeError("NDJSON tool response has no body.");
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
+  const encoder = new TextEncoder();
+  type Writer = Awaited<ReturnType<ActionContext["streams"]["open"]>>;
+  const channels = new Map<string, {
+    writer: Writer;
+    mediaType: string;
+    appendIndex: number;
+    settled: boolean;
+  }>();
+  const streamIds = new Map<string, string>();
   let buffered = "";
   let terminal: NdjsonRecord | undefined;
   const processLine = async (raw: string): Promise<void> => {
@@ -377,13 +419,45 @@ async function consumeNdjsonToolResponse(
       throw new TypeError("NDJSON tool response emitted after settlement.");
     }
     if (record.type === "output") {
-      await context?.emitOutput(record.delta, {
-        channel: record.channel,
-        ...(record.mode ? { mode: record.mode } : {}),
-        ...(typeof record.mediaType === "string" && record.mediaType.trim()
-          ? { mediaType: record.mediaType.trim() }
-          : {}),
-      });
+      const channel = record.channel!.trim();
+      const declaredMediaType = typeof record.mediaType === "string" &&
+          record.mediaType.trim()
+        ? record.mediaType.trim()
+        : undefined;
+      let state = channels.get(channel);
+      if (!state) {
+        const streamIdSegment = generatedActionAlias(channel, "channel");
+        const collidingChannel = streamIds.get(streamIdSegment);
+        if (collidingChannel && collidingChannel !== channel) {
+          throw new TypeError(
+            `NDJSON channels '${collidingChannel}' and '${channel}' produce the same stream ID.`,
+          );
+        }
+        const mediaType = declaredMediaType ?? "text/plain";
+        const writer = await context.streams.open({
+          id: `${context.action.runId}:${streamIdSegment}`,
+          mediaType,
+          role: "tool.output",
+          metadata: { channel },
+          correlationId: context.identity.correlationId,
+        }, { signal: context.signal });
+        state = { writer, mediaType, appendIndex: 0, settled: false };
+        channels.set(channel, state);
+        streamIds.set(streamIdSegment, channel);
+      } else if (
+        declaredMediaType !== undefined && declaredMediaType !== state.mediaType
+      ) {
+        throw new TypeError(
+          `NDJSON channel '${channel}' changed mediaType from '${state.mediaType}' to '${declaredMediaType}'.`,
+        );
+      }
+      const value = typeof record.delta === "string"
+        ? record.delta
+        : `${JSON.stringify(record.delta ?? null)}\n`;
+      await state.writer.append({
+        bytes: encoder.encode(value),
+        appendId: `${context.action.runId}:${channel}:${state.appendIndex++}`,
+      }, { signal: context.signal });
       return;
     }
     terminal = record;
@@ -402,20 +476,84 @@ async function consumeNdjsonToolResponse(
     }
     buffered += decoder.decode();
     await processLine(buffered);
+    if (!terminal) {
+      throw new TypeError("NDJSON tool response ended without a result.");
+    }
+    if (terminal.type === "error") {
+      throw new ToolExecutionError(
+        terminal.error ?? terminal.value,
+        response.status,
+        response.statusText || "Stream failed",
+      );
+    }
+    const closed: Array<
+      Readonly<{
+        channel: string;
+        prepared: Awaited<ReturnType<Writer["close"]>>;
+      }>
+    > = [];
+    for (const [channel, state] of channels) {
+      const prepared = await state.writer.close({
+        assetId: `${context.action.runId}:${
+          generatedActionAlias(channel, "channel")
+        }`,
+        metadata: { channel },
+      }, { signal: context.signal });
+      state.settled = true;
+      closed.push({ channel, prepared });
+    }
+    for (const { channel, prepared } of closed) {
+      if (prepared.content.length !== 1) {
+        throw new TypeError(
+          `NDJSON channel '${channel}' must close with exactly one ContentRef.`,
+        );
+      }
+    }
+    const combined = Object.freeze({
+      content: Object.freeze(closed.map(({ prepared }) => prepared.content[0])),
+      assets: Object.freeze(closed.flatMap(({ prepared }) => prepared.assets)),
+    });
+    const materialized = closed.length > 0
+      ? await context.content.materialize(combined)
+      : [];
+    if (materialized.length !== closed.length) {
+      throw new TypeError(
+        "NDJSON content materialization must return one ContentRef per channel.",
+      );
+    }
+    const streams: Record<string, ContentRef> = {};
+    closed.forEach(({ channel, prepared }, index) => {
+      const ref = materialized[index];
+      if (ref.assetId !== prepared.content[0].assetId) {
+        throw new TypeError(
+          `NDJSON channel '${channel}' materialized an unexpected ContentRef.`,
+        );
+      }
+      streams[channel] = ref;
+    });
+    if (Object.keys(streams).length === 0) return terminal.value;
+    const value = terminal.value;
+    return value && typeof value === "object" && !Array.isArray(value)
+      ? Object.freeze({
+        ...(value as Record<string, unknown>),
+        streams: Object.freeze(streams),
+      })
+      : Object.freeze({ value, streams: Object.freeze(streams) });
+  } catch (error) {
+    await Promise.allSettled(
+      [...channels.values()]
+        .filter((state) => !state.settled)
+        .map(async (state) => {
+          await state.writer.abort({
+            reason: error instanceof Error ? error.message : String(error),
+          });
+          state.settled = true;
+        }),
+    );
+    throw error;
   } finally {
     reader.releaseLock();
   }
-  if (!terminal) {
-    throw new TypeError("NDJSON tool response ended without a result.");
-  }
-  if (terminal.type === "error") {
-    throw new ToolExecutionError(
-      terminal.error ?? terminal.value,
-      response.status,
-      response.statusText || "Stream failed",
-    );
-  }
-  return terminal.value;
 }
 
 function decodeJsonPointerSegment(segment: string): string {
@@ -494,6 +632,7 @@ function extractValue(obj: any, path: string): any {
 async function callAuthEndpoint(
   authConfig: DynamicAuth,
   baseUrl: string,
+  signal: AbortSignal,
 ): Promise<CachedToken> {
   const authUrl = authConfig.authEndpoint.url.startsWith("http")
     ? authConfig.authEndpoint.url
@@ -513,9 +652,7 @@ async function callAuthEndpoint(
     );
   }
 
-  console.log(`🔐 Calling auth endpoint: ${method} ${authUrl}`);
-
-  const response = await fetch(authUrl, { method, headers, body });
+  const response = await fetch(authUrl, { method, headers, body, signal });
 
   if (!response.ok) {
     throw new Error(
@@ -560,12 +697,6 @@ async function callAuthEndpoint(
       : undefined
     : undefined;
 
-  console.log(
-    `✅ Authentication successful, token expires: ${
-      new Date(expiry).toISOString()
-    }`,
-  );
-
   return { token, expiry, refreshToken };
 }
 
@@ -575,9 +706,10 @@ async function callAuthEndpoint(
 async function getDynamicToken(
   authConfig: DynamicAuth,
   baseUrl: string,
-  apiName: string,
+  tokenCache: Map<string, CachedToken>,
+  signal: AbortSignal,
 ): Promise<string> {
-  const cacheKey = `${apiName}_dynamic_token`;
+  const cacheKey = "dynamic";
   const cached = tokenCache.get(cacheKey);
   const now = Date.now();
 
@@ -593,8 +725,6 @@ async function getDynamicToken(
   // Try to refresh if we have a refresh token and refresh endpoint
   if (cached?.refreshToken && authConfig.refreshConfig?.refreshEndpoint) {
     try {
-      console.log(`🔄 Refreshing token for ${apiName}`);
-
       const refreshUrl =
         authConfig.refreshConfig.refreshEndpoint.startsWith("http")
           ? authConfig.refreshConfig.refreshEndpoint
@@ -607,6 +737,7 @@ async function getDynamicToken(
           "User-Agent": "Copilotz-Agents/1.0",
         },
         body: JSON.stringify({ refresh_token: cached.refreshToken }),
+        signal,
       });
 
       if (refreshResponse.ok) {
@@ -622,20 +753,17 @@ async function getDynamicToken(
             refreshToken: cached.refreshToken,
           };
           tokenCache.set(cacheKey, newCached);
-          console.log(`✅ Token refreshed for ${apiName}`);
           return newToken;
         }
       }
     } catch (error) {
-      console.warn(
-        `⚠️ Token refresh failed for ${apiName}, getting new token:`,
-        error,
-      );
+      if (signal.aborted) throw actionAbortError(signal);
+      if ((error as Error)?.name === "AbortError") throw error;
     }
   }
 
   // Get new token
-  const newToken = await callAuthEndpoint(authConfig, baseUrl);
+  const newToken = await callAuthEndpoint(authConfig, baseUrl, signal);
 
   if (authConfig.cache?.enabled !== false) {
     tokenCache.set(cacheKey, newToken);
@@ -652,7 +780,8 @@ async function applyAuthentication(
   headers: Record<string, string>,
   queryParams: URLSearchParams,
   baseUrl?: string,
-  apiName?: string,
+  tokenCache?: Map<string, CachedToken>,
+  signal?: AbortSignal,
 ) {
   if (!auth) return;
   const normalizedAuth: AuthConfig = auth;
@@ -690,11 +819,18 @@ async function applyAuthentication(
       break;
 
     case "dynamic": {
-      if (!baseUrl || !apiName) {
-        throw new Error("Dynamic authentication requires baseUrl and apiName");
+      if (!baseUrl || !tokenCache || !signal) {
+        throw new Error(
+          "Dynamic authentication requires baseUrl, cache, and Action signal",
+        );
       }
 
-      const token = await getDynamicToken(normalizedAuth, baseUrl, apiName);
+      const token = await getDynamicToken(
+        normalizedAuth,
+        baseUrl,
+        tokenCache,
+        signal,
+      );
 
       if (normalizedAuth.tokenExtraction.type === "bearer") {
         const prefix = normalizedAuth.tokenExtraction.prefix || "Bearer ";
@@ -725,18 +861,16 @@ function createApiExecutor(
     bodyParams: Set<string>;
     isObjectBody: boolean;
   },
+  tokenCache: Map<string, CachedToken>,
 ) {
   return async (
     args: unknown,
-    context?: unknown,
+    context: ActionContext,
   ) => {
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
-    let unsubscribe: (() => void) | undefined;
+    let removeAbortListener: (() => void) | undefined;
     let abortReason: "timeout" | "cancelled" | undefined;
     try {
-      const executionContext = context as
-        | WorkflowToolExecutionContext
-        | undefined;
       const params = (args && typeof args === "object")
         ? args as Record<string, unknown>
         : {};
@@ -781,7 +915,8 @@ function createApiExecutor(
         headers,
         queryParams,
         baseUrl,
-        apiConfig.name,
+        tokenCache,
+        context.signal,
       );
 
       const requestMethod = method.toUpperCase();
@@ -817,21 +952,29 @@ function createApiExecutor(
 
       if (apiConfig.prepareRequest) {
         const prepareContext: APIPrepareRequestContext = {
+          apiId: apiConfig.id,
           apiName: apiConfig.name,
-          toolKey,
-          toolExecutionId: executionContext?.toolExecutionId,
-          toolCallId: executionContext?.toolCallId,
-          correlationId: executionContext?.correlationId,
-          idempotencyKey: executionContext?.idempotencyKey,
-          threadId: executionContext?.threadId,
-          senderId: executionContext?.senderId,
-          senderType: executionContext?.senderType,
-          userExternalId: executionContext?.userExternalId,
-          namespace: executionContext?.namespace,
-          collections: executionContext?.collections,
-          userMetadata: executionContext?.userMetadata,
-          threadMetadata: executionContext?.threadMetadata,
-          resolveAsset: executionContext?.resolveAsset,
+          actionAlias: toolKey,
+          actionId: context.action.id,
+          actionRunId: context.action.runId,
+          operationKey: context.operationKey,
+          identity: context.identity,
+          actionMetadata: context.action.metadata,
+          signal: context.signal,
+          namespace: context.namespace,
+          collections: context.collections,
+          async resolveAsset(ref) {
+            const id = assetIdFromRef(context.namespace, ref);
+            const asset = await context.content.get(id);
+            if (!asset) throw new Error(`Asset '${id}' was not found.`);
+            const resolved = await context.content.resolve({
+              assetId: id,
+              kind: attachmentKind(asset.mediaType),
+              role: "attachment",
+              mediaType: asset.mediaType,
+            });
+            return { bytes: resolved.bytes, mime: asset.mediaType };
+          },
         };
         preparedRequest =
           (await apiConfig.prepareRequest(preparedRequest, prepareContext)) ??
@@ -860,10 +1003,13 @@ function createApiExecutor(
 
       // Set cancellation / timeout
       const controller = new AbortController();
-      unsubscribe = executionContext?.onCancel?.(() => {
+      const abort = () => {
         abortReason = "cancelled";
-        controller.abort();
-      });
+        controller.abort(context.signal.reason);
+      };
+      context.signal.addEventListener("abort", abort, { once: true });
+      removeAbortListener = () =>
+        context.signal.removeEventListener("abort", abort);
       timeoutId = typeof apiConfig.timeout === "number" && apiConfig.timeout > 0
         ? setTimeout(() => {
           if (!controller.signal.aborted) {
@@ -873,10 +1019,7 @@ function createApiExecutor(
         }, apiConfig.timeout * 1000)
         : undefined;
       requestOptions.signal = controller.signal;
-      if (executionContext?.cancelled) {
-        abortReason = "cancelled";
-        controller.abort();
-      }
+      if (context.signal.aborted) abort();
 
       // Make the request
       const response = await fetch(url, requestOptions);
@@ -891,7 +1034,7 @@ function createApiExecutor(
       ) {
         responseData = await consumeNdjsonToolResponse(
           response,
-          executionContext,
+          context,
         );
       } else if (contentType.includes("application/json")) {
         responseData = await response.json();
@@ -910,22 +1053,15 @@ function createApiExecutor(
 
       const assetMapping = apiConfig.responseAssets?.[toolKey];
       const result = assetMapping
-        ? promoteResponseAsset(responseData, assetMapping)
+        ? await promoteResponseAsset(
+          responseData,
+          assetMapping,
+          context,
+          toolKey,
+        )
         : responseData;
 
       if (apiConfig.includeResponseHeaders) {
-        if (assetMapping) {
-          const promoted = result as WorkflowToolResult;
-          return Object.freeze({
-            ...promoted,
-            output: {
-              body: promoted.output,
-              headers: sanitizeToolJsonValue(
-                Object.fromEntries(response.headers.entries()),
-              ),
-            },
-          });
-        }
         return {
           body: result,
           headers: sanitizeToolJsonValue(
@@ -936,26 +1072,30 @@ function createApiExecutor(
 
       return result;
     } catch (error) {
+      if (context.signal.aborted) throw actionAbortError(context.signal);
       if (error instanceof Error && error.name === "AbortError") {
-        throw new Error(
-          abortReason === "timeout"
-            ? `Request timeout after ${apiConfig.timeout} seconds`
-            : `Request cancelled`,
-        );
+        if (abortReason === "timeout") {
+          throw new Error(`Request timeout after ${apiConfig.timeout} seconds`);
+        }
+        throw error;
       }
       throw error;
     } finally {
       if (timeoutId !== undefined) clearTimeout(timeoutId);
-      unsubscribe?.();
+      removeAbortListener?.();
     }
   };
 }
 
-/**
- * Generates Tool instances from an OpenAPI configuration
- */
-export function generateApiTools(apiConfig: API): WorkflowTool[] {
-  const tools: WorkflowTool[] = [];
+type GeneratedOpenApiTool = Readonly<{
+  alias: string;
+  action: AnyActionDefinition;
+  tool: ToolResource;
+}>;
+
+function generateApiEntries(apiConfig: API): readonly GeneratedOpenApiTool[] {
+  const entries: GeneratedOpenApiTool[] = [];
+  const tokenCache = new Map<string, CachedToken>();
   const schema = dereferenceOpenApiLocalRefs(
     normalizeOpenApiSchema(apiConfig.openApiSchema),
   );
@@ -985,8 +1125,9 @@ export function generateApiTools(apiConfig: API): WorkflowTool[] {
       const op = operation as OpenAPIOperation;
 
       // Generate tool key and name
-      const toolKey = op.operationId ||
-        `${apiConfig.name}_${method}_${path.replace(/[^a-zA-Z0-9]/g, "_")}`;
+      const rawAlias = op.operationId ||
+        `${apiConfig.id}_${method}_${path.replace(/[^a-zA-Z0-9]/g, "_")}`;
+      const actionAlias = generatedActionAlias(rawAlias, "api");
 
       const toolName = op.summary ||
         `${method.toUpperCase()} ${path}`;
@@ -1000,51 +1141,83 @@ export function generateApiTools(apiConfig: API): WorkflowTool[] {
       const { schema: inputSchema, parameterMetadata } =
         convertParameterToJsonSchema(op.parameters, op.requestBody);
 
-      // Create the tool
-      const tool: WorkflowTool = {
-        id: `api:${apiConfig.id}:${toolKey}`,
-        key: toolKey,
-        name: toolName,
-        description: toolDescription,
-        externalId: null,
-        metadata: null,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-        outputSchema: null,
+      const action = defineAction({
+        id: `copilotz.tools.openapi.${
+          generatedActionIdSegment(apiConfig.id, "api")
+        }.${generatedActionIdSegment(actionAlias, "operation")}`,
         inputSchema,
-        historyPolicy: apiConfig.toolPolicies?.[toolKey] ??
-          apiConfig.historyPolicyDefaults,
         execute: createApiExecutor(
           apiConfig,
           path,
           method,
-          toolKey,
+          actionAlias,
           baseUrl,
           parameterMetadata,
+          tokenCache,
         ),
-      };
+      });
+      const tool = defineTool(actionAlias, action, {
+        name: toolName,
+        description: toolDescription,
+        ...((apiConfig.toolPolicies?.[actionAlias] ??
+            apiConfig.historyPolicyDefaults)
+          ? {
+            history: apiConfig.toolPolicies?.[actionAlias] ??
+              apiConfig.historyPolicyDefaults,
+          }
+          : {}),
+        metadata: {
+          apiId: apiConfig.id,
+          method: method.toUpperCase(),
+          path,
+        },
+      });
 
-      tools.push(tool);
+      entries.push(Object.freeze({ alias: actionAlias, action, tool }));
     });
   });
 
-  return tools;
+  return Object.freeze(entries);
 }
 
-/**
- * Generates tools from multiple API configurations
- */
-export function generateAllApiTools(apiConfigs: API[]): WorkflowTool[] {
-  const allTools: WorkflowTool[] = [];
+export type CreateOpenApiToolsPluginOptions = Readonly<{
+  apis: readonly API[];
+  id?: string;
+  version?: string;
+}>;
 
-  apiConfigs.forEach((config) => {
-    try {
-      const tools = generateApiTools(config);
-      allTools.push(...tools);
-    } catch (error) {
-      console.error(`Failed to generate tools for API ${config.name}:`, error);
+/** Discovers every OpenAPI operation before runtime composition. */
+export function createOpenApiToolsPlugin(
+  options: CreateOpenApiToolsPluginOptions,
+): CopilotzPlugin {
+  if (!options || !Array.isArray(options.apis)) {
+    throw new TypeError("OpenAPI Tool plugin requires an APIs array.");
+  }
+  const entries: GeneratedOpenApiTool[] = [];
+  const aliases = new Set<string>();
+  const actionIds = new Set<string>();
+  for (const api of options.apis) {
+    for (const entry of generateApiEntries(api)) {
+      assertGeneratedEntryUnique(
+        aliases,
+        actionIds,
+        entry.alias,
+        entry.action.id,
+        `OpenAPI '${api.id}'`,
+      );
+      entries.push(entry);
     }
+  }
+  return definePlugin({
+    id: options.id ?? "@copilotz/openapi-tools",
+    version: options.version ?? "3.0.0",
+    actions: Object.fromEntries(
+      entries.map((entry) => [entry.alias, entry.action]),
+    ),
+    resources: {
+      tools: Object.fromEntries(
+        entries.map((entry) => [entry.alias, entry.tool]),
+      ),
+    },
   });
-
-  return allTools;
 }

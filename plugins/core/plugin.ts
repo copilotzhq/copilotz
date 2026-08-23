@@ -20,11 +20,7 @@ import {
   deleteThreadMessagesAction,
 } from "./resources/actions/thread.ts";
 import { reviseMessageAction } from "./resources/actions/message.ts";
-import {
-  callToolAction,
-  executeToolBatchAction,
-} from "./resources/actions/tool.ts";
-import { askTool } from "./resources/tools/ask.ts";
+import { askAction, askTool } from "./resources/tools/ask.ts";
 
 export const CORE_PLUGIN_ID = "@copilotz/core";
 export const CORE_PLUGIN_VERSION = "0.61.0";
@@ -41,8 +37,7 @@ export type CoreActions = Readonly<{
   deleteThreadMessages: typeof deleteThreadMessagesAction;
   reviseMessage: typeof reviseMessageAction;
   createThreadMessage: typeof createThreadMessageAction;
-  callTool: typeof callToolAction;
-  executeToolBatch: typeof executeToolBatchAction;
+  ask: typeof askAction;
 }>;
 
 export type CoreProcessors = Readonly<{
@@ -76,8 +71,7 @@ export const coreActions: CoreActions = Object.freeze({
   deleteThreadMessages: deleteThreadMessagesAction,
   reviseMessage: reviseMessageAction,
   createThreadMessage: createThreadMessageAction,
-  callTool: callToolAction,
-  executeToolBatch: executeToolBatchAction,
+  ask: askAction,
 });
 
 export const coreProcessors: CoreProcessors = Object.freeze({

@@ -17,9 +17,8 @@ Main options:
 - `databaseRecovery`: bounded wait, retry hint, reconnect delay, and optional
   availability-error classifier
 - `databaseLifecycle`: persistence callbacks for explicit Gateway/Worker roles
-- `core: false | CopilotzCorePluginOptions`
-- `plugins`, `context`
-- `toolCatalog` shared by execution and capability introspection
+- `plugins`, plus final `resources` and `adapters` overlays
+- `assets` and runtime-neutral `engine` policy
 - `worker: { id?, capacity? }`
 
 Configuration-created databases are closed by the application. Injected database
@@ -146,21 +145,25 @@ Its creator retains ownership. No opaque domain-composition factory is required.
 
 Important members:
 
-- `config`, `plugins`, `capabilities`
-- `content`, `conversation`, `collections`, `relations`
-- `llmAttempts`, `toolExecutions`, `schedules`, `knowledge`
+- `config`, `plugins`
+- `content`, `collections`
 - `events`, `deliveries`
 - `databaseSchema`, `databaseScope(name)`
-- `send(input)`, `events`, `close(reason?)`, `goal(input)`
+- `send(input)`, `observe()`, `close(reason?)`
 - `recover(options)`, `recoverAll(options)`, `maintenance(options)`,
   `shutdown(reason?)`
 
 All products are factory-created frozen records. Infer their type or import
 `CopilotzApplication`; do not subclass them.
 
-`application.capabilities.resolve({ agent })` returns the agent's effective
-tool, peer-agent, and skill resources with plugin origins and grant sources.
-Omitted grants resolve to none.
+`application.plugins.resources.tools` is the composed data-only Tool Resource
+map, and every Resource names a matching definition in
+`application.plugins.actions`. Core selects the Agent's explicitly granted
+aliases and invokes those Actions through the ordinary Action context. An
+adapter that needs an effective-grant view may create
+`createAgentCapabilityResolver({ registry: application.plugins })`; the
+application exposes no Tool catalog, Tool executor, or Tool-execution query
+surface.
 
 `application.events` is the durable event-store query surface (`append`, `list`,
 `get`, `subscribe`, settlement helpers). `application.observe()` is the

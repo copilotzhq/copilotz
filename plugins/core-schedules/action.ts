@@ -211,13 +211,15 @@ async function dispatchScheduledMessage(
     throw new Error(`Scheduled job '${item.jobId}' has no agent recipient.`);
   }
   const metadata = {
-    ...structuredClone(item.payload.metadata ?? {}),
     scheduledJob: {
       jobId: item.jobId,
       jobName: item.jobName,
       occurrenceId: item.occurrenceId,
       mode: item.mode,
       scheduledFor: item.scheduledFor,
+    },
+    scheduledMessage: {
+      metadata: structuredClone(item.payload.metadata ?? {}),
     },
   };
   const descriptor = item.payload.thread;

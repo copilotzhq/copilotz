@@ -1,4 +1,7 @@
-import { isSettledActionError } from "@copilotz/copilotz/actions";
+import {
+  type AnyActionDefinition,
+  isSettledActionError,
+} from "@copilotz/copilotz/actions";
 import {
   type CopilotzPlugin,
   definePlugin,
@@ -6,13 +9,11 @@ import {
   type Processor,
   type ProcessorContext,
 } from "@copilotz/copilotz/plugins";
-import type { WorkflowTool } from "@copilotz/copilotz/tools";
+import type { ToolResource } from "@copilotz/copilotz/tools";
 import {
   createIndexKnowledgeDocumentAction,
-  deleteKnowledgeDocumentAction,
   type IndexKnowledgeDocumentAction,
-  type KnowledgeActionCallers,
-  searchKnowledgeAction,
+  type KnowledgeIndexActionCallers,
 } from "./actions.ts";
 import {
   KNOWLEDGE_DOCUMENT_COLLECTION,
@@ -23,11 +24,7 @@ import {
   createDefaultKnowledgeSourceLoader,
   createDefaultKnowledgeTextExtractor,
 } from "./source.ts";
-import {
-  createDeleteDocumentTool,
-  createIngestDocumentTool,
-  createSearchKnowledgeTool,
-} from "./tools.ts";
+import { createKnowledgeActionResources } from "./tools.ts";
 import type {
   CreateKnowledgePluginOptions,
   KnowledgeChunkingConfig,
@@ -91,7 +88,7 @@ function embedding(value: KnowledgeEmbeddingConfig): KnowledgeEmbeddingConfig {
 
 type KnowledgeProcessorContext =
   & Omit<ProcessorContext, "actions">
-  & Readonly<{ actions: KnowledgeActionCallers }>;
+  & Readonly<{ actions: KnowledgeIndexActionCallers }>;
 
 function createIndexProcessor(): Processor<KnowledgeProcessorContext> {
   return defineProcessor<KnowledgeProcessorContext>({
@@ -129,23 +126,15 @@ type KnowledgeCollections = Readonly<{
   chunk: typeof knowledgeChunkCollection;
 }>;
 
-type KnowledgeActions = Readonly<{
-  indexKnowledgeDocument: IndexKnowledgeDocumentAction;
-  searchKnowledge: typeof searchKnowledgeAction;
-  deleteKnowledgeDocument: typeof deleteKnowledgeDocumentAction;
-}>;
+type KnowledgeActions =
+  & Readonly<{ indexKnowledgeDocument: IndexKnowledgeDocumentAction }>
+  & Readonly<Record<string, AnyActionDefinition>>;
 
 type KnowledgeProcessors = Readonly<{
   indexKnowledgeDocument: Processor<KnowledgeProcessorContext>;
 }>;
 
-type KnowledgeTools =
-  | Readonly<Record<never, never>>
-  | Readonly<{
-    ingestKnowledge: WorkflowTool;
-    searchKnowledge: WorkflowTool;
-    deleteKnowledgeDocument: WorkflowTool;
-  }>;
+type KnowledgeTools = Readonly<Record<string, ToolResource>>;
 
 type KnowledgeResources = Readonly<{ tools: KnowledgeTools }>;
 
@@ -165,6 +154,17 @@ export function createKnowledgePlugin(
   input: CreateKnowledgePluginOptions,
 ): KnowledgePlugin {
   const embeddingConfig = embedding(input.embedding);
+  const contribution = input.tools === false
+    ? Object.freeze({
+      actions: Object.freeze({}),
+      tools: Object.freeze({}),
+    })
+    : createKnowledgeActionResources(embeddingConfig, input.tools);
+  if (Object.hasOwn(contribution.actions, "indexKnowledgeDocument")) {
+    throw new TypeError(
+      "Knowledge Tool Action alias 'indexKnowledgeDocument' is reserved.",
+    );
+  }
   const actions = Object.freeze({
     indexKnowledgeDocument: createIndexKnowledgeDocumentAction({
       embedding: embeddingConfig,
@@ -172,18 +172,7 @@ export function createKnowledgePlugin(
       loader: input.sourceLoader ?? createDefaultKnowledgeSourceLoader(),
       extractor: input.extractText ?? createDefaultKnowledgeTextExtractor(),
     }),
-    searchKnowledge: searchKnowledgeAction,
-    deleteKnowledgeDocument: deleteKnowledgeDocumentAction,
-  });
-  const tools = input.tools === false ? Object.freeze({}) : Object.freeze({
-    ingestKnowledge: createIngestDocumentTool(input.tools?.ingestId),
-    searchKnowledge: createSearchKnowledgeTool(
-      embeddingConfig,
-      input.tools?.searchId,
-    ),
-    deleteKnowledgeDocument: createDeleteDocumentTool(
-      input.tools?.deleteId,
-    ),
+    ...contribution.actions,
   });
   return definePlugin({
     id: input.id?.trim() || DEFAULT_ID,
@@ -194,6 +183,6 @@ export function createKnowledgePlugin(
     },
     actions,
     processors: { indexKnowledgeDocument: createIndexProcessor() },
-    resources: { tools },
+    resources: { tools: contribution.tools },
   });
 }

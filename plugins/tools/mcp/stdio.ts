@@ -54,8 +54,17 @@ function stdioTransport(server: MCPServer): StdioTransport {
 }
 
 function abortError(signal: AbortSignal): Error {
-  if (signal.reason instanceof Error) return signal.reason;
-  return new DOMException("MCP operation cancelled.", "AbortError");
+  if (
+    signal.reason instanceof DOMException && signal.reason.name === "AbortError"
+  ) {
+    return signal.reason;
+  }
+  return new DOMException(
+    signal.reason instanceof Error
+      ? signal.reason.message
+      : "MCP operation cancelled.",
+    "AbortError",
+  );
 }
 
 async function abortable<T>(
@@ -131,6 +140,9 @@ export const connectMcp: ConnectMcpRuntime = async (
     await abortable(client.connect(transport), signal, close);
   } catch (cause) {
     await close().catch(() => undefined);
+    if ((cause as Error)?.name === "AbortError" || signal?.aborted) {
+      throw signal?.aborted ? abortError(signal) : cause;
+    }
     throw new Error(`Failed to connect to MCP server '${server.name}'.`, {
       cause,
     });

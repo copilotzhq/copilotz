@@ -177,7 +177,6 @@ export type GoalMetrics = Readonly<{
   leadRuns: number;
   judgeRuns: number;
   messages: number;
-  toolCalls: number;
   errors: number;
 }>;
 

@@ -1,3 +1,7 @@
+import { type ActionContext, defineAction } from "@copilotz/copilotz/actions";
+import { defineTool } from "../contracts.ts";
+import { actionAbortError } from "./abort.ts";
+
 interface WebSearchParams {
   query: string;
   count?: number;
@@ -305,11 +309,8 @@ function shouldRetry(error: unknown): boolean {
   return false;
 }
 
-export default {
-  key: "web_search",
-  name: "Web Search",
-  description:
-    "Search the web and return structured page results. Use this to find relevant pages before fetching a specific URL.",
+export const webSearchAction = defineAction({
+  id: "copilotz.tools.web.web_search",
   inputSchema: {
     type: "object",
     properties: {
@@ -360,7 +361,7 @@ export default {
     safeSearch = "moderate",
     timeRange,
     timeout = 20,
-  }: WebSearchParams) => {
+  }: WebSearchParams, context: ActionContext) => {
     const trimmedQuery = query.trim();
     if (!trimmedQuery) throw new Error("Search query is required.");
 
@@ -371,7 +372,18 @@ export default {
       const profile = selectBrowserHeaderProfile(attemptedProfiles);
       attemptedProfiles.push(profile.name);
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), timeout * 1000);
+      let callerCancelled = false;
+      let timedOut = false;
+      const abort = () => {
+        callerCancelled = true;
+        controller.abort();
+      };
+      context.signal.addEventListener("abort", abort, { once: true });
+      if (context.signal.aborted) abort();
+      const timeoutId = setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+      }, timeout * 1000);
 
       try {
         const url = buildSearchUrl({
@@ -415,9 +427,13 @@ export default {
           count: results.length,
         };
       } catch (error) {
-        const normalizedError = (error as Error).name === "AbortError"
-          ? new Error(`Search timeout after ${timeout} seconds`)
-          : error;
+        if (callerCancelled || context.signal.aborted) {
+          throw actionAbortError(context.signal);
+        }
+        const normalizedError =
+          timedOut || (error as Error).name === "AbortError"
+            ? new Error(`Search timeout after ${timeout} seconds`)
+            : error;
         lastError = normalizedError;
         if (attempt < MAX_ATTEMPTS && shouldRetry(normalizedError)) continue;
         const message = normalizedError instanceof Error
@@ -426,10 +442,17 @@ export default {
         throw new Error(`Web search failed: ${message}`);
       } finally {
         clearTimeout(timeoutId);
+        context.signal.removeEventListener("abort", abort);
       }
     }
 
     const message = lastError instanceof Error ? lastError.message : "unknown";
     throw new Error(`Web search failed: ${message}`);
   },
-};
+});
+
+export const webSearchTool = defineTool("web_search", webSearchAction, {
+  name: "Web Search",
+  description:
+    "Search the web and return structured page results. Use this to find relevant pages before fetching a specific URL.",
+});

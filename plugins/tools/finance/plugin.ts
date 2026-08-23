@@ -1,27 +1,47 @@
-import { createFinanceTool, type CreateFinanceToolOptions } from "./index.ts";
+import {
+  createFinanceAction,
+  type CreateFinanceActionOptions,
+  FINANCE_TOOL_DESCRIPTION,
+  FINANCE_TOOL_NAME,
+} from "./index.ts";
 import { type CopilotzPlugin, definePlugin } from "@copilotz/copilotz/plugins";
-import type { WorkflowTool } from "../internal/types.ts";
+import { defineTool, type ToolResource } from "../contracts.ts";
 
 export type CreateFinanceToolsPluginOptions =
-  & CreateFinanceToolOptions
+  & CreateFinanceActionOptions
   & Readonly<{ id?: string; version?: string }>;
+
+type EmptyMap = Readonly<Record<never, never>>;
+type FinanceToolsPlugin = CopilotzPlugin<
+  string,
+  string,
+  readonly [],
+  EmptyMap,
+  Readonly<{ finance: ReturnType<typeof createFinanceAction> }>,
+  EmptyMap,
+  Readonly<{ tools: Readonly<{ finance: ToolResource<"finance"> }> }>,
+  EmptyMap
+>;
+
+function financeToolsPlugin(
+  options: CreateFinanceToolsPluginOptions,
+): FinanceToolsPlugin {
+  const action = createFinanceAction({ getProvider: options.getProvider });
+  const tool = defineTool("finance", action, {
+    name: FINANCE_TOOL_NAME,
+    description: FINANCE_TOOL_DESCRIPTION,
+  });
+  return definePlugin({
+    id: options.id ?? "@copilotz/finance-tools",
+    version: options.version ?? "3.0.0",
+    actions: { finance: action },
+    resources: { tools: { finance: tool } },
+  });
+}
 
 /** Provides the finance capability as one logical, factory-created tool. */
 export function createFinanceToolsPlugin(
   options: CreateFinanceToolsPluginOptions = {},
-): CopilotzPlugin {
-  const tool = createFinanceTool({ getProvider: options.getProvider });
-  if (typeof tool.execute !== "function") {
-    throw new TypeError("Finance tool has no executor.");
-  }
-  const workflowTool = Object.freeze({
-    ...tool,
-    id: tool.id || tool.key,
-    execute: tool.execute,
-  }) as WorkflowTool;
-  return definePlugin({
-    id: options.id ?? "@copilotz/finance-tools",
-    version: options.version ?? "3.0.0",
-    resources: { tools: { [workflowTool.key]: workflowTool } },
-  });
+): FinanceToolsPlugin {
+  return financeToolsPlugin(options);
 }

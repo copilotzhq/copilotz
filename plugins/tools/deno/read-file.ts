@@ -6,19 +6,16 @@ interface ReadFileParams {
   includeLineNumbers?: boolean;
 }
 
+import { defineAction } from "@copilotz/copilotz/actions";
+import { defineTool } from "../contracts.ts";
 import { readWorkspaceFile, resolveWorkspacePath } from "./fs-utils.ts";
 
 const AUTO_TRUNCATE_LINES = 300;
 const MAX_FILE_SIZE_BYTES = 1_000_000; // 1MB — refuse to read without a range
 const MAX_OUTPUT_BYTES = 100_000; // 100KB — truncate output and warn
 
-export default {
-  key: "read_file",
-  name: "Read File",
-  description:
-    "Read a file from the current workspace, optionally limiting the response to a line range. " +
-    "Files over 300 lines are auto-truncated when no range is given. " +
-    "Files over 1MB require an explicit range. Output is capped at 100KB.",
+export const readFileAction = defineAction({
+  id: "copilotz.tools.deno.read_file",
   inputSchema: {
     type: "object",
     properties: {
@@ -113,4 +110,12 @@ export default {
       throw new Error(`Failed to read file: ${(error as Error).message}`);
     }
   },
-};
+});
+
+export const readFileTool = defineTool("read_file", readFileAction, {
+  name: "Read File",
+  description:
+    "Read a file from the current workspace, optionally limiting the response to a line range. " +
+    "Files over 300 lines are auto-truncated when no range is given. " +
+    "Files over 1MB require an explicit range. Output is capped at 100KB.",
+});

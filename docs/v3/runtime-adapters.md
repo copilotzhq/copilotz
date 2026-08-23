@@ -12,45 +12,44 @@ access to a filesystem, subprocess, socket, package loader, or other host API.
 The runtime hosting that worker grants those capabilities explicitly through
 factory-created adapters.
 
-For API and MCP tools, the portable text workflow uses a worker-local tool
-catalog. Static tool resources need no adapter. If `apis` or `mcpServers`
-resources exist without their corresponding generator, catalog resolution fails
-with a bounded configuration error instead of importing a runtime module or
-silently omitting tools.
+API and MCP integrations are factory-created plugins. Each factory completes
+discovery before registry composition and contributes native Actions plus
+matching data-only Tool Resources. Duplicate generated aliases or Action IDs
+fail composition instead of being silently replaced.
 
 ```ts
-import { createCopilotzWorker } from "@copilotz/copilotz/application";
-import { createServerWorkflowToolCatalog } from "@copilotz/copilotz/tools/catalog";
+import { createMcpToolsPlugin } from "@copilotz/copilotz/tools/mcp";
+import { createOpenApiToolsPlugin } from "@copilotz/copilotz/tools/openapi";
 import { connectMcp } from "@copilotz/copilotz/tools/mcp/stdio";
 
-const worker = await createCopilotzWorker({
-  database,
-  namespace: "customer-a",
-  id: "customer-a-worker",
-  transport,
-  core: {
-    text: {
-      toolCatalog: createServerWorkflowToolCatalog({ connectMcp }),
-    },
-  },
-  plugins,
+const openApiTools = createOpenApiToolsPlugin({ apis });
+const mcpTools = await createMcpToolsPlugin({
+  servers: mcpServers,
+  connect: connectMcp,
 });
+
+const plugins = [corePlugin, openApiTools, mcpTools];
 ```
 
-`createServerWorkflowToolCatalog()` on `/tools/catalog` grants Web-fetch OpenAPI
-generation and accepts an explicitly injected MCP connector. The first-party
-subprocess connector has one home, `/tools/mcp/stdio`, and is passed to that
-factory like any other host capability. Browser or Cloudflare workers omit it or
-inject a transport they support. A shared or remote Oxian worker constructs its
-catalog locally; dispatch payloads continue to contain delivery and resource
-identities, never generator closures, MCP clients, or transports.
+`createOpenApiToolsPlugin()` uses portable Web APIs. `createMcpToolsPlugin()`
+accepts a structural connection capability; discovery owns one short-lived
+connection and every Action invocation owns another. Connections close on
+success, failure, and cancellation. The first-party subprocess connector has one
+home, `/tools/mcp/stdio`, and is passed to that factory like any other host
+capability. Browser or Cloudflare workers omit it or inject a supported
+transport. Dispatch payloads contain delivery and resource identities, never
+factory closures, MCP clients, or transports.
 
-MCP integration is factory-first. `createMcpWorkflowToolGenerator({ connect })`
-accepts a structural connection capability. Discovery owns one short-lived
-connection, and every tool invocation owns another. All are closed by Copilotz,
-which avoids hidden resident clients and gives cancellation a transport-level
-boundary. The stdio implementation uses the official SDK internally but does not
-expose an SDK class as a Copilotz API.
+OpenAPI NDJSON output is append-only. Channel names must map to distinct stream
+IDs, each channel keeps the media type declared by its first record, and all
+closed channel batches materialize through one atomic content call.
+
+MCP call results are lowered before Action settlement. Lossless plain JSON is
+preserved recursively; standard image, audio, and embedded-resource bodies are
+prepared and materialized as one atomic batch, then replaced by canonical
+`ContentRef`s. Typed arrays, Blobs, streams, cyclic values, and objects with
+non-plain prototypes are rejected. Discovered schemas are cloned and deeply
+frozen before registry composition.
 
 This same boundary applies to filesystem, terminal, package resolution, server,
 and CLI capabilities: portable resources and execution semantics live in core;
@@ -65,11 +64,11 @@ imports. `createInteractiveCliIo()` and `startInteractiveCli()` live on
 explicit host choice. Deno and Bun can use that compatibility adapter; browser
 and worker deployments omit it.
 
-Its application convenience accepts `{ application, agent, scope }` and resolves
-terminal listings from `application.capabilities`. The portable state machine
-accepts `performRun` and an asynchronous `inspect` callback instead of parallel
-static agent/tool arrays, so adapter output cannot drift from runtime
-authorization.
+The portable state machine accepts `performRun` and an asynchronous `inspect`
+callback instead of parallel static agent/tool arrays. An embedding application
+can back `inspect` with Core's capability resolver over its composed plugin
+registry, so adapter output cannot drift from runtime authorization without
+adding an application-level capability facade.
 
 Runtime placement belongs to the owning package subpath, not to every exported
 symbol. Node runtime adapters and Deno/stdio Tool hosts therefore use the same
@@ -116,6 +115,11 @@ legacy asset store. The Deno service is worker-local: an embedded engine already
 targets one attached worker, while a shared hypervisor must configure a stable
 worker target (or inject an external terminal service) when shell state must
 survive deliveries.
+
+Service-created assets remain staged while `execute()` runs. The plugin first
+validates the complete service result as lossless plain JSON, then materializes
+all staged bodies once and remaps candidate IDs/refs in the returned value.
+Failure or an unsafe result therefore commits no partial asset graph.
 
 The first-party Gateway terminates at the Web Fetch contract. `gateway.fetch`
 maps `Request` values into the transport-neutral application, preserves raw

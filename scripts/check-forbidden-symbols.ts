@@ -32,6 +32,39 @@ const forbidden = [
   "connectStdioMcp",
   "createStdioServerWorkflowToolCatalog",
   "CreateStdioServerWorkflowToolCatalogOptions",
+  "WorkflowTool",
+  "WorkflowToolResult",
+  "WorkflowToolExecutionContext",
+  "WorkflowToolHostContext",
+  "WorkflowToolCatalog",
+  "WorkflowToolCatalogContext",
+  "WorkflowToolExecutor",
+  "WorkflowToolOutcome",
+  "WorkflowToolOutputOptions",
+  "DeferredWorkflowToolResult",
+  "DeferWorkflowToolOptions",
+  "CreateWorkflowToolExecutorOptions",
+  "CreateWorkflowToolCatalogOptions",
+  "GenerateApiWorkflowTools",
+  "GenerateMcpWorkflowTools",
+  "ResolveWorkflowAgentTools",
+  "createWorkflowToolExecutor",
+  "createWorkflowToolCatalog",
+  "createOpenApiWorkflowToolGenerator",
+  "createMcpWorkflowToolGenerator",
+  "createServerWorkflowToolCatalog",
+  "deferWorkflowTool",
+  "isDeferredWorkflowToolResult",
+  "isWorkflowToolResult",
+  "isWorkflowTool",
+  "executeToolBatchAction",
+  "callToolAction",
+  "CALL_TOOL_ACTION_ID",
+  "EXECUTE_TOOL_BATCH_ACTION_ID",
+  "generateApiTools",
+  "generateAllApiTools",
+  "generateMcpTools",
+  "toolExecutionId",
   "EventNativeRunHandle",
   "EventNativeRunInput",
   "brain_node",
@@ -133,6 +166,12 @@ for await (const file of files(repositoryRoot)) {
   if (allowed(file.path)) continue;
   for (let index = 0; index < lines.length; index += 1) {
     for (const symbol of forbidden) {
+      if (
+        symbol === "toolExecutionId" &&
+        file.path.startsWith("migration/content-v2/")
+      ) {
+        continue;
+      }
       const pattern = new RegExp(`\\b${symbol}\\b`);
       if (pattern.test(lines[index])) {
         violations.push(`${file.path}:${index + 1}: ${symbol}`);

@@ -10,7 +10,7 @@ export {
   coreSchedulesPlugin,
 } from "./plugin.ts";
 export { dispatchScheduledMessageProcessor } from "./processor.ts";
-export { scheduledMessagesTool } from "./tool.ts";
+export { scheduledJobsAction, scheduledJobsToolResource } from "./tool.ts";
 export { CORE_SCHEDULED_MESSAGE_PAYLOAD_TYPE } from "./types.ts";
 export type {
   CoreScheduledMessageInput,

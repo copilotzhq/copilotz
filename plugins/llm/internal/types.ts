@@ -345,28 +345,6 @@ export interface ToolCallStreamDelta {
   toolCallId?: string;
 }
 
-export interface ToolPipelineToolStage {
-  type: "tool";
-  id: string;
-  tool: {
-    id: string;
-    name?: string;
-  };
-  args: string;
-}
-
-export interface ToolPipelineJqStage {
-  type: "jq";
-  filter: string;
-}
-
-export type ToolPipelineStage = ToolPipelineToolStage | ToolPipelineJqStage;
-
-export interface ToolPipeline {
-  id: string;
-  stages: ToolPipelineStage[];
-}
-
 // Unified Tool Invocation payload mapping executions end-to-end
 export interface ToolInvocation {
   /** Framework-owned correlation ID. Model/provider-supplied IDs are ignored. */
@@ -384,12 +362,6 @@ export interface ToolInvocation {
     | "failed"
     | "expired"
     | "overwritten";
-  // Internal batch aggregator metadata
-  batchId?: string | null;
-  batchSize?: number | null;
-  batchIndex?: number | null;
-  /** Internal sequential pipeline plan. Present only on the root tool call. */
-  pipeline?: ToolPipeline;
 }
 
 // Response from chat completions with media processing results

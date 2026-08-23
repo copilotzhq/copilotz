@@ -1,67 +1,68 @@
-import { assertEquals, assertStrictEquals } from "@std/assert";
+import {
+  assert,
+  assertEquals,
+  assertRejects,
+  assertStrictEquals,
+  assertThrows,
+} from "@std/assert";
+import type { ActionContext } from "@copilotz/copilotz/actions";
+import type {
+  ContentRef,
+  ContentStreamAppendInput,
+  ContentStreamOpenInput,
+  PreparedContent,
+  PublishAssetInput,
+} from "@copilotz/copilotz/content";
 import type { API } from "../resources.ts";
-import type { WorkflowToolExecutionContext } from "../internal/types.ts";
-import { generateApiTools } from "./generator.ts";
+import { createOpenApiToolsPlugin } from "./generator.ts";
 
-Deno.test("OpenAPI preparation receives the tenant collection scope", async () => {
-  let observed:
-    | Parameters<NonNullable<API["prepareRequest"]>>[1]
-    | undefined;
-  const api: API = {
-    id: "scoped-api",
-    name: "Scoped API",
-    baseUrl: "https://example.test",
-    openApiSchema: {
-      openapi: "3.0.0",
-      paths: {
-        "/lookup": {
-          get: {
-            operationId: "scoped_lookup",
-            responses: { "200": { description: "ok" } },
-          },
-        },
-      },
-    },
-    prepareRequest(request, context) {
-      observed = context;
-      return request;
-    },
-  };
-  const collection = Object.freeze({ definition: { name: "records" } });
-  const executionContext = {
+type Executable = Readonly<{
+  execute(input: unknown, context: ActionContext): unknown | Promise<unknown>;
+}>;
+
+function action(
+  plugin: ReturnType<typeof createOpenApiToolsPlugin>,
+  alias: string,
+): Executable {
+  const value = plugin.actions[alias];
+  if (!value) throw new Error(`Missing generated Action '${alias}'.`);
+  return value as unknown as Executable;
+}
+
+function actionContext(
+  overrides: Partial<ActionContext> = {},
+): ActionContext {
+  return {
     namespace: "tenant-a",
-    processor: {},
-    collections: { records: collection },
-  } as unknown as WorkflowToolExecutionContext;
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = () =>
-    Promise.resolve(
-      new Response('{"ok":true}', {
-        headers: { "content-type": "application/json" },
-      }),
-    );
-  try {
-    const tool = generateApiTools(api)[0];
-    await tool.execute({}, executionContext);
-    assertEquals(observed?.namespace, "tenant-a");
-    assertStrictEquals(observed?.collections?.records, collection as never);
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-});
+    operationKey: "openapi-test",
+    identity: { correlationId: "correlation-a" },
+    action: {
+      id: "copilotz.tools.openapi.fixture.operation",
+      runId: "action-run-a",
+      metadata: { caller: "test" },
+    },
+    collections: {},
+    content: {},
+    streams: {},
+    signal: new AbortController().signal,
+    ...overrides,
+  } as unknown as ActionContext;
+}
 
-Deno.test("OpenAPI NDJSON responses stream output before returning their final value", async () => {
-  const api: API = {
-    id: "streaming-api",
-    name: "Streaming API",
+function api(
+  operationId: string,
+  options: Partial<API> = {},
+): API {
+  return {
+    id: "fixture-api",
+    name: "Fixture API",
     baseUrl: "https://example.test",
-    streamNdjson: true,
     openApiSchema: {
       openapi: "3.1.0",
       paths: {
-        "/terminal": {
+        "/operation": {
           post: {
-            operationId: "terminal",
+            operationId,
             requestBody: {
               content: {
                 "application/json": {
@@ -74,15 +75,92 @@ Deno.test("OpenAPI NDJSON responses stream output before returning their final v
         },
       },
     },
+    ...options,
   };
-  const seen: unknown[] = [];
-  const executionContext = {
-    emitOutput(value: unknown, options: unknown) {
-      seen.push({ value, options });
-      return Promise.resolve();
+}
+
+Deno.test("OpenAPI factory injects native Action context into request preparation", async () => {
+  let observed:
+    | Parameters<NonNullable<API["prepareRequest"]>>[1]
+    | undefined;
+  const definition = api("scoped_lookup", {
+    prepareRequest(request, context) {
+      observed = context;
+      return request;
     },
-    processor: { signal: new AbortController().signal },
-  } as unknown as WorkflowToolExecutionContext;
+  });
+  const collection = Object.freeze({ definition: { name: "records" } });
+  const context = actionContext({
+    collections: { records: collection } as unknown as ActionContext[
+      "collections"
+    ],
+  });
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = () => Promise.resolve(Response.json({ ok: true }));
+  try {
+    const plugin = createOpenApiToolsPlugin({ apis: [definition] });
+    await action(plugin, "scoped_lookup").execute({}, context);
+    assertEquals(observed?.apiId, "fixture-api");
+    assertEquals(observed?.actionAlias, "scoped_lookup");
+    assertEquals(observed?.actionRunId, "action-run-a");
+    assertStrictEquals(observed?.signal, context.signal);
+    assertEquals(observed?.namespace, "tenant-a");
+    assertStrictEquals(observed?.collections.records, collection as never);
+    assertEquals(Object.keys(plugin.actions), ["scoped_lookup"]);
+    assertEquals(
+      (plugin.resources.tools.scoped_lookup as { action: string }).action,
+      "scoped_lookup",
+    );
+    assert(!("execute" in (plugin.resources.tools.scoped_lookup as object)));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("OpenAPI NDJSON uses live Content Streams and materializes them before completion", async () => {
+  const definition = api("terminal", { streamNdjson: true });
+  const seen: unknown[] = [];
+  const ref: ContentRef = {
+    assetId: "stream-asset-a",
+    kind: "text",
+    role: "tool.output",
+    mediaType: "text/plain",
+  };
+  const prepared: PreparedContent = { content: [ref], assets: [] };
+  const context = actionContext({
+    streams: {
+      async open(input: ContentStreamOpenInput) {
+        seen.push({ type: "open", input });
+        return {
+          id: input.id ?? "stream-a",
+          offset: () => 0,
+          async append(value: ContentStreamAppendInput) {
+            seen.push({
+              type: "append",
+              value: new TextDecoder().decode(value.bytes),
+            });
+            return { startOffset: 0, endOffset: value.bytes.byteLength };
+          },
+          async close() {
+            seen.push({ type: "close" });
+            return prepared;
+          },
+          async abort() {},
+          async [Symbol.asyncDispose]() {},
+        };
+      },
+      follow() {
+        throw new Error("not used");
+      },
+    },
+    content: {
+      materialize(value: PreparedContent) {
+        assertEquals(value, prepared);
+        seen.push({ type: "materialize" });
+        return Promise.resolve(value.content);
+      },
+    },
+  } as unknown as Partial<ActionContext>);
   const originalFetch = globalThis.fetch;
   globalThis.fetch = () =>
     Promise.resolve(
@@ -94,40 +172,466 @@ Deno.test("OpenAPI NDJSON responses stream output before returning their final v
             mode: "append",
             delta: "hello\n",
           }),
-          JSON.stringify({
-            type: "output",
-            channel: "stderr",
-            mode: "append",
-            delta: "warning\n",
-          }),
           JSON.stringify({ type: "result", value: { exitCode: 0 } }),
           "",
         ].join("\n"),
-        {
-          headers: { "content-type": "application/x-ndjson; charset=utf-8" },
-        },
+        { headers: { "content-type": "application/x-ndjson" } },
       ),
     );
   try {
-    const result = await generateApiTools(api)[0].execute({}, executionContext);
-    assertEquals(seen, [{
-      value: "hello\n",
-      options: { channel: "stdout", mode: "append" },
-    }, {
-      value: "warning\n",
-      options: { channel: "stderr", mode: "append" },
-    }]);
-    assertEquals(result, { exitCode: 0 });
+    const result = await action(
+      createOpenApiToolsPlugin({ apis: [definition] }),
+      "terminal",
+    ).execute({}, context);
+    assertEquals(result, {
+      exitCode: 0,
+      streams: { stdout: ref },
+    });
+    assertEquals(seen.map((entry) => (entry as { type: string }).type), [
+      "open",
+      "append",
+      "close",
+      "materialize",
+    ]);
   } finally {
     globalThis.fetch = originalFetch;
   }
 });
 
-Deno.test("OpenAPI response assets become canonical attachments without leaking base64", async () => {
-  const api: API = {
-    id: "asset-api",
-    name: "Asset API",
-    baseUrl: "https://example.test",
+Deno.test("OpenAPI NDJSON aborts every open stream on missing and error terminals", async () => {
+  const definition = api("terminal_failure", { streamNdjson: true });
+  const originalFetch = globalThis.fetch;
+  try {
+    for (
+      const terminal of [
+        "",
+        JSON.stringify({ type: "error", error: { message: "failed" } }),
+      ]
+    ) {
+      let aborts = 0;
+      const context = actionContext({
+        streams: {
+          async open(input: ContentStreamOpenInput) {
+            return {
+              id: input.id ?? "stream-a",
+              offset: () => 0,
+              append: () => Promise.resolve({ startOffset: 0, endOffset: 1 }),
+              close: () => Promise.resolve({ content: [], assets: [] }),
+              abort: () => {
+                aborts += 1;
+                return Promise.resolve();
+              },
+              async [Symbol.asyncDispose]() {},
+            };
+          },
+          follow() {
+            throw new Error("not used");
+          },
+        },
+      } as unknown as Partial<ActionContext>);
+      globalThis.fetch = () =>
+        Promise.resolve(
+          new Response(
+            [
+              JSON.stringify({
+                type: "output",
+                channel: "stdout",
+                delta: "partial",
+              }),
+              terminal,
+              "",
+            ].join("\n"),
+            {
+              headers: { "content-type": "application/x-ndjson" },
+            },
+          ),
+        );
+      await assertRejects(async () =>
+        await action(
+          createOpenApiToolsPlugin({ apis: [definition] }),
+          "terminal_failure",
+        ).execute({}, context)
+      );
+      assertEquals(aborts, 1);
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("OpenAPI NDJSON close failure aborts that and every later writer", async () => {
+  const definition = api("terminal_close_failure", { streamNdjson: true });
+  const states = new Map<string, { closes: number; aborts: number }>();
+  let materializeCalls = 0;
+  const context = actionContext({
+    streams: {
+      async open(input: ContentStreamOpenInput) {
+        const channel = String(input.metadata?.channel);
+        const state = { closes: 0, aborts: 0 };
+        states.set(channel, state);
+        return {
+          id: input.id ?? channel,
+          offset: () => 0,
+          append: () => Promise.resolve({ startOffset: 0, endOffset: 1 }),
+          close: () => {
+            state.closes += 1;
+            if (channel === "stderr") {
+              return Promise.reject(new Error("close failed"));
+            }
+            return Promise.resolve({ content: [], assets: [] });
+          },
+          abort: () => {
+            state.aborts += 1;
+            return Promise.resolve();
+          },
+          async [Symbol.asyncDispose]() {},
+        };
+      },
+      follow() {
+        throw new Error("not used");
+      },
+    },
+    content: {
+      materialize: () => {
+        materializeCalls += 1;
+        return Promise.resolve([]);
+      },
+    },
+  } as unknown as Partial<ActionContext>);
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = () =>
+    Promise.resolve(
+      new Response(
+        [
+          JSON.stringify({ type: "output", channel: "stdout", delta: "one" }),
+          JSON.stringify({ type: "output", channel: "stderr", delta: "two" }),
+          JSON.stringify({ type: "output", channel: "trace", delta: "three" }),
+          JSON.stringify({ type: "result", value: { exitCode: 0 } }),
+          "",
+        ].join("\n"),
+        {
+          headers: { "content-type": "application/x-ndjson" },
+        },
+      ),
+    );
+  try {
+    await assertRejects(
+      async () =>
+        await action(
+          createOpenApiToolsPlugin({ apis: [definition] }),
+          "terminal_close_failure",
+        ).execute({}, context),
+      Error,
+      "close failed",
+    );
+    assertEquals(
+      states,
+      new Map([
+        ["stdout", { closes: 1, aborts: 0 }],
+        ["stderr", { closes: 1, aborts: 1 }],
+        ["trace", { closes: 0, aborts: 1 }],
+      ]),
+    );
+    assertEquals(materializeCalls, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("OpenAPI NDJSON materializes all closed channels in one batch", async () => {
+  const definition = api("terminal_combined", { streamNdjson: true });
+  const refs: Record<string, ContentRef> = {
+    stdout: {
+      assetId: "stream-stdout",
+      kind: "text",
+      role: "tool.output",
+      mediaType: "text/plain",
+    },
+    stderr: {
+      assetId: "stream-stderr",
+      kind: "text",
+      role: "tool.output",
+      mediaType: "text/plain",
+    },
+  };
+  const assets = Object.fromEntries(
+    Object.entries(refs).map(([channel, ref]) => [channel, {
+      id: ref.assetId,
+      namespace: "tenant-a",
+      mediaType: ref.mediaType,
+      body: new TextEncoder().encode(channel),
+      byteLength: channel.length,
+      digest: `sha256:${channel}` as const,
+    }]),
+  );
+  let materializeCalls = 0;
+  const context = actionContext({
+    streams: {
+      async open(input: ContentStreamOpenInput) {
+        const channel = String(input.metadata?.channel);
+        return {
+          id: input.id ?? channel,
+          offset: () => 0,
+          append: () => Promise.resolve({ startOffset: 0, endOffset: 1 }),
+          close: () =>
+            Promise.resolve({
+              content: [refs[channel]],
+              assets: [assets[channel]],
+            }),
+          abort: () => Promise.resolve(),
+          async [Symbol.asyncDispose]() {},
+        };
+      },
+      follow() {
+        throw new Error("not used");
+      },
+    },
+    content: {
+      materialize(prepared: PreparedContent) {
+        materializeCalls += 1;
+        assertEquals(prepared.content, [refs.stdout, refs.stderr]);
+        assertEquals(prepared.assets, [assets.stdout, assets.stderr]);
+        return Promise.resolve(prepared.content);
+      },
+    },
+  } as unknown as Partial<ActionContext>);
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = () =>
+    Promise.resolve(
+      new Response(
+        [
+          JSON.stringify({ type: "output", channel: "stdout", delta: "one" }),
+          JSON.stringify({ type: "output", channel: "stderr", delta: "two" }),
+          JSON.stringify({ type: "result", value: { exitCode: 0 } }),
+          "",
+        ].join("\n"),
+        { headers: { "content-type": "application/x-ndjson" } },
+      ),
+    );
+  try {
+    const result = await action(
+      createOpenApiToolsPlugin({ apis: [definition] }),
+      "terminal_combined",
+    ).execute({}, context);
+    assertEquals(materializeCalls, 1);
+    assertEquals(result, {
+      exitCode: 0,
+      streams: { stdout: refs.stdout, stderr: refs.stderr },
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("OpenAPI NDJSON settles all writers before one failing materialization", async () => {
+  const definition = api("terminal_materialize_failure", {
+    streamNdjson: true,
+  });
+  let closes = 0;
+  let materializeCalls = 0;
+  const context = actionContext({
+    streams: {
+      async open(input: ContentStreamOpenInput) {
+        const channel = String(input.metadata?.channel);
+        const ref: ContentRef = {
+          assetId: `stream-${channel}`,
+          kind: "text",
+          role: "tool.output",
+          mediaType: "text/plain",
+        };
+        return {
+          id: input.id ?? channel,
+          offset: () => 0,
+          append: () => Promise.resolve({ startOffset: 0, endOffset: 1 }),
+          close: () => {
+            closes += 1;
+            return Promise.resolve({ content: [ref], assets: [] });
+          },
+          abort: () => Promise.resolve(),
+          async [Symbol.asyncDispose]() {},
+        };
+      },
+      follow() {
+        throw new Error("not used");
+      },
+    },
+    content: {
+      materialize(prepared: PreparedContent) {
+        materializeCalls += 1;
+        assertEquals(prepared.content.length, 2);
+        return Promise.reject(new Error("materialize failed"));
+      },
+    },
+  } as unknown as Partial<ActionContext>);
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = () =>
+    Promise.resolve(
+      new Response(
+        [
+          JSON.stringify({ type: "output", channel: "stdout", delta: "one" }),
+          JSON.stringify({ type: "output", channel: "stderr", delta: "two" }),
+          JSON.stringify({ type: "result", value: {} }),
+          "",
+        ].join("\n"),
+        { headers: { "content-type": "application/x-ndjson" } },
+      ),
+    );
+  try {
+    await assertRejects(
+      () =>
+        action(
+          createOpenApiToolsPlugin({ apis: [definition] }),
+          "terminal_materialize_failure",
+        ).execute({}, context) as Promise<unknown>,
+      Error,
+      "materialize failed",
+    );
+    assertEquals(closes, 2);
+    assertEquals(materializeCalls, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("OpenAPI NDJSON requires exactly one ref from every closed channel", async () => {
+  const definition = api("terminal_invalid_close", { streamNdjson: true });
+  let materializeCalls = 0;
+  const context = actionContext({
+    streams: {
+      async open(input: ContentStreamOpenInput) {
+        return {
+          id: input.id ?? "stream-a",
+          offset: () => 0,
+          append: () => Promise.resolve({ startOffset: 0, endOffset: 1 }),
+          close: () => Promise.resolve({ content: [], assets: [] }),
+          abort: () => Promise.resolve(),
+          async [Symbol.asyncDispose]() {},
+        };
+      },
+      follow() {
+        throw new Error("not used");
+      },
+    },
+    content: {
+      materialize() {
+        materializeCalls += 1;
+        return Promise.resolve([]);
+      },
+    },
+  } as unknown as Partial<ActionContext>);
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = () =>
+    Promise.resolve(
+      new Response(
+        [
+          JSON.stringify({ type: "output", channel: "stdout", delta: "one" }),
+          JSON.stringify({ type: "result", value: {} }),
+          "",
+        ].join("\n"),
+        { headers: { "content-type": "application/x-ndjson" } },
+      ),
+    );
+  try {
+    await assertRejects(
+      () =>
+        action(
+          createOpenApiToolsPlugin({ apis: [definition] }),
+          "terminal_invalid_close",
+        ).execute({}, context) as Promise<unknown>,
+      TypeError,
+      "exactly one ContentRef",
+    );
+    assertEquals(materializeCalls, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("OpenAPI NDJSON rejects non-append and inconsistent channel declarations", async () => {
+  const definition = api("terminal_invalid_output", { streamNdjson: true });
+  const cases = [
+    {
+      records: [
+        { type: "output", channel: "stdout", mode: "replace", delta: "one" },
+      ],
+      message: "mode 'replace' is unsupported",
+      opens: 0,
+    },
+    {
+      records: [
+        {
+          type: "output",
+          channel: "stdout",
+          mediaType: "text/plain",
+          delta: "one",
+        },
+        {
+          type: "output",
+          channel: "stdout",
+          mediaType: "application/json",
+          delta: "two",
+        },
+      ],
+      message: "changed mediaType",
+      opens: 1,
+    },
+    {
+      records: [
+        { type: "output", channel: "a-b", delta: "one" },
+        { type: "output", channel: "a_b", delta: "two" },
+      ],
+      message: "produce the same stream ID",
+      opens: 1,
+    },
+  ] as const;
+  const originalFetch = globalThis.fetch;
+  try {
+    for (const testCase of cases) {
+      let opens = 0;
+      const context = actionContext({
+        streams: {
+          async open(input: ContentStreamOpenInput) {
+            opens += 1;
+            return {
+              id: input.id ?? "stream-a",
+              offset: () => 0,
+              append: () => Promise.resolve({ startOffset: 0, endOffset: 1 }),
+              close: () => Promise.resolve({ content: [], assets: [] }),
+              abort: () => Promise.resolve(),
+              async [Symbol.asyncDispose]() {},
+            };
+          },
+          follow() {
+            throw new Error("not used");
+          },
+        },
+      } as unknown as Partial<ActionContext>);
+      globalThis.fetch = () =>
+        Promise.resolve(
+          new Response(
+            [...testCase.records, { type: "result", value: {} }]
+              .map((record) => JSON.stringify(record)).join("\n") + "\n",
+            { headers: { "content-type": "application/x-ndjson" } },
+          ),
+        );
+      await assertRejects(
+        () =>
+          action(
+            createOpenApiToolsPlugin({ apis: [definition] }),
+            "terminal_invalid_output",
+          ).execute({}, context) as Promise<unknown>,
+        TypeError,
+        testCase.message,
+      );
+      assertEquals(opens, testCase.opens);
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("OpenAPI response assets publish canonical content and return a ContentRef", async () => {
+  const definition = api("asset_export", {
     responseAssets: {
       asset_export: {
         dataBase64Field: "dataBase64",
@@ -135,56 +639,177 @@ Deno.test("OpenAPI response assets become canonical attachments without leaking 
         nameField: "path",
       },
     },
-    openApiSchema: {
-      openapi: "3.1.0",
-      paths: {
-        "/assets/export": {
-          post: {
-            operationId: "asset_export",
-            requestBody: {
-              content: {
-                "application/json": {
-                  schema: { type: "object", properties: {} },
-                },
-              },
-            },
-            responses: { "200": { description: "ok" } },
-          },
-        },
+  });
+  let published = "";
+  const context = actionContext({
+    content: {
+      publish(input: Omit<PublishAssetInput, "namespace" | "idempotencyKey">) {
+        published = new TextDecoder().decode(input.body);
+        return Promise.resolve({
+          id: "asset-a",
+          namespace: "tenant-a",
+          mediaType: input.mediaType,
+          byteLength: input.body.byteLength,
+          digest: "sha256:fixture",
+          state: "ready",
+          location: { kind: "database", key: "asset-a" },
+          createdAt: "2026-08-23T00:00:00.000Z",
+        });
       },
     },
-  };
+  } as unknown as Partial<ActionContext>);
   const originalFetch = globalThis.fetch;
   globalThis.fetch = () =>
     Promise.resolve(Response.json({
       path: "outputs/report.csv",
       mimeType: "text/csv",
-      size: 18,
       dataBase64: btoa("name,value\nalpha,1\n"),
-      workspaceGeneration: 2,
-      environment: null,
     }));
   try {
-    const result = await generateApiTools(api)[0].execute({});
+    const result = await action(
+      createOpenApiToolsPlugin({ apis: [definition] }),
+      "asset_export",
+    ).execute({}, context);
+    assertEquals(published, "name,value\nalpha,1\n");
     assertEquals(result, {
-      kind: "copilotz.workflow-tool.result.v1",
-      output: {
-        path: "outputs/report.csv",
-        mimeType: "text/csv",
-        size: 18,
-        workspaceGeneration: 2,
-        environment: null,
-      },
-      attachments: [{
-        type: "file",
-        bytes: new TextEncoder().encode("name,value\nalpha,1\n"),
-        mediaType: "text/csv",
+      path: "outputs/report.csv",
+      mimeType: "text/csv",
+      asset: {
+        assetId: "asset-a",
+        kind: "file",
         role: "attachment",
+        mediaType: "text/csv",
         disposition: "attachment",
         name: "report.csv",
-      }],
+      },
     });
     assertEquals(JSON.stringify(result).includes("dataBase64"), false);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("OpenAPI aliases are deterministic and collisions fail composition", () => {
+  const normalized = createOpenApiToolsPlugin({
+    apis: [api("GET /records")],
+  });
+  assertEquals(Object.keys(normalized.actions), ["api_GET_records"]);
+  assertThrows(
+    () =>
+      createOpenApiToolsPlugin({
+        apis: [
+          api("same", { id: "one" }),
+          api("same", { id: "two" }),
+        ],
+      }),
+    TypeError,
+    "alias collision 'same'",
+  );
+});
+
+Deno.test("OpenAPI Action cancellation remains AbortError", async () => {
+  const controller = new AbortController();
+  const context = actionContext({ signal: controller.signal });
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (_input, init) =>
+    new Promise((_resolve, reject) => {
+      if (init?.signal?.aborted) {
+        reject(new DOMException("cancelled", "AbortError"));
+        return;
+      }
+      init?.signal?.addEventListener("abort", () =>
+        reject(new DOMException("cancelled", "AbortError")), { once: true });
+    });
+  try {
+    const execution = action(
+      createOpenApiToolsPlugin({ apis: [api("cancel_request")] }),
+      "cancel_request",
+    ).execute({}, context);
+    controller.abort();
+    const error = await assertRejects(async () => await execution);
+    assertEquals((error as Error).name, "AbortError");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("OpenAPI dynamic-auth caches are isolated per generated API instance", async () => {
+  const dynamicApi = (authUrl: string): API =>
+    api("authenticated", {
+      id: "same-id",
+      name: "Same Display Name",
+      auth: {
+        type: "dynamic",
+        authEndpoint: { url: authUrl },
+        tokenExtraction: { type: "bearer" },
+        cache: { enabled: true, duration: 3_600 },
+      },
+    });
+  const first = createOpenApiToolsPlugin({
+    apis: [dynamicApi("https://auth-a.test/token")],
+  });
+  const second = createOpenApiToolsPlugin({
+    apis: [dynamicApi("https://auth-b.test/token")],
+  });
+  const authCalls: string[] = [];
+  const apiAuthorizations: string[] = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (input, init) => {
+    const url = String(input);
+    if (url.startsWith("https://auth-")) {
+      authCalls.push(url);
+      return Promise.resolve(new Response(url.includes("auth-a") ? "a" : "b"));
+    }
+    apiAuthorizations.push(
+      new Headers(init?.headers).get("authorization") ?? "",
+    );
+    return Promise.resolve(Response.json({ ok: true }));
+  };
+  try {
+    await action(first, "authenticated").execute({}, actionContext());
+    await action(second, "authenticated").execute({}, actionContext());
+    assertEquals(authCalls, [
+      "https://auth-a.test/token",
+      "https://auth-b.test/token",
+    ]);
+    assertEquals(apiAuthorizations, ["Bearer a", "Bearer b"]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("OpenAPI dynamic authentication honors Action cancellation", async () => {
+  const definition = api("auth_cancel", {
+    auth: {
+      type: "dynamic",
+      authEndpoint: { url: "https://auth-cancel.test/token" },
+      tokenExtraction: { type: "bearer" },
+    },
+  });
+  const controller = new AbortController();
+  const cancellation = new Error("tenant cancelled authentication");
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (_input, init) =>
+    new Promise((_resolve, reject) => {
+      if (init?.signal?.aborted) {
+        reject(init.signal.reason);
+        return;
+      }
+      init?.signal?.addEventListener(
+        "abort",
+        () => reject(init.signal?.reason),
+        { once: true },
+      );
+    });
+  try {
+    const execution = action(
+      createOpenApiToolsPlugin({ apis: [definition] }),
+      "auth_cancel",
+    ).execute({}, actionContext({ signal: controller.signal }));
+    controller.abort(cancellation);
+    const error = await assertRejects(async () => await execution);
+    assertEquals((error as Error).name, "AbortError");
+    assertEquals((error as Error).message, cancellation.message);
   } finally {
     globalThis.fetch = originalFetch;
   }

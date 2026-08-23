@@ -48,12 +48,12 @@ knowledge records, schedules, and custom collections are graph nodes with typed
 edges. Thread activity and ordering are updated transactionally; there is no
 separate thread table.
 
-LLM generations, sessions, and tool executions are durable Actions, not semantic
-graph nodes. Their persisted lifecycle events are self-contained and can drive
-later Processors directly. Internal provider retries remain accounting inside
-the LLM Action output unless a plugin deliberately declares a separate provider
-Action. Messages remain graph records because they are the canonical transcript
-used to reconstruct a thread or conversation.
+LLM calls and tool executions are durable Actions, not semantic graph nodes.
+Their persisted lifecycle events are self-contained and can drive later
+Processors directly. Internal provider retries remain accounting inside the LLM
+Action output unless a plugin deliberately declares a separate provider Action.
+Messages remain graph records because they are the canonical transcript used to
+reconstruct a thread or conversation.
 
 ## Event model
 
@@ -63,9 +63,11 @@ causation, correlation, and subject metadata. Ephemeral deltas share the event
 vocabulary but have no database ID or position.
 
 Collection mutations emit events derived from the Collection name, such as
-`message.created`. Executable work emits lifecycle events derived from the
-Action identity, such as `llm.generate.invoked`, `tool.call.completed`, and
-`tool.call.failed`. Both use the same durable event and delivery backbone.
+`message.created`. Executable work emits lifecycle events derived from its
+declared Action identity, such as `llm.call.invoked` or
+`copilotz.tools.web.search.completed`. Every concrete tool is an Action; there
+is no generic tool-call wrapper lifecycle. Collections and Actions use the same
+durable event and delivery backbone.
 
 Recipients are not persisted as work merely because they can observe an event.
 Only matched durable processors create delivery rows. UI listeners, public
@@ -110,10 +112,10 @@ runtime, and their instructions/files are disclosed lazily through the plugin's
 portable reader.
 
 Availability is separate from authority. Agents receive explicit tool, agent,
-and skill grants; omission means none, while `{ all: true }` is the deliberate
-broad-access form. `ask` and skill disclosure tools are derived implementation
-mechanisms of higher-level grants. Application introspection resolves the same
-catalog used by prompts and durable execution.
+and skill alias lists; omission means none. `ask` and skill disclosure tools are
+derived implementation mechanisms of higher-level grants. Core resolves those
+grants directly against the composed Resource and Action maps used for prompting
+and durable execution; there is no separate Tool catalog.
 
 ## Stream model
 

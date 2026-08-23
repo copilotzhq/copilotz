@@ -26,17 +26,19 @@ const worker = await createCopilotz({
 ```
 
 Omitting `role` selects the embedded topology. It owns a private in-process
-Gateway and Worker unless the caller injects database or dispatch infrastructure.
-Gateway and Worker options use the same plugin, resource, adapter, asset, and
-persistence configuration; `Gateway` adds dispatch/transport placement and
-`Worker` adds the Oxian worker connection options.
+Gateway and Worker unless the caller injects database or dispatch
+infrastructure. Gateway and Worker options use the same plugin, resource,
+adapter, asset, and persistence configuration; `Gateway` adds dispatch/transport
+placement and `Worker` adds the Oxian worker connection options.
 
 ## Returned role surfaces
 
 The embedded application has exactly:
 
 ```ts
-{ send, observe, close }
+{
+  send, observe, close;
+}
 ```
 
 Gateway returns that same base surface plus `fetch(request)`. Worker returns
@@ -93,3 +95,12 @@ subpaths: `/actions`, `/collections`, `/content`, `/events`, `/plugins`, and
 `/application` exports generic application types only; it does not expose a
 factory or runtime authority. `/server` remains an explicit server-projection
 package for host integrations, not a backdoor to runtime internals.
+
+Host-specific entrypoints are `/adapters/deno`, `/core/cli`, `/core/cli/node`,
+`/skills/deno`, `/tools/deno`, `/tools/mcp/stdio`, and
+`/tools/persistent-terminal/deno`. There are no generic `/adapters`,
+`/adapters/node`, `/domain`, or `/attachments` subpaths.
+
+The sole database upgrade is `/migration/v4#migrateToV4`, restricted to the
+exact Copilotz 0.47/0.48 legacy graph profile. See
+[the migration guide](migration-v4.md).

@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.62.0 — 2026-08-23
+
+Final plugin-first runtime and deployed-data migration release.
+
+### Breaking
+
+- The root now exposes one application factory and the narrow
+  `{ send, observe, close }` surface. Runtime internals, semantic DTOs, and host
+  capabilities live on explicit subpaths or inside their owning plugins.
+- LLM calls and every concrete Tool are native Actions. Model Resources and LLM
+  Adapters are application-owned; Tool Resources are data-only presentations of
+  the same Action aliases Core invokes.
+- Goals, Channels, Memory, Knowledge, Skills, Schedules, Usage, and Admin are
+  ordinary plugins built from Collections, Actions, Processors, Resources, and
+  Adapters. The legacy controller/catalog/executor paths are removed.
+- `/domain`, `/attachments`, `/adapters`, `/adapters/node`, `/migration/v1`,
+  `/migration/content-v2`, and `/migration/memory-v4` are removed.
+
+### Added
+
+- Generic application stream observation through `/streams`, with one
+  subscriber-owned byte follower per `stream.output` descriptor.
+- Core-owned conversation contracts, projections, and portable CLI adapters on
+  `/core`, `/core/cli`, and `/core/cli/node`.
+- The sole deployed-data migration, `/migration/v4#migrateToV4`, for the exact
+  legacy graph profile used by Copilotz 0.47/0.48. It archives old tables,
+  creates ordinary v4 source Events, rebuilds and verifies projections, and
+  writes the v4 readiness marker only after successful verification.
+
+### Verified
+
+- A frozen real Gilpinna 0.48 PGlite fixture preserves all 12 messages and both
+  original Asset byte streams, resumes after a crash immediately before the
+  readiness marker, and continues through the final Core/LLM seam.
+- The package passes the complete type, architecture, boundary, runtime test,
+  and publish dry-run ladder.
+
 ## 0.61.0 — 2026-08-18
 
 Plugin-first event-sourced core. Conversation collections, text/ask processors,

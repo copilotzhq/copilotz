@@ -23,7 +23,7 @@ import { reviseMessageAction } from "./resources/actions/message.ts";
 import { askAction, askTool } from "./resources/tools/ask.ts";
 
 export const CORE_PLUGIN_ID = "@copilotz/core";
-export const CORE_PLUGIN_VERSION = "0.61.0";
+export const CORE_PLUGIN_VERSION = "0.62.0";
 
 export type CoreCollections = Readonly<{
   participant: typeof participantCollection;

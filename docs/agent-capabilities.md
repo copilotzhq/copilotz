@@ -57,22 +57,20 @@ The generic runtime installs no semantic plugins implicitly. Applications
 compose `corePlugin` and any native tools, web tools, finance, memory, usage,
 schedules, knowledge, or skills explicitly.
 
-## Canonical introspection
+## Canonical resolution
 
 Core resolves static, OpenAPI-generated, and MCP-generated Tool Resources from
 the composed registry. Each selected Resource names the same alias in the
 composed Action map, and Core invokes that Action directly. There is no second
 Tool catalog or execution registry.
 
-An application or adapter that needs the same effective-grant view can construct
-the optional Core resolver over that registry:
+Core's optional resolver consumes the composed plugin registry inside a trusted
+host or plugin boundary:
 
 ```ts
 import { createAgentCapabilityResolver } from "@copilotz/copilotz/core";
 
-const capabilities = createAgentCapabilityResolver({
-  registry: app.plugins,
-});
+const capabilities = createAgentCapabilityResolver({ registry });
 const view = await capabilities.resolve({ agent: "support" });
 
 view.tools; // alias, data-only Resource, and explicit/derived grant
@@ -80,13 +78,13 @@ view.agents;
 view.skills;
 ```
 
-The portable CLI accepts an injected `inspect` callback. An embedding adapter
-may back that callback with this resolver so its `/tools`, `/agents`, and
-`/skills` views cannot drift from Core's grant rules:
+The public application does not expose its registry. A trusted embedding that
+already owns composition may back the portable CLI's `inspect` callback with the
+same resolver so its `/tools`, `/agents`, and `/skills` views cannot drift:
 
 ```ts
 startInteractiveCli({
-  performRun,
+  application: { send: app.send, namespace: "acme" },
   scope,
   inspect,
 });

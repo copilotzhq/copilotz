@@ -1,138 +1,121 @@
 # Architecture
 
-Copilotz separates durable meaning from execution placement. The north-star loop
-is: applications send plugin-owned input envelopes, runtime persists and
-dispatches Events, plugin Processors react, and plugin-owned Actions or
-Collections emit more Events.
+Copilotz separates durable meaning from execution placement. Applications send
+plugin-owned input envelopes; the runtime persists and dispatches immutable
+Events; plugin Processors react by invoking Actions or mutating Collections.
 
 ```mermaid
 flowchart LR
-  app["createCopilotz(context)"]
-  event[("Event")]
-
-  app -- "send(plugin input envelope)" --> event
-  event -- "observe()" --> app
-
-  subgraph plugins["Plugins"]
-    direction LR
-    processor["Processor<br/><small>listens to events</small>"]
-    actions["Actions"]
-    mutations["Mutations<br/><small>Collections</small>"]
-
-    processor -- "runs" --> actions
-    processor -- "runs" --> mutations
-  end
-
-  event -- "dispatches to" --> processor
-  actions -- "emits<br/><small>&lt;actionId&gt;.invoked / completed / failed / cancelled</small>" --> event
-  mutations -- "emits<br/><small>&lt;collection&gt;.created / updated / deleted</small>" --> event
+  app["application.send"] --> event[("Event")]
+  event --> processor["Processor"]
+  processor --> action["Action"]
+  processor --> collection["Collection"]
+  action --> event
+  collection --> event
 ```
 
-Important boundaries:
+## Ownership
 
-- `copilotz.send(...)` is runtime-neutral application ingress. It does not
-  invoke a plugin Action directly or promote plugin APIs onto the application
-  object.
-- Plugins may export typed helpers that build input envelopes, such as
-  `core.message(...)`; runtime persists those envelopes opaquely.
-- Inside Processors and Actions, business operations use direct aliases such as
-  `context.actions.generate(...)` and `context.collections.message.create(...)`.
-- Action lifecycle Event Bodies contain the invocation input and the terminal
-  output or error. Processors receive that resolved data directly; there is no
-  separate Action invocation or query API.
+The generic runtime owns:
 
-## Domain model
+- Event Bodies, Events, sparse durable deliveries, and settlement scopes;
+- Collection planning, graph projection, content adoption, and replay;
+- Action lifecycle persistence and invocation identity;
+- application composition, persistence recovery, and execution transport;
+- generic progressive Bodies and stream observation.
 
-A conversation is a thread plus participant graph. Messages, assets, memories,
-knowledge records, schedules, and custom collections are graph nodes with typed
-edges. Thread activity and ordering are updated transactionally; there is no
-separate thread table.
+Plugins own semantic contracts and workflows. Core owns participants, threads,
+messages, Agent Resources, prompt policy, and the conversation loop. LLM owns
+`llm.call`, Model Resources, Adapter contracts, and provider factories. Tools,
+Goals, Channels, Memory, Knowledge, Skills, Schedules, Usage, and Admin own
+their respective Collections, Actions, Processors, Resources, and Adapters.
 
-LLM calls and tool executions are durable Actions, not semantic graph nodes.
-Their persisted lifecycle events are self-contained and can drive later
-Processors directly. Internal provider retries remain accounting inside the LLM
-Action output unless a plugin deliberately declares a separate provider Action.
-Messages remain graph records because they are the canonical transcript used to
-reconstruct a thread or conversation.
+Runtime production code never imports a concrete plugin.
 
-## Event model
+## Five plugin primitives
 
-A durable event is an immutable fact with a ULID and database-assigned monotonic
-position. An envelope is simply an event carrying routing, visibility,
-causation, correlation, and subject metadata. Ephemeral deltas share the event
-vocabulary but have no database ID or position.
+- Collections describe durable state.
+- Actions describe executable capabilities.
+- Processors decide when capabilities or mutations run.
+- Resources are named declarative data and policy.
+- Adapters are runtime-only interchangeable implementations.
 
-Collection mutations emit events derived from the Collection name, such as
-`message.created`. Executable work emits lifecycle events derived from its
-declared Action identity, such as `llm.call.invoked` or
-`copilotz.tools.web.search.completed`. Every concrete tool is an Action; there
-is no generic tool-call wrapper lifecycle. Collections and Actions use the same
-durable event and delivery backbone.
+Resources and Adapters compose independently. Application overlays win after
+plugin dependencies and root plugins. Plain typed values are canonical; helpers
+such as `defineAgent`, `defineModel`, and `defineTool` add validation and
+inference, not privileged object identities.
 
-Recipients are not persisted as work merely because they can observe an event.
-Only matched durable processors create delivery rows. UI listeners, public
-participants, channel observers, and raw media frames do not multiply database
-work.
+## Durable lifecycle
 
-## Execution model
+A Collection mutation commits its projection, Event Body, immutable Event, and
+matched delivery obligations atomically. An Action emits
+`<actionId>.invoked|progress|completed|failed|cancelled`; those Events are its
+only operational record.
 
-Oxian dispatches logical workload identities. Copilotz dispatch payloads contain
-delivery/resource IDs, never serialized closures or physical worker identity.
-The default `createCopilotz()` application composes a private Gateway and Worker
-over one uniquely addressed in-process event-fabric transport. Explicit
-topologies use the same factory with `role: "gateway"` and `role: "worker"`
-and the same plain transport vocabulary:
+Action metadata is plugin-owned, canonical JSON. It is persisted in every
+lifecycle Event Body and received as `context.action.metadata`. It is not copied
+to the generic Event envelope or inherited by nested calls.
+Runtime-authenticated Event Body references prevent public ingress from forging
+registered Action lifecycle receipts.
 
-```text
-embedded      Gateway ── in-process fabric ── Worker
-split-local   Gateway ── in-process fabric ── Worker(s)
-remote        Gateway ── WebSocket ────────── Worker(s)
-shared-host   Gateway ── injected dispatcher ─ existing Oxian fleet
-```
+Durable Processor execution is at least once. A Processor receives the resolved
+Event first and the complete composed context second. Stable operation keys and
+Action identities make a retry restore the same mutation/result. A Processor may
+declare detached settlement for durable background work that must not block or
+fail the foreground operation.
 
-In-process and WebSocket paths use the same versioned Copilotz work protocol and
-lifecycle. The transport adapter owns byte movement; semantic events, response
-metadata, cancellation, and raw stream output follow one framing contract. Local
-transport can retain byte arrays without WebSocket encoding.
+## AI harness
 
-## Plugin model
+Agent, Model, Tool, Goal, and Skill values are data-only Resources. Provider
+credentials and clients exist only inside Adapters. Core turns a Model Resource
+alias into one `llm.call` Action. Tool Resources map model presentation to the
+same Action aliases present under `context.actions`; there is no Tool catalog,
+executor, wrapper Action, or second validation lifecycle.
 
-Everything extensible is a plugin declaration or composed value. Collections,
-Actions, and Processors are executable plugin declarations. Semantic values such
-as agents and tools are Resources; variable external implementations are
-Adapters. Composition is deterministic:
+Multiple model-produced Tool calls form a deterministic plan and run
+sequentially in provider order. Ask uses a native Core Action and durable
+question/answer messages; nested continuation state is stored in compact
+non-recursive metadata rather than an in-memory promise.
 
-1. dependency plugins, depth first
-2. declared plugins in order
-3. explicit application Resources and Adapters
+## Content and streams
 
-A later resource with the same type and stable ID replaces the earlier one.
-Skills remain optional plugin resources: standard directories are packed before
-runtime, and their instructions/files are disclosed lazily through the plugin's
-portable reader.
+Potentially large or binary values become immutable Assets referenced by
+`ContentRef`. Collection-declared content is prepared before SQL and adopted in
+the same transaction as its owning semantic record.
 
-Availability is separate from authority. Agents receive explicit tool, agent,
-and skill alias lists; omission means none. `ask` and skill disclosure tools are
-derived implementation mechanisms of higher-level grants. Core resolves those
-grants directly against the composed Resource and Action maps used for prompting
-and durable execution; there is no separate Tool catalog.
+A progressive Stream is a runtime Body, not a conversation primitive. Opening
+one emits a serializable `stream.output` descriptor with only namespace, content
+metadata, causation/correlation, and stream ID. Each application subscriber
+receives its own lazy byte follower. Thread, participant, routing, visibility,
+Collection, and plugin policy never enter this generic descriptor.
 
-## Stream model
+Closing a stream returns `PreparedContent`; a semantic Collection or Action must
+adopt it. Closing alone does not create an Asset graph record.
 
-Text and realtime share the attachment boundary. Discrete input becomes a
-semantic event; raw audio or future media enters once as a Web `ReadableStream`.
-Backpressure remains end-to-end through Oxian. Only stream lifecycle facts and
-final semantic outcomes are persisted.
+## Application and execution
 
-## Factory-first boundary
+The public embedded application is exactly `{ send, observe, close }`. Gateway
+adds portable `fetch`; Worker returns `{ ready, closed, close }`. The root
+factory supports embedded, split in-process, WebSocket, and injected-dispatcher
+topologies without changing plugin contracts.
 
-Public runtime objects are frozen records returned by factories. Stateful
-behavior is held in closures. Narrow `Error` subclasses may exist for error
-identity, but managers/stores/services are not public architecture classes.
+`send()` subscribes before append and waits for its explicit settlement scope,
+relayed output drain, and a final settlement check. `observe()` is an
+independent application-wide subscription. A transient persistence outage
+interrupts active handles but does not pretend to cancel durable deliveries;
+normal recovery resumes them after reconnection.
 
-The public application boundary intentionally omits the internal engine and
-worker workload closures. Application code selects a role and declares its
-transport, lifecycle functions, plugins, and persistence. Copilotz owns the
-assembly details.
+## Storage and replay
 
-For implementation-level detail, see [the v3 design index](v3/README.md).
+Events and Event Bodies are immutable replay/deduplication facts. Ordinary
+maintenance compacts only settled deliveries. Graph nodes and edges are
+projections rebuilt namespace-wide from the complete registered Collection set,
+historical Asset manifests, and generic relation events.
+
+Asset provenance is exactly the opaque identity `{ type, id }`. A Ready Asset
+node's body ID is durable liveness authority. Database, filesystem, and object
+BodyStores preserve location and bytes through replay without runtime semantic
+special cases.
+
+See [ARCHITECTURE.md](../ARCHITECTURE.md) for the full first-principles
+contract.

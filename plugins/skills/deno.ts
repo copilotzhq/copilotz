@@ -7,7 +7,7 @@ import {
 import { parseSkillMarkdown, skillFileMediaType } from "./index.ts";
 import type { SkillFileDescriptor, SkillManifest } from "./contracts.ts";
 
-const DEFAULT_RUNTIME_IMPORT = "jsr:@copilotz/copilotz@^0.61.0/skills";
+const DEFAULT_RUNTIME_IMPORT = "jsr:@copilotz/copilotz@^0.62.0/skills";
 
 export type BuildOpenSkillsPluginOptions = Readonly<{
   /** Directory whose immediate children are Agent Skills directories. */

@@ -40,9 +40,8 @@ work placement; neither defines plugin business semantics.
 - `IMPLEMENTATION_PLAN.md` — current audit, target APIs, ownership, deletion
   rules, and implementation order; subordinate to `ARCHITECTURE.md`
 
-Other README and `docs/` files describe the code at different historical
-checkpoints. They are not architecture authorities and must be reconciled or
-deleted during the refactor.
+`README.md` and the curated `docs/` guides describe the executable public
+surface. Historical design plans are intentionally not shipped.
 
 ## Current Code Map
 
@@ -54,7 +53,8 @@ the remaining cut order.
 - Action definition, lifecycle, and invocation: `runtime/actions/`
 - Canonical graph Collections and mutation planning: `runtime/collections/`
 - Canonical content/assets: `runtime/content/`
-- Runtime-neutral conversation DTOs: `runtime/domain/`
+- Conversation DTOs and projections: `plugins/core/contracts.ts` and
+  `plugins/core/projections.ts`
 - Immutable events/deliveries: `runtime/events/`
 - Oxian placement: `runtime/execution/`
 - Plugin definition/composition: `runtime/plugins/`
@@ -66,14 +66,14 @@ the remaining cut order.
 - Native Tool Actions, data-only Tool Resources, and generated integration
   factories: `plugins/tools/`
 - Text/ask processors: `plugins/core/`
-- Persistent text/realtime attachments: `runtime/attachments/`
+- Generic progressive stream output: `runtime/streams/`
 - Admin, knowledge, and skills: `plugins/admin/`, `plugins/knowledge/`,
   `plugins/skills/`
 - Schedules, usage, and goals: corresponding `plugins/` modules
 - Channel plugins and transports: `plugins/channels/`
 - Semantic memory plugin: `plugins/memory/`
-- Physical persistence: `runtime/persistence/`; host listeners:
-  `runtime/adapters/`
+- Physical persistence: `runtime/persistence/`; Deno host listeners and Body
+  storage: `runtime/adapters/deno/`; portable/Node CLI: `plugins/core/adapters/`
 - Web Fetch boundary: `server/`
 - Isolated legacy-graph-v1 (0.47/0.48) upgrade: `migration/v4/`
 

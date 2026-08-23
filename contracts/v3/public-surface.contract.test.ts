@@ -49,7 +49,7 @@ function assertFunctions(
   for (const name of names) assertEquals(typeof module[name], "function", name);
 }
 
-Deno.test("v3 root exposes only the application factory", () => {
+Deno.test("package root exposes only the application factory", () => {
   assertFunctions(copilotz, ["createCopilotz"]);
   assertEquals(Object.keys(copilotz).sort(), ["createCopilotz"]);
   for (
@@ -92,7 +92,7 @@ Deno.test("v3 root exposes only the application factory", () => {
   ) assertEquals(removed in copilotz, false, removed);
 });
 
-Deno.test("v3 package subpaths expose cohesive factories", () => {
+Deno.test("package subpaths expose cohesive factories", () => {
   assertEquals(Object.keys(application), []);
   assertEquals("createCopilotzApplication" in application, false);
   assertFunctions(persistence, ["createCopilotzPersistence"]);

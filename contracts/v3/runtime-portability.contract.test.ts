@@ -1,4 +1,9 @@
-import { assert, assertEquals, assertStringIncludes } from "@std/assert";
+import {
+  assert,
+  assertEquals,
+  assertRejects,
+  assertStringIncludes,
+} from "@std/assert";
 
 const repositoryRoot = new URL("../../", import.meta.url);
 
@@ -13,6 +18,60 @@ Deno.test("every declared package export resolves to a source file", async () =>
   for (const [subpath, target] of Object.entries(configuration.exports)) {
     const stat = await Deno.stat(new URL(target, repositoryRoot));
     assert(stat.isFile, `${subpath} -> ${target}`);
+  }
+});
+
+Deno.test("published documentation matches the final version and subpaths", async () => {
+  const configuration = JSON.parse(await source("deno.json")) as {
+    version: string;
+    exports: Record<string, string>;
+  };
+  assertEquals(configuration.version, "0.62.0");
+  const readme = await source("README.md");
+  assertStringIncludes(readme, `@^${configuration.version}`);
+  for (const subpath of Object.keys(configuration.exports)) {
+    if (subpath === ".") continue;
+    assertStringIncludes(readme, subpath.slice(1), subpath);
+  }
+
+  const manifest = JSON.parse(await source("docs/manifest.json")) as {
+    sections: readonly {
+      items: readonly { slug: string }[];
+    }[];
+  };
+  for (const section of manifest.sections) {
+    for (const item of section.items) {
+      const stat = await Deno.stat(
+        new URL(`docs/${item.slug}.md`, repositoryRoot),
+      );
+      assert(stat.isFile, item.slug);
+    }
+  }
+
+  const publishedDocs = [
+    readme,
+    ...await Promise.all(
+      Array.from(Deno.readDirSync(new URL("docs/", repositoryRoot)))
+        .filter((entry) => entry.isFile && entry.name.endsWith(".md"))
+        .map((entry) => source(`docs/${entry.name}`)),
+    ),
+  ].join("\n");
+  assert(
+    !/@copilotz\/copilotz\/(?:domain|attachments|adapters\/node|migration\/(?:v1|content-v2|memory-v4))\b/
+      .test(
+        publishedDocs,
+      ),
+  );
+  for (
+    const deleted of [
+      "docs/application-resilience-plan.md",
+      "docs/content-v2-migration.md",
+      "docs/migration-v3.md",
+      "docs/realtime-attachments.md",
+      "docs/v3/README.md",
+    ]
+  ) {
+    await assertRejects(() => Deno.stat(new URL(deleted, repositoryRoot)));
   }
 });
 

@@ -1099,6 +1099,11 @@ against the real Gemini Adapter without exporting legacy history.
 - update examples and downstream contract tests;
 - run the complete verification ladder and a publish dry run.
 
+Checkpoint: closed in `0.62.0`. Published documentation now describes only the
+final root factory and declared subpaths, obsolete v1/content-v2/memory-v4 and
+v3 design documents are removed, the exact 0.47/0.48-to-v4 migration has one
+guide, and the package/versioned plugin surfaces share the same release version.
+
 ## 7. Verification ladder
 
 Every slice runs the narrow tests it changes, then:

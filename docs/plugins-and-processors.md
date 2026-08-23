@@ -95,4 +95,5 @@ Collection reactions after commit belong in Processors. Atomic validation and
 transformation intrinsic to one Collection mutation belongs in that Collection's
 definition.
 
-See also [event-native collections](v3/event-native-collections.md).
+See also [events, deliveries, and recovery](events-deliveries-recovery.md) and
+[content and assets](content-assets.md).

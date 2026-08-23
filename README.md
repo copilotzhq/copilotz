@@ -1,190 +1,146 @@
 # Copilotz
 
-Copilotz v3 is an event-native runtime for durable, plugin-composed agent
-applications.
-
-Runtime owns the event backbone. Plugins own business meaning. The core loop is:
+Copilotz 0.62 is a plugin-first, event-sourced runtime for durable AI
+applications. The runtime owns generic mechanics; plugins own business meaning.
 
 ```mermaid
 flowchart LR
-  app["createCopilotz(context)"]
-  event[("Event")]
-
-  app -- "send(plugin input envelope)" --> event
-  event -- "observe()" --> app
-
-  subgraph plugins["Plugins"]
-    direction LR
-    processor["Processor<br/><small>listens to events</small>"]
-    actions["Actions"]
-    mutations["Mutations<br/><small>Collections</small>"]
-
-    processor -- "runs" --> actions
-    processor -- "runs" --> mutations
-  end
-
-  event -- "dispatches to" --> processor
-  actions -- "emits<br/><small>&lt;actionId&gt;.invoked / completed / failed / cancelled</small>" --> event
-  mutations -- "emits<br/><small>&lt;collection&gt;.created / updated / deleted</small>" --> event
+  input["plugin input"] --> send["application.send"]
+  send --> event[("immutable Event")]
+  event --> processor["Processor"]
+  processor --> action["Action"]
+  processor --> collection["Collection mutation"]
+  action --> event
+  collection --> event
 ```
 
-Essential boundaries:
+Plugins contribute five primitives:
 
-- `copilotz.send(...)` is runtime-neutral ingress; it does not invoke a plugin
-  Action directly.
-- Processors listen to Events and invoke plugin-owned Actions or Collections.
-- Actions emit `<actionId>.invoked/completed/...`.
-- Collections are semantic graph state and emit
-  `<collection>.created/updated/...`.
-- Action events carry self-contained input and output Event Bodies; Processors
-  receive the resolved body as `event.data`.
-- Messages remain the canonical semantic conversation history. LLM attempts and
-  tool executions are operational Actions rather than graph Collections.
+- Collections: durable semantic state and relations.
+- Actions: executable capabilities with one durable lifecycle.
+- Processors: event-driven orchestration.
+- Resources: declarative agents, models, tools, skills, and policy.
+- Adapters: application-owned external implementations and credentials.
+
+Messages, agents, models, tools, goals, and channels belong to their semantic
+plugins. The generic runtime contains no provider catalog, Tool executor,
+conversation DTO, or hidden workflow controller.
 
 ## Install
 
 ```ts
-import { createCopilotz } from "jsr:@copilotz/copilotz@^0.61.0";
-import { core } from "jsr:@copilotz/copilotz@^0.61.0/core";
+import { createCopilotz } from "jsr:@copilotz/copilotz@^0.62.0";
 ```
 
-The root package is runtime-neutral. Host capabilities such as MCP stdio,
-filesystem access, subprocesses, CLI terminal I/O, and HTTP mounting live on
-explicit package subpaths.
+Host-only capabilities live on explicit subpaths. Importing the root does not
+pull in filesystem, subprocess, terminal, MCP stdio, or provider credentials.
 
-## Minimal application shape
+## Compose an AI application
 
 ```ts
-import { createCopilotz } from "jsr:@copilotz/copilotz@^0.61.0";
-import { core } from "jsr:@copilotz/copilotz@^0.61.0/core";
+import { createCopilotz } from "jsr:@copilotz/copilotz@^0.62.0";
+import { corePlugin, message } from "jsr:@copilotz/copilotz@^0.62.0/core";
+import type { LlmAdapter } from "jsr:@copilotz/copilotz@^0.62.0/llm";
 
-const copilotz = await createCopilotz({
-  namespace: "example",
+declare const myLlmAdapter: LlmAdapter;
+
+const app = await createCopilotz({
+  namespace: "acme",
   database: { url: ":memory:" },
-  context: {
-    llm: {
-      default: myLlmAdapter,
-    },
+  plugins: [corePlugin],
+  resources: {
     agents: {
       support: {
         id: "support",
         name: "Support",
-        role: "Helpful support agent",
+        role: "Answer clearly and use only explicitly granted capabilities.",
+        models: { generate: "default" },
         capabilities: {},
       },
     },
+    models: {
+      default: { adapter: "default", model: "provider-model-id" },
+    },
   },
+  adapters: { llm: { default: myLlmAdapter } },
 });
 
-const sent = await copilotz.send(core.message({
+// A Channel, Goal, onboarding plugin, or trusted Gateway route has already
+// created this thread and its human/agent participants.
+const operation = await app.send(message({
   thread: "thread-1",
   participant: "user-1",
   recipientIds: ["agent-support"],
-  content: "Hello",
+  content: "How can you help me?",
 }));
 
-for await (const event of copilotz.observe()) {
-  console.log(event.type, event.correlationId);
-  if (event.correlationId === sent.correlationId) break;
+for await (const output of operation.outputs) {
+  console.log(output.type, output.correlationId);
 }
-await sent.done;
-await copilotz.close();
+await operation.done;
+await app.close();
 ```
 
-`send()` accepts one plugin-owned input envelope. Helpers such as
-`core.message(...)` are exported by their owning plugin; the runtime persists
-the envelope opaquely and processors decide what it means. `observe()` is the
-application observation stream. Durable event persistence, replay, delivery, and
-deduplication remain runtime infrastructure rather than a second public workflow
-API.
+`send()` accepts one plugin-owned input envelope. It returns the durable ingress
+Event identity, a request-bound output stream, a settlement Promise, and
+cancellation. `observe()` creates an independent application-wide subscription.
+The public application surface is exactly `{ send, observe, close }`; Gateway
+adds `fetch`, while Worker returns `{ ready, closed, close }`.
 
 ## Core guarantees
 
-- Public runtime products are frozen records created by factories; architecture
-  services are not classes.
-- Every durable domain mutation atomically commits graph state, one immutable
-  event, and the sparse delivery rows required by matched processors.
-- Delivery is at-least-once. Built-in mutations deduplicate by delivery-derived
-  operation keys, and tools receive an idempotency key.
-- Raw token/audio/future media frames are ephemeral Web Streams. Final
-  transcripts, messages, tools, errors, and stream lifecycle facts are durable.
-- Plugins compose in deterministic order: core, declared plugins, then explicit
-  application context. Later context values replace earlier values by namespace
-  and key.
-- Installed resources do not create ambient agent authority. Exact
-  `capabilities` alias lists are required; installing another Resource never
-  broadens an existing Agent grant.
-- Injected Ominipg databases, Oxian Hypervisors, and dispatchers remain owned by
-  the embedding application.
-- Copilotz-owned database configurations and connection capabilities recover
-  through one shared physical-connection generation; indeterminate operations
-  are never replayed, active attachments terminate, and durable deliveries
-  resume after reconnect.
-- Logical `namespace` and physical `databaseSchema` scope are explicit; one
-  application can lazily bind multiple schemas without creating another database
-  connection or Oxian runtime.
+- Collection state, Event Bodies, immutable Events, and required delivery
+  obligations commit atomically.
+- Durable Processor execution is at least once. Stable mutation operation keys
+  and Action identities make retries restore the same result.
+- Action lifecycle data is self-contained and authenticated by runtime-created
+  Event Bodies. Public input cannot forge a registered lifecycle receipt.
+- Model Resources contain only durable configuration. LLM Adapters capture
+  credentials, clients, endpoints, and runtime transport.
+- Tool Resources are data-only presentations of the same Action aliases that
+  Core invokes. There is no second Tool execution path.
+- Progressive `stream.output` observations contain generic content metadata and
+  one subscriber-owned byte follower. Semantic routing stays in plugins.
+- Normal provisioning creates only a fresh v4 schema or validates an existing v4
+  schema. Legacy databases require the explicit migration.
 
-## Package map
+## Public package map
 
-| Subpath                            | Purpose                                                                              |
-| ---------------------------------- | ------------------------------------------------------------------------------------ |
-| `@copilotz/copilotz`               | Normal runtime-neutral application API                                               |
-| `/application`                     | Embedded, Gateway, and Worker role factories                                         |
-| `/core`                            | Minimal semantic AI harness plugin                                                   |
-| `/plugins`                         | Plugin definition and composition primitives                                         |
-| `/events`                          | Immutable events and durable delivery contracts                                      |
-| `/content`, `/domain`              | Canonical assets and graph-native repositories                                       |
-| `/attachments`                     | Persistent text/realtime ingress                                                     |
-| `/llm`, `/tools`                   | LLM and Tool plugin contracts and integrations                                       |
-| `/tools/*`                         | Optional Tool plugins, protocol integrations, and host implementations               |
-| `/skills`                          | Optional Open Skill resources and portable disclosure tools                          |
-| `/skills/deno`                     | Deno build-time Open Skill packer                                                    |
-| `/knowledge`                       | Optional Knowledge plugin primitives                                                 |
-| `/memory`, `/goals`, `/usage`      | Optional semantic state and workflow plugins                                         |
-| `/schedules`, `/schedules/core`    | Generic scheduling and optional Core-message integration                             |
-| `/channels`, `/actions`, `/admin`  | Transport plugins, executable primitives, and admin APIs                             |
-| `/adapters`                        | Ominipg adaptation and portable CLI mechanics                                        |
-| `/adapters/deno`, `/adapters/node` | Generic host/runtime adapters                                                        |
-| `/server`                          | Event-native server projection types                                                 |
-| `/migration/v4`                    | Isolated legacy-graph-v1 (0.47/0.48) to v4 upgrade; never imported by normal runtime |
+| Area               | Subpaths                                                                                                                              |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------- |
+| Application        | root factory; `/application` types                                                                                                    |
+| Generic primitives | `/actions`, `/collections`, `/content`, `/streams`, `/events`, `/plugins`, `/persistence`, `/tokens`                                  |
+| AI harness         | `/core`, `/llm`, `/tools`, `/skills`, `/knowledge`, `/memory`, `/goals`, `/usage`                                                     |
+| Integrations       | `/channels`, `/schedules`, `/schedules/core`, `/admin`, `/server`                                                                     |
+| Host capabilities  | `/adapters/deno`, `/core/cli`, `/core/cli/node`, `/skills/deno`, `/tools/deno`, `/tools/mcp/stdio`, `/tools/persistent-terminal/deno` |
+| Tool factories     | `/tools/builtin`, `/tools/finance`, `/tools/mcp`, `/tools/openapi`, `/tools/persistent-terminal`, `/tools/web`                        |
+| Database upgrade   | `/migration/v4`                                                                                                                       |
+
+The authoritative export list is `deno.json`. There are no `/domain`,
+`/attachments`, generic `/adapters`, `/adapters/node`, or legacy migration
+subpaths.
 
 ## Documentation
 
-Start with [the v3 quickstart](docs/quickstart.md), then read:
-
+- [Quickstart](docs/quickstart.md)
 - [Architecture](docs/architecture.md)
+- [API and package reference](docs/api.md)
 - [Plugins and processors](docs/plugins-and-processors.md)
-- [Agent capabilities](docs/agent-capabilities.md)
-- [Skills](docs/skills.md)
 - [Events, deliveries, and recovery](docs/events-deliveries-recovery.md)
 - [Content and assets](docs/content-assets.md)
-- [Embedding and hypervisors](docs/embedding-and-hypervisors.md)
-- [Multi-agent public ask](docs/multi-agent-ask.md)
-- [Realtime attachments](docs/realtime-attachments.md)
-- [API and package reference](docs/api.md)
-- [Migrating from v0.x](docs/migration-v3.md)
-- [v3 release notes](CHANGELOG.md)
+- [Progressive streams](docs/streams.md)
+- [Embedding, Gateway, and Worker roles](docs/embedding-and-hypervisors.md)
+- [Legacy 0.47/0.48 to v4 migration](docs/migration-v4.md)
 
-The detailed implementation contracts and parity evidence live in
-[docs/v3](docs/v3/README.md).
+The first-principles contract is [ARCHITECTURE.md](ARCHITECTURE.md).
 
-## Validation
+## Verification
 
 ```sh
 deno task check
 deno task test
-deno task bundle:runtime-smoke
-deno task smoke:deno
-deno task smoke:node
-deno task smoke:bun
-deno task smoke:browser
-deno task bundle:edge-smoke
-deno task smoke:cloudflare
-deno task smoke:cloudflare-build
-deno task publish:dry-run
+deno publish --dry-run --allow-dirty
 ```
-
-CI additionally runs the PostgreSQL migration/event matrix before publishing.
 
 ## License
 

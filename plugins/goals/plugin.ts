@@ -23,7 +23,7 @@ import { defineGoal } from "./resource.ts";
 import type { GoalResource } from "./types.ts";
 
 export const GOALS_PLUGIN_ID = "@copilotz/goals";
-export const GOALS_PLUGIN_VERSION = "0.61.0";
+export const GOALS_PLUGIN_VERSION = "0.62.0";
 
 export type CreateGoalsPluginOptions<
   TGoals extends Readonly<Record<string, GoalResource>> = Readonly<

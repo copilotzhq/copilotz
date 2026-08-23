@@ -6,97 +6,92 @@
         {
           "title": "Documentation",
           "slug": "README",
-          "description": "Copilotz v3 documentation map."
+          "description": "Current Copilotz 0.62 documentation map."
         },
         {
           "title": "Quickstart",
           "slug": "quickstart",
-          "description": "Create and run an embedded multi-agent application."
+          "description": "Compose plugins, Resources, Adapters, and typed ingress."
         },
         {
           "title": "Architecture",
           "slug": "architecture",
-          "description": "Graph state, routed events, deliveries, plugins, and streams."
-        }
-      ]
-    },
-    {
-      "title": "Core",
-      "items": [
-        {
-          "title": "Plugins and Processors",
-          "slug": "plugins-and-processors",
-          "description": "Compose resources and independent subscriptions."
-        },
-        {
-          "title": "Agent Capabilities",
-          "slug": "agent-capabilities",
-          "description": "Least-authority resource grants, derived mechanisms, and introspection."
-        },
-        {
-          "title": "Skills",
-          "slug": "skills",
-          "description": "Open Skill authoring, portable plugin builds, and progressive disclosure."
-        },
-        {
-          "title": "Events, Deliveries, and Recovery",
-          "slug": "events-deliveries-recovery",
-          "description": "Atomic facts, guaranteed work, retries, and maintenance."
-        },
-        {
-          "title": "Content and Assets",
-          "slug": "content-assets",
-          "description": "One immutable content model for every modality."
-        },
-        {
-          "title": "Semantic Memory and Context",
-          "slug": "memory",
-          "description": "Ontology, native consolidation, application evidence, querying, and migration."
-        },
-        {
-          "title": "Multi-Agent Ask",
-          "slug": "multi-agent-ask",
-          "description": "Public agent-to-agent conversation and causal resumption."
-        },
-        {
-          "title": "Realtime Attachments",
-          "slug": "realtime-attachments",
-          "description": "Unified discrete and stream ingress with Web backpressure."
-        }
-      ]
-    },
-    {
-      "title": "Deployment",
-      "items": [
-        {
-          "title": "Embedding and Hypervisors",
-          "slug": "embedding-and-hypervisors",
-          "description": "Private, shared-host, and remote Oxian placement."
-        },
-        {
-          "title": "Runtime Adapters",
-          "slug": "runtime-adapters",
-          "description": "Explicit host capabilities and portable core boundaries."
-        },
-        {
-          "title": "Application Resilience and Memory Refactor Plan",
-          "slug": "application-resilience-plan",
-          "description": "Agreed resilience, memory ontology, native consolidation, and plugin context design."
+          "description": "Plugin ownership, durable lifecycle, content, streams, and execution."
         },
         {
           "title": "API Reference",
           "slug": "api",
-          "description": "Factories, handles, subpaths, and server boundary."
+          "description": "Root role factory, returned surfaces, and explicit subpaths."
+        }
+      ]
+    },
+    {
+      "title": "Runtime",
+      "items": [
+        {
+          "title": "Plugins and Processors",
+          "slug": "plugins-and-processors",
+          "description": "Compose the five plugin primitives and retry-safe orchestration."
         },
         {
-          "title": "Migrate to v3",
-          "slug": "migration-v3",
-          "description": "Breaking API map and isolated database upgrade."
+          "title": "Events, Deliveries, and Recovery",
+          "slug": "events-deliveries-recovery",
+          "description": "Immutable facts, sparse work, settlement scopes, and reconnect behavior."
         },
         {
-          "title": "Content-v2 Migration",
-          "slug": "content-v2-migration",
-          "description": "Repair legacy tool history and relocate asset bodies to object storage."
+          "title": "Content and Assets",
+          "slug": "content-assets",
+          "description": "Canonical refs, atomic adoption, BodyStores, and provenance."
+        },
+        {
+          "title": "Progressive Streams",
+          "slug": "streams",
+          "description": "Generic stream.output observation and subscriber-owned byte followers."
+        },
+        {
+          "title": "Embedding, Gateways, and Workers",
+          "slug": "embedding-and-hypervisors",
+          "description": "Embedded, split, remote, and injected-dispatcher placement."
+        },
+        {
+          "title": "Host Capability Adapters",
+          "slug": "runtime-adapters",
+          "description": "Deno, Node CLI, MCP stdio, and host-owned capabilities."
+        }
+      ]
+    },
+    {
+      "title": "Semantic Plugins",
+      "items": [
+        {
+          "title": "Agent Capabilities",
+          "slug": "agent-capabilities",
+          "description": "Exact alias grants and derived Core/Skills mechanisms."
+        },
+        {
+          "title": "Multi-Agent Ask",
+          "slug": "multi-agent-ask",
+          "description": "Durable public questions, nested cursors, and plan resumption."
+        },
+        {
+          "title": "Semantic Memory",
+          "slug": "memory",
+          "description": "Plugin-owned consolidation, ontology, tools, and recovery."
+        },
+        {
+          "title": "Skills",
+          "slug": "skills",
+          "description": "Portable Agent Skills resources and build-time directory packing."
+        }
+      ]
+    },
+    {
+      "title": "Migration",
+      "items": [
+        {
+          "title": "0.47/0.48 Legacy Graph to v4",
+          "slug": "migration-v4",
+          "description": "Exact-profile archive, source synthesis, replay, verification, and restart."
         }
       ]
     }

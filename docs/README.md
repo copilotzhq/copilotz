@@ -1,34 +1,33 @@
-# Copilotz v3 Documentation
+# Copilotz Documentation
 
-Copilotz is a multi-agent application framework built around routed semantic
-events, durable consumer deliveries, plugin resources, and stream-capable thread
-attachments.
+These guides describe the executable 0.62 public surface. Historical design
+plans and removed migration APIs are intentionally not published.
 
 ## Start here
 
 1. [Quickstart](quickstart.md)
 2. [Architecture](architecture.md)
-3. [Plugins and processors](plugins-and-processors.md)
-4. [Agent capabilities](agent-capabilities.md)
-5. [Skills](skills.md)
-6. [Semantic memory and application context](memory.md)
-7. [API and package reference](api.md)
+3. [API and package reference](api.md)
+4. [Plugins and processors](plugins-and-processors.md)
 
-## Runtime and persistence
+## Runtime mechanics
 
 - [Events, deliveries, and recovery](events-deliveries-recovery.md)
-- [Application resilience and memory refactor plan](application-resilience-plan.md)
-- [Semantic memory and application context](memory.md)
-- [Canonical content and assets](content-assets.md)
-- [Embedding and hypervisors](embedding-and-hypervisors.md)
-- [Runtime capability adapters](runtime-adapters.md)
+- [Content and assets](content-assets.md)
+- [Progressive streams](streams.md)
+- [Embedding, Gateways, and Workers](embedding-and-hypervisors.md)
+- [Host capability adapters](runtime-adapters.md)
 
-## Agent interaction
+## Semantic plugins
 
-- [Multi-agent public ask](multi-agent-ask.md)
-- [Realtime attachments](realtime-attachments.md)
+- [Agent capabilities](agent-capabilities.md)
+- [Multi-agent ask](multi-agent-ask.md)
+- [Semantic memory](memory.md)
+- [Skills](skills.md)
 
-## Upgrades and internals
+## Database upgrade
 
-- [Migrating from v0.x](migration-v3.md)
-- [Detailed v3 design and parity evidence](v3/README.md)
+- [Migrate the exact 0.47/0.48 legacy graph to v4](migration-v4.md)
+
+`../ARCHITECTURE.md` is the first-principles architecture authority. The
+package's actual public entrypoints are the `exports` in `../deno.json`.

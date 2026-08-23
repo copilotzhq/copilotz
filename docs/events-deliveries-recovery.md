@@ -2,104 +2,73 @@
 
 Copilotz persists facts and work obligations separately.
 
-## Durable events
+## Immutable facts
 
-Durable events include an ID, monotonic position, namespace, optional thread,
-subject, routing/visibility, causation, correlation, deduplication ID, compact
-mutation delta/reference, and creation time. They do not have processing status.
+A durable Event has a database-assigned monotonic position, namespace, type,
+optional subject/thread/routing/visibility, causation, correlation,
+deduplication identity, and optional Event Body reference. Event Bodies contain
+the complete data required to replay Collection mutations and Action lifecycle
+facts.
 
-Common facts include:
+Common facts are:
 
-- `message.created`
-- `<actionId>.invoked|progress|completed|failed|cancelled`
-- `<collection>.created`, `<collection>.updated`, `<collection>.deleted`
+- `<collection>.created|updated|deleted|command`;
+- `relation.upserted|deleted`;
+- `asset.created|deleted`;
+- `<actionId>.invoked|progress|completed|failed|cancelled`.
 
-Runtime-native stream output is published live and never inserted into the
-events table. It carries ordered bytes through logical lanes such as content,
-reasoning, tool calls, stdout, stderr, progress, and result. The corresponding
-Action lifecycle owns durable execution settlement; final values and semantic
-messages remain asset-backed durable content.
+Events and Event Bodies are immutable. They are also retry receipts and replay
+sources, so ordinary maintenance never compacts them.
 
-## Durable deliveries
+## Sparse durable work
 
-A delivery is one guaranteed obligation for `(eventId, consumerId)`. Its states
-are `pending`, `leased`, `retry_wait`, `succeeded`, `cancelled`, and
-`dead_letter`. Rows track attempts, availability, lease owner/expiry, last
-error, and settlement timestamps—but never physical Oxian worker identity. Each
-delivery also owns a `settlementScopeId`, independently of the event's causation
-and correlation metadata.
+A delivery is one obligation for `(eventId, consumerId)`. Rows exist only for
+matched durable Processors. Observation visibility, participants, and transient
+stream subscribers do not create work rows.
 
-Defaults:
+Delivery states are `pending`, `leased`, `retry_wait`, `succeeded`, `cancelled`,
+and `dead_letter`. Execution is at least once: an expired lease or retryable
+failure may run the same logical delivery again.
 
-- lease: 120 seconds
-- heartbeat: 30 seconds
-- attempts: 3
-- exponential jittered retry capped at 30 seconds
-- settled retention: 7 days
-- dead letters retained until retried or discarded
+Stable Collection operation keys and Action invocation identities are therefore
+part of plugin correctness. On retry, built-in mutations and Actions first load
+their authenticated durable result instead of repeating a settled effect.
 
-## Atomicity and idempotency
+## Settlement scopes
 
-Required durable consumers are resolved before commit. A domain mutation,
-immutable event, and delivery rows commit in one Ominipg transaction. A crash
-after commit but before dispatch therefore leaves recoverable work.
-
-Execution is at-least-once. Built-in projections use delivery-derived
-deduplication IDs; external tools receive an idempotency key and must use it
-when calling non-idempotent systems.
-
-## Explicit settlement scopes
-
-Application `send(...).done` waits for deliveries in its explicit settlement
-scope, not every causally related event or every event sharing a correlation ID.
-Durable processor work inherits its triggering scope by default. A processor can
-declare `settlement: "detached"` to fork a durable, recoverable scope whose
-completion and failure do not block the caller.
-
-Causation remains unchanged across a detached boundary, so provenance and
-debugging still lead back to the triggering message. Descendant mutations
-automatically inherit the executing delivery's scope. Cancellation marks only
-unsettled deliveries in the selected scope; dead letters reject only handles
-waiting for that same scope.
-
-For remote Workers, settlement also waits for Worker output frames already in
-flight in the same settlement scope. This prevents the database's final delivery
-update from racing the Gateway's final semantic event without making detached
-work block the foreground handle. The Gateway then confirms the durable scope
-again in case that event created more work.
-
-## Operations
+`application.send(input)` creates an explicit settlement scope and returns:
 
 ```ts
-await app.recover({ namespace: "acme", limit: 100 });
-
-// All physical database scopes already opened by this application:
-await app.recoverAll({ limit: 100 });
-
-const result = await app.maintenance({
-  namespace: "acme",
-  limit: 100,
-  retentionMs: 7 * 24 * 60 * 60 * 1000,
-});
-
-const dead = await app.deliveries.list({
-  namespace: "acme",
-  status: "dead_letter",
-});
-await app.deliveries.retry("acme", dead[0].id);
-// Or explicitly discard it:
-// await app.deliveries.discard("acme", dead[0].id);
+type ApplicationSendHandle = Readonly<{
+  eventId: string;
+  correlationId: string;
+  outputs: ReadableStream<ApplicationOutput>;
+  done: Promise<void>;
+  cancel(reason?: string): Promise<void>;
+}>;
 ```
 
-Never compact pending, leased, retrying, or dead-lettered work. Long-lived
-engines should schedule periodic maintenance; short-lived deployments can call
-it opportunistically. Each maintenance call bounds both recovery and each
-compaction phase with `limit` (default 100, capped at 1,000), so retention work
-is incremental and does not turn a periodic tick into an unbounded database
-transaction.
+Matched Processors inherit the triggering scope by default. A Processor with
+`settlement: "detached"` creates durable background work whose completion and
+failure do not block the foreground handle. Causation still points to the
+originating Event.
 
-Detailed contract: [events and deliveries](v3/events-and-deliveries.md).
+For remote Workers, `done` also waits for output frames already in flight and
+then verifies the durable scope again. This prevents a final output from racing
+operation settlement.
 
-Copilotz-owned database connections also trigger `recoverAll()` automatically
-after a successful reconnect. This rediscovers durable obligations; it never
-replays the in-flight operation that detected the connection loss.
+## Recovery ownership
+
+Recovery, leasing, dead-letter retry/discard, and delivery compaction are
+runtime/host authorities, not methods on the public application. The public
+surface remains `{ send, observe, close }`.
+
+Copilotz-owned persistence reconnects, revalidates every opened v4 schema, and
+recovers durable obligations. It never replays the indeterminate SQL operation
+that detected the outage. Active `send` handles reject so callers receive an
+honest boundary; durable work remains recoverable and is not falsely marked
+cancelled.
+
+Embeddings that need operational inspection use the trusted Gateway `/v3` server
+boundary or their own internal persistence tooling rather than exposing delivery
+mutation to ordinary application code.

@@ -78,3 +78,7 @@ owned by that role.
 Durable events and delivery obligations remain the recovery authority. A lost
 connection rejects the affected operation as indeterminate, bounds admission of
 new work, and resumes durable processing after reconnection.
+
+Every selected physical schema must already be a validated v4 schema. Ordinary
+role startup never mutates a legacy schema; run the explicit
+[0.47/0.48 migration](migration-v4.md) first.

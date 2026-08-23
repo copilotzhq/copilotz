@@ -1,16 +1,20 @@
 # Quickstart
 
-The normal entry point is `createCopilotz()`. It creates a private Ominipg
-database and private in-process Oxian host unless you inject application-owned
-infrastructure.
+`createCopilotz()` is the sole application factory. Omitting `role` creates an
+embedded Gateway and Worker over a private in-process transport.
+
+## Compose Core and one model
 
 ```ts
-import { createCopilotz } from "jsr:@copilotz/copilotz@^0.61.0";
-import { corePlugin, message } from "jsr:@copilotz/copilotz@^0.61.0/core";
+import { createCopilotz } from "jsr:@copilotz/copilotz@^0.62.0";
+import { corePlugin, message } from "jsr:@copilotz/copilotz@^0.62.0/core";
+import { createOpenAiAdapter } from "jsr:@copilotz/copilotz@^0.62.0/llm";
 
-const namespace = "acme";
+const apiKey = Deno.env.get("OPENAI_API_KEY");
+if (!apiKey) throw new Error("OPENAI_API_KEY is required.");
+
 const app = await createCopilotz({
-  namespace,
+  namespace: "acme",
   database: { url: ":memory:" },
   plugins: [corePlugin],
   resources: {
@@ -18,55 +22,69 @@ const app = await createCopilotz({
       support: {
         id: "support",
         name: "Support",
-        role: "Answer clearly and use tools when useful.",
-        models: { generate: "default" },
+        role: "Answer clearly and use only granted capabilities.",
+        models: { generate: "fast" },
         capabilities: {},
       },
     },
     models: {
-      default: { adapter: "default", model: "gpt-5-mini" },
+      fast: {
+        adapter: "openai",
+        model: "your-provider-model-id",
+      },
     },
   },
-  adapters: { llm: { default: myLlmAdapter } },
+  adapters: {
+    llm: {
+      openai: createOpenAiAdapter({
+        apiKey,
+      }),
+    },
+  },
 });
+```
 
-// The channel or onboarding flow has already created this thread and its
-// user/agent participants.
-const sent = await app.send(message({
+The Model Resource is durable, provider-neutral data. The Adapter captures the
+credential and transport at composition time. Neither the API key nor client is
+persisted in an Agent, Action input, or lifecycle output.
+
+## Send typed ingress
+
+Core messages target an existing thread and participant graph. Channel and Goal
+plugins create that graph as part of their atomic ingress; a trusted Gateway
+host can also bootstrap Collections through its `/v3/collections/*` routes.
+
+```ts
+const operation = await app.send(message({
   thread: "thread-1",
   participant: "user-1",
-  recipientIds: ["support-1"],
+  recipientIds: ["agent-support"],
   content: "How can you help me?",
+  deduplicationId: "demo:thread-1:message-1",
 }));
 
-for await (const output of app.observe()) {
-  console.log(output.type, output.correlationId);
-  if (output.correlationId === sent.correlationId) break;
+for await (const output of operation.outputs) {
+  if (output.type === "stream.output") {
+    for await (const bytes of output.payload) consume(bytes);
+  } else {
+    console.log(output.type, output.subject);
+  }
 }
-await sent.done;
 
+await operation.done;
 await app.close();
 ```
 
-## What happened
+The output stream is installed before ingress is appended. `done` resolves only
+after the operation's durable settlement scope reaches zero and relayed output
+is drained. Detached Processors remain durable but do not delay this handle.
 
-1. The user message and its canonical content were committed with a
-   `message.created` event.
-2. Matching durable processors received sparse delivery obligations.
-3. Oxian executed the text workflow. LLM and Tool Actions emitted their ordinary
-   durable lifecycle Events, while public output became a Message graph record.
-4. `sent.done` settled only after the message's causal delivery scope completed.
-
-## Add a plugin
-
-Use plugins for reusable packages and explicit Resource or Adapter overlays for
-application-local values.
+## Add a native Tool
 
 ```ts
-import { defineAction } from "jsr:@copilotz/copilotz@^0.61.0/actions";
-import { corePlugin } from "jsr:@copilotz/copilotz@^0.61.0/core";
-import { definePlugin } from "jsr:@copilotz/copilotz@^0.61.0/plugins";
-import { defineTool } from "jsr:@copilotz/copilotz@^0.61.0/tools";
+import { defineAction } from "jsr:@copilotz/copilotz@^0.62.0/actions";
+import { definePlugin } from "jsr:@copilotz/copilotz@^0.62.0/plugins";
+import { defineTool } from "jsr:@copilotz/copilotz@^0.62.0/tools";
 
 const lookupCustomer = defineAction({
   id: "acme.customer.lookup",
@@ -75,46 +93,33 @@ const lookupCustomer = defineAction({
     properties: { id: { type: "string" } },
     required: ["id"],
   },
-  execute: async (input: Readonly<{ id: string }>) =>
-    await lookupCustomerById(input.id),
-});
-
-const lookupCustomerTool = defineTool("lookup_customer", lookupCustomer, {
-  name: "Lookup customer",
-  description: "Fetch a customer by ID.",
+  async execute(input: Readonly<{ id: string }>) {
+    return await lookupCustomerById(input.id);
+  },
 });
 
 const customerPlugin = definePlugin({
   id: "@acme/customer-support",
   version: "1.0.0",
   actions: { lookup_customer: lookupCustomer },
-  resources: { tools: { lookup_customer: lookupCustomerTool } },
-});
-
-const app = await createCopilotz({
-  namespace: "acme",
-  plugins: [corePlugin, customerPlugin],
   resources: {
-    agents: {
-      support: {
-        id: "support",
-        name: "Support",
-        role: "Customer support",
-        models: { generate: "default" },
-        capabilities: { tools: ["lookup_customer"] },
-      },
-    },
-    models: {
-      default: { adapter: "default", model: "gpt-5-mini" },
+    tools: {
+      lookup_customer: defineTool("lookup_customer", lookupCustomer, {
+        name: "Lookup customer",
+        description: "Fetch a customer by ID.",
+      }),
     },
   },
-  adapters: { llm: { default: myLlmAdapter } },
 });
 ```
 
-Installing a Tool Resource and its matching Action is separate from granting its
-Action alias to an Agent. Omitted capabilities grant nothing; see
-[agent capabilities](agent-capabilities.md) for exact alias selections.
+Install `customerPlugin`, then grant the exact alias on the Agent:
 
-Next: [plugins and processors](plugins-and-processors.md) or
-[persistent/realtime attachments](realtime-attachments.md).
+```ts
+capabilities: {
+  tools: ["lookup_customer"];
+}
+```
+
+Installing a Tool does not grant it. The Tool Resource describes one existing
+Action alias; Core invokes that Action directly, so there is one lifecycle.

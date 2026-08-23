@@ -1,192 +1,162 @@
-import type { ContentInput } from "@copilotz/copilotz/content";
-import { type CopilotzPlugin, definePlugin } from "@copilotz/copilotz/plugins";
 import {
-  channelMetadata,
-  collectByteStream,
-  coreMessageEnvelope,
-  isAttachmentStreamOutput,
+  base64ToBytes,
+  bytesToBase64,
+  type ContentInput,
+  type ResolvedContent,
+} from "@copilotz/copilotz/content";
+import { definePlugin } from "@copilotz/copilotz/plugins";
+import {
   outboundText,
+  providerRecord,
   requestHeader,
-  resolveAgentMessageOutput,
+  requiredProviderText,
 } from "../helpers.ts";
+import { channelsPlugin } from "../plugin.ts";
+import { defineChannelResource } from "../resource.ts";
 import type {
-  ChannelEgressContext,
-  ChannelIngressEnvelope,
-  ChannelRequest,
+  ChannelAdapter,
+  ChannelDeliveryAttempt,
+  ChannelJsonObject,
+  ChannelProviderPlugin,
   ChannelResource,
 } from "../types.ts";
 import { createDiscordTransport, verifyDiscordSignature } from "./transport.ts";
 import type {
-  CreateDiscordChannelOptions,
+  CreateDiscordChannelAdapterOptions,
   CreateDiscordChannelPluginOptions,
+  CreateDiscordChannelResourceOptions,
   DiscordActionPayload,
   DiscordConfig,
-  DiscordDeliveryOutput,
+  DiscordConfigContext,
+  DiscordDelivery,
   DiscordInteraction,
   DiscordTransport,
+  DiscordUser,
 } from "./types.ts";
 
-const DEFAULT_MAX_STREAM_BYTES = 32 * 1024 * 1024;
-
-function required(value: unknown, name: string): string {
-  if (typeof value !== "string" || !value.trim()) {
-    throw new TypeError(`${name} must be non-empty.`);
-  }
-  return value.trim();
+function configContext(
+  operation: DiscordConfigContext["operation"],
+  context: Readonly<{ namespace: string; channelId: string }>,
+  request?: DiscordConfigContext["request"],
+  route?: ChannelJsonObject,
+): DiscordConfigContext {
+  return Object.freeze({
+    operation,
+    namespace: context.namespace,
+    channelId: context.channelId,
+    ...(request ? { request } : {}),
+    ...(route ? { route } : {}),
+  });
 }
 
 async function configFor(
-  options: CreateDiscordChannelOptions,
-  request: ChannelRequest,
+  options: CreateDiscordChannelAdapterOptions,
+  context: DiscordConfigContext,
 ): Promise<DiscordConfig> {
   const value = typeof options.config === "function"
-    ? await options.config(request)
+    ? await options.config(context)
     : options.config;
   if (!value || typeof value !== "object") {
     throw new TypeError("Discord config resolver returned no config.");
   }
   return Object.freeze({
-    applicationId: required(value.applicationId, "Discord applicationId"),
-    publicKey: required(value.publicKey, "Discord publicKey"),
-    ...(value.botToken?.trim() ? { botToken: value.botToken.trim() } : {}),
+    applicationId: requiredProviderText(
+      value.applicationId,
+      "Discord applicationId",
+    ),
+    publicKey: requiredProviderText(value.publicKey, "Discord publicKey"),
+    botToken: requiredProviderText(value.botToken, "Discord botToken"),
   });
 }
 
-function mediaKind(mediaType: string): "image" | "audio" | "video" | "file" {
-  if (mediaType.startsWith("image/")) return "image";
-  if (mediaType.startsWith("audio/")) return "audio";
-  if (mediaType.startsWith("video/")) return "video";
-  return "file";
+function safeUser(user: DiscordUser): ChannelJsonObject {
+  return Object.freeze({
+    id: requiredProviderText(user.id, "Discord user ID"),
+    ...(user.username?.trim() ? { username: user.username.trim() } : {}),
+    ...(user.global_name?.trim()
+      ? { globalName: user.global_name.trim() }
+      : {}),
+  });
 }
 
-async function interactionEnvelope(
+async function occurrence(
   interaction: DiscordInteraction,
   transport: DiscordTransport,
-): Promise<ChannelIngressEnvelope | null> {
+) {
   if (interaction.type !== 2 && interaction.type !== 3) return null;
   const user = interaction.member?.user ?? interaction.user;
-  if (!user?.id || !interaction.id || !interaction.token) return null;
-  const threadId = interaction.channel_id?.trim() || user.id;
-  const content: ContentInput[] = [];
-  let directText: string | undefined;
+  if (!user) return null;
+  const id = requiredProviderText(interaction.id, "Discord interaction ID");
+  const channelId = requiredProviderText(
+    interaction.channel_id,
+    "Discord channel ID",
+  );
+  const input: Record<string, unknown> = {
+    interactionId: id,
+    interactionType: interaction.type,
+    channelId,
+    user: safeUser(user),
+    ...(interaction.guild_id?.trim()
+      ? { guildId: interaction.guild_id.trim() }
+      : {}),
+  };
   if (interaction.type === 2) {
     const options = interaction.data?.options ?? [];
-    const prompt = options.find((option) =>
-      option.name === "prompt" || option.name === "message"
+    const prompt = options.find((item) =>
+      item.name === "prompt" || item.name === "message"
     );
     if (typeof prompt?.value === "string" && prompt.value.trim()) {
-      directText = prompt.value.trim();
-      content.push({ type: "text", text: directText });
+      input.text = prompt.value.trim();
+    } else if (interaction.data?.name?.trim()) {
+      input.text = `/${interaction.data.name.trim()}`;
     }
-    const attachments = options.filter((option) => option.type === 11);
-    if (!prompt && attachments.length === 0 && interaction.data?.name?.trim()) {
-      directText = `/${interaction.data.name.trim()}`;
-      content.push({ type: "text", text: directText });
-    }
-    for (const option of attachments) {
-      const key = typeof option.value === "string" ? option.value : "";
+    const attachments = [];
+    for (const item of options.filter((item) => item.type === 11)) {
+      const key = typeof item.value === "string" ? item.value : "";
       const attachment = key
         ? interaction.data?.resolved?.attachments?.[key]
         : undefined;
       if (!attachment?.url) continue;
       const downloaded = await transport.download(attachment.url);
       if (!downloaded) continue;
-      const mediaType = attachment.content_type?.trim() ||
-        downloaded.mediaType;
-      content.push({
-        type: mediaKind(mediaType),
-        bytes: downloaded.bytes,
-        mediaType,
+      attachments.push(Object.freeze({
+        dataBase64: bytesToBase64(downloaded.bytes),
+        mediaType: attachment.content_type?.trim() || downloaded.mediaType,
         ...(attachment.filename?.trim()
           ? { name: attachment.filename.trim() }
           : downloaded.name
           ? { name: downloaded.name }
           : {}),
-      });
+      }));
     }
-  } else {
-    const customId = interaction.data?.custom_id?.trim();
-    if (customId) {
-      directText = customId;
-      content.push({ type: "text", text: customId });
-    }
+    if (attachments.length) input.attachments = Object.freeze(attachments);
+  } else if (interaction.data?.custom_id?.trim()) {
+    input.text = interaction.data.custom_id.trim();
   }
-  if (content.length === 0) return null;
-  const id = `discord:${interaction.id}`;
-  const name = user.global_name?.trim() || user.username?.trim();
+  if (!input.text && !input.attachments) return null;
   return Object.freeze({
-    thread: {
-      externalId: threadId,
-      metadata: {
-        channels: {
-          discord: {
-            interactionId: interaction.id,
-            interactionToken: interaction.token,
-            channelId: interaction.channel_id ?? null,
-            guildId: interaction.guild_id ?? null,
-            userId: user.id,
-            userName: user.username ?? null,
-          },
-        },
-      },
-    },
-    participant: {
-      externalId: user.id,
-      participantType: "human" as const,
-      ...(name ? { name } : {}),
-      metadata: { provider: "discord", discord: structuredClone(user) },
-    },
-    input: coreMessageEnvelope({
-      thread: threadId,
-      participant: {
-        externalId: user.id,
-        participantType: "human" as const,
-        ...(name ? { name } : {}),
-        metadata: { provider: "discord", discord: structuredClone(user) },
-      },
-      content: content.length === 1 && directText
-        ? directText
-        : Object.freeze(content),
-      id,
-      correlationId: id,
-      deduplicationId: id,
-      metadata: {
-        provider: "discord",
-        interactionId: interaction.id,
-        interactionType: interaction.type,
-      },
-    }),
+    id: `discord:${id}`,
+    input: Object.freeze(input) as ChannelJsonObject,
   });
 }
 
-function actionPayload(payload: unknown): DiscordActionPayload | null {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-    return null;
-  }
-  const record = payload as Record<string, unknown>;
-  const nested = record.action;
-  const action = nested && typeof nested === "object" && !Array.isArray(nested)
-    ? nested as DiscordActionPayload
-    : record as DiscordActionPayload;
-  if (action.type !== "reply_buttons") return null;
-  return {
-    ...action,
-    message: typeof record.content === "string"
-      ? record.content
-      : action.message ?? "",
-  };
+function mediaKind(value: string): "image" | "audio" | "video" | "file" {
+  if (value.startsWith("image/")) return "image";
+  if (value.startsWith("audio/")) return "audio";
+  if (value.startsWith("video/")) return "video";
+  return "file";
 }
 
-function textChunks(text: string): readonly string[] {
+function chunks(value: string): readonly string[] {
   const result: string[] = [];
-  let remaining = text.trim();
-  while (remaining.length > 2000) {
-    const window = remaining.slice(0, 2001);
+  let remaining = value.trim();
+  while (remaining.length > 2_000) {
+    const window = remaining.slice(0, 2_001);
     const boundary = Math.max(
       window.lastIndexOf("\n"),
       window.lastIndexOf(" "),
     );
-    const take = boundary > 1000 ? boundary : 2000;
+    const take = boundary > 1_000 ? boundary : 2_000;
     result.push(remaining.slice(0, take).trim());
     remaining = remaining.slice(take).trimStart();
   }
@@ -194,199 +164,302 @@ function textChunks(text: string): readonly string[] {
   return Object.freeze(result);
 }
 
-async function deliver(
-  options: CreateDiscordChannelOptions,
-  transport: DiscordTransport,
-  config: DiscordConfig,
-  context: ChannelEgressContext,
-  state: { initial: boolean },
-  original: DiscordDeliveryOutput,
-): Promise<void> {
-  const output = options.transformOutput
-    ? await options.transformOutput(original, context)
-    : original;
-  if (!output) return;
-  if (output.kind === "text") {
-    for (const chunk of textChunks(output.text)) {
-      await transport.send(
-        config,
-        output.interactionToken,
-        { content: chunk },
-        state.initial,
-      );
-      state.initial = false;
-    }
-    return;
-  }
-  if (output.kind === "media") {
-    await transport.sendMedia(
-      config,
-      output.interactionToken,
-      output.media,
-      state.initial,
-    );
-    state.initial = false;
-    return;
-  }
-  const buttons = (output.action.content ?? []).flatMap((item) => {
-    const label = item.text?.trim().slice(0, 80);
-    const customId = item.payload?.trim().slice(0, 100);
-    return label && customId
-      ? [{ type: 2, style: 1, label, custom_id: customId }]
-      : [];
-  });
-  const message = output.action.message?.trim();
-  if (!message || buttons.length === 0) return;
-  await transport.send(config, output.interactionToken, {
-    content: message,
-    components: [{ type: 1, components: buttons }],
-  }, state.initial);
-  state.initial = false;
+function action(value: unknown): DiscordActionPayload | null {
+  const root = providerRecord(value);
+  const nested = providerRecord(root.action);
+  const source = Object.keys(nested).length ? nested : root;
+  if (source.type !== "reply_buttons") return null;
+  const content = (Array.isArray(source.content) ? source.content : []).flatMap(
+    (item) => {
+      const button = providerRecord(item);
+      const text = typeof button.text === "string" ? button.text.trim() : "";
+      const payload = typeof button.payload === "string"
+        ? button.payload.trim()
+        : "";
+      return text && payload ? [{ text, payload }] : [];
+    },
+  );
+  const message = typeof source.message === "string"
+    ? source.message.trim()
+    : typeof root.content === "string"
+    ? root.content.trim()
+    : "";
+  return message && content.length
+    ? Object.freeze({
+      type: "reply_buttons",
+      message,
+      content: Object.freeze(content),
+    })
+    : null;
 }
 
-/** Creates an attachment-native Discord interactions channel. */
-export function createDiscordChannel(
-  options: CreateDiscordChannelOptions,
+async function emit(
+  options: CreateDiscordChannelAdapterOptions,
+  transport: DiscordTransport,
+  config: DiscordConfig,
+  attempt: ChannelDeliveryAttempt,
+  original: DiscordDelivery,
+): Promise<unknown> {
+  const delivery = options.transformDelivery
+    ? await options.transformDelivery(original, attempt)
+    : original;
+  if (!delivery) return null;
+  if (delivery.kind === "text") {
+    let result: unknown = null;
+    for (const content of chunks(delivery.text)) {
+      result = await transport.send(config, delivery.channelId, { content });
+    }
+    return result;
+  }
+  if (delivery.kind === "media") {
+    return await transport.sendMedia(
+      config,
+      delivery.channelId,
+      delivery.media,
+    );
+  }
+  return await transport.send(config, delivery.channelId, {
+    content: delivery.action.message,
+    components: [{
+      type: 1,
+      components: delivery.action.content.map((item) => ({
+        type: 2,
+        style: 1,
+        label: item.text?.slice(0, 80),
+        custom_id: item.payload?.slice(0, 100),
+      })),
+    }],
+  });
+}
+
+function providerId(value: unknown): string | undefined {
+  const id = providerRecord(value).id;
+  return typeof id === "string" && id.trim() ? id.trim() : undefined;
+}
+
+async function emitContent(
+  options: CreateDiscordChannelAdapterOptions,
+  transport: DiscordTransport,
+  config: DiscordConfig,
+  attempt: ChannelDeliveryAttempt,
+  channelId: string,
+  content: ResolvedContent,
+): Promise<unknown | undefined> {
+  const text = outboundText(content);
+  if (text) {
+    return await emit(options, transport, config, attempt, {
+      kind: "text",
+      channelId,
+      text,
+    });
+  }
+  if (["image", "audio", "video", "file"].includes(content.ref.kind)) {
+    return await emit(options, transport, config, attempt, {
+      kind: "media",
+      channelId,
+      media: {
+        bytes: content.bytes,
+        mediaType: content.ref.mediaType,
+        ...(content.ref.name ? { name: content.ref.name } : {}),
+      },
+    });
+  }
+  return undefined;
+}
+
+export function createDiscordChannelResource(
+  options: CreateDiscordChannelResourceOptions = {},
 ): ChannelResource {
-  if (!options?.config) throw new TypeError("Discord channel requires config.");
-  const id = options.id?.trim() || "discord";
+  return defineChannelResource({
+    egress: "external",
+    ...(options.defaultAgentAliases
+      ? { defaultAgentAliases: options.defaultAgentAliases }
+      : {}),
+    ...(options.metadata ? { metadata: options.metadata } : {}),
+  });
+}
+
+export function createDiscordChannelAdapter(
+  options: CreateDiscordChannelAdapterOptions,
+): ChannelAdapter {
+  if (!options?.config) throw new TypeError("Discord Adapter requires config.");
   const transport = options.transport ??
     createDiscordTransport({ fetch: options.fetch });
-  const maxStreamBytes = options.maxStreamBytes ?? DEFAULT_MAX_STREAM_BYTES;
-  if (!Number.isSafeInteger(maxStreamBytes) || maxStreamBytes < 1) {
-    throw new TypeError("Discord maxStreamBytes must be positive.");
-  }
   return Object.freeze({
-    id,
-    ...(options.defaultAgentIds?.length
-      ? { defaultAgentIds: Object.freeze([...options.defaultAgentIds]) }
-      : {}),
-    ingress: Object.freeze({
-      async handle(request: ChannelRequest) {
-        const config = await configFor(options, request);
-        const signature = requestHeader(request.headers, "x-signature-ed25519");
-        const timestamp = requestHeader(
-          request.headers,
-          "x-signature-timestamp",
-        );
-        if (
-          !signature || !timestamp || !request.rawBody ||
-          !await verifyDiscordSignature(
-            config.publicKey,
-            signature,
-            timestamp,
-            request.rawBody,
-          )
-        ) {
-          return {
-            status: 401,
-            response: { error: "Invalid request signature" },
-            inputs: Object.freeze([]),
-          };
-        }
-        const interaction = request.body as DiscordInteraction;
-        if (interaction.type === 1) {
-          return {
-            status: 200,
-            response: { type: 1 },
-            inputs: Object.freeze([]),
-          };
-        }
-        const envelope = await interactionEnvelope(interaction, transport);
-        return {
+    async accept(request, context) {
+      const config = await configFor(
+        options,
+        configContext("accept", context, request),
+      );
+      const signature = requestHeader(request.headers, "x-signature-ed25519");
+      const timestamp = requestHeader(request.headers, "x-signature-timestamp");
+      if (
+        !signature || !timestamp || !request.rawBody ||
+        !await verifyDiscordSignature(
+          config.publicKey,
+          signature,
+          timestamp,
+          request.rawBody,
+        )
+      ) {
+        return Object.freeze({
+          status: 401,
+          response: Object.freeze({ error: "Invalid request signature" }),
+          occurrences: Object.freeze([]),
+        });
+      }
+      const interaction = request.body as DiscordInteraction;
+      if (interaction.type === 1) {
+        return Object.freeze({
           status: 200,
-          response: envelope ? { type: 5 } : { status: "ok" },
-          inputs: Object.freeze(envelope ? [envelope] : []),
-        };
-      },
-    }),
-    egress: Object.freeze({
-      async deliver(context: ChannelEgressContext) {
-        const route = channelMetadata(
-          context.execution.thread.metadata,
-          "discord",
+          response: Object.freeze({ type: 1 }),
+          occurrences: Object.freeze([]),
+        });
+      }
+      const accepted = await occurrence(interaction, transport);
+      return Object.freeze({
+        status: 200,
+        response: accepted
+          ? Object.freeze({ type: 5 })
+          : Object.freeze({ status: "ok" }),
+        occurrences: Object.freeze(accepted ? [accepted] : []),
+      });
+    },
+    receive(value, _context) {
+      const input = providerRecord(value);
+      const channelId = requiredProviderText(
+        input.channelId,
+        "Discord channel ID",
+      );
+      const user = providerRecord(input.user);
+      const userId = requiredProviderText(user.id, "Discord user ID");
+      const contents: ContentInput[] = [];
+      if (typeof input.text === "string" && input.text.trim()) {
+        contents.push(input.text.trim());
+      }
+      for (
+        const value of Array.isArray(input.attachments) ? input.attachments : []
+      ) {
+        const attachment = providerRecord(value);
+        const mediaType = requiredProviderText(
+          attachment.mediaType,
+          "Discord attachment media type",
         );
-        const interactionToken = typeof route?.interactionToken === "string"
-          ? route.interactionToken.trim()
-          : "";
-        if (!interactionToken) {
-          throw new Error(
-            "Thread metadata is missing Discord interaction routing.",
-          );
-        }
-        const config = await configFor(options, context.request);
-        const delivered = new Set<string>();
-        const state = { initial: true };
-        for await (const output of context.execution.outputs) {
-          if (isAttachmentStreamOutput(output)) {
-            if (output.participant.type !== "agent") {
-              await output.payload.cancel("discord_non_agent_stream").catch(
-                () => undefined,
-              );
-              continue;
-            }
-            const body = await collectByteStream(
-              output.payload,
-              maxStreamBytes,
-              "discord_output_too_large",
-            );
-            if (body.byteLength) {
-              await deliver(options, transport, config, context, state, {
-                kind: "media",
-                interactionToken,
-                media: { bytes: body, mediaType: output.mediaType },
-                output,
-              });
-            }
-            continue;
-          }
-          const resolved = await resolveAgentMessageOutput(context, output);
-          if (resolved && !delivered.has(resolved.message.id)) {
-            delivered.add(resolved.message.id);
-            for (const content of resolved.content) {
-              const text = outboundText(content);
-              await deliver(
-                options,
-                transport,
-                config,
-                context,
-                state,
-                text ? { kind: "text", interactionToken, text, output } : {
-                  kind: "media",
-                  interactionToken,
-                  media: {
-                    bytes: content.bytes,
-                    mediaType: content.ref.mediaType,
-                    ...(content.ref.name ? { name: content.ref.name } : {}),
-                  },
-                  output,
-                },
-              );
-            }
-            const action = actionPayload(resolved.message.metadata);
-            if (action) {
-              await deliver(options, transport, config, context, state, {
-                kind: "reply_buttons",
-                interactionToken,
-                action,
-                output,
-              });
-            }
-            continue;
-          }
-        }
-      },
-    }),
+        contents.push({
+          type: mediaKind(mediaType),
+          bytes: base64ToBytes(requiredProviderText(
+            attachment.dataBase64,
+            "Discord attachment base64",
+          )),
+          mediaType,
+          ...(typeof attachment.name === "string"
+            ? { name: attachment.name }
+            : {}),
+        });
+      }
+      if (!contents.length) throw new TypeError("Discord message is empty.");
+      const interactionId = requiredProviderText(
+        input.interactionId,
+        "Discord interaction ID",
+      );
+      const name = typeof user.globalName === "string" && user.globalName.trim()
+        ? user.globalName.trim()
+        : typeof user.username === "string"
+        ? user.username.trim()
+        : "";
+      return Object.freeze({
+        externalThreadId: channelId,
+        sender: Object.freeze({
+          externalId: userId,
+          participantType: "human" as const,
+          ...(name ? { name } : {}),
+          metadata: Object.freeze({
+            provider: "discord",
+            user: user as ChannelJsonObject,
+          }),
+        }),
+        content: contents.length === 1 ? contents[0] : Object.freeze(contents),
+        route: Object.freeze({ channelId }),
+        metadata: Object.freeze({
+          provider: "discord",
+          interactionId,
+          interactionType: Number(input.interactionType),
+        }),
+        thread: Object.freeze({
+          metadata: Object.freeze({
+            provider: "discord",
+            channelId,
+            ...(typeof input.guildId === "string"
+              ? { guildId: input.guildId }
+              : {}),
+            userId,
+            lastInboundInteractionId: interactionId,
+          }),
+        }),
+      });
+    },
+    async deliver(attempt, context) {
+      const route = providerRecord(attempt.intent.route);
+      const channelId = requiredProviderText(
+        route.channelId,
+        "Discord channel ID",
+      );
+      const config = await configFor(
+        options,
+        configContext("deliver", context, undefined, attempt.intent.route),
+      );
+      let delivered = 0;
+      const providerIds: string[] = [];
+      for (const content of attempt.content) {
+        const result = await emitContent(
+          options,
+          transport,
+          config,
+          attempt,
+          channelId,
+          content,
+        );
+        if (result === undefined) continue;
+        delivered += 1;
+        const id = providerId(result);
+        if (id) providerIds.push(id);
+      }
+      const metadata = providerRecord(attempt.intent.metadata);
+      const semantic = action(providerRecord(metadata.message));
+      if (semantic) {
+        const result = await emit(options, transport, config, attempt, {
+          kind: "reply_buttons",
+          channelId,
+          action: semantic,
+        });
+        delivered += 1;
+        const id = providerId(result);
+        if (id) providerIds.push(id);
+      }
+      return Object.freeze({
+        deliveryKey: attempt.intent.deliveryKey,
+        delivered,
+        ...(providerIds.length
+          ? { providerIds: Object.freeze(providerIds) }
+          : {}),
+      });
+    },
   });
 }
 
 export function createDiscordChannelPlugin(
   options: CreateDiscordChannelPluginOptions,
-): CopilotzPlugin {
-  const channel = createDiscordChannel(options);
+): ChannelProviderPlugin {
+  const channelId = options.channelId?.trim() || "discord";
   return definePlugin({
     id: options.pluginId?.trim() || "@copilotz/channel-discord",
-    version: options.version?.trim() || "3.0.0",
-    resources: { channels: { [channel.id]: channel } },
+    version: options.version?.trim() || "4.0.0",
+    plugins: [channelsPlugin] as const,
+    resources: {
+      channels: { [channelId]: createDiscordChannelResource(options) },
+    },
+    adapters: {
+      channels: { [channelId]: createDiscordChannelAdapter(options) },
+    },
   });
 }

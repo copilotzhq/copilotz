@@ -1,8 +1,7 @@
-import type { AttachmentOutput } from "@copilotz/copilotz/attachments";
 import type {
-  ChannelEgressContext,
+  ChannelDeliveryAttempt,
+  ChannelJsonObject,
   ChannelRequest,
-  ChannelResource,
 } from "../types.ts";
 
 export type WhatsAppConfig = Readonly<{
@@ -13,8 +12,16 @@ export type WhatsAppConfig = Readonly<{
   graphApiVersion?: string;
 }>;
 
+export type WhatsAppConfigContext = Readonly<{
+  operation: "accept" | "deliver";
+  namespace: string;
+  channelId: string;
+  request?: ChannelRequest;
+  route?: ChannelJsonObject;
+}>;
+
 export type WhatsAppConfigResolver = (
-  request: ChannelRequest,
+  context: WhatsAppConfigContext,
 ) => WhatsAppConfig | Promise<WhatsAppConfig>;
 
 export type WhatsAppDownloadedMedia = Readonly<{
@@ -34,7 +41,6 @@ export type WhatsAppUploadedMedia = Readonly<{
   type: "image" | "video" | "audio" | "document";
 }>;
 
-/** Web-standard transport boundary for Meta Graph API access. */
 export type WhatsAppTransport = Readonly<{
   download(
     config: WhatsAppConfig,
@@ -55,43 +61,34 @@ export type WhatsAppReplyButtonInput = Readonly<{
   text?: string;
   payload?: string;
 }>;
-
 export type WhatsAppReplyButton = Readonly<{
   type: "reply";
   reply: Readonly<{ id: string; title: string }>;
 }>;
-
 export type WhatsAppCarouselImageInput = Readonly<{
   id?: string;
   link?: string;
   bytes?: Uint8Array;
   mediaType?: string;
 }>;
-
 export type WhatsAppCarouselQuickReplyInput = Readonly<{
   type?: "quick_reply";
   text?: string;
   payload?: string;
 }>;
-
 export type WhatsAppMediaCarouselCardInput = Readonly<{
   body?: string;
   image?: WhatsAppCarouselImageInput;
-  /** Application-owned value that a transform can turn into an image. */
   renderData?: unknown;
   buttons?: readonly WhatsAppCarouselQuickReplyInput[];
 }>;
-
-export type WhatsAppActionPayload =
-  & Readonly<Record<string, unknown>>
-  & Readonly<{
-    type?: string;
-    message?: string;
-    content?: readonly WhatsAppReplyButtonInput[];
-    fallbackText?: string;
-    cards?: readonly WhatsAppMediaCarouselCardInput[];
-  }>;
-
+export type WhatsAppActionPayload = Readonly<{
+  type?: string;
+  message?: string;
+  content?: readonly WhatsAppReplyButtonInput[];
+  fallbackText?: string;
+  cards?: readonly WhatsAppMediaCarouselCardInput[];
+}>;
 export type WhatsAppMediaCarouselAction =
   & WhatsAppActionPayload
   & Readonly<{
@@ -99,7 +96,6 @@ export type WhatsAppMediaCarouselAction =
     message: string;
     cards: readonly WhatsAppMediaCarouselCardInput[];
   }>;
-
 export type WhatsAppResolvedCarouselCard = Readonly<{
   body?: string;
   image: Readonly<{ id: string }> | Readonly<{ link: string }>;
@@ -109,7 +105,6 @@ export type WhatsAppResolvedCarouselCard = Readonly<{
     payload: string;
   }>[];
 }>;
-
 export type WhatsAppResolvedMediaCarouselAction = Readonly<{
   type: "media_carousel";
   message: string;
@@ -117,57 +112,34 @@ export type WhatsAppResolvedMediaCarouselAction = Readonly<{
   cards: readonly WhatsAppResolvedCarouselCard[];
 }>;
 
-export type WhatsAppTextDeliveryOutput = Readonly<{
-  kind: "text";
-  to: string;
-  text: string;
-  output: AttachmentOutput;
+export type WhatsAppDelivery =
+  | Readonly<{ kind: "text"; to: string; text: string }>
+  | Readonly<{ kind: "media"; to: string; media: WhatsAppMediaInput }>
+  | Readonly<{
+    kind: "reply_buttons";
+    to: string;
+    action: WhatsAppActionPayload;
+  }>
+  | Readonly<{
+    kind: "media_carousel";
+    to: string;
+    action: WhatsAppMediaCarouselAction;
+  }>;
+
+export type TransformWhatsAppDelivery = (
+  delivery: WhatsAppDelivery,
+  attempt: ChannelDeliveryAttempt,
+) => WhatsAppDelivery | null | Promise<WhatsAppDelivery | null>;
+
+export type CreateWhatsAppChannelResourceOptions = Readonly<{
+  defaultAgentAliases?: readonly string[];
+  metadata?: ChannelJsonObject;
 }>;
-
-export type WhatsAppMediaDeliveryOutput = Readonly<{
-  kind: "media";
-  to: string;
-  media: WhatsAppMediaInput;
-  output: AttachmentOutput;
-}>;
-
-export type WhatsAppReplyButtonsDeliveryOutput = Readonly<{
-  kind: "reply_buttons";
-  to: string;
-  action: WhatsAppActionPayload;
-  output: AttachmentOutput;
-}>;
-
-export type WhatsAppMediaCarouselDeliveryOutput = Readonly<{
-  kind: "media_carousel";
-  to: string;
-  action: WhatsAppMediaCarouselAction;
-  output: AttachmentOutput;
-}>;
-
-export type WhatsAppDeliveryOutput =
-  | WhatsAppTextDeliveryOutput
-  | WhatsAppMediaDeliveryOutput
-  | WhatsAppReplyButtonsDeliveryOutput
-  | WhatsAppMediaCarouselDeliveryOutput;
-
-export type TransformWhatsAppDeliveryOutput = (
-  output: WhatsAppDeliveryOutput,
-  context: ChannelEgressContext,
-) =>
-  | WhatsAppDeliveryOutput
-  | null
-  | Promise<WhatsAppDeliveryOutput | null>;
-
-export type CreateWhatsAppChannelOptions = Readonly<{
-  id?: string;
+export type CreateWhatsAppChannelAdapterOptions = Readonly<{
   config: WhatsAppConfig | WhatsAppConfigResolver;
-  defaultAgentIds?: readonly string[];
   transport?: WhatsAppTransport;
   fetch?: typeof fetch;
-  transformOutput?: TransformWhatsAppDeliveryOutput;
-  /** Defaults to 32 MiB for one completed realtime output stream. */
-  maxStreamBytes?: number;
+  transformDelivery?: TransformWhatsAppDelivery;
   threadExternalId?: (
     input: Readonly<{
       senderPhone: string;
@@ -176,22 +148,16 @@ export type CreateWhatsAppChannelOptions = Readonly<{
     }>,
   ) => string;
 }>;
-
 export type CreateWhatsAppChannelPluginOptions =
-  & CreateWhatsAppChannelOptions
-  & Readonly<{
-    pluginId?: string;
-    version?: string;
-  }>;
-
-export type WhatsAppChannel = ChannelResource;
+  & CreateWhatsAppChannelResourceOptions
+  & CreateWhatsAppChannelAdapterOptions
+  & Readonly<{ channelId?: string; pluginId?: string; version?: string }>;
 
 export type WhatsAppInteractiveReply = Readonly<{
   id?: string;
   title?: string;
   description?: string;
 }>;
-
 export type WhatsAppWebhookMessage = Readonly<{
   from: string;
   id: string;
@@ -213,7 +179,6 @@ export type WhatsAppWebhookMessage = Readonly<{
     list_reply?: WhatsAppInteractiveReply;
   }>;
 }>;
-
 export type WhatsAppWebhookPayload = Readonly<{
   entry?: readonly Readonly<{
     id: string;

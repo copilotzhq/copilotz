@@ -1,13 +1,22 @@
-import type { AttachmentOutput } from "@copilotz/copilotz/attachments";
-import type { ContentInput } from "@copilotz/copilotz/content";
-import type { ConversationMessage } from "@copilotz/copilotz/domain";
-import { type CopilotzPlugin, definePlugin } from "@copilotz/copilotz/plugins";
-import { coreMessageEnvelope } from "../helpers.ts";
-import { loadChannelMessage } from "../identity.ts";
+import {
+  base64ToBytes,
+  bytesToBase64,
+  type ContentInput,
+  type ResolvedContent,
+} from "@copilotz/copilotz/content";
+import { definePlugin } from "@copilotz/copilotz/plugins";
+import {
+  outboundText,
+  providerRecord,
+  requiredProviderText,
+} from "../helpers.ts";
+import { channelsPlugin } from "../plugin.ts";
+import { defineChannelResource } from "../resource.ts";
 import type {
-  ChannelEgressContext,
-  ChannelIngressEnvelope,
-  ChannelRequest,
+  ChannelAdapter,
+  ChannelDeliveryAttempt,
+  ChannelJsonObject,
+  ChannelProviderPlugin,
   ChannelResource,
 } from "../types.ts";
 import {
@@ -23,106 +32,110 @@ import {
   whatsappHeader,
 } from "./transport.ts";
 import type {
-  CreateWhatsAppChannelOptions,
+  CreateWhatsAppChannelAdapterOptions,
   CreateWhatsAppChannelPluginOptions,
+  CreateWhatsAppChannelResourceOptions,
   WhatsAppActionPayload,
   WhatsAppConfig,
-  WhatsAppDeliveryOutput,
+  WhatsAppConfigContext,
+  WhatsAppDelivery,
   WhatsAppMediaCarouselAction,
-  WhatsAppMediaInput,
   WhatsAppTransport,
   WhatsAppWebhookMessage,
   WhatsAppWebhookPayload,
 } from "./types.ts";
 
-const DEFAULT_MAX_STREAM_BYTES = 32 * 1024 * 1024;
-
-function required(value: unknown, name: string): string {
-  if (typeof value !== "string" || !value.trim()) {
-    throw new TypeError(`${name} must be non-empty.`);
-  }
-  return value.trim();
+function query(request: { query?: Record<string, unknown> }, key: string) {
+  const value = request.query?.[key];
+  return Array.isArray(value) ? value[0] : value;
 }
 
-function queryValue(
-  request: ChannelRequest,
-  name: string,
-): string | undefined {
-  const value = request.query?.[name];
-  return Array.isArray(value) ? value[0] : value as string | undefined;
-}
-
-async function resolveConfig(
-  source: CreateWhatsAppChannelOptions["config"],
-  request: ChannelRequest,
-): Promise<WhatsAppConfig> {
-  const config = typeof source === "function" ? await source(request) : source;
-  if (!config || typeof config !== "object") {
-    throw new TypeError("WhatsApp config resolver returned no config.");
-  }
+function configContext(
+  operation: WhatsAppConfigContext["operation"],
+  context: Readonly<{ namespace: string; channelId: string }>,
+  request?: WhatsAppConfigContext["request"],
+  route?: ChannelJsonObject,
+): WhatsAppConfigContext {
   return Object.freeze({
-    accessToken: required(config.accessToken, "WhatsApp accessToken"),
-    phoneId: config.phoneId?.trim() ?? "",
-    ...(config.appSecret?.trim() ? { appSecret: config.appSecret.trim() } : {}),
-    ...(config.webhookVerifyToken?.trim()
-      ? { webhookVerifyToken: config.webhookVerifyToken.trim() }
-      : {}),
-    graphApiVersion: config.graphApiVersion?.trim() || "v25.0",
+    operation,
+    namespace: context.namespace,
+    channelId: context.channelId,
+    ...(request ? { request } : {}),
+    ...(route ? { route } : {}),
   });
 }
 
-function mediaDescriptor(message: WhatsAppWebhookMessage):
-  | Readonly<{
-    id: string;
-    mediaType?: string;
-    name?: string;
-    kind: "image" | "audio" | "video" | "file";
-  }>
-  | null {
-  if (message.image?.id) {
-    return {
+async function configFor(
+  options: CreateWhatsAppChannelAdapterOptions,
+  context: WhatsAppConfigContext,
+): Promise<WhatsAppConfig> {
+  const value = typeof options.config === "function"
+    ? await options.config(context)
+    : options.config;
+  if (!value || typeof value !== "object") {
+    throw new TypeError("WhatsApp config resolver returned no config.");
+  }
+  return Object.freeze({
+    accessToken: requiredProviderText(
+      value.accessToken,
+      "WhatsApp accessToken",
+    ),
+    phoneId: typeof value.phoneId === "string" ? value.phoneId.trim() : "",
+    ...(value.appSecret?.trim() ? { appSecret: value.appSecret.trim() } : {}),
+    ...(value.webhookVerifyToken?.trim()
+      ? { webhookVerifyToken: value.webhookVerifyToken.trim() }
+      : {}),
+    graphApiVersion: value.graphApiVersion?.trim() || "v25.0",
+  });
+}
+
+function media(message: WhatsAppWebhookMessage): ChannelJsonObject | null {
+  const value = message.image?.id
+    ? {
       id: message.image.id,
-      mediaType: message.image.mime_type,
       kind: "image",
-    };
-  }
-  if (message.audio?.id) {
-    return {
+      ...(message.image.mime_type
+        ? { mediaType: message.image.mime_type }
+        : {}),
+    }
+    : message.audio?.id
+    ? {
       id: message.audio.id,
-      mediaType: message.audio.mime_type,
       kind: "audio",
-    };
-  }
-  if (message.video?.id) {
-    return {
+      ...(message.audio.mime_type
+        ? { mediaType: message.audio.mime_type }
+        : {}),
+    }
+    : message.video?.id
+    ? {
       id: message.video.id,
-      mediaType: message.video.mime_type,
       kind: "video",
-    };
-  }
-  if (message.document?.id) {
-    return {
+      ...(message.video.mime_type
+        ? { mediaType: message.video.mime_type }
+        : {}),
+    }
+    : message.document?.id
+    ? {
       id: message.document.id,
-      mediaType: message.document.mime_type,
-      name: message.document.filename,
       kind: "file",
-    };
-  }
-  return null;
+      ...(message.document.mime_type
+        ? { mediaType: message.document.mime_type }
+        : {}),
+      ...(message.document.filename ? { name: message.document.filename } : {}),
+    }
+    : null;
+  return value ? Object.freeze(value) : null;
 }
 
 function caption(message: WhatsAppWebhookMessage): string | undefined {
-  return message.text?.body?.trim() ||
-    message.image?.caption?.trim() ||
-    message.video?.caption?.trim() ||
-    message.document?.caption?.trim() ||
+  return message.text?.body?.trim() || message.image?.caption?.trim() ||
+    message.video?.caption?.trim() || message.document?.caption?.trim() ||
     message.interactive?.button_reply?.title?.trim() ||
-    message.interactive?.list_reply?.title?.trim() ||
-    undefined;
+    message.interactive?.list_reply?.title?.trim() || undefined;
 }
 
-async function ingressEnvelope(
-  options: CreateWhatsAppChannelOptions,
+async function occurrence(
+  options: CreateWhatsAppChannelAdapterOptions,
   transport: WhatsAppTransport,
   config: WhatsAppConfig,
   input: Readonly<{
@@ -131,28 +144,42 @@ async function ingressEnvelope(
     userName?: string;
     message: WhatsAppWebhookMessage;
   }>,
-): Promise<ChannelIngressEnvelope | null> {
-  const senderPhone = required(input.message.from, "WhatsApp sender phone");
-  const messageId = required(input.message.id, "WhatsApp message ID");
-  const content: ContentInput[] = [];
+) {
+  const senderPhone = requiredProviderText(
+    input.message.from,
+    "WhatsApp sender phone",
+  );
+  const messageId = requiredProviderText(
+    input.message.id,
+    "WhatsApp message ID",
+  );
   const text = caption(input.message);
-  if (text) content.push({ type: "text", text });
-  const descriptor = mediaDescriptor(input.message);
-  if (descriptor) {
-    const downloaded = await transport.download(config, descriptor);
-    if (downloaded) {
-      content.push({
-        type: descriptor.kind,
-        bytes: downloaded.bytes,
-        mediaType: downloaded.mediaType,
-        ...(downloaded.name || descriptor.name
-          ? { name: downloaded.name || descriptor.name }
-          : {}),
-      });
+  const attachment = media(input.message);
+  let persistedMedia: ChannelJsonObject | null = null;
+  if (attachment) {
+    const downloadConfig = Object.freeze({
+      ...config,
+      phoneId: input.phoneId?.trim() || config.phoneId,
+    });
+    const downloaded = await transport.download(downloadConfig, {
+      id: requiredProviderText(attachment.id, "WhatsApp media ID"),
+      ...(typeof attachment.mediaType === "string"
+        ? { mediaType: attachment.mediaType }
+        : {}),
+      ...(typeof attachment.name === "string" ? { name: attachment.name } : {}),
+    });
+    if (!downloaded) {
+      throw new Error("WhatsApp media download returned no content.");
     }
+    persistedMedia = Object.freeze({
+      kind: requiredProviderText(attachment.kind, "WhatsApp media kind"),
+      dataBase64: bytesToBase64(downloaded.bytes),
+      mediaType: downloaded.mediaType,
+      ...(downloaded.name ? { name: downloaded.name } : {}),
+    });
   }
-  if (content.length === 0) return null;
-  const externalId = options.threadExternalId?.({
+  if (!text && !persistedMedia) return null;
+  const externalThreadId = options.threadExternalId?.({
     senderPhone,
     phoneId: input.phoneId,
     businessId: input.businessId,
@@ -160,472 +187,413 @@ async function ingressEnvelope(
   const interactive = input.message.interactive?.button_reply ??
     input.message.interactive?.list_reply;
   return Object.freeze({
-    thread: {
-      externalId,
-      metadata: {
-        channels: {
-          whatsapp: {
-            recipientPhone: senderPhone,
-            channelId: input.phoneId ?? null,
-            businessId: input.businessId,
-            userName: input.userName ?? null,
-            lastInboundMessageId: messageId,
-          },
-        },
-      },
-    },
-    participant: {
-      externalId: senderPhone,
-      participantType: "human" as const,
-      ...(input.userName ? { name: input.userName } : {}),
-      metadata: { phone: senderPhone, provider: "whatsapp" },
-    },
-    input: coreMessageEnvelope({
-      thread: externalId,
-      participant: {
-        externalId: senderPhone,
-        participantType: "human" as const,
-        ...(input.userName ? { name: input.userName } : {}),
-        metadata: { phone: senderPhone, provider: "whatsapp" },
-      },
-      content: content.length === 1 && text && !descriptor
-        ? text
-        : Object.freeze(content),
-      id: messageId,
-      correlationId: `whatsapp:${messageId}`,
-      deduplicationId: `whatsapp:${messageId}`,
-      metadata: {
-        provider: "whatsapp",
-        providerMessageId: messageId,
-        ...(input.message.timestamp
-          ? { providerTimestamp: input.message.timestamp }
-          : {}),
-        messageType: input.message.type,
-        ...(interactive
-          ? {
-            interactive: {
-              id: interactive.id ?? null,
-              title: interactive.title ?? null,
-              description: interactive.description ?? null,
-            },
-          }
-          : {}),
-      },
+    id: `whatsapp:${messageId}`,
+    input: Object.freeze({
+      externalThreadId,
+      businessId: requiredProviderText(
+        input.businessId,
+        "WhatsApp business ID",
+      ),
+      ...(input.phoneId?.trim() ? { phoneId: input.phoneId.trim() } : {}),
+      senderPhone,
+      messageId,
+      messageType: requiredProviderText(
+        input.message.type,
+        "WhatsApp message type",
+      ),
+      ...(input.message.timestamp
+        ? { timestamp: String(input.message.timestamp) }
+        : {}),
+      ...(input.userName?.trim() ? { userName: input.userName.trim() } : {}),
+      ...(text ? { text } : {}),
+      ...(persistedMedia ? { media: persistedMedia } : {}),
+      ...(interactive
+        ? {
+          interactive: Object.freeze({
+            ...(interactive.id?.trim() ? { id: interactive.id.trim() } : {}),
+            ...(interactive.title?.trim()
+              ? { title: interactive.title.trim() }
+              : {}),
+            ...(interactive.description?.trim()
+              ? { description: interactive.description.trim() }
+              : {}),
+          }),
+        }
+        : {}),
     }),
   });
 }
 
-function whatsappContext(metadata: Readonly<Record<string, unknown>>): {
-  recipientPhone: string;
-  channelId?: string;
-} | null {
-  const channels = metadata.channels;
-  if (!channels || typeof channels !== "object" || Array.isArray(channels)) {
-    return null;
-  }
-  const value = (channels as Record<string, unknown>).whatsapp;
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const record = value as Record<string, unknown>;
-  const recipientPhone = typeof record.recipientPhone === "string"
-    ? record.recipientPhone.trim()
-    : "";
-  if (!recipientPhone) return null;
-  const channelId = typeof record.channelId === "string"
-    ? record.channelId.trim()
-    : "";
-  return { recipientPhone, ...(channelId ? { channelId } : {}) };
+function responseIds(value: unknown): readonly string[] {
+  const messages = providerRecord(value).messages;
+  return Array.isArray(messages)
+    ? Object.freeze(messages.flatMap((item) => {
+      const id = providerRecord(item).id;
+      return typeof id === "string" && id.trim() ? [id.trim()] : [];
+    }))
+    : Object.freeze([]);
 }
 
-function isStreamOutput(output: unknown): output is Extract<
-  AttachmentOutput,
-  { type: "stream.output" }
-> {
-  return Boolean(
-    output && typeof output === "object" &&
-      (output as { type?: unknown }).type === "stream.output" &&
-      (output as { payload?: { getReader?: unknown } }).payload &&
-      typeof (output as { payload: { getReader?: unknown } }).payload
-          .getReader === "function",
-  );
-}
-
-async function readStream(
-  stream: ReadableStream<Uint8Array>,
-  maxBytes: number,
-): Promise<Uint8Array> {
-  const reader = stream.getReader();
-  const chunks: Uint8Array[] = [];
-  let length = 0;
-  try {
-    while (true) {
-      const item = await reader.read();
-      if (item.done) break;
-      if (!(item.value instanceof Uint8Array)) {
-        throw new TypeError(
-          "WhatsApp output stream must contain Uint8Array chunks.",
-        );
-      }
-      length += item.value.byteLength;
-      if (length > maxBytes) {
-        await reader.cancel("whatsapp_output_too_large");
-        throw new RangeError(
-          `WhatsApp output stream exceeds ${maxBytes} bytes.`,
-        );
-      }
-      chunks.push(item.value.slice());
+async function emit(
+  options: CreateWhatsAppChannelAdapterOptions,
+  transport: WhatsAppTransport,
+  config: WhatsAppConfig,
+  attempt: ChannelDeliveryAttempt,
+  original: WhatsAppDelivery,
+): Promise<readonly string[]> {
+  const delivery = options.transformDelivery
+    ? await options.transformDelivery(original, attempt)
+    : original;
+  if (!delivery) return [];
+  if (delivery.kind === "text") {
+    const ids: string[] = [];
+    for (const text of splitWhatsAppText(delivery.text)) {
+      ids.push(...responseIds(
+        await transport.send(config, {
+          messaging_product: "whatsapp",
+          to: delivery.to,
+          type: "text",
+          text: { body: text },
+        }),
+      ));
     }
-  } finally {
-    reader.releaseLock();
+    return Object.freeze(ids);
   }
-  const body = new Uint8Array(length);
-  let offset = 0;
-  for (const chunk of chunks) {
-    body.set(chunk, offset);
-    offset += chunk.byteLength;
+  if (delivery.kind === "media") {
+    const uploaded = await transport.upload(config, delivery.media);
+    return responseIds(
+      await transport.send(config, {
+        messaging_product: "whatsapp",
+        to: delivery.to,
+        type: uploaded.type,
+        [uploaded.type]: {
+          id: uploaded.id,
+          ...(uploaded.type === "document" && delivery.media.name
+            ? { filename: delivery.media.name }
+            : {}),
+        },
+      }),
+    );
   }
-  return body;
-}
-
-async function sendText(
-  transport: WhatsAppTransport,
-  config: WhatsAppConfig,
-  to: string,
-  text: string,
-): Promise<void> {
-  for (const chunk of splitWhatsAppText(text)) {
-    await transport.send(config, {
-      messaging_product: "whatsapp",
-      to,
-      type: "text",
-      text: { body: chunk },
-    });
+  if (delivery.kind === "reply_buttons") {
+    const body = buildWhatsAppReplyButtonsMessage(
+      delivery.to,
+      delivery.action,
+    );
+    return body ? responseIds(await transport.send(config, body)) : [];
   }
-}
-
-async function sendMedia(
-  transport: WhatsAppTransport,
-  config: WhatsAppConfig,
-  to: string,
-  media: WhatsAppMediaInput,
-): Promise<void> {
-  const uploaded = await transport.upload(config, media);
-  await transport.send(config, {
-    messaging_product: "whatsapp",
-    to,
-    type: uploaded.type,
-    [uploaded.type]: {
-      id: uploaded.id,
-      ...(uploaded.type === "document" && media.name
-        ? { filename: media.name }
-        : {}),
-    },
-  });
-}
-
-async function transformed(
-  options: CreateWhatsAppChannelOptions,
-  output: WhatsAppDeliveryOutput,
-  context: ChannelEgressContext,
-): Promise<WhatsAppDeliveryOutput | null> {
-  return options.transformOutput
-    ? await options.transformOutput(output, context)
-    : output;
-}
-
-async function deliverOutput(
-  options: CreateWhatsAppChannelOptions,
-  transport: WhatsAppTransport,
-  config: WhatsAppConfig,
-  context: ChannelEgressContext,
-  original: WhatsAppDeliveryOutput,
-): Promise<void> {
-  const output = await transformed(options, original, context);
-  if (!output) return;
-  if (output.kind === "text") {
-    if (output.text.trim()) {
-      await sendText(transport, config, output.to, output.text);
-    }
-    return;
-  }
-  if (output.kind === "media") {
-    await sendMedia(transport, config, output.to, output.media);
-    return;
-  }
-  if (output.kind === "reply_buttons") {
-    const body = buildWhatsAppReplyButtonsMessage(output.to, output.action);
-    if (body) await transport.send(config, body);
-    return;
-  }
-  const action = await resolveWhatsAppMediaCarouselAction(
-    output.action,
+  const resolved = await resolveWhatsAppMediaCarouselAction(
+    delivery.action,
     (media) => transport.upload(config, media),
   );
-  const body = action
-    ? buildWhatsAppMediaCarouselMessage(output.to, action)
+  const body = resolved
+    ? buildWhatsAppMediaCarouselMessage(delivery.to, resolved)
     : null;
-  if (body) {
-    await transport.send(config, body);
-    return;
-  }
-  const fallback = output.action.fallbackText?.trim() ||
-    output.action.message?.trim();
-  if (fallback) await sendText(transport, config, output.to, fallback);
+  if (body) return responseIds(await transport.send(config, body));
+  const fallback = delivery.action.fallbackText?.trim() ||
+    delivery.action.message?.trim();
+  return fallback
+    ? await emit(options, transport, config, attempt, {
+      kind: "text",
+      to: delivery.to,
+      text: fallback,
+    })
+    : [];
 }
 
-async function deliverMessage(
-  options: CreateWhatsAppChannelOptions,
+function action(value: unknown): WhatsAppActionPayload | null {
+  const result = normalizeWhatsAppActionPayload(value);
+  return result?.type === "reply_buttons" || result?.type === "media_carousel"
+    ? result
+    : null;
+}
+
+async function emitContent(
+  options: CreateWhatsAppChannelAdapterOptions,
   transport: WhatsAppTransport,
   config: WhatsAppConfig,
-  context: ChannelEgressContext,
+  attempt: ChannelDeliveryAttempt,
   to: string,
-  message: ConversationMessage,
-  output: AttachmentOutput,
-): Promise<void> {
-  if (message.sender.participantType !== "agent") return;
-  const content = await context.application.content.resolver.getMany(
-    message.content,
-    { namespace: context.namespace },
-  );
-  for (const item of content) {
-    if (item.ref.kind === "text" && item.text) {
-      await deliverOutput(options, transport, config, context, {
-        kind: "text",
-        to,
-        text: item.text,
-        output,
-      });
-      continue;
-    }
-    if (item.ref.kind === "json") {
-      const text = item.text ?? JSON.stringify(item.value);
-      if (text) {
-        await deliverOutput(options, transport, config, context, {
-          kind: "text",
-          to,
-          text,
-          output,
-        });
-      }
-      continue;
-    }
-    await deliverOutput(options, transport, config, context, {
+  content: ResolvedContent,
+): Promise<readonly string[]> {
+  const text = outboundText(content);
+  if (text) {
+    return await emit(options, transport, config, attempt, {
+      kind: "text",
+      to,
+      text,
+    });
+  }
+  if (["image", "audio", "video", "file"].includes(content.ref.kind)) {
+    return await emit(options, transport, config, attempt, {
       kind: "media",
       to,
       media: {
-        bytes: item.bytes,
-        mediaType: item.ref.mediaType,
-        ...(item.ref.name ? { name: item.ref.name } : {}),
+        bytes: content.bytes,
+        mediaType: content.ref.mediaType,
+        ...(content.ref.name ? { name: content.ref.name } : {}),
       },
-      output,
     });
   }
+  return [];
 }
 
-function actionPayload(value: unknown): WhatsAppActionPayload | null {
-  const action = normalizeWhatsAppActionPayload(value);
-  return action?.type === "reply_buttons" || action?.type === "media_carousel"
-    ? action
-    : null;
-}
-
-/** Creates an attachment-native WhatsApp channel. */
-export function createWhatsAppChannel(
-  options: CreateWhatsAppChannelOptions,
+export function createWhatsAppChannelResource(
+  options: CreateWhatsAppChannelResourceOptions = {},
 ): ChannelResource {
+  return defineChannelResource({
+    egress: "external",
+    ...(options.defaultAgentAliases
+      ? { defaultAgentAliases: options.defaultAgentAliases }
+      : {}),
+    ...(options.metadata ? { metadata: options.metadata } : {}),
+  });
+}
+
+export function createWhatsAppChannelAdapter(
+  options: CreateWhatsAppChannelAdapterOptions,
+): ChannelAdapter {
   if (!options?.config) {
-    throw new TypeError("WhatsApp channel requires config.");
+    throw new TypeError("WhatsApp Adapter requires config.");
   }
-  const id = options.id?.trim() || "whatsapp";
   const transport = options.transport ??
     createWhatsAppGraphTransport({ fetch: options.fetch });
-  const maxStreamBytes = options.maxStreamBytes ?? DEFAULT_MAX_STREAM_BYTES;
-  if (!Number.isSafeInteger(maxStreamBytes) || maxStreamBytes < 1) {
-    throw new TypeError("WhatsApp maxStreamBytes must be positive.");
-  }
   return Object.freeze({
-    id,
-    ...(options.defaultAgentIds?.length
-      ? { defaultAgentIds: Object.freeze([...options.defaultAgentIds]) }
-      : {}),
-    ingress: Object.freeze({
-      async handle(request: ChannelRequest) {
-        const config = await resolveConfig(options.config, request);
-        if (request.method.toUpperCase() === "GET") {
-          const accepted = queryValue(request, "hub.mode") === "subscribe" &&
-            queryValue(request, "hub.verify_token") ===
-              (config.webhookVerifyToken ?? "");
-          return accepted
-            ? {
-              status: 200,
-              response: queryValue(request, "hub.challenge") ?? "",
-              inputs: Object.freeze([]),
-            }
-            : {
-              status: 403,
-              response: { error: "Forbidden" },
-              inputs: Object.freeze([]),
-            };
-        }
-        if (config.appSecret) {
-          const signature = whatsappHeader(
-            request.headers,
-            "x-hub-signature-256",
-          );
-          if (!signature) {
-            return {
-              status: 403,
-              response: { error: "Missing X-Hub-Signature-256 header" },
-              inputs: Object.freeze([]),
-            };
-          }
-          if (!request.rawBody) {
-            return {
-              status: 400,
-              response: {
-                error: "Raw body required for signature verification",
-              },
-              inputs: Object.freeze([]),
-            };
-          }
-          if (
-            !await verifyWhatsAppSignature(
-              request.rawBody,
-              config.appSecret,
-              signature,
-            )
-          ) {
-            return {
-              status: 403,
-              response: { error: "Invalid webhook signature" },
-              inputs: Object.freeze([]),
-            };
-          }
-        }
-        const payload = request.body as WhatsAppWebhookPayload;
-        const inputs: ChannelIngressEnvelope[] = [];
-        for (const entry of payload?.entry ?? []) {
-          for (const change of entry.changes ?? []) {
-            const value = change.value;
-            const userName = value?.contacts?.[0]?.profile?.name;
-            const phoneId = value?.metadata?.phone_number_id;
-            for (const message of value?.messages ?? []) {
-              const envelope = await ingressEnvelope(
-                options,
-                transport,
-                { ...config, phoneId: phoneId?.trim() || config.phoneId },
-                { businessId: entry.id, phoneId, userName, message },
-              );
-              if (envelope) inputs.push(envelope);
-            }
-          }
-        }
-        return {
-          status: 200,
-          response: { status: "ok" },
-          inputs: Object.freeze(inputs),
-        };
-      },
-    }),
-    egress: Object.freeze({
-      async deliver(context: ChannelEgressContext) {
-        const route = whatsappContext(context.execution.thread.metadata);
-        if (!route) {
-          throw new Error(
-            "Thread metadata is missing WhatsApp recipient routing information.",
-          );
-        }
-        const baseConfig = await resolveConfig(options.config, context.request);
-        const config = Object.freeze({
-          ...baseConfig,
-          phoneId: route.channelId || required(
-            baseConfig.phoneId,
-            "WhatsApp phoneId",
-          ),
+    async accept(request, context) {
+      const config = await configFor(
+        options,
+        configContext("accept", context, request),
+      );
+      if (request.method.toUpperCase() === "GET") {
+        const verified = query(request, "hub.mode") === "subscribe" &&
+          query(request, "hub.verify_token") === config.webhookVerifyToken;
+        return Object.freeze({
+          status: verified ? 200 : 403,
+          response: verified
+            ? query(request, "hub.challenge") ?? ""
+            : Object.freeze({ error: "Forbidden" }),
+          occurrences: Object.freeze([]),
         });
-        const deliveredMessages = new Set<string>();
-        for await (const output of context.execution.outputs) {
-          if (isStreamOutput(output)) {
-            if (output.participant.type !== "agent") {
-              await output.payload.cancel("whatsapp_non_agent_stream").catch(
-                () => undefined,
-              );
-              continue;
-            }
-            const bytes = await readStream(output.payload, maxStreamBytes);
-            if (bytes.byteLength) {
-              await deliverOutput(options, transport, config, context, {
-                kind: "media",
-                to: route.recipientPhone,
-                media: { bytes, mediaType: output.mediaType },
-                output,
-              });
-            }
-            continue;
-          }
-          if (output.type === "message.created" && output.durable) {
-            const messageId = output.subject?.type === "message"
-              ? output.subject.id
-              : output.payload && typeof output.payload === "object" &&
-                  typeof (output.payload as Record<string, unknown>)
-                      .messageId ===
-                    "string"
-              ? (output.payload as Record<string, string>).messageId
-              : "";
-            if (!messageId || deliveredMessages.has(messageId)) continue;
-            deliveredMessages.add(messageId);
-            const message = await loadChannelMessage(
-              context.application,
-              context.namespace,
-              messageId,
-            );
-            if (message) {
-              await deliverMessage(
-                options,
-                transport,
-                config,
-                context,
-                route.recipientPhone,
-                message,
-                output,
-              );
-              const action = actionPayload(message.metadata);
-              if (action) {
-                await deliverOutput(
-                  options,
-                  transport,
-                  config,
-                  context,
-                  action.type === "media_carousel"
-                    ? {
-                      kind: "media_carousel",
-                      to: route.recipientPhone,
-                      action: action as WhatsAppMediaCarouselAction,
-                      output,
-                    }
-                    : {
-                      kind: "reply_buttons",
-                      to: route.recipientPhone,
-                      action,
-                      output,
-                    },
-                );
-              }
-            }
-            continue;
+      }
+      if (config.appSecret) {
+        const signature = whatsappHeader(
+          request.headers,
+          "x-hub-signature-256",
+        );
+        if (
+          !signature || !request.rawBody ||
+          !await verifyWhatsAppSignature(
+            request.rawBody,
+            config.appSecret,
+            signature,
+          )
+        ) {
+          return Object.freeze({
+            status: 403,
+            response: Object.freeze({ error: "Forbidden" }),
+            occurrences: Object.freeze([]),
+          });
+        }
+      }
+      const payload = request.body as WhatsAppWebhookPayload;
+      const occurrences = [];
+      for (const entry of payload?.entry ?? []) {
+        for (const change of entry.changes ?? []) {
+          const value = change.value;
+          const userName = value?.contacts?.[0]?.profile?.name;
+          const phoneId = value?.metadata?.phone_number_id;
+          for (const message of value?.messages ?? []) {
+            const accepted = await occurrence(options, transport, config, {
+              businessId: entry.id,
+              phoneId,
+              userName,
+              message,
+            });
+            if (accepted) occurrences.push(accepted);
           }
         }
-      },
-    }),
+      }
+      return Object.freeze({
+        status: 200,
+        response: Object.freeze({ status: "ok" }),
+        occurrences: Object.freeze(occurrences),
+      });
+    },
+    receive(value, _context) {
+      const input = providerRecord(value);
+      const externalThreadId = requiredProviderText(
+        input.externalThreadId,
+        "WhatsApp external thread ID",
+      );
+      const senderPhone = requiredProviderText(
+        input.senderPhone,
+        "WhatsApp sender phone",
+      );
+      const phoneId = typeof input.phoneId === "string"
+        ? input.phoneId.trim()
+        : "";
+      const contents: ContentInput[] = [];
+      if (typeof input.text === "string" && input.text.trim()) {
+        contents.push(input.text.trim());
+      }
+      const descriptor = providerRecord(input.media);
+      if (Object.keys(descriptor).length) {
+        contents.push({
+          type: requiredProviderText(
+            descriptor.kind,
+            "WhatsApp media kind",
+          ) as "image" | "audio" | "video" | "file",
+          bytes: base64ToBytes(requiredProviderText(
+            descriptor.dataBase64,
+            "WhatsApp media base64",
+          )),
+          mediaType: requiredProviderText(
+            descriptor.mediaType,
+            "WhatsApp media type",
+          ),
+          ...(typeof descriptor.name === "string"
+            ? { name: descriptor.name }
+            : {}),
+        });
+      }
+      if (!contents.length) throw new TypeError("WhatsApp message is empty.");
+      const messageId = requiredProviderText(
+        input.messageId,
+        "WhatsApp message ID",
+      );
+      const businessId = requiredProviderText(
+        input.businessId,
+        "WhatsApp business ID",
+      );
+      const userName = typeof input.userName === "string"
+        ? input.userName.trim()
+        : "";
+      return Object.freeze({
+        externalThreadId,
+        sender: Object.freeze({
+          externalId: senderPhone,
+          participantType: "human" as const,
+          ...(userName ? { name: userName } : {}),
+          metadata: Object.freeze({
+            provider: "whatsapp",
+            phone: senderPhone,
+          }),
+        }),
+        content: contents.length === 1 ? contents[0] : Object.freeze(contents),
+        route: Object.freeze({
+          recipientPhone: senderPhone,
+          ...(phoneId ? { phoneId } : {}),
+          businessId,
+        }),
+        metadata: Object.freeze({
+          provider: "whatsapp",
+          providerMessageId: messageId,
+          ...(typeof input.timestamp === "string"
+            ? { providerTimestamp: input.timestamp }
+            : {}),
+          messageType: requiredProviderText(
+            input.messageType,
+            "WhatsApp message type",
+          ),
+          ...(input.interactive && typeof input.interactive === "object"
+            ? { interactive: input.interactive as ChannelJsonObject }
+            : {}),
+        }),
+        thread: Object.freeze({
+          metadata: Object.freeze({
+            provider: "whatsapp",
+            recipientPhone: senderPhone,
+            ...(phoneId ? { phoneId } : {}),
+            businessId,
+            ...(userName ? { userName } : {}),
+            lastInboundMessageId: messageId,
+          }),
+        }),
+      });
+    },
+    async deliver(attempt, context) {
+      const route = providerRecord(attempt.intent.route);
+      const to = requiredProviderText(
+        route.recipientPhone,
+        "WhatsApp recipient phone",
+      );
+      const phoneId = typeof route.phoneId === "string"
+        ? route.phoneId.trim()
+        : "";
+      const base = await configFor(
+        options,
+        configContext("deliver", context, undefined, attempt.intent.route),
+      );
+      const config = Object.freeze({
+        ...base,
+        phoneId: phoneId || requiredProviderText(
+          base.phoneId,
+          "WhatsApp phoneId",
+        ),
+      });
+      const providerIds: string[] = [];
+      let delivered = 0;
+      for (const content of attempt.content) {
+        const ids = await emitContent(
+          options,
+          transport,
+          config,
+          attempt,
+          to,
+          content,
+        );
+        if (
+          ids.length || outboundText(content) ||
+          ["image", "audio", "video", "file"].includes(content.ref.kind)
+        ) {
+          delivered += 1;
+          providerIds.push(...ids);
+        }
+      }
+      const metadata = providerRecord(attempt.intent.metadata);
+      const message = providerRecord(metadata.message);
+      const semantic = action(message);
+      if (semantic) {
+        const ids = await emit(
+          options,
+          transport,
+          config,
+          attempt,
+          semantic.type === "media_carousel"
+            ? {
+              kind: "media_carousel",
+              to,
+              action: semantic as WhatsAppMediaCarouselAction,
+            }
+            : { kind: "reply_buttons", to, action: semantic },
+        );
+        delivered += 1;
+        providerIds.push(...ids);
+      }
+      return Object.freeze({
+        deliveryKey: attempt.intent.deliveryKey,
+        delivered,
+        ...(providerIds.length
+          ? { providerIds: Object.freeze(providerIds) }
+          : {}),
+      });
+    },
   });
 }
 
 export function createWhatsAppChannelPlugin(
   options: CreateWhatsAppChannelPluginOptions,
-): CopilotzPlugin {
-  const channel = createWhatsAppChannel(options);
+): ChannelProviderPlugin {
+  const channelId = options.channelId?.trim() || "whatsapp";
   return definePlugin({
     id: options.pluginId?.trim() || "@copilotz/channel-whatsapp",
-    version: options.version?.trim() || "3.0.0",
-    resources: { channels: { [channel.id]: channel } },
+    version: options.version?.trim() || "4.0.0",
+    plugins: [channelsPlugin] as const,
+    resources: {
+      channels: { [channelId]: createWhatsAppChannelResource(options) },
+    },
+    adapters: {
+      channels: { [channelId]: createWhatsAppChannelAdapter(options) },
+    },
   });
 }

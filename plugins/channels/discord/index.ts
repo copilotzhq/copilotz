@@ -1,18 +1,21 @@
-export { createDiscordChannel, createDiscordChannelPlugin } from "./channel.ts";
+export {
+  createDiscordChannelAdapter,
+  createDiscordChannelPlugin,
+  createDiscordChannelResource,
+} from "./channel.ts";
 export { createDiscordTransport, verifyDiscordSignature } from "./transport.ts";
 export type {
-  CreateDiscordChannelOptions,
+  CreateDiscordChannelAdapterOptions,
   CreateDiscordChannelPluginOptions,
-  DiscordActionDeliveryOutput,
+  CreateDiscordChannelResourceOptions,
   DiscordActionPayload,
   DiscordConfig,
+  DiscordConfigContext,
   DiscordConfigResolver,
-  DiscordDeliveryOutput,
+  DiscordDelivery,
   DiscordInteraction,
-  DiscordMediaDeliveryOutput,
   DiscordMediaInput,
-  DiscordTextDeliveryOutput,
   DiscordTransport,
   DiscordUser,
-  TransformDiscordDeliveryOutput,
+  TransformDiscordDelivery,
 } from "./types.ts";

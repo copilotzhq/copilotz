@@ -1,13 +1,24 @@
-import type { AttachmentOutput } from "@copilotz/copilotz/attachments";
-import type { ChannelEgressContext, ChannelRequest } from "../types.ts";
+import type {
+  ChannelDeliveryAttempt,
+  ChannelJsonObject,
+  ChannelRequest,
+} from "../types.ts";
 
 export type TelegramConfig = Readonly<{
   botToken: string;
   secretToken?: string;
 }>;
 
+export type TelegramConfigContext = Readonly<{
+  operation: "accept" | "deliver";
+  namespace: string;
+  channelId: string;
+  request?: ChannelRequest;
+  route?: ChannelJsonObject;
+}>;
+
 export type TelegramConfigResolver = (
-  request: ChannelRequest,
+  context: TelegramConfigContext,
 ) => TelegramConfig | Promise<TelegramConfig>;
 
 export type TelegramMediaInput = Readonly<{
@@ -33,58 +44,42 @@ export type TelegramTransport = Readonly<{
   ): Promise<unknown>;
 }>;
 
-export type TelegramActionPayload =
-  & Readonly<Record<string, unknown>>
-  & Readonly<{
-    type?: string;
-    message?: string;
-    content?: readonly Readonly<{ text?: string; payload?: string }>[];
+export type TelegramActionPayload = Readonly<{
+  type: "reply_buttons";
+  message: string;
+  content: readonly Readonly<{ text?: string; payload?: string }>[];
+}>;
+
+export type TelegramDelivery =
+  | Readonly<{ kind: "text"; chatId: string; text: string }>
+  | Readonly<{ kind: "media"; chatId: string; media: TelegramMediaInput }>
+  | Readonly<{
+    kind: "reply_buttons";
+    chatId: string;
+    action: TelegramActionPayload;
   }>;
 
-export type TelegramTextDeliveryOutput = Readonly<{
-  kind: "text";
-  chatId: string;
-  text: string;
-  output: AttachmentOutput;
+export type TransformTelegramDelivery = (
+  delivery: TelegramDelivery,
+  attempt: ChannelDeliveryAttempt,
+) => TelegramDelivery | null | Promise<TelegramDelivery | null>;
+
+export type CreateTelegramChannelResourceOptions = Readonly<{
+  defaultAgentAliases?: readonly string[];
+  metadata?: ChannelJsonObject;
 }>;
 
-export type TelegramMediaDeliveryOutput = Readonly<{
-  kind: "media";
-  chatId: string;
-  media: TelegramMediaInput;
-  output: AttachmentOutput;
-}>;
-
-export type TelegramActionDeliveryOutput = Readonly<{
-  kind: "reply_buttons";
-  chatId: string;
-  action: TelegramActionPayload;
-  output: AttachmentOutput;
-}>;
-
-export type TelegramDeliveryOutput =
-  | TelegramTextDeliveryOutput
-  | TelegramMediaDeliveryOutput
-  | TelegramActionDeliveryOutput;
-
-export type TransformTelegramDeliveryOutput = (
-  output: TelegramDeliveryOutput,
-  context: ChannelEgressContext,
-) => TelegramDeliveryOutput | null | Promise<TelegramDeliveryOutput | null>;
-
-export type CreateTelegramChannelOptions = Readonly<{
-  id?: string;
+export type CreateTelegramChannelAdapterOptions = Readonly<{
   config: TelegramConfig | TelegramConfigResolver;
-  defaultAgentIds?: readonly string[];
   transport?: TelegramTransport;
   fetch?: typeof fetch;
-  transformOutput?: TransformTelegramDeliveryOutput;
-  maxStreamBytes?: number;
+  transformDelivery?: TransformTelegramDelivery;
 }>;
 
 export type CreateTelegramChannelPluginOptions =
-  & CreateTelegramChannelOptions
-  & Readonly<{ pluginId?: string; version?: string }>;
+  & CreateTelegramChannelResourceOptions
+  & CreateTelegramChannelAdapterOptions
+  & Readonly<{ channelId?: string; pluginId?: string; version?: string }>;
 
 export type TelegramUser = Readonly<{
   id: string | number;

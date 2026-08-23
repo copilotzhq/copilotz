@@ -1,18 +1,20 @@
-export { createZendeskChannel, createZendeskChannelPlugin } from "./channel.ts";
+export {
+  createZendeskChannelAdapter,
+  createZendeskChannelPlugin,
+  createZendeskChannelResource,
+} from "./channel.ts";
 export { createZendeskTransport } from "./transport.ts";
 export type {
-  CreateZendeskChannelOptions,
+  CreateZendeskChannelAdapterOptions,
   CreateZendeskChannelPluginOptions,
-  TransformZendeskDeliveryOutput,
-  ZendeskActionDeliveryOutput,
+  CreateZendeskChannelResourceOptions,
+  TransformZendeskDelivery,
   ZendeskActionPayload,
   ZendeskConfig,
+  ZendeskConfigContext,
   ZendeskConfigResolver,
-  ZendeskDeliveryOutput,
-  ZendeskMediaDeliveryOutput,
+  ZendeskDelivery,
   ZendeskMediaInput,
-  ZendeskReplyButtonInput,
-  ZendeskTextDeliveryOutput,
   ZendeskTransport,
   ZendeskWebhookPayload,
 } from "./types.ts";

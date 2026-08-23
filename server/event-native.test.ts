@@ -9,17 +9,19 @@ import { createTestDomainContext } from "../runtime/testing/domain-context.ts";
 
 import { createCopilotz } from "../runtime/application/index.ts";
 import type { AttachmentOutput } from "../runtime/attachments/index.ts";
-import type {
-  ChannelRequest,
-  ChannelResource,
-  ChannelRuntime,
-} from "../plugins/channels/index.ts";
-import { defineCollection } from "../runtime/collections/index.ts";
 import {
-  createEphemeralEvent,
-  provisionCopilotzSchema,
-} from "../runtime/events/index.ts";
-import { definePlugin } from "../runtime/plugins/index.ts";
+  channelsPlugin,
+  createWebChannelAdapter,
+  createWebChannelResource,
+} from "../plugins/channels/index.ts";
+import type { ChannelAdapter } from "../plugins/channels/index.ts";
+import { defineCollection } from "../runtime/collections/index.ts";
+import { provisionCopilotzSchema } from "../runtime/events/index.ts";
+import {
+  definePlugin,
+  defineProcessor,
+  type ProcessorContext,
+} from "../runtime/plugins/index.ts";
 import { coreCollectionsPlugin } from "../plugins/core/plugin.ts";
 import type { AgentResource } from "@copilotz/copilotz/core";
 import { createTestDatabase } from "../runtime/testing/ominipg.ts";
@@ -712,76 +714,177 @@ Deno.test("trusted schema resolution isolates identical HTTP resource identities
 });
 
 Deno.test("event-native app returns request-bound channel output before delivery settlement", async () => {
-  const application = await createCopilotz({
-    namespace: NAMESPACE,
-    databaseSchema: `${SCHEMA}_request_bound`,
-    plugins: [coreCollectionsPlugin],
-  });
   let release!: () => void;
   const settlement = new Promise<void>((resolve) => {
     release = resolve;
   });
-  let cancelled: string | undefined;
-  const channel: ChannelResource = Object.freeze({
-    id: "web",
-    ingress: Object.freeze({ handle: () => ({ inputs: [] }) }),
-    egress: Object.freeze({
-      requestBound: true,
-      deliver: () => undefined,
-    }),
-  });
-  const channels: ChannelRuntime = Object.freeze({
-    list: () => [channel],
-    get: (id) => id === channel.id ? channel : undefined,
-    dispatch(_namespace: string, request: ChannelRequest) {
-      const event = createEphemeralEvent({
-        type: "text.delta",
-        namespace: NAMESPACE,
-        payload: { text: "streamed" },
-        correlationId: "request-bound-a",
-      });
-      const done = (async () => {
-        await request.callback!(event as AttachmentOutput);
-        await settlement;
-      })();
-      return Promise.resolve(Object.freeze({
-        status: 202,
-        response: { accepted: true },
-        requestBound: true,
-        executions: Object.freeze([]),
-        done,
-        cancel(reason = "cancelled") {
-          cancelled = reason;
-          release();
-          return Promise.resolve();
+  const blocker = definePlugin({
+    id: "test.request-bound-channel-blocker",
+    version: "1.0.0",
+    processors: {
+      wait: defineProcessor<ProcessorContext>({
+        id: "test.request-bound-channel-wait",
+        on: [{ eventType: "message.created" }],
+        async handle(_event, _context) {
+          await settlement;
         },
-      }));
+      }),
     },
   });
+  let acceptSignal: AbortSignal | undefined;
+  const web = createWebChannelAdapter();
+  const observedWeb: ChannelAdapter = Object.freeze({
+    ...web,
+    accept(request, context) {
+      acceptSignal = context.signal;
+      return web.accept(request, context);
+    },
+  });
+  const channelProvider = definePlugin({
+    id: "test.request-bound-channel-provider",
+    version: "1.0.0",
+    plugins: [channelsPlugin] as const,
+    resources: { channels: { web: createWebChannelResource() } },
+    adapters: {
+      channels: {
+        web: observedWeb,
+      },
+    },
+  });
+  const application = await createCopilotz({
+    namespace: NAMESPACE,
+    databaseSchema: `${SCHEMA}_request_bound`,
+    plugins: [channelProvider, blocker],
+  });
   try {
-    const response = await createEventNativeApp(application, { channels })
-      .handle({
-        resource: "channels",
-        method: "POST",
-        path: ["web"],
-        body: {},
-      });
+    const response = await createEventNativeApp(application).handle({
+      resource: "channels",
+      method: "POST",
+      path: ["web"],
+      body: {
+        id: "request-bound-a",
+        input: {
+          externalThreadId: "request-thread-a",
+          sender: {
+            externalId: "request-user-a",
+            participantType: "human",
+          },
+          recipients: [{
+            externalId: "request-tool-a",
+            participantType: "tool",
+          }],
+          content: "streamed",
+        },
+      },
+    });
     assertEquals(response.status, 200);
     assert(isEventNativeOutputStream(response.data));
+    const output = response.data;
     let settled = false;
-    response.data.done.then(() => settled = true);
+    void output.done.then(
+      () => settled = true,
+      () => undefined,
+    );
     assertEquals(settled, false);
-    const reader = response.data.outputs.getReader();
+    const reader = output.outputs.getReader();
     const first = await reader.read();
-    assertEquals(first.value?.type, "text.delta");
+    assertEquals(first.value?.type, "copilotz.channels.ingress.input");
     assertEquals(settled, false);
+    const cancellation = output.cancel("test_cleanup");
+    assertEquals(acceptSignal?.aborted, true);
     release();
-    await response.data.done;
-    assertEquals((await reader.read()).done, true);
-    await response.data.cancel("test_cleanup");
-    assertEquals(cancelled, "test_cleanup");
+    await cancellation;
+    await assertRejects(() => output.done);
+    await reader.cancel("test_cleanup").catch(() => undefined);
   } finally {
     release();
+    await application.shutdown();
+  }
+});
+
+Deno.test("event-native Channel host validates every occurrence before persistence and cleans up rejected accepts", async () => {
+  const signals: AbortSignal[] = [];
+  const adapter = (
+    occurrences: readonly Readonly<Record<string, unknown>>[],
+  ): ChannelAdapter =>
+    Object.freeze({
+      accept(_request, context) {
+        signals.push(context.signal);
+        return Object.freeze({
+          occurrences: Object.freeze(occurrences),
+        }) as never;
+      },
+      receive() {
+        throw new Error("Rejected host accepts must not reach a worker.");
+      },
+    });
+  const provider = definePlugin({
+    id: "test.channel-host-prevalidation",
+    version: "1.0.0",
+    plugins: [channelsPlugin] as const,
+    resources: {
+      channels: {
+        multiple: createWebChannelResource(),
+        invalid: Object.freeze({ egress: "external" as const }),
+      },
+    },
+    adapters: {
+      channels: {
+        multiple: adapter([
+          Object.freeze({ id: "one", input: Object.freeze({}) }),
+          Object.freeze({ id: "two", input: Object.freeze({}) }),
+        ]),
+        invalid: adapter([
+          Object.freeze({
+            id: "valid",
+            input: Object.freeze({}),
+          }),
+          Object.freeze({
+            id: "invalid",
+            input: Object.freeze({}),
+            legacyRoute: Object.freeze({}),
+          }),
+        ]),
+      },
+    },
+  });
+  const application = await createCopilotz({
+    namespace: NAMESPACE,
+    databaseSchema: `${SCHEMA}_channel_host_prevalidation`,
+    plugins: [provider],
+  });
+  const app = createEventNativeApp(application);
+  try {
+    await expectAppError(
+      () =>
+        app.handle({
+          resource: "channels",
+          method: "POST",
+          path: ["multiple"],
+          body: {},
+        }),
+      400,
+      "multiple_request_occurrences",
+    );
+    await assertRejects(
+      () =>
+        app.handle({
+          resource: "channels",
+          method: "POST",
+          path: ["invalid"],
+          body: {},
+        }),
+      TypeError,
+      "legacyRoute",
+    );
+    assertEquals(signals.map((signal) => signal.aborted), [true, true]);
+    assertEquals(
+      (await application.events.list({ namespace: NAMESPACE })).filter(
+        (event) => event.type === "copilotz.channels.ingress.input",
+      ),
+      [],
+    );
+  } finally {
     await application.shutdown();
   }
 });

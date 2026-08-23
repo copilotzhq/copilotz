@@ -1,5 +1,8 @@
-import type { AttachmentOutput } from "@copilotz/copilotz/attachments";
-import type { ChannelEgressContext, ChannelRequest } from "../types.ts";
+import type {
+  ChannelDeliveryAttempt,
+  ChannelJsonObject,
+  ChannelRequest,
+} from "../types.ts";
 
 export type ZendeskConfig = Readonly<{
   appId: string;
@@ -9,9 +12,15 @@ export type ZendeskConfig = Readonly<{
   businessName?: string;
   businessLogo?: string | null;
 }>;
-
+export type ZendeskConfigContext = Readonly<{
+  operation: "accept" | "deliver";
+  namespace: string;
+  channelId: string;
+  request?: ChannelRequest;
+  route?: ChannelJsonObject;
+}>;
 export type ZendeskConfigResolver = (
-  request: ChannelRequest,
+  context: ZendeskConfigContext,
 ) => ZendeskConfig | Promise<ZendeskConfig>;
 
 export type ZendeskMediaInput = Readonly<{
@@ -19,7 +28,6 @@ export type ZendeskMediaInput = Readonly<{
   mediaType: string;
   name?: string;
 }>;
-
 export type ZendeskTransport = Readonly<{
   download(url: string): Promise<ZendeskMediaInput | null>;
   upload(
@@ -34,63 +42,42 @@ export type ZendeskTransport = Readonly<{
   ): Promise<unknown>;
 }>;
 
-export type ZendeskReplyButtonInput = Readonly<{
-  text?: string;
-  payload?: string;
+export type ZendeskActionPayload = Readonly<{
+  type: "reply_buttons";
+  message: string;
+  content: readonly Readonly<{ text?: string; payload?: string }>[];
 }>;
-
-export type ZendeskActionPayload =
-  & Readonly<Record<string, unknown>>
-  & Readonly<{
-    type?: string;
-    message?: string;
-    content?: readonly ZendeskReplyButtonInput[];
+export type ZendeskDelivery =
+  | Readonly<{ kind: "text"; conversationId: string; text: string }>
+  | Readonly<{
+    kind: "media";
+    conversationId: string;
+    media: ZendeskMediaInput;
+  }>
+  | Readonly<{
+    kind: "reply_buttons";
+    conversationId: string;
+    action: ZendeskActionPayload;
   }>;
+export type TransformZendeskDelivery = (
+  delivery: ZendeskDelivery,
+  attempt: ChannelDeliveryAttempt,
+) => ZendeskDelivery | null | Promise<ZendeskDelivery | null>;
 
-export type ZendeskTextDeliveryOutput = Readonly<{
-  kind: "text";
-  conversationId: string;
-  text: string;
-  output: AttachmentOutput;
+export type CreateZendeskChannelResourceOptions = Readonly<{
+  defaultAgentAliases?: readonly string[];
+  metadata?: ChannelJsonObject;
 }>;
-
-export type ZendeskMediaDeliveryOutput = Readonly<{
-  kind: "media";
-  conversationId: string;
-  media: ZendeskMediaInput;
-  output: AttachmentOutput;
-}>;
-
-export type ZendeskActionDeliveryOutput = Readonly<{
-  kind: "reply_buttons";
-  conversationId: string;
-  action: ZendeskActionPayload;
-  output: AttachmentOutput;
-}>;
-
-export type ZendeskDeliveryOutput =
-  | ZendeskTextDeliveryOutput
-  | ZendeskMediaDeliveryOutput
-  | ZendeskActionDeliveryOutput;
-
-export type TransformZendeskDeliveryOutput = (
-  output: ZendeskDeliveryOutput,
-  context: ChannelEgressContext,
-) => ZendeskDeliveryOutput | null | Promise<ZendeskDeliveryOutput | null>;
-
-export type CreateZendeskChannelOptions = Readonly<{
-  id?: string;
+export type CreateZendeskChannelAdapterOptions = Readonly<{
   config: ZendeskConfig | ZendeskConfigResolver;
-  defaultAgentIds?: readonly string[];
   transport?: ZendeskTransport;
   fetch?: typeof fetch;
-  transformOutput?: TransformZendeskDeliveryOutput;
-  maxStreamBytes?: number;
+  transformDelivery?: TransformZendeskDelivery;
 }>;
-
 export type CreateZendeskChannelPluginOptions =
-  & CreateZendeskChannelOptions
-  & Readonly<{ pluginId?: string; version?: string }>;
+  & CreateZendeskChannelResourceOptions
+  & CreateZendeskChannelAdapterOptions
+  & Readonly<{ channelId?: string; pluginId?: string; version?: string }>;
 
 export type ZendeskWebhookPayload = Readonly<{
   events?: readonly Readonly<{

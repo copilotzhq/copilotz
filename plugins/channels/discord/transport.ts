@@ -1,26 +1,9 @@
-import type {
-  DiscordConfig,
-  DiscordMediaInput,
-  DiscordTransport,
-} from "./types.ts";
+import type { DiscordConfig, DiscordTransport } from "./types.ts";
 
 function required(value: string | undefined, name: string): string {
   const normalized = value?.trim() ?? "";
   if (!normalized) throw new TypeError(`${name} must be non-empty.`);
   return normalized;
-}
-
-function endpoint(
-  config: DiscordConfig,
-  interactionToken: string,
-  initial: boolean,
-): string {
-  const base = `/webhooks/${
-    encodeURIComponent(required(config.applicationId, "Discord applicationId"))
-  }/${
-    encodeURIComponent(required(interactionToken, "Discord interaction token"))
-  }`;
-  return initial ? `${base}/messages/@original` : base;
 }
 
 async function discordResult(response: Response): Promise<unknown> {
@@ -36,21 +19,26 @@ async function discordResult(response: Response): Promise<unknown> {
   return response.status === 204 ? null : await response.json();
 }
 
-function headers(config: DiscordConfig): Record<string, string> {
-  return config.botToken?.trim()
-    ? { Authorization: `Bot ${config.botToken.trim()}` }
-    : {};
+function endpoint(channelId: string): string {
+  return `https://discord.com/api/v10/channels/${
+    encodeURIComponent(required(channelId, "Discord channel ID"))
+  }/messages`;
+}
+
+function authorization(config: DiscordConfig): Record<string, string> {
+  return {
+    Authorization: `Bot ${required(config.botToken, "Discord botToken")}`,
+  };
 }
 
 function extension(mediaType: string): string {
-  return mediaType.split(";")[0].split("/")[1]?.replace(
+  return mediaType.split(";", 1)[0].split("/")[1]?.replace(
     /[^a-z0-9.+-]/gi,
     "_",
-  ) ||
-    "bin";
+  ) || "bin";
 }
 
-/** Creates a fetch-backed Discord interactions transport. */
+/** Fetch-backed Discord Bot transport; interaction tokens never enter routes. */
 export function createDiscordTransport(
   options: Readonly<{ fetch?: typeof fetch }> = {},
 ): DiscordTransport {
@@ -68,26 +56,19 @@ export function createDiscordTransport(
           "application/octet-stream",
       });
     },
-    async send(config, interactionToken, body, initial) {
+    async send(config, channelId, body) {
       return await discordResult(
-        await fetcher(
-          `https://discord.com/api/v10${
-            endpoint(config, interactionToken, initial)
-          }`,
-          {
-            method: initial ? "PATCH" : "POST",
-            headers: { ...headers(config), "Content-Type": "application/json" },
-            body: JSON.stringify(body),
+        await fetcher(endpoint(channelId), {
+          method: "POST",
+          headers: {
+            ...authorization(config),
+            "Content-Type": "application/json",
           },
-        ),
+          body: JSON.stringify(body),
+        }),
       );
     },
-    async sendMedia(
-      config,
-      interactionToken,
-      media: DiscordMediaInput,
-      initial,
-    ) {
+    async sendMedia(config, channelId, media) {
       const name = media.name?.trim() || `file.${extension(media.mediaType)}`;
       const form = new FormData();
       form.append(
@@ -102,16 +83,11 @@ export function createDiscordTransport(
         name,
       );
       return await discordResult(
-        await fetcher(
-          `https://discord.com/api/v10${
-            endpoint(config, interactionToken, initial)
-          }`,
-          {
-            method: initial ? "PATCH" : "POST",
-            headers: headers(config),
-            body: form,
-          },
-        ),
+        await fetcher(endpoint(channelId), {
+          method: "POST",
+          headers: authorization(config),
+          body: form,
+        }),
       );
     },
   });
@@ -128,7 +104,6 @@ function hexBytes(value: string): Uint8Array | null {
   return bytes;
 }
 
-/** Verifies Discord's Ed25519 signature over timestamp + exact request bytes. */
 export async function verifyDiscordSignature(
   publicKey: string,
   signature: string,

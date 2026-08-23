@@ -1,8 +1,12 @@
 import type { AgentResource } from "@copilotz/copilotz/core";
-import {
-  type ChannelRuntime,
-  createChannelRuntime,
-} from "../plugins/channels/index.ts";
+import { channelIngress } from "../plugins/channels/input.ts";
+import { defineChannelResource } from "../plugins/channels/resource.ts";
+import type {
+  ChannelAcceptResult,
+  ChannelAdapter,
+  ChannelIngressOccurrence,
+  ChannelRequest,
+} from "../plugins/channels/types.ts";
 import {
   getThread,
   listMessages,
@@ -14,7 +18,10 @@ import {
   type EventNativeHistoryInclude,
 } from "./history.ts";
 import { eventNativeAsset } from "./assets.ts";
-import type { CopilotzApplication } from "../runtime/application/index.ts";
+import type {
+  ApplicationSendHandle,
+  CopilotzApplication,
+} from "../runtime/application/index.ts";
 import type { AttachmentOutput } from "../runtime/attachments/index.ts";
 import type {
   ConversationThread,
@@ -78,13 +85,6 @@ export type CreateEventNativeAppOptions = Readonly<{
   resolveDatabaseSchema?: (
     request: EventNativeAppRequest,
   ) => string | null | undefined | Promise<string | null | undefined>;
-  channels?: ChannelRuntime;
-  /** Supplies an explicitly schema-bound channel runtime when one is injected. */
-  resolveChannels?: (
-    databaseSchema: string,
-    application: CopilotzApplication,
-  ) => ChannelRuntime | Promise<ChannelRuntime>;
-  onDetachedChannelError?: (error: unknown) => void;
 }>;
 
 export type EventNativeApp = Readonly<{
@@ -742,90 +742,194 @@ async function handleDeliveries(
 }
 
 async function handleChannels(
-  channels: ChannelRuntime,
+  application: CopilotzApplication,
   namespace: string,
   request: EventNativeAppRequest,
   path: readonly string[],
 ): Promise<EventNativeAppResponse> {
-  const ingress = path[0];
-  const egress = path.length === 1
-    ? ingress
-    : path.length === 3 && path[1] === "to"
-    ? path[2]
-    : undefined;
-  if (!ingress || !egress) {
+  const channelId = path.length === 1 ? path[0]?.trim() : "";
+  if (!channelId) {
     throw appError(404, "route_not_found", "Channel route was not found.");
   }
-  if (!channels.get(ingress)?.ingress) {
+  const candidate = application.plugins.resources.channels?.[channelId];
+  if (!candidate) {
     throw appError(
       404,
       "channel_not_found",
-      `Channel ingress '${ingress}' was not found.`,
+      `Channel '${channelId}' was not found.`,
     );
   }
-  if (!channels.get(egress)?.egress) {
+  const channel = defineChannelResource(candidate as never);
+  const adapter = application.plugins.adapters.channels?.[channelId] as
+    | ChannelAdapter
+    | undefined;
+  if (!adapter || typeof adapter.accept !== "function") {
     throw appError(
       404,
       "channel_not_found",
-      `Channel egress '${egress}' was not found.`,
+      `Channel Adapter '${channelId}' was not found.`,
     );
   }
-  const suppliedCallback = request.context?.callback;
-  const requestBound = channels.get(egress)?.egress?.requestBound === true;
-  const bridge = !suppliedCallback && requestBound
-    ? new TransformStream<AttachmentOutput, AttachmentOutput>()
-    : undefined;
-  const writer = bridge?.writable.getWriter();
-  const callback = suppliedCallback ??
-    (writer ? (output: AttachmentOutput) => writer.write(output) : undefined);
   const rawBody = request.context?.rawBody;
-  let dispatched;
+  const channelRequest: ChannelRequest = Object.freeze({
+    method: request.method,
+    headers: Object.freeze({ ...(request.headers ?? {}) }),
+    ...(request.query ? { query: request.query } : {}),
+    body: request.body,
+    ...(rawBody instanceof Uint8Array ? { rawBody: rawBody.slice() } : {}),
+    ...(request.context ? { context: request.context } : {}),
+  });
+  const abort = new AbortController();
+  let accepted: ChannelAcceptResult;
   try {
-    dispatched = await channels.dispatch(namespace, {
-      method: request.method,
-      headers: request.headers ?? {},
-      query: request.query,
-      body: request.body,
-      ...(rawBody instanceof Uint8Array ? { rawBody } : {}),
-      ...(typeof callback === "function"
-        ? {
-          callback: callback as (
-            output: AttachmentOutput,
-          ) => void | Promise<void>,
-        }
-        : {}),
-      context: request.context,
-      route: { ingress, egress },
-    });
+    accepted = acceptedChannels(
+      await adapter.accept(channelRequest, {
+        namespace,
+        channelId,
+        channel,
+        signal: abort.signal,
+        now: () => new Date(),
+      }),
+    );
   } catch (error) {
-    await writer?.abort(error).catch(() => undefined);
+    abort.abort(error);
     throw error;
   }
-  if (bridge && writer) {
-    const done = dispatched.done.then(
-      () => writer.close(),
-      async (error) => {
-        await writer.abort(error).catch(() => undefined);
-        throw error;
-      },
+  if ((accepted.status ?? 200) >= 400 && accepted.occurrences.length > 0) {
+    abort.abort("channel_accept_rejected_occurrences");
+    throw appError(
+      500,
+      "invalid_channel_accept",
+      "A rejected Channel request cannot contain accepted occurrences.",
     );
-    done.catch(() => undefined);
+  }
+  let envelopes: ReturnType<typeof channelIngress>[];
+  try {
+    envelopes = accepted.occurrences.map((occurrence) =>
+      channelIngress(channelId, occurrence, {
+        namespace,
+        databaseSchema: application.config.databaseSchema,
+      })
+    );
+  } catch (error) {
+    abort.abort(error);
+    throw error;
+  }
+  if (channel.egress === "request-observation" && envelopes.length > 1) {
+    abort.abort("channel_request_has_multiple_occurrences");
+    throw appError(
+      400,
+      "multiple_request_occurrences",
+      "A request-observation Channel must accept exactly one occurrence.",
+    );
+  }
+  const handles: ApplicationSendHandle[] = [];
+  try {
+    for (const envelope of envelopes) {
+      handles.push(await application.send(envelope));
+    }
+  } catch (error) {
+    abort.abort(error);
+    await Promise.allSettled(
+      handles.map((handle) => handle.cancel("channel_accept_failed")),
+    );
+    throw error;
+  }
+  if (channel.egress === "request-observation" && handles.length > 0) {
+    const handle = handles[0];
+    const done = handle.done.finally(() => abort.abort());
     const output: EventNativeOutputStream = Object.freeze({
       type: EVENT_NATIVE_OUTPUT_STREAM,
-      outputs: bridge.readable,
+      outputs: handle.outputs,
       done,
-      cancel: (reason) => dispatched.cancel(reason),
+      async cancel(reason = "channel_request_cancelled") {
+        abort.abort(reason);
+        await handle.cancel(reason);
+      },
     });
     return { status: 200, data: output };
   }
-  if (dispatched.requestBound) await dispatched.done;
+  for (const handle of handles) void handle.done.catch(() => undefined);
+  abort.abort("channel_accept_completed");
   return {
-    status: dispatched.status,
-    data: dispatched.response ?? {
+    status: accepted.status ?? (handles.length ? 202 : 200),
+    data: accepted.response ?? {
       accepted: true,
-      executions: dispatched.executions.length,
+      occurrences: handles.length,
+      eventIds: Object.freeze(handles.map((handle) => handle.eventId)),
     },
   };
+}
+
+const ACCEPT_KEYS = new Set(["occurrences", "status", "response"]);
+
+function acceptedChannels(value: unknown): ChannelAcceptResult {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError("Channel accept result must be a plain object.");
+  }
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw new TypeError("Channel accept result must be a plain object.");
+  }
+  const snapshot: Record<string, unknown> = {};
+  for (const key of Reflect.ownKeys(value)) {
+    if (typeof key !== "string" || !ACCEPT_KEYS.has(key)) {
+      throw new TypeError(
+        `Channel accept result cannot declare '${String(key)}'.`,
+      );
+    }
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (!descriptor?.enumerable || !("value" in descriptor)) {
+      throw new TypeError(
+        `Channel accept result.${key} must be a data property.`,
+      );
+    }
+    if (descriptor.value === undefined) {
+      throw new TypeError(`Channel accept result.${key} cannot be undefined.`);
+    }
+    snapshot[key] = descriptor.value;
+  }
+  const occurrences = snapshot.occurrences;
+  if (
+    !Array.isArray(occurrences) ||
+    Object.getPrototypeOf(occurrences) !== Array.prototype ||
+    Object.keys(occurrences).length !== occurrences.length ||
+    Reflect.ownKeys(occurrences).some((key) =>
+      key !== "length" &&
+      (typeof key !== "string" || !/^(0|[1-9][0-9]*)$/.test(key) ||
+        Number(key) >= occurrences.length)
+    )
+  ) {
+    throw new TypeError("Channel accept occurrences must be a dense array.");
+  }
+  const descriptors = Object.getOwnPropertyDescriptors(occurrences);
+  const normalized = Object.freeze(Array.from(
+    { length: occurrences.length },
+    (_, index) => {
+      const descriptor = descriptors[String(index)];
+      if (!descriptor?.enumerable || !("value" in descriptor)) {
+        throw new TypeError(
+          `Channel accept occurrences[${index}] must be a data property.`,
+        );
+      }
+      const occurrence = descriptor.value;
+      if (!occurrence || typeof occurrence !== "object") {
+        throw new TypeError("Channel occurrence must be a plain object.");
+      }
+      return occurrence as ChannelIngressOccurrence;
+    },
+  ));
+  const status = snapshot.status;
+  if (
+    status !== undefined &&
+    (!Number.isSafeInteger(status) || Number(status) < 100 ||
+      Number(status) > 599)
+  ) throw new TypeError("Channel accept status must be an HTTP status.");
+  return Object.freeze({
+    occurrences: normalized,
+    ...(status !== undefined ? { status: Number(status) } : {}),
+    ...(snapshot.response !== undefined ? { response: snapshot.response } : {}),
+  });
 }
 
 /** Creates the queue-free, graph/event-native framework-neutral HTTP facade. */
@@ -833,11 +937,7 @@ export function createEventNativeApp(
   application: CopilotzApplication,
   options: CreateEventNativeAppOptions = {},
 ): EventNativeApp {
-  const channels = options.channels ?? createChannelRuntime(application, {
-    onDetachedError: (error) => options.onDetachedChannelError?.(error),
-  });
   const applicationScopes = new Map<string, Promise<CopilotzApplication>>();
-  const channelScopes = new Map<string, Promise<ChannelRuntime>>();
   const scopedApplication = (databaseSchema: string) => {
     if (databaseSchema === application.config.databaseSchema) {
       return Promise.resolve(application);
@@ -853,34 +953,6 @@ export function createEventNativeApp(
       throw error;
     });
     applicationScopes.set(databaseSchema, pending);
-    return pending;
-  };
-  const scopedChannels = (
-    databaseSchema: string,
-    scoped: CopilotzApplication,
-  ): Promise<ChannelRuntime> => {
-    if (databaseSchema === application.config.databaseSchema) {
-      return Promise.resolve(channels);
-    }
-    const existing = channelScopes.get(databaseSchema);
-    if (existing) return existing;
-    const pending = options.resolveChannels
-      ? Promise.resolve(options.resolveChannels(databaseSchema, scoped))
-      : options.channels
-      ? Promise.reject(
-        new Error(
-          "An injected channel runtime requires resolveChannels for non-default database schemas.",
-        ),
-      )
-      : Promise.resolve(createChannelRuntime(scoped, {
-        onDetachedError: (error) => options.onDetachedChannelError?.(error),
-      }));
-    channelScopes.set(databaseSchema, pending);
-    void pending.catch(() => {
-      if (channelScopes.get(databaseSchema) === pending) {
-        channelScopes.delete(databaseSchema);
-      }
-    });
     return pending;
   };
   const resources = Object.freeze([
@@ -937,7 +1009,7 @@ export function createEventNativeApp(
           return await handleAssets(scoped, namespace, request, path);
         case "channels":
           return await handleChannels(
-            await scopedChannels(requestBoundary.databaseSchema, scoped),
+            scoped,
             namespace,
             request,
             path,

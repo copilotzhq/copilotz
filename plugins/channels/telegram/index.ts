@@ -1,22 +1,22 @@
 export {
-  createTelegramChannel,
+  createTelegramChannelAdapter,
   createTelegramChannelPlugin,
+  createTelegramChannelResource,
 } from "./channel.ts";
 export { createTelegramTransport } from "./transport.ts";
 export type {
-  CreateTelegramChannelOptions,
+  CreateTelegramChannelAdapterOptions,
   CreateTelegramChannelPluginOptions,
-  TelegramActionDeliveryOutput,
+  CreateTelegramChannelResourceOptions,
   TelegramActionPayload,
   TelegramConfig,
+  TelegramConfigContext,
   TelegramConfigResolver,
-  TelegramDeliveryOutput,
-  TelegramMediaDeliveryOutput,
+  TelegramDelivery,
   TelegramMediaInput,
   TelegramMessage,
-  TelegramTextDeliveryOutput,
   TelegramTransport,
   TelegramUpdate,
   TelegramUser,
-  TransformTelegramDeliveryOutput,
+  TransformTelegramDelivery,
 } from "./types.ts";

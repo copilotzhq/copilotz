@@ -9,7 +9,7 @@ import type {
   PersistentTerminalScope,
   PersistentTerminalService,
   PersistentTerminalServiceContext,
-} from "../../tools/index.ts";
+} from "./plugin.ts";
 
 export type CreatePersistentTerminalServiceOptions = Readonly<{
   /** Explicit isolated workspace tree. Defaults to COPILOTZ_WORKSPACES_DIR. */

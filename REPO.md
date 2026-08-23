@@ -55,6 +55,7 @@ This map describes the transitional worktree, not target ownership. Use
 - Agents, prompt, and transcript: `runtime/agents/`
 - LLM providers and attempt lifecycle: `runtime/llm/`
 - Tool catalog, executor, and jq pipelines: `runtime/tools/`
+- Concrete Tool plugins and host/protocol integrations: `plugins/tools/`
 - Text/ask processors: `plugins/core/`
 - Persistent text/realtime attachments: `runtime/attachments/`
 - Memory, knowledge, schedules, usage, goals: corresponding `runtime/` modules

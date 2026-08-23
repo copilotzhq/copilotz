@@ -1,18 +1,23 @@
-import type { API } from "../resources/index.ts";
+import type { API } from "@copilotz/copilotz/resources";
 import {
   createWorkflowToolCatalog,
   type GenerateApiWorkflowTools,
   isWorkflowTool,
   type WorkflowToolCatalog,
-} from "../tools/index.ts";
-import { createMcpWorkflowToolGenerator } from "./mcp-tools.ts";
+} from "@copilotz/copilotz/tools";
+import { createMcpWorkflowToolGenerator } from "../mcp/generator.ts";
 import type { CreateServerWorkflowToolCatalogOptions } from "./types.ts";
+
+export type {
+  CreateServerWorkflowToolCatalog,
+  CreateServerWorkflowToolCatalogOptions,
+} from "./types.ts";
 
 /** Web-fetch OpenAPI generator, loaded only when API resources are present. */
 export function createOpenApiWorkflowToolGenerator(): GenerateApiWorkflowTools {
   return async (apis: readonly API[]) => {
     if (!apis.length) return Object.freeze([]);
-    const { generateApiTools } = await import("./openapi-tools.ts");
+    const { generateApiTools } = await import("../openapi/generator.ts");
     return Object.freeze(
       apis.flatMap((api) => generateApiTools(api)).filter(isWorkflowTool),
     );

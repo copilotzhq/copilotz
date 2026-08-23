@@ -1,10 +1,17 @@
-import type { MCPServer } from "../resources/index.ts";
+import type { MCPServer } from "@copilotz/copilotz/resources";
 import type {
   GenerateMcpWorkflowTools,
   WorkflowTool,
   WorkflowToolExecutionContext,
-} from "../tools/index.ts";
+} from "@copilotz/copilotz/tools";
 import type {
+  CreateMcpWorkflowToolGeneratorOptions,
+  McpRuntimeConnection,
+  McpToolDescriptor,
+} from "./types.ts";
+
+export type {
+  ConnectMcpRuntime,
   CreateMcpWorkflowToolGeneratorOptions,
   McpRuntimeConnection,
   McpToolDescriptor,

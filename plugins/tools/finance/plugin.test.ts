@@ -1,9 +1,9 @@
 import { assert, assertEquals, assertRejects } from "@std/assert";
 
-import { createFinanceProviderRegistry } from "./finance/provider/registry.ts";
-import type { FinanceDataProvider } from "./finance/provider/types.ts";
-import type { WorkflowTool } from "./types.ts";
-import { createFinanceToolsPlugin } from "./finance-plugin.ts";
+import { createFinanceProviderRegistry } from "./provider/registry.ts";
+import type { FinanceDataProvider } from "./provider/types.ts";
+import type { WorkflowTool } from "@copilotz/copilotz/tools";
+import { createFinanceToolsPlugin } from "./plugin.ts";
 
 function provider(): FinanceDataProvider {
   const searchAssets: FinanceDataProvider["searchAssets"] = async (
@@ -54,10 +54,10 @@ Deno.test("finance provider registry and tool are factory-created resources", as
 Deno.test("finance implementation keeps providers behind factories", async () => {
   for (
     const module of [
-      "finance/index.ts",
-      "finance/provider/registry.ts",
-      "finance/provider/yahoo.ts",
-      "finance-plugin.ts",
+      "index.ts",
+      "provider/registry.ts",
+      "provider/yahoo.ts",
+      "plugin.ts",
     ]
   ) {
     const source = await Deno.readTextFile(new URL(module, import.meta.url));

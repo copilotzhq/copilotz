@@ -1,15 +1,15 @@
-import applyPatch from "./tools/apply-patch.ts";
-import listDirectory from "./tools/list-directory.ts";
-import readFile from "./tools/read-file.ts";
-import restoreFileVersion from "./tools/restore-file-version.ts";
-import runCommand from "./tools/run-command.ts";
-import searchCode from "./tools/search-code.ts";
-import searchFiles from "./tools/search-files.ts";
-import showFileDiff from "./tools/show-file-diff.ts";
-import writeFile from "./tools/write-file.ts";
-import type { NewTool } from "../../resources/index.ts";
-import { type CopilotzPlugin, definePlugin } from "../../plugins/index.ts";
-import type { WorkflowTool } from "../../tools/index.ts";
+import applyPatch from "./apply-patch.ts";
+import listDirectory from "./list-directory.ts";
+import readFile from "./read-file.ts";
+import restoreFileVersion from "./restore-file-version.ts";
+import runCommand from "./run-command.ts";
+import searchCode from "./search-code.ts";
+import searchFiles from "./search-files.ts";
+import showFileDiff from "./show-file-diff.ts";
+import writeFile from "./write-file.ts";
+import { type CopilotzPlugin, definePlugin } from "@copilotz/copilotz/plugins";
+import type { NewTool } from "@copilotz/copilotz/resources";
+import type { WorkflowTool } from "@copilotz/copilotz/tools";
 
 export const WORKSPACE_TOOL_IDS = [
   "read_file",

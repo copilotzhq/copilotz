@@ -1,7 +1,7 @@
 import { assert, assertEquals, assertThrows } from "@std/assert";
 
-import type { WorkflowTool } from "./types.ts";
-import { createWebToolsPlugin, WEB_TOOL_IDS } from "./web-plugin.ts";
+import type { WorkflowTool } from "@copilotz/copilotz/tools";
+import { createWebToolsPlugin, WEB_TOOL_IDS } from "./plugin.ts";
 
 Deno.test("Web tools compose as stable plugin resources", () => {
   const plugin = createWebToolsPlugin();
@@ -43,10 +43,10 @@ Deno.test("Web tool selection is explicit and validated", () => {
 Deno.test("Web tool plugin excludes filesystem, process, and class APIs", async () => {
   for (
     const module of [
-      "web-plugin.ts",
-      "web/http-request.ts",
-      "web/fetch-text.ts",
-      "web/web-search.ts",
+      "plugin.ts",
+      "http-request.ts",
+      "fetch-text.ts",
+      "web-search.ts",
     ]
   ) {
     const source = await Deno.readTextFile(new URL(module, import.meta.url));

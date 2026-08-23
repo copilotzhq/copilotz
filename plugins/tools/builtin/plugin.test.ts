@@ -1,11 +1,14 @@
 import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
-import { type CopilotzEngine, createCopilotzEngine } from "../engine/index.ts";
+import {
+  type CopilotzEngine,
+  createCopilotzEngine,
+} from "../../../runtime/engine/index.ts";
 import {
   projectMessages,
   projectParticipantById,
   projectThreadById,
-} from "../../runtime/testing/projections.ts";
-import { createSqlSession } from "../events/index.ts";
+} from "../../../runtime/testing/projections.ts";
+import { createSqlSession } from "@copilotz/copilotz/events";
 import {
   createPluginRegistry,
   definePlugin,
@@ -13,16 +16,22 @@ import {
   type PluginRegistry,
   type ProcessorContext,
   type ProcessorEvent,
-} from "../plugins/index.ts";
-import { coreCollectionsPlugin } from "../../plugins/core/plugin.ts";
-import type { WorkflowTool, WorkflowToolExecutionContext } from "./types.ts";
+} from "@copilotz/copilotz/plugins";
+import { coreCollectionsPlugin } from "@copilotz/copilotz/plugins/core";
+import type {
+  WorkflowTool,
+  WorkflowToolExecutionContext,
+} from "@copilotz/copilotz/tools";
+import { BUILT_IN_CORE_TOOL_IDS, createBuiltInToolsPlugin } from "./plugin.ts";
+import type { Agent } from "@copilotz/copilotz/resources";
 import {
-  BUILT_IN_CORE_TOOL_IDS,
-  createBuiltInToolsPlugin,
-} from "./core-plugin.ts";
-import type { Agent } from "../resources/index.ts";
-import { createTestDatabase, type TestDatabase } from "../testing/ominipg.ts";
-import { createSkillsPlugin, defineInlineSkill } from "../skills/index.ts";
+  createTestDatabase,
+  type TestDatabase,
+} from "../../../runtime/testing/ominipg.ts";
+import {
+  createSkillsPlugin,
+  defineInlineSkill,
+} from "../../../runtime/skills/index.ts";
 
 const TEST_SCHEMA = "copilotz_core_tools";
 
@@ -421,7 +430,7 @@ Deno.test("memory and thread tools mutate domain state idempotently", async () =
 });
 
 Deno.test("A55 built-in tool core stays factory-first and runtime-neutral", async () => {
-  for (const module of ["core-plugin.ts", "index.ts"]) {
+  for (const module of ["plugin.ts"]) {
     const source = await Deno.readTextFile(new URL(module, import.meta.url));
     assert(!/\bDeno\b|\bBun\b|\bprocess\b/.test(source));
     assert(!/from\s+["']node:/.test(source));

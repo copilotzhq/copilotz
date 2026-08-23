@@ -6,14 +6,14 @@ import {
   assertThrows,
 } from "@std/assert";
 
-import type { PersistentTerminalServiceContext } from "../../tools/index.ts";
+import type { PersistentTerminalServiceContext } from "./plugin.ts";
 import {
   buildPersistentTerminalSessionKey,
   buildTerminalWorkspaceRoot,
   createPersistentTerminalService,
   normalizeTerminalFilePath,
   resolveTerminalFilePath,
-} from "./persistent-terminal.ts";
+} from "./deno.ts";
 
 function context(
   overrides: Partial<PersistentTerminalServiceContext> = {},
@@ -199,7 +199,7 @@ Deno.test("Deno terminal transfers canonical assets without owning storage", asy
 
 Deno.test("Deno persistent terminal is closure-backed and factory-first", async () => {
   const source = await Deno.readTextFile(
-    new URL("persistent-terminal.ts", import.meta.url),
+    new URL("deno.ts", import.meta.url),
   );
   assert(!/^\s*(?:export\s+)?class\s/m.test(source));
   assert(!/^const sessions\s*=/m.test(source));

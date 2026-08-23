@@ -1,10 +1,13 @@
 import { assert, assertEquals, assertRejects } from "@std/assert";
 
-import type { WorkflowTool, WorkflowToolExecutionContext } from "./types.ts";
+import type {
+  WorkflowTool,
+  WorkflowToolExecutionContext,
+} from "@copilotz/copilotz/tools";
 import {
   createPersistentTerminalToolsPlugin,
   type PersistentTerminalService,
-} from "./persistent-terminal-plugin.ts";
+} from "./plugin.ts";
 
 function toolFrom(service: PersistentTerminalService): WorkflowTool {
   const plugin = createPersistentTerminalToolsPlugin({ terminal: service });
@@ -108,7 +111,7 @@ Deno.test("persistent terminal canonical asset bridge enforces tenant scope", as
 
 Deno.test("persistent terminal tool boundary is factory-first and runtime-neutral", async () => {
   const source = await Deno.readTextFile(
-    new URL("persistent-terminal-plugin.ts", import.meta.url),
+    new URL("plugin.ts", import.meta.url),
   );
   assert(!/^\s*(?:export\s+)?class\s/m.test(source));
   assert(!/\bDeno\.|\bBun\.|from\s+["']node:/.test(source));

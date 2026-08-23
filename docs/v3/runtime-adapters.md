@@ -20,7 +20,8 @@ silently omitting tools.
 
 ```ts
 import { createCopilotzWorker } from "@copilotz/copilotz/application";
-import { createServerWorkflowToolCatalog } from "@copilotz/copilotz/adapters/stdio";
+import { createServerWorkflowToolCatalog } from "@copilotz/copilotz/tools/catalog";
+import { connectMcp } from "@copilotz/copilotz/tools/mcp/stdio";
 
 const worker = await createCopilotzWorker({
   database,
@@ -29,19 +30,18 @@ const worker = await createCopilotzWorker({
   transport,
   core: {
     text: {
-      toolCatalog: createServerWorkflowToolCatalog(),
+      toolCatalog: createServerWorkflowToolCatalog({ connectMcp }),
     },
   },
   plugins,
 });
 ```
 
-`createServerWorkflowToolCatalog()` on the generic adapters subpath grants
-Web-fetch OpenAPI generation and accepts an explicitly injected MCP connector.
-The same `createServerWorkflowToolCatalog()` name lives on the host-only
-`adapters/stdio` subpath and additionally grants the first-party subprocess
-transport. Browser or Cloudflare workers use the generic factory with only
-adapters supported by that host. A shared or remote Oxian worker constructs its
+`createServerWorkflowToolCatalog()` on `/tools/catalog` grants Web-fetch OpenAPI
+generation and accepts an explicitly injected MCP connector. The first-party
+subprocess connector has one home, `/tools/mcp/stdio`, and is passed to that
+factory like any other host capability. Browser or Cloudflare workers omit it or
+inject a transport they support. A shared or remote Oxian worker constructs its
 catalog locally; dispatch payloads continue to contain delivery and resource
 identities, never generator closures, MCP clients, or transports.
 
@@ -71,9 +71,9 @@ accepts `performRun` and an asynchronous `inspect` callback instead of parallel
 static agent/tool arrays, so adapter output cannot drift from runtime
 authorization.
 
-Runtime placement belongs to the adapter subpath, not to every exported symbol.
-The Node, Deno, and stdio entrypoints therefore use the same capability names an
-equivalent host implementation would expose.
+Runtime placement belongs to the owning package subpath, not to every exported
+symbol. Node runtime adapters and Deno/stdio Tool hosts therefore use the same
+capability names an equivalent host implementation would expose.
 
 Skills illustrate the source/runtime split. Canonical Agent Skills directories
 are validated by a build-host adapter and emitted as a portable plugin catalog
@@ -93,29 +93,28 @@ provider registry is closure-backed and worker-local, and the Yahoo provider is
 a plain factory product. Applications can inject another provider resolver
 without changing the logical `finance` tool ID.
 
-Deno-specific filesystem and general subprocess behavior lives on the separate
-`@copilotz/copilotz/adapters/deno` subpath. It provides factory plugins for the
-bounded workspace tools and `run_command`, plus `buildOpenSkillsPlugin()` for
-turning standard source directories into portable runtime modules. Applications
-import the generated plugin and never inject a Deno skill source. The generic
-root and `copilotz/adapters` entrypoints do not import that subpath. MCP stdio
-is similarly isolated on `@copilotz/copilotz/adapters/stdio`; it is never
-imported by the generic adapter entry point. Node/Bun hosts can provide
-equivalent plugins with the same stable tool IDs; browsers and Cloudflare
-workers simply omit them. The bundled Deno implementations use the capability
-IDs `@copilotz/workspace-tools` and `@copilotz/process-tools`, so another host
-can replace either implementation without changing the logical plugin identity.
+Deno-specific workspace and process Tools live on
+`@copilotz/copilotz/tools/deno`; the separate `@copilotz/copilotz/adapters/deno`
+subpath retains the Deno listener, filesystem BodyStore, and
+`buildOpenSkillsPlugin()`. Applications import the generated Skill plugin and
+never inject a Deno skill source. MCP stdio is isolated on
+`@copilotz/copilotz/tools/mcp/stdio`; it is not imported by the generic adapter
+or Tool entrypoint. Node/Bun hosts can provide equivalent plugins with the same
+stable tool IDs; browsers and Cloudflare workers simply omit them. The bundled
+Deno implementations use the capability IDs `@copilotz/workspace-tools` and
+`@copilotz/process-tools`, so another host can replace either implementation
+without changing the logical plugin identity.
 
 Persistent terminals use a two-part boundary. The runtime-neutral
 `createPersistentTerminalToolsPlugin()` receives a `PersistentTerminalService`;
-`createPersistentTerminalService()` from `/adapters/deno` owns Deno child
-processes and session state. The application—not the plugin registry—owns and
-shuts down that service. Asset transfers cross the boundary through canonical
-content callbacks, so the adapter never reaches into SQL or a legacy asset
-store. The Deno service is worker-local: an embedded engine already targets one
-attached worker, while a shared hypervisor must configure a stable worker target
-(or inject an external terminal service) when shell state must survive
-deliveries.
+`createPersistentTerminalService()` from `/tools/persistent-terminal/deno` owns
+Deno child processes and session state. The application—not the plugin
+registry—owns and shuts down that service. Asset transfers cross the boundary
+through canonical content callbacks, so the host never reaches into SQL or a
+legacy asset store. The Deno service is worker-local: an embedded engine already
+targets one attached worker, while a shared hypervisor must configure a stable
+worker target (or inject an external terminal service) when shell state must
+survive deliveries.
 
 The first-party Gateway terminates at the Web Fetch contract. `gateway.fetch`
 maps `Request` values into the transport-neutral application, preserves raw

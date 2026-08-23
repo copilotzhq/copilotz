@@ -821,6 +821,14 @@ barrel or compatibility layer—and keeps the invariant that `runtime/` never
 imports a concrete plugin. The later semantic cuts then happen vertically so
 each behavior moves with its definitions, implementation, tests, and exports:
 
+The concrete Tool-integration portion of this checkpoint is closed. Built-in,
+web, finance, persistent-terminal, OpenAPI, MCP, catalog, and Deno host code now
+lives only under `plugins/tools/**`, with deliberate `/tools/*` package exports.
+There is no forwarding runtime barrel and no duplicate stdio catalog wrapper:
+applications compose the generic catalog with the MCP stdio connector
+explicitly. The one pre-existing WorkflowTool executor/catalog remains only
+until item 2 replaces that entire semantic path atomically.
+
 1. LLM: common `llm.call` Action, Model Resources, the LLM Adapter contract,
    first-party OpenAI/Anthropic/Google-Gemini/Groq/DeepSeek/Ollama/MiniMax
    Adapter factories, prompt/response normalization, and usage output.
@@ -986,9 +994,9 @@ Architecture-specific closure checks must prove:
 
 ## 8. Immediate next slice
 
-Slices 1 through 3 are closed. Begin Slice 4 with the ownership-evacuation
-checkpoint for concrete Tool integrations and semantic adapters, leaving the
-single current executor/catalog untouched until the coordinated Tool/LLM/Core
-semantic cut can delete it without a dual execution path. Then move each
-remaining semantic vertical through the one
-Action/Collection/Processor/Resource/Adapter model.
+Slices 1 through 3 and the concrete Tool-integration ownership checkpoint are
+closed. Continue Slice 4 by moving the remaining semantic plugin verticals out
+of `runtime/`, with no runtime-to-plugin imports or forwarding modules. Then cut
+the Tool/LLM/Core semantic SCC vertically: introduce the final Action/Resource/
+Adapter contracts and delete the single legacy executor/catalog in that same
+change so no dual execution path exists.

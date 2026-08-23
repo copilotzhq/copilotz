@@ -3,15 +3,26 @@ import type {
   APIPrepareRequestContext,
   APIPrepareRequestInput,
   APIResponseAssetMapping,
-} from "../resources/index.ts";
-import { base64ToBytes, type ContentInput } from "../content/index.ts";
-import { parse as parseYaml } from "../../dependencies/yaml.ts";
+} from "@copilotz/copilotz/resources";
+import { base64ToBytes, type ContentInput } from "@copilotz/copilotz/content";
+import { parse as parseYaml } from "../../../dependencies/yaml.ts";
 import type {
   WorkflowTool,
   WorkflowToolExecutionContext,
   WorkflowToolResult,
-} from "../tools/index.ts";
-import { ToolExecutionError } from "../tools/errors.ts";
+} from "@copilotz/copilotz/tools";
+
+class ToolExecutionError extends Error {
+  readonly response: unknown;
+  readonly status: number;
+
+  constructor(response: unknown, status: number, statusText: string) {
+    super(`HTTP ${status}: ${statusText}`);
+    this.name = "ToolExecutionError";
+    this.response = response;
+    this.status = status;
+  }
+}
 
 type AuthConfig = NonNullable<API["auth"]>;
 type DynamicAuth = Extract<AuthConfig, { type: "dynamic" }>;

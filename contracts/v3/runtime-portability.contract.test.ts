@@ -16,13 +16,13 @@ Deno.test("every declared package export resolves to a source file", async () =>
   }
 });
 
-Deno.test("generic package and adapter entrypoints exclude host-only MCP stdio", async () => {
+Deno.test("generic package and Tool entrypoints exclude host-only MCP stdio", async () => {
   const root = await source("index.ts");
   const genericAdapters = await source("runtime/adapters/index.ts");
   const genericCatalog = await source(
-    "runtime/adapters/server-tool-catalog.ts",
+    "plugins/tools/catalog/server.ts",
   );
-  const stdioAdapters = await source("runtime/adapters/stdio.ts");
+  const stdioMcp = await source("plugins/tools/mcp/stdio.ts");
 
   for (
     const [name, value] of [
@@ -35,7 +35,7 @@ Deno.test("generic package and adapter entrypoints exclude host-only MCP stdio",
     assert(!/\b(?:Deno|Bun|process)\./.test(value), name);
     assert(!/stdio-mcp/.test(value), name);
   }
-  assertStringIncludes(stdioAdapters, "connectMcp");
+  assertStringIncludes(stdioMcp, "connectMcp");
 });
 
 Deno.test("portable smoke contract uses only Web and injected capabilities", async () => {

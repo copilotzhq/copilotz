@@ -126,23 +126,23 @@ API.
 
 ## Package map
 
-| Subpath                            | Purpose                                                             |
-| ---------------------------------- | ------------------------------------------------------------------- |
-| `@copilotz/copilotz`               | Normal runtime-neutral application API                              |
-| `/application`                     | Embedded, Gateway, and Worker role factories                        |
-| `/plugins`, `/resources`           | Plugin composition and logical resource types                       |
-| `/capabilities`                    | Explicit agent grants and canonical introspection                   |
-| `/events`                          | Immutable events and durable delivery contracts                     |
-| `/content`, `/domain`              | Canonical assets and graph-native repositories                      |
-| `/attachments`                     | Persistent text/realtime ingress                                    |
-| `/agents`, `/llm`, `/tools`        | Agent prompt/config, LLM providers, tool catalog and executor       |
-| `/skills`                          | Optional Open Skill resources and portable disclosure tools         |
-| `/channels`, `/actions`, `/admin`  | Transport plugins, executable primitives, and admin APIs            |
-| `/adapters`                        | Runtime-neutral OpenAPI/MCP injection and Ominipg adapters          |
-| `/adapters/stdio`                  | Explicit subprocess-backed MCP stdio capability                     |
-| `/adapters/deno`, `/adapters/node` | Host-specific capabilities                                          |
-| `/server`                          | Event-native server projection types                                |
-| `/migration/v1`                    | Isolated one-way database upgrade; never imported by normal runtime |
+| Subpath                            | Purpose                                                                |
+| ---------------------------------- | ---------------------------------------------------------------------- |
+| `@copilotz/copilotz`               | Normal runtime-neutral application API                                 |
+| `/application`                     | Embedded, Gateway, and Worker role factories                           |
+| `/plugins`, `/resources`           | Plugin composition and logical resource types                          |
+| `/capabilities`                    | Explicit agent grants and canonical introspection                      |
+| `/events`                          | Immutable events and durable delivery contracts                        |
+| `/content`, `/domain`              | Canonical assets and graph-native repositories                         |
+| `/attachments`                     | Persistent text/realtime ingress                                       |
+| `/agents`, `/llm`, `/tools`        | Agent prompt/config, LLM providers, and generic Tool contracts         |
+| `/tools/*`                         | Optional Tool plugins, protocol integrations, and host implementations |
+| `/skills`                          | Optional Open Skill resources and portable disclosure tools            |
+| `/channels`, `/actions`, `/admin`  | Transport plugins, executable primitives, and admin APIs               |
+| `/adapters`                        | Ominipg adaptation and portable CLI mechanics                          |
+| `/adapters/deno`, `/adapters/node` | Generic host/runtime adapters                                          |
+| `/server`                          | Event-native server projection types                                   |
+| `/migration/v1`                    | Isolated one-way database upgrade; never imported by normal runtime    |
 
 ## Documentation
 

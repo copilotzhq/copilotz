@@ -4,17 +4,20 @@ Plugin resources describe logical behavior; they do not grant filesystem,
 subprocess, package-loader, or server access. The embedding worker grants those
 capabilities explicitly.
 
-| Subpath           | Capability                                                                                       |
-| ----------------- | ------------------------------------------------------------------------------------------------ |
-| `/adapters`       | Ominipg database adaptation, Web-fetch OpenAPI generation, and injected MCP transport            |
-| `/adapters/stdio` | Official MCP SDK subprocess transport                                                            |
-| `/adapters/deno`  | Deno listener, workspace/process tools, Open Skill build packer, and persistent terminal service |
-| `/adapters/node`  | Node terminal I/O for the interactive CLI                                                        |
+| Subpath                           | Capability                                                       |
+| --------------------------------- | ---------------------------------------------------------------- |
+| `/adapters`                       | Ominipg adaptation and the portable CLI state machine            |
+| `/adapters/deno`                  | Deno listener, filesystem BodyStore, and Open Skill build packer |
+| `/adapters/node`                  | Node terminal I/O for the interactive CLI                        |
+| `/tools/catalog`                  | Portable Web-fetch OpenAPI catalog with injected MCP transport   |
+| `/tools/mcp/stdio`                | Official MCP SDK subprocess connector                            |
+| `/tools/deno`                     | Deno workspace and process Tool plugins                          |
+| `/tools/persistent-terminal/deno` | Deno persistent-terminal service                                 |
 
 Generic OpenAPI with an application-owned MCP transport:
 
 ```ts
-import { createServerWorkflowToolCatalog } from "@copilotz/copilotz/adapters";
+import { createServerWorkflowToolCatalog } from "@copilotz/copilotz/tools/catalog";
 
 const catalog = createServerWorkflowToolCatalog({
   connectMcp: connectOverApplicationTransport,
@@ -48,15 +51,16 @@ per operation so Copilotz does not guess which API responses represent files.
 Explicit server-side stdio:
 
 ```ts
-import { createServerWorkflowToolCatalog } from "@copilotz/copilotz/adapters/stdio";
+import { createServerWorkflowToolCatalog } from "@copilotz/copilotz/tools/catalog";
+import { connectMcp } from "@copilotz/copilotz/tools/mcp/stdio";
 
-const catalog = createServerWorkflowToolCatalog();
+const catalog = createServerWorkflowToolCatalog({ connectMcp });
 ```
 
-Adapter subpaths identify placement; their symbols remain capability-oriented.
-For example, `/adapters/node` exports `startInteractiveCli()` and
-`/adapters/deno` exports `createWorkspaceToolsPlugin()` without repeating the
-runtime in each API name.
+Owner subpaths identify placement; their symbols remain capability-oriented. For
+example, `/adapters/node` exports `startInteractiveCli()`, while `/tools/deno`
+exports `createWorkspaceToolsPlugin()` without making the generic runtime own
+that Tool integration.
 
 The same naming rule applies to serving a Gateway. Deno applications call
 `listen(gateway, options)` from `/adapters/deno`; other hosts mount the
@@ -73,10 +77,10 @@ startInteractiveCli({ application, agent: "support", scope });
 Remote/custom clients can use the portable state machine with injected
 `performRun` and `inspect` callbacks instead.
 
-Importing the root or generic adapters never imports the stdio SDK. Browser and
-Cloudflare hosts omit unsupported resources or inject a transport they own.
-Missing capabilities fail during resource resolution instead of silently
-dropping tools.
+Importing the root, generic adapters, or generic Tool catalog never imports the
+stdio SDK. Browser and Cloudflare hosts omit unsupported resources or inject a
+transport they own. Missing capabilities fail during resource resolution instead
+of silently dropping tools.
 
 Package/path plugin resolution belongs to the embedding host's normal module
 system. Import plugin values directly and pass those concrete plugins to

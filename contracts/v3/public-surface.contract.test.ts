@@ -4,7 +4,6 @@ import * as copilotz from "../../index.ts";
 import * as adapters from "../../runtime/adapters/index.ts";
 import * as denoAdapters from "../../runtime/adapters/deno/index.ts";
 import * as nodeAdapters from "../../runtime/adapters/node/index.ts";
-import * as stdioAdapters from "../../runtime/adapters/stdio.ts";
 import * as application from "../../runtime/application/public.ts";
 import * as actions from "../../runtime/actions/index.ts";
 import * as attachments from "../../runtime/attachments/index.ts";
@@ -15,6 +14,16 @@ import * as events from "../../runtime/events/index.ts";
 import * as plugins from "../../runtime/plugins/index.ts";
 import * as server from "../../server/index.ts";
 import * as migration from "../../migration/v1/index.ts";
+import * as builtinTools from "../../plugins/tools/builtin/plugin.ts";
+import * as toolCatalog from "../../plugins/tools/catalog/server.ts";
+import * as denoTools from "../../plugins/tools/deno/index.ts";
+import * as financeTools from "../../plugins/tools/finance/plugin.ts";
+import * as mcpTools from "../../plugins/tools/mcp/generator.ts";
+import * as stdioMcpTools from "../../plugins/tools/mcp/stdio.ts";
+import * as openApiTools from "../../plugins/tools/openapi/generator.ts";
+import * as persistentTerminalTools from "../../plugins/tools/persistent-terminal/plugin.ts";
+import * as denoPersistentTerminal from "../../plugins/tools/persistent-terminal/deno.ts";
+import * as webTools from "../../plugins/tools/web/plugin.ts";
 import type {
   AnyCopilotzPlugin,
   CopilotzApplication,
@@ -72,6 +81,10 @@ Deno.test("v3 root exposes the factory-first application vocabulary", () => {
       "createDeliveryExecutor",
       "createManagedOminipgSession",
       "createOminipgSqlSession",
+      "createBuiltInToolsPlugin",
+      "createFinanceToolsPlugin",
+      "createPersistentTerminalToolsPlugin",
+      "createWebToolsPlugin",
     ]
   ) assertEquals(removed in copilotz, false, removed);
 });
@@ -84,28 +97,46 @@ Deno.test("v3 package subpaths expose cohesive factories", () => {
     "createCopilotzWorker",
   ]);
   assertEquals("createCopilotzApplication" in application, false);
-  assertFunctions(adapters, [
-    "createServerWorkflowToolCatalog",
-  ]);
+  assertEquals("createServerWorkflowToolCatalog" in adapters, false);
   assertEquals("createModulePluginResolver" in adapters, false);
   assertEquals("createManagedOminipgSession" in adapters, false);
   assertEquals("createOminipgSqlSession" in adapters, false);
   assertEquals("connectMcp" in adapters, false);
-  assertFunctions(stdioAdapters, [
-    "connectMcp",
-    "createServerWorkflowToolCatalog",
-  ]);
   assertFunctions(nodeAdapters, [
     "createInteractiveCliIo",
     "startInteractiveCli",
   ]);
   assertFunctions(denoAdapters, [
     "buildOpenSkillsPlugin",
-    "createPersistentTerminalService",
-    "createProcessToolsPlugin",
-    "createWorkspaceToolsPlugin",
     "listen",
   ]);
+  for (
+    const moved of [
+      "createPersistentTerminalService",
+      "createProcessToolsPlugin",
+      "createWorkspaceToolsPlugin",
+    ]
+  ) assertEquals(moved in denoAdapters, false, moved);
+  assertFunctions(builtinTools, ["createBuiltInToolsPlugin"]);
+  assertFunctions(toolCatalog, [
+    "createOpenApiWorkflowToolGenerator",
+    "createServerWorkflowToolCatalog",
+  ]);
+  assertFunctions(denoTools, [
+    "createProcessToolsPlugin",
+    "createWorkspaceToolsPlugin",
+  ]);
+  assertFunctions(financeTools, ["createFinanceToolsPlugin"]);
+  assertFunctions(mcpTools, ["createMcpWorkflowToolGenerator"]);
+  assertFunctions(stdioMcpTools, ["connectMcp"]);
+  assertFunctions(openApiTools, ["generateAllApiTools", "generateApiTools"]);
+  assertFunctions(persistentTerminalTools, [
+    "createPersistentTerminalToolsPlugin",
+  ]);
+  assertFunctions(denoPersistentTerminal, [
+    "createPersistentTerminalService",
+  ]);
+  assertFunctions(webTools, ["createWebToolsPlugin"]);
   assertFunctions(attachments, [
     "createAttachmentRuntime",
   ]);

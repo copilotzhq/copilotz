@@ -1,4 +1,4 @@
-import type { MCPServer } from "../resources/index.ts";
+import type { MCPServer } from "@copilotz/copilotz/resources";
 import type {
   ConnectMcpRuntime,
   McpRuntimeConnection,
@@ -90,8 +90,8 @@ export const connectMcp: ConnectMcpRuntime = async (
 ): Promise<McpRuntimeConnection> => {
   const config = stdioTransport(server);
   const [{ Client }, { StdioClientTransport }] = await Promise.all([
-    import("../../dependencies/mcp-client.ts"),
-    import("../../dependencies/mcp-stdio-client.ts"),
+    import("../../../dependencies/mcp-client.ts"),
+    import("../../../dependencies/mcp-stdio-client.ts"),
   ]);
   const ClientConstructor = Client as unknown as Constructor<
     SdkClient,

@@ -1,6 +1,9 @@
-import { type CopilotzPlugin, definePlugin } from "../plugins/index.ts";
-import { assetIdFromRef, formatAssetRef } from "../content/index.ts";
-import type { WorkflowTool, WorkflowToolExecutionContext } from "./types.ts";
+import { type CopilotzPlugin, definePlugin } from "@copilotz/copilotz/plugins";
+import { assetIdFromRef, formatAssetRef } from "@copilotz/copilotz/content";
+import type {
+  WorkflowTool,
+  WorkflowToolExecutionContext,
+} from "@copilotz/copilotz/tools";
 
 export type PersistentTerminalScope = "agent" | "project" | "tenant";
 

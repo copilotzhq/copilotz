@@ -1,13 +1,13 @@
-import type { CollectionRecord } from "../collections/index.ts";
-import type { Agent } from "../resources/index.ts";
-import { assetIdFromRef, formatAssetRef } from "../content/index.ts";
-import type { ParticipantInput } from "../domain/index.ts";
-import { type CopilotzPlugin, definePlugin } from "../plugins/index.ts";
-import type { ActionCallOptions } from "../actions/index.ts";
+import type { CollectionRecord } from "@copilotz/copilotz/collections";
+import type { Agent } from "@copilotz/copilotz/resources";
+import { assetIdFromRef, formatAssetRef } from "@copilotz/copilotz/content";
+import type { ParticipantInput } from "@copilotz/copilotz/domain";
+import { type CopilotzPlugin, definePlugin } from "@copilotz/copilotz/plugins";
+import type { ActionCallOptions } from "@copilotz/copilotz/actions";
 import type {
   WorkflowTool,
   WorkflowToolExecutionContext,
-} from "../tools/index.ts";
+} from "@copilotz/copilotz/tools";
 
 export const BUILT_IN_CORE_TOOL_IDS = [
   "get_current_time",

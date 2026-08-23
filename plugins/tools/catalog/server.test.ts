@@ -5,15 +5,15 @@ import {
   assertStringIncludes,
 } from "@std/assert";
 
-import type { API, MCPServer } from "../resources/index.ts";
-import { createPluginRegistry, definePlugin } from "../plugins/index.ts";
+import type { API, MCPServer } from "@copilotz/copilotz/resources";
+import { createPluginRegistry, definePlugin } from "@copilotz/copilotz/plugins";
 import {
   createWorkflowToolCatalog,
   type WorkflowTool,
-} from "../tools/index.ts";
-import { createMcpWorkflowToolGenerator } from "./mcp-tools.ts";
-import { createServerWorkflowToolCatalog } from "./server-tool-catalog.ts";
-import type { McpRuntimeConnection } from "./types.ts";
+} from "@copilotz/copilotz/tools";
+import { createMcpWorkflowToolGenerator } from "../mcp/generator.ts";
+import type { McpRuntimeConnection } from "../mcp/types.ts";
+import { createServerWorkflowToolCatalog } from "./server.ts";
 
 type TestRegistry = Awaited<ReturnType<typeof createPluginRegistry>>;
 
@@ -173,14 +173,14 @@ Deno.test("generic server catalog never grants stdio implicitly", async () => {
 
 Deno.test("adapter boundary is factory-first and leaves runtime APIs out of core", async () => {
   const core = await Deno.readTextFile(
-    new URL("../tools/catalog.ts", import.meta.url),
+    new URL("../../../runtime/tools/catalog.ts", import.meta.url),
   );
   assert(!core.includes('import("../api/index.ts")'));
   assert(!core.includes('import("../mcp/index.ts")'));
   for (
     const module of [
-      "mcp-tools.ts",
-      "server-tool-catalog.ts",
+      "../mcp/generator.ts",
+      "server.ts",
     ]
   ) {
     const source = await Deno.readTextFile(new URL(module, import.meta.url));
@@ -189,7 +189,7 @@ Deno.test("adapter boundary is factory-first and leaves runtime APIs out of core
     assert(!/^\s*(?:export\s+)?class\s/m.test(source));
     assertStringIncludes(
       source,
-      module === "mcp-tools.ts" ? "function" : "export",
+      module === "../mcp/generator.ts" ? "function" : "export",
     );
   }
 });

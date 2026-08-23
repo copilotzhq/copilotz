@@ -847,10 +847,10 @@ narrow `FinanceError` remains a class.
 
 **Coverage:** skill, filesystem, fetch, terminal, web-search, jq, pipeline, and
 tool-formatting tests plus manifest completeness,
-`runtime/skills/plugin.test.ts`, `runtime/tools/core-plugin.test.ts`, and
-`runtime/tools/web-plugin.test.ts`, plus `runtime/tools/finance-plugin.test.ts`
-and the persistent-terminal plugin/Deno service tests under `runtime/tools` and
-`runtime/adapters/deno`.
+`runtime/skills/plugin.test.ts`, `plugins/tools/builtin/plugin.test.ts`, and
+`plugins/tools/web/plugin.test.ts`, plus `plugins/tools/finance/plugin.test.ts`
+and the persistent-terminal plugin/Deno service tests under
+`plugins/tools/persistent-terminal`.
 
 ### F27 — Runtime portability and Oxian placement
 
@@ -1039,11 +1039,11 @@ Keep behavior; adapt event/content representations and persistence queries:
 - `resources/features/admin/usage.test.ts`
 - `runtime/skills/plugin.test.ts`
 - `runtime/adapters/deno/deno-adapter.test.ts` (Open Skill pack/build contract)
-- `resources/tools/_shared/fs-utils.test.ts`
-- `resources/tools/fetch_text/index.test.ts`
-- `resources/tools/persistent_terminal/index.test.ts`
-- `resources/tools/update_user_memory/index.test.ts`
-- `resources/tools/web_search/index.test.ts`
+- `plugins/tools/deno/fs-utils.test.ts`
+- `plugins/tools/web/fetch-text.test.ts`
+- `plugins/tools/persistent-terminal/plugin.test.ts`
+- `plugins/tools/builtin/plugin.test.ts`
+- `plugins/tools/web/web-search.test.ts`
 - `runtime/tools/format-tools-for-prompt.test.ts`
 - `runtime/tools/jq.test.ts`
 - `runtime/tools/pipeline.test.ts`

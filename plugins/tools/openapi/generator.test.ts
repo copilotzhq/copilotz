@@ -1,7 +1,7 @@
 import { assertEquals, assertStrictEquals } from "@std/assert";
-import type { API } from "../resources/index.ts";
-import type { WorkflowToolExecutionContext } from "../tools/index.ts";
-import { generateApiTools } from "./openapi-tools.ts";
+import type { API } from "@copilotz/copilotz/resources";
+import type { WorkflowToolExecutionContext } from "@copilotz/copilotz/tools";
+import { generateApiTools } from "./generator.ts";
 
 Deno.test("OpenAPI preparation receives the tenant collection scope", async () => {
   let observed:

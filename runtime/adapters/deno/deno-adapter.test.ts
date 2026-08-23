@@ -13,19 +13,23 @@ import * as denoAdapter from "./index.ts";
 Deno.test("Deno adapter packages workspace and process tools by stable ID", () => {
   const workspace = createWorkspaceToolsPlugin();
   const process = createProcessToolsPlugin();
+  const workspaceTools = workspace.resources.tools ?? {};
+  const processTools = process.resources.tools ?? {};
   assertEquals(
-    workspace.manifest.provides.tools,
+    Object.keys(workspaceTools),
     [...WORKSPACE_TOOL_IDS],
   );
-  assertEquals(process.manifest.provides.tools, [...PROCESS_TOOL_IDS]);
-  assertEquals(workspace.manifest.id, "@copilotz/workspace-tools");
-  assertEquals(process.manifest.id, "@copilotz/process-tools");
+  assertEquals(Object.keys(processTools), [...PROCESS_TOOL_IDS]);
+  assertEquals(workspace.id, "@copilotz/workspace-tools");
+  assertEquals(process.id, "@copilotz/process-tools");
   assert(
-    workspace.resources.tools?.every((tool) => Object.isFrozen(tool)),
+    Object.values(workspaceTools).every((tool) => Object.isFrozen(tool)),
   );
   assertEquals(
-    createWorkspaceToolsPlugin({ include: ["read_file"] }).manifest
-      .provides.tools,
+    Object.keys(
+      createWorkspaceToolsPlugin({ include: ["read_file"] }).resources
+        .tools ?? {},
+    ),
     ["read_file"],
   );
   for (
@@ -78,8 +82,10 @@ Follow the generated instructions.`,
     const loaded = await import(
       `${toFileUrl(build.pluginModule).href}?test=${crypto.randomUUID()}`
     );
-    assertEquals(loaded.default.manifest.provides.skills, ["contract-skill"]);
-    const skill = loaded.default.resources.skills[0];
+    assertEquals(Object.keys(loaded.default.resources.skills ?? {}), [
+      "contract-skill",
+    ]);
+    const skill = loaded.default.resources.skills["contract-skill"];
     assertEquals(skill.name, "contract-skill");
     assertEquals(
       (await skill.read("references/guide.md")).body,

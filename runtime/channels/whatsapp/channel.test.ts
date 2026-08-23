@@ -3,13 +3,9 @@ import {
   createTestDatabase,
   type TestDatabase,
 } from "../../testing/ominipg.ts";
-import { createTestDomainContext } from "../../../runtime/testing/domain-context.ts";
 import {
-  projectMessageById,
   projectMessages,
-  projectParticipants,
   projectThreadByExternalId,
-  projectThreadById,
   projectThreads,
 } from "../../../runtime/testing/projections.ts";
 import type { Agent } from "../../resources/index.ts";
@@ -133,7 +129,7 @@ function replyPlugin() {
   return definePlugin({
     id: "test.whatsapp-reply",
     version: "1.0.0",
-    processors: [processor],
+    processors: { channelReply: processor },
   });
 }
 
@@ -164,9 +160,8 @@ Deno.test("WhatsApp channel normalizes signed media ingress and native semantic 
     database: db,
     namespace: NAMESPACE,
     databaseSchema: "copilotz_v3_whatsapp",
-    core: false,
-    canonicalCore: [coreCollectionsPlugin],
     plugins: [
+      coreCollectionsPlugin,
       replyPlugin(),
       createWhatsAppChannelPlugin({
         config: CONFIG,
@@ -174,7 +169,7 @@ Deno.test("WhatsApp channel normalizes signed media ingress and native semantic 
         defaultAgentIds: [agent.id],
       }),
     ],
-    context: { agents: { [agent.id]: agent } },
+    resources: { agents: { [agent.id]: agent } },
   });
   const body = {
     entry: [{

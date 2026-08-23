@@ -43,6 +43,16 @@ const forbidden = [
   "createRealtimeProviderContext",
   "isRealtimeProviderResource",
   "RealtimeProviderResource",
+  "defineFeature",
+  "FeatureDefinition",
+  "FeatureExecuteContext",
+  "FeatureContext",
+  "createFeatureContext",
+  "createFeatureInvoker",
+  "requireFeatureActions",
+  "coreFeatureAliases",
+  "createV1FetchHandler",
+  "createV1SseProjector",
 ] as const;
 
 const retiredOxian = [
@@ -78,7 +88,6 @@ function allowed(path: string): boolean {
     path.startsWith("migration/memory-v4/") ||
     path.startsWith("contracts/") ||
     path.endsWith(".test.ts") ||
-    path === "server/v1-sse.ts" ||
     path === "docs/migration-v3.md" ||
     path === "docs/v3/downstream-migration.md" ||
     path === "docs/v3/feature-test-parity.md" ||

@@ -209,6 +209,6 @@ export function createPersistentTerminalToolsPlugin(
   return definePlugin({
     id: options.id ?? "@copilotz/persistent-terminal-tools",
     version: options.version ?? "3.0.0",
-    tools: [tool],
+    resources: { tools: { [tool.key]: tool } },
   });
 }

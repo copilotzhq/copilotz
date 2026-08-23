@@ -78,7 +78,7 @@ async function createFixture(options?: {
   const plugin = definePlugin({
     id: "test.execution",
     version: "1.0.0",
-    processors: [processor],
+    processors: { observer: processor },
   });
   const registry = await createPluginRegistry({ plugins: [plugin] });
   return Object.freeze({ db, store, registry, calls });
@@ -93,9 +93,7 @@ async function appendMessage(fixture: Fixture) {
   } as const;
   return await fixture.store.append(
     draft,
-    fixture.registry.processors.durableConsumers(draft).map((item) =>
-      item.consumerId
-    ),
+    fixture.registry.durableConsumers(draft).map((item) => item.consumerId),
   );
 }
 

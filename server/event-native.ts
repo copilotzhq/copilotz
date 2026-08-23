@@ -8,16 +8,7 @@ import {
   listMessages,
   listThreads,
   projectParticipant,
-  projectThread,
 } from "./collection-projections.ts";
-import {
-  createFeatureContext,
-  type FeatureHostContext,
-  type FeatureRequest,
-  type FeatureResource,
-  type FeatureResponse,
-} from "../runtime/features/index.ts";
-import { requireFeatureActions } from "../runtime/features/context.ts";
 import {
   createEventNativeMessageHistoryIncluded,
   type EventNativeHistoryInclude,
@@ -26,28 +17,41 @@ import { eventNativeAsset } from "./assets.ts";
 import type { CopilotzApplication } from "../runtime/application/index.ts";
 import type { AttachmentOutput } from "../runtime/attachments/index.ts";
 import type {
-  ContentInput,
-  ContentSequence,
-  PreparedContent,
-} from "../runtime/content/index.ts";
-import type {
   ConversationThread,
   Participant,
 } from "../runtime/domain/index.ts";
-import type {
-  CollectionMutationIdentity,
-  CollectionRecord,
-} from "../runtime/collections/index.ts";
-import { workflowMutationId } from "../runtime/domain/workflow-support.ts";
+import type { CollectionMutationIdentity } from "../runtime/collections/index.ts";
 import type {
   DeliveryStatus,
   DurableEvent,
   EventDelivery,
 } from "../runtime/events/index.ts";
 
-export type EventNativeAppRequest = FeatureRequest;
+export type EventNativeAppRequest = Readonly<{
+  resource: string;
+  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+  path?: readonly string[];
+  query?: Readonly<Record<string, string | readonly string[] | undefined>>;
+  body?: unknown;
+  headers?: Readonly<Record<string, string>>;
+  context?: Readonly<
+    Record<string, unknown> & {
+      namespace?: string;
+      databaseSchema?: string;
+    }
+  >;
+}>;
 
-export type EventNativeAppResponse = FeatureResponse;
+export type EventNativeAppResponse = Readonly<{
+  status: number;
+  headers?: HeadersInit;
+  data?: unknown;
+  included?: unknown;
+  pageInfo?: Readonly<{
+    next?: string;
+    hasMore: boolean;
+  }>;
+}>;
 
 export type EventNativeAppError =
   & Error
@@ -55,10 +59,6 @@ export type EventNativeAppError =
     status: number;
     code: string;
   }>;
-
-export type EventNativeFeatureContext = FeatureHostContext;
-
-export type EventNativeFeatureResource = FeatureResource;
 
 export const EVENT_NATIVE_OUTPUT_STREAM = "copilotz.output-stream.v1";
 
@@ -218,66 +218,6 @@ function mutationIdentity(
   });
 }
 
-function nullablePatch(
-  value: Record<string, unknown>,
-  nullable: readonly string[],
-): Readonly<{ set: Record<string, unknown>; unset: readonly string[] }> {
-  const set: Record<string, unknown> = {};
-  const unset: string[] = [];
-  for (const [key, item] of Object.entries(value)) {
-    if (item === null && nullable.includes(key)) unset.push(key);
-    else if (item !== undefined) set[key] = structuredClone(item);
-  }
-  return Object.freeze({ set, unset: Object.freeze(unset) });
-}
-
-async function persistPreparedContent(
-  application: CopilotzApplication,
-  prepared: PreparedContent,
-): Promise<ContentSequence> {
-  const publishedIds = new Map<string, string>();
-  for (const asset of prepared.assets) {
-    const existing = await application.content.assets.get(
-      asset.namespace,
-      asset.id,
-    );
-    if (existing) {
-      publishedIds.set(asset.id, existing.id);
-      continue;
-    }
-    const published = await application.content.assets.publish({
-      namespace: asset.namespace,
-      id: asset.id,
-      mediaType: asset.mediaType,
-      body: asset.body,
-      ...(asset.idempotencyKey ? { idempotencyKey: asset.idempotencyKey } : {}),
-      ...(asset.origin ? { origin: asset.origin } : {}),
-      ...(asset.metadata ? { metadata: { ...asset.metadata } } : {}),
-    });
-    publishedIds.set(asset.id, published.id);
-  }
-  return Object.freeze(prepared.content.map((ref) => {
-    const assetId = publishedIds.get(ref.assetId) ?? ref.assetId;
-    return assetId === ref.assetId ? ref : Object.freeze({ ...ref, assetId });
-  }));
-}
-
-function featureContext(
-  application: CopilotzApplication,
-  namespace: string,
-): FeatureHostContext {
-  return createFeatureContext({
-    namespace,
-    plugins: application.plugins,
-    collections: application.collections,
-    collectionRuntime: application.collectionRuntime,
-    contentResolver: application.content.resolver,
-    events: application.events,
-    deliveries: application.deliveries,
-    relations: application.relations,
-  });
-}
-
 function base64(bytes: Uint8Array): string {
   let binary = "";
   const chunk = 0x8000;
@@ -307,13 +247,6 @@ function nextPage<T extends { id: string }>(
   return limit !== undefined && values.length === limit
     ? Object.freeze({ next: values.at(-1)?.id, hasMore: true })
     : Object.freeze({ hasMore: false });
-}
-
-function featureId(feature: FeatureResource): string {
-  if (!feature.id?.trim()) {
-    throw new TypeError("Feature resources require an ID.");
-  }
-  return feature.id.trim();
 }
 
 async function requestScope(
@@ -518,51 +451,11 @@ async function handleThreads(
     });
     return { status: 200, data: threads, pageInfo: nextPage(threads, limit) };
   }
-  if (request.method === "POST" && path.length === 0) {
-    const body = record(request.body);
-    const identity = mutationIdentity(request);
-    const id = workflowMutationId(
-      "thread",
-      namespace,
-      typeof body.id === "string" ? body.id : undefined,
-      identity,
-      () => crypto.randomUUID(),
-    );
-    const existed = await collections.thread.get({ id }) !== null;
-    const created = await requireFeatureActions(
-      featureContext(application, namespace),
-      "copilotz.core.thread",
-    ).create({ ...body, id }, {
-      operationKey: header(request.headers, "idempotency-key") ??
-        `http:thread:create:${id}`,
-      identity,
-    });
-    return {
-      status: existed ? 200 : 201,
-      data: await projectThread(collections, created as CollectionRecord),
-    };
-  }
   if (path.length === 1 && request.method === "GET") {
     return await threadResponse(
       namespace,
       await getThread(collections, path[0]),
     );
-  }
-  if (path.length === 1 && request.method === "PATCH") {
-    const patch = nullablePatch(record(request.body), ["name", "description"]);
-    const updated = await collections.thread.update({
-      id: path[0],
-      set: patch.set,
-      unset: patch.unset,
-    }, { threadId: path[0], identity: mutationIdentity(request) });
-    return { status: 200, data: await projectThread(collections, updated) };
-  }
-  if (path.length === 1 && request.method === "DELETE") {
-    await collections.thread.delete({ id: path[0] }, {
-      threadId: path[0],
-      identity: mutationIdentity(request),
-    });
-    return { status: 204 };
   }
   if (
     path.length === 2 && path[1] === "activity" && request.method === "GET"
@@ -599,74 +492,6 @@ async function handleThreads(
   if (path.length === 2 && path[1] === "messages" && request.method === "GET") {
     return await messageList(application, namespace, path[0], request);
   }
-  if (
-    path.length === 2 && path[1] === "messages" &&
-    request.method === "DELETE"
-  ) {
-    await requireFeatureActions(
-      featureContext(application, namespace),
-      "copilotz.core.thread",
-    ).deleteMessages(
-      {
-        threadId: path[0],
-      },
-      {
-        operationKey: header(request.headers, "idempotency-key") ??
-          `http:thread:delete-messages:${path[0]}`,
-        identity: mutationIdentity(request),
-      },
-    );
-    return { status: 204 };
-  }
-  if (
-    path.length === 4 && path[1] === "messages" && path[3] === "edit" &&
-    request.method === "POST"
-  ) {
-    const body = record(request.body);
-    if (body.content === undefined) {
-      throw appError(400, "content_required", "Edited content is required.");
-    }
-    const deduplicationId = header(request.headers, "idempotency-key");
-    const prepared = await application.content.preparer.prepare(
-      body.content as ContentInput | readonly ContentInput[],
-      {
-        namespace,
-        ...(deduplicationId
-          ? { idempotencyKey: `${deduplicationId}:content` }
-          : {}),
-      },
-    );
-    const content = await persistPreparedContent(application, prepared);
-    const identity = mutationIdentity(request);
-    const id = workflowMutationId(
-      "message_revision",
-      namespace,
-      undefined,
-      identity,
-      () => crypto.randomUUID(),
-    );
-    const existed = await collections.message.get({ id }) !== null;
-    const revised = await requireFeatureActions(
-      featureContext(application, namespace),
-      "copilotz.core.message",
-    ).revise({
-      id,
-      threadId: path[0],
-      messageId: path[2],
-      content,
-      ...(body.metadata === undefined
-        ? {}
-        : { metadata: record(body.metadata) }),
-    }, {
-      operationKey: deduplicationId ??
-        `http:message:revise:${path[2]}:${crypto.randomUUID()}`,
-      identity,
-    });
-    return {
-      status: existed ? 200 : 201,
-      data: revised,
-    };
-  }
   throw appError(404, "route_not_found", "Thread route was not found.");
 }
 
@@ -696,15 +521,6 @@ async function handleParticipants(
       pageInfo: nextPage(participants, limit),
     };
   }
-  if (request.method === "POST" && path.length === 0) {
-    const body = record(request.body);
-    const created = await collections.participant.create(body, {
-      operationKey: header(request.headers, "idempotency-key") ??
-        `http:participant:create:${crypto.randomUUID()}`,
-      identity: mutationIdentity(request),
-    });
-    return { status: 201, data: projectParticipant(created) };
-  }
   if (path.length !== 1) {
     throw appError(404, "route_not_found", "Participant route was not found.");
   }
@@ -725,26 +541,6 @@ async function handleParticipants(
       );
     }
     return { status: 200, data: participant };
-  }
-  if (request.method === "PATCH") {
-    if (!participant) {
-      throw appError(
-        404,
-        "participant_not_found",
-        "Participant was not found.",
-      );
-    }
-    const patch = nullablePatch(record(request.body), [
-      "name",
-      "email",
-      "agentId",
-    ]);
-    const updated = await collections.participant.update({
-      id: participant.id,
-      set: patch.set,
-      unset: patch.unset,
-    }, { identity: mutationIdentity(request) });
-    return { status: 200, data: projectParticipant(updated) };
   }
   throw appError(
     405,
@@ -940,41 +736,6 @@ async function handleDeliveries(
   throw appError(404, "route_not_found", "Delivery route was not found.");
 }
 
-async function handleFeatures(
-  application: CopilotzApplication,
-  namespace: string,
-  request: EventNativeAppRequest,
-  path: readonly string[],
-): Promise<EventNativeAppResponse> {
-  if (path.length !== 2) {
-    throw appError(404, "route_not_found", "Feature route was not found.");
-  }
-  const feature = Object.values(
-    application.plugins.context.featureDefinitions ?? {},
-  ).find((candidate): candidate is FeatureResource =>
-    !!candidate && typeof candidate === "object" &&
-    featureId(candidate as FeatureResource) === path[0]
-  );
-  if (!feature?.actions[path[1]]) {
-    throw appError(404, "feature_not_found", "Feature action was not found.");
-  }
-  const context = featureContext(application, namespace);
-  let output: unknown;
-  try {
-    output = await context.feature(feature)[path[1]](request);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (message.includes("is not registered")) {
-      throw appError(404, "feature_not_found", "Feature action was not found.");
-    }
-    throw error;
-  }
-  const response = record(output);
-  return "status" in response && typeof response.status === "number"
-    ? response as EventNativeAppResponse
-    : { status: 200, data: output };
-}
-
 async function handleChannels(
   channels: ChannelRuntime,
   namespace: string,
@@ -1131,16 +892,12 @@ export function createEventNativeApp(
     { name: "deliveries", methods: Object.freeze(["GET", "POST"]) },
     { name: "events", methods: Object.freeze(["GET"]) },
     {
-      name: "features",
-      methods: Object.freeze(["GET", "POST", "PATCH", "PUT", "DELETE"]),
-    },
-    {
       name: "participants",
-      methods: Object.freeze(["GET", "POST", "PATCH"]),
+      methods: Object.freeze(["GET"]),
     },
     {
       name: "threads",
-      methods: Object.freeze(["GET", "POST", "PATCH", "DELETE"]),
+      methods: Object.freeze(["GET"]),
     },
   ]);
   return Object.freeze({
@@ -1165,7 +922,7 @@ export function createEventNativeApp(
           }
           return {
             status: 200,
-            data: Object.values(scoped.plugins.context.agents ?? {})
+            data: Object.values(scoped.plugins.resources.agents ?? {})
               .filter((candidate): candidate is Agent =>
                 !!candidate && typeof candidate === "object"
               )
@@ -1195,8 +952,6 @@ export function createEventNativeApp(
           return await handleEvents(scoped, namespace, request, path);
         case "deliveries":
           return await handleDeliveries(scoped, namespace, request, path);
-        case "features":
-          return await handleFeatures(scoped, namespace, request, path);
         default:
           throw appError(
             404,

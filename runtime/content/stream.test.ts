@@ -2,8 +2,8 @@ import { assertEquals } from "@std/assert";
 
 import { createTestDatabase } from "../testing/ominipg.ts";
 import {
-  createEventCoordinator,
   createCoreSchemaStatements,
+  createEventCoordinator,
   createEventStore,
   createSqlSession,
 } from "../events/index.ts";

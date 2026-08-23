@@ -73,12 +73,15 @@ import type {
   ScopedCollections,
 } from "../collections/index.ts";
 import type {
-  AnyFeatureDefinition,
-  FeatureActionsFor,
-  FeatureContextValues,
-  FeatureInvoker,
-} from "../features/index.ts";
-import type { PluginRegistry, Processor } from "../plugins/index.ts";
+  ActionCallers,
+  ActionTransactionContext,
+  ActionTransactionOptions,
+} from "../actions/index.ts";
+import type {
+  AnyProcessor,
+  PluginRegistry,
+  Processor,
+} from "../plugins/index.ts";
 import type {
   ConnectAttachmentInput,
   RunHandle,
@@ -90,7 +93,6 @@ import type {
   ScopedScheduledJobTrigger,
 } from "../schedules/index.ts";
 import type { ProgressiveBodyMaintenanceResult } from "../content/index.ts";
-import type { MemoryKindDefinition } from "../memory/ontology.ts";
 import type { ActionLifecycleEmitter } from "../actions/index.ts";
 
 export type ScopedMutationOptions = Readonly<{
@@ -227,23 +229,26 @@ export type ScopedRelations = Readonly<{
   ): Promise<readonly DomainRelation[]>;
 }>;
 
-export type CopilotzProcessorCapabilities =
-  & FeatureContextValues
-  & Readonly<{
-    namespace: string;
-    events: ScopedEvents;
-    content: ScopedContent;
-    collections: ScopedCollections;
-    relations: ScopedRelations;
-    schedules: ScopedScheduledJobTrigger;
-    memoryKinds: Readonly<Record<string, MemoryKindDefinition | undefined>>;
-    /** Reusable plugin commands. Joins this delivery's collection runtime. */
-    features: FeatureInvoker;
-    /** Invoke a Feature by definition. Consumer-local aliases live on `features`. */
-    feature<F extends AnyFeatureDefinition>(
-      definition: F,
-    ): FeatureActionsFor<F>;
-  }>;
+export type CopilotzProcessorCapabilities = Readonly<{
+  namespace: string;
+  resources: PluginRegistry["resources"];
+  adapters: PluginRegistry["adapters"];
+  actions: ActionCallers;
+  events: ScopedEvents;
+  content: ScopedContent;
+  /** Runtime-native progressive content production. */
+  streams?: ContentStreamRuntime;
+  collections: ScopedCollections;
+  relations: ScopedRelations;
+  schedules: ScopedScheduledJobTrigger;
+  now(): Date;
+  transaction<T>(
+    execute: (context: ActionTransactionContext<ScopedCollections>) =>
+      | T
+      | Promise<T>,
+    options?: ActionTransactionOptions,
+  ): Promise<T>;
+}>;
 
 export type CopilotzProcessorContext =
   & DeliveryContextBase
@@ -316,7 +321,7 @@ export type CreateCopilotzEngineOptions = Readonly<{
   retryBaseMs?: number;
   retryCapMs?: number;
   /** Connection-bound processors. Same contract as static, no delivery rows. */
-  transientProcessors?: readonly Processor[];
+  transientProcessors?: readonly AnyProcessor[];
 }>;
 
 export type CopilotzEngineMaintenanceResult = Readonly<{
@@ -473,7 +478,7 @@ export type CreateCopilotzProcessorCapabilitiesOptions = Readonly<{
   eventHub: CopilotzEventHub;
   publishEvent?: (event: CopilotzEvent) => Promise<void>;
   eventStore: Pick<EventStore, "listDeliveries" | "listEvents" | "tables">;
-  actionLifecycle?: ActionLifecycleEmitter;
+  actionLifecycle: ActionLifecycleEmitter;
   session: SqlExecutor;
   now?: () => Date;
   collectionRuntime: CollectionRuntime;

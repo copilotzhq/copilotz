@@ -8,7 +8,7 @@ function freezeValue<T>(value: T): T {
   return value;
 }
 
-/** Normalizes one Feature input/output to the exact JSON value EventBodyStore persists. */
+/** Normalizes one Action input/output to the exact JSON value EventBodyStore persists. */
 export function durableActionValue(value: unknown): unknown {
   try {
     const text = JSON.stringify(value === undefined ? null : value);

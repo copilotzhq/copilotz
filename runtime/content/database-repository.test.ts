@@ -65,7 +65,7 @@ async function createFixture(options: {
     plugins: [definePlugin({
       id: "test.assets",
       version: "1.0.0",
-      processors: [observer],
+      processors: { observer },
     })],
   });
   const executor = createDeliveryExecutor({

@@ -18,9 +18,16 @@ export function requireAgent(
   id: string,
 ): Agent {
   const agentId = requiredText(id, "Agent id");
-  const agent = context.agents[agentId];
-  if (!agent) throw new Error(`Unknown agent resource '${agentId}'.`);
-  return agent;
+  const matches = Object.values(context.agents).filter(
+    (agent): agent is Agent => agent?.id === agentId,
+  );
+  if (matches.length === 0) {
+    throw new Error(`Unknown agent resource '${agentId}'.`);
+  }
+  if (matches.length > 1) {
+    throw new Error(`Agent resource id '${agentId}' is ambiguous.`);
+  }
+  return matches[0];
 }
 
 function runtimeMode(runtime: AgentRuntime): AgentRuntimeMode {

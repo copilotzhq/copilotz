@@ -8,7 +8,7 @@
  * @module
  */
 
-export { corePlugin, corePluginManifest } from "./plugins/core/index.ts";
+export { corePlugin } from "./plugins/core/index.ts";
 export * from "./runtime/application/public.ts";
 export * from "./runtime/capabilities/index.ts";
 export * from "./runtime/admin/index.ts";
@@ -20,7 +20,7 @@ export * from "./runtime/domain/index.ts";
 export * from "./runtime/events/index.ts";
 export type * from "./runtime/engine/index.ts";
 export type * from "./runtime/execution/index.ts";
-export * from "./runtime/features/index.ts";
+export * from "./runtime/actions/index.ts";
 export * from "./plugins/goals/index.ts";
 export * from "./runtime/knowledge/index.ts";
 export * from "./runtime/memory/index.ts";

@@ -51,8 +51,8 @@ the generic runtime, not a special execution path inside it.
    may import plugins and pass them to the runtime.
 9. A plugin may depend on other plugins through `plugins: [...]`. Dependencies
    compose before the plugin that declares them.
-10. Each slice must leave the repository type-correct, testable, and free of dead
-   production modules.
+10. Each slice must leave the repository type-correct, testable, and free of
+    dead production modules.
 
 ## 3. Current-code audit
 
@@ -79,43 +79,33 @@ The current branch already contains several mechanisms that fit the target:
 These are foundations, not reasons to retain their current directory or public
 API shape.
 
-### 3.2 Composition is still domain-shaped
+### 3.2 Composition foundation has landed
 
-`runtime/plugins/types.ts` currently defines fixed buckets for `agents`, `llm`,
-`embedding`, `tools`, `skills`, `storage`, `mcp`, `api`, `channels`, and
-`memoryKinds`, alongside Collections, Features, and Processors.
+`definePlugin` and the registry now compose only Collections, Actions,
+Processors, Resources, and Adapters. Executable definitions use keyed maps;
+Resources and Adapters use independent namespace maps. Fixed AI-specific
+composition buckets and duplicated manifests have been removed.
 
-This makes the runtime aware of one AI harness's vocabulary. It also conflates
-three different things:
+The remaining work is physical and semantic extraction: several business plugins
+still live under `runtime/`, and application assembly still exposes too much of
+that transitional tree.
 
-- executable primitives;
-- declarative Resources;
-- variable Adapters.
+### 3.3 Actions are unified
 
-The registry then hard-codes how those buckets become context namespaces. That
-logic must disappear.
+`runtime/actions/` now owns Action definition, invocation, optional schema
+validation, transaction context, and durable lifecycle Events. Plugins register
+one Action per capability and callers use direct `context.actions.<alias>`
+access. The former grouped executable module and its aliases have been deleted.
 
-### 3.3 Actions have two identities in the code
+### 3.4 Context composition is runtime-neutral
 
-Actions are authored as grouped `Feature` definitions in `runtime/features/`,
-while their durable lifecycle is implemented in `runtime/actions/`. The runtime
-and plugins therefore use both “Feature action” and “Action” for the same
-primitive.
+Runtime context now composes unknown Resource and Adapter namespaces separately
+under `context.resources` and `context.adapters`. Action and Processor
+definitions carry their expected TypeScript context without runtime dependency
+metadata or filtering.
 
-The target has one public primitive named Action and one runtime module that owns
-its definition, invocation, validation, transaction context, and lifecycle.
-
-### 3.4 Runtime context contains plugin vocabulary
-
-`runtime/features/types.ts`, `runtime/engine/types.ts`, and related context
-builders directly name agents, tools, LLM providers, APIs, MCP servers, skills,
-embeddings, prompt context, domain relations, and Feature aliases.
-
-This creates the exact coupling the plugin architecture is meant to remove.
-The runtime should separately compose unknown Resource and Adapter namespaces
-and preserve their inferred TypeScript shape. Semantic packages define the
-concrete interfaces; Action and Processor definitions carry their expected
-context types without creating runtime dependency metadata.
+Semantic context types still need to move beside their owning plugins as the AI
+harness verticals leave `runtime/`.
 
 ### 3.5 Business plugins physically live under `runtime/`
 
@@ -132,8 +122,9 @@ depend on their semantics.
 
 The package root and `runtime/application/` currently construct a canonical Core
 plugin plus optional built-in tools, memory, schedules, knowledge, and usage.
-They expose `core`, `canonicalCore`, `toolCatalog`, `capabilities`, separate role
-factories, and remnants of `connect`, `run`, attachments, and the raw Engine.
+They expose `core`, `canonicalCore`, `toolCatalog`, `capabilities`, separate
+role factories, and remnants of `connect`, `run`, attachments, and the raw
+Engine.
 
 The target application factory composes only what the caller supplies. Plugin
 dependencies provide higher-level presets without making the runtime know what
@@ -160,21 +151,24 @@ TypeScript interface:
 ```ts
 interface SearchContext extends ActionContext {
   resources: {
-    searchPolicies: Readonly<Record<string, SearchPolicy>>;
+    searchPolicies: Readonly<Record<string, SearchPolicy | undefined>>;
   };
   adapters: {
-    search: Readonly<Record<string, SearchAdapter>>;
+    search: Readonly<Record<string, SearchAdapter | undefined>>;
   };
 }
 
-const search = defineAction<SearchContext>({
+const search = defineAction({
   id: "search.query",
   inputSchema, // optional
   outputSchema, // optional
-  async execute(input, context) {
+  async execute(input: SearchInput, context: SearchContext) {
     const policy = context.resources.searchPolicies[input.policy];
+    if (!policy) throw new Error(`Unknown search policy '${input.policy}'.`);
     const adapter = context.adapters.search[policy.adapter];
-    if (!adapter) throw new Error(`Unknown search adapter '${policy.adapter}'.`);
+    if (!adapter) {
+      throw new Error(`Unknown search adapter '${policy.adapter}'.`);
+    }
     const result = await adapter.query(input);
     return result;
   },
@@ -198,8 +192,8 @@ Rules:
   `context.actions.search(input, options?)`;
 - the declared context interface is retained as phantom generic information so
   statically known plugin/application composition can be checked by TypeScript;
-- TypeScript interfaces are erased, so dynamically loaded Resources and
-  Adapters are still checked by the semantic code that consumes them;
+- TypeScript interfaces are erased, so dynamically loaded Resources and Adapters
+  are still checked by the semantic code that consumes them;
 - there is no `invoke(...)` locator API and no `requires` declaration;
 - there is no transaction/workflow/query mode on the definition.
 
@@ -239,8 +233,8 @@ const messages = defineCollection({
 });
 ```
 
-Declared content belongs only to Collection definitions. Actions merely call
-the Collection API. The kernel canonicalizes content, materializes or verifies
+Declared content belongs only to Collection definitions. Actions merely call the
+Collection API. The kernel canonicalizes content, materializes or verifies
 Assets, creates ownership relations, and emits the Collection event in the same
 logical mutation.
 
@@ -289,7 +283,7 @@ const answerCompleted = defineProcessor<AnswerCompletedContext>({
 Processors receive the resolved immutable Event Body as `event.data`. The
 runtime passes Actions and Processors the same complete composed context; their
 declared interfaces present the narrower static view each implementation wants.
-They do not declare Feature aliases or runtime dependency requirements.
+They do not declare runtime dependency aliases or requirements.
 
 Processors normally use Resources to decide what to do, then invoke Actions or
 mutate Collections. They may type and access an Adapter directly, but external
@@ -306,17 +300,18 @@ definePlugin({
   id: "@acme/assistant",
   version: "1.0.0",
   resources: {
-    agents: { assistant },       // Resource
+    agents: { assistant }, // Resource
     tools: { search: searchTool }, // Resource
-    models: { default: model },  // Resource
+    models: { default: model }, // Resource
   },
   adapters: {
-    llm: { default: openai },    // Adapter
+    llm: { default: openai }, // Adapter
   },
 });
 ```
 
-The runtime deep-composes each category and exposes only direct property access:
+The runtime composes each category by namespace and key and exposes only direct
+property access:
 
 ```ts
 context.resources.agents.assistant;
@@ -349,13 +344,13 @@ const model = defineModel({
 
 A helper is justified only by useful inference, defaults, normalization,
 branding, or runtime validation of dynamic input. It must not register the value
-implicitly or produce a privileged representation that plain declarations
-cannot satisfy. Cross-resource references such as a Model's Adapter name are
-resolved and checked by the semantic Action that understands them; the generic
-runtime does not encode those relationships.
+implicitly or produce a privileged representation that plain declarations cannot
+satisfy. Cross-resource references such as a Model's Adapter name are resolved
+and checked by the semantic Action that understands them; the generic runtime
+does not encode those relationships.
 
-A Tool is primarily a Resource describing how an existing Action is presented
-to an LLM. It references the Action rather than carrying a second execution
+A Tool is primarily a Resource describing how an existing Action is presented to
+an LLM. It references the Action rather than carrying a second execution
 implementation. An Agent is a Resource interpreted by the plugin whose
 processors implement the agent loop. A Model is a Resource selecting an LLM
 Adapter and configuration.
@@ -391,8 +386,9 @@ Exact composition rules:
 - Adapter namespaces merge independently by key in composition order;
 - application Resources and Adapters are the final overlays in their respective
   categories;
-- runtime-owned context names such as `actions`, `collections`, `transaction`,
-  `content`, and `stream` are reserved and cannot be contributed by a plugin;
+- Resource and Adapter namespaces never collide with runtime-owned context
+  members because they remain nested under `context.resources` and
+  `context.adapters`;
 - runtime identity comes from each definition's stable ID, while the map key is
   the ergonomic context alias;
 - `context.collections.<alias>` and `context.actions.<alias>` are generated from
@@ -514,21 +510,21 @@ code:
 
 Exit: the target contracts are executable and no test encodes a deleted spec.
 
-### Slice 2 — One Action and composition implementation
+### Slice 2 — One Action and composition implementation (complete)
 
-- merge `runtime/features/` and `runtime/actions/` into the final Action module;
-- split every grouped Feature action into an Action definition;
-- migrate every `defineFeature`, `context.feature(...)`, Feature alias, and
-  Feature registry caller directly;
-- replace fixed plugin resource arrays with the final Collection/Action/
-  Processor maps plus separate Resource and Adapter maps;
-- move Processor definition/matching out of the plugin registry;
-- delete Feature terminology, fixed resource-type constants, manifests that
-  duplicate definitions, and `requires`;
-- preserve the current durable Action events and retry-stable results.
+- consolidated executable definitions and durable lifecycle in the Action
+  module;
+- split grouped executable capabilities into individual Action definitions;
+- migrated callers to direct Action aliases;
+- replaced fixed plugin resource arrays with final Collection/Action/Processor
+  maps plus separate Resource and Adapter maps;
+- separated Processor definition and matching from composition;
+- deleted the retired executable API, fixed resource-type constants, duplicated
+  manifests, and `requires`;
+- preserved durable Action Events and retry-stable results.
 
-Exit: one composer, one Action invoker, one Processor registry, and no Feature
-API or fixed AI resource bucket remains.
+Exit: one composer, one Action invoker, one Processor registry, and no retired
+executable API or fixed AI resource bucket remains.
 
 ### Slice 3 — Make context and transactions runtime-neutral
 
@@ -560,9 +556,9 @@ tests, and exports:
    contributes no hidden configured provider.
 
 The application explicitly selects and configures its LLM Adapters. Concrete
-tools, memory, knowledge, schedules, channels, goals, usage accounting, and admin
-behavior remain optional first-party plugins. Only actual Skill Resources and
-their loaders belong to the Skills vocabulary.
+tools, memory, knowledge, schedules, channels, goals, usage accounting, and
+admin behavior remain optional first-party plugins. Only actual Skill Resources
+and their loaders belong to the Skills vocabulary.
 
 Delete the corresponding `runtime/llm`, `runtime/tools`, `runtime/agents`,
 `runtime/context`, and `runtime/capabilities` code as each vertical cutover
@@ -574,8 +570,8 @@ harness.
 
 ### Slice 5 — Extract the remaining semantic plugins
 
-Move admin, channels, knowledge, memory, schedules, skills, usage, and goals into
-ordinary plugin packages using only the five primitives. For each plugin:
+Move admin, channels, knowledge, memory, schedules, skills, usage, and goals
+into ordinary plugin packages using only the five primitives. For each plugin:
 
 - move semantic types and adapters with it;
 - replace repository/manager calls with Collections or Actions;
@@ -604,8 +600,8 @@ composition invariant.
 
 - delete implicit Core and built-in plugin construction;
 - make plugin dependencies the only preset/composition mechanism;
-- collapse embedded/Gateway/Worker public creation into the one
-  `createCopilotz` contract with explicit role/infrastructure options;
+- collapse embedded/Gateway/Worker public creation into the one `createCopilotz`
+  contract with explicit role/infrastructure options;
 - retain only `send`, `observe`, `close`, and operation cancellation/settlement
   on the public application;
 - remove public `run`, `connect`, raw `events`, Engine, attachment, capability,
@@ -662,8 +658,7 @@ Architecture-specific closure checks must prove:
   composition, type inference, and injected context;
 - equivalent plain declarations and optional helpers produce values accepted by
   the same public Resource or Adapter interface;
-- no `Feature`, `requires`, `context.feature`, locator, or hidden Core path
-  remains;
+- no retired executable API, `requires`, locator, or hidden Core path remains;
 - every Collection mutation and Action lifecycle transition persists the
   expected Event Body and durable Event;
 - Action lifecycle input/output persistence is independent of schema presence;
@@ -674,8 +669,6 @@ Architecture-specific closure checks must prove:
 
 ## 8. Immediate next slice
 
-Do not begin another semantic move yet. Start with Slice 1 and review its golden
-contract tests as an API lock. The first implementation change after approval is
-Slice 2: replace Feature/fixed-bucket composition with the one final
-Action/Collection/Processor/Resource/Adapter model. That foundation determines
-every later LLM, Tool, Agent, Core, and application move.
+Slices 1 and 2 are now the executable API lock. Continue with Slice 3 and close
+each semantic vertical against the one
+Action/Collection/Processor/Resource/Adapter model before moving to the next.

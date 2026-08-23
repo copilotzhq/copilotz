@@ -3,14 +3,9 @@ import {
   createTestDatabase,
   type TestDatabase,
 } from "../../testing/ominipg.ts";
-import { createTestDomainContext } from "../../../runtime/testing/domain-context.ts";
 import {
-  projectMessageById,
   projectMessages,
-  projectParticipants,
   projectThreadByExternalId,
-  projectThreadById,
-  projectThreads,
 } from "../../../runtime/testing/projections.ts";
 import type { Agent } from "../../resources/index.ts";
 import { createCopilotzApplication } from "../../application/index.ts";
@@ -143,7 +138,7 @@ function replyPlugin() {
   return definePlugin({
     id: "test.discord-reply",
     version: "1.0.0",
-    processors: [processor],
+    processors: { channelReply: processor },
   });
 }
 
@@ -159,9 +154,8 @@ Deno.test("Discord channel verifies interactions and preserves native media/acti
     database: db,
     namespace: NAMESPACE,
     databaseSchema: "copilotz_v3_discord",
-    core: false,
-    canonicalCore: [coreCollectionsPlugin],
     plugins: [
+      coreCollectionsPlugin,
       replyPlugin(),
       createDiscordChannelPlugin({
         config: signed.config,
@@ -169,7 +163,7 @@ Deno.test("Discord channel verifies interactions and preserves native media/acti
         defaultAgentIds: [agent.id],
       }),
     ],
-    context: { agents: { [agent.id]: agent } },
+    resources: { agents: { [agent.id]: agent } },
   });
   const body = {
     id: "interaction-a",

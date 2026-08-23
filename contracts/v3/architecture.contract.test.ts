@@ -1,4 +1,4 @@
-import { assert, assertEquals } from "@std/assert";
+import { assert, assertEquals, assertRejects } from "@std/assert";
 import { fromFileUrl, join, relative } from "../../dependencies/std-path.ts";
 
 import { createCopilotz } from "../../index.ts";
@@ -16,7 +16,7 @@ const canonicalEntries = [
   "runtime/engine",
   "runtime/events",
   "runtime/execution",
-  "runtime/features",
+  "runtime/actions",
   "runtime/knowledge",
   "runtime/memory",
   "runtime/plugins",
@@ -78,10 +78,24 @@ Deno.test("v3 root is a runtime-neutral composition barrel", async () => {
   assert(!/\bclass\s+\w+/.test(source));
 });
 
+Deno.test("retired executable and v1 server modules are deleted", async () => {
+  for (
+    const path of [
+      "../../runtime/features/index.ts",
+      "../../server/v1-fetch.ts",
+      "../../server/v1-sse.ts",
+    ]
+  ) {
+    await assertRejects(
+      () => Deno.stat(new URL(path, import.meta.url)),
+      Deno.errors.NotFound,
+    );
+  }
+});
+
 Deno.test("createCopilotz returns one frozen factory-created application", async () => {
   const application = await createCopilotz({
     namespace: "architecture-contract",
-    core: false,
   });
   try {
     assertEquals(Object.getPrototypeOf(application), Object.prototype);

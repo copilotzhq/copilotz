@@ -1,79 +1,65 @@
-import { assert, assertEquals } from "@std/assert";
-
-import { createCollectionRuntime } from "@copilotz/copilotz/collections";
-import { createPluginRegistry, definePlugin } from "@copilotz/copilotz/plugins";
-import { createCopilotz } from "../../create-copilotz.ts";
+import { assert, assertEquals, assertStrictEquals } from "@std/assert";
+import { createPluginRegistry } from "@copilotz/copilotz/plugins";
 import {
   CORE_COLLECTION_NAMES,
   coreCollectionsPlugin,
   corePlugin,
 } from "./index.ts";
 
-const CORE_FEATURE_IDS = [
-  "copilotz.core.thread-message",
-  "copilotz.core.llm",
-  "copilotz.core.tool",
-  "copilotz.core.tool-batch",
-  "copilotz.core.thread",
-  "copilotz.core.message",
+const CORE_ACTION_IDS = [
+  "copilotz.core.thread.create",
+  "copilotz.core.thread.addParticipant",
+  "copilotz.core.thread.deleteMessages",
+  "copilotz.core.message.revise",
+  "copilotz.core.thread-message.create",
+  "copilotz.core.llm.generate",
+  "copilotz.core.llm.session",
+  "copilotz.core.tool.call",
+  "copilotz.core.tool-batch.execute",
 ];
 
-Deno.test("core plugin is static data and provides its domain resources", () => {
-  assertEquals(corePlugin.manifest.id, "@copilotz/core");
-  assertEquals(corePlugin.manifest.provides.collections, [
-    ...CORE_COLLECTION_NAMES,
-  ]);
+Deno.test("core plugin is direct static plugin composition", () => {
+  assertEquals(corePlugin.id, "@copilotz/core");
   assertEquals(
-    corePlugin.resources.collections?.map((item) =>
-      (item as { name: string }).name
-    ),
+    Object.values(corePlugin.collections).map((definition) => definition.name),
     [...CORE_COLLECTION_NAMES],
   );
   assertEquals(
-    corePlugin.resources.processors?.map((item) => (item as { id: string }).id),
-    [
-      "copilotz.core.message-to-text-attempt",
-      "copilotz.core.message-input",
-      "copilotz.core.project-text-result",
-      "copilotz.core.project-tool-result",
-      "copilotz.core.complete-agent-ask",
-      "copilotz.core.fail-agent-ask",
-    ],
+    Object.values(corePlugin.actions).map((definition) => definition.id),
+    CORE_ACTION_IDS,
   );
-  assertEquals(
-    corePlugin.resources.llm?.map((item) => (item as { id: string }).id),
-    [
-      "openai",
-      "anthropic",
-      "gemini",
-      "groq",
-      "deepseek",
-      "ollama",
-      "minimax",
-    ],
-  );
+  assertEquals(Object.keys(corePlugin.processors), [
+    "messageRouter",
+    "messageInput",
+    "projectTextResult",
+    "projectToolResult",
+    "completeAsk",
+    "failAsk",
+  ]);
+  assertEquals(Object.keys(corePlugin.adapters.llm), [
+    "openai",
+    "anthropic",
+    "gemini",
+    "groq",
+    "deepseek",
+    "ollama",
+    "minimax",
+  ]);
   assert(
-    corePlugin.resources.llm?.every((item) =>
-      typeof (item as { generate?: unknown }).generate === "function"
+    Object.values(corePlugin.adapters.llm).every((adapter) =>
+      typeof adapter.generate === "function"
     ),
   );
+  assertStrictEquals(corePlugin.resources.tools.ask.id, "ask");
+  assertEquals("manifest" in corePlugin, false);
+  assertEquals("features" in corePlugin, false);
   assertEquals(
-    corePlugin.manifest.provides.features,
-    CORE_FEATURE_IDS,
-  );
-  assertEquals(
-    corePlugin.resources.features?.map((item) => (item as { id: string }).id),
-    CORE_FEATURE_IDS,
-  );
-  assertEquals(
-    coreCollectionsPlugin.resources.features?.map((item) =>
-      (item as { id: string }).id
-    ),
-    CORE_FEATURE_IDS,
+    Object.values(coreCollectionsPlugin.actions).map((action) => action.id),
+    CORE_ACTION_IDS,
   );
 });
 
-Deno.test("application llm resources override core adapters by stable ID", async () => {
+Deno.test("application LLM Adapters overlay Core by alias", () => {
   const replacement = {
     id: "openai",
     type: "llm",
@@ -81,66 +67,23 @@ Deno.test("application llm resources override core adapters by stable ID", async
       throw new Error("replacement generate");
     },
   };
-  const registry = await createPluginRegistry({
-    core: corePlugin,
-    plugins: [definePlugin({
-      id: "test.providers",
-      version: "1.0.0",
-      llm: [replacement],
-    })],
+  const registry = createPluginRegistry({
+    plugins: [corePlugin],
+    adapters: { llm: { openai: replacement } },
   });
-  assertEquals(registry.context.llm.openai, replacement);
+  assertStrictEquals(registry.adapters.llm.openai, replacement);
 });
 
-Deno.test("core plugin collections win until a later plugin replaces a stable ID", async () => {
-  const replacement = {
-    name: "message",
-    schema: { type: "object", properties: {} },
-  };
-  const registry = await createPluginRegistry({
-    core: corePlugin,
-    plugins: [definePlugin({
-      id: "acme.messages",
-      version: "1.0.0",
-      collections: [replacement],
-    })],
-  });
-  assertEquals(
-    registry.collections.require("participant"),
-    corePlugin.resources.collections?.find((item) =>
-      (item as { name: string }).name === "participant"
-    ),
-  );
-  assertEquals(registry.collections.require("message"), replacement);
-});
-
-Deno.test("package-root createCopilotz injects corePlugin before optional built-ins", async () => {
-  const application = await createCopilotz({
-    namespace: "phase-4-core",
-    core: false,
-  });
-  try {
-    assertEquals(application.config.corePluginIds[0], "@copilotz/core");
-    assert(application.plugins.collections.get("participant"));
-    assertEquals(
-      Object.keys(application.plugins.context.embeddings ?? {}).length,
-      0,
-    );
-  } finally {
-    await application.shutdown();
-  }
-});
-
-Deno.test("core plugin production files import Copilotz through public subpaths", async () => {
+Deno.test("core production modules consume public Copilotz subpaths", async () => {
   const files = [
     "plugin.ts",
-    "manifest.ts",
+    "context.ts",
     "resources/llm/index.ts",
-    "resources/features/thread-message.ts",
-    "resources/features/llm.ts",
-    "resources/features/tool.ts",
-    "resources/features/thread.ts",
-    "resources/features/message.ts",
+    "resources/actions/thread-message.ts",
+    "resources/actions/llm.ts",
+    "resources/actions/tool.ts",
+    "resources/actions/thread.ts",
+    "resources/actions/message.ts",
     "resources/processors/helpers.ts",
     "resources/processors/index.ts",
     "resources/processors/message-router.ts",
@@ -159,15 +102,8 @@ Deno.test("core plugin production files import Copilotz through public subpaths"
     assert(!/from\s+["']\.\.\/.*runtime\//.test(source), file);
     assert(!/from\s+["']\.\.\/runtime\//.test(source), file);
   }
-  const plugin = await Deno.readTextFile(new URL("plugin.ts", import.meta.url));
-  assert(plugin.includes("@copilotz/copilotz/plugins"));
-  const participant = await Deno.readTextFile(
-    new URL("resources/collections/participant.ts", import.meta.url),
+  const action = await Deno.readTextFile(
+    new URL("resources/actions/thread-message.ts", import.meta.url),
   );
-  assert(participant.includes("@copilotz/copilotz/collections"));
-  const feature = await Deno.readTextFile(
-    new URL("resources/features/thread-message.ts", import.meta.url),
-  );
-  assert(feature.includes("@copilotz/copilotz/features"));
-  assertEquals(typeof createCollectionRuntime, "function");
+  assert(action.includes("@copilotz/copilotz/actions"));
 });

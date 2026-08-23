@@ -1,7 +1,10 @@
-import { coreFeatureAliases } from "@copilotz/copilotz/plugins/core";
 import { assert, assertEquals, assertRejects } from "@std/assert";
 
-import { coreCollectionsPlugin } from "../../plugins/core/plugin.ts";
+import {
+  CORE_PLUGIN_VERSION,
+  coreCollections,
+  coreCollectionsPlugin,
+} from "../../plugins/core/plugin.ts";
 import { createSqlSession } from "../events/index.ts";
 import { createPluginRegistry, definePlugin } from "../plugins/index.ts";
 import { createTestDatabase } from "../testing/ominipg.ts";
@@ -17,7 +20,7 @@ import {
 
 const NAMESPACE = "tenant-collection-ingress-slice-2";
 
-Deno.test("engine conversation factories are gone; messages still use the thread-message feature", async () => {
+Deno.test("engine conversation factories are gone; messages use the registered Action", async () => {
   await assertRejects(
     () => Deno.stat(new URL("./core-records.ts", import.meta.url)),
     Deno.errors.NotFound,
@@ -26,16 +29,12 @@ Deno.test("engine conversation factories are gone; messages still use the thread
     new URL("../attachments/attachment.ts", import.meta.url),
   );
   assertEquals(
-    attachment.includes("requireFeatureActions"),
-    true,
-  );
-  assertEquals(
-    attachment.includes("copilotz.core.thread-message"),
+    attachment.includes("actions.createThreadMessage"),
     true,
   );
 });
 
-Deno.test("createMessage ensures a new sender through the thread-message feature", async () => {
+Deno.test("createThreadMessage Action ensures a new sender", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   const engine = await createCopilotzEngine({
     session: createSqlSession(db),
@@ -47,12 +46,8 @@ Deno.test("createMessage ensures a new sender through the thread-message feature
     random: () => 0,
   });
   try {
-    const domain = createTestDomainContext(
-      engine,
-      NAMESPACE,
-      coreFeatureAliases,
-    );
-    await domain.features.thread.create({
+    const domain = createTestDomainContext(engine, NAMESPACE);
+    await domain.actions.createThread({
       id: "thread-a",
       participants: [{
         id: "human-a",
@@ -60,11 +55,7 @@ Deno.test("createMessage ensures a new sender through the thread-message feature
         participantType: "human",
       }],
     }, { identity: { deduplicationId: "thread-a:create" } });
-    const content = await engine.content.preparer.prepare("slice two", {
-      namespace: NAMESPACE,
-      idempotencyKey: "message-job:content",
-    });
-    const created = await domain.features.threadMessage.create({
+    const created = await domain.actions.createThreadMessage({
       id: "message-job",
       threadId: "thread-a",
       sender: {
@@ -73,7 +64,7 @@ Deno.test("createMessage ensures a new sender through the thread-message feature
         name: "RAG",
       },
       recipientIds: ["human-a"],
-      content,
+      content: "slice two",
     }, { identity: { deduplicationId: "message-job:create" } }) as {
       id: string;
       senderId: string;
@@ -105,12 +96,11 @@ Deno.test("createMessage ensures a new sender through the thread-message feature
   }
 });
 
-Deno.test("createMessage fails when the thread-message feature is not bound", async () => {
+Deno.test("createThreadMessage fails when its Action is not bound", async () => {
   const collectionsOnly = definePlugin({
     id: "test.core-collections-without-thread-message",
-    version: coreCollectionsPlugin.manifest.version,
-    collections: coreCollectionsPlugin.resources.collections,
-    features: [],
+    version: CORE_PLUGIN_VERSION,
+    collections: coreCollections,
   });
   const db = await createTestDatabase({ url: ":memory:" });
   const engine = await createCopilotzEngine({
@@ -136,13 +126,9 @@ Deno.test("createMessage fails when the thread-message feature is not bound", as
       id: "thread-a",
       participantIds: ["human-a"],
     });
-    const content = await engine.content.preparer.prepare("unbound", {
-      namespace: NAMESPACE,
-      idempotencyKey: "unbound:content",
-    });
     await assertRejects(
       async () =>
-        await domain.features.threadMessage.create({
+        await domain.actions.createThreadMessage({
           id: "message-unbound",
           threadId: "thread-a",
           sender: {
@@ -150,7 +136,7 @@ Deno.test("createMessage fails when the thread-message feature is not bound", as
             externalId: "human-a",
             participantType: "human",
           },
-          content,
+          content: "unbound",
         }),
       Error,
     );

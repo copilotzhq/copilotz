@@ -138,7 +138,7 @@ export type WorkflowToolExecutionContext = {
   cancelReason?: string;
 };
 
-/** Runtime-neutral capabilities exposed to a Tool by its owning Feature. */
+/** Runtime-neutral capabilities exposed to a Tool by its invoking Action. */
 export type WorkflowToolHostContext = CopilotzProcessorContext;
 
 export type WorkflowToolOutputOptions = Readonly<{

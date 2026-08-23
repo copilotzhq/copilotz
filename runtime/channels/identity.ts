@@ -14,8 +14,6 @@ import type {
   CollectionRecord,
   CollectionRuntime,
 } from "../collections/index.ts";
-import { createFeatureContext } from "../features/index.ts";
-import { requireFeatureActions } from "../features/context.ts";
 import type {
   ConversationMessage,
   ConversationThread,
@@ -298,7 +296,7 @@ export async function resolveChannelParticipant(
     const existing = await getParticipant(runtime, namespace, id) ??
       await getParticipantByExternalId(runtime, namespace, id);
     if (existing) return existing;
-    const agent = (application.plugins.context.agents ?? {})[id] as
+    const agent = (application.plugins.resources.agents ?? {})[id] as
       | Agent
       | undefined;
     if (agent) return await agentParticipant(application, namespace, agent);
@@ -399,19 +397,7 @@ async function resolveThread(
     { deduplicationId: `channel:thread:${namespace}:${id ?? externalId}` },
     ulid,
   );
-  const created = await requireFeatureActions(
-    createFeatureContext({
-      namespace,
-      plugins: application.plugins,
-      collections: application.collections,
-      collectionRuntime: runtime,
-      contentResolver: application.content.resolver,
-      events: application.events,
-      deliveries: application.deliveries,
-      relations: application.relations,
-    }),
-    "copilotz.core.thread",
-  ).create({
+  const created = await runtime.withScope({ namespace }).thread.create({
     id: threadId,
     ...(externalId ? { externalId } : {}),
     ...(descriptor.name?.trim() ? { name: descriptor.name.trim() } : {}),
@@ -422,7 +408,7 @@ async function resolveThread(
     ...(descriptor.metadata
       ? { metadata: structuredClone(descriptor.metadata) }
       : {}),
-    participants,
+    participantIds: participants.map((participant) => participant.id),
   }, {
     operationKey: `channel:thread:${id ?? externalId}`,
     identity: {
@@ -441,21 +427,14 @@ async function addThreadParticipant(
   if (thread.participants.some((item) => item.id === participant.id)) {
     return thread;
   }
-  await requireFeatureActions(
-    createFeatureContext({
-      namespace,
-      plugins: application.plugins,
-      collections: application.collections,
-      collectionRuntime: application.collectionRuntime,
-      contentResolver: application.content.resolver,
-      events: application.events,
-      deliveries: application.deliveries,
-      relations: application.relations,
-    }),
-    "copilotz.core.thread",
-  ).addParticipant({
-    threadId: thread.id,
-    participant,
+  await application.collectionRuntime.withScope({ namespace }).thread.update({
+    id: thread.id,
+    set: {
+      participantIds: [
+        ...thread.participants.map((item) => item.id),
+        participant.id,
+      ],
+    },
   }, {
     operationKey: `channel:thread-participant:${thread.id}:${participant.id}`,
     identity: {

@@ -51,8 +51,10 @@ async function registry() {
   const application = definePlugin({
     id: "test.capabilities.application",
     version: "1.0.0",
-    agents: values,
-    tools: [clock],
+    resources: {
+      agents: Object.fromEntries(values.map((agent) => [agent.id, agent])),
+      tools: { [clock.key]: clock },
+    },
   });
   return await createPluginRegistry({
     plugins: [
@@ -123,7 +125,7 @@ Deno.test("resolver rejects unknown grants instead of silently broadening access
   const overriding = definePlugin({
     id: "test.capabilities.invalid",
     version: "1.0.0",
-    agents: [invalid],
+    resources: { agents: { [invalid.id]: invalid } },
   });
   const combined = await createPluginRegistry({
     plugins: [...resources.plugins, overriding],

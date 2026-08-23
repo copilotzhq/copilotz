@@ -1,17 +1,40 @@
-import { llmFeature } from "./resources/features/llm.ts";
-import { toolBatchFeature, toolFeature } from "./resources/features/tool.ts";
-import { messageFeature } from "./resources/features/message.ts";
-import { threadFeature } from "./resources/features/thread.ts";
-import { threadMessageFeature } from "./resources/features/thread-message.ts";
-
-export { corePluginManifest } from "./manifest.ts";
-export { coreCollectionsPlugin, corePlugin } from "./plugin.ts";
 export {
-  TOOL_BATCH_FEATURE_ID,
-  TOOL_FEATURE_ID,
-  toolBatchFeature,
-  toolFeature,
-} from "./resources/features/tool.ts";
+  CORE_PLUGIN_ID,
+  CORE_PLUGIN_VERSION,
+  coreActions,
+  coreCollections,
+  coreCollectionsPlugin,
+  corePlugin,
+  coreProcessors,
+} from "./plugin.ts";
+export {
+  ADD_THREAD_PARTICIPANT_ACTION_ID,
+  addThreadParticipantAction,
+  CREATE_THREAD_ACTION_ID,
+  createThreadAction,
+  DELETE_THREAD_MESSAGES_ACTION_ID,
+  deleteThreadMessagesAction,
+} from "./resources/actions/thread.ts";
+export {
+  CREATE_THREAD_MESSAGE_ACTION_ID,
+  createThreadMessageAction,
+} from "./resources/actions/thread-message.ts";
+export {
+  REVISE_MESSAGE_ACTION_ID,
+  reviseMessageAction,
+} from "./resources/actions/message.ts";
+export {
+  GENERATE_LLM_ACTION_ID,
+  generateLlmAction,
+  RUN_LLM_SESSION_ACTION_ID,
+  runLlmSessionAction,
+} from "./resources/actions/llm.ts";
+export {
+  CALL_TOOL_ACTION_ID,
+  callToolAction,
+  EXECUTE_TOOL_BATCH_ACTION_ID,
+  executeToolBatchAction,
+} from "./resources/actions/tool.ts";
 export {
   core,
   CORE_MESSAGE_INPUT_EVENT,
@@ -21,19 +44,6 @@ export type {
   CoreMessageInput,
   CoreMessageInputEnvelope,
 } from "./resources/inputs/index.ts";
-export {
-  THREAD_MESSAGE_FEATURE_ID,
-  threadMessageFeature,
-} from "./resources/features/thread-message.ts";
-export { LLM_FEATURE_ID, llmFeature } from "./resources/features/llm.ts";
-export {
-  MESSAGE_FEATURE_ID,
-  messageFeature,
-} from "./resources/features/message.ts";
-export {
-  THREAD_FEATURE_ID,
-  threadFeature,
-} from "./resources/features/thread.ts";
 export {
   CORE_COLLECTION_NAMES,
   messageCollection,
@@ -47,22 +57,3 @@ export type {
   MessageRecord,
   MessageRevision,
 } from "./resources/collections/index.ts";
-
-/** Consumer-local aliases for tests and host FeatureContext construction. */
-export type CoreFeatureAliases = Readonly<{
-  thread: typeof threadFeature;
-  threadMessage: typeof threadMessageFeature;
-  message: typeof messageFeature;
-  llm: typeof llmFeature;
-  tool: typeof toolFeature;
-  toolBatch: typeof toolBatchFeature;
-}>;
-
-export const coreFeatureAliases: CoreFeatureAliases = Object.freeze({
-  thread: threadFeature,
-  threadMessage: threadMessageFeature,
-  message: messageFeature,
-  llm: llmFeature,
-  tool: toolFeature,
-  toolBatch: toolBatchFeature,
-});

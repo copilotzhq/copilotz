@@ -1,7 +1,4 @@
-import {
-  coreFeatureAliases,
-  message as coreMessage,
-} from "@copilotz/copilotz/plugins/core";
+import { message as coreMessage } from "@copilotz/copilotz/plugins/core";
 import { assertEquals, assertExists } from "@std/assert";
 import {
   type CopilotzProcessorContext,
@@ -12,14 +9,7 @@ import {
   defineProcessor,
 } from "../../index.ts";
 import { createTestDomainContext } from "../../runtime/testing/domain-context.ts";
-import {
-  projectMessageById,
-  projectMessages,
-  projectParticipants,
-  projectThreadByExternalId,
-  projectThreadById,
-  projectThreads,
-} from "../../runtime/testing/projections.ts";
+import { projectMessages } from "../../runtime/testing/projections.ts";
 import { createTestDatabase } from "../../runtime/testing/ominipg.ts";
 import { loadMessageRecord } from "../../runtime/engine/collection-graph.ts";
 import { coreCollectionsPlugin } from "../../plugins/core/plugin.ts";
@@ -64,14 +54,18 @@ function migratedApplicationPlugin() {
   return definePlugin({
     id: "@downstream/application",
     version: "3.0.0",
-    agents: [{
-      id: "support",
-      name: "Support",
-      role: "Support agent",
-      runtime: { provider: provider.id, model: "injected" },
-    }],
-    llm: [provider],
-    processors: [processor],
+    resources: {
+      agents: {
+        support: {
+          id: "support",
+          name: "Support",
+          role: "Support agent",
+          runtime: { provider: provider.id, model: "injected" },
+        },
+      },
+    },
+    adapters: { llm: { downstreamInjected: provider } },
+    processors: { reply: processor },
   });
 }
 
@@ -89,9 +83,7 @@ Deno.test("downstream app embeds Copilotz with app-owned database, Hypervisor, a
   const application = await createCopilotzGateway({
     database,
     namespace: NAMESPACE,
-    core: false,
-    canonicalCore: [coreCollectionsPlugin],
-    plugins: [plugin],
+    plugins: [coreCollectionsPlugin, plugin],
     dispatcher: hypervisor,
     target: { workerId },
     engine: {
@@ -102,9 +94,7 @@ Deno.test("downstream app embeds Copilotz with app-owned database, Hypervisor, a
   const worker = await createCopilotzWorker({
     database,
     namespace: NAMESPACE,
-    core: false,
-    canonicalCore: [coreCollectionsPlugin],
-    plugins: [plugin],
+    plugins: [coreCollectionsPlugin, plugin],
     id: workerId,
     transport,
     capacity: 8,
@@ -116,14 +106,13 @@ Deno.test("downstream app embeds Copilotz with app-owned database, Hypervisor, a
     assertEquals("engine" in application, false);
     assertEquals("execution" in application, false);
     assertEquals(
-      (application.plugins.context.llm["downstream-injected"] as {
+      (application.plugins.adapters.llm.downstreamInjected as {
         id: string;
       }).id,
       "downstream-injected",
     );
-    await createTestDomainContext(application, NAMESPACE, coreFeatureAliases)
-      .features.thread
-      .create({
+    await createTestDomainContext(application, NAMESPACE).actions.createThread(
+      {
         id: "downstream-thread",
         namespace: NAMESPACE,
         participants: [
@@ -139,7 +128,8 @@ Deno.test("downstream app embeds Copilotz with app-owned database, Hypervisor, a
             agentId: "support",
           },
         ],
-      });
+      },
+    );
     const run = await application.send(coreMessage({
       thread: "downstream-thread",
       participant: "downstream-user",

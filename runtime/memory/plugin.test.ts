@@ -7,33 +7,18 @@ import {
 import { createTestDomainContext } from "../../runtime/testing/domain-context.ts";
 import {
   projectActionEvents,
-  projectMessageById,
   projectMessages,
-  projectParticipants,
-  projectThreadByExternalId,
-  projectThreadById,
-  projectThreads,
 } from "../../runtime/testing/projections.ts";
 import type { Agent } from "../resources/index.ts";
 import type { ValidateCollectionRecord } from "../domain/index.ts";
 import { createTestDatabase, type TestDatabase } from "../testing/ominipg.ts";
 import { type CopilotzEngine, createCopilotzEngine } from "../engine/index.ts";
 import { createSqlSession } from "../events/index.ts";
-import type {
-  ChatRequest,
-  ChatResponse,
-  ProviderAPI,
-  TokenUsage,
-} from "../llm/types.ts";
-import {
-  createPluginRegistry,
-  definePlugin,
-  type Processor,
-} from "../plugins/index.ts";
+import type { ChatRequest, ChatResponse, TokenUsage } from "../llm/types.ts";
+import { createPluginRegistry, definePlugin } from "../plugins/index.ts";
 import { defineContextResource } from "../context/index.ts";
 import {
   coreCollectionsPlugin,
-  coreFeatureAliases,
   corePlugin,
 } from "@copilotz/copilotz/plugins/core";
 import {
@@ -41,7 +26,10 @@ import {
   generateFromChat,
   type LlmChat,
 } from "../llm/index.ts";
-import { createLongTermMemoryPlugin } from "./plugin.ts";
+import {
+  CONSOLIDATE_MEMORY_ACTION_ID,
+  createLongTermMemoryPlugin,
+} from "./plugin.ts";
 import { type MemoryKindDefinition, memorySourceKey } from "./ontology.ts";
 import type { MemoryEmbed } from "./types.ts";
 
@@ -78,12 +66,28 @@ type FixtureOptions = Readonly<{
   withTextWorkflow?: boolean;
 }>;
 
-Deno.test("memory consolidation starts in a detached durable settlement scope", () => {
+Deno.test("memory plugin exposes final maps and detached reservation", () => {
   const plugin = createLongTermMemoryPlugin();
-  const processors = plugin.resources.processors as
-    | readonly Processor[]
-    | undefined;
-  const reservation = processors?.find((processor) =>
+  assertEquals(Object.keys(plugin.collections).sort(), [
+    "longTermMemory",
+    "memoryRecord",
+    "memorySpace",
+    "memorySpaceAccess",
+  ]);
+  assertEquals(Object.keys(plugin.actions).sort(), [
+    "consolidateMemory",
+    "maintainMemory",
+  ]);
+  assertEquals(Object.keys(plugin.resources.tools).sort(), [
+    "consolidateMemory",
+    "inspectMemory",
+    "listMemorySpaces",
+    "searchMemory",
+    "setMemoryStatus",
+  ]);
+  assertEquals(plugin.adapters.memoryEmbedding, {});
+  const processors = Object.values(plugin.processors);
+  const reservation = processors.find((processor) =>
     processor.id === "copilotz.memory.reserve"
   );
   assertExists(reservation);
@@ -138,8 +142,8 @@ async function createFixture(
     const resources = definePlugin({
       id: "test.memory.resources",
       version: "1.0.0",
-      agents: [configuredAgent],
-      llm: [provider],
+      resources: { agents: { [configuredAgent.id]: configuredAgent } },
+      adapters: { llm: { [provider.id]: provider } },
     });
     stage = "registry";
     const registry = await createPluginRegistry({
@@ -174,8 +178,8 @@ async function createFixture(
       validateCollection: options.validateCollection,
     });
     stage = "thread";
-    await createTestDomainContext(engine, "tenant-a", coreFeatureAliases)
-      .features.thread.create({
+    await createTestDomainContext(engine, "tenant-a")
+      .actions.createThread({
         id: "thread-a",
         participants: [
           { id: "user-a", externalId: "user-a", participantType: "human" },
@@ -199,16 +203,11 @@ async function addMessage(
   sender: "user" | "agent",
   text: string,
 ) {
-  const content = await fixture.engine.content.preparer.prepare(text, {
-    namespace: "tenant-a",
-    idempotencyKey: `${id}:content`,
-  });
   return await createTestDomainContext(
     fixture.engine,
     "tenant-a",
-    coreFeatureAliases,
-  ).features
-    .threadMessage.create({
+  ).actions
+    .createThreadMessage({
       id,
       threadId: "thread-a",
       sender: sender === "user"
@@ -219,7 +218,7 @@ async function addMessage(
           participantType: "agent",
           agentId: agent.id,
         },
-      content,
+      content: text,
     }, {
       identity: {
         correlationId: `correlation:${id}`,
@@ -343,7 +342,7 @@ async function waitForMaintenanceSettlement(fixture: Fixture) {
 
 async function projectToolLifecycle(
   fixture: Fixture,
-): Promise<Array<Record<string, any> & { status: string }>> {
+): Promise<Array<Record<string, unknown> & { status: string }>> {
   const events = await projectActionEvents(
     fixture.engine,
     "tenant-a",
@@ -365,7 +364,7 @@ async function projectToolLifecycle(
       ...(event.status === "failed" || event.status === "cancelled"
         ? { safeError: event.error }
         : {}),
-    } as Record<string, any> & { status: string };
+    } as Record<string, unknown> & { status: string };
   });
 }
 
@@ -425,6 +424,15 @@ Deno.test("native consolidation uses one internal tool grant and emits no public
 
     const maintenance = await waitForMaintenanceSettlement(fixture);
     assertEquals(maintenance.map((event) => event.status), ["completed"]);
+    const consolidation = await projectActionEvents(
+      fixture.engine,
+      "tenant-a",
+      CONSOLIDATE_MEMORY_ACTION_ID,
+    );
+    assertEquals(consolidation.map((event) => event.status), [
+      "invoked",
+      "completed",
+    ]);
     const messages = await projectMessages(
       fixture.engine,
       "tenant-a",
@@ -587,7 +595,7 @@ Deno.test("frozen application evidence is captured once and reused across repair
   const plugin = definePlugin({
     id: "test.compass",
     version: "1.0.0",
-    context: { promptContext: { [workspace.id]: workspace } },
+    resources: { promptContext: { [workspace.id]: workspace } },
   });
   const fixture = await createFixture(
     (request, index) =>
@@ -791,7 +799,7 @@ Deno.test("failed context capture retries before provider execution and freezes 
   const plugin = definePlugin({
     id: "test.retrying-context",
     version: "1.0.0",
-    context: { promptContext: { [resource.id]: resource } },
+    resources: { promptContext: { [resource.id]: resource } },
   });
   const fixture = await createFixture(
     (request) => response(request, [call("settle", { outcome: "no_changes" })]),
@@ -965,7 +973,7 @@ Deno.test("overridden memory-kind schemas use ordinary tool failure and repair",
   const plugin = definePlugin({
     id: "test.memory-kind",
     version: "1.0.0",
-    context: { memoryKinds: { [kind.id]: kind } },
+    resources: { memoryKinds: { [kind.id]: kind } },
   });
   const fixture = await createFixture(
     (request, index) =>
@@ -1141,18 +1149,10 @@ Deno.test("memory query tools enforce thread access, explain provenance, and pre
       threadId: "thread-a",
     });
 
-    const queryContent = await fixture.engine.content.preparer.prepare(
-      "Review and retract the visible memory.",
-      {
-        namespace: "tenant-a",
-        idempotencyKey: "memory-query:content",
-      },
-    );
     await createTestDomainContext(
       fixture.engine,
       "tenant-a",
-      coreFeatureAliases,
-    ).features.threadMessage.create({
+    ).actions.createThreadMessage({
       id: "message-query",
       threadId: "thread-a",
       sender: {
@@ -1161,7 +1161,7 @@ Deno.test("memory query tools enforce thread access, explain provenance, and pre
         participantType: "human",
       },
       recipientIds: ["agent-north"],
-      content: queryContent,
+      content: "Review and retract the visible memory.",
     }, {
       identity: {
         correlationId: "memory-query",

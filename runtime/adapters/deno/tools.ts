@@ -93,7 +93,9 @@ export function createWorkspaceToolsPlugin(
   return definePlugin({
     id: options.id ?? "@copilotz/workspace-tools",
     version: options.version ?? "3.0.0",
-    tools,
+    resources: {
+      tools: Object.fromEntries(tools.map((tool) => [tool.key, tool])),
+    },
   });
 }
 
@@ -110,6 +112,8 @@ export function createProcessToolsPlugin(
   return definePlugin({
     id: options.id ?? "@copilotz/process-tools",
     version: options.version ?? "3.0.0",
-    tools,
+    resources: {
+      tools: Object.fromEntries(tools.map((tool) => [tool.key, tool])),
+    },
   });
 }

@@ -1,4 +1,3 @@
-import { coreFeatureAliases } from "@copilotz/copilotz/plugins/core";
 import { assertEquals, assertExists } from "@std/assert";
 
 import { createSqlSession } from "../../runtime/events/index.ts";
@@ -18,12 +17,8 @@ Deno.test("thread replay preserves activity cursors derived from thread-scoped e
     defaultDatabaseSchema: "copilotz_thread_replay_cursor",
   });
   try {
-    const domain = createTestDomainContext(
-      engine,
-      namespace,
-      coreFeatureAliases,
-    );
-    await domain.features.thread.create({
+    const domain = createTestDomainContext(engine, namespace);
+    await domain.actions.createThread({
       id: "thread-a",
       participants: [{
         id: "user-a",
@@ -31,11 +26,7 @@ Deno.test("thread replay preserves activity cursors derived from thread-scoped e
         participantType: "human",
       }],
     });
-    const content = await engine.content.preparer.prepare("hello", {
-      namespace,
-      idempotencyKey: "thread-replay-message-content",
-    });
-    await domain.features.threadMessage.create({
+    await domain.actions.createThreadMessage({
       id: "message-a",
       threadId: "thread-a",
       sender: {
@@ -43,7 +34,7 @@ Deno.test("thread replay preserves activity cursors derived from thread-scoped e
         externalId: "user-a",
         participantType: "human",
       },
-      content,
+      content: "hello",
     });
     const messageEvent = (await engine.events.list({
       namespace,

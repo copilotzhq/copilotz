@@ -1,7 +1,4 @@
-import {
-  coreCollectionsPlugin,
-  coreFeatureAliases,
-} from "@copilotz/copilotz/plugins/core";
+import { coreCollectionsPlugin } from "@copilotz/copilotz/plugins/core";
 import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
 import {
   createSqlSession,
@@ -32,8 +29,8 @@ import {
 import { createTestDatabase, type TestDatabase } from "../testing/ominipg.ts";
 import { createHypervisor } from "../../dependencies/oxian-hypervisor.ts";
 import { createWorker } from "../../dependencies/oxian-worker.ts";
-import { defineCollection } from "../domain/index.ts";
-import { defineFeature } from "../features/index.ts";
+import { defineCollection } from "../collections/index.ts";
+import { type ActionCaller, defineAction } from "../actions/index.ts";
 import type { ContentRef } from "../content/index.ts";
 
 const TEST_SCHEMA = "copilotz_factory_engine";
@@ -45,19 +42,18 @@ const auditCollection = defineCollection({
     additionalProperties: false,
     properties: {
       id: { type: "string" },
+      namespace: { type: "string" },
       sourceEventId: { type: "string" },
       createdAt: { type: "string" },
       updatedAt: { type: "string" },
     },
-    required: ["id", "sourceEventId"],
+    required: ["id", "namespace", "sourceEventId"],
   } as const,
 });
 
-const engineEchoFeature = defineFeature({
-  id: "test.engine.echo",
-  actions: {
-    run: { execute: (input: unknown) => structuredClone(input) },
-  },
+const engineEchoAction = defineAction({
+  id: "test.engine.echo.run",
+  execute: (input: unknown) => structuredClone(input),
 });
 
 type Fixture = Readonly<{
@@ -78,7 +74,14 @@ async function createFixture(): Promise<Fixture> {
     name: "Echo",
     execute: (value: unknown) => value,
   });
-  const processor = defineProcessor<CopilotzProcessorContext>({
+  type FixtureProcessorContext =
+    & Omit<CopilotzProcessorContext, "actions">
+    & Readonly<{
+      actions: Readonly<{
+        engineEcho: ActionCaller<typeof engineEchoAction>;
+      }>;
+    }>;
+  const processor = defineProcessor<FixtureProcessorContext>({
     id: "engine.message.to-attempt",
     on: [{ eventType: "message.created", routing: { senderId: "user-a" } }],
     async handle(event, context) {
@@ -90,7 +93,10 @@ async function createFixture(): Promise<Fixture> {
         "collectionRuntime" in context;
       assertEquals(context.namespace, "tenant-a");
       assertEquals(context.event.id, event.id);
-      assertEquals(context.tools.echo?.key, "echo");
+      assertEquals(
+        (context.resources.tools?.echo as typeof echoTool | undefined)?.key,
+        "echo",
+      );
 
       const message = await context.collections.message.get({
         id: event.subject!.id,
@@ -106,7 +112,7 @@ async function createFixture(): Promise<Fixture> {
       );
       const attemptId = `attempt:${message.id}`;
       const content = await context.content.materialize(prepared);
-      await context.feature(engineEchoFeature).run({
+      await context.actions.engineEcho({
         id: attemptId,
         threadId: message.threadId,
         messageId: message.id,
@@ -114,7 +120,7 @@ async function createFixture(): Promise<Fixture> {
         agentId: "support",
         content,
       }, { operationKey: "logical-attempt" });
-      await context.collections.engine_audit.create({
+      await context.collections.engineAudit.create({
         id: `audit:${event.id}`,
         sourceEventId: event.id,
       });
@@ -135,10 +141,10 @@ async function createFixture(): Promise<Fixture> {
       definePlugin({
         id: "test.engine",
         version: "1.0.0",
-        processors: [processor],
-        collections: [auditCollection],
-        features: [engineEchoFeature],
-        tools: [echoTool],
+        processors: { messageToAttempt: processor },
+        collections: { engineAudit: auditCollection },
+        actions: { engineEcho: engineEchoAction },
+        resources: { tools: { echo: echoTool } },
       }),
     ],
   });
@@ -216,21 +222,13 @@ Deno.test("factory engine scopes typed processor capabilities and deduplicates r
       namespace,
       identity: { deduplicationId: "thread-a:create" },
     });
-    const content = await fixture.engine.content.preparer.prepare(
-      "Hello engine",
-      {
-        namespace,
-        idempotencyKey: "message-a:body",
-      },
-    );
     const frames = fixture.engine.events.subscribe({
       namespace,
       threadId: "thread-a",
       types: ["text.delta"],
     }).getReader();
-    await createTestDomainContext(fixture.engine, namespace, coreFeatureAliases)
-      .features
-      .threadMessage.create({
+    await createTestDomainContext(fixture.engine, namespace).actions
+      .createThreadMessage({
         id: "message-a",
         threadId: "thread-a",
         sender: {
@@ -239,7 +237,7 @@ Deno.test("factory engine scopes typed processor capabilities and deduplicates r
           participantType: "human",
         },
         recipientIds: ["agent-a"],
-        content,
+        content: "Hello engine",
       }, {
         identity: {
           correlationId: "run-a",
@@ -377,7 +375,7 @@ Deno.test("one engine isolates lazy physical-schema repository scopes", async ()
     async handle(event, context) {
       if (!event.durable) throw new Error("Expected a durable event.");
       handledSchemas.push(context.databaseSchema);
-      await context.collections.engine_audit.create({
+      await context.collections.engineAudit.create({
         id: `audit:${event.subject?.id}`,
         sourceEventId: event.id,
       });
@@ -389,8 +387,8 @@ Deno.test("one engine isolates lazy physical-schema repository scopes", async ()
       definePlugin({
         id: "test.engine.scopes",
         version: "1.0.0",
-        collections: [auditCollection],
-        processors: [processor],
+        collections: { engineAudit: auditCollection },
+        processors: { audit: processor },
       }),
     ],
   });

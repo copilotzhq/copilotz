@@ -1,12 +1,10 @@
 import type { ResolvedContent } from "../content/index.ts";
 import type { CollectionRecord } from "../domain/index.ts";
 import type { DurableEvent } from "../events/index.ts";
-import type {
-  FeatureExecuteContext,
-  FeatureRequest,
-} from "../features/index.ts";
+import type { ActionContext } from "../actions/index.ts";
+import type { AdminRequest } from "./types.ts";
 
-type AdminQueryContext = FeatureExecuteContext;
+type AdminQueryContext = ActionContext;
 
 export function record(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -15,7 +13,7 @@ export function record(value: unknown): Record<string, unknown> {
 }
 
 export function queryText(
-  request: FeatureRequest,
+  request: AdminRequest,
   name: string,
 ): string | undefined {
   const raw = request.query?.[name];
@@ -24,7 +22,7 @@ export function queryText(
 }
 
 export function queryTexts(
-  request: FeatureRequest,
+  request: AdminRequest,
   name: string,
 ): readonly string[] | undefined {
   const raw = request.query?.[name];
@@ -40,7 +38,7 @@ export function queryTexts(
 }
 
 export function queryLimit(
-  request: FeatureRequest,
+  request: AdminRequest,
   fallback = 50,
   maximum = 200,
 ): number {
@@ -190,13 +188,8 @@ export async function messagePreview(
   if (!message) return null;
   try {
     const content = Array.isArray(message.content) ? message.content : [];
-    const resolved = await context.content.resolver.getMany(
-      content as Parameters<
-        FeatureExecuteContext[
-          "content"
-        ]["resolver"]["getMany"]
-      >[0],
-      { namespace: context.namespace },
+    const resolved = await context.content.resolveMany(
+      content as Parameters<ActionContext["content"]["resolveMany"]>[0],
     );
     const text = resolved.map(resolvedText).join("\n").trim();
     return text ? text.slice(0, maximum) : null;

@@ -780,14 +780,10 @@ channels stream attachment output immediately: the Fetch boundary pulls one
 attachment output at a time, preserves backpressure, strips byte-stream bodies
 from SSE metadata, and cancels causal work when the response body is cancelled.
 That surface can be hosted by Deno, Node, Bun, browser service workers, and
-Cloudflare workers. Legacy SSE projection is isolated in
-`createV1SseProjector()`, which maps text/reasoning/tool-call deltas and
-hydrated public messages to the current uppercase wire vocabulary. Binary and
-oversized message content stays an asset reference under an
-application-controlled URL policy. An internal route adapter maps only the
-transitional `providers` and `admin` names at the edge, and
-`createV1FetchHandler()` composes it with the `/v1` Fetch and SSE surface.
-Downstream response-shape migration remains in this feature family.
+Cloudflare workers. The transitional v1 Fetch/SSE projection described by this
+historical checkpoint has since been deleted. Downstream clients must consume
+the event-native Fetch contract directly; binary and oversized message content
+remains represented by application-controlled Asset references.
 
 Interactive CLI behavior is now a factory-created state machine over injected
 I/O. Node-compatible readline/process access lives only on the explicit

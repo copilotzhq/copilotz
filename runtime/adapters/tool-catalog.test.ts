@@ -48,8 +48,14 @@ async function resourcesFor(input: {
   const plugin = definePlugin({
     id: "test.catalog-adapters",
     version: "1.0.0",
-    ...(input.apis ? { api: input.apis } : {}),
-    ...(input.mcpServers ? { mcp: input.mcpServers } : {}),
+    resources: {
+      apis: Object.fromEntries(
+        (input.apis ?? []).map((api) => [api.id, api]),
+      ),
+      mcp: Object.fromEntries(
+        (input.mcpServers ?? []).map((server) => [server.id, server]),
+      ),
+    },
   });
   return await createPluginRegistry({ plugins: [plugin] });
 }
@@ -58,15 +64,15 @@ function catalogContext(resources: TestRegistry) {
   return Object.freeze({
     agents: Object.freeze({}),
     skills: Object.freeze({}),
-    tools: (resources.context.tools ?? Object.freeze({})) as Record<
+    tools: (resources.resources.tools ?? Object.freeze({})) as Record<
       string,
       WorkflowTool | undefined
     >,
-    apis: (resources.context.apis ?? Object.freeze({})) as Record<
+    apis: (resources.resources.apis ?? Object.freeze({})) as Record<
       string,
       API | undefined
     >,
-    mcp: (resources.context.mcp ?? Object.freeze({})) as Record<
+    mcp: (resources.resources.mcp ?? Object.freeze({})) as Record<
       string,
       MCPServer | undefined
     >,

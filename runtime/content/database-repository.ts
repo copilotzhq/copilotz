@@ -463,15 +463,15 @@ export function createDatabaseAssetRepository(
         candidate.readyBody.byteLength !== candidate.byteLength ||
         candidate.readyBody.digest !== candidate.digest ||
         assetBodyId({
-          id: candidate.id,
-          namespace,
-          mediaType: candidate.mediaType,
-          byteLength: candidate.byteLength,
-          digest: candidate.digest,
-          state: "ready",
-          location: candidate.location,
-          createdAt: "",
-        }) !== candidate.readyBody.bodyId
+            id: candidate.id,
+            namespace,
+            mediaType: candidate.mediaType,
+            byteLength: candidate.byteLength,
+            digest: candidate.digest,
+            state: "ready",
+            location: candidate.location,
+            createdAt: "",
+          }) !== candidate.readyBody.bodyId
       ) {
         throw createContentError(
           "asset_corrupted",

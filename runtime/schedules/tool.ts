@@ -1,9 +1,14 @@
-import type { ContentInput } from "../content/index.ts";
+import type { ContentInput, DurableContentInput } from "../content/index.ts";
 import type {
   WorkflowTool,
   WorkflowToolExecutionContext,
 } from "../tools/index.ts";
-import { scheduledJobsLifecycleFeature } from "./lifecycle.ts";
+import {
+  createScheduledJob,
+  getScheduledJob,
+  listScheduledJobs,
+  updateScheduledJob,
+} from "./lifecycle.ts";
 import type {
   ScheduledJobSchedule,
   ScheduledJobSender,
@@ -184,12 +189,19 @@ function executionContext(
   return value;
 }
 
-async function prepareRunContent<T extends Partial<ScheduledJobToolRunInput>>(
-  input: T,
+type PreparedScheduledJobToolRunInput =
+  & Omit<Partial<ScheduledJobToolRunInput>, "content">
+  & Readonly<{ content?: DurableContentInput }>;
+
+async function prepareRunContent(
+  input: Partial<ScheduledJobToolRunInput>,
   context: WorkflowToolExecutionContext,
   operationKey: string,
-): Promise<T> {
-  if (input.content === undefined) return input;
+): Promise<PreparedScheduledJobToolRunInput> {
+  if (input.content === undefined) {
+    const { content: _content, ...withoutContent } = input;
+    return Object.freeze(withoutContent);
+  }
   const content = await context.processor.content.prepare(input.content, {
     operationKey: `${operationKey}:content`,
   });
@@ -307,9 +319,6 @@ export function createScheduledJobsTool(
       const input = record(raw);
       const selected = action(input.action);
       const operation = `scheduled_jobs:${selected}`;
-      const lifecycle = context.processor.feature(
-        scheduledJobsLifecycleFeature,
-      );
       if (selected === "create") {
         const preparedRun = await prepareRunContent(
           run(input.run, {
@@ -319,7 +328,7 @@ export function createScheduledJobsTool(
           context,
           operation,
         );
-        const job = await lifecycle.create({
+        const job = await createScheduledJob({
           ...(optionalText(input.jobId, "Scheduled job ID")
             ? { id: optionalText(input.jobId, "Scheduled job ID") }
             : {}),
@@ -332,18 +341,22 @@ export function createScheduledJobsTool(
             })()
             : jobStatus(input.status) as "active" | "paused",
           schedule: schedule(input.schedule),
-          run: preparedRun,
+          run: preparedRun as
+            & Required<
+              Pick<PreparedScheduledJobToolRunInput, "content">
+            >
+            & PreparedScheduledJobToolRunInput,
           ...(input.metadata === undefined ? {} : {
             metadata: structuredClone(
               record(input.metadata, "Scheduled job metadata"),
             ),
           }),
-        }, { operationKey: operation });
+        }, context.processor);
         return { job };
       }
 
       if (selected === "list") {
-        const jobs = await lifecycle.list({
+        const jobs = await listScheduledJobs({
           ...(input.status === undefined
             ? {}
             : { status: jobStatus(input.status) }),
@@ -353,7 +366,7 @@ export function createScheduledJobsTool(
           ...(positiveLimit(input.limit)
             ? { limit: positiveLimit(input.limit) }
             : {}),
-        });
+        }, context.processor);
         const threadId = optionalText(input.threadId, "Scheduled thread ID");
         return {
           jobs: threadId
@@ -367,14 +380,20 @@ export function createScheduledJobsTool(
 
       const jobId = requiredText(input.jobId, "Scheduled job ID");
       if (selected === "get") {
-        return { job: await lifecycle.get({ id: jobId }) };
+        return { job: await getScheduledJob({ id: jobId }, context.processor) };
       }
       if (
         selected === "pause" || selected === "resume" || selected === "cancel"
       ) {
-        const job = await lifecycle[selected]({ id: jobId }, {
-          operationKey: operation,
-        });
+        const status = selected === "pause"
+          ? "paused"
+          : selected === "resume"
+          ? "active"
+          : "cancelled";
+        const job = await updateScheduledJob(
+          { id: jobId, patch: { status } },
+          context.processor,
+        );
         return { job };
       }
       if (selected === "run_now") {
@@ -411,14 +430,12 @@ export function createScheduledJobsTool(
           "Scheduled job update requires at least one field.",
         );
       }
-      const job = await lifecycle.update(
+      const job = await updateScheduledJob(
         {
           id: jobId,
           patch,
         },
-        {
-          operationKey: operation,
-        },
+        context.processor,
       );
       return { job };
     },

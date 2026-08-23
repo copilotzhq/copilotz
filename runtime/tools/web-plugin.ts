@@ -54,6 +54,8 @@ export function createWebToolsPlugin(
   return definePlugin({
     id: options.id ?? "@copilotz/web-tools",
     version: options.version ?? "3.0.0",
-    tools,
+    resources: {
+      tools: Object.fromEntries(tools.map((tool) => [tool.key, tool])),
+    },
   });
 }

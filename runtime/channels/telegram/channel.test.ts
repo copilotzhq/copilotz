@@ -3,14 +3,9 @@ import {
   createTestDatabase,
   type TestDatabase,
 } from "../../testing/ominipg.ts";
-import { createTestDomainContext } from "../../../runtime/testing/domain-context.ts";
 import {
-  projectMessageById,
   projectMessages,
-  projectParticipants,
   projectThreadByExternalId,
-  projectThreadById,
-  projectThreads,
 } from "../../../runtime/testing/projections.ts";
 import type { Agent } from "../../resources/index.ts";
 import { createCopilotzApplication } from "../../application/index.ts";
@@ -106,7 +101,7 @@ function replyPlugin() {
   return definePlugin({
     id: "test.telegram-reply",
     version: "1.0.0",
-    processors: [processor],
+    processors: { channelReply: processor },
   });
 }
 
@@ -121,9 +116,8 @@ Deno.test("Telegram channel preserves identity, canonical media, buttons, and na
     database: db,
     namespace: NAMESPACE,
     databaseSchema: "copilotz_v3_telegram",
-    core: false,
-    canonicalCore: [coreCollectionsPlugin],
     plugins: [
+      coreCollectionsPlugin,
       replyPlugin(),
       createTelegramChannelPlugin({
         config,
@@ -131,7 +125,7 @@ Deno.test("Telegram channel preserves identity, canonical media, buttons, and na
         defaultAgentIds: [agent.id],
       }),
     ],
-    context: { agents: { [agent.id]: agent } },
+    resources: { agents: { [agent.id]: agent } },
   });
   try {
     const result = await createChannelRuntime(application).dispatch(NAMESPACE, {

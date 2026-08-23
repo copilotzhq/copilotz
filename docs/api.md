@@ -208,7 +208,7 @@ types. `@copilotz/copilotz/adapters/deno` exports `buildOpenSkillsPlugin()` for
 build-time conversion of standard Agent Skills directories into a portable
 plugin. Filesystem directory loading is not an application runtime API.
 
-## HTTP and v1 compatibility
+## HTTP
 
 `gateway.fetch` is the v3 Web Fetch API. It serves the Copilotz application at
 `/v3` by default and also handles Worker upgrades when the Gateway owns a
@@ -216,30 +216,19 @@ WebSocket transport.
 
 `resolveDatabaseSchema(request)` on `createCopilotzGateway()` is the explicit
 tenant-authorization boundary for multi-schema HTTP routing. Request context
-cannot override the resolver. Feature actions may return `headers` alongside
-`status` and `data`; the Fetch adapter preserves those headers for JSON, 204,
-and SSE responses.
+cannot override the resolver. Actions may return `headers` alongside `status`
+and `data`; the Fetch adapter preserves those headers for JSON, 204, and SSE
+responses.
 
-`@copilotz/copilotz/server` contains only the transitional v1 projection:
-
-- `createV1FetchHandler(application, options?)`
-- `createV1SseProjector(application, options?)`
-
-The v1 SSE projection writes the projected frame `type` as the SSE `event:`
-name. Thread records preserve `name` and `description`; message history accepts
-`before`, `after`, `order`, and `limit` query parameters. Consumers that need
-renderable history request `include=content,workflow`. The response keeps
-canonical messages in `data` and adds related canonical `llmAttempts`,
-`toolExecutions`, and resolved immutable `content` under `included`; it does not
-flatten message senders, content refs, or workflow records into a legacy DTO.
+`@copilotz/copilotz/server` exposes bounded event-native server projection
+types. It does not contain a legacy route or wire-protocol adapter.
 
 ## Package exports
 
 The authoritative subpath list is `deno.json`. Public groups are application,
 capabilities, plugins, resources, content, domain, events, attachments, agents,
-llm, memory, knowledge, schedules, usage, skills, tools, channels, features,
-admin, goals, adapters, the transitional server projection, and the isolated v1
-and memory-v4 migrations.
+llm, memory, knowledge, schedules, usage, skills, tools, channels, actions,
+admin, goals, adapters, event-native server types, and isolated migrations.
 
 Internal engine assembly, delivery executors, framed Worker protocol, and raw
 workload maps are implementation details rather than package entry points. Every

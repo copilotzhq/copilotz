@@ -25,6 +25,6 @@ export function createFinanceToolsPlugin(
   return definePlugin({
     id: options.id ?? "@copilotz/finance-tools",
     version: options.version ?? "3.0.0",
-    tools: [workflowTool],
+    resources: { tools: { [workflowTool.key]: workflowTool } },
   });
 }

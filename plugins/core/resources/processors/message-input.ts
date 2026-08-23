@@ -1,4 +1,3 @@
-import type { CopilotzProcessorContext } from "@copilotz/copilotz/engine";
 import type { CollectionRecord } from "@copilotz/copilotz/collections";
 import {
   base64ToBytes,
@@ -6,8 +5,8 @@ import {
   parseDataUrl,
 } from "@copilotz/copilotz/content";
 import { defineProcessor, type Processor } from "@copilotz/copilotz/plugins";
+import type { CoreProcessorContext } from "../../context.ts";
 import { CORE_MESSAGE_INPUT_EVENT } from "../inputs/index.ts";
-import { threadMessageFeature } from "../features/thread-message.ts";
 
 const MEDIA_TYPES = new Set(["image", "audio", "video", "file"]);
 
@@ -28,7 +27,7 @@ function requireText(value: unknown, name: string): string {
 }
 
 async function resolveThreadId(
-  context: CopilotzProcessorContext,
+  context: CoreProcessorContext,
   value: unknown,
 ): Promise<string> {
   const threads = context.collections.thread;
@@ -62,7 +61,7 @@ async function resolveThreadId(
 }
 
 async function resolveParticipantId(
-  context: CopilotzProcessorContext,
+  context: CoreProcessorContext,
   value: string,
 ): Promise<string> {
   const idOrExternalId = requireText(value, "Message recipient");
@@ -80,7 +79,7 @@ async function resolveParticipantId(
 }
 
 async function resolveParticipantRecord(
-  context: CopilotzProcessorContext,
+  context: CoreProcessorContext,
   value: unknown,
 ): Promise<CollectionRecord | null> {
   const participants = context.collections.participant;
@@ -122,7 +121,7 @@ function recordStringArray(
 }
 
 async function defaultRecipientIds(
-  context: CopilotzProcessorContext,
+  context: CoreProcessorContext,
   threadId: string,
   senderInput: unknown,
 ): Promise<readonly string[]> {
@@ -145,7 +144,7 @@ async function defaultRecipientIds(
 }
 
 async function recipientIds(
-  context: CopilotzProcessorContext,
+  context: CoreProcessorContext,
   value: unknown,
   threadId: string,
   senderInput: unknown,
@@ -214,11 +213,10 @@ function contentInput(value: unknown): ContentInput | readonly ContentInput[] {
     : contentPart(value)) as ContentInput | readonly ContentInput[];
 }
 
-export const messageInputProcessor: Processor<CopilotzProcessorContext> =
-  defineProcessor<CopilotzProcessorContext>({
+export const messageInputProcessor: Processor<CoreProcessorContext> =
+  defineProcessor<CoreProcessorContext>({
     id: "copilotz.core.message-input",
     on: [{ eventType: CORE_MESSAGE_INPUT_EVENT }],
-    requires: { features: { threadMessage: threadMessageFeature } },
     async handle(event, context) {
       if (!event.durable) return;
       const input = record(event.payload);
@@ -230,19 +228,21 @@ export const messageInputProcessor: Processor<CopilotzProcessorContext> =
         },
       );
       const persisted = await context.content.materialize(content);
-      await context.features.threadMessage.create({
+      await context.actions.createThreadMessage({
         id: optionalText(input.id) ?? event.id,
         threadId,
         sender: participant(input.participant),
-        recipientIds: await recipientIds(
-          context,
-          input.recipientIds,
-          threadId,
-          input.participant,
-        ),
+        recipientIds: [
+          ...await recipientIds(
+            context,
+            input.recipientIds,
+            threadId,
+            input.participant,
+          ),
+        ],
         content: persisted,
         metadata: record(input.metadata),
-        ...(input.visibility ? { visibility: input.visibility } : {}),
+        ...(input.visibility ? { visibility: record(input.visibility) } : {}),
       }, {
         operationKey: "core-message-input",
         identity: {

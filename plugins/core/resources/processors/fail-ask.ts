@@ -5,9 +5,8 @@ import {
   withAgentAskMetadata,
   withWorkflowMetadata,
 } from "@copilotz/copilotz/events";
-import type { CopilotzProcessorContext } from "@copilotz/copilotz/engine";
 import { defineProcessor, type Processor } from "@copilotz/copilotz/plugins";
-import { threadMessageFeature } from "../features/thread-message.ts";
+import type { CoreProcessorContext } from "../../context.ts";
 import { asRecord, optionalText } from "./helpers.ts";
 
 function askFailure(
@@ -27,8 +26,8 @@ function askFailure(
   });
 }
 
-export const failAskProcessor: Processor<CopilotzProcessorContext> =
-  defineProcessor<CopilotzProcessorContext>({
+export const failAskProcessor: Processor<CoreProcessorContext> =
+  defineProcessor<CoreProcessorContext>({
     id: "copilotz.core.fail-agent-ask",
     on: [
       {
@@ -44,7 +43,6 @@ export const failAskProcessor: Processor<CopilotzProcessorContext> =
         eventType: "copilotz.core.llm.session.cancelled",
       },
     ],
-    requires: { features: { threadMessage: threadMessageFeature } },
     async handle(event, context) {
       const lifecycle = asRecord(event.data);
       const attempt = asRecord(lifecycle.input);
@@ -56,7 +54,7 @@ export const failAskProcessor: Processor<CopilotzProcessorContext> =
       }
       const cancelled = lifecycle.status === "cancelled";
       const failure = askFailure(error, ask, cancelled);
-      const projected = await context.content.prepare({
+      const projected = {
         type: "json",
         value: {
           status: cancelled ? "cancelled" : "failed",
@@ -65,8 +63,8 @@ export const failAskProcessor: Processor<CopilotzProcessorContext> =
           error: failure.message,
         },
         role: "tool.projected_output",
-      }, { operationKey: `ask:${ask.askId}:failure-output` });
-      await context.features.threadMessage.create({
+      } as const;
+      await context.actions.createThreadMessage({
         id: await deriveWorkflowId("message", ask.toolExecutionId, "result"),
         threadId: String(attempt.threadId),
         sender: {

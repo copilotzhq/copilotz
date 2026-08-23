@@ -1,248 +1,286 @@
+import type { ActionMap } from "../actions/types.ts";
+import type { CollectionDefinition } from "../collections/definition.ts";
 import type {
   DurableConsumerObligation,
   DurableEventDraft,
 } from "../events/types.ts";
 import { matchProcessor } from "./match.ts";
 import {
-  isProcessor,
   type Processor,
   processorConsumerId,
   processorIdFromConsumer,
 } from "./processor.ts";
 import {
-  type CopilotzPlugin,
-  INTERNAL_PLUGIN_RESOURCE_TYPES,
-  type PluginContextContribution,
-  type PluginContextValues,
+  type AnyCopilotzPlugin,
+  type AnyProcessor,
+  type CollectionMap,
+  type ComposePlugins,
+  freezePluginNamespaces,
+  isCopilotzPlugin,
+  type OverlayPluginNamespaces,
+  type PluginAdapters,
+  type PluginNamespaceMap,
   type PluginResources,
-  type PluginResourceType,
-  stablePluginResourceId,
+  type PluginTypeComposition,
+  type ProcessorMap,
 } from "./types.ts";
 
-function rejectStaticWildcardProcessor(value: object, id: string): void {
-  if (!isProcessor(value)) return;
+type EmptyMap = Readonly<Record<never, never>>;
+
+export type PluginComposition<
+  TCollections extends CollectionMap = CollectionMap,
+  TActions extends ActionMap = ActionMap,
+  TProcessors extends ProcessorMap = ProcessorMap,
+  TResources extends PluginResources = PluginResources,
+  TAdapters extends PluginAdapters = PluginAdapters,
+> = PluginTypeComposition<
+  TCollections,
+  TActions,
+  TProcessors,
+  TResources,
+  TAdapters
+>;
+
+export type RegistryComposition<
+  TPlugins extends readonly AnyCopilotzPlugin[],
+  TResources extends PluginResources,
+  TAdapters extends PluginAdapters,
+> = ComposePlugins<TPlugins> extends
+  infer TPluginsComposition extends PluginComposition ? PluginComposition<
+    TPluginsComposition["collections"],
+    TPluginsComposition["actions"],
+    TPluginsComposition["processors"],
+    OverlayPluginNamespaces<TPluginsComposition["resources"], TResources>,
+    OverlayPluginNamespaces<TPluginsComposition["adapters"], TAdapters>
+  >
+  : never;
+
+function rejectStaticWildcardProcessor(value: AnyProcessor): void {
   if (value.on.some((clause) => clause.eventType === "*")) {
     throw new TypeError(
-      `Processor '${id}' cannot register eventType '*' as a static resource.`,
+      `Processor '${value.id}' cannot register eventType '*' as a static definition.`,
     );
   }
 }
 
-function contextNamespaceForResourceType(
-  type: PluginResourceType,
-): string | undefined {
-  switch (type) {
-    case "agents":
-      return "agents";
-    case "tools":
-      return "tools";
-    case "llm":
-      return "llm";
-    case "api":
-      return "apis";
-    case "mcp":
-      return "mcp";
-    case "skills":
-      return "skills";
-    case "features":
-      return "featureDefinitions";
-    case "embedding":
-      return "embeddings";
-    case "memoryKinds":
-      return "memoryKinds";
-    case "channels":
-      return "channels";
-    default:
-      return undefined;
+export type PluginRegistry<
+  TComposition extends PluginComposition = PluginComposition,
+> = Readonly<{
+  plugins: readonly AnyCopilotzPlugin[];
+  collections: TComposition["collections"];
+  actions: TComposition["actions"];
+  processors: TComposition["processors"];
+  resources: TComposition["resources"];
+  adapters: TComposition["adapters"];
+  matchDurable(
+    draft: DurableEventDraft,
+    data?: unknown,
+  ): readonly AnyProcessor[];
+  durableConsumers(
+    draft: DurableEventDraft,
+    data?: unknown,
+  ): readonly DurableConsumerObligation[];
+  processorForConsumer(consumerId: string): AnyProcessor | undefined;
+}>;
+
+export type CreatePluginRegistryOptions<
+  TPlugins extends readonly AnyCopilotzPlugin[] = readonly [],
+  TResources extends PluginResources = EmptyMap,
+  TAdapters extends PluginAdapters = EmptyMap,
+> = Readonly<{
+  plugins?: TPlugins;
+  resources?: TResources;
+  adapters?: TAdapters;
+}>;
+
+function frozenRecord<T>(
+  values: ReadonlyMap<string, T>,
+): Readonly<Record<string, T>> {
+  return Object.freeze(Object.fromEntries(values));
+}
+
+function mergeNamespaces(
+  target: Map<string, Map<string, unknown>>,
+  source: PluginNamespaceMap,
+): void {
+  for (const [namespace, values] of Object.entries(source)) {
+    const entries = target.get(namespace) ?? new Map<string, unknown>();
+    target.set(namespace, entries);
+    for (const [alias, value] of Object.entries(values)) {
+      entries.set(alias, value);
+    }
   }
 }
 
-export type PluginRegistry = Readonly<{
-  plugins: readonly CopilotzPlugin[];
-  context: PluginContextValues;
-  collections: Readonly<{
-    list(): readonly object[];
-    get(id: string): object | undefined;
-    require(id: string): object;
-  }>;
-  processors: Readonly<{
-    list(): readonly Processor[];
-    get(id: string): Processor | undefined;
-    matchDurable(
-      draft: DurableEventDraft,
-      data?: unknown,
-    ): readonly Processor[];
-    durableConsumers(
-      draft: DurableEventDraft,
-      data?: unknown,
-    ): readonly DurableConsumerObligation[];
-    processorForConsumer(consumerId: string): Processor | undefined;
-  }>;
-}>;
-
-export type CreatePluginRegistryOptions = {
-  core?: CopilotzPlugin | readonly CopilotzPlugin[];
-  plugins?: readonly CopilotzPlugin[];
-  context?: PluginContextContribution;
-};
+function frozenNamespaces(
+  source: ReadonlyMap<string, ReadonlyMap<string, unknown>>,
+): PluginNamespaceMap {
+  return Object.freeze(Object.fromEntries(
+    [...source.entries()].map(([namespace, values]) => [
+      namespace,
+      frozenRecord(values),
+    ]),
+  ));
+}
 
 /**
- * Composes core, declared plugins in order, then explicit application
- * resources. A later stable ID replaces an earlier one for that resource type.
+ * Composes dependency plugins first, then root plugins in caller order, then
+ * application Resource and Adapter overlays. Executable definitions never
+ * replace one another.
  */
-export function createPluginRegistry(
-  options: CreatePluginRegistryOptions = {},
-): PluginRegistry {
-  const maps = new Map<PluginResourceType, Map<string, object>>();
-  for (const type of INTERNAL_PLUGIN_RESOURCE_TYPES) {
-    maps.set(type, new Map());
-  }
-  const contextMaps = new Map<string, Map<string, unknown>>();
-  const plugins: CopilotzPlugin[] = [];
-  const pluginIds = new Map<string, CopilotzPlugin>();
+export function createPluginRegistry<
+  const TPlugins extends readonly AnyCopilotzPlugin[] = readonly [],
+  const TResources extends PluginResources = EmptyMap,
+  const TAdapters extends PluginAdapters = EmptyMap,
+>(
+  options: CreatePluginRegistryOptions<TPlugins, TResources, TAdapters> = {},
+): PluginRegistry<RegistryComposition<TPlugins, TResources, TAdapters>> {
+  const collections = new Map<string, CollectionDefinition>();
+  const actions = new Map<string, ActionMap[string]>();
+  const processors = new Map<string, AnyProcessor>();
+  const collectionIds = new Map<string, string>();
+  const actionIds = new Map<string, string>();
+  const processorIds = new Map<string, string>();
+  const resourceNamespaces = new Map<string, Map<string, unknown>>();
+  const adapterNamespaces = new Map<string, Map<string, unknown>>();
+  const plugins: AnyCopilotzPlugin[] = [];
+  const pluginIds = new Map<string, AnyCopilotzPlugin>();
 
-  const add = (resources: PluginResources): void => {
-    for (const type of INTERNAL_PLUGIN_RESOURCE_TYPES) {
-      const values = resources[type];
-      if (!values) continue;
-      const map = maps.get(type)!;
-      for (const value of values) {
-        const id = stablePluginResourceId(type, value);
-        if (type === "processors") rejectStaticWildcardProcessor(value, id);
-        map.delete(id);
-        map.set(id, value);
+  const addDefinitions = <T extends object>(
+    kind: "collection" | "action" | "processor",
+    definitions: Readonly<Record<string, T>>,
+    aliases: Map<string, T>,
+    stableIds: Map<string, string>,
+    stableId: (definition: T) => string,
+  ): void => {
+    for (const [alias, definition] of Object.entries(definitions)) {
+      const existingAlias = aliases.get(alias);
+      if (existingAlias) {
+        throw new TypeError(
+          `${kind[0].toUpperCase()}${
+            kind.slice(1)
+          } alias '${alias}' is declared by more than one plugin.`,
+        );
       }
-    }
-  };
-
-  const addResourceContext = (resources: PluginResources): void => {
-    for (const type of INTERNAL_PLUGIN_RESOURCE_TYPES) {
-      const namespace = contextNamespaceForResourceType(type);
-      if (!namespace) continue;
-      const values = resources[type];
-      if (!values) continue;
-      const map = contextMaps.get(namespace) ?? new Map<string, unknown>();
-      contextMaps.set(namespace, map);
-      for (const value of values) {
-        map.set(stablePluginResourceId(type, value), value);
+      const id = stableId(definition).trim();
+      const existingIdAlias = stableIds.get(id);
+      if (existingIdAlias) {
+        throw new TypeError(
+          `${kind[0].toUpperCase()}${
+            kind.slice(1)
+          } id '${id}' is exposed as both '${existingIdAlias}' and '${alias}'.`,
+        );
       }
-    }
-  };
-
-  const addContext = (context: PluginContextContribution): void => {
-    for (const [namespace, values] of Object.entries(context)) {
-      const map = contextMaps.get(namespace) ?? new Map<string, unknown>();
-      contextMaps.set(namespace, map);
-      for (const [key, value] of Object.entries(values)) {
-        map.set(key, value);
-      }
+      aliases.set(alias, definition);
+      stableIds.set(id, alias);
     }
   };
 
   const register = (
-    pluginInput: CopilotzPlugin,
-    resources = pluginInput.resources,
+    plugin: AnyCopilotzPlugin,
     stack: readonly string[] = [],
-  ): CopilotzPlugin => {
-    const plugin = pluginInput;
-    const id = plugin.manifest.id;
-    if (stack.includes(id)) {
+  ): void => {
+    if (!isCopilotzPlugin(plugin)) {
       throw new TypeError(
-        `Plugin dependency cycle detected: ${[...stack, id].join(" -> ")}.`,
+        "Registry plugins must be created with definePlugin().",
       );
     }
-    const existing = pluginIds.get(id);
-    if (existing) {
-      if (existing === plugin) return existing;
+    if (stack.includes(plugin.id)) {
       throw new TypeError(
-        `Plugin '${id}' was declared more than once.`,
+        `Plugin dependency cycle detected: ${
+          [...stack, plugin.id].join(" -> ")
+        }.`,
       );
+    }
+    const existing = pluginIds.get(plugin.id);
+    if (existing) {
+      if (existing === plugin) return;
+      throw new TypeError(`Plugin '${plugin.id}' was declared more than once.`);
     }
     for (const dependency of plugin.plugins) {
-      register(dependency, dependency.resources, [...stack, id]);
+      register(dependency, [...stack, plugin.id]);
     }
-    pluginIds.set(id, plugin);
+    pluginIds.set(plugin.id, plugin);
     plugins.push(plugin);
-    add(resources);
-    addResourceContext(resources);
-    addContext(plugin.context);
-    return plugin;
+    addDefinitions(
+      "collection",
+      plugin.collections,
+      collections,
+      collectionIds,
+      (definition) => definition.name,
+    );
+    addDefinitions(
+      "action",
+      plugin.actions,
+      actions,
+      actionIds,
+      (definition) => definition.id,
+    );
+    for (const processor of Object.values(plugin.processors)) {
+      rejectStaticWildcardProcessor(processor);
+    }
+    addDefinitions(
+      "processor",
+      plugin.processors,
+      processors,
+      processorIds,
+      (definition) => definition.id,
+    );
+    mergeNamespaces(resourceNamespaces, plugin.resources);
+    mergeNamespaces(adapterNamespaces, plugin.adapters);
   };
-
-  const corePlugins = options.core
-    ? Array.isArray(options.core) ? options.core : [options.core]
-    : [];
-  for (const plugin of corePlugins) register(plugin);
 
   for (const plugin of options.plugins ?? []) register(plugin);
 
-  if (options.context) {
-    addContext(options.context);
-  }
+  mergeNamespaces(
+    resourceNamespaces,
+    freezePluginNamespaces(options.resources, "Application resources"),
+  );
+  mergeNamespaces(
+    adapterNamespaces,
+    freezePluginNamespaces(options.adapters, "Application adapters"),
+  );
 
-  const context = Object.freeze(Object.fromEntries(
-    [...contextMaps.entries()].map(([namespace, values]) => [
-      namespace,
-      Object.freeze(Object.fromEntries(values.entries())),
-    ]),
-  )) as PluginContextValues;
-
-  const listProcessors = (): readonly Processor[] =>
-    [...maps.get("processors")!.values()].filter(isProcessor);
-
+  const frozenProcessors = frozenRecord(processors);
+  const processorById = new Map(
+    Object.values(frozenProcessors).map((
+      processor,
+    ) => [processor.id, processor]),
+  );
   const matchDurable = (
     draft: DurableEventDraft,
     data?: unknown,
-  ): readonly Processor[] =>
+  ): readonly AnyProcessor[] =>
     Object.freeze(
-      listProcessors().filter((processor) =>
-        matchProcessor(processor, draft, data)
-      ),
-    );
-
-  const durableConsumers = (
-    draft: DurableEventDraft,
-    data?: unknown,
-  ): readonly DurableConsumerObligation[] =>
-    Object.freeze(
-      matchDurable(draft, data).map((processor) =>
-        Object.freeze({
-          consumerId: processorConsumerId(processor.id),
-          settlement: processor.settlement ?? "inherit",
-        })
+      Object.values(frozenProcessors).filter((processor) =>
+        matchProcessor(processor as Processor, draft, data)
       ),
     );
 
   const registry: PluginRegistry = {
     plugins: Object.freeze([...plugins]),
-    context,
-    collections: Object.freeze({
-      list(): readonly object[] {
-        return Object.freeze([...maps.get("collections")!.values()]);
-      },
-      get(id: string): object | undefined {
-        return maps.get("collections")!.get(id);
-      },
-      require(id: string): object {
-        const value = maps.get("collections")!.get(id);
-        if (!value) throw new Error(`Unknown collection '${id}'.`);
-        return value;
-      },
-    }),
-    processors: Object.freeze({
-      list: listProcessors,
-      get(id: string): Processor | undefined {
-        const value = maps.get("processors")!.get(id);
-        return isProcessor(value) ? value : undefined;
-      },
-      matchDurable,
-      durableConsumers,
-      processorForConsumer(consumerId) {
-        const id = processorIdFromConsumer(consumerId);
-        const value = id ? maps.get("processors")!.get(id) : undefined;
-        return isProcessor(value) ? value : undefined;
-      },
-    }),
+    collections: frozenRecord(collections),
+    actions: frozenRecord(actions),
+    processors: frozenProcessors,
+    resources: frozenNamespaces(resourceNamespaces),
+    adapters: frozenNamespaces(adapterNamespaces),
+    matchDurable,
+    durableConsumers(draft, data) {
+      return Object.freeze(
+        matchDurable(draft, data).map((processor) =>
+          Object.freeze({
+            consumerId: processorConsumerId(processor.id),
+            settlement: processor.settlement ?? "inherit",
+          })
+        ),
+      );
+    },
+    processorForConsumer(consumerId) {
+      const id = processorIdFromConsumer(consumerId);
+      return id ? processorById.get(id) : undefined;
+    },
   };
-  return Object.freeze(registry);
+  return Object.freeze(registry) as PluginRegistry<
+    RegistryComposition<TPlugins, TResources, TAdapters>
+  >;
 }

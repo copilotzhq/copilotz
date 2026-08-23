@@ -4,9 +4,14 @@ import {
   withAgentAskMetadata,
   workflowMetadata,
 } from "@copilotz/copilotz/events";
-import type { CopilotzProcessorContext } from "@copilotz/copilotz/engine";
 import { defineProcessor, type Processor } from "@copilotz/copilotz/plugins";
+import { isSettledActionError } from "@copilotz/copilotz/actions";
 import { agentUsesSessionRuntime } from "@copilotz/copilotz/agents";
+import {
+  coreAgent,
+  type CoreProcessorContext,
+  coreWorkflowContext,
+} from "../../context.ts";
 import {
   asRecord,
   collectionEventRecord,
@@ -18,15 +23,12 @@ import {
   stringArray,
   toolCatalogFor,
 } from "./helpers.ts";
-import { llmFeature } from "../features/llm.ts";
-import { isSettledFeatureActionError } from "@copilotz/copilotz/features";
-
-export const messageRouterProcessor: Processor<CopilotzProcessorContext> =
-  defineProcessor<CopilotzProcessorContext>({
+export const messageRouterProcessor: Processor<CoreProcessorContext> =
+  defineProcessor<CoreProcessorContext>({
     id: "copilotz.core.message-to-text-attempt",
     on: [{ eventType: "message.created" }],
-    requires: { features: { llm: llmFeature } },
     async handle(event, context) {
+      const workflowContext = coreWorkflowContext(context);
       if (!event.routing?.recipientIds?.length) return;
       if (!event.durable || !event.threadId) return;
       const record = collectionEventRecord(event);
@@ -55,18 +57,18 @@ export const messageRouterProcessor: Processor<CopilotzProcessorContext> =
         const participant = await loadParticipant(context, recipientId);
         if (!participant || participant.participantType !== "agent") continue;
         const agentId = participantAgentId(participant);
-        const agent = context.agents[agentId];
+        const agent = coreAgent(context.resources, agentId);
         if (!agent) continue;
         const useSession = agentUsesSessionRuntime(agent);
         const options = policyOptions(agent);
-        const toolCatalog = toolCatalogFor(context, agent);
-        const available = await toolCatalog.forAgent(context, agent);
+        const toolCatalog = toolCatalogFor(agent);
+        const available = await toolCatalog.forAgent(workflowContext, agent);
         const tools = options.resolveAgentTools
           ? await options.resolveAgentTools({
             agent,
             tools: available,
             sourceEvent: event,
-            context,
+            context: workflowContext,
           })
           : available;
         const availableIds = new Set(available.map((tool) => tool.key));
@@ -120,8 +122,8 @@ export const messageRouterProcessor: Processor<CopilotzProcessorContext> =
           sourceEvent: event,
         };
         const action = useSession
-          ? context.features.llm.session
-          : context.features.llm.generate;
+          ? context.actions.runLlmSession
+          : context.actions.generateLlm;
         try {
           await action(input, {
             operationKey: `route:${continuationKey}`,
@@ -131,7 +133,7 @@ export const messageRouterProcessor: Processor<CopilotzProcessorContext> =
             },
           });
         } catch (error) {
-          if (!isSettledFeatureActionError(error)) throw error;
+          if (!isSettledActionError(error)) throw error;
         }
       }
     },

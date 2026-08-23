@@ -79,7 +79,9 @@ export async function createCopilotzEngine(
   const ownsEventHub = options.eventHub === undefined;
 
   const configuredTransients = () =>
-    createTransientProcessorSet(options.transientProcessors ?? []);
+    createTransientProcessorSet(
+      (options.transientProcessors ?? []) as readonly Processor[],
+    );
   const transientsBySchema = new Map<
     string,
     ReturnType<typeof createTransientProcessorSet>

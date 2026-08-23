@@ -39,7 +39,11 @@ export function createSkillsPlugin(
   return definePlugin({
     id: options.id ?? "@copilotz/skills",
     version: options.version ?? "0.57.0",
-    skills,
-    ...(tools.length ? { tools } : {}),
+    resources: {
+      skills: Object.fromEntries(skills.map((skill) => [skill.name, skill])),
+      ...(tools.length
+        ? { tools: Object.fromEntries(tools.map((tool) => [tool.key, tool])) }
+        : {}),
+    },
   });
 }

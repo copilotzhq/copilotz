@@ -32,20 +32,20 @@ const mcpServer: MCPServer = {
 
 function catalogContext(resources: TestRegistry) {
   return Object.freeze({
-    agents: (resources.context.agents ?? Object.freeze({})) as Record<
+    agents: (resources.resources.agents ?? Object.freeze({})) as Record<
       string,
       Agent | undefined
     >,
     skills: Object.freeze({}),
-    tools: (resources.context.tools ?? Object.freeze({})) as Record<
+    tools: (resources.resources.tools ?? Object.freeze({})) as Record<
       string,
       WorkflowTool | undefined
     >,
-    apis: (resources.context.apis ?? Object.freeze({})) as Record<
+    apis: (resources.resources.apis ?? Object.freeze({})) as Record<
       string,
       API | undefined
     >,
-    mcp: (resources.context.mcp ?? Object.freeze({})) as Record<
+    mcp: (resources.resources.mcp ?? Object.freeze({})) as Record<
       string,
       MCPServer | undefined
     >,
@@ -57,9 +57,11 @@ Deno.test("worker-local tool catalog caches descriptors and keeps explicit-tool 
   const plugin = definePlugin({
     id: "contract.catalog",
     version: "1.0.0",
-    tools: [explicit],
-    api: [api],
-    mcp: [mcpServer],
+    resources: {
+      tools: { [explicit.key]: explicit },
+      apis: { [api.id]: api },
+      mcp: { [mcpServer.id]: mcpServer },
+    },
   });
   const resources = catalogContext(
     await createPluginRegistry({ plugins: [plugin] }),
@@ -135,7 +137,7 @@ Deno.test("worker-local tool catalog installs tools without ambient agent grants
   const plugin = definePlugin({
     id: "contract.static-catalog",
     version: "1.0.0",
-    tools: [explicit],
+    resources: { tools: { [explicit.key]: explicit } },
   });
   const resources = catalogContext(
     await createPluginRegistry({ plugins: [plugin] }),

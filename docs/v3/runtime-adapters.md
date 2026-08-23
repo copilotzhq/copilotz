@@ -122,15 +122,9 @@ maps `Request` values into the transport-neutral application, preserves raw
 channel bytes, and passes native streaming `Response` values through. The
 internal adapter serializes semantic attachment output incrementally as SSE,
 honors pull backpressure, omits raw media streams from JSON frames, and
-propagates response cancellation to channel execution. `createV1SseProjector()`
-is the first-party v1 edge: it maps canonical deltas and public messages to
-uppercase compatibility frames while preserving media and oversized content as
-configurable asset links. The internal route projection keeps transitional
-`providers` → `channels` and `admin` → `features/admin` aliases at that same
-boundary, while `createV1FetchHandler()` composes those aliases, the `/v1` base
-path, and SSE projection in one factory. The same handler can therefore be
-mounted by Deno, Node, Bun, browser service workers, or Cloudflare workers
-without bringing a framework or runtime API into the core.
+propagates response cancellation to channel execution. The same Fetch handler
+can be mounted by Deno, Node, Bun, browser service workers, or Cloudflare
+workers without bringing a framework or transport API into the runtime core.
 
 Plugin package loading is not a runtime adapter. The embedding application uses
 its own module system to import plugin values, then passes concrete plugins to

@@ -119,6 +119,6 @@ export function createWebChannelPlugin(
   return definePlugin({
     id: options.pluginId?.trim() || "@copilotz/channel-web",
     version: options.version?.trim() || "3.0.0",
-    channels: [channel],
+    resources: { channels: { [channel.id]: channel } },
   });
 }

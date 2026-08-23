@@ -121,7 +121,7 @@ Deno.test("static processor uses frozen event body and captures input in a child
     plugins: [definePlugin({
       id: "test.phase-5",
       version: "1.0.0",
-      processors: [processor, ignored],
+      processors: { observer: processor, ignored },
     })],
   });
   const executor = createDeliveryExecutor({

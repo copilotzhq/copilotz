@@ -11,14 +11,14 @@ mutation delta/reference, and creation time. They do not have processing status.
 Common facts include:
 
 - `message.created`
-- `<featureId>.<action>.invoked|completed|failed|cancelled`
+- `<actionId>.invoked|progress|completed|failed|cancelled`
 - `<collection>.created`, `<collection>.updated`, `<collection>.deleted`
 
 Runtime-native stream output is published live and never inserted into the
 events table. It carries ordered bytes through logical lanes such as content,
 reasoning, tool calls, stdout, stderr, progress, and result. The corresponding
-Feature Action lifecycle owns durable execution settlement; final values and
-semantic messages remain asset-backed durable content.
+Action lifecycle owns durable execution settlement; final values and semantic
+messages remain asset-backed durable content.
 
 ## Durable deliveries
 
@@ -52,9 +52,9 @@ when calling non-idempotent systems.
 
 Application `send(...).done` waits for deliveries in its explicit settlement
 scope, not every causally related event or every event sharing a correlation ID.
-Durable processor work inherits its triggering scope by default.
-A processor can declare `settlement: "detached"` to fork a durable, recoverable
-scope whose completion and failure do not block the caller.
+Durable processor work inherits its triggering scope by default. A processor can
+declare `settlement: "detached"` to fork a durable, recoverable scope whose
+completion and failure do not block the caller.
 
 Causation remains unchanged across a detached boundary, so provenance and
 debugging still lead back to the triggering message. Descendant mutations

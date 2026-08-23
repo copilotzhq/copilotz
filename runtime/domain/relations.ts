@@ -175,7 +175,7 @@ function uniqueJsonValues(values: readonly unknown[]): readonly unknown[] {
  * Projects a graph relation inside an already-open aggregate transaction.
  *
  * This does not emit a separate `relation.created` event. It is for Collection
- * or Feature transactions whose parent event owns the semantic mutation.
+ * or Action transactions whose parent event owns the semantic mutation.
  */
 export async function projectDomainRelation(
   transaction: SqlExecutor,

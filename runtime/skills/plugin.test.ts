@@ -145,19 +145,24 @@ Deno.test("skills plugins own disclosure tools and preserve stable-ID overrides"
     version: "1.0.0",
     skills: [replacement],
   });
-  assertEquals(base.manifest.provides.tools, ["list_skills", "load_skill"]);
-  assertEquals(overriding.manifest.provides.tools, [...SKILL_TOOL_IDS]);
+  assertEquals(Object.keys(base.resources.tools ?? {}), [
+    "list_skills",
+    "load_skill",
+  ]);
+  assertEquals(Object.keys(overriding.resources.tools ?? {}), [
+    ...SKILL_TOOL_IDS,
+  ]);
 
   const registry = await createPluginRegistry({
     plugins: [base, overriding],
   });
   assertEquals(
-    (registry.context.skills["portable-skill"] as { description: string })
+    (registry.resources.skills["portable-skill"] as { description: string })
       .description,
     "Replacement instructions for portable runtime behavior.",
   );
   assertEquals(
-    Object.keys(registry.context.tools),
+    Object.keys(registry.resources.tools),
     [...SKILL_TOOL_IDS],
   );
 });

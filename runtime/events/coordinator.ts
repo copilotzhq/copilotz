@@ -138,7 +138,7 @@ export function createEventCoordinator(
     // Durable filters are synchronous so the complete obligation set is known
     // before entering the database transaction.
     const enableDispatch = mutation.dispatch !== false;
-    const consumers = options.registry.processors.durableConsumers(
+    const consumers = options.registry.durableConsumers(
       mutation.draft,
       mutation.matchData,
     );

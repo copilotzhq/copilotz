@@ -5,14 +5,17 @@ import { createWebToolsPlugin, WEB_TOOL_IDS } from "./web-plugin.ts";
 
 Deno.test("Web tools compose as stable plugin resources", () => {
   const plugin = createWebToolsPlugin();
-  assertEquals(plugin.manifest.provides.tools, [...WEB_TOOL_IDS]);
+  const tools = plugin.resources.tools as
+    | Readonly<Record<string, WorkflowTool>>
+    | undefined;
+  assertEquals(Object.keys(tools ?? {}), [...WEB_TOOL_IDS]);
   assertEquals(
-    plugin.resources.tools?.map((value) => (value as WorkflowTool).key),
+    Object.values(tools ?? {}).map((value) => value.key),
     [...WEB_TOOL_IDS],
   );
   assert(
-    plugin.resources.tools?.every((value) =>
-      typeof (value as WorkflowTool).execute === "function" &&
+    Object.values(tools ?? {}).every((value) =>
+      typeof value.execute === "function" &&
       Object.isFrozen(value)
     ),
   );
@@ -20,7 +23,9 @@ Deno.test("Web tools compose as stable plugin resources", () => {
 
 Deno.test("Web tool selection is explicit and validated", () => {
   assertEquals(
-    createWebToolsPlugin({ include: ["fetch_text"] }).manifest.provides.tools,
+    Object.keys(
+      createWebToolsPlugin({ include: ["fetch_text"] }).resources.tools ?? {},
+    ),
     ["fetch_text"],
   );
   assertThrows(

@@ -139,11 +139,9 @@ export async function createCopilotzGateway(
     application = await createCopilotzApplication({
       namespace: options.namespace,
       databaseSchema: options.databaseSchema,
-      core: options.core,
-      canonicalCore: options.canonicalCore,
       plugins: options.plugins,
-      context: options.context,
-      toolCatalog: options.toolCatalog,
+      resources: options.resources,
+      adapters: options.adapters,
       assets: options.assets,
       database: persistence.database,
       engine: {

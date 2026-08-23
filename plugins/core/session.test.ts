@@ -74,8 +74,8 @@ async function createFixture(session: LlmSession): Promise<Fixture> {
   const app = definePlugin({
     id: "test.session-workflow.resources",
     version: "1.0.0",
-    agents: [echoAgent],
-    llm: [provider],
+    resources: { agents: { echo: echoAgent } },
+    adapters: { llm: { openai: provider } },
   });
   const registry = await createPluginRegistry({
     plugins: [corePlugin, app],

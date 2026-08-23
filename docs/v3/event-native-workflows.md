@@ -12,7 +12,7 @@ status: superseded
 > Actions that emit generic persisted lifecycle Event Bodies whose terminal
 > transitions repeat the input and carry the output or safe error directly to
 > Processors. Provider retry accounting stays in the parent LLM Action output
-> unless it is a deliberately declared Feature. See
+> unless it is a deliberately declared Action. See
 > [durable-actions](durable-actions.md). This document remains only as
 > historical context for the workflow behavior that 10D7 must preserve while
 > deleting the specialized Collections.

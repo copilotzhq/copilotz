@@ -1,4 +1,3 @@
-import { coreFeatureAliases } from "@copilotz/copilotz/plugins/core";
 import { assert, assertEquals, assertExists } from "@std/assert";
 
 import { createTestDatabase, type TestDatabase } from "../testing/ominipg.ts";
@@ -21,10 +20,13 @@ import {
   projectThreads,
 } from "../../runtime/testing/projections.ts";
 import {
+  createScheduledJob,
   createScheduledJobsPlugin,
   getNextScheduledRunAt,
+  getScheduledJob,
+  listScheduledJobs,
   scheduledJobCollection,
-  scheduledJobsLifecycleFeature,
+  updateScheduledJob,
 } from "./index.ts";
 
 const NAMESPACE = "tenant-schedules";
@@ -41,20 +43,14 @@ Deno.test("scheduled due transition atomically advances and dispatches one publi
     database: db,
     namespace: NAMESPACE,
     databaseSchema: "copilotz_v3_schedules",
-    core: false,
-    canonicalCore: [coreCollectionsPlugin],
-    plugins: [createScheduledJobsPlugin()],
-    context: { agents: { [agent.id]: agent } },
+    plugins: [coreCollectionsPlugin, createScheduledJobsPlugin()],
+    resources: { agents: { support: agent } },
     engine: { now: () => BASE },
   });
   try {
-    const scheduleContext = createTestDomainContext(
-      application,
-      NAMESPACE,
-      {},
-      { now: () => BASE },
-    );
-    const lifecycle = scheduleContext.feature(scheduledJobsLifecycleFeature);
+    const scheduleContext = createTestDomainContext(application, NAMESPACE, {
+      now: () => BASE,
+    });
     const createdContent = await application.content.preparer.prepare([
       "Prepare the brief",
       {
@@ -67,7 +63,7 @@ Deno.test("scheduled due transition atomically advances and dispatches one publi
       namespace: NAMESPACE,
       idempotencyKey: "schedule-create-a:content",
     });
-    const created = await lifecycle.create({
+    const created = await createScheduledJob({
       id: "morning-brief",
       name: "Morning brief",
       schedule: {
@@ -80,9 +76,7 @@ Deno.test("scheduled due transition atomically advances and dispatches one publi
         content: createdContent,
         metadata: { source: "schedule-test" },
       },
-    }, {
-      operationKey: "schedule-create-a",
-    });
+    }, scheduleContext);
     assertExists(created);
     assertEquals(created.nextRunAt, "2026-01-01T00:01:00.000Z");
     assertEquals(created.run.content.length, 2);
@@ -97,7 +91,10 @@ Deno.test("scheduled due transition atomically advances and dispatches one publi
     assertEquals(tick.failed, 0);
     assertEquals(tick.jobs[0].occurrenceId, "morning-brief:1767225660000");
 
-    const updated = await lifecycle.get({ id: "morning-brief" });
+    const updated = await getScheduledJob(
+      { id: "morning-brief" },
+      scheduleContext,
+    );
     assertExists(updated);
     assertEquals(updated.lastRunAt, "2026-01-01T00:01:00.000Z");
     assertEquals(updated.nextRunAt, "2026-01-01T00:02:00.000Z");
@@ -178,8 +175,8 @@ Deno.test("scheduled due transition atomically advances and dispatches one publi
       2,
     );
 
-    const commanded = await scheduleContext.collection(scheduledJobCollection)
-      .commands.due({
+    const commanded = await scheduleContext.collections.scheduledJob.commands
+      .due({
         id: "morning-brief",
         mode: "scheduled",
         scheduledFor: "2026-01-01T00:02:00.000Z",
@@ -214,7 +211,9 @@ Deno.test("scheduled_jobs tool uses scoped capabilities for the complete lifecyc
     on: [{ eventType: "fixture.scheduled_jobs.requested" }],
     async handle(event, processor) {
       if (!event.durable) return;
-      const tool = processor.tools.scheduled_jobs as WorkflowTool | undefined;
+      const tool = processor.resources.tools?.scheduled_jobs as
+        | WorkflowTool
+        | undefined;
       if (!tool) throw new Error("Unknown tool 'scheduled_jobs'.");
       const context: WorkflowToolExecutionContext = {
         namespace: processor.namespace,
@@ -244,24 +243,24 @@ Deno.test("scheduled_jobs tool uses scoped capabilities for the complete lifecyc
   const fixturePlugin = definePlugin({
     id: "fixture.scheduled-jobs-tool",
     version: "1.0.0",
-    processors: [driver],
+    processors: { driver },
   });
   const application = await createCopilotzApplication({
     database: db,
     databaseSchema: "copilotz_v3_schedule_tool",
-    core: false,
-    canonicalCore: [coreCollectionsPlugin],
-    plugins: [createScheduledJobsPlugin(), fixturePlugin],
-    context: { agents: { [agent.id]: agent } },
+    plugins: [
+      coreCollectionsPlugin,
+      createScheduledJobsPlugin(),
+      fixturePlugin,
+    ],
+    resources: { agents: { support: agent } },
     engine: { now: () => BASE },
   });
   try {
-    await createTestDomainContext(application, NAMESPACE, coreFeatureAliases)
-      .features.thread
-      .create({
-        id: "thread-tool",
-        externalId: "thread-tool",
-      });
+    await createTestDomainContext(application, NAMESPACE).actions.createThread({
+      id: "thread-tool",
+      externalId: "thread-tool",
+    });
     const invoke = async (payload: Record<string, unknown>) => {
       const appended = await application.events.append({
         type: "fixture.scheduled_jobs.requested",
@@ -354,27 +353,17 @@ Deno.test("scheduled lifecycle and concurrent ticks remain tenant scoped and lea
   const application = await createCopilotzApplication({
     database: db,
     databaseSchema: "copilotz_v3_schedule_lifecycle",
-    core: false,
-    canonicalCore: [coreCollectionsPlugin],
-    plugins: [createScheduledJobsPlugin()],
-    context: { agents: { [agent.id]: agent } },
+    plugins: [coreCollectionsPlugin, createScheduledJobsPlugin()],
+    resources: { agents: { support: agent } },
     engine: { now: () => BASE },
   });
   try {
-    const tenantA = createTestDomainContext(
-      application,
-      "tenant-a",
-      {},
-      { now: () => BASE },
-    )
-      .feature(scheduledJobsLifecycleFeature);
-    const tenantB = createTestDomainContext(
-      application,
-      "tenant-b",
-      {},
-      { now: () => BASE },
-    )
-      .feature(scheduledJobsLifecycleFeature);
+    const tenantA = createTestDomainContext(application, "tenant-a", {
+      now: () => BASE,
+    });
+    const tenantB = createTestDomainContext(application, "tenant-b", {
+      now: () => BASE,
+    });
     const contentA = await application.content.preparer.prepare("Run A", {
       namespace: "tenant-a",
       idempotencyKey: "job-a:content",
@@ -383,19 +372,22 @@ Deno.test("scheduled lifecycle and concurrent ticks remain tenant scoped and lea
       namespace: "tenant-b",
       idempotencyKey: "job-b:content",
     });
-    await tenantA.create({
+    await createScheduledJob({
       id: "job-a",
       name: "Job A",
       schedule: { type: "cron", expression: "* * * * *" },
       run: { recipientIds: [agent.id], content: contentA },
-    }, { operationKey: "job-a:create" });
-    await tenantB.create({
+    }, tenantA);
+    await createScheduledJob({
       id: "job-b",
       name: "Job B",
       schedule: { type: "cron", expression: "* * * * *" },
       run: { recipientIds: [agent.id], content: contentB },
-    }, { operationKey: "job-b:create" });
-    const paused = await tenantB.pause({ id: "job-b" });
+    }, tenantB);
+    const paused = await updateScheduledJob({
+      id: "job-b",
+      patch: { status: "paused" },
+    }, tenantB);
     assertEquals(paused.status, "paused");
     assertEquals(
       (await application.schedules.tick({
@@ -404,7 +396,10 @@ Deno.test("scheduled lifecycle and concurrent ticks remain tenant scoped and lea
       })).claimed,
       0,
     );
-    const resumed = await tenantB.resume({ id: "job-b" });
+    const resumed = await updateScheduledJob({
+      id: "job-b",
+      patch: { status: "active" },
+    }, tenantB);
     assertEquals(resumed.status, "active");
     assert(
       (resumed.nextRunAtMs ?? 0) > BASE.getTime(),
@@ -423,14 +418,17 @@ Deno.test("scheduled lifecycle and concurrent ticks remain tenant scoped and lea
     ]);
     assertEquals(left.dispatched + right.dispatched, 1);
     assertEquals(
-      (await tenantA.list({})).map((value) => value.id),
+      (await listScheduledJobs({}, tenantA)).map((value) => value.id),
       ["job-a"],
     );
     assertEquals(
-      (await tenantB.list({})).map((value) => value.id),
+      (await listScheduledJobs({}, tenantB)).map((value) => value.id),
       ["job-b"],
     );
-    const cancelled = await tenantB.cancel({ id: "job-b" });
+    const cancelled = await updateScheduledJob({
+      id: "job-b",
+      patch: { status: "cancelled" },
+    }, tenantB);
     assertEquals(cancelled.status, "cancelled");
     assertEquals(cancelled.nextRunAt, null);
   } finally {

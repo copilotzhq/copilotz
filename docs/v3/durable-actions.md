@@ -1,6 +1,6 @@
 ---
 title: Copilotz v3 Durable Actions
-description: Persisted action lifecycle events for Features, LLM calls, tools, and other executable work.
+description: Persisted lifecycle events for plugin-owned executable work.
 section: Internal Design
 status: implementation
 ---
@@ -10,31 +10,34 @@ status: implementation
 Copilotz separates durable meaning from durable execution.
 
 - **Collections** own semantic graph state and emit persisted mutation events.
-- **Actions** are Feature executions and emit persisted lifecycle events.
-- **Processors** receive committed events and may call Features or mutate
+- **Actions** are executable plugin capabilities and emit persisted lifecycle
+  events.
+- **Processors** receive committed events and may call Actions or mutate
   Collections.
 
-Action is not a fourth plugin declaration kind and has no separate invocation
-API. Calling `context.feature(definition).action(input)` executes that Feature
-action immediately through the runtime-owned lifecycle below.
+Each Action is registered once under a plugin alias. Calling
+`context.actions.<alias>(input)` executes it immediately through the
+runtime-owned lifecycle below.
 
 ## Canonical lifecycle
 
-For Feature `F` and action `A`, runtime derives exactly this event family:
+For Action ID `A`, runtime derives exactly this event family:
 
 ```text
-<F.id>.<A>.invoked
-<F.id>.<A>.completed
-<F.id>.<A>.failed
-<F.id>.<A>.cancelled
+<A>.invoked
+<A>.progress
+<A>.completed
+<A>.failed
+<A>.cancelled
 ```
 
 There is no separate `started` state. Placement, delivery leases, and worker
 attempts are runtime infrastructure rather than public Action vocabulary.
 
 The lifecycle is independent of `inputSchema` and `outputSchema`. Those schemas
-only provide optional validation and type inference. Runtime persists input and
-output for every action call whether schemas exist or not.
+only provide optional runtime validation. TypeScript input, output, and context
+types come from the Action's `execute` signature. Runtime persists input and
+output for every Action call whether schemas exist or not.
 
 ## Self-contained Event Bodies
 
@@ -91,9 +94,9 @@ queue command that asks another Processor to execute the same action:
 
 ```text
 Processor receives prior event
-  -> calls Feature action
+  -> calls context.actions.<alias>(input)
      -> runtime commits <action>.invoked { input }
-     -> Feature executes immediately
+     -> Action executes immediately
      -> runtime commits one terminal event { input, output | error }
 ```
 
@@ -107,20 +110,20 @@ operational Collection.
 Action events and are deleted in Phase 10D7:
 
 ```text
-LLM generation/session       -> LLM Feature lifecycle
-tool execution               -> Tool Feature lifecycle
+LLM generation/session       -> LLM Action lifecycle
+tool execution               -> Tool Action lifecycle
 ```
 
-Provider retries and fallbacks performed inside one LLM Feature action are
+Provider retries and fallbacks performed inside one LLM Action are
 attempt-accounting entries in that Action's terminal output, not synthetic child
 Actions. A provider call receives its own lifecycle only when a plugin actually
-declares and invokes it as a Feature action.
+declares and invokes it as an Action.
 
 Messages remain a semantic Collection because they are the durable transcript
 used to reconstruct threads and conversations. A Processor interested in one
-particular Feature result may consume its `.completed` event. A Processor that
+particular Action result may consume its `.completed` event. A Processor that
 must react whenever a semantic record changes consumes the Collection event,
-regardless of which Feature or caller performed the mutation.
+regardless of which Action or caller performed the mutation.
 
 Final assistant messages, tool-visible messages, Assets, usage records, and
 other durable business meaning remain in their owning Collections. Their
@@ -128,11 +131,11 @@ production may be driven by self-contained Action terminal events.
 
 ## Query boundary
 
-Normal Feature and Processor contexts expose neither `context.actions` nor a
-generic event-history reader. A Processor already receives its triggering event
-and resolved `event.data`. Recurring semantic reads use Collection queries;
+Action and Processor contexts expose the same composed Action aliases under
+`context.actions`. A Processor already receives its triggering event and
+resolved `event.data`. Recurring semantic reads use Collection queries;
 plugin-owned projections may be built by Processors when a real domain requires
-them.
+them. There is no separate ActionRun projection API.
 
 The EventStore remains runtime infrastructure for persistence, delivery,
 deduplication, replay, and private retry recovery. It may recognize a previously

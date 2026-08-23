@@ -1,19 +1,15 @@
 import type { CollectionRecord } from "@copilotz/copilotz/collections";
 import type { Agent } from "@copilotz/copilotz/resources";
-import type { CopilotzProcessorContext } from "@copilotz/copilotz/engine";
 import type { CopilotzEvent } from "@copilotz/copilotz/events";
 import {
-  defineFeature,
-  type FeatureAction,
-  type FeatureDefinition,
-  type FeatureExecuteContext,
-} from "@copilotz/copilotz/features";
+  type ActionDefinition,
+  defineAction,
+} from "@copilotz/copilotz/actions";
 import {
   agentSessionBaseConfig,
   agentTextBaseConfig,
   agentUsesSessionRuntime,
   buildAgentTextPrompt,
-  requireAgent,
   staticAgentSessionConfig,
   staticAgentTextConfig,
 } from "@copilotz/copilotz/agents";
@@ -32,6 +28,11 @@ import {
   sessionChainFromResources,
 } from "@copilotz/copilotz/llm";
 import {
+  type CoreActionContext,
+  coreWorkflowContext,
+  requireCoreAgent,
+} from "../../context.ts";
+import {
   asRecord,
   errorText,
   loadParticipant,
@@ -43,17 +44,18 @@ import {
   toolCatalogFor,
 } from "../processors/helpers.ts";
 
-export const LLM_FEATURE_ID = "copilotz.core.llm";
+export const GENERATE_LLM_ACTION_ID = "copilotz.core.llm.generate";
+export const RUN_LLM_SESSION_ACTION_ID = "copilotz.core.llm.session";
 
 const utf8 = new TextEncoder();
 const activeSessions = new WeakMap<object, Set<string>>();
 
 function acquireSession(
-  context: FeatureExecuteContext,
+  context: CoreActionContext,
   providerId: string,
   key: string,
 ): (() => void) | undefined {
-  const provider = context.llm[providerId];
+  const provider = context.adapters.llm[providerId];
   if (!provider || typeof provider !== "object") {
     throw new Error(`LLM provider '${providerId}' is unavailable.`);
   }
@@ -139,7 +141,7 @@ async function resolveAgentConfig(
   agent: Agent,
   operation: AgentTextActionInput,
   event: CopilotzEvent,
-  context: FeatureExecuteContext,
+  context: CoreActionContext,
   prompt: AgentTextPrompt,
   mode: "generate" | "session" = "generate",
 ): Promise<ProviderConfig> {
@@ -151,7 +153,7 @@ async function resolveAgentConfig(
       agent,
       operation,
       sourceEvent: event,
-      context: context as unknown as CopilotzProcessorContext,
+      context: coreWorkflowContext(context),
       baseConfig,
       thread: prompt.thread,
       messages: prompt.messages,
@@ -172,25 +174,23 @@ async function resolveAgentConfig(
 
 async function executeGenerate(
   input: unknown,
-  context: FeatureExecuteContext,
+  context: CoreActionContext,
 ): Promise<Readonly<Record<string, unknown>>> {
   const attempt = asRecord(input) as CollectionRecord;
   const event = asRecord(attempt.sourceEvent) as unknown as CopilotzEvent;
   if (!event.type || !event.namespace || !event.correlationId) {
     throw new TypeError("LLM generation requires a source Event.");
   }
-  const agent = requireAgent(
-    context as unknown as CopilotzProcessorContext,
+  const workflowContext = coreWorkflowContext(context);
+  const agent = requireCoreAgent(
+    context.resources,
     requiredText(optionalText(attempt.agentId), "LLM attempt agent id"),
   );
-  const toolCatalog = toolCatalogFor(
-    context as unknown as CopilotzProcessorContext,
-    agent,
-  );
+  const toolCatalog = toolCatalogFor(agent);
   const options = policyOptions(agent);
   const participant = optionalText(attempt.participantId)
     ? await loadParticipant(
-      context as unknown as CopilotzProcessorContext,
+      workflowContext,
       optionalText(attempt.participantId)!,
     )
     : null;
@@ -201,12 +201,12 @@ async function executeGenerate(
   }
   const granted = new Set(stringArray(attempt.availableToolIds));
   const tools = (await toolCatalog.forAgent(
-    context as unknown as CopilotzProcessorContext,
+    workflowContext,
     agent,
   ))
     .filter((tool) => granted.has(tool.key));
   const prompt = await buildAgentTextPrompt(
-    context as unknown as CopilotzProcessorContext,
+    workflowContext,
     {
       options,
       agent,
@@ -245,7 +245,7 @@ async function executeGenerate(
     participantId: participant.id,
   });
   const encoder = new TextEncoder();
-  const streamRuntime = context.content.stream;
+  const streamRuntime = context.streams;
   if (!streamRuntime) {
     throw new Error("Runtime content stream is not configured.");
   }
@@ -365,7 +365,7 @@ async function executeGenerate(
     let response;
     if (useSession) {
       const invocation = runSessionChain(
-        sessionChainFromResources(context, config),
+        sessionChainFromResources({ llm: context.adapters.llm }, config),
         {
           request,
           env,
@@ -394,7 +394,7 @@ async function executeGenerate(
       }
     } else {
       response = await runGenerateChain(
-        generateChainFromResources(context, config),
+        generateChainFromResources({ llm: context.adapters.llm }, config),
         { request, env, stream },
       ).result;
     }
@@ -490,15 +490,24 @@ async function executeGenerate(
   }
 }
 
-export const llmFeature: FeatureDefinition<
-  Readonly<{
-    generate: FeatureAction<undefined, Readonly<Record<string, unknown>>>;
-    session: FeatureAction<undefined, Readonly<Record<string, unknown>>>;
-  }>
-> = defineFeature({
-  id: LLM_FEATURE_ID,
-  actions: {
-    generate: { execute: executeGenerate },
-    session: { execute: executeGenerate },
-  },
+export const generateLlmAction: ActionDefinition<
+  unknown,
+  Readonly<Record<string, unknown>>,
+  CoreActionContext,
+  undefined,
+  undefined
+> = defineAction({
+  id: GENERATE_LLM_ACTION_ID,
+  execute: executeGenerate,
+});
+
+export const runLlmSessionAction: ActionDefinition<
+  unknown,
+  Readonly<Record<string, unknown>>,
+  CoreActionContext,
+  undefined,
+  undefined
+> = defineAction({
+  id: RUN_LLM_SESSION_ACTION_ID,
+  execute: executeGenerate,
 });

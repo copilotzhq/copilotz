@@ -103,15 +103,13 @@ function fixture(
       },
     },
     resources: {
-      list: () => [tool],
-      get: () => undefined,
+      agents: {},
+      tools: { terminal: tool },
+      apis: {},
+      mcp: {},
+      skills: {},
     },
-    agents: {},
-    tools: { terminal: tool },
-    llm: {},
-    apis: {},
-    mcp: {},
-    skills: {},
+    adapters: { llm: {} },
     conversation: {
       getParticipant: () =>
         Promise.resolve({ id: "agent-a", externalId: "north" }),

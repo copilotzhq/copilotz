@@ -57,7 +57,23 @@ export type {
   ProcedureMemoryDraft,
   ProposedMemoryRef,
 } from "./ontology.ts";
-export { createLongTermMemoryPlugin } from "./plugin.ts";
+export {
+  CONSOLIDATE_MEMORY_ACTION_ID,
+  createLongTermMemoryPlugin,
+  MAINTAIN_MEMORY_ACTION_ID,
+} from "./plugin.ts";
+export type {
+  ConsolidateMemoryActionInput,
+  ConsolidateMemoryActionResult,
+  LongTermMemoryPlugin,
+  MaintainMemoryActionInput,
+  MaintainMemoryActionResult,
+  MemoryActionCallers,
+  MemoryActionContext,
+  MemoryAdapters,
+  MemoryProcessorContext,
+  MemoryResources,
+} from "./plugin.ts";
 export type {
   CreateLongTermMemoryPluginOptions,
   MemoryEmbed,

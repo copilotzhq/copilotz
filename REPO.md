@@ -58,7 +58,7 @@ This map describes the transitional worktree, not target ownership. Use
 - Text/ask processors: `plugins/core/`
 - Persistent text/realtime attachments: `runtime/attachments/`
 - Memory, knowledge, schedules, usage, goals: corresponding `runtime/` modules
-- Channels/features/admin: corresponding `runtime/` modules
+- Channels/admin: corresponding `runtime/` modules
 - Host capabilities: `runtime/adapters/`
 - Web Fetch boundary: `server/`
 - Isolated legacy upgrade: `migration/v1/`
@@ -72,7 +72,8 @@ This map describes the transitional worktree, not target ownership. Use
 - Resources and Adapters remain separate composition/context roots and use
   direct property access, not locators or runtime dependency declarations.
 - Actions and Processors declare their expected context as ordinary TypeScript
-  interfaces; the runtime passes the complete composed context without filtering.
+  interfaces; the runtime passes the complete composed context without
+  filtering.
 - Plain typed Resource and Adapter objects are canonical. Semantic helper
   factories are optional conveniences, never required constructors.
 - Durable mutations commit graph, event, and delivery obligations atomically.

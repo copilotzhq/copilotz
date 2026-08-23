@@ -12,7 +12,7 @@ import { minimaxProvider } from "./minimax/adapter.ts";
 import { ollamaProvider } from "./ollama/adapter.ts";
 import { openaiProvider } from "./openai/adapter.ts";
 
-function llmResource(id: string, factory: ProviderFactory): LlmResource {
+function llmAdapter(id: string, factory: ProviderFactory): LlmResource {
   return defineLlmProviderResource({
     id,
     type: "llm",
@@ -20,21 +20,49 @@ function llmResource(id: string, factory: ProviderFactory): LlmResource {
   });
 }
 
-export const openaiLlmResource = llmResource("openai", openaiProvider);
-export const anthropicLlmResource = llmResource("anthropic", anthropicProvider);
-export const geminiLlmResource = llmResource("gemini", geminiProvider);
-export const groqLlmResource = llmResource("groq", groqProvider);
-export const deepseekLlmResource = llmResource("deepseek", deepseekProvider);
-export const ollamaLlmResource = llmResource("ollama", ollamaProvider);
-export const minimaxLlmResource = llmResource("minimax", minimaxProvider);
+export const openaiLlmAdapter: LlmResource = llmAdapter(
+  "openai",
+  openaiProvider,
+);
+export const anthropicLlmAdapter: LlmResource = llmAdapter(
+  "anthropic",
+  anthropicProvider,
+);
+export const geminiLlmAdapter: LlmResource = llmAdapter(
+  "gemini",
+  geminiProvider,
+);
+export const groqLlmAdapter: LlmResource = llmAdapter("groq", groqProvider);
+export const deepseekLlmAdapter: LlmResource = llmAdapter(
+  "deepseek",
+  deepseekProvider,
+);
+export const ollamaLlmAdapter: LlmResource = llmAdapter(
+  "ollama",
+  ollamaProvider,
+);
+export const minimaxLlmAdapter: LlmResource = llmAdapter(
+  "minimax",
+  minimaxProvider,
+);
 
-/** Vendor adapters shipped only when corePlugin is installed. */
-export const coreLlmResources: readonly LlmResource[] = Object.freeze([
-  openaiLlmResource,
-  anthropicLlmResource,
-  geminiLlmResource,
-  groqLlmResource,
-  deepseekLlmResource,
-  ollamaLlmResource,
-  minimaxLlmResource,
-]);
+export type CoreLlmAdapters = Readonly<{
+  openai: LlmResource;
+  anthropic: LlmResource;
+  gemini: LlmResource;
+  groq: LlmResource;
+  deepseek: LlmResource;
+  ollama: LlmResource;
+  minimax: LlmResource;
+}>;
+
+/** First-party LLM Adapter implementations contributed by Core. */
+export const coreLlmAdapters: CoreLlmAdapters = Object.freeze({
+  openai: openaiLlmAdapter,
+  anthropic: anthropicLlmAdapter,
+  gemini: geminiLlmAdapter,
+  groq: groqLlmAdapter,
+  deepseek: deepseekLlmAdapter,
+  ollama: ollamaLlmAdapter,
+  minimax: minimaxLlmAdapter,
+});

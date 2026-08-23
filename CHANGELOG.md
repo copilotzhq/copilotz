@@ -12,8 +12,8 @@ mechanism and does not own a vendor catalog.
   message Collections plus LLM and Tool Features.
 - `llm` resources expose `generate()`. Shipped adapters live on the core plugin
   as `{ id, type: "llm", generate }`.
-- `copilotz.core.thread-message` `create` feature for ensure-participant,
-  thread membership, and `message.create` in one transaction.
+- `copilotz.core.thread-message` `create` feature for ensure-participant, thread
+  membership, and `message.create` in one transaction.
 - Direct Feature action calls through `context.features.<alias>.<action>(...)`
   and `context.feature(definition).<action>(...)`.
 - Persisted Feature Action lifecycle events derived automatically from the

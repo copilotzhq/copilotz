@@ -60,7 +60,7 @@ export function createEventCollections(
   options: CreateEventCollectionsOptions,
 ): EventCollections {
   const repositories = new Map<string, ErasedEventCollectionRepository>();
-  for (const resource of options.registry.collections.list()) {
+  for (const resource of Object.values(options.registry.collections)) {
     const definition = resource as ErasedDefinition;
     const repository = createEventCollectionRepository({
       definition,

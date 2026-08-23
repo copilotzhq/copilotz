@@ -1,4 +1,3 @@
-import { coreFeatureAliases } from "@copilotz/copilotz/plugins/core";
 import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
 import {
   type CopilotzProcessorContext,
@@ -14,11 +13,11 @@ import {
   projectThreads,
 } from "../../runtime/testing/projections.ts";
 import {
+  type AnyProcessor,
   createPluginRegistry,
   definePlugin,
   defineProcessor,
   type PluginRegistry,
-  type Processor,
 } from "../plugins/index.ts";
 import { coreCollectionsPlugin } from "../../plugins/core/plugin.ts";
 import type { AttachmentOutput, AttachmentStreamOutput } from "./index.ts";
@@ -51,7 +50,7 @@ function agent(id: string): Agent {
 
 async function registryFor(options: {
   agents?: readonly Agent[];
-  processors?: readonly Processor[];
+  processors?: readonly AnyProcessor[];
 } = {}): Promise<PluginRegistry> {
   const agents = options.agents ?? [agent("support")];
   const processors = options.processors ?? [];
@@ -61,8 +60,19 @@ async function registryFor(options: {
       definePlugin({
         id: "test.attachments",
         version: "1.0.0",
-        agents,
-        ...(processors.length ? { processors } : {}),
+        resources: {
+          agents: Object.fromEntries(agents.map((value) => [value.id, value])),
+        },
+        ...(processors.length
+          ? {
+            processors: Object.fromEntries(
+              processors.map((
+                value,
+                index,
+              ) => [`processor${index + 1}`, value]),
+            ),
+          }
+          : {}),
       }),
     ],
   });
@@ -100,25 +110,24 @@ async function createThread(
   engine: CopilotzEngine,
   agentIds: readonly string[] = ["support"],
 ): Promise<void> {
-  await createTestDomainContext(engine, NAMESPACE, coreFeatureAliases).features
-    .thread.create({
-      id: "thread-a",
-      participants: [
-        {
-          id: "user-a",
-          externalId: "user-a",
-          participantType: "human",
-          name: "User A",
-        },
-        ...agentIds.map((id) => ({
-          id: `participant:${id}`,
-          externalId: id,
-          participantType: "agent" as const,
-          agentId: id,
-          name: id,
-        })),
-      ],
-    }, { identity: { deduplicationId: "thread-a:create" } });
+  await createTestDomainContext(engine, NAMESPACE).actions.createThread({
+    id: "thread-a",
+    participants: [
+      {
+        id: "user-a",
+        externalId: "user-a",
+        participantType: "human",
+        name: "User A",
+      },
+      ...agentIds.map((id) => ({
+        id: `participant:${id}`,
+        externalId: id,
+        participantType: "agent" as const,
+        agentId: id,
+        name: id,
+      })),
+    ],
+  }, { identity: { deduplicationId: "thread-a:create" } });
 }
 
 function isStreamOutput(
@@ -513,7 +522,7 @@ Deno.test("attachment outputs follow runtime content streams as live bytes", asy
     on: [{ eventType: "message.created" }],
     async handle(event, context) {
       if (!event.durable || !event.threadId) return;
-      const stream = context.content.stream;
+      const stream = context.streams;
       if (!stream) throw new Error("Runtime content stream is not configured.");
       const writer = await stream.open({
         id: "runtime-stream-a",

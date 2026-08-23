@@ -1,6 +1,12 @@
 export { scheduledJobCollection } from "./collection.ts";
-export { scheduledJobsLifecycleFeature } from "./lifecycle.ts";
+export {
+  createScheduledJob,
+  getScheduledJob,
+  listScheduledJobs,
+  updateScheduledJob,
+} from "./lifecycle.ts";
 export { createScheduledJobsPlugin } from "./plugin.ts";
+export type { ScheduledJobsPlugin } from "./plugin.ts";
 export { createScheduledJobsTool } from "./tool.ts";
 export { createScheduledJobTrigger } from "./trigger.ts";
 export { getNextScheduledRunAt } from "./model.ts";

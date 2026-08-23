@@ -3,10 +3,13 @@ import type { CollectionRecord } from "../domain/index.ts";
 import type { CollectionEventBody } from "../collections/index.ts";
 import type { CopilotzProcessorContext } from "../engine/index.ts";
 import {
-  defineFeature,
-  type FeatureExecuteContext,
-} from "../features/index.ts";
-import { requireFeatureActions } from "../features/context.ts";
+  type ActionCaller,
+  type ActionCallOptions,
+  type ActionContext,
+  type ActionContextNamespaces,
+  type ActionDefinition,
+  defineAction,
+} from "../actions/index.ts";
 import {
   type CopilotzPlugin,
   definePlugin,
@@ -14,13 +17,36 @@ import {
   type Processor,
   type ProcessorEvent,
 } from "../plugins/index.ts";
+import type { WorkflowTool } from "../tools/index.ts";
 import { scheduledJobCollection } from "./collection.ts";
-import { scheduledJobsLifecycleFeature } from "./lifecycle.ts";
 import type {
   CreateScheduledJobsPluginOptions,
   ScheduledJobOccurrence,
 } from "./types.ts";
 import { createScheduledJobsTool } from "./tool.ts";
+
+type CreateThreadMessage = (
+  input: Readonly<{
+    id?: string;
+    threadId: string;
+    sender: CollectionRecord;
+    recipientIds?: readonly string[];
+    content: ScheduledJobOccurrence["run"]["content"];
+    metadata?: Readonly<Record<string, unknown>>;
+  }>,
+  options?: ActionCallOptions,
+) => Promise<CollectionRecord>;
+
+type ScheduledJobsDispatchContext =
+  & Omit<ActionContext, "actions" | "resources">
+  & Readonly<{
+    resources:
+      & ActionContextNamespaces
+      & Readonly<{
+        agents: Readonly<Record<string, Agent | undefined>>;
+      }>;
+    actions: Readonly<{ createThreadMessage: CreateThreadMessage }>;
+  }>;
 
 function required(value: unknown, name: string): string {
   if (typeof value !== "string" || !value.trim()) {
@@ -36,7 +62,7 @@ function stringArray(value: unknown): readonly string[] {
 }
 
 async function byExternalId(
-  context: FeatureExecuteContext,
+  context: ScheduledJobsDispatchContext,
   collection: "participant" | "thread",
   externalId: string,
 ): Promise<CollectionRecord | null> {
@@ -112,7 +138,7 @@ function occurrence(event: ProcessorEvent): ScheduledJobOccurrence {
 
 async function sender(
   item: ScheduledJobOccurrence,
-  context: FeatureExecuteContext,
+  context: ScheduledJobsDispatchContext,
 ): Promise<CollectionRecord> {
   const descriptor = item.run.sender;
   const externalId = descriptor?.externalId?.trim() || item.jobId;
@@ -142,7 +168,7 @@ async function sender(
 
 async function agentParticipant(
   agent: Agent,
-  context: FeatureExecuteContext,
+  context: ScheduledJobsDispatchContext,
 ): Promise<CollectionRecord> {
   const externalId = agent.externalId?.trim() || agent.id;
   const existing = await byExternalId(context, "participant", externalId);
@@ -164,13 +190,17 @@ async function agentParticipant(
 
 async function recipient(
   reference: string,
-  context: FeatureExecuteContext,
+  context: ScheduledJobsDispatchContext,
 ): Promise<CollectionRecord> {
   const id = required(reference, "Scheduled recipient");
   const existing = await context.collections.participant.get({ id }) ??
     await byExternalId(context, "participant", id);
   if (existing) return existing;
-  const agent = context.agents[id];
+  const agents = context.resources.agents ?? {};
+  const agent = agents[id] ??
+    Object.values(agents).find((value) =>
+      value?.id === id || value?.externalId === id
+    );
   if (agent) return await agentParticipant(agent, context);
   throw new Error(`Scheduled recipient '${id}' was not found.`);
 }
@@ -179,7 +209,7 @@ async function resolveThread(
   item: ScheduledJobOccurrence,
   senderParticipant: CollectionRecord,
   recipients: readonly CollectionRecord[],
-  context: FeatureExecuteContext,
+  context: ScheduledJobsDispatchContext,
 ): Promise<CollectionRecord> {
   const descriptor = item.run.thread;
   let thread = descriptor?.id
@@ -221,8 +251,8 @@ async function resolveThread(
 
 async function dispatchOccurrence(
   item: ScheduledJobOccurrence,
-  context: FeatureExecuteContext,
-): Promise<void> {
+  context: ScheduledJobsDispatchContext,
+): Promise<null> {
   const sendingParticipant = await sender(item, context);
   let recipients = await Promise.all(
     (item.run.recipientIds ?? []).map((value) => recipient(value, context)),
@@ -250,7 +280,7 @@ async function dispatchOccurrence(
     recipients,
     context,
   );
-  await requireFeatureActions(context, "copilotz.core.thread-message").create({
+  await context.actions.createThreadMessage({
     id: `scheduled:${item.occurrenceId}`,
     threadId: thread.id,
     sender: sendingParticipant,
@@ -266,45 +296,73 @@ async function dispatchOccurrence(
       },
     },
   }, { operationKey: `scheduled-message:${item.occurrenceId}` });
+  return null;
 }
 
-const scheduledJobsDispatchFeature = defineFeature({
-  id: "copilotz.scheduled-jobs.dispatch",
-  actions: {
-    dispatch: {
-      execute(
-        input: ScheduledJobOccurrence,
-        context: FeatureExecuteContext,
-      ) {
-        return dispatchOccurrence(input, context);
-      },
-    },
+export const dispatchScheduledJobAction: ActionDefinition<
+  ScheduledJobOccurrence,
+  null,
+  ScheduledJobsDispatchContext,
+  undefined,
+  undefined
+> = defineAction<
+  ScheduledJobOccurrence,
+  null,
+  ScheduledJobsDispatchContext
+>({
+  id: "copilotz.scheduled-jobs.dispatch.dispatch",
+  execute(
+    input: ScheduledJobOccurrence,
+    context: ScheduledJobsDispatchContext,
+  ) {
+    return dispatchOccurrence(input, context);
   },
 });
 
-const scheduledJobsDispatchProcessor: Processor<CopilotzProcessorContext> =
-  defineProcessor<CopilotzProcessorContext>({
+type ScheduledJobsProcessorContext =
+  & Omit<CopilotzProcessorContext, "actions">
+  & Readonly<{
+    actions: Readonly<{
+      dispatchScheduledJob: ActionCaller<typeof dispatchScheduledJobAction>;
+    }>;
+  }>;
+
+const scheduledJobsDispatchProcessor: Processor<ScheduledJobsProcessorContext> =
+  defineProcessor<ScheduledJobsProcessorContext>({
     id: "scheduled_jobs.dispatch",
     on: [{ eventType: "scheduled_job.due" }],
     async handle(event, context) {
       if (!event.durable) return;
-      await context.feature(scheduledJobsDispatchFeature).dispatch(
-        occurrence(event),
-      );
+      await context.actions.dispatchScheduledJob(occurrence(event));
     },
   });
+
+export type ScheduledJobsPlugin = CopilotzPlugin<
+  string,
+  string,
+  readonly [],
+  Readonly<{ scheduledJob: typeof scheduledJobCollection }>,
+  Readonly<{ dispatchScheduledJob: typeof dispatchScheduledJobAction }>,
+  Readonly<{
+    dispatchScheduledJob: Processor<ScheduledJobsProcessorContext>;
+  }>,
+  Readonly<{
+    tools: Readonly<Record<string, WorkflowTool | undefined>>;
+  }>,
+  Readonly<Record<never, never>>
+>;
 
 /** Packages the schedule collection and its Oxian-delivered due processor. */
 export function createScheduledJobsPlugin(
   options: CreateScheduledJobsPluginOptions = {},
-): CopilotzPlugin {
+): ScheduledJobsPlugin {
   const tool = createScheduledJobsTool(options.toolId);
   return definePlugin({
     id: options.id?.trim() || "@copilotz/scheduled-jobs",
     version: options.version?.trim() || "3.0.0",
-    collections: [scheduledJobCollection],
-    features: [scheduledJobsLifecycleFeature, scheduledJobsDispatchFeature],
-    processors: [scheduledJobsDispatchProcessor],
-    tools: [tool],
+    collections: { scheduledJob: scheduledJobCollection },
+    actions: { dispatchScheduledJob: dispatchScheduledJobAction },
+    processors: { dispatchScheduledJob: scheduledJobsDispatchProcessor },
+    resources: { tools: { [tool.key]: tool } },
   });
 }

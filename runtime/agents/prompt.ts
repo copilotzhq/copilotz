@@ -95,7 +95,9 @@ function grantedSkills(
 ): readonly Skill[] {
   return resolveSkillGrants(
     agent,
-    Object.values(context.skills).filter((value): value is Skill => !!value),
+    Object.values(context.resources.skills ?? {}).filter(
+      (value): value is Skill => Boolean(value),
+    ),
   );
 }
 
@@ -433,8 +435,8 @@ export async function buildAgentTextPrompt(
     instructions,
     thread,
     participant,
-    agents: Object.values(context.agents).filter((value): value is Agent =>
-      !!value
+    agents: Object.values(context.resources.agents ?? {}).filter(
+      (value): value is Agent => Boolean(value),
     ),
     skills: input.tools.some((tool) => tool.key === "load_skill")
       ? grantedSkills(context, input.agent)

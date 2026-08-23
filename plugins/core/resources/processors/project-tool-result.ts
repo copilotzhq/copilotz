@@ -1,8 +1,8 @@
 import type { CollectionRecord } from "@copilotz/copilotz/collections";
 import type {
+  ContentInput,
   ContentRef,
   ContentSequence,
-  PreparedContent,
 } from "@copilotz/copilotz/content";
 import type { EventVisibility } from "@copilotz/copilotz/events";
 import {
@@ -13,7 +13,6 @@ import {
   type WorkflowMetadata,
   workflowMetadata,
 } from "@copilotz/copilotz/events";
-import type { CopilotzProcessorContext } from "@copilotz/copilotz/engine";
 import { defineProcessor, type Processor } from "@copilotz/copilotz/plugins";
 import type { CreateTextWorkflowPluginOptions } from "@copilotz/copilotz/llm";
 import type { Agent } from "@copilotz/copilotz/resources";
@@ -22,8 +21,11 @@ import {
   evaluateJq as defaultEvaluateJq,
   type WorkflowJqEvaluator,
 } from "@copilotz/copilotz/tools";
-import { threadMessageFeature } from "../features/thread-message.ts";
-import { toolBatchFeature } from "../features/tool.ts";
+import {
+  coreAgent,
+  type CoreProcessorContext,
+  coreWorkflowContext,
+} from "../../context.ts";
 import {
   asRecord,
   historyVisibilityOf,
@@ -38,7 +40,7 @@ import {
 } from "./helpers.ts";
 
 function jqFor(
-  _context: CopilotzProcessorContext,
+  _context: CoreProcessorContext,
   agent?: Agent,
 ): WorkflowJqEvaluator {
   const extra = agent as
@@ -59,11 +61,10 @@ function resultVisibility(execution: CollectionRecord): EventVisibility {
     : { kind: "internal" as const };
 }
 
-async function resultContent(
-  context: CopilotzProcessorContext,
+function resultContent(
   execution: CollectionRecord,
-  override?: ContentSequence | PreparedContent,
-): Promise<ContentSequence | PreparedContent> {
+  override?: ContentSequence,
+): ContentSequence | ContentInput {
   if (override) return override;
   const projected = Array.isArray(execution.projectedOutput)
     ? execution.projectedOutput as ContentSequence
@@ -84,17 +85,17 @@ async function resultContent(
   const error = asRecord(execution.safeError);
   const failed = String(execution.status) === "failed" ||
     String(execution.status) === "cancelled";
-  return await context.content.prepare({
+  return {
     type: "text",
     text: failed
       ? optionalText(error.message) ?? "Tool execution failed."
       : "No output returned",
     role: "tool.projected_output",
-  }, { operationKey: "project:tool-result:fallback" });
+  };
 }
 
 async function executionOutput(
-  context: CopilotzProcessorContext,
+  context: CoreProcessorContext,
   execution: CollectionRecord,
 ): Promise<unknown> {
   const sequence = Array.isArray(execution.projectedOutput)
@@ -109,22 +110,23 @@ async function executionOutput(
 }
 
 async function projectExecution(
-  event: Parameters<Processor<CopilotzProcessorContext>["handle"]>[0],
-  context: CopilotzProcessorContext,
+  event: Parameters<Processor<CoreProcessorContext>["handle"]>[0],
+  context: CoreProcessorContext,
   initial: CollectionRecord,
   continueAfter: boolean,
 ) {
   let execution = initial;
+  const workflowContext = coreWorkflowContext(context);
   if (String(execution.status) === "running") return;
   let metadata = workflowMetadata(execution.metadata);
   if (metadata?.kind === "memory_consolidation") return;
   const agent = optionalText(execution.agentId)
-    ? context.agents[optionalText(execution.agentId)!]
+    ? coreAgent(context.resources, optionalText(execution.agentId)!)
     : undefined;
-  const toolCatalog = toolCatalogFor(context, agent);
+  const toolCatalog = toolCatalogFor(agent);
   const evaluateJq = jqFor(context, agent);
   let projectedStatus = String(execution.status);
-  let projectedContent: ContentSequence | PreparedContent | undefined;
+  let projectedContent: ContentSequence | undefined;
 
   if (
     metadata?.pipeline && String(execution.status) === "completed" &&
@@ -138,8 +140,8 @@ async function projectExecution(
     });
     if (advancement.kind === "next_tool") {
       let availableTools = agent
-        ? await toolCatalog.forAgent(context, agent)
-        : await toolCatalog.all(context);
+        ? await toolCatalog.forAgent(workflowContext, agent)
+        : await toolCatalog.all(workflowContext);
       const granted = new Set(stringArray(execution.availableToolIds));
       if (granted.size) {
         availableTools = availableTools.filter((tool) => granted.has(tool.key));
@@ -179,7 +181,7 @@ async function projectExecution(
         advancement.pipeline.id,
         String(advancement.stageIndex),
       );
-      await context.features.toolBatch.execute({
+      await context.actions.executeToolBatch({
         batchId: nextId,
         items: [{
           id: nextId,
@@ -308,7 +310,7 @@ async function projectExecution(
       ? { pipelineFailure: metadata.pipelineFailure }
       : {}),
   });
-  await context.features.threadMessage.create({
+  await context.actions.createThreadMessage({
     id: await deriveWorkflowId("message", execution.id, "result"),
     threadId: recordThreadId(execution),
     sender: {
@@ -319,7 +321,7 @@ async function projectExecution(
         : toolId,
     },
     recipientIds: [recipientId],
-    content: await resultContent(context, execution, projectedContent),
+    content: resultContent(execution, projectedContent),
     visibility: resultVisibility(execution),
     metadata: messageMetadata,
   }, {
@@ -327,16 +329,10 @@ async function projectExecution(
   });
 }
 
-export const projectToolResultProcessor: Processor<CopilotzProcessorContext> =
-  defineProcessor<CopilotzProcessorContext>({
+export const projectToolResultProcessor: Processor<CoreProcessorContext> =
+  defineProcessor<CoreProcessorContext>({
     id: "copilotz.core.project-tool-result",
     on: [{ eventType: "copilotz.core.tool-batch.execute.completed" }],
-    requires: {
-      features: {
-        threadMessage: threadMessageFeature,
-        toolBatch: toolBatchFeature,
-      },
-    },
     async handle(event, context) {
       const lifecycle = asRecord(event.data);
       const input = asRecord(lifecycle.input);

@@ -6,6 +6,7 @@ import * as denoAdapters from "../../runtime/adapters/deno/index.ts";
 import * as nodeAdapters from "../../runtime/adapters/node/index.ts";
 import * as stdioAdapters from "../../runtime/adapters/stdio.ts";
 import * as application from "../../runtime/application/public.ts";
+import * as actions from "../../runtime/actions/index.ts";
 import * as attachments from "../../runtime/attachments/index.ts";
 import * as capabilities from "../../runtime/capabilities/index.ts";
 import * as content from "../../runtime/content/index.ts";
@@ -15,12 +16,12 @@ import * as plugins from "../../runtime/plugins/index.ts";
 import * as server from "../../server/index.ts";
 import * as migration from "../../migration/v1/index.ts";
 import type {
+  AnyCopilotzPlugin,
   CopilotzApplication,
   CopilotzEvent,
   CopilotzGateway,
   CopilotzWorker,
   CreateCopilotzOptions,
-  PluginManifest,
   RunHandle,
   ThreadAttachment,
 } from "../../index.ts";
@@ -33,7 +34,7 @@ function compilePublicTypes(
   _worker: CopilotzWorker,
   _run: RunHandle,
   _attachment: ThreadAttachment,
-  _manifest: PluginManifest,
+  _plugin: AnyCopilotzPlugin,
 ): void {}
 void compilePublicTypes;
 
@@ -52,6 +53,7 @@ Deno.test("v3 root exposes the factory-first application vocabulary", () => {
     "definePlugin",
     "defineProcessor",
     "defineCollection",
+    "defineAction",
     "createAttachmentRuntime",
     "createContentPreparer",
     "createConversationRepository",
@@ -124,13 +126,10 @@ Deno.test("v3 package subpaths expose cohesive factories", () => {
   ]);
   assertFunctions(events, ["createEventStore", "createEventCoordinator"]);
   assertFunctions(plugins, ["definePlugin", "defineProcessor"]);
+  assertFunctions(actions, ["defineAction"]);
 });
 
 Deno.test("server and migration remain explicit bounded subpaths", () => {
-  assertFunctions(server, [
-    "createV1FetchHandler",
-    "createV1SseProjector",
-  ]);
   for (
     const removed of [
       "withApp",

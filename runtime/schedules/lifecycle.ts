@@ -2,12 +2,8 @@ import type { DurableContentInput } from "../content/index.ts";
 import type {
   CollectionRecord,
   ScopedCollection,
+  ScopedCollections,
 } from "../collections/index.ts";
-import {
-  defineFeature,
-  type FeatureDefinition,
-  type FeatureExecuteContext,
-} from "../features/index.ts";
 import { scheduledJobCollection } from "./collection.ts";
 import {
   getNextScheduledRunAt,
@@ -23,74 +19,53 @@ import type {
   ScheduledJobStatus,
 } from "./types.ts";
 
-type FeatureScheduledJobRun =
+export type ScheduledJobRunInput =
   & Omit<ScheduledJobRun, "content">
   & Readonly<{ content: DurableContentInput }>;
 
-type CreateScheduledJobFeatureInput = Readonly<{
+export type CreateScheduledJobInput = Readonly<{
   id?: string;
   name: string;
   status?: Exclude<ScheduledJobStatus, "cancelled">;
   schedule: ScheduledJobSchedule;
-  run: FeatureScheduledJobRun;
+  run: ScheduledJobRunInput;
   metadata?: Record<string, unknown>;
 }>;
 
-type UpdateScheduledJobFeatureInput = Readonly<{
+export type UpdateScheduledJobInput = Readonly<{
   id: string;
   patch: Readonly<{
     name?: string;
     status?: ScheduledJobStatus;
     schedule?: ScheduledJobSchedule;
-    run?: Partial<FeatureScheduledJobRun>;
+    run?: Partial<ScheduledJobRunInput>;
     metadata?: Record<string, unknown>;
   }>;
 }>;
 
-type ListScheduledJobsFeatureInput = Readonly<{
+export type ListScheduledJobsInput = Readonly<{
   status?: ScheduledJobStatus;
   after?: string;
   limit?: number;
 }>;
 
-type ScheduledJobTransitionAction = (
-  input: { id: string },
-  context: FeatureExecuteContext,
-) => Promise<ScheduledJob>;
-
-type ScheduledJobsLifecycleActions = Readonly<{
-  create: Readonly<{ execute: typeof create }>;
-  update: Readonly<{ execute: typeof update }>;
-  pause: Readonly<{ execute: ScheduledJobTransitionAction }>;
-  resume: Readonly<{ execute: ScheduledJobTransitionAction }>;
-  cancel: Readonly<{ execute: ScheduledJobTransitionAction }>;
-  get: Readonly<{
-    execute(
-      input: { id: string },
-      context: FeatureExecuteContext,
-    ): Promise<ScheduledJob | null>;
-  }>;
-  list: Readonly<{
-    execute(
-      input: ListScheduledJobsFeatureInput,
-      context: FeatureExecuteContext,
-    ): Promise<readonly ScheduledJob[]>;
-  }>;
+export type ScheduledJobMutationContext = Readonly<{
+  collections: ScopedCollections;
+  now(): Date;
 }>;
 
 function collection(
-  context: FeatureExecuteContext,
+  context: ScheduledJobMutationContext,
 ): ScopedCollection<CollectionRecord, Record<string, unknown>> {
-  const scoped = context.collections[scheduledJobCollection.name];
-  if (!scoped) {
-    throw new Error("Scheduled job collection is not bound.");
-  }
+  const scoped = context.collections.scheduledJob ??
+    context.collections[scheduledJobCollection.name];
+  if (!scoped) throw new Error("Scheduled job collection is not bound.");
   return scoped as ScopedCollection<CollectionRecord, Record<string, unknown>>;
 }
 
 function runPatch(
   current: ScheduledJob,
-  input: Partial<FeatureScheduledJobRun>,
+  input: Partial<ScheduledJobRunInput>,
 ): ScheduledJobRun {
   return Object.freeze({
     ...structuredClone(current.run),
@@ -99,9 +74,10 @@ function runPatch(
   }) as ScheduledJobRun;
 }
 
-async function create(
-  input: CreateScheduledJobFeatureInput,
-  context: FeatureExecuteContext,
+/** Creates one Scheduled Job through its Collection-owned mutation contract. */
+export async function createScheduledJob(
+  input: CreateScheduledJobInput,
+  context: ScheduledJobMutationContext,
 ): Promise<ScheduledJob> {
   const name = requireScheduledText(input.name, "Scheduled job name");
   const schedule = normalizeScheduledJobSchedule(input.schedule);
@@ -122,9 +98,10 @@ async function create(
   return normalizeScheduledJobRecord(record);
 }
 
-async function update(
-  input: UpdateScheduledJobFeatureInput,
-  context: FeatureExecuteContext,
+/** Applies the scheduling invariants around one ordinary Collection update. */
+export async function updateScheduledJob(
+  input: UpdateScheduledJobInput,
+  context: ScheduledJobMutationContext,
 ): Promise<ScheduledJob> {
   const id = requireScheduledText(input.id, "Scheduled job ID");
   const jobs = collection(context);
@@ -146,9 +123,7 @@ async function update(
   if (input.patch.metadata !== undefined) {
     patch.metadata = structuredClone(input.patch.metadata);
   }
-  if (input.patch.run) {
-    patch.run = runPatch(current, input.patch.run);
-  }
+  if (input.patch.run) patch.run = runPatch(current, input.patch.run);
   if (nextStatus === "cancelled") {
     patch.nextRunAt = null;
     patch.nextRunAtMs = null;
@@ -171,44 +146,24 @@ async function update(
   return normalizeScheduledJobRecord(record);
 }
 
-function transition(status: ScheduledJobStatus): ScheduledJobTransitionAction {
-  return (input: { id: string }, context: FeatureExecuteContext) =>
-    update({ id: input.id, patch: { status } }, context);
+export async function getScheduledJob(
+  input: { id: string },
+  context: ScheduledJobMutationContext,
+): Promise<ScheduledJob | null> {
+  const value = await collection(context).get({
+    id: requireScheduledText(input.id, "Scheduled job ID"),
+  });
+  return value ? normalizeScheduledJobRecord(value) : null;
 }
 
-export const scheduledJobsLifecycleFeature: FeatureDefinition<
-  ScheduledJobsLifecycleActions
-> = defineFeature({
-  id: "copilotz.scheduled-jobs.lifecycle",
-  actions: {
-    create: { execute: create },
-    update: { execute: update },
-    pause: { execute: transition("paused") },
-    resume: { execute: transition("active") },
-    cancel: { execute: transition("cancelled") },
-    get: {
-      async execute(
-        input: { id: string },
-        context: FeatureExecuteContext,
-      ): Promise<ScheduledJob | null> {
-        const value = await collection(context).get({
-          id: requireScheduledText(input.id, "Scheduled job ID"),
-        });
-        return value ? normalizeScheduledJobRecord(value) : null;
-      },
-    },
-    list: {
-      async execute(
-        input: ListScheduledJobsFeatureInput = {},
-        context: FeatureExecuteContext,
-      ): Promise<readonly ScheduledJob[]> {
-        const values = await collection(context).list({
-          after: input.after,
-          limit: input.limit,
-          ...(input.status ? { where: { status: input.status } } : {}),
-        });
-        return Object.freeze(values.map(normalizeScheduledJobRecord));
-      },
-    },
-  },
-});
+export async function listScheduledJobs(
+  input: ListScheduledJobsInput = {},
+  context: ScheduledJobMutationContext,
+): Promise<readonly ScheduledJob[]> {
+  const values = await collection(context).list({
+    after: input.after,
+    limit: input.limit,
+    ...(input.status ? { where: { status: input.status } } : {}),
+  });
+  return Object.freeze(values.map(normalizeScheduledJobRecord));
+}

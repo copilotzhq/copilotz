@@ -1,16 +1,4 @@
-import type { CopilotzProcessorContext } from "@copilotz/copilotz/engine";
-import {
-  type CopilotzPlugin,
-  definePlugin,
-  type Processor,
-} from "@copilotz/copilotz/plugins";
-import { corePluginManifest } from "./manifest.ts";
-import { threadMessageFeature } from "./resources/features/thread-message.ts";
-import { threadFeature } from "./resources/features/thread.ts";
-import { messageFeature } from "./resources/features/message.ts";
-import { llmFeature } from "./resources/features/llm.ts";
-import { toolBatchFeature, toolFeature } from "./resources/features/tool.ts";
-import { coreLlmResources } from "./resources/llm/index.ts";
+import { type CopilotzPlugin, definePlugin } from "@copilotz/copilotz/plugins";
 import {
   messageCollection,
   participantCollection,
@@ -24,49 +12,132 @@ import {
   projectTextResultProcessor,
   projectToolResultProcessor,
 } from "./resources/processors/index.ts";
+import { createThreadMessageAction } from "./resources/actions/thread-message.ts";
+import {
+  addThreadParticipantAction,
+  createThreadAction,
+  deleteThreadMessagesAction,
+} from "./resources/actions/thread.ts";
+import { reviseMessageAction } from "./resources/actions/message.ts";
+import {
+  generateLlmAction,
+  runLlmSessionAction,
+} from "./resources/actions/llm.ts";
+import {
+  callToolAction,
+  executeToolBatchAction,
+} from "./resources/actions/tool.ts";
+import {
+  type CoreLlmAdapters,
+  coreLlmAdapters,
+} from "./resources/llm/index.ts";
 import { askTool } from "./resources/tools/ask.ts";
 
-const processors: readonly Processor<CopilotzProcessorContext>[] = Object
-  .freeze([
-    messageRouterProcessor,
-    messageInputProcessor,
-    projectTextResultProcessor,
-    projectToolResultProcessor,
-    completeAskProcessor,
-    failAskProcessor,
-  ]);
+export const CORE_PLUGIN_ID = "@copilotz/core";
+export const CORE_PLUGIN_VERSION = "0.61.0";
 
-const collections = Object.freeze([
-  participantCollection,
-  threadCollection,
-  messageCollection,
-]);
+export type CoreCollections = Readonly<{
+  participant: typeof participantCollection;
+  thread: typeof threadCollection;
+  message: typeof messageCollection;
+}>;
 
-const features = Object.freeze([
-  threadMessageFeature,
-  llmFeature,
-  toolFeature,
-  toolBatchFeature,
-  threadFeature,
-  messageFeature,
-]);
+export type CoreActions = Readonly<{
+  createThread: typeof createThreadAction;
+  addThreadParticipant: typeof addThreadParticipantAction;
+  deleteThreadMessages: typeof deleteThreadMessagesAction;
+  reviseMessage: typeof reviseMessageAction;
+  createThreadMessage: typeof createThreadMessageAction;
+  generateLlm: typeof generateLlmAction;
+  runLlmSession: typeof runLlmSessionAction;
+  callTool: typeof callToolAction;
+  executeToolBatch: typeof executeToolBatchAction;
+}>;
 
-/** Collections without text/ask processors. Tests that must not run core routing. */
-export const coreCollectionsPlugin: CopilotzPlugin = definePlugin({
-  id: "@copilotz/core-collections",
-  version: corePluginManifest.version,
-  collections: [...collections],
-  processors: [messageInputProcessor],
-  features: [...features],
+export type CoreProcessors = Readonly<{
+  messageRouter: typeof messageRouterProcessor;
+  messageInput: typeof messageInputProcessor;
+  projectTextResult: typeof projectTextResultProcessor;
+  projectToolResult: typeof projectToolResultProcessor;
+  completeAsk: typeof completeAskProcessor;
+  failAsk: typeof failAskProcessor;
+}>;
+
+type CoreCollectionsProcessors = Readonly<{
+  messageInput: typeof messageInputProcessor;
+}>;
+
+type CorePluginResources = Readonly<{
+  tools: Readonly<{ ask: typeof askTool }>;
+}>;
+
+type CorePluginAdapters = Readonly<{
+  llm: CoreLlmAdapters;
+}>;
+
+type EmptyPluginNamespaces = Readonly<Record<never, never>>;
+
+export const coreCollections: CoreCollections = Object.freeze({
+  participant: participantCollection,
+  thread: threadCollection,
+  message: messageCollection,
 });
 
-/** Static core plugin: collections, text/ask processors, llm adapters, ask tool, thread-message feature. */
-export const corePlugin: CopilotzPlugin = definePlugin({
-  id: corePluginManifest.id,
-  version: corePluginManifest.version,
-  collections: [...collections],
-  processors,
-  llm: [...coreLlmResources],
-  tools: [askTool],
-  features: [...features],
+export const coreActions: CoreActions = Object.freeze({
+  createThread: createThreadAction,
+  addThreadParticipant: addThreadParticipantAction,
+  deleteThreadMessages: deleteThreadMessagesAction,
+  reviseMessage: reviseMessageAction,
+  createThreadMessage: createThreadMessageAction,
+  generateLlm: generateLlmAction,
+  runLlmSession: runLlmSessionAction,
+  callTool: callToolAction,
+  executeToolBatch: executeToolBatchAction,
+});
+
+export const coreProcessors: CoreProcessors = Object.freeze({
+  messageRouter: messageRouterProcessor,
+  messageInput: messageInputProcessor,
+  projectTextResult: projectTextResultProcessor,
+  projectToolResult: projectToolResultProcessor,
+  completeAsk: completeAskProcessor,
+  failAsk: failAskProcessor,
+});
+
+/** Collections and Actions without Core's semantic routing processors. */
+export const coreCollectionsPlugin: CopilotzPlugin<
+  "@copilotz/core-collections",
+  typeof CORE_PLUGIN_VERSION,
+  readonly [],
+  CoreCollections,
+  CoreActions,
+  CoreCollectionsProcessors,
+  EmptyPluginNamespaces,
+  EmptyPluginNamespaces
+> = definePlugin({
+  id: "@copilotz/core-collections",
+  version: CORE_PLUGIN_VERSION,
+  collections: coreCollections,
+  actions: coreActions,
+  processors: { messageInput: messageInputProcessor },
+});
+
+/** The minimum semantic plugin for an end-to-end multi-provider agent. */
+export const corePlugin: CopilotzPlugin<
+  typeof CORE_PLUGIN_ID,
+  typeof CORE_PLUGIN_VERSION,
+  readonly [],
+  CoreCollections,
+  CoreActions,
+  CoreProcessors,
+  CorePluginResources,
+  CorePluginAdapters
+> = definePlugin({
+  id: CORE_PLUGIN_ID,
+  version: CORE_PLUGIN_VERSION,
+  collections: coreCollections,
+  actions: coreActions,
+  processors: coreProcessors,
+  resources: { tools: { ask: askTool } },
+  adapters: { llm: coreLlmAdapters },
 });

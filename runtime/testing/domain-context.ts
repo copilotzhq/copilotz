@@ -17,10 +17,10 @@ import {
   mapThreadRecord,
 } from "../engine/collection-graph.ts";
 import {
-  type AnyFeatureDefinition,
-  createFeatureContext,
-  type FeatureContext,
-} from "../features/index.ts";
+  type ActionEventData,
+  type ActionHostContext,
+  createActionContext,
+} from "../actions/index.ts";
 
 export type TestDomainHost = Pick<
   CopilotzEngine,
@@ -43,7 +43,7 @@ async function materialize(
 ): Promise<ContentSequence> {
   const transaction = activeCollectionTransaction(host.collectionRuntime);
   if (!transaction) {
-    throw new Error("Test feature content requires an active transaction.");
+    throw new Error("Test Action content requires an active transaction.");
   }
   return await host.content.assets.materialize({
     transaction,
@@ -55,15 +55,14 @@ async function materialize(
 export function createTestDomainContext(
   host: TestDomainHost,
   namespace: string,
-  featureAliases: Readonly<Record<string, AnyFeatureDefinition>> = {},
   options: Readonly<{ now?: () => Date }> = {},
-): FeatureContext {
-  return createFeatureContext({
+): ActionHostContext {
+  const lifecycle = new Map<string, ActionEventData>();
+  return createActionContext({
     namespace,
     plugins: host.plugins,
     collections: host.collections,
     collectionRuntime: host.collectionRuntime,
-    featureAliases,
     now: options.now,
     contentResolver: host.content.resolver,
     content: (scopedNamespace) =>
@@ -73,7 +72,7 @@ export function createTestDomainContext(
           host.content.preparer.prepare(input, {
             namespace: scopedNamespace,
             idempotencyKey:
-              `test-feature:${scopedNamespace}:${prepareOptions.operationKey}`,
+              `test-action:${scopedNamespace}:${prepareOptions.operationKey}`,
             origin: prepareOptions.origin,
           }),
         materialize: (input, options) =>
@@ -84,7 +83,7 @@ export function createTestDomainContext(
           );
           if (!transaction) {
             throw new Error(
-              "Test feature content requires an active transaction.",
+              "Test Action content requires an active transaction.",
             );
           }
           await host.content.assets.linkOwner({
@@ -97,7 +96,7 @@ export function createTestDomainContext(
             ...input,
             namespace: scopedNamespace,
             idempotencyKey:
-              `test-feature:${scopedNamespace}:${publishOptions.operationKey}`,
+              `test-action:${scopedNamespace}:${publishOptions.operationKey}`,
           }),
         get: (assetId) => host.content.assets.get(scopedNamespace, assetId),
         getMany: (assetIds) =>
@@ -109,6 +108,27 @@ export function createTestDomainContext(
         open: (ref) =>
           host.content.resolver.open(ref, { namespace: scopedNamespace }),
       }),
+    actionLifecycle: {
+      async append({ draft, data }) {
+        const id = draft.deduplicationId?.trim();
+        if (!id) {
+          throw new TypeError(
+            "Test Action lifecycle requires deduplicationId.",
+          );
+        }
+        const existing = lifecycle.get(id);
+        if (existing && JSON.stringify(existing) !== JSON.stringify(data)) {
+          throw new Error(
+            `Test Action lifecycle '${id}' changed across retry.`,
+          );
+        }
+        lifecycle.set(id, structuredClone(data));
+        return undefined as never;
+      },
+      load(_namespace, id) {
+        return Promise.resolve(lifecycle.get(id) ?? null);
+      },
+    },
     events: host.events,
     deliveries: host.deliveries,
     relations: host.relations,
@@ -116,7 +136,7 @@ export function createTestDomainContext(
 }
 
 export async function projectTestThread(
-  context: FeatureContext,
+  context: ActionHostContext,
   record: CollectionRecord | null,
 ): Promise<ConversationThread | null> {
   if (!record) return null;
@@ -135,7 +155,7 @@ export async function projectTestThread(
 }
 
 export async function projectTestMessage(
-  context: FeatureContext,
+  context: ActionHostContext,
   record: CollectionRecord | null,
 ): Promise<ConversationMessage | null> {
   if (!record) return null;
@@ -147,7 +167,7 @@ export async function projectTestMessage(
 }
 
 export async function projectTestMessages(
-  context: FeatureContext,
+  context: ActionHostContext,
   records: readonly CollectionRecord[],
 ): Promise<readonly ConversationMessage[]> {
   return Object.freeze(

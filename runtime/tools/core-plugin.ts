@@ -3,7 +3,7 @@ import type { Agent } from "../resources/index.ts";
 import { assetIdFromRef, formatAssetRef } from "../content/index.ts";
 import type { ParticipantInput } from "../domain/index.ts";
 import { type CopilotzPlugin, definePlugin } from "../plugins/index.ts";
-import { requireFeatureActions } from "../features/context.ts";
+import type { ActionCallOptions } from "../actions/index.ts";
 import type {
   WorkflowTool,
   WorkflowToolExecutionContext,
@@ -560,10 +560,13 @@ async function resolveThreadParticipant(
   const existing = await ctx.processor.collections.participant.get({ id }) ??
     await byExternalId(ctx, id);
   if (existing) return participantInput(existing);
-  const agent = ctx.processor.agents[id] ??
-    Object.values(ctx.processor.agents).filter((value): value is Agent =>
-      !!value
-    ).find((candidate) => candidate.name === id || candidate.externalId === id);
+  const agents = (ctx.processor.resources.agents ?? {}) as Readonly<
+    Record<string, Agent | undefined>
+  >;
+  const agent = agents[id] ??
+    Object.values(agents).filter((value): value is Agent => !!value).find((
+      candidate,
+    ) => candidate.name === id || candidate.externalId === id);
   if (!agent) {
     throw new Error(`Thread participant '${id}' was not found.`);
   }
@@ -696,21 +699,20 @@ function createThreadTool(): WorkflowTool {
           input.initialMessage.trim()
         ? input.initialMessage
         : `Started thread: ${name}`;
-      const content = await ctx.processor.content.prepare(initialMessage, {
-        operationKey: `create_thread:${threadId}:initial-content`,
-      });
       const recipientIds = ensured
         .filter((participant) => participant.id !== caller.id)
         .map((participant) => participant.id);
-      const message = await requireFeatureActions(
-        ctx.processor,
-        "copilotz.core.thread-message",
-      ).create({
+      const createThreadMessage = ctx.processor.actions
+        .createThreadMessage as unknown as (
+          input: Record<string, unknown>,
+          options?: ActionCallOptions,
+        ) => Promise<CollectionRecord>;
+      const message = await createThreadMessage({
         id: initialMessageId,
         threadId,
         sender: caller,
         recipientIds,
-        content,
+        content: initialMessage,
         visibility: { kind: "public" },
         metadata: {
           kind: "thread_initial_message",
@@ -719,7 +721,7 @@ function createThreadTool(): WorkflowTool {
         },
       }, {
         operationKey: `create_thread:${threadId}:initial-message`,
-      }) as CollectionRecord;
+      });
       return {
         threadId,
         name,
@@ -797,6 +799,8 @@ export function createBuiltInToolsPlugin(
   return definePlugin({
     id: options.id ?? "@copilotz/built-in-tools",
     version: options.version ?? "3.0.0",
-    tools,
+    resources: {
+      tools: Object.fromEntries(tools.map((tool) => [tool.key, tool])),
+    },
   });
 }

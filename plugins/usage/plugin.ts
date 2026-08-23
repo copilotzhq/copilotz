@@ -370,15 +370,15 @@ export function createUsageWorkflowPlugin(
   options: CreateUsageWorkflowPluginOptions = {},
 ): CopilotzPlugin {
   const processors = options.enabled === false
-    ? Object.freeze([]) as readonly Processor<CopilotzProcessorContext>[]
-    : Object.freeze([
-      llmUsageProcessor(options),
-      toolUsageProcessor(options),
-    ]);
+    ? Object.freeze({})
+    : Object.freeze({
+      recordLlmUsage: llmUsageProcessor(options),
+      recordToolUsage: toolUsageProcessor(options),
+    });
   return definePlugin({
     id: options.id ?? DEFAULT_PLUGIN_ID,
     version: options.version ?? DEFAULT_PLUGIN_VERSION,
-    collections: [usageCollection],
-    ...(processors.length ? { processors } : {}),
+    collections: { usage: usageCollection },
+    processors,
   });
 }

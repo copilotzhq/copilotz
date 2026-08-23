@@ -26,18 +26,19 @@ export type ProcessorEvent<TData = unknown> = CopilotzEvent & {
   data: TData;
 };
 
+declare const processorContextType: unique symbol;
+
 /** Independent named event subscription. Plugin resources are static. */
 export type Processor<TContext extends ProcessorContext = ProcessorContext> = {
   id: string;
   on: readonly ProcessorMatchClause[];
   /** Defaults to `inherit`. Detached work remains durable but non-blocking. */
   settlement?: ProcessorSettlement;
-  /** Consumer-local Feature aliases. Values must be Feature definitions. */
-  requires?: Readonly<{
-    features?: Readonly<
-      Record<string, { readonly id: string; readonly actions: object }>
-    >;
-  }>;
+  /**
+   * Carries the author's expected composed context through TypeScript without
+   * creating runtime dependency metadata or filtering the injected context.
+   */
+  readonly [processorContextType]?: (context: TContext) => TContext;
   handle(
     event: ProcessorEvent,
     context: TContext,

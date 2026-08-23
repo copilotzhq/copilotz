@@ -20,6 +20,7 @@ import {
   projectDomainRelation,
 } from "../domain/index.ts";
 import {
+  type ActionContextBindings,
   createActionLifecycleAppender,
   createActionLifecycleLoader,
 } from "../actions/index.ts";
@@ -46,7 +47,6 @@ import {
   type CollectionRuntime,
   createCollectionRuntime,
 } from "../collections/index.ts";
-import type { FeatureContextBindings } from "../features/index.ts";
 import type {
   PluginRegistry,
   TransientProcessorSet,
@@ -173,7 +173,7 @@ export function createDatabaseScope(
     createId: engine.createId,
     now: engine.now,
   });
-  for (const resource of options.registry.collections.list()) {
+  for (const resource of Object.values(options.registry.collections)) {
     if (isKernelCollection(resource)) collectionRuntime.bind(resource);
   }
   const relations = createDomainRelationRepository({
@@ -193,7 +193,7 @@ export function createDatabaseScope(
       session: engine.session,
       schema: databaseSchema,
     });
-  const featureBindings: Omit<FeatureContextBindings, "namespace"> = Object
+  const actionBindings: Omit<ActionContextBindings, "namespace"> = Object
     .freeze({
       plugins: options.registry,
       collections,
@@ -242,7 +242,7 @@ export function createDatabaseScope(
             options.preparer.prepare(input, {
               namespace,
               idempotencyKey:
-                `feature:${namespace}:${prepareOptions.operationKey}`,
+                `action:${namespace}:${prepareOptions.operationKey}`,
               origin: prepareOptions.origin,
             }),
           materialize: (input, materializeOptions = {}) =>
@@ -266,7 +266,7 @@ export function createDatabaseScope(
               ...input,
               namespace,
               idempotencyKey:
-                `feature:${namespace}:${publishOptions.operationKey}`,
+                `action:${namespace}:${publishOptions.operationKey}`,
             }),
           get: (assetId) => assets.get(namespace, assetId),
           getMany: (assetIds) => assets.getMany(namespace, assetIds),
@@ -290,7 +290,7 @@ export function createDatabaseScope(
           const tx = activeCollectionTransaction(collectionRuntime);
           if (!tx) {
             throw new Error(
-              "Feature transaction relation projection requires an active transaction.",
+              "Action transaction relation projection requires an active transaction.",
             );
           }
           return projectDomainRelation(tx, store.tables, input);
@@ -318,12 +318,11 @@ export function createDatabaseScope(
     store,
     session: engine.session,
     assets,
-    preparer: options.preparer,
     eventHub: options.eventHub,
     executor: options.executor,
     collectionRuntime,
     transients: options.transients,
-    featureBindings,
+    actionBindings,
     streamBodyStore,
     dispatchEvent: options.publishLive,
     createId: engine.createId,

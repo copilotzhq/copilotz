@@ -4,15 +4,10 @@ import {
   type CopilotzProcessorContext,
   createCopilotzEngine,
 } from "../engine/index.ts";
-import { createTestDomainContext } from "../../runtime/testing/domain-context.ts";
 import {
-  projectMessageById,
   projectMessages,
   projectParticipantById,
-  projectParticipants,
-  projectThreadByExternalId,
   projectThreadById,
-  projectThreads,
 } from "../../runtime/testing/projections.ts";
 import { createSqlSession } from "../events/index.ts";
 import {
@@ -22,7 +17,6 @@ import {
   type PluginRegistry,
 } from "../plugins/index.ts";
 import { coreCollectionsPlugin } from "../../plugins/core/plugin.ts";
-import { threadMessageFeature } from "@copilotz/copilotz/plugins/core";
 import type { WorkflowTool, WorkflowToolExecutionContext } from "./types.ts";
 import {
   BUILT_IN_CORE_TOOL_IDS,
@@ -71,11 +65,6 @@ async function createFixture(
   const runner = defineProcessor<CopilotzProcessorContext>({
     id: "test.core-tools.runner",
     on: [{ eventType: "message.created" }],
-    requires: {
-      features: {
-        threadMessage: threadMessageFeature,
-      },
-    },
     async handle(event, context) {
       if (event.threadId !== "thread-a") return;
       try {
@@ -88,8 +77,8 @@ async function createFixture(
   const app = definePlugin({
     id: "test.core-tools.resources",
     version: "1.0.0",
-    agents: [agent],
-    processors: [runner],
+    processors: { runner },
+    resources: { agents: { [agent.id]: agent } },
   });
   const registry = await createPluginRegistry({
     plugins: [
@@ -219,8 +208,8 @@ async function toolContext(
     userExternalId: "user-a",
     agent,
     agents: [agent],
-    tools: Object.values(context.tools).filter((value): value is WorkflowTool =>
-      !!value
+    tools: Object.values(context.resources.tools ?? {}).filter(
+      (value): value is WorkflowTool => !!value,
     ),
     collections: context.collections,
     emitOutput: () => Promise.resolve(),
@@ -232,19 +221,22 @@ function tool(
   context: CopilotzProcessorContext,
   id: string,
 ): WorkflowTool {
-  const found = context.tools[id];
+  const found = context.resources.tools?.[id];
   if (!found) throw new Error(`Unknown tool '${id}'.`);
   return found as WorkflowTool;
 }
 
 Deno.test("built-in tools exclude optional plugin-owned skill tools", () => {
   const plugin = createBuiltInToolsPlugin();
-  assertEquals(plugin.manifest.provides.tools, [...BUILT_IN_CORE_TOOL_IDS]);
+  const tools = plugin.resources.tools as
+    | Readonly<Record<string, WorkflowTool>>
+    | undefined;
+  assertEquals(Object.keys(tools ?? {}), [...BUILT_IN_CORE_TOOL_IDS]);
   assertEquals(
-    plugin.resources.tools?.map((value) => (value as WorkflowTool).key),
+    Object.values(tools ?? {}).map((value) => value.key),
     [...BUILT_IN_CORE_TOOL_IDS],
   );
-  assert(!plugin.manifest.provides.tools?.includes("load_skill"));
+  assert(!Object.hasOwn(tools ?? {}, "load_skill"));
 });
 
 Deno.test("asset, skill, clock, and wait tools use typed capabilities", async () => {

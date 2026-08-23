@@ -13,13 +13,13 @@ import {
   type WorkflowTool,
   type WorkflowToolExecutionContext,
 } from "@copilotz/copilotz/tools";
-import { threadMessageFeature } from "../features/thread-message.ts";
 import {
   asRecord,
   optionalText,
   requireCollection,
   requiredText,
 } from "../processors/helpers.ts";
+import { coreAgent, type CoreResources } from "../../context.ts";
 
 const DEFAULT_TOOL_ID = "ask";
 const DEFAULT_MAX_DEPTH = 8;
@@ -162,12 +162,14 @@ export function defineAskTool(
           `Asking participant '${askingParticipantId}' is not an agent.`,
         );
       }
-      const agents = Object.values(context.processor.agents).filter(
-        (value): value is Agent => !!value,
-      );
+      const resources = context.processor.resources as CoreResources;
+      const agents = Object.values(resources.agents ?? {})
+        .filter(
+          (value): value is Agent => !!value,
+        );
       const askingAgent = context.agent ??
         (execution.agentId
-          ? context.processor.agents[execution.agentId]
+          ? coreAgent(resources, execution.agentId)
           : undefined);
       if (!askingAgent) {
         throw new Error(
@@ -249,15 +251,12 @@ export function defineAskTool(
         depth,
       });
       const metadata = withAgentAskMetadata(undefined, ask);
-      const content = await context.processor.content.prepare(message, {
-        operationKey: `ask:${askId}:question-content`,
-      });
-      await context.processor.feature(threadMessageFeature).create({
+      await context.processor.actions.createThreadMessage({
         id: questionMessageId,
         threadId: execution.threadId,
         sender: askingParticipant,
         recipientIds: [askedParticipant.id],
-        content,
+        content: message,
         visibility: { kind: "public" },
         metadata,
       }, {

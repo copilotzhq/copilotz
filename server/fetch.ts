@@ -107,14 +107,14 @@ async function body(request: Request): Promise<
 
 function responseHeaders(
   options: CreateEventNativeFetchHandlerOptions,
-  featureHeaders?: HeadersInit,
+  applicationHeaders?: HeadersInit,
 ): Headers {
   const result = new Headers({
     "content-type": "application/json; charset=utf-8",
     ...(options.responseHeaders ?? {}),
   });
-  if (!featureHeaders) return result;
-  const supplied = new Headers(featureHeaders);
+  if (!applicationHeaders) return result;
+  const supplied = new Headers(applicationHeaders);
   supplied.forEach((value, name) => {
     if (name.toLowerCase() !== "set-cookie") result.set(name, value);
   });
@@ -217,7 +217,7 @@ function sseResponse(
   stream: EventNativeOutputStream,
   request: Request,
   options: CreateEventNativeFetchHandlerOptions,
-  featureHeaders?: HeadersInit,
+  applicationHeaders?: HeadersInit,
 ): Response {
   const reader = stream.outputs.getReader();
   const body = new ReadableStream<Uint8Array>({
@@ -252,7 +252,7 @@ function sseResponse(
   return new Response(body, {
     status: 200,
     headers: (() => {
-      const headers = responseHeaders(options, featureHeaders);
+      const headers = responseHeaders(options, applicationHeaders);
       headers.set("cache-control", "no-cache");
       headers.set("content-type", "text/event-stream; charset=utf-8");
       return headers;

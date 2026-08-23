@@ -14,7 +14,7 @@ plugins/processors, database state, and HTTP clients explicitly.
 | uppercase internal event vocabulary                                    | semantic lowercase durable events plus ephemeral deltas                                 |
 | `unsafeGraph` and public raw graph writes                              | typed domain/collection mutations and relations                                         |
 | ambient `withSchema()`                                                 | explicit namespace/schema on application or operation scope                             |
-| `withApp()`                                                            | `createCopilotzGateway().fetch` or transitional `createV1FetchHandler()`                |
+| `withApp()`                                                            | `createCopilotzGateway().fetch`                                                         |
 | public engine/application assembly and workload maps                   | `createCopilotz()`, `createCopilotzGateway()`, and `createCopilotzWorker()`             |
 | hidden agent consultation/delegation                                   | public same-thread `ask` conversation                                                   |
 | Web Worker/inline runtime switches                                     | private/shared/injected Oxian placement                                                 |
@@ -35,8 +35,8 @@ plugins/processors, database state, and HTTP clients explicitly.
 4. Replace ambient schema/database calls with explicit namespace/schema and
    domain repositories.
 5. Move large text, JSON, media, and tool payloads to canonical content refs.
-6. Mount `gateway.fetch` as the v3 server. Keep the v1 Fetch/SSE projection only
-   for clients that still require it.
+6. Mount `gateway.fetch` as the server and migrate clients to its event-native
+   response contract.
 7. Drain all legacy pending/processing work and active thread leases.
 8. Run the isolated database upgrade for every tenant schema.
 9. Run application compile, runtime, persistence, channel, and HTTP acceptance

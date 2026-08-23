@@ -40,9 +40,10 @@ export async function collectContextContributions(
   const collected: CollectedContextContribution[] = [];
   const ids = new Set<string>();
   for (
-    const resource of Object.values(context.promptContext).filter(
-      isContextResource,
-    )
+    const resource of Object.values(context.resources.promptContext ?? {})
+      .filter(
+        isContextResource,
+      )
   ) {
     if (!resource.purposes.includes(input.purpose)) continue;
     const value = await resource.contribute({

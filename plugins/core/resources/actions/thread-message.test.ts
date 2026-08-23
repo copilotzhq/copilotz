@@ -1,47 +1,32 @@
-import { coreFeatureAliases } from "@copilotz/copilotz/plugins/core";
 import { assertEquals } from "@std/assert";
-import { THREAD_MESSAGE_FEATURE_ID } from "./thread-message.ts";
 import { createTestDomainContext } from "../../../../runtime/testing/domain-context.ts";
 import { createCopilotzApplication } from "../../../../runtime/application/index.ts";
-import { createFeatureContext } from "../../../../runtime/features/index.ts";
 import { createTestDatabase } from "../../../../runtime/testing/ominipg.ts";
 import { coreCollectionsPlugin } from "../../plugin.ts";
 
 const NAMESPACE = "tenant-thread-message";
 
-Deno.test("thread-message feature ensures participant, membership, and message in one invoke", async () => {
+Deno.test("createThreadMessage ensures participant, membership, and message atomically", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   const application = await createCopilotzApplication({
     database: db,
     namespace: NAMESPACE,
-    databaseSchema: "copilotz_thread_message_feature",
-    core: false,
-    canonicalCore: [coreCollectionsPlugin],
+    databaseSchema: "copilotz_thread_message_action",
+    plugins: [coreCollectionsPlugin],
     engine: { retryBaseMs: 0, random: () => 0 },
   });
   try {
-    await createTestDomainContext(application, NAMESPACE, coreFeatureAliases)
-      .features.thread
-      .create({
-        id: "thread-a",
-        participants: [{
-          id: "human-a",
-          externalId: "human-a",
-          participantType: "human",
-        }],
-      }, { identity: { deduplicationId: "thread-a:create" } });
-    const context = createFeatureContext({
-      namespace: NAMESPACE,
-      plugins: application.plugins,
-      collectionRuntime: application.collectionRuntime,
-      featureAliases: coreFeatureAliases,
-      contentResolver: application.content.resolver,
-      events: application.events,
-      deliveries: application.deliveries,
-      relations: application.relations,
-    });
+    const context = createTestDomainContext(application, NAMESPACE);
+    await context.actions.createThread({
+      id: "thread-a",
+      participants: [{
+        id: "human-a",
+        externalId: "human-a",
+        participantType: "human",
+      }],
+    }, { identity: { deduplicationId: "thread-a:create" } });
     assertEquals(typeof context.transaction, "function");
-    const created = await context.features.threadMessage.create(
+    const created = await context.actions.createThreadMessage(
       {
         id: "message-job",
         threadId: "thread-a",
@@ -51,7 +36,7 @@ Deno.test("thread-message feature ensures participant, membership, and message i
           name: "RAG",
         },
         recipientIds: ["human-a"],
-        content: [],
+        content: "Action-owned content",
         metadata: { kind: "fixture" },
       },
       { operationKey: "thread-message:create" },

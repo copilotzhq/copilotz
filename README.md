@@ -16,7 +16,7 @@ flowchart LR
   subgraph plugins["Plugins"]
     direction LR
     processor["Processor<br/><small>listens to events</small>"]
-    actions["Actions<br/><small>Features</small>"]
+    actions["Actions"]
     mutations["Mutations<br/><small>Collections</small>"]
 
     processor -- "runs" --> actions
@@ -30,9 +30,10 @@ flowchart LR
 
 Essential boundaries:
 
-- `copilotz.send(...)` is runtime-neutral ingress; it is not a Feature call.
-- Processors listen to Events and run plugin-owned Features or Collections.
-- Features are executable actions and emit `<actionId>.invoked/completed/...`.
+- `copilotz.send(...)` is runtime-neutral ingress; it does not invoke a plugin
+  Action directly.
+- Processors listen to Events and invoke plugin-owned Actions or Collections.
+- Actions emit `<actionId>.invoked/completed/...`.
 - Collections are semantic graph state and emit
   `<collection>.created/updated/...`.
 - Action events carry self-contained input and output Event Bodies; Processors
@@ -136,11 +137,11 @@ API.
 | `/attachments`                     | Persistent text/realtime ingress                                    |
 | `/agents`, `/llm`, `/tools`        | Agent prompt/config, LLM providers, tool catalog and executor       |
 | `/skills`                          | Optional Open Skill resources and portable disclosure tools         |
-| `/channels`, `/features`, `/admin` | App and transport resources                                         |
+| `/channels`, `/actions`, `/admin`  | Transport plugins, executable primitives, and admin APIs            |
 | `/adapters`                        | Runtime-neutral OpenAPI/MCP injection and Ominipg adapters          |
 | `/adapters/stdio`                  | Explicit subprocess-backed MCP stdio capability                     |
 | `/adapters/deno`, `/adapters/node` | Host-specific capabilities                                          |
-| `/server`                          | Transitional v1 transport projection                                |
+| `/server`                          | Event-native server projection types                                |
 | `/migration/v1`                    | Isolated one-way database upgrade; never imported by normal runtime |
 
 ## Documentation

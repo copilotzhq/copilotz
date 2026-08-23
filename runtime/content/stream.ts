@@ -5,10 +5,7 @@ import {
   type ProgressiveBodyFollower,
   type ProgressiveBodyWriter,
 } from "./progressive.ts";
-import type {
-  BodyHead,
-  BodyStore,
-} from "./body-store.ts";
+import type { BodyHead, BodyStore } from "./body-store.ts";
 import type {
   AssetBodyLocation,
   AssetOrigin,
@@ -44,7 +41,9 @@ function contentStreamBodyId(
   const namespace = input.namespace.trim();
   const streamId = input.streamId.trim();
   if (!namespace || !streamId) {
-    throw new TypeError("Content stream body id requires namespace and stream id.");
+    throw new TypeError(
+      "Content stream body id requires namespace and stream id.",
+    );
   }
   return ["content-streams", cleanSegment(namespace), cleanSegment(streamId)]
     .join("/");
@@ -229,7 +228,9 @@ export function createContentStreamRuntime(
           throw new Error(`Content stream '${id}' is already settled.`);
         }
         const assetId = closeInput.assetId.trim();
-        if (!assetId) throw new TypeError("Content stream assetId is required.");
+        if (!assetId) {
+          throw new TypeError("Content stream assetId is required.");
+        }
         const readyBody = await body.finalize();
         throwIfAborted(closeOptions.signal);
         settled = true;
@@ -245,7 +246,8 @@ export function createContentStreamRuntime(
             location: bodyLocation(options.store, readyBody),
             byteLength: readyBody.byteLength,
             digest: readyBody.digest,
-            idempotencyKey: `${namespace}:content-stream:${id}:asset:${assetId}`,
+            idempotencyKey:
+              `${namespace}:content-stream:${id}:asset:${assetId}`,
             ...(closeInput.origin
               ? { origin: structuredClone(closeInput.origin) }
               : {}),

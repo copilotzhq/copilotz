@@ -46,7 +46,7 @@ export function createChannelRuntime(
   options: CreateChannelRuntimeOptions = {},
 ): ChannelRuntime {
   const channels = Object.freeze(
-    Object.values(application.plugins.context.channels ?? {}).filter(
+    Object.values(application.plugins.resources.channels ?? {}).filter(
       (value): value is ChannelResource =>
         !!value && typeof value === "object" && "id" in value,
     ),

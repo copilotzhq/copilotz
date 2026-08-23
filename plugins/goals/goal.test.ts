@@ -1,11 +1,12 @@
 import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
 
+import type { ActionCallers } from "../../runtime/actions/index.ts";
 import { createTestDatabase } from "../../runtime/testing/ominipg.ts";
+import { createTestDomainContext } from "../../runtime/testing/domain-context.ts";
 import type { Agent } from "../../runtime/resources/index.ts";
 import { createCopilotzApplication } from "../../runtime/application/index.ts";
 import type { CopilotzApplication } from "../../runtime/application/index.ts";
 import type { CopilotzProcessorContext } from "../../runtime/engine/index.ts";
-import { createFeatureContext } from "../../runtime/features/index.ts";
 import {
   type CopilotzPlugin,
   definePlugin,
@@ -15,7 +16,7 @@ import {
   loadMessageRecord,
   loadParticipantRecord,
 } from "../../runtime/engine/collection-graph.ts";
-import { coreCollectionsPlugin } from "../core/plugin.ts";
+import { type coreActions, coreCollectionsPlugin } from "../core/plugin.ts";
 import type { GoalStreamEvent } from "./types.ts";
 import { createGoalRuntime } from "./index.ts";
 import type { GoalRuntime } from "./index.ts";
@@ -41,6 +42,10 @@ const judgeAgent: Agent = Object.freeze({
 });
 
 type ScriptMode = "normal" | "tool-isolation";
+type GoalTestActions = Pick<
+  typeof coreActions,
+  "createThread" | "addThreadParticipant"
+>;
 
 async function messageText(
   context: CopilotzProcessorContext,
@@ -134,8 +139,15 @@ function scriptedGoalPlugin(mode: ScriptMode = "normal"): CopilotzPlugin {
   return definePlugin({
     id: `fixture.goals.${mode}`,
     version: "1.0.0",
-    agents: [testedAgent, simulatorAgent, judgeAgent],
-    processors: [processor],
+    plugins: [coreCollectionsPlugin],
+    processors: { goalScript: processor },
+    resources: {
+      agents: {
+        tested: testedAgent,
+        simulator: simulatorAgent,
+        judge: judgeAgent,
+      },
+    },
   });
 }
 
@@ -154,26 +166,25 @@ async function createFixture(
     database,
     namespace: NAMESPACE,
     databaseSchema: schema,
-    core: false,
-    canonicalCore: [coreCollectionsPlugin],
     plugins: [scriptedGoalPlugin(mode)],
     engine: { retryBaseMs: 0, random: () => 0 },
   });
   const scope = await application.databaseScope(schema);
+  const actionsByNamespace = new Map<
+    string,
+    ActionCallers<GoalTestActions>
+  >();
   const goals = createGoalRuntime({
     registry: application.plugins,
     collectionRuntime: scope.collectionRuntime,
-    features: (namespace) =>
-      createFeatureContext({
-        namespace,
-        plugins: application.plugins,
-        collections: scope.collections,
-        collectionRuntime: scope.collectionRuntime,
-        contentResolver: scope.content.resolver,
-        events: { list: (input) => scope.events.list(input) },
-        deliveries: { list: (input) => scope.deliveries.list(input) },
-        relations: { list: (input) => scope.relations.list(input) },
-      }),
+    actions(namespace) {
+      const existing = actionsByNamespace.get(namespace);
+      if (existing) return existing;
+      const actions = createTestDomainContext(application, namespace)
+        .actions as ActionCallers<GoalTestActions>;
+      actionsByNamespace.set(namespace, actions);
+      return actions;
+    },
     resolver: scope.content.resolver,
     send: (input) => application.send(input),
     defaultNamespace: NAMESPACE,

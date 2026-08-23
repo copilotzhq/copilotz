@@ -4,7 +4,7 @@ import { createTestDatabase } from "../testing/ominipg.ts";
 import { createCopilotzEngine } from "../engine/index.ts";
 import { createSqlSession } from "../events/index.ts";
 import { createPluginRegistry, definePlugin } from "../plugins/index.ts";
-import { defineCollection } from "./index.ts";
+import { defineCollection } from "../collections/index.ts";
 
 const relationNodeCollection = defineCollection({
   name: "relation_contract_node",
@@ -24,7 +24,7 @@ Deno.test("typed relations create, query, and delete direct graph edges", async 
     plugins: [definePlugin({
       id: "test.typed-relations",
       version: "1.0.0",
-      collections: [relationNodeCollection],
+      collections: { relationNode: relationNodeCollection },
     })],
   });
   const engine = await createCopilotzEngine({

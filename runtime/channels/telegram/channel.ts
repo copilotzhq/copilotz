@@ -441,6 +441,6 @@ export function createTelegramChannelPlugin(
   return definePlugin({
     id: options.pluginId?.trim() || "@copilotz/channel-telegram",
     version: options.version?.trim() || "3.0.0",
-    channels: [channel],
+    resources: { channels: { [channel.id]: channel } },
   });
 }

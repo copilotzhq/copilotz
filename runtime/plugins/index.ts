@@ -26,18 +26,23 @@ export type { TransientProcessorSet } from "./transient.ts";
 export { createPluginRegistry } from "./registry.ts";
 export type {
   CreatePluginRegistryOptions,
+  PluginComposition,
   PluginRegistry,
+  RegistryComposition,
 } from "./registry.ts";
-export { definePlugin } from "./types.ts";
+export { definePlugin, isCopilotzPlugin } from "./types.ts";
 export type {
+  AnyCopilotzPlugin,
+  AnyProcessor,
+  CollectionMap,
+  ComposePlugins,
+  CompositionOfPlugin,
   CopilotzPlugin,
   DefinePluginInput,
-  PluginContextContribution,
-  PluginContextValues,
-  PluginDeclarationResources,
-  PluginDeclarationResourceType,
-  PluginManifest,
-  PluginResource,
+  PluginAdapters,
+  PluginNamespaceMap,
   PluginResources,
-  PluginResourceType,
+  PluginTypeComposition,
+  ProcessorContextOf,
+  ProcessorMap,
 } from "./types.ts";

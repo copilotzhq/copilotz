@@ -1,13 +1,38 @@
 const repositoryRoot = new URL("../", import.meta.url);
 const configuration = JSON.parse(
   await Deno.readTextFile(new URL("deno.json", repositoryRoot)),
-) as { exports: Record<string, string> };
+) as {
+  exports: Record<string, string>;
+  imports: Record<string, string>;
+};
 
 const exportTargets = Object.values(configuration.exports);
 for (const [subpath, target] of Object.entries(configuration.exports)) {
   const stat = await Deno.stat(new URL(target, repositoryRoot));
   if (!stat.isFile) {
     throw new Error(`Package export ${subpath} is not a file: ${target}`);
+  }
+}
+
+const selfImports = Object.entries(configuration.imports).filter((
+  [specifier],
+) => specifier.startsWith("@copilotz/copilotz/"));
+for (const [specifier, target] of selfImports) {
+  if (!target.startsWith("./")) {
+    throw new Error(
+      `Package self-import ${specifier} must use a local target.`,
+    );
+  }
+  const stat = await Deno.stat(new URL(target, repositoryRoot));
+  if (!stat.isFile) {
+    throw new Error(
+      `Package self-import ${specifier} is not a file: ${target}`,
+    );
+  }
+  if (!exportTargets.includes(target)) {
+    throw new Error(
+      `Package self-import ${specifier} does not match a public export target: ${target}`,
+    );
   }
 }
 
@@ -149,5 +174,5 @@ if (unusedDependencies.length) {
 }
 
 console.log(
-  `Package surface passed: ${exportTargets.length} exports, ${production.length} production modules, and dependency wrappers are reachable and release-clean.`,
+  `Package surface passed: ${exportTargets.length} exports, ${selfImports.length} self-imports, ${production.length} production modules, and dependency wrappers are reachable and release-clean.`,
 );

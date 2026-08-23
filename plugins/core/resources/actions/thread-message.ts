@@ -4,22 +4,19 @@ import type {
   ScopedCollections,
 } from "@copilotz/copilotz/collections";
 import type {
-  ContentSequence,
-  DurableContentInput,
-} from "@copilotz/copilotz/content";
-import type {
   ParticipantInput,
   ParticipantType,
 } from "@copilotz/copilotz/domain";
 import type { EventVisibility } from "@copilotz/copilotz/events";
 import {
-  defineFeature,
-  type FeatureAction,
-  type FeatureDefinition,
-  type FeatureExecuteContext,
-} from "@copilotz/copilotz/features";
+  type ActionContext,
+  type ActionDefinition,
+  defineAction,
+} from "@copilotz/copilotz/actions";
+import { prepareActionContent } from "./content-policy.ts";
 
-export const THREAD_MESSAGE_FEATURE_ID = "copilotz.core.thread-message";
+export const CREATE_THREAD_MESSAGE_ACTION_ID =
+  "copilotz.core.thread-message.create";
 
 export type ThreadMessageSender = CollectionRecord | ParticipantInput;
 
@@ -53,11 +50,6 @@ function stringArray(value: unknown): readonly string[] {
       typeof item === "string" && Boolean(item.trim())
     ),
   );
-}
-
-function contentSequence(value: unknown): ContentSequence {
-  if (!Array.isArray(value)) return Object.freeze([]);
-  return Object.freeze(value) as ContentSequence;
 }
 
 function participantType(value: unknown): ParticipantType {
@@ -194,9 +186,9 @@ function asSender(value: unknown): ThreadMessageSender {
   return record as ThreadMessageSender;
 }
 
-async function createThreadMessageAction(
+async function executeCreateThreadMessage(
   input: unknown,
-  context: FeatureExecuteContext,
+  context: ActionContext,
 ): Promise<CollectionRecord> {
   const data = asRecord(input);
   const id = requireText(data.id, "Message ID");
@@ -205,9 +197,12 @@ async function createThreadMessageAction(
   const recipientIds = stringArray(data.recipientIds);
   const eventVisibility = visibility(data.visibility);
   const metadata = structuredClone(asRecord(data.metadata));
+  const content = await prepareActionContent(
+    data.content ?? [],
+    context,
+    "message-content",
+  );
   return await context.transaction(async (tx) => {
-    const suppliedContent = data.content as DurableContentInput | undefined;
-    const content = suppliedContent ?? contentSequence(suppliedContent);
     const collections = tx.collections;
     if (!collections.message) {
       throw new Error("Collection 'message' is not bound.");
@@ -258,22 +253,14 @@ const createInputSchema = {
   required: ["id", "threadId", "sender"],
 } as const;
 
-type ThreadMessageFeature = FeatureDefinition<{
-  create: FeatureAction<
-    typeof createInputSchema,
-    CollectionRecord
-  >;
-}>;
-
-const threadMessageFeatureDefinition: ThreadMessageFeature = defineFeature({
-  id: THREAD_MESSAGE_FEATURE_ID,
-  actions: {
-    create: {
-      inputSchema: createInputSchema,
-      execute: createThreadMessageAction,
-    },
-  },
+export const createThreadMessageAction: ActionDefinition<
+  unknown,
+  CollectionRecord,
+  ActionContext,
+  typeof createInputSchema,
+  undefined
+> = defineAction({
+  id: CREATE_THREAD_MESSAGE_ACTION_ID,
+  inputSchema: createInputSchema,
+  execute: executeCreateThreadMessage,
 });
-
-export const threadMessageFeature: ThreadMessageFeature =
-  threadMessageFeatureDefinition;

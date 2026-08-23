@@ -8,7 +8,6 @@ export type {
   CreateCopilotzOptions,
   CreateCopilotzWorkerOptions,
 } from "../../create-copilotz.ts";
-export { createCopilotzCorePlugins } from "./core-plugins.ts";
 export type {
   ApplicationSendHandle,
   ApplicationSendInput,
@@ -16,10 +15,7 @@ export type {
   CopilotzApplicationConfig,
   CopilotzApplicationObservation,
   CopilotzComposition,
-  CopilotzCorePluginOptions,
   CopilotzInputEnvelope,
-  CorePluginSetting,
-  CreateCopilotzCorePlugins,
 } from "./types.ts";
 export type { CopilotzEmbeddedApplication } from "./copilotz.ts";
 export type { CopilotzGateway, CopilotzGatewayHttpOptions } from "./gateway.ts";

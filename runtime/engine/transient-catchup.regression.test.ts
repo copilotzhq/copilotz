@@ -1,4 +1,3 @@
-import { coreFeatureAliases } from "@copilotz/copilotz/plugins/core";
 import { assertEquals, assertExists } from "@std/assert";
 
 import { coreCollectionsPlugin } from "../../plugins/core/plugin.ts";
@@ -125,15 +124,14 @@ Deno.test("transient catch-up delivers a concurrently committed event once", asy
     });
     await queryStarted;
 
-    await createTestDomainContext(engine, NAMESPACE, coreFeatureAliases)
-      .features.thread.create({
-        id: "thread-racing-catchup",
-        participants: [{
-          id: "user-a",
-          externalId: "user-a",
-          participantType: "human",
-        }],
-      });
+    await createTestDomainContext(engine, NAMESPACE).actions.createThread({
+      id: "thread-racing-catchup",
+      participants: [{
+        id: "user-a",
+        externalId: "user-a",
+        participantType: "human",
+      }],
+    });
     const createdEvent = (await engine.events.list({
       namespace: NAMESPACE,
       limit: 100,

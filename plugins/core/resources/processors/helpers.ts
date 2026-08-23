@@ -13,12 +13,7 @@ import type {
   Participant,
 } from "@copilotz/copilotz/domain";
 import type { CopilotzProcessorContext } from "@copilotz/copilotz/engine";
-import {
-  type CreateTextWorkflowPluginOptions,
-  isLlmResource,
-  type LlmResource,
-  requireLlmResource,
-} from "@copilotz/copilotz/llm";
+import type { CreateTextWorkflowPluginOptions } from "@copilotz/copilotz/llm";
 import type { Agent } from "@copilotz/copilotz/resources";
 import {
   createWorkflowToolCatalog,
@@ -61,25 +56,12 @@ export function stringArray(value: unknown): readonly string[] {
 }
 
 export function requireCollection<T extends CollectionRecord>(
-  context: CopilotzProcessorContext,
+  context: Pick<CopilotzProcessorContext, "collections">,
   name: string,
 ): ScopedCollection<T> {
   const bound = context.collections[name] as ScopedCollection<T> | undefined;
   if (!bound) throw new Error(`Collection '${name}' is not bound.`);
   return bound;
-}
-
-export function llmResource(
-  context: CopilotzProcessorContext,
-  provider: string,
-): LlmResource {
-  return requireLlmResource(context, provider);
-}
-
-export function firstLlmResource(
-  context: CopilotzProcessorContext,
-): LlmResource | undefined {
-  return Object.values(context.llm).find(isLlmResource);
 }
 
 export function collectionEventRecord(
@@ -191,7 +173,7 @@ export function preparedContent(
 }
 
 export async function listThreadMessages(
-  context: CopilotzProcessorContext,
+  context: Pick<CopilotzProcessorContext, "collections">,
   threadId: string,
 ): Promise<readonly CollectionRecord[]> {
   const threads = requireCollection(context, "thread");
@@ -221,7 +203,6 @@ export function historyVisibilityOf(record: CollectionRecord): string {
 }
 
 export function toolCatalogFor(
-  _context: CopilotzProcessorContext,
   agent?: Agent,
 ): WorkflowToolCatalog {
   const extra = agent as
@@ -269,7 +250,7 @@ export function valueContent(value: unknown, role: string): ContentInput {
 }
 
 export async function loadParticipant(
-  context: CopilotzProcessorContext,
+  context: Pick<CopilotzProcessorContext, "collections">,
   id: string,
 ): Promise<CollectionRecord | null> {
   return await requireCollection(context, "participant").get({ id });

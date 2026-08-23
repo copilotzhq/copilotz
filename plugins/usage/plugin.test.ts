@@ -1,4 +1,3 @@
-import { coreFeatureAliases } from "@copilotz/copilotz/plugins/core";
 import { assert, assertEquals, assertExists } from "@std/assert";
 import {
   createUsageWorkflowPlugin,
@@ -29,57 +28,62 @@ import {
   definePlugin,
   defineProcessor,
 } from "../../runtime/plugins/index.ts";
-import { defineFeature } from "../../runtime/features/index.ts";
-import { coreCollectionsPlugin } from "../core/plugin.ts";
+import { defineAction } from "../../runtime/actions/index.ts";
+import { coreCollections, createThreadAction } from "../core/index.ts";
 
 const NAMESPACE = "tenant-a";
 const THREAD_ID = "thread-a";
 
-const usageLlmFeature = defineFeature({
-  id: "copilotz.core.llm",
-  actions: {
-    generate: {
-      execute(input: unknown) {
-        const value = input as Record<string, unknown>;
-        if (value.fail) throw new Error(String(value.fail));
-        return value.result;
-      },
-    },
+const usageLlmAction = defineAction<unknown, unknown>({
+  id: "copilotz.core.llm.generate",
+  execute(input: unknown) {
+    const value = input as Record<string, unknown>;
+    if (value.fail) throw new Error(String(value.fail));
+    return value.result;
   },
 });
 
-const usageToolFeature = defineFeature({
-  id: "copilotz.core.tool",
-  actions: {
-    call: {
-      execute(input: unknown) {
-        return (input as Record<string, unknown>).result;
-      },
-    },
+const usageToolAction = defineAction<unknown, unknown>({
+  id: "copilotz.core.tool.call",
+  execute(input: unknown) {
+    return (input as Record<string, unknown>).result;
   },
+});
+
+const usageCorePlugin = definePlugin({
+  id: "test.usage-core",
+  version: "1.0.0",
+  collections: coreCollections,
+  actions: { createThread: createThreadAction },
 });
 
 const usageActionDriverPlugin = definePlugin({
   id: "test.usage-action-driver",
   version: "1.0.0",
-  processors: [defineProcessor<CopilotzProcessorContext>({
-    id: "test.usage-action-driver",
-    on: [
-      { eventType: "test.usage.llm" },
-      { eventType: "test.usage.tool" },
-    ],
-    async handle(event, context) {
-      if (event.type === "test.usage.llm") {
-        await context.feature(usageLlmFeature).generate(event.data, {
+  actions: {
+    usageLlm: usageLlmAction,
+    usageTool: usageToolAction,
+  },
+  processors: {
+    actionDriver: defineProcessor<CopilotzProcessorContext>({
+      id: "test.usage-action-driver",
+      on: [
+        { eventType: "test.usage.llm" },
+        { eventType: "test.usage.tool" },
+      ],
+      async handle(event, context) {
+        if (event.type === "test.usage.llm") {
+          await context.actions.usageLlm(event.data, {
+            operationKey: String((event.data as Record<string, unknown>).key),
+          }).catch(() => undefined);
+          return;
+        }
+        await context.actions.usageTool(event.data, {
           operationKey: String((event.data as Record<string, unknown>).key),
-        }).catch(() => undefined);
-        return;
-      }
-      await context.feature(usageToolFeature).call(event.data, {
-        operationKey: String((event.data as Record<string, unknown>).key),
-      });
-    },
-  })],
+        });
+      },
+    }),
+  },
 });
 
 type Fixture = Readonly<{
@@ -93,7 +97,7 @@ async function createFixture(
   const db = await createTestDatabase({ url: ":memory:" });
   const registry = await createPluginRegistry({
     plugins: [
-      coreCollectionsPlugin,
+      usageCorePlugin,
       createUsageWorkflowPlugin(options),
       usageActionDriverPlugin,
     ],
@@ -105,23 +109,22 @@ async function createFixture(
     retryBaseMs: 0,
     random: () => 0,
   });
-  await createTestDomainContext(engine, NAMESPACE, coreFeatureAliases).features
-    .thread.create({
-      id: THREAD_ID,
-      participants: [
-        {
-          id: "user-node",
-          externalId: "user-external",
-          participantType: "human",
-        },
-        {
-          id: "agent-node",
-          externalId: "north",
-          participantType: "agent",
-          agentId: "north",
-        },
-      ],
-    });
+  await createTestDomainContext(engine, NAMESPACE).actions.createThread({
+    id: THREAD_ID,
+    participants: [
+      {
+        id: "user-node",
+        externalId: "user-external",
+        participantType: "human",
+      },
+      {
+        id: "agent-node",
+        externalId: "north",
+        participantType: "agent",
+        agentId: "north",
+      },
+    ],
+  });
   return Object.freeze({ db, engine });
 }
 
@@ -132,36 +135,26 @@ async function closeFixture(fixture: Fixture): Promise<void> {
 
 Deno.test("usage workflow is a factory-created plugin and can disable metering", () => {
   const enabled = createUsageWorkflowPlugin();
-  assertEquals(enabled.manifest.provides.collections, ["usage"]);
-  assertEquals(enabled.manifest.provides.processors, [
-    "copilotz.core.record-llm-usage",
-    "copilotz.core.record-tool-usage",
+  assertEquals(Object.keys(enabled.collections), ["usage"]);
+  assertEquals(Object.keys(enabled.processors), [
+    "recordLlmUsage",
+    "recordToolUsage",
   ]);
-  assertEquals(enabled.resources.collections?.length, 1);
-  assertEquals(enabled.resources.processors?.length, 2);
 
   const disabled = createUsageWorkflowPlugin({ enabled: false });
-  assertEquals(disabled.manifest.provides.collections, ["usage"]);
-  assertEquals(disabled.manifest.provides.processors, undefined);
-  assertEquals(disabled.resources.processors, undefined);
+  assertEquals(Object.keys(disabled.collections), ["usage"]);
+  assertEquals(Object.keys(disabled.processors), []);
 });
 
-Deno.test("package-root core.usage composes the usage plugin without runtime ownership", async () => {
+Deno.test("package-root composes an explicitly supplied usage plugin", async () => {
   const application = await createCopilotz({
     namespace: "usage-root",
-    core: {
-      tools: false,
-      webTools: false,
-      finance: false,
-      memory: false,
-      schedules: false,
-      usage: { enabled: false },
-    },
+    plugins: [createUsageWorkflowPlugin({ enabled: false })],
   });
   try {
-    assert(application.plugins.collections.get("usage"));
+    assert(application.plugins.collections.usage);
     assertEquals(
-      application.config.declaredPluginIds.includes("@copilotz/core-usage"),
+      application.config.pluginIds.includes("@copilotz/core-usage"),
       true,
     );
   } finally {

@@ -1,323 +1,332 @@
-import { assert, assertEquals, assertThrows } from "@std/assert";
 import {
+  assert,
+  assertEquals,
+  assertStrictEquals,
+  assertThrows,
+} from "@std/assert";
+import { defineAction } from "../actions/define.ts";
+import { defineCollection } from "../collections/definition.ts";
+import {
+  type CopilotzPlugin,
   createPluginRegistry,
   createTransientProcessorSet,
   definePlugin,
   defineProcessor,
-  type Processor,
 } from "./index.ts";
 
-function plugin(input: {
-  id: string;
-  agents?: readonly object[];
-  tools?: readonly object[];
-  processors?: readonly Processor[];
-  plugins?: Parameters<typeof definePlugin>[0]["plugins"];
-  context?: Parameters<typeof definePlugin>[0]["context"];
-}) {
-  return definePlugin({
-    id: input.id,
-    version: "1.0.0",
-    plugins: input.plugins,
-    context: input.context,
-    agents: input.agents,
-    tools: input.tools,
-    processors: input.processors,
+function action(id: string) {
+  return defineAction({
+    id,
+    execute(input: unknown) {
+      return input;
+    },
   });
 }
 
-Deno.test("plugin manifests validate stable provided resources", () => {
-  const valid = plugin({
-    id: "acme.valid",
-    agents: [{ id: "support", name: "Support" }],
-    tools: [{ id: "random-database-id", key: "lookup", name: "Lookup" }],
+function collection(name: string) {
+  return defineCollection({
+    name,
+    schema: {
+      type: "object",
+      properties: { id: { type: "string" } },
+      required: ["id"],
+      additionalProperties: true,
+    } as const,
   });
-  assert(Object.isFrozen(valid));
-  assert(Object.isFrozen(valid.manifest.provides.tools));
-  assertEquals(valid.manifest.provides.tools, ["lookup"]);
+}
+
+function processor(id: string, eventType = "message.created") {
+  return defineProcessor({
+    id,
+    on: [{ eventType }],
+    handle: () => undefined,
+  });
+}
+
+Deno.test("plugin definitions use direct identity and five keyed primitive maps", () => {
+  const model = { adapter: "openai", model: "gpt-5" };
+  const adapter = { call: () => "ok" };
+  const search = action("search.query");
+  const documents = collection("document");
+  const indexDocument = processor("search.index", "document.created");
+  const plugin = definePlugin({
+    id: "@acme/search",
+    version: "1.0.0",
+    collections: { documents },
+    actions: { search },
+    processors: { indexDocument },
+    resources: { models: { default: model } },
+    adapters: { llm: { openai: adapter } },
+  });
+
+  assertEquals(plugin.id, "@acme/search");
+  assertEquals(plugin.version, "1.0.0");
+  assertStrictEquals(plugin.collections.documents, documents);
+  assertStrictEquals(plugin.actions.search, search);
+  assertStrictEquals(plugin.processors.indexDocument, indexDocument);
+  assertStrictEquals(plugin.resources.models.default, model);
+  assertStrictEquals(plugin.adapters.llm.openai, adapter);
+  assert(Object.isFrozen(plugin));
+  assert(Object.isFrozen(plugin.resources));
+  assert(Object.isFrozen(plugin.resources.models));
+  assert(!Object.isFrozen(model));
+  assert(!Object.isFrozen(adapter));
+  assertEquals("manifest" in plugin, false);
+  assertEquals("context" in plugin, false);
+});
+
+Deno.test("dependencies compose once before dependents and root plugins", () => {
+  const base = definePlugin({
+    id: "acme.base",
+    version: "1.0.0",
+    resources: { agents: { support: { name: "Base" } } },
+  });
+  const child = definePlugin({
+    id: "acme.child",
+    version: "1.0.0",
+    plugins: [base],
+    resources: { agents: { support: { name: "Child" } } },
+  });
+  const sibling = definePlugin({
+    id: "acme.sibling",
+    version: "1.0.0",
+    plugins: [base],
+    resources: { agents: { researcher: { name: "Researcher" } } },
+  });
+  const registry = createPluginRegistry({ plugins: [child, sibling] });
+
+  assertEquals(registry.plugins.map((plugin) => plugin.id), [
+    "acme.base",
+    "acme.child",
+    "acme.sibling",
+  ]);
+  assertEquals(registry.resources.agents.support, { name: "Child" });
+  assertEquals(registry.resources.agents.researcher, { name: "Researcher" });
+});
+
+Deno.test("same plugin object is idempotent while duplicate plugin identities fail", () => {
+  const shared = definePlugin({ id: "acme.shared", version: "1.0.0" });
+  const registry = createPluginRegistry({ plugins: [shared, shared] });
+  assertEquals(registry.plugins, [shared]);
+
+  const duplicate = definePlugin({ id: "acme.shared", version: "2.0.0" });
+  assertThrows(
+    () => createPluginRegistry({ plugins: [shared, duplicate] }),
+    TypeError,
+    "declared more than once",
+  );
 
   assertThrows(
     () =>
       definePlugin({
-        id: "acme.invalid",
+        id: "acme.invalid-dependency",
         version: "1.0.0",
-        agents: [{ id: "present" }, { id: "present" }],
+        plugins: [{ id: "raw" }] as unknown as readonly CopilotzPlugin[],
       }),
     TypeError,
-    "duplicate",
+    "definePlugin",
   );
 });
 
-Deno.test("plugin composition precedence is core, declaration order, then application context", async () => {
-  const core = plugin({
-    id: "@copilotz/core",
-    agents: [{ id: "support", name: "Core" }],
+Deno.test("Resources and Adapters overlay independently and application values are final", () => {
+  const dependencyResource = { source: "dependency" };
+  const pluginResource = { source: "plugin" };
+  const applicationResource = { source: "application" };
+  const dependencyAdapter = () => "dependency";
+  const pluginAdapter = () => "plugin";
+  const applicationAdapter = () => "application";
+  const dependency = definePlugin({
+    id: "acme.overlay-dependency",
+    version: "1.0.0",
+    resources: { shared: { default: dependencyResource } },
+    adapters: { shared: { default: dependencyAdapter } },
   });
-  const first = plugin({
-    id: "acme.first",
-    agents: [
-      { id: "support", name: "First" },
-      { id: "research", name: "Research" },
-    ],
+  const plugin = definePlugin({
+    id: "acme.overlay",
+    version: "1.0.0",
+    plugins: [dependency],
+    resources: { shared: { default: pluginResource } },
+    adapters: { shared: { default: pluginAdapter } },
   });
-  const second = plugin({
-    id: "acme.second",
-    agents: [{ id: "support", name: "Second" }],
-  });
-  const registry = await createPluginRegistry({
-    core,
-    plugins: [first, second],
-    context: { agents: { support: { id: "support", name: "Application" } } },
+  const registry = createPluginRegistry({
+    plugins: [plugin],
+    resources: { shared: { default: applicationResource } },
+    adapters: { shared: { default: applicationAdapter } },
   });
 
+  assertStrictEquals(registry.resources.shared.default, applicationResource);
+  assertStrictEquals(registry.adapters.shared.default, applicationAdapter);
   assertEquals(
-    (registry.context.agents.support as { id: string; name: string }).name,
-    "Application",
-  );
-  assertEquals(
-    (registry.context.agents.research as { id: string; name: string }).name,
-    "Research",
+    (registry.adapters.shared.default as () => string)(),
+    "application",
   );
 });
 
-Deno.test("plugin dependencies compose before the declaring plugin", async () => {
-  const base = plugin({
-    id: "acme.base",
-    agents: [{ id: "support", name: "Base" }],
-    tools: [{ key: "lookup", name: "Lookup" }],
-  });
-  const child = plugin({
-    id: "acme.child",
-    plugins: [base],
-    agents: [{ id: "support", name: "Child" }],
-  });
-  const sibling = plugin({
-    id: "acme.sibling",
-    plugins: [base],
-    agents: [{ id: "research", name: "Research" }],
-  });
-  const registry = await createPluginRegistry({
-    plugins: [child, sibling],
-  });
-
-  assertEquals(
-    registry.plugins.map((registered) => registered.manifest.id),
-    ["acme.base", "acme.child", "acme.sibling"],
-  );
-  assertEquals(
-    (registry.context.agents.support as { name: string }).name,
-    "Child",
-  );
-  assertEquals(
-    (registry.context.tools.lookup as { name: string }).name,
-    "Lookup",
-  );
-  assertEquals(
-    (registry.context.agents.support as { name: string }).name,
-    "Child",
-  );
-  assertEquals(
-    (registry.context.tools.lookup as { name: string }).name,
-    "Lookup",
-  );
-});
-
-Deno.test("plugin property context composes with dependency and application precedence", async () => {
-  const dependencySearch = Object.freeze({
-    key: "provider-search",
-    name: "Provider Search",
-  });
-  const childSearch = Object.freeze({
-    key: "child-search",
-    name: "Child Search",
-  });
-  const applicationSearch = Object.freeze({
-    key: "application-search",
-    name: "Application Search",
-  });
-  const base = plugin({
-    id: "acme.context-base",
-    context: { tools: { search: dependencySearch } },
-  });
-  const child = plugin({
-    id: "acme.context-child",
-    plugins: [base],
-    context: {
-      tools: { search: childSearch },
-      agents: { assistant: { id: "assistant" } },
+Deno.test("registry preserves inferred overlay types", () => {
+  const dependency = definePlugin({
+    id: "acme.typed-dependency",
+    version: "1.0.0",
+    resources: {
+      models: { fallback: { model: "fallback-model" as const } },
     },
   });
-  const registry = await createPluginRegistry({
-    plugins: [child],
-    context: { tools: { search: applicationSearch } },
+  const plugin = definePlugin({
+    id: "acme.typed",
+    version: "1.0.0",
+    plugins: [dependency],
+    resources: { models: { default: { model: "plugin-model" as const } } },
   });
-
-  assertEquals(registry.context.tools.search, applicationSearch);
-  assertEquals(registry.context.agents.assistant, { id: "assistant" });
+  const registry = createPluginRegistry({
+    plugins: [plugin],
+    resources: { models: { default: { model: "application-model" as const } } },
+  });
+  const fallback: "fallback-model" = registry.resources.models.fallback.model;
+  const selected: "application-model" = registry.resources.models.default.model;
+  assertEquals([fallback, selected], ["fallback-model", "application-model"]);
 });
 
-Deno.test("plugin dependency cycles and duplicate identities fail", async () => {
-  const first: Record<string, unknown> = {
-    id: "acme.first",
+Deno.test("executable aliases and stable IDs are unique", () => {
+  const firstAction = action("search.first");
+  const secondAction = action("search.second");
+  const aliasA = definePlugin({
+    id: "acme.action-alias-a",
     version: "1.0.0",
-  };
-  const second: Record<string, unknown> = {
-    id: "acme.second",
+    actions: { search: firstAction },
+  });
+  const aliasB = definePlugin({
+    id: "acme.action-alias-b",
     version: "1.0.0",
-    plugins: [first],
-  };
-  first.plugins = [second];
-
+    actions: { search: secondAction },
+  });
   assertThrows(
-    () => definePlugin(first as Parameters<typeof definePlugin>[0]),
+    () => createPluginRegistry({ plugins: [aliasA, aliasB] }),
     TypeError,
-    "cycle",
+    "Action alias 'search'",
   );
 
+  const idA = definePlugin({
+    id: "acme.action-id-a",
+    version: "1.0.0",
+    actions: { first: action("shared.action") },
+  });
+  const idB = definePlugin({
+    id: "acme.action-id-b",
+    version: "1.0.0",
+    actions: { second: action("shared.action") },
+  });
+  assertThrows(
+    () => createPluginRegistry({ plugins: [idA, idB] }),
+    TypeError,
+    "Action id 'shared.action'",
+  );
+
+  const collectionA = definePlugin({
+    id: "acme.collection-a",
+    version: "1.0.0",
+    collections: { first: collection("shared_collection") },
+  });
+  const collectionB = definePlugin({
+    id: "acme.collection-b",
+    version: "1.0.0",
+    collections: { second: collection("shared_collection") },
+  });
+  assertThrows(
+    () => createPluginRegistry({ plugins: [collectionA, collectionB] }),
+    TypeError,
+    "Collection id 'shared_collection'",
+  );
+
+  const processorA = definePlugin({
+    id: "acme.processor-a",
+    version: "1.0.0",
+    processors: { first: processor("shared.processor") },
+  });
+  const processorB = definePlugin({
+    id: "acme.processor-b",
+    version: "1.0.0",
+    processors: { second: processor("shared.processor") },
+  });
+  assertThrows(
+    () => createPluginRegistry({ plugins: [processorA, processorB] }),
+    TypeError,
+    "Processor id 'shared.processor'",
+  );
+});
+
+Deno.test("legacy fields and non-property aliases are rejected", () => {
   assertThrows(
     () =>
-      createPluginRegistry({
-        plugins: [
-          plugin({ id: "acme.duplicate" }),
-          plugin({ id: "acme.duplicate" }),
-        ],
+      definePlugin(
+        {
+          id: "acme.legacy",
+          version: "1.0.0",
+          agents: [],
+        } as unknown as Parameters<typeof definePlugin>[0],
+      ),
+    TypeError,
+    "cannot declare 'agents'",
+  );
+  assertThrows(
+    () =>
+      definePlugin({
+        id: "acme.invalid-alias",
+        version: "1.0.0",
+        resources: { "not-valid": { value: 1 } },
       }),
     TypeError,
-    "declared more than once",
+    "invalid alias",
   );
 });
 
-Deno.test("prompt context and memory-kind context follow stable override rules", async () => {
-  const contextA = {
-    id: "workspace",
-    type: "context",
-    purposes: ["conversation"],
-    contribute: () => null,
-  };
-  const contextB = { ...contextA, purposes: ["memory_consolidation"] };
-  const kindA = {
-    id: "acme.signal",
-    form: "assertion",
-    description: "first",
-  };
-  const kindB = { ...kindA, description: "replacement" };
-  const resourcePlugin = (
-    id: string,
-    context: object,
-    kind: { id: string },
-  ) =>
-    definePlugin({
-      id,
-      version: "1.0.0",
-      context: {
-        promptContext: { [(context as { id: string }).id]: context },
-        memoryKinds: { [kind.id as string]: kind },
-      },
-    });
-  const registry = await createPluginRegistry({
-    plugins: [
-      resourcePlugin("first", contextA, kindA),
-      resourcePlugin("second", contextB, kindB),
-    ],
-  });
-
-  assertEquals(registry.context.promptContext.workspace, contextB);
-  assertEquals(
-    (registry.context.memoryKinds["acme.signal"] as { description: string })
-      .description,
-    "replacement",
-  );
-});
-
-Deno.test("processor stable IDs override while different IDs remain independent", async () => {
-  const calls: string[] = [];
-  const first = defineProcessor({
+Deno.test("processor matching and durable consumer identity use direct registries", () => {
+  const observer = defineProcessor({
     id: "memory.observe",
-    on: [{ eventType: "message.created" }],
-    handle: () => {
-      calls.push("first");
-    },
-  });
-  const replacement = defineProcessor({
-    id: "memory.observe",
-    on: [{ eventType: "message.created" }],
-    handle: () => {
-      calls.push("replacement");
-    },
-  });
-  const independent = defineProcessor({
-    id: "audit.observe",
     on: [{ eventType: "message.created", namespace: "tenant-a" }],
     settlement: "detached",
-    handle: () => {
-      calls.push("independent");
-    },
+    handle: () => undefined,
   });
-  const registry = await createPluginRegistry({
-    plugins: [
-      plugin({ id: "first", processors: [first] }),
-      plugin({ id: "second", processors: [replacement, independent] }),
-    ],
+  const plugin = definePlugin({
+    id: "acme.processor",
+    version: "1.0.0",
+    processors: { observer },
   });
+  const registry = createPluginRegistry({ plugins: [plugin] });
   const draft = {
     type: "message.created",
     namespace: "tenant-a",
-    payload: { id: "message-a" },
+    payload: {},
   } as const;
 
-  assertEquals(registry.processors.matchDurable(draft), [
-    replacement,
-    independent,
-  ]);
-  assertEquals(registry.processors.durableConsumers(draft), [
-    { consumerId: "processor:memory.observe", settlement: "inherit" },
-    { consumerId: "processor:audit.observe", settlement: "detached" },
-  ]);
-  assertEquals(
-    registry.processors.processorForConsumer("processor:memory.observe"),
-    replacement,
-  );
-  for (const processor of registry.processors.matchDurable(draft)) {
-    await processor.handle({
-      durable: true,
-      id: "event-a",
-      position: "1",
-      schemaVersion: 3,
-      ...draft,
-      routing: {},
-      visibility: { kind: "public" },
-      metadata: {},
-      correlationId: "event-a",
-      createdAt: new Date().toISOString(),
-      data: draft.payload,
-    }, {});
-  }
-  assertEquals(calls, ["replacement", "independent"]);
-});
-
-Deno.test("defineProcessor rejects string matchers", () => {
-  assertThrows(
-    () =>
-      defineProcessor({
-        id: "invalid.string-on",
-        on: ["control.created"] as unknown as Processor["on"],
-        handle: () => undefined,
-      }),
-    TypeError,
-    "matcher object",
+  assertStrictEquals(registry.processors.observer, observer);
+  assertEquals(registry.matchDurable(draft), [observer]);
+  assertEquals(registry.durableConsumers(draft), [{
+    consumerId: "processor:memory.observe",
+    settlement: "detached",
+  }]);
+  assertStrictEquals(
+    registry.processorForConsumer("processor:memory.observe"),
+    observer,
   );
 });
 
-Deno.test("transient processors observe events without durable matching", async () => {
-  const live = defineProcessor({
-    id: "captions.live",
-    on: [{ eventType: "audio.delta" }],
+Deno.test("static wildcard processors remain invalid while transient processors may use them", () => {
+  const wildcard = defineProcessor({
+    id: "audit.all",
+    on: [{ eventType: "*" }],
     handle: () => undefined,
   });
-  const registry = await createPluginRegistry({
-    plugins: [plugin({ id: "static", processors: [] })],
+  const plugin = definePlugin({
+    id: "acme.wildcard",
+    version: "1.0.0",
+    processors: { wildcard },
   });
-  const transients = createTransientProcessorSet([live]);
+  assertThrows(
+    () => createPluginRegistry({ plugins: [plugin] }),
+    TypeError,
+    "cannot register eventType '*'",
+  );
+
+  const transients = createTransientProcessorSet([wildcard]);
   const event = {
     durable: false,
     type: "audio.delta",
@@ -331,33 +340,17 @@ Deno.test("transient processors observe events without durable matching", async 
     sequence: 1,
     createdAt: new Date().toISOString(),
   } as const;
-  assertEquals(transients.match(event), [live]);
-  assertEquals(
-    registry.processors.matchDurable({
-      type: "audio.delta",
-      namespace: "tenant-a",
-      payload: {},
-    }),
-    [],
-  );
+  assertEquals(transients.match(event), [wildcard]);
 });
 
-Deno.test("A55 plugin core is runtime-neutral and contains no legacy processor controls", async () => {
+Deno.test("plugin composition core stays runtime-neutral", async () => {
   for (
-    const module of [
-      "index.ts",
-      "processor.ts",
-      "registry.ts",
-      "types.ts",
-      "match.ts",
-    ]
+    const module of ["index.ts", "processor.ts", "registry.ts", "types.ts"]
   ) {
     const source = await Deno.readTextFile(new URL(module, import.meta.url));
     assert(!/\bDeno\b|\bBun\b|\bprocess\b/.test(source));
     assert(!/from\s+["']node:/.test(source));
-    assert(!/\bclass\s+\w+/.test(source));
     assert(!/loaders\/resources|runtime\/cli|server\//.test(source));
-    assert(!/producedEvents|shouldProcess|\bpriority\b/.test(source));
-    assert(!/ProcessorDelivery|\bfilter\?:/.test(source));
+    assert(!/manifest|provides|PluginResourceType/.test(source));
   }
 });

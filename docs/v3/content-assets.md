@@ -639,24 +639,20 @@ imports in core.
 - Copilotz owns and closes only the private host/database it created. An
   injected dispatcher, target, database, or storage backend remains app-owned.
 
-## Compatibility and Migration
+## Migration
 
-### Edge compatibility
+### Ingress and egress
 
-During the v3 migration:
+The final boundary:
 
-- accept current `MessagePayload.content` strings and parts;
-- accept bare IDs and current `asset://<id>` / namespaced references;
-- keep `ToolExecutionContext.resolveAsset` and provide a migration from direct
-  `assetStore` access;
-- expose canonical compound message history to migrated clients through
-  `include=content,workflow`, without a flattened message compatibility DTO;
-- project semantic/delta events to the versioned legacy transport vocabulary at
-  the v1 SSE boundary;
-- preserve `/v1/assets/:id?format=dataUrl` with authorization and size limits.
+- accepts source content strings and structured parts at declared semantic
+  boundaries;
+- uses canonical Asset references after durable materialization;
+- exposes event-native content and history without a second legacy DTO or wire
+  projection;
+- applies authorization and size limits in the application-owned HTTP boundary.
 
-Compatibility projection happens at the boundary. Canonical internal records do
-not store both old and new content shapes.
+Canonical internal records never store two content representations.
 
 ### Existing records
 

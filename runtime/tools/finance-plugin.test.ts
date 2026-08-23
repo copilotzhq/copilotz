@@ -24,8 +24,11 @@ function provider(): FinanceDataProvider {
 Deno.test("finance provider registry and tool are factory-created resources", async () => {
   const registry = createFinanceProviderRegistry({ contract: provider() });
   const plugin = createFinanceToolsPlugin({ getProvider: registry.get });
-  assertEquals(plugin.manifest.provides.tools, ["finance"]);
-  const tool = plugin.resources.tools?.[0] as WorkflowTool;
+  const tools = plugin.resources.tools as
+    | Readonly<Record<string, WorkflowTool>>
+    | undefined;
+  assertEquals(Object.keys(tools ?? {}), ["finance"]);
+  const tool = tools?.finance as WorkflowTool;
   assert(Object.isFrozen(tool));
   assertEquals(
     await tool.execute({

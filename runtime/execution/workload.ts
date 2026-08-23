@@ -173,7 +173,7 @@ export function createDeliveryWorkload(
       if (event.namespace !== metadata.namespace) {
         throw new TypeError("Invalid delivery dispatch: namespace mismatch.");
       }
-      const processor = options.registry.processors.processorForConsumer(
+      const processor = options.registry.processorForConsumer(
         delivery.consumerId,
       );
       if (!processor) {
@@ -223,10 +223,12 @@ export function createDeliveryWorkload(
         ...base,
       });
       abort.signal.throwIfAborted();
-      await processor.handle(
-        await resolveProcessorEvent(store, event),
-        context,
-      );
+      const processorEvent = await resolveProcessorEvent(store, event);
+      const handle = processor.handle as (
+        event: typeof processorEvent,
+        executionContext: typeof context,
+      ) => void | Promise<void>;
+      await handle(processorEvent, context);
       abort.signal.throwIfAborted();
       const succeeded = await store.succeedDelivery(
         delivery.id,

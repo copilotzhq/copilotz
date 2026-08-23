@@ -1,19 +1,24 @@
-import { digestContent } from "../content/index.ts";
+import { isSettledActionError } from "../actions/index.ts";
 import type { CopilotzProcessorContext } from "../engine/index.ts";
-import { requireFeatureActions } from "../features/context.ts";
 import {
   type CopilotzPlugin,
   definePlugin,
   defineProcessor,
+  type Processor,
 } from "../plugins/index.ts";
-import { chunkText } from "../../utils/chunker.ts";
+import type { WorkflowTool } from "../tools/index.ts";
+import {
+  createIndexKnowledgeDocumentAction,
+  deleteKnowledgeDocumentAction,
+  type IndexKnowledgeDocumentAction,
+  type KnowledgeActionCallers,
+  searchKnowledgeAction,
+} from "./actions.ts";
 import {
   KNOWLEDGE_DOCUMENT_COLLECTION,
   knowledgeChunkCollection,
   knowledgeDocumentCollection,
 } from "./collections.ts";
-import { knowledgeFeature } from "./features.ts";
-import { embedKnowledgeTexts } from "./resources.ts";
 import {
   createDefaultKnowledgeSourceLoader,
   createDefaultKnowledgeTextExtractor,
@@ -26,11 +31,7 @@ import {
 import type {
   CreateKnowledgePluginOptions,
   KnowledgeChunkingConfig,
-  KnowledgeDocument,
   KnowledgeEmbeddingConfig,
-  KnowledgeSourceLoader,
-  KnowledgeTextExtractor,
-  LoadedKnowledgeSource,
 } from "./types.ts";
 
 const DEFAULT_ID = "@copilotz/knowledge";
@@ -75,7 +76,7 @@ function chunking(value: KnowledgeChunkingConfig = {}): Required<
 
 function embedding(value: KnowledgeEmbeddingConfig): KnowledgeEmbeddingConfig {
   return Object.freeze({
-    provider: required(value.provider, "Embedding provider resource ID"),
+    provider: required(value.provider, "Embedding provider Adapter ID"),
     ...(value.model?.trim() ? { model: value.model.trim() } : {}),
     ...(value.dimensions === undefined ? {} : {
       dimensions: positiveInteger(
@@ -88,98 +89,12 @@ function embedding(value: KnowledgeEmbeddingConfig): KnowledgeEmbeddingConfig {
   });
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
+type KnowledgeProcessorContext =
+  & Omit<CopilotzProcessorContext, "actions">
+  & Readonly<{ actions: KnowledgeActionCallers }>;
 
-function errorCode(error: unknown): string {
-  if (error instanceof TypeError) return "knowledge_input_invalid";
-  if (error instanceof DOMException && error.name === "AbortError") {
-    return "knowledge_cancelled";
-  }
-  return "knowledge_index_failed";
-}
-
-async function loadSource(
-  document: KnowledgeDocument,
-  context: CopilotzProcessorContext,
-  loader: KnowledgeSourceLoader,
-): Promise<LoadedKnowledgeSource> {
-  if (document.source.length) {
-    if (document.source.length !== 1) {
-      throw new Error(`Document '${document.id}' has multiple source assets.`);
-    }
-    const [resolved] = await context.content.resolveMany(document.source);
-    return Object.freeze({
-      bytes: resolved.bytes,
-      mediaType: resolved.asset.mediaType,
-      sourceType: document.sourceType,
-      sourceUri: document.sourceUri,
-      title: document.title,
-    });
-  }
-  return await loader({
-    document,
-    signal: context.signal,
-    idempotencyKey: `${context.idempotencyKey}:knowledge-source`,
-  });
-}
-
-async function announce(
-  context: CopilotzProcessorContext,
-  document: KnowledgeDocument,
-  input: Readonly<{
-    status: "indexed" | "duplicate" | "failed";
-    message: string;
-    metadata?: Record<string, unknown>;
-  }>,
-): Promise<void> {
-  if (!document.threadId) return;
-  if (!await context.collections.thread.get({ id: document.threadId })) return;
-  const messageId = `${document.id}:knowledge:${input.status}`;
-  const prepared = await context.content.prepare({
-    type: "text",
-    text: input.message,
-    role: "body",
-  }, { operationKey: `knowledge-announce:${document.id}:${input.status}` });
-  const content = await context.content.materialize(prepared, {
-    origin: {
-      scope: { type: "thread", id: document.threadId },
-      producer: { type: "message", id: messageId },
-    },
-  });
-  await requireFeatureActions(context, "copilotz.core.thread-message").create({
-    id: messageId,
-    threadId: document.threadId,
-    sender: {
-      externalId: "copilotz.knowledge",
-      participantType: "job",
-      name: "RAG",
-    },
-    recipientIds: [],
-    content,
-    visibility: { kind: "public" },
-    metadata: {
-      knowledgeResult: {
-        documentId: document.id,
-        title: document.title,
-        status: input.status,
-        ...structuredClone(input.metadata ?? {}),
-      },
-    },
-  }, { operationKey: `knowledge-announce:${document.id}:${input.status}` });
-  if (content.length) await context.content.linkOwner(messageId, content);
-}
-
-function createIndexProcessor(
-  options: Readonly<{
-    embedding: KnowledgeEmbeddingConfig;
-    chunking: Required<KnowledgeChunkingConfig>;
-    loader: KnowledgeSourceLoader;
-    extractor: KnowledgeTextExtractor;
-  }>,
-) {
-  return defineProcessor<CopilotzProcessorContext>({
+function createIndexProcessor(): Processor<KnowledgeProcessorContext> {
+  return defineProcessor<KnowledgeProcessorContext>({
     id: PROCESSOR_ID,
     on: [{
       eventType: "document.created",
@@ -187,153 +102,98 @@ function createIndexProcessor(
     }],
     async handle(event, context) {
       if (!event.durable || !event.subject) return;
-      const id = event.subject.id;
-      let document = await context.collections.document.get({ id }) as
-        | KnowledgeDocument
-        | null;
-      if (!document) throw new Error(`Knowledge document '${id}' vanished.`);
-      let settled = false;
       try {
-        document = await context.feature(knowledgeFeature).beginIndex({ id });
-        const loaded = await loadSource(document, context, options.loader);
-        context.signal.throwIfAborted();
-        const text = (await options.extractor({
-          bytes: loaded.bytes,
-          mediaType: loaded.mediaType,
+        await context.actions.indexKnowledgeDocument({
+          id: event.subject.id,
+        }, {
+          operationKey: `index:${event.subject.id}`,
+          identity: {
+            causationId: event.id,
+            correlationId: event.correlationId,
+            deduplicationId: event.deduplicationId,
+            settlementScopeId: context.settlementScopeId,
+          },
           signal: context.signal,
-        })).trim();
-        if (!text) throw new Error("Document has no text to index.");
-        const hash = await digestContent(loaded.bytes);
-        const canonical = document.forceReindex
-          ? null
-          : (await context.collections.document.queries.byContentHash({
-            contentHash: hash,
-          }))[0] as KnowledgeDocument | undefined;
-        if (canonical && canonical.id !== document.id) {
-          document = await context.feature(knowledgeFeature).markDuplicate({
-            id,
-            duplicateOfDocumentId: canonical.id,
-            source: canonical.source,
-            mediaType: canonical.mediaType ?? loaded.mediaType,
-            contentHash: hash,
-          });
-          settled = true;
-          await announce(context, document, {
-            status: "duplicate",
-            message: `Document "${document.title}" already indexed (hash: ${
-              hash.slice(7, 15)
-            }...).`,
-            metadata: { duplicateOfDocumentId: canonical.id },
-          });
-          return;
-        }
-
-        const chunks = chunkText(text, options.chunking);
-        if (chunks.length === 0) {
-          throw new Error("Document has no content to index.");
-        }
-        const vectors: (readonly number[])[] = [];
-        const batchSize = options.embedding.batchSize!;
-        let model = options.embedding.model;
-        let dimensions = options.embedding.dimensions;
-        for (let offset = 0; offset < chunks.length; offset += batchSize) {
-          context.signal.throwIfAborted();
-          const batch = chunks.slice(offset, offset + batchSize);
-          const response = await embedKnowledgeTexts(
-            context,
-            options.embedding,
-            batch.map((item) => item.content),
-            {
-              signal: context.signal,
-              idempotencyKey:
-                `${context.idempotencyKey}:knowledge-embed:${offset}`,
-            },
-          );
-          vectors.push(...response.embeddings);
-          model = response.model;
-          dimensions = response.dimensions;
-        }
-        const source = document.source.length
-          ? document.source
-          : await context.content.prepare({
-            type: "file",
-            bytes: loaded.bytes,
-            mediaType: loaded.mediaType,
-            role: "document.source",
-            ...(loaded.title ? { name: loaded.title } : {}),
-          }, { operationKey: `index:${id}:source` });
-        document = await context.feature(knowledgeFeature).completeIndex({
-          id,
-          title: loaded.title ?? document.title,
-          mediaType: loaded.mediaType,
-          contentHash: hash,
-          source,
-          chunks: chunks.map((chunk, index) => ({
-            content: chunk.content,
-            embedding: vectors[index],
-            chunkIndex: chunk.metadata.chunkIndex,
-            tokenCount: chunk.metadata.tokenCount,
-            startPosition: chunk.metadata.startPosition,
-            endPosition: chunk.metadata.endPosition,
-            metadata: {
-              ...(model ? { embeddingModel: model } : {}),
-              ...(dimensions ? { embeddingDimensions: dimensions } : {}),
-            },
-          })),
-        });
-        settled = true;
-        await announce(context, document, {
-          status: "indexed",
-          message:
-            `Successfully indexed "${document.title}" (${document.chunkCount} chunks).`,
-          metadata: { chunks: document.chunkCount },
         });
       } catch (error) {
-        if (!settled) {
-          const failed = await context.feature(knowledgeFeature).failIndex({
-            id,
-            error: {
-              code: errorCode(error),
-              message: errorMessage(error),
-            },
-          }).catch(() => undefined);
-          document = failed ?? document;
-          if (context.delivery.attempts >= context.delivery.maxAttempts) {
-            await announce(context, document, {
-              status: "failed",
-              message: `❌ Failed to ingest document: ${errorMessage(error)}`,
-            }).catch(() => undefined);
-          }
-        }
-        throw error;
+        // A durable Action failure is a settled semantic outcome. Only an
+        // infrastructure failure before lifecycle settlement retries delivery.
+        if (!isSettledActionError(error)) throw error;
       }
     },
   });
 }
 
-/** Packages graph collections, durable indexing, and optional RAG tools. */
+type KnowledgeCollections = Readonly<{
+  document: typeof knowledgeDocumentCollection;
+  chunk: typeof knowledgeChunkCollection;
+}>;
+
+type KnowledgeActions = Readonly<{
+  indexKnowledgeDocument: IndexKnowledgeDocumentAction;
+  searchKnowledge: typeof searchKnowledgeAction;
+  deleteKnowledgeDocument: typeof deleteKnowledgeDocumentAction;
+}>;
+
+type KnowledgeProcessors = Readonly<{
+  indexKnowledgeDocument: Processor<KnowledgeProcessorContext>;
+}>;
+
+type KnowledgeTools =
+  | Readonly<Record<never, never>>
+  | Readonly<{
+    ingestKnowledge: WorkflowTool;
+    searchKnowledge: WorkflowTool;
+    deleteKnowledgeDocument: WorkflowTool;
+  }>;
+
+type KnowledgeResources = Readonly<{ tools: KnowledgeTools }>;
+
+export type KnowledgePlugin = CopilotzPlugin<
+  string,
+  string,
+  readonly [],
+  KnowledgeCollections,
+  KnowledgeActions,
+  KnowledgeProcessors,
+  KnowledgeResources,
+  Readonly<Record<never, never>>
+>;
+
+/** Packages Knowledge Collections, Actions, Processors, and Tool Resources. */
 export function createKnowledgePlugin(
   input: CreateKnowledgePluginOptions,
-): CopilotzPlugin {
-  const pluginId = input.id?.trim() || DEFAULT_ID;
+): KnowledgePlugin {
   const embeddingConfig = embedding(input.embedding);
-  const processor = createIndexProcessor({
-    embedding: embeddingConfig,
-    chunking: chunking(input.chunking),
-    loader: input.sourceLoader ?? createDefaultKnowledgeSourceLoader(),
-    extractor: input.extractText ?? createDefaultKnowledgeTextExtractor(),
+  const actions = Object.freeze({
+    indexKnowledgeDocument: createIndexKnowledgeDocumentAction({
+      embedding: embeddingConfig,
+      chunking: chunking(input.chunking),
+      loader: input.sourceLoader ?? createDefaultKnowledgeSourceLoader(),
+      extractor: input.extractText ?? createDefaultKnowledgeTextExtractor(),
+    }),
+    searchKnowledge: searchKnowledgeAction,
+    deleteKnowledgeDocument: deleteKnowledgeDocumentAction,
   });
-  const tools = input.tools === false ? [] : [
-    createIngestDocumentTool(input.tools?.ingestId),
-    createSearchKnowledgeTool(embeddingConfig, input.tools?.searchId),
-    createDeleteDocumentTool(input.tools?.deleteId),
-  ];
+  const tools = input.tools === false ? Object.freeze({}) : Object.freeze({
+    ingestKnowledge: createIngestDocumentTool(input.tools?.ingestId),
+    searchKnowledge: createSearchKnowledgeTool(
+      embeddingConfig,
+      input.tools?.searchId,
+    ),
+    deleteKnowledgeDocument: createDeleteDocumentTool(
+      input.tools?.deleteId,
+    ),
+  });
   return definePlugin({
-    id: pluginId,
+    id: input.id?.trim() || DEFAULT_ID,
     version: input.version?.trim() || DEFAULT_VERSION,
-    collections: [knowledgeDocumentCollection, knowledgeChunkCollection],
-    features: [knowledgeFeature],
-    processors: [processor],
-    ...(tools.length ? { tools } : {}),
+    collections: {
+      document: knowledgeDocumentCollection,
+      chunk: knowledgeChunkCollection,
+    },
+    actions,
+    processors: { indexKnowledgeDocument: createIndexProcessor() },
+    resources: { tools },
   });
 }

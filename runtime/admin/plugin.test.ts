@@ -1,11 +1,9 @@
-import { coreFeatureAliases } from "@copilotz/copilotz/plugins/core";
 import { assert, assertEquals, assertExists } from "@std/assert";
 
 import { createTestDatabase, type TestDatabase } from "../testing/ominipg.ts";
 import type { Agent } from "../resources/index.ts";
-import { createEventNativeApp } from "../../server/event-native.ts";
 import { createCopilotzApplication } from "../application/index.ts";
-import { corePlugin } from "../../plugins/core/index.ts";
+import { corePlugin, message } from "../../plugins/core/index.ts";
 import { createSqlSession } from "../events/index.ts";
 import { createLongTermMemoryPlugin } from "../memory/index.ts";
 import { createUsageWorkflowPlugin } from "../../plugins/usage/index.ts";
@@ -50,63 +48,55 @@ Deno.test("admin plugin projects event-native application state without raw stor
     database: db,
     namespace: NAMESPACE,
     databaseSchema: SCHEMA,
-    core: false,
-    canonicalCore: [corePlugin],
     plugins: [
+      corePlugin,
       createUsageWorkflowPlugin({ enabled: false }),
       createLongTermMemoryPlugin({ enabled: false }),
       createAdminPlugin(),
     ],
-    context: { agents: { [supportAgent.id]: supportAgent } },
+    resources: { agents: { [supportAgent.id]: supportAgent } },
   });
-  const app = createEventNativeApp(application);
   try {
-    await createTestDomainContext(application, NAMESPACE, coreFeatureAliases)
-      .features.thread
-      .create({
-        id: "thread-a",
-        externalId: "external-thread-a",
-        metadata: { name: "Visible thread", summary: "A useful summary" },
-        participants: [{
-          id: "user-a",
-          externalId: "external-user-a",
-          participantType: "human",
-          name: "Alice",
-        }, {
-          id: "agent-a",
-          externalId: "support",
-          participantType: "agent",
-          agentId: "support",
-          name: "Support",
-        }],
-      });
-    await createTestDomainContext(application, "tenant-b", coreFeatureAliases)
-      .features.thread
-      .create({
+    await createTestDomainContext(application, NAMESPACE).actions.createThread({
+      id: "thread-a",
+      externalId: "external-thread-a",
+      metadata: { name: "Visible thread", summary: "A useful summary" },
+      participants: [{
+        id: "user-a",
+        externalId: "external-user-a",
+        participantType: "human",
+        name: "Alice",
+      }, {
+        id: "agent-a",
+        externalId: "support",
+        participantType: "agent",
+        agentId: "support",
+        name: "Support",
+      }],
+    });
+    await createTestDomainContext(application, "tenant-b").actions.createThread(
+      {
         id: "thread-b",
         participants: [{
           id: "user-b",
           externalId: "external-user-b",
           participantType: "human",
         }],
-      });
-    const prepared = await application.content.preparer.prepare(
-      "Admin-visible message",
-      { namespace: NAMESPACE, idempotencyKey: "admin-message-a" },
+      },
     );
-    await createTestDomainContext(application, NAMESPACE, coreFeatureAliases)
-      .features.threadMessage
-      .create({
-        id: "message-a",
-        threadId: "thread-a",
-        sender: {
-          id: "user-a",
-          externalId: "external-user-a",
-          participantType: "human",
-        },
-        recipientIds: [],
-        content: prepared,
-      }, { identity: { correlationId: "admin-run-a" } });
+    const sent = await application.send(message({
+      correlationId: "admin-run-a",
+      thread: "thread-a",
+      participant: {
+        id: "user-a",
+        externalId: "external-user-a",
+        participantType: "human",
+      },
+      id: "message-a",
+      recipientIds: [],
+      content: "Admin-visible message",
+    }));
+    await sent.done;
 
     await application.collections.get("usage").create({
       id: "usage-a",
@@ -197,13 +187,16 @@ Deno.test("admin plugin projects event-native application state without raw stor
       threadId: "thread-a",
     });
 
-    const request = (action: string, query?: Record<string, string>) =>
-      app.handle({
-        resource: "features",
+    const admin = createTestDomainContext(application, NAMESPACE).actions;
+    const request = (action: string, query?: Record<string, string>) => {
+      const caller = admin[`admin${action[0].toUpperCase()}${action.slice(1)}`];
+      if (!caller) throw new Error(`Admin Action '${action}' was not found.`);
+      return caller({
+        resource: "admin",
         method: "GET",
-        path: ["admin", action],
         query,
-      });
+      }) as Promise<{ status: number; data?: unknown }>;
+    };
 
     const overview = object((await request("overview")).data);
     assertEquals(object(overview.threadTotals).total, 1);
@@ -230,9 +223,19 @@ Deno.test("admin plugin projects event-native application state without raw stor
         correlationId: "admin-run-a",
       })).data,
     );
-    assertEquals(events.length, 1);
-    assertEquals(object(events[0]).type, "message.created");
-    assertEquals("status" in object(events[0]), false);
+    assert(
+      events.some((value) => object(value).type === "message.created"),
+    );
+    assert(
+      events.some((value) =>
+        object(value).type === "copilotz.core.thread-message.create.invoked"
+      ),
+    );
+    assert(
+      events.some((value) =>
+        object(value).type === "copilotz.core.thread-message.create.completed"
+      ),
+    );
 
     const threads = array(
       (await request("threads", { search: "visible" })).data,
@@ -275,11 +278,10 @@ Deno.test("admin plugin projects event-native application state without raw stor
     assertEquals(object(agents[0]).id, "support");
     assertEquals("instructions" in object(agents[0]), false);
 
-    const rejected = await app.handle({
-      resource: "features",
+    const rejected = await admin.adminOverview({
+      resource: "admin",
       method: "POST",
-      path: ["admin", "overview"],
-    });
+    }) as { status: number; data?: unknown };
     assertEquals(rejected.status, 405);
     assertExists(object(rejected.data).code);
   } finally {

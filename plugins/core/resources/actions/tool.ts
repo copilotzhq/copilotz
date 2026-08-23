@@ -4,17 +4,20 @@ import {
 } from "@copilotz/copilotz/content";
 import type { CollectionRecord } from "@copilotz/copilotz/collections";
 import type { CopilotzEvent } from "@copilotz/copilotz/events";
-import type { CopilotzProcessorContext } from "@copilotz/copilotz/engine";
 import {
-  defineFeature,
-  type FeatureAction,
-  type FeatureDefinition,
-  type FeatureExecuteContext,
-} from "@copilotz/copilotz/features";
+  type ActionCaller,
+  type ActionDefinition,
+  defineAction,
+} from "@copilotz/copilotz/actions";
 import {
   executeTool,
   type WorkflowToolHostContext,
 } from "@copilotz/copilotz/tools";
+import {
+  type CoreActionContext,
+  coreAgent,
+  coreWorkflowContext,
+} from "../../context.ts";
 import {
   asRecord,
   historyVisibilityOf,
@@ -30,12 +33,12 @@ import {
 } from "../processors/helpers.ts";
 
 const DEFAULT_TOOL_TIMEOUT_MS = 300_000;
-export const TOOL_FEATURE_ID = "copilotz.core.tool";
-export const TOOL_BATCH_FEATURE_ID = "copilotz.core.tool-batch";
+export const CALL_TOOL_ACTION_ID = "copilotz.core.tool.call";
+export const EXECUTE_TOOL_BATCH_ACTION_ID = "copilotz.core.tool-batch.execute";
 
 async function executeCall(
   input: unknown,
-  context: FeatureExecuteContext,
+  context: CoreActionContext,
 ): Promise<Readonly<Record<string, unknown>>> {
   const execution = asRecord(input) as CollectionRecord;
   const event = asRecord(execution.sourceEvent) as unknown as CopilotzEvent;
@@ -45,14 +48,12 @@ async function executeCall(
   if (!context.signal) {
     throw new Error("Tool call requires a cancellable invocation context.");
   }
-  const toolContext = context as unknown as WorkflowToolHostContext;
+  const workflowContext = coreWorkflowContext(context);
+  const toolContext = workflowContext as WorkflowToolHostContext;
   const agent = optionalText(execution.agentId)
-    ? context.agents[optionalText(execution.agentId)!]
+    ? coreAgent(context.resources, optionalText(execution.agentId)!)
     : undefined;
-  const toolCatalog = toolCatalogFor(
-    context as unknown as CopilotzProcessorContext,
-    agent,
-  );
+  const toolCatalog = toolCatalogFor(agent);
   const options = agent ? policyOptions(agent) : {};
   const toolId = requiredText(
     typeof toolField(execution, "id") === "string"
@@ -63,10 +64,10 @@ async function executeCall(
   const granted = new Set(stringArray(execution.availableToolIds));
   const catalog = agent
     ? await toolCatalog.forAgent(
-      context as unknown as CopilotzProcessorContext,
+      workflowContext,
       agent,
     )
-    : await toolCatalog.all(context as unknown as CopilotzProcessorContext);
+    : await toolCatalog.all(workflowContext);
   const availableTools = granted.size
     ? catalog.filter((tool) => granted.has(tool.key))
     : catalog;
@@ -76,7 +77,7 @@ async function executeCall(
     : undefined;
   if (!argumentRef) throw new TypeError("Tool call arguments are missing.");
   const args = resolvedValue(await context.content.resolve(argumentRef));
-  const streamRuntime = context.content.stream;
+  const streamRuntime = context.streams;
   const outcome = await executeTool({
     execution,
     tool,
@@ -156,13 +157,32 @@ async function executeCall(
   throw error;
 }
 
+export const callToolAction: ActionDefinition<
+  unknown,
+  Readonly<Record<string, unknown>>,
+  CoreActionContext,
+  undefined,
+  undefined
+> = defineAction({
+  id: CALL_TOOL_ACTION_ID,
+  execute: executeCall,
+});
+
+type ToolBatchActionContext =
+  & Omit<CoreActionContext, "actions">
+  & Readonly<{
+    actions: Readonly<{
+      callTool: ActionCaller<typeof callToolAction>;
+    }>;
+  }>;
+
 async function executeBatch(
   input: unknown,
-  context: FeatureExecuteContext,
+  context: ToolBatchActionContext,
 ): Promise<Readonly<Record<string, unknown>>> {
   const batch = asRecord(input);
   const items = Array.isArray(batch.items) ? batch.items : [];
-  const call = context.feature(toolFeature).call;
+  const call = context.actions.callTool;
   const outcomes = await Promise.all(items.map(async (item, index) => {
     const record = asRecord(item);
     try {
@@ -194,20 +214,13 @@ async function executeBatch(
   });
 }
 
-export const toolFeature: FeatureDefinition<
-  Readonly<{
-    call: FeatureAction<undefined, Readonly<Record<string, unknown>>>;
-  }>
-> = defineFeature({
-  id: TOOL_FEATURE_ID,
-  actions: { call: { execute: executeCall } },
-});
-
-export const toolBatchFeature: FeatureDefinition<
-  Readonly<{
-    execute: FeatureAction<undefined, Readonly<Record<string, unknown>>>;
-  }>
-> = defineFeature({
-  id: TOOL_BATCH_FEATURE_ID,
-  actions: { execute: { execute: executeBatch } },
+export const executeToolBatchAction: ActionDefinition<
+  unknown,
+  Readonly<Record<string, unknown>>,
+  ToolBatchActionContext,
+  undefined,
+  undefined
+> = defineAction({
+  id: EXECUTE_TOOL_BATCH_ACTION_ID,
+  execute: executeBatch,
 });

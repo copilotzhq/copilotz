@@ -92,8 +92,8 @@ async function runCollectionContentContract(
     plugins: [definePlugin({
       id: "test.collection-content",
       version: "1.0.0",
-      collections: [contentOwnerCollection],
-      processors: [contentMatcher],
+      collections: { contentOwner: contentOwnerCollection },
+      processors: { contentMatcher },
     })],
   });
   let nextId = 0;

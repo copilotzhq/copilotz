@@ -2,7 +2,10 @@ import {
   type MutationIdentity,
   projectDomainRelation,
 } from "../domain/index.ts";
-import { activeCollectionTransaction } from "../collections/kernel.ts";
+import {
+  activeCollectionTransaction,
+  type CollectionDefinition,
+} from "../collections/index.ts";
 import { createContentStreamRuntime } from "../content/index.ts";
 import {
   createEphemeralEvent,
@@ -12,20 +15,18 @@ import {
   waitForCopilotzEvent,
 } from "../events/index.ts";
 import {
-  type AnyFeatureDefinition,
-  createFeatureContextValues,
-  createFeatureInvoker,
-  type FeatureActionsFor,
-  type FeatureHostContext,
-  type FeatureTransactionContext,
-} from "../features/index.ts";
+  type ActionContext,
+  type ActionTransactionContext,
+  actionTransactionIdentity,
+  type ActionTransactionOptions,
+  createActionCallers,
+} from "../actions/index.ts";
 import type {
   CopilotzCapabilityBase,
   CopilotzProcessorCapabilities,
   CreateCopilotzProcessorCapabilitiesOptions,
   ScopedMutationOptions,
 } from "./types.ts";
-import type { MemoryKindDefinition } from "../memory/ontology.ts";
 
 function requiredText(value: string, name: string): string {
   const normalized = value.trim();
@@ -143,11 +144,6 @@ export function createCopilotzProcessorCapabilities(
       });
     },
   });
-
-  const contextValues = createFeatureContextValues(options.registry.context);
-  const memoryKinds = Object.freeze({
-    ...(options.registry.context.memoryKinds ?? {}),
-  }) as Readonly<Record<string, MemoryKindDefinition | undefined>>;
 
   const content: CopilotzProcessorCapabilities["content"] = Object.freeze({
     prepare(input, prepareOptions) {
@@ -273,86 +269,104 @@ export function createCopilotzProcessorCapabilities(
     },
   });
 
-  const capabilities: Omit<
-    CopilotzProcessorCapabilities,
-    "features" | "feature"
-  > = Object
-    .freeze({
+  const collectionsByName = Object.freeze({
+    ...options.collections.withScope({
       namespace,
-      ...contextValues,
-      events,
-      content,
-      collections: Object.freeze({
-        ...options.collections.withScope({
-          namespace,
-          createMutationIdentity: options.base.createMutationIdentity,
-        }),
-        ...options.collectionRuntime.withScope({
-          namespace,
-          createMutationIdentity: options.base.createMutationIdentity,
-        }),
-      }),
-      relations,
-      schedules,
-      memoryKinds,
-    });
-  const attached = attachProcessorFeatures(options, capabilities);
-  return Object.freeze({
-    ...capabilities,
-    features: attached.features,
-    feature: attached.feature,
+      createMutationIdentity: options.base.createMutationIdentity,
+    }),
+    ...options.collectionRuntime.withScope({
+      namespace,
+      createMutationIdentity: options.base.createMutationIdentity,
+    }),
   });
-}
+  const collections = Object.freeze(Object.fromEntries(
+    Object.entries(options.registry.collections).map(([alias, definition]) => {
+      const collection = collectionsByName[
+        (definition as CollectionDefinition).name
+      ];
+      if (!collection) {
+        throw new Error(
+          `Collection '${definition.name}' for alias '${alias}' is not bound.`,
+        );
+      }
+      return [alias, collection];
+    }),
+  ));
 
-function processorFeatureAliases(
-  options: CreateCopilotzProcessorCapabilitiesOptions,
-): Readonly<Record<string, AnyFeatureDefinition>> {
-  const consumerId = options.base.source?.consumerId;
-  const processor = consumerId
-    ? options.registry.processors.processorForConsumer(consumerId)
-    : undefined;
-  const aliases = processor?.requires?.features;
-  if (!aliases) return {};
-  return aliases as Readonly<Record<string, AnyFeatureDefinition>>;
-}
-
-function attachProcessorFeatures(
-  options: CreateCopilotzProcessorCapabilitiesOptions,
-  capabilities: Omit<CopilotzProcessorCapabilities, "features" | "feature">,
-): Pick<CopilotzProcessorCapabilities, "features" | "feature"> {
-  const holder: { current?: FeatureHostContext } = {};
-  const transaction: Parameters<typeof createFeatureInvoker>[2] = (input) => {
+  const transaction = async <T>(
+    execute: (context: ActionTransactionContext<typeof collections>) =>
+      | T
+      | Promise<T>,
+    transactionOptions: ActionTransactionOptions = {},
+  ): Promise<T> => {
+    const operationKey = transactionOptions.operationKey?.trim() ||
+      `transaction:${crypto.randomUUID()}`;
     const source = options.base.createMutationIdentity(
-      input.operationKey,
-      input.identity?.metadata,
+      operationKey,
+      transactionOptions.identity?.metadata,
     );
-    return options.collectionRuntime.transaction({
-      ...input,
+    const result = await options.collectionRuntime.transaction({
+      operationKey,
+      namespace,
       identity: {
-        causationId: input.identity?.causationId ?? source.causationId,
-        correlationId: input.identity?.correlationId ?? source.correlationId,
-        settlementScopeId: input.identity?.settlementScopeId ??
+        causationId: transactionOptions.identity?.causationId ??
+          source.causationId,
+        correlationId: transactionOptions.identity?.correlationId ??
+          source.correlationId,
+        settlementScopeId: transactionOptions.identity?.settlementScopeId ??
           source.settlementScopeId,
-        ...(input.identity?.deduplicationId
-          ? { deduplicationId: input.identity.deduplicationId }
+        ...(transactionOptions.identity?.deduplicationId
+          ? { deduplicationId: transactionOptions.identity.deduplicationId }
           : {}),
         metadata: {
           ...source.metadata,
-          ...input.identity?.metadata,
+          ...transactionOptions.identity?.metadata,
         },
       },
+      execute: async () => {
+        const relations = Object.freeze({
+          upsert(
+            input: Parameters<
+              ActionTransactionContext["relations"]["upsert"]
+            >[0],
+          ) {
+            const active = activeCollectionTransaction(
+              options.collectionRuntime,
+            );
+            if (!active) {
+              throw new Error(
+                "Action transaction relation projection requires an active transaction.",
+              );
+            }
+            return projectDomainRelation(active, options.eventStore.tables, {
+              ...input,
+              namespace,
+            });
+          },
+        });
+        return await execute(Object.freeze({ collections, relations }));
+      },
     });
+    return result.value;
   };
-  const host = () => {
-    if (!holder.current) throw new Error("Feature context is not ready.");
-    return holder.current;
-  };
+
+  const deliveries = Object.freeze({
+    list: (listOptions = {}) =>
+      options.eventStore.listDeliveries({
+        ...listOptions,
+        namespace,
+      }),
+  });
+
   const invocationKey = options.base.source?.id ??
     (options.base.event.durable
       ? options.base.event.id
       : options.base.event.correlationId);
-  const invocation = {
-    createInvocationKey: () => invocationKey,
+  let rootActionIndex = 0;
+  const actions = createActionCallers(options.registry.actions, {
+    actionLifecycle: options.actionLifecycle,
+    createInvocationKey: (actionId) =>
+      `${invocationKey}:action:${++rootActionIndex}:${actionId}`,
     identity: {
       causationId: options.base.event.durable
         ? options.base.event.id
@@ -361,178 +375,84 @@ function attachProcessorFeatures(
       deduplicationId: invocationKey,
       settlementScopeId: options.base.settlementScopeId,
     },
-  } as const;
-  const features = createFeatureInvoker(
-    processorFeatureAliases(options),
-    host,
-    transaction,
-    {
-      ...invocation,
-      isTransactionActive: () =>
-        activeCollectionTransaction(options.collectionRuntime) !== undefined,
-      actionLifecycle: options.actionLifecycle,
-      upsertRelation: (input) => {
-        const tx = activeCollectionTransaction(options.collectionRuntime);
-        if (!tx) {
-          throw new Error(
-            "Feature transaction relation projection requires an active transaction.",
-          );
-        }
-        return projectDomainRelation(tx, options.eventStore.tables, input);
-      },
-    },
-  );
-  const feature = <F extends AnyFeatureDefinition>(definition: F) =>
-    createFeatureInvoker({ bound: definition }, host, transaction, {
-      ...invocation,
-      isTransactionActive: () =>
-        activeCollectionTransaction(options.collectionRuntime) !== undefined,
-      actionLifecycle: options.actionLifecycle,
-      upsertRelation: (input) => {
-        const tx = activeCollectionTransaction(options.collectionRuntime);
-        if (!tx) {
-          throw new Error(
-            "Feature transaction relation projection requires an active transaction.",
-          );
-        }
-        return projectDomainRelation(tx, options.eventStore.tables, input);
-      },
-    }).bound as FeatureActionsFor<F>;
-  holder.current = Object.freeze({
-    ...options.base,
-    ...(capabilities as unknown as Record<string, unknown>),
-    namespace: capabilities.namespace,
-    now: options.now ?? (() => new Date()),
-    agents: capabilities.agents,
-    tools: capabilities.tools,
-    llm: capabilities.llm,
-    apis: capabilities.apis,
-    mcp: capabilities.mcp,
-    skills: capabilities.skills,
-    embeddings: capabilities.embeddings,
-    promptContext: capabilities.promptContext,
-    featureDefinitions: capabilities.featureDefinitions,
-    collections: capabilities.collections,
-    collection(definition) {
-      const collection = capabilities.collections[definition.name];
-      if (!collection) {
-        throw new TypeError(`Collection '${definition.name}' is not bound.`);
-      }
-      return collection as never;
-    },
-    transaction: async (execute, transactionOptions = {}) => {
-      const operationKey = transactionOptions.operationKey?.trim() ||
-        `processor-feature:${crypto.randomUUID()}`;
-      const result = await transaction({
-        operationKey,
-        namespace: capabilities.namespace,
-        ...(transactionOptions.identity
-          ? { identity: transactionOptions.identity }
-          : {}),
-        execute: async () =>
-          await execute(Object.freeze({
-            collections: capabilities.collections,
-            collection(
-              definition: Parameters<
-                FeatureTransactionContext["collection"]
-              >[0],
-            ) {
-              const collection = capabilities.collections[definition.name];
-              if (!collection) {
-                throw new TypeError(
-                  `Collection '${definition.name}' is not bound.`,
-                );
-              }
-              return collection as never;
-            },
-            relations: Object.freeze({
-              upsert(
-                input: Parameters<
-                  FeatureTransactionContext["relations"]["upsert"]
-                >[0],
-              ) {
-                const tx = activeCollectionTransaction(
-                  options.collectionRuntime,
-                );
-                if (!tx) {
-                  throw new Error(
-                    "Feature transaction relation projection requires an active transaction.",
-                  );
-                }
-                return projectDomainRelation(
-                  tx,
-                  options.eventStore.tables,
-                  { ...input, namespace: capabilities.namespace },
-                );
-              },
-            }),
-          }) as FeatureTransactionContext),
-      });
-      return result.value;
-    },
-    content: Object.freeze({
-      resolver: options.resolver,
-      stream: createContentStreamRuntime({
-        namespace: capabilities.namespace,
-        store: options.streamBodyStore,
-        async onOpen(output) {
-          const threadId = output.threadId ?? options.base.event.threadId;
-          if (!threadId) return;
-          const event = createEphemeralEvent({
-            type: "stream.output",
-            namespace: capabilities.namespace,
-            threadId,
-            streamId: output.id,
-            payload: {
-              streamId: output.id,
-              mediaType: output.mediaType,
-              role: output.role,
-              ...(output.participantId
-                ? { participantId: output.participantId }
-                : {}),
-            },
-            routing: (output.routing as EventRouting | undefined) ??
-              options.base.event.routing,
-            visibility: (output.visibility as EventVisibility | undefined) ??
-              options.base.event.visibility,
-            metadata: {
-              ...structuredClone(output.metadata),
-              ...capabilitySourceMetadata(options.base),
-              contentStream: true,
-              role: output.role,
-            },
-            causationId: options.base.event.durable
-              ? options.base.event.id
-              : options.base.event.causationId,
-            correlationId: output.correlationId ??
-              options.base.event.correlationId,
-          }, options.now);
-          if (options.publishEvent) await options.publishEvent(event);
-          else await options.eventHub.publish(event);
+    createContext({ frame, actions: nestedActions, progress }) {
+      let transactionIndex = 0;
+      const actionContent = Object.freeze({
+        ...content,
+        prepare(
+          input: Parameters<typeof content.prepare>[0],
+          prepareOptions: Parameters<typeof content.prepare>[1],
+        ) {
+          return content.prepare(input, {
+            ...prepareOptions,
+            operationKey:
+              `${frame.operationKey}/${prepareOptions.operationKey}`,
+          });
         },
-      }),
-      bodies: options.streamBodyStore,
-      prepare: capabilities.content.prepare,
-      materialize: capabilities.content.materialize,
-      linkOwner: capabilities.content.linkOwner,
-      publish: capabilities.content.publish,
-      get: capabilities.content.get,
-      getMany: capabilities.content.getMany,
-      resolve: capabilities.content.resolve,
-      resolveMany: capabilities.content.resolveMany,
-      open: capabilities.content.open,
-    }),
-    features,
-    feature,
-    events: capabilities.events,
-    deliveries: Object.freeze({
-      list: (listOptions = {}) =>
-        options.eventStore.listDeliveries({
-          ...listOptions,
-          namespace: capabilities.namespace,
+        publish(
+          input: Parameters<typeof content.publish>[0],
+          publishOptions: Parameters<typeof content.publish>[1],
+        ) {
+          return content.publish(input, {
+            ...publishOptions,
+            operationKey:
+              `${frame.operationKey}/${publishOptions.operationKey}`,
+          });
+        },
+      });
+      return Object.freeze({
+        ...options.base,
+        ...capabilities,
+        deliveries,
+        action: Object.freeze({
+          id: frame.actionId,
+          runId: frame.actionRunId,
+          ...(frame.parentActionRunId
+            ? { parentRunId: frame.parentActionRunId }
+            : {}),
         }),
-    }),
-    relations: Object.freeze({ list: capabilities.relations.list }),
+        operationKey: frame.operationKey,
+        identity: Object.freeze({ ...(frame.identity ?? {}) }),
+        actions: nestedActions,
+        content: actionContent,
+        streams: content.stream,
+        ...(frame.signal ? { signal: frame.signal } : {}),
+        progress,
+        transaction: (
+          execute: Parameters<ActionContext["transaction"]>[0],
+          actionOptions: ActionTransactionOptions = {},
+        ) => {
+          const localKey = actionOptions.operationKey?.trim() ||
+            `transaction:${++transactionIndex}`;
+          const identity = actionTransactionIdentity(
+            frame.identity,
+            actionOptions.identity,
+          );
+          return transaction(execute as never, {
+            ...actionOptions,
+            operationKey: `${frame.operationKey}/${localKey}`,
+            ...(identity ? { identity } : {}),
+            signal: actionOptions.signal ?? frame.signal,
+          }) as never;
+        },
+      }) as ActionContext;
+    },
   });
-  return Object.freeze({ features, feature });
+
+  const capabilities: CopilotzProcessorCapabilities = Object.freeze({
+    namespace,
+    resources: options.registry.resources,
+    adapters: options.registry.adapters,
+    actions,
+    events,
+    content,
+    streams: content.stream,
+    collections,
+    relations,
+    schedules,
+    now: options.now ?? (() => new Date()),
+    transaction,
+    deliveries,
+  });
+  return capabilities;
 }

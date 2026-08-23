@@ -25,7 +25,7 @@ function definedValues<T>(
 function agentContext(
   options: CreateAgentCapabilityResolverOptions,
 ): Readonly<Record<string, Agent | undefined>> {
-  return (options.registry.context.agents ?? {}) as Readonly<
+  return (options.registry.resources.agents ?? {}) as Readonly<
     Record<string, Agent | undefined>
   >;
 }
@@ -33,7 +33,7 @@ function agentContext(
 function skillContext(
   options: CreateAgentCapabilityResolverOptions,
 ): Readonly<Record<string, Skill | undefined>> {
-  return (options.registry.context.skills ?? {}) as Readonly<
+  return (options.registry.resources.skills ?? {}) as Readonly<
     Record<string, Skill | undefined>
   >;
 }
@@ -54,11 +54,11 @@ function catalogContext(
   options: CreateAgentCapabilityResolverOptions,
 ): WorkflowToolCatalogContext {
   return Object.freeze({
-    agents: Object.freeze({ ...(options.registry.context.agents ?? {}) }),
-    skills: Object.freeze({ ...(options.registry.context.skills ?? {}) }),
-    tools: Object.freeze({ ...(options.registry.context.tools ?? {}) }),
-    apis: Object.freeze({ ...(options.registry.context.apis ?? {}) }),
-    mcp: Object.freeze({ ...(options.registry.context.mcp ?? {}) }),
+    agents: Object.freeze({ ...(options.registry.resources.agents ?? {}) }),
+    skills: Object.freeze({ ...(options.registry.resources.skills ?? {}) }),
+    tools: Object.freeze({ ...(options.registry.resources.tools ?? {}) }),
+    apis: Object.freeze({ ...(options.registry.resources.apis ?? {}) }),
+    mcp: Object.freeze({ ...(options.registry.resources.mcp ?? {}) }),
   }) as unknown as WorkflowToolCatalogContext;
 }
 

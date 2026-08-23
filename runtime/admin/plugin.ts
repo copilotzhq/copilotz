@@ -1,11 +1,10 @@
 import type { Agent } from "../resources/index.ts";
 import type { CollectionRecord } from "../domain/index.ts";
 import {
-  defineFeature,
-  type FeatureExecuteContext,
-  type FeatureRequest,
-  type FeatureResponse,
-} from "../features/index.ts";
+  type ActionContext,
+  type ActionContextNamespaces,
+  defineAction,
+} from "../actions/index.ts";
 import { type CopilotzPlugin, definePlugin } from "../plugins/index.ts";
 import {
   allCollectionRecords,
@@ -25,27 +24,39 @@ import {
 } from "./projections.ts";
 import type {
   AdminActivityPoint,
+  AdminRequest,
+  AdminResponse,
   AdminUsageTotals,
   CreateAdminPluginOptions,
 } from "./types.ts";
 
 const DEFAULT_PLUGIN_ID = "@copilotz/admin";
 const DEFAULT_PLUGIN_VERSION = "3.0.0";
-const DEFAULT_FEATURE_ID = "admin";
+const ACTION_ID_PREFIX = "copilotz.admin";
 
-function asRequest(input: unknown): FeatureRequest {
+type AdminActionContext =
+  & Omit<ActionContext, "resources">
+  & Readonly<{
+    resources:
+      & ActionContextNamespaces
+      & Readonly<{
+        agents: Readonly<Record<string, Agent | undefined>>;
+      }>;
+  }>;
+
+function asRequest(input: unknown): AdminRequest {
   if (
     input &&
     typeof input === "object" &&
     "method" in input &&
     typeof (input as { method?: unknown }).method === "string"
   ) {
-    return input as FeatureRequest;
+    return input as AdminRequest;
   }
-  throw new TypeError("Admin actions expect a FeatureRequest.");
+  throw new TypeError("Admin actions expect an AdminRequest.");
 }
 
-function readOnly(request: FeatureRequest): FeatureResponse | undefined {
+function readOnly(request: AdminRequest): AdminResponse | undefined {
   return request.method === "GET" ? undefined : {
     status: 405,
     data: {
@@ -73,7 +84,7 @@ function usageTotals(records: readonly CollectionRecord[]): AdminUsageTotals {
   }));
 }
 
-function range(request: FeatureRequest) {
+function range(request: AdminRequest) {
   return {
     from: optionalDate(queryText(request, "from")),
     to: optionalDate(queryText(request, "to")),
@@ -92,8 +103,8 @@ function createdInRange(
 
 type AdminAction = (
   input: unknown,
-  context: FeatureExecuteContext,
-) => FeatureResponse | Promise<FeatureResponse>;
+  context: AdminActionContext,
+) => AdminResponse | Promise<AdminResponse>;
 
 const overview: AdminAction = async (input, context) => {
   const request = asRequest(input);
@@ -167,7 +178,7 @@ const overview: AdminAction = async (input, context) => {
 
 type ActivityInterval = "hour" | "day" | "week" | "month";
 
-function interval(request: FeatureRequest): ActivityInterval {
+function interval(request: AdminRequest): ActivityInterval {
   const value = queryText(request, "interval") ?? "day";
   if (
     value === "hour" || value === "day" || value === "week" || value === "month"
@@ -421,7 +432,7 @@ const participants: AdminAction = async (input, context) => {
 };
 
 function exactUsageWhere(
-  request: FeatureRequest,
+  request: AdminRequest,
 ): Record<string, unknown> | undefined {
   const keys = [
     "kind",
@@ -511,7 +522,7 @@ const brain: AdminAction = async (input, context) => {
   let values = [
     ...await allCollectionRecords(
       context,
-      "memory_record",
+      "memoryRecord",
       Object.keys(where).length ? where : undefined,
     ),
   ];
@@ -586,9 +597,9 @@ const agents: AdminAction = (input, context) => {
   if (rejected) return rejected;
   return {
     status: 200,
-    data: Object.values(context.agents).filter((agent): agent is Agent =>
-      Boolean(agent)
-    ).map(publicAgent),
+    data: Object.values(context.resources.agents).filter((
+      agent,
+    ): agent is Agent => Boolean(agent)).map(publicAgent),
   };
 };
 
@@ -607,26 +618,34 @@ const adminRequestSchema = {
   required: ["resource", "method"],
 } as const;
 
-function queryAction(execute: AdminAction) {
-  return {
+function queryAction(id: string, execute: AdminAction) {
+  return defineAction<
+    AdminRequest,
+    AdminResponse,
+    AdminActionContext,
+    typeof adminRequestSchema
+  >({
+    id,
     inputSchema: adminRequestSchema,
-    execute,
-  };
+    execute(input, context: AdminActionContext) {
+      return execute(input, context);
+    },
+  });
 }
 
-function feature(options: CreateAdminPluginOptions) {
-  return defineFeature({
-    id: options.featureId?.trim() || DEFAULT_FEATURE_ID,
-    actions: {
-      overview: queryAction(overview),
-      activity: queryAction(activity),
-      events: queryAction(events),
-      threads: queryAction(threads),
-      participants: queryAction(participants),
-      usage: queryAction(usage),
-      brain: queryAction(brain),
-      agents: queryAction(agents),
-    },
+function adminActions() {
+  return Object.freeze({
+    adminOverview: queryAction(`${ACTION_ID_PREFIX}.overview`, overview),
+    adminActivity: queryAction(`${ACTION_ID_PREFIX}.activity`, activity),
+    adminEvents: queryAction(`${ACTION_ID_PREFIX}.events`, events),
+    adminThreads: queryAction(`${ACTION_ID_PREFIX}.threads`, threads),
+    adminParticipants: queryAction(
+      `${ACTION_ID_PREFIX}.participants`,
+      participants,
+    ),
+    adminUsage: queryAction(`${ACTION_ID_PREFIX}.usage`, usage),
+    adminBrain: queryAction(`${ACTION_ID_PREFIX}.brain`, brain),
+    adminAgents: queryAction(`${ACTION_ID_PREFIX}.agents`, agents),
   });
 }
 
@@ -634,10 +653,9 @@ function feature(options: CreateAdminPluginOptions) {
 export function createAdminPlugin(
   options: CreateAdminPluginOptions = {},
 ): CopilotzPlugin {
-  const resource = feature(options);
   return definePlugin({
     id: options.id?.trim() || DEFAULT_PLUGIN_ID,
     version: options.version?.trim() || DEFAULT_PLUGIN_VERSION,
-    features: [resource],
+    actions: adminActions(),
   });
 }

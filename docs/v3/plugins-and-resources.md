@@ -1,96 +1,117 @@
 ---
-title: Copilotz v3 Plugins and Resources
-description: Factory-first plugin composition and independent processor subscriptions.
+title: Copilotz v3 Plugins, Resources, and Adapters
+description: Direct plugin composition over Collections, Actions, Processors, Resources, and Adapters.
 section: Internal Design
 status: implementation
 ---
 
-# Copilotz v3 Plugins and Resources
+# Copilotz v3 Plugins, Resources, and Adapters
 
-Copilotz keeps agents, tools, processors, collections, providers, channels,
-skills, memory, APIs, MCP servers, features, and storage as resource kinds. A
-plugin is the package and composition boundary that declares and provides those
-resources.
+A plugin is the only semantic composition boundary. It may contribute five
+independent categories:
+
+- Collections: graph state and its mutation contract;
+- Actions: executable capabilities with durable lifecycle Events;
+- Processors: event subscriptions and orchestration;
+- Resources: named semantic definitions and configuration;
+- Adapters: named implementations of variable external boundaries.
 
 ```ts
-import {
-  createPluginRegistry,
-  definePlugin,
-  defineProcessor,
-} from "@copilotz/copilotz/plugins";
+import { definePlugin, defineProcessor } from "@copilotz/copilotz/plugins";
+import { defineAction } from "@copilotz/copilotz/actions";
 
-const audit = defineProcessor({
-  id: "audit.message-created",
-  on: ["message.created"],
-  delivery: "durable",
-  filter: (event) => event.namespace === "customer-a",
-  handle: async (event, context) => {
-    // Persist an audit projection through typed collections.
+const notify = defineAction({
+  id: "acme.notify",
+  async execute(input: Notification, context: NotificationContext) {
+    return await context.adapters.notifications.default.send(input);
   },
 });
 
-const plugin = definePlugin({
-  id: "@acme/copilotz-audit",
-  version: "2.0.0",
-  processors: [audit],
+const onMessage = defineProcessor<MessageProcessorContext>({
+  id: "acme.notify-on-message",
+  on: [{ eventType: "message.created" }],
+  async handle(event, context) {
+    await context.actions.notify({ eventId: event.id });
+  },
 });
 
-const registry = await createPluginRegistry({ plugins: [plugin] });
+export const notificationsPlugin = definePlugin({
+  id: "@acme/notifications",
+  version: "1.0.0",
+  actions: { notify },
+  processors: { onMessage },
+  resources: {
+    notificationPolicies: { default: defaultPolicy },
+  },
+  adapters: {
+    notifications: { default: notificationAdapter },
+  },
+});
 ```
+
+## Direct maps and identities
+
+Collections, Actions, and Processors are keyed maps. The key is the ergonomic
+context alias; each definition carries its own stable durable identity.
+
+```ts
+context.collections.message.create(input);
+context.actions.notify(input);
+context.resources.notificationPolicies.default;
+context.adapters.notifications.default;
+```
+
+There are no locator methods, manifests that repeat the definition, dependency
+declarations on Actions or Processors, or filtered capability proxies. Actions
+and Processors describe the narrower context they expect with ordinary
+TypeScript interfaces. The runtime passes the complete composed context.
 
 ## Composition
 
-Plugins compose in this order:
+A plugin may depend on concrete plugin values through `plugins: [...]`.
+Dependencies compose depth-first before the declaring plugin. Top-level plugins
+then compose in caller order, followed by application Resource and Adapter
+overlays.
 
-1. built-in core plugin;
-2. declared plugins, in declaration order;
-3. explicit application context/resources.
+Executable aliases and stable IDs must be unique. A duplicate Collection,
+Action, or Processor is an error rather than an implicit replacement. Resource
+and Adapter namespaces merge independently by key; later values replace earlier
+values with the same namespace and alias.
 
-Within one resource kind, a later resource with the same stable ID replaces the
-earlier resource. Resources with different IDs remain independent. The registry
-records the winning resource's plugin origin and exposes `list`, `get`, and
-`require` lookups.
+Resources and Adapters remain separate all the way through composition and
+execution:
 
-A plugin declares resources once through `definePlugin()`, and the manifest is
-derived. A plugin can depend on other plugins with `plugins: [...]`; dependency
-plugins compose before the declaring plugin. Composition receives concrete
-plugin objects only. There are no string sources, named imports, presets, or
-runtime module resolver.
+```ts
+createCopilotz({
+  plugins: [notificationsPlugin],
+  resources: {
+    notificationPolicies: { urgent: urgentPolicy },
+  },
+  adapters: {
+    notifications: { default: productionAdapter },
+  },
+});
+```
 
-Built-in resources use the same mechanism. Skills are optional plugin resources,
-not a default development catalog. `createSkillsPlugin()` packages portable
-skills and their progressive-disclosure tools; later plugins or explicit
-resources can replace a skill by stable name. Standard `SKILL.md` directories
-are validated and packed before runtime rather than read by the registry.
+Plain typed objects are canonical Resource and Adapter values. A semantic plugin
+may export helpers when they add useful inference, defaults, normalization, or
+validation, but the helper does not create a privileged runtime object form.
 
 ## Processor subscriptions
 
-A processor is a resource with a stable ID, an event-type subscription, a
-delivery mode, an optional filter, and a handler. There is no processor chain,
-phase, claim, swallowing behavior, or produced-event side channel.
+Durable Processors match committed Events and create sparse delivery obligations
+in the same transaction as those Events. They default to inherited settlement
+and may use `settlement: "detached"` for causally linked background work.
+Transient Processors observe ephemeral events without delivery rows.
 
-- `durable` subscriptions become sparse delivery obligations in the same
-  transaction as the semantic event. Their filters must return synchronously so
-  matching can finish before commit. Dynamic or asynchronous checks belong in
-  `handle`.
-- Durable subscriptions use `settlement: "inherit"` by default. A subscription
-  may declare `settlement: "detached"` to fork durable background work from the
-  caller's completion scope while retaining causation, retries, recovery, and
-  automatic scope inheritance for its descendants.
-- `live` subscriptions observe ephemeral events such as stream frames. They do
-  not create delivery rows and cannot declare detached durable settlement.
-- Logical durable consumer IDs are derived from processor IDs, never from an
-  Oxian worker identity.
+Processor handlers decide what happens next by invoking Actions or mutating
+Collections. Durable retries reuse runtime-derived operation identities, while
+the semantic logic stays in the plugin.
 
-Processor handlers receive events and an application-supplied plain context. The
-isolated registry does not yet dispatch handlers or replace the current resource
-loader. Those switches happen only as complete verticals gain parity tests and
-move onto the new event/delivery executor.
+## Host boundaries
 
-## Public surface
-
-The factory and type APIs are available from both the root package and
-`@copilotz/copilotz/plugins`. This module is additive during Gate 2. The legacy
-`resources` configuration and processor runtime remain canonical until their
-port and downstream compatibility gates are complete; v3 will then remove that
-loader rather than retain two composition paths.
+Plugin loading is application code, not a runtime adapter. The embedding host
+imports concrete plugin values and passes them to composition. Filesystem,
+subprocess, server, and provider-specific behavior belongs in explicit host or
+semantic Adapter packages; the generic runtime does not discover modules or
+guess resource kinds.

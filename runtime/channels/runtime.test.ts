@@ -1,7 +1,4 @@
-import {
-  coreFeatureAliases,
-  message as coreMessage,
-} from "@copilotz/copilotz/plugins/core";
+import { message as coreMessage } from "@copilotz/copilotz/plugins/core";
 import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
 import {
   loadMessageRecord,
@@ -9,7 +6,6 @@ import {
 } from "../engine/collection-graph.ts";
 import { createTestDomainContext } from "../../runtime/testing/domain-context.ts";
 import {
-  projectMessageById,
   projectMessages,
   projectParticipants,
   projectThreadByExternalId,
@@ -66,7 +62,7 @@ function replyPlugin() {
   return definePlugin({
     id: "test.channel-reply",
     version: "1.0.0",
-    processors: [processor],
+    processors: { channelReply: processor },
   });
 }
 
@@ -80,13 +76,12 @@ Deno.test("channel runtime normalizes web ingress, bootstraps graph identities, 
     database: db,
     namespace: NAMESPACE,
     databaseSchema: SCHEMA,
-    core: false,
-    canonicalCore: [coreCollectionsPlugin],
     plugins: [
+      coreCollectionsPlugin,
       replyPlugin(),
       createWebChannelPlugin({ defaultAgentIds: [supportAgent.id] }),
     ],
-    context: { agents: { [supportAgent.id]: supportAgent } },
+    resources: { agents: { [supportAgent.id]: supportAgent } },
   });
   const runtime = createChannelRuntime(application);
   try {
@@ -244,21 +239,19 @@ Deno.test("request-bound channel delivery reports missing callbacks through done
     database: db,
     namespace: NAMESPACE,
     databaseSchema: `${SCHEMA}_callback`,
-    core: false,
-    canonicalCore: [coreCollectionsPlugin],
-    plugins: [createWebChannelPlugin()],
+    plugins: [coreCollectionsPlugin, createWebChannelPlugin()],
   });
   try {
-    await createTestDomainContext(application, NAMESPACE, coreFeatureAliases)
-      .features.thread
-      .create({
+    await createTestDomainContext(application, NAMESPACE).actions.createThread(
+      {
         id: "thread-a",
         participants: [{
           id: "user-a",
           externalId: "user-a",
           participantType: "human",
         }],
-      });
+      },
+    );
     const dispatched = await createChannelRuntime(application).dispatch(
       NAMESPACE,
       {

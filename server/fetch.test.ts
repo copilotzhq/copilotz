@@ -32,7 +32,7 @@ Deno.test("Fetch adapter maps routes, repeated queries, JSON, bytes, and context
   });
   const response = await handle(
     new Request(
-      "https://example.test/v2/features/echo/ping?tag=a&tag=b&limit=2",
+      "https://example.test/v2/widgets/echo/ping?tag=a&tag=b&limit=2",
       {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -43,7 +43,7 @@ Deno.test("Fetch adapter maps routes, repeated queries, JSON, bytes, and context
   assertEquals(response.status, 201);
   assertEquals(response.headers.get("x-contract"), "true");
   assertEquals(await response.json(), { data: { accepted: true } });
-  assertEquals(observed[0].resource, "features");
+  assertEquals(observed[0].resource, "widgets");
   assertEquals(observed[0].path, ["echo", "ping"]);
   assertEquals(observed[0].query, { tag: ["a", "b"], limit: "2" });
   assertEquals(observed[0].body, { hello: "world" });
@@ -88,7 +88,7 @@ Deno.test("Fetch adapter returns bounded HTTP errors and preserves native Respon
   assertEquals(invalid.status, 400);
   assertEquals((await invalid.json()).error.code, "invalid_json");
   native = true;
-  const streamed = await handle(new Request("https://example.test/features"));
+  const streamed = await handle(new Request("https://example.test/widgets"));
   assertEquals(await streamed.text(), "stream");
   assertEquals(streamed.headers.get("content-type"), "text/plain");
 });
@@ -120,7 +120,7 @@ Deno.test("Fetch adapter exposes bounded retryable persistence failures as HTTP 
   });
 });
 
-Deno.test("Fetch adapter preserves feature response headers for JSON, empty, and SSE responses", async () => {
+Deno.test("Fetch adapter preserves application response headers for JSON, empty, and SSE responses", async () => {
   let mode: "json" | "empty" | "sse" = "json";
   const stream: EventNativeOutputStream = Object.freeze({
     type: EVENT_NATIVE_OUTPUT_STREAM,
@@ -138,10 +138,10 @@ Deno.test("Fetch adapter preserves feature response headers for JSON, empty, and
       return Promise.resolve({
         status: mode === "empty" ? 204 : 200,
         headers: [
-          ["set-cookie", "session=feature; Path=/; HttpOnly"],
+          ["set-cookie", "session=application; Path=/; HttpOnly"],
           ["set-cookie", "tenant=acme; Path=/; Secure"],
-          ["x-feature", mode],
-          ["x-shared", "feature"],
+          ["x-application", mode],
+          ["x-shared", "application"],
         ],
         ...(mode === "sse"
           ? { data: stream }
@@ -157,10 +157,10 @@ Deno.test("Fetch adapter preserves feature response headers for JSON, empty, and
   for (const candidate of ["json", "empty", "sse"] as const) {
     mode = candidate;
     const response = await handle(new Request("https://example.test/test"));
-    assertEquals(response.headers.get("x-feature"), candidate);
-    assertEquals(response.headers.get("x-shared"), "feature");
+    assertEquals(response.headers.get("x-application"), candidate);
+    assertEquals(response.headers.get("x-shared"), "application");
     assertEquals(response.headers.getSetCookie(), [
-      "session=feature; Path=/; HttpOnly",
+      "session=application; Path=/; HttpOnly",
       "tenant=acme; Path=/; Secure",
     ]);
   }

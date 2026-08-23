@@ -138,8 +138,12 @@ async function createFixture(
   const app = definePlugin({
     id: "test.agent-ask.resources",
     version: "1.0.0",
-    agents: [...agents],
-    llm: [provider],
+    resources: {
+      agents: Object.fromEntries(
+        agents.map((agent, index) => [`agent${index}`, agent]),
+      ),
+    },
+    adapters: { llm: { openai: provider } },
   });
   const registry = await createPluginRegistry({
     plugins: [

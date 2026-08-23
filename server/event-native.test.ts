@@ -1,11 +1,7 @@
-import {
-  coreFeatureAliases,
-  message as coreMessage,
-} from "@copilotz/copilotz/plugins/core";
+import { message as coreMessage } from "@copilotz/copilotz/plugins/core";
 import {
   assert,
   assertEquals,
-  assertExists,
   assertRejects,
   assertStringIncludes,
 } from "@std/assert";
@@ -18,27 +14,19 @@ import type {
   ChannelResource,
   ChannelRuntime,
 } from "../runtime/channels/index.ts";
-import { defineCollection } from "../runtime/domain/index.ts";
-import type { CopilotzEvent } from "../runtime/events/index.ts";
+import { defineCollection } from "../runtime/collections/index.ts";
 import {
   createEphemeralEvent,
   provisionCopilotzSchema,
 } from "../runtime/events/index.ts";
 import { definePlugin } from "../runtime/plugins/index.ts";
-import {
-  defineFeature,
-  type FeatureExecuteContext,
-} from "../runtime/features/index.ts";
 import { coreCollectionsPlugin } from "../plugins/core/plugin.ts";
 import type { Agent } from "../runtime/resources/index.ts";
 import { createTestDatabase } from "../runtime/testing/ominipg.ts";
 import {
   createEventNativeApp,
   type EventNativeAppError,
-  type EventNativeAppRequest,
   type EventNativeAppResponse,
-  type EventNativeFeatureContext,
-  type EventNativeFeatureResource,
   isEventNativeOutputStream,
 } from "./event-native.ts";
 
@@ -69,34 +57,11 @@ const supportAgent = Object.freeze(
   } satisfies Agent,
 );
 
-const echoFeature = defineFeature({
-  id: "echo",
-  actions: {
-    ping: {
-      inputSchema: {
-        type: "object",
-        additionalProperties: true,
-      } as const,
-      execute(input: unknown, context: FeatureExecuteContext) {
-        const request = input as EventNativeAppRequest;
-        return {
-          namespace: context.namespace,
-          body: request.body,
-          hasFeatureInvoke: typeof context.features.echo?.ping === "function",
-          hasApplication: "application" in context,
-          hasScopedCollections: typeof context.collections === "object",
-        };
-      },
-    },
-  },
-});
-
 const adapterPlugin = definePlugin({
   id: "test.event-native-adapter",
   version: "1.0.0",
-  agents: [supportAgent],
-  collections: [notes],
-  features: [echoFeature],
+  collections: { notes },
+  resources: { agents: { support: supportAgent } },
 });
 
 function object(value: unknown): Record<string, unknown> {
@@ -132,9 +97,7 @@ Deno.test("event-native app exposes graph, event, asset, collection, and plugin 
   const application = await createCopilotz({
     namespace: NAMESPACE,
     databaseSchema: SCHEMA,
-    core: false,
-    canonicalCore: [coreCollectionsPlugin],
-    plugins: [adapterPlugin],
+    plugins: [coreCollectionsPlugin, adapterPlugin],
   });
   const app = createEventNativeApp(application);
   try {
@@ -148,19 +111,18 @@ Deno.test("event-native app exposes graph, event, asset, collection, and plugin 
         "collections",
         "deliveries",
         "events",
-        "features",
         "participants",
         "threads",
       ],
     );
     assertEquals(
       app.resources().find((resource) => resource.name === "threads")?.methods,
-      ["GET", "POST", "PATCH", "DELETE"],
+      ["GET"],
     );
     assertEquals(
       app.resources().find((resource) => resource.name === "participants")
         ?.methods,
-      ["GET", "POST", "PATCH"],
+      ["GET"],
     );
 
     const agentResponse = await app.handle({
@@ -174,54 +136,34 @@ Deno.test("event-native app exposes graph, event, asset, collection, and plugin 
     assertEquals("instructions" in projectedAgent, false);
     assertEquals("metadata" in projectedAgent, false);
 
-    const createThread = () =>
-      app.handle({
-        resource: "threads",
-        method: "POST",
-        headers: {
-          "idempotency-key": "http:thread:a",
-          "x-copilotz-correlation-id": "http:correlation:a",
-        },
-        body: {
-          id: "thread-a",
-          externalId: "external-thread-a",
-          participants: [{
-            id: "user-a",
-            externalId: "external-user-a",
-            participantType: "human",
-            name: "Alice",
-            email: "alice@example.test",
-          }, {
-            id: "agent-a",
-            externalId: "support",
-            participantType: "agent",
-            agentId: "support",
-            name: "Support",
-          }],
-          metadata: { source: "test" },
-        },
-      });
-    const createdThread = await createThread();
-    assertEquals(createdThread.status, 201);
-    assertEquals(object(createdThread.data).id, "thread-a");
-    assertEquals(array(object(createdThread.data).participants).length, 2);
-    const repeatedThread = await createThread();
-    assertEquals(repeatedThread.status, 200);
-    assertEquals(object(repeatedThread.data).id, "thread-a");
-
-    const createdParticipant = await app.handle({
-      resource: "participants",
-      method: "POST",
-      headers: { "idempotency-key": "http:participant:b" },
-      body: {
+    const domain = createTestDomainContext(application, NAMESPACE);
+    await domain.actions.createThread({
+      id: "thread-a",
+      externalId: "external-thread-a",
+      participants: [{
+        id: "user-a",
+        externalId: "external-user-a",
+        participantType: "human",
+        name: "Alice",
+        email: "alice@example.test",
+      }, {
+        id: "agent-a",
+        externalId: "support",
+        participantType: "agent",
+        agentId: "support",
+        name: "Support",
+      }],
+      metadata: { source: "test" },
+    });
+    await domain.actions.addThreadParticipant({
+      threadId: "thread-a",
+      participant: {
         id: "user-b",
         externalId: "external-user-b",
         participantType: "human",
         name: "Bob",
       },
     });
-    assertEquals(createdParticipant.status, 201);
-    assertEquals(object(createdParticipant.data).externalId, "external-user-b");
 
     const listedThreads = await app.handle({
       resource: "threads",
@@ -231,15 +173,12 @@ Deno.test("event-native app exposes graph, event, asset, collection, and plugin 
     assertEquals(array(listedThreads.data).length, 1);
     assertEquals(object(array(listedThreads.data)[0]).id, "thread-a");
 
-    const patchedParticipant = await app.handle({
+    const participant = await app.handle({
       resource: "participants",
-      method: "PATCH",
+      method: "GET",
       path: ["external-user-a"],
-      headers: { "idempotency-key": "http:participant:a:update" },
-      body: { name: "Alice Updated", metadata: { tier: "pro" } },
     });
-    assertEquals(object(patchedParticipant.data).name, "Alice Updated");
-    assertEquals(object(object(patchedParticipant.data).metadata).tier, "pro");
+    assertEquals(object(participant.data).name, "Alice");
     const humanParticipants = await app.handle({
       resource: "participants",
       method: "GET",
@@ -354,7 +293,12 @@ Deno.test("event-native app exposes graph, event, asset, collection, and plugin 
     });
     assertEquals(
       array(threadEvents.data).map((value) => object(value).type),
-      ["thread.created", "message.created"],
+      [
+        "thread.created",
+        "participant.created",
+        "thread.updated",
+        "message.created",
+      ],
     );
     assertEquals(threadEvents.pageInfo, { hasMore: false });
     const threadActivity = await app.handle({
@@ -368,39 +312,24 @@ Deno.test("event-native app exposes graph, event, asset, collection, and plugin 
     assertEquals(object(threadActivity.data).activeDeliveries, []);
     assertEquals(object(threadActivity.data).lastFailure, null);
 
-    const editMessage = () =>
-      app.handle({
-        resource: "threads",
-        method: "POST",
-        path: ["thread-a", "messages", "message-a", "edit"],
-        headers: {
-          "idempotency-key": "http:message:a:edit",
-          "x-copilotz-correlation-id": "http:correlation:message:a:edit",
-        },
-        body: {
-          content: [
-            "Hello after editing",
-            { type: "json", value: { revision: 1 } },
-          ],
-          metadata: { editedBy: "user-a" },
-        },
-      });
-    const editedMessage = await editMessage();
-    assertEquals(editedMessage.status, 201);
-    const revisionResult = object(editedMessage.data);
+    const revisionResult = object(
+      await domain.actions.reviseMessage({
+        id: "message-a:revision:1",
+        threadId: "thread-a",
+        messageId: "message-a",
+        content: [
+          "Hello after editing",
+          { type: "json", value: { revision: 1 } },
+        ],
+        metadata: { editedBy: "user-a" },
+      }),
+    );
     const revision = object(revisionResult.message);
     assertEquals(revisionResult.rootMessageId, "message-a");
     assertEquals(revisionResult.previousRevisionMessageId, "message-a");
     assertEquals(revisionResult.revisionIndex, 1);
     assertEquals(object(revision.revision).revisionIndex, 1);
     assertEquals(object(revision.metadata).editedBy, "user-a");
-    const repeatedEdit = await editMessage();
-    assertEquals(repeatedEdit.status, 200);
-    assertEquals(
-      object(object(repeatedEdit.data).message).id,
-      revision.id,
-    );
-
     const activeMessages = array(
       (await app.handle({
         resource: "threads",
@@ -424,18 +353,6 @@ Deno.test("event-native app exposes graph, event, asset, collection, and plugin 
       revision.id,
     ]);
 
-    const revisionEvents = array(
-      (await app.handle({
-        resource: "events",
-        method: "GET",
-        query: { correlationId: "http:correlation:message:a:edit" },
-      })).data,
-    );
-    const revisionCreated = revisionEvents.find((event) =>
-      object(event).type === "message.created"
-    );
-    assertExists(revisionCreated);
-    const revisionEventId = object(revisionCreated).id as string;
     await expectAppError(
       () => app.handle({ resource: "events", method: "POST" }),
       405,
@@ -484,37 +401,6 @@ Deno.test("event-native app exposes graph, event, asset, collection, and plugin 
       "record_not_found",
     );
 
-    const featureResponse = await app.handle({
-      resource: "features",
-      method: "POST",
-      path: ["echo", "ping"],
-      body: { value: 42 },
-    });
-    assertEquals(featureResponse, {
-      status: 200,
-      data: {
-        namespace: NAMESPACE,
-        body: { value: 42 },
-        hasFeatureInvoke: false,
-        hasApplication: false,
-        hasScopedCollections: true,
-      },
-    });
-
-    const patchedThread = await app.handle({
-      resource: "threads",
-      method: "PATCH",
-      path: ["thread-a"],
-      body: { status: "archived", metadata: { archivedBy: "test" } },
-    });
-    assertEquals(object(patchedThread.data).status, "archived");
-    const archivedThreads = await app.handle({
-      resource: "threads",
-      method: "GET",
-      query: { status: "archived" },
-    });
-    assertEquals(array(archivedThreads.data).length, 1);
-
     const deliveries = await app.handle({
       resource: "deliveries",
       method: "GET",
@@ -558,49 +444,6 @@ Deno.test("event-native app exposes graph, event, asset, collection, and plugin 
       "schema_mismatch",
     );
 
-    const deletedMessages = await app.handle({
-      resource: "threads",
-      method: "DELETE",
-      path: ["thread-a", "messages"],
-      headers: { "idempotency-key": "http:thread:a:delete-messages" },
-    });
-    assertEquals(deletedMessages.status, 204);
-    assertEquals(
-      (await app.handle({
-        resource: "threads",
-        method: "GET",
-        path: ["thread-a", "messages"],
-      })).data,
-      [],
-    );
-    assertEquals(
-      object(
-        (await app.handle({
-          resource: "events",
-          method: "GET",
-          path: [revisionEventId],
-        })).data,
-      ).type,
-      "message.created",
-    );
-
-    const deletedThread = await app.handle({
-      resource: "threads",
-      method: "DELETE",
-      path: ["thread-a"],
-      headers: { "idempotency-key": "http:thread:a:delete" },
-    });
-    assertEquals(deletedThread.status, 204);
-    await expectAppError(
-      () =>
-        app.handle({
-          resource: "threads",
-          method: "GET",
-          path: ["thread-a"],
-        }),
-      404,
-      "thread_not_found",
-    );
     assertEquals(
       object(
         (await app.handle({
@@ -611,7 +454,7 @@ Deno.test("event-native app exposes graph, event, asset, collection, and plugin 
       ).type,
       "message.created",
     );
-    for (const resource of ["graph", "queues"]) {
+    for (const resource of ["features", "graph", "queues"]) {
       await expectAppError(
         () => app.handle({ resource, method: "GET" }),
         404,
@@ -627,17 +470,12 @@ Deno.test("message history resolves canonical semantic content without operation
   const application = await createCopilotz({
     namespace: NAMESPACE,
     databaseSchema: `${SCHEMA}_history`,
-    core: false,
-    canonicalCore: [coreCollectionsPlugin],
+    plugins: [coreCollectionsPlugin],
   });
   const app = createEventNativeApp(application);
   try {
-    const domain = createTestDomainContext(
-      application,
-      NAMESPACE,
-      coreFeatureAliases,
-    );
-    await domain.features.thread.create({
+    const domain = createTestDomainContext(application, NAMESPACE);
+    await domain.actions.createThread({
       id: "history-thread",
       participants: [{
         id: "history-human",
@@ -652,7 +490,7 @@ Deno.test("message history resolves canonical semantic content without operation
         name: "Support",
       }],
     });
-    await domain.features.threadMessage.create({
+    await domain.actions.createThreadMessage({
       id: "history-user-message",
       threadId: "history-thread",
       sender: {
@@ -661,10 +499,7 @@ Deno.test("message history resolves canonical semantic content without operation
         participantType: "human",
       },
       recipientIds: ["history-agent"],
-      content: await application.content.preparer.prepare("Run lookup", {
-        namespace: NAMESPACE,
-        idempotencyKey: "history:user:body",
-      }),
+      content: "Run lookup",
     });
     const reasoning = await application.content.preparer.prepare({
       type: "text",
@@ -691,7 +526,7 @@ Deno.test("message history resolves canonical semantic content without operation
       args: JSON.stringify({ query: "canonical" }),
       status: "pending",
     }];
-    await domain.features.threadMessage.create({
+    await domain.actions.createThreadMessage({
       id: "history-agent-message",
       threadId: "history-thread",
       sender: {
@@ -700,10 +535,7 @@ Deno.test("message history resolves canonical semantic content without operation
         participantType: "agent",
         agentId: "support",
       },
-      content: await application.content.preparer.prepare("Running lookup", {
-        namespace: NAMESPACE,
-        idempotencyKey: "history:agent:body",
-      }),
+      content: "Running lookup",
       metadata: {
         llmReasoning: reasoning.content,
         llmToolCalls: toolCalls,
@@ -714,15 +546,7 @@ Deno.test("message history resolves canonical semantic content without operation
         },
       },
     });
-    const toolOutput = await application.content.preparer.prepare({
-      type: "json",
-      value: { ok: false, error: "Lookup unavailable" },
-      role: "tool.projected_output",
-    }, {
-      namespace: NAMESPACE,
-      idempotencyKey: "history:execution:output",
-    });
-    await domain.features.threadMessage.create({
+    await domain.actions.createThreadMessage({
       id: "history-tool-message",
       threadId: "history-thread",
       sender: {
@@ -731,7 +555,11 @@ Deno.test("message history resolves canonical semantic content without operation
         name: "Lookup",
       },
       recipientIds: ["history-agent"],
-      content: toolOutput,
+      content: {
+        type: "json",
+        value: { ok: false, error: "Lookup unavailable" },
+        role: "tool.projected_output",
+      },
       metadata: {
         toolId: "lookup",
         toolStatus: "failed",
@@ -832,8 +660,7 @@ Deno.test("trusted schema resolution isolates identical HTTP resource identities
   const application = await createCopilotz({
     namespace: NAMESPACE,
     databaseSchema: defaultSchema,
-    core: false,
-    canonicalCore: [coreCollectionsPlugin],
+    plugins: [coreCollectionsPlugin],
     database,
   });
   let authorizedSchema = defaultSchema;
@@ -842,9 +669,10 @@ Deno.test("trusted schema resolution isolates identical HTTP resource identities
   });
   const create = (status: string) =>
     app.handle({
-      resource: "threads",
+      resource: "collections",
       method: "POST",
-      body: { id: "shared-thread", status, participants: [] },
+      path: ["thread"],
+      body: { id: "shared-thread", status, participantIds: [] },
       context: { databaseSchema: authorizedSchema },
     });
   try {
@@ -889,8 +717,7 @@ Deno.test("event-native app returns request-bound channel output before delivery
   const application = await createCopilotz({
     namespace: NAMESPACE,
     databaseSchema: `${SCHEMA}_request_bound`,
-    core: false,
-    canonicalCore: [coreCollectionsPlugin],
+    plugins: [coreCollectionsPlugin],
   });
   let release!: () => void;
   const settlement = new Promise<void>((resolve) => {
@@ -908,7 +735,7 @@ Deno.test("event-native app returns request-bound channel output before delivery
   const channels: ChannelRuntime = Object.freeze({
     list: () => [channel],
     get: (id) => id === channel.id ? channel : undefined,
-    async dispatch(_namespace: string, request: ChannelRequest) {
+    dispatch(_namespace: string, request: ChannelRequest) {
       const event = createEphemeralEvent({
         type: "text.delta",
         namespace: NAMESPACE,
@@ -919,7 +746,7 @@ Deno.test("event-native app returns request-bound channel output before delivery
         await request.callback!(event as AttachmentOutput);
         await settlement;
       })();
-      return Object.freeze({
+      return Promise.resolve(Object.freeze({
         status: 202,
         response: { accepted: true },
         requestBound: true,
@@ -930,7 +757,7 @@ Deno.test("event-native app returns request-bound channel output before delivery
           release();
           return Promise.resolve();
         },
-      });
+      }));
     },
   });
   try {

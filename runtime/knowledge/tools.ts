@@ -8,11 +8,12 @@ import type {
   WorkflowTool,
   WorkflowToolExecutionContext,
 } from "../tools/index.ts";
-import { knowledgeFeature } from "./features.ts";
+import type { DeleteKnowledgeDocumentResult } from "./actions.ts";
 import { embedKnowledgeTexts } from "./resources.ts";
 import type {
   KnowledgeDocumentSourceInput,
   KnowledgeEmbeddingConfig,
+  KnowledgeSearchResult,
   KnowledgeSearchScope,
 } from "./types.ts";
 
@@ -330,7 +331,9 @@ export function createSearchKnowledgeTool(
       const query = required(input.query, "Knowledge query");
       const explicitScope = searchScope(input.scope);
       const response = await embedKnowledgeTexts(
-        ctx.processor,
+        {
+          embeddings: ctx.processor.adapters.embedding ?? Object.freeze({}),
+        },
         embedding,
         [query],
         {
@@ -338,33 +341,31 @@ export function createSearchKnowledgeTool(
           idempotencyKey: `${ctx.idempotencyKey}:knowledge-query`,
         },
       );
-      const results = await ctx.processor.feature(knowledgeFeature)
-        .searchDocuments({
-          embedding: response.embeddings[0],
-          scope: {
-            threadId: ctx.execution.threadId,
-            ...(ctx.execution.agentId
-              ? { agentId: ctx.execution.agentId }
-              : {}),
-            ...explicitScope,
-          },
-          limit: boundedInteger(
-            input.limit,
-            5,
-            "Knowledge result limit",
-            1,
-            20,
-          ),
-          threshold: boundedNumber(
-            input.threshold,
-            0.5,
-            "Knowledge similarity threshold",
-            -1,
-            1,
-          ),
-        }, {
-          operationKey: "search_knowledge",
-        });
+      const results = await ctx.processor.actions.searchKnowledge({
+        embedding: response.embeddings[0],
+        scope: {
+          threadId: ctx.execution.threadId,
+          ...(ctx.execution.agentId ? { agentId: ctx.execution.agentId } : {}),
+          ...explicitScope,
+        },
+        limit: boundedInteger(
+          input.limit,
+          5,
+          "Knowledge result limit",
+          1,
+          20,
+        ),
+        threshold: boundedNumber(
+          input.threshold,
+          0.5,
+          "Knowledge similarity threshold",
+          -1,
+          1,
+        ),
+      }, {
+        operationKey: "search_knowledge",
+        signal: ctx.processor.signal,
+      }) as readonly KnowledgeSearchResult[];
       if (results.length === 0) {
         return {
           results: [],
@@ -418,12 +419,13 @@ export function createDeleteDocumentTool(
       if (Boolean(documentId) === Boolean(sourceUri)) {
         throw new TypeError("Provide exactly one of documentId or sourceUri.");
       }
-      return await ctx.processor.feature(knowledgeFeature).deleteDocument({
+      return await ctx.processor.actions.deleteKnowledgeDocument({
         ...(documentId ? { documentId } : {}),
         ...(sourceUri ? { sourceUri } : {}),
       }, {
         operationKey: "delete_document",
-      });
+        signal: ctx.processor.signal,
+      }) as DeleteKnowledgeDocumentResult;
     },
   });
 }

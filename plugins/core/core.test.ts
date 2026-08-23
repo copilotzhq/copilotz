@@ -94,7 +94,7 @@ async function createFixture(url: string, schema: string): Promise<Fixture> {
     plugins: [definePlugin({
       id: "test.core-collections",
       version: "1.0.0",
-      processors: [processor],
+      processors: { audit: processor },
     })],
   });
   const executor = createDeliveryExecutor({

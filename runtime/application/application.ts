@@ -1,4 +1,3 @@
-import { createAgentCapabilityResolver } from "../capabilities/index.ts";
 import {
   type CopilotzPersistenceLifecycleCallbacks,
   type OpenCopilotzPersistence,
@@ -6,8 +5,6 @@ import {
 } from "./persistence.ts";
 import { type CopilotzEngine, createCopilotzEngine } from "../engine/index.ts";
 import { createPluginRegistry } from "../plugins/index.ts";
-import { createWorkflowToolCatalog } from "../tools/index.ts";
-import { createCopilotzCorePlugins } from "./core-plugins.ts";
 import type { AttachmentOutput } from "../attachments/index.ts";
 import type {
   ApplicationSendHandle,
@@ -183,15 +180,10 @@ export async function createCopilotzApplication(
     options.databaseSchema,
     "Database schema",
   ) ?? "public";
-  const toolCatalog = options.toolCatalog ?? createWorkflowToolCatalog();
-  const core = Object.freeze([
-    ...(options.canonicalCore ?? []),
-    ...createCopilotzCorePlugins(options.core, { toolCatalog }),
-  ]);
-  const registry = await createPluginRegistry({
-    core,
+  const registry = createPluginRegistry({
     plugins: options.plugins,
-    context: options.context,
+    resources: options.resources,
+    adapters: options.adapters,
   });
 
   let engine;
@@ -370,9 +362,7 @@ export async function createCopilotzApplication(
     return sendHandle;
   };
 
-  const declaredPluginIds = registry.plugins
-    .slice(core.length)
-    .map((plugin) => plugin.manifest.id);
+  const pluginIds = registry.plugins.map((plugin) => plugin.id);
   const {
     connect: _engineConnect,
     events: _engineEvents,
@@ -385,13 +375,9 @@ export async function createCopilotzApplication(
     config: Object.freeze({
       ...(namespace ? { namespace } : {}),
       databaseSchema,
-      corePluginIds: Object.freeze(
-        core.map((plugin) => plugin.manifest.id),
-      ),
-      declaredPluginIds: Object.freeze(declaredPluginIds),
+      pluginIds: Object.freeze(pluginIds),
       databaseOwnership: persistence.ownership,
     }),
-    capabilities: createAgentCapabilityResolver({ registry, toolCatalog }),
     events: engine.events,
     engine,
     execution: engine.execution,

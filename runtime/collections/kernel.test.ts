@@ -230,7 +230,7 @@ async function createFixture(
     plugins: [definePlugin({
       id: "test.collection-kernel",
       version: "1.0.0",
-      processors: [processor],
+      processors: { observeJobs: processor },
     })],
   });
   const executor = createDeliveryExecutor({

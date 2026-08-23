@@ -1,4 +1,3 @@
-import { coreFeatureAliases } from "@copilotz/copilotz/plugins/core";
 import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
 import {
   createPluginRegistry,
@@ -22,7 +21,7 @@ import {
   createCopilotzEngine,
 } from "./index.ts";
 import { createTestDatabase } from "../testing/ominipg.ts";
-import { defineCollection } from "../domain/index.ts";
+import { defineCollection } from "../collections/index.ts";
 
 const auditCollection = defineCollection({
   name: "live_audit",
@@ -31,11 +30,12 @@ const auditCollection = defineCollection({
     additionalProperties: false,
     properties: {
       id: { type: "string" },
+      namespace: { type: "string" },
       sourceType: { type: "string" },
       createdAt: { type: "string" },
       updatedAt: { type: "string" },
     },
-    required: ["id", "sourceType"],
+    required: ["id", "namespace", "sourceType"],
   } as const,
 });
 
@@ -61,7 +61,7 @@ Deno.test("live processors mutate causally without delivery rows or capacity-one
       liveCalls += 1;
       leakedDelivery = leakedDelivery || "delivery" in context;
       assertEquals(context.event.type, event.type);
-      await context.collections.live_audit.create({
+      await context.collections.liveAudit.create({
         id: `audit:${event.durable ? event.id : event.correlationId}`,
         sourceType: event.type,
       });
@@ -80,8 +80,8 @@ Deno.test("live processors mutate causally without delivery rows or capacity-one
       definePlugin({
         id: "test.live",
         version: "1.0.0",
-        processors: [durable],
-        collections: [auditCollection],
+        processors: { observeLiveAudit: durable },
+        collections: { liveAudit: auditCollection },
       }),
     ],
   });
@@ -94,27 +94,20 @@ Deno.test("live processors mutate causally without delivery rows or capacity-one
     execution: { capacity: 1 },
   });
   try {
-    await createTestDomainContext(engine, "tenant-live", coreFeatureAliases)
-      .features.thread.create(
-        {
-          namespace: "tenant-live",
-          id: "thread-a",
-          participants: [
-            {
-              id: "user-a",
-              externalId: "user-a",
-              participantType: "human",
-            },
-          ],
-        },
-      );
-    const content = await engine.content.preparer.prepare("hello", {
-      namespace: "tenant-live",
-      idempotencyKey: "live-message:content",
-    });
-    await createTestDomainContext(engine, "tenant-live", coreFeatureAliases)
-      .features.threadMessage
-      .create({
+    await createTestDomainContext(engine, "tenant-live").actions.createThread(
+      {
+        id: "thread-a",
+        participants: [
+          {
+            id: "user-a",
+            externalId: "user-a",
+            participantType: "human",
+          },
+        ],
+      },
+    );
+    await createTestDomainContext(engine, "tenant-live").actions
+      .createThreadMessage({
         id: "message-a",
         threadId: "thread-a",
         sender: {
@@ -122,7 +115,7 @@ Deno.test("live processors mutate causally without delivery rows or capacity-one
           externalId: "user-a",
           participantType: "human",
         },
-        content,
+        content: "hello",
       }, {
         identity: {
           correlationId: "live-root",
@@ -257,18 +250,16 @@ Deno.test("transient catch-up replays committed events without delivery rows", a
     defaultDatabaseSchema: "copilotz_transient_catchup",
   });
   try {
-    await createTestDomainContext(engine, "tenant-live", coreFeatureAliases)
-      .features.thread.create(
-        {
-          namespace: "tenant-live",
-          id: "thread-a",
-          participants: [{
-            id: "user-a",
-            externalId: "user-a",
-            participantType: "human",
-          }],
-        },
-      );
+    await createTestDomainContext(engine, "tenant-live").actions.createThread(
+      {
+        id: "thread-a",
+        participants: [{
+          id: "user-a",
+          externalId: "user-a",
+          participantType: "human",
+        }],
+      },
+    );
     const firstEvent = (await engine.events.list({
       namespace: "tenant-live",
       limit: 100,
@@ -280,18 +271,16 @@ Deno.test("transient catch-up replays committed events without delivery rows", a
       afterPosition: "0",
     });
     assertEquals(seen, [firstEvent.id]);
-    await createTestDomainContext(engine, "tenant-live", coreFeatureAliases)
-      .features.thread.create(
-        {
-          namespace: "tenant-live",
-          id: "thread-b",
-          participants: [{
-            id: "user-b",
-            externalId: "user-b",
-            participantType: "human",
-          }],
-        },
-      );
+    await createTestDomainContext(engine, "tenant-live").actions.createThread(
+      {
+        id: "thread-b",
+        participants: [{
+          id: "user-b",
+          externalId: "user-b",
+          participantType: "human",
+        }],
+      },
+    );
     const secondEvent = (await engine.events.list({
       namespace: "tenant-live",
       limit: 100,

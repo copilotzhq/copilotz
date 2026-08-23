@@ -1,5 +1,12 @@
 import { assertEquals, assertExists } from "@std/assert";
 import {
+  type ActionCaller,
+  type ActionCompletedData,
+  type ActionContext,
+  type ActionContextNamespaces,
+  defineAction,
+} from "../actions/index.ts";
+import {
   createPluginRegistry,
   definePlugin,
   defineProcessor,
@@ -11,55 +18,51 @@ import {
   type CopilotzProcessorContext,
   createCopilotzEngine,
 } from "./index.ts";
-import {
-  coreCollectionsPlugin,
-  coreFeatureAliases,
-} from "@copilotz/copilotz/plugins/core";
-import {
-  defineFeature,
-  type FeatureExecuteContext,
-} from "../features/index.ts";
-import type { ActionCompletedData } from "../actions/index.ts";
+import { coreCollectionsPlugin } from "@copilotz/copilotz/plugins/core";
 
-Deno.test("features see the same deliveries from processor and direct contexts", async () => {
-  const namespace = "tenant-feature-deliveries";
+Deno.test("Actions see the same deliveries from processor and direct contexts", async () => {
+  const namespace = "tenant-action-deliveries";
   let processorDeliveryIds: readonly string[] | undefined;
   let completedData: ActionCompletedData | undefined;
   const customAdapter = Object.freeze({ id: "adapter-a" });
-  const feature = defineFeature({
-    id: "test.delivery-probe",
-    actions: {
-      list: {
-        inputSchema: { type: "object" } as const,
-        async execute(_input: unknown, context: FeatureExecuteContext) {
-          assertEquals(
-            (context as unknown as {
-              customAdapters: Record<string, unknown>;
-            }).customAdapters.primary,
-            customAdapter,
-          );
-          return (await context.deliveries.list()).map((delivery) =>
-            delivery.id
-          );
-        },
-      },
+  type AdapterNamespaces =
+    & ActionContextNamespaces
+    & Readonly<{
+      custom: Readonly<{ primary: typeof customAdapter }>;
+    }>;
+  type DeliveryProbeContext =
+    & Omit<ActionContext, "adapters">
+    & Readonly<{
+      adapters: AdapterNamespaces;
+    }>;
+  const inputSchema = { type: "object" } as const;
+  const deliveryProbeAction = defineAction<
+    unknown,
+    readonly string[],
+    DeliveryProbeContext,
+    typeof inputSchema
+  >({
+    id: "test.delivery-probe.list",
+    inputSchema,
+    async execute(_input, context) {
+      assertEquals(context.adapters.custom.primary, customAdapter);
+      return (await context.deliveries.list()).map((delivery) => delivery.id);
     },
   });
-  const processor = defineProcessor<CopilotzProcessorContext>({
+  type ProbeProcessorContext =
+    & Omit<CopilotzProcessorContext, "actions" | "adapters">
+    & Readonly<{
+      actions: Readonly<{
+        deliveryProbe: ActionCaller<typeof deliveryProbeAction>;
+      }>;
+      adapters: AdapterNamespaces;
+    }>;
+  const processor = defineProcessor<ProbeProcessorContext>({
     id: "test.delivery-probe-processor",
     on: [{ eventType: "thread.created" }],
-    requires: {
-      features: { deliveryProbe: feature },
-    },
     async handle(_event, context) {
-      assertEquals(
-        (context as unknown as {
-          customAdapters: Record<string, unknown>;
-        }).customAdapters.primary,
-        customAdapter,
-      );
-      processorDeliveryIds = await context.features.deliveryProbe
-        .list({}) as readonly string[];
+      assertEquals(context.adapters.custom.primary, customAdapter);
+      processorDeliveryIds = await context.actions.deliveryProbe({});
     },
   });
   const completionProcessor = defineProcessor<CopilotzProcessorContext>({
@@ -70,13 +73,11 @@ Deno.test("features see the same deliveries from processor and direct contexts",
     },
   });
   const plugin = definePlugin({
-    id: "test.feature-delivery-parity",
+    id: "test.action-delivery-parity",
     version: "1.0.0",
-    features: [feature],
-    processors: [processor, completionProcessor],
-    context: {
-      customAdapters: { primary: customAdapter },
-    },
+    actions: { deliveryProbe: deliveryProbeAction },
+    processors: { deliveryProbe: processor, completion: completionProcessor },
+    adapters: { custom: { primary: customAdapter } },
   });
   const db = await createTestDatabase({ url: ":memory:" });
   const engine = await createCopilotzEngine({
@@ -84,18 +85,17 @@ Deno.test("features see the same deliveries from processor and direct contexts",
     registry: await createPluginRegistry({
       plugins: [coreCollectionsPlugin, plugin],
     }),
-    defaultDatabaseSchema: "copilotz_feature_delivery_parity",
+    defaultDatabaseSchema: "copilotz_action_delivery_parity",
   });
   try {
-    await createTestDomainContext(engine, namespace, coreFeatureAliases)
-      .features.thread.create({
-        id: "thread-a",
-        participants: [{
-          id: "user-a",
-          externalId: "user-a",
-          participantType: "human",
-        }],
-      });
+    await createTestDomainContext(engine, namespace).actions.createThread({
+      id: "thread-a",
+      participants: [{
+        id: "user-a",
+        externalId: "user-a",
+        participantType: "human",
+      }],
+    });
     const created = (await engine.events.list({ namespace, limit: 100 })).find(
       (event) =>
         event.type === "thread.created" && event.subject?.id === "thread-a",

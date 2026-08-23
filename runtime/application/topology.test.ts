@@ -1,7 +1,4 @@
-import {
-  coreFeatureAliases,
-  message as coreMessage,
-} from "@copilotz/copilotz/plugins/core";
+import { message as coreMessage } from "@copilotz/copilotz/plugins/core";
 import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
 import {
   createCopilotzGateway,
@@ -10,24 +7,17 @@ import {
 } from "./index.ts";
 import { createTestDatabase } from "../testing/ominipg.ts";
 import { listen } from "../adapters/deno/listen.ts";
-import { type CopilotzPlugin, definePlugin } from "../plugins/index.ts";
+import { type AnyCopilotzPlugin, definePlugin } from "../plugins/index.ts";
 import { defineProcessor } from "../plugins/processor.ts";
 import type { CopilotzProcessorContext } from "../engine/index.ts";
 import type { CopilotzDatabase } from "./persistence.ts";
 import { isCopilotzPersistenceError } from "./persistence.ts";
 import { coreCollectionsPlugin } from "../../plugins/core/plugin.ts";
 import { createTestDomainContext } from "../testing/domain-context.ts";
-import {
-  projectMessageById,
-  projectMessages,
-  projectParticipants,
-  projectThreadByExternalId,
-  projectThreadById,
-  projectThreads,
-} from "../testing/projections.ts";
+import { projectMessages } from "../testing/projections.ts";
 
 const namespace = "copilotz-topology-test";
-function cascadingPlugin(): CopilotzPlugin {
+function cascadingPlugin(): AnyCopilotzPlugin {
   const first = defineProcessor<CopilotzProcessorContext>({
     id: "topology.first",
     on: [{
@@ -82,7 +72,7 @@ function cascadingPlugin(): CopilotzPlugin {
   return definePlugin({
     id: "@copilotz/topology-test",
     version: "1.0.0",
-    processors: [first, second],
+    processors: { first, second },
   });
 }
 
@@ -105,10 +95,8 @@ Deno.test("Gateway and Worker preserve live output and cascading durable work", 
   let started = 0;
   const gateway = await createCopilotzGateway({
     namespace,
-    core: false,
-    canonicalCore: [coreCollectionsPlugin],
     database,
-    plugins: [plugin],
+    plugins: [coreCollectionsPlugin, plugin],
     transports: [transport],
     target: { workerId },
     engine: { retryBaseMs: 0, random: () => 0 },
@@ -119,10 +107,8 @@ Deno.test("Gateway and Worker preserve live output and cascading durable work", 
   });
   const worker = await createCopilotzWorker({
     namespace,
-    core: false,
-    canonicalCore: [coreCollectionsPlugin],
     database,
-    plugins: [plugin],
+    plugins: [coreCollectionsPlugin, plugin],
     id: workerId,
     transport,
     capacity: 1,
@@ -138,25 +124,24 @@ Deno.test("Gateway and Worker preserve live output and cascading durable work", 
 
   try {
     await worker.ready;
-    await createTestDomainContext(gateway, namespace, coreFeatureAliases)
-      .features.thread.create({
-        id: "topology-thread",
-        participants: [{
-          id: "topology-user",
-          externalId: "topology-user",
-          participantType: "human",
-        }, {
-          id: "topology-agent",
-          externalId: "topology-agent",
-          participantType: "agent",
-          agentId: "topology-agent",
-        }, {
-          id: "topology-second-agent",
-          externalId: "topology-second-agent",
-          participantType: "agent",
-          agentId: "topology-second-agent",
-        }],
-      });
+    await createTestDomainContext(gateway, namespace).actions.createThread({
+      id: "topology-thread",
+      participants: [{
+        id: "topology-user",
+        externalId: "topology-user",
+        participantType: "human",
+      }, {
+        id: "topology-agent",
+        externalId: "topology-agent",
+        participantType: "agent",
+        agentId: "topology-agent",
+      }, {
+        id: "topology-second-agent",
+        externalId: "topology-second-agent",
+        participantType: "agent",
+        agentId: "topology-second-agent",
+      }],
+    });
     const run = await gateway.send(coreMessage({
       thread: "topology-thread",
       participant: "topology-user",
@@ -233,8 +218,7 @@ Deno.test("Gateway bounds persistence outages as retryable HTTP 503 responses", 
   });
   const gateway = await createCopilotzGateway({
     namespace,
-    core: false,
-    canonicalCore: [coreCollectionsPlugin],
+    plugins: [coreCollectionsPlugin],
     persistence,
   });
   try {
@@ -285,10 +269,8 @@ Deno.test({
       | undefined;
     const gateway = await createCopilotzGateway({
       namespace,
-      core: false,
-      canonicalCore: [coreCollectionsPlugin],
       database,
-      plugins: [plugin],
+      plugins: [coreCollectionsPlugin, plugin],
       transports: [transport],
       target: { workerId },
       admit(context) {
@@ -323,10 +305,8 @@ Deno.test({
     workerUrl.protocol = "ws:";
     const worker = await createCopilotzWorker({
       namespace,
-      core: false,
-      canonicalCore: [coreCollectionsPlugin],
       database,
-      plugins: [plugin],
+      plugins: [coreCollectionsPlugin, plugin],
       id: workerId,
       transport: {
         type: "websocket",
@@ -362,29 +342,24 @@ Deno.test({
 
     try {
       await worker.ready;
-      assertEquals(
-        (await fetch(new URL("v3/agents", listener.url))).status,
-        200,
-      );
-      await createTestDomainContext(gateway, namespace, coreFeatureAliases)
-        .features.thread.create({
-          id: "topology-thread",
-          participants: [{
-            id: "topology-user",
-            externalId: "topology-user",
-            participantType: "human",
-          }, {
-            id: "topology-agent",
-            externalId: "topology-agent",
-            participantType: "agent",
-            agentId: "topology-agent",
-          }, {
-            id: "topology-second-agent",
-            externalId: "topology-second-agent",
-            participantType: "agent",
-            agentId: "topology-second-agent",
-          }],
-        });
+      await createTestDomainContext(gateway, namespace).actions.createThread({
+        id: "topology-thread",
+        participants: [{
+          id: "topology-user",
+          externalId: "topology-user",
+          participantType: "human",
+        }, {
+          id: "topology-agent",
+          externalId: "topology-agent",
+          participantType: "agent",
+          agentId: "topology-agent",
+        }, {
+          id: "topology-second-agent",
+          externalId: "topology-second-agent",
+          participantType: "agent",
+          agentId: "topology-second-agent",
+        }],
+      });
       const run = await gateway.send(coreMessage({
         thread: "topology-thread",
         participant: "topology-user",

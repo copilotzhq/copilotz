@@ -231,7 +231,9 @@ function createExecutor(
     context,
     sourceEvent: suppliedSourceEvent,
     idempotencyKey: suppliedIdempotencyKey,
-    availableTools = Object.values(context.tools).filter(isWorkflowTool),
+    availableTools = Object.values(context.resources.tools ?? {}).filter(
+      isWorkflowTool,
+    ),
   }) => {
     const legacy = context as
       & WorkflowToolHostContext
@@ -289,9 +291,10 @@ function createExecutor(
     const human = thread?.participants.find((candidate) =>
       candidate.participantType === "human"
     );
-    const agent = execution.agentId
-      ? context.agents[execution.agentId]
-      : undefined;
+    const agents = (context.resources.agents ?? {}) as Readonly<
+      Record<string, Agent | undefined>
+    >;
+    const agent = execution.agentId ? agents[execution.agentId] : undefined;
     let rejectCancellation: ((reason: Error) => void) | undefined;
     let outputSequence = 0;
     let emittedResult = false;
@@ -406,9 +409,7 @@ function createExecutor(
       senderType: "agent",
       userExternalId: human?.externalId,
       agent: agent ?? null,
-      agents: Object.values(context.agents).filter((value): value is Agent =>
-        !!value
-      ),
+      agents: Object.values(agents).filter((value): value is Agent => !!value),
       tools: [...availableTools],
       collections: context.collections,
       userMetadata: human?.metadata,

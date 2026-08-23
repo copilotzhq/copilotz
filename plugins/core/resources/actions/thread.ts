@@ -1,10 +1,9 @@
 import type { CollectionRecord } from "@copilotz/copilotz/collections";
 import {
-  defineFeature,
-  type FeatureAction,
-  type FeatureDefinition,
-  type FeatureExecuteContext,
-} from "@copilotz/copilotz/features";
+  type ActionContext,
+  type ActionDefinition,
+  defineAction,
+} from "@copilotz/copilotz/actions";
 import type { ParticipantInput } from "@copilotz/copilotz/domain";
 import {
   addSenderToThreadInTransaction,
@@ -12,11 +11,15 @@ import {
 } from "./thread-message.ts";
 import { asRecord, requiredText } from "./content-policy.ts";
 
-export const THREAD_FEATURE_ID = "copilotz.core.thread";
+export const CREATE_THREAD_ACTION_ID = "copilotz.core.thread.create";
+export const ADD_THREAD_PARTICIPANT_ACTION_ID =
+  "copilotz.core.thread.addParticipant";
+export const DELETE_THREAD_MESSAGES_ACTION_ID =
+  "copilotz.core.thread.deleteMessages";
 
 async function create(
   input: unknown,
-  context: FeatureExecuteContext,
+  context: ActionContext,
 ): Promise<CollectionRecord> {
   return await context.transaction(async (tx) => {
     const data = asRecord(input);
@@ -53,7 +56,7 @@ async function create(
 
 async function addParticipant(
   input: unknown,
-  context: FeatureExecuteContext,
+  context: ActionContext,
 ): Promise<
   Readonly<{
     thread: CollectionRecord | null;
@@ -84,9 +87,12 @@ async function addParticipant(
   });
 }
 
+type AddThreadParticipantResult = Awaited<ReturnType<typeof addParticipant>>;
+type DeleteThreadMessagesResult = Awaited<ReturnType<typeof deleteMessages>>;
+
 async function deleteMessages(
   input: unknown,
-  context: FeatureExecuteContext,
+  context: ActionContext,
 ): Promise<Readonly<{ threadId: string; deleted: true }>> {
   return await context.transaction(async (tx) => {
     const data = asRecord(input);
@@ -129,36 +135,38 @@ const deleteMessagesInput = {
   required: ["threadId"],
 } as const;
 
-type ThreadParticipantResult = Awaited<ReturnType<typeof addParticipant>>;
-type DeleteMessagesResult = Awaited<ReturnType<typeof deleteMessages>>;
-type ThreadFeature = FeatureDefinition<{
-  create: FeatureAction<typeof createInput, CollectionRecord>;
-  addParticipant: FeatureAction<
-    typeof addParticipantInput,
-    ThreadParticipantResult
-  >;
-  deleteMessages: FeatureAction<
-    typeof deleteMessagesInput,
-    DeleteMessagesResult
-  >;
-}>;
-
-const threadFeatureDefinition: ThreadFeature = defineFeature({
-  id: THREAD_FEATURE_ID,
-  actions: {
-    create: {
-      inputSchema: createInput,
-      execute: create,
-    },
-    addParticipant: {
-      inputSchema: addParticipantInput,
-      execute: addParticipant,
-    },
-    deleteMessages: {
-      inputSchema: deleteMessagesInput,
-      execute: deleteMessages,
-    },
-  },
+export const createThreadAction: ActionDefinition<
+  unknown,
+  CollectionRecord,
+  ActionContext,
+  typeof createInput,
+  undefined
+> = defineAction({
+  id: CREATE_THREAD_ACTION_ID,
+  inputSchema: createInput,
+  execute: create,
 });
 
-export const threadFeature: ThreadFeature = threadFeatureDefinition;
+export const addThreadParticipantAction: ActionDefinition<
+  unknown,
+  AddThreadParticipantResult,
+  ActionContext,
+  typeof addParticipantInput,
+  undefined
+> = defineAction({
+  id: ADD_THREAD_PARTICIPANT_ACTION_ID,
+  inputSchema: addParticipantInput,
+  execute: addParticipant,
+});
+
+export const deleteThreadMessagesAction: ActionDefinition<
+  unknown,
+  DeleteThreadMessagesResult,
+  ActionContext,
+  typeof deleteMessagesInput,
+  undefined
+> = defineAction({
+  id: DELETE_THREAD_MESSAGES_ACTION_ID,
+  inputSchema: deleteMessagesInput,
+  execute: deleteMessages,
+});

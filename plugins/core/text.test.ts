@@ -52,10 +52,7 @@ import {
   definePlugin,
   type PluginRegistry,
 } from "../../runtime/plugins/index.ts";
-import {
-  coreFeatureAliases,
-  corePlugin,
-} from "@copilotz/copilotz/plugins/core";
+import { corePlugin } from "@copilotz/copilotz/plugins/core";
 import {
   type CreateTextWorkflowPluginOptions,
   defineLlmProviderResource,
@@ -364,27 +361,39 @@ async function createFixture(
   const app = definePlugin({
     id: "test.text-workflow.resources",
     version: "1.0.0",
-    agents: [policyAgent, ...additionalAgents],
-    tools: [tool, ...(generatedResources.tools ?? [])],
-    llm: [provider],
-    ...(generatedResources.apis?.length
-      ? { api: [...generatedResources.apis] }
-      : {}),
-    ...(generatedResources.mcpServers?.length
-      ? { mcp: [...generatedResources.mcpServers] }
-      : {}),
-    ...(generatedResources.context?.length
-      ? {
-        context: {
-          promptContext: Object.fromEntries(
-            generatedResources.context.map((resource) => [
-              resource.id,
-              resource,
-            ]),
-          ),
-        },
-      }
-      : {}),
+    resources: {
+      agents: Object.fromEntries(
+        [policyAgent, ...additionalAgents].map((resource, index) => [
+          `agent${index}`,
+          resource,
+        ]),
+      ),
+      tools: Object.fromEntries(
+        [tool, ...(generatedResources.tools ?? [])].map((resource, index) => [
+          `tool${index}`,
+          resource,
+        ]),
+      ),
+      apis: Object.fromEntries(
+        (generatedResources.apis ?? []).map((resource, index) => [
+          `api${index}`,
+          resource,
+        ]),
+      ),
+      mcp: Object.fromEntries(
+        (generatedResources.mcpServers ?? []).map((resource, index) => [
+          `server${index}`,
+          resource,
+        ]),
+      ),
+      promptContext: Object.fromEntries(
+        (generatedResources.context ?? []).map((resource, index) => [
+          `context${index}`,
+          resource,
+        ]),
+      ),
+    },
+    adapters: { llm: { openai: provider } },
   });
   const registry = await createPluginRegistry({
     plugins: [
@@ -1095,16 +1104,12 @@ Deno.test("revising a human turn runs the agent from the projected branch", asyn
         idempotencyKey: "message:user:revision:1:content",
       },
     );
-    await createTestDomainContext(
-      fixture.engine,
-      "tenant-a",
-      coreFeatureAliases,
-    ).features.message
-      .revise({
+    await createTestDomainContext(fixture.engine, "tenant-a").actions
+      .reviseMessage({
         id: "message:user:revision:1",
         threadId: "thread-a",
         messageId: "message:user",
-        content,
+        content: await persistPreparedContent(fixture.engine, content),
       }, {
         identity: {
           correlationId: "run-a:revision:1",

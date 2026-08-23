@@ -46,20 +46,17 @@ Deno.test("event coordinator matches before commit, publishes, then dispatches",
     plugins: [definePlugin({
       id: "test.widgets",
       version: "1.0.0",
-      processors: [processor],
+      processors: { observer: processor },
     })],
   });
   const registry = Object.freeze({
     ...baseRegistry,
-    processors: Object.freeze({
-      ...baseRegistry.processors,
-      durableConsumers(
-        draft: Parameters<typeof baseRegistry.processors.durableConsumers>[0],
-      ) {
-        order.push("matched");
-        return baseRegistry.processors.durableConsumers(draft);
-      },
-    }),
+    durableConsumers(
+      draft: Parameters<typeof baseRegistry.durableConsumers>[0],
+    ) {
+      order.push("matched");
+      return baseRegistry.durableConsumers(draft);
+    },
   });
   const executor = createDeliveryExecutor({
     store: fixture.store,
@@ -122,7 +119,7 @@ Deno.test("post-commit publication and placement failures leave delivery recover
     plugins: [definePlugin({
       id: "test.audit",
       version: "1.0.0",
-      processors: [processor],
+      processors: { observer: processor },
     })],
   });
   const executor = createDeliveryExecutor({
@@ -181,7 +178,7 @@ Deno.test("deduplicated settled events do not dispatch a second operation", asyn
     plugins: [definePlugin({
       id: "test.once",
       version: "1.0.0",
-      processors: [processor],
+      processors: { observer: processor },
     })],
   });
   const executor = createDeliveryExecutor({

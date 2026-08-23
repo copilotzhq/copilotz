@@ -11,6 +11,7 @@ import { durableActionValue } from "./value.ts";
 
 const ACTION_STATUSES = new Set<ActionStatus>([
   "invoked",
+  "progress",
   "completed",
   "failed",
   "cancelled",
@@ -30,8 +31,7 @@ function optionalText(value: string | undefined): string | undefined {
 function safeError(error: SerializedActionError): SerializedActionError {
   const name = requireText(error.name, "Action error name");
   const message = requireText(error.message, "Action error message");
-  const stack = optionalText(error.stack);
-  return Object.freeze({ name, message, ...(stack ? { stack } : {}) });
+  return Object.freeze({ name, message });
 }
 
 function eventData(input: ActionLifecycleInput): ActionEventData {
@@ -49,6 +49,21 @@ function eventData(input: ActionLifecycleInput): ActionEventData {
   switch (input.status) {
     case "invoked":
       return Object.freeze({ ...base, status: "invoked" });
+    case "progress": {
+      if (
+        !Number.isSafeInteger(input.progressIndex) || input.progressIndex < 1
+      ) {
+        throw new TypeError(
+          "Action progress index must be a positive safe integer.",
+        );
+      }
+      return Object.freeze({
+        ...base,
+        status: "progress",
+        progressIndex: input.progressIndex,
+        progress: durableActionValue(input.progress),
+      });
+    }
     case "completed":
       return Object.freeze({
         ...base,
@@ -108,18 +123,17 @@ export function createActionLifecycleEmitter(
     async terminal(actionRunId) {
       const id = requireText(actionRunId, "Action run id");
       if (!input.load) return null;
-      for (const status of ["completed", "failed", "cancelled"] as const) {
-        const data = await input.load(namespace, `${id}:action:${status}`);
-        if (!data) continue;
-        if (
-          data.actionRunId !== id || data.status !== status ||
-          data.actionId.trim().length === 0
-        ) {
-          throw new Error(`Action terminal event '${id}' is inconsistent.`);
-        }
-        return data;
+      const data = await input.load(namespace, `${id}:action:terminal`);
+      if (!data) return null;
+      if (
+        data.actionRunId !== id ||
+        (data.status !== "completed" && data.status !== "failed" &&
+          data.status !== "cancelled") ||
+        data.actionId.trim().length === 0
+      ) {
+        throw new Error(`Action terminal event '${id}' is inconsistent.`);
       }
-      return null;
+      return data;
     },
   });
 }

@@ -1,25 +1,66 @@
-import type { DurableContentInput } from "../content/index.ts";
+import { digestContent, type DurableContentInput } from "../content/index.ts";
 import {
-  defineFeature,
-  type FeatureAction,
-  type FeatureDefinition,
-  type FeatureExecuteContext,
-  type FeatureTransactionContext,
-} from "../features/index.ts";
-import {
-  knowledgeChunkCollection,
-  knowledgeDocumentCollection,
-} from "./collections.ts";
+  type ActionCaller,
+  type ActionCallOptions,
+  type ActionContext,
+  type ActionDefinition,
+  defineAction,
+} from "../actions/index.ts";
+import { chunkText } from "../../utils/chunker.ts";
+import { embedKnowledgeTexts } from "./resources.ts";
 import type {
   CompleteKnowledgeDocumentInput,
   KnowledgeChunk,
+  KnowledgeChunkingConfig,
   KnowledgeDocument,
+  KnowledgeEmbeddingConfig,
+  KnowledgeEmbeddingProviderResource,
   KnowledgeSearchInput,
   KnowledgeSearchResult,
+  KnowledgeSourceLoader,
+  KnowledgeTextExtractor,
+  LoadedKnowledgeSource,
   MarkKnowledgeDocumentDuplicateInput,
 } from "./types.ts";
 
-export const KNOWLEDGE_FEATURE_ID = "copilotz.knowledge";
+export const INDEX_KNOWLEDGE_DOCUMENT_ACTION_ID =
+  "copilotz.knowledge.indexDocument";
+export const SEARCH_KNOWLEDGE_ACTION_ID = "copilotz.knowledge.searchDocuments";
+export const DELETE_KNOWLEDGE_DOCUMENT_ACTION_ID =
+  "copilotz.knowledge.deleteDocument";
+
+export type KnowledgeActionContext =
+  & Omit<ActionContext, "actions" | "adapters">
+  & Readonly<{
+    actions: Readonly<{
+      createThreadMessage: (
+        input: unknown,
+        options?: ActionCallOptions,
+      ) => Promise<unknown>;
+    }>;
+    adapters: Readonly<{
+      embedding: Readonly<
+        Record<string, KnowledgeEmbeddingProviderResource | undefined>
+      >;
+    }>;
+  }>;
+
+export type IndexKnowledgeDocumentInput = Readonly<{ id: string }>;
+export type SearchKnowledgeActionInput = Omit<
+  KnowledgeSearchInput,
+  "namespace"
+>;
+export type DeleteKnowledgeDocumentInput = Readonly<{
+  documentId?: string;
+  sourceUri?: string;
+}>;
+
+export type CreateIndexKnowledgeDocumentActionOptions = Readonly<{
+  embedding: KnowledgeEmbeddingConfig;
+  chunking: Required<KnowledgeChunkingConfig>;
+  loader: KnowledgeSourceLoader;
+  extractor: KnowledgeTextExtractor;
+}>;
 
 function record(value: unknown, name = "Input"): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -36,7 +77,19 @@ function optional(value: unknown, name: string): string | undefined {
   return value.trim();
 }
 
-type DeleteDocumentResult = Readonly<
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function errorCode(error: unknown): string {
+  if (error instanceof TypeError) return "knowledge_input_invalid";
+  if (error instanceof DOMException && error.name === "AbortError") {
+    return "knowledge_cancelled";
+  }
+  return "knowledge_index_failed";
+}
+
+export type DeleteKnowledgeDocumentResult = Readonly<
   | {
     success: true;
     message: string;
@@ -289,10 +342,10 @@ function failIndexInput(input: unknown): FailIndexInput {
 }
 
 async function deleteDocumentChunks(
-  tx: FeatureTransactionContext,
+  collections: ActionContext["collections"],
   documentId: string,
 ): Promise<void> {
-  const chunks = tx.collection(knowledgeChunkCollection);
+  const chunks = collections.chunk;
   let after: string | undefined;
   while (true) {
     const page = await chunks.list({
@@ -310,9 +363,9 @@ async function deleteDocumentChunks(
 }
 
 async function listAllChunks(
-  context: FeatureExecuteContext,
+  context: Pick<ActionContext, "collections">,
 ): Promise<readonly KnowledgeChunk[]> {
-  const chunks = context.collection(knowledgeChunkCollection);
+  const chunks = context.collections.chunk;
   const collected: KnowledgeChunk[] = [];
   let after: string | undefined;
   while (true) {
@@ -330,7 +383,7 @@ async function listAllChunks(
 
 async function searchDocuments(
   input: unknown,
-  context: FeatureExecuteContext,
+  context: ActionContext,
 ): Promise<readonly KnowledgeSearchResult[]> {
   const data = record(input);
   const embedding = finiteVector(data.embedding, "Knowledge query embedding");
@@ -350,7 +403,7 @@ async function searchDocuments(
     -1,
     1,
   );
-  const documents = context.collection(knowledgeDocumentCollection);
+  const documents = context.collections.document;
   const documentCache = new Map<string, KnowledgeDocument | null>();
   const results: KnowledgeSearchResult[] = [];
   for (const chunk of await listAllChunks(context)) {
@@ -380,12 +433,12 @@ async function searchDocuments(
 
 async function beginIndex(
   input: unknown,
-  context: FeatureExecuteContext,
+  context: KnowledgeActionContext,
 ): Promise<KnowledgeDocument> {
   const id = requireText(record(input).id, "Document ID");
   return await context.transaction(
     async (tx) =>
-      await tx.collection(knowledgeDocumentCollection).commands.beginIndex({
+      await tx.collections.document.commands.beginIndex({
         id,
       }) as KnowledgeDocument,
     { operationKey: `index:${id}:begin` },
@@ -394,12 +447,12 @@ async function beginIndex(
 
 async function completeIndex(
   input: unknown,
-  context: FeatureExecuteContext,
+  context: KnowledgeActionContext,
 ): Promise<KnowledgeDocument> {
   const data = completeIndexInput(input);
   return await context.transaction(async (tx) => {
-    await deleteDocumentChunks(tx, data.id);
-    const chunks = tx.collection(knowledgeChunkCollection);
+    await deleteDocumentChunks(tx.collections, data.id);
+    const chunks = tx.collections.chunk;
     for (const chunk of data.chunks) {
       await chunks.create({
         id: `${data.id}:chunk:${chunk.chunkIndex}`,
@@ -413,7 +466,7 @@ async function completeIndex(
         metadata: chunk.metadata,
       }, { operationKey: `index:${data.id}:chunk:${chunk.chunkIndex}` });
     }
-    return await tx.collection(knowledgeDocumentCollection).commands
+    return await tx.collections.document.commands
       .completeIndex({
         id: data.id,
         ...(data.title ? { title: data.title } : {}),
@@ -427,11 +480,11 @@ async function completeIndex(
 
 async function markDuplicate(
   input: unknown,
-  context: FeatureExecuteContext,
+  context: KnowledgeActionContext,
 ): Promise<KnowledgeDocument> {
   const data = duplicateInput(input);
   return await context.transaction(async (tx) => {
-    const canonical = await tx.collection(knowledgeDocumentCollection).get({
+    const canonical = await tx.collections.document.get({
       id: data.duplicateOfDocumentId,
     }) as KnowledgeDocument | null;
     if (!canonical || canonical.status !== "indexed") {
@@ -447,8 +500,8 @@ async function markDuplicate(
         "Duplicate metadata does not match the canonical document.",
       );
     }
-    await deleteDocumentChunks(tx, data.id);
-    return await tx.collection(knowledgeDocumentCollection).commands
+    await deleteDocumentChunks(tx.collections, data.id);
+    return await tx.collections.document.commands
       .markDuplicate({
         id: data.id,
         duplicateOfDocumentId: data.duplicateOfDocumentId,
@@ -461,12 +514,12 @@ async function markDuplicate(
 
 async function failIndex(
   input: unknown,
-  context: FeatureExecuteContext,
+  context: KnowledgeActionContext,
 ): Promise<KnowledgeDocument> {
   const data = failIndexInput(input);
   return await context.transaction(
     async (tx) =>
-      await tx.collection(knowledgeDocumentCollection).commands.failIndex({
+      await tx.collections.document.commands.failIndex({
         id: data.id,
         code: data.error.code,
         message: data.error.message,
@@ -475,10 +528,210 @@ async function failIndex(
   );
 }
 
+function actionSignal(context: KnowledgeActionContext): AbortSignal {
+  return context.signal ?? new AbortController().signal;
+}
+
+async function loadSource(
+  document: KnowledgeDocument,
+  context: KnowledgeActionContext,
+  loader: KnowledgeSourceLoader,
+): Promise<LoadedKnowledgeSource> {
+  if (document.source.length) {
+    if (document.source.length !== 1) {
+      throw new Error(`Document '${document.id}' has multiple source assets.`);
+    }
+    const [resolved] = await context.content.resolveMany(document.source);
+    return Object.freeze({
+      bytes: resolved.bytes,
+      mediaType: resolved.asset.mediaType,
+      sourceType: document.sourceType,
+      sourceUri: document.sourceUri,
+      title: document.title,
+    });
+  }
+  return await loader({
+    document,
+    signal: actionSignal(context),
+    idempotencyKey: `${context.operationKey}:knowledge-source`,
+  });
+}
+
+async function announce(
+  context: KnowledgeActionContext,
+  document: KnowledgeDocument,
+  input: Readonly<{
+    status: "indexed" | "duplicate" | "failed";
+    message: string;
+    metadata?: Record<string, unknown>;
+  }>,
+): Promise<void> {
+  if (!document.threadId) return;
+  const threads = context.collections.thread;
+  if (!threads || !await threads.get({ id: document.threadId })) return;
+  const createMessage = context.actions.createThreadMessage;
+  if (typeof createMessage !== "function") return;
+  const messageId = `${document.id}:knowledge:${input.status}`;
+  const prepared = await context.content.prepare({
+    type: "text",
+    text: input.message,
+    role: "body",
+  }, { operationKey: `announce:${document.id}:${input.status}` });
+  const content = await context.content.materialize(prepared, {
+    origin: {
+      scope: { type: "thread", id: document.threadId },
+      producer: { type: "message", id: messageId },
+    },
+  });
+  await createMessage({
+    id: messageId,
+    threadId: document.threadId,
+    sender: {
+      externalId: "copilotz.knowledge",
+      participantType: "job",
+      name: "RAG",
+    },
+    recipientIds: [],
+    content,
+    visibility: { kind: "public" },
+    metadata: {
+      knowledgeResult: {
+        documentId: document.id,
+        title: document.title,
+        status: input.status,
+        ...structuredClone(input.metadata ?? {}),
+      },
+    },
+  }, { operationKey: `announce:${document.id}:${input.status}` });
+  if (content.length) await context.content.linkOwner(messageId, content);
+}
+
+async function indexDocument(
+  input: unknown,
+  context: KnowledgeActionContext,
+  options: CreateIndexKnowledgeDocumentActionOptions,
+): Promise<KnowledgeDocument> {
+  const id = requireText(record(input).id, "Document ID");
+  let document = await context.collections.document.get({ id }) as
+    | KnowledgeDocument
+    | null;
+  if (!document) throw new Error(`Knowledge document '${id}' vanished.`);
+  let settled = false;
+  try {
+    document = await beginIndex({ id }, context);
+    const loaded = await loadSource(document, context, options.loader);
+    actionSignal(context).throwIfAborted();
+    const text = (await options.extractor({
+      bytes: loaded.bytes,
+      mediaType: loaded.mediaType,
+      signal: actionSignal(context),
+    })).trim();
+    if (!text) throw new Error("Document has no text to index.");
+    const hash = await digestContent(loaded.bytes);
+    const canonical = document.forceReindex
+      ? null
+      : (await context.collections.document.queries.byContentHash({
+        contentHash: hash,
+      }))[0] as KnowledgeDocument | undefined;
+    if (canonical && canonical.id !== document.id) {
+      document = await markDuplicate({
+        id,
+        duplicateOfDocumentId: canonical.id,
+        source: canonical.source,
+        mediaType: canonical.mediaType ?? loaded.mediaType,
+        contentHash: hash,
+      }, context);
+      settled = true;
+      await announce(context, document, {
+        status: "duplicate",
+        message: `Document "${document.title}" already indexed (hash: ${
+          hash.slice(7, 15)
+        }...).`,
+        metadata: { duplicateOfDocumentId: canonical.id },
+      }).catch(() => undefined);
+      return document;
+    }
+
+    const chunks = chunkText(text, options.chunking);
+    if (chunks.length === 0) {
+      throw new Error("Document has no content to index.");
+    }
+    const vectors: (readonly number[])[] = [];
+    const batchSize = options.embedding.batchSize!;
+    let model = options.embedding.model;
+    let dimensions = options.embedding.dimensions;
+    for (let offset = 0; offset < chunks.length; offset += batchSize) {
+      actionSignal(context).throwIfAborted();
+      const batch = chunks.slice(offset, offset + batchSize);
+      const response = await embedKnowledgeTexts(
+        { embeddings: context.adapters.embedding ?? Object.freeze({}) },
+        options.embedding,
+        batch.map((item) => item.content),
+        {
+          signal: actionSignal(context),
+          idempotencyKey: `${context.operationKey}:knowledge-embed:${offset}`,
+        },
+      );
+      vectors.push(...response.embeddings);
+      model = response.model;
+      dimensions = response.dimensions;
+    }
+    const source = document.source.length
+      ? document.source
+      : await context.content.prepare({
+        type: "file",
+        bytes: loaded.bytes,
+        mediaType: loaded.mediaType,
+        role: "document.source",
+        ...(loaded.title ? { name: loaded.title } : {}),
+      }, { operationKey: `index:${id}:source` });
+    document = await completeIndex({
+      id,
+      title: loaded.title ?? document.title,
+      mediaType: loaded.mediaType,
+      contentHash: hash,
+      source,
+      chunks: chunks.map((chunk, index) => ({
+        content: chunk.content,
+        embedding: vectors[index],
+        chunkIndex: chunk.metadata.chunkIndex,
+        tokenCount: chunk.metadata.tokenCount,
+        startPosition: chunk.metadata.startPosition,
+        endPosition: chunk.metadata.endPosition,
+        metadata: {
+          ...(model ? { embeddingModel: model } : {}),
+          ...(dimensions ? { embeddingDimensions: dimensions } : {}),
+        },
+      })),
+    }, context);
+    settled = true;
+    await announce(context, document, {
+      status: "indexed",
+      message:
+        `Successfully indexed "${document.title}" (${document.chunkCount} chunks).`,
+      metadata: { chunks: document.chunkCount },
+    }).catch(() => undefined);
+    return document;
+  } catch (error) {
+    if (!settled) {
+      const failed = await failIndex({
+        id,
+        error: { code: errorCode(error), message: errorMessage(error) },
+      }, context).catch(() => undefined);
+      document = failed ?? document;
+      await announce(context, document, {
+        status: "failed",
+        message: `Failed to ingest document: ${errorMessage(error)}`,
+      }).catch(() => undefined);
+    }
+    throw error;
+  }
+}
+
 async function deleteDocument(
   input: unknown,
-  context: FeatureExecuteContext,
-): Promise<DeleteDocumentResult> {
+  context: ActionContext,
+): Promise<DeleteKnowledgeDocumentResult> {
   const data = record(input);
   const documentId = optional(data.documentId, "Document ID");
   const sourceUri = optional(data.sourceUri, "Document source URI");
@@ -580,41 +833,87 @@ const searchDocumentsOutputSchema = {
   },
 } as const;
 
-type KnowledgeFeature = FeatureDefinition<{
-  beginIndex: FeatureAction<undefined, KnowledgeDocument>;
-  completeIndex: FeatureAction<undefined, KnowledgeDocument>;
-  markDuplicate: FeatureAction<undefined, KnowledgeDocument>;
-  failIndex: FeatureAction<undefined, KnowledgeDocument>;
-  searchDocuments: FeatureAction<
-    typeof searchDocumentsInputSchema,
-    readonly KnowledgeSearchResult[],
-    typeof searchDocumentsOutputSchema
-  >;
-  deleteDocument: FeatureAction<
-    typeof deleteDocumentInputSchema,
-    DeleteDocumentResult,
-    typeof deleteDocumentOutputSchema
-  >;
-}>;
+const indexKnowledgeDocumentInputSchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: { id: { type: "string" } },
+  required: ["id"],
+} as const;
 
-const knowledgeFeatureDefinition: KnowledgeFeature = defineFeature({
-  id: KNOWLEDGE_FEATURE_ID,
-  actions: {
-    beginIndex: { execute: beginIndex },
-    completeIndex: { execute: completeIndex },
-    markDuplicate: { execute: markDuplicate },
-    failIndex: { execute: failIndex },
-    searchDocuments: {
-      inputSchema: searchDocumentsInputSchema,
-      outputSchema: searchDocumentsOutputSchema,
-      execute: searchDocuments,
+/** Defines the configured document-indexing workflow as one durable Action. */
+export function createIndexKnowledgeDocumentAction(
+  options: CreateIndexKnowledgeDocumentActionOptions,
+): ActionDefinition<
+  IndexKnowledgeDocumentInput,
+  KnowledgeDocument,
+  KnowledgeActionContext,
+  typeof indexKnowledgeDocumentInputSchema,
+  undefined
+> {
+  return defineAction<
+    IndexKnowledgeDocumentInput,
+    KnowledgeDocument,
+    KnowledgeActionContext,
+    typeof indexKnowledgeDocumentInputSchema
+  >({
+    id: INDEX_KNOWLEDGE_DOCUMENT_ACTION_ID,
+    inputSchema: indexKnowledgeDocumentInputSchema,
+    async execute(input, context: KnowledgeActionContext) {
+      return await indexDocument(input, context, options);
     },
-    deleteDocument: {
-      inputSchema: deleteDocumentInputSchema,
-      outputSchema: deleteDocumentOutputSchema,
-      execute: deleteDocument,
-    },
+  });
+}
+
+/** Searches the durable Knowledge Collections using a precomputed embedding. */
+export const searchKnowledgeAction: ActionDefinition<
+  SearchKnowledgeActionInput,
+  readonly KnowledgeSearchResult[],
+  ActionContext,
+  typeof searchDocumentsInputSchema,
+  typeof searchDocumentsOutputSchema
+> = defineAction<
+  SearchKnowledgeActionInput,
+  readonly KnowledgeSearchResult[],
+  ActionContext,
+  typeof searchDocumentsInputSchema,
+  typeof searchDocumentsOutputSchema
+>({
+  id: SEARCH_KNOWLEDGE_ACTION_ID,
+  inputSchema: searchDocumentsInputSchema,
+  outputSchema: searchDocumentsOutputSchema,
+  async execute(input, context: ActionContext) {
+    return [...await searchDocuments(input, context)];
   },
 });
 
-export const knowledgeFeature: KnowledgeFeature = knowledgeFeatureDefinition;
+/** Deletes one document and its derived chunks atomically. */
+export const deleteKnowledgeDocumentAction: ActionDefinition<
+  DeleteKnowledgeDocumentInput,
+  DeleteKnowledgeDocumentResult,
+  ActionContext,
+  typeof deleteDocumentInputSchema,
+  typeof deleteDocumentOutputSchema
+> = defineAction<
+  DeleteKnowledgeDocumentInput,
+  DeleteKnowledgeDocumentResult,
+  ActionContext,
+  typeof deleteDocumentInputSchema,
+  typeof deleteDocumentOutputSchema
+>({
+  id: DELETE_KNOWLEDGE_DOCUMENT_ACTION_ID,
+  inputSchema: deleteDocumentInputSchema,
+  outputSchema: deleteDocumentOutputSchema,
+  execute: deleteDocument,
+});
+
+export type IndexKnowledgeDocumentAction = ReturnType<
+  typeof createIndexKnowledgeDocumentAction
+>;
+
+export type KnowledgeActionCallers = Readonly<{
+  indexKnowledgeDocument: ActionCaller<IndexKnowledgeDocumentAction>;
+  searchKnowledge: ActionCaller<typeof searchKnowledgeAction>;
+  deleteKnowledgeDocument: ActionCaller<
+    typeof deleteKnowledgeDocumentAction
+  >;
+}>;

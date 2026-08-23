@@ -1,8 +1,4 @@
-import type {
-  BodyStore,
-  ContentPreparer,
-  DatabaseAssetRepository,
-} from "../content/index.ts";
+import type { BodyStore, DatabaseAssetRepository } from "../content/index.ts";
 import { createContentStreamRuntime } from "../content/index.ts";
 import type { CollectionRuntime } from "../collections/kernel.ts";
 import type { CollectionRecord } from "../collections/index.ts";
@@ -21,10 +17,9 @@ import {
 import type { CopilotzEvent, CopilotzEventHub } from "../events/index.ts";
 import type { DeliveryExecutor } from "../execution/index.ts";
 import {
-  createFeatureContext,
-  type FeatureContextBindings,
-} from "../features/index.ts";
-import { requireFeatureActions } from "../features/context.ts";
+  type ActionContextBindings,
+  createActionContext,
+} from "../actions/index.ts";
 import {
   defineProcessor,
   type TransientProcessorSet,
@@ -49,7 +44,6 @@ export type CreateAttachmentRuntimeOptions = Readonly<{
   coordinator: EventCoordinator;
   store: EventStore;
   session: SqlExecutor;
-  preparer: ContentPreparer;
   assets: Pick<DatabaseAssetRepository, "materialize" | "linkOwner">;
   eventHub: CopilotzEventHub;
   dispatchEvent?: (event: CopilotzEvent) => Promise<
@@ -61,7 +55,7 @@ export type CreateAttachmentRuntimeOptions = Readonly<{
   executor: DeliveryExecutor;
   collectionRuntime: CollectionRuntime;
   transients: TransientProcessorSet;
-  featureBindings: Omit<FeatureContextBindings, "namespace">;
+  actionBindings: Omit<ActionContextBindings, "namespace">;
   streamBodyStore?: BodyStore;
   createId?: () => string;
   now?: () => Date;
@@ -888,10 +882,6 @@ export function createAttachmentRuntime(
         createId,
       );
       const settlementScopeId = messageId;
-      const prepared = await options.preparer.prepare(message.content, {
-        namespace,
-        idempotencyKey: `${deduplicationId}:content`,
-      });
       const metadata = structuredClone(message.metadata ?? {});
       const recipientIds = resolveRecipientIds(
         thread,
@@ -903,19 +893,16 @@ export function createAttachmentRuntime(
         settlementScopeId,
         metadata,
       };
-      const features = createFeatureContext({
-        ...options.featureBindings,
+      const actions = createActionContext({
+        ...options.actionBindings,
         namespace,
       });
-      const record = await requireFeatureActions(
-        features,
-        "copilotz.core.thread-message",
-      ).create({
+      const record = await actions.actions.createThreadMessage({
         id: messageId,
         threadId: thread.id,
         sender: participantInput(participant),
         recipientIds: [...recipientIds],
-        content: prepared,
+        content: message.content,
         metadata,
         visibility: message.visibility ?? { kind: "public" },
       }, { operationKey: deduplicationId, identity }) as CollectionRecord;

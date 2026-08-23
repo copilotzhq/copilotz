@@ -75,7 +75,7 @@ async function createFixture(): Promise<Fixture> {
     plugins: [definePlugin({
       id: "test.conversation",
       version: "1.0.0",
-      processors: [processor],
+      processors: { observeMessage: processor },
     })],
   });
   const executor = createDeliveryExecutor({

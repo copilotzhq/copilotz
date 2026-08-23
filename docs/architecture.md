@@ -2,7 +2,7 @@
 
 Copilotz separates durable meaning from execution placement. The north-star loop
 is: applications send plugin-owned input envelopes, runtime persists and
-dispatches Events, plugin Processors react, and plugin-owned Features/actions or
+dispatches Events, plugin Processors react, and plugin-owned Actions or
 Collections emit more Events.
 
 ```mermaid
@@ -16,7 +16,7 @@ flowchart LR
   subgraph plugins["Plugins"]
     direction LR
     processor["Processor<br/><small>listens to events</small>"]
-    actions["Actions<br/><small>Features</small>"]
+    actions["Actions"]
     mutations["Mutations<br/><small>Collections</small>"]
 
     processor -- "runs" --> actions
@@ -30,13 +30,13 @@ flowchart LR
 
 Important boundaries:
 
-- `copilotz.send(...)` is runtime-neutral application ingress. It is not a
-  Feature call and does not promote plugin APIs onto the application object.
+- `copilotz.send(...)` is runtime-neutral application ingress. It does not
+  invoke a plugin Action directly or promote plugin APIs onto the application
+  object.
 - Plugins may export typed helpers that build input envelopes, such as
   `core.message(...)`; runtime persists those envelopes opaquely.
-- Inside Processors and Features, business operations run through
-  `context.features.<featureKey>.<actionName>(...)` or
-  `context.feature(definition).<actionName>(...)`.
+- Inside Processors and Actions, business operations use direct aliases such as
+  `context.actions.generate(...)` and `context.collections.message.create(...)`.
 - Action lifecycle Event Bodies contain the invocation input and the terminal
   output or error. Processors receive that resolved data directly; there is no
   separate Action invocation or query API.
@@ -52,8 +52,8 @@ LLM generations, sessions, and tool executions are durable Actions, not semantic
 graph nodes. Their persisted lifecycle events are self-contained and can drive
 later Processors directly. Internal provider retries remain accounting inside
 the LLM Action output unless a plugin deliberately declares a separate provider
-Feature action. Messages remain graph records because they are the canonical
-transcript used to reconstruct a thread or conversation.
+Action. Messages remain graph records because they are the canonical transcript
+used to reconstruct a thread or conversation.
 
 ## Event model
 
@@ -95,15 +95,14 @@ transport can retain byte arrays without WebSocket encoding.
 
 ## Plugin model
 
-Everything extensible is a plugin declaration or context value. Collections,
-Features, and Processors are executable plugin declarations. Agents, tools, LLM
-adapters, channels, skills, memory kinds, APIs, MCP servers, and host
-capabilities are typed context values or ordinary plugin code. Composition is
-deterministic:
+Everything extensible is a plugin declaration or composed value. Collections,
+Actions, and Processors are executable plugin declarations. Semantic values such
+as agents and tools are Resources; variable external implementations are
+Adapters. Composition is deterministic:
 
-1. built-in core plugins
+1. dependency plugins, depth first
 2. declared plugins in order
-3. explicit application resources
+3. explicit application Resources and Adapters
 
 A later resource with the same type and stable ID replaces the earlier one.
 Skills remain optional plugin resources: standard directories are packed before

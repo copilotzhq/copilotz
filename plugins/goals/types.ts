@@ -11,7 +11,11 @@ import type {
 } from "@copilotz/copilotz/domain";
 import type { CopilotzEvent } from "@copilotz/copilotz/events";
 import type { PluginRegistry } from "@copilotz/copilotz/plugins";
-import type { FeatureHostContext } from "@copilotz/copilotz/features";
+import type { ActionCaller } from "@copilotz/copilotz/actions";
+import type {
+  addThreadParticipantAction,
+  createThreadAction,
+} from "@copilotz/copilotz/plugins/core";
 import type {
   ApplicationSendHandle,
   ApplicationSendInput,
@@ -218,9 +222,12 @@ export type GoalRuntime = Readonly<{
 }>;
 
 export type CreateGoalRuntimeOptions = Readonly<{
-  registry: Pick<PluginRegistry, "context">;
+  registry: Pick<PluginRegistry, "resources">;
   collectionRuntime: CollectionRuntime;
-  features(namespace: string): FeatureHostContext;
+  actions(namespace: string): Readonly<{
+    createThread: ActionCaller<typeof createThreadAction>;
+    addThreadParticipant: ActionCaller<typeof addThreadParticipantAction>;
+  }>;
   resolver: Pick<ContentResolver, "getMany">;
   send(input: ApplicationSendInput): Promise<ApplicationSendHandle>;
   defaultNamespace?: string;

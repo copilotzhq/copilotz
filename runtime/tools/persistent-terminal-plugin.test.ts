@@ -8,7 +8,7 @@ import {
 
 function toolFrom(service: PersistentTerminalService): WorkflowTool {
   const plugin = createPersistentTerminalToolsPlugin({ terminal: service });
-  return plugin.resources.tools?.[0] as WorkflowTool;
+  return Object.values(plugin.resources.tools ?? {})[0] as WorkflowTool;
 }
 
 function fixtureContext(): WorkflowToolExecutionContext {
@@ -77,9 +77,12 @@ Deno.test("persistent terminal tool delegates through an explicitly owned servic
     },
   });
   const plugin = createPersistentTerminalToolsPlugin({ terminal: service });
-  const tool = plugin.resources.tools?.[0] as WorkflowTool;
+  const tools = plugin.resources.tools as
+    | Readonly<Record<string, WorkflowTool>>
+    | undefined;
+  const tool = tools?.persistent_terminal as WorkflowTool;
 
-  assertEquals(plugin.manifest.provides.tools, ["persistent_terminal"]);
+  assertEquals(Object.keys(tools ?? {}), ["persistent_terminal"]);
   assert(Object.isFrozen(tool));
   assertEquals(await tool.execute({ action: "run" }, fixtureContext()), {
     read: "asset://tenant-a/asset-a",

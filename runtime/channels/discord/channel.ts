@@ -388,6 +388,6 @@ export function createDiscordChannelPlugin(
   return definePlugin({
     id: options.pluginId?.trim() || "@copilotz/channel-discord",
     version: options.version?.trim() || "3.0.0",
-    channels: [channel],
+    resources: { channels: { [channel.id]: channel } },
   });
 }

@@ -1,7 +1,4 @@
-import {
-  coreFeatureAliases,
-  message as coreMessage,
-} from "@copilotz/copilotz/plugins/core";
+import { message as coreMessage } from "@copilotz/copilotz/plugins/core";
 import { assert, assertEquals, assertExists } from "@std/assert";
 import {
   type CopilotzPlugin,
@@ -11,14 +8,7 @@ import {
   defineProcessor,
 } from "../../index.ts";
 import { createTestDomainContext } from "../../runtime/testing/domain-context.ts";
-import {
-  projectMessageById,
-  projectMessages,
-  projectParticipants,
-  projectThreadByExternalId,
-  projectThreadById,
-  projectThreads,
-} from "../../runtime/testing/projections.ts";
+import { projectMessages } from "../../runtime/testing/projections.ts";
 import { loadMessageRecord } from "../../runtime/engine/collection-graph.ts";
 import { coreCollectionsPlugin } from "../../plugins/core/plugin.ts";
 
@@ -53,7 +43,7 @@ function publicReplyPlugin(): CopilotzPlugin {
   return definePlugin({
     id: "contract.public-reply",
     version: "3.0.0",
-    processors: [processor],
+    processors: { reply: processor },
   });
 }
 
@@ -66,9 +56,7 @@ async function collect<T>(stream: ReadableStream<T>): Promise<T[]> {
 Deno.test("root createCopilotz runs one causal event scope without queue state", async () => {
   const copilotz = await createCopilotz({
     namespace: NAMESPACE,
-    core: false,
-    canonicalCore: [coreCollectionsPlugin],
-    plugins: [publicReplyPlugin()],
+    plugins: [coreCollectionsPlugin, publicReplyPlugin()],
     engine: { retryBaseMs: 0, random: () => 0 },
   });
   try {
@@ -77,23 +65,22 @@ Deno.test("root createCopilotz runs one causal event scope without queue state",
     assertEquals("execution" in copilotz, false);
     assertEquals("hypervisor" in copilotz, false);
     assertEquals("transports" in copilotz, false);
-    await createTestDomainContext(copilotz, NAMESPACE, coreFeatureAliases)
-      .features.thread.create({
-        id: "contract-thread",
-        participants: [
-          {
-            id: "contract-user",
-            externalId: "user-1",
-            participantType: "human",
-          },
-          {
-            id: "contract-agent",
-            externalId: "support",
-            participantType: "agent",
-            agentId: "support",
-          },
-        ],
-      });
+    await createTestDomainContext(copilotz, NAMESPACE).actions.createThread({
+      id: "contract-thread",
+      participants: [
+        {
+          id: "contract-user",
+          externalId: "user-1",
+          participantType: "human",
+        },
+        {
+          id: "contract-agent",
+          externalId: "support",
+          participantType: "agent",
+          agentId: "support",
+        },
+      ],
+    });
 
     const run = await copilotz.send(coreMessage({
       thread: "contract-thread",

@@ -15,7 +15,7 @@ Deno.test("static plugin processors reject the transient-only event wildcard", (
   const plugin = definePlugin({
     id: "test.static-wildcard-plugin",
     version: "1.0.0",
-    processors: [wildcard],
+    processors: { wildcard },
   });
 
   assertThrows(

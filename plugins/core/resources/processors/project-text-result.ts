@@ -7,13 +7,14 @@ import {
   withAgentAskMetadata,
   withWorkflowMetadata,
 } from "@copilotz/copilotz/events";
-import type { CopilotzProcessorContext } from "@copilotz/copilotz/engine";
 import { defineProcessor, type Processor } from "@copilotz/copilotz/plugins";
 import { requireAgent } from "@copilotz/copilotz/agents";
 import type { ToolInvocation } from "@copilotz/copilotz/llm";
 import { createWorkflowPipelineMetadata } from "@copilotz/copilotz/tools";
-import { threadMessageFeature } from "../features/thread-message.ts";
-import { toolBatchFeature } from "../features/tool.ts";
+import {
+  type CoreProcessorContext,
+  coreWorkflowContext,
+} from "../../context.ts";
 import {
   asRecord,
   loadParticipant,
@@ -28,7 +29,7 @@ import {
 } from "./helpers.ts";
 
 async function toolCallsFromAttempt(
-  context: CopilotzProcessorContext,
+  context: CoreProcessorContext,
   output: Record<string, unknown>,
 ): Promise<readonly ToolInvocation[]> {
   const refs = Array.isArray(output.toolCalls)
@@ -41,20 +42,15 @@ async function toolCallsFromAttempt(
   return Object.freeze(Array.isArray(value) ? value as ToolInvocation[] : []);
 }
 
-export const projectTextResultProcessor: Processor<CopilotzProcessorContext> =
-  defineProcessor<CopilotzProcessorContext>({
+export const projectTextResultProcessor: Processor<CoreProcessorContext> =
+  defineProcessor<CoreProcessorContext>({
     id: "copilotz.core.project-text-result",
     on: [
       { eventType: "copilotz.core.llm.generate.completed" },
       { eventType: "copilotz.core.llm.session.completed" },
     ],
-    requires: {
-      features: {
-        threadMessage: threadMessageFeature,
-        toolBatch: toolBatchFeature,
-      },
-    },
     async handle(event, context) {
+      const workflowContext = coreWorkflowContext(context);
       const lifecycle = asRecord(event.data);
       const input = asRecord(lifecycle.input);
       const output = asRecord(lifecycle.output);
@@ -94,7 +90,7 @@ export const projectTextResultProcessor: Processor<CopilotzProcessorContext> =
           agentParticipantId: participant.id,
         },
       );
-      const outputMessage = await context.features.threadMessage.create({
+      const outputMessage = await context.actions.createThreadMessage({
         id: await deriveWorkflowId("message", attempt.id, "output"),
         threadId: recordThreadId(attempt),
         sender: participant,
@@ -109,13 +105,13 @@ export const projectTextResultProcessor: Processor<CopilotzProcessorContext> =
       if (!toolCalls.length) return;
 
       const agent = requireAgent(
-        context,
+        workflowContext,
         requiredText(optionalText(attempt.agentId), "LLM attempt agent id"),
       );
-      const toolCatalog = toolCatalogFor(context, agent);
+      const toolCatalog = toolCatalogFor(agent);
       const granted = new Set(stringArray(attempt.availableToolIds));
       const availableTools = (await toolCatalog.forAgent(
-        context,
+        workflowContext,
         agent,
       )).filter((tool) => granted.has(tool.key));
       const toolsByKey = new Map(
@@ -184,7 +180,7 @@ export const projectTextResultProcessor: Processor<CopilotzProcessorContext> =
           sourceEvent: event,
         });
       }
-      await context.features.toolBatch.execute({
+      await context.actions.executeToolBatch({
         batchId,
         items,
       }, {

@@ -134,7 +134,7 @@ async function createFixture(url: string, schema: string): Promise<Fixture> {
     plugins: [definePlugin({
       id: "test.collection-transaction",
       version: "1.0.0",
-      processors: [processor],
+      processors: { observeJob: processor },
     })],
   });
   const executor = createDeliveryExecutor({

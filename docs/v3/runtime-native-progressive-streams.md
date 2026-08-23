@@ -6,7 +6,7 @@ description: The Phase 10 boundary between progressive byte production, BodyStor
 # Runtime-native progressive streams
 
 Phase 10 treats streams as runtime-native progressive content production. A
-Stream is not a plugin resource, Collection, Feature, semantic event family, or
+Stream is not a plugin resource, Collection, Action, semantic event family, or
 application-domain record. It is the progressive write/follow mode of the
 BodyStore.
 
@@ -46,9 +46,9 @@ Only assetization creates protected Asset metadata:
 - standalone `scope.content.publish(...)`.
 
 There is no staging Asset node for an open stream, and no Asset node for a
-closed-but-unadopted stream. A ready Body that is never adopted remains protected
-briefly as operational orphan state and is collected after the protection/grace
-window.
+closed-but-unadopted stream. A ready Body that is never adopted remains
+protected briefly as operational orphan state and is collected after the
+protection/grace window.
 
 ## API shape
 
@@ -102,14 +102,14 @@ Runtime owns the domain-neutral mechanics:
 - writer generation and fencing;
 - writer lease/protection windows;
 - ready-Body to prepared-content conversion;
-- generic expired-writer recovery: fence the expired Body generation, then
-  abort it without inspecting semantic graph records;
+- generic expired-writer recovery: fence the expired Body generation, then abort
+  it without inspecting semantic graph records;
 - generic orphan cleanup for unreferenced ready Bodies; and
 - backpressured byte transport/projection.
 
 Runtime does not know what a stream means. It does not branch on message, tool,
 LLM, goal, memory, schedule, or any plugin-owned domain. It does not maintain a
-Stream Collection, Stream Feature, or Stream durable-event protocol.
+Stream Collection, Stream Action, or Stream durable-event protocol.
 
 ## Plugin ownership
 

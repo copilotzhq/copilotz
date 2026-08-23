@@ -1,4 +1,3 @@
-import { coreFeatureAliases } from "@copilotz/copilotz/plugins/core";
 import {
   assert,
   assertEquals,
@@ -20,7 +19,6 @@ import { createCopilotz } from "../../index.ts";
 import { createTestDatabase, type TestDatabase } from "../testing/ominipg.ts";
 import { createCopilotzApplication } from "../application/index.ts";
 import type { CopilotzProcessorContext } from "../engine/index.ts";
-import { createFeatureContext } from "../features/index.ts";
 import { definePlugin, defineProcessor } from "../plugins/index.ts";
 import { coreCollectionsPlugin } from "../../plugins/core/plugin.ts";
 import type {
@@ -33,8 +31,8 @@ import {
   createKnowledgePlugin,
   createSearchKnowledgeTool,
   defineKnowledgeEmbeddingProvider,
-  knowledgeFeature,
 } from "./index.ts";
+import type { KnowledgeActionCallers } from "./actions.ts";
 import type { KnowledgeChunk, KnowledgeDocument } from "./types.ts";
 
 const NAMESPACE = "tenant-knowledge";
@@ -53,20 +51,11 @@ async function knowledgeHarness(
   const collections = scope.collectionRuntime.withScope({
     namespace: NAMESPACE,
   });
-  const featureContext = createFeatureContext({
-    namespace: NAMESPACE,
-    plugins: application.plugins,
-    collections: scope.collections,
-    collectionRuntime: scope.collectionRuntime,
-    contentResolver: scope.content.resolver,
-    events: { list: (input) => scope.events.list(input) },
-    deliveries: { list: (input) => scope.deliveries.list(input) },
-    relations: { list: (input) => scope.relations.list(input) },
-  });
+  const actionContext = createTestDomainContext(application, NAMESPACE);
   return Object.freeze({
     documents: collections.document,
     chunks: collections.chunk,
-    feature: featureContext.feature(knowledgeFeature),
+    actions: actionContext.actions as unknown as KnowledgeActionCallers,
     prepareSource(text: string, operationKey: string) {
       return scope.content.preparer.prepare({
         type: "text",
@@ -121,11 +110,38 @@ function embeddingProvider(
   });
 }
 
+Deno.test("knowledge plugin exposes keyed Collections, Actions, Processors, and Tool Resources", () => {
+  const plugin = createKnowledgePlugin({
+    embedding: { provider: "fixture.embedding" },
+  });
+  assertEquals(Object.keys(plugin.collections), ["document", "chunk"]);
+  assertEquals(Object.keys(plugin.actions), [
+    "indexKnowledgeDocument",
+    "searchKnowledge",
+    "deleteKnowledgeDocument",
+  ]);
+  assertEquals(
+    Object.values(plugin.actions).map((action) => action.id),
+    [
+      "copilotz.knowledge.indexDocument",
+      "copilotz.knowledge.searchDocuments",
+      "copilotz.knowledge.deleteDocument",
+    ],
+  );
+  assertEquals(Object.keys(plugin.processors), ["indexKnowledgeDocument"]);
+  assertEquals(Object.keys(plugin.resources.tools), [
+    "ingestKnowledge",
+    "searchKnowledge",
+    "deleteKnowledgeDocument",
+  ]);
+  assertEquals("features" in plugin, false);
+});
+
 async function createThread(
   application: Awaited<ReturnType<typeof createCopilotzApplication>>,
 ): Promise<void> {
-  await createTestDomainContext(application, NAMESPACE, coreFeatureAliases)
-    .features.thread.create({
+  await createTestDomainContext(application, NAMESPACE)
+    .actions.createThread({
       id: "thread-a",
       participants: [{
         id: "human-a",
@@ -140,24 +156,27 @@ async function createThread(
     }, { identity: { deduplicationId: "thread-a:create" } });
 }
 
-Deno.test("package-root core.knowledge composes the knowledge plugin without runtime application ownership", async () => {
+Deno.test("package root composes the explicit Knowledge plugin", async () => {
   const application = await createCopilotz({
     namespace: "knowledge-root",
-    core: {
-      tools: false,
-      webTools: false,
-      finance: false,
-      memory: false,
-      schedules: false,
-      knowledge: { embedding: { provider: "fixture.embedding" } },
+    plugins: [
+      coreCollectionsPlugin,
+      createKnowledgePlugin({
+        embedding: { provider: "fixture.embedding" },
+      }),
+    ],
+    adapters: {
+      embedding: {
+        "fixture.embedding": embeddingProvider([]),
+      },
     },
   });
   try {
-    assert(application.plugins.collections.get("document"));
-    assert(application.plugins.collections.get("chunk"));
+    assert(application.plugins.collections.document);
+    assert(application.plugins.collections.chunk);
     assertEquals("knowledge" in application, false);
     assertEquals(
-      application.config.declaredPluginIds.includes("@copilotz/knowledge"),
+      application.config.pluginIds.includes("@copilotz/knowledge"),
       true,
     );
   } finally {
@@ -176,18 +195,19 @@ Deno.test("knowledge indexing keeps one canonical source asset and atomic search
     database: db,
     namespace: NAMESPACE,
     databaseSchema: "copilotz_v3_knowledge",
-    core: false,
-    canonicalCore: [coreCollectionsPlugin],
-    plugins: [createKnowledgePlugin({
-      embedding: {
-        provider: "fixture.embedding",
-        dimensions: 2,
-        batchSize: 2,
-      },
-      chunking: { chunkSize: 512, chunkOverlap: 0 },
-    })],
-    context: {
-      embeddings: { "fixture.embedding": embeddingProvider(calls) },
+    plugins: [
+      coreCollectionsPlugin,
+      createKnowledgePlugin({
+        embedding: {
+          provider: "fixture.embedding",
+          dimensions: 2,
+          batchSize: 2,
+        },
+        chunking: { chunkSize: 512, chunkOverlap: 0 },
+      }),
+    ],
+    adapters: {
+      embedding: { "fixture.embedding": embeddingProvider(calls) },
     },
     engine: { retryBaseMs: 0, random: () => 0 },
   });
@@ -245,7 +265,7 @@ Deno.test("knowledge indexing keeps one canonical source asset and atomic search
     assertStringIncludes(chunks[0].content, "Copilotz stores");
     assertEquals(chunks[0].embedding, [1, 0]);
     assertEquals(
-      (await knowledge.feature.searchDocuments({
+      (await knowledge.actions.searchKnowledge({
         embedding: [1, 0],
         scope: { threadId: "thread-a" },
         threshold: 0.5,
@@ -253,13 +273,19 @@ Deno.test("knowledge indexing keeps one canonical source asset and atomic search
       ["document-a"],
     );
     assertEquals(
-      await knowledge.feature.searchDocuments({
+      await knowledge.actions.searchKnowledge({
         embedding: [1, 0],
         scope: { threadId: "another-thread" },
       }),
       [],
     );
 
+    await application.events.waitFor({
+      namespace: NAMESPACE,
+      types: ["copilotz.knowledge.indexDocument.completed"],
+      timeoutMs: 5_000,
+      pollIntervalMs: 10,
+    });
     const events = await application.events.list({ namespace: NAMESPACE });
     assertEquals(
       events.filter((event) => event.type === "document.created").length,
@@ -275,6 +301,18 @@ Deno.test("knowledge indexing keeps one canonical source asset and atomic search
     );
     assertEquals(
       events.filter((event) => event.type === "chunk.created").length,
+      1,
+    );
+    assertEquals(
+      events.filter((event) =>
+        event.type === "copilotz.knowledge.indexDocument.invoked"
+      ).length,
+      1,
+    );
+    assertEquals(
+      events.filter((event) =>
+        event.type === "copilotz.knowledge.indexDocument.completed"
+      ).length,
       1,
     );
     const createdEvent = events.find((event) =>
@@ -344,7 +382,7 @@ Deno.test("knowledge indexing keeps one canonical source asset and atomic search
     assertEquals(duplicateDocument.chunkCount, 0);
     assertEquals(duplicateDocument.source, document.source);
 
-    const deleted = await knowledge.feature.deleteDocument({
+    const deleted = await knowledge.actions.deleteKnowledgeDocument({
       documentId: document.id,
     }, { operationKey: "document-a:delete" });
     assertEquals(deleted.success, true);
@@ -410,24 +448,25 @@ Deno.test("knowledge indexing keeps one canonical source asset and atomic search
   }
 });
 
-Deno.test("knowledge source failures retry through Oxian and settle as one durable failure", async () => {
+Deno.test("knowledge source failure settles once as document and Action failure", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   const sourceKeys: string[] = [];
   const application = await createCopilotzApplication({
     database: db,
     namespace: NAMESPACE,
     databaseSchema: "copilotz_v3_knowledge_failure",
-    core: false,
-    canonicalCore: [coreCollectionsPlugin],
-    plugins: [createKnowledgePlugin({
-      embedding: { provider: "fixture.embedding", dimensions: 2 },
-      sourceLoader(input) {
-        sourceKeys.push(input.idempotencyKey);
-        return Promise.reject(new Error("fixture source unavailable"));
-      },
-    })],
-    context: {
-      embeddings: { "fixture.embedding": embeddingProvider([]) },
+    plugins: [
+      coreCollectionsPlugin,
+      createKnowledgePlugin({
+        embedding: { provider: "fixture.embedding", dimensions: 2 },
+        sourceLoader(input) {
+          sourceKeys.push(input.idempotencyKey);
+          return Promise.reject(new Error("fixture source unavailable"));
+        },
+      }),
+    ],
+    adapters: {
+      embedding: { "fixture.embedding": embeddingProvider([]) },
     },
     engine: { retryBaseMs: 0, random: () => 0, maxAttempts: 3 },
   });
@@ -458,18 +497,13 @@ Deno.test("knowledge source failures retry through Oxian and settle as one durab
       operationKey: "document-failure:create",
       identity: { correlationId: "knowledge-failure" },
     });
-    for (
-      const expected of ["retry_wait", "retry_wait", "dead_letter"] as const
-    ) {
-      const recovery = await application.recover({ namespace: NAMESPACE });
-      assertEquals(recovery.handles.length, 1);
-      assertEquals(
-        (await recovery.handles[0].done).delivery.status,
-        expected,
-      );
-    }
-    assertEquals(sourceKeys.length, 3);
-    assertEquals(new Set(sourceKeys).size, 1);
+    await application.events.waitFor({
+      namespace: NAMESPACE,
+      types: ["copilotz.knowledge.indexDocument.failed"],
+      timeoutMs: 5_000,
+      pollIntervalMs: 10,
+    });
+    assertEquals(sourceKeys.length, 1);
     const document = await knowledge.documents.get({
       id: "document-failure",
     }) as KnowledgeDocument | null;
@@ -479,6 +513,12 @@ Deno.test("knowledge source failures retry through Oxian and settle as one durab
     const events = await application.events.list({ namespace: NAMESPACE });
     assertEquals(
       events.filter((event) => event.type === "document.failed").length,
+      1,
+    );
+    assertEquals(
+      events.filter((event) =>
+        event.type === "copilotz.knowledge.indexDocument.failed"
+      ).length,
       1,
     );
     const messages = await projectMessages(application, NAMESPACE, "thread-a");
@@ -506,7 +546,9 @@ Deno.test("knowledge tools execute through scoped factory capabilities", async (
         toolId: string;
         arguments: Record<string, unknown>;
       };
-      const tool = processor.tools[payload.toolId] as WorkflowTool | undefined;
+      const tool = Object.values(processor.resources.tools ?? {}).find(
+        (candidate) => (candidate as WorkflowTool).key === payload.toolId,
+      ) as WorkflowTool | undefined;
       if (!tool) throw new Error(`Unknown tool '${payload.toolId}'.`);
       const toolContext: WorkflowToolExecutionContext = {
         namespace: processor.namespace,
@@ -541,23 +583,22 @@ Deno.test("knowledge tools execute through scoped factory capabilities", async (
   const driverPlugin = definePlugin({
     id: "fixture.knowledge-tools",
     version: "1.0.0",
-    processors: [driver],
+    processors: { knowledgeTools: driver },
   });
   const application = await createCopilotzApplication({
     database: db,
     namespace: NAMESPACE,
     databaseSchema: "copilotz_v3_knowledge_tools",
-    core: false,
-    canonicalCore: [coreCollectionsPlugin],
     plugins: [
+      coreCollectionsPlugin,
       createKnowledgePlugin({
         embedding: { provider: "fixture.embedding", dimensions: 2 },
         chunking: { chunkSize: 512, chunkOverlap: 0 },
       }),
       driverPlugin,
     ],
-    context: {
-      embeddings: { "fixture.embedding": embeddingProvider([]) },
+    adapters: {
+      embedding: { "fixture.embedding": embeddingProvider([]) },
     },
     engine: { retryBaseMs: 0, random: () => 0 },
   });
@@ -701,7 +742,7 @@ Deno.test("knowledge ingest tool creates documents through collections without k
   });
 });
 
-Deno.test("knowledge delete tool delegates to Feature without knowledge capability", async () => {
+Deno.test("knowledge delete tool delegates to its Action alias", async () => {
   const tool = createDeleteDocumentTool();
   const calls: unknown[] = [];
   const output = await tool.execute({
@@ -711,20 +752,18 @@ Deno.test("knowledge delete tool delegates to Feature without knowledge capabili
     idempotencyKey: "delete-unit",
     correlationId: "delete-unit",
     processor: {
-      feature(definition: { id: string }) {
-        assertEquals(definition.id, "copilotz.knowledge");
-        return {
-          async deleteDocument(input: unknown) {
-            calls.push(input);
-            return {
-              success: true,
-              message: "Document deleted.",
-              documentId: "document-a",
-              title: "Document A",
-              namespace: NAMESPACE,
-            };
-          },
-        };
+      signal: new AbortController().signal,
+      actions: {
+        async deleteKnowledgeDocument(input: unknown) {
+          calls.push(input);
+          return {
+            success: true,
+            message: "Document deleted.",
+            documentId: "document-a",
+            title: "Document A",
+            namespace: NAMESPACE,
+          };
+        },
       },
     },
     execution: {
@@ -757,7 +796,7 @@ Deno.test("knowledge delete tool delegates to Feature without knowledge capabili
   assertEquals(output.documentId, "document-a");
 });
 
-Deno.test("knowledge search tool delegates to Feature without knowledge capability", async () => {
+Deno.test("knowledge search tool delegates to its Action alias", async () => {
   const tool = createSearchKnowledgeTool({
     provider: "fixture.embedding",
     dimensions: 2,
@@ -773,43 +812,42 @@ Deno.test("knowledge search tool delegates to Feature without knowledge capabili
     correlationId: "search-unit",
     processor: {
       signal: new AbortController().signal,
-      embeddings: {
-        "fixture.embedding": defineKnowledgeEmbeddingProvider({
-          id: "fixture.embedding",
-          type: "embedding",
-          embed(input) {
-            embeddingCalls.push(input);
-            return Promise.resolve({
-              embeddings: [[1, 0]],
-              model: "fixture-embedding-v1",
-              dimensions: 2,
-            });
-          },
-        }),
+      adapters: {
+        embedding: {
+          "fixture.embedding": defineKnowledgeEmbeddingProvider({
+            id: "fixture.embedding",
+            type: "embedding",
+            embed(input) {
+              embeddingCalls.push(input);
+              return Promise.resolve({
+                embeddings: [[1, 0]],
+                model: "fixture-embedding-v1",
+                dimensions: 2,
+              });
+            },
+          }),
+        },
       },
-      feature(definition: { id: string }) {
-        assertEquals(definition.id, "copilotz.knowledge");
-        return {
-          async searchDocuments(input: unknown) {
-            calls.push(input);
-            return [{
-              similarity: 0.95,
-              document: {
-                id: "document-a",
-                namespace: NAMESPACE,
-                title: "Document A",
-                sourceUri: "text:document-a",
-              },
-              chunk: {
-                id: "chunk-a",
-                namespace: NAMESPACE,
-                documentId: "document-a",
-                chunkIndex: 0,
-                content: "Durable semantic content.",
-              },
-            }];
-          },
-        };
+      actions: {
+        async searchKnowledge(input: unknown) {
+          calls.push(input);
+          return [{
+            similarity: 0.95,
+            document: {
+              id: "document-a",
+              namespace: NAMESPACE,
+              title: "Document A",
+              sourceUri: "text:document-a",
+            },
+            chunk: {
+              id: "chunk-a",
+              namespace: NAMESPACE,
+              documentId: "document-a",
+              chunkIndex: 0,
+              content: "Durable semantic content.",
+            },
+          }];
+        },
       },
     },
     execution: {
@@ -855,7 +893,7 @@ Deno.test("knowledge modules remain factory-first and runtime-neutral", async ()
   for (
     const module of [
       "collections.ts",
-      "features.ts",
+      "actions.ts",
       "index.ts",
       "plugin.ts",
       "resources.ts",

@@ -1,7 +1,6 @@
 import { cwd, stdin, stdout } from "node:process";
 import { createInterface } from "node:readline/promises";
 
-import type { CopilotzApplication } from "../../application/index.ts";
 import {
   type InteractiveCliHandle,
   type InteractiveCliIo,
@@ -26,17 +25,7 @@ export type StartPortableInteractiveCliOptions = Omit<
   "io"
 >;
 
-export type StartApplicationInteractiveCliOptions =
-  & Omit<InteractiveCliOptions, "io" | "performRun" | "inspect">
-  & Readonly<{
-    application: CopilotzApplication;
-    /** Stable ID of the agent receiving this CLI's prompts. */
-    agent: string;
-  }>;
-
-export type StartInteractiveCliOptions =
-  | StartPortableInteractiveCliOptions
-  | StartApplicationInteractiveCliOptions;
+export type StartInteractiveCliOptions = StartPortableInteractiveCliOptions;
 
 /** Creates readline I/O for Node and runtimes implementing its compatibility API. */
 export function createInteractiveCliIo(): InteractiveCliIo {
@@ -68,51 +57,6 @@ export function createInteractiveCliIo(): InteractiveCliIo {
 export function startInteractiveCli(
   options: StartInteractiveCliOptions,
 ): InteractiveCliHandle {
-  if ("application" in options) {
-    const { application, agent, ...portable } = options;
-    return startPortableInteractiveCli({
-      ...portable,
-      io: createInteractiveCliIo(),
-      performRun: (input) =>
-        application.send({
-          type: "copilotz.core.message.input",
-          payload: {
-            thread: typeof input.thread === "string"
-              ? input.thread
-              : input.thread.id,
-            participant: input.participant,
-            recipientIds: input.recipientIds,
-            content: input.content,
-            ...(input.messageId ? { id: input.messageId } : {}),
-            ...(input.metadata ? { metadata: input.metadata } : {}),
-            ...(input.visibility ? { visibility: input.visibility } : {}),
-          },
-          ...(input.correlationId
-            ? { correlationId: input.correlationId }
-            : {}),
-          ...(input.deduplicationId
-            ? { deduplicationId: input.deduplicationId }
-            : {}),
-          ...(input.databaseSchema ? { databaseSchema: input.databaseSchema } : {}),
-          namespace: input.namespace,
-        }),
-      async inspect() {
-        const resolved = await application.capabilities.resolve({ agent });
-        return Object.freeze({
-          agent: resolved.agent,
-          agents: Object.freeze(
-            resolved.agents.map((entry) => entry.resource),
-          ),
-          tools: Object.freeze(
-            resolved.tools.map((entry) => entry.resource),
-          ),
-          skills: Object.freeze(
-            resolved.skills.map((entry) => entry.resource),
-          ),
-        });
-      },
-    });
-  }
   return startPortableInteractiveCli({
     ...options,
     io: createInteractiveCliIo(),

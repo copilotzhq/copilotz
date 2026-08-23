@@ -7,8 +7,26 @@ export {
   knowledgeChunkCollection,
   knowledgeDocumentCollection,
 } from "./collections.ts";
-export { KNOWLEDGE_FEATURE_ID, knowledgeFeature } from "./features.ts";
+export {
+  createIndexKnowledgeDocumentAction,
+  DELETE_KNOWLEDGE_DOCUMENT_ACTION_ID,
+  deleteKnowledgeDocumentAction,
+  INDEX_KNOWLEDGE_DOCUMENT_ACTION_ID,
+  SEARCH_KNOWLEDGE_ACTION_ID,
+  searchKnowledgeAction,
+} from "./actions.ts";
+export type {
+  CreateIndexKnowledgeDocumentActionOptions,
+  DeleteKnowledgeDocumentInput,
+  DeleteKnowledgeDocumentResult,
+  IndexKnowledgeDocumentAction,
+  IndexKnowledgeDocumentInput,
+  KnowledgeActionCallers,
+  KnowledgeActionContext,
+  SearchKnowledgeActionInput,
+} from "./actions.ts";
 export { createKnowledgePlugin } from "./plugin.ts";
+export type { KnowledgePlugin } from "./plugin.ts";
 export {
   defineKnowledgeEmbeddingProvider,
   embedKnowledgeTexts,

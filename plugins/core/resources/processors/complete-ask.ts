@@ -4,23 +4,21 @@ import {
   withAgentAskMetadata,
   withWorkflowMetadata,
 } from "@copilotz/copilotz/events";
-import type { CopilotzProcessorContext } from "@copilotz/copilotz/engine";
 import { defineProcessor, type Processor } from "@copilotz/copilotz/plugins";
-import { threadMessageFeature } from "../features/thread-message.ts";
+import type { CoreProcessorContext } from "../../context.ts";
 import {
   asRecord,
   collectionEventRecord,
   requireCollection,
 } from "./helpers.ts";
 
-export const completeAskProcessor: Processor<CopilotzProcessorContext> =
-  defineProcessor<CopilotzProcessorContext>({
+export const completeAskProcessor: Processor<CoreProcessorContext> =
+  defineProcessor<CoreProcessorContext>({
     id: "copilotz.core.complete-agent-ask",
     on: [{
       eventType: "message.created",
       metadata: { copilotzAsk: { phase: "answer" } },
     }],
-    requires: { features: { threadMessage: threadMessageFeature } },
     async handle(event, context) {
       const record = collectionEventRecord(event);
       const sender = await requireCollection(context, "participant").get(
@@ -36,7 +34,7 @@ export const completeAskProcessor: Processor<CopilotzProcessorContext> =
       ) {
         return;
       }
-      const output = await context.content.prepare({
+      const output = {
         type: "json",
         value: {
           status: "answered",
@@ -47,8 +45,8 @@ export const completeAskProcessor: Processor<CopilotzProcessorContext> =
           askedParticipantId: ask.askedParticipantId,
         },
         role: "tool.output",
-      }, { operationKey: `ask:${ask.askId}:answer-output` });
-      await context.features.threadMessage.create({
+      } as const;
+      await context.actions.createThreadMessage({
         id: await deriveWorkflowId("message", ask.toolExecutionId, "result"),
         threadId: String(record.threadId),
         sender: {

@@ -41,13 +41,15 @@ Deno.test("configured BodyStore is scoped infrastructure, not a plugin resource"
     storage: { type: "memory", config: { backendId: "memory:test" } },
   });
   assert(runtime.adapter);
-  assertEquals(
-    (definePlugin({
-      id: "test.body-store-is-infrastructure",
-      version: "1.0.0",
-      bodyStore: [{ id: "not-a-plugin-resource" }],
-    } as never).manifest.provides as Record<string, unknown>).bodyStore,
-    undefined,
+  assertThrows(
+    () =>
+      definePlugin({
+        id: "test.body-store-is-infrastructure",
+        version: "1.0.0",
+        bodyStore: [{ id: "not-a-plugin-resource" }],
+      } as never),
+    TypeError,
+    "cannot declare 'bodyStore'",
   );
   const scoped = runtime.adapter.forScope({
     namespace: "tenant-a",

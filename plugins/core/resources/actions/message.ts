@@ -1,15 +1,17 @@
-import type { DurableContentInput } from "@copilotz/copilotz/content";
 import type { CollectionRecord } from "@copilotz/copilotz/collections";
 import {
-  defineFeature,
-  type FeatureAction,
-  type FeatureDefinition,
-  type FeatureExecuteContext,
-} from "@copilotz/copilotz/features";
+  type ActionContext,
+  type ActionDefinition,
+  defineAction,
+} from "@copilotz/copilotz/actions";
 import type { EventVisibility } from "@copilotz/copilotz/events";
-import { asRecord, requiredText } from "./content-policy.ts";
+import {
+  asRecord,
+  prepareActionContent,
+  requiredText,
+} from "./content-policy.ts";
 
-export const MESSAGE_FEATURE_ID = "copilotz.core.message";
+export const REVISE_MESSAGE_ACTION_ID = "copilotz.core.message.revise";
 
 type MessageRevisionResult = Readonly<{
   message: CollectionRecord;
@@ -20,7 +22,7 @@ type MessageRevisionResult = Readonly<{
 
 async function revise(
   input: unknown,
-  context: FeatureExecuteContext,
+  context: ActionContext,
 ): Promise<MessageRevisionResult> {
   const data = asRecord(input);
   const id = requiredText(data.id, "Message revision ID");
@@ -58,17 +60,21 @@ async function revise(
       typeof value === "string"
     )
     : [];
+  if (data.content === undefined) {
+    throw new TypeError("Edited content is required.");
+  }
+  const content = await prepareActionContent(
+    data.content,
+    context,
+    "revision-content",
+  );
   return await context.transaction(async (tx) => {
-    const supplied = data.content as DurableContentInput | undefined;
-    if (supplied === undefined) {
-      throw new TypeError("Edited content is required.");
-    }
     const created = await tx.collections.message.create({
       id,
       threadId,
       senderId: sender.id,
       recipientIds,
-      content: supplied,
+      content,
       metadata: structuredClone(
         Object.keys(asRecord(data.metadata)).length
           ? asRecord(data.metadata)
@@ -116,21 +122,14 @@ const reviseInput = {
   required: ["id", "threadId", "messageId", "content"],
 } as const;
 
-type MessageFeature = FeatureDefinition<{
-  revise: FeatureAction<
-    typeof reviseInput,
-    MessageRevisionResult
-  >;
-}>;
-
-const messageFeatureDefinition: MessageFeature = defineFeature({
-  id: MESSAGE_FEATURE_ID,
-  actions: {
-    revise: {
-      inputSchema: reviseInput,
-      execute: revise,
-    },
-  },
+export const reviseMessageAction: ActionDefinition<
+  unknown,
+  MessageRevisionResult,
+  ActionContext,
+  typeof reviseInput,
+  undefined
+> = defineAction({
+  id: REVISE_MESSAGE_ACTION_ID,
+  inputSchema: reviseInput,
+  execute: revise,
 });
-
-export const messageFeature: MessageFeature = messageFeatureDefinition;

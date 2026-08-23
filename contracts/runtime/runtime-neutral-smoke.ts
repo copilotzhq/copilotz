@@ -49,13 +49,10 @@ export async function runRuntimeNeutralSmoke(): Promise<
   const plugin = definePlugin({
     id: "@copilotz/runtime-smoke",
     version: "3.0.0",
-    llm: [provider],
+    adapters: { llm: { runtimeSmoke: provider } },
   });
   const registry = await createPluginRegistry({ plugins: [plugin] });
-  const resolved = registry.require<LlmProviderResource>(
-    "llm",
-    provider.id,
-  );
+  const resolved: LlmProviderResource = registry.adapters.llm.runtimeSmoke;
   if (typeof resolved.generate !== "function") {
     throw new TypeError(
       "Runtime-smoke llm resource must implement generate().",
@@ -65,7 +62,7 @@ export async function runRuntimeNeutralSmoke(): Promise<
   return Object.freeze({
     assetId: published.id,
     assetText,
-    pluginId: plugin.manifest.id,
+    pluginId: plugin.id,
     providerEndpoint,
     webStreams: true,
   });

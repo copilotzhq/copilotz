@@ -8,6 +8,7 @@ import type { ParticipantInput } from "@copilotz/copilotz/domain";
 import {
   addSenderToThreadInTransaction,
   ensureParticipantInTransaction,
+  findParticipant,
 } from "./thread-message.ts";
 import { asRecord, requiredText } from "./content-policy.ts";
 
@@ -21,26 +22,31 @@ async function create(
   input: unknown,
   context: ActionContext,
 ): Promise<CollectionRecord> {
-  return await context.transaction(async (tx) => {
-    const data = asRecord(input);
-    const eventMetadata = structuredClone(asRecord(data.metadata));
-    const participants = Array.isArray(data.participants)
-      ? data.participants.map((item) => asRecord(item) as ParticipantInput)
-      : [];
-    const threadId = typeof data.id === "string" && data.id.trim()
-      ? data.id.trim()
-      : undefined;
-    const ensured: CollectionRecord[] = [];
-    for (const participant of participants) {
-      ensured.push(
-        await ensureParticipantInTransaction(
+  const data = asRecord(input);
+  const eventMetadata = structuredClone(asRecord(data.metadata));
+  const participants = Array.isArray(data.participants)
+    ? data.participants.map((item) => asRecord(item) as ParticipantInput)
+    : [];
+  const threadId = typeof data.id === "string" && data.id.trim()
+    ? data.id.trim()
+    : undefined;
+  const existing = await Promise.all(
+    participants.map((participant) =>
+      findParticipant(context.collections, participant)
+    ),
+  );
+  const thread = await context.transaction(async (tx) => {
+    const ensured = await Promise.all(
+      participants.map((participant, index) =>
+        ensureParticipantInTransaction(
           tx.collections,
           participant,
+          existing[index] ?? null,
           undefined,
           eventMetadata,
-        ),
-      );
-    }
+        )
+      ),
+    );
     const { participants: _participants, ...fields } = data;
     return await tx.collections.thread.create({
       ...fields,
@@ -52,6 +58,9 @@ async function create(
       identity: { metadata: eventMetadata },
     });
   });
+  const created = await context.collections.thread.get({ id: thread.id });
+  if (!created) throw new Error(`Thread '${thread.id}' was not created.`);
+  return created;
 }
 
 async function addParticipant(
@@ -63,14 +72,16 @@ async function addParticipant(
     participant: CollectionRecord;
   }>
 > {
-  return await context.transaction(async (tx) => {
-    const data = asRecord(input);
-    const threadId = requiredText(data.threadId, "Thread ID");
-    const participant = asRecord(data.participant) as ParticipantInput;
-    const eventMetadata = structuredClone(asRecord(data.eventMetadata));
+  const data = asRecord(input);
+  const threadId = requiredText(data.threadId, "Thread ID");
+  const participant = asRecord(data.participant) as ParticipantInput;
+  const eventMetadata = structuredClone(asRecord(data.eventMetadata));
+  const existing = await findParticipant(context.collections, participant);
+  const ensured = await context.transaction(async (tx) => {
     const ensured = await ensureParticipantInTransaction(
       tx.collections,
       participant,
+      existing,
       threadId,
       eventMetadata,
     );
@@ -80,11 +91,16 @@ async function addParticipant(
       ensured.id,
       eventMetadata,
     );
-    return Object.freeze({
-      thread: await tx.collections.thread.get({ id: threadId }),
-      participant: ensured,
-    });
+    return ensured;
   });
+  const [thread, participantRecord] = await Promise.all([
+    context.collections.thread.get({ id: threadId }),
+    context.collections.participant.get({ id: ensured.id }),
+  ]);
+  if (!participantRecord) {
+    throw new Error(`Participant '${ensured.id}' was not created.`);
+  }
+  return Object.freeze({ thread, participant: participantRecord });
 }
 
 type AddThreadParticipantResult = Awaited<ReturnType<typeof addParticipant>>;
@@ -94,17 +110,17 @@ async function deleteMessages(
   input: unknown,
   context: ActionContext,
 ): Promise<Readonly<{ threadId: string; deleted: true }>> {
-  return await context.transaction(async (tx) => {
-    const data = asRecord(input);
-    const threadId = requiredText(data.threadId, "Thread ID");
-    const messages = await tx.collections.message.queries.byThreadId({
-      threadId,
-    });
+  const data = asRecord(input);
+  const threadId = requiredText(data.threadId, "Thread ID");
+  const messages = await context.collections.message.queries.byThreadId({
+    threadId,
+  });
+  await context.transaction(async (tx) => {
     for (const message of messages) {
       await tx.collections.message.delete({ id: message.id }, { threadId });
     }
-    return Object.freeze({ threadId, deleted: true as const });
   });
+  return Object.freeze({ threadId, deleted: true as const });
 }
 
 const createInput = {

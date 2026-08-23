@@ -272,20 +272,22 @@ async function executeGenerate(
     if (existing) return existing;
     const created = streamRuntime.open({
       id: `${attempt.id}:${key}`,
-      threadId: recordThreadId(attempt),
       role: lane,
       mediaType,
-      participantId: participant.id,
       metadata: {
         lane,
         llmAttemptId: attempt.id,
         agent: publicAgent,
+        core: {
+          threadId: recordThreadId(attempt),
+          participantId: participant.id,
+          routing: {
+            senderId: participant.id,
+            recipientIds: [],
+          },
+          visibility: { kind: "public" },
+        },
       },
-      routing: {
-        senderId: participant.id,
-        recipientIds: [],
-      },
-      visibility: { kind: "public" },
       correlationId: event.correlationId,
     });
     writers.set(key, created);

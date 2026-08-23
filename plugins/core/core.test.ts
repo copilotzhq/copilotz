@@ -16,6 +16,7 @@ import {
   createTestDatabase,
   type TestDatabase,
 } from "../../runtime/testing/ominipg.ts";
+import { createTestProcessorContext } from "../../runtime/testing/processor-context.ts";
 import {
   createCoreSchemaStatements,
   createEventCoordinator,
@@ -100,6 +101,7 @@ async function createFixture(url: string, schema: string): Promise<Fixture> {
   const executor = createDeliveryExecutor({
     store,
     registry,
+    createContext: createTestProcessorContext,
     workerId: "core-collections-test",
   });
   const coordinator = createEventCoordinator({ store, registry, executor });
@@ -180,20 +182,20 @@ async function runCoreSuite(url: string, schema: string): Promise<void> {
           externalId: "user:ada",
           participantType: "human",
           name: "Ada",
-        }, { namespace: NAMESPACE });
+        });
         const agent = await collections.participant.create({
           id: "participant-agent",
           externalId: "agent:copilot",
           participantType: "agent",
           name: "Copilot",
           agentId: "agent-1",
-        }, { namespace: NAMESPACE });
+        });
         const thread = await collections.thread.create({
           id: "thread-a",
           externalId: "ext-thread-a",
           name: "Inbox",
-          participantIds: [human.record.id, agent.record.id],
-        }, { namespace: NAMESPACE });
+          participantIds: [human.id, agent.id],
+        });
         return { human, agent, thread };
       },
     });
@@ -319,22 +321,23 @@ async function runCoreSuite(url: string, schema: string): Promise<void> {
     });
     await Promise.all(original.dispatch.handles.map((handle) => handle.done));
     assertEquals(original.event.eventType, "message.created");
-    assertEquals(original.event.threadId, "thread-a");
-    assertEquals(original.event.routing, {
-      senderId: "participant-human",
-    });
+    assertEquals(original.event.threadId, undefined);
+    assertEquals(original.event.routing, {});
     assertEquals(original.event.visibility, { kind: "public" });
     assertEquals(
-      (await session.query<{ source_type: string; source_id: string }>(
+      (await session.query<{
+        source_type: string | null;
+        source_id: string | null;
+      }>(
         `SELECT source_type, source_id FROM ${tables.nodes}
          WHERE id = $1 AND type = 'message'`,
         ["message-1"],
       )).rows[0],
-      { source_type: "thread", source_id: "thread-a" },
+      { source_type: null, source_id: null },
     );
 
     const threadAfterMessage = await threads.get("thread-a", NAMESPACE);
-    assertEquals(threadAfterMessage?.lastEventId, original.event.id);
+    assertEquals(threadAfterMessage?.lastEventId, undefined);
 
     const withSender = await messages.query(NAMESPACE, {
       where: { id: "message-1" },
@@ -407,9 +410,7 @@ async function runCoreSuite(url: string, schema: string): Promise<void> {
     );
     const tampered = await runtime.verify(messageCollection, NAMESPACE);
     assertEquals(tampered.ok, false);
-    await runtime.rebuild(participantCollection, NAMESPACE);
-    await runtime.rebuild(threadCollection, NAMESPACE);
-    await runtime.rebuild(messageCollection, NAMESPACE);
+    await runtime.rebuild(NAMESPACE);
     assertEquals(await runtime.verify(messageCollection, NAMESPACE), {
       ok: true,
     });

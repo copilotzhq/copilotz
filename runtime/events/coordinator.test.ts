@@ -1,5 +1,6 @@
 import { assert, assertEquals, assertExists } from "@std/assert";
 import { createTestDatabase } from "../testing/ominipg.ts";
+import { createTestProcessorContext } from "../testing/processor-context.ts";
 import { createDeliveryExecutor } from "../execution/index.ts";
 import {
   createPluginRegistry,
@@ -35,10 +36,7 @@ Deno.test("event coordinator matches before commit, publishes, then dispatches",
     on: [{ eventType: "widget.created" }],
     handle(event, context) {
       assert(event.durable);
-      assertEquals(
-        context.idempotencyKey,
-        (context.delivery as { id: string }).id,
-      );
+      assertEquals(context.operationKey, context.identity.deduplicationId);
       order.push("handled");
     },
   });
@@ -61,6 +59,7 @@ Deno.test("event coordinator matches before commit, publishes, then dispatches",
   const executor = createDeliveryExecutor({
     store: fixture.store,
     registry,
+    createContext: createTestProcessorContext,
     workerId: "coordinator-test",
   });
   const coordinator = createEventCoordinator({
@@ -125,6 +124,7 @@ Deno.test("post-commit publication and placement failures leave delivery recover
   const executor = createDeliveryExecutor({
     store: fixture.store,
     registry,
+    createContext: createTestProcessorContext,
     dispatcher: {
       dispatch: () => Promise.reject(new Error("no worker capacity")),
     },
@@ -184,6 +184,7 @@ Deno.test("deduplicated settled events do not dispatch a second operation", asyn
   const executor = createDeliveryExecutor({
     store: fixture.store,
     registry,
+    createContext: createTestProcessorContext,
     workerId: "coordinator-dedupe-test",
   });
   let publications = 0;

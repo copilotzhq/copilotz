@@ -1,6 +1,7 @@
 import type {
   CollectionDefinition,
   CollectionRuntime,
+  CollectionTransactionCollections,
   ScopedCollections,
 } from "../collections/index.ts";
 import type {
@@ -17,27 +18,27 @@ import type {
   PublishAssetInput,
   ResolvedContent,
 } from "../content/index.ts";
-import type {
-  DomainRelation,
-  ListDomainRelationsOptions,
-  ProjectDomainRelationInput,
-} from "../domain/index.ts";
-import type { DurableEvent, EventDelivery } from "../events/index.ts";
 import type { PluginRegistry } from "../plugins/index.ts";
 import { createActionLifecycleEmitter } from "./lifecycle.ts";
-import { actionTransactionIdentity, createActionCallers } from "./invoker.ts";
+import {
+  type ActionInvocationFrame,
+  actionTransactionIdentity,
+  createActionCallers,
+} from "./invoker.ts";
 import type {
   ActionCallers,
+  ActionCallOptions,
   ActionContext,
   ActionLifecycleAppender,
   ActionLifecycleLoader,
   ActionTransactionContext,
   ActionTransactionOptions,
+  RuntimeContext,
 } from "./types.ts";
 
 export type ActionContentHandle = Readonly<{
   resolver: Pick<ContentResolver, "getMany">;
-  stream?: ContentStreamRuntime;
+  stream: ContentStreamRuntime;
   bodies?: BodyStore;
   prepare(
     input: ContentInput | readonly ContentInput[],
@@ -47,7 +48,6 @@ export type ActionContentHandle = Readonly<{
     input: DurableContentInput,
     options?: { origin?: AssetOrigin },
   ): Promise<ContentSequence>;
-  linkOwner(ownerId: string, content: ContentSequence): Promise<void>;
   publish(
     input: Omit<PublishAssetInput, "namespace" | "idempotencyKey">,
     options: { operationKey: string },
@@ -66,79 +66,28 @@ export type ActionHostContext = Readonly<{
   actions: ActionCallers;
   collections: ScopedCollections;
   content: ActionContentHandle;
-  streams?: ContentStreamRuntime;
+  streams: ContentStreamRuntime;
+  signal: AbortSignal;
   now(): Date;
   transaction: ActionContext["transaction"];
-  events: Readonly<{
-    list(options?: {
-      threadId?: string;
-      correlationId?: string;
-      afterPosition?: string;
-      limit?: number;
-    }): Promise<readonly DurableEvent[]>;
-  }>;
-  deliveries: Readonly<{
-    list(options?: {
-      eventId?: string;
-      consumerId?: string;
-      status?: EventDelivery["status"];
-      limit?: number;
-    }): Promise<readonly EventDelivery[]>;
-  }>;
-  relations: Readonly<{
-    list(
-      options?: Omit<ListDomainRelationsOptions, "namespace">,
-    ): Promise<readonly DomainRelation[]>;
-  }>;
 }>;
 
 export type ActionContextBindings = Readonly<{
   namespace: string;
   plugins: PluginRegistry;
-  collections?: {
-    withScope(scope: { namespace: string }): ScopedCollections;
-  };
-  collectionRuntime: CollectionRuntime;
+  collections: CollectionRuntime;
   transaction?: CollectionRuntime["transaction"];
   actionLifecycle: Readonly<{
     append: ActionLifecycleAppender;
     load: ActionLifecycleLoader;
   }>;
   now?: () => Date;
-  contentResolver: Pick<ContentResolver, "getMany">;
-  content?: (namespace: string) => ActionContentHandle;
-  events: {
-    list(options: {
-      namespace: string;
-      threadId?: string;
-      correlationId?: string;
-      afterPosition?: string;
-      limit?: number;
-    }): Promise<readonly DurableEvent[]>;
-  };
-  deliveries: {
-    list(options: {
-      namespace: string;
-      eventId?: string;
-      consumerId?: string;
-      status?: EventDelivery["status"];
-      limit?: number;
-    }): Promise<readonly EventDelivery[]>;
-  };
-  relations: {
-    list(
-      options: ListDomainRelationsOptions,
-    ): Promise<readonly DomainRelation[]>;
-    upsert?(
-      input: ProjectDomainRelationInput,
-    ): Promise<DomainRelation>;
-  };
+  content(namespace: string): ActionContentHandle;
 }>;
 
 function scopedCollections(bindings: ActionContextBindings): ScopedCollections {
-  const byName = Object.freeze({
-    ...bindings.collections?.withScope({ namespace: bindings.namespace }),
-    ...bindings.collectionRuntime.withScope({ namespace: bindings.namespace }),
+  const byName = bindings.collections.withScope({
+    namespace: bindings.namespace,
   });
   const aliases = Object.fromEntries(
     Object.entries(bindings.plugins.collections).map(([alias, definition]) => {
@@ -154,10 +103,112 @@ function scopedCollections(bindings: ActionContextBindings): ScopedCollections {
   return Object.freeze(aliases) as ScopedCollections;
 }
 
+function scopedTransactionCollections(
+  plugins: PluginRegistry,
+  byName: CollectionTransactionCollections,
+): ActionTransactionContext["collections"] {
+  return Object.freeze(Object.fromEntries(
+    Object.entries(plugins.collections).map(([alias, definition]) => {
+      const collection = byName[(definition as CollectionDefinition).name];
+      if (!collection) {
+        throw new Error(
+          `Collection '${definition.name}' for alias '${alias}' is not bound.`,
+        );
+      }
+      return [alias, collection];
+    }),
+  ));
+}
+
 function throwIfAborted(signal: AbortSignal | undefined): void {
   if (!signal?.aborted) return;
   if (signal.reason instanceof Error) throw signal.reason;
   throw new DOMException("This operation was aborted.", "AbortError");
+}
+
+type ActionInvocationHost = Pick<
+  RuntimeContext,
+  | "namespace"
+  | "resources"
+  | "adapters"
+  | "collections"
+  | "content"
+  | "streams"
+  | "signal"
+  | "now"
+  | "transaction"
+>;
+
+/** Adds invocation lifecycle state to the shared runtime context. */
+export function createActionInvocationContext(
+  options: Readonly<{
+    host: ActionInvocationHost;
+    frame: ActionInvocationFrame;
+    actions: Readonly<
+      Record<
+        string,
+        (input: unknown, options?: ActionCallOptions) => Promise<unknown>
+      >
+    >;
+    progress(value: unknown): Promise<void>;
+  }>,
+): ActionContext {
+  const { frame, host } = options;
+  let transactionIndex = 0;
+  const content = Object.freeze({
+    ...host.content,
+    prepare(
+      input: Parameters<typeof host.content.prepare>[0],
+      prepareOptions: Parameters<typeof host.content.prepare>[1],
+    ) {
+      return host.content.prepare(input, {
+        ...prepareOptions,
+        operationKey: `${frame.operationKey}/${prepareOptions.operationKey}`,
+      });
+    },
+    publish(
+      input: Parameters<typeof host.content.publish>[0],
+      publishOptions: Parameters<typeof host.content.publish>[1],
+    ) {
+      return host.content.publish(input, {
+        ...publishOptions,
+        operationKey: `${frame.operationKey}/${publishOptions.operationKey}`,
+      });
+    },
+  });
+  return Object.freeze({
+    ...host,
+    action: Object.freeze({
+      id: frame.actionId,
+      runId: frame.actionRunId,
+      ...(frame.parentActionRunId
+        ? { parentRunId: frame.parentActionRunId }
+        : {}),
+    }),
+    operationKey: frame.operationKey,
+    identity: Object.freeze({ ...(frame.identity ?? {}) }),
+    actions: options.actions,
+    content,
+    signal: frame.signal,
+    progress: options.progress,
+    transaction: (
+      execute: Parameters<ActionContext["transaction"]>[0],
+      transactionOptions: ActionTransactionOptions = {},
+    ) => {
+      const localKey = transactionOptions.operationKey?.trim() ||
+        `transaction:${++transactionIndex}`;
+      const identity = actionTransactionIdentity(
+        frame.identity,
+        transactionOptions.identity,
+      );
+      return host.transaction(execute as never, {
+        ...transactionOptions,
+        operationKey: `${frame.operationKey}/${localKey}`,
+        ...(identity ? { identity } : {}),
+        signal: transactionOptions.signal ?? frame.signal,
+      }) as never;
+    },
+  }) as ActionContext;
 }
 
 /** Builds the direct Action host for one trusted namespace scope. */
@@ -168,43 +219,14 @@ export function createActionContext(
   if (!namespace) throw new TypeError("Namespace must be non-empty.");
   const collections = scopedCollections({ ...bindings, namespace });
   const runtimeTransaction = bindings.transaction ??
-    bindings.collectionRuntime.transaction;
-  const content: ActionContentHandle = bindings.content?.(namespace) ??
-    Object.freeze({
-      resolver: bindings.contentResolver,
-      prepare() {
-        throw new Error("Action content preparation is not configured.");
-      },
-      materialize() {
-        throw new Error("Action content materialization is not configured.");
-      },
-      linkOwner() {
-        throw new Error("Action content ownership is not configured.");
-      },
-      publish() {
-        throw new Error("Action content publication is not configured.");
-      },
-      get() {
-        throw new Error("Action content lookup is not configured.");
-      },
-      getMany() {
-        throw new Error("Action content lookup is not configured.");
-      },
-      resolve() {
-        throw new Error("Action content resolution is not configured.");
-      },
-      resolveMany() {
-        throw new Error("Action content resolution is not configured.");
-      },
-      open() {
-        throw new Error("Action content streaming is not configured.");
-      },
-    });
+    bindings.collections.transaction;
+  const content = bindings.content(namespace);
   const lifecycle = createActionLifecycleEmitter({
     namespace,
     append: bindings.actionLifecycle.append,
     load: bindings.actionLifecycle.load,
   });
+  const signal = new AbortController().signal;
 
   const transact = async <T>(
     execute: (context: ActionTransactionContext) => T | Promise<T>,
@@ -217,23 +239,15 @@ export function createActionContext(
       operationKey,
       namespace,
       ...(options.identity ? { identity: options.identity } : {}),
-      execute: async () => {
+      execute: async ({ collections: byName, relations }) => {
         throwIfAborted(options.signal);
-        const relations = Object.freeze({
-          upsert(
-            input: Parameters<
-              ActionTransactionContext["relations"]["upsert"]
-            >[0],
-          ) {
-            if (!bindings.relations.upsert) {
-              throw new Error(
-                "Action transaction relation projection is not configured.",
-              );
-            }
-            return bindings.relations.upsert({ ...input, namespace });
-          },
-        });
-        return await execute(Object.freeze({ collections, relations }));
+        return await execute(Object.freeze({
+          collections: scopedTransactionCollections(
+            bindings.plugins,
+            byName,
+          ),
+          relations,
+        }));
       },
     });
     throwIfAborted(options.signal);
@@ -242,64 +256,15 @@ export function createActionContext(
 
   const actions = createActionCallers(bindings.plugins.actions, {
     actionLifecycle: lifecycle,
+    signal,
     createInvocationKey: () => `invocation:${crypto.randomUUID()}`,
     createContext({ frame, actions: nestedActions, progress }) {
-      let transactionIndex = 0;
-      const actionContent = Object.freeze({
-        ...content,
-        prepare(
-          input: Parameters<ActionContentHandle["prepare"]>[0],
-          options: Parameters<ActionContentHandle["prepare"]>[1],
-        ) {
-          return content.prepare(input, {
-            ...options,
-            operationKey: `${frame.operationKey}/${options.operationKey}`,
-          });
-        },
-        publish(
-          input: Parameters<ActionContentHandle["publish"]>[0],
-          options: Parameters<ActionContentHandle["publish"]>[1],
-        ) {
-          return content.publish(input, {
-            ...options,
-            operationKey: `${frame.operationKey}/${options.operationKey}`,
-          });
-        },
-      });
-      return Object.freeze({
-        ...host,
-        action: Object.freeze({
-          id: frame.actionId,
-          runId: frame.actionRunId,
-          ...(frame.parentActionRunId
-            ? { parentRunId: frame.parentActionRunId }
-            : {}),
-        }),
-        operationKey: frame.operationKey,
-        identity: Object.freeze({ ...(frame.identity ?? {}) }),
+      return createActionInvocationContext({
+        host,
+        frame,
         actions: nestedActions,
-        content: actionContent,
-        streams: content.stream,
-        ...(frame.signal ? { signal: frame.signal } : {}),
         progress,
-        transaction: (
-          execute: Parameters<ActionContext["transaction"]>[0],
-          options: ActionTransactionOptions = {},
-        ) => {
-          const localKey = options.operationKey?.trim() ||
-            `transaction:${++transactionIndex}`;
-          const identity = actionTransactionIdentity(
-            frame.identity,
-            options.identity,
-          );
-          return transact(execute as never, {
-            ...options,
-            operationKey: `${frame.operationKey}/${localKey}`,
-            ...(identity ? { identity } : {}),
-            signal: options.signal ?? frame.signal,
-          }) as never;
-        },
-      }) as ActionContext;
+      });
     },
   });
 
@@ -311,23 +276,9 @@ export function createActionContext(
     collections,
     content,
     streams: content.stream,
+    signal,
     now: bindings.now ?? (() => new Date()),
     transaction: transact,
-    events: Object.freeze({
-      list(options = {}) {
-        return bindings.events.list({ ...options, namespace });
-      },
-    }),
-    deliveries: Object.freeze({
-      list(options = {}) {
-        return bindings.deliveries.list({ ...options, namespace });
-      },
-    }),
-    relations: Object.freeze({
-      list(options = {}) {
-        return bindings.relations.list({ ...options, namespace });
-      },
-    }),
   });
   return host;
 }

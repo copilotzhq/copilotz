@@ -4,19 +4,9 @@ import { createTestDatabase, type TestDatabase } from "../testing/ominipg.ts";
 import type { Agent } from "../resources/index.ts";
 import { createCopilotzApplication } from "../application/index.ts";
 import { corePlugin, message } from "../../plugins/core/index.ts";
-import { createSqlSession } from "../events/index.ts";
-import { createLongTermMemoryPlugin } from "../memory/index.ts";
 import { createUsageWorkflowPlugin } from "../../plugins/usage/index.ts";
 import { createAdminPlugin } from "./plugin.ts";
 import { createTestDomainContext } from "../../runtime/testing/domain-context.ts";
-import {
-  projectMessageById,
-  projectMessages,
-  projectParticipants,
-  projectThreadByExternalId,
-  projectThreadById,
-  projectThreads,
-} from "../../runtime/testing/projections.ts";
 
 const SCHEMA = "copilotz_admin_plugin";
 const NAMESPACE = "tenant-a";
@@ -42,7 +32,7 @@ async function close(db: TestDatabase): Promise<void> {
   await db.close();
 }
 
-Deno.test("admin plugin projects event-native application state without raw storage access", async () => {
+Deno.test("admin plugin projects Collection state without raw storage access", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   const application = await createCopilotzApplication({
     database: db,
@@ -51,7 +41,6 @@ Deno.test("admin plugin projects event-native application state without raw stor
     plugins: [
       corePlugin,
       createUsageWorkflowPlugin({ enabled: false }),
-      createLongTermMemoryPlugin({ enabled: false }),
       createAdminPlugin(),
     ],
     resources: { agents: { [supportAgent.id]: supportAgent } },
@@ -98,7 +87,10 @@ Deno.test("admin plugin projects event-native application state without raw stor
     }));
     await sent.done;
 
-    await application.collections.get("usage").create({
+    const usageCollection = application.collections.withScope({
+      namespace: NAMESPACE,
+    }).usage;
+    await usageCollection.create({
       id: "usage-a",
       kind: "llm",
       resource: "test-model",
@@ -113,78 +105,16 @@ Deno.test("admin plugin projects event-native application state without raw stor
       totalTokens: 17,
       totalCostUsd: 0.03,
       occurredAt: new Date().toISOString(),
-    }, { namespace: NAMESPACE });
-
-    await application.collections.get("memory_space").create({
-      id: "memory-a",
-      scopeType: "thread",
-      scopeId: "thread-a",
+    });
+    await usageCollection.create({
+      id: "usage-tool-a",
+      kind: "tool",
+      resource: "search",
       threadId: "thread-a",
-      access: "read_write",
-      defaultWrite: true,
-    }, { namespace: NAMESPACE });
-    await application.collections.get("long_term_memory").create({
-      id: "checkpoint-a",
-      threadId: "thread-a",
-      schemaVersion: "3",
-      strategy: "rolling",
-      status: "ready",
-      memorySpaceId: "memory-a",
-      readMemorySpaceIds: ["memory-a"],
-      writeMemorySpaceIds: ["memory-a"],
-      defaultWriteMemorySpaceId: "memory-a",
-      sequence: 1,
       agentId: "support",
-      sourceStartMessageId: "message-a",
-      sourceEndMessageId: "message-a",
-    }, { namespace: NAMESPACE });
-    const memories = application.collections.get("memory_record");
-    for (
-      const [id, form, kind, summary, status, data] of [
-        [
-          "memory-a-decision",
-          "intent",
-          "intent.decision",
-          "The team chose the event-native architecture.",
-          "active",
-          { status: "active" },
-        ],
-        [
-          "memory-a-action",
-          "intent",
-          "intent.action",
-          "Implement the event-native architecture.",
-          "proposed",
-          { status: "proposed" },
-        ],
-      ] as const
-    ) {
-      await memories.create({
-        id,
-        memorySpaceId: "memory-a",
-        consolidationId: "checkpoint-a",
-        createdByAgentId: "support",
-        originThreadId: "thread-a",
-        form,
-        status,
-        kind,
-        summary,
-        temporal: { recordedAt: new Date().toISOString() },
-        provenance: {
-          sources: [{ type: "message", id: "message-a" }],
-          recordedBy: { type: "participant", id: "agent-a" },
-          consolidationId: "checkpoint-a",
-        },
-        data,
-      }, { namespace: NAMESPACE });
-    }
-    await application.relations.create({
-      namespace: NAMESPACE,
-      id: "memory-relation-a",
-      type: "depends_on",
-      source: { type: "memory_record", id: "memory-a-action" },
-      target: { type: "memory_record", id: "memory-a-decision" },
-      threadId: "thread-a",
+      initiatedById: "external-user-a",
+      status: "completed",
+      occurredAt: new Date().toISOString(),
     });
 
     const admin = createTestDomainContext(application, NAMESPACE).actions;
@@ -210,32 +140,16 @@ Deno.test("admin plugin projects event-native application state without raw stor
       totalTokens: 17,
       totalCostUsd: 0.03,
     });
+    assertEquals(object(overview.toolTotals).totalCalls, 1);
+    assertEquals("deliveryTotals" in overview, false);
 
     const activity = array(
       (await request("activity", { interval: "day" })).data,
     );
     assertEquals(activity.length, 1);
     assertEquals(object(activity[0]).messageCount, 1);
+    assertEquals(object(activity[0]).toolCallCount, 1);
     assertEquals(object(activity[0]).totalCalls, 1);
-
-    const events = array(
-      (await request("events", {
-        correlationId: "admin-run-a",
-      })).data,
-    );
-    assert(
-      events.some((value) => object(value).type === "message.created"),
-    );
-    assert(
-      events.some((value) =>
-        object(value).type === "copilotz.core.thread-message.create.invoked"
-      ),
-    );
-    assert(
-      events.some((value) =>
-        object(value).type === "copilotz.core.thread-message.create.completed"
-      ),
-    );
 
     const threads = array(
       (await request("threads", { search: "visible" })).data,
@@ -260,19 +174,8 @@ Deno.test("admin plugin projects event-native application state without raw stor
     assertEquals(usage.length, 1);
     assertEquals(object(usage[0]).id, "usage-a");
 
-    const brainProjection = object(
-      (await request("brain", {
-        form: "intent",
-      })).data,
-    );
-    assertEquals(array(brainProjection.nodes).length, 2);
-    assert(
-      array(brainProjection.edges).some((value) =>
-        object(value).id === "memory-relation-a"
-      ),
-    );
-    assertEquals(array(brainProjection.stats).length, 2);
-    assertEquals(object(array(brainProjection.stats)[0]).form, "intent");
+    assertEquals("adminEvents" in admin, false);
+    assertEquals("adminBrain" in admin, false);
 
     const agents = array((await request("agents")).data);
     assertEquals(object(agents[0]).id, "support");

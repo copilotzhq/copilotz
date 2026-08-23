@@ -31,17 +31,32 @@ Deno.test("Action transactions expose atomic relation projection", async () => {
       actions: { upsertRelation },
     })],
   });
-  const collectionRuntime = {
+  const collections = {
     withScope: () => Object.freeze({}),
     async transaction<T>(options: {
       operationKey: string;
       namespace: string;
       identity?: unknown;
-      execute(): Promise<T>;
+      execute(
+        context: Readonly<{
+          collections: Record<string, never>;
+          relations: Readonly<{
+            upsert(
+              input: Readonly<Record<string, unknown> & { id: string }>,
+            ): Promise<Readonly<{ id: string }>>;
+          }>;
+        }>,
+      ): Promise<T>;
     }) {
       transactionIdentity = options.identity;
+      const relations = Object.freeze({
+        upsert(input: Readonly<Record<string, unknown> & { id: string }>) {
+          projected.push(input);
+          return Promise.resolve(Object.freeze({ id: input.id }));
+        },
+      });
       return {
-        value: await options.execute(),
+        value: await options.execute({ collections: {}, relations }),
         operationKey: options.operationKey,
         namespace: options.namespace,
         settlementScopeId: "settlement-test",
@@ -54,26 +69,47 @@ Deno.test("Action transactions expose atomic relation projection", async () => {
   const context = createActionContext({
     namespace: "tenant-actions",
     plugins,
-    collectionRuntime,
+    collections,
     actionLifecycle: {
       append: () => Promise.resolve(undefined as never),
       load: () => Promise.resolve(null),
     },
-    contentResolver: { getMany: () => Promise.resolve([]) },
-    events: { list: () => Promise.resolve([]) },
-    deliveries: { list: () => Promise.resolve([]) },
-    relations: {
-      list: () => Promise.resolve([]),
-      upsert(input) {
-        projected.push(input);
-        return Promise.resolve({
-          ...input,
-          metadata: input.metadata ?? {},
-          weight: input.weight ?? 1,
-          createdAt: new Date(0).toISOString(),
-        });
-      },
-    },
+    content: () =>
+      Object.freeze({
+        resolver: { getMany: () => Promise.resolve([]) },
+        stream: Object.freeze({
+          open() {
+            throw new Error("Content streams are not configured.");
+          },
+          follow() {
+            throw new Error("Content streams are not configured.");
+          },
+        }),
+        prepare() {
+          throw new Error("Content is not configured.");
+        },
+        materialize() {
+          throw new Error("Content is not configured.");
+        },
+        publish() {
+          throw new Error("Content is not configured.");
+        },
+        get() {
+          throw new Error("Content is not configured.");
+        },
+        getMany() {
+          throw new Error("Content is not configured.");
+        },
+        resolve() {
+          throw new Error("Content is not configured.");
+        },
+        resolveMany() {
+          throw new Error("Content is not configured.");
+        },
+        open() {
+          throw new Error("Content is not configured.");
+        },
+      }),
   });
 
   const result = await context.actions.upsertRelation({
@@ -89,22 +125,12 @@ Deno.test("Action transactions expose atomic relation projection", async () => {
   });
 
   assertEquals(projected, [{
-    namespace: "tenant-actions",
     id: "memory-a:related:memory-b",
     type: "test.link",
     source: { type: "memory_record", id: "memory-a" },
     target: { type: "memory_record", id: "memory-b" },
   }]);
-  assertEquals(result, {
-    namespace: "tenant-actions",
-    id: "memory-a:related:memory-b",
-    type: "test.link",
-    source: { type: "memory_record", id: "memory-a" },
-    target: { type: "memory_record", id: "memory-b" },
-    metadata: {},
-    weight: 1,
-    createdAt: "1970-01-01T00:00:00.000Z",
-  });
+  assertEquals(result, { id: "memory-a:related:memory-b" });
   assertEquals(transactionIdentity, {
     causationId: "event-a",
     correlationId: "run-a",

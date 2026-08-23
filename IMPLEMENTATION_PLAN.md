@@ -1,6 +1,6 @@
 # Copilotz First-Principles Refactor Plan
 
-Status: proposed implementation authority, pending review.
+Status: active implementation authority.
 
 This plan implements [`ARCHITECTURE.md`](./ARCHITECTURE.md). It replaces the
 deleted phase implementation specifications. If this plan and the architecture
@@ -102,7 +102,15 @@ access. The former grouped executable module and its aliases have been deleted.
 Runtime context now composes unknown Resource and Adapter namespaces separately
 under `context.resources` and `context.adapters`. Action and Processor
 definitions carry their expected TypeScript context without runtime dependency
-metadata or filtering.
+metadata or filtering. Both execute over one runtime-owned `RuntimeContext`.
+Processors receive the resolved Event as the first argument to `handle`; it is
+not injected as a context field.
+
+`signal` and `streams` are required runtime primitives. Raw storage/database,
+executor, Event, delivery, and schedule services are not plugin context. The
+runtime may use those mechanisms to execute plugin work, but plugins interact
+with them only through Actions, Collections, transactions, typed ingress, and
+application observation.
 
 Semantic context types still need to move beside their owning plugins as the AI
 harness verticals leave `runtime/`.
@@ -113,6 +121,16 @@ Production `definePlugin(...)` calls currently exist under runtime modules for
 admin, channels, knowledge, memory, schedules, skills, tools, and Deno tools.
 LLM orchestration, agent prompt policy, tool execution, and domain repositories
 also live under `runtime/`.
+
+Their semantic boundaries have started moving ahead of the physical extraction:
+
+- schedules now use plugin-owned Actions and Processors driven by typed tick and
+  manual-run ingress instead of an Engine schedule service;
+- Admin derives activity from Message and Usage Collections and no longer
+  exposes raw Event or delivery internals;
+- Memory reads relations through Collection graph mechanics, and maintenance
+  receives its source Event data explicitly rather than through a repository
+  shortcut.
 
 These are plugin business logic or plugin-owned adapters. Their current location
 is not merely cosmetic: it permits runtime types and application assembly to
@@ -141,6 +159,15 @@ The final surface should expose stable primitives, the application factory, and
 deliberate plugin packages. Internal kernels and historical migration machinery
 must not become permanent framework APIs.
 
+### 3.8 Event retention and namespace rebuild are closed
+
+Event maintenance now compacts only settled delivery obligations. Durable
+Events and Event Bodies remain immutable replay and deduplication authority.
+`CollectionRuntime.rebuild(namespace)` performs one atomic namespace-global
+replay over all bound Collections, standalone Asset lifecycle Events, and
+generic relation Events in global Event order. The former partial
+Collection/relation rebuild and Event-deletion paths have been removed.
+
 ## 4. Target programming model
 
 ### 4.1 Action
@@ -149,7 +176,7 @@ An Action is one executable capability. Its context expectation is an ordinary
 TypeScript interface:
 
 ```ts
-interface SearchContext extends ActionContext {
+interface SearchContext extends RuntimeContext {
   resources: {
     searchPolicies: Readonly<Record<string, SearchPolicy | undefined>>;
   };
@@ -185,6 +212,9 @@ Rules:
   and `.cancelled`;
 - progress, when needed, is explicitly emitted as `<actionId>.progress` through
   `context.progress(value)` and does not require a second Action kind;
+- `RuntimeContext` is the shared base; an Action that uses the lifecycle-only
+  `action` identity or `progress` method may express that refinement through
+  `ActionContext` without gaining another service bag;
 - lifecycle Event Bodies are self-contained: terminal and progress events carry
   the invocation input alongside their output, progress value, or normalized
   error, so Processors normally need no lifecycle-history query;
@@ -203,23 +233,120 @@ An Action chooses its own atomic boundaries:
 
 ```ts
 await context.transaction(async (transaction) => {
-  await transaction.collections.messages.create({ ... });
-  await transaction.collections.threads.update({ id, set: { ... } });
+  const message = await transaction.collections.messages.create({ ... });
+  await transaction.collections.threads.update({
+    id,
+    set: { lastMessageId: message.id },
+  });
+  await transaction.relations.upsert({
+    id: `${id}:contains:${message.id}`,
+    source: { type: "thread", id },
+    target: { type: "message", id: message.id },
+    type: "contains",
+  });
 });
 ```
 
 `context.transaction(...)` means “commit these graph mutations atomically,” not
 “keep a SQL connection open while arbitrary user code executes.” The callback
-builds a mutation plan. The runtime then:
+builds an immutable mutation plan outside SQL. `transaction.collections`
+contains mutation operations only; it has no `get`, `list`, or `search` API.
+Planned calls return stable `{ id }` references, never speculative Collection
+records. State-dependent behavior belongs in Collection commands that the
+runtime evaluates once against a planning snapshot and then verifies under the
+commit lock. A conflicting snapshot rejects the transaction; the runtime never
+reruns developer code or a command implicitly.
 
-1. validates the plan;
-2. prepares declared durable content before opening SQL;
-3. opens the graph transaction;
-4. commits graph projections, Event Bodies, Events, and delivery obligations;
-5. dispatches only after commit.
+The callback still closes over the complete Action or Processor context. Reads
+through `context.collections` are allowed, but they are ordinary planning-time
+reads and do not silently become transaction preconditions. If a decision must
+be protected from a concurrent record change, it belongs in a Collection
+command. This is an explicit developer contract, not hidden effect filtering or
+an AsyncLocal restriction on otherwise valid Actions.
 
-External calls such as LLM generation or HTTP requests stay outside the
-transaction unless the developer deliberately places them before or after it.
+Every successful planned Collection call has one durable semantic Event
+identity, including an update or command whose resulting record is unchanged.
+The Event Body carries both a canonical state-independent intent—create input,
+update patch, command name/input, or delete ID—and the resulting immutable
+record. Raw bytes are represented in the intent only by digest and length.
+Before reading a mutable record during a retry, the planner checks that call's
+stable event identity; when it already exists, it validates the intent and
+reconstructs the overlay/reference from the immutable Event Body. This is the
+idempotency record: there is no separate transaction receipt ledger, and a
+no-change call cannot turn into a new mutation after a later call in the
+original batch has committed.
+
+The same durable no-change rule applies to a standalone Collection mutation
+whenever it carries a deduplication identity. A truly unkeyed local update or
+command may still return a local no-op without manufacturing an Event.
+
+The planner has one root scope and rejects nested transactions. Reusable helpers
+accept the existing transaction context; an Action that owns another transaction
+executes outside the root callback. Every mutation Promise is registered
+synchronously and drained before the plan closes. Parallel calls get stable
+invocation ordinals and commit in that order. Calls for one record or relation
+serialize their planning overlays in invocation order, while disjoint keys may
+prepare concurrently. Any started mutation failure aborts the root plan even if
+callback code catches that Promise; partial savepoints are deliberately not part
+of the contract.
+
+`transaction.relations.upsert(...)` is the corresponding mutation-only graph
+primitive for an edge that is not owned by one Collection mutation. It stages a
+canonical relation intent, returns only `{ id }`, and produces the generic
+durable `relation.upserted` Event in the same batch. Its metadata-only Event
+Body contains the complete normalized relation, so replay can rebuild the edge
+without consulting mutable graph state or guessing which Collection event owns
+it.
+
+The Event and its Event Body remain together as immutable source data. The
+Event's unique deduplication identity is the retry receipt; there is no second
+ledger that would make deleting it safe. Runtime maintenance compacts only
+settled delivery obligations. It does not compact durable Events or Event
+Bodies.
+
+Every BodyStore Adapter declares its durability, reach, minimum protection, and
+Ready-GC capability. On an Adapter with `readyGarbageCollection: true`, `put` is
+acquire-or-create: reusing a matching Ready Body renews non-shortening
+protection and advances its maintenance version, while deletion performs an
+exact state/version/idle/protection compare-and-delete. An Adapter that cannot
+guarantee that protocol sets `readyGarbageCollection: false`; its `put` remains
+immutable and integrity-checking but need not renew protection. The built-in S3
+Adapter follows this conservative model.
+
+The filesystem Adapter is crash-durable through its atomic manifest/tombstone
+protocol, but its declared coordination reach is one process. Its Ready-GC
+guarantee therefore applies only within that deployment reach.
+
+One schema-wide advisory read/write barrier closes the liveness race without
+moving storage into SQL. Asset adoption and rebuild hold the shared side until
+graph commit; physical deletion holds the exclusive side while rechecking the
+indexed Ready Asset nodes. After acquiring the shared side, commit validates the
+captured protection deadline in memory. It never calls an external BodyStore
+from the graph transaction.
+
+The runtime then:
+
+1. lets the callback finish and validates the resulting plan;
+2. prepares declared content and external Body bytes before opening SQL;
+3. opens the graph transaction, locks the affected records, and verifies every
+   planning snapshot or create-absence expectation;
+4. adopts prepared Bodies and Assets;
+5. commits those records with graph projections, Event Bodies, Events, and
+   delivery obligations;
+6. dispatches only after commit.
+
+Retry dispatch also follows that boundary: an already-committed batch does not
+republish its Events, but any still-pending durable deliveries are dispatched
+again from their persisted obligations.
+
+The callback is ordinary developer code and may call Actions or Adapters, but
+those calls still execute before SQL and are not made atomic or rollbackable by
+the transaction. Only the staged graph mutations are committed atomically. The
+runtime never reruns the callback automatically after a commit conflict, so an
+external effect is not silently repeated; the Action decides whether and how to
+retry the whole operation. Keeping external calls visibly before the callback is
+usually clearest, but it is a DX convention rather than a second declarative
+Action mode.
 
 ### 4.3 Collection
 
@@ -237,6 +364,27 @@ Declared content belongs only to Collection definitions. Actions merely call the
 Collection API. The kernel canonicalizes content, materializes or verifies
 Assets, creates ownership relations, and emits the Collection event in the same
 logical mutation.
+
+Collections do not declare `bodyRefs`, and no `body_references` table exists.
+A Ready Asset node's indexed `bodyId` is the sole durable Body-liveness
+authority.
+Asset provenance uses one opaque scope `{ type, id }`; a semantic plugin may use
+`thread`, while standalone publication may use the namespace. Storage and the
+kernel neither enumerate nor branch on those values.
+
+Projection rebuild is namespace-global and receives every bound Collection
+definition. In one locked transaction it clears the namespace projections and
+folds durable Events in global position order. Each Collection Event restores
+its historical Asset manifest before projecting that record and its derived
+edges; standalone Asset and generic relation lifecycle Events fold at their own
+historical positions. Starting from an empty namespace projection ensures stale
+nodes and edges cannot survive.
+
+Generic relations have an event-ordered lifecycle. `relation.upserted` makes the
+relation live; deleting either endpoint removes it; recreating an endpoint alone
+does not restore it. Only a later upsert does. Per-Collection destructive
+rebuild is not part of the target API because an edge has two endpoints and may
+be owned by another Collection or by the generic relation planner.
 
 Scoped Collection calls keep one input object and one optional options object:
 
@@ -258,7 +406,7 @@ A Processor is one durable Event subscription and may declare its expected
 context with the same TypeScript mechanism:
 
 ```ts
-interface AnswerCompletedContext extends ProcessorContext {
+interface AnswerCompletedContext extends RuntimeContext {
   resources: {
     agents: Readonly<Record<string, AgentResource>>;
   };
@@ -283,7 +431,8 @@ const answerCompleted = defineProcessor<AnswerCompletedContext>({
 Processors receive the resolved immutable Event Body as `event.data`. The
 runtime passes Actions and Processors the same complete composed context; their
 declared interfaces present the narrower static view each implementation wants.
-They do not declare runtime dependency aliases or requirements.
+They do not declare runtime dependency aliases or requirements. The Event is the
+first `handle` argument, not a context field or a general Event-query API.
 
 Processors normally use Resources to decide what to do, then invoke Actions or
 mutate Collections. They may type and access an Adapter directly, but external
@@ -354,6 +503,87 @@ an LLM. It references the Action rather than carrying a second execution
 implementation. An Agent is a Resource interpreted by the plugin whose
 processors implement the agent loop. A Model is a Resource selecting an LLM
 Adapter and configuration.
+
+The exact Tool shape is deliberately small:
+
+```ts
+type ToolResource<TAction extends string = string> = Readonly<{
+  action: TAction; // alias under context.actions
+  name: string;
+  description: string;
+  inputSchema?: ActionSchema;
+  outputSchema?: ActionSchema;
+  history?: Readonly<{
+    visibility?: "requester_only" | "public_status" | "public";
+  }>;
+  metadata?: Readonly<Record<string, unknown>>;
+}>;
+```
+
+For `resources.tools.search`, the invariant is
+`resource alias === tool.action === action alias`. Core validates that invariant
+when building an LLM request and executes the Tool through the already-composed
+`context.actions[tool.action](input, options)` function. This is ordinary direct
+map access, not a locator API. `defineTool(alias, action, presentation)` may
+copy the Action schemas for inference, but its result is structurally equivalent
+to the plain object. A Tool has no `execute` method, host context, independent
+validator, wrapper Action, catalog entry, or second lifecycle.
+
+The provider-neutral LLM boundary follows the same reference rule:
+
+```ts
+type ModelResource<TOptions = unknown> = Readonly<{
+  adapter: string; // context.adapters.llm alias
+  model: string;
+  mode?: "generate" | "session";
+  options?: TOptions;
+  fallbacks?: readonly string[]; // context.resources.models aliases
+}>;
+
+type LlmAdapter = Readonly<{
+  call(input: LlmAdapterCallInput): LlmInvocation;
+}>;
+```
+
+The common Action boundary is provider-neutral and JSON-safe:
+
+```ts
+type LlmCallInput = Readonly<{
+  model: string; // context.resources.models alias
+  request: LlmRequest;
+  stream?: LlmStreamDescriptor;
+  inputStreamId?: string;
+  metadata?: Readonly<Record<string, unknown>>;
+  options?: Readonly<Record<string, unknown>>;
+}>;
+
+type LlmCallOutput = Readonly<{
+  model: string; // selected Model Resource alias
+  adapter: string; // selected LLM Adapter alias
+  providerModel: string;
+  content: ContentSequence;
+  reasoning?: ContentSequence;
+  toolCalls?: readonly LlmToolCall[];
+  usage?: LlmUsage;
+  attempts?: readonly LlmAttemptUsage[];
+  finishReason?: string;
+}>;
+```
+
+Core correlation such as thread, agent, participant, and originating message is
+carried in `metadata`; it is not part of LLM semantics. Raw tokens and provider
+frames are Stream output, not Action progress. `llm.call` closes/materializes
+those Streams and awaits final usage before completing, so its lifecycle output
+contains neither a live Stream nor a Promise.
+
+`llm.call` resolves the requested Model Resource and Adapter, emits the one
+Action lifecycle, uses `context.streams` for raw frames, and returns a fully
+settled JSON-safe result containing canonical content, tool calls, usage, and
+provider/model identities. Provider credentials, clients, endpoints, and
+protocol quirks exist only in Adapter construction. `llmPlugin` installs no
+configured model or provider; applications add them explicitly. Optional
+provider plugins/factories are composition conveniences around the same plain
+Adapter values and never install a hidden default Model.
 
 ### 4.6 Plugin
 
@@ -444,6 +674,13 @@ deployment role through options and injected infrastructure.
 Events; live Body/Stream chunks remain transient stream observations and never
 pretend to be durable Events.
 
+Each `send` correlation sink is installed before ingress is appended. Operation
+settlement waits for durable obligations, drains generic relayed execution
+output, and confirms durable settlement again before closing the sink. Closing
+preserves its queued Events. `observe()` is an application-wide subscription to
+the same generic publish boundary; it is not implemented by teeing active
+request streams or by filtering on plugin-owned thread fields.
+
 ## 5. Target ownership
 
 The exact filenames may evolve during a vertical move, but ownership may not.
@@ -468,10 +705,12 @@ plugins/
   llm/
     actions/ resources/ adapters/ plugin.ts
   tools/
-    actions/ resources/ adapters/ plugin.ts
+    contracts.ts and concrete Action/resource integration plugins
   memory/
   knowledge/
   schedules/
+    collections/ actions/ processors/ plugin.ts
+    core/        optional Core message integration plugin
   skills/
   channels/
   admin/
@@ -526,30 +765,71 @@ Exit: the target contracts are executable and no test encodes a deleted spec.
 Exit: one composer, one Action invoker, one Processor registry, and no retired
 executable API or fixed AI resource bucket remains.
 
-### Slice 3 — Make context and transactions runtime-neutral
+### Slice 3 — Make context and transactions runtime-neutral (complete)
 
-- replace hard-coded Action/Processor context fields with composed Resource and
-  Adapter generics;
-- keep only runtime primitives—actions, collections, transaction, content,
-  streams, cancellation, identity, and time—in the runtime-owned base context;
+- use one runtime-neutral `RuntimeContext` for Actions and Processors, with the
+  Processor Event supplied as the first `handle` argument;
+- keep only composed actions, collections, resources and adapters plus generic
+  transaction, content, required streams/cancellation, identity, and time
+  primitives in that context;
+- remove raw storage/database, executor, Event, delivery, and schedule services
+  from plugin context;
 - move agent/tool/LLM/API/MCP/skill/prompt types to their semantic owners;
-- implement transaction planning so external content preparation occurs before
-  SQL while graph/Event/delivery writes remain atomic;
-- remove direct runtime domain-relation and repository conveniences that are not
-  generic Collection mechanics.
+- make `transaction.collections` mutation-only and return `{ id }` references;
+- make relation upserts first-class planned graph mutations with replayable
+  `relation.upserted` Events instead of attaching them to an arbitrary
+  Collection mutation;
+- replace Event deletion with delivery-only compaction so Event Bodies, replay,
+  and deduplication identities have one lifecycle;
+- replace partial Collection/relation rebuilds with one atomic namespace-global
+  projection reduction over every bound Collection and all historical Asset
+  manifests;
+- execute the transaction callback outside SQL, prepare external content first,
+  and adopt Bodies/Assets inside the atomic graph/Event/delivery commit;
+- make BodyStore `put` acquire or renew Ready-Body protection and make
+  maintenance deletion a state/version/idle/protection compare-and-delete for
+  each Adapter that advertises Ready GC; require other Adapters to disable it;
+- serialize Asset adoption/rebuild and physical deletion through one schema-wide
+  advisory read/write barrier, with no external Body I/O in graph SQL;
+- remove the Collection `bodyRefs` declaration and the speculative
+  `body_references` table; indexed Ready Asset `bodyId` is the sole durable Body
+  liveness authority;
+- express schedule ticking, manual runs, and dispatch through plugin-owned
+  Actions, Processors, Collections, and typed ingress;
+- keep the base Schedules record generic: timing/status, opaque JSON `payload`,
+  optional top-level declared `content`, and a persisted occurrence. Put the
+  typed scheduled-message payload, due Processor, dispatch Action, and Tool in a
+  separate Core+Schedules plugin; persisted jobs never contain an Action alias;
+- keep Admin on semantic Message/Usage projections and Memory on Collection
+  graph relations rather than runtime persistence shortcuts;
+- delete the legacy `EventCollections` and `DomainRelationRepository` engine
+  paths and the `collectionRuntime`/`relations` aliases; `CollectionRuntime`,
+  exposed as `.collections`, is the sole active engine graph path. The legacy
+  semantic `ConversationRepository` is also deleted; semantic projections use
+  the canonical Collection surface.
 
-Exit: adding a new resource namespace or adapter kind requires no runtime edit.
+Exit: adding a Resource namespace, Adapter kind, or semantic service requires no
+runtime context edit, and transaction callbacks hold no SQL connection open.
 
 ### Slice 4 — Extract the AI harness as vertical plugins
 
-Do this vertically so each behavior moves with its definitions, implementation,
-tests, and exports:
+Begin with one ownership-evacuation checkpoint. Move Admin, Channels, Knowledge,
+Memory, Schedules, Skills, Usage, Goals, existing Tool integrations, and their
+semantic adapters physically beneath `plugins/` before deleting fixed AI runtime
+modules. This move changes ownership and imports directly—there is no forwarding
+barrel or compatibility layer—and keeps the invariant that `runtime/` never
+imports a concrete plugin. The later semantic cuts then happen vertically so
+each behavior moves with its definitions, implementation, tests, and exports:
 
 1. LLM: common `llm.call` Action, Model Resources, the LLM Adapter contract,
    first-party OpenAI/Anthropic/Google-Gemini/Groq/DeepSeek/Ollama/MiniMax
    Adapter factories, prompt/response normalization, and usage output.
 2. Tools: Tool Resources that point to existing Actions, optional concrete Tool
-   Actions, OpenAPI/MCP adapters, validation, and tool host implementations.
+   Actions, OpenAPI/MCP integrations, and tool host implementations. Convert all
+   concrete Tools to Actions in the same cut that removes `Tool.execute`, the
+   generic executor/catalog, Core wrapper Actions, and bespoke Tool contexts;
+   there is never a dual execution path. `plugins/tools` owns contracts and
+   integrations but need not export an empty marker plugin.
 3. Core harness: participant/thread/message Collections, Agent Resources, the
    typed message ingress helper, routing Processors, message projection, prompt
    policy, and the agent loop. `corePlugin.plugins` includes `llmPlugin`; Core
@@ -568,10 +848,11 @@ resolver.
 Exit: the generic runtime can run without importing or installing the AI
 harness.
 
-### Slice 5 — Extract the remaining semantic plugins
+### Slice 5 — Finish the remaining semantic plugins
 
-Move admin, channels, knowledge, memory, schedules, skills, usage, and goals
-into ordinary plugin packages using only the five primitives. For each plugin:
+With ownership already moved in Slice 4's opening checkpoint, finish admin,
+channels, knowledge, memory, schedules, skills, usage, and goals as ordinary
+plugin packages using only the five primitives. For each plugin:
 
 - move semantic types and adapters with it;
 - replace repository/manager calls with Collections or Actions;
@@ -587,6 +868,12 @@ Exit: no production `definePlugin(...)` call exists under `runtime/`.
 - fold private attachment plumbing into generic application ingress and stream
   observation, then delete the attachment API;
 - keep Asset/Body/EventBody/Stream lifecycle runtime-owned and domain-neutral;
+- make every `context.streams.open(...)` emit one generic `stream.output`
+  observation and keep thread, participant, routing, visibility, Collection,
+  and plugin vocabulary out of the Stream contract and runtime emitter; the
+  lower-level Body primitive may omit observation wiring;
+- make Asset-manifest replay storage-neutral and prove that rebuilt Assets
+  remain readable through database, filesystem, and object BodyStores;
 - ensure Stream close yields prepared durable content that a Collection mutation
   can assetize; Streams create no semantic graph record by themselves;
 - isolate physical persistence and execution transports from semantic adapters;
@@ -618,10 +905,21 @@ directory tree.
 
 Only after target schemas and ownership are frozen:
 
-- inventory the last released durable formats from the release tag, not from
+- inventory the last released durable formats from `v0.60.18`, not from
   unreleased refactor code;
-- migrate released Events, graph records, Asset bodies and ownership,
-  filesystem/object-storage locations, and required projections;
+- `v0.60.18` never had `body_references`; final schema v4 neither creates nor
+  migrates it;
+- advance the final storage schema from released version 3 to version 4; normal
+  provisioning must never turn a released v3 database into a partially upgraded
+  final schema;
+- migrate released Events, graph records, Asset nodes, BodyStore data and
+  locations, and required projections;
+- treat released live graph and Asset state as migration baseline authority,
+  because v0.60.18 could already have compacted its non-authoritative Event
+  history; synthesize final source Event Bodies rather than pretending that old
+  history is complete;
+- preserve any retained released Events as historical data without interpreting
+  their legacy payloads as final projection-source Events;
 - make the migration resumable, idempotent, verifiable by digest/count, and
   isolated from the normal runtime;
 - delete historical migration entrypoints that are not part of this one release
@@ -656,19 +954,41 @@ Architecture-specific closure checks must prove:
 - no fixed semantic resource kind exists in runtime composition;
 - Resources and Adapters remain separate through plugin definition, application
   composition, type inference, and injected context;
+- Actions and Processors receive the same runtime-neutral context, Processors
+  receive their Event as the first argument, and no raw storage, executor,
+  Event/delivery, or schedule service is injected;
 - equivalent plain declarations and optional helpers produce values accepted by
   the same public Resource or Adapter interface;
 - no retired executable API, `requires`, locator, or hidden Core path remains;
 - every Collection mutation and Action lifecycle transition persists the
   expected Event Body and durable Event;
+- ordinary maintenance compacts only settled deliveries and preserves Events,
+  Event Bodies, and their deduplication identities;
 - Action lifecycle input/output persistence is independent of schema presence;
 - Processor retries reproduce or observe one stable Action result;
 - Collection content fields assetize automatically;
+- namespace-global replay restores all historical Asset manifests, declared
+  cross-Collection edges, and live generic relations while removing stale edges;
+- endpoint deletion followed by recreation does not resurrect a generic relation
+  without a later `relation.upserted` Event;
+- rebuilt Assets remain readable through every supported BodyStore;
+- transaction planning prepares external content before SQL and adopts its
+  durable records atomically with graph, Event, and delivery state;
+- idempotent Body puts renew protection where Ready GC is advertised, stale
+  maintenance versions cannot delete, and idle/protection guards are enforced
+  by every enabled maintenance backend;
+- Asset adoption/rebuild and maintenance races never commit a live reference
+  to a missing Body, and graph SQL performs no external BodyStore call;
+- custom BodyStore adapters declare truthful deployment guarantees, and unsafe
+  Ready-Body garbage collection stays disabled;
 - stream chunks are not durable Events, while settled content is durable;
 - the final package surface and self-import map are exhaustive and intentional.
 
 ## 8. Immediate next slice
 
-Slices 1 and 2 are now the executable API lock. Continue with Slice 3 and close
-each semantic vertical against the one
-Action/Collection/Processor/Resource/Adapter model before moving to the next.
+Slices 1 through 3 are closed. Begin Slice 4 with the ownership-evacuation
+checkpoint for concrete Tool integrations and semantic adapters, leaving the
+single current executor/catalog untouched until the coordinated Tool/LLM/Core
+semantic cut can delete it without a dual execution path. Then move each
+remaining semantic vertical through the one
+Action/Collection/Processor/Resource/Adapter model.

@@ -1,30 +1,36 @@
-import type { ContentInput, DurableContentInput } from "../content/index.ts";
+import type { ActionCaller } from "@copilotz/copilotz/actions";
+import type {
+  ContentInput,
+  DurableContentInput,
+} from "@copilotz/copilotz/content";
 import type {
   WorkflowTool,
   WorkflowToolExecutionContext,
-} from "../tools/index.ts";
+} from "@copilotz/copilotz/tools";
+import type { runScheduledJobNowAction } from "../schedules/actions.ts";
 import {
   createScheduledJob,
   getScheduledJob,
   listScheduledJobs,
   updateScheduledJob,
-} from "./lifecycle.ts";
+} from "../schedules/lifecycle.ts";
 import type {
+  ScheduledJob,
   ScheduledJobSchedule,
-  ScheduledJobSender,
   ScheduledJobStatus,
-  ScheduledJobThread,
+} from "../schedules/types.ts";
+import {
+  normalizeCoreScheduledMessagePayload,
+  scheduledMessageJob,
+} from "./message.ts";
+import type {
+  CoreScheduledMessageInput,
+  CoreScheduledMessagePayload,
+  CoreScheduledMessageSender,
+  CoreScheduledMessageThread,
 } from "./types.ts";
 
-type ScheduledJobToolRunInput = Readonly<{
-  thread?: ScheduledJobThread;
-  sender?: ScheduledJobSender;
-  recipientIds?: readonly string[];
-  content: ContentInput | readonly ContentInput[];
-  metadata?: Record<string, unknown>;
-}>;
-
-type ScheduledJobsAction =
+type ScheduledJobsToolAction =
   | "create"
   | "get"
   | "list"
@@ -33,6 +39,14 @@ type ScheduledJobsAction =
   | "resume"
   | "cancel"
   | "run_now";
+
+type ParsedMessage = Readonly<{
+  thread?: CoreScheduledMessageThread;
+  sender?: CoreScheduledMessageSender;
+  recipientIds?: readonly string[];
+  content?: ContentInput | readonly ContentInput[];
+  metadata?: Readonly<Record<string, unknown>>;
+}>;
 
 function record(value: unknown, name = "Input"): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -53,7 +67,7 @@ function optionalText(value: unknown, name: string): string | undefined {
   return requiredText(value, name);
 }
 
-function action(value: unknown): ScheduledJobsAction {
+function selectedAction(value: unknown): ScheduledJobsToolAction {
   const normalized = requiredText(value, "Scheduled jobs action");
   if (
     normalized === "create" || normalized === "get" ||
@@ -96,7 +110,7 @@ function stringList(
   return Object.freeze(value.map((item) => requiredText(item, name)));
 }
 
-function thread(value: unknown): ScheduledJobThread | undefined {
+function thread(value: unknown): CoreScheduledMessageThread | undefined {
   if (value === undefined) return undefined;
   const input = record(value, "Scheduled thread");
   const metadata = input.metadata === undefined
@@ -121,19 +135,17 @@ function thread(value: unknown): ScheduledJobThread | undefined {
   });
 }
 
-function sender(value: unknown): ScheduledJobSender | undefined {
+function sender(value: unknown): CoreScheduledMessageSender | undefined {
   if (value === undefined) return undefined;
   const input = record(value, "Scheduled sender");
-  const externalId = requiredText(
-    input.externalId ?? input.id,
-    "Scheduled sender external ID",
-  );
   return Object.freeze({
     ...(optionalText(input.id, "Scheduled sender ID")
       ? { id: optionalText(input.id, "Scheduled sender ID") }
       : {}),
-    externalId,
-    participantType: "job",
+    externalId: requiredText(
+      input.externalId ?? input.id,
+      "Scheduled sender external ID",
+    ),
     ...(optionalText(input.name, "Scheduled sender name")
       ? { name: optionalText(input.name, "Scheduled sender name") }
       : {}),
@@ -141,29 +153,29 @@ function sender(value: unknown): ScheduledJobSender | undefined {
       ? { email: optionalText(input.email, "Scheduled sender email") }
       : {}),
     ...(input.metadata === undefined ? {} : {
-      metadata: structuredClone(record(input.metadata, "Sender metadata")),
+      metadata: structuredClone(
+        record(input.metadata, "Scheduled sender metadata"),
+      ),
     }),
   });
 }
 
-function run(
+function message(
   value: unknown,
   options: { partial: boolean; defaultThreadId?: string },
-): Partial<ScheduledJobToolRunInput> & {
-  content?: ScheduledJobToolRunInput["content"];
-} {
+): ParsedMessage {
   const input = record(value, "Scheduled run");
   if (!options.partial && input.content === undefined) {
     throw new TypeError("Scheduled run content is required.");
   }
-  const content = input.content as
-    | ContentInput
-    | readonly ContentInput[]
-    | undefined;
   const targetThread = thread(input.thread) ??
     (options.defaultThreadId ? { id: options.defaultThreadId } : undefined);
   return Object.freeze({
-    ...(content === undefined ? {} : { content: structuredClone(content) }),
+    ...(input.content === undefined ? {} : {
+      content: structuredClone(input.content) as
+        | ContentInput
+        | readonly ContentInput[],
+    }),
     ...(targetThread ? { thread: targetThread } : {}),
     ...(input.sender === undefined ? {} : { sender: sender(input.sender) }),
     ...(input.recipientIds === undefined ? {} : {
@@ -189,25 +201,18 @@ function executionContext(
   return value;
 }
 
-type PreparedScheduledJobToolRunInput =
-  & Omit<Partial<ScheduledJobToolRunInput>, "content">
-  & Readonly<{ content?: DurableContentInput }>;
-
-async function prepareRunContent(
-  input: Partial<ScheduledJobToolRunInput>,
+async function prepareMessageContent(
+  input: ParsedMessage,
   context: WorkflowToolExecutionContext,
   operationKey: string,
-): Promise<PreparedScheduledJobToolRunInput> {
-  if (input.content === undefined) {
-    const { content: _content, ...withoutContent } = input;
-    return Object.freeze(withoutContent);
-  }
-  const content = await context.processor.content.prepare(input.content, {
-    operationKey: `${operationKey}:content`,
-  });
+): Promise<Omit<ParsedMessage, "content"> & { content?: DurableContentInput }> {
+  const { content, ...message } = input;
+  if (content === undefined) return Object.freeze(message);
   return Object.freeze({
-    ...input,
-    content,
+    ...message,
+    content: await context.processor.content.prepare(content, {
+      operationKey: `${operationKey}:content`,
+    }),
   });
 }
 
@@ -218,6 +223,20 @@ function positiveLimit(value: unknown): number | undefined {
     throw new TypeError("Scheduled job list limit must be between 1 and 100.");
   }
   return number;
+}
+
+function coreJob(
+  value: ScheduledJob | null,
+  id?: string,
+): ScheduledJob<CoreScheduledMessagePayload> | null {
+  if (!value) return null;
+  try {
+    const payload = normalizeCoreScheduledMessagePayload(value.payload);
+    return Object.freeze({ ...value, payload });
+  } catch {
+    if (id) throw new Error(`Core scheduled message '${id}' was not found.`);
+    return null;
+  }
 }
 
 const scheduleSchema = {
@@ -271,64 +290,61 @@ const runSchema = {
   },
 } as const;
 
-/** Creates the event-native scheduled-job lifecycle tool. */
-export function createScheduledJobsTool(
-  toolId = "scheduled_jobs",
-): WorkflowTool {
-  const id = requiredText(toolId, "Scheduled jobs tool ID");
-  return Object.freeze({
-    id,
-    key: id,
-    name: "Scheduled Jobs",
-    description:
-      "Create and manage recurring jobs that send public messages to Copilotz agents. Supports create, get, list, update, pause, resume, cancel, and run_now.",
-    inputSchema: {
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        action: {
-          type: "string",
-          enum: [
-            "create",
-            "get",
-            "list",
-            "update",
-            "pause",
-            "resume",
-            "cancel",
-            "run_now",
-          ],
-        },
-        jobId: { type: "string" },
-        name: { type: "string" },
-        status: {
-          type: "string",
-          enum: ["active", "paused", "cancelled"],
-        },
-        schedule: scheduleSchema,
-        run: runSchema,
-        metadata: { type: "object", additionalProperties: true },
-        threadId: { type: "string" },
-        after: { type: "string" },
-        limit: { type: "integer", minimum: 1, maximum: 100 },
+/** Current single Tool execution surface; Slice 4 will make it Action-backed. */
+export const scheduledMessagesTool: WorkflowTool = Object.freeze({
+  id: "scheduled_jobs",
+  key: "scheduled_jobs",
+  name: "Scheduled Jobs",
+  description:
+    "Create and manage recurring jobs that send public messages to Copilotz agents. Supports create, get, list, update, pause, resume, cancel, and run_now.",
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      action: {
+        type: "string",
+        enum: [
+          "create",
+          "get",
+          "list",
+          "update",
+          "pause",
+          "resume",
+          "cancel",
+          "run_now",
+        ],
       },
-      required: ["action"],
+      jobId: { type: "string" },
+      name: { type: "string" },
+      status: {
+        type: "string",
+        enum: ["active", "paused", "cancelled"],
+      },
+      schedule: scheduleSchema,
+      run: runSchema,
+      metadata: { type: "object", additionalProperties: true },
+      threadId: { type: "string" },
+      after: { type: "string" },
+      limit: { type: "integer", minimum: 1, maximum: 100 },
     },
-    async execute(raw: unknown, value?: WorkflowToolExecutionContext) {
-      const context = executionContext(value);
-      const input = record(raw);
-      const selected = action(input.action);
-      const operation = `scheduled_jobs:${selected}`;
-      if (selected === "create") {
-        const preparedRun = await prepareRunContent(
-          run(input.run, {
-            partial: false,
-            defaultThreadId: context.execution.threadId,
-          }) as ScheduledJobToolRunInput,
-          context,
-          operation,
-        );
-        const job = await createScheduledJob({
+    required: ["action"],
+  },
+  async execute(raw: unknown, value?: WorkflowToolExecutionContext) {
+    const context = executionContext(value);
+    const input = record(raw);
+    const action = selectedAction(input.action);
+    const operation = `scheduled_jobs:${action}`;
+    if (action === "create") {
+      const parsed = await prepareMessageContent(
+        message(input.run, {
+          partial: false,
+          defaultThreadId: context.execution.threadId,
+        }),
+        context,
+        operation,
+      ) as CoreScheduledMessageInput;
+      const job = await createScheduledJob(
+        scheduledMessageJob({
           ...(optionalText(input.jobId, "Scheduled job ID")
             ? { id: optionalText(input.jobId, "Scheduled job ID") }
             : {}),
@@ -341,103 +357,112 @@ export function createScheduledJobsTool(
             })()
             : jobStatus(input.status) as "active" | "paused",
           schedule: schedule(input.schedule),
-          run: preparedRun as
-            & Required<
-              Pick<PreparedScheduledJobToolRunInput, "content">
-            >
-            & PreparedScheduledJobToolRunInput,
+          message: parsed,
           ...(input.metadata === undefined ? {} : {
             metadata: structuredClone(
               record(input.metadata, "Scheduled job metadata"),
             ),
           }),
-        }, context.processor);
-        return { job };
-      }
-
-      if (selected === "list") {
-        const jobs = await listScheduledJobs({
-          ...(input.status === undefined
-            ? {}
-            : { status: jobStatus(input.status) }),
-          ...(optionalText(input.after, "Scheduled job cursor")
-            ? { after: optionalText(input.after, "Scheduled job cursor") }
-            : {}),
-          ...(positiveLimit(input.limit)
-            ? { limit: positiveLimit(input.limit) }
-            : {}),
-        }, context.processor);
-        const threadId = optionalText(input.threadId, "Scheduled thread ID");
-        return {
-          jobs: threadId
-            ? jobs.filter((item) =>
-              item.run.thread?.id === threadId ||
-              item.run.thread?.externalId === threadId
-            )
-            : jobs,
-        };
-      }
-
-      const jobId = requiredText(input.jobId, "Scheduled job ID");
-      if (selected === "get") {
-        return { job: await getScheduledJob({ id: jobId }, context.processor) };
-      }
-      if (
-        selected === "pause" || selected === "resume" || selected === "cancel"
-      ) {
-        const status = selected === "pause"
-          ? "paused"
-          : selected === "resume"
-          ? "active"
-          : "cancelled";
-        const job = await updateScheduledJob(
-          { id: jobId, patch: { status } },
-          context.processor,
-        );
-        return { job };
-      }
-      if (selected === "run_now") {
-        if (!context.processor.schedules) {
-          throw new Error("Scheduled run_now requires the schedule trigger.");
-        }
-        return await context.processor.schedules.runNow(jobId, {
-          operationKey: operation,
-        });
-      }
-
-      const patch: Record<string, unknown> = {};
-      if (input.name !== undefined) {
-        patch.name = requiredText(input.name, "Scheduled job name");
-      }
-      if (input.status !== undefined) patch.status = jobStatus(input.status);
-      if (input.schedule !== undefined) {
-        patch.schedule = schedule(input.schedule);
-      }
-      if (input.run !== undefined) {
-        patch.run = await prepareRunContent(
-          run(input.run, { partial: true }),
-          context,
-          operation,
-        );
-      }
-      if (input.metadata !== undefined) {
-        patch.metadata = structuredClone(
-          record(input.metadata, "Scheduled job metadata"),
-        );
-      }
-      if (Object.keys(patch).length === 0) {
-        throw new TypeError(
-          "Scheduled job update requires at least one field.",
-        );
-      }
-      const job = await updateScheduledJob(
-        {
-          id: jobId,
-          patch,
-        },
+        }),
         context.processor,
       );
       return { job };
-    },
-  });
-}
+    }
+
+    if (action === "list") {
+      const jobs = await listScheduledJobs({
+        ...(input.status === undefined
+          ? {}
+          : { status: jobStatus(input.status) }),
+        ...(optionalText(input.after, "Scheduled job cursor")
+          ? { after: optionalText(input.after, "Scheduled job cursor") }
+          : {}),
+        ...(positiveLimit(input.limit)
+          ? { limit: positiveLimit(input.limit) }
+          : {}),
+      }, context.processor);
+      const threadId = optionalText(input.threadId, "Scheduled thread ID");
+      return {
+        jobs: jobs
+          .map((job) => coreJob(job))
+          .filter((job): job is ScheduledJob<CoreScheduledMessagePayload> =>
+            job !== null
+          )
+          .filter((job) =>
+            !threadId || job.payload.thread?.id === threadId ||
+            job.payload.thread?.externalId === threadId
+          ),
+      };
+    }
+
+    const jobId = requiredText(input.jobId, "Scheduled job ID");
+    const existing = coreJob(
+      await getScheduledJob({ id: jobId }, context.processor),
+      jobId,
+    );
+    if (!existing) {
+      throw new Error(`Core scheduled message '${jobId}' was not found.`);
+    }
+    if (action === "get") return { job: existing };
+    if (action === "pause" || action === "resume" || action === "cancel") {
+      const status = action === "pause"
+        ? "paused"
+        : action === "resume"
+        ? "active"
+        : "cancelled";
+      return {
+        job: await updateScheduledJob(
+          { id: jobId, patch: { status } },
+          context.processor,
+        ),
+      };
+    }
+    if (action === "run_now") {
+      const caller = context.processor.actions.runScheduledJobNow as unknown as
+        | ActionCaller<typeof runScheduledJobNowAction>
+        | undefined;
+      if (typeof caller !== "function") {
+        throw new Error(
+          "Scheduled run_now requires the runScheduledJobNow Action.",
+        );
+      }
+      return await caller({ id: jobId }, { operationKey: operation });
+    }
+
+    const patch: Record<string, unknown> = {};
+    if (input.name !== undefined) {
+      patch.name = requiredText(input.name, "Scheduled job name");
+    }
+    if (input.status !== undefined) patch.status = jobStatus(input.status);
+    if (input.schedule !== undefined) patch.schedule = schedule(input.schedule);
+    if (input.run !== undefined) {
+      const parsed = await prepareMessageContent(
+        message(input.run, { partial: true }),
+        context,
+        operation,
+      );
+      const { content, ...payloadFields } = parsed;
+      if (Object.keys(payloadFields).length) {
+        patch.payload = normalizeCoreScheduledMessagePayload({
+          ...structuredClone(existing.payload),
+          ...payloadFields,
+        });
+      }
+      if (content !== undefined) patch.content = content;
+    }
+    if (input.metadata !== undefined) {
+      patch.metadata = structuredClone(
+        record(input.metadata, "Scheduled job metadata"),
+      );
+    }
+    if (Object.keys(patch).length === 0) {
+      throw new TypeError("Scheduled job update requires at least one field.");
+    }
+    return {
+      job: await updateScheduledJob(
+        { id: jobId, patch },
+        context.processor,
+      ),
+    };
+  },
+});

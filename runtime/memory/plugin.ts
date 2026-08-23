@@ -4,20 +4,22 @@ import type {
   PreparedAsset,
   PreparedContent,
 } from "../content/index.ts";
-import type { CollectionRecord, DomainNodeRef } from "../domain/index.ts";
+import type {
+  CollectionRecord,
+  GraphRelationUpsertInput,
+} from "../collections/index.ts";
 import type {
   ConversationMessage,
   ConversationThread,
   Participant,
 } from "../domain/index.ts";
-import type { CopilotzProcessorContext } from "../engine/index.ts";
 import {
   type ActionCallOptions,
   type ActionContext,
-  type ActionContextNamespaces,
   type ActionDefinition,
   defineAction,
   isSettledActionError,
+  type RuntimeActionCallers,
 } from "../actions/index.ts";
 import {
   listThreadMessageRecords,
@@ -45,8 +47,9 @@ import {
   definePlugin,
   defineProcessor,
   type Processor,
+  type ProcessorContext,
+  type ProcessorEvent,
 } from "../plugins/index.ts";
-import type { LlmResource } from "../llm/index.ts";
 import { buildAgentTextPrompt } from "../agents/index.ts";
 import type {
   WorkflowTool,
@@ -93,7 +96,9 @@ import {
 } from "./ontology.ts";
 import type {
   CreateLongTermMemoryPluginOptions,
+  MemoryAdapters,
   MemoryEmbed,
+  MemoryResources,
 } from "./types.ts";
 import {
   DEFAULT_LONG_TERM_MEMORY_CONFIG,
@@ -126,6 +131,7 @@ export type ConsolidateMemoryActionResult = Readonly<
 
 export type MaintainMemoryActionInput = Readonly<{
   checkpointId: string;
+  sourceEvent: ProcessorEvent;
 }>;
 
 export type MaintainMemoryActionResult = Readonly<{
@@ -138,24 +144,6 @@ export type MaintainMemoryActionResult = Readonly<{
   cost?: unknown;
 }>;
 
-export type MemoryResources =
-  & ActionContextNamespaces
-  & Readonly<{
-    agents: Readonly<Record<string, Agent | undefined>>;
-    memoryKinds: Readonly<
-      Record<string, MemoryKindDefinition | undefined>
-    >;
-  }>;
-
-export type MemoryAdapters =
-  & ActionContextNamespaces
-  & Readonly<{
-    llm: Readonly<Record<string, LlmResource | undefined>>;
-    memoryEmbedding: Readonly<
-      Record<string, CreateLongTermMemoryPluginOptions["embed"] | undefined>
-    >;
-  }>;
-
 export type MemoryActionCallers = Readonly<{
   consolidateMemory(
     input: ConsolidateMemoryActionInput,
@@ -167,22 +155,19 @@ export type MemoryActionCallers = Readonly<{
   ): Promise<MaintainMemoryActionResult>;
 }>;
 
-export type MemoryActionContext =
-  & ActionContext
-  & CopilotzProcessorContext
-  & Readonly<{
-    resources: MemoryResources;
-    adapters: MemoryAdapters;
-    actions: MemoryActionCallers;
-  }>;
+type MemoryCallers = RuntimeActionCallers & MemoryActionCallers;
 
-export type MemoryProcessorContext =
-  & CopilotzProcessorContext
-  & Readonly<{
-    resources: MemoryResources;
-    adapters: MemoryAdapters;
-    actions: CopilotzProcessorContext["actions"] & MemoryActionCallers;
-  }>;
+export type MemoryActionContext = ActionContext<
+  MemoryResources,
+  MemoryAdapters,
+  MemoryCallers
+>;
+
+export type MemoryProcessorContext = ProcessorContext<
+  MemoryResources,
+  MemoryAdapters,
+  MemoryCallers
+>;
 
 function record(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -249,8 +234,8 @@ type MemoryRecordWrite =
 type MemoryRelationWrite = Readonly<{
   id: string;
   type: string;
-  source: DomainNodeRef;
-  target: DomainNodeRef;
+  source: GraphRelationUpsertInput["source"];
+  target: GraphRelationUpsertInput["target"];
   metadata?: Readonly<Record<string, unknown>>;
   weight?: number;
 }>;
@@ -268,18 +253,6 @@ async function commitMemoryConsolidation(
   input: CommitMemoryConsolidationInput,
 ) {
   return await context.transaction(async (tx) => {
-    const checkpoint = await tx.collections.longTermMemory.get({
-      id: input.checkpointId,
-    });
-    if (!checkpoint) {
-      throw new Error(`Unknown memory checkpoint '${input.checkpointId}'.`);
-    }
-    if (checkpoint.status !== "pending") {
-      throw new Error(
-        `Memory checkpoint '${input.checkpointId}' is not pending.`,
-      );
-    }
-
     for (const write of input.records) {
       if (write.operation === "create") {
         if (write.record.consolidationId !== input.checkpointId) {
@@ -307,14 +280,9 @@ async function commitMemoryConsolidation(
       ...input.checkpointPatch,
       content: input.checkpointContent,
     };
-    if (checkpointPatch.status !== "ready") {
-      throw new TypeError(
-        "Atomic memory consolidation must settle the checkpoint as ready.",
-      );
-    }
-    await tx.collections.longTermMemory.update({
+    await tx.collections.longTermMemory.commands.completeConsolidation({
       id: input.checkpointId,
-      set: checkpointPatch as never,
+      ...checkpointPatch,
     }, { operationKey: `memory-checkpoint:ready:${input.checkpointId}` });
 
     return Object.freeze({
@@ -346,7 +314,7 @@ function participantAgentId(participant: Participant): string {
 }
 
 async function checkpoints(
-  context: CopilotzProcessorContext,
+  context: MemoryProcessorContext,
   threadId: string,
   agentId: string,
   status?: "pending" | "ready" | "failed",
@@ -366,7 +334,7 @@ async function checkpoints(
 }
 
 async function threadMemorySpaces(
-  context: CopilotzProcessorContext,
+  context: MemoryProcessorContext,
   threadId: string,
 ): Promise<readonly MemorySpaceDescriptor[]> {
   const grants = await context.collections.memorySpaceAccess
@@ -412,7 +380,7 @@ async function threadMemorySpaces(
 }
 
 async function ensureWritableMemorySpace(
-  context: CopilotzProcessorContext,
+  context: MemoryProcessorContext,
   threadId: string,
 ) {
   const current = await threadMemorySpaces(context, threadId);
@@ -457,7 +425,7 @@ function checkpointAccessible(
 }
 
 async function latestReadyCheckpoint(
-  context: CopilotzProcessorContext,
+  context: MemoryProcessorContext,
   threadId: string,
   agentId: string,
   spaces: readonly MemorySpaceDescriptor[],
@@ -470,7 +438,7 @@ async function latestReadyCheckpoint(
 }
 
 async function messageText(
-  context: CopilotzProcessorContext,
+  context: MemoryProcessorContext,
   message: ConversationMessage,
 ): Promise<string> {
   const resolved = await context.content.resolveMany(message.content);
@@ -483,7 +451,7 @@ async function messageText(
 }
 
 async function sourceMessages(
-  context: CopilotzProcessorContext,
+  context: MemoryProcessorContext,
   messages: readonly ConversationMessage[],
 ): Promise<readonly MemorySourceMessage[]> {
   const result: MemorySourceMessage[] = [];
@@ -533,7 +501,7 @@ function memoryRecord(value: CollectionRecord): MemoryRecordProjection | null {
 }
 
 async function activeMemoryRecords(
-  context: CopilotzProcessorContext,
+  context: MemoryProcessorContext,
   spaces: readonly MemorySpaceDescriptor[],
   agentId: string,
 ) {
@@ -591,7 +559,7 @@ function lexicalScore(query: string, candidate: string): number {
 }
 
 async function candidateRecords(
-  context: CopilotzProcessorContext,
+  context: MemoryProcessorContext,
   input: Readonly<{
     query: string;
     form: MemoryForm;
@@ -687,7 +655,7 @@ function frozenSnapshot(
 }
 
 async function captureContextSnapshot(
-  context: CopilotzProcessorContext,
+  context: MemoryProcessorContext,
   input: Readonly<{
     checkpoint: CollectionRecord;
     agent: Agent;
@@ -785,11 +753,20 @@ function memoryKinds(
   );
 }
 
-function workflowToolContext(value?: WorkflowToolExecutionContext) {
+type MemoryWorkflowToolContext =
+  & Omit<
+    WorkflowToolExecutionContext,
+    "processor"
+  >
+  & Readonly<{ processor: MemoryProcessorContext }>;
+
+function workflowToolContext(
+  value?: WorkflowToolExecutionContext,
+): MemoryWorkflowToolContext {
   if (!value?.processor) {
     throw new Error("This tool requires an event-native Copilotz context.");
   }
-  return value;
+  return value as MemoryWorkflowToolContext;
 }
 
 function memoryCheckpointId(value: unknown): string {
@@ -805,7 +782,7 @@ function parseToolArgs(value: string): unknown {
 }
 
 async function failCheckpoint(
-  context: CopilotzProcessorContext,
+  context: MemoryProcessorContext,
   checkpointId: string,
   error: unknown,
 ) {
@@ -983,11 +960,11 @@ function intentOrInquiryStatus(
 }
 
 async function recordRelations(
-  context: CopilotzProcessorContext,
+  context: MemoryProcessorContext,
   ids: ReadonlySet<string>,
 ) {
   return Object.freeze(
-    (await context.relations.list({
+    (await context.collections.memoryRecord.relations.list({
       types: MEMORY_RELATION_TYPES,
       limit: 1_000,
     }))
@@ -1003,7 +980,7 @@ async function recordRelations(
 }
 
 async function prepareCheckpointSettlement(
-  context: CopilotzProcessorContext,
+  context: MemoryProcessorContext,
   input: Readonly<{
     checkpoint: CollectionRecord;
     agentId: string;
@@ -1055,7 +1032,7 @@ async function prepareCheckpointSettlement(
 }
 
 async function settleCheckpoint(
-  context: CopilotzProcessorContext,
+  context: MemoryProcessorContext,
   input: Parameters<typeof prepareCheckpointSettlement>[1],
 ) {
   const settlement = await prepareCheckpointSettlement(context, input);
@@ -1631,7 +1608,7 @@ function createMemoryMaintenanceAction(
         "Memory checkpoint id",
       );
       const context = actionContext;
-      const sourceEvent = context.event;
+      const sourceEvent = input.sourceEvent;
       let repairReason: string | undefined;
       let lastError: unknown = new Error(
         "Memory consolidation did not produce a valid result.",
@@ -1978,11 +1955,12 @@ function inspectMemoryTool(): WorkflowTool {
       if (!spaces.has(String(item.memorySpaceId))) {
         throw new Error(`Memory '${id}' is not accessible from this thread.`);
       }
-      const relations = await tool.processor.relations.list({
-        nodeId: id,
-        direction: "both",
-        limit: 1_000,
-      });
+      const relations = await tool.processor.collections.memoryRecord.relations
+        .list({
+          id,
+          direction: "both",
+          limit: 1_000,
+        });
       const accessibleMemoryIds = new Set(
         (await tool.processor.collections.memoryRecord.list({
           limit: 1_000,
@@ -2195,6 +2173,7 @@ function prepareMemoryMaintenanceProcessor(): Processor<
       try {
         await context.actions.maintainMemory({
           checkpointId: checkpoint.id,
+          sourceEvent: event,
         }, {
           operationKey: `memory:${checkpoint.id}:run`,
           signal: context.signal,

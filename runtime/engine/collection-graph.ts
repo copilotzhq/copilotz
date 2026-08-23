@@ -5,7 +5,7 @@ import type {
   ConversationThread,
   Participant,
 } from "../domain/index.ts";
-import type { CopilotzProcessorCapabilities } from "./types.ts";
+import type { ProcessorContext } from "../plugins/index.ts";
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -51,7 +51,7 @@ export function projectActiveBranch<T extends { id: string }>(
 }
 
 export function requireScopedCollection(
-  context: CopilotzProcessorCapabilities,
+  context: ProcessorContext,
   name: string,
 ) {
   const bound = context.collections[name];
@@ -140,7 +140,7 @@ export function mapThreadRecord(
 }
 
 export async function loadParticipantRecord(
-  context: CopilotzProcessorCapabilities,
+  context: ProcessorContext,
   id: string,
 ): Promise<Participant | null> {
   const bound = context.collections.participant;
@@ -150,7 +150,7 @@ export async function loadParticipantRecord(
 }
 
 export async function loadThreadRecord(
-  context: CopilotzProcessorCapabilities,
+  context: ProcessorContext,
   threadId: string,
 ): Promise<ConversationThread | null> {
   const threads = context.collections.thread;
@@ -171,7 +171,7 @@ export async function loadThreadRecord(
 }
 
 export async function listThreadMessageRecords(
-  context: CopilotzProcessorCapabilities,
+  context: ProcessorContext,
   threadId: string,
 ): Promise<readonly ConversationMessage[]> {
   const messages = requireScopedCollection(context, "message");
@@ -194,7 +194,7 @@ export async function listThreadMessageRecords(
 }
 
 export async function loadMessageRecord(
-  context: CopilotzProcessorCapabilities,
+  context: ProcessorContext,
   id: string,
 ): Promise<ConversationMessage | null> {
   const record = await requireScopedCollection(context, "message").get({ id });

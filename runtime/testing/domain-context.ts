@@ -5,8 +5,6 @@ import type {
 } from "../content/index.ts";
 import type { CopilotzEngine } from "../engine/index.ts";
 import type { CollectionRecord } from "../collections/index.ts";
-import { activeCollectionTransaction } from "../collections/index.ts";
-import { createCoreTableNames } from "../events/index.ts";
 import type {
   ConversationMessage,
   ConversationThread,
@@ -27,11 +25,7 @@ export type TestDomainHost = Pick<
   | "plugins"
   | "databaseSchema"
   | "collections"
-  | "collectionRuntime"
   | "content"
-  | "events"
-  | "deliveries"
-  | "relations"
   | "bindTransient"
 >;
 
@@ -41,14 +35,11 @@ async function materialize(
   input: DurableContentInput,
   origin?: AssetOrigin,
 ): Promise<ContentSequence> {
-  const transaction = activeCollectionTransaction(host.collectionRuntime);
-  if (!transaction) {
-    throw new Error("Test Action content requires an active transaction.");
-  }
   return await host.content.assets.materialize({
-    transaction,
-    tables: createCoreTableNames(host.databaseSchema),
-  }, { namespace, content: input, origin });
+    namespace,
+    content: input,
+    origin,
+  });
 }
 
 /** Builds the real namespace-scoped domain context for tests. */
@@ -62,12 +53,18 @@ export function createTestDomainContext(
     namespace,
     plugins: host.plugins,
     collections: host.collections,
-    collectionRuntime: host.collectionRuntime,
     now: options.now,
-    contentResolver: host.content.resolver,
     content: (scopedNamespace) =>
       Object.freeze({
         resolver: host.content.resolver,
+        stream: Object.freeze({
+          open() {
+            throw new Error("Test content streams are not configured.");
+          },
+          follow() {
+            throw new Error("Test content streams are not configured.");
+          },
+        }),
         prepare: (input, prepareOptions) =>
           host.content.preparer.prepare(input, {
             namespace: scopedNamespace,
@@ -77,20 +74,6 @@ export function createTestDomainContext(
           }),
         materialize: (input, options) =>
           materialize(host, scopedNamespace, input, options?.origin),
-        async linkOwner(ownerId, content) {
-          const transaction = activeCollectionTransaction(
-            host.collectionRuntime,
-          );
-          if (!transaction) {
-            throw new Error(
-              "Test Action content requires an active transaction.",
-            );
-          }
-          await host.content.assets.linkOwner({
-            transaction,
-            tables: createCoreTableNames(host.databaseSchema),
-          }, { namespace: scopedNamespace, ownerId, content });
-        },
         publish: (input, publishOptions) =>
           host.content.assets.publish({
             ...input,
@@ -129,9 +112,6 @@ export function createTestDomainContext(
         return Promise.resolve(lifecycle.get(id) ?? null);
       },
     },
-    events: host.events,
-    deliveries: host.deliveries,
-    relations: host.relations,
   });
 }
 

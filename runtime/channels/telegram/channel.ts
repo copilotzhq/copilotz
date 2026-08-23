@@ -416,17 +416,16 @@ export function createTelegramChannel(
                 },
               );
             }
+            const action = actionPayload(resolved.message.metadata);
+            if (action) {
+              await deliver(options, transport, config, context, {
+                kind: "reply_buttons",
+                chatId,
+                action,
+                output,
+              });
+            }
             continue;
-          }
-          if (output.type !== "action.created") continue;
-          const action = actionPayload(output.payload);
-          if (action) {
-            await deliver(options, transport, config, context, {
-              kind: "reply_buttons",
-              chatId,
-              action,
-              output,
-            });
           }
         }
       },

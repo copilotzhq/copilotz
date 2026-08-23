@@ -37,7 +37,6 @@ Deno.test({
       assertEquals(
         tables.rows.map((row) => row.table_name),
         [
-          "body_references",
           "edges",
           "event_bodies",
           "event_deliveries",
@@ -145,20 +144,20 @@ Deno.test({
         causationId: parent.event.id,
         createdAt: old,
       });
-      const firstCompaction = await store.compact({
+      const firstCompaction = await store.compactDeliveries({
         retentionMs: 7 * 24 * 60 * 60 * 1_000,
         now: new Date("2021-01-01T00:00:00.000Z"),
         limit: 1,
       });
-      assertEquals(firstCompaction.events, 1);
+      assertEquals(firstCompaction.deliveries, 0);
       assertEquals(await store.getEvent(parent.event.id) !== null, true);
-      const secondCompaction = await store.compact({
+      const secondCompaction = await store.compactDeliveries({
         retentionMs: 7 * 24 * 60 * 60 * 1_000,
         now: new Date("2021-01-01T00:00:00.000Z"),
         limit: 1,
       });
-      assertEquals(secondCompaction.events, 1);
-      assertEquals(await store.getEvent(parent.event.id), null);
+      assertEquals(secondCompaction.deliveries, 0);
+      assertEquals(await store.getEvent(parent.event.id), parent.event);
     } finally {
       await session.query(
         `DROP SCHEMA IF EXISTS ${quoteEventIdentifier(schema)} CASCADE`,

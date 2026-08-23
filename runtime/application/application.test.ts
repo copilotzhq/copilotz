@@ -4,11 +4,11 @@ import {
   type AnyCopilotzPlugin,
   definePlugin,
   defineProcessor,
+  type ProcessorContext,
 } from "../plugins/index.ts";
 import { createTestDomainContext } from "../../runtime/testing/domain-context.ts";
 import { waitForTestDelivery } from "../../runtime/testing/deliveries.ts";
 import { projectMessages } from "../../runtime/testing/projections.ts";
-import type { CopilotzProcessorContext } from "../engine/index.ts";
 import { createCopilotzApplication } from "./application.ts";
 import { createCopilotz } from "./copilotz.ts";
 import type { CopilotzDatabase } from "./persistence.ts";
@@ -25,7 +25,7 @@ const SCHEMA = "copilotz_application";
 const NAMESPACE = "tenant-a";
 
 function replyPlugin(): AnyCopilotzPlugin {
-  const processor = defineProcessor<CopilotzProcessorContext>({
+  const processor = defineProcessor<ProcessorContext>({
     id: "application.reply",
     on: [{ eventType: "message.created", routing: { senderId: "user-a" } }],
     async handle(event, context) {
@@ -39,21 +39,61 @@ function replyPlugin(): AnyCopilotzPlugin {
         { type: "text", text: "application reply" },
         { operationKey: "reply-content" },
       );
-      const persisted = await context.content.materialize(content);
       await context.collections.message.create({
         id: `reply:${incoming.id}`,
         threadId: incoming.threadId,
         senderId: "agent-a",
         recipientIds: [incoming.sender.id],
-        content: persisted,
+        content,
       }, { operationKey: "reply-message" });
-      await context.content.linkOwner(`reply:${incoming.id}`, persisted);
     },
   });
   return definePlugin({
     id: "test.application.reply",
     version: "1.0.0",
     processors: { reply: processor },
+  });
+}
+
+function runtimeNeutralStreamPlugin(): AnyCopilotzPlugin {
+  const processor = defineProcessor<ProcessorContext>({
+    id: "application.runtime-neutral-stream",
+    on: [{ eventType: "test.runtime-neutral-stream" }],
+    async handle(event, context) {
+      const writer = await context.streams.open({
+        id: "runtime-neutral-stream-a",
+        mediaType: "text/plain",
+        role: "output",
+        metadata: { source: "test-plugin" },
+        correlationId: event.correlationId,
+      });
+      await writer.abort();
+    },
+  });
+  return definePlugin({
+    id: "test.application.runtime-neutral-stream",
+    version: "1.0.0",
+    processors: { runtimeNeutralStream: processor },
+  });
+}
+
+function correlatedOutputPlugin(): AnyCopilotzPlugin {
+  const processor = defineProcessor<ProcessorContext>({
+    id: "application.correlated-output",
+    on: [{ eventType: "test.correlated-output" }],
+    async handle(event, context) {
+      const writer = await context.streams.open({
+        id: `correlated-output:${event.correlationId}`,
+        mediaType: "text/plain",
+        role: "output",
+      });
+      await writer.abort();
+    },
+  });
+  return definePlugin({
+    id: "test.application.correlated-output",
+    version: "1.0.0",
+    processors: { correlatedOutput: processor },
   });
 }
 
@@ -207,6 +247,125 @@ Deno.test("application send publishes one session output stream", async () => {
   }
 });
 
+Deno.test("application observes streams opened from events with no thread semantics", async () => {
+  const db = await createTestDatabase({ url: ":memory:" });
+  const application = await createCopilotzApplication({
+    database: db,
+    namespace: NAMESPACE,
+    databaseSchema: `${SCHEMA}_runtime_neutral_stream`,
+    plugins: [runtimeNeutralStreamPlugin()],
+    engine: { retryBaseMs: 0, random: () => 0 },
+  });
+  try {
+    const sent = await application.send({
+      type: "test.runtime-neutral-stream",
+      payload: { value: 42 },
+      correlationId: "runtime-neutral-correlation",
+    });
+    const observed = collect(sent.outputs);
+    await sent.done;
+    const outputs = await observed;
+    const stream = outputs.find((output) => output.type === "stream.output");
+    assertExists(stream);
+    assert("durable" in stream && !stream.durable);
+    assertEquals(stream.durable, false);
+    assertEquals(stream.threadId, undefined);
+    assertEquals(stream.streamId, "runtime-neutral-stream-a");
+    assertEquals(stream.correlationId, "runtime-neutral-correlation");
+    assertEquals(stream.payload, {
+      streamId: "runtime-neutral-stream-a",
+      mediaType: "text/plain",
+      kind: "text",
+      role: "output",
+    });
+    assertEquals(stream.metadata.source, "test-plugin");
+  } finally {
+    await application.shutdown();
+    await closeDb(db);
+  }
+});
+
+Deno.test("application isolates simultaneous causal outputs and preserves the final queued frame", async () => {
+  const db = await createTestDatabase({ url: ":memory:" });
+  const databaseSchema = `${SCHEMA}_correlated_outputs`;
+  const application = await createCopilotzApplication({
+    database: db,
+    namespace: NAMESPACE,
+    databaseSchema,
+    plugins: [correlatedOutputPlugin()],
+    engine: { retryBaseMs: 0, random: () => 0 },
+  });
+  try {
+    const global = application.observe().getReader();
+    const [first, second] = await Promise.all([
+      application.send({
+        type: "test.correlated-output",
+        correlationId: "correlation-first",
+      }),
+      application.send({
+        type: "test.correlated-output",
+        correlationId: "correlation-second",
+      }),
+    ]);
+
+    // Deliberately do not consume either request stream until its causal scope
+    // settles. Closing the direct sink must preserve every already-queued event,
+    // including the final remote stream frame.
+    await Promise.all([first.done, second.done]);
+    const [firstOutputs, secondOutputs] = await Promise.all([
+      collect(first.outputs),
+      collect(second.outputs),
+    ]);
+    assertEquals(firstOutputs.map((event) => event.type), [
+      "test.correlated-output",
+      "stream.output",
+    ]);
+    assertEquals(
+      firstOutputs.every((event) =>
+        event.correlationId === "correlation-first"
+      ),
+      true,
+    );
+    assertEquals(secondOutputs.map((event) => event.type), [
+      "test.correlated-output",
+      "stream.output",
+    ]);
+    assertEquals(
+      secondOutputs.every((event) =>
+        event.correlationId === "correlation-second"
+      ),
+      true,
+    );
+
+    const globallyObserved = [];
+    while (globallyObserved.length < 4) {
+      const next = await global.read();
+      assertEquals(next.done, false);
+      globallyObserved.push(next.value!);
+    }
+    assertEquals(
+      new Set(globallyObserved.map((event) => event.correlationId)),
+      new Set(["correlation-first", "correlation-second"]),
+    );
+    await global.cancel();
+
+    const direct = application.observe().getReader();
+    await application.events.emit({
+      type: "test.outside-send",
+      namespace: NAMESPACE,
+      payload: null,
+      correlationId: "outside-send",
+    });
+    const observedDirect = await direct.read();
+    assertEquals(observedDirect.done, false);
+    assertEquals(observedDirect.value?.type, "test.outside-send");
+    await direct.cancel();
+  } finally {
+    await application.shutdown();
+    await closeDb(db);
+  }
+});
+
 Deno.test("createCopilotz owns a configured Ominipg database", async () => {
   const application = await createCopilotz({
     namespace: NAMESPACE,
@@ -304,7 +463,7 @@ Deno.test("application terminates attachments and resumes durable deliveries aft
   let processorCalls = 0;
   const closedGenerations: number[] = [];
   const lifecycle: string[] = [];
-  const processor = defineProcessor<CopilotzProcessorContext>({
+  const processor = defineProcessor<ProcessorContext>({
     id: "application.recovery",
     on: [{ eventType: "message.created" }],
     handle() {
@@ -451,6 +610,7 @@ Deno.test("application composition remains factory-first and runtime-neutral", a
     assert(!/\bDeno\b|\bBun\b|\bprocess\b/.test(source), module);
     assert(!/from\s+["']node:/.test(source), module);
     assert(!/runtime\/cli|server\//.test(source), module);
+    assert(!/attachments/.test(source), module);
     assert(!/queueId|queueTTL|ackMode|runGeneration/.test(source), module);
   }
 });

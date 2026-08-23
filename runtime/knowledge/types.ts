@@ -3,7 +3,10 @@ import type {
   ContentSequence,
   DurableContentInput,
 } from "../content/index.ts";
-import type { CollectionRecord, MutationIdentity } from "../domain/index.ts";
+import type {
+  CollectionMutationIdentity as MutationIdentity,
+  CollectionRecord,
+} from "../collections/index.ts";
 
 export type KnowledgeDocumentStatus =
   | "pending"

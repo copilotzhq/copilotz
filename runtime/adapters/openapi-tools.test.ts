@@ -3,7 +3,7 @@ import type { API } from "../resources/index.ts";
 import type { WorkflowToolExecutionContext } from "../tools/index.ts";
 import { generateApiTools } from "./openapi-tools.ts";
 
-Deno.test("OpenAPI preparation receives the trusted database and collection scope", async () => {
+Deno.test("OpenAPI preparation receives the tenant collection scope", async () => {
   let observed:
     | Parameters<NonNullable<API["prepareRequest"]>>[1]
     | undefined;
@@ -30,7 +30,7 @@ Deno.test("OpenAPI preparation receives the trusted database and collection scop
   const collection = Object.freeze({ definition: { name: "records" } });
   const executionContext = {
     namespace: "tenant-a",
-    processor: { databaseSchema: "tenant_a" },
+    processor: {},
     collections: { records: collection },
   } as unknown as WorkflowToolExecutionContext;
   const originalFetch = globalThis.fetch;
@@ -44,7 +44,6 @@ Deno.test("OpenAPI preparation receives the trusted database and collection scop
     const tool = generateApiTools(api)[0];
     await tool.execute({}, executionContext);
     assertEquals(observed?.namespace, "tenant-a");
-    assertEquals(observed?.databaseSchema, "tenant_a");
     assertStrictEquals(observed?.collections?.records, collection as never);
   } finally {
     globalThis.fetch = originalFetch;

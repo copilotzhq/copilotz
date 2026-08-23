@@ -3,7 +3,7 @@ import type { ToolPipelineStage, ToolPipelineToolStage } from "../llm/types.ts";
 import type { ScopedCollections } from "../collections/index.ts";
 import type { CopilotzEvent } from "../events/types.ts";
 import type { ContentInput } from "../content/index.ts";
-import type { CopilotzProcessorContext } from "../engine/index.ts";
+import type { ProcessorContext } from "../plugins/index.ts";
 
 /** Existing custom/native tool shape required by the event-native executor. */
 export type WorkflowTool =
@@ -139,7 +139,7 @@ export type WorkflowToolExecutionContext = {
 };
 
 /** Runtime-neutral capabilities exposed to a Tool by its invoking Action. */
-export type WorkflowToolHostContext = CopilotzProcessorContext;
+export type WorkflowToolHostContext = ProcessorContext;
 
 export type WorkflowToolOutputOptions = Readonly<{
   channel?: string;
@@ -168,6 +168,6 @@ export type ResolveWorkflowAgentTools = (
     agent: Agent;
     tools: readonly WorkflowTool[];
     sourceEvent: CopilotzEvent;
-    context: CopilotzProcessorContext;
+    context: ProcessorContext;
   }>,
 ) => readonly WorkflowTool[] | Promise<readonly WorkflowTool[]>;

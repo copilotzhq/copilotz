@@ -12,7 +12,11 @@ import {
   projectThreadById,
   projectThreads,
 } from "../../runtime/testing/projections.ts";
-import { definePlugin, defineProcessor } from "../plugins/index.ts";
+import {
+  definePlugin,
+  defineProcessor,
+  type ProcessorContext,
+} from "../plugins/index.ts";
 import { coreCollectionsPlugin } from "../../plugins/core/plugin.ts";
 import { createChannelRuntime } from "./runtime.ts";
 import { createWebChannelPlugin } from "./web.ts";
@@ -20,7 +24,6 @@ import { createTestDatabase, type TestDatabase } from "../testing/ominipg.ts";
 import type { Agent } from "../resources/index.ts";
 import { createEventNativeApp } from "../../server/event-native.ts";
 import { createCopilotzApplication } from "../application/index.ts";
-import type { CopilotzProcessorContext } from "../engine/index.ts";
 
 const SCHEMA = "copilotz_channel_runtime";
 const NAMESPACE = "tenant-a";
@@ -32,7 +35,7 @@ const supportAgent: Agent = {
 };
 
 function replyPlugin() {
-  const processor = defineProcessor<CopilotzProcessorContext>({
+  const processor = defineProcessor<ProcessorContext>({
     id: "channel.reply",
     on: [{ eventType: "message.created" }],
     async handle(event, context) {
@@ -48,15 +51,13 @@ function replyPlugin() {
       const content = await context.content.prepare("Channel reply", {
         operationKey: "channel-reply-content",
       });
-      const persisted = await context.content.materialize(content);
       await context.collections.message.create({
         id: `reply:${message.id}`,
         threadId: message.threadId,
         senderId: recipient.id,
         recipientIds: [message.sender.id],
-        content: persisted,
+        content,
       }, { operationKey: "channel-reply-message" });
-      await context.content.linkOwner(`reply:${message.id}`, persisted);
     },
   });
   return definePlugin({

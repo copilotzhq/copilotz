@@ -70,18 +70,27 @@ function throwIfAborted(signal: AbortSignal | undefined): void {
 
 export type ContentStreamOpenInput = Readonly<{
   id?: string;
-  threadId?: string;
   mediaType: string;
   kind?: ContentKind;
   role: ContentRole | string;
-  participantId?: string;
   name?: string;
   alt?: string;
   language?: string;
   disposition?: "inline" | "attachment";
   metadata?: Readonly<Record<string, unknown>>;
-  routing?: unknown;
-  visibility?: unknown;
+  correlationId?: string;
+}>;
+
+export type ContentStreamOpened = Readonly<{
+  id: string;
+  mediaType: string;
+  kind: ContentKind;
+  role: string;
+  name?: string;
+  alt?: string;
+  language?: string;
+  disposition?: "inline" | "attachment";
+  metadata: Readonly<Record<string, unknown>>;
   correlationId?: string;
 }>;
 
@@ -145,20 +154,7 @@ export type CreateContentStreamRuntimeOptions = Readonly<{
   namespace: string;
   store: BodyStore;
   createId?: () => string;
-  onOpen?(
-    input: Readonly<{
-      id: string;
-      namespace: string;
-      threadId?: string;
-      mediaType: string;
-      role: string;
-      participantId?: string;
-      metadata: Readonly<Record<string, unknown>>;
-      routing?: unknown;
-      visibility?: unknown;
-      correlationId?: string;
-    }>,
-  ): void | Promise<void>;
+  onOpen?(input: ContentStreamOpened): void | Promise<void>;
 }>;
 
 export function createContentStreamRuntime(
@@ -177,6 +173,12 @@ export function createContentStreamRuntime(
       if (!id || !mediaType || !role) {
         throw new TypeError("Content stream requires id, mediaType, and role.");
       }
+      const kind = input.kind ?? mediaKind(mediaType);
+      const name = input.name?.trim();
+      const alt = input.alt?.trim();
+      const language = input.language?.trim();
+      const correlationId = input.correlationId?.trim();
+      const metadata = Object.freeze(structuredClone(input.metadata ?? {}));
       const bodyId = contentStreamBodyId({ namespace, streamId: id });
       const body: ProgressiveBodyWriter = await createProgressiveBodyWriter(
         options.store,
@@ -184,39 +186,29 @@ export function createContentStreamRuntime(
       );
       await options.onOpen?.(Object.freeze({
         id,
-        namespace,
-        ...(input.threadId?.trim() ? { threadId: input.threadId.trim() } : {}),
         mediaType,
+        kind,
         role,
-        ...(input.participantId?.trim()
-          ? { participantId: input.participantId.trim() }
-          : {}),
-        metadata: Object.freeze(structuredClone(input.metadata ?? {})),
-        ...(input.routing !== undefined ? { routing: input.routing } : {}),
-        ...(input.visibility !== undefined
-          ? { visibility: input.visibility }
-          : {}),
-        ...(input.correlationId?.trim()
-          ? { correlationId: input.correlationId.trim() }
-          : {}),
+        ...(name ? { name } : {}),
+        ...(alt ? { alt } : {}),
+        ...(language ? { language } : {}),
+        ...(input.disposition ? { disposition: input.disposition } : {}),
+        metadata,
+        ...(correlationId ? { correlationId } : {}),
       }));
       let settled = false;
 
       const contentRef = (assetId: string): ContentRef =>
         Object.freeze({
           assetId,
-          kind: input.kind ?? mediaKind(mediaType),
+          kind,
           role,
           mediaType,
-          ...(input.name?.trim() ? { name: input.name.trim() } : {}),
-          ...(input.alt?.trim() ? { alt: input.alt.trim() } : {}),
-          ...(input.language?.trim()
-            ? { language: input.language.trim() }
-            : {}),
+          ...(name ? { name } : {}),
+          ...(alt ? { alt } : {}),
+          ...(language ? { language } : {}),
           ...(input.disposition ? { disposition: input.disposition } : {}),
-          ...(input.metadata
-            ? { metadata: structuredClone(input.metadata) }
-            : {}),
+          ...(input.metadata ? { metadata: structuredClone(metadata) } : {}),
         });
 
       const close = async (

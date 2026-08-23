@@ -7,7 +7,6 @@ export type CoreTableName =
   | "edges"
   | "events"
   | "event_bodies"
-  | "body_references"
   | "event_deliveries";
 
 export function validateEventSchemaName(value: string): string {
@@ -32,7 +31,6 @@ export function createCoreTableNames(schemaName = "public"): Readonly<
     edges: table("edges"),
     events: table("events"),
     event_bodies: table("event_bodies"),
-    body_references: table("body_references"),
     event_deliveries: table("event_deliveries"),
   });
 }
@@ -89,13 +87,6 @@ const CORE_SCHEMA_COLUMNS = Object.freeze(
       "digest",
       "created_at",
     ]),
-    body_references: Object.freeze([
-      "namespace",
-      "body_id",
-      "owner_kind",
-      "owner_id",
-      "created_at",
-    ]),
     event_deliveries: Object.freeze([
       "id",
       "event_id",
@@ -142,7 +133,6 @@ export async function validateCopilotzSchema(
           'edges',
           'events',
           'event_bodies',
-          'body_references',
           'event_deliveries'
         )`,
     [schema],
@@ -218,23 +208,18 @@ export function createCoreSchemaStatements(
       ON ${tables.nodes} (namespace, type, created_at, id)`,
     `CREATE INDEX IF NOT EXISTS "nodes_namespace_source_idx"
       ON ${tables.nodes} (namespace, source_type, source_id)`,
-    `CREATE UNIQUE INDEX IF NOT EXISTS "nodes_participant_external_unique_idx"
-      ON ${tables.nodes} (namespace, source_id)
-      WHERE type = 'participant'
-        AND source_type = 'participant_external_id'
-        AND source_id IS NOT NULL`,
-    `CREATE UNIQUE INDEX IF NOT EXISTS "nodes_thread_external_unique_idx"
-      ON ${tables.nodes} (namespace, source_id)
-      WHERE type = 'thread'
-        AND source_type = 'thread_external_id'
-        AND source_id IS NOT NULL`,
-    `CREATE UNIQUE INDEX IF NOT EXISTS "nodes_asset_idempotency_unique_idx"
-      ON ${tables.nodes} (namespace, source_id)
-      WHERE type = 'asset'
-        AND source_type = 'asset_idempotency'
-        AND source_id IS NOT NULL`,
-    `DROP INDEX IF EXISTS ${schema}."nodes_tool_call_unique_idx"`,
-    `DROP INDEX IF EXISTS ${schema}."nodes_tool_call_idx"`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "nodes_identity_unique_idx"
+      ON ${tables.nodes} (namespace, type, source_type, source_id)
+      WHERE source_type IS NOT NULL AND source_id IS NOT NULL`,
+    `CREATE INDEX IF NOT EXISTS "nodes_ready_asset_body_idx"
+      ON ${tables.nodes} (namespace, (data ->> 'bodyId'))
+      WHERE type = 'asset' AND data ->> 'state' = 'ready'`,
+    `CREATE INDEX IF NOT EXISTS "nodes_ready_asset_body_backend_idx"
+      ON ${tables.nodes} (
+        (data ->> 'bodyId'),
+        (data -> 'location' ->> 'kind'),
+        (COALESCE(data -> 'location' ->> 'backendId', ''))
+      ) WHERE type = 'asset' AND data ->> 'state' = 'ready'`,
     `CREATE INDEX IF NOT EXISTS "nodes_data_gin_idx"
       ON ${tables.nodes} USING GIN (data)`,
     `CREATE TABLE IF NOT EXISTS ${tables.edges} (
@@ -251,9 +236,6 @@ export function createCoreSchemaStatements(
       ON ${tables.edges} (namespace, source_node_id, type)`,
     `CREATE INDEX IF NOT EXISTS "edges_target_type_idx"
       ON ${tables.edges} (namespace, target_node_id, type)`,
-    `CREATE UNIQUE INDEX IF NOT EXISTS "edges_participation_unique_idx"
-      ON ${tables.edges} (namespace, source_node_id, target_node_id, type)
-      WHERE type = 'participates_in'`,
     `CREATE UNIQUE INDEX IF NOT EXISTS "edges_asset_link_unique_idx"
       ON ${tables.edges} (namespace, source_node_id, target_node_id, type)
       WHERE type = 'has_asset'`,
@@ -295,16 +277,6 @@ export function createCoreSchemaStatements(
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       PRIMARY KEY (namespace, event_body_id)
     )`,
-    `CREATE TABLE IF NOT EXISTS ${tables.body_references} (
-      namespace TEXT NOT NULL,
-      body_id TEXT NOT NULL,
-      owner_kind TEXT NOT NULL,
-      owner_id TEXT NOT NULL,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      PRIMARY KEY (namespace, body_id, owner_kind, owner_id)
-    )`,
-    `CREATE INDEX IF NOT EXISTS "body_references_body_idx"
-      ON ${tables.body_references} (namespace, body_id)`,
     `CREATE TABLE IF NOT EXISTS ${tables.event_deliveries} (
       id TEXT PRIMARY KEY,
       event_id TEXT NOT NULL REFERENCES ${tables.events}(id) ON DELETE CASCADE,

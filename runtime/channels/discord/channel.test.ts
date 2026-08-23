@@ -9,12 +9,15 @@ import {
 } from "../../../runtime/testing/projections.ts";
 import type { Agent } from "../../resources/index.ts";
 import { createCopilotzApplication } from "../../application/index.ts";
-import type { CopilotzProcessorContext } from "../../engine/index.ts";
 import {
   loadMessageRecord,
   loadParticipantRecord,
 } from "../../engine/collection-graph.ts";
-import { definePlugin, defineProcessor } from "../../plugins/index.ts";
+import {
+  definePlugin,
+  defineProcessor,
+  type ProcessorContext,
+} from "../../plugins/index.ts";
 import { coreCollectionsPlugin } from "../../../plugins/core/plugin.ts";
 import { createChannelRuntime } from "../runtime.ts";
 import { createDiscordChannel, createDiscordChannelPlugin } from "./index.ts";
@@ -92,7 +95,7 @@ function fakeTransport() {
 }
 
 function replyPlugin() {
-  const processor = defineProcessor<CopilotzProcessorContext>({
+  const processor = defineProcessor<ProcessorContext>({
     id: "discord.reply",
     on: [{ eventType: "message.created" }],
     async handle(event, context) {
@@ -105,16 +108,6 @@ function replyPlugin() {
         input.recipientIds[0],
       );
       assertExists(recipient);
-      await context.events.emit({
-        type: "action.created",
-        payload: {
-          action: {
-            type: "reply_buttons",
-            message: "Choose",
-            content: [{ text: "Open", payload: "open" }],
-          },
-        },
-      });
       const content = await context.content.prepare([
         "Discord reply",
         {
@@ -124,15 +117,20 @@ function replyPlugin() {
           name: "answer.pdf",
         },
       ], { operationKey: "discord-reply-content" });
-      const persisted = await context.content.materialize(content);
       await context.collections.message.create({
         id: `reply:${input.id}`,
         threadId: input.threadId,
         senderId: recipient.id,
         recipientIds: [input.sender.id],
-        content: persisted,
+        content,
+        metadata: {
+          action: {
+            type: "reply_buttons",
+            message: "Choose",
+            content: [{ text: "Open", payload: "open" }],
+          },
+        },
       }, { operationKey: "discord-reply-message" });
-      await context.content.linkOwner(`reply:${input.id}`, persisted);
     },
   });
   return definePlugin({
@@ -202,11 +200,11 @@ Deno.test("Discord channel verifies interactions and preserves native media/acti
     await result.done;
     assertEquals(fake.downloads, ["https://cdn.discord.example/a"]);
     assertEquals(fake.sends.map((value) => value.initial), [true, false]);
-    assertEquals(fake.sends[0].body.components, [{
+    assertEquals(fake.sends[0].body.content, "Discord reply");
+    assertEquals(fake.sends[1].body.components, [{
       type: 1,
       components: [{ type: 2, style: 1, label: "Open", custom_id: "open" }],
     }]);
-    assertEquals(fake.sends[1].body.content, "Discord reply");
     assertEquals(fake.media.length, 1);
     assertEquals(fake.media[0].initial, false);
     assertEquals(fake.media[0].value.name, "answer.pdf");

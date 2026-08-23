@@ -170,6 +170,27 @@ export const longTermMemoryCollection: CollectionDefinition<
     ),
   },
   content: { fields: ["content", "contextSnapshotContent"] },
+  commands: {
+    completeConsolidation: {
+      mutate({ current, input }) {
+        if (current.status !== "pending") {
+          throw new Error(
+            `Memory checkpoint '${current.id}' is not pending.`,
+          );
+        }
+        const patch = input && typeof input === "object" &&
+            !Array.isArray(input)
+          ? input as Record<string, unknown>
+          : {};
+        if (patch.status !== "ready") {
+          throw new TypeError(
+            "Atomic memory consolidation must settle the checkpoint as ready.",
+          );
+        }
+        return { set: patch };
+      },
+    },
+  },
 });
 
 const memoryRecordSchema = {

@@ -10,6 +10,7 @@ import {
   resolveCollectionEventBody,
 } from "./index.ts";
 import { createTestDatabase, type TestDatabase } from "../testing/ominipg.ts";
+import { createTestProcessorContext } from "../testing/processor-context.ts";
 import {
   createCoreSchemaStatements,
   createEventCoordinator,
@@ -172,6 +173,29 @@ const projectionScaleDefinition = defineCollection({
   } as const,
 });
 
+const timestampOrderDefinition = defineCollection({
+  name: "timestamp_order",
+  timestamps: { createdAt: "createdOn", updatedAt: "changedOn" },
+  schema: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      id: { type: "string" },
+      namespace: { type: "string" },
+      label: { type: "string" },
+      createdOn: { type: "string" },
+      changedOn: { type: "string" },
+    },
+    required: [
+      "id",
+      "namespace",
+      "label",
+      "createdOn",
+      "changedOn",
+    ],
+  } as const,
+});
+
 type Fixture = Readonly<{
   db: TestDatabase;
   session: SqlSession;
@@ -207,6 +231,7 @@ async function settle(
 async function createFixture(
   url: string,
   schema: string,
+  now: () => Date = () => new Date(NOW),
 ): Promise<Fixture> {
   const db = await createTestDatabase({ url });
   const session = createSqlSession(db);
@@ -236,6 +261,7 @@ async function createFixture(
   const executor = createDeliveryExecutor({
     store,
     registry,
+    createContext: createTestProcessorContext,
     workerId: "collection-kernel-test",
   });
   const coordinator = createEventCoordinator({ store, registry, executor });
@@ -245,7 +271,7 @@ async function createFixture(
     session,
     eventStore: store,
     createId: () => `kernel-${++nextId}`,
-    now: () => new Date(NOW),
+    now,
   });
   return Object.freeze({
     db,
@@ -303,7 +329,7 @@ async function runKernelSuite(url: string, schema: string): Promise<void> {
           },
         ),
       TypeError,
-      "schema validation",
+      "lossless JSON",
     );
 
     const created = await jobs.create({
@@ -494,6 +520,24 @@ async function runKernelSuite(url: string, schema: string): Promise<void> {
       ),
       1,
     );
+    const relations = await runtime.withScope({ namespace: "tenant-a" }).job
+      .relations.list({
+        id: "job-a",
+        direction: "out",
+        types: ["job_notes"],
+      });
+    assertEquals(relations.length, 1);
+    const { createdAt, ...relation } = relations[0];
+    assertEquals(relation, {
+      id: 'relation:["tenant-a","job_notes","job-a","note-a"]',
+      namespace: "tenant-a",
+      type: "job_notes",
+      source: { type: "job", id: "job-a" },
+      target: { type: "job_note", id: "note-a" },
+      metadata: {},
+      weight: 1,
+    });
+    assert(Number.isFinite(new Date(createdAt).getTime()));
 
     const withNotes = await jobs.query("tenant-a", {
       where: { id: "job-a" },
@@ -559,8 +603,7 @@ async function runKernelSuite(url: string, schema: string): Promise<void> {
     );
     const tampered = await runtime.verify(jobDefinition, "tenant-a");
     assertEquals(tampered.ok, false);
-    await runtime.rebuild(jobDefinition, "tenant-a");
-    await runtime.rebuild(jobNoteDefinition, "tenant-a");
+    await runtime.rebuild("tenant-a");
     assertEquals(await runtime.verify(jobDefinition, "tenant-a"), { ok: true });
     assertEquals(
       (await jobs.get("job-a", "tenant-a"))?.title,
@@ -603,6 +646,72 @@ async function runKernelSuite(url: string, schema: string): Promise<void> {
 
 Deno.test("collection kernel on PGlite", async () => {
   await runKernelSuite(":memory:", "copilotz_collection_kernel");
+});
+
+Deno.test("namespace rebuild preserves durable Collection timestamp order", async () => {
+  const times = [
+    "2026-08-17T21:00:00.000Z",
+    "2026-08-17T21:01:00.000Z",
+    "2026-08-17T21:02:00.000Z",
+    "2026-08-17T21:03:00.000Z",
+  ];
+  let clock = 0;
+  const fixture = await createFixture(
+    ":memory:",
+    "copilotz_collection_timestamp_rebuild",
+    () => new Date(times[Math.min(clock++, times.length - 1)]),
+  );
+  const records = fixture.runtime.bind(timestampOrderDefinition);
+  const namespace = "tenant-timestamp-order";
+  const orderedIds = async (field: "createdAt" | "updatedAt") =>
+    (await records.list(namespace, {
+      order: { field, direction: "asc" },
+    })).map((record) => record.id);
+  const storedTimes = async () => {
+    const result = await fixture.session.query<{
+      id: string;
+      created_at: string | Date;
+      updated_at: string | Date;
+    }>(
+      `SELECT id, created_at, updated_at
+       FROM ${fixture.store.tables.nodes}
+       WHERE namespace = $1 AND type = $2
+       ORDER BY id`,
+      [namespace, timestampOrderDefinition.name],
+    );
+    return result.rows.map((row) => ({
+      id: row.id,
+      createdAt: new Date(row.created_at).toISOString(),
+      updatedAt: new Date(row.updated_at).toISOString(),
+    }));
+  };
+
+  try {
+    await records.create({ id: "z", label: "Z" }, { namespace });
+    await records.create({ id: "a", label: "A" }, { namespace });
+    await records.update("z", { set: { label: "Z updated" } }, {
+      namespace,
+    });
+    await records.update("a", { set: { label: "A updated" } }, {
+      namespace,
+    });
+
+    const expectedTimes = [
+      { id: "a", createdAt: times[1], updatedAt: times[3] },
+      { id: "z", createdAt: times[0], updatedAt: times[2] },
+    ];
+    assertEquals(await storedTimes(), expectedTimes);
+    assertEquals(await orderedIds("createdAt"), ["z", "a"]);
+    assertEquals(await orderedIds("updatedAt"), ["z", "a"]);
+
+    await fixture.runtime.rebuild(namespace);
+
+    assertEquals(await storedTimes(), expectedTimes);
+    assertEquals(await orderedIds("createdAt"), ["z", "a"]);
+    assertEquals(await orderedIds("updatedAt"), ["z", "a"]);
+  } finally {
+    await closeFixture(fixture);
+  }
 });
 
 Deno.test("scoped collection calls own namespace and expose property commands and queries", async () => {
@@ -667,7 +776,7 @@ Deno.test("collection verification scans every projection page", async () => {
           await collections.projection_scale.create({
             id: `projection-${sequence.toString().padStart(4, "0")}`,
             sequence,
-          }, { namespace: "tenant-scale" });
+          });
         }
       },
     });

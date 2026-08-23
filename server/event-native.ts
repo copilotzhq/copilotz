@@ -308,7 +308,7 @@ async function messageList(
   threadId: string,
   request: EventNativeAppRequest,
 ): Promise<EventNativeAppResponse> {
-  const collections = application.collectionRuntime.withScope({ namespace });
+  const collections = application.collections.withScope({ namespace });
   const thread = await getThread(collections, threadId);
   if (!thread) {
     throw appError(404, "thread_not_found", "Thread was not found.");
@@ -438,7 +438,7 @@ async function handleThreads(
   request: EventNativeAppRequest,
   path: readonly string[],
 ): Promise<EventNativeAppResponse> {
-  const collections = application.collectionRuntime.withScope({ namespace });
+  const collections = application.collections.withScope({ namespace });
   if (request.method === "GET" && path.length === 0) {
     const limit = queryNumber(request.query, "limit");
     const statuses = queryTexts(request.query, "status");
@@ -501,7 +501,7 @@ async function handleParticipants(
   request: EventNativeAppRequest,
   path: readonly string[],
 ): Promise<EventNativeAppResponse> {
-  const collections = application.collectionRuntime.withScope({ namespace });
+  const collections = application.collections.withScope({ namespace });
   if (request.method === "GET" && path.length === 0) {
     const limit = queryNumber(request.query, "limit");
     const participantType = queryChoice<Participant["participantType"]>(
@@ -556,16 +556,22 @@ async function handleCollections(
   path: readonly string[],
 ): Promise<EventNativeAppResponse> {
   if (request.method === "GET" && path.length === 0) {
-    return { status: 200, data: application.collections.names };
+    return {
+      status: 200,
+      data: Object.freeze([
+        ...new Set(
+          Object.values(application.plugins.collections).map((definition) =>
+            definition.name
+          ),
+        ),
+      ]),
+    };
   }
   const name = path[0];
   if (!name) {
     throw appError(404, "route_not_found", "Collection route was not found.");
   }
-  const collection = {
-    ...application.collections.withScope({ namespace }),
-    ...application.collectionRuntime.withScope({ namespace }),
-  }[name];
+  const collection = application.collections.withScope({ namespace })[name];
   if (!collection) {
     throw appError(
       404,

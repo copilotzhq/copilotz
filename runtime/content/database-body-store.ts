@@ -20,6 +20,7 @@ import {
   bodyProtectionMs,
   bodyProtectionUntil,
   readBodyBytes,
+  resolveBodyProtectionUntil,
   writerCapabilityFromHead,
 } from "./body-store.ts";
 import { digestContent } from "./digest.ts";
@@ -28,6 +29,7 @@ import { createContentError } from "./errors.ts";
 
 function validateHead(expected: PutBodyInput, actual: BodyHead): void {
   if (
+    actual.bodyId !== expected.bodyId ||
     actual.byteLength !== expected.bytes.byteLength ||
     actual.digest !== expected.digest || actual.mediaType !== expected.mediaType
   ) {
@@ -126,7 +128,7 @@ function mapHead(row: BodyRow): BodyHead {
     ),
     ...(row.protected_until ? { protectedUntil: row.protected_until } : {}),
     etag: row.digest.slice("sha256:".length),
-    lastModified: row.ready_at ?? row.updated_at,
+    lastModified: row.updated_at,
   });
 }
 
@@ -205,6 +207,7 @@ export function createDatabaseBodyStoreAdapter(
       durability: "durable" as const,
       reach: "cluster" as const,
       minimumProtectionMs: protectionMs,
+      readyGarbageCollection: true,
     }),
     forScope(scope) {
       return storeFor(scope.databaseSchema);
@@ -228,6 +231,8 @@ export function createDatabaseBodyStore(
   const backendId = options.backendId?.trim() || "database:default";
   const protectionMs = bodyProtectionMs(options.protectionMs);
   const deadline = () => bodyProtectionUntil(protectionMs);
+  const putDeadline = (requested: string | undefined) =>
+    resolveBodyProtectionUntil(requested, protectionMs);
   const schema = quoteEventIdentifier(
     validateEventSchemaName(options.schema.trim()),
   );
@@ -270,16 +275,20 @@ export function createDatabaseBodyStore(
     return ready;
   };
 
-  const loadBody = async (bodyId: string): Promise<BodyRow | null> => {
+  const loadBody = async (
+    bodyId: string,
+    executor: SqlExecutor = session,
+    lock: boolean = false,
+  ): Promise<BodyRow | null> => {
     await ensure();
-    const result = await session.query<BodyRow>(
+    const result = await executor.query<BodyRow>(
       `SELECT body_id, state, media_type, byte_length, digest,
               writer_generation, writer_token_hash, lease_expires_at,
               protected_until, maintenance_version, created_at, updated_at,
               ready_at
          FROM ${bodies}
         WHERE body_id = $1
-        LIMIT 1`,
+        LIMIT 1${lock ? " FOR UPDATE" : ""}`,
       [bodyId],
     );
     return result.rows[0] ?? null;
@@ -296,9 +305,12 @@ export function createDatabaseBodyStore(
     return row;
   };
 
-  const readParts = async (bodyId: string): Promise<Uint8Array> => {
+  const readParts = async (
+    bodyId: string,
+    executor: SqlExecutor = session,
+  ): Promise<Uint8Array> => {
     await ensure();
-    const result = await session.query<PartRow>(
+    const result = await executor.query<PartRow>(
       `SELECT start_offset, append_id, bytes
          FROM ${parts}
         WHERE body_id = $1
@@ -306,6 +318,21 @@ export function createDatabaseBodyStore(
       [bodyId],
     );
     return concatBytes(result.rows.map((row) => bytesFromSql(row.bytes)));
+  };
+
+  const atomically = async <T>(
+    operation: (transaction: SqlExecutor) => Promise<T>,
+  ): Promise<T> => {
+    const transactional = session as
+      & SqlExecutor
+      & Readonly<{
+        transaction?: <TResult>(
+          callback: (transaction: SqlExecutor) => Promise<TResult>,
+        ) => Promise<TResult>;
+      }>;
+    return typeof transactional.transaction === "function"
+      ? await transactional.transaction(operation)
+      : await operation(session);
   };
 
   const requireOwner = (row: BodyRow, reservationId: string): void => {
@@ -545,20 +572,77 @@ export function createDatabaseBodyStore(
     backendId,
     async put(input) {
       await ensure();
-      const existing = await loadBody(input.bodyId);
-      if (existing) {
+      const protectedUntil = putDeadline(input.protectedUntil);
+      return await atomically(async (transaction) => {
+        const inserted = await transaction.query<BodyRow>(
+          `INSERT INTO ${bodies}
+             (body_id, state, media_type, byte_length, digest, protected_until,
+              maintenance_version, updated_at, ready_at)
+           VALUES ($1, 'ready', $2, $3, $4, $5, 1, NOW(), NOW())
+           ON CONFLICT (body_id) DO NOTHING
+           RETURNING body_id, state, media_type, byte_length, digest,
+                     writer_generation, writer_token_hash, lease_expires_at,
+                     protected_until, maintenance_version, created_at,
+                     updated_at, ready_at`,
+          [
+            input.bodyId,
+            input.mediaType,
+            input.bytes.byteLength,
+            input.digest,
+            protectedUntil,
+          ],
+        );
+        if (inserted.rows[0]) {
+          await transaction.query(
+            `INSERT INTO ${parts} (body_id, start_offset, append_id, bytes)
+             VALUES ($1, 0, 'put', $2)`,
+            [input.bodyId, input.bytes],
+          );
+          const head = mapHead(inserted.rows[0]);
+          validateHead(input, head);
+          return head;
+        }
+
+        const existing = await loadBody(input.bodyId, transaction, true);
+        if (!existing) {
+          throw createContentError(
+            "asset_storage_unavailable",
+            "Database body disappeared during acquire-or-create.",
+          );
+        }
+        if (existing.state === "ready") {
+          validateHead(input, mapHead(existing));
+          const renewed = await transaction.query<BodyRow>(
+            `UPDATE ${bodies}
+                SET protected_until = GREATEST(
+                      COALESCE(protected_until, $2::timestamptz),
+                      $2::timestamptz
+                    ),
+                    maintenance_version = maintenance_version + 1,
+                    updated_at = NOW()
+              WHERE body_id = $1
+                AND state = 'ready'
+              RETURNING body_id, state, media_type, byte_length, digest,
+                        writer_generation, writer_token_hash, lease_expires_at,
+                        protected_until, maintenance_version, created_at,
+                        updated_at, ready_at`,
+            [input.bodyId, protectedUntil],
+          );
+          if (!renewed.rows[0]) {
+            throw createContentError(
+              "asset_storage_unavailable",
+              "Database body renewal lost its locked row.",
+            );
+          }
+          return mapHead(renewed.rows[0]);
+        }
         if (existing.media_type !== input.mediaType) {
           throw createContentError(
             "asset_conflict",
             "Stored body conflicts with the canonical metadata.",
           );
         }
-        if (existing.state === "ready") {
-          const head = mapHead(existing);
-          validateHead(input, head);
-          return head;
-        }
-        const bytes = await readParts(input.bodyId);
+        const bytes = await readParts(input.bodyId, transaction);
         if (
           bytes.byteLength !== input.bytes.byteLength ||
           !bytes.every((byte, index) => byte === input.bytes[index])
@@ -568,7 +652,7 @@ export function createDatabaseBodyStore(
             "Progressive body bytes conflict with finalization input.",
           );
         }
-        const finalized = await session.query<BodyRow>(
+        const finalized = await transaction.query<BodyRow>(
           `UPDATE ${bodies}
               SET state = 'ready',
                   digest = $2,
@@ -583,42 +667,18 @@ export function createDatabaseBodyStore(
                       writer_generation, writer_token_hash, lease_expires_at,
                       protected_until, maintenance_version, created_at,
                       updated_at, ready_at`,
-          [input.bodyId, input.digest, deadline()],
+          [input.bodyId, input.digest, protectedUntil],
         );
         if (!finalized.rows[0]) {
-          const head = mapHead(await requireBody(input.bodyId));
-          validateHead(input, head);
-          return head;
+          throw createContentError(
+            "asset_storage_unavailable",
+            "Database progressive body finalization lost its locked row.",
+          );
         }
         const head = mapHead(finalized.rows[0]);
         validateHead(input, head);
         return head;
-      }
-      const inserted = await session.query<BodyRow>(
-        `INSERT INTO ${bodies}
-           (body_id, state, media_type, byte_length, digest, protected_until,
-            maintenance_version, updated_at, ready_at)
-         VALUES ($1, 'ready', $2, $3, $4, $5, 1, NOW(), NOW())
-         RETURNING body_id, state, media_type, byte_length, digest,
-                   writer_generation, writer_token_hash, lease_expires_at,
-                   protected_until, maintenance_version, created_at, updated_at,
-                   ready_at`,
-        [
-          input.bodyId,
-          input.mediaType,
-          input.bytes.byteLength,
-          input.digest,
-          deadline(),
-        ],
-      );
-      await session.query(
-        `INSERT INTO ${parts} (body_id, start_offset, append_id, bytes)
-         VALUES ($1, 0, 'put', $2)`,
-        [input.bodyId, input.bytes],
-      );
-      const head = mapHead(inserted.rows[0]);
-      validateHead(input, head);
-      return head;
+      });
     },
     async head({ bodyId }) {
       const row = await loadBody(bodyId);
@@ -724,6 +784,11 @@ export function createDatabaseBodyStore(
     maintenance: {
       async list(input) {
         await ensure();
+        if (!Number.isSafeInteger(input.idleForMs) || input.idleForMs < 0) {
+          throw new TypeError(
+            "Body maintenance idle duration must be a non-negative integer.",
+          );
+        }
         const states = input.states.length > 0 ? [...input.states] : [];
         if (states.length === 0) {
           return Object.freeze({ bodies: Object.freeze([]) });
@@ -737,9 +802,11 @@ export function createDatabaseBodyStore(
              FROM ${bodies}
             WHERE state = ANY($1)
               AND body_id > $2
+              AND updated_at <= NOW() -
+                    ($3::double precision * INTERVAL '1 millisecond')
             ORDER BY body_id
-            LIMIT $3`,
-          [states, after, input.limit],
+            LIMIT $4`,
+          [states, after, input.idleForMs, input.limit],
         );
         const page = result.rows.map(mapAnyHead);
         return Object.freeze({
@@ -751,6 +818,11 @@ export function createDatabaseBodyStore(
       },
       async delete(input) {
         await ensure();
+        if (!Number.isSafeInteger(input.idleForMs) || input.idleForMs < 0) {
+          throw new TypeError(
+            "Body maintenance idle duration must be a non-negative integer.",
+          );
+        }
         const removed = await session.query<{ body_id: string }>(
           `DELETE FROM ${bodies}
             WHERE body_id = $1
@@ -758,11 +830,14 @@ export function createDatabaseBodyStore(
               AND maintenance_version = $3
               AND (protected_until IS NULL OR protected_until <= NOW())
               AND (lease_expires_at IS NULL OR lease_expires_at <= NOW())
+              AND updated_at <= NOW() -
+                    ($4::double precision * INTERVAL '1 millisecond')
            RETURNING body_id`,
           [
             input.bodyId,
             input.expectedState,
             input.expectedMaintenanceVersion,
+            input.idleForMs,
           ],
         );
         return Boolean(removed.rows[0]);

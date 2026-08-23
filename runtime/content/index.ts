@@ -57,6 +57,7 @@ export type {
   ContentStreamAppendResult,
   ContentStreamCloseInput,
   ContentStreamFollowInput,
+  ContentStreamOpened,
   ContentStreamOpenInput,
   ContentStreamRuntime,
   ContentStreamWriter,
@@ -72,7 +73,6 @@ export type {
 } from "./maintenance.ts";
 export { createBodyStorageRuntime } from "./storage.ts";
 export { assetIdFromRef, formatAssetRef } from "./asset-ref.ts";
-export { ASSET_BODY_OWNER_KIND } from "./types.ts";
 export {
   base64ToBytes,
   bytesToBase64,
@@ -85,7 +85,6 @@ export {
   createDatabaseAssetRepository,
   type CreateDatabaseAssetRepositoryOptions,
   type DatabaseAssetRepository,
-  type LinkAssetOwnerInput,
 } from "./database-repository.ts";
 export { createContentError, isContentError } from "./errors.ts";
 export {
@@ -110,10 +109,13 @@ export {
 } from "./repository.ts";
 export { type ContentResolver, createContentResolver } from "./resolver.ts";
 export type {
+  AssetAdoptionPlan,
   AssetBody,
   AssetBodyLocation,
+  AssetEventBody,
   AssetId,
   AssetManifestEntry,
+  AssetMaterializationPlan,
   AssetOrigin,
   AssetRecord,
   AssetRepository,

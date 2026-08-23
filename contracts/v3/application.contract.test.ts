@@ -2,10 +2,10 @@ import { message as coreMessage } from "@copilotz/copilotz/plugins/core";
 import { assert, assertEquals, assertExists } from "@std/assert";
 import {
   type CopilotzPlugin,
-  type CopilotzProcessorContext,
   createCopilotz,
   definePlugin,
   defineProcessor,
+  type ProcessorContext,
 } from "../../index.ts";
 import { createTestDomainContext } from "../../runtime/testing/domain-context.ts";
 import { projectMessages } from "../../runtime/testing/projections.ts";
@@ -15,7 +15,7 @@ import { coreCollectionsPlugin } from "../../plugins/core/plugin.ts";
 const NAMESPACE = "v3-root-contract";
 
 function publicReplyPlugin(): CopilotzPlugin {
-  const processor = defineProcessor<CopilotzProcessorContext>({
+  const processor = defineProcessor<ProcessorContext>({
     id: "contract.public-reply",
     on: [{
       eventType: "message.created",
@@ -29,15 +29,13 @@ function publicReplyPlugin(): CopilotzPlugin {
       const content = await context.content.prepare("Hello from v3", {
         operationKey: "reply-content",
       });
-      const persisted = await context.content.materialize(content);
       await context.collections.message.create({
         id: "contract-reply",
         threadId: source.threadId,
         senderId: "contract-agent",
         recipientIds: [source.sender.id],
-        content: persisted,
+        content,
       }, { operationKey: "reply-message" });
-      await context.content.linkOwner("contract-reply", persisted);
     },
   });
   return definePlugin({

@@ -56,7 +56,6 @@ Deno.test("v3 root exposes the factory-first application vocabulary", () => {
     "defineAction",
     "createAttachmentRuntime",
     "createContentPreparer",
-    "createConversationRepository",
     "createEventStore",
     "createAgentCapabilityResolver",
   ]);
@@ -119,11 +118,9 @@ Deno.test("v3 package subpaths expose cohesive factories", () => {
     "createContentResolver",
     "createDatabaseAssetRepository",
   ]);
-  assertFunctions(domain, [
-    "defineCollection",
-    "createConversationRepository",
-    "createEventCollections",
-  ]);
+  assertEquals("defineCollection" in domain, false);
+  assertEquals("createEventCollections" in domain, false);
+  assertEquals("createDomainRelationRepository" in domain, false);
   assertFunctions(events, ["createEventStore", "createEventCoordinator"]);
   assertFunctions(plugins, ["definePlugin", "defineProcessor"]);
   assertFunctions(actions, ["defineAction"]);

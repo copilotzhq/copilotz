@@ -75,7 +75,6 @@ Deno.test("A20 clean v3 baseline contains only the six core tables", async () =>
     assertEquals(
       result.rows.map((row) => row.table_name),
       [
-        "body_references",
         "edges",
         "event_bodies",
         "event_deliveries",
@@ -250,17 +249,6 @@ Deno.test("A20 graph mutation, immutable event, and sparse deliveries commit ato
     assertEquals(first.deliveries.length, 2);
     assert(Object.isFrozen(first.event));
     assert(Object.isFrozen(first.event.payload));
-
-    const thread = await session.query<{
-      data: Record<string, unknown>;
-    }>(
-      `SELECT data FROM ${store.tables.nodes} WHERE id = 'thread-a'`,
-    );
-    assertEquals(thread.rows[0]?.data?.lastEventId, first.event.id);
-    assertEquals(
-      String(thread.rows[0]?.data?.lastEventPosition),
-      first.event.position,
-    );
 
     const conflict = await assertRejects(() =>
       store.append({
@@ -641,7 +629,7 @@ Deno.test("one event atomically forks inherited and detached delivery scopes", a
   }
 });
 
-Deno.test("A22 compaction removes only old fully settled semantic work", async () => {
+Deno.test("A22 delivery compaction removes only old fully settled obligations", async () => {
   const fixture = await createFixture();
   const { store } = fixture;
   try {
@@ -677,14 +665,14 @@ Deno.test("A22 compaction removes only old fully settled semantic work", async (
     }, ["consumer"]);
 
     assertEquals(
-      await store.compact({
+      await store.compactDeliveries({
         retentionMs: 7 * 24 * 60 * 60 * 1_000,
         now: new Date("2021-01-01T00:00:00.000Z"),
       }),
-      { events: 2, deliveries: 1 },
+      { deliveries: 1 },
     );
-    assertEquals(await store.getEvent(settled.event.id), null);
-    assertEquals(await store.getEvent(passive.event.id), null);
+    assertEquals(await store.getEvent(settled.event.id), settled.event);
+    assertEquals(await store.getEvent(passive.event.id), passive.event);
     assertEquals(
       (await store.getDelivery(dead.deliveries[0].id))?.status,
       "dead_letter",
@@ -698,7 +686,7 @@ Deno.test("A22 compaction removes only old fully settled semantic work", async (
   }
 });
 
-Deno.test("A22 compaction bounds each transaction and peels causal leaves", async () => {
+Deno.test("A22 delivery compaction never removes immutable Events", async () => {
   const fixture = await createFixture();
   const { store } = fixture;
   try {
@@ -726,36 +714,33 @@ Deno.test("A22 compaction bounds each transaction and peels causal leaves", asyn
         })),
     );
 
-    const first = await store.compact({
+    const first = await store.compactDeliveries({
       retentionMs: 7 * 24 * 60 * 60 * 1_000,
       now: new Date("2021-01-01T00:00:00.000Z"),
       limit: 1,
     });
-    assertEquals(first, { events: 1, deliveries: 0 });
+    assertEquals(first, { deliveries: 0 });
     assertEquals(await store.getEvent(parent.event.id) !== null, true);
 
-    let removed = first.events;
     for (let index = 0; index < 4; index++) {
-      const result = await store.compact({
+      const result = await store.compactDeliveries({
         retentionMs: 7 * 24 * 60 * 60 * 1_000,
         now: new Date("2021-01-01T00:00:00.000Z"),
         limit: 1,
       });
-      assertEquals(result.events <= 1, true);
-      removed += result.events;
+      assertEquals(result, { deliveries: 0 });
     }
-    assertEquals(removed, 5);
-    assertEquals(await store.getEvent(parent.event.id), null);
-    assertEquals(await store.getEvent(child.event.id), null);
+    assertEquals(await store.getEvent(parent.event.id), parent.event);
+    assertEquals(await store.getEvent(child.event.id), child.event);
     for (const event of unrelated) {
-      assertEquals(await store.getEvent(event.event.id), null);
+      assertEquals(await store.getEvent(event.event.id), event.event);
     }
   } finally {
     await closeFixture(fixture);
   }
 });
 
-Deno.test("A22 compaction bounds settled deliveries before deleting their event", async () => {
+Deno.test("A22 delivery compaction is bounded and retains immutable Events", async () => {
   const fixture = await createFixture();
   const { store } = fixture;
   try {
@@ -773,24 +758,24 @@ Deno.test("A22 compaction bounds settled deliveries before deleting their event"
     }
 
     assertEquals(
-      await store.compact({
+      await store.compactDeliveries({
         retentionMs: 7 * 24 * 60 * 60 * 1_000,
         now: new Date("2021-01-01T00:00:00.000Z"),
         limit: 1,
       }),
-      { events: 0, deliveries: 1 },
+      { deliveries: 1 },
     );
     assertEquals(await store.getEvent(committed.event.id) !== null, true);
 
     assertEquals(
-      await store.compact({
+      await store.compactDeliveries({
         retentionMs: 7 * 24 * 60 * 60 * 1_000,
         now: new Date("2021-01-01T00:00:00.000Z"),
         limit: 1,
       }),
-      { events: 1, deliveries: 1 },
+      { deliveries: 1 },
     );
-    assertEquals(await store.getEvent(committed.event.id), null);
+    assertEquals(await store.getEvent(committed.event.id), committed.event);
   } finally {
     await closeFixture(fixture);
   }

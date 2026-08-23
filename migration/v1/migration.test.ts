@@ -5,7 +5,6 @@ import {
   assertStringIncludes,
 } from "@std/assert";
 import {
-  createEventCoordinator,
   createEventStore,
   quoteEventIdentifier,
   type SqlExecutor,
@@ -16,12 +15,15 @@ import {
   createTestDatabase,
   type TestDatabase,
 } from "../../runtime/testing/ominipg.ts";
+import type { CollectionRecord } from "../../runtime/collections/index.ts";
+import { type ContentRef } from "../../runtime/content/index.ts";
 import {
-  type ContentRef,
-  createDatabaseAssetRepository,
-} from "../../runtime/content/index.ts";
-import { createConversationRepository } from "../../runtime/domain/index.ts";
+  mapMessageRecord,
+  mapParticipantRecord,
+  mapThreadRecord,
+} from "../../runtime/engine/collection-graph.ts";
 import { createDeliveryExecutor } from "../../runtime/execution/index.ts";
+import { createTestProcessorContext } from "../../runtime/testing/processor-context.ts";
 import type { KnowledgeDocument } from "../../runtime/knowledge/index.ts";
 import { createPluginRegistry } from "../../runtime/plugins/index.ts";
 import {
@@ -122,23 +124,112 @@ async function createV3Readers(session: SqlSession, schema: string) {
     store,
     registry,
     workerId: `migration-reader-${schema}`,
-    createContext: (base) => ({ ...base }),
+    createContext: createTestProcessorContext,
   });
-  const coordinator = createEventCoordinator({ store, registry, executor });
-  let id = 0;
-  const databaseAssets = createDatabaseAssetRepository({
-    coordinator,
-    session,
-    eventStore: store,
-    databaseSchema: schema,
-    createId: () => `migration-reader-edge-${++id}`,
-  });
-  const conversation = createConversationRepository({
-    coordinator,
-    session,
-    eventStore: store,
-    assets: databaseAssets,
-    createId: () => `migration-reader-domain-${++id}`,
+  type NodeProjectionRow = Readonly<{
+    id: string;
+    namespace: string;
+    data: unknown;
+    created_at: string | Date;
+    updated_at: string | Date;
+  }>;
+  const mapNode = (row: NodeProjectionRow): CollectionRecord => {
+    const value = typeof row.data === "string"
+      ? JSON.parse(row.data) as unknown
+      : row.data;
+    const data = value && typeof value === "object" && !Array.isArray(value)
+      ? value as Record<string, unknown>
+      : {};
+    return Object.freeze({
+      ...data,
+      id: row.id,
+      namespace: row.namespace,
+      createdAt: new Date(row.created_at).toISOString(),
+      updatedAt: new Date(row.updated_at).toISOString(),
+    });
+  };
+  const getNode = async (
+    namespace: string,
+    type: "participant" | "thread" | "message",
+    id: string,
+  ): Promise<CollectionRecord | null> => {
+    const result = await session.query<NodeProjectionRow>(
+      `SELECT id, namespace, data, created_at, updated_at
+       FROM ${store.tables.nodes}
+       WHERE namespace = $1 AND type = $2 AND id = $3
+       LIMIT 1`,
+      [namespace, type, id],
+    );
+    return result.rows[0] ? mapNode(result.rows[0]) : null;
+  };
+  const getNodeByExternalId = async (
+    namespace: string,
+    type: "participant" | "thread",
+    externalId: string,
+  ): Promise<CollectionRecord | null> => {
+    const result = await session.query<NodeProjectionRow>(
+      `SELECT id, namespace, data, created_at, updated_at
+       FROM ${store.tables.nodes}
+       WHERE namespace = $1 AND type = $2
+         AND data ->> 'externalId' = $3
+       ORDER BY created_at, id
+       LIMIT 1`,
+      [namespace, type, externalId],
+    );
+    return result.rows[0] ? mapNode(result.rows[0]) : null;
+  };
+  const getParticipant = async (namespace: string, id: string) => {
+    const record = await getNode(namespace, "participant", id);
+    return record ? mapParticipantRecord(record) : null;
+  };
+  const projectThread = async (record: CollectionRecord) => {
+    const result = await session.query<NodeProjectionRow>(
+      `SELECT participant.id, participant.namespace, participant.data,
+              participant.created_at, participant.updated_at
+       FROM ${store.tables.nodes} participant
+       JOIN ${store.tables.edges} edge
+         ON edge.namespace = participant.namespace
+        AND edge.source_node_id = participant.id
+       WHERE edge.namespace = $1 AND edge.target_node_id = $2
+         AND edge.type = 'participates_in'
+         AND participant.type = 'participant'
+       ORDER BY edge.created_at, participant.id`,
+      [record.namespace, record.id],
+    );
+    return mapThreadRecord(
+      record,
+      result.rows.map(mapNode).map(mapParticipantRecord),
+    );
+  };
+  const conversation = Object.freeze({
+    async getParticipantByExternalId(
+      namespace: string,
+      externalId: string,
+    ) {
+      const record = await getNodeByExternalId(
+        namespace,
+        "participant",
+        externalId,
+      );
+      return record ? mapParticipantRecord(record) : null;
+    },
+    async getThread(namespace: string, id: string) {
+      const record = await getNode(namespace, "thread", id);
+      return record ? await projectThread(record) : null;
+    },
+    async getThreadByExternalId(namespace: string, externalId: string) {
+      const record = await getNodeByExternalId(namespace, "thread", externalId);
+      return record ? await projectThread(record) : null;
+    },
+    async getMessage(namespace: string, id: string) {
+      const record = await getNode(namespace, "message", id);
+      if (!record) return null;
+      const sender = await getParticipant(namespace, String(record.senderId));
+      if (!sender) {
+        throw new Error(`Message '${id}' sender was not found.`);
+      }
+      return mapMessageRecord(record, sender);
+    },
   });
   type LegacyWorkflowRecord = Readonly<
     Record<string, unknown> & {
@@ -1103,7 +1194,6 @@ Deno.test("A28 multi-tenant upgrade preserves graph domains and translates settl
       assertEquals(
         tables.rows.map((row) => row.table_name),
         [
-          "body_references",
           "edges",
           "event_bodies",
           "event_deliveries",
@@ -1404,8 +1494,12 @@ Deno.test("A28 upgrade preserves repeated provider tool-call labels", async () =
       resolveLegacyAsset: legacyAssetResolver(suffix),
     });
 
-    const rows = await session.query<{ id: string; source_id: string }>(
-      `SELECT id, source_id FROM ${q(schema, "nodes")}
+    const rows = await session.query<{
+      id: string;
+      source_type: string | null;
+      source_id: string | null;
+    }>(
+      `SELECT id, source_type, source_id FROM ${q(schema, "nodes")}
        WHERE namespace = $1 AND type = 'tool_execution'
          AND data ->> 'toolCallId' = $2
        ORDER BY created_at, id`,
@@ -1415,7 +1509,16 @@ Deno.test("A28 upgrade preserves repeated provider tool-call labels", async () =
       `tool-${suffix}`,
       repeatedId,
     ]);
-    assertEquals(new Set(rows.rows.map((row) => row.source_id)).size, 1);
+    assertEquals(
+      rows.rows.map(({ source_type, source_id }) => ({
+        source_type,
+        source_id,
+      })),
+      [
+        { source_type: null, source_id: null },
+        { source_type: null, source_id: null },
+      ],
+    );
 
     const readers = await createV3Readers(session, schema);
     try {

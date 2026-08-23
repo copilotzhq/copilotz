@@ -1,6 +1,7 @@
 import { assertEquals } from "@std/assert";
 
 import { createTestDatabase } from "../testing/ominipg.ts";
+import { createTestProcessorContext } from "../testing/processor-context.ts";
 import {
   createCoreSchemaStatements,
   createEventCoordinator,
@@ -10,13 +11,68 @@ import {
 import { createDeliveryExecutor } from "../execution/index.ts";
 import { createPluginRegistry } from "../plugins/index.ts";
 import {
+  type ContentStreamOpened,
   createBodyStorageRuntime,
   createContentStreamRuntime,
   createDatabaseAssetRepository,
   createDatabaseBodyStore,
+  createMemoryBodyStore,
 } from "./index.ts";
 
 const TEST_SCHEMA = "copilotz_content_streams";
+
+Deno.test("content stream open reports only its normalized runtime-neutral descriptor", async () => {
+  let opened: ContentStreamOpened | undefined;
+  const stream = createContentStreamRuntime({
+    namespace: "tenant-a",
+    store: createMemoryBodyStore(),
+    onOpen(input) {
+      opened = input;
+    },
+  });
+
+  const writer = await stream.open({
+    id: " stream-a ",
+    mediaType: " text/plain ",
+    role: " assistant ",
+    name: " answer.txt ",
+    alt: " answer ",
+    language: " en ",
+    disposition: "inline",
+    metadata: { lane: "content" },
+    correlationId: " correlation-a ",
+  });
+
+  assertEquals(opened, {
+    id: "stream-a",
+    mediaType: "text/plain",
+    kind: "text",
+    role: "assistant",
+    name: "answer.txt",
+    alt: "answer",
+    language: "en",
+    disposition: "inline",
+    metadata: { lane: "content" },
+    correlationId: "correlation-a",
+  });
+  assertEquals(
+    "threadId" in (opened as unknown as Record<string, unknown>),
+    false,
+  );
+  assertEquals(
+    "participantId" in (opened as unknown as Record<string, unknown>),
+    false,
+  );
+  assertEquals(
+    "routing" in (opened as unknown as Record<string, unknown>),
+    false,
+  );
+  assertEquals(
+    "visibility" in (opened as unknown as Record<string, unknown>),
+    false,
+  );
+  await writer.abort();
+});
 
 Deno.test("content stream close returns prepared content without creating an Asset node", async () => {
   const database = await createTestDatabase({ url: ":memory:" });
@@ -64,17 +120,11 @@ Deno.test("content stream close returns prepared content without creating an Ass
     );
     assertEquals(assets.rows[0].n, 0);
 
-    const bodyRefs = await session.query<{ n: number }>(
-      `SELECT count(*)::int AS n
-         FROM ${store.tables.body_references}
-        WHERE namespace = 'tenant-a'`,
-    );
-    assertEquals(bodyRefs.rows[0].n, 0);
-
     const registry = createPluginRegistry();
     const executor = createDeliveryExecutor({
       store,
       registry,
+      createContext: createTestProcessorContext,
       workerId: "content-stream-test",
     });
     try {
@@ -96,10 +146,13 @@ Deno.test("content stream close returns prepared content without creating an Ass
           payload: { id: "message-a" },
         },
         mutate: async (context) => {
-          const adopted = await assets.materializeWithManifest(context, {
-            namespace: "tenant-a",
-            content: prepared,
-          });
+          const adopted = await assets.materializeWithManifestInTransaction(
+            context,
+            {
+              namespace: "tenant-a",
+              content: prepared,
+            },
+          );
           assertEquals(adopted.content, prepared.content);
           assertEquals(adopted.assets.length, 1);
           return adopted;
@@ -119,10 +172,12 @@ Deno.test("content stream close returns prepared content without creating an Ass
 
     const adoptedRefs = await session.query<{ n: number }>(
       `SELECT count(*)::int AS n
-         FROM ${store.tables.body_references}
+         FROM ${store.tables.nodes}
         WHERE namespace = 'tenant-a'
-          AND owner_kind = '@copilotz/asset/v1'
-          AND owner_id = 'asset-a'`,
+          AND type = 'asset'
+          AND id = 'asset-a'
+          AND data ->> 'state' = 'ready'
+          AND COALESCE(data ->> 'bodyId', '') <> ''`,
     );
     assertEquals(adoptedRefs.rows[0].n, 1);
   } finally {

@@ -1,12 +1,12 @@
 import { message as coreMessage } from "@copilotz/copilotz/plugins/core";
 import { assertEquals, assertExists } from "@std/assert";
 import {
-  type CopilotzProcessorContext,
   createCopilotzGateway,
   createCopilotzWorker,
   defineLlmProviderResource,
   definePlugin,
   defineProcessor,
+  type ProcessorContext,
 } from "../../index.ts";
 import { createTestDomainContext } from "../../runtime/testing/domain-context.ts";
 import { projectMessages } from "../../runtime/testing/projections.ts";
@@ -26,7 +26,7 @@ function migratedApplicationPlugin() {
       throw new Error("downstream llm is not invoked");
     },
   });
-  const processor = defineProcessor<CopilotzProcessorContext>({
+  const processor = defineProcessor<ProcessorContext>({
     id: "downstream.reply",
     on: [{
       eventType: "message.created",
@@ -40,15 +40,13 @@ function migratedApplicationPlugin() {
       const content = await context.content.prepare("embedded reply", {
         operationKey: "downstream-reply-content",
       });
-      const persisted = await context.content.materialize(content);
       await context.collections.message.create({
         id: "downstream-reply",
         threadId: source.threadId,
         senderId: "downstream-agent",
         recipientIds: [source.sender.id],
-        content: persisted,
+        content,
       }, { operationKey: "downstream-reply-message" });
-      await context.content.linkOwner("downstream-reply", persisted);
     },
   });
   return definePlugin({

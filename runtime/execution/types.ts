@@ -74,7 +74,7 @@ export type CreateDeliveryMutationIdentity = (
 
 export type DeliveryContextFactory = (
   base: DeliveryContextBase,
-) => ProcessorContext | void | Promise<ProcessorContext | void>;
+) => ProcessorContext | Promise<ProcessorContext>;
 
 export type DeliveryWorkloadScheduler = Readonly<{
   schedule(callback: () => void, delayMs: number): unknown;
@@ -85,7 +85,7 @@ export type CreateDeliveryWorkloadOptions = Readonly<{
   store?: EventStore;
   resolveStore?: (databaseSchema: string) => EventStore | Promise<EventStore>;
   registry: PluginRegistry;
-  createContext?: DeliveryContextFactory;
+  createContext: DeliveryContextFactory;
   leaseMs?: number;
   heartbeatMs?: number;
   scheduler?: DeliveryWorkloadScheduler;
@@ -122,7 +122,7 @@ export type CreateDeliveryExecutorOptions = Readonly<{
   resolveStore?: (databaseSchema: string) => EventStore | Promise<EventStore>;
   defaultDatabaseSchema?: string;
   registry: PluginRegistry;
-  createContext?: DeliveryContextFactory;
+  createContext: DeliveryContextFactory;
   /** Dispatch to an externally hosted workload. The executor never closes it. */
   dispatcher?: DeliveryDispatcher;
   /** Bind Copilotz Workers to an application-owned in-process Hypervisor. */
@@ -152,7 +152,10 @@ export type CreateDeliveryExecutorOptions = Readonly<{
   /** Relays semantic events framed by a remote Copilotz Worker. */
   onOutputEvent?: (
     event: CopilotzEvent,
-    context: Readonly<{ databaseSchema: string }>,
+    context: Readonly<{
+      databaseSchema: string;
+      settlementScopeId?: string;
+    }>,
   ) => void | Promise<void>;
 }>;
 

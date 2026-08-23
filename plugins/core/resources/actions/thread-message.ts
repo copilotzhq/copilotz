@@ -1,4 +1,5 @@
 import type {
+  CollectionMutationRef,
   CollectionRecord,
   ScopedCollectionCallOptions,
   ScopedCollections,
@@ -11,6 +12,7 @@ import type { EventVisibility } from "@copilotz/copilotz/events";
 import {
   type ActionContext,
   type ActionDefinition,
+  type ActionTransactionContext,
   defineAction,
 } from "@copilotz/copilotz/actions";
 import { prepareActionContent } from "./content-policy.ts";
@@ -111,12 +113,10 @@ export function senderFields(input: ThreadMessageSender): ParticipantInput {
   };
 }
 
-export async function ensureParticipantInTransaction(
+export async function findParticipant(
   collections: ScopedCollections,
   input: ThreadMessageSender,
-  threadId?: string,
-  eventMetadata?: Readonly<Record<string, unknown>>,
-): Promise<CollectionRecord> {
+): Promise<CollectionRecord | null> {
   const collection = collections.participant;
   if (!collection) throw new Error("Collection 'participant' is not bound.");
   const id = optionalText(
@@ -136,6 +136,21 @@ export async function ensureParticipantInTransaction(
     });
     if (byExternal) return byExternal;
   }
+  return null;
+}
+
+export async function ensureParticipantInTransaction(
+  collections: ActionTransactionContext["collections"],
+  input: ThreadMessageSender,
+  existing: CollectionRecord | null,
+  threadId?: string,
+  eventMetadata?: Readonly<Record<string, unknown>>,
+): Promise<CollectionMutationRef> {
+  if (existing) return Object.freeze({ id: existing.id });
+  const collection = collections.participant;
+  if (!collection) throw new Error("Collection 'participant' is not bound.");
+  const fields = senderFields(input);
+  const externalId = fields.externalId?.trim();
   if (!externalId) {
     throw new TypeError("Sender externalId must be non-empty.");
   }
@@ -160,18 +175,14 @@ export async function ensureParticipantInTransaction(
 }
 
 export async function addSenderToThreadInTransaction(
-  collections: ScopedCollections,
+  collections: ActionTransactionContext["collections"],
   threadId: string,
   senderId: string,
   eventMetadata?: Readonly<Record<string, unknown>>,
 ): Promise<void> {
-  const thread = await collections.thread.get({ id: threadId });
-  if (!thread) throw new Error(`Thread '${threadId}' was not found.`);
-  const current = stringArray(thread.participantIds);
-  if (current.includes(senderId)) return;
-  await collections.thread.update({
+  await collections.thread.commands.addParticipant({
     id: threadId,
-    set: { participantIds: [...new Set([...current, senderId])] },
+    participantId: senderId,
   }, {
     threadId,
     ...(eventMetadata ? { identity: { metadata: eventMetadata } } : {}),
@@ -197,12 +208,22 @@ async function executeCreateThreadMessage(
   const recipientIds = stringArray(data.recipientIds);
   const eventVisibility = visibility(data.visibility);
   const metadata = structuredClone(asRecord(data.metadata));
+  const threadCollection = context.collections.thread;
+  if (!threadCollection) {
+    throw new Error("Collection 'thread' is not bound.");
+  }
+  const [existingSender, thread] = await Promise.all([
+    findParticipant(context.collections, sender),
+    threadCollection.get({ id: threadId }),
+  ]);
+  if (!thread) throw new Error(`Thread '${threadId}' was not found.`);
+  const existingParticipantIds = stringArray(thread.participantIds);
   const content = await prepareActionContent(
     data.content ?? [],
     context,
     "message-content",
   );
-  return await context.transaction(async (tx) => {
+  await context.transaction(async (tx) => {
     const collections = tx.collections;
     if (!collections.message) {
       throw new Error("Collection 'message' is not bound.");
@@ -213,6 +234,7 @@ async function executeCreateThreadMessage(
     const ensured = await ensureParticipantInTransaction(
       collections,
       sender,
+      existingSender,
       threadId,
     );
     const options: ScopedCollectionCallOptions = {
@@ -229,13 +251,18 @@ async function executeCreateThreadMessage(
       content,
       metadata,
     }, options);
-    await addSenderToThreadInTransaction(
-      collections,
-      threadId,
-      ensured.id,
-    );
+    if (!existingParticipantIds.includes(ensured.id)) {
+      await addSenderToThreadInTransaction(
+        collections,
+        threadId,
+        ensured.id,
+      );
+    }
     return created;
   });
+  const created = await context.collections.message.get({ id });
+  if (!created) throw new Error(`Message '${id}' was not created.`);
+  return created;
 }
 
 const createInputSchema = {

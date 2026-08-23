@@ -1,14 +1,7 @@
 import type { CollectionRecord } from "@copilotz/copilotz/collections";
-import {
-  base64ToBytes,
-  type ContentInput,
-  parseDataUrl,
-} from "@copilotz/copilotz/content";
 import { defineProcessor, type Processor } from "@copilotz/copilotz/plugins";
 import type { CoreProcessorContext } from "../../context.ts";
 import { CORE_MESSAGE_INPUT_EVENT } from "../inputs/index.ts";
-
-const MEDIA_TYPES = new Set(["image", "audio", "video", "file"]);
 
 function record(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -180,39 +173,6 @@ function stringArray(value: unknown): readonly string[] {
   );
 }
 
-function contentPart(value: unknown): unknown {
-  const part = record(value);
-  if (!part || typeof part.type !== "string" || !MEDIA_TYPES.has(part.type)) {
-    return value;
-  }
-  if (part.bytes instanceof Uint8Array) return value;
-  const encoded = typeof part.dataBase64 === "string"
-    ? {
-      bytes: base64ToBytes(part.dataBase64),
-      mediaType: typeof part.mediaType === "string"
-        ? part.mediaType
-        : "application/octet-stream",
-    }
-    : typeof part.url === "string"
-    ? parseDataUrl(part.url)
-    : null;
-  if (!encoded) return value;
-  const { dataBase64: _dataBase64, url: _url, ...rest } = part;
-  return Object.freeze({
-    ...rest,
-    bytes: encoded.bytes,
-    mediaType: typeof part.mediaType === "string"
-      ? part.mediaType
-      : encoded.mediaType,
-  });
-}
-
-function contentInput(value: unknown): ContentInput | readonly ContentInput[] {
-  return (Array.isArray(value)
-    ? Object.freeze(value.map(contentPart))
-    : contentPart(value)) as ContentInput | readonly ContentInput[];
-}
-
 export const messageInputProcessor: Processor<CoreProcessorContext> =
   defineProcessor<CoreProcessorContext>({
     id: "copilotz.core.message-input",
@@ -221,13 +181,6 @@ export const messageInputProcessor: Processor<CoreProcessorContext> =
       if (!event.durable) return;
       const input = record(event.payload);
       const threadId = await resolveThreadId(context, input.thread);
-      const content = await context.content.prepare(
-        contentInput(input.content),
-        {
-          operationKey: "core-message-input-content",
-        },
-      );
-      const persisted = await context.content.materialize(content);
       await context.actions.createThreadMessage({
         id: optionalText(input.id) ?? event.id,
         threadId,
@@ -240,7 +193,7 @@ export const messageInputProcessor: Processor<CoreProcessorContext> =
             input.participant,
           ),
         ],
-        content: persisted,
+        content: input.content ?? [],
         metadata: record(input.metadata),
         ...(input.visibility ? { visibility: record(input.visibility) } : {}),
       }, {

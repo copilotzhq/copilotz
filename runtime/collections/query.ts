@@ -1,7 +1,12 @@
 import type { SqlExecutor } from "../events/index.ts";
 import type { CollectionDefinition } from "./definition.ts";
 import { loadCollectionRecord, mapNode, type NodeRow } from "./reducer.ts";
-import type { CollectionQuery, CollectionRecord } from "./types.ts";
+import type {
+  CollectionGraphRelation,
+  CollectionQuery,
+  CollectionRecord,
+  CollectionRelationQuery,
+} from "./types.ts";
 
 function boundedLimit(value: number | undefined): number {
   if (value === undefined) return 100;
@@ -32,6 +37,111 @@ export async function getCollectionRecord(
   id: string,
 ): Promise<CollectionRecord | null> {
   return await loadCollectionRecord(executor, tables, namespace, name, id);
+}
+
+type EdgeRow = Readonly<{
+  id: string;
+  namespace: string;
+  source_node_id: string;
+  source_type: string;
+  target_node_id: string;
+  target_type: string;
+  type: string;
+  data: unknown;
+  weight: number | string | null;
+  created_at: string | Date;
+}>;
+
+function jsonRecord(value: unknown): Record<string, unknown> {
+  if (typeof value === "string") {
+    try {
+      return jsonRecord(JSON.parse(value));
+    } catch {
+      return {};
+    }
+  }
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function relationLimit(value: number | undefined): number {
+  if (value === undefined) return 100;
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new TypeError("Relation limit must be a positive integer.");
+  }
+  return Math.min(value, 1_000);
+}
+
+/** Lists graph edges connected to nodes of one scoped Collection. */
+export async function queryCollectionRelations(
+  executor: SqlExecutor,
+  tables: { nodes: string; edges: string },
+  namespace: string,
+  collection: string,
+  query: CollectionRelationQuery = {},
+): Promise<readonly CollectionGraphRelation[]> {
+  const direction = query.direction ?? "both";
+  if (direction !== "in" && direction !== "out" && direction !== "both") {
+    throw new TypeError(`Invalid relation direction '${String(direction)}'.`);
+  }
+  const params: unknown[] = [namespace, collection];
+  const nodeId = query.id?.trim();
+  const nodeParameter = nodeId ? params.push(nodeId) : undefined;
+  const membership = direction === "out"
+    ? [
+      "source.type = $2",
+      ...(nodeParameter ? [`edge.source_node_id = $${nodeParameter}`] : []),
+    ].join(" AND ")
+    : direction === "in"
+    ? [
+      "target.type = $2",
+      ...(nodeParameter ? [`edge.target_node_id = $${nodeParameter}`] : []),
+    ].join(" AND ")
+    : nodeParameter
+    ? `((source.type = $2 AND edge.source_node_id = $${nodeParameter}) OR
+        (target.type = $2 AND edge.target_node_id = $${nodeParameter}))`
+    : "(source.type = $2 OR target.type = $2)";
+  const filters = ["edge.namespace = $1", membership];
+  const types = Object.freeze(
+    [
+      ...new Set(
+        (query.types ?? []).map((type) => type.trim()).filter(Boolean),
+      ),
+    ],
+  );
+  if (types.length) {
+    filters.push(`edge.type = ANY($${params.push([...types])}::text[])`);
+  }
+  const result = await executor.query<EdgeRow>(
+    `SELECT edge.*, source.type AS source_type, target.type AS target_type
+       FROM ${tables.edges} edge
+       JOIN ${tables.nodes} source
+         ON source.namespace = edge.namespace
+        AND source.id = edge.source_node_id
+       JOIN ${tables.nodes} target
+         ON target.namespace = edge.namespace
+        AND target.id = edge.target_node_id
+      WHERE ${filters.join(" AND ")}
+      ORDER BY edge.created_at, edge.id
+      LIMIT ${relationLimit(query.limit)}`,
+    params,
+  );
+  return Object.freeze(result.rows.map((row) => {
+    const data = jsonRecord(row.data);
+    return Object.freeze({
+      id: row.id,
+      namespace: row.namespace,
+      type: row.type,
+      source: Object.freeze({ type: row.source_type, id: row.source_node_id }),
+      target: Object.freeze({ type: row.target_type, id: row.target_node_id }),
+      metadata: Object.freeze(jsonRecord(data.metadata)),
+      weight: Number(row.weight ?? 1),
+      createdAt: row.created_at instanceof Date
+        ? row.created_at.toISOString()
+        : new Date(row.created_at).toISOString(),
+    });
+  }));
 }
 
 export async function queryCollectionRecords(

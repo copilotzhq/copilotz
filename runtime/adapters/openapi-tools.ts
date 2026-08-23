@@ -818,7 +818,6 @@ function createApiExecutor(
           userExternalId: executionContext?.userExternalId,
           agent: executionContext?.agent ?? null,
           namespace: executionContext?.namespace,
-          databaseSchema: executionContext?.processor.databaseSchema,
           collections: executionContext?.collections,
           userMetadata: executionContext?.userMetadata,
           threadMetadata: executionContext?.threadMetadata,

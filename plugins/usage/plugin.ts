@@ -1,5 +1,5 @@
 import type { ScopedCollection } from "@copilotz/copilotz/collections";
-import type { CopilotzProcessorContext } from "@copilotz/copilotz/engine";
+import type { ProcessorContext } from "@copilotz/copilotz/plugins";
 import type { CopilotzEvent } from "@copilotz/copilotz/events";
 import {
   type CopilotzPlugin,
@@ -101,7 +101,7 @@ function normalizedCost(value: unknown): UsageCost | null {
 }
 
 function usageCollectionFrom(
-  context: CopilotzProcessorContext,
+  context: ProcessorContext,
 ): ScopedCollection {
   const collection = context.collections.usage;
   if (!collection) {
@@ -113,7 +113,7 @@ function usageCollectionFrom(
 }
 
 async function participantExternalId(
-  context: CopilotzProcessorContext,
+  context: ProcessorContext,
   participantId: string | undefined,
 ): Promise<string | null> {
   if (!participantId) return null;
@@ -219,7 +219,7 @@ async function applyUsageOptions(
 async function persistUsage(
   input: UsageRecord,
   source: unknown,
-  context: CopilotzProcessorContext,
+  context: ProcessorContext,
   options: CreateUsageWorkflowPluginOptions,
 ): Promise<void> {
   const resolved = await applyUsageOptions(input, source, options);
@@ -308,8 +308,8 @@ function toolUsageRecord(
 
 function llmUsageProcessor(
   options: CreateUsageWorkflowPluginOptions,
-): Processor<CopilotzProcessorContext> {
-  return defineProcessor<CopilotzProcessorContext>({
+): Processor<ProcessorContext> {
+  return defineProcessor<ProcessorContext>({
     id: "copilotz.core.record-llm-usage",
     on: [
       { eventType: "copilotz.core.llm.generate.completed" },
@@ -339,8 +339,8 @@ function llmUsageProcessor(
 
 function toolUsageProcessor(
   options: CreateUsageWorkflowPluginOptions,
-): Processor<CopilotzProcessorContext> {
-  return defineProcessor<CopilotzProcessorContext>({
+): Processor<ProcessorContext> {
+  return defineProcessor<ProcessorContext>({
     id: "copilotz.core.record-tool-usage",
     on: [
       { eventType: "copilotz.core.tool.call.completed" },

@@ -217,11 +217,7 @@ export function createDeliveryWorkload(
         dispatchAttemptId: metadata.dispatchAttemptId,
         createMutationIdentity,
       });
-      const extension = await options.createContext?.(base);
-      const context = Object.freeze({
-        ...(extension ?? {}),
-        ...base,
-      });
+      const context = await options.createContext(base);
       abort.signal.throwIfAborted();
       const processorEvent = await resolveProcessorEvent(store, event);
       const handle = processor.handle as (

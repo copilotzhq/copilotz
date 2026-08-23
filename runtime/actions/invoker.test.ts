@@ -40,6 +40,7 @@ Deno.test("root Action identity combines host invocation and local operation", a
   let hostInvocationKey = "event-1:action:1:test.echo";
   const actions = createActionCallers({ echo }, {
     actionLifecycle: lifecycle,
+    signal: new AbortController().signal,
     createInvocationKey: () => hostInvocationKey,
     createContext: () => Object.freeze({}) as ActionContext,
   });

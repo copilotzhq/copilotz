@@ -1,5 +1,5 @@
 import { isSettledActionError } from "../actions/index.ts";
-import type { CopilotzProcessorContext } from "../engine/index.ts";
+import type { ProcessorContext } from "../plugins/index.ts";
 import {
   type CopilotzPlugin,
   definePlugin,
@@ -90,7 +90,7 @@ function embedding(value: KnowledgeEmbeddingConfig): KnowledgeEmbeddingConfig {
 }
 
 type KnowledgeProcessorContext =
-  & Omit<CopilotzProcessorContext, "actions">
+  & Omit<ProcessorContext, "actions">
   & Readonly<{ actions: KnowledgeActionCallers }>;
 
 function createIndexProcessor(): Processor<KnowledgeProcessorContext> {
@@ -111,7 +111,7 @@ function createIndexProcessor(): Processor<KnowledgeProcessorContext> {
             causationId: event.id,
             correlationId: event.correlationId,
             deduplicationId: event.deduplicationId,
-            settlementScopeId: context.settlementScopeId,
+            settlementScopeId: context.identity.settlementScopeId,
           },
           signal: context.signal,
         });

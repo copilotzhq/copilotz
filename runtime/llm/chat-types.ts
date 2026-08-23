@@ -14,7 +14,7 @@ import type {
   Participant,
 } from "../domain/index.ts";
 import type { CopilotzEvent } from "../events/index.ts";
-import type { CopilotzProcessorContext } from "../engine/index.ts";
+import type { ProcessorContext } from "../plugins/index.ts";
 import type { MemorySourceRef } from "../memory/ontology.ts";
 import type {
   ResolveWorkflowAgentTools,
@@ -51,7 +51,7 @@ export type ResolveAgentTextConfig = (
     agent: Agent;
     operation: AgentTextActionInput;
     sourceEvent: CopilotzEvent;
-    context: CopilotzProcessorContext;
+    context: ProcessorContext;
     baseConfig: ProviderConfig;
     thread: ConversationThread;
     messages: readonly ChatMessage[];
@@ -66,7 +66,7 @@ export type ResolveWorkflowAgentInstructions = (
     thread: ConversationThread;
     userMetadata?: Readonly<Record<string, unknown>>;
     sourceEvent: CopilotzEvent;
-    context: CopilotzProcessorContext;
+    context: ProcessorContext;
   }>,
 ) => string | null | undefined | Promise<string | null | undefined>;
 
@@ -77,7 +77,7 @@ export type WorkflowHistoryTransform = (
     thread: ConversationThread;
     agent: Agent;
     sourceEvent: CopilotzEvent;
-    context: CopilotzProcessorContext;
+    context: ProcessorContext;
   }>,
 ) => readonly ChatMessage[] | Promise<readonly ChatMessage[]>;
 

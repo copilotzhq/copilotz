@@ -131,7 +131,7 @@ export type EventStore = {
     correlationId?: string;
     afterPosition?: string;
     limit?: number;
-  }): Promise<readonly DurableEvent[]>;
+  }, executor?: SqlExecutor): Promise<readonly DurableEvent[]>;
   getDelivery(id: string): Promise<EventDelivery | null>;
   listDeliveries(options?: {
     namespace?: string;
@@ -181,11 +181,11 @@ export type EventStore = {
   ): Promise<number>;
   retryDeadLetter(id: string): Promise<boolean>;
   discardDeadLetter(id: string): Promise<boolean>;
-  compact(options?: {
+  compactDeliveries(options?: {
     retentionMs?: number | null;
     now?: Date;
     limit?: number;
-  }): Promise<{ events: number; deliveries: number }>;
+  }): Promise<{ deliveries: number }>;
 };
 
 const DEFAULT_COMPACTION_LIMIT = 100;
@@ -453,10 +453,16 @@ function boundedInteger(
 
 function isDeduplicationViolation(error: unknown): boolean {
   if (!error || typeof error !== "object") return false;
-  const value = error as { code?: unknown; message?: unknown; cause?: unknown };
-  return value.code === "23505" ||
+  const value = error as {
+    code?: unknown;
+    constraint?: unknown;
+    message?: unknown;
+    cause?: unknown;
+  };
+  const namedConstraint = value.constraint === "events_namespace_dedup_idx" ||
     (typeof value.message === "string" &&
-      value.message.includes("events_namespace_dedup_idx")) ||
+      value.message.includes("events_namespace_dedup_idx"));
+  return (value.code === "23505" && namedConstraint) ||
     (value.cause !== undefined && isDeduplicationViolation(value.cause));
 }
 
@@ -572,6 +578,14 @@ export function createEventStore(
 
     const runOn = async (transaction: SqlExecutor) => {
       if (draft.deduplicationId) {
+        await transaction.query(
+          "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+          [JSON.stringify([
+            databaseSchema,
+            draft.namespace,
+            draft.deduplicationId,
+          ])],
+        );
         const existing = await loadDuplicate(
           transaction,
           draft.namespace,
@@ -639,24 +653,6 @@ export function createEventStore(
         deliveries.push(mapDelivery(result.rows[0], databaseSchema));
       }
 
-      if (draft.threadId) {
-        await transaction.query(
-          `UPDATE ${tables.nodes}
-             SET data = COALESCE(data, '{}'::jsonb) || $1::jsonb,
-                 updated_at = NOW()
-             WHERE id = $2 AND namespace = $3 AND type = 'thread'`,
-          [
-            JSON.stringify({
-              lastEventId: event.id,
-              lastEventPosition: event.position,
-              lastEventAt: event.createdAt,
-            }),
-            draft.threadId,
-            draft.namespace,
-          ],
-        );
-      }
-
       return Object.freeze({
         value,
         event,
@@ -687,11 +683,10 @@ export function createEventStore(
       if (!draft.deduplicationId || !isDeduplicationViolation(error)) {
         throw error;
       }
-      return mutation.transaction
-        ? await recoverOn(mutation.transaction, error)
-        : await session.transaction((transaction) =>
-          recoverOn(transaction, error)
-        );
+      if (mutation.transaction) throw error;
+      return await session.transaction((transaction) =>
+        recoverOn(transaction, error)
+      );
     }
   };
 
@@ -884,7 +879,7 @@ export function createEventStore(
     getEventByDeduplicationId(namespace, deduplicationId) {
       return loadDuplicate(session, namespace, deduplicationId);
     },
-    async listEvents(listOptions) {
+    async listEvents(listOptions, executor = session) {
       const conditions = ["namespace = $1"];
       const params: unknown[] = [listOptions.namespace];
       if (listOptions.threadId) {
@@ -900,7 +895,7 @@ export function createEventStore(
         conditions.push(`position > $${params.length}::bigint`);
       }
       params.push(boundedInteger(listOptions.limit, 1_000, 1));
-      const result = await session.query<EventRow>(
+      const result = await executor.query<EventRow>(
         `SELECT * FROM ${tables.events}
          WHERE ${conditions.join(" AND ")}
          ORDER BY position LIMIT $${params.length}`,
@@ -1084,9 +1079,9 @@ export function createEventStore(
       );
       return result.rows.length === 1;
     },
-    async compact(compactOptions = {}) {
+    async compactDeliveries(compactOptions = {}) {
       if (compactOptions.retentionMs === null) {
-        return { events: 0, deliveries: 0 };
+        return { deliveries: 0 };
       }
       const retentionMs = boundedInteger(
         compactOptions.retentionMs,
@@ -1130,32 +1125,7 @@ export function createEventStore(
            RETURNING delivery.id`,
           [cutoff, limit],
         );
-        const events = await transaction.query<{ id: string }>(
-          `WITH candidates AS (
-             SELECT event.position
-             FROM ${tables.events} AS event
-             WHERE event.created_at < $1::timestamptz
-               AND NOT EXISTS (
-                 SELECT 1 FROM ${tables.event_deliveries} delivery
-                 WHERE delivery.event_id = event.id
-               )
-               AND NOT EXISTS (
-                 SELECT 1 FROM ${tables.events} child
-                 WHERE child.namespace = event.namespace
-                   AND child.causation_id = event.id
-               )
-             ORDER BY event.position
-             FOR UPDATE OF event SKIP LOCKED
-             LIMIT $2
-           )
-           DELETE FROM ${tables.events} AS event
-           USING candidates
-           WHERE event.position = candidates.position
-           RETURNING event.id`,
-          [cutoff, limit],
-        );
         return {
-          events: events.rows.length,
           deliveries: deliveries.rows.length,
         };
       });

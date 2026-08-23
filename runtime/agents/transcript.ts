@@ -2,7 +2,7 @@ import type { ReasoningHistoryOptions } from "../resources/index.ts";
 import { bytesToBase64, formatAssetRef, toDataUrl } from "../content/index.ts";
 import type { ContentRef } from "../content/index.ts";
 import type { ConversationMessage } from "../domain/index.ts";
-import type { CopilotzProcessorCapabilities } from "../engine/index.ts";
+import type { ProcessorContext } from "../plugins/index.ts";
 import {
   listThreadMessageRecords,
   loadThreadRecord,
@@ -41,7 +41,7 @@ function attachmentDescriptor(message: ConversationMessage, ref: ContentRef) {
 }
 
 async function contentParts(
-  context: CopilotzProcessorCapabilities,
+  context: ProcessorContext,
   message: ConversationMessage,
 ): Promise<{ content: ChatMessage["content"]; text: string }> {
   const resolved = await context.content.resolveMany(message.content);
@@ -103,7 +103,7 @@ async function contentParts(
 }
 
 async function messageReasoning(
-  context: CopilotzProcessorCapabilities,
+  context: ProcessorContext,
   message: ConversationMessage,
 ): Promise<string | undefined> {
   const refs = Array.isArray(message.metadata.llmReasoning)
@@ -139,7 +139,7 @@ function speakerMetadata(
 }
 
 async function toChatMessage(
-  context: CopilotzProcessorCapabilities,
+  context: ProcessorContext,
   message: ConversationMessage,
   targetParticipantId?: string,
   options: Readonly<{
@@ -256,7 +256,7 @@ async function toChatMessage(
 
 /** Compiles immutable graph messages and their canonical assets for one call. */
 export async function buildTextTranscript(
-  context: CopilotzProcessorCapabilities,
+  context: ProcessorContext,
   input: Readonly<{
     threadId: string;
     messageIds?: readonly string[];

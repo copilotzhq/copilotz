@@ -11,16 +11,12 @@ export type AssetState =
 
 /** Immutable provenance used for storage layout and operational correlation. */
 export type AssetOrigin = Readonly<{
-  scope:
-    | Readonly<{ type: "thread"; id: string }>
-    | Readonly<{ type: "collection"; collection: string; id: string }>
-    | Readonly<{ type: "namespace"; id: string }>;
+  /** Runtime-neutral graph identity that scoped the producing work. */
+  scope: Readonly<{ type: string; id: string }>;
   producer: Readonly<{ type: string; id: string }>;
   path?: string;
   inferred?: boolean;
 }>;
-
-export const ASSET_BODY_OWNER_KIND = "@copilotz/asset/v1" as const;
 
 /** Replay authority for one Asset materialized by a stable graph mutation. */
 export type AssetManifestEntry = Readonly<{
@@ -29,10 +25,28 @@ export type AssetManifestEntry = Readonly<{
   mediaType: string;
   byteLength: number;
   digest: `sha256:${string}`;
+  location: AssetBodyLocation;
+  idempotencyKey?: string;
   origin?: AssetOrigin;
   metadata?: Readonly<Record<string, unknown>>;
   createdAt: string;
+  readyAt?: string;
 }>;
+
+/** Immutable replay authority for standalone Asset lifecycle mutations. */
+export type AssetEventBody =
+  | Readonly<{
+    operation: "create";
+    asset: AssetRecord;
+    bodyId: string;
+    idempotencyKey?: string;
+  }>
+  | Readonly<{
+    operation: "delete";
+    asset: AssetRecord;
+    bodyId: string;
+    idempotencyKey?: string;
+  }>;
 
 /** Physical placement of an asset body. */
 export type AssetBodyLocation =
@@ -137,6 +151,24 @@ export type PreparedContent = Readonly<{
 
 /** Canonical refs may be supplied directly when every body already exists. */
 export type DurableContentInput = ContentSequence | PreparedContent;
+
+/** One new Asset whose durable body and graph metadata are ready for adoption. */
+export type AssetAdoptionPlan = Readonly<{
+  /** Database bodies join the graph transaction; ready bodies need no write. */
+  kind: "database" | "ready";
+  /** Ready-body GC requires a live preflight protection deadline. */
+  protectionRequired: boolean;
+  candidate: PreparedAsset;
+  asset: AssetRecord;
+}>;
+
+/** Preflighted content that can be adopted without external I/O. */
+export type AssetMaterializationPlan = Readonly<{
+  namespace: string;
+  content: ContentSequence;
+  assets: readonly AssetManifestEntry[];
+  adoptions: readonly AssetAdoptionPlan[];
+}>;
 
 /** Input accepted by the canonical content normalizer. */
 export type ContentInput =

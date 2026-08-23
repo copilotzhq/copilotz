@@ -1,6 +1,8 @@
 import { assert, assertEquals, assertRejects } from "@std/assert";
 
 import { createTestDatabase, type TestDatabase } from "../testing/ominipg.ts";
+import { rebuildNamespaceProjections } from "../collections/index.ts";
+import { createTestProcessorContext } from "../testing/processor-context.ts";
 import {
   createCoreSchemaStatements,
   createEventCoordinator,
@@ -72,7 +74,7 @@ async function createFixture(options: {
     store,
     registry,
     workerId: "asset-test",
-    createContext: (base) => ({ ...base }),
+    createContext: createTestProcessorContext,
   });
   const coordinator = createEventCoordinator({ store, registry, executor });
   let nextId = 0;
@@ -140,7 +142,7 @@ Deno.test("database assets publish immutable bodies, events, and deliveries with
     assertEquals(first.location.kind, "database");
     assertEquals(
       first.location.kind === "database" ? first.location.key : "",
-      "schemas/copilotz_database_assets/namespaces/tenant-a/assets/asset/asset-a/assets/asset-a",
+      "schemas/copilotz_database_assets/namespaces/tenant-a/origins/namespace/tenant-a/asset/asset-a/assets/asset-a",
     );
     assertEquals(first.state, "ready");
 
@@ -148,7 +150,10 @@ Deno.test("database assets publish immutable bodies, events, and deliveries with
     assertEquals(fixture.observed, ["asset.created"]);
     const events = await fixture.store.listEvents({ namespace: "tenant-a" });
     assertEquals(events.length, 1);
-    assertEquals(events[0].payload, { assetId: "asset-a" });
+    assert(
+      typeof (events[0].payload as Record<string, unknown>).dataRef ===
+        "object",
+    );
     assert(!JSON.stringify(events[0]).includes("durable hello"));
 
     const row = await fixture.session.query<{ data: unknown }>(
@@ -167,11 +172,12 @@ Deno.test("database assets publish immutable bodies, events, and deliveries with
     assertEquals(bodyRows.rows[0].n, 1);
     const refs = await fixture.session.query<{ n: number }>(
       `SELECT count(*)::int AS n
-         FROM ${fixture.store.tables.body_references}
+         FROM ${fixture.store.tables.nodes}
         WHERE namespace = 'tenant-a'
-          AND body_id = $1
-          AND owner_kind = '@copilotz/asset/v1'
-          AND owner_id = 'asset-a'`,
+          AND type = 'asset'
+          AND id = 'asset-a'
+          AND data ->> 'state' = 'ready'
+          AND data ->> 'bodyId' = $1`,
       [first.location.kind === "database" ? first.location.key : ""],
     );
     assertEquals(refs.rows[0].n, 1);
@@ -276,6 +282,114 @@ Deno.test("database assets batch and stream UTF-8, JSON, and binary bodies in ca
   }
 });
 
+Deno.test("standalone materialization emits its replayable Asset lifecycle", async () => {
+  const fixture = await createFixture();
+  try {
+    const prepared = await createContentPreparer({
+      createId: () => "asset-materialized",
+    }).prepare("standalone result", {
+      namespace: "tenant-a",
+      idempotencyKey: "materialized-a",
+    });
+    const first = await fixture.assets.materialize({
+      namespace: "tenant-a",
+      content: prepared,
+    });
+    const retried = await fixture.assets.materialize({
+      namespace: "tenant-a",
+      content: prepared,
+    });
+    assertEquals(first, retried);
+    assertEquals(
+      (await fixture.store.listEvents({ namespace: "tenant-a" })).map(
+        (event) => event.type,
+      ),
+      ["asset.created"],
+    );
+
+    await fixture.session.query(
+      `DELETE FROM ${fixture.store.tables.nodes} WHERE namespace = $1`,
+      ["tenant-a"],
+    );
+    assertEquals(
+      await fixture.assets.get("tenant-a", "asset-materialized"),
+      null,
+    );
+    await fixture.session.transaction((transaction) =>
+      rebuildNamespaceProjections(
+        transaction,
+        fixture.store,
+        [],
+        "tenant-a",
+      )
+    );
+    assertEquals(
+      new TextDecoder().decode(
+        (await fixture.assets.read("tenant-a", "asset-materialized")).bytes,
+      ),
+      "standalone result",
+    );
+  } finally {
+    await closeFixture(fixture);
+  }
+});
+
+Deno.test("concurrent multi-Asset materialization remaps a raced idempotency key", async () => {
+  const fixture = await createFixture();
+  try {
+    const prepare = async (
+      id: string,
+      value: string,
+      idempotencyKey: string,
+    ) =>
+      await createContentPreparer({ createId: () => id }).prepare(value, {
+        namespace: "tenant-a",
+        idempotencyKey,
+      });
+    const [sharedLeft, sharedRight, leftOnly, rightOnly] = await Promise.all([
+      prepare("asset-shared-left", "shared", "race-shared"),
+      prepare("asset-shared-right", "shared", "race-shared"),
+      prepare("asset-left-only", "left", "race-left"),
+      prepare("asset-right-only", "right", "race-right"),
+    ]);
+    const left = Object.freeze({
+      content: Object.freeze([
+        sharedLeft.content[0],
+        leftOnly.content[0],
+      ]),
+      assets: Object.freeze([
+        sharedLeft.assets[0],
+        leftOnly.assets[0],
+      ]),
+    });
+    const right = Object.freeze({
+      content: Object.freeze([
+        sharedRight.content[0],
+        rightOnly.content[0],
+      ]),
+      assets: Object.freeze([
+        sharedRight.assets[0],
+        rightOnly.assets[0],
+      ]),
+    });
+    const [leftRefs, rightRefs] = await Promise.all([
+      fixture.assets.materialize({ namespace: "tenant-a", content: left }),
+      fixture.assets.materialize({ namespace: "tenant-a", content: right }),
+    ]);
+    assertEquals(leftRefs[0].assetId, rightRefs[0].assetId);
+    assert(await fixture.assets.get("tenant-a", leftRefs[1].assetId));
+    assert(await fixture.assets.get("tenant-a", rightRefs[1].assetId));
+    assertEquals(
+      (await fixture.store.listEvents({ namespace: "tenant-a" })).filter(
+        (event) => event.type === "asset.created",
+      ).length,
+      3,
+    );
+  } finally {
+    await closeFixture(fixture);
+  }
+});
+
 Deno.test("prepared aggregate bodies roll back with their owner and semantic event", async () => {
   const fixture = await createFixture();
   try {
@@ -295,16 +409,19 @@ Deno.test("prepared aggregate bodies roll back with their owner and semantic eve
           deduplicationId: "example:owner-a",
         },
         mutate: async (context) => {
-          const content = await fixture.assets.materialize(context, {
-            namespace: "tenant-a",
-            content: prepared,
-          });
+          const content = await fixture.assets.materializeInTransaction(
+            context,
+            {
+              namespace: "tenant-a",
+              content: prepared,
+            },
+          );
           await context.transaction.query(
             `INSERT INTO ${context.tables.nodes}
                (id, namespace, type, name, data)
              VALUES ('owner-a', 'tenant-a', 'example', 'owner-a', '{}')`,
           );
-          await fixture.assets.linkOwner(context, {
+          await fixture.assets.linkOwnerInTransaction(context, {
             namespace: "tenant-a",
             ownerId: "owner-a",
             content,
@@ -328,6 +445,117 @@ Deno.test("prepared aggregate bodies roll back with their owner and semantic eve
     );
     assertEquals(Number(counts.rows[0].nodes), 0);
     assertEquals(Number(counts.rows[0].edges), 0);
+  } finally {
+    await closeFixture(fixture);
+  }
+});
+
+Deno.test("external bodies are prepared before Asset graph adoption", async () => {
+  const memory = createMemoryBodyStore({ backendId: "gcs:planned-assets" });
+  let puts = 0;
+  const objectStore = Object.freeze({
+    ...memory,
+    kind: "object" as const,
+    async put(input: Parameters<typeof memory.put>[0]) {
+      puts++;
+      return await memory.put(input);
+    },
+  });
+  const fixture = await createFixture({
+    storage: {
+      storage: {
+        type: "custom",
+        config: {
+          store: objectStore,
+          prefix: "copilotz",
+          deployment: {
+            durability: "ephemeral",
+            reach: "process",
+            minimumProtectionMs: 500,
+            readyGarbageCollection: true,
+          },
+        },
+      },
+    },
+  });
+  try {
+    const prepared = await createContentPreparer({
+      createId: () => "asset-planned-object",
+    }).prepare("prepared outside SQL", {
+      namespace: "tenant-a",
+      idempotencyKey: "planned-object",
+    });
+    const plan = await fixture.assets.prepareMaterialization({
+      namespace: "tenant-a",
+      content: prepared,
+    });
+
+    assertEquals(puts, 1);
+    assertEquals(plan.adoptions.map((item) => item.kind), ["ready"]);
+    assertEquals(plan.assets.length, 1);
+    assert(await memory.head({ bodyId: plan.assets[0].bodyId }));
+    assertEquals(
+      await fixture.assets.get("tenant-a", "asset-planned-object"),
+      null,
+    );
+
+    await fixture.session.transaction((transaction) =>
+      fixture.assets.adoptMaterialization({
+        transaction,
+        tables: fixture.store.tables,
+      }, plan)
+    );
+
+    assertEquals(puts, 1);
+    assert(await fixture.assets.get("tenant-a", "asset-planned-object"));
+  } finally {
+    await closeFixture(fixture);
+  }
+});
+
+Deno.test("database bodies and Asset metadata are adopted in one transaction", async () => {
+  const fixture = await createFixture();
+  try {
+    const prepared = await createContentPreparer({
+      createId: () => "asset-planned-database",
+    }).prepare("adopt inside SQL", {
+      namespace: "tenant-a",
+      idempotencyKey: "planned-database",
+    });
+    const plan = await fixture.assets.prepareMaterialization({
+      namespace: "tenant-a",
+      content: prepared,
+    });
+    const bodyId = plan.assets[0].bodyId;
+    const before = await fixture.session.query<{ n: number }>(
+      `SELECT count(*)::int AS n
+         FROM information_schema.tables
+        WHERE table_schema = 'copilotz_database_assets'
+          AND table_name = 'content_bodies'`,
+    );
+
+    assertEquals(plan.adoptions.map((item) => item.kind), ["database"]);
+    assertEquals(before.rows[0].n, 0);
+    assertEquals(
+      await fixture.assets.get("tenant-a", "asset-planned-database"),
+      null,
+    );
+
+    await fixture.session.transaction((transaction) =>
+      fixture.assets.adoptMaterialization({
+        transaction,
+        tables: fixture.store.tables,
+      }, plan)
+    );
+
+    const after = await fixture.session.query<{ n: number }>(
+      `SELECT count(*)::int AS n
+         FROM "copilotz_database_assets"."content_bodies"
+        WHERE body_id = $1`,
+      [bodyId],
+    );
+    assertEquals(after.rows[0].n, 1);
+    assert(await fixture.assets.get("tenant-a", "asset-planned-database"));
   } finally {
     await closeFixture(fixture);
   }
@@ -366,7 +594,16 @@ Deno.test("object-backed assets persist provenance paths and keep bodies outside
     storage: {
       storage: {
         type: "custom",
-        config: { store: objectStore, prefix: "copilotz" },
+        config: {
+          store: objectStore,
+          prefix: "copilotz",
+          deployment: {
+            durability: "ephemeral",
+            reach: "process",
+            minimumProtectionMs: 500,
+            readyGarbageCollection: true,
+          },
+        },
       },
     },
   });
@@ -385,7 +622,7 @@ Deno.test("object-backed assets persist provenance paths and keep bodies outside
     assertEquals(asset.location.kind, "object");
     assertEquals(
       asset.location.kind === "object" ? asset.location.key : "",
-      "copilotz/schemas/copilotz_database_assets/namespaces/tenant-a/threads/thread-a/tool_execution/tool-a/assets/asset-object",
+      "copilotz/schemas/copilotz_database_assets/namespaces/tenant-a/origins/thread/thread-a/tool_execution/tool-a/assets/asset-object",
     );
     const row = await fixture.session.query<{ data: unknown }>(
       `SELECT data FROM ${fixture.store.tables.nodes} WHERE id = 'asset-object'`,
@@ -411,7 +648,7 @@ Deno.test("object-backed assets persist provenance paths and keep bodies outside
 Deno.test("asset maintenance retries body deletion and removes old orphan uploads", async () => {
   const memory = createMemoryBodyStore({
     backendId: "gcs:maintenance",
-    protectionMs: 0,
+    protectionMs: 500,
   });
   let rejectNextDelete = true;
   const objectStore = Object.freeze({
@@ -432,7 +669,16 @@ Deno.test("asset maintenance retries body deletion and removes old orphan upload
     storage: {
       storage: {
         type: "custom",
-        config: { store: objectStore, prefix: "copilotz" },
+        config: {
+          store: objectStore,
+          prefix: "copilotz",
+          deployment: {
+            durability: "ephemeral",
+            reach: "process",
+            minimumProtectionMs: 500,
+            readyGarbageCollection: true,
+          },
+        },
       },
     },
   });
@@ -482,17 +728,25 @@ Deno.test("asset maintenance retries body deletion and removes old orphan upload
       digest: await digestContent(orphanBytes),
       ifAbsent: true,
     });
+    await new Promise((resolve) => setTimeout(resolve, 550));
 
     const maintained = await fixture.assets.maintainBodies({
-      now: new Date("2030-01-01T00:00:00.000Z"),
-      orphanAfterMs: 24 * 60 * 60 * 1_000,
+      orphanAfterMs: 0,
     });
     assertEquals(maintained, {
-      retriedDeletions: 1,
       orphanedBodiesDeleted: 1,
     });
-    assertEquals(await memory.head({ bodyId: key }), null);
     assert(await memory.head({ bodyId: keepKey }));
+    const pendingBody = await memory.head({ bodyId: key });
+    const orphanBody = await memory.head({ bodyId: orphanKey });
+    assertEquals(Number(pendingBody !== null) + Number(orphanBody !== null), 1);
+    assertEquals(
+      await fixture.assets.maintainBodies({
+        orphanAfterMs: 0,
+      }),
+      { orphanedBodiesDeleted: 1 },
+    );
+    assertEquals(await memory.head({ bodyId: key }), null);
     assertEquals(await memory.head({ bodyId: orphanKey }), null);
   } finally {
     await closeFixture(fixture);

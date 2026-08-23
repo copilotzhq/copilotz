@@ -7,9 +7,12 @@ import {
 } from "./index.ts";
 import { createTestDatabase } from "../testing/ominipg.ts";
 import { listen } from "../adapters/deno/listen.ts";
-import { type AnyCopilotzPlugin, definePlugin } from "../plugins/index.ts";
+import {
+  type AnyCopilotzPlugin,
+  definePlugin,
+  type ProcessorContext,
+} from "../plugins/index.ts";
 import { defineProcessor } from "../plugins/processor.ts";
-import type { CopilotzProcessorContext } from "../engine/index.ts";
 import type { CopilotzDatabase } from "./persistence.ts";
 import { isCopilotzPersistenceError } from "./persistence.ts";
 import { coreCollectionsPlugin } from "../../plugins/core/plugin.ts";
@@ -18,7 +21,7 @@ import { projectMessages } from "../testing/projections.ts";
 
 const namespace = "copilotz-topology-test";
 function cascadingPlugin(): AnyCopilotzPlugin {
-  const first = defineProcessor<CopilotzProcessorContext>({
+  const first = defineProcessor<ProcessorContext>({
     id: "topology.first",
     on: [{
       eventType: "message.created",
@@ -27,26 +30,40 @@ function cascadingPlugin(): AnyCopilotzPlugin {
     async handle(event, context) {
       assert(event.durable);
       assertExists(event.threadId);
-      const content = await context.content.prepare("first worker reply", {
-        operationKey: "first-content",
+      const stream = await context.streams.open({
+        id: "topology-first-stream",
+        mediaType: "text/plain",
+        role: "assistant",
+        metadata: {
+          threadId: event.threadId,
+          participantId: "topology-agent",
+        },
+        correlationId: event.correlationId,
       });
-      const persisted = await context.content.materialize(content);
+      await stream.append({
+        bytes: new TextEncoder().encode("first worker reply"),
+        appendId: "topology-first-chunk",
+      });
+      const persisted = await stream.close({
+        assetId: "topology-first-reply-content",
+      });
       await context.collections.message.create({
         id: "topology-first-reply",
         threadId: event.threadId,
         senderId: "topology-agent",
         recipientIds: ["topology-user"],
         content: persisted,
-      }, { operationKey: "first-message" });
-      await context.content.linkOwner("topology-first-reply", persisted);
-      await context.events.emit({
-        type: "text.delta",
+      }, {
+        operationKey: "first-message",
         threadId: event.threadId,
-        payload: { text: "first worker reply" },
+        routing: {
+          senderId: "topology-agent",
+          recipientIds: ["topology-user"],
+        },
       });
     },
   });
-  const second = defineProcessor<CopilotzProcessorContext>({
+  const second = defineProcessor<ProcessorContext>({
     id: "topology.second",
     on: [{
       eventType: "message.created",
@@ -58,15 +75,20 @@ function cascadingPlugin(): AnyCopilotzPlugin {
       const content = await context.content.prepare("cascaded worker reply", {
         operationKey: "second-content",
       });
-      const persisted = await context.content.materialize(content);
       await context.collections.message.create({
         id: "topology-second-reply",
         threadId: event.threadId,
         senderId: "topology-second-agent",
         recipientIds: ["topology-user"],
-        content: persisted,
-      }, { operationKey: "second-message" });
-      await context.content.linkOwner("topology-second-reply", persisted);
+        content,
+      }, {
+        operationKey: "second-message",
+        threadId: event.threadId,
+        routing: {
+          senderId: "topology-second-agent",
+          recipientIds: ["topology-user"],
+        },
+      });
     },
   });
   return definePlugin({
@@ -157,7 +179,7 @@ Deno.test("Gateway and Worker preserve live output and cascading durable work", 
       3,
     );
     assertEquals(
-      observed.filter((event) => event.type === "text.delta").length,
+      observed.filter((event) => event.type === "stream.output").length,
       1,
     );
     assertEquals(
@@ -374,7 +396,7 @@ Deno.test({
         3,
       );
       assertEquals(
-        observed.filter((event) => event.type === "text.delta").length,
+        observed.filter((event) => event.type === "stream.output").length,
         1,
       );
       assertEquals(worker.snapshot().transport, "websocket");

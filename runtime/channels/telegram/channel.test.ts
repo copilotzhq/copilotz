@@ -9,12 +9,15 @@ import {
 } from "../../../runtime/testing/projections.ts";
 import type { Agent } from "../../resources/index.ts";
 import { createCopilotzApplication } from "../../application/index.ts";
-import type { CopilotzProcessorContext } from "../../engine/index.ts";
 import {
   loadMessageRecord,
   loadParticipantRecord,
 } from "../../engine/collection-graph.ts";
-import { definePlugin, defineProcessor } from "../../plugins/index.ts";
+import {
+  definePlugin,
+  defineProcessor,
+  type ProcessorContext,
+} from "../../plugins/index.ts";
 import { message as coreMessage } from "../../../plugins/core/index.ts";
 import { coreCollectionsPlugin } from "../../../plugins/core/plugin.ts";
 import { createChannelRuntime } from "../runtime.ts";
@@ -56,7 +59,7 @@ function fakeTransport() {
 }
 
 function replyPlugin() {
-  const processor = defineProcessor<CopilotzProcessorContext>({
+  const processor = defineProcessor<ProcessorContext>({
     id: "telegram.reply",
     on: [{ eventType: "message.created" }],
     async handle(event, context) {
@@ -69,16 +72,6 @@ function replyPlugin() {
         input.recipientIds[0],
       );
       assertExists(recipient);
-      await context.events.emit({
-        type: "action.created",
-        payload: {
-          action: {
-            type: "reply_buttons",
-            message: "Choose",
-            content: [{ text: "Open", payload: "open" }],
-          },
-        },
-      });
       const content = await context.content.prepare([
         "Telegram reply",
         {
@@ -87,15 +80,20 @@ function replyPlugin() {
           mediaType: "audio/ogg",
         },
       ], { operationKey: "telegram-reply-content" });
-      const persisted = await context.content.materialize(content);
       await context.collections.message.create({
         id: `reply:${input.id}`,
         threadId: input.threadId,
         senderId: recipient.id,
         recipientIds: [input.sender.id],
-        content: persisted,
+        content,
+        metadata: {
+          action: {
+            type: "reply_buttons",
+            message: "Choose",
+            content: [{ text: "Open", payload: "open" }],
+          },
+        },
       }, { operationKey: "telegram-reply-message" });
-      await context.content.linkOwner(`reply:${input.id}`, persisted);
     },
   });
   return definePlugin({
@@ -149,10 +147,10 @@ Deno.test("Telegram channel preserves identity, canonical media, buttons, and na
       "sendMessage",
       "sendMessage",
     ]);
-    assertEquals(fake.calls[0].body.reply_markup, {
+    assertEquals(fake.calls[0].body.text, "Telegram reply");
+    assertEquals(fake.calls[1].body.reply_markup, {
       inline_keyboard: [[{ text: "Open", callback_data: "open" }]],
     });
-    assertEquals(fake.calls[1].body.text, "Telegram reply");
     assertEquals(fake.media.map((value) => value.mediaType), ["audio/ogg"]);
     const thread = await projectThreadByExternalId(
       application,

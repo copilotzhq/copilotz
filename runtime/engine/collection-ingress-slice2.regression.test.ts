@@ -10,13 +10,7 @@ import { createPluginRegistry, definePlugin } from "../plugins/index.ts";
 import { createTestDatabase } from "../testing/ominipg.ts";
 import { createCopilotzEngine } from "./index.ts";
 import { createTestDomainContext } from "../../runtime/testing/domain-context.ts";
-import {
-  projectMessages,
-  projectParticipants,
-  projectThreadByExternalId,
-  projectThreadById,
-  projectThreads,
-} from "../../runtime/testing/projections.ts";
+import { projectThreadById } from "../../runtime/testing/projections.ts";
 
 const NAMESPACE = "tenant-collection-ingress-slice-2";
 

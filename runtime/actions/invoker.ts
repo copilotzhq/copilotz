@@ -4,10 +4,10 @@ import type {
   ActionCallers,
   ActionCallOptions,
   ActionContext,
-  ActionIdentity,
   ActionMap,
   ActionTransactionOptions,
   AnyActionDefinition,
+  RuntimeIdentity,
 } from "./types.ts";
 import type {
   ActionEventData,
@@ -24,15 +24,16 @@ export type ActionInvocationFrame = Readonly<{
   rootKey: string;
   operationKey: string;
   parentActionRunId?: string;
-  identity?: ActionIdentity;
-  signal?: AbortSignal;
+  identity?: RuntimeIdentity;
+  signal: AbortSignal;
   nextActionIndex(): number;
 }>;
 
 export type CreateActionCallersOptions = Readonly<{
   actionLifecycle: ActionLifecycleEmitter;
   createInvocationKey?: (actionId: string) => string;
-  identity?: ActionIdentity;
+  identity?: RuntimeIdentity;
+  signal: AbortSignal;
   createContext(
     input: Readonly<{
       frame: ActionInvocationFrame;
@@ -56,18 +57,17 @@ function requireAlias(alias: string): string {
 }
 
 function mergeSignal(
-  parent: AbortSignal | undefined,
+  parent: AbortSignal,
   child: AbortSignal | undefined,
-): AbortSignal | undefined {
-  if (!parent) return child;
+): AbortSignal {
   if (!child || child === parent) return parent;
   return AbortSignal.any([parent, child]);
 }
 
 function mergeIdentity(
-  parent: ActionIdentity | undefined,
-  child: ActionIdentity | undefined,
-): ActionIdentity | undefined {
+  parent: RuntimeIdentity | undefined,
+  child: RuntimeIdentity | undefined,
+): RuntimeIdentity | undefined {
   if (!parent) return child;
   if (!child) return parent;
   return Object.freeze({
@@ -84,7 +84,7 @@ function mergeIdentity(
  * the Action explicitly supplies one for that transaction.
  */
 export function actionTransactionIdentity(
-  action: ActionIdentity | undefined,
+  action: RuntimeIdentity | undefined,
   transaction: ActionTransactionOptions["identity"],
 ): ActionTransactionOptions["identity"] {
   const causationId = transaction?.causationId ?? action?.causationId;
@@ -161,7 +161,7 @@ function createFrame(
     parent?.identity ?? invoker.identity,
     options.identity,
   );
-  const signal = mergeSignal(parent?.signal, options.signal);
+  const signal = mergeSignal(parent?.signal ?? invoker.signal, options.signal);
   const hostInvocationKey = parent
     ? undefined
     : invoker.createInvocationKey?.(action.id)?.trim() || undefined;
@@ -186,7 +186,7 @@ function createFrame(
     operationKey: actionRunId,
     ...(parent ? { parentActionRunId: parent.actionRunId } : {}),
     ...(identity ? { identity } : {}),
-    ...(signal ? { signal } : {}),
+    signal,
     nextActionIndex: () => ++actionIndex,
   });
 }

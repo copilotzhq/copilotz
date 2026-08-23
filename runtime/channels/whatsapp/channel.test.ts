@@ -10,12 +10,15 @@ import {
 } from "../../../runtime/testing/projections.ts";
 import type { Agent } from "../../resources/index.ts";
 import { createCopilotzApplication } from "../../application/index.ts";
-import type { CopilotzProcessorContext } from "../../engine/index.ts";
 import {
   loadMessageRecord,
   loadParticipantRecord,
 } from "../../engine/collection-graph.ts";
-import { definePlugin, defineProcessor } from "../../plugins/index.ts";
+import {
+  definePlugin,
+  defineProcessor,
+  type ProcessorContext,
+} from "../../plugins/index.ts";
 import { coreCollectionsPlugin } from "../../../plugins/core/plugin.ts";
 import { createChannelRuntime } from "../runtime.ts";
 import {
@@ -83,7 +86,7 @@ function fakeTransport() {
 }
 
 function replyPlugin() {
-  const processor = defineProcessor<CopilotzProcessorContext>({
+  const processor = defineProcessor<ProcessorContext>({
     id: "whatsapp.reply",
     on: [{ eventType: "message.created" }],
     async handle(event, context) {
@@ -96,16 +99,6 @@ function replyPlugin() {
         message.recipientIds[0],
       );
       assertExists(recipient);
-      await context.events.emit({
-        type: "action.created",
-        payload: {
-          action: {
-            type: "reply_buttons",
-            message: "Choose",
-            content: [{ text: "Yes", payload: "yes" }],
-          },
-        },
-      });
       const content = await context.content.prepare([
         "Native WhatsApp reply",
         {
@@ -115,15 +108,20 @@ function replyPlugin() {
           name: "answer.ogg",
         },
       ], { operationKey: "reply-content" });
-      const persisted = await context.content.materialize(content);
       await context.collections.message.create({
         id: `reply:${message.id}`,
         threadId: message.threadId,
         senderId: recipient.id,
         recipientIds: [message.sender.id],
-        content: persisted,
+        content,
+        metadata: {
+          action: {
+            type: "reply_buttons",
+            message: "Choose",
+            content: [{ text: "Yes", payload: "yes" }],
+          },
+        },
       }, { operationKey: "reply-message" });
-      await context.content.linkOwner(`reply:${message.id}`, persisted);
     },
   });
   return definePlugin({
@@ -214,14 +212,14 @@ Deno.test("WhatsApp channel normalizes signed media ingress and native semantic 
     assertEquals(fake.uploads[0].bytes, bytes(9, 8, 7));
     assertEquals(
       fake.sends.map((value) => value.type),
-      ["interactive", "text", "audio"],
+      ["text", "audio", "interactive"],
     );
     assertEquals(
-      (fake.sends[0].interactive as Record<string, unknown>).type,
+      (fake.sends[2].interactive as Record<string, unknown>).type,
       "button",
     );
-    assertEquals(fake.sends[1].text, { body: "Native WhatsApp reply" });
-    assertEquals(fake.sends[2].audio, { id: "uploaded-1" });
+    assertEquals(fake.sends[0].text, { body: "Native WhatsApp reply" });
+    assertEquals(fake.sends[1].audio, { id: "uploaded-1" });
 
     const thread = await projectThreadByExternalId(
       application,

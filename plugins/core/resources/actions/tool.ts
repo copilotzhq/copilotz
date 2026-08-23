@@ -85,7 +85,6 @@ async function executeCall(
     arguments: args,
     context: toolContext,
     sourceEvent: event,
-    idempotencyKey: context.operationKey ?? String(execution.id),
   }, {
     defaultTimeoutMs: options.toolExecutionTimeoutMs ??
       DEFAULT_TOOL_TIMEOUT_MS,
@@ -95,14 +94,7 @@ async function executeCall(
         throw new Error("Runtime content stream is not configured.");
       }
       return streamRuntime.open({
-        id: input.id,
-        threadId: input.threadId,
-        role: input.lane,
-        mediaType: input.mediaType,
-        participantId: input.participantId,
-        metadata: input.metadata,
-        routing: input.routing,
-        visibility: input.visibility,
+        ...input,
         correlationId: event.correlationId,
       });
     },

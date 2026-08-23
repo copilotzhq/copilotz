@@ -1,8 +1,5 @@
 import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
-import {
-  type CopilotzProcessorContext,
-  createCopilotzEngine,
-} from "../engine/index.ts";
+import { createCopilotzEngine } from "../engine/index.ts";
 import { createTestDomainContext } from "../../runtime/testing/domain-context.ts";
 import {
   projectMessageById,
@@ -18,6 +15,7 @@ import {
   definePlugin,
   defineProcessor,
   type PluginRegistry,
+  type ProcessorContext,
 } from "../plugins/index.ts";
 import { coreCollectionsPlugin } from "../../plugins/core/plugin.ts";
 import type { AttachmentOutput, AttachmentStreamOutput } from "./index.ts";
@@ -150,20 +148,10 @@ async function nextSemanticType(
   }
 }
 
-async function nextStreamOutput(
-  reader: ReadableStreamDefaultReader<AttachmentOutput>,
-) {
-  while (true) {
-    const next = await reader.read();
-    if (next.done) throw new Error("Attachment outputs closed unexpectedly.");
-    if (isStreamOutput(next.value)) return next.value;
-  }
-}
-
 Deno.test("event-native run is a temporary attachment over one causal scope", async () => {
   let release!: () => void;
   const gate = new Promise<void>((resolve) => release = resolve);
-  const processor = defineProcessor<CopilotzProcessorContext>({
+  const processor = defineProcessor<ProcessorContext>({
     id: "test.run-gate",
     on: [{ eventType: "message.created" }],
     handle: () => gate,
@@ -231,7 +219,7 @@ Deno.test("detached durable descendants do not block the triggering run", async 
   const descendantStarted = new Promise<void>((resolve) => {
     announceDescendant = resolve;
   });
-  const reserve = defineProcessor<CopilotzProcessorContext>({
+  const reserve = defineProcessor<ProcessorContext>({
     id: "test.detached-reserve",
     on: [{ eventType: "message.created" }],
     settlement: "detached",
@@ -242,9 +230,12 @@ Deno.test("detached durable descendants do not block the triggering run", async 
       }, { operationKey: "detached-reserve-thread" });
     },
   });
-  const descendant = defineProcessor<CopilotzProcessorContext>({
+  const descendant = defineProcessor<ProcessorContext>({
     id: "test.detached-descendant",
-    on: [{ eventType: "thread.updated" }],
+    on: [{
+      eventType: "thread.updated",
+      data: { set: { metadata: { detached: true } } },
+    }],
     async handle() {
       announceDescendant();
       await gate;
@@ -297,7 +288,7 @@ Deno.test("run cancellation aborts only its foreground settlement scope", async 
     announceForegroundStarted = resolve;
   });
   let foregroundAborted = false;
-  const foreground = defineProcessor<CopilotzProcessorContext>({
+  const foreground = defineProcessor<ProcessorContext>({
     id: "test.run-cancellation",
     on: [{ eventType: "message.created" }],
     async handle(_event, context) {
@@ -321,7 +312,7 @@ Deno.test("run cancellation aborts only its foreground settlement scope", async 
     announceDetachedStarted = resolve;
   });
   let detachedAborted = false;
-  const detached = defineProcessor<CopilotzProcessorContext>({
+  const detached = defineProcessor<ProcessorContext>({
     id: "test.detached-cancellation",
     on: [{ eventType: "message.created" }],
     settlement: "detached",
@@ -512,74 +503,6 @@ Deno.test("ephemeral attachment handles settle with independent live processors"
     await reader.cancel();
   } finally {
     release?.();
-    await closeFixture(fixture);
-  }
-});
-
-Deno.test("attachment outputs follow runtime content streams as live bytes", async () => {
-  const processor = defineProcessor<CopilotzProcessorContext>({
-    id: "test.attachment-content-stream-write",
-    on: [{ eventType: "message.created" }],
-    async handle(event, context) {
-      if (!event.durable || !event.threadId) return;
-      const stream = context.streams;
-      if (!stream) throw new Error("Runtime content stream is not configured.");
-      const writer = await stream.open({
-        id: "runtime-stream-a",
-        threadId: event.threadId,
-        role: "content",
-        mediaType: "text/plain",
-        participantId: event.routing.senderId,
-        correlationId: event.correlationId,
-      });
-      await writer.append({
-        bytes: new TextEncoder().encode("hello stream"),
-        appendId: "test-stream:1",
-      });
-      await writer.close({ assetId: "runtime-stream-a" });
-    },
-  });
-  const fixture = await createFixture({
-    registry: await registryFor({ processors: [processor] }),
-  });
-  try {
-    await createThread(fixture.engine);
-    const attachment = await fixture.engine.connect({
-      namespace: NAMESPACE,
-      thread: "thread-a",
-      participant: "user-a",
-    });
-    const reader = attachment.outputs.getReader();
-    const sent = attachment.send({
-      content: [{ type: "text", text: "Start a stream." }],
-    });
-    const output = await nextStreamOutput(reader);
-    assertEquals(output.type, "stream.output");
-    assertEquals(output.streamId, "runtime-stream-a");
-    assertEquals(output.mediaType, "text/plain");
-    assertEquals(output.metadata.role, "content");
-    const pending = output.payload.getReader();
-    const chunks: Uint8Array[] = [];
-    const reading = (async () => {
-      while (true) {
-        const next = await pending.read();
-        if (next.done) break;
-        chunks.push(next.value);
-      }
-    })();
-    await (await sent).done;
-    await reading;
-    const bytes = new Uint8Array(
-      chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0),
-    );
-    let offset = 0;
-    for (const chunk of chunks) {
-      bytes.set(chunk, offset);
-      offset += chunk.byteLength;
-    }
-    assertEquals(new TextDecoder().decode(bytes), "hello stream");
-    await reader.cancel();
-  } finally {
     await closeFixture(fixture);
   }
 });

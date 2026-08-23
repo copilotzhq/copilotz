@@ -16,7 +16,7 @@ export type CollectionRelation = Readonly<{
   collection: string;
   foreignKey: string;
   edgeType?: string;
-  /** Default parent→child. `child-to-parent` is `participates_in` (participant→thread). */
+  /** Direction of the projected edge relative to the owning Collection. */
   edge?: "parent-to-child" | "child-to-parent";
 }>;
 
@@ -87,7 +87,6 @@ export type CollectionDefinition<
   identity?: Readonly<{ sourceType: string; sourceField: string }>;
   search?: Readonly<{ enabled: boolean; fields: readonly string[] }>;
   content?: Readonly<{ fields: readonly string[] }>;
-  bodyRefs?: Readonly<{ fields: readonly string[] }>;
   beforeCreate?: (
     data: Record<string, unknown>,
     context: CollectionHookContext,
@@ -300,13 +299,6 @@ export function defineCollection<S extends JsonSchema>(
       ? {
         content: Object.freeze({
           fields: Object.freeze([...input.content.fields]),
-        }),
-      }
-      : {}),
-    ...(input.bodyRefs
-      ? {
-        bodyRefs: Object.freeze({
-          fields: Object.freeze([...input.bodyRefs.fields]),
         }),
       }
       : {}),

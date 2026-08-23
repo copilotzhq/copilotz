@@ -11,7 +11,6 @@ export type {
   CollectionRelation,
 } from "./definition.ts";
 export {
-  activeCollectionTransaction,
   createCollectionRuntime,
   resolveCollectionEventBody,
 } from "./kernel.ts";
@@ -22,6 +21,7 @@ export type {
   CollectionScope,
   CollectionTransactionCollections,
   CollectionTransactionOptions,
+  CollectionTransactionRelations,
   CollectionTransactionResult,
   CreateCollectionRuntimeOptions,
   ScopedCollection,
@@ -29,13 +29,15 @@ export type {
   ScopedCollectionCommand,
   ScopedCollectionDeleteInput,
   ScopedCollectionNamedQuery,
+  ScopedCollectionReadOptions,
   ScopedCollections,
   ScopedCollectionUpdateInput,
+  TransactionCollection,
 } from "./kernel.ts";
 export {
   foldCollectionBodies,
   isCollectionEvent,
-  rebuildCollectionProjections,
+  rebuildNamespaceProjections,
   verifyCollectionProjections,
 } from "./replay.ts";
 export { isCollectionNoop } from "./types.ts";
@@ -45,14 +47,21 @@ export type {
   CollectionDurableEvent,
   CollectionEventBody,
   CollectionEventOperation,
+  CollectionGraphRelation,
   CollectionMutation,
   CollectionMutationIdentity,
+  CollectionMutationIntent,
+  CollectionMutationRef,
   CollectionNoop,
   CollectionQuery,
   CollectionQueryOrder,
   CollectionRecord,
+  CollectionRelationQuery,
   CollectionUpdated,
   CollectionUpdatePatch,
   CollectionWrite,
   CollectionWriteOptions,
+  GraphRelationEventBody,
+  GraphRelationIntent,
+  GraphRelationUpsertInput,
 } from "./types.ts";

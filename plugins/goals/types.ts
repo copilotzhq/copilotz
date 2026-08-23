@@ -223,7 +223,7 @@ export type GoalRuntime = Readonly<{
 
 export type CreateGoalRuntimeOptions = Readonly<{
   registry: Pick<PluginRegistry, "resources">;
-  collectionRuntime: CollectionRuntime;
+  collections: CollectionRuntime;
   actions(namespace: string): Readonly<{
     createThread: ActionCaller<typeof createThreadAction>;
     addThreadParticipant: ActionCaller<typeof addThreadParticipantAction>;

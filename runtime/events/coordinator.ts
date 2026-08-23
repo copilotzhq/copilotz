@@ -43,7 +43,10 @@ export type CoordinatedMutationResult<T> =
 
 export type EventPublisher = (
   event: CopilotzEvent,
-  context?: Readonly<{ settlementScopeId: string }>,
+  context?: Readonly<{
+    databaseSchema?: string;
+    settlementScopeId?: string;
+  }>,
 ) => void | Promise<void>;
 
 export type CreateEventCoordinatorOptions = Readonly<{
@@ -179,13 +182,14 @@ export function createEventCoordinator(
   const flushCommitted = async (
     result: CommitEventMutationResult<unknown>,
   ): Promise<EventDispatchReport> => {
-    if (result.deduplicated) return EMPTY_DISPATCH;
-    try {
-      await options.publish?.(result.event, {
-        settlementScopeId: result.settlementScopeId,
-      });
-    } catch {
-      // Publication cannot roll back already committed domain state.
+    if (!result.deduplicated) {
+      try {
+        await options.publish?.(result.event, {
+          settlementScopeId: result.settlementScopeId,
+        });
+      } catch {
+        // Publication cannot roll back already committed domain state.
+      }
     }
     return await dispatch(result);
   };

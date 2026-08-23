@@ -429,14 +429,14 @@ async function closeFixture(fixture: Fixture): Promise<void> {
 }
 
 function boundCollection(engine: CopilotzEngine, name: string) {
-  const collection = engine.collectionRuntime.get(name);
+  const collection = engine.collections.get(name);
   if (!collection) {
     throw new Error(`Collection '${name}' is not bound.`);
   }
   return collection;
 }
 
-async function persistPreparedContent(
+async function materializeStandaloneContent(
   engine: CopilotzEngine,
   prepared: Awaited<
     ReturnType<CopilotzEngine["content"]["preparer"]["prepare"]>
@@ -493,7 +493,7 @@ async function startContentRun(
     threadId: "thread-a",
     senderId: "user-a",
     recipientIds: [agentParticipantId],
-    content: await persistPreparedContent(fixture.engine, prepared),
+    content: prepared,
     metadata: {},
   }, {
     namespace,
@@ -1097,19 +1097,12 @@ Deno.test("revising a human turn runs the agent from the projected branch", asyn
     );
     assertEquals(beforeRevision.length, 2);
 
-    const content = await fixture.engine.content.preparer.prepare(
-      "Revised question",
-      {
-        namespace: "tenant-a",
-        idempotencyKey: "message:user:revision:1:content",
-      },
-    );
     await createTestDomainContext(fixture.engine, "tenant-a").actions
       .reviseMessage({
         id: "message:user:revision:1",
         threadId: "thread-a",
         messageId: "message:user",
-        content: await persistPreparedContent(fixture.engine, content),
+        content: "Revised question",
       }, {
         identity: {
           correlationId: "run-a:revision:1",
@@ -1635,7 +1628,7 @@ Deno.test("participant-relative history labels peer agents and enforces tool and
       text: "south private reasoning",
       role: "reasoning",
     }, { namespace: "tenant-a", idempotencyKey: "peer:reasoning" });
-    const peerReasoningRefs = await persistPreparedContent(
+    const peerReasoningRefs = await materializeStandaloneContent(
       fixture.engine,
       peerReasoning,
     );
@@ -1644,7 +1637,7 @@ Deno.test("participant-relative history labels peer agents and enforces tool and
       threadId: "thread-a",
       senderId: "agent-south",
       recipientIds: [],
-      content: await persistPreparedContent(fixture.engine, peerAnswer),
+      content: peerAnswer,
       metadata: {
         llmReasoning: peerReasoningRefs,
         copilotzWorkflow: {
@@ -1675,7 +1668,7 @@ Deno.test("participant-relative history labels peer agents and enforces tool and
         threadId: "thread-a",
         senderId: "tool-contract",
         recipientIds: [],
-        content: await persistPreparedContent(fixture.engine, projected),
+        content: projected,
         metadata: {
           requesterId: "agent-south",
           historyVisibility: visibility,
@@ -1717,7 +1710,7 @@ Deno.test("participant-relative history labels peer agents and enforces tool and
       threadId: "thread-a",
       senderId: "user-a",
       recipientIds: ["agent-north"],
-      content: await persistPreparedContent(fixture.engine, userBody),
+      content: userBody,
       metadata: {},
     }, {
       namespace: "tenant-a",

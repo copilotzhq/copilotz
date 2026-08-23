@@ -1,12 +1,12 @@
 import type { CollectionRecord } from "../collections/index.ts";
 import type { Agent } from "../resources/index.ts";
 import { assetIdFromRef } from "../content/index.ts";
-import type { ContentStreamWriter, PreparedContent } from "../content/index.ts";
 import type {
-  CopilotzEvent,
-  EventRouting,
-  EventVisibility,
-} from "../events/index.ts";
+  ContentStreamOpenInput,
+  ContentStreamWriter,
+  PreparedContent,
+} from "../content/index.ts";
+import type { CopilotzEvent } from "../events/index.ts";
 import {
   loadParticipantRecord,
   loadThreadRecord,
@@ -91,21 +91,14 @@ export type WorkflowToolExecutor = (
     availableTools?: readonly WorkflowTool[];
     arguments: unknown;
     context: WorkflowToolHostContext;
-    sourceEvent?: CopilotzEvent;
-    idempotencyKey?: string;
+    sourceEvent: CopilotzEvent;
   }>,
 ) => Promise<WorkflowToolOutcome>;
 
-export type OpenWorkflowToolOutputStreamInput = Readonly<{
-  threadId: string;
-  lane: string;
-  mediaType: string;
-  participantId?: string;
-  metadata?: Record<string, unknown>;
-  id?: string;
-  routing?: EventRouting;
-  visibility?: EventVisibility;
-}>;
+export type OpenWorkflowToolOutputStreamInput = Omit<
+  ContentStreamOpenInput,
+  "correlationId"
+>;
 
 export type OpenWorkflowToolOutputStream = (
   input: OpenWorkflowToolOutputStreamInput,
@@ -210,8 +203,7 @@ export async function executeTool(
     availableTools?: readonly WorkflowTool[];
     arguments: unknown;
     context: WorkflowToolHostContext;
-    sourceEvent?: CopilotzEvent;
-    idempotencyKey?: string;
+    sourceEvent: CopilotzEvent;
   }>,
   options: CreateWorkflowToolExecutorOptions = {},
 ): Promise<WorkflowToolOutcome> {
@@ -229,24 +221,11 @@ function createExecutor(
     tool,
     arguments: args,
     context,
-    sourceEvent: suppliedSourceEvent,
-    idempotencyKey: suppliedIdempotencyKey,
+    sourceEvent,
     availableTools = Object.values(context.resources.tools ?? {}).filter(
       isWorkflowTool,
     ),
   }) => {
-    const legacy = context as
-      & WorkflowToolHostContext
-      & Readonly<{
-        event?: CopilotzEvent;
-        idempotencyKey?: string;
-      }>;
-    const sourceEvent = suppliedSourceEvent ?? legacy.event;
-    if (!sourceEvent) {
-      throw new TypeError("Tool execution requires a source Event.");
-    }
-    const idempotencyKey = suppliedIdempotencyKey ?? legacy.idempotencyKey ??
-      `tool:${execution.id}`;
     const started = Date.now();
     const toolId = typeof execution.tool.id === "string"
       ? execution.tool.id
@@ -310,12 +289,8 @@ function createExecutor(
         throw new Error("Workflow tool live output stream is not configured.");
       }
       const created = options.openStream({
-        threadId: execution.threadId,
-        lane: "tool_output",
+        role: "tool_output",
         mediaType: "application/x-ndjson",
-        ...(execution.participantId
-          ? { participantId: execution.participantId }
-          : {}),
         metadata: {
           toolExecutionId: execution.id,
           toolCallId: execution.toolCallId,
@@ -324,11 +299,17 @@ function createExecutor(
               execution.tool.name.trim()
             ? { toolName: execution.tool.name.trim() }
             : {}),
+          core: {
+            threadId: execution.threadId,
+            ...(execution.participantId
+              ? { participantId: execution.participantId }
+              : {}),
+            routing: execution.participantId
+              ? { senderId: execution.participantId }
+              : {},
+            visibility: sourceEvent.visibility,
+          },
         },
-        routing: execution.participantId
-          ? { senderId: execution.participantId }
-          : {},
-        visibility: sourceEvent.visibility,
       });
       writers.set(key, created);
       return created;
@@ -399,7 +380,7 @@ function createExecutor(
     const toolContext: WorkflowToolExecutionContext = {
       namespace: context.namespace,
       correlationId: sourceEvent.correlationId,
-      idempotencyKey,
+      idempotencyKey: context.operationKey,
       execution,
       processor: context,
       threadId: execution.threadId,

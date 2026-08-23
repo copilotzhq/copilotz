@@ -5,7 +5,7 @@ import {
 } from "./persistence.ts";
 import { type CopilotzEngine, createCopilotzEngine } from "../engine/index.ts";
 import { createPluginRegistry } from "../plugins/index.ts";
-import type { AttachmentOutput } from "../attachments/index.ts";
+import type { CopilotzEvent } from "../events/index.ts";
 import type {
   ApplicationSendHandle,
   ApplicationSendInput,
@@ -68,14 +68,16 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
 }
 
 async function waitForApplicationScope(
-  engine: Pick<CopilotzEngine, "events">,
+  eventScope: Pick<CopilotzEngine, "events">,
+  execution: Pick<CopilotzEngine["execution"], "settleOutputs">,
+  databaseSchema: string,
   namespace: string,
   settlementScopeId: string,
   signal: AbortSignal,
 ): Promise<void> {
   while (true) {
     if (signal.aborted) throw signal.reason;
-    const settlement = await engine.events.settlement(
+    const settlement = await eventScope.events.settlement(
       namespace,
       settlementScopeId,
     );
@@ -89,79 +91,139 @@ async function waitForApplicationScope(
         `Settlement scope '${settlementScopeId}' was cancelled.`,
       );
     }
-    if (settlement.unsettled === 0) return;
+    if (settlement.unsettled === 0) {
+      // A remote Worker commits its final delivery before every framed output
+      // necessarily reaches this application. Drain the generic causal output
+      // relay, then recheck in case a relayed event created more durable work.
+      await execution.settleOutputs({
+        databaseSchema,
+        namespace,
+        settlementScopeId,
+      });
+      const confirmed = await eventScope.events.settlement(
+        namespace,
+        settlementScopeId,
+      );
+      if (confirmed.deadLetters > 0) {
+        throw new Error(
+          `Settlement scope '${settlementScopeId}' contains dead-lettered work.`,
+        );
+      }
+      if (confirmed.cancelled > 0) {
+        throw new Error(
+          `Settlement scope '${settlementScopeId}' was cancelled.`,
+        );
+      }
+      if (confirmed.unsettled === 0) return;
+    }
     await sleep(25, signal);
   }
 }
 
-type ApplicationOutputHub = Readonly<{
-  subscribe(): ReadableStream<AttachmentOutput>;
-  emit(output: AttachmentOutput): void;
+type ApplicationOutputFilter = Readonly<{
+  databaseSchema?: string;
+  namespace?: string;
+  correlationId?: string;
+}>;
+
+type ApplicationOutputSubscription = Readonly<{
+  outputs: ReadableStream<CopilotzEvent>;
   close(): void;
   error(reason: unknown): void;
 }>;
 
+type ApplicationOutputHub = Readonly<{
+  subscribe(filter?: ApplicationOutputFilter): ApplicationOutputSubscription;
+  emit(output: CopilotzEvent, databaseSchema: string): void;
+  close(): void;
+}>;
+
 function createApplicationOutputHub(): ApplicationOutputHub {
-  const controllers = new Set<
-    ReadableStreamDefaultController<AttachmentOutput>
-  >();
-  const pending: AttachmentOutput[] = [];
+  type SubscriptionState = {
+    filter: ApplicationOutputFilter;
+    controller?: ReadableStreamDefaultController<CopilotzEvent>;
+    closed: boolean;
+  };
+  const subscriptions = new Set<SubscriptionState>();
   let closed = false;
-  let failure: unknown;
 
   const close = () => {
     if (closed) return;
     closed = true;
-    pending.length = 0;
-    for (const controller of controllers) controller.close();
-    controllers.clear();
+    for (const subscription of subscriptions) {
+      subscription.closed = true;
+      try {
+        subscription.controller?.close();
+      } catch {
+        // A consumer may have already cancelled its observation stream.
+      }
+    }
+    subscriptions.clear();
   };
 
   return Object.freeze({
-    subscribe() {
-      let current:
-        | ReadableStreamDefaultController<AttachmentOutput>
-        | undefined;
-      return new ReadableStream<AttachmentOutput>({
+    subscribe(filter = {}) {
+      const subscription: SubscriptionState = {
+        filter: Object.freeze({ ...filter }),
+        closed: false,
+      };
+      const outputs = new ReadableStream<CopilotzEvent>({
         start(controller) {
-          current = controller;
-          if (failure !== undefined) {
-            controller.error(failure);
-            return;
-          }
+          subscription.controller = controller;
           if (closed) {
+            subscription.closed = true;
             controller.close();
             return;
           }
-          controllers.add(controller);
-          const queued = pending.splice(0);
-          for (const output of queued) {
-            if (closed || failure !== undefined) break;
-            controller.enqueue(output);
-          }
+          subscriptions.add(subscription);
         },
         cancel() {
-          if (current) controllers.delete(current);
+          subscription.closed = true;
+          subscriptions.delete(subscription);
         },
       }, { highWaterMark: 256 });
+      const finish = (reason?: unknown) => {
+        if (subscription.closed) return;
+        subscription.closed = true;
+        subscriptions.delete(subscription);
+        try {
+          if (reason === undefined) subscription.controller?.close();
+          else subscription.controller?.error(reason);
+        } catch {
+          // A consumer may have already cancelled its observation stream.
+        }
+      };
+      return Object.freeze({
+        outputs,
+        close: () => finish(),
+        error: finish,
+      });
     },
-    emit(output) {
+    emit(output, databaseSchema) {
       if (closed) return;
-      if (controllers.size === 0) {
-        pending.push(output);
-        return;
+      for (const subscription of subscriptions) {
+        const { filter } = subscription;
+        if (
+          filter.databaseSchema !== undefined &&
+          filter.databaseSchema !== databaseSchema
+        ) continue;
+        if (
+          filter.namespace !== undefined &&
+          filter.namespace !== output.namespace
+        ) continue;
+        if (
+          filter.correlationId !== undefined &&
+          filter.correlationId !== output.correlationId
+        ) continue;
+        try {
+          subscription.controller?.enqueue(output);
+        } catch {
+          subscription.closed = true;
+          subscriptions.delete(subscription);
+        }
       }
-      for (const controller of controllers) controller.enqueue(output);
     },
     close,
-    error(reason) {
-      if (closed) return;
-      closed = true;
-      failure = reason;
-      pending.length = 0;
-      for (const controller of controllers) controller.error(reason);
-      controllers.clear();
-    },
   });
 }
 
@@ -185,6 +247,8 @@ export async function createCopilotzApplication(
     resources: options.resources,
     adapters: options.adapters,
   });
+  const outputHub = createApplicationOutputHub();
+  const configuredPublish = options.engine?.publish;
 
   let engine;
   try {
@@ -194,8 +258,13 @@ export async function createCopilotzApplication(
       registry,
       defaultDatabaseSchema: databaseSchema,
       assets: options.assets,
+      async publish(event, context) {
+        outputHub.emit(event, context?.databaseSchema ?? databaseSchema);
+        await configuredPublish?.(event, context);
+      },
     });
   } catch (error) {
+    outputHub.close();
     await persistence.close("copilotz_application_initialization_failed").catch(
       () => undefined,
     );
@@ -231,8 +300,6 @@ export async function createCopilotzApplication(
     shutdownTask.catch(() => undefined);
     return shutdownTask;
   };
-  const outputHub = createApplicationOutputHub();
-
   const send = async (
     input: ApplicationSendInput,
   ): Promise<ApplicationSendHandle> => {
@@ -241,63 +308,11 @@ export async function createCopilotzApplication(
     const inputNamespace = requiredNamespace(input.namespace, namespace);
     const inputDatabaseSchema = input.databaseSchema?.trim() || databaseSchema;
     const correlationId = input.correlationId?.trim() || crypto.randomUUID();
-    const subscription = inputDatabaseSchema === databaseSchema
-      ? engine.events.subscribe({
-        namespace: inputNamespace,
-        correlationId,
-      })
-      : (await engine.databaseScope(inputDatabaseSchema)).events.subscribe({
-        namespace: inputNamespace,
-        correlationId,
-      });
-    const eventReader = subscription.getReader();
-    let sendController:
-      | ReadableStreamDefaultController<AttachmentOutput>
-      | undefined;
-    let outputsClosed = false;
-    const closeOutputs = () => {
-      if (outputsClosed) return;
-      outputsClosed = true;
-      try {
-        sendController?.close();
-      } catch {
-        // A request-bound adapter may have cancelled the stream.
-      }
-    };
-    const errorOutputs = (error: unknown) => {
-      if (outputsClosed) return;
-      outputsClosed = true;
-      try {
-        sendController?.error(error);
-      } catch {
-        // A request-bound adapter may have cancelled the stream.
-      }
-    };
-    const outputs = new ReadableStream<AttachmentOutput>({
-      start(controller) {
-        sendController = controller;
-      },
-      cancel(reason) {
-        return eventReader.cancel(reason);
-      },
-    }, { highWaterMark: 256 });
-    const pump = (async () => {
-      try {
-        while (true) {
-          const next = await eventReader.read();
-          if (next.done) break;
-          const output = next.value as AttachmentOutput;
-          outputHub.emit(output);
-          if (!outputsClosed) sendController?.enqueue(output);
-        }
-      } catch (error) {
-        outputHub.error(error);
-        errorOutputs(error);
-        throw error;
-      } finally {
-        closeOutputs();
-      }
-    })();
+    const subscription = outputHub.subscribe({
+      databaseSchema: inputDatabaseSchema,
+      namespace: inputNamespace,
+      correlationId,
+    });
     let committed;
     try {
       const scopedEngine = inputDatabaseSchema === databaseSchema
@@ -321,29 +336,29 @@ export async function createCopilotzApplication(
           : {}),
       });
     } catch (error) {
-      await eventReader.cancel(error).catch(() => undefined);
-      errorOutputs(error);
+      subscription.error(error);
       throw error;
     }
     const abort = new AbortController();
     const settlementScopeId = committed.settlementScopeId;
+    const eventScope = inputDatabaseSchema === databaseSchema
+      ? engine
+      : await engine.databaseScope(inputDatabaseSchema);
     const done = waitForApplicationScope(
-      inputDatabaseSchema === databaseSchema
-        ? engine
-        : await engine.databaseScope(inputDatabaseSchema),
+      eventScope,
+      engine.execution,
+      inputDatabaseSchema,
       inputNamespace,
       settlementScopeId,
       abort.signal,
-    ).finally(async () => {
-      await eventReader.cancel("application_send_settled").catch(() =>
-        undefined
-      );
+    ).finally(() => {
+      subscription.close();
       activeSends.delete(sendHandle);
     });
     const sendHandle: ApplicationSendHandle = Object.freeze({
       eventId: committed.event.id,
       correlationId,
-      outputs,
+      outputs: subscription.outputs,
       done,
       async cancel(reason = "application_send_cancelled") {
         if (!abort.signal.aborted) abort.abort(new Error(reason));
@@ -358,7 +373,6 @@ export async function createCopilotzApplication(
       },
     });
     activeSends.add(sendHandle);
-    pump.catch(() => undefined);
     return sendHandle;
   };
 
@@ -387,7 +401,7 @@ export async function createCopilotzApplication(
     },
     send,
     observe() {
-      return outputHub.subscribe();
+      return outputHub.subscribe().outputs;
     },
     close: shutdown,
     shutdown,

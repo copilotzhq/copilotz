@@ -372,6 +372,7 @@ export function createDeliveryExecutor(
           ? (event) =>
             options.onOutputEvent!(event, {
               databaseSchema: delivery.databaseSchema,
+              settlementScopeId: delivery.settlementScopeId,
             })
           : undefined,
       });

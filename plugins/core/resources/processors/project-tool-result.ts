@@ -63,7 +63,7 @@ function resultVisibility(execution: CollectionRecord): EventVisibility {
 
 function resultContent(
   execution: CollectionRecord,
-  override?: ContentSequence,
+  override?: ContentSequence | ContentInput,
 ): ContentSequence | ContentInput {
   if (override) return override;
   const projected = Array.isArray(execution.projectedOutput)
@@ -126,7 +126,7 @@ async function projectExecution(
   const toolCatalog = toolCatalogFor(agent);
   const evaluateJq = jqFor(context, agent);
   let projectedStatus = String(execution.status);
-  let projectedContent: ContentSequence | undefined;
+  let projectedContent: ContentSequence | ContentInput | undefined;
 
   if (
     metadata?.pipeline && String(execution.status) === "completed" &&
@@ -218,22 +218,15 @@ async function projectExecution(
     }
 
     if (advancement.kind === "settled" && advancement.projected) {
-      const prepared = await context.content.prepare(
-        valueContent(advancement.output, "tool.projected_output"),
-        {
-          operationKey: `pipeline:${metadata.pipeline.id}:final-projection`,
-        },
+      projectedContent = valueContent(
+        advancement.output,
+        "tool.projected_output",
       );
-      projectedContent = await context.content.materialize(prepared);
-      execution = {
-        ...execution,
-        projectedOutput: projectedContent,
-      } as CollectionRecord;
     }
 
     if (advancement.kind === "failed") {
       projectedStatus = "failed";
-      const prepared = await context.content.prepare({
+      projectedContent = {
         type: "json",
         value: {
           ok: false,
@@ -242,10 +235,7 @@ async function projectExecution(
           error: advancement.message,
         },
         role: "tool.projected_output",
-      }, {
-        operationKey: `pipeline:${metadata.pipeline.id}:failure-projection`,
-      });
-      projectedContent = await context.content.materialize(prepared);
+      };
       const failedWorkflow: WorkflowMetadata = {
         ...metadata,
         pipelineFailure: {
@@ -255,7 +245,6 @@ async function projectExecution(
       };
       execution = {
         ...execution,
-        projectedOutput: projectedContent,
         metadata: withWorkflowMetadata(undefined, failedWorkflow),
       } as CollectionRecord;
       metadata = failedWorkflow;

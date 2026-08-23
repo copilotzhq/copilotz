@@ -587,31 +587,31 @@ export function createWhatsAppChannel(
                 message,
                 output,
               );
+              const action = actionPayload(message.metadata);
+              if (action) {
+                await deliverOutput(
+                  options,
+                  transport,
+                  config,
+                  context,
+                  action.type === "media_carousel"
+                    ? {
+                      kind: "media_carousel",
+                      to: route.recipientPhone,
+                      action: action as WhatsAppMediaCarouselAction,
+                      output,
+                    }
+                    : {
+                      kind: "reply_buttons",
+                      to: route.recipientPhone,
+                      action,
+                      output,
+                    },
+                );
+              }
             }
             continue;
           }
-          if (output.type !== "action.created") continue;
-          const action = actionPayload(output.payload);
-          if (!action) continue;
-          await deliverOutput(
-            options,
-            transport,
-            config,
-            context,
-            action.type === "media_carousel"
-              ? {
-                kind: "media_carousel",
-                to: route.recipientPhone,
-                action: action as WhatsAppMediaCarouselAction,
-                output,
-              }
-              : {
-                kind: "reply_buttons",
-                to: route.recipientPhone,
-                action,
-                output,
-              },
-          );
         }
       },
     }),

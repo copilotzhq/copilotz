@@ -97,30 +97,9 @@ async function createFixture(session: LlmSession): Promise<Fixture> {
 }
 
 function boundCollection(engine: CopilotzEngine, name: string) {
-  const collection = engine.collectionRuntime.get(name);
+  const collection = engine.collections.get(name);
   if (!collection) throw new Error(`Collection '${name}' is not bound.`);
   return collection;
-}
-
-async function persistPreparedContent(
-  engine: CopilotzEngine,
-  prepared: Awaited<
-    ReturnType<CopilotzEngine["content"]["preparer"]["prepare"]>
-  >,
-) {
-  for (const asset of prepared.assets) {
-    if (await engine.content.assets.get(asset.namespace, asset.id)) continue;
-    await engine.content.assets.publish({
-      namespace: asset.namespace,
-      id: asset.id,
-      mediaType: asset.mediaType,
-      body: asset.body,
-      ...(asset.idempotencyKey ? { idempotencyKey: asset.idempotencyKey } : {}),
-      ...(asset.origin ? { origin: asset.origin } : {}),
-      ...(asset.metadata ? { metadata: { ...asset.metadata } } : {}),
-    });
-  }
-  return prepared.content;
 }
 
 async function createThread(fixture: Fixture): Promise<void> {
@@ -162,7 +141,7 @@ async function createUserMessage(
     threadId: "thread-a",
     senderId: "user-a",
     recipientIds: ["agent-echo"],
-    content: await persistPreparedContent(fixture.engine, prepared),
+    content: prepared,
     metadata: {},
   }, {
     namespace: NAMESPACE,

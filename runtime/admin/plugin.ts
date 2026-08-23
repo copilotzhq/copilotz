@@ -1,14 +1,13 @@
 import type { Agent } from "../resources/index.ts";
-import type { CollectionRecord } from "../domain/index.ts";
+import type { CollectionRecord } from "../collections/index.ts";
 import {
   type ActionContext,
-  type ActionContextNamespaces,
   defineAction,
+  type RuntimeContextNamespaces,
 } from "../actions/index.ts";
 import { type CopilotzPlugin, definePlugin } from "../plugins/index.ts";
 import {
   allCollectionRecords,
-  allEvents,
   allMessages,
   allParticipants,
   allThreads,
@@ -34,15 +33,12 @@ const DEFAULT_PLUGIN_ID = "@copilotz/admin";
 const DEFAULT_PLUGIN_VERSION = "3.0.0";
 const ACTION_ID_PREFIX = "copilotz.admin";
 
-type AdminActionContext =
-  & Omit<ActionContext, "resources">
+type AdminActionContext = ActionContext<
+  & RuntimeContextNamespaces
   & Readonly<{
-    resources:
-      & ActionContextNamespaces
-      & Readonly<{
-        agents: Readonly<Record<string, Agent | undefined>>;
-      }>;
-  }>;
+    agents: Readonly<Record<string, Agent | undefined>>;
+  }>
+>;
 
 function asRequest(input: unknown): AdminRequest {
   if (
@@ -111,37 +107,19 @@ const overview: AdminAction = async (input, context) => {
   const rejected = readOnly(request);
   if (rejected) return rejected;
   const dates = range(request);
-  const [threads, participants, usage] = await Promise.all([
+  const [threads, messages, participants, usage] = await Promise.all([
     allThreads(context),
+    allCollectionRecords(context, "message"),
     allParticipants(context),
     allCollectionRecords(context, "usage"),
   ]);
-  let messageTotal = 0;
-  for (const thread of threads) {
-    const messages = await allMessages(context, thread.id);
-    messageTotal += messages.filter((message) =>
+  const messageTotal =
+    messages.filter((message) =>
       inDateRange(message.createdAt, dates.from, dates.to)
     ).length;
-  }
   const rangedUsage = usage.filter((value) => createdInRange(value, dates));
   const llm = rangedUsage.filter((value) => value.kind === "llm");
   const tools = rangedUsage.filter((value) => value.kind === "tool");
-  const deliveryStatuses = [
-    "pending",
-    "leased",
-    "retry_wait",
-    "succeeded",
-    "cancelled",
-    "dead_letter",
-  ] as const;
-  const deliveryCounts = await Promise.all(
-    deliveryStatuses.map(async (status) =>
-      (await context.deliveries.list({
-        status,
-        limit: 1_000,
-      })).length
-    ),
-  );
   const threadStatus = (status: string) =>
     threads.filter((thread) => thread.status === status).length;
   const participantType = (type: string) =>
@@ -166,12 +144,6 @@ const overview: AdminAction = async (input, context) => {
       },
       llmTotals: usageTotals(llm),
       toolTotals: usageTotals(tools),
-      deliveryTotals: Object.fromEntries(
-        deliveryStatuses.map((
-          status,
-          index,
-        ) => [status, deliveryCounts[index]]),
-      ),
     },
   };
 };
@@ -229,8 +201,8 @@ const activity: AdminAction = async (input, context) => {
   if (rejected) return rejected;
   const unit = interval(request);
   const dates = range(request);
-  const [events, usage] = await Promise.all([
-    allEvents(context),
+  const [messages, usage] = await Promise.all([
+    allCollectionRecords(context, "message"),
     allCollectionRecords(context, "usage"),
   ]);
   const points = new Map<string, MutableActivityPoint>();
@@ -240,20 +212,21 @@ const activity: AdminAction = async (input, context) => {
     points.set(key, existing);
     return existing;
   };
-  for (const event of events) {
-    if (!inDateRange(event.createdAt, dates.from, dates.to)) continue;
-    const current = point(event.createdAt);
-    if (event.type === "message.created") current.messageCount += 1;
-    if (event.type === "copilotz.core.tool.call.invoked") {
-      current.toolCallCount += 1;
-    }
+  for (const message of messages) {
+    if (!inDateRange(message.createdAt, dates.from, dates.to)) continue;
+    point(message.createdAt).messageCount += 1;
   }
   for (const value of usage) {
-    if (value.kind !== "llm" || !createdInRange(value, dates)) continue;
+    if (!createdInRange(value, dates)) continue;
+    if (value.kind !== "tool" && value.kind !== "llm") continue;
     const occurredAt = typeof value.occurredAt === "string"
       ? value.occurredAt
       : value.createdAt;
     const current = point(occurredAt);
+    if (value.kind === "tool") {
+      current.toolCallCount += 1;
+      continue;
+    }
     current.totalCalls += 1;
     current.inputTokens += finite(value.inputTokens);
     current.outputTokens += finite(value.outputTokens);
@@ -266,32 +239,6 @@ const activity: AdminAction = async (input, context) => {
     data: [...points.values()].sort((left, right) =>
       left.bucket.localeCompare(right.bucket)
     ),
-  };
-};
-
-const events: AdminAction = async (input, context) => {
-  const request = asRequest(input);
-  const rejected = readOnly(request);
-  if (rejected) return rejected;
-  const limit = queryLimit(request);
-  const dates = range(request);
-  const types = queryTexts(request, "type") ?? queryTexts(request, "eventType");
-  const search = queryText(request, "search")?.toLowerCase();
-  const values = (await allEvents(context, {
-    threadId: queryText(request, "threadId"),
-    correlationId: queryText(request, "correlationId"),
-    afterPosition: queryText(request, "afterPosition"),
-  })).filter((event) =>
-    (!types || types.includes(event.type)) &&
-    inDateRange(event.createdAt, dates.from, dates.to) &&
-    (!search || JSON.stringify(event).toLowerCase().includes(search))
-  ).slice(0, limit);
-  return {
-    status: 200,
-    data: values,
-    pageInfo: values.length === limit
-      ? { next: values.at(-1)?.position, hasMore: true }
-      : { hasMore: false },
   };
 };
 
@@ -479,108 +426,6 @@ const usage: AdminAction = async (input, context) => {
   };
 };
 
-function hashUnit(value: string, salt: number): number {
-  let hash = 2166136261 ^ salt;
-  for (let index = 0; index < value.length; index++) {
-    hash ^= value.charCodeAt(index);
-    hash = Math.imul(hash, 16777619);
-  }
-  return (hash >>> 0) / 0xffffffff;
-}
-
-function brainNode(value: CollectionRecord) {
-  const form = typeof value.form === "string" ? value.form : "unknown";
-  const kind = typeof value.kind === "string" ? value.kind : "unknown";
-  return {
-    ...value,
-    clusterId: `${form}:${kind}`,
-    x: hashUnit(value.id, 1),
-    y: hashUnit(value.id, 2),
-  };
-}
-
-const brain: AdminAction = async (input, context) => {
-  const request = asRequest(input);
-  const rejected = readOnly(request);
-  if (rejected) return rejected;
-  const limit = queryLimit(request);
-  const where: Record<string, unknown> = {};
-  for (
-    const [key, queryKey] of [
-      ["memorySpaceId", "memorySpaceId"],
-      ["consolidationId", "checkpointId"],
-      ["createdByAgentId", "agentId"],
-      ["originThreadId", "threadId"],
-      ["form", "form"],
-      ["kind", "kind"],
-      ["status", "status"],
-    ] as const
-  ) {
-    const value = queryText(request, queryKey);
-    if (value && value !== "all") where[key] = value;
-  }
-  let values = [
-    ...await allCollectionRecords(
-      context,
-      "memoryRecord",
-      Object.keys(where).length ? where : undefined,
-    ),
-  ];
-  const search = queryText(request, "search")?.toLowerCase();
-  if (search) {
-    values = values.filter((value) =>
-      `${String(value.summary ?? "")}\n${JSON.stringify(value.data ?? {})}`
-        .toLowerCase().includes(search)
-    );
-  }
-  const after = queryText(request, "after");
-  if (after) {
-    const index = values.findIndex((value) => value.id === after);
-    if (index < 0) throw new Error(`Brain cursor '${after}' was not found.`);
-    values = values.slice(index + 1);
-  }
-  const selected = values.slice(0, limit);
-  const relations = new Map<string, unknown>();
-  for (const value of selected) {
-    for (
-      const relation of await context.relations.list({
-        nodeId: value.id,
-        direction: "both",
-        limit: 1_000,
-      })
-    ) relations.set(relation.id, relation);
-  }
-  const stats = Object.values(
-    values.reduce<
-      Record<
-        string,
-        { form: string; kind: string; status: string; count: number }
-      >
-    >(
-      (result, value) => {
-        const form = String(value.form ?? "unknown");
-        const kind = String(value.kind ?? "unknown");
-        const status = String(value.status ?? "active");
-        const key = `${form}\0${kind}\0${status}`;
-        const current = result[key] ?? { form, kind, status, count: 0 };
-        current.count += 1;
-        result[key] = current;
-        return result;
-      },
-      {},
-    ),
-  );
-  return {
-    status: 200,
-    data: {
-      nodes: selected.map(brainNode),
-      edges: [...relations.values()],
-      stats,
-    },
-    pageInfo: pageInfo(selected, limit),
-  };
-};
-
 function publicAgent(agent: Agent): Record<string, unknown> {
   return {
     id: agent.id,
@@ -637,14 +482,12 @@ function adminActions() {
   return Object.freeze({
     adminOverview: queryAction(`${ACTION_ID_PREFIX}.overview`, overview),
     adminActivity: queryAction(`${ACTION_ID_PREFIX}.activity`, activity),
-    adminEvents: queryAction(`${ACTION_ID_PREFIX}.events`, events),
     adminThreads: queryAction(`${ACTION_ID_PREFIX}.threads`, threads),
     adminParticipants: queryAction(
       `${ACTION_ID_PREFIX}.participants`,
       participants,
     ),
     adminUsage: queryAction(`${ACTION_ID_PREFIX}.usage`, usage),
-    adminBrain: queryAction(`${ACTION_ID_PREFIX}.brain`, brain),
     adminAgents: queryAction(`${ACTION_ID_PREFIX}.agents`, agents),
   });
 }

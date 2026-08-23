@@ -8,6 +8,10 @@ import { loadCollectionEventBodies } from "./replay.ts";
 const EVENT_COUNT = 10_001;
 const EVENT_BODY = JSON.stringify({
   operation: "create",
+  intent: {
+    operation: "create",
+    input: ["object", [["id", ["string", "shared-record"]]]],
+  },
   assets: [],
   record: {
     id: "shared-record",
@@ -56,6 +60,7 @@ function durableEvent(position: number): DurableEvent {
     schemaVersion: 3,
     type: "audit_record.created",
     namespace: "tenant-replay",
+    subject: { type: "audit_record", id: "shared-record" },
     payload: {
       dataRef: {
         eventBodyId: "shared-event-body",

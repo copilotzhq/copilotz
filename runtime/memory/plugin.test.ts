@@ -10,7 +10,6 @@ import {
   projectMessages,
 } from "../../runtime/testing/projections.ts";
 import type { Agent } from "../resources/index.ts";
-import type { ValidateCollectionRecord } from "../domain/index.ts";
 import { createTestDatabase, type TestDatabase } from "../testing/ominipg.ts";
 import { type CopilotzEngine, createCopilotzEngine } from "../engine/index.ts";
 import { createSqlSession } from "../events/index.ts";
@@ -61,7 +60,6 @@ type FixtureOptions = Readonly<{
   agent?: Agent;
   memoryEnabled?: boolean;
   embed?: MemoryEmbed | false;
-  validateCollection?: ValidateCollectionRecord;
   /** Install core text/ask processors. Default is semantic Collections only. */
   withTextWorkflow?: boolean;
 }>;
@@ -175,7 +173,6 @@ async function createFixture(
       }`,
       retryBaseMs: 0,
       random: () => 0,
-      validateCollection: options.validateCollection,
     });
     stage = "thread";
     await createTestDomainContext(engine, "tenant-a")
@@ -424,6 +421,10 @@ Deno.test("native consolidation uses one internal tool grant and emits no public
 
     const maintenance = await waitForMaintenanceSettlement(fixture);
     assertEquals(maintenance.map((event) => event.status), ["completed"]);
+    assertEquals(
+      record(record(maintenance[0].input).sourceEvent).type,
+      "long_term_memory.created",
+    );
     const consolidation = await projectActionEvents(
       fixture.engine,
       "tenant-a",
@@ -746,8 +747,7 @@ Deno.test("corrections preserve temporal history and create explicit supersessio
     assertEquals(oldState?.status, "superseded");
     assertEquals(corrected?.status, "current");
     assertExists(record(oldState?.temporal).invalidatedAt);
-    const relations = await fixture.engine.relations.list({
-      namespace: "tenant-a",
+    const relations = await scoped.memory_record.relations.list({
       types: ["contradicts", "supersedes"],
       limit: 100,
     });
@@ -1140,13 +1140,17 @@ Deno.test("memory query tools enforce thread access, explain provenance, and pre
         "Compass hidden tenant fact.",
       ),
     );
-    await fixture.engine.relations.create({
+    await fixture.engine.collections.transaction({
+      operationKey: "cross-space-relation:create",
       namespace: "tenant-a",
-      id: "cross-space-relation",
-      type: "contradicts",
-      source: { type: "memory_record", id: "memory-visible" },
-      target: { type: "memory_record", id: "memory-hidden" },
-      threadId: "thread-a",
+      execute: ({ relations }) =>
+        relations.upsert({
+          id: "cross-space-relation",
+          type: "contradicts",
+          source: { type: "memory_record", id: "memory-visible" },
+          target: { type: "memory_record", id: "memory-hidden" },
+          metadata: { threadId: "thread-a" },
+        }),
     });
 
     await createTestDomainContext(
@@ -1216,64 +1220,6 @@ Deno.test("memory query tools enforce thread access, explain provenance, and pre
     const updated = await scoped.memory_record.get({ id: "memory-visible" });
     assertEquals(updated?.status, "retracted");
     assertExists(record(updated?.temporal).invalidatedAt);
-  } finally {
-    await close(fixture);
-  }
-});
-
-Deno.test("semantic graph and ready checkpoint roll back as one aggregate", async () => {
-  const fixture = await createFixture(
-    (request) =>
-      response(request, [call(`memory-call-${request.messages.length}`, {
-        outcome: "changes",
-        assertions: [{
-          localId: "atomic-state",
-          kind: "assertion.state",
-          summary: "Atomic memory must never become partially visible.",
-          subject: { type: "external", id: "copilotz" },
-          predicate: "commit_state",
-          object: "atomic",
-          epistemic: { basis: "observed", stance: "affirmed" },
-          sources: [{ type: "message", id: "message-agent-a" }],
-        }],
-      })]),
-    [],
-    {
-      validateCollection({ definition, record: value }) {
-        if (
-          definition.name === "long_term_memory" && value.status === "ready"
-        ) {
-          throw new Error("injected checkpoint settlement failure");
-        }
-      },
-    },
-  );
-  try {
-    await trigger(fixture);
-    await waitForCheckpoint(fixture, "failed");
-    const scoped = fixture.engine.collections.withScope({
-      namespace: "tenant-a",
-    });
-    assertEquals(await scoped.memory_record.list({ limit: 100 }), []);
-    assertEquals(
-      (await fixture.engine.relations.list({
-        namespace: "tenant-a",
-        types: ["has_memory_record", "includes_memory_record"],
-        limit: 100,
-      })).filter((relation) =>
-        relation.source.type === "memory_record" ||
-        relation.target.type === "memory_record"
-      ),
-      [],
-    );
-    assertEquals(
-      (await fixture.engine.events.list({
-        namespace: "tenant-a",
-        threadId: "thread-a",
-        limit: 1_000,
-      })).some((event) => event.type === "memory.consolidation.committed"),
-      false,
-    );
   } finally {
     await close(fixture);
   }

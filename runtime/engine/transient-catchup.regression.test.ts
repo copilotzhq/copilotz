@@ -6,14 +6,6 @@ import { createPluginRegistry, defineProcessor } from "../plugins/index.ts";
 import { createTestDatabase } from "../testing/ominipg.ts";
 import { createCopilotzEngine } from "./index.ts";
 import { createTestDomainContext } from "../../runtime/testing/domain-context.ts";
-import {
-  projectMessageById,
-  projectMessages,
-  projectParticipants,
-  projectThreadByExternalId,
-  projectThreadById,
-  projectThreads,
-} from "../../runtime/testing/projections.ts";
 
 const NAMESPACE = "tenant-transient-regression";
 

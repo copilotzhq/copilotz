@@ -5,21 +5,10 @@ import {
   defineProcessor,
 } from "../plugins/index.ts";
 import { createTestDomainContext } from "../../runtime/testing/domain-context.ts";
-import {
-  projectMessageById,
-  projectMessages,
-  projectParticipants,
-  projectThreadByExternalId,
-  projectThreadById,
-  projectThreads,
-} from "../../runtime/testing/projections.ts";
 import { createSqlSession } from "../events/index.ts";
 import { coreCollectionsPlugin } from "../../plugins/core/plugin.ts";
-import {
-  type CopilotzLiveProcessorContext,
-  type CopilotzProcessorContext,
-  createCopilotzEngine,
-} from "./index.ts";
+import { createCopilotzEngine } from "./index.ts";
+import type { ProcessorContext } from "../plugins/index.ts";
 import { createTestDatabase } from "../testing/ominipg.ts";
 import { defineCollection } from "../collections/index.ts";
 
@@ -54,20 +43,19 @@ Deno.test("live processors mutate causally without delivery rows or capacity-one
   let liveCalls = 0;
   let durableCalls = 0;
   let leakedDelivery = false;
-  const live = defineProcessor<CopilotzLiveProcessorContext>({
+  const live = defineProcessor<ProcessorContext>({
     id: "test.live-message-audit",
     on: [{ eventType: "message.created" }],
     async handle(event, context) {
       liveCalls += 1;
       leakedDelivery = leakedDelivery || "delivery" in context;
-      assertEquals(context.event.type, event.type);
       await context.collections.liveAudit.create({
         id: `audit:${event.durable ? event.id : event.correlationId}`,
         sourceType: event.type,
       });
     },
   });
-  const durable = defineProcessor<CopilotzProcessorContext>({
+  const durable = defineProcessor<ProcessorContext>({
     id: "test.observe-live-audit",
     on: [{ eventType: "live_audit.created" }],
     handle() {
@@ -130,13 +118,12 @@ Deno.test("live processors mutate causally without delivery rows or capacity-one
     assertExists(resultEvent);
     assertEquals(liveCalls, 1);
     assertEquals(leakedDelivery, false);
-    await waitUntil(async () => durableCalls === 1);
+    await waitUntil(() => durableCalls === 1);
     assertEquals(durableCalls, 1);
 
-    const audit = await engine.collections.get("live_audit").get(
-      "tenant-live",
-      `audit:${resultEvent.id}`,
-    );
+    const audit = await engine.collections.withScope({
+      namespace: "tenant-live",
+    }).live_audit.get({ id: `audit:${resultEvent.id}` });
     assertExists(audit);
     const deliveries = await engine.deliveries.list({
       namespace: "tenant-live",
@@ -161,14 +148,14 @@ Deno.test("live processors mutate causally without delivery rows or capacity-one
 
 Deno.test("live subscription failures remain independent and ephemeral", async () => {
   const calls: string[] = [];
-  const good = defineProcessor<CopilotzLiveProcessorContext>({
+  const good = defineProcessor<ProcessorContext>({
     id: "test.live-good",
     on: [{ eventType: "cursor.changed" }],
     handle() {
       calls.push("good");
     },
   });
-  const bad = defineProcessor<CopilotzLiveProcessorContext>({
+  const bad = defineProcessor<ProcessorContext>({
     id: "test.live-bad",
     on: [{ eventType: "cursor.changed" }],
     handle() {

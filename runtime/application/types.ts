@@ -1,8 +1,8 @@
-import type { AttachmentOutput } from "../attachments/index.ts";
 import type {
   CopilotzEngine,
   CreateCopilotzEngineOptions,
 } from "../engine/index.ts";
+import type { CopilotzEvent } from "../events/index.ts";
 import type {
   AnyCopilotzPlugin,
   PluginAdapters,
@@ -66,12 +66,12 @@ export type ApplicationSendInput = CopilotzInputEnvelope;
 export type ApplicationSendHandle = Readonly<{
   eventId: string;
   correlationId: string;
-  outputs: ReadableStream<AttachmentOutput>;
+  outputs: ReadableStream<CopilotzEvent>;
   done: Promise<void>;
   cancel(reason?: string): Promise<void>;
 }>;
 
-export type CopilotzApplicationObservation = ReadableStream<AttachmentOutput>;
+export type CopilotzApplicationObservation = ReadableStream<CopilotzEvent>;
 
 export type CopilotzApplication =
   & Omit<

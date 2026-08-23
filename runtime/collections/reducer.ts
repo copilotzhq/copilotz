@@ -1,8 +1,9 @@
 import type { EventMutationContext, SqlExecutor } from "../events/index.ts";
 import type { CollectionDefinition } from "./definition.ts";
 import type { CollectionEventBody, CollectionRecord } from "./types.ts";
-import { ASSET_BODY_OWNER_KIND } from "../content/index.ts";
 import type { AssetManifestEntry, ContentRef } from "../content/index.ts";
+import { assetNodeData } from "../content/asset-node.ts";
+import { sameValue } from "./equal.ts";
 
 export type NodeRow = Record<string, unknown> & {
   id: string;
@@ -11,6 +12,8 @@ export type NodeRow = Record<string, unknown> & {
   name: string;
   content: string | null;
   data: unknown;
+  source_type?: string | null;
+  source_id?: string | null;
 };
 
 function requireText(value: string, name: string): string {
@@ -71,6 +74,26 @@ export function identitySource(
   const sourceId = typeof raw === "string" && raw.trim() ? raw.trim() : null;
   if (!sourceId) return { sourceType: null, sourceId: null };
   return { sourceType: identity.sourceType, sourceId };
+}
+
+function recordTimestamp(
+  definition: CollectionDefinition,
+  value: Record<string, unknown>,
+  timestamp: "createdAt" | "updatedAt",
+): string | null {
+  const field = definition.timestamps?.[timestamp] ?? timestamp;
+  const raw = value[field];
+  if (raw === undefined || raw === null || raw === "") return null;
+  if (
+    typeof raw !== "string" ||
+    !raw.trim() ||
+    Number.isNaN(new Date(raw).getTime())
+  ) {
+    throw new TypeError(
+      `Collection '${definition.name}' timestamp field '${field}' must be a valid timestamp.`,
+    );
+  }
+  return raw;
 }
 
 function relatedIds(
@@ -207,41 +230,31 @@ export async function synchronizeRelations(
   }
 }
 
-function bodyReferenceIds(
-  definition: CollectionDefinition,
-  value: Record<string, unknown>,
-): readonly string[] {
-  const ids = new Set<string>();
-  for (const field of definition.bodyRefs?.fields ?? []) {
-    const raw = value[field];
-    const values = Array.isArray(raw) ? raw : [raw];
-    for (const candidate of values) {
-      if (typeof candidate === "string" && candidate.trim()) {
-        ids.add(candidate.trim());
-      }
-    }
-  }
-  return Object.freeze([...ids]);
-}
-
 function contentRefs(value: unknown): readonly ContentRef[] {
   return Array.isArray(value) ? value as ContentRef[] : [];
 }
 
-function declaredContentAssetIds(
+function declaredContentRefs(
   definition: CollectionDefinition,
   value: Record<string, unknown>,
-): readonly string[] {
-  const ids = new Set<string>();
+): ReadonlyMap<string, ContentRef> {
+  const refs = new Map<string, ContentRef>();
   for (const field of definition.content?.fields ?? []) {
     const raw = getPath(value, field);
     for (const ref of contentRefs(raw)) {
       if (typeof ref.assetId === "string" && ref.assetId.trim()) {
-        ids.add(ref.assetId.trim());
+        const assetId = ref.assetId.trim();
+        const existing = refs.get(assetId);
+        if (existing && existing.mediaType !== ref.mediaType) {
+          throw new Error(
+            `Content refs for Asset '${assetId}' disagree on media type.`,
+          );
+        }
+        refs.set(assetId, ref);
       }
     }
   }
-  return Object.freeze([...ids]);
+  return refs;
 }
 
 function getPath(
@@ -266,7 +279,37 @@ async function synchronizeContentAssetEdges(
   value: Record<string, unknown>,
 ): Promise<void> {
   if (!definition.content?.fields.length) return;
-  const assetIds = declaredContentAssetIds(definition, value);
+  const refs = declaredContentRefs(definition, value);
+  const assetIds = [...refs.keys()].sort();
+  if (assetIds.length > 0) {
+    const locked = await context.transaction.query<NodeRow>(
+      `SELECT * FROM ${context.tables.nodes}
+       WHERE namespace = $1 AND type = 'asset' AND id = ANY($2::text[])
+       ORDER BY id FOR UPDATE`,
+      [namespace, assetIds],
+    );
+    const assets = new Map(locked.rows.map((row) => [row.id, row]));
+    for (const assetId of assetIds) {
+      const asset = assets.get(assetId);
+      if (!asset) {
+        throw new Error(
+          `Declared content references missing Asset '${assetId}'.`,
+        );
+      }
+      const data = record(asset.data);
+      if (data.state !== "ready") {
+        throw new Error(
+          `Declared content references non-ready Asset '${assetId}'.`,
+        );
+      }
+      const mediaType = refs.get(assetId)!.mediaType;
+      if (data.mediaType !== mediaType || asset.name !== mediaType) {
+        throw new Error(
+          `Declared content media type does not match Asset '${assetId}'.`,
+        );
+      }
+    }
+  }
   await context.transaction.query(
     `DELETE FROM ${context.tables.edges}
       WHERE namespace = $1
@@ -291,25 +334,24 @@ async function synchronizeContentAssetEdges(
   }
 }
 
-async function projectAssetManifestEntry(
+export async function projectAssetManifestEntry(
   context: EventMutationContext,
   namespace: string,
   entry: AssetManifestEntry,
 ): Promise<void> {
-  const data = JSON.stringify({
+  const data = JSON.stringify(assetNodeData({
+    id: entry.assetId,
+    namespace,
     mediaType: entry.mediaType,
     byteLength: entry.byteLength,
     digest: entry.digest,
     state: "ready",
-    bodyId: entry.bodyId,
-    // Transitional runtime metadata: current Asset readers still expect a
-    // location object. The event manifest remains locator-free; final BodyStore
-    // readers consume bodyId directly.
-    location: { kind: "database", key: entry.bodyId },
-    readyAt: entry.createdAt,
+    location: entry.location,
     ...(entry.origin ? { origin: structuredClone(entry.origin) } : {}),
-    metadata: structuredClone(entry.metadata ?? {}),
-  });
+    createdAt: entry.createdAt,
+    readyAt: entry.readyAt ?? entry.createdAt,
+    ...(entry.metadata ? { metadata: structuredClone(entry.metadata) } : {}),
+  }, entry.bodyId));
   const existing = await context.transaction.query<NodeRow>(
     `SELECT * FROM ${context.tables.nodes}
      WHERE id = $1 LIMIT 1`,
@@ -321,21 +363,36 @@ async function projectAssetManifestEntry(
       `Asset manifest id conflicts with a non-Asset node: ${entry.assetId}`,
     );
   }
+  const sourceType = entry.idempotencyKey ? "asset_idempotency" : null;
+  const sourceId = entry.idempotencyKey ?? null;
+  if (
+    row &&
+    (row.name !== entry.mediaType ||
+      !sameValue(record(row.data), JSON.parse(data)) ||
+      (row.source_type ?? null) !== sourceType ||
+      (row.source_id ?? null) !== sourceId)
+  ) {
+    throw new Error(
+      `Asset manifest conflicts with an existing Asset: ${entry.assetId}`,
+    );
+  }
   if (!row) {
     await context.transaction.query(
       `INSERT INTO ${context.tables.nodes} (
-         id, namespace, type, name, data, source_type, source_id
-       ) VALUES ($1, $2, 'asset', $3, $4::jsonb, NULL, NULL)`,
-      [entry.assetId, namespace, entry.mediaType, data],
+         id, namespace, type, name, data, source_type, source_id,
+         created_at, updated_at
+       ) VALUES ($1, $2, 'asset', $3, $4::jsonb, $5, $6, $7, $7)`,
+      [
+        entry.assetId,
+        namespace,
+        entry.mediaType,
+        data,
+        sourceType,
+        sourceId,
+        entry.createdAt,
+      ],
     );
   }
-  await context.transaction.query(
-    `INSERT INTO ${context.tables.body_references} (
-       namespace, body_id, owner_kind, owner_id
-     ) VALUES ($1, $2, $3, $4)
-     ON CONFLICT DO NOTHING`,
-    [namespace, entry.bodyId, ASSET_BODY_OWNER_KIND, entry.assetId],
-  );
 }
 
 async function projectAssetManifest(
@@ -348,34 +405,6 @@ async function projectAssetManifest(
   }
 }
 
-export async function synchronizeBodyReferences(
-  context: EventMutationContext,
-  definition: CollectionDefinition,
-  namespace: string,
-  ownerId: string,
-  value: Record<string, unknown>,
-): Promise<void> {
-  if (!definition.bodyRefs?.fields.length) return;
-  const bodyIds = bodyReferenceIds(definition, value);
-  await context.transaction.query(
-    `DELETE FROM ${context.tables.body_references}
-      WHERE namespace = $1
-        AND owner_kind = $2
-        AND owner_id = $3
-        AND NOT (body_id = ANY($4::text[]))`,
-    [namespace, definition.name, ownerId, bodyIds],
-  );
-  for (const bodyId of bodyIds) {
-    await context.transaction.query(
-      `INSERT INTO ${context.tables.body_references} (
-         namespace, body_id, owner_kind, owner_id
-       ) VALUES ($1, $2, $3, $4)
-       ON CONFLICT DO NOTHING`,
-      [namespace, bodyId, definition.name, ownerId],
-    );
-  }
-}
-
 export async function projectCollectionEvent(
   context: EventMutationContext,
   definition: CollectionDefinition,
@@ -385,13 +414,6 @@ export async function projectCollectionEvent(
   const id = body.record.id;
   await projectAssetManifest(context, namespace, body.assets);
   if (body.operation === "delete") {
-    if (definition.bodyRefs?.fields.length) {
-      await context.transaction.query(
-        `DELETE FROM ${context.tables.body_references}
-          WHERE namespace = $1 AND owner_kind = $2 AND owner_id = $3`,
-        [namespace, definition.name, id],
-      );
-    }
     await context.transaction.query(
       `DELETE FROM ${context.tables.edges}
        WHERE namespace = $1 AND (source_node_id = $2 OR target_node_id = $2)`,
@@ -406,16 +428,40 @@ export async function projectCollectionEvent(
   }
   const content = searchContent(definition, body.record);
   const identity = identitySource(definition, body.record);
+  const createdAt = recordTimestamp(
+    definition,
+    body.record,
+    "createdAt",
+  );
+  const updatedAt = recordTimestamp(
+    definition,
+    body.record,
+    "updatedAt",
+  );
   const existing = await context.transaction.query<NodeRow>(
     `SELECT * FROM ${context.tables.nodes}
      WHERE namespace = $1 AND id = $2 AND type = $3 LIMIT 1`,
     [namespace, id, definition.name],
   );
-  if (existing.rows[0]) {
+  if (body.operation === "create" && existing.rows[0]) {
+    throw new Error(
+      `Collection '${definition.name}' '${id}' already exists.`,
+    );
+  }
+  if (body.operation === "update" && !existing.rows[0]) {
+    throw new Error(`Unknown ${definition.name} '${id}'.`);
+  }
+  if (body.operation === "update") {
     await context.transaction.query(
       `UPDATE ${context.tables.nodes}
        SET name = $4, content = $5, data = $6::jsonb,
-           source_type = $7, source_id = $8, updated_at = NOW()
+           source_type = $7, source_id = $8,
+           created_at = COALESCE($9::timestamptz, created_at),
+           updated_at = COALESCE(
+             $10::timestamptz,
+             $9::timestamptz,
+             updated_at
+           )
        WHERE namespace = $1 AND id = $2 AND type = $3`,
       [
         namespace,
@@ -426,13 +472,20 @@ export async function projectCollectionEvent(
         JSON.stringify(body.record),
         identity.sourceType,
         identity.sourceId,
+        createdAt,
+        updatedAt,
       ],
     );
   } else {
     await context.transaction.query(
       `INSERT INTO ${context.tables.nodes} (
-         id, namespace, type, name, content, data, source_type, source_id
-       ) VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8)`,
+         id, namespace, type, name, content, data, source_type, source_id,
+         created_at, updated_at
+       ) VALUES (
+         $1, $2, $3, $4, $5, $6::jsonb, $7, $8,
+         COALESCE($9::timestamptz, $10::timestamptz, NOW()),
+         COALESCE($10::timestamptz, $9::timestamptz, NOW())
+       )`,
       [
         id,
         namespace,
@@ -442,17 +495,12 @@ export async function projectCollectionEvent(
         JSON.stringify(body.record),
         identity.sourceType,
         identity.sourceId,
+        createdAt,
+        updatedAt,
       ],
     );
   }
   await synchronizeRelations(context, definition, namespace, id, body.record);
-  await synchronizeBodyReferences(
-    context,
-    definition,
-    namespace,
-    id,
-    body.record,
-  );
   await synchronizeContentAssetEdges(
     context,
     definition,

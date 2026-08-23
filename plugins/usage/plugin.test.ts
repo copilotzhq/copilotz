@@ -19,7 +19,6 @@ import {
 } from "../../runtime/testing/ominipg.ts";
 import {
   type CopilotzEngine,
-  type CopilotzProcessorContext,
   createCopilotzEngine,
 } from "../../runtime/engine/index.ts";
 import { createSqlSession } from "../../runtime/events/index.ts";
@@ -27,8 +26,12 @@ import {
   createPluginRegistry,
   definePlugin,
   defineProcessor,
+  type ProcessorContext,
 } from "../../runtime/plugins/index.ts";
-import { defineAction } from "../../runtime/actions/index.ts";
+import {
+  type ActionCallers,
+  defineAction,
+} from "../../runtime/actions/index.ts";
 import { coreCollections, createThreadAction } from "../core/index.ts";
 
 const NAMESPACE = "tenant-a";
@@ -50,6 +53,16 @@ const usageToolAction = defineAction<unknown, unknown>({
   },
 });
 
+type UsageDriverContext = ProcessorContext<
+  ProcessorContext["resources"],
+  ProcessorContext["adapters"],
+  ActionCallers<{
+    usageLlm: typeof usageLlmAction;
+    usageTool: typeof usageToolAction;
+  }>,
+  ProcessorContext["collections"]
+>;
+
 const usageCorePlugin = definePlugin({
   id: "test.usage-core",
   version: "1.0.0",
@@ -65,7 +78,7 @@ const usageActionDriverPlugin = definePlugin({
     usageTool: usageToolAction,
   },
   processors: {
-    actionDriver: defineProcessor<CopilotzProcessorContext>({
+    actionDriver: defineProcessor<UsageDriverContext>({
       id: "test.usage-action-driver",
       on: [
         { eventType: "test.usage.llm" },
@@ -250,9 +263,9 @@ Deno.test("usage workflow records Action terminals once without payload copies",
     });
 
     const deadline = Date.now() + 10_000;
-    while (
-      (await fixture.engine.collections.get("usage").list(NAMESPACE)).length < 3
-    ) {
+    const usage = fixture.engine.collections.withScope({ namespace: NAMESPACE })
+      .usage;
+    while ((await usage.list()).length < 3) {
       if (Date.now() >= deadline) {
         throw new Error("Usage Actions did not settle.");
       }
@@ -261,9 +274,7 @@ Deno.test("usage workflow records Action terminals once without payload copies",
     }
 
     const rows = [
-      ...await fixture.engine.collections.get("usage").list(
-        NAMESPACE,
-      ),
+      ...await usage.list(),
     ].sort((left, right) => left.id.localeCompare(right.id));
     assertEquals(rows.length, 3);
     assertEquals(hookKinds.sort(), ["llm", "llm", "tool"]);
@@ -300,7 +311,7 @@ Deno.test("usage workflow records Action terminals once without payload copies",
 
     await fixture.engine.recover({ namespace: NAMESPACE });
     assertEquals(
-      (await fixture.engine.collections.get("usage").list(NAMESPACE)).length,
+      (await usage.list()).length,
       3,
     );
   } finally {

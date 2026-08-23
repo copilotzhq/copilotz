@@ -1,5 +1,5 @@
 import type { ProviderConfig, ProviderFallbackConfig } from "../llm/types.ts";
-import type { ScopedEventCollection } from "../domain/index.ts";
+import type { ScopedCollection } from "../collections/index.ts";
 
 export type ToolHistoryVisibility =
   | "requester_only"
@@ -161,10 +161,8 @@ export type APIPrepareRequestContext = Readonly<{
   userExternalId?: string;
   agent?: Agent | null;
   namespace?: string;
-  /** Trusted physical schema selected by the application boundary. */
-  databaseSchema?: string;
   /** Tenant-scoped graph collections available to this tool execution. */
-  collections?: Readonly<Record<string, ScopedEventCollection>>;
+  collections?: Readonly<Record<string, ScopedCollection>>;
   userMetadata?: Readonly<Record<string, unknown>>;
   threadMetadata?: Readonly<Record<string, unknown>>;
   resolveAsset?: (

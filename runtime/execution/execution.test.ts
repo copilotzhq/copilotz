@@ -17,13 +17,16 @@ import {
 import {
   createDeliveryExecutor,
   createDeliveryWorkload,
+  type DeliveryContextFactory,
   type DeliveryDispatcher,
 } from "./index.ts";
+import { createTestProcessorContext } from "../testing/processor-context.ts";
 
 type Fixture = Readonly<{
   db: TestDatabase;
   store: EventStore;
   registry: PluginRegistry;
+  createContext: DeliveryContextFactory;
   calls: Array<
     Readonly<{
       eventId: string;
@@ -59,29 +62,44 @@ async function createFixture(options?: {
     on: [{ eventType: "message.created" }],
     async handle(event, context) {
       if (!event.durable) throw new Error("Expected a durable event.");
-      const idempotencyKey = String(context.idempotencyKey);
-      const createMutationIdentity = context.createMutationIdentity as (
-        key: string,
-        metadata?: Record<string, unknown>,
-      ) => Fixture["calls"][number]["mutationIdentity"];
-      const mutationIdentity = createMutationIdentity("effect", {
-        custom: "value",
-      });
-      assert(Object.isFrozen(mutationIdentity));
-      assert(Object.isFrozen(mutationIdentity.metadata));
-      calls.push(
-        Object.freeze({ eventId: event.id, idempotencyKey, mutationIdentity }),
+      assertEquals(
+        [
+          "databaseSchema",
+          "event",
+          "delivery",
+          "settlementScopeId",
+          "idempotencyKey",
+          "dispatchAttemptId",
+          "createMutationIdentity",
+        ].filter((key) => Object.hasOwn(context, key)),
+        [],
       );
+      const idempotencyKey = context.operationKey;
       await options?.handle?.(event.id, idempotencyKey);
     },
   });
+  const createContext: DeliveryContextFactory = (base) => {
+    const mutationIdentity = base.createMutationIdentity("effect", {
+      custom: "value",
+    });
+    assert(Object.isFrozen(mutationIdentity));
+    assert(Object.isFrozen(mutationIdentity.metadata));
+    calls.push(
+      Object.freeze({
+        eventId: base.event.id,
+        idempotencyKey: base.idempotencyKey,
+        mutationIdentity,
+      }),
+    );
+    return createTestProcessorContext(base);
+  };
   const plugin = definePlugin({
     id: "test.execution",
     version: "1.0.0",
     processors: { observer: processor },
   });
   const registry = await createPluginRegistry({ plugins: [plugin] });
-  return Object.freeze({ db, store, registry, calls });
+  return Object.freeze({ db, store, registry, createContext, calls });
 }
 
 async function appendMessage(fixture: Fixture) {
@@ -107,6 +125,7 @@ Deno.test("A24 private in-process Oxian recovers and executes a durable delivery
   const executor = createDeliveryExecutor({
     store: fixture.store,
     registry: fixture.registry,
+    createContext: fixture.createContext,
     workerId: "copilotz-private-test",
   });
   try {
@@ -158,6 +177,7 @@ Deno.test("delivery failures retry through the same logical consumer and stable 
   const executor = createDeliveryExecutor({
     store: fixture.store,
     registry: fixture.registry,
+    createContext: fixture.createContext,
     workerId: "copilotz-retry-test",
   });
   try {
@@ -191,6 +211,7 @@ Deno.test("concurrent local dispatch calls share one physical delivery attempt",
   const executor = createDeliveryExecutor({
     store: fixture.store,
     registry: fixture.registry,
+    createContext: fixture.createContext,
     workerId: "copilotz-dedup-test",
   });
   try {
@@ -221,6 +242,7 @@ Deno.test("A52 a shared Hypervisor survives Copilotz worker shutdown", async () 
   const executor = createDeliveryExecutor({
     store: fixture.store,
     registry: fixture.registry,
+    createContext: fixture.createContext,
     hypervisor,
     transport,
     workerId: "shared-copilotz",
@@ -274,6 +296,7 @@ Deno.test("A53 remote dispatch contains serializable identities and resolves on 
       "copilotz.delivery.v1": createDeliveryWorkload({
         store: fixture.store,
         registry: fixture.registry,
+        createContext: fixture.createContext,
       }),
     },
   });
@@ -291,6 +314,7 @@ Deno.test("A53 remote dispatch contains serializable identities and resolves on 
   const executor = createDeliveryExecutor({
     store: fixture.store,
     registry: fixture.registry,
+    createContext: fixture.createContext,
     dispatcher,
     target: { workerId: "external-copilotz" },
   });
@@ -338,6 +362,7 @@ Deno.test("shared Hypervisors require their explicit event-fabric transport", as
         createDeliveryExecutor({
           store: fixture.store,
           registry: fixture.registry,
+          createContext: fixture.createContext,
           hypervisor,
         }),
       TypeError,

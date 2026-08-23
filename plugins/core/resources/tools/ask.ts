@@ -19,18 +19,31 @@ import {
   requireCollection,
   requiredText,
 } from "../processors/helpers.ts";
-import { coreAgent, type CoreResources } from "../../context.ts";
+import {
+  coreAgent,
+  type CoreProcessorContext,
+  type CoreResources,
+} from "../../context.ts";
 
 const DEFAULT_TOOL_ID = "ask";
 const DEFAULT_MAX_DEPTH = 8;
 
+type AskToolExecutionContext =
+  & Omit<WorkflowToolExecutionContext, "processor">
+  & Readonly<{ processor: CoreProcessorContext }>;
+
 function executionContext(
   value: WorkflowToolExecutionContext | undefined,
-): WorkflowToolExecutionContext {
-  if (!value?.processor) {
-    throw new Error("The ask capability requires an event-native context.");
+): AskToolExecutionContext {
+  if (
+    !value?.processor ||
+    typeof value.processor.actions.createThreadMessage !== "function"
+  ) {
+    throw new Error(
+      "The ask capability requires the createThreadMessage Action.",
+    );
   }
-  return value;
+  return value as AskToolExecutionContext;
 }
 
 function normalizedIdentity(value: string | null | undefined): string | null {

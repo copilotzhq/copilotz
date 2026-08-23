@@ -1,13 +1,12 @@
 import type { JSONSchema } from "../../dependencies/json-schema-to-ts.ts";
 import type { CoordinatedMutationResult } from "../events/coordinator.ts";
 import type { DurableEvent, DurableEventDraft } from "../events/types.ts";
-import type { EventDelivery } from "../events/types.ts";
 import type {
-  DomainRelation,
-  ListDomainRelationsOptions,
-  ProjectDomainRelationInput,
-} from "../domain/index.ts";
-import type { ScopedCollections } from "../collections/kernel.ts";
+  CollectionTransactionRelations,
+  ScopedCollection,
+  ScopedCollections,
+  TransactionCollection,
+} from "../collections/kernel.ts";
 import type { ContentStreamRuntime } from "../content/stream.ts";
 import type {
   AssetOrigin,
@@ -21,16 +20,35 @@ import type {
   ResolvedContent,
 } from "../content/types.ts";
 
-export type ActionContextNamespace = Readonly<Record<string, unknown>>;
+export type RuntimeContextNamespace = Readonly<Record<string, unknown>>;
 
-export type ActionContextNamespaces = Readonly<
-  Record<string, ActionContextNamespace>
+export type RuntimeContextNamespaces = Readonly<
+  Record<string, RuntimeContextNamespace>
 >;
 
-export type ActionCollections = ScopedCollections;
+export type RuntimeCollections = ScopedCollections;
+
+export type RuntimeTransactionCollections<
+  TCollections extends RuntimeCollections = RuntimeCollections,
+> = Readonly<
+  {
+    [K in keyof TCollections]: TCollections[K] extends ScopedCollection<
+      infer TSelect,
+      infer TInsert
+    > ? TransactionCollection<TSelect, TInsert>
+      : TransactionCollection;
+  }
+>;
+
+export type RuntimeActionCallers = Readonly<
+  Record<
+    string,
+    (input: never, options?: ActionCallOptions) => Promise<unknown>
+  >
+>;
 
 /** Runtime-native durable content operations available to Actions. */
-export type ActionContent = Readonly<{
+export type RuntimeContent = Readonly<{
   prepare(
     input: ContentInput | readonly ContentInput[],
     options: { operationKey: string; origin?: AssetOrigin },
@@ -39,7 +57,6 @@ export type ActionContent = Readonly<{
     input: DurableContentInput,
     options?: { origin?: AssetOrigin },
   ): Promise<ContentSequence>;
-  linkOwner(ownerId: string, content: ContentSequence): Promise<void>;
   publish(
     input: Omit<PublishAssetInput, "namespace" | "idempotencyKey">,
     options: { operationKey: string },
@@ -51,9 +68,9 @@ export type ActionContent = Readonly<{
   open(ref: ContentRef): Promise<ReadableStream<Uint8Array>>;
 }>;
 
-export type ActionStreams = ContentStreamRuntime;
+export type RuntimeStreams = ContentStreamRuntime;
 
-export type ActionIdentity = Readonly<{
+export type RuntimeIdentity = Readonly<{
   causationId?: string;
   correlationId?: string;
   deduplicationId?: string;
@@ -62,14 +79,14 @@ export type ActionIdentity = Readonly<{
 
 export type ActionCallOptions = Readonly<{
   operationKey?: string;
-  identity?: ActionIdentity;
+  identity?: RuntimeIdentity;
   signal?: AbortSignal;
 }>;
 
 export type ActionTransactionOptions = Readonly<{
   operationKey?: string;
   identity?:
-    & ActionIdentity
+    & RuntimeIdentity
     & Readonly<{
       metadata?: Readonly<Record<string, unknown>>;
     }>;
@@ -77,70 +94,54 @@ export type ActionTransactionOptions = Readonly<{
 }>;
 
 export type ActionTransactionContext<
-  TCollections extends ActionCollections = ActionCollections,
+  TCollections extends RuntimeCollections = RuntimeCollections,
 > = Readonly<{
-  collections: TCollections;
-  relations: Readonly<{
-    /** Atomically creates or replaces one graph relation projection. */
-    upsert(
-      input: Omit<ProjectDomainRelationInput, "namespace">,
-    ): Promise<DomainRelation>;
-  }>;
+  collections: RuntimeTransactionCollections<TCollections>;
+  relations: CollectionTransactionRelations;
 }>;
 
 /**
- * Runtime-owned Action context. Semantic Actions narrow this shape through an
- * ordinary interface; the runtime still passes the complete composed context.
+ * Runtime-owned context shared by Actions and Processors. Semantic code may
+ * narrow the composed maps through an ordinary TypeScript interface; the
+ * runtime still passes the complete context without filtering it.
  */
-export interface ActionContext {
+export interface RuntimeContext<
+  TResources extends RuntimeContextNamespaces = RuntimeContextNamespaces,
+  TAdapters extends RuntimeContextNamespaces = RuntimeContextNamespaces,
+  TActions extends RuntimeActionCallers = RuntimeActionCallers,
+  TCollections extends RuntimeCollections = RuntimeCollections,
+> {
   readonly namespace: string;
   readonly operationKey: string;
-  readonly identity: ActionIdentity;
+  readonly identity: RuntimeIdentity;
+  readonly resources: TResources;
+  readonly adapters: TAdapters;
+  readonly actions: TActions;
+  readonly collections: TCollections;
+  readonly content: RuntimeContent;
+  readonly streams: RuntimeStreams;
+  readonly signal: AbortSignal;
+  now(): Date;
+  transaction<T>(
+    execute: (
+      context: ActionTransactionContext<TCollections>,
+    ) => T | Promise<T>,
+    options?: ActionTransactionOptions,
+  ): Promise<T>;
+}
+
+/** Runtime context for one Action invocation and its durable lifecycle. */
+export interface ActionContext<
+  TResources extends RuntimeContextNamespaces = RuntimeContextNamespaces,
+  TAdapters extends RuntimeContextNamespaces = RuntimeContextNamespaces,
+  TActions extends RuntimeActionCallers = RuntimeActionCallers,
+  TCollections extends RuntimeCollections = RuntimeCollections,
+> extends RuntimeContext<TResources, TAdapters, TActions, TCollections> {
   readonly action: Readonly<{
     id: string;
     runId: string;
     parentRunId?: string;
   }>;
-  readonly resources: ActionContextNamespaces;
-  readonly adapters: ActionContextNamespaces;
-  readonly actions: Readonly<
-    Record<
-      string,
-      (input: never, options?: ActionCallOptions) => Promise<unknown>
-    >
-  >;
-  readonly collections: ActionCollections;
-  readonly content: ActionContent;
-  readonly streams: ActionStreams;
-  readonly events: Readonly<{
-    list(options?: {
-      threadId?: string;
-      correlationId?: string;
-      afterPosition?: string;
-      limit?: number;
-    }): Promise<readonly DurableEvent[]>;
-  }>;
-  readonly deliveries: Readonly<{
-    list(options?: {
-      eventId?: string;
-      consumerId?: string;
-      status?: EventDelivery["status"];
-      limit?: number;
-    }): Promise<readonly EventDelivery[]>;
-  }>;
-  readonly relations: Readonly<{
-    list(
-      options?: Omit<ListDomainRelationsOptions, "namespace">,
-    ): Promise<readonly DomainRelation[]>;
-  }>;
-  readonly signal?: AbortSignal;
-  now(): Date;
-  transaction<T>(
-    execute: (
-      context: ActionTransactionContext,
-    ) => T | Promise<T>,
-    options?: ActionTransactionOptions,
-  ): Promise<T>;
   /** Persists one self-contained `<actionId>.progress` lifecycle Event. */
   progress(value: unknown): Promise<void>;
 }

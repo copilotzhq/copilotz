@@ -48,12 +48,12 @@ export type LiveMutationIdentity = Readonly<{
 
 export type LiveProcessorContextFactory = (
   base: LiveProcessorContextBase,
-) => ProcessorContext | void | Promise<ProcessorContext | void>;
+) => ProcessorContext | Promise<ProcessorContext>;
 
 export type CreateLiveProcessorWorkloadOptions = Readonly<{
   registry: PluginRegistry;
   transients?: TransientProcessorSet;
-  createContext?: LiveProcessorContextFactory;
+  createContext: LiveProcessorContextFactory;
   maxEventBytes?: number;
 }>;
 
@@ -66,7 +66,7 @@ export type InvokeLiveProcessorsOptions = Readonly<{
   eventData?: unknown;
   signal: AbortSignal;
   settlementScopeId?: string;
-  createContext?: LiveProcessorContextFactory;
+  createContext: LiveProcessorContextFactory;
   createDispatchAttemptId?: () => string;
 }>;
 
@@ -279,8 +279,7 @@ async function invokeOne(
       options.settlementScopeId,
     ),
   });
-  const extension = await options.createContext?.(base);
-  const context = Object.freeze({ ...(extension ?? {}), ...base });
+  const context = await options.createContext(base);
   options.signal.throwIfAborted();
   await processor.handle(
     withProcessorEventData(

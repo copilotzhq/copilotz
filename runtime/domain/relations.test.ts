@@ -18,7 +18,7 @@ const relationNodeCollection = defineCollection({
   } as const,
 });
 
-Deno.test("typed relations create, query, and delete direct graph edges", async () => {
+Deno.test("planned relations upsert, query, and retire with their endpoint", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   const registry = await createPluginRegistry({
     plugins: [definePlugin({
@@ -43,55 +43,69 @@ Deno.test("typed relations create, query, and delete direct graph edges", async 
       name: "Target",
     });
 
-    const created = await engine.relations.create({
+    const created = await engine.collections.transaction({
+      operationKey: "relation-a:create",
       namespace: "tenant-a",
-      id: "relation-a",
-      type: "supports",
-      source: { type: relationNodeCollection.name, id: "source-a" },
-      target: { type: relationNodeCollection.name, id: "target-a" },
-      metadata: { reason: "contract" },
       identity: {
         correlationId: "relation-contract",
         deduplicationId: "relation-a:create",
       },
+      execute: ({ relations }) =>
+        relations.upsert({
+          id: "relation-a",
+          type: "supports",
+          source: { type: relationNodeCollection.name, id: "source-a" },
+          target: { type: relationNodeCollection.name, id: "target-a" },
+          metadata: { reason: "contract" },
+        }),
     });
-    assertEquals(created.event.type, "relation.created");
-    assertEquals(created.event.payload, { relationId: "relation-a" });
-    assertExists(created.value);
-    assertEquals(created.value.metadata, { reason: "contract" });
-    assertEquals(
-      await engine.relations.list({
-        namespace: "tenant-a",
-        nodeId: "source-a",
-        direction: "out",
-        types: ["supports"],
-      }),
-      [created.value],
-    );
-    assertEquals(
-      (await engine.relations.get("tenant-a", "relation-a"))?.target.id,
-      "target-a",
+    assertEquals(created.value, { id: "relation-a" });
+    const [relation] = await scoped.relation_contract_node.relations.list({
+      id: "source-a",
+      direction: "out",
+      types: ["supports"],
+    });
+    assertExists(relation);
+    assertEquals(relation.id, "relation-a");
+    assertEquals(relation.target.id, "target-a");
+    assertEquals(relation.metadata, { reason: "contract" });
+    assertExists(
+      (await engine.events.list({ namespace: "tenant-a" })).find((event) =>
+        event.type === "relation.upserted"
+      ),
     );
 
     await assertRejects(
       () =>
-        engine.relations.create({
+        engine.collections.transaction({
+          operationKey: "missing-relation:create",
           namespace: "tenant-b",
-          type: "supports",
-          source: { type: relationNodeCollection.name, id: "source-a" },
-          target: { type: relationNodeCollection.name, id: "target-a" },
+          execute: ({ relations }) =>
+            relations.upsert({
+              type: "supports",
+              source: {
+                type: relationNodeCollection.name,
+                id: "source-a",
+              },
+              target: {
+                type: relationNodeCollection.name,
+                id: "target-a",
+              },
+            }),
         }),
       Error,
       "was not found",
     );
 
-    const deleted = await engine.relations.delete({
-      namespace: "tenant-a",
-      id: "relation-a",
-      identity: { deduplicationId: "relation-a:delete" },
-    });
-    assertEquals(deleted.event.type, "relation.deleted");
-    assertEquals(await engine.relations.get("tenant-a", "relation-a"), null);
+    await scoped.relation_contract_node.delete({ id: "target-a" });
+    assertEquals(
+      await scoped.relation_contract_node.relations.list({
+        id: "source-a",
+        direction: "out",
+        types: ["supports"],
+      }),
+      [],
+    );
   } finally {
     await engine.shutdown();
     await db.close();

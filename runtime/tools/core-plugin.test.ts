@@ -1,9 +1,5 @@
 import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
-import {
-  type CopilotzEngine,
-  type CopilotzProcessorContext,
-  createCopilotzEngine,
-} from "../engine/index.ts";
+import { type CopilotzEngine, createCopilotzEngine } from "../engine/index.ts";
 import {
   projectMessages,
   projectParticipantById,
@@ -15,6 +11,8 @@ import {
   definePlugin,
   defineProcessor,
   type PluginRegistry,
+  type ProcessorContext,
+  type ProcessorEvent,
 } from "../plugins/index.ts";
 import { coreCollectionsPlugin } from "../../plugins/core/plugin.ts";
 import type { WorkflowTool, WorkflowToolExecutionContext } from "./types.ts";
@@ -46,7 +44,10 @@ Follow the contract.`,
   files: { "references/guide.md": "Contract guide" },
 });
 
-type RunAction<T> = (context: CopilotzProcessorContext) => Promise<T>;
+type RunAction<T> = (
+  context: ProcessorContext,
+  sourceEvent: ProcessorEvent,
+) => Promise<T>;
 
 type Fixture = Readonly<{
   db: TestDatabase;
@@ -62,13 +63,13 @@ async function createFixture(
   let active: RunAction<unknown> | undefined;
   let output: unknown;
   let failure: unknown;
-  const runner = defineProcessor<CopilotzProcessorContext>({
+  const runner = defineProcessor<ProcessorContext>({
     id: "test.core-tools.runner",
     on: [{ eventType: "message.created" }],
     async handle(event, context) {
       if (event.threadId !== "thread-a") return;
       try {
-        output = await active?.(context);
+        output = await active?.(context, event);
       } catch (error) {
         failure = error;
       }
@@ -100,9 +101,9 @@ async function createFixture(
     random: () => 0,
   });
   const namespace = "tenant-a";
-  const participants = engine.collectionRuntime.get("participant");
-  const threads = engine.collectionRuntime.get("thread");
-  const messages = engine.collectionRuntime.get("message");
+  const participants = engine.collections.get("participant");
+  const threads = engine.collections.get("thread");
+  const messages = engine.collections.get("message");
   if (!participants || !threads || !messages) {
     throw new Error("Core collections are not bound.");
   }
@@ -136,28 +137,12 @@ async function createFixture(
         `trigger-${++trigger}`,
         { namespace, idempotencyKey: `trigger:${trigger}` },
       );
-      for (const asset of content.assets) {
-        if (await engine.content.assets.get(asset.namespace, asset.id)) {
-          continue;
-        }
-        await engine.content.assets.publish({
-          namespace: asset.namespace,
-          id: asset.id,
-          mediaType: asset.mediaType,
-          body: asset.body,
-          ...(asset.idempotencyKey
-            ? { idempotencyKey: asset.idempotencyKey }
-            : {}),
-          ...(asset.origin ? { origin: asset.origin } : {}),
-          ...(asset.metadata ? { metadata: { ...asset.metadata } } : {}),
-        });
-      }
       const created = await messages.create({
         id: `trigger-${trigger}`,
         threadId: "thread-a",
         senderId: "user-participant",
         recipientIds: ["agent-participant"],
-        content: content.content,
+        content,
         metadata: {},
       }, {
         namespace,
@@ -181,7 +166,8 @@ async function closeFixture(fixture: Fixture): Promise<void> {
 }
 
 async function toolContext(
-  context: CopilotzProcessorContext,
+  context: ProcessorContext,
+  sourceEvent: ProcessorEvent,
   id: string,
 ): Promise<WorkflowToolExecutionContext> {
   const execution = Object.freeze({
@@ -196,8 +182,8 @@ async function toolContext(
   });
   return {
     namespace: context.namespace,
-    correlationId: context.event.correlationId ?? context.event.id,
-    idempotencyKey: context.idempotencyKey,
+    correlationId: sourceEvent.correlationId,
+    idempotencyKey: context.operationKey,
     execution,
     processor: context,
     threadId: "thread-a",
@@ -218,7 +204,7 @@ async function toolContext(
 }
 
 function tool(
-  context: CopilotzProcessorContext,
+  context: ProcessorContext,
   id: string,
 ): WorkflowTool {
   const found = context.resources.tools?.[id];
@@ -249,8 +235,12 @@ Deno.test("asset, skill, clock, and wait tools use typed capabilities", async ()
     },
   }));
   try {
-    const result = await fixture.run(async (processor) => {
-      const ctx = await toolContext(processor, "execution-built-ins");
+    const result = await fixture.run(async (processor, sourceEvent) => {
+      const ctx = await toolContext(
+        processor,
+        sourceEvent,
+        "execution-built-ins",
+      );
       const saved = await tool(processor, "save_asset").execute!(
         {
           mimeType: "text/plain",
@@ -316,8 +306,12 @@ Deno.test("memory and thread tools mutate domain state idempotently", async () =
     now: () => new Date("2026-08-06T12:00:00.000Z"),
   }));
   try {
-    const result = await fixture.run(async (processor) => {
-      const ctx = await toolContext(processor, "execution-memory");
+    const result = await fixture.run(async (processor, sourceEvent) => {
+      const ctx = await toolContext(
+        processor,
+        sourceEvent,
+        "execution-memory",
+      );
       await tool(processor, "update_my_memory").execute!(
         { key: "architecture", value: "event-native", operation: "set" },
         ctx,

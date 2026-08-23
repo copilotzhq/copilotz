@@ -35,9 +35,6 @@ must not be carried forward implicitly.
   processor subscriptions.
 - [Oxian Execution](./oxian-execution.md) defines private/shared/remote delivery
   placement, ownership, lease claiming, and ID-only worker payloads.
-- [Graph-Native Conversation](./graph-native-conversation.md) defines the first
-  participant/thread/message aggregate on canonical content, immutable events,
-  sparse deliveries, and typed graph operations.
 - [Event-Native Collections](./event-native-collections.md) defines plugin
   collection composition, atomic typed mutations, before-hook migration, and
   delivery-scoped retry safety.

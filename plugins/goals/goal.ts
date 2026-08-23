@@ -349,7 +349,7 @@ async function loadParticipant(
   namespace: string,
   id: string,
 ): Promise<Participant | null> {
-  const record = await options.collectionRuntime.withScope({ namespace })
+  const record = await options.collections.withScope({ namespace })
     .participant.get({ id });
   return record ? mapParticipantRecord(record) : null;
 }
@@ -376,7 +376,7 @@ async function loadThreadById(
   namespace: string,
   id: string,
 ): Promise<ConversationThread | null> {
-  const record = await options.collectionRuntime.withScope({ namespace })
+  const record = await options.collections.withScope({ namespace })
     .thread.get({ id });
   return record ? await projectThread(options, namespace, record) : null;
 }
@@ -386,7 +386,7 @@ async function loadThreadByExternalId(
   namespace: string,
   externalId: string,
 ): Promise<ConversationThread | null> {
-  const [record] = await options.collectionRuntime.withScope({ namespace })
+  const [record] = await options.collections.withScope({ namespace })
     .thread.queries.byExternalId({ externalId });
   return record ? await projectThread(options, namespace, record) : null;
 }
@@ -396,7 +396,7 @@ async function loadMessage(
   namespace: string,
   id: string,
 ): Promise<ConversationMessage | null> {
-  const collections = options.collectionRuntime.withScope({ namespace });
+  const collections = options.collections.withScope({ namespace });
   const record = await collections.message.get({ id });
   if (!record) return null;
   const sender = await collections.participant.get({

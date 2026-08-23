@@ -189,6 +189,145 @@ Deno.test("database BodyStore maintenance refuses unexpired ready protection", a
   }
 });
 
+Deno.test("database BodyStore matching put renews protection and advances the maintenance fence", async () => {
+  const db = await createTestDatabase({ url: ":memory:" });
+  const store = createDatabaseBodyStore({
+    session: db,
+    schema: "copilotz_body_put_renewal",
+    protectionMs: 60_000,
+  });
+  try {
+    const bytes = encoder.encode("renewable");
+    const input = {
+      bodyId: "bodies/renewable",
+      bytes,
+      mediaType: "text/plain",
+      digest: await digestContent(bytes),
+    } as const;
+    const expired = await store.put({
+      ...input,
+      protectedUntil: "2000-01-01T00:00:00.000Z",
+    });
+    const renewed = await store.put(input);
+    assertEquals(
+      renewed.maintenanceVersion,
+      expired.maintenanceVersion + 1,
+    );
+    assertEquals(Date.parse(renewed.protectedUntil!) > Date.now(), true);
+    const kept = await store.put({
+      ...input,
+      protectedUntil: "2000-01-01T00:00:00.000Z",
+    });
+    assertEquals(kept.maintenanceVersion, renewed.maintenanceVersion + 1);
+    assertEquals(kept.protectedUntil, renewed.protectedUntil);
+    assertEquals(
+      await store.maintenance.delete({
+        bodyId: input.bodyId,
+        expectedState: "ready",
+        expectedMaintenanceVersion: expired.maintenanceVersion,
+        idleForMs: 0,
+      }),
+      false,
+    );
+    await assertRejects(() =>
+      store.put({
+        ...input,
+        bytes: encoder.encode("conflict"),
+        digest:
+          "sha256:fa9e1d222a14b79755c8b9d5523c2c8fc73a4ca5a7f25f518c5b1d17770d0fab",
+      })
+    );
+  } finally {
+    await db.close();
+  }
+});
+
+Deno.test("database BodyStore acquire-or-create is linearizable across store instances", async () => {
+  const db = await createTestDatabase({ url: ":memory:" });
+  const schema = "copilotz_body_put_linearizable";
+  const firstStore = createDatabaseBodyStore({
+    session: db,
+    schema,
+    protectionMs: 0,
+  });
+  const secondStore = createDatabaseBodyStore({
+    session: db,
+    schema,
+    protectionMs: 0,
+  });
+  try {
+    const bytes = encoder.encode("one-body");
+    const input = {
+      bodyId: "bodies/linearizable",
+      bytes,
+      mediaType: "text/plain",
+      digest: await digestContent(bytes),
+      protectedUntil: "2000-01-01T00:00:00.000Z",
+    } as const;
+    const heads = await Promise.all([
+      firstStore.put(input),
+      secondStore.put(input),
+    ]);
+    assertEquals(
+      heads.map((head) => head.maintenanceVersion).sort((left, right) =>
+        left - right
+      ),
+      [1, 2],
+    );
+    assertEquals(
+      new TextDecoder().decode(
+        await readAll(
+          await firstStore.read({
+            bodyId: input.bodyId,
+          }),
+        ),
+      ),
+      "one-body",
+    );
+  } finally {
+    await db.close();
+  }
+});
+
+Deno.test("database BodyStore delete enforces idle duration in its SQL CAS", async () => {
+  const db = await createTestDatabase({ url: ":memory:" });
+  const store = createDatabaseBodyStore({
+    session: db,
+    schema: "copilotz_body_maintenance_idle",
+    protectionMs: 0,
+  });
+  try {
+    const bytes = encoder.encode("idle-guarded");
+    const head = await store.put({
+      bodyId: "bodies/idle-guarded",
+      bytes,
+      mediaType: "text/plain",
+      digest: await digestContent(bytes),
+      protectedUntil: "2000-01-01T00:00:00.000Z",
+    });
+    assertEquals(
+      await store.maintenance.delete({
+        bodyId: head.bodyId,
+        expectedState: "ready",
+        expectedMaintenanceVersion: head.maintenanceVersion,
+        idleForMs: 60_000,
+      }),
+      false,
+    );
+    assertEquals(
+      await store.maintenance.delete({
+        bodyId: head.bodyId,
+        expectedState: "ready",
+        expectedMaintenanceVersion: head.maintenanceVersion,
+        idleForMs: 0,
+      }),
+      true,
+    );
+  } finally {
+    await db.close();
+  }
+});
+
 Deno.test("database BodyStore append is expected-offset and append-id stable", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   const store = createDatabaseBodyStore({

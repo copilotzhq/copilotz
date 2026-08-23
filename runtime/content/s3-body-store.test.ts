@@ -19,10 +19,11 @@ function xmlEscape(value: string): string {
     .replaceAll(">", "&gt;");
 }
 
-Deno.test("S3 BodyStore conditionally writes, verifies, streams, lists, and deletes", async () => {
+Deno.test("S3 BodyStore reuses immutable objects and disables unsafe Ready GC", async () => {
   const objects = new Map<string, StoredObject>();
   let headRequests = 0;
   let putRequests = 0;
+  let deleteRequests = 0;
   const putPayloadDigests: string[] = [];
   const server = Deno.serve(
     { hostname: "127.0.0.1", port: 0 },
@@ -111,6 +112,7 @@ Deno.test("S3 BodyStore conditionally writes, verifies, streams, lists, and dele
           : new Response(null, { status: 404 });
       }
       if (request.method === "DELETE") {
+        deleteRequests++;
         objects.delete(path);
         return new Response(null, { status: 204 });
       }
@@ -172,13 +174,20 @@ Deno.test("S3 BodyStore conditionally writes, verifies, streams, lists, and dele
       })
     );
     assertEquals((conflict as ContentError).code, "asset_conflict");
-    await store.maintenance.delete({
-      bodyId: input.bodyId,
-      expectedState: "ready",
-      expectedMaintenanceVersion: first.maintenanceVersion,
-      idleForMs: 0,
-    });
-    assertEquals(await store.head({ bodyId: input.bodyId }), null);
+    assertEquals(
+      await store.maintenance.delete({
+        bodyId: input.bodyId,
+        expectedState: "ready",
+        expectedMaintenanceVersion: first.maintenanceVersion,
+        idleForMs: 0,
+      }),
+      false,
+    );
+    assertEquals(deleteRequests, 0);
+    assertEquals(
+      (await store.head({ bodyId: input.bodyId }))?.bodyId,
+      input.bodyId,
+    );
   } finally {
     await server.shutdown();
   }

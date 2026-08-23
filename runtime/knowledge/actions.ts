@@ -341,11 +341,12 @@ function failIndexInput(input: unknown): FailIndexInput {
   });
 }
 
-async function deleteDocumentChunks(
+async function listDocumentChunks(
   collections: ActionContext["collections"],
   documentId: string,
-): Promise<void> {
+): Promise<readonly KnowledgeChunk[]> {
   const chunks = collections.chunk;
+  const collected: KnowledgeChunk[] = [];
   let after: string | undefined;
   while (true) {
     const page = await chunks.list({
@@ -353,13 +354,12 @@ async function deleteDocumentChunks(
       ...(after ? { after } : {}),
       limit: 1_000,
     }) as readonly KnowledgeChunk[];
-    for (const chunk of page) {
-      await chunks.delete({ id: chunk.id });
-    }
+    collected.push(...page);
     if (page.length < 1_000) break;
     after = page.at(-1)?.id;
     if (!after) break;
   }
+  return Object.freeze(collected);
 }
 
 async function listAllChunks(
@@ -436,13 +436,16 @@ async function beginIndex(
   context: KnowledgeActionContext,
 ): Promise<KnowledgeDocument> {
   const id = requireText(record(input).id, "Document ID");
-  return await context.transaction(
-    async (tx) =>
-      await tx.collections.document.commands.beginIndex({
+  const ref = await context.transaction(
+    (tx) =>
+      tx.collections.document.commands.beginIndex({
         id,
-      }) as KnowledgeDocument,
+      }),
     { operationKey: `index:${id}:begin` },
   );
+  const document = await context.collections.document.get({ id: ref.id });
+  if (!document) throw new Error(`Knowledge document '${ref.id}' is missing.`);
+  return document as KnowledgeDocument;
 }
 
 async function completeIndex(
@@ -450,8 +453,11 @@ async function completeIndex(
   context: KnowledgeActionContext,
 ): Promise<KnowledgeDocument> {
   const data = completeIndexInput(input);
-  return await context.transaction(async (tx) => {
-    await deleteDocumentChunks(tx.collections, data.id);
+  const previousChunks = await listDocumentChunks(context.collections, data.id);
+  const ref = await context.transaction(async (tx) => {
+    for (const chunk of previousChunks) {
+      await tx.collections.chunk.delete({ id: chunk.id });
+    }
     const chunks = tx.collections.chunk;
     for (const chunk of data.chunks) {
       await chunks.create({
@@ -466,16 +472,18 @@ async function completeIndex(
         metadata: chunk.metadata,
       }, { operationKey: `index:${data.id}:chunk:${chunk.chunkIndex}` });
     }
-    return await tx.collections.document.commands
-      .completeIndex({
-        id: data.id,
-        ...(data.title ? { title: data.title } : {}),
-        mediaType: data.mediaType,
-        contentHash: data.contentHash,
-        source: data.source,
-        chunkCount: data.chunks.length,
-      }) as KnowledgeDocument;
+    return await tx.collections.document.commands.completeIndex({
+      id: data.id,
+      ...(data.title ? { title: data.title } : {}),
+      mediaType: data.mediaType,
+      contentHash: data.contentHash,
+      source: data.source,
+      chunkCount: data.chunks.length,
+    });
   }, { operationKey: `index:${data.id}:complete` });
+  const document = await context.collections.document.get({ id: ref.id });
+  if (!document) throw new Error(`Knowledge document '${ref.id}' is missing.`);
+  return document as KnowledgeDocument;
 }
 
 async function markDuplicate(
@@ -483,33 +491,38 @@ async function markDuplicate(
   context: KnowledgeActionContext,
 ): Promise<KnowledgeDocument> {
   const data = duplicateInput(input);
-  return await context.transaction(async (tx) => {
-    const canonical = await tx.collections.document.get({
-      id: data.duplicateOfDocumentId,
-    }) as KnowledgeDocument | null;
-    if (!canonical || canonical.status !== "indexed") {
-      throw new Error(
-        `Canonical knowledge document '${data.duplicateOfDocumentId}' is not indexed.`,
-      );
+  const canonical = await context.collections.document.get({
+    id: data.duplicateOfDocumentId,
+  }) as KnowledgeDocument | null;
+  if (!canonical || canonical.status !== "indexed") {
+    throw new Error(
+      `Canonical knowledge document '${data.duplicateOfDocumentId}' is not indexed.`,
+    );
+  }
+  if (
+    canonical.contentHash !== data.contentHash ||
+    canonical.mediaType !== data.mediaType
+  ) {
+    throw new Error(
+      "Duplicate metadata does not match the canonical document.",
+    );
+  }
+  const previousChunks = await listDocumentChunks(context.collections, data.id);
+  const ref = await context.transaction(async (tx) => {
+    for (const chunk of previousChunks) {
+      await tx.collections.chunk.delete({ id: chunk.id });
     }
-    if (
-      canonical.contentHash !== data.contentHash ||
-      canonical.mediaType !== data.mediaType
-    ) {
-      throw new Error(
-        "Duplicate metadata does not match the canonical document.",
-      );
-    }
-    await deleteDocumentChunks(tx.collections, data.id);
-    return await tx.collections.document.commands
-      .markDuplicate({
-        id: data.id,
-        duplicateOfDocumentId: data.duplicateOfDocumentId,
-        source: data.source,
-        mediaType: data.mediaType,
-        contentHash: data.contentHash,
-      }) as KnowledgeDocument;
+    return await tx.collections.document.commands.markDuplicate({
+      id: data.id,
+      duplicateOfDocumentId: data.duplicateOfDocumentId,
+      source: data.source,
+      mediaType: data.mediaType,
+      contentHash: data.contentHash,
+    });
   }, { operationKey: `index:${data.id}:duplicate` });
+  const document = await context.collections.document.get({ id: ref.id });
+  if (!document) throw new Error(`Knowledge document '${ref.id}' is missing.`);
+  return document as KnowledgeDocument;
 }
 
 async function failIndex(
@@ -517,15 +530,18 @@ async function failIndex(
   context: KnowledgeActionContext,
 ): Promise<KnowledgeDocument> {
   const data = failIndexInput(input);
-  return await context.transaction(
-    async (tx) =>
-      await tx.collections.document.commands.failIndex({
+  const ref = await context.transaction(
+    (tx) =>
+      tx.collections.document.commands.failIndex({
         id: data.id,
         code: data.error.code,
         message: data.error.message,
-      }) as KnowledgeDocument,
+      }),
     { operationKey: `index:${data.id}:fail` },
   );
+  const document = await context.collections.document.get({ id: ref.id });
+  if (!document) throw new Error(`Knowledge document '${ref.id}' is missing.`);
+  return document as KnowledgeDocument;
 }
 
 function actionSignal(context: KnowledgeActionContext): AbortSignal {
@@ -572,17 +588,6 @@ async function announce(
   const createMessage = context.actions.createThreadMessage;
   if (typeof createMessage !== "function") return;
   const messageId = `${document.id}:knowledge:${input.status}`;
-  const prepared = await context.content.prepare({
-    type: "text",
-    text: input.message,
-    role: "body",
-  }, { operationKey: `announce:${document.id}:${input.status}` });
-  const content = await context.content.materialize(prepared, {
-    origin: {
-      scope: { type: "thread", id: document.threadId },
-      producer: { type: "message", id: messageId },
-    },
-  });
   await createMessage({
     id: messageId,
     threadId: document.threadId,
@@ -592,7 +597,11 @@ async function announce(
       name: "RAG",
     },
     recipientIds: [],
-    content,
+    content: {
+      type: "text",
+      text: input.message,
+      role: "body",
+    },
     visibility: { kind: "public" },
     metadata: {
       knowledgeResult: {
@@ -603,7 +612,6 @@ async function announce(
       },
     },
   }, { operationKey: `announce:${document.id}:${input.status}` });
-  if (content.length) await context.content.linkOwner(messageId, content);
 }
 
 async function indexDocument(
@@ -738,37 +746,37 @@ async function deleteDocument(
   if (Boolean(documentId) === Boolean(sourceUri)) {
     throw new TypeError("Provide exactly one of documentId or sourceUri.");
   }
-  return await context.transaction(async (tx) => {
-    const document = documentId
-      ? await tx.collections.document.get({ id: documentId })
-      : (await tx.collections.document.queries.bySourceUri({
-        sourceUri: sourceUri!,
-      }))[0];
-    if (!document) {
-      return {
-        success: false,
-        message: documentId
-          ? `Document with ID "${documentId}" not found.`
-          : `Document with source "${sourceUri}" not found.`,
-      };
-    }
-    const chunks = await tx.collections.chunk.list({
-      where: { documentId: document.id },
-      limit: 1_000,
-    });
+  const document = documentId
+    ? await context.collections.document.get({ id: documentId })
+    : (await context.collections.document.queries.bySourceUri({
+      sourceUri: sourceUri!,
+    }))[0];
+  if (!document) {
+    return {
+      success: false,
+      message: documentId
+        ? `Document with ID "${documentId}" not found.`
+        : `Document with source "${sourceUri}" not found.`,
+    };
+  }
+  const chunks = await listDocumentChunks(
+    context.collections,
+    document.id,
+  );
+  await context.transaction(async (tx) => {
     for (const chunk of chunks) {
       await tx.collections.chunk.delete({ id: chunk.id });
     }
     await tx.collections.document.delete({ id: document.id });
-    const title = String(document.title || document.sourceUri || document.id);
-    return {
-      success: true,
-      message: `Document "${title}" deleted.`,
-      documentId: document.id,
-      title,
-      namespace: document.namespace,
-    };
   }, { operationKey: "delete_document" });
+  const title = String(document.title || document.sourceUri || document.id);
+  return {
+    success: true,
+    message: `Document "${title}" deleted.`,
+    documentId: document.id,
+    title,
+    namespace: document.namespace,
+  };
 }
 
 const deleteDocumentInputSchema = {

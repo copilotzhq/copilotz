@@ -3,80 +3,98 @@ import {
   type ActionCaller,
   type ActionCompletedData,
   type ActionContext,
-  type ActionContextNamespaces,
   defineAction,
+  type RuntimeContextNamespaces,
 } from "../actions/index.ts";
 import {
   createPluginRegistry,
   definePlugin,
   defineProcessor,
+  type ProcessorContext,
 } from "../plugins/index.ts";
-import { createTestDomainContext } from "../../runtime/testing/domain-context.ts";
-import { waitForTestDelivery } from "../../runtime/testing/deliveries.ts";
+import { createTestDomainContext } from "../testing/domain-context.ts";
+import { waitForTestDelivery } from "../testing/deliveries.ts";
 import { createTestDatabase } from "../testing/ominipg.ts";
-import {
-  type CopilotzProcessorContext,
-  createCopilotzEngine,
-} from "./index.ts";
 import { coreCollectionsPlugin } from "@copilotz/copilotz/plugins/core";
+import { createCopilotzEngine } from "./index.ts";
 
-Deno.test("Actions see the same deliveries from processor and direct contexts", async () => {
-  const namespace = "tenant-action-deliveries";
-  let processorDeliveryIds: readonly string[] | undefined;
+const EXECUTOR_FIELDS = Object.freeze([
+  "databaseSchema",
+  "event",
+  "delivery",
+  "settlementScopeId",
+  "idempotencyKey",
+  "dispatchAttemptId",
+  "createMutationIdentity",
+]);
+
+type ProbeResult = Readonly<{
+  namespace: string;
+  adapterId: string;
+  operationKey: string;
+  hasSignal: boolean;
+  hasStreams: boolean;
+  executorFields: readonly string[];
+}>;
+
+Deno.test("Actions and Processors receive one runtime-neutral composed context", async () => {
+  const namespace = "tenant-action-context";
+  let processorResult: ProbeResult | undefined;
   let completedData: ActionCompletedData | undefined;
   const customAdapter = Object.freeze({ id: "adapter-a" });
   type AdapterNamespaces =
-    & ActionContextNamespaces
+    & RuntimeContextNamespaces
     & Readonly<{
       custom: Readonly<{ primary: typeof customAdapter }>;
     }>;
-  type DeliveryProbeContext =
+  type ProbeActionContext =
     & Omit<ActionContext, "adapters">
-    & Readonly<{
-      adapters: AdapterNamespaces;
-    }>;
-  const inputSchema = { type: "object" } as const;
-  const deliveryProbeAction = defineAction<
-    unknown,
-    readonly string[],
-    DeliveryProbeContext,
-    typeof inputSchema
-  >({
-    id: "test.delivery-probe.list",
-    inputSchema,
-    async execute(_input, context) {
-      assertEquals(context.adapters.custom.primary, customAdapter);
-      return (await context.deliveries.list()).map((delivery) => delivery.id);
+    & Readonly<{ adapters: AdapterNamespaces }>;
+  const probeAction = defineAction<unknown, ProbeResult, ProbeActionContext>({
+    id: "test.context.probe",
+    execute(_input, context) {
+      return Object.freeze({
+        namespace: context.namespace,
+        adapterId: context.adapters.custom.primary.id,
+        operationKey: context.operationKey,
+        hasSignal: context.signal instanceof AbortSignal,
+        hasStreams: typeof context.streams.open === "function",
+        executorFields: Object.freeze(
+          EXECUTOR_FIELDS.filter((key) => Object.hasOwn(context, key)),
+        ),
+      });
     },
   });
   type ProbeProcessorContext =
-    & Omit<CopilotzProcessorContext, "actions" | "adapters">
+    & Omit<ProcessorContext, "actions" | "adapters">
     & Readonly<{
-      actions: Readonly<{
-        deliveryProbe: ActionCaller<typeof deliveryProbeAction>;
-      }>;
+      actions: Readonly<{ probe: ActionCaller<typeof probeAction> }>;
       adapters: AdapterNamespaces;
     }>;
   const processor = defineProcessor<ProbeProcessorContext>({
-    id: "test.delivery-probe-processor",
+    id: "test.context.processor",
     on: [{ eventType: "thread.created" }],
     async handle(_event, context) {
       assertEquals(context.adapters.custom.primary, customAdapter);
-      processorDeliveryIds = await context.actions.deliveryProbe({});
+      assertEquals(
+        EXECUTOR_FIELDS.filter((key) => Object.hasOwn(context, key)),
+        [],
+      );
+      processorResult = await context.actions.probe({});
     },
   });
-  const completionProcessor = defineProcessor<CopilotzProcessorContext>({
-    id: "test.delivery-probe-completed",
-    on: [{ eventType: "test.delivery-probe.list.completed" }],
+  const completionProcessor = defineProcessor<ProcessorContext>({
+    id: "test.context.completed",
+    on: [{ eventType: "test.context.probe.completed" }],
     handle(event) {
       completedData = event.data as ActionCompletedData;
     },
   });
   const plugin = definePlugin({
-    id: "test.action-delivery-parity",
+    id: "test.action-context",
     version: "1.0.0",
-    actions: { deliveryProbe: deliveryProbeAction },
-    processors: { deliveryProbe: processor, completion: completionProcessor },
+    actions: { probe: probeAction },
+    processors: { probe: processor, completion: completionProcessor },
     adapters: { custom: { primary: customAdapter } },
   });
   const db = await createTestDatabase({ url: ":memory:" });
@@ -85,10 +103,20 @@ Deno.test("Actions see the same deliveries from processor and direct contexts", 
     registry: await createPluginRegistry({
       plugins: [coreCollectionsPlugin, plugin],
     }),
-    defaultDatabaseSchema: "copilotz_action_delivery_parity",
+    defaultDatabaseSchema: "copilotz_action_context",
   });
   try {
-    await createTestDomainContext(engine, namespace).actions.createThread({
+    const directContext = createTestDomainContext(engine, namespace);
+    const directResult = await directContext.actions.probe({}, {
+      operationKey: "direct-probe",
+    }) as ProbeResult;
+    assertEquals(directResult.executorFields, []);
+    assertEquals(directResult.adapterId, customAdapter.id);
+    assertEquals(directResult.namespace, namespace);
+    assertEquals(directResult.hasSignal, true);
+    assertEquals(directResult.hasStreams, true);
+
+    await directContext.actions.createThread({
       id: "thread-a",
       participants: [{
         id: "user-a",
@@ -103,23 +131,19 @@ Deno.test("Actions see the same deliveries from processor and direct contexts", 
     assertExists(created);
     await waitForTestDelivery(engine, namespace, created.id, "succeeded");
     const completed = (await engine.events.list({ namespace, limit: 100 }))
-      .find(
-        (event) => event.type === "test.delivery-probe.list.completed",
-      );
+      .find((event) => event.type === "test.context.probe.completed");
     assertExists(completed);
     await waitForTestDelivery(engine, namespace, completed.id, "succeeded");
-    assertExists(processorDeliveryIds);
+
+    assertExists(processorResult);
+    assertEquals(processorResult.executorFields, []);
+    assertEquals(processorResult.adapterId, customAdapter.id);
+    assertEquals(processorResult.namespace, namespace);
+    assertEquals(processorResult.hasSignal, true);
+    assertEquals(processorResult.hasStreams, true);
     assertExists(completedData);
     assertEquals(completedData.status, "completed");
-    assertEquals(completedData.input, {});
-    assertEquals(completedData.output, processorDeliveryIds);
-
-    const directDeliveryIds = (await engine.deliveries.list({ namespace }))
-      .filter((delivery) =>
-        delivery.consumerId !== "processor:test.delivery-probe-completed"
-      )
-      .map((delivery) => delivery.id);
-    assertEquals(processorDeliveryIds, directDeliveryIds);
+    assertEquals(completedData.output, processorResult);
   } finally {
     await engine.shutdown();
     await db.close();

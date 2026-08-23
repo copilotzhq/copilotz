@@ -1,11 +1,19 @@
 import { ulid } from "../../dependencies/ulid.ts";
 import type {
+  CoordinatedMutationResult,
   EventCoordinator,
   EventMutationContext,
   EventStore,
   SqlExecutor,
+  SqlSession,
 } from "../events/index.ts";
+import {
+  eventDataRef,
+  readEventBody,
+  writeEventBody,
+} from "../events/body-store.ts";
 import { digestContent } from "./digest.ts";
+import { assetNodeData } from "./asset-node.ts";
 import { createContentError } from "./errors.ts";
 import { cloneContentRef } from "./input.ts";
 import {
@@ -20,9 +28,12 @@ import {
 } from "./database-body-store.ts";
 import { createBodyStorageRuntime } from "./storage.ts";
 import type {
+  AssetAdoptionPlan,
   AssetBody,
   AssetBodyLocation,
+  AssetEventBody,
   AssetManifestEntry,
+  AssetMaterializationPlan,
   AssetOrigin,
   AssetRecord,
   AssetRepository,
@@ -34,7 +45,6 @@ import type {
   PreparedContent,
   PublishAssetInput,
 } from "./types.ts";
-import { ASSET_BODY_OWNER_KIND } from "./types.ts";
 import type { BodyStorageRuntime, BodyStore } from "./body-store.ts";
 
 type AssetNodeRow = Record<string, unknown> & {
@@ -63,20 +73,32 @@ export type LinkAssetOwnerInput = Readonly<{
 }>;
 
 export type AssetBodyMaintenanceResult = Readonly<{
-  retriedDeletions: number;
   orphanedBodiesDeleted: number;
 }>;
 
 export type DatabaseAssetRepository =
   & AssetRepository
   & Readonly<{
-    /** Makes prepared bodies durable inside an aggregate's open transaction. */
+    /** Prepares external bodies and a deterministic graph adoption plan. */
+    prepareMaterialization(
+      input: AssetMutationInput,
+    ): Promise<AssetMaterializationPlan>;
+    /** Adopts prepared database bodies and Asset graph metadata atomically. */
+    adoptMaterialization(
+      context: EventMutationContext,
+      plan: AssetMaterializationPlan,
+    ): Promise<void>;
+    /** Makes prepared bodies durable in one short repository transaction. */
     materialize(
+      input: AssetMutationInput,
+    ): Promise<ContentSequence>;
+    /** Makes prepared bodies durable inside an aggregate's open transaction. */
+    materializeInTransaction(
       context: EventMutationContext,
       input: AssetMutationInput,
     ): Promise<ContentSequence>;
     /** Makes prepared bodies durable and reports replay metadata for new Assets. */
-    materializeWithManifest(
+    materializeWithManifestInTransaction(
       context: EventMutationContext,
       input: AssetMutationInput,
     ): Promise<
@@ -86,12 +108,14 @@ export type DatabaseAssetRepository =
       }>
     >;
     /** Resolves a replay to existing bodies without writing. */
-    resolvePrepared(
+    resolvePreparedInTransaction(
       context: EventMutationContext,
       input: AssetMutationInput,
     ): Promise<ContentSequence>;
     /** Adds typed owner links after the owner node exists. */
-    linkOwner(
+    linkOwner(input: LinkAssetOwnerInput): Promise<void>;
+    /** Adds typed owner links inside an aggregate's open transaction. */
+    linkOwnerInTransaction(
       context: EventMutationContext,
       input: LinkAssetOwnerInput,
     ): Promise<void>;
@@ -112,7 +136,7 @@ export type DatabaseAssetRepository =
 
 export type CreateDatabaseAssetRepositoryOptions = Readonly<{
   coordinator: EventCoordinator;
-  session: SqlExecutor;
+  session: SqlSession;
   eventStore: Pick<EventStore, "tables">;
   databaseSchema: string;
   storage?: BodyStorageRuntime;
@@ -149,17 +173,9 @@ function cloneOrigin(value: unknown): AssetOrigin | undefined {
   const fields = record(value);
   const scope = record(fields.scope);
   const producer = record(fields.producer);
-  const validScope = scope.type === "thread" && typeof scope.id === "string"
-    ? { type: "thread" as const, id: scope.id }
-    : scope.type === "collection" && typeof scope.collection === "string" &&
-        typeof scope.id === "string"
-    ? {
-      type: "collection" as const,
-      collection: scope.collection,
-      id: scope.id,
-    }
-    : scope.type === "namespace" && typeof scope.id === "string"
-    ? { type: "namespace" as const, id: scope.id }
+  const validScope = typeof scope.type === "string" &&
+      scope.type.trim() && typeof scope.id === "string" && scope.id.trim()
+    ? { type: scope.type, id: scope.id }
     : undefined;
   if (
     !validScope || typeof producer.type !== "string" ||
@@ -339,7 +355,10 @@ function assetBodyId(asset: AssetRecord): string | undefined {
   return "key" in asset.location ? asset.location.key : undefined;
 }
 
-function assetManifestEntry(asset: AssetRecord): AssetManifestEntry {
+function assetManifestEntry(
+  asset: AssetRecord,
+  idempotencyKey?: string,
+): AssetManifestEntry {
   const bodyId = assetBodyId(asset);
   if (!bodyId) {
     throw createContentError(
@@ -354,9 +373,12 @@ function assetManifestEntry(asset: AssetRecord): AssetManifestEntry {
     mediaType: asset.mediaType,
     byteLength: asset.byteLength,
     digest: asset.digest,
+    location: structuredClone(asset.location),
+    ...(idempotencyKey ? { idempotencyKey } : {}),
     ...(asset.origin ? { origin: structuredClone(asset.origin) } : {}),
     ...(asset.metadata ? { metadata: structuredClone(asset.metadata) } : {}),
     createdAt: asset.createdAt,
+    ...(asset.readyAt ? { readyAt: asset.readyAt } : {}),
   });
 }
 
@@ -507,140 +529,15 @@ export function createDatabaseAssetRepository(
     }
   };
 
-  const insertCandidate = async (
-    context: EventMutationContext,
-    namespace: string,
-    candidate: PreparedAsset,
-    fallbackOrigin?: AssetOrigin,
-    manifest?: AssetManifestEntry[],
-  ): Promise<AssetRecord> => {
-    const key = candidate.idempotencyKey?.trim() || undefined;
-    if (key) {
-      const existing = await findByIdempotency(
-        context.transaction,
-        namespace,
-        key,
-      );
-      if (existing) {
-        const asset = mapAsset(existing);
-        assertRecordMatches(asset, candidate, key);
-        return asset;
-      }
-    }
-    const idCollision = await findById(
-      context.transaction,
-      namespace,
-      candidate.id,
-    );
-    if (idCollision) {
-      throw createContentError(
-        "asset_conflict",
-        `Asset ID already exists: ${candidate.id}`,
-        { namespace, assetId: candidate.id },
-      );
-    }
-    const origin = candidate.origin ?? fallbackOrigin;
-    const storedLocation: AssetBodyLocation = candidate.readyBody
-      ? candidate.location!
-      : await (async () => {
-        const keyForBody = assetBodyKey({
-          prefix: storage.prefix,
-          databaseSchema: options.databaseSchema,
-          namespace,
-          assetId: candidate.id,
-          origin,
-        });
-        const configuredWriter = storage.writer!;
-        const writer = configuredWriter.kind === "database"
-          ? createDatabaseBodyStore({
-            session: context.transaction,
-            schema: options.databaseSchema,
-            backendId: configuredWriter.backendId,
-          })
-          : configuredWriter;
-        const head = await writer.put({
-          bodyId: keyForBody,
-          bytes: candidate.body,
-          mediaType: candidate.mediaType,
-          digest: candidate.digest,
-          ifAbsent: true,
-        });
-        return writer.kind === "object"
-          ? {
-            kind: "object" as const,
-            backendId: writer.backendId,
-            key: keyForBody,
-            ...(head.etag ? { etag: head.etag } : {}),
-          }
-          : writer.kind === "filesystem"
-          ? {
-            kind: "filesystem" as const,
-            backendId: writer.backendId,
-            key: keyForBody,
-          }
-          : writer.kind === "database"
-          ? { kind: "database" as const, key: keyForBody }
-          : {
-            kind: "memory" as const,
-            backendId: writer.backendId,
-            key: keyForBody,
-          };
-      })();
-    const readyAt = now().toISOString();
-    let data: string;
-    try {
-      data = JSON.stringify({
-        mediaType: candidate.mediaType,
-        byteLength: candidate.byteLength,
-        digest: candidate.digest,
-        state: "ready",
-        location: storedLocation,
-        readyAt,
-        ...(origin ? { origin: structuredClone(origin) } : {}),
-        metadata: structuredClone(candidate.metadata ?? {}),
-      });
-    } catch (cause) {
-      throw createContentError(
-        "content_invalid",
-        `Asset metadata is not JSON serializable: ${candidate.id}`,
-        { namespace, assetId: candidate.id, cause },
-      );
-    }
-    const result = await context.transaction.query<AssetNodeRow>(
-      `INSERT INTO ${context.tables.nodes} (
-         id, namespace, type, name, data, source_type, source_id
-       ) VALUES ($1, $2, 'asset', $3, $4::jsonb, $5, $6)
-       RETURNING *`,
-      [
-        candidate.id,
-        namespace,
-        candidate.mediaType,
-        data,
-        key ? "asset_idempotency" : null,
-        key ?? null,
-      ],
-    );
-    const asset = mapAsset(result.rows[0]);
-    const bodyId = assetBodyId(asset);
-    if (bodyId) {
-      await context.transaction.query(
-        `INSERT INTO ${context.tables.body_references} (
-           namespace, body_id, owner_kind, owner_id
-         ) VALUES ($1, $2, $3, $4)
-         ON CONFLICT DO NOTHING`,
-        [namespace, bodyId, ASSET_BODY_OWNER_KIND, asset.id],
-      );
-    }
-    manifest?.push(assetManifestEntry(asset));
-    return asset;
-  };
-
-  const canonicalize = async (
-    context: EventMutationContext,
+  const validateMutationInput = async (
     input: AssetMutationInput,
-    write: boolean,
-    manifest?: AssetManifestEntry[],
-  ): Promise<ContentSequence> => {
+  ): Promise<
+    Readonly<{
+      namespace: string;
+      prepared: PreparedContent;
+      candidates: ReadonlyMap<string, PreparedAsset>;
+    }>
+  > => {
     const namespace = requiredText(input.namespace, "Asset namespace");
     const prepared = preparedInput(input.content);
     const candidates = new Map<string, PreparedAsset>();
@@ -663,45 +560,16 @@ export function createDatabaseAssetRepository(
       await validateCandidate(namespace, candidate);
       candidates.set(candidate.id, candidate);
     }
+    return Object.freeze({ namespace, prepared, candidates });
+  };
 
-    const resolved = new Map<string, AssetRecord>();
-    const remapped = new Map<string, string>();
-    for (const candidate of candidates.values()) {
-      let asset: AssetRecord;
-      if (write) {
-        asset = await insertCandidate(
-          context,
-          namespace,
-          candidate,
-          input.origin,
-          manifest,
-        );
-      } else {
-        const row = candidate.idempotencyKey?.trim()
-          ? await findByIdempotency(
-            context.transaction,
-            namespace,
-            candidate.idempotencyKey.trim(),
-          )
-          : await findById(context.transaction, namespace, candidate.id);
-        if (!row) {
-          throw createContentError(
-            "asset_not_found",
-            `Prepared asset replay could not be resolved: ${candidate.id}`,
-            { namespace, assetId: candidate.id },
-          );
-        }
-        asset = mapAsset(row);
-        assertRecordMatches(
-          asset,
-          candidate,
-          candidate.idempotencyKey?.trim(),
-        );
-      }
-      resolved.set(asset.id, asset);
-      remapped.set(candidate.id, asset.id);
-    }
-
+  const resolveRefs = async (
+    executor: SqlExecutor,
+    namespace: string,
+    prepared: PreparedContent,
+    resolved: Map<string, AssetRecord>,
+    remapped: ReadonlyMap<string, string>,
+  ): Promise<ContentSequence> => {
     const refs: ContentRef[] = [];
     for (const source of prepared.content) {
       const ref = cloneContentRef({
@@ -710,11 +578,7 @@ export function createDatabaseAssetRepository(
       });
       let asset = resolved.get(ref.assetId);
       if (!asset) {
-        const row = await findById(
-          context.transaction,
-          namespace,
-          ref.assetId,
-        );
+        const row = await findById(executor, namespace, ref.assetId);
         if (!row) {
           throw createContentError(
             "asset_not_found",
@@ -736,6 +600,463 @@ export function createDatabaseAssetRepository(
       refs.push(ref);
     }
     return Object.freeze(refs);
+  };
+
+  const prepareCandidate = async (
+    executor: SqlExecutor,
+    namespace: string,
+    source: PreparedAsset,
+    fallbackOrigin?: AssetOrigin,
+  ): Promise<
+    Readonly<{ asset: AssetRecord; adoption?: AssetAdoptionPlan }>
+  > => {
+    const candidate: PreparedAsset = Object.freeze({
+      ...source,
+      body: source.body.slice(),
+      ...(source.readyBody
+        ? { readyBody: structuredClone(source.readyBody) }
+        : {}),
+      ...(source.location
+        ? { location: structuredClone(source.location) }
+        : {}),
+      ...(source.origin ? { origin: structuredClone(source.origin) } : {}),
+      ...(source.metadata
+        ? { metadata: structuredClone(source.metadata) }
+        : {}),
+    });
+    const key = candidate.idempotencyKey?.trim() || undefined;
+    if (key) {
+      const existing = await findByIdempotency(
+        executor,
+        namespace,
+        key,
+      );
+      if (existing) {
+        const asset = mapAsset(existing);
+        assertRecordMatches(asset, candidate, key);
+        return Object.freeze({ asset });
+      }
+    }
+    const idCollision = await findById(
+      executor,
+      namespace,
+      candidate.id,
+    );
+    if (idCollision) {
+      throw createContentError(
+        "asset_conflict",
+        `Asset ID already exists: ${candidate.id}`,
+        { namespace, assetId: candidate.id },
+      );
+    }
+    const origin = candidate.origin ??
+      (fallbackOrigin ? structuredClone(fallbackOrigin) : undefined);
+    try {
+      JSON.stringify({
+        ...(origin ? { origin } : {}),
+        metadata: candidate.metadata ?? {},
+      });
+    } catch (cause) {
+      throw createContentError(
+        "content_invalid",
+        `Asset metadata is not JSON serializable: ${candidate.id}`,
+        { namespace, assetId: candidate.id, cause },
+      );
+    }
+    const configuredWriter = storage.writer!;
+    const bodyId = candidate.readyBody?.bodyId ?? assetBodyKey({
+      prefix: storage.prefix,
+      databaseSchema: options.databaseSchema,
+      namespace,
+      assetId: candidate.id,
+      origin,
+    });
+    let adoptionKind: AssetAdoptionPlan["kind"] = "ready";
+    let adoptionCandidate = candidate;
+    let storedLocation: AssetBodyLocation;
+    if (candidate.readyBody) {
+      storedLocation = structuredClone(candidate.location!);
+    } else if (configuredWriter.kind === "database") {
+      adoptionKind = "database";
+      storedLocation = { kind: "database", key: bodyId };
+    } else {
+      const head = await configuredWriter.put({
+        bodyId,
+        bytes: candidate.body,
+        mediaType: candidate.mediaType,
+        digest: candidate.digest,
+        ifAbsent: true,
+      });
+      if (
+        head.bodyId !== bodyId || head.state !== "ready" ||
+        head.mediaType !== candidate.mediaType ||
+        head.byteLength !== candidate.byteLength ||
+        head.digest !== candidate.digest
+      ) {
+        throw createContentError(
+          "asset_corrupted",
+          `Prepared body integrity does not match: ${candidate.id}`,
+          { namespace, assetId: candidate.id },
+        );
+      }
+      storedLocation = configuredWriter.kind === "object"
+        ? {
+          kind: "object",
+          backendId: configuredWriter.backendId,
+          key: bodyId,
+          ...(head.etag ? { etag: head.etag } : {}),
+        }
+        : configuredWriter.kind === "filesystem"
+        ? {
+          kind: "filesystem",
+          backendId: configuredWriter.backendId,
+          key: bodyId,
+        }
+        : {
+          kind: "memory",
+          backendId: configuredWriter.backendId,
+          key: bodyId,
+        };
+      adoptionCandidate = Object.freeze({
+        ...candidate,
+        readyBody: Object.freeze(structuredClone(head)),
+        location: Object.freeze(structuredClone(storedLocation)),
+      });
+    }
+    const readyAt = now().toISOString();
+    const asset: AssetRecord = Object.freeze({
+      id: candidate.id,
+      namespace,
+      mediaType: candidate.mediaType,
+      byteLength: candidate.byteLength,
+      digest: candidate.digest,
+      state: "ready",
+      location: Object.freeze(storedLocation),
+      ...(origin ? { origin: Object.freeze(structuredClone(origin)) } : {}),
+      createdAt: readyAt,
+      readyAt,
+      ...(cloneMetadata(candidate.metadata)
+        ? { metadata: cloneMetadata(candidate.metadata) }
+        : {}),
+    });
+    return Object.freeze({
+      asset,
+      adoption: Object.freeze({
+        kind: adoptionKind,
+        protectionRequired: adoptionKind === "ready" &&
+          adapter.deployment.readyGarbageCollection,
+        candidate: adoptionCandidate,
+        asset,
+      }),
+    });
+  };
+
+  const adoptCandidate = async (
+    context: EventMutationContext,
+    plan: AssetAdoptionPlan,
+  ): Promise<AssetRecord> => {
+    const { asset, candidate } = plan;
+    const namespace = asset.namespace;
+    const key = candidate.idempotencyKey?.trim() || undefined;
+    if (key) {
+      const existing = await findByIdempotency(
+        context.transaction,
+        namespace,
+        key,
+      );
+      if (existing) {
+        const current = mapAsset(existing);
+        assertRecordMatches(current, candidate, key);
+        if (current.id !== asset.id) {
+          throw createContentError(
+            "asset_conflict",
+            `Asset materialization plan became stale: ${asset.id}`,
+            { namespace, assetId: asset.id },
+          );
+        }
+        return current;
+      }
+    }
+    const idCollision = await findById(
+      context.transaction,
+      namespace,
+      asset.id,
+    );
+    if (idCollision) {
+      throw createContentError(
+        "asset_conflict",
+        `Asset ID already exists: ${asset.id}`,
+        { namespace, assetId: asset.id },
+      );
+    }
+    const bodyId = assetBodyId(asset);
+    if (!bodyId) {
+      throw createContentError(
+        "asset_corrupted",
+        `Asset body location is missing a body id: ${asset.id}`,
+        { namespace, assetId: asset.id },
+      );
+    }
+    await context.transaction.query(
+      "SELECT pg_advisory_xact_lock_shared(hashtext($1), hashtext($2))",
+      [options.databaseSchema, "body-ownership"],
+    );
+    if (plan.kind === "ready" && plan.protectionRequired) {
+      const protectedUntil = candidate.readyBody?.protectedUntil;
+      const protectionDeadline = protectedUntil
+        ? Date.parse(protectedUntil)
+        : Number.NaN;
+      if (
+        !Number.isFinite(protectionDeadline) || protectionDeadline <= Date.now()
+      ) {
+        throw createContentError(
+          "asset_corrupted",
+          `Prepared ready body protection expired before adoption: ${candidate.id}`,
+          { namespace, assetId: candidate.id },
+        );
+      }
+    }
+    if (plan.kind === "database") {
+      const writer = createDatabaseBodyStore({
+        session: context.transaction,
+        schema: options.databaseSchema,
+        backendId: storage.writer!.backendId,
+      });
+      await writer.put({
+        bodyId,
+        bytes: candidate.body,
+        mediaType: candidate.mediaType,
+        digest: candidate.digest,
+        ifAbsent: true,
+      });
+    }
+    let data: string;
+    try {
+      data = JSON.stringify(assetNodeData(asset, bodyId));
+    } catch (cause) {
+      throw createContentError(
+        "content_invalid",
+        `Asset metadata is not JSON serializable: ${asset.id}`,
+        { namespace, assetId: asset.id, cause },
+      );
+    }
+    const result = await context.transaction.query<AssetNodeRow>(
+      `INSERT INTO ${context.tables.nodes} (
+         id, namespace, type, name, data, source_type, source_id,
+         created_at, updated_at
+       ) VALUES ($1, $2, 'asset', $3, $4::jsonb, $5, $6, $7, $7)
+       RETURNING *`,
+      [
+        asset.id,
+        namespace,
+        asset.mediaType,
+        data,
+        key ? "asset_idempotency" : null,
+        key ?? null,
+        asset.createdAt,
+      ],
+    );
+    return mapAsset(result.rows[0]);
+  };
+
+  const prepareMaterializationOn = async (
+    executor: SqlExecutor,
+    input: AssetMutationInput,
+  ): Promise<AssetMaterializationPlan> => {
+    const { namespace, prepared, candidates } = await validateMutationInput(
+      input,
+    );
+
+    const resolved = new Map<string, AssetRecord>();
+    const remapped = new Map<string, string>();
+    const keyed = new Map<string, AssetRecord>();
+    const adoptions: AssetAdoptionPlan[] = [];
+    const manifest: AssetManifestEntry[] = [];
+    for (const candidate of candidates.values()) {
+      const key = candidate.idempotencyKey?.trim() || undefined;
+      const local = key ? keyed.get(key) : undefined;
+      let asset: AssetRecord;
+      if (local) {
+        assertRecordMatches(local, candidate, key);
+        asset = local;
+      } else {
+        const preparedCandidate = await prepareCandidate(
+          executor,
+          namespace,
+          candidate,
+          input.origin,
+        );
+        asset = preparedCandidate.asset;
+        if (preparedCandidate.adoption) {
+          adoptions.push(preparedCandidate.adoption);
+          manifest.push(assetManifestEntry(asset, key));
+        }
+        if (key) keyed.set(key, asset);
+      }
+      resolved.set(asset.id, asset);
+      remapped.set(candidate.id, asset.id);
+    }
+
+    const content = await resolveRefs(
+      executor,
+      namespace,
+      prepared,
+      resolved,
+      remapped,
+    );
+    return Object.freeze({
+      namespace,
+      content,
+      assets: Object.freeze(manifest),
+      adoptions: Object.freeze(adoptions),
+    });
+  };
+
+  const adoptMaterialization = async (
+    context: EventMutationContext,
+    plan: AssetMaterializationPlan,
+  ): Promise<void> => {
+    const namespace = requiredText(plan.namespace, "Asset namespace");
+    for (const adoption of plan.adoptions) {
+      if (adoption.asset.namespace !== namespace) {
+        throw createContentError(
+          "content_invalid",
+          `Asset adoption belongs to another namespace: ${adoption.asset.id}`,
+          { namespace, assetId: adoption.asset.id },
+        );
+      }
+      await adoptCandidate(context, adoption);
+    }
+  };
+
+  const commitAssetCreation = async (
+    adoption: AssetAdoptionPlan,
+    execution?: Readonly<{ transaction: SqlExecutor; dispatch: false }>,
+  ): Promise<CoordinatedMutationResult<AssetRecord>> => {
+    const { asset, candidate } = adoption;
+    const namespace = asset.namespace;
+    const key = candidate.idempotencyKey?.trim() || undefined;
+    const logicalId = key ? `key:${key}` : `id:${asset.id}`;
+    const eventBodyId = `asset-event-body:${namespace}:create:${logicalId}`;
+    const bodyId = assetBodyId(asset);
+    if (!bodyId) {
+      throw createContentError(
+        "asset_corrupted",
+        `Asset body location is missing a body id: ${asset.id}`,
+        { namespace, assetId: asset.id },
+      );
+    }
+    const eventBody: AssetEventBody = Object.freeze({
+      operation: "create",
+      asset,
+      bodyId,
+      ...(key ? { idempotencyKey: key } : {}),
+    });
+    return await options.coordinator.commitMutation({
+      draft: {
+        type: "asset.created",
+        namespace,
+        subject: { type: "asset", id: asset.id },
+        payload: {
+          dataRef: {
+            eventBodyId,
+            schemaVersion: 1,
+            mediaType: "application/json",
+          },
+        },
+        deduplicationId: `asset.create:${logicalId}`,
+      },
+      ...(execution
+        ? { transaction: execution.transaction, dispatch: execution.dispatch }
+        : {}),
+      matchData: eventBody,
+      mutate: async (context) => {
+        const created = await adoptCandidate(context, adoption);
+        await writeEventBody(context, {
+          namespace,
+          id: eventBodyId,
+          json: eventBody,
+        });
+        return created;
+      },
+      recoverDuplicate: async (event, context) => {
+        const body = await readEventBody<AssetEventBody>(
+          context,
+          event.namespace,
+          eventDataRef(event.payload),
+        );
+        if (
+          body.operation !== "create" ||
+          body.asset.id !== asset.id ||
+          body.idempotencyKey !== key
+        ) {
+          throw createContentError(
+            "asset_conflict",
+            "Asset creation identity was reused with different input.",
+            { namespace, assetId: asset.id },
+          );
+        }
+        assertRecordMatches(body.asset, candidate, key);
+        return body.asset;
+      },
+    });
+  };
+
+  const commitStandaloneMaterialization = async (
+    plan: AssetMaterializationPlan,
+  ): Promise<void> => {
+    const pending: CoordinatedMutationResult<AssetRecord>[] = [];
+    await options.session.transaction(async (transaction) => {
+      for (const adoption of plan.adoptions) {
+        pending.push(
+          await commitAssetCreation(adoption, {
+            transaction,
+            dispatch: false,
+          }),
+        );
+      }
+    });
+    for (const result of pending) {
+      await options.coordinator.flushCommitted(result);
+    }
+  };
+
+  const resolvePreparedContent = async (
+    context: EventMutationContext,
+    input: AssetMutationInput,
+  ): Promise<ContentSequence> => {
+    const { namespace, prepared, candidates } = await validateMutationInput(
+      input,
+    );
+    const resolved = new Map<string, AssetRecord>();
+    const remapped = new Map<string, string>();
+    for (const candidate of candidates.values()) {
+      const row = candidate.idempotencyKey?.trim()
+        ? await findByIdempotency(
+          context.transaction,
+          namespace,
+          candidate.idempotencyKey.trim(),
+        )
+        : await findById(context.transaction, namespace, candidate.id);
+      if (!row) {
+        throw createContentError(
+          "asset_not_found",
+          `Prepared asset replay could not be resolved: ${candidate.id}`,
+          { namespace, assetId: candidate.id },
+        );
+      }
+      const asset = mapAsset(row);
+      assertRecordMatches(asset, candidate, candidate.idempotencyKey?.trim());
+      resolved.set(asset.id, asset);
+      remapped.set(candidate.id, asset.id);
+    }
+    return await resolveRefs(
+      context.transaction,
+      namespace,
+      prepared,
+      resolved,
+      remapped,
+    );
   };
 
   const getRows = async (
@@ -787,20 +1108,6 @@ export function createDatabaseAssetRepository(
     );
   };
 
-  const compareDeleteReadyBody = async (
-    store: BodyStore,
-    bodyId: string,
-  ): Promise<boolean> => {
-    const head = await store.head({ bodyId });
-    if (!head) return true;
-    return await store.maintenance.delete({
-      bodyId,
-      expectedState: "ready",
-      expectedMaintenanceVersion: head.maintenanceVersion,
-      idleForMs: 0,
-    });
-  };
-
   const readRows = async (
     namespace: string,
     assetIds: readonly string[],
@@ -847,7 +1154,7 @@ export function createDatabaseAssetRepository(
     ));
   };
 
-  const linkOwner = async (
+  const linkOwnerInTransaction = async (
     context: EventMutationContext,
     input: LinkAssetOwnerInput,
   ): Promise<void> => {
@@ -897,57 +1204,16 @@ export function createDatabaseAssetRepository(
         origin: structuredClone(input.origin ?? defaultOrigin),
       });
       await validateCandidate(namespace, candidate);
-
-      if (key) {
-        const existing = await findByIdempotency(
-          options.session,
-          namespace,
-          key,
-        );
-        if (existing) {
-          const asset = mapAsset(existing);
-          assertRecordMatches(asset, candidate, key);
-          return asset;
-        }
-      }
-      if (await findById(options.session, namespace, candidate.id)) {
-        throw createContentError(
-          "asset_conflict",
-          `Asset ID already exists: ${candidate.id}`,
-          { namespace, assetId: candidate.id },
-        );
-      }
-
+      const preparedCandidate = await prepareCandidate(
+        options.session,
+        namespace,
+        candidate,
+      );
+      if (!preparedCandidate.adoption) return preparedCandidate.asset;
       try {
-        const result = await options.coordinator.commitMutation({
-          draft: {
-            type: "asset.created",
-            namespace,
-            subject: { type: "asset", id: candidate.id },
-            payload: { assetId: candidate.id },
-            ...(key ? { deduplicationId: `asset.publish:${key}` } : {}),
-          },
-          mutate: (context) => insertCandidate(context, namespace, candidate),
-          recoverDuplicate: async (_event, context) => {
-            const row = key
-              ? await findByIdempotency(context.transaction, namespace, key)
-              : await findById(
-                context.transaction,
-                namespace,
-                candidate.id,
-              );
-            if (!row) {
-              throw createContentError(
-                "asset_not_found",
-                `Asset could not be recovered: ${candidate.id}`,
-                { namespace, assetId: candidate.id },
-              );
-            }
-            const asset = mapAsset(row);
-            assertRecordMatches(asset, candidate, key);
-            return asset;
-          },
-        });
+        const result = await commitAssetCreation(
+          preparedCandidate.adoption,
+        );
         return result.value!;
       } catch (error) {
         if (key) {
@@ -1026,20 +1292,75 @@ export function createDatabaseAssetRepository(
     async markDeleted(namespaceInput, assetIdInput) {
       const namespace = requiredText(namespaceInput, "Asset namespace");
       const assetId = requiredText(assetIdInput, "Asset ID");
-      const current = mapAsset(
-        await requireRow(options.session, namespace, assetId),
-      );
-      if (current.state === "deleted") return current;
-      const deletedAt = now().toISOString();
+      const eventBodyId = `asset-event-body:${namespace}:delete:${assetId}`;
       const result = await options.coordinator.commitMutation({
         draft: {
           type: "asset.deleted",
           namespace,
           subject: { type: "asset", id: assetId },
-          payload: { assetId },
+          payload: {
+            dataRef: {
+              eventBodyId,
+              schemaVersion: 1,
+              mediaType: "application/json",
+            },
+          },
           deduplicationId: `asset.delete:${assetId}`,
         },
         mutate: async ({ transaction, tables: names }) => {
+          await transaction.query(
+            "SELECT pg_advisory_xact_lock_shared(hashtext($1), hashtext($2))",
+            [options.databaseSchema, "body-ownership"],
+          );
+          const locked = await transaction.query<AssetNodeRow>(
+            `SELECT * FROM ${names.nodes}
+             WHERE namespace = $1 AND id = $2 AND type = 'asset'
+             LIMIT 1 FOR UPDATE`,
+            [namespace, assetId],
+          );
+          if (!locked.rows[0]) {
+            throw createContentError(
+              "asset_not_found",
+              `Asset not found: ${assetId}`,
+              { namespace, assetId },
+            );
+          }
+          const currentRow = locked.rows[0];
+          const current = mapAsset(currentRow);
+          if (current.state !== "ready") {
+            throw createContentError(
+              "asset_conflict",
+              `Asset is not ready for deletion: ${assetId}`,
+              { namespace, assetId },
+            );
+          }
+          const owners = await transaction.query<{ id: string }>(
+            `SELECT id FROM ${names.edges}
+             WHERE namespace = $1 AND target_node_id = $2
+               AND type = 'has_asset'
+             LIMIT 1`,
+            [namespace, assetId],
+          );
+          if (owners.rows[0]) {
+            throw createContentError(
+              "asset_conflict",
+              `Asset is still referenced by declared Collection content: ${assetId}`,
+              { namespace, assetId },
+            );
+          }
+          const bodyId = assetBodyId(current);
+          if (!bodyId) {
+            throw createContentError(
+              "asset_corrupted",
+              `Asset body location is missing a body id: ${assetId}`,
+              { namespace, assetId },
+            );
+          }
+          const idempotencyKey = currentRow.source_type ===
+                "asset_idempotency" && currentRow.source_id
+            ? currentRow.source_id
+            : undefined;
+          const deletedAt = now().toISOString();
           const updated = await transaction.query<AssetNodeRow>(
             `UPDATE ${names.nodes}
              SET data = (COALESCE(data, '{}'::jsonb) - 'body') || $1::jsonb,
@@ -1059,54 +1380,41 @@ export function createDatabaseAssetRepository(
               { namespace, assetId },
             );
           }
-          const bodyId = assetBodyId(current);
-          if (bodyId) {
-            await transaction.query(
-              `DELETE FROM ${names.body_references}
-                WHERE namespace = $1
-                  AND body_id = $2
-                  AND owner_kind = $3
-                  AND owner_id = $4`,
-              [namespace, bodyId, ASSET_BODY_OWNER_KIND, assetId],
-            );
-          }
-          return mapAsset(updated.rows[0]);
+          const deleted = mapAsset(updated.rows[0]);
+          const eventBody: AssetEventBody = Object.freeze({
+            operation: "delete",
+            asset: deleted,
+            bodyId,
+            ...(idempotencyKey ? { idempotencyKey } : {}),
+          });
+          await writeEventBody({ transaction, tables: names }, {
+            namespace,
+            id: eventBodyId,
+            json: eventBody,
+          });
+          return deleted;
         },
-        recoverDuplicate: async (_event, { transaction }) =>
-          mapAsset(await requireRow(transaction, namespace, assetId)),
-      });
-      const deleted = result.value!;
-      if (
-        current.location.kind !== "database" && current.location.backendId &&
-        current.location.key
-      ) {
-        const bodyStore = storage.readers.get(current.location.backendId);
-        if (bodyStore) {
-          try {
-            const deletedBody = await compareDeleteReadyBody(
-              bodyStore,
-              current.location.key,
+        recoverDuplicate: async (event, context) => {
+          const body = await readEventBody<AssetEventBody>(
+            context,
+            event.namespace,
+            eventDataRef(event.payload),
+          );
+          if (body.operation !== "delete" || body.asset.id !== assetId) {
+            throw createContentError(
+              "asset_conflict",
+              "Asset delete identity was reused with a different Asset.",
+              { namespace, assetId },
             );
-            if (deletedBody) {
-              await options.session.query(
-                `UPDATE ${tables.nodes}
-                 SET data = data || jsonb_build_object('bodyDeletedAt', $3::text),
-                     updated_at = NOW()
-                 WHERE namespace = $1 AND id = $2 AND type = 'asset'
-                   AND data ->> 'state' = 'deleted'`,
-                [namespace, assetId, deletedAt],
-              );
-            }
-          } catch {
-            // Keep the durable location for maintenance retry.
           }
-        }
-      }
-      return deleted;
+          return body.asset;
+        },
+      });
+      return result.value!;
     },
 
     async maintainBodies(maintenance = {}) {
-      const maintenanceNow = maintenance.now ?? now();
+      const maintenanceNow = maintenance.now ?? new Date();
       const orphanAfterMs = maintenance.orphanAfterMs ?? 24 * 60 * 60 * 1_000;
       const limit = maintenance.limit ?? 100;
       if (!Number.isFinite(orphanAfterMs) || orphanAfterMs < 0) {
@@ -1117,45 +1425,8 @@ export function createDatabaseAssetRepository(
           "assets maintenance limit must be between 1 and 10000.",
         );
       }
-      let retriedDeletions = 0;
       let orphanedBodiesDeleted = 0;
-      const pending = await options.session.query<AssetNodeRow>(
-        `SELECT * FROM ${tables.nodes}
-         WHERE type = 'asset' AND (data ->> 'state') = 'deleted'
-           AND (data ->> 'bodyDeletedAt') IS NULL
-           AND (data -> 'location' ->> 'kind') <> 'database'
-         ORDER BY updated_at, id LIMIT $1`,
-        [limit],
-      );
-      for (const row of pending.rows) {
-        const asset = mapAsset(row);
-        if (
-          asset.location.kind === "database" ||
-          !asset.location.backendId || !asset.location.key
-        ) continue;
-        const bodyStore = storage.readers.get(asset.location.backendId);
-        if (!bodyStore) continue;
-        try {
-          const deleted = await compareDeleteReadyBody(
-            bodyStore,
-            asset.location.key,
-          );
-          if (!deleted) continue;
-          await options.session.query(
-            `UPDATE ${tables.nodes}
-             SET data = data || jsonb_build_object('bodyDeletedAt', $3::text),
-                 updated_at = NOW()
-             WHERE namespace = $1 AND id = $2 AND type = 'asset'
-               AND data ->> 'state' = 'deleted'`,
-            [asset.namespace, asset.id, maintenanceNow.toISOString()],
-          );
-          retriedDeletions++;
-        } catch {
-          // Keep the durable location for a later retry.
-        }
-      }
-      const remaining = limit - retriedDeletions;
-      if (storage.writer && remaining > 0) {
+      if (storage.writer && adapter.deployment.readyGarbageCollection) {
         const prefix = assetBodySchemaPrefix({
           prefix: storage.prefix,
           databaseSchema: options.databaseSchema,
@@ -1164,7 +1435,7 @@ export function createDatabaseAssetRepository(
         const candidates = await storage.writer.maintenance.list({
           states: ["ready"],
           idleForMs: orphanAfterMs,
-          limit: remaining,
+          limit,
         });
         for (const body of candidates.bodies) {
           if (body.state !== "ready") continue;
@@ -1173,43 +1444,125 @@ export function createDatabaseAssetRepository(
             ? new Date(body.lastModified).getTime()
             : Number.NaN;
           if (!Number.isFinite(modified) || modified > cutoff) continue;
-          const owner = await options.session.query<{ body_id: string }>(
-            `SELECT body_id FROM ${tables.body_references}
-             WHERE body_id = $1
-             LIMIT 1`,
-            [body.bodyId],
-          );
-          if (owner.rows[0]) continue;
-          const deleted = await storage.writer.maintenance.delete({
-            bodyId: body.bodyId,
-            expectedState: body.state,
-            expectedMaintenanceVersion: body.maintenanceVersion,
-            idleForMs: orphanAfterMs,
-          });
+          let deleted = false;
+          try {
+            deleted = await options.session.transaction(async (transaction) => {
+              await transaction.query(
+                "SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))",
+                [options.databaseSchema, "body-ownership"],
+              );
+              const owner = await transaction.query<{ id: string }>(
+                `SELECT id FROM ${tables.nodes}
+                 WHERE type = 'asset'
+                   AND data ->> 'state' = 'ready'
+                   AND data ->> 'bodyId' = $1
+                   AND data -> 'location' ->> 'kind' = $2
+                   AND COALESCE(data -> 'location' ->> 'backendId', '') = $3
+                 LIMIT 1`,
+                [
+                  body.bodyId,
+                  storage.writer!.kind,
+                  storage.writer!.kind === "database"
+                    ? ""
+                    : storage.writer!.backendId,
+                ],
+              );
+              if (owner.rows[0]) return false;
+              const maintenanceStore = storage.writer!.kind === "database"
+                ? createDatabaseBodyStore({
+                  session: transaction,
+                  schema: options.databaseSchema,
+                  backendId: storage.writer!.backendId,
+                })
+                : storage.writer!;
+              return await maintenanceStore.maintenance.delete({
+                bodyId: body.bodyId,
+                expectedState: body.state,
+                expectedMaintenanceVersion: body.maintenanceVersion,
+                idleForMs: orphanAfterMs,
+              });
+            });
+          } catch {
+            // One unavailable backend object cannot block the remaining page.
+          }
           if (deleted) orphanedBodiesDeleted++;
         }
       }
-      return Object.freeze({ retriedDeletions, orphanedBodiesDeleted });
+      return Object.freeze({ orphanedBodiesDeleted });
     },
 
-    materialize(context, input) {
-      return canonicalize(context, input, true);
+    prepareMaterialization(input) {
+      return prepareMaterializationOn(options.session, input);
     },
 
-    async materializeWithManifest(context, input) {
-      const assets: AssetManifestEntry[] = [];
-      const content = await canonicalize(context, input, true, assets);
+    adoptMaterialization,
+
+    async materialize(input) {
+      let plan = await prepareMaterializationOn(options.session, input);
+      const attempted = new Set<string>();
+      while (plan.adoptions.length > 0) {
+        const signature = JSON.stringify(plan.adoptions.map((adoption) => [
+          adoption.asset.id,
+          adoption.candidate.idempotencyKey?.trim() || null,
+          adoption.candidate.digest,
+        ]));
+        if (attempted.has(signature)) {
+          throw createContentError(
+            "asset_conflict",
+            "Asset materialization could not resolve a concurrent creation.",
+            { namespace: plan.namespace },
+          );
+        }
+        attempted.add(signature);
+        try {
+          await commitStandaloneMaterialization(plan);
+          return plan.content;
+        } catch (error) {
+          const refreshed = await prepareMaterializationOn(
+            options.session,
+            input,
+          );
+          if (refreshed.adoptions.length === 0) return refreshed.content;
+          const refreshedSignature = JSON.stringify(
+            refreshed.adoptions.map((adoption) => [
+              adoption.asset.id,
+              adoption.candidate.idempotencyKey?.trim() || null,
+              adoption.candidate.digest,
+            ]),
+          );
+          if (attempted.has(refreshedSignature)) throw error;
+          plan = refreshed;
+        }
+      }
+      return plan.content;
+    },
+
+    async materializeInTransaction(context, input) {
+      const plan = await prepareMaterializationOn(context.transaction, input);
+      await adoptMaterialization(context, plan);
+      return plan.content;
+    },
+
+    async materializeWithManifestInTransaction(context, input) {
+      const plan = await prepareMaterializationOn(context.transaction, input);
+      await adoptMaterialization(context, plan);
       return Object.freeze({
-        content,
-        assets: Object.freeze(assets),
+        content: plan.content,
+        assets: plan.assets,
       });
     },
 
-    resolvePrepared(context, input) {
-      return canonicalize(context, input, false);
+    resolvePreparedInTransaction(context, input) {
+      return resolvePreparedContent(context, input);
     },
 
-    linkOwner,
+    async linkOwner(input) {
+      await options.session.transaction((transaction) =>
+        linkOwnerInTransaction({ transaction, tables }, input)
+      );
+    },
+
+    linkOwnerInTransaction,
 
     async syncOwner(context, input) {
       const namespace = requiredText(input.namespace, "Asset namespace");
@@ -1229,7 +1582,7 @@ export function createDatabaseAssetRepository(
           [namespace, ownerId, assetIds],
         );
       }
-      await linkOwner(context, input);
+      await linkOwnerInTransaction(context, input);
     },
   };
 

@@ -9,7 +9,7 @@ import {
   defineProcessor,
 } from "../plugins/index.ts";
 import { defineCollection } from "../collections/index.ts";
-import type { BodyStorageOptions } from "../content/index.ts";
+import { type BodyStorageOptions, digestContent } from "../content/index.ts";
 import { denoAssetFilesystem } from "../adapters/deno/assets.ts";
 
 async function readEventBody(
@@ -103,17 +103,9 @@ async function runCollectionContentContract(
     defaultDatabaseSchema: input.schema,
     ...(input.assets ? { assets: input.assets } : {}),
     createId: () => `generated-${++nextId}`,
-    validateCollection({ definition, record }) {
-      if (
-        definition.name === contentOwnerCollection.name &&
-        record.reject === true
-      ) {
-        throw new Error("synthetic validation failure");
-      }
-    },
   });
   try {
-    const scoped = engine.collectionRuntime.withScope({
+    const scoped = engine.collections.withScope({
       namespace: "tenant-a",
     });
     const rejected = await engine.content.preparer.prepare("rolled back", {
@@ -188,7 +180,7 @@ async function runCollectionContentContract(
     assertEquals(createdAssets.length, 1);
     assertEquals(createdAssets[0].assetId, first.content[0].assetId);
     assertEquals(typeof createdAssets[0].bodyId, "string");
-    assertEquals("location" in createdAssets[0], false);
+    assertEquals(typeof createdAssets[0].location, "object");
     const matchedDeliveries = await db.query<{ n: string | number }>(
       `SELECT count(*)::int AS n
        FROM "${input.schema}"."event_deliveries" delivery
@@ -326,23 +318,201 @@ async function runCollectionContentContract(
       ).then((result) => Number(result.rows[0]?.n ?? 0)),
       0,
     );
+
+    const sequential = await engine.content.preparer.prepare(
+      "sequential body",
+      {
+        namespace: "tenant-a",
+        idempotencyKey: "sequential-body",
+      },
+    );
+    await engine.collections.transaction({
+      operationKey: "content:create-update",
+      namespace: "tenant-a",
+      async execute({ collections }) {
+        await collections.contract_content_owner.create({
+          id: "sequential-owner",
+          body: sequential,
+        });
+        await collections.contract_content_owner.update({
+          id: "sequential-owner",
+          set: { reject: false },
+        });
+      },
+    });
+    assertEquals(
+      (await scoped.contract_content_owner.get({ id: "sequential-owner" }))
+        ?.body,
+      sequential.content,
+    );
+
+    const deletedInPlan = await engine.content.preparer.prepare(
+      "deleted in plan",
+      {
+        namespace: "tenant-a",
+        idempotencyKey: "deleted-in-plan",
+      },
+    );
+    await engine.collections.transaction({
+      operationKey: "content:create-delete",
+      namespace: "tenant-a",
+      async execute({ collections }) {
+        await collections.contract_content_owner.create({
+          id: "deleted-plan-owner",
+          body: deletedInPlan,
+        });
+        await collections.contract_content_owner.delete({
+          id: "deleted-plan-owner",
+        });
+      },
+    });
+    assertEquals(
+      await scoped.contract_content_owner.get({ id: "deleted-plan-owner" }),
+      null,
+    );
+    assertExists(
+      await engine.content.assets.get(
+        "tenant-a",
+        deletedInPlan.content[0].assetId,
+      ),
+    );
+
+    const sameKeyFirst = await engine.content.preparer.prepare(
+      "same transaction body",
+      {
+        namespace: "tenant-a",
+        idempotencyKey: "same-transaction-key",
+      },
+    );
+    const sameKeySecond = await engine.content.preparer.prepare(
+      "same transaction body",
+      {
+        namespace: "tenant-a",
+        idempotencyKey: "same-transaction-key",
+      },
+    );
+    await engine.collections.transaction({
+      operationKey: "content:same-key",
+      namespace: "tenant-a",
+      async execute({ collections }) {
+        await collections.contract_content_owner.create({
+          id: "same-key-owner-a",
+          body: sameKeyFirst,
+        });
+        await collections.contract_content_owner.create({
+          id: "same-key-owner-b",
+          body: sameKeySecond,
+        });
+      },
+    });
+    const sameKeyOwners = await Promise.all([
+      scoped.contract_content_owner.get({ id: "same-key-owner-a" }),
+      scoped.contract_content_owner.get({ id: "same-key-owner-b" }),
+    ]);
+    assertEquals(
+      (sameKeyOwners[0]?.body as { assetId: string }[])[0].assetId,
+      (sameKeyOwners[1]?.body as { assetId: string }[])[0].assetId,
+    );
+
+    const conflictBase = await engine.content.preparer.prepare(
+      "conflict base",
+      {
+        namespace: "tenant-a",
+        idempotencyKey: "conflict-base",
+      },
+    );
+    const conflictingBytes = new TextEncoder().encode("conflicting bytes");
+    const conflictingPrepared = Object.freeze({
+      content: conflictBase.content,
+      assets: Object.freeze([Object.freeze({
+        ...conflictBase.assets[0],
+        body: conflictingBytes,
+        byteLength: conflictingBytes.byteLength,
+        digest: await digestContent(conflictingBytes),
+      })]),
+    });
+    await assertRejects(
+      () =>
+        engine.collections.transaction({
+          operationKey: "content:conflicting-staged-id",
+          namespace: "tenant-a",
+          async execute({ collections }) {
+            await collections.contract_content_owner.create({
+              id: "conflict-owner-a",
+              body: conflictBase,
+            });
+            await collections.contract_content_owner.create({
+              id: "conflict-owner-b",
+              body: conflictingPrepared,
+            });
+          },
+        }),
+      Error,
+      "conflicts with an earlier transaction mutation",
+    );
+    assertEquals(
+      await scoped.contract_content_owner.get({ id: "conflict-owner-a" }),
+      null,
+    );
+    await assertRejects(
+      () =>
+        engine.content.assets.markDeleted(
+          "tenant-a",
+          third.content[0].assetId,
+        ),
+      Error,
+      "still referenced by declared Collection content",
+    );
+
+    const raced = await engine.content.preparer.prepare("raced body", {
+      namespace: "tenant-a",
+      idempotencyKey: "raced-body",
+    });
+    const racedRefs = await engine.content.assets.materialize({
+      namespace: "tenant-a",
+      content: raced,
+    });
+    let notifyStaged!: () => void;
+    let releaseCommit!: () => void;
+    const staged = new Promise<void>((resolve) => notifyStaged = resolve);
+    const released = new Promise<void>((resolve) => releaseCommit = resolve);
+    const racedTransaction = engine.collections.transaction({
+      operationKey: "content:delete-race",
+      namespace: "tenant-a",
+      async execute({ collections }) {
+        await collections.contract_content_owner.create({
+          id: "raced-owner",
+          body: racedRefs,
+        });
+        notifyStaged();
+        await released;
+      },
+    });
+    const racedRejection = assertRejects(
+      () => racedTransaction,
+      Error,
+      "non-ready Asset",
+    );
+    await staged;
+    await engine.content.assets.markDeleted(
+      "tenant-a",
+      racedRefs[0].assetId,
+    );
+    releaseCommit();
+    await racedRejection;
+    assertEquals(
+      await scoped.contract_content_owner.get({ id: "raced-owner" }),
+      null,
+    );
     assertExists(
       await engine.content.assets.get("tenant-a", first.content[0].assetId),
-    );
-    await db.query(
-      `DELETE FROM "${input.schema}"."body_references"
-       WHERE namespace = $1`,
-      ["tenant-a"],
     );
     await db.query(
       `DELETE FROM "${input.schema}"."nodes"
        WHERE namespace = $1`,
       ["tenant-a"],
     );
-    await engine.collectionRuntime.rebuild(
-      contentOwnerCollection as never,
-      "tenant-a",
-    );
+    await engine.collections.rebuild("tenant-a");
     const rebuilt = await scoped.contract_content_owner.get({
       id: "content-owner",
     });
@@ -360,17 +530,15 @@ async function runCollectionContentContract(
       source_node_id: "content-owner",
       target_node_id: third.content[0].assetId,
     }]);
-    const replayPins = await db.query<{ owner_kind: string; owner_id: string }>(
-      `SELECT owner_kind, owner_id
-       FROM "${input.schema}"."body_references"
-       WHERE namespace = $1 AND body_id = $2
-       ORDER BY owner_kind, owner_id`,
+    const replayPins = await db.query<{ id: string }>(
+      `SELECT id
+       FROM "${input.schema}"."nodes"
+       WHERE namespace = $1 AND type = 'asset'
+         AND data ->> 'state' = 'ready'
+         AND data ->> 'bodyId' = $2`,
       ["tenant-a", commandAssets[0].bodyId],
     );
-    assertEquals(replayPins.rows, [{
-      owner_kind: "@copilotz/asset/v1",
-      owner_id: third.content[0].assetId,
-    }]);
+    assertEquals(replayPins.rows, [{ id: third.content[0].assetId }]);
   } finally {
     await engine.shutdown();
     await db.close();
@@ -396,7 +564,7 @@ Deno.test("custom collection content materializes and links atomically with file
           config: {
             backendId: "filesystem:collection-content",
             prefix: "collection-content",
-            protectionMs: 0,
+            protectionMs: 5_000,
             access: denoAssetFilesystem(root),
           },
         },

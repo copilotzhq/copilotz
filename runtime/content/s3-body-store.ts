@@ -18,6 +18,7 @@ import {
   bodyProtectionMs,
   bodyProtectionRemainingMs,
   bodyProtectionUntil,
+  resolveBodyProtectionUntil,
   writerCapabilityFromHead,
 } from "./body-store.ts";
 
@@ -51,6 +52,7 @@ function normalizeDigest(
 
 function assertStored(input: PutBodyInput, head: BodyHead): void {
   if (
+    head.bodyId !== input.bodyId ||
     head.byteLength !== input.bytes.byteLength ||
     head.digest !== input.digest ||
     head.mediaType !== input.mediaType
@@ -504,7 +506,10 @@ export function createS3BodyStore(
     backendId,
     async put(input) {
       let response: Response;
-      const protectedUntil = bodyProtectionUntil(protectionMs);
+      const protectedUntil = resolveBodyProtectionUntil(
+        input.protectedUntil,
+        protectionMs,
+      );
       try {
         response = await client.makeRequest({
           method: "PUT",
@@ -679,18 +684,12 @@ export function createS3BodyStore(
             : {}),
         });
       },
-      async delete(input) {
-        if (input.expectedState !== "ready") return false;
-        const current = await head(input.bodyId);
-        if (
-          !current ||
-          current.maintenanceVersion !== input.expectedMaintenanceVersion ||
-          bodyProtectionRemainingMs(current.protectedUntil) > 0
-        ) {
-          return false;
-        }
-        await client.deleteObject(input.bodyId, { bucketName: bucket });
-        return true;
+      delete(input) {
+        // Generic object metadata has no version independent from immutable
+        // content ETags, so it cannot prove the Ready-body CAS contract.
+        // Progressive staging is fenced separately by writer ownership.
+        void input;
+        return Promise.resolve(false);
       },
     },
   };

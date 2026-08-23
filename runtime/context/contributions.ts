@@ -1,4 +1,4 @@
-import type { CopilotzProcessorContext } from "../engine/index.ts";
+import type { ProcessorContext } from "../plugins/index.ts";
 import type { ContentInput, ContentRef } from "../content/index.ts";
 import type { ContextContribution, ContextPurpose } from "./types.ts";
 import { isContextResource } from "./resources.ts";
@@ -24,7 +24,7 @@ export type CollectedContextContribution =
   }>;
 
 export async function collectContextContributions(
-  context: CopilotzProcessorContext,
+  context: ProcessorContext,
   input: Readonly<{
     purpose: ContextPurpose;
     agent: Agent;
@@ -51,7 +51,7 @@ export async function collectContextContributions(
       collections: context.collections,
       signal: context.signal,
       idempotencyKey:
-        `${context.idempotencyKey}:context:${resource.id}:${input.purpose}`,
+        `${context.operationKey}:context:${resource.id}:${input.purpose}`,
     });
     const contributions = value === null
       ? []
@@ -102,7 +102,7 @@ function isContentRef(value: ContentInput | ContentRef): value is ContentRef {
 }
 
 export async function renderContextContent(
-  context: CopilotzProcessorContext,
+  context: ProcessorContext,
   content: ContentInput | ContentRef,
 ): Promise<string> {
   if (typeof content === "string") return content;

@@ -286,7 +286,7 @@ function storedOrigin(value: unknown): AssetOrigin | undefined {
     typeof scope.id === "string"
   ) {
     return {
-      scope: { type: "collection", collection: scope.collection, id: scope.id },
+      scope: { type: scope.collection, id: scope.id },
       producer: { type: producer.type, id: producer.id },
       ...(typeof fields.path === "string" ? { path: fields.path } : {}),
       ...(fields.inferred === true ? { inferred: true } : {}),
@@ -348,7 +348,7 @@ async function inferOrigins(
     origins.set(row.id, {
       scope: threadId
         ? { type: "thread", id: threadId }
-        : { type: "collection", collection: found.type, id: found.id },
+        : { type: found.type, id: found.id },
       producer: { type: found.type, id: found.id },
       inferred: true,
     });

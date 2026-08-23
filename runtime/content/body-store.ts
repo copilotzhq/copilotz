@@ -138,6 +138,8 @@ export type BodyStoreDeployment = Readonly<{
   durability: "ephemeral" | "durable";
   reach: "process" | "cluster";
   minimumProtectionMs: number;
+  /** Ready Bodies may be collected only when the backend has an exact CAS. */
+  readyGarbageCollection: boolean;
 }>;
 
 export type TrustedBodyScope = Readonly<{
@@ -255,7 +257,12 @@ export type BodyStorageConfig =
   }>
   | Readonly<{
     type: "custom";
-    config: Readonly<{ store: BodyStore; prefix?: string }>;
+    config: Readonly<{
+      store: BodyStore;
+      prefix?: string;
+      /** Omit to use the conservative, Ready-GC-disabled deployment. */
+      deployment?: BodyStoreDeployment;
+    }>;
   }>;
 
 export type BodyStorageOptions = Readonly<{
@@ -280,6 +287,12 @@ export type S3BodyStorageConfig = Readonly<{
 
 /** Host callbacks used by filesystem adapters; core never imports host APIs. */
 export type BodyFilesystemAccess = Readonly<{
+  /** Linearizable create-or-renew for immutable Ready bytes and metadata. */
+  acquireReady(
+    input: PutBodyInput & Readonly<{ protectedUntil: string }>,
+  ): Promise<BodyHead>;
+  /** Atomically enforces every Ready maintenance compare-and-delete guard. */
+  deleteReady(input: BodyMaintenanceDeleteInput): Promise<boolean>;
   writeExclusive(input: PutBodyInput): Promise<"created" | "exists">;
   writeReplace(
     input: Readonly<{ bodyId: string; bytes: Uint8Array }>,
@@ -288,6 +301,13 @@ export type BodyFilesystemAccess = Readonly<{
     input: Readonly<{ bodyId: string; bytes: Uint8Array }>,
   ): Promise<number>;
   stat(path: string): Promise<BodyHead | null>;
+  /** Opens bytes only when the authoritative Ready manifest is visible. */
+  openReady(path: string): Promise<ReadableStream<Uint8Array>>;
+  /** Opens Ready bytes at an offset after resolving the authoritative manifest. */
+  openReadyFrom(
+    path: string,
+    offset: number,
+  ): Promise<ReadableStream<Uint8Array>>;
   read(path: string): Promise<Uint8Array>;
   open(path: string): Promise<ReadableStream<Uint8Array>>;
   openFrom(path: string, offset: number): Promise<ReadableStream<Uint8Array>>;
@@ -350,6 +370,50 @@ export function bodyProtectionRemainingMs(
   return Math.max(0, expiresAt - now);
 }
 
+export function resolveBodyProtectionUntil(
+  requested: string | undefined,
+  protectionMs: number,
+  now: number = Date.now(),
+): string {
+  const value = requested ?? bodyProtectionUntil(protectionMs, now);
+  const expiresAt = Date.parse(value);
+  if (!Number.isFinite(expiresAt)) {
+    throw new TypeError("Body protection deadline must be a valid timestamp.");
+  }
+  return new Date(expiresAt).toISOString();
+}
+
+export function latestBodyProtectionUntil(
+  current: string | undefined,
+  requested: string,
+): string {
+  const currentAt = current ? Date.parse(current) : Number.NEGATIVE_INFINITY;
+  const requestedAt = Date.parse(requested);
+  if (
+    (current !== undefined && !Number.isFinite(currentAt)) ||
+    !Number.isFinite(requestedAt)
+  ) {
+    throw new TypeError("Body protection deadline must be a valid timestamp.");
+  }
+  return new Date(Math.max(currentAt, requestedAt)).toISOString();
+}
+
+export function bodyHasBeenIdle(
+  lastModified: string | undefined,
+  idleForMs: number,
+  now: number = Date.now(),
+): boolean {
+  if (!Number.isSafeInteger(idleForMs) || idleForMs < 0) {
+    throw new TypeError(
+      "Body maintenance idle duration must be a non-negative integer.",
+    );
+  }
+  if (idleForMs === 0) return true;
+  if (!lastModified) return false;
+  const modifiedAt = Date.parse(lastModified);
+  return Number.isFinite(modifiedAt) && modifiedAt <= now - idleForMs;
+}
+
 function cleanSegment(value: string): string {
   return encodeURIComponent(value.trim()).replaceAll("%2F", "%252F");
 }
@@ -386,18 +450,11 @@ export function assetBodyKey(
   );
   const origin = input.origin;
   if (!origin) return join(root, "assets", cleanSegment(input.assetId));
-  const scope = origin.scope.type === "thread"
-    ? ["threads", cleanSegment(origin.scope.id)]
-    : origin.scope.type === "collection"
-    ? [
-      "collections",
-      cleanSegment(origin.scope.collection),
-      cleanSegment(origin.scope.id),
-    ]
-    : ["assets"];
   return join(
     root,
-    ...scope,
+    "origins",
+    cleanSegment(origin.scope.type),
+    cleanSegment(origin.scope.id),
     cleanSegment(origin.producer.type),
     cleanSegment(origin.producer.id),
     "assets",
@@ -410,6 +467,7 @@ function validateHead(
   actual: BodyHead,
 ): void {
   if (
+    actual.bodyId !== expected.bodyId ||
     actual.byteLength !== expected.bytes.byteLength ||
     actual.digest !== expected.digest || actual.mediaType !== expected.mediaType
   ) {
@@ -450,12 +508,16 @@ export function createMemoryBodyStore(
 ): BodyStore {
   const backendId = options.backendId?.trim() || "memory:default";
   const protectionMs = bodyProtectionMs(options.protectionMs);
-  const entries = new Map<string, { head: BodyHead; bytes: Uint8Array }>();
+  const entries = new Map<
+    string,
+    { head: BodyHead; bytes: Uint8Array; updatedAt: number }
+  >();
   const mutable = new Map<
     string,
     {
       head: ActiveMutableBodyHead;
       leaseExpiresAt: number;
+      updatedAt: number;
       chunks: Uint8Array[];
       appendIds: Map<string, Uint8Array>;
     }
@@ -473,10 +535,30 @@ export function createMemoryBodyStore(
     kind: "memory",
     backendId,
     put(input) {
+      const now = Date.now();
+      const requestedProtection = resolveBodyProtectionUntil(
+        input.protectedUntil,
+        protectionMs,
+        now,
+      );
       const existing = entries.get(input.bodyId);
       if (existing) {
         validateHead(input, existing.head);
-        return Promise.resolve(existing.head);
+        const head = Object.freeze({
+          ...existing.head,
+          maintenanceVersion: existing.head.maintenanceVersion + 1,
+          protectedUntil: latestBodyProtectionUntil(
+            existing.head.protectedUntil,
+            requestedProtection,
+          ),
+          lastModified: new Date(now).toISOString(),
+        });
+        entries.set(input.bodyId, {
+          head,
+          bytes: existing.bytes,
+          updatedAt: now,
+        });
+        return Promise.resolve(head);
       }
       const head = Object.freeze({
         bodyId: input.bodyId,
@@ -485,11 +567,15 @@ export function createMemoryBodyStore(
         mediaType: input.mediaType,
         digest: input.digest,
         maintenanceVersion: 1,
-        protectedUntil: bodyProtectionUntil(protectionMs),
+        protectedUntil: requestedProtection,
         etag: input.digest.slice("sha256:".length),
-        lastModified: new Date().toISOString(),
+        lastModified: new Date(now).toISOString(),
       });
-      entries.set(input.bodyId, { head, bytes: input.bytes.slice() });
+      entries.set(input.bodyId, {
+        head,
+        bytes: input.bytes.slice(),
+        updatedAt: now,
+      });
       return Promise.resolve(head);
     },
     head: ({ bodyId }) =>
@@ -579,7 +665,12 @@ export function createMemoryBodyStore(
           writerGeneration: (existing.head.writerGeneration ?? 1) + 1,
           writerLeaseRemainingMs: protectionMs,
         });
-        mutable.set(input.bodyId, { ...existing, head, leaseExpiresAt });
+        mutable.set(input.bodyId, {
+          ...existing,
+          head,
+          leaseExpiresAt,
+          updatedAt: Date.now(),
+        });
         return Promise.resolve(writerCapabilityFromHead(head));
       }
       if (entries.has(input.bodyId)) {
@@ -602,6 +693,7 @@ export function createMemoryBodyStore(
       mutable.set(input.bodyId, {
         head,
         leaseExpiresAt: newLeaseExpiresAt(),
+        updatedAt: Date.now(),
         chunks: [],
         appendIds: new Map(),
       });
@@ -658,6 +750,7 @@ export function createMemoryBodyStore(
       mutable.set(input.writer.bodyId, {
         head,
         leaseExpiresAt,
+        updatedAt: Date.now(),
         chunks: entry.chunks,
         appendIds: entry.appendIds,
       });
@@ -705,7 +798,11 @@ export function createMemoryBodyStore(
         etag: digest.slice("sha256:".length),
         lastModified: new Date().toISOString(),
       });
-      entries.set(input.writer.bodyId, { head, bytes });
+      entries.set(input.writer.bodyId, {
+        head,
+        bytes,
+        updatedAt: Date.now(),
+      });
       mutable.delete(input.writer.bodyId);
       return head;
     },
@@ -725,10 +822,26 @@ export function createMemoryBodyStore(
         const states = new Set<BodyState>(input.states);
         const bodies: (BodyHead | MutableBodyHead)[] = [];
         for (const entry of entries.values()) {
-          if (states.has(entry.head.state)) bodies.push(entry.head);
+          if (
+            states.has(entry.head.state) &&
+            bodyHasBeenIdle(
+              entry.head.lastModified,
+              input.idleForMs,
+            )
+          ) {
+            bodies.push(entry.head);
+          }
         }
         for (const entry of mutable.values()) {
-          if (states.has(entry.head.state)) bodies.push(entry.head);
+          if (
+            states.has(entry.head.state) &&
+            bodyHasBeenIdle(
+              new Date(entry.updatedAt).toISOString(),
+              input.idleForMs,
+            )
+          ) {
+            bodies.push(entry.head);
+          }
         }
         bodies.sort((left, right) => left.bodyId.localeCompare(right.bodyId));
         const after = input.after ?? "";
@@ -749,7 +862,11 @@ export function createMemoryBodyStore(
           ready &&
           ready.head.state === input.expectedState &&
           ready.head.maintenanceVersion === input.expectedMaintenanceVersion &&
-          bodyProtectionRemainingMs(ready.head.protectedUntil) === 0
+          bodyProtectionRemainingMs(ready.head.protectedUntil) === 0 &&
+          bodyHasBeenIdle(
+            ready.head.lastModified,
+            input.idleForMs,
+          )
         ) {
           entries.delete(input.bodyId);
           return Promise.resolve(true);
@@ -760,7 +877,11 @@ export function createMemoryBodyStore(
           current.head.state === input.expectedState &&
           current.head.maintenanceVersion ===
             input.expectedMaintenanceVersion &&
-          current.leaseExpiresAt <= Date.now()
+          current.leaseExpiresAt <= Date.now() &&
+          bodyHasBeenIdle(
+            new Date(current.updatedAt).toISOString(),
+            input.idleForMs,
+          )
         ) {
           mutable.delete(input.bodyId);
           return Promise.resolve(true);
@@ -1111,16 +1232,14 @@ export function createFilesystemBodyStore(
     kind: "filesystem",
     backendId,
     async put(input) {
-      const protectedUntil = input.protectedUntil ??
-        bodyProtectionUntil(protectionMs);
-      await options.access.writeExclusive({ ...input, protectedUntil });
-      const head = await options.access.stat(input.bodyId);
-      if (!head) {
-        throw createContentError(
-          "asset_storage_unavailable",
-          "Filesystem asset write was not visible after completion.",
-        );
-      }
+      const protectedUntil = resolveBodyProtectionUntil(
+        input.protectedUntil,
+        protectionMs,
+      );
+      const head = await options.access.acquireReady({
+        ...input,
+        protectedUntil,
+      });
       validateHead(input, head);
       return head;
     },
@@ -1128,11 +1247,13 @@ export function createFilesystemBodyStore(
       return await options.access.stat(bodyId) ??
         await progressive.head(bodyId);
     },
-    read: ({ bodyId }) => options.access.open(bodyId),
+    read: ({ bodyId }) => options.access.openReady(bodyId),
     async follow(input) {
       const offset = Math.max(0, input.offset ?? 0);
       const ready = await options.access.stat(input.bodyId);
-      if (ready) return await options.access.openFrom(input.bodyId, offset);
+      if (ready) {
+        return await options.access.openReadyFrom(input.bodyId, offset);
+      }
       const staged = await progressive.head(input.bodyId);
       if (!staged) {
         throw createContentError(
@@ -1192,7 +1313,9 @@ export function createFilesystemBodyStore(
         const bodies: BodyHead[] = [];
         if (states.has("ready")) {
           for await (const body of options.access.list("")) {
-            bodies.push(body);
+            if (bodyHasBeenIdle(body.lastModified, input.idleForMs)) {
+              bodies.push(body);
+            }
           }
         }
         bodies.sort((left, right) => left.bodyId.localeCompare(right.bodyId));
@@ -1210,16 +1333,12 @@ export function createFilesystemBodyStore(
       },
       async delete(input) {
         if (input.expectedState !== "ready") return false;
-        const head = await options.access.stat(input.bodyId);
-        if (
-          !head ||
-          head.maintenanceVersion !== input.expectedMaintenanceVersion ||
-          bodyProtectionRemainingMs(head.protectedUntil) > 0
-        ) {
-          return false;
+        if (!Number.isSafeInteger(input.idleForMs) || input.idleForMs < 0) {
+          throw new TypeError(
+            "Body maintenance idle duration must be a non-negative integer.",
+          );
         }
-        await options.access.delete(input.bodyId);
-        return true;
+        return await options.access.deleteReady(input);
       },
     },
   };

@@ -1,8 +1,10 @@
+import type { CollectionRecord } from "@copilotz/copilotz/collections";
+import type { ContentSequence } from "@copilotz/copilotz/content";
 import { Cron } from "../../dependencies/croner.ts";
-import type { CollectionRecord } from "../domain/index.ts";
 import type {
   ScheduledJob,
-  ScheduledJobRun,
+  ScheduledJobOccurrenceRef,
+  ScheduledJobPayload,
   ScheduledJobSchedule,
   ScheduledJobStatus,
 } from "./types.ts";
@@ -64,15 +66,40 @@ export function getNextScheduledRunAt(
   return next;
 }
 
-export function normalizeScheduledJobRecord(
-  value: CollectionRecord,
-): ScheduledJob {
-  const run = scheduledRecord(
-    value.run,
-    "Scheduled job run",
-  ) as ScheduledJobRun;
-  if (!Array.isArray(run.content)) {
-    throw new TypeError("Scheduled job run content must be canonical refs.");
+function normalizeOccurrence(value: unknown): ScheduledJobOccurrenceRef | null {
+  if (value === null || value === undefined) return null;
+  const occurrence = scheduledRecord(value, "Scheduled occurrence");
+  const mode = occurrence.mode === "manual"
+    ? "manual"
+    : occurrence.mode === "scheduled"
+    ? "scheduled"
+    : undefined;
+  if (!mode) throw new TypeError("Scheduled occurrence mode is invalid.");
+  const scheduledFor = new Date(
+    requireScheduledText(
+      occurrence.scheduledFor,
+      "Scheduled occurrence time",
+    ),
+  );
+  if (Number.isNaN(scheduledFor.getTime())) {
+    throw new TypeError("Scheduled occurrence time is invalid.");
+  }
+  return Object.freeze({
+    id: requireScheduledText(occurrence.id, "Scheduled occurrence ID"),
+    mode,
+    scheduledFor: scheduledFor.toISOString(),
+  });
+}
+
+export function normalizeScheduledJobRecord<
+  TPayload extends ScheduledJobPayload = ScheduledJobPayload,
+>(value: CollectionRecord): ScheduledJob<TPayload> {
+  const payload = scheduledRecord(
+    value.payload,
+    "Scheduled job payload",
+  ) as TPayload;
+  if (value.content !== undefined && !Array.isArray(value.content)) {
+    throw new TypeError("Scheduled job content must be canonical refs.");
   }
   return Object.freeze({
     ...value,
@@ -81,19 +108,24 @@ export function normalizeScheduledJobRecord(
     schedule: normalizeScheduledJobSchedule(
       value.schedule as ScheduledJobSchedule,
     ),
-    run: Object.freeze(structuredClone(run)),
+    payload: Object.freeze(structuredClone(payload)),
+    ...(Array.isArray(value.content)
+      ? {
+        content: Object.freeze(
+          structuredClone(value.content),
+        ) as ContentSequence,
+      }
+      : {}),
     nextRunAt: typeof value.nextRunAt === "string" ? value.nextRunAt : null,
     nextRunAtMs: typeof value.nextRunAtMs === "number"
       ? value.nextRunAtMs
       : null,
-    lastRunAt: typeof value.lastRunAt === "string" ? value.lastRunAt : null,
-    lastRunAtMs: typeof value.lastRunAtMs === "number"
-      ? value.lastRunAtMs
-      : null,
+    lastOccurrence: normalizeOccurrence(value.lastOccurrence),
     metadata: Object.freeze(structuredClone(
-      value.metadata && typeof value.metadata === "object"
+      value.metadata && typeof value.metadata === "object" &&
+        !Array.isArray(value.metadata)
         ? value.metadata as Record<string, unknown>
         : {},
     )),
-  }) as ScheduledJob;
+  }) as ScheduledJob<TPayload>;
 }

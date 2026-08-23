@@ -113,10 +113,6 @@ export const messageCollection: CollectionDefinition = defineCollection({
     metadata: {},
   },
   content: { fields: ["content"] },
-  identity: {
-    sourceType: "thread",
-    sourceField: "threadId",
-  },
   relations: {
     thread: relation.belongsTo("thread", "threadId", "has_message"),
     sender: relation.belongsTo("participant", "senderId", "sent_by"),

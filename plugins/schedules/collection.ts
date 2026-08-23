@@ -12,14 +12,29 @@ function record(value: unknown, name: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function iso(value: unknown, name: string): string {
+function text(value: unknown, name: string): string {
   if (typeof value !== "string" || !value.trim()) {
     throw new TypeError(`${name} must be non-empty.`);
   }
-  const date = new Date(value);
+  return value.trim();
+}
+
+function iso(value: unknown, name: string): string {
+  const date = new Date(text(value, name));
   if (Number.isNaN(date.getTime())) throw new TypeError(`${name} is invalid.`);
   return date.toISOString();
 }
+
+const occurrenceSchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    id: { type: "string" },
+    mode: { type: "string", enum: ["scheduled", "manual"] },
+    scheduledFor: { type: "string" },
+  },
+  required: ["id", "mode", "scheduledFor"],
+} as const;
 
 const scheduledJobSchema = {
   type: "object",
@@ -42,25 +57,14 @@ const scheduledJobSchema = {
       },
       required: ["type", "expression"],
     },
-    run: {
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        thread: { type: "object", additionalProperties: true },
-        sender: { type: "object", additionalProperties: true },
-        recipientIds: { type: "array", items: { type: "string" } },
-        content: {
-          type: "array",
-          items: { type: "object", additionalProperties: true },
-        },
-        metadata: { type: "object", additionalProperties: true },
-      },
-      required: ["content"],
+    payload: { type: "object", additionalProperties: true },
+    content: {
+      type: "array",
+      items: { type: "object", additionalProperties: true },
     },
     nextRunAt: { type: ["string", "null"] },
     nextRunAtMs: { type: ["number", "null"] },
-    lastRunAt: { type: ["string", "null"] },
-    lastRunAtMs: { type: ["number", "null"] },
+    lastOccurrence: { anyOf: [occurrenceSchema, { type: "null" }] },
     metadata: { type: "object", additionalProperties: true },
     createdAt: { type: "string" },
     updatedAt: { type: "string" },
@@ -69,9 +73,11 @@ const scheduledJobSchema = {
     "name",
     "status",
     "schedule",
-    "run",
+    "payload",
     "nextRunAt",
     "nextRunAtMs",
+    "lastOccurrence",
+    "metadata",
   ],
 } as const;
 
@@ -79,11 +85,12 @@ const dueCommandInputSchema = {
   type: "object",
   additionalProperties: false,
   properties: {
+    occurrenceId: { type: "string" },
     mode: { type: "string", enum: ["scheduled", "manual"] },
     scheduledFor: { type: "string" },
     checkedAt: { type: "string" },
   },
-  required: ["mode", "scheduledFor"],
+  required: ["occurrenceId", "mode", "scheduledFor"],
 } as const;
 
 export const scheduledJobCollection: CollectionDefinition<
@@ -92,7 +99,7 @@ export const scheduledJobCollection: CollectionDefinition<
   name: "scheduled_job",
   schema: scheduledJobSchema,
   timestamps: { createdAt: "createdAt", updatedAt: "updatedAt" },
-  content: { fields: ["run.content"] },
+  content: { fields: ["content"] },
   indexes: ["status", "nextRunAtMs", ["status", "nextRunAtMs"]],
   commands: {
     due: {
@@ -109,17 +116,18 @@ export const scheduledJobCollection: CollectionDefinition<
           throw new Error(`Scheduled job '${current.id}' is cancelled.`);
         }
         const set: Record<string, unknown> = {
-          lastRunAt: scheduledFor.toISOString(),
-          lastRunAtMs: scheduledForMs,
+          lastOccurrence: {
+            id: text(command.occurrenceId, "Scheduled occurrence ID"),
+            mode,
+            scheduledFor: scheduledFor.toISOString(),
+          },
         };
         if (mode === "scheduled") {
           if (current.status !== "active") {
             throw new Error(`Scheduled job '${current.id}' is not active.`);
           }
           if (current.nextRunAtMs !== scheduledForMs) {
-            throw new Error(
-              `Scheduled job '${current.id}' is no longer due.`,
-            );
+            throw new Error(`Scheduled job '${current.id}' is no longer due.`);
           }
           const checkedAt = new Date(
             command.checkedAt === undefined

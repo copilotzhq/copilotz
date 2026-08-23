@@ -32,18 +32,18 @@ import {
   createTransientProcessorSet,
   matchProcessor,
   type Processor,
+  type ProcessorContext,
   resolveProcessorEventData,
 } from "../plugins/index.ts";
-import { createCopilotzProcessorCapabilities } from "./context.ts";
+import { createProcessorContext } from "./context.ts";
 import {
   createDatabaseScope,
   type DatabaseScopeRuntime,
 } from "./database-scope.ts";
 import type {
-  CopilotzCapabilityBase,
   CopilotzEngine,
-  CopilotzProcessorCapabilities,
   CreateCopilotzEngineOptions,
+  EngineContextSeed,
 } from "./types.ts";
 
 type AdditionalDatabaseScope = Readonly<{
@@ -128,9 +128,9 @@ export async function createCopilotzEngine(
   let resolver:
     | DatabaseScopeRuntime["public"]["content"]["resolver"]
     | undefined;
-  const createCapabilities = async (
-    base: CopilotzCapabilityBase,
-  ): Promise<CopilotzProcessorCapabilities> => {
+  const createContextFor = async (
+    base: EngineContextSeed,
+  ): Promise<ProcessorContext> => {
     const additional = base.databaseSchema === databaseSchema
       ? undefined
       : await resolveAdditionalScope(base.databaseSchema);
@@ -147,11 +147,14 @@ export async function createCopilotzEngine(
     if (!scopedCoordinator) {
       throw new Error("Copilotz action lifecycle is not initialized.");
     }
-    return createCopilotzProcessorCapabilities({
+    return createProcessorContext({
       base,
       registry: options.registry,
+      assets: scopedCapabilities.assets,
       preparer,
       resolver: scopedResolver,
+      collections: scopedCapabilities.collections,
+      streamBodyStore: scopedCapabilities.streamBodyStore,
       eventHub: scopedEventHub,
       async publishEvent(event) {
         const dispatched = await publishLive(event, {
@@ -163,7 +166,6 @@ export async function createCopilotzEngine(
         });
         await dispatched.done;
       },
-      eventStore: scopedStore,
       actionLifecycle: createActionLifecycleEmitter({
         namespace: base.event.namespace,
         append: createActionLifecycleAppender({
@@ -191,14 +193,18 @@ export async function createCopilotzEngine(
         },
       }),
       now,
-      ...scopedCapabilities,
     });
   };
   const createContext = async (
     base: DeliveryContextBase,
-  ): Promise<CopilotzProcessorCapabilities> =>
-    await createCapabilities({
-      ...base,
+  ): Promise<ProcessorContext> =>
+    await createContextFor({
+      databaseSchema: base.databaseSchema,
+      event: base.event,
+      signal: base.signal,
+      settlementScopeId: base.settlementScopeId,
+      idempotencyKey: base.idempotencyKey,
+      createMutationIdentity: base.createMutationIdentity,
       source: {
         kind: "delivery",
         id: base.delivery.id,
@@ -207,9 +213,16 @@ export async function createCopilotzEngine(
     });
   const createLiveContext = async (
     base: LiveProcessorContextBase,
-  ): Promise<CopilotzProcessorCapabilities> =>
-    await createCapabilities({
-      ...base,
+  ): Promise<ProcessorContext> =>
+    await createContextFor({
+      databaseSchema: base.databaseSchema,
+      event: base.event,
+      signal: base.signal,
+      ...(base.settlementScopeId
+        ? { settlementScopeId: base.settlementScopeId }
+        : {}),
+      idempotencyKey: base.idempotencyKey,
+      createMutationIdentity: base.createMutationIdentity,
       source: {
         kind: "live",
         id: base.dispatchAttemptId,
@@ -278,7 +291,7 @@ export async function createCopilotzEngine(
           signal: new AbortController().signal,
           createContext: createLiveContext,
         }).catch(() => undefined);
-        await options.publish?.(event);
+        await options.publish?.(event, context);
         await options.execution?.onOutputEvent?.(event, context);
       }
       if (!event.durable) return;
@@ -317,14 +330,21 @@ export async function createCopilotzEngine(
       ? await resolveProcessorEventData(scopedStore, event)
       : event.payload;
     await scopedEventHub.publish(event);
-    await options.publish?.(event);
+    await options.publish?.(event, {
+      databaseSchema: scopedDatabaseSchema,
+      ...(publishOptions.settlementScopeId
+        ? { settlementScopeId: publishOptions.settlementScopeId }
+        : {}),
+    });
     // Transient processors are connection-local. Never place them on a Worker.
     const abort = new AbortController();
     const relay = () => abort.abort(publishOptions.signal?.reason);
     if (publishOptions.signal?.aborted) relay();
-    else {publishOptions.signal?.addEventListener("abort", relay, {
+    else {
+      publishOptions.signal?.addEventListener("abort", relay, {
         once: true,
-      });}
+      });
+    }
     const scopedTransients = transientsFor(scopedDatabaseSchema);
     const done = invokeLiveProcessors({
       databaseSchema: scopedDatabaseSchema,
@@ -437,6 +457,7 @@ export async function createCopilotzEngine(
         liveWorkload: liveDispatcher.workload,
         workloads: executor.workloads,
         dispatchWork: (input) => executor.dispatchWork(input),
+        settleOutputs: (scope) => executor.settleOutputs(scope),
       }),
       connect(input) {
         const requested = input.databaseSchema?.trim() || databaseSchema;

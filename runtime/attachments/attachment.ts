@@ -44,7 +44,7 @@ export type CreateAttachmentRuntimeOptions = Readonly<{
   coordinator: EventCoordinator;
   store: EventStore;
   session: SqlExecutor;
-  assets: Pick<DatabaseAssetRepository, "materialize" | "linkOwner">;
+  assets: Pick<DatabaseAssetRepository, "materialize">;
   eventHub: CopilotzEventHub;
   dispatchEvent?: (event: CopilotzEvent) => Promise<
     Readonly<{
@@ -53,7 +53,7 @@ export type CreateAttachmentRuntimeOptions = Readonly<{
     }>
   >;
   executor: DeliveryExecutor;
-  collectionRuntime: CollectionRuntime;
+  collections: CollectionRuntime;
   transients: TransientProcessorSet;
   actionBindings: Omit<ActionContextBindings, "namespace">;
   streamBodyStore?: BodyStore;
@@ -447,7 +447,7 @@ export function createAttachmentRuntime(
     const id = typeof value === "string"
       ? requiredText(value, "Thread")
       : value.id;
-    const collections = options.collectionRuntime.withScope({ namespace });
+    const collections = options.collections.withScope({ namespace });
     const threads = collections.thread;
     const participants = collections.participant;
     if (!threads) {

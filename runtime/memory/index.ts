@@ -70,13 +70,14 @@ export type {
   MaintainMemoryActionResult,
   MemoryActionCallers,
   MemoryActionContext,
-  MemoryAdapters,
   MemoryProcessorContext,
-  MemoryResources,
 } from "./plugin.ts";
 export type {
   CreateLongTermMemoryPluginOptions,
+  MemoryAdapters,
   MemoryEmbed,
   MemoryEmbeddingInput,
+  MemoryResources,
+  MemoryRuntimeContext,
   ResolveMemoryLlmConfig,
 } from "./types.ts";

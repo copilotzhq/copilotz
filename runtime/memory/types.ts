@@ -1,16 +1,41 @@
 import type { Agent } from "../resources/index.ts";
 import type { ConversationThread, Participant } from "../domain/index.ts";
-import type { CopilotzProcessorContext } from "../engine/index.ts";
+import type { RuntimeContextNamespaces } from "../actions/index.ts";
 import type { CopilotzEvent } from "../events/index.ts";
+import type { ProcessorContext } from "../plugins/index.ts";
 import type { AgentTextActionInput } from "../llm/chat-types.ts";
+import type { LlmResource } from "../llm/index.ts";
 import type { ChatMessage, ProviderConfig } from "../llm/types.ts";
+import type { MemoryKindDefinition } from "./ontology.ts";
 import type { LongTermMemoryConfig } from "./resources.ts";
+
+export type MemoryResources =
+  & RuntimeContextNamespaces
+  & Readonly<{
+    agents: Readonly<Record<string, Agent | undefined>>;
+    memoryKinds: Readonly<
+      Record<string, MemoryKindDefinition | undefined>
+    >;
+  }>;
+
+export type MemoryAdapters =
+  & RuntimeContextNamespaces
+  & Readonly<{
+    llm: Readonly<Record<string, LlmResource | undefined>>;
+    memoryEmbedding: Readonly<Record<string, MemoryEmbed | undefined>>;
+  }>;
+
+/** Composed context shape required by Memory-owned behavior. */
+export type MemoryRuntimeContext = ProcessorContext<
+  MemoryResources,
+  MemoryAdapters
+>;
 
 export type MemoryEmbeddingInput = Readonly<{
   agent: Agent;
   thread: ConversationThread;
   checkpointId: string;
-  context: CopilotzProcessorContext;
+  context: MemoryRuntimeContext;
 }>;
 
 export type MemoryEmbed = (
@@ -26,7 +51,7 @@ export type ResolveMemoryLlmConfig = (
     thread: ConversationThread;
     messages: readonly ChatMessage[];
     sourceEvent: CopilotzEvent;
-    context: CopilotzProcessorContext;
+    context: MemoryRuntimeContext;
     baseConfig: ProviderConfig;
   }>,
 ) => ProviderConfig | Promise<ProviderConfig>;

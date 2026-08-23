@@ -7,25 +7,14 @@ import {
 } from "../events/index.ts";
 import { createTestDomainContext } from "../../runtime/testing/domain-context.ts";
 import { waitForTestDelivery } from "../../runtime/testing/deliveries.ts";
-import {
-  projectActionEvents,
-  projectMessageById,
-  projectMessages,
-  projectParticipants,
-  projectThreadByExternalId,
-  projectThreadById,
-  projectThreads,
-} from "../../runtime/testing/projections.ts";
+import { projectActionEvents } from "../../runtime/testing/projections.ts";
 import {
   createPluginRegistry,
   definePlugin,
   defineProcessor,
+  type ProcessorContext,
 } from "../plugins/index.ts";
-import {
-  type CopilotzEngine,
-  type CopilotzProcessorContext,
-  createCopilotzEngine,
-} from "./index.ts";
+import { type CopilotzEngine, createCopilotzEngine } from "./index.ts";
 import { createTestDatabase, type TestDatabase } from "../testing/ominipg.ts";
 import { createHypervisor } from "../../dependencies/oxian-hypervisor.ts";
 import { createWorker } from "../../dependencies/oxian-worker.ts";
@@ -75,7 +64,7 @@ async function createFixture(): Promise<Fixture> {
     execute: (value: unknown) => value,
   });
   type FixtureProcessorContext =
-    & Omit<CopilotzProcessorContext, "actions">
+    & Omit<ProcessorContext, "actions">
     & Readonly<{
       actions: Readonly<{
         engineEcho: ActionCaller<typeof engineEchoAction>;
@@ -92,7 +81,6 @@ async function createFixture(): Promise<Fixture> {
         "coordinator" in context.collections ||
         "collectionRuntime" in context;
       assertEquals(context.namespace, "tenant-a");
-      assertEquals(context.event.id, event.id);
       assertEquals(
         (context.resources.tools?.echo as typeof echoTool | undefined)?.key,
         "echo",
@@ -123,12 +111,6 @@ async function createFixture(): Promise<Fixture> {
       await context.collections.engineAudit.create({
         id: `audit:${event.id}`,
         sourceEventId: event.id,
-      });
-      await context.events.emit({
-        type: "text.delta",
-        payload: { text: `attempt-${calls}` },
-        streamId: `stream:${event.id}`,
-        sequence: calls,
       });
       if (calls === 1) {
         throw new Error("synthetic crash after typed projections");
@@ -188,7 +170,6 @@ Deno.test("factory engine scopes typed processor capabilities and deduplicates r
     assertEquals(
       tables.rows.map((row) => row.table_name),
       [
-        "body_references",
         "edges",
         "event_bodies",
         "event_deliveries",
@@ -198,9 +179,9 @@ Deno.test("factory engine scopes typed processor capabilities and deduplicates r
     );
 
     const namespace = "tenant-a";
-    const participants = fixture.engine.collectionRuntime.get("participant");
-    const threads = fixture.engine.collectionRuntime.get("thread");
-    const messages = fixture.engine.collectionRuntime.get("message");
+    const participants = fixture.engine.collections.get("participant");
+    const threads = fixture.engine.collections.get("thread");
+    const messages = fixture.engine.collections.get("message");
     assertExists(participants);
     assertExists(threads);
     assertExists(messages);
@@ -222,11 +203,6 @@ Deno.test("factory engine scopes typed processor capabilities and deduplicates r
       namespace,
       identity: { deduplicationId: "thread-a:create" },
     });
-    const frames = fixture.engine.events.subscribe({
-      namespace,
-      threadId: "thread-a",
-      types: ["text.delta"],
-    }).getReader();
     await createTestDomainContext(fixture.engine, namespace).actions
       .createThreadMessage({
         id: "message-a",
@@ -257,12 +233,6 @@ Deno.test("factory engine scopes typed processor capabilities and deduplicates r
       "retry_wait",
     );
     assertEquals(first.status, "retry_wait");
-    const frame = (await frames.read()).value!;
-    assertEquals(frame.durable, false);
-    assertEquals(frame.correlationId, "run-a");
-    assertEquals(frame.causationId, messageEvent.id);
-    await frames.cancel();
-
     const recovery = await fixture.engine.recover({ namespace: "tenant-a" });
     assertEquals(recovery.failures, []);
     assertEquals(recovery.handles.length, 1);
@@ -291,9 +261,9 @@ Deno.test("factory engine scopes typed processor capabilities and deduplicates r
       "input:Hello engine",
     );
 
-    const audits = await fixture.engine.collections.get("engine_audit").list(
-      "tenant-a",
-    );
+    const audits = await fixture.engine.collections.withScope({
+      namespace: "tenant-a",
+    }).engine_audit.list();
     assertEquals(audits.length, 1);
     assertEquals(audits[0].id, `audit:${messageEvent.id}`);
     const events = await fixture.engine.events.list({ namespace: "tenant-a" });
@@ -368,13 +338,11 @@ Deno.test("engine shutdown releases only its worker and leaves injected infrastr
 Deno.test("one engine isolates lazy physical-schema repository scopes", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   const session = createSqlSession(db);
-  const handledSchemas: string[] = [];
-  const processor = defineProcessor<CopilotzProcessorContext>({
+  const processor = defineProcessor<ProcessorContext>({
     id: "engine.scope.audit",
     on: [{ eventType: "thread.created" }],
     async handle(event, context) {
       if (!event.durable) throw new Error("Expected a durable event.");
-      handledSchemas.push(context.databaseSchema);
       await context.collections.engineAudit.create({
         id: `audit:${event.subject?.id}`,
         sourceEventId: event.id,
@@ -401,12 +369,12 @@ Deno.test("one engine isolates lazy physical-schema repository scopes", async ()
     await provisionCopilotzSchema(session, "copilotz_scope_b");
     const first = await engine.databaseScope("copilotz_scope_a");
     const second = await engine.databaseScope("copilotz_scope_b");
-    await first.collectionRuntime.withScope({ namespace: "tenant" }).thread
+    await first.collections.withScope({ namespace: "tenant" }).thread
       .create({
         id: "same-thread",
         status: "first",
       });
-    await second.collectionRuntime.withScope({ namespace: "tenant" }).thread
+    await second.collections.withScope({ namespace: "tenant" }).thread
       .create({
         id: "same-thread",
         status: "second",
@@ -428,31 +396,29 @@ Deno.test("one engine isolates lazy physical-schema repository scopes", async ()
     }
 
     assertEquals(
-      (await first.collectionRuntime.withScope({ namespace: "tenant" }).thread
+      (await first.collections.withScope({ namespace: "tenant" }).thread
         .get({ id: "same-thread" }))?.status,
       "first",
     );
     assertEquals(
-      (await second.collectionRuntime.withScope({ namespace: "tenant" }).thread
+      (await second.collections.withScope({ namespace: "tenant" }).thread
         .get({ id: "same-thread" }))?.status,
       "second",
     );
     assertEquals(
-      (await first.collections.get("engine_audit").list("tenant")).map(
-        (row) => row.id,
-      ),
+      (await first.collections.withScope({ namespace: "tenant" }).engine_audit
+        .list()).map(
+          (row) => row.id,
+        ),
       ["audit:same-thread"],
     );
     assertEquals(
-      (await second.collections.get("engine_audit").list("tenant")).map(
-        (row) => row.id,
-      ),
+      (await second.collections.withScope({ namespace: "tenant" }).engine_audit
+        .list()).map(
+          (row) => row.id,
+        ),
       ["audit:same-thread"],
     );
-    assertEquals(handledSchemas.sort(), [
-      "copilotz_scope_a",
-      "copilotz_scope_b",
-    ]);
     assertEquals(engine.execution.ownership, "private_hypervisor");
   } finally {
     await engine.shutdown();

@@ -9,7 +9,8 @@ Deno.test("channel runtime bootstraps identities from collections, not conversat
     new URL("./identity.ts", import.meta.url),
   );
   assertEquals(identity.includes("application.conversation"), false);
-  assertEquals(identity.includes("collectionRuntime"), true);
+  assertEquals(identity.includes("collectionRuntime"), false);
+  assertEquals(identity.includes("application.collections"), true);
   const helpers = await Deno.readTextFile(
     new URL("./helpers.ts", import.meta.url),
   );

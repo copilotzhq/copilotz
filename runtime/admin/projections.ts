@@ -1,6 +1,5 @@
 import type { ResolvedContent } from "../content/index.ts";
-import type { CollectionRecord } from "../domain/index.ts";
-import type { DurableEvent } from "../events/index.ts";
+import type { CollectionRecord } from "../collections/index.ts";
 import type { ActionContext } from "../actions/index.ts";
 import type { AdminRequest } from "./types.ts";
 
@@ -122,29 +121,6 @@ export async function allMessages(
   threadId: string,
 ): Promise<readonly CollectionRecord[]> {
   return await allCollectionRecords(context, "message", { threadId });
-}
-
-export async function allEvents(
-  context: AdminQueryContext,
-  options: {
-    threadId?: string;
-    correlationId?: string;
-    afterPosition?: string;
-  } = {},
-): Promise<readonly DurableEvent[]> {
-  const result: DurableEvent[] = [];
-  let afterPosition = options.afterPosition;
-  do {
-    const page = await context.events.list({
-      threadId: options.threadId,
-      correlationId: options.correlationId,
-      afterPosition,
-      limit: 1_000,
-    });
-    result.push(...page);
-    afterPosition = page.length === 1_000 ? page.at(-1)?.position : undefined;
-  } while (afterPosition);
-  return Object.freeze(result);
 }
 
 export async function allCollectionRecords(

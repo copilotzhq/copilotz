@@ -1,4 +1,10 @@
 import type {
+  RuntimeActionCallers,
+  RuntimeCollections,
+  RuntimeContext,
+  RuntimeContextNamespaces,
+} from "../actions/types.ts";
+import type {
   CopilotzEvent,
   EventRouting,
   EventSubject,
@@ -8,7 +14,13 @@ import type {
 /** Determines whether durable work participates in its triggering scope. */
 export type ProcessorSettlement = "inherit" | "detached";
 
-export type ProcessorContext = Record<string, unknown>;
+/** The same complete composed runtime context supplied to every Processor. */
+export type ProcessorContext<
+  TResources extends RuntimeContextNamespaces = RuntimeContextNamespaces,
+  TAdapters extends RuntimeContextNamespaces = RuntimeContextNamespaces,
+  TActions extends RuntimeActionCallers = RuntimeActionCallers,
+  TCollections extends RuntimeCollections = RuntimeCollections,
+> = RuntimeContext<TResources, TAdapters, TActions, TCollections>;
 
 /** One OR-entry. Fields inside the entry are AND. */
 export type ProcessorMatchClause = Readonly<{

@@ -68,8 +68,8 @@ async function revise(
     context,
     "revision-content",
   );
-  return await context.transaction(async (tx) => {
-    const created = await tx.collections.message.create({
+  const created = await context.transaction(async (tx) => {
+    const createdRef = await tx.collections.message.create({
       id,
       threadId,
       senderId: sender.id,
@@ -100,11 +100,23 @@ async function revise(
       },
     }, { threadId });
     return Object.freeze({
-      message: created,
+      messageId: createdRef.id,
       rootMessageId: revision.rootMessageId,
       previousRevisionMessageId: previous.id,
       revisionIndex: revision.revisionIndex,
     });
+  });
+  const message = await context.collections.message.get({
+    id: created.messageId,
+  });
+  if (!message) {
+    throw new Error(`Message revision '${created.messageId}' was not created.`);
+  }
+  return Object.freeze({
+    message,
+    rootMessageId: created.rootMessageId,
+    previousRevisionMessageId: created.previousRevisionMessageId,
+    revisionIndex: created.revisionIndex,
   });
 }
 

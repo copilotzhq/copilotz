@@ -13,13 +13,6 @@ import {
   maintainProgressiveBodies,
 } from "../content/index.ts";
 import {
-  createDomainRelationRepository,
-  createEventCollections,
-  type DomainRelationRepository,
-  type EventCollections,
-  projectDomainRelation,
-} from "../domain/index.ts";
-import {
   type ActionContextBindings,
   createActionLifecycleAppender,
   createActionLifecycleLoader,
@@ -31,10 +24,7 @@ import {
   createEventCoordinator,
   createEventStore,
   type EventCoordinator,
-  type EventRouting,
   type EventStore,
-  type EventVisibility,
-  type SqlExecutor,
   waitForCopilotzEvent,
 } from "../events/index.ts";
 import type {
@@ -42,7 +32,6 @@ import type {
   LiveEventDispatchHandle,
 } from "../execution/index.ts";
 import {
-  activeCollectionTransaction,
   type CollectionDefinition,
   type CollectionRuntime,
   createCollectionRuntime,
@@ -51,10 +40,6 @@ import type {
   PluginRegistry,
   TransientProcessorSet,
 } from "../plugins/index.ts";
-import {
-  createScheduledJobTrigger,
-  type ScheduledJobTrigger,
-} from "../schedules/index.ts";
 import type {
   CopilotzEngineDatabaseScope,
   CopilotzEngineMaintenanceResult,
@@ -63,11 +48,7 @@ import type {
 
 export type DatabaseScopeCapabilities = Readonly<{
   assets: DatabaseAssetRepository;
-  session: SqlExecutor;
-  collections: EventCollections;
-  relations: DomainRelationRepository;
-  schedules: ScheduledJobTrigger;
-  collectionRuntime: CollectionRuntime;
+  collections: CollectionRuntime;
   streamBodyStore: BodyStore;
 }>;
 
@@ -153,7 +134,7 @@ export function createDatabaseScope(
     authorize: engine.authorizeContent,
     digest: engine.digest,
   });
-  const collectionRuntime = createCollectionRuntime({
+  const collections = createCollectionRuntime({
     coordinator,
     session: engine.session,
     eventStore: store,
@@ -161,27 +142,9 @@ export function createDatabaseScope(
     createId: engine.createId,
     now: options.now,
   });
-  const collections = createEventCollections({
-    registry: options.registry,
-    coordinator,
-    session: engine.session,
-    readExecutor: () =>
-      activeCollectionTransaction(collectionRuntime) ?? engine.session,
-    eventStore: store,
-    assets,
-    validate: engine.validateCollection,
-    createId: engine.createId,
-    now: engine.now,
-  });
   for (const resource of Object.values(options.registry.collections)) {
-    if (isKernelCollection(resource)) collectionRuntime.bind(resource);
+    if (isKernelCollection(resource)) collections.bind(resource);
   }
-  const relations = createDomainRelationRepository({
-    coordinator,
-    session: engine.session,
-    eventStore: store,
-    createId: engine.createId,
-  });
   const actionLifecycleAppender = createActionLifecycleAppender({
     coordinator,
   });
@@ -197,9 +160,7 @@ export function createDatabaseScope(
     .freeze({
       plugins: options.registry,
       collections,
-      collectionRuntime,
       now: options.now,
-      contentResolver: resolver,
       content: (namespace) =>
         Object.freeze({
           resolver,
@@ -208,24 +169,22 @@ export function createDatabaseScope(
             store: streamBodyStore,
             createId: engine.createId,
             async onOpen(output) {
-              if (!output.threadId) return;
               const event = createEphemeralEvent({
                 type: "stream.output",
                 namespace,
-                threadId: output.threadId,
                 streamId: output.id,
                 payload: {
                   streamId: output.id,
                   mediaType: output.mediaType,
+                  kind: output.kind,
                   role: output.role,
-                  ...(output.participantId
-                    ? { participantId: output.participantId }
+                  ...(output.name ? { name: output.name } : {}),
+                  ...(output.alt ? { alt: output.alt } : {}),
+                  ...(output.language ? { language: output.language } : {}),
+                  ...(output.disposition
+                    ? { disposition: output.disposition }
                     : {}),
                 },
-                routing: output.routing as EventRouting | undefined,
-                visibility:
-                  (output.visibility as EventVisibility | undefined) ??
-                    { kind: "public" },
                 correlationId: output.correlationId ??
                   `content-stream:${output.id}`,
                 metadata: {
@@ -247,20 +206,10 @@ export function createDatabaseScope(
             }),
           materialize: (input, materializeOptions = {}) =>
             assets.materialize({
-              transaction: activeCollectionTransaction(collectionRuntime) ??
-                engine.session,
-              tables: store.tables,
-            }, {
               namespace,
               content: input,
               origin: materializeOptions.origin,
             }),
-          linkOwner: (ownerId, content) =>
-            assets.linkOwner({
-              transaction: activeCollectionTransaction(collectionRuntime) ??
-                engine.session,
-              tables: store.tables,
-            }, { namespace, ownerId, content }),
           publish: (input, publishOptions) =>
             assets.publish({
               ...input,
@@ -274,42 +223,14 @@ export function createDatabaseScope(
           resolveMany: (refs) => resolver.getMany(refs, { namespace }),
           open: (ref) => resolver.open(ref, { namespace }),
         }),
-      events: {
-        list: (listOptions) => store.listEvents(listOptions),
-      },
       actionLifecycle: {
         append: actionLifecycleAppender,
         load: createActionLifecycleLoader({ store }),
       },
-      deliveries: {
-        list: (listOptions) => store.listDeliveries(listOptions),
-      },
-      relations: {
-        list: (listOptions) => relations.list(listOptions),
-        upsert: (input) => {
-          const tx = activeCollectionTransaction(collectionRuntime);
-          if (!tx) {
-            throw new Error(
-              "Action transaction relation projection requires an active transaction.",
-            );
-          }
-          return projectDomainRelation(tx, store.tables, input);
-        },
-      },
     });
-  const schedules = createScheduledJobTrigger({
-    collectionRuntime,
-    session: engine.session,
-    eventStore: store,
-    now: options.now,
-  });
   const capabilities: DatabaseScopeCapabilities = Object.freeze({
     assets,
-    session: engine.session,
     collections,
-    relations,
-    schedules,
-    collectionRuntime,
     streamBodyStore,
   });
   const attachmentRuntime = createAttachmentRuntime({
@@ -320,7 +241,7 @@ export function createDatabaseScope(
     assets,
     eventHub: options.eventHub,
     executor: options.executor,
-    collectionRuntime,
+    collections,
     transients: options.transients,
     actionBindings,
     streamBodyStore,
@@ -402,7 +323,7 @@ export function createDatabaseScope(
       consumerIds: maintenanceOptions.consumerIds,
       limit: maintenanceOptions.limit,
     });
-    const compacted = await store.compact({
+    const compacted = await store.compactDeliveries({
       retentionMs: maintenanceOptions.retentionMs,
       now: maintenanceOptions.now,
       limit: maintenanceOptions.limit,
@@ -428,9 +349,6 @@ export function createDatabaseScope(
     databaseSchema,
     content: Object.freeze({ assets, preparer: options.preparer, resolver }),
     collections,
-    collectionRuntime,
-    relations,
-    schedules,
     connect(input) {
       return attachmentRuntime.connect({
         ...input,

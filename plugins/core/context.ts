@@ -1,9 +1,9 @@
 import type {
   ActionCaller,
   ActionContext,
-  ActionContextNamespaces,
+  RuntimeContextNamespaces,
 } from "@copilotz/copilotz/actions";
-import type { CopilotzProcessorContext } from "@copilotz/copilotz/engine";
+import type { ProcessorContext } from "@copilotz/copilotz/plugins";
 import type { LlmResource } from "@copilotz/copilotz/llm";
 import type {
   Agent,
@@ -20,7 +20,7 @@ import type {
 import type { executeToolBatchAction } from "./resources/actions/tool.ts";
 
 export type CoreResources =
-  & ActionContextNamespaces
+  & RuntimeContextNamespaces
   & Readonly<{
     agents: Readonly<Record<string, Agent | undefined>>;
     tools: Readonly<Record<string, Tool | undefined>>;
@@ -30,7 +30,7 @@ export type CoreResources =
   }>;
 
 export type CoreAdapters =
-  & ActionContextNamespaces
+  & RuntimeContextNamespaces
   & Readonly<{
     llm: Readonly<Record<string, LlmResource | undefined>>;
   }>;
@@ -41,7 +41,7 @@ export type CoreComposedContext = Readonly<{
 }>;
 
 export type CoreWorkflowContext =
-  & CopilotzProcessorContext
+  & ProcessorContext
   & Readonly<{
     agents: CoreResources["agents"];
     tools: CoreResources["tools"];
@@ -49,19 +49,18 @@ export type CoreWorkflowContext =
     apis: CoreResources["apis"];
     mcp: CoreResources["mcp"];
     llm: CoreAdapters["llm"];
-    embeddings: ActionContextNamespaces[string];
-    promptContext: ActionContextNamespaces[string];
-    memoryKinds: ActionContextNamespaces[string];
+    embeddings: RuntimeContextNamespaces[string];
+    promptContext: RuntimeContextNamespaces[string];
+    memoryKinds: RuntimeContextNamespaces[string];
   }>;
 
 /** Runtime capabilities plus the composed namespaces used by Core semantics. */
 export type CoreActionContext =
   & ActionContext
-  & CopilotzProcessorContext
   & CoreComposedContext;
 
 export type CoreProcessorContext =
-  & Omit<CopilotzProcessorContext, "actions">
+  & Omit<ProcessorContext, "actions">
   & CoreComposedContext
   & Readonly<{
     actions: Readonly<{

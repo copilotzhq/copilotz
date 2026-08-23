@@ -1,7 +1,7 @@
 import { assertEquals, assertRejects, assertThrows } from "@std/assert";
 import type { Agent } from "../resources/index.ts";
 import type { ConversationThread, Participant } from "../domain/index.ts";
-import type { CopilotzProcessorContext } from "../engine/index.ts";
+import type { ProcessorContext } from "../plugins/index.ts";
 import {
   collectContextContributions,
   defineContextResource,
@@ -37,17 +37,20 @@ const thread = {
 
 function context(
   resources: readonly ReturnType<typeof defineContextResource>[],
-): CopilotzProcessorContext {
+): ProcessorContext {
   return {
+    namespace: "tenant-a",
+    operationKey: "delivery-a",
+    identity: { deduplicationId: "delivery-a" },
     resources: {
       promptContext: Object.fromEntries(
         resources.map((resource) => [resource.id, resource]),
       ),
     },
     adapters: {},
+    actions: {},
     collections: { workspace: {} },
     signal: new AbortController().signal,
-    idempotencyKey: "delivery-a",
     content: {
       resolve: () =>
         Promise.resolve({
@@ -61,7 +64,9 @@ function context(
           },
         }),
     },
-  } as unknown as CopilotzProcessorContext;
+    now: () => new Date("2026-08-14T00:00:00.000Z"),
+    transaction: () => Promise.reject(new Error("Not used by this fixture.")),
+  } as unknown as ProcessorContext;
 }
 
 Deno.test("context resources are purpose-scoped, ordered, and receive stable capabilities", async () => {

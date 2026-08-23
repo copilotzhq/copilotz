@@ -132,7 +132,6 @@ const EPHEMERAL_TYPES = Object.freeze([
 const UNSUPPORTED_UPGRADE_MARKERS = Object.freeze([
   "asset_bodies",
   "asset_body_staging",
-  "body_references",
   "content_bodies",
   "content_parts",
   "event_bodies",
@@ -1901,7 +1900,7 @@ async function normalizeToolExecutions(
     await transaction.query(
       `UPDATE ${qualified(schema, "nodes")}
        SET content = NULL, data = $3::jsonb,
-         source_type = 'tool_call', source_id = $4
+         source_type = NULL, source_id = NULL
        WHERE namespace = $1 AND id = $2 AND type = 'tool_execution'`,
       [
         row.namespace,
@@ -1935,7 +1934,6 @@ async function normalizeToolExecutions(
             },
           },
         }),
-        JSON.stringify([threadId, toolCallId]),
       ],
     );
     for (

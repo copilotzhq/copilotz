@@ -9,7 +9,7 @@ import type {
   ConversationThread,
   Participant,
 } from "../domain/index.ts";
-import type { CopilotzProcessorContext } from "../engine/index.ts";
+import type { ProcessorContext } from "../plugins/index.ts";
 import {
   listThreadMessageRecords,
   loadThreadRecord,
@@ -61,7 +61,7 @@ async function resolveInstructions(
   thread: ConversationThread,
   userMetadata: Readonly<Record<string, unknown>> | undefined,
   sourceEvent: CopilotzEvent,
-  context: CopilotzProcessorContext,
+  context: ProcessorContext,
 ): Promise<string | null> {
   const baseInstructions = agent.instructions ?? null;
   const resolved = await options.resolveAgentInstructions?.({
@@ -90,7 +90,7 @@ function agentForParticipant(
 }
 
 function grantedSkills(
-  context: CopilotzProcessorContext,
+  context: ProcessorContext,
   agent: Agent,
 ): readonly Skill[] {
   return resolveSkillGrants(
@@ -255,7 +255,7 @@ function systemPrompt(
 }
 
 async function promptContext(
-  context: CopilotzProcessorContext,
+  context: ProcessorContext,
   input: Readonly<{
     purpose: ContextPurpose;
     agent: Agent;
@@ -338,7 +338,7 @@ function selectedRawMessages(
 
 /** Builds one immutable, participant-relative text prompt snapshot. */
 export async function buildAgentTextPrompt(
-  context: CopilotzProcessorContext,
+  context: ProcessorContext,
   input: Readonly<{
     options: CreateTextWorkflowPluginOptions;
     agent: Agent;

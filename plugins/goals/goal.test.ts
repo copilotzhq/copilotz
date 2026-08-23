@@ -6,11 +6,11 @@ import { createTestDomainContext } from "../../runtime/testing/domain-context.ts
 import type { Agent } from "../../runtime/resources/index.ts";
 import { createCopilotzApplication } from "../../runtime/application/index.ts";
 import type { CopilotzApplication } from "../../runtime/application/index.ts";
-import type { CopilotzProcessorContext } from "../../runtime/engine/index.ts";
 import {
   type CopilotzPlugin,
   definePlugin,
   defineProcessor,
+  type ProcessorContext,
 } from "../../runtime/plugins/index.ts";
 import {
   loadMessageRecord,
@@ -48,7 +48,7 @@ type GoalTestActions = Pick<
 >;
 
 async function messageText(
-  context: CopilotzProcessorContext,
+  context: ProcessorContext,
   messageId: string,
 ): Promise<string> {
   const message = await loadMessageRecord(context, messageId);
@@ -58,7 +58,7 @@ async function messageText(
 }
 
 function scriptedGoalPlugin(mode: ScriptMode = "normal"): CopilotzPlugin {
-  const processor = defineProcessor<CopilotzProcessorContext>({
+  const processor = defineProcessor<ProcessorContext>({
     id: `fixture.goal-script.${mode}`,
     on: [{ eventType: "message.created" }],
     async handle(event, context) {
@@ -89,19 +89,14 @@ function scriptedGoalPlugin(mode: ScriptMode = "normal"): CopilotzPlugin {
             operationKey: "fixture:secret-tool-participant",
             threadId: incoming.threadId,
           });
-        const toolContentRefs = await context.content.materialize(toolContent);
         await context.collections.message.create({
           id: `secret-tool:${incoming.id}`,
           threadId: incoming.threadId,
           senderId: toolSender.id,
           recipientIds: [],
-          content: toolContentRefs,
+          content: toolContent,
           metadata: { historyVisibility: "public_status" },
         }, { operationKey: "fixture:secret-tool-message" });
-        await context.content.linkOwner(
-          `secret-tool:${incoming.id}`,
-          toolContentRefs,
-        );
       }
 
       const answer = agentId === "tested"
@@ -122,18 +117,13 @@ function scriptedGoalPlugin(mode: ScriptMode = "normal"): CopilotzPlugin {
         { type: "text", text: answer },
         { operationKey: "fixture:answer-content" },
       );
-      const answerContent = await context.content.materialize(content);
       await context.collections.message.create({
         id: `answer:${incoming.id}:${agentId}`,
         threadId: incoming.threadId,
         senderId: recipient.id,
         recipientIds: [incoming.sender.id],
-        content: answerContent,
+        content,
       }, { operationKey: "fixture:answer-message" });
-      await context.content.linkOwner(
-        `answer:${incoming.id}:${agentId}`,
-        answerContent,
-      );
     },
   });
   return definePlugin({
@@ -176,7 +166,7 @@ async function createFixture(
   >();
   const goals = createGoalRuntime({
     registry: application.plugins,
-    collectionRuntime: scope.collectionRuntime,
+    collections: scope.collections,
     actions(namespace) {
       const existing = actionsByNamespace.get(namespace);
       if (existing) return existing;

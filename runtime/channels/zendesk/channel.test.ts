@@ -9,12 +9,15 @@ import {
 } from "../../../runtime/testing/projections.ts";
 import type { Agent } from "../../resources/index.ts";
 import { createCopilotzApplication } from "../../application/index.ts";
-import type { CopilotzProcessorContext } from "../../engine/index.ts";
 import {
   loadMessageRecord,
   loadParticipantRecord,
 } from "../../engine/collection-graph.ts";
-import { definePlugin, defineProcessor } from "../../plugins/index.ts";
+import {
+  definePlugin,
+  defineProcessor,
+  type ProcessorContext,
+} from "../../plugins/index.ts";
 import { coreCollectionsPlugin } from "../../../plugins/core/plugin.ts";
 import { createChannelRuntime } from "../runtime.ts";
 import { createZendeskChannel, createZendeskChannelPlugin } from "./index.ts";
@@ -62,7 +65,7 @@ function fakeTransport() {
 }
 
 function replyPlugin() {
-  const processor = defineProcessor<CopilotzProcessorContext>({
+  const processor = defineProcessor<ProcessorContext>({
     id: "zendesk.reply",
     on: [{ eventType: "message.created" }],
     async handle(event, context) {
@@ -75,16 +78,6 @@ function replyPlugin() {
         input.recipientIds[0],
       );
       assertExists(recipient);
-      await context.events.emit({
-        type: "action.created",
-        payload: {
-          content: "Choose",
-          action: {
-            type: "reply_buttons",
-            content: [{ text: "Continue", payload: "continue" }],
-          },
-        },
-      });
       const content = await context.content.prepare([
         "Zendesk reply",
         {
@@ -94,15 +87,20 @@ function replyPlugin() {
           name: "reply.png",
         },
       ], { operationKey: "zendesk-reply-content" });
-      const persisted = await context.content.materialize(content);
       await context.collections.message.create({
         id: `reply:${input.id}`,
         threadId: input.threadId,
         senderId: recipient.id,
         recipientIds: [input.sender.id],
-        content: persisted,
+        content,
+        metadata: {
+          action: {
+            type: "reply_buttons",
+            message: "Choose",
+            content: [{ text: "Continue", payload: "continue" }],
+          },
+        },
       }, { operationKey: "zendesk-reply-message" });
-      await context.content.linkOwner(`reply:${input.id}`, persisted);
     },
   });
   return definePlugin({
@@ -173,10 +171,10 @@ Deno.test("Zendesk channel preserves webhook identity, media, actions, and nativ
       fake.sends.map((value) =>
         (value.content as Record<string, unknown>).type
       ),
-      ["text", "text", "image"],
+      ["text", "image", "text"],
     );
     assertEquals(
-      (fake.sends[0].content as Record<string, unknown>).actions,
+      (fake.sends[2].content as Record<string, unknown>).actions,
       [{ type: "reply", text: "Continue", payload: "continue" }],
     );
     const thread = await projectThreadByExternalId(

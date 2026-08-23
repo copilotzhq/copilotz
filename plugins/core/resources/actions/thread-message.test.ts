@@ -26,6 +26,26 @@ Deno.test("createThreadMessage ensures participant, membership, and message atom
       }],
     }, { identity: { deduplicationId: "thread-a:create" } });
     assertEquals(typeof context.transaction, "function");
+
+    await context.actions.createThreadMessage(
+      {
+        id: "message-human",
+        threadId: "thread-a",
+        sender: {
+          id: "human-a",
+          externalId: "human-a",
+          participantType: "human",
+        },
+        content: "Already a member",
+      },
+      { operationKey: "thread-message:existing-member" },
+    );
+    assertEquals(
+      (await application.events.list({ namespace: NAMESPACE, limit: 100 }))
+        .filter((event) => event.type === "thread.updated").length,
+      0,
+    );
+
     const created = await context.actions.createThreadMessage(
       {
         id: "message-job",
@@ -44,7 +64,7 @@ Deno.test("createThreadMessage ensures participant, membership, and message atom
     assertEquals(created.id, "message-job");
     assertEquals(created.threadId, "thread-a");
 
-    const collections = application.collectionRuntime.withScope({
+    const collections = application.collections.withScope({
       namespace: NAMESPACE,
     });
     const sender = await collections.participant.queries.byExternalId({
@@ -63,6 +83,11 @@ Deno.test("createThreadMessage ensures participant, membership, and message atom
     const message = await collections.message.get({ id: "message-job" });
     assertEquals(message?.senderId, created.senderId);
     assertEquals(message?.metadata, { kind: "fixture" });
+    assertEquals(
+      (await application.events.list({ namespace: NAMESPACE, limit: 100 }))
+        .filter((event) => event.type === "thread.updated").length,
+      1,
+    );
   } finally {
     await application.shutdown();
     await db.close();

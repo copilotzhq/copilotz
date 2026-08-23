@@ -168,32 +168,11 @@ async function closeFixture(fixture: Fixture): Promise<void> {
 }
 
 function boundCollection(engine: CopilotzEngine, name: string) {
-  const collection = engine.collectionRuntime.get(name);
+  const collection = engine.collections.get(name);
   if (!collection) {
     throw new Error(`Collection '${name}' is not bound.`);
   }
   return collection;
-}
-
-async function persistPreparedContent(
-  engine: CopilotzEngine,
-  prepared: Awaited<
-    ReturnType<CopilotzEngine["content"]["preparer"]["prepare"]>
-  >,
-) {
-  for (const asset of prepared.assets) {
-    if (await engine.content.assets.get(asset.namespace, asset.id)) continue;
-    await engine.content.assets.publish({
-      namespace: asset.namespace,
-      id: asset.id,
-      mediaType: asset.mediaType,
-      body: asset.body,
-      ...(asset.idempotencyKey ? { idempotencyKey: asset.idempotencyKey } : {}),
-      ...(asset.origin ? { origin: asset.origin } : {}),
-      ...(asset.metadata ? { metadata: { ...asset.metadata } } : {}),
-    });
-  }
-  return prepared.content;
 }
 
 async function startRun(fixture: Fixture, text: string) {
@@ -231,7 +210,7 @@ async function startRun(fixture: Fixture, text: string) {
     threadId: "thread-a",
     senderId: "user-a",
     recipientIds: ["agent-a"],
-    content: await persistPreparedContent(fixture.engine, content),
+    content,
     metadata: {},
   }, {
     namespace,

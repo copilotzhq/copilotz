@@ -5,10 +5,9 @@ import { createCopilotzEngine } from "../../runtime/engine/index.ts";
 import { createPluginRegistry } from "../../runtime/plugins/index.ts";
 import { createTestDatabase } from "../../runtime/testing/ominipg.ts";
 import { coreCollectionsPlugin } from "./plugin.ts";
-import { threadCollection } from "./resources/collections/thread.ts";
 import { createTestDomainContext } from "../../runtime/testing/domain-context.ts";
 
-Deno.test("thread replay preserves activity cursors derived from thread-scoped events", async () => {
+Deno.test("thread replay does not derive mutable state from related Events", async () => {
   const namespace = "tenant-thread-replay-cursor";
   const db = await createTestDatabase({ url: ":memory:" });
   const engine = await createCopilotzEngine({
@@ -43,14 +42,14 @@ Deno.test("thread replay preserves activity cursors derived from thread-scoped e
     })).find((event) => event.subject?.id === "message-a");
     assertExists(messageEvent);
     const before = await domain.collections.thread.get({ id: "thread-a" });
-    assertEquals(before?.lastEventId, messageEvent.id);
-    assertEquals(before?.lastEventPosition, messageEvent.position);
+    assertEquals(before?.lastEventId, undefined);
+    assertEquals(before?.lastEventPosition, undefined);
 
-    await engine.collectionRuntime.rebuild(threadCollection, namespace);
+    await engine.collections.rebuild(namespace);
 
     const rebuilt = await domain.collections.thread.get({ id: "thread-a" });
-    assertEquals(rebuilt?.lastEventId, messageEvent.id);
-    assertEquals(rebuilt?.lastEventPosition, messageEvent.position);
+    assertEquals(rebuilt?.lastEventId, undefined);
+    assertEquals(rebuilt?.lastEventPosition, undefined);
   } finally {
     await engine.shutdown();
     await db.close();

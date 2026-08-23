@@ -1,7 +1,7 @@
 import { assertEquals } from "@std/assert";
 
-import type { CopilotzProcessorContext } from "../engine/index.ts";
-import type { EphemeralEvent } from "../events/index.ts";
+import type { CopilotzEvent } from "../events/index.ts";
+import type { ProcessorContext } from "../plugins/index.ts";
 import type { WorkflowTool } from "./types.ts";
 import { createWorkflowToolExecutor } from "./executor.ts";
 import { createContentPreparer } from "../content/index.ts";
@@ -11,12 +11,11 @@ function fixture(
 ): Readonly<{
   run: ReturnType<typeof createWorkflowToolExecutor>;
   tool: WorkflowTool;
-  context: CopilotzProcessorContext;
-  events: EphemeralEvent[];
+  context: ProcessorContext;
+  sourceEvent: CopilotzEvent;
   chunks: Array<Record<string, unknown>>;
   finalized: () => number;
 }> {
-  const events: EphemeralEvent[] = [];
   const chunks: Array<Record<string, unknown>> = [];
   let finalized = 0;
   const tool: WorkflowTool = {
@@ -63,45 +62,34 @@ function fixture(
         return Promise.resolve();
       },
     });
+  const sourceEvent: CopilotzEvent = {
+    durable: true,
+    id: "event-a",
+    position: "1",
+    schemaVersion: 1,
+    type: "copilotz.core.tool.call.invoked",
+    namespace: "tenant-a",
+    threadId: "thread-a",
+    payload: {},
+    routing: { senderId: "agent-a" },
+    visibility: {
+      kind: "tool",
+      policy: "public_status",
+      requesterId: "agent-a",
+    },
+    metadata: {},
+    correlationId: "correlation-a",
+    createdAt: "2026-08-13T12:00:00.000Z",
+  };
   const context = {
     namespace: "tenant-a",
-    databaseSchema: "copilotz_test",
+    operationKey: "delivery-a",
+    identity: {
+      causationId: sourceEvent.id,
+      correlationId: sourceEvent.correlationId,
+      deduplicationId: "delivery-a",
+    },
     signal: new AbortController().signal,
-    idempotencyKey: "delivery-a",
-    event: {
-      durable: true,
-      id: "event-a",
-      position: "1",
-      schemaVersion: 1,
-      type: "tool_execution.created",
-      namespace: "tenant-a",
-      threadId: "thread-a",
-      payload: {},
-      routing: { senderId: "agent-a" },
-      visibility: {
-        kind: "tool",
-        policy: "public_status",
-        requesterId: "agent-a",
-      },
-      metadata: {},
-      correlationId: "correlation-a",
-      createdAt: "2026-08-13T12:00:00.000Z",
-    },
-    events: {
-      emit(input: Record<string, unknown>) {
-        events.push({
-          durable: false,
-          namespace: "tenant-a",
-          correlationId: "correlation-a",
-          routing: {},
-          visibility: { kind: "public" },
-          metadata: {},
-          createdAt: "2026-08-13T12:00:00.000Z",
-          ...input,
-        } as EphemeralEvent);
-        return Promise.resolve(events.at(-1)!);
-      },
-    },
     resources: {
       agents: {},
       tools: { terminal: tool },
@@ -110,11 +98,7 @@ function fixture(
       skills: {},
     },
     adapters: { llm: {} },
-    conversation: {
-      getParticipant: () =>
-        Promise.resolve({ id: "agent-a", externalId: "north" }),
-      getThread: () => Promise.resolve({ participants: [] }),
-    },
+    actions: {},
     collections: {},
     content: {
       prepare: (
@@ -137,12 +121,14 @@ function fixture(
           },
         }),
     },
-  } as unknown as CopilotzProcessorContext;
+    now: () => new Date("2026-08-13T12:00:00.000Z"),
+    transaction: () => Promise.reject(new Error("Not used by this fixture.")),
+  } as unknown as ProcessorContext;
   return Object.freeze({
     run: createWorkflowToolExecutor({ openStream }),
     tool,
     context,
-    events,
+    sourceEvent,
     chunks,
     finalized: () => finalized,
   });
@@ -169,10 +155,10 @@ Deno.test("tool executor orders explicit output chunks and emits a final result 
     availableTools: [test.tool],
     arguments: {},
     context: test.context,
+    sourceEvent: test.sourceEvent,
   });
 
   assertEquals(outcome.status, "completed");
-  assertEquals(test.events, []);
   assertEquals(test.finalized(), 1);
   assertEquals(test.chunks, [{
     channel: "stdout",
@@ -209,6 +195,7 @@ Deno.test("automatic tool output extracts nested data URLs before streaming", as
     availableTools: [test.tool],
     arguments: {},
     context: test.context,
+    sourceEvent: test.sourceEvent,
   });
   assertEquals(outcome.status, "completed");
   if (outcome.status !== "completed") return;
@@ -252,9 +239,9 @@ Deno.test("an explicit result channel prevents duplicate automatic output", asyn
     availableTools: [test.tool],
     arguments: {},
     context: test.context,
+    sourceEvent: test.sourceEvent,
   });
 
-  assertEquals(test.events.length, 0);
   assertEquals(test.chunks.length, 1);
   assertEquals(test.chunks[0], {
     channel: "result",
@@ -282,10 +269,10 @@ Deno.test("large returned values remain on the asset-backed durable path", async
     availableTools: [test.tool],
     arguments: {},
     context: test.context,
+    sourceEvent: test.sourceEvent,
   });
 
   assertEquals(outcome.status, "completed");
-  assertEquals(test.events, []);
   assertEquals(test.chunks, []);
 });
 
@@ -319,13 +306,13 @@ Deno.test("tool result envelopes keep attachment bytes off the live result chann
     availableTools: [test.tool],
     arguments: {},
     context: test.context,
+    sourceEvent: test.sourceEvent,
   });
 
   assertEquals(outcome.status, "completed");
   if (outcome.status !== "completed") throw new Error("Expected completion");
   assertEquals(outcome.output, output);
   assertEquals(outcome.attachments, [attachment]);
-  assertEquals(test.events.length, 0);
   assertEquals(test.chunks.length, 1);
   assertEquals(test.chunks[0], {
     channel: "result",
@@ -372,6 +359,7 @@ Deno.test("tool asset resolution accepts namespace-qualified canonical refs", as
     availableTools: [test.tool],
     arguments: {},
     context: test.context,
+    sourceEvent: test.sourceEvent,
   });
 
   assertEquals(outcome.status, "completed");

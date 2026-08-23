@@ -18,8 +18,11 @@ import {
 import { createCopilotz } from "../../index.ts";
 import { createTestDatabase, type TestDatabase } from "../testing/ominipg.ts";
 import { createCopilotzApplication } from "../application/index.ts";
-import type { CopilotzProcessorContext } from "../engine/index.ts";
-import { definePlugin, defineProcessor } from "../plugins/index.ts";
+import {
+  definePlugin,
+  defineProcessor,
+  type ProcessorContext,
+} from "../plugins/index.ts";
 import { coreCollectionsPlugin } from "../../plugins/core/plugin.ts";
 import type {
   WorkflowTool,
@@ -48,7 +51,7 @@ async function knowledgeHarness(
   databaseSchema: string,
 ) {
   const scope = await application.databaseScope(databaseSchema);
-  const collections = scope.collectionRuntime.withScope({
+  const collections = scope.collections.withScope({
     namespace: NAMESPACE,
   });
   const actionContext = createTestDomainContext(application, NAMESPACE);
@@ -537,7 +540,7 @@ Deno.test("knowledge source failure settles once as document and Action failure"
 Deno.test("knowledge tools execute through scoped factory capabilities", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   const outputs = new Map<string, unknown>();
-  const driver = defineProcessor<CopilotzProcessorContext>({
+  const driver = defineProcessor<ProcessorContext>({
     id: "fixture.knowledge-tools",
     on: [{ eventType: "fixture.knowledge_tool.requested" }],
     async handle(event, processor) {
@@ -553,7 +556,7 @@ Deno.test("knowledge tools execute through scoped factory capabilities", async (
       const toolContext: WorkflowToolExecutionContext = {
         namespace: processor.namespace,
         correlationId: event.correlationId,
-        idempotencyKey: processor.idempotencyKey,
+        idempotencyKey: processor.operationKey,
         processor,
         execution: {
           id: `execution:${event.id}`,

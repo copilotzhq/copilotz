@@ -12,7 +12,7 @@ import type {
   ConversationThread,
   Participant,
 } from "@copilotz/copilotz/domain";
-import type { CopilotzProcessorContext } from "@copilotz/copilotz/engine";
+import type { ProcessorContext } from "@copilotz/copilotz/plugins";
 import type { CreateTextWorkflowPluginOptions } from "@copilotz/copilotz/llm";
 import type { Agent } from "@copilotz/copilotz/resources";
 import {
@@ -56,7 +56,7 @@ export function stringArray(value: unknown): readonly string[] {
 }
 
 export function requireCollection<T extends CollectionRecord>(
-  context: Pick<CopilotzProcessorContext, "collections">,
+  context: Pick<ProcessorContext, "collections">,
   name: string,
 ): ScopedCollection<T> {
   const bound = context.collections[name] as ScopedCollection<T> | undefined;
@@ -173,7 +173,7 @@ export function preparedContent(
 }
 
 export async function listThreadMessages(
-  context: Pick<CopilotzProcessorContext, "collections">,
+  context: Pick<ProcessorContext, "collections">,
   threadId: string,
 ): Promise<readonly CollectionRecord[]> {
   const threads = requireCollection(context, "thread");
@@ -250,7 +250,7 @@ export function valueContent(value: unknown, role: string): ContentInput {
 }
 
 export async function loadParticipant(
-  context: Pick<CopilotzProcessorContext, "collections">,
+  context: Pick<ProcessorContext, "collections">,
   id: string,
 ): Promise<CollectionRecord | null> {
   return await requireCollection(context, "participant").get({ id });

@@ -265,7 +265,7 @@ async function agentParticipant(
 ): Promise<Participant> {
   const externalId = agent.externalId?.trim() || agent.id;
   const existing = await getParticipantByExternalId(
-    application.collectionRuntime,
+    application.collections,
     namespace,
     externalId,
   );
@@ -277,7 +277,7 @@ async function agentParticipant(
     }
     return existing;
   }
-  return await ensureParticipant(application.collectionRuntime, namespace, {
+  return await ensureParticipant(application.collections, namespace, {
     externalId,
     participantType: "agent",
     agentId: agent.id,
@@ -290,7 +290,7 @@ export async function resolveChannelParticipant(
   namespace: string,
   reference: ChannelParticipantRef,
 ): Promise<Participant> {
-  const runtime = application.collectionRuntime;
+  const runtime = application.collections;
   if (typeof reference === "string") {
     const id = requiredText(reference, "Channel participant");
     const existing = await getParticipant(runtime, namespace, id) ??
@@ -362,7 +362,7 @@ async function resolveThread(
   reference: string | ConversationThread | ChannelThreadInput,
   participants: readonly Participant[],
 ): Promise<ConversationThread> {
-  const runtime = application.collectionRuntime;
+  const runtime = application.collections;
   if (typeof reference === "string") {
     const id = requiredText(reference, "Channel thread");
     const existing = await getThread(runtime, namespace, id) ??
@@ -427,7 +427,7 @@ async function addThreadParticipant(
   if (thread.participants.some((item) => item.id === participant.id)) {
     return thread;
   }
-  await application.collectionRuntime.withScope({ namespace }).thread.update({
+  await application.collections.withScope({ namespace }).thread.update({
     id: thread.id,
     set: {
       participantIds: [
@@ -443,7 +443,7 @@ async function addThreadParticipant(
     },
   });
   const updated = await getThread(
-    application.collectionRuntime,
+    application.collections,
     namespace,
     thread.id,
   );
@@ -536,7 +536,7 @@ export async function loadChannelMessage(
   namespace: string,
   id: string,
 ): Promise<ConversationMessage | null> {
-  const collections = application.collectionRuntime.withScope({ namespace });
+  const collections = application.collections.withScope({ namespace });
   const record = await collections.message.get({ id });
   if (!record) return null;
   const sender = await collections.participant.get({

@@ -8,7 +8,10 @@ import type {
   WorkflowTool,
   WorkflowToolExecutionContext,
 } from "../tools/index.ts";
-import type { DeleteKnowledgeDocumentResult } from "./actions.ts";
+import type {
+  DeleteKnowledgeDocumentResult,
+  KnowledgeActionCallers,
+} from "./actions.ts";
 import { embedKnowledgeTexts } from "./resources.ts";
 import type {
   KnowledgeDocumentSourceInput,
@@ -40,9 +43,22 @@ function processorContext(
   value: WorkflowToolExecutionContext | undefined,
 ): WorkflowToolExecutionContext {
   if (!value?.processor) {
-    throw new Error("This tool requires an event-native Copilotz context.");
+    throw new Error("Knowledge tools require a Processor context.");
   }
   return value;
+}
+
+function knowledgeAction<K extends keyof KnowledgeActionCallers>(
+  context: WorkflowToolExecutionContext,
+  key: K,
+): KnowledgeActionCallers[K] {
+  const action = (context.processor.actions as Partial<KnowledgeActionCallers>)[
+    key
+  ];
+  if (typeof action !== "function") {
+    throw new Error(`Knowledge tool requires the '${key}' Action.`);
+  }
+  return action as KnowledgeActionCallers[K];
 }
 
 function tool(
@@ -327,6 +343,7 @@ export function createSearchKnowledgeTool(
     },
     async execute(raw, value) {
       const ctx = processorContext(value);
+      const searchKnowledge = knowledgeAction(ctx, "searchKnowledge");
       const input = record(raw);
       const query = required(input.query, "Knowledge query");
       const explicitScope = searchScope(input.scope);
@@ -341,7 +358,7 @@ export function createSearchKnowledgeTool(
           idempotencyKey: `${ctx.idempotencyKey}:knowledge-query`,
         },
       );
-      const results = await ctx.processor.actions.searchKnowledge({
+      const results = await searchKnowledge({
         embedding: response.embeddings[0],
         scope: {
           threadId: ctx.execution.threadId,
@@ -413,13 +430,17 @@ export function createDeleteDocumentTool(
     },
     async execute(raw, value) {
       const ctx = processorContext(value);
+      const deleteKnowledgeDocument = knowledgeAction(
+        ctx,
+        "deleteKnowledgeDocument",
+      );
       const input = record(raw);
       const documentId = optional(input.documentId, "Document ID");
       const sourceUri = optional(input.sourceUri, "Document source URI");
       if (Boolean(documentId) === Boolean(sourceUri)) {
         throw new TypeError("Provide exactly one of documentId or sourceUri.");
       }
-      return await ctx.processor.actions.deleteKnowledgeDocument({
+      return await deleteKnowledgeDocument({
         ...(documentId ? { documentId } : {}),
         ...(sourceUri ? { sourceUri } : {}),
       }, {

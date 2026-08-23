@@ -20,7 +20,6 @@ const canonicalEntries = [
   "runtime/knowledge",
   "runtime/memory",
   "runtime/plugins",
-  "runtime/schedules",
   "runtime/skills",
   "runtime/tools",
   "runtime/agents",

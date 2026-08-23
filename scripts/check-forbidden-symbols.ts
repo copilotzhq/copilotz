@@ -51,6 +51,9 @@ const forbidden = [
   "createFeatureInvoker",
   "requireFeatureActions",
   "coreFeatureAliases",
+  "CopilotzProcessorContext",
+  "CopilotzLiveProcessorContext",
+  "ActionContextNamespaces",
   "createV1FetchHandler",
   "createV1SseProjector",
 ] as const;
@@ -88,6 +91,7 @@ function allowed(path: string): boolean {
     path.startsWith("migration/memory-v4/") ||
     path.startsWith("contracts/") ||
     path.endsWith(".test.ts") ||
+    path === "CHANGELOG.md" ||
     path === "docs/migration-v3.md" ||
     path === "docs/v3/downstream-migration.md" ||
     path === "docs/v3/feature-test-parity.md" ||

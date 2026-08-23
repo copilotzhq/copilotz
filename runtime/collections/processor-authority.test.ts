@@ -8,6 +8,7 @@ import {
   relation,
 } from "./index.ts";
 import { createTestDatabase } from "../testing/ominipg.ts";
+import { createTestProcessorContext } from "../testing/processor-context.ts";
 import {
   createCoreSchemaStatements,
   createEventCoordinator,
@@ -88,12 +89,8 @@ Deno.test("static processor uses frozen event body and captures input in a child
         title: String(body.record.title),
         fetched: Object.hasOwn(context, "jobs"),
       });
-      await (context as {
-        transaction: ReturnType<typeof createCollectionRuntime>["transaction"];
-      }).transaction({
-        operationKey: `job-note:${body.record.id}`,
-        namespace: event.namespace,
-        execute: async ({ collections }) => {
+      await context.transaction(
+        async ({ collections }) => {
           await collections.job_note.create({
             id: `note:${body.record.id}`,
             jobId: body.record.id,
@@ -101,9 +98,10 @@ Deno.test("static processor uses frozen event body and captures input in a child
               source: "external",
               title: body.record.title,
             }),
-          }, { namespace: event.namespace });
+          });
         },
-      });
+        { operationKey: `job-note:${body.record.id}` },
+      );
       sideEffects.push(String(body.record.title));
     },
   });
@@ -128,14 +126,39 @@ Deno.test("static processor uses frozen event body and captures input in a child
     store,
     registry,
     workerId: "phase-5-authority",
-    createContext: (base) => ({
-      transaction: (
-        input: Parameters<
-          ReturnType<typeof createCollectionRuntime>["transaction"]
-        >[0],
-      ) => runtime!.transaction(input),
-      ...base,
-    }),
+    createContext: (base) => {
+      const context = createTestProcessorContext(base);
+      const collections = runtime!.withScope({
+        namespace: base.event.namespace,
+        createMutationIdentity: base.createMutationIdentity,
+      });
+      const transaction: typeof context.transaction = async (
+        execute,
+        options = {},
+      ) => {
+        const operationKey = options.operationKey?.trim() ||
+          `processor:${base.idempotencyKey}`;
+        const result = await runtime!.transaction({
+          operationKey,
+          namespace: base.event.namespace,
+          identity: base.createMutationIdentity(
+            operationKey,
+            options.identity?.metadata as Record<string, unknown> | undefined,
+          ),
+          execute: async ({ collections, relations }) =>
+            await execute(Object.freeze({
+              collections,
+              relations,
+            })),
+        });
+        return result.value;
+      };
+      return Object.freeze({
+        ...context,
+        collections,
+        transaction,
+      });
+    },
   });
   const coordinator = createEventCoordinator({ store, registry, executor });
   let nextId = 0;
@@ -156,10 +179,11 @@ Deno.test("static processor uses frozen event body and captures input in a child
         const job = await collections.job.create({
           id: "job-a",
           title: "original",
-        }, { namespace: NAMESPACE });
-        await collections.job.update("job-a", {
+        });
+        await collections.job.update({
+          id: "job-a",
           set: { title: "later" },
-        }, { namespace: NAMESPACE });
+        });
         return job;
       },
     });

@@ -37,6 +37,7 @@ Deno.test({
       assertEquals(
         tables.rows.map((row) => row.table_name),
         [
+          "copilotz_schema_metadata",
           "edges",
           "event_bodies",
           "event_deliveries",

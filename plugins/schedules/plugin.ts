@@ -66,7 +66,7 @@ export const scheduledJobsTickInputProcessor: Processor<
 });
 
 export const SCHEDULES_PLUGIN_ID = "@copilotz/schedules";
-export const SCHEDULES_PLUGIN_VERSION = "0.62.0";
+export const SCHEDULES_PLUGIN_VERSION = "0.62.1";
 
 type EmptyMap = Readonly<Record<never, never>>;
 type SchedulesCollections = Readonly<{

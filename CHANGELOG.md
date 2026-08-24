@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.62.0 — 2026-08-24
+## 0.62.1 — 2026-08-24
 
 Final plugin-first runtime and deployed-data migration release.
 

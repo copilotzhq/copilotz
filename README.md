@@ -30,7 +30,7 @@ conversation DTO, or hidden workflow controller.
 ## Install
 
 ```ts
-import { createCopilotz } from "jsr:@copilotz/copilotz@^0.62.0";
+import { createCopilotz } from "jsr:@copilotz/copilotz@^0.62.1";
 ```
 
 Host-only capabilities live on explicit subpaths. Importing the root does not
@@ -39,8 +39,8 @@ pull in filesystem, subprocess, terminal, MCP stdio, or provider credentials.
 ## Compose an AI application
 
 ```ts
-import { createCopilotz } from "jsr:@copilotz/copilotz@^0.62.0";
-import { corePlugin, message } from "jsr:@copilotz/copilotz@^0.62.0/core";
+import { createCopilotz } from "jsr:@copilotz/copilotz@^0.62.1";
+import { corePlugin, message } from "jsr:@copilotz/copilotz@^0.62.1/core";
 
 const openAiKey = Deno.env.get("OPENAI_API_KEY");
 if (!openAiKey) throw new Error("OPENAI_API_KEY is required");

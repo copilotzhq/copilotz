@@ -28,14 +28,16 @@ export const completeAskProcessor: Processor<CoreToolProcessorContext> =
       if (sender.id !== ask.askedParticipantId) return;
       await resumeDeferredToolPlan(context, ask, {
         status: "completed",
-        output: Object.freeze({
-          status: "answered",
+        /** Pipeline value is the canonical content; receipt provenance is separate. */
+        output: structuredClone(message.content),
+        askResult: {
+          schema: "copilotz.ask-result.v1",
           askId: ask.askId,
-          questionMessageId: ask.questionMessageId,
-          answerMessageId: message.id,
-          askedAgentId: ask.askedAgentId,
+          status: "completed",
           askedParticipantId: ask.askedParticipantId,
-        }),
+          askedAgentId: ask.askedAgentId,
+          answerMessageId: String(message.id),
+        },
       });
     },
   });

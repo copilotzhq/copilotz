@@ -7,7 +7,7 @@ Collections, native Actions, Tool Resources, and durable Processors.
 import { createLongTermMemoryPlugin } from "@copilotz/copilotz/memory";
 
 const memoryPlugin = createLongTermMemoryPlugin({
-  model: "memoryModel",
+  models: ["memoryModel", "memoryBackup"],
   config: {
     triggerEstimatedTokens: 8_000,
     retainRecentEstimatedTokens: 2_000,
@@ -15,9 +15,10 @@ const memoryPlugin = createLongTermMemoryPlugin({
 });
 ```
 
-`model` is an alias in the application's `resources.models` map. Memory never
-resolves provider credentials or infers an Agent's Model; its maintenance Action
-calls the composed `llm.call` Action explicitly.
+`models` is a non-empty ordered list of aliases in the application's
+`resources.models` map. Memory never infers an Agent's Models; its maintenance
+Action calls the composed `llm.call` Action explicitly and uses the same ordered
+fallback semantics as Core.
 
 ## Durable model
 

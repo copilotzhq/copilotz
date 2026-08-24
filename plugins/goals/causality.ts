@@ -1,8 +1,8 @@
 import type { RuntimeContext } from "@copilotz/copilotz/actions";
 import type { CollectionRecord } from "@copilotz/copilotz/collections";
 import {
-  coreToolActionMessageMetadata,
   coreToolPlanMetadata,
+  coreToolResultOrigin,
   workflowMetadata,
 } from "@copilotz/copilotz/core";
 import { asGoalRecord } from "./collection.ts";
@@ -71,7 +71,7 @@ async function validatedFinalToolStep(
   const toolMetadata = record(toolMessage.metadata);
   const workflow = workflowMetadata(toolMetadata);
   if (workflow?.kind !== "tool_result") return null;
-  const tool = coreToolActionMessageMetadata(toolMetadata);
+  const tool = coreToolResultOrigin(toolMetadata);
   if (!tool || tool.planIndex + 1 !== tool.planSize) return null;
   if (
     text(toolMessage.threadId) !== tool.threadId ||

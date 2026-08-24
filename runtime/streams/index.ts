@@ -1,19 +1,20 @@
-export {
-  createContentStreamRuntime,
-} from "./stream.ts";
+export { createContentStreamRuntime } from "./stream.ts";
 export type {
   ContentStreamAbortInput,
   ContentStreamAppendInput,
   ContentStreamAppendResult,
   ContentStreamCloseInput,
   ContentStreamFollowInput,
-  ContentStreamOpenInput,
   ContentStreamOpened,
+  ContentStreamOpenInput,
   ContentStreamRuntime,
   ContentStreamWriter,
   CreateContentStreamRuntimeOptions,
 } from "./stream.ts";
-export { createStreamOutputDescriptor, isStreamOutputDescriptor } from "./observation.ts";
+export {
+  createStreamOutputDescriptor,
+  isStreamOutputDescriptor,
+} from "./observation.ts";
 export type {
   ApplicationOutput,
   RuntimeOutputDescriptor,

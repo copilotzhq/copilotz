@@ -16,10 +16,7 @@ import {
   createActionContext,
 } from "@copilotz/copilotz/actions";
 import type { PluginRegistry, Processor } from "@copilotz/copilotz/plugins";
-import type {
-  ConversationMessage,
-  ConversationThread,
-} from "../contracts.ts";
+import type { ConversationMessage, ConversationThread } from "../contracts.ts";
 import {
   mapMessageRecord,
   mapParticipantRecord,

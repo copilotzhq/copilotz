@@ -1,8 +1,13 @@
-export { defineAgent } from "./agent.ts";
+export { agentInstructionBase, defineAgent } from "./agent.ts";
 export type {
   AgentCapabilities,
   AgentCapabilitySelection,
+  AgentInstructionContext,
+  AgentInstructionExecution,
+  AgentInstructionResolution,
+  AgentInstructionResolver,
   AgentModels,
+  AgentModelSelection,
   AgentResource,
 } from "./agent.ts";
 export type {

@@ -89,6 +89,13 @@ const forbidden = [
   "ActionContextNamespaces",
   "createV1FetchHandler",
   "createV1SseProjector",
+  "createAnthropicAdapter",
+  "createDeepSeekAdapter",
+  "createGeminiAdapter",
+  "createGroqAdapter",
+  "createMinimaxAdapter",
+  "createOllamaAdapter",
+  "createOpenAiAdapter",
 ] as const;
 
 const retiredOxian = [

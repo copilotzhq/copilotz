@@ -171,7 +171,9 @@ export async function validateCopilotzSchema(
     throw error;
   }
   const marker = await executor.query<{ version: string | number }>(
-    `SELECT version FROM ${createCoreTableNames(schema).copilotz_schema_metadata}
+    `SELECT version FROM ${
+      createCoreTableNames(schema).copilotz_schema_metadata
+    }
       WHERE singleton = TRUE LIMIT 1`,
   );
   if (Number(marker.rows[0]?.version) !== EVENT_SCHEMA_VERSION) {
@@ -193,7 +195,9 @@ export async function validateCopilotzSchema(
   );
   if (migration.rows[0]) {
     const state = await executor.query<{ stage: string }>(
-      `SELECT stage FROM ${quoteEventIdentifier(schema)}."copilotz_v4_migration_state"
+      `SELECT stage FROM ${
+        quoteEventIdentifier(schema)
+      }."copilotz_v4_migration_state"
         WHERE singleton = TRUE LIMIT 1`,
     );
     if (state.rows[0]?.stage !== "complete") {
@@ -235,7 +239,9 @@ async function classifySchema(
     return "migration_required";
   }
   const marker = await executor.query<{ version: string | number }>(
-    `SELECT version FROM ${createCoreTableNames(schema).copilotz_schema_metadata}
+    `SELECT version FROM ${
+      createCoreTableNames(schema).copilotz_schema_metadata
+    }
       WHERE singleton = TRUE LIMIT 1`,
   );
   if (Number(marker.rows[0]?.version) !== EVENT_SCHEMA_VERSION) {
@@ -243,7 +249,9 @@ async function classifySchema(
   }
   if (!tables.has("copilotz_v4_migration_state")) return "v4";
   const state = await executor.query<{ stage: string }>(
-    `SELECT stage FROM ${quoteEventIdentifier(schema)}."copilotz_v4_migration_state"
+    `SELECT stage FROM ${
+      quoteEventIdentifier(schema)
+    }."copilotz_v4_migration_state"
       WHERE singleton = TRUE LIMIT 1`,
   );
   return state.rows[0]?.stage === "complete" ? "v4" : "migration_required";
@@ -270,7 +278,9 @@ export async function provisionCopilotzSchema(
 ): Promise<CoreSchemaValidation> {
   const schema = validateEventSchemaName(schemaName);
   const classification = await classifySchema(session, schema);
-  if (classification === "v4") return await validateCopilotzSchema(session, schema);
+  if (classification === "v4") {
+    return await validateCopilotzSchema(session, schema);
+  }
   if (classification !== "fresh") throw migrationRequired(schema);
   return await session.transaction(async (transaction) => {
     // Recheck inside the DDL transaction so a competing provisioner cannot turn

@@ -172,7 +172,7 @@ function systemPrompt(
       `You are ${input.agent.name}`,
       `Your role is: ${input.agent.role}`,
       input.agent.personality ? `Personality: ${input.agent.personality}` : "",
-      input.agent.instructions
+      typeof input.agent.instructions === "string"
         ? `Your instructions are: ${input.agent.instructions}`
         : "",
     ].filter(Boolean).join("\n"),

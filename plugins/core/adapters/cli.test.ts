@@ -156,7 +156,6 @@ Deno.test("portable CLI preserves interactive run, rendering, and session comman
   assertEquals(messages.at(0)!.payload!.thread, "thread-a");
   const rendered = output.join("");
   assertStringIncludes(rendered, "Copilotz Interactive Session");
-  assertStringIncludes(rendered, "assistant Support");
   assertStringIncludes(rendered, "Support>");
   assertStringIncludes(rendered, "last event id: event-a");
   assertStringIncludes(rendered, "Available tools: 1");
@@ -339,7 +338,10 @@ Deno.test("portable CLI renders tool-call NDJSON as one safe tool block", async 
     rendered,
     "agent-a> Checking now.\ntool> get_current_time",
   );
-  assertStringIncludes(rendered, "tool> get_current_time\nagent-a> It is noon.");
+  assertStringIncludes(
+    rendered,
+    "tool> get_current_time\nagent-a> It is noon.",
+  );
   assertEquals(rendered.includes("providerAttemptId"), false);
   assertEquals(rendered.includes("draftId"), false);
   assertEquals(rendered.includes('"phase":"delta"'), false);
@@ -392,9 +394,126 @@ Deno.test("portable CLI renders reasoning and answer streams separately", async 
   const rendered = stripCliFormatting(output.join(""));
   assertStringIncludes(
     rendered,
-    "assistant Northstar\nthinking> Inspect the facts.\nNorthstar> Final answer.",
+    "Northstar thinking> Inspect the facts.\nNorthstar> Final answer.",
   );
   assertEquals(rendered.includes("the facts.Final answer."), false);
+});
+
+Deno.test("portable CLI uses Core stream agents and renders fragmented Ask drafts safely", async () => {
+  const answers = ["coordinate the research", "/exit"];
+  const output: string[] = [];
+  const io: InteractiveCliIo = Object.freeze({
+    question: () => Promise.resolve(answers.shift() ?? "/exit"),
+    write: (value) => output.push(value),
+    close: () => undefined,
+  });
+  const coordinator = { id: "coordinator", name: "Coordinator" };
+  const researcher = { id: "researcher", name: "Researcher" };
+  const askFrames = [{
+    providerAttemptId: "attempt-a",
+    draftId: "attempt-a:0",
+    callIndex: 0,
+    sequence: 0,
+    toolName: "ask",
+    phase: "start",
+    delta:
+      '{"name":"ask","arguments":{"target":"Researcher","message":"Find \\uD83D',
+  }, {
+    providerAttemptId: "attempt-a",
+    draftId: "attempt-a:0",
+    callIndex: 0,
+    sequence: 1,
+    toolName: "ask",
+    phase: "delta",
+    delta: "\\uDE80 launch options",
+  }, {
+    providerAttemptId: "attempt-a",
+    draftId: "attempt-a:0",
+    callIndex: 0,
+    sequence: 2,
+    toolName: "ask",
+    phase: "delta",
+    delta: '"}}',
+  }, {
+    providerAttemptId: "attempt-a",
+    draftId: "attempt-a:0",
+    callIndex: 0,
+    sequence: 3,
+    toolName: "ask",
+    phase: "complete",
+    delta: "",
+    toolCallId: "call-a",
+  }];
+  const askNdjson = askFrames.map((frame) => JSON.stringify(frame) + "\n")
+    .join("");
+  const outputs = [
+    streamedText(
+      "reasoning",
+      "coordinator-reasoning",
+      ["Delegate this."],
+      coordinator,
+    ),
+    streamedToolCalls([
+      askNdjson.slice(0, 37),
+      askNdjson.slice(37, 218),
+      askNdjson.slice(218),
+    ], coordinator),
+    streamedText(
+      "content",
+      "researcher-answer",
+      ["Here are the options."],
+      researcher,
+    ),
+    streamedText(
+      "content",
+      "coordinator-answer",
+      ["I recommend option one."],
+      coordinator,
+    ),
+  ];
+  const handle = startInteractiveCli({
+    io,
+    scope: {
+      thread: "thread-a",
+      participant: "user-a",
+      recipientIds: ["fallback-agent"],
+    },
+    inspect: () => ({
+      agents: [{ id: "fallback-agent", name: "Fallback" }],
+      tools: [],
+      skills: [],
+    }),
+    application: Object.freeze({
+      namespace: "tenant-a",
+      send() {
+        return Promise.resolve({
+          eventId: "event-a",
+          correlationId: "correlation-a",
+          outputs: new ReadableStream<ApplicationOutput>({
+            start(controller) {
+              for (const stream of outputs) controller.enqueue(stream);
+              controller.close();
+            },
+          }),
+          done: Promise.resolve(),
+          cancel: () => Promise.resolve(),
+        });
+      },
+    }),
+  });
+
+  await handle.closed;
+  const rendered = stripCliFormatting(output.join(""));
+  assertStringIncludes(rendered, "Coordinator thinking> Delegate this.");
+  assertStringIncludes(
+    rendered,
+    "Coordinator → @Researcher> Find 🚀 launch options",
+  );
+  assertStringIncludes(rendered, "Researcher> Here are the options.");
+  assertStringIncludes(rendered, "Coordinator> I recommend option one.");
+  assertEquals(rendered.includes("Fallback>"), false);
+  assertEquals(rendered.includes("\\uD83D"), false);
+  assertEquals(rendered.split("🚀").length - 1, 1);
 });
 
 Deno.test("portable CLI is factory-first and imports no host terminal API", async () => {

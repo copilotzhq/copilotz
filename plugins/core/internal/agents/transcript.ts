@@ -10,7 +10,10 @@ import {
   loadThreadRecord,
 } from "../../projections.ts";
 import {
+  agentAskMetadata,
+  agentAskResultMetadata,
   coreToolActionMessageMetadata,
+  coreToolPlanResultMetadata,
   workflowMetadata,
 } from "../workflow-metadata.ts";
 
@@ -52,6 +55,8 @@ function embeddedToolCalls(value: unknown): readonly LlmToolCall[] {
 function toolCallId(message: ConversationMessage): string | undefined {
   const toolAction = coreToolActionMessageMetadata(message.metadata);
   if (toolAction?.toolCallId) return toolAction.toolCallId;
+  const branch = coreToolPlanResultMetadata(message.metadata);
+  if (branch?.origin.toolCallId) return branch.origin.toolCallId;
   return optionalText(record(record(message.metadata).toolInvocation).id);
 }
 
@@ -63,6 +68,49 @@ function toLlmMessage(
   const content = Object.freeze(structuredClone(message.content));
   const name = messageName(message);
   if (message.sender.participantType === "agent") {
+    const ask = agentAskMetadata(message.metadata);
+    if (ask) {
+      const mode = ask.mode ?? "public";
+      if (ask.phase === "question") {
+        if (targetParticipantId === ask.askedParticipantId) {
+          return Object.freeze({
+            role: "user",
+            content,
+            ...(name ? { name } : {}),
+          });
+        }
+        return targetParticipantId === ask.askingParticipantId ||
+            mode === "private"
+          ? null
+          : Object.freeze({ role: "user", content, ...(name ? { name } : {}) });
+      }
+      if (ask.phase === "progress") {
+        if (targetParticipantId === ask.askedParticipantId) {
+          const toolCalls = embeddedToolCalls(message.metadata.llmToolCalls);
+          return Object.freeze({
+            role: "assistant",
+            content,
+            ...(name ? { name } : {}),
+            ...(toolCalls.length ? { toolCalls } : {}),
+          });
+        }
+        return mode === "public" && content.length
+          ? Object.freeze({ role: "user", content, ...(name ? { name } : {}) })
+          : null;
+      }
+      // The caller receives this answer only through the receipt below.
+      if (targetParticipantId === ask.askingParticipantId) return null;
+      if (targetParticipantId === ask.askedParticipantId) {
+        return Object.freeze({
+          role: "assistant",
+          content,
+          ...(name ? { name } : {}),
+        });
+      }
+      return mode === "private"
+        ? null
+        : Object.freeze({ role: "user", content, ...(name ? { name } : {}) });
+    }
     if (targetParticipantId && message.sender.id === targetParticipantId) {
       const toolCalls = embeddedToolCalls(message.metadata.llmToolCalls);
       return Object.freeze({
@@ -72,6 +120,7 @@ function toLlmMessage(
         ...(toolCalls.length ? { toolCalls } : {}),
       });
     }
+    if (embeddedToolCalls(message.metadata.llmToolCalls).length) return null;
     return Object.freeze({ role: "user", content, ...(name ? { name } : {}) });
   }
   if (message.sender.participantType === "tool") {
@@ -92,6 +141,31 @@ function toLlmMessage(
     if (historyVisibility !== "public") return null;
   }
   return Object.freeze({ role: "user", content, ...(name ? { name } : {}) });
+}
+
+function receiptAnswer(
+  receipt: ConversationMessage,
+  answer: ConversationMessage | undefined,
+  targetParticipantId?: string,
+): LlmMessage | null {
+  const result = agentAskResultMetadata(receipt.metadata);
+  if (
+    !result || result.status !== "completed" || !result.answerMessageId ||
+    !answer || answer.id !== result.answerMessageId ||
+    answer.sender.id !== result.askedParticipantId ||
+    targetParticipantId === undefined
+  ) return null;
+  const ask = agentAskMetadata(answer.metadata);
+  if (
+    !ask || ask.phase !== "answer" || ask.askId !== result.askId ||
+    ask.askingParticipantId !== targetParticipantId
+  ) return null;
+  const name = messageName(answer);
+  return Object.freeze({
+    role: "user",
+    content: Object.freeze(structuredClone(answer.content)),
+    ...(name ? { name } : {}),
+  });
 }
 
 /** Compiles immutable Core Messages into participant-relative LLM history. */
@@ -120,10 +194,61 @@ export async function buildLlmTranscript(
       });
     })()
     : history;
-  return Object.freeze(
-    selected.flatMap((message) => {
-      const projected = toLlmMessage(message, input.participantId);
-      return projected ? [projected] : [];
-    }),
-  );
+  const byId = new Map(history.map((message) => [message.id, message]));
+  const output: LlmMessage[] = [];
+
+  const appendNormal = (message: ConversationMessage) => {
+    const projected = toLlmMessage(message, input.participantId);
+    if (projected) output.push(projected);
+  };
+  for (let index = 0; index < selected.length;) {
+    const plan = selected[index];
+    const planProjection = plan && toLlmMessage(plan, input.participantId);
+    const toolIds = planProjection?.role === "assistant"
+      ? new Set((planProjection.toolCalls ?? []).map((call) => call.id))
+      : new Set<string>();
+    if (!planProjection || toolIds.size === 0) {
+      if (plan) appendNormal(plan);
+      index++;
+      continue;
+    }
+    output.push(planProjection);
+    const receipts: ConversationMessage[] = [];
+    const deferred: ConversationMessage[] = [];
+    const seen = new Set<string>();
+    index++;
+    while (index < selected.length && seen.size < toolIds.size) {
+      const candidate = selected[index++]!;
+      const projected = toLlmMessage(candidate, input.participantId);
+      if (
+        projected?.role === "tool" && projected.toolCallId &&
+        toolIds.has(projected.toolCallId)
+      ) {
+        receipts.push(candidate);
+        seen.add(projected.toolCallId);
+      } else deferred.push(candidate);
+    }
+    // A model may only see peer text after every result for its own call block.
+    for (const receipt of receipts) appendNormal(receipt);
+    const receiptsByAnswerId = new Map(
+      receipts.flatMap((receipt) => {
+        const result = agentAskResultMetadata(receipt.metadata);
+        return result?.answerMessageId
+          ? [[result.answerMessageId, receipt]]
+          : [];
+      }),
+    );
+    // Preserve public nested causality after the closed Tool block. Keep
+    // nested peer messages in their durable order, but reserve direct root
+    // answers for the provider-order receipt sequence below.
+    for (const message of deferred) {
+      if (receiptsByAnswerId.has(message.id)) continue;
+      appendNormal(message);
+    }
+    for (const [id, receipt] of receiptsByAnswerId) {
+      const answer = receiptAnswer(receipt, byId.get(id), input.participantId);
+      if (answer) output.push(answer);
+    }
+  }
+  return Object.freeze(output);
 }

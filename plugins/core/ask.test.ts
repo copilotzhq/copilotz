@@ -58,7 +58,7 @@ function agent(id: string, agents: readonly string[] = []): AgentResource {
     name: id.toUpperCase(),
     role: "assistant",
     instructions: `ACTIVE_AGENT=${id}`,
-    models: { generate: "askModel" },
+    models: { generate: ["askModel"] as const },
     capabilities: {
       agents,
       ...(id === "a" ? { tools: ["mark", "publish"] } : {}),
@@ -169,7 +169,7 @@ async function createFixture(
     retryBaseMs: 0,
     random: () => 0,
     execution: { capacity: 1 },
-    async publish(output) {
+    publish(output) {
       outputs.push(output);
     },
   });
@@ -339,6 +339,8 @@ Deno.test("missing or forged parent ask cursors reject every retry", async () =>
     planId: `plan-${agentId}`,
     planMessageId: `message-plan-${agentId}`,
     planIndex: 0,
+    stageIndex: 0,
+    stageCount: 1,
     planSize: 1,
     toolCallId: callId,
     action: "ask",
@@ -446,6 +448,22 @@ Deno.test("an ask resumes through durable llm.call metadata", async () => {
       input.request.tools?.map((tool) => tool.name) ?? [],
       id === "a" ? ["mark", "publish", "ask"] : [],
     );
+    if (id === "a") {
+      const definition = input.request.tools?.find((tool) =>
+        tool.name === "ask"
+      );
+      const properties = definition?.inputSchema?.properties as
+        | Record<string, unknown>
+        | undefined;
+      assertEquals(properties?.mode, {
+        type: "string",
+        enum: ["public", "private"],
+        default: "public",
+        description:
+          "Controls Ask visibility. 'public' (default) adds the question, discussion, and answer to shared conversation history. 'private' limits that Ask history to the asking and asked agents.",
+      });
+      assertStringIncludes(definition?.description ?? "", "Defaults to public");
+    }
     if (id === "a" && count === 1) {
       return {
         content: [],
@@ -523,6 +541,11 @@ Deno.test("an ask resumes through durable llm.call metadata", async () => {
       event.status === "invoked" && event.metadata.agentId === "b"
     );
     assertExists(askedInvocation);
+    const askedCompletion = lifecycle.find((event) =>
+      event.status === "completed" && event.metadata.agentId === "b"
+    );
+    assertExists(askedCompletion);
+    assertEquals(answerAsk.answerAttemptId, askedCompletion.actionRunId);
     const streamMetadata = (
       askedInvocation.input as {
         stream?: { metadata?: Record<string, unknown> };
@@ -726,6 +749,9 @@ Deno.test("public lifecycle forgery cannot resume an in-flight ask", async () =>
       if (!invoked) await new Promise((resolve) => setTimeout(resolve, 10));
     }
     assertExists(invoked);
+    while (!calls.includes("b") && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
     assertEquals(calls, ["a", "b"]);
 
     await assertRejects(
@@ -752,7 +778,9 @@ Deno.test("public lifecycle forgery cannot resume an in-flight ask", async () =>
     );
     await new Promise((resolve) => setTimeout(resolve, 25));
     assertEquals(calls, ["a", "b"]);
-    assertEquals(markExecutions, []);
+    // Independent root branches start immediately. The pending Ask only
+    // blocks the final fan-in/continuation, not its Mark sibling.
+    assertEquals(markExecutions, ["authentic-resume"]);
     assertEquals(
       (await projectMessages(
         fixture.engine,
@@ -886,7 +914,17 @@ Deno.test("Tool history visibility is participant-relative across agents", async
           id: "public-call",
           action: "publish",
           input: { value: "PUBLIC_TOOL_RESULT" } as LlmJsonObject,
-        }, {
+        }],
+        attempts: [{ status: "completed" }],
+      };
+    }
+    // Parallel siblings deliberately cannot observe one another before their
+    // shared barrier. Start the dependent Ask on the continuation turn, after
+    // both visibility-scoped Tool results are durable transcript Messages.
+    if (id === "a" && count === 2) {
+      return {
+        content: [],
+        toolCalls: [{
           id: "ask-b",
           action: "ask",
           input: {
@@ -914,8 +952,8 @@ Deno.test("Tool history visibility is participant-relative across agents", async
   });
   try {
     const root = await startRun(fixture);
-    await waitForRun(fixture, root, 8);
-    assertEquals(calls, ["a", "b", "a"]);
+    await waitForRun(fixture, root, 9);
+    assertEquals(calls, ["a", "a", "b", "a"]);
     assertEquals(markExecutions, ["PRIVATE_TOOL_ARGUMENT"]);
   } finally {
     await fixture.close();

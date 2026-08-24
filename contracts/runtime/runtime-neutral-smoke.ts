@@ -67,6 +67,7 @@ export async function runRuntimeNeutralSmoke(): Promise<
   const resolvedModel: ModelResource = registry.resources.models.runtimeSmoke;
   if (
     typeof resolvedAdapter.call !== "function" ||
+    !("adapter" in resolvedModel) ||
     resolvedModel.adapter !== "runtimeSmoke"
   ) {
     throw new TypeError(

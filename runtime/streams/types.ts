@@ -26,9 +26,11 @@ export type StreamOutputDescriptor = Readonly<{
 }>;
 
 /** Transport-facing output with a per-subscriber progressive Body follower. */
-export type StreamOutput = StreamOutputDescriptor & Readonly<{
-  payload: ReadableStream<Uint8Array>;
-}>;
+export type StreamOutput =
+  & StreamOutputDescriptor
+  & Readonly<{
+    payload: ReadableStream<Uint8Array>;
+  }>;
 
 export type RuntimeOutputDescriptor = CopilotzEvent | StreamOutputDescriptor;
 export type ApplicationOutput = CopilotzEvent | StreamOutput;
@@ -76,7 +78,9 @@ export type ContentStreamCloseInput = Readonly<{
 }>;
 
 export type ContentStreamAbortInput = Readonly<{ reason?: string }>;
-export type ContentStreamFollowInput = Readonly<{ id: string; offset?: number }>;
+export type ContentStreamFollowInput = Readonly<
+  { id: string; offset?: number }
+>;
 
 export type ContentStreamWriter = Readonly<
   & AsyncDisposable

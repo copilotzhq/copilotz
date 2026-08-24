@@ -39,6 +39,17 @@ function llmOutput(
   }>,
 ): LlmCallOutput {
   const secret = input.secret ?? "provider-output-must-not-be-copied";
+  const attempts = input.attempts ?? Object.freeze([Object.freeze({
+    id: `${model}-attempt-0`,
+    index: 0,
+    providerRequest: true,
+    model,
+    adapter: "openai-primary",
+    providerModel: "gpt-5-mini-test",
+    status: "completed" as const,
+    usage: input.usage,
+    finishReason: "stop",
+  })]);
   return Object.freeze({
     model,
     adapter: "openai-primary",
@@ -55,22 +66,66 @@ function llmOutput(
       input: Object.freeze({ secretPrompt: "tool-call-must-not-be-copied" }),
     })]),
     usage: input.usage,
-    ...(input.attempts ? { attempts: input.attempts } : {}),
+    attempts,
     finishReason: "stop",
   });
 }
 
 const usageLlmAction = defineAction<LlmCallInput, LlmCallOutput>({
   id: "llm.call",
-  execute(input) {
-    if (input.model === "failing-model") {
+  async execute(input, context) {
+    const model = input.models[0];
+    if (model === "failing-model") {
+      await context.progress({
+        schema: "copilotz.llm.attempt-accounting.v1",
+        attempts: [{
+          id: "failing-attempt-0",
+          index: 0,
+          providerRequest: true,
+          model,
+          adapter: "openai-primary",
+          providerModel: "gpt-5-mini-test",
+          status: "failed",
+          error: { code: "provider_unavailable", message: "not copied" },
+        }],
+      });
       throw new Error("provider unavailable");
     }
-    if (input.model === "cancelled-model") {
+    if (model === "cancelled-model") {
+      await context.progress({
+        schema: "copilotz.llm.attempt-accounting.v1",
+        attempts: [{
+          id: "cancelled-attempt-0",
+          index: 0,
+          providerRequest: true,
+          model,
+          adapter: "openai-primary",
+          providerModel: "gpt-5-mini-test",
+          status: "cancelled",
+          error: { code: "cancelled", message: "not copied" },
+        }],
+      });
       throw new DOMException("cancelled by caller", "AbortError");
     }
-    if (input.model === "aggregate-model") {
-      return llmOutput(input.model, {
+    if (model === "reported-failure") {
+      await context.progress({
+        schema: "copilotz.llm.attempt-accounting.v1",
+        attempts: [{
+          id: "reported-failure-attempt-0",
+          index: 0,
+          providerRequest: true,
+          model,
+          adapter: "openai-primary",
+          providerModel: "gpt-5-mini-test",
+          status: "failed",
+          usage: { inputTokens: 7, outputTokens: 2, totalTokens: 9 },
+          error: { code: "malformed_tool_call", message: "not copied" },
+        }],
+      });
+      throw new Error("framework rejected provider output");
+    }
+    if (model === "aggregate-model") {
+      return llmOutput(model, {
         usage: Object.freeze({
           inputTokens: 23,
           outputTokens: 7,
@@ -83,6 +138,8 @@ const usageLlmAction = defineAction<LlmCallInput, LlmCallOutput>({
           Object.freeze({
             id: "aggregate-attempt-0",
             index: 0,
+            providerRequest: true,
+            model: "aggregate-model",
             adapter: "openai-primary",
             providerModel: "fallback-a",
             status: "failed" as const,
@@ -99,6 +156,8 @@ const usageLlmAction = defineAction<LlmCallInput, LlmCallOutput>({
           Object.freeze({
             id: "aggregate-attempt-1",
             index: 1,
+            providerRequest: true,
+            model: "aggregate-model",
             adapter: "openai-primary",
             providerModel: "gpt-5-mini-test",
             status: "completed" as const,
@@ -114,8 +173,8 @@ const usageLlmAction = defineAction<LlmCallInput, LlmCallOutput>({
         secret: "aggregate-content-must-not-be-copied",
       });
     }
-    if (input.model === "uncosted-model") {
-      return llmOutput(input.model, {
+    if (model === "uncosted-model") {
+      return llmOutput(model, {
         usage: Object.freeze({
           inputTokens: 4,
           outputTokens: 3,
@@ -126,6 +185,8 @@ const usageLlmAction = defineAction<LlmCallInput, LlmCallOutput>({
           Object.freeze({
             id: "uncosted-attempt-0",
             index: 0,
+            providerRequest: true,
+            model: "uncosted-model",
             adapter: "openai-primary",
             providerModel: "fallback-usd",
             status: "failed" as const,
@@ -139,6 +200,8 @@ const usageLlmAction = defineAction<LlmCallInput, LlmCallOutput>({
           Object.freeze({
             id: "uncosted-attempt-1",
             index: 1,
+            providerRequest: true,
+            model: "uncosted-model",
             adapter: "openai-primary",
             providerModel: "fallback-eur",
             status: "completed" as const,
@@ -153,7 +216,7 @@ const usageLlmAction = defineAction<LlmCallInput, LlmCallOutput>({
         secret: "uncosted-content-must-not-be-copied",
       });
     }
-    return llmOutput(input.model, {
+    return llmOutput(model, {
       usage: Object.freeze({
         inputTokens: 10,
         outputTokens: 5,
@@ -288,7 +351,12 @@ Deno.test("usage workflow is a factory-created plugin and can disable metering",
   ]);
   assertEquals(
     enabled.processors.recordLlmUsage?.on.map((clause) => clause.eventType),
-    ["llm.call.completed", "llm.call.failed", "llm.call.cancelled"],
+    [
+      "llm.call.completed",
+      "llm.call.failed",
+      "llm.call.cancelled",
+      "llm.call.progress",
+    ],
   );
 
   const disabled = createUsageWorkflowPlugin({ enabled: false });
@@ -369,7 +437,8 @@ Deno.test("usage workflow records Action terminals once without payload copies",
     await invoke("test.usage.llm", {
       key: "provider-0",
       input: {
-        model: "primary-model",
+        models: ["primary-model"],
+        mode: "generate",
         request: {
           instructions: "prompt-must-not-be-copied",
           messages: [],
@@ -388,7 +457,8 @@ Deno.test("usage workflow records Action terminals once without payload copies",
     await invoke("test.usage.llm", {
       key: "provider-1",
       input: {
-        model: "failing-model",
+        models: ["failing-model"],
+        mode: "generate",
         request: { messages: [] },
       },
       metadata: { source: "standalone-test" },
@@ -546,7 +616,7 @@ Deno.test("usage recognizes failed and cancelled Tool Actions structurally", asy
   }
 });
 
-Deno.test("usage persists only llm.call aggregate accounting", async () => {
+Deno.test("usage projects one ledger row per reported llm provider attempt", async () => {
   const fixture = await createFixture();
   try {
     const invoke = async (model: string) => {
@@ -558,7 +628,8 @@ Deno.test("usage persists only llm.call aggregate accounting", async () => {
         payload: {
           key,
           input: {
-            model,
+            models: [model],
+            mode: "generate",
             request: {
               instructions: `${model}-prompt-must-not-be-copied`,
               messages: [],
@@ -576,11 +647,12 @@ Deno.test("usage persists only llm.call aggregate accounting", async () => {
     await invoke("uncosted-model");
     await invoke("failing-model");
     await invoke("cancelled-model");
+    await invoke("reported-failure");
 
     const usage = fixture.engine.collections.withScope({ namespace: NAMESPACE })
       .usage;
     const deadline = Date.now() + 10_000;
-    while ((await usage.list()).length < 4) {
+    while ((await usage.list()).length < 7) {
       if (Date.now() >= deadline) {
         throw new Error("Aggregate Usage Actions did not settle.");
       }
@@ -589,34 +661,78 @@ Deno.test("usage persists only llm.call aggregate accounting", async () => {
     }
 
     const rows = await usage.list();
-    assertEquals(rows.length, 4);
+    assertEquals(rows.length, 7);
 
-    const aggregate = rows.find((row) => row.resource === "aggregate-model")!;
-    assertEquals(aggregate.metrics, {
-      calls: 1,
-      inputTokens: 23,
-      outputTokens: 7,
-      reasoningTokens: 2,
-      cachedInputTokens: 5,
-      totalTokens: 32,
-    });
-    assertEquals(aggregate.totalCostUsd, 0.031);
-    assertEquals(aggregate.pricingCurrency, "USD");
-    assertEquals(aggregate.pricingSource, "openai-primary");
-    assertEquals(aggregate.pricingModelId, "gpt-5-mini-test");
+    const attempts = rows.filter((row) =>
+      typeof row.dedupeKey === "string" && row.dedupeKey.includes(":attempt:")
+    );
+    assertEquals(attempts.length, 7);
+    assertEquals(
+      attempts.filter((row) => row.totalTokens !== null).map((row) => ({
+        model: row.model,
+        status: row.status,
+        totalTokens: row.totalTokens,
+        cost: row.totalCostUsd,
+        currency: row.pricingCurrency,
+      })).sort((left, right) =>
+        Number(left.totalTokens) - Number(right.totalTokens)
+      ),
+      [
+        {
+          model: "reported-failure",
+          status: "failed",
+          totalTokens: 9,
+          cost: null,
+          currency: null,
+        },
+        {
+          model: "uncosted-model",
+          status: "failed",
+          totalTokens: 40,
+          cost: 1,
+          currency: "USD",
+        },
+        {
+          model: "uncosted-model",
+          status: "completed",
+          totalTokens: 70,
+          cost: 2,
+          currency: "EUR",
+        },
+        {
+          model: "aggregate-model",
+          status: "failed",
+          totalTokens: 100,
+          cost: 9,
+          currency: "EUR",
+        },
+        {
+          model: "aggregate-model",
+          status: "completed",
+          totalTokens: 280,
+          cost: 12,
+          currency: "GBP",
+        },
+      ],
+    );
 
-    const uncosted = rows.find((row) => row.resource === "uncosted-model")!;
-    assertEquals(uncosted.metrics, {
+    const reportedFailure = rows.find((row) =>
+      row.model === "reported-failure" &&
+      typeof row.dedupeKey === "string" && row.dedupeKey.endsWith(":attempt:0")
+    );
+    assert(reportedFailure);
+    assertEquals(reportedFailure.status, "failed");
+    assertEquals(reportedFailure.statusReason, "malformed_tool_call");
+    assertEquals(reportedFailure.metrics, {
       calls: 1,
-      inputTokens: 4,
-      outputTokens: 3,
-      cachedInputTokens: 1,
-      totalTokens: 7,
+      inputTokens: 7,
+      outputTokens: 2,
+      totalTokens: 9,
     });
-    assertEquals(uncosted.totalCostUsd, null);
-    assertEquals(uncosted.pricingCurrency, null);
-    assertEquals(uncosted.pricingSource, null);
-    assertEquals(uncosted.pricingModelId, null);
+    assertEquals(
+      rows.filter((row) => row.resource === "reported-failure").length,
+      1,
+    );
 
     for (
       const [model, status] of [
@@ -627,8 +743,8 @@ Deno.test("usage persists only llm.call aggregate accounting", async () => {
       const terminal = rows.find((row) => row.resource === model)!;
       assertEquals(terminal.model, model);
       assertEquals(terminal.status, status);
-      assertEquals(terminal.adapter, null);
-      assertEquals(terminal.providerModel, null);
+      assertEquals(terminal.adapter, "openai-primary");
+      assertEquals(terminal.providerModel, "gpt-5-mini-test");
       assertEquals(terminal.metrics, { calls: 1 });
       assertEquals(terminal.totalCostUsd, null);
       assertEquals(terminal.threadId, null);
@@ -641,11 +757,11 @@ Deno.test("usage persists only llm.call aggregate accounting", async () => {
     assert(!serialized.includes("prompt-must-not-be-copied"));
     assert(!serialized.includes("content-must-not-be-copied"));
     assert(!serialized.includes("tool-call-must-not-be-copied"));
-    assert(!serialized.includes("EUR"));
-    assert(!serialized.includes("GBP"));
+    assert(serialized.includes("EUR"));
+    assert(serialized.includes("GBP"));
 
     await fixture.engine.recover({ namespace: NAMESPACE });
-    assertEquals((await usage.list()).length, 4);
+    assertEquals((await usage.list()).length, 7);
   } finally {
     await closeFixture(fixture);
   }

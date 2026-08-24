@@ -12,14 +12,14 @@ resources: {
       id: "coordinator",
       name: "Coordinator",
       role: "Coordinate specialists and synthesize the final answer.",
-      models: { generate: "default" },
+      models: { generate: ["default"] },
       capabilities: { agents: ["researcher", "writer"] },
     },
     researcher: {
       id: "researcher",
       name: "Researcher",
       role: "Research facts and answer peers publicly.",
-      models: { generate: "default" },
+      models: { generate: ["default"] },
       capabilities: { agents: ["coordinator"] },
     },
   },
@@ -44,14 +44,19 @@ The model invokes:
 - Nested asks persist a non-recursive parent cursor. Resume reloads and
   validates the parent question, so depth is limited by durable ancestry rather
   than an in-memory stack.
-- Calls in one model-produced Tool plan execute sequentially in provider order.
-  An `ask` completion pauses that plan until its durable answer or failure Event
-  resumes the remaining calls and one final LLM continuation.
+- Top-level calls in one model-produced Tool plan execute as ordered parallel
+  branches. Piped Tool and `jq` stages within one branch execute sequentially.
+  An `ask` branch settles only after its durable final answer or failure,
+  including any Tool plans and nested asks the asked Agent performs first. The
+  parent plan resumes once every branch settles and emits one final LLM
+  continuation.
 - An asked-agent failure produces durable failure state and still resumes the
   caller with a labelled outcome.
 - No global single-speaker lock is imposed. Generic progressive output remains
-  independent per stream; semantic participant identity stays in Core Events and
-  Messages rather than the runtime stream descriptor.
+  independent per stream. The generic descriptor gains no participant field;
+  Core supplies only an opaque plugin-owned Agent/Ask display hint in its stream
+  metadata. The durable question, answer, identities, and causal authority
+  remain in Core Messages and Action lifecycle data.
 
 Background work that should not be part of the public conversation belongs in a
 separate application-defined thread/workflow, not a hidden consultation API.

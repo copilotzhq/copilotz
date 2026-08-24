@@ -186,7 +186,9 @@ export async function listThreadMessageRecords(
   const hydrated: ConversationMessage[] = [];
   for (const record of records) {
     const sender = await participants.get({ id: String(record.senderId) });
-    if (!sender) throw new Error(`Message '${record.id}' sender was not found.`);
+    if (!sender) {
+      throw new Error(`Message '${record.id}' sender was not found.`);
+    }
     hydrated.push(mapMessageRecord(record, mapParticipantRecord(sender)));
   }
   return projectActiveMessageBranch(hydrated, thread?.activeMessageBranch);

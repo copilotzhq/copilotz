@@ -51,7 +51,12 @@ await cli.closed;
 ```
 
 The CLI does not own a Tool catalog, invoke Tools directly, or receive runtime
-storage authority.
+storage authority. Core adds an opaque Agent display hint to each LLM stream, so
+multi-agent output is attributed per response rather than inferred from the
+original recipient. The renderer keeps reasoning separate (`Agent thinking>`),
+labels visible output with the responding Agent (`Agent>`), and presents an
+incremental Ask draft as `Asking Agent → @Target> question` without exposing the
+provider's Tool-call JSON.
 
 ## Generated Tool integrations
 
@@ -60,12 +65,45 @@ composition. Each generated operation contributes one native Action and a
 matching data-only Tool Resource. Duplicate aliases or Action IDs fail during
 composition.
 
+For small native tools, author the Action and its presentation together, then
+compose the result explicitly. The executable remains only in the Action; the
+registered Tool Resource is data-only. This is an intentional compiler boundary:
+tool execution has a durable lifecycle, retries, and possible external effects,
+so it is never a Resource policy hook.
+
+```ts
+import { createToolsPlugin, defineTool } from "@copilotz/copilotz/tools";
+
+const tools = createToolsPlugin({
+  tools: {
+    echo: defineTool({
+      id: "example.echo",
+      name: "Echo",
+      description: "Returns the supplied message.",
+      execute: ({ message }: { message: string }) => ({ message }),
+    }),
+  },
+});
+```
+
+`createOpenApiToolsPlugin` accepts either `apis: [defineApi(...)]` or an API
+declaration map such as `apis: { booking: defineApi(...) }`. Both forms generate
+every schema operation using its operation ID-derived Tool alias.
+
+`defineApi` itself is an immutable process-local API Resource definition. Its
+typed transport policies, such as request preparation and response-asset
+mapping, stay on that definition; the OpenAPI compiler is still required to
+materialize each operation's Action and Tool Resource. Its process-local API
+Resource may carry transport policy and credentials, just as a built-in LLM
+Model Resource does. A genuinely custom transport implementation belongs to an
+Adapter rather than a Resource hook.
+
 OpenAPI live NDJSON channels are append-only, media-stable, and materialized in
 one combined content commit. MCP result lowering accepts lossless JSON and
 promotes standard image/audio/resource bodies through one staged
 materialization; runtime objects, typed arrays, cycles, and credential-bearing
 schemas reject.
 
-Import provider and host values directly and pass them to
-`createCopilotz({ plugins, resources, adapters })`. The registry does not load
-string presets, package paths, or modules at runtime.
+Pass built-in provider configuration directly in Model Resources. Import and
+register an Adapter only for a custom provider or host capability. The registry
+does not load string presets, package paths, or modules at runtime.

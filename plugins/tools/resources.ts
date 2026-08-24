@@ -79,14 +79,40 @@ export type APIPrepareRequest = (
   | undefined
   | Promise<APIPrepareRequestInput | undefined>;
 
-/** Top-level response fields promoted into one canonical tool attachment. */
-export type APIResponseAssetMapping = Readonly<{
-  dataBase64Field: string;
-  mediaTypeField: string;
+type APIResponseAssetMappingOptions = Readonly<{
   nameField?: string;
   /** Response field receiving the canonical ContentRef. Defaults to `asset`. */
   outputField?: string;
+  /** Missing or null source fields are omitted instead of failing the Action. */
+  optional?: boolean;
+  /** Allowed response media types. Supports exact values and `type/*`. */
+  mediaTypes?: readonly string[];
+  /** Maximum decoded byte length. Defaults to 20 MiB. */
+  maxBytes?: number;
 }>;
+
+/** Top-level response field promoted into one canonical tool attachment. */
+export type APIResponseAssetMapping =
+  & APIResponseAssetMappingOptions
+  & Readonly<
+    | {
+      /** Raw base64 field paired with a separate media-type field. */
+      dataBase64Field: string;
+      mediaTypeField: string;
+      dataUrlField?: never;
+    }
+    | {
+      /** Complete `data:<media-type>;base64,...` response field. */
+      dataUrlField: string;
+      dataBase64Field?: never;
+      mediaTypeField?: never;
+    }
+  >;
+
+/** One attachment mapping or a batch promoted from the same API response. */
+export type APIResponseAssetMappings =
+  | APIResponseAssetMapping
+  | readonly APIResponseAssetMapping[];
 
 /** OpenAPI-backed Tool Resource definition owned by the Tools plugin. */
 export type API = Readonly<{
@@ -103,8 +129,8 @@ export type API = Readonly<{
   /** Consume append-only application/x-ndjson output records plus one result. */
   streamNdjson?: boolean | null;
   prepareRequest?: APIPrepareRequest | null;
-  /** Tool key to response-field mapping for automatic canonical attachments. */
-  responseAssets?: Readonly<Record<string, APIResponseAssetMapping>>;
+  /** Tool key to explicit response fields promoted into canonical attachments. */
+  responseAssets?: Readonly<Record<string, APIResponseAssetMappings>>;
   metadata?: Readonly<Record<string, unknown>> | null;
   historyPolicyDefaults?: ToolHistory;
   toolPolicies?: Readonly<Record<string, ToolHistory>>;

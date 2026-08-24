@@ -16,7 +16,7 @@ import type {
   ContentStreamOpenInput,
 } from "@copilotz/copilotz/streams";
 import type { API } from "../resources.ts";
-import { createOpenApiToolsPlugin } from "./generator.ts";
+import { createOpenApiToolsPlugin, defineApi } from "./generator.ts";
 
 type Executable = Readonly<{
   execute(input: unknown, context: ActionContext): unknown | Promise<unknown>;
@@ -691,6 +691,144 @@ Deno.test("OpenAPI response assets publish canonical content and return a Conten
   }
 });
 
+Deno.test("OpenAPI response assets promote explicit data URLs as one ref per field", async () => {
+  const definition = api("available_seats", {
+    responseAssets: {
+      available_seats: [
+        {
+          dataUrlField: "seatMapImg",
+          outputField: "seatMapAsset",
+          mediaTypes: ["image/*"],
+        },
+        {
+          dataUrlField: "secondFloorSeatMapImg",
+          outputField: "secondFloorSeatMapAsset",
+          mediaTypes: ["image/png"],
+          optional: true,
+        },
+      ],
+    },
+  });
+  const published: Array<
+    Readonly<{
+      bytes: string;
+      mediaType: string;
+      operationKey: string;
+    }>
+  > = [];
+  const context = actionContext({
+    content: {
+      publish(
+        input: Omit<PublishAssetInput, "namespace" | "idempotencyKey">,
+        options: Readonly<{ operationKey: string }>,
+      ) {
+        published.push(Object.freeze({
+          bytes: new TextDecoder().decode(input.body),
+          mediaType: input.mediaType,
+          operationKey: options.operationKey,
+        }));
+        const id = `asset-${published.length}`;
+        return Promise.resolve({
+          id,
+          namespace: "tenant-a",
+          mediaType: input.mediaType,
+          byteLength: input.body.byteLength,
+          digest: `sha256:${id}`,
+          state: "ready",
+          location: { kind: "database", key: id },
+          createdAt: "2026-08-23T00:00:00.000Z",
+        });
+      },
+    },
+  } as unknown as Partial<ActionContext>);
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = () =>
+    Promise.resolve(Response.json({
+      availableSeats: ["01", "02"],
+      seatMapImg: `data:image/png;base64,${btoa("floor-one")}`,
+      secondFloorSeatMapImg: `data:image/png;base64,${btoa("floor-two")}`,
+    }));
+  try {
+    const result = await action(
+      createOpenApiToolsPlugin({ apis: [definition] }),
+      "available_seats",
+    ).execute({}, context);
+    assertEquals(published, [
+      {
+        bytes: "floor-one",
+        mediaType: "image/png",
+        operationKey: "openapi:available_seats:response-asset:0:seatMapAsset",
+      },
+      {
+        bytes: "floor-two",
+        mediaType: "image/png",
+        operationKey:
+          "openapi:available_seats:response-asset:1:secondFloorSeatMapAsset",
+      },
+    ]);
+    assertEquals(result, {
+      availableSeats: ["01", "02"],
+      seatMapAsset: {
+        assetId: "asset-1",
+        kind: "image",
+        role: "attachment",
+        mediaType: "image/png",
+        disposition: "attachment",
+      },
+      secondFloorSeatMapAsset: {
+        assetId: "asset-2",
+        kind: "image",
+        role: "attachment",
+        mediaType: "image/png",
+        disposition: "attachment",
+      },
+    });
+    assertEquals(JSON.stringify(result).includes("data:image"), false);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("OpenAPI response assets validate every configured field before publication", async () => {
+  const definition = api("available_seats", {
+    responseAssets: {
+      available_seats: [
+        { dataUrlField: "seatMapImg", mediaTypes: ["image/png"] },
+        { dataUrlField: "secondFloorSeatMapImg", mediaTypes: ["image/png"] },
+      ],
+    },
+  });
+  let publishes = 0;
+  const context = actionContext({
+    content: {
+      publish() {
+        publishes += 1;
+        throw new Error("must not publish");
+      },
+    },
+  } as unknown as Partial<ActionContext>);
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = () =>
+    Promise.resolve(Response.json({
+      seatMapImg: `data:image/png;base64,${btoa("floor-one")}`,
+      secondFloorSeatMapImg: "not-a-data-url",
+    }));
+  try {
+    await assertRejects(
+      () =>
+        action(
+          createOpenApiToolsPlugin({ apis: [definition] }),
+          "available_seats",
+        ).execute({}, context) as Promise<unknown>,
+      TypeError,
+      "is not a valid data URL",
+    );
+    assertEquals(publishes, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 Deno.test("OpenAPI aliases are deterministic and collisions fail composition", () => {
   const normalized = createOpenApiToolsPlugin({
     apis: [api("GET /records")],
@@ -706,6 +844,82 @@ Deno.test("OpenAPI aliases are deterministic and collisions fail composition", (
       }),
     TypeError,
     "alias collision 'same'",
+  );
+});
+
+Deno.test("OpenAPI alias maps are declaration maps and retain every operation alias", () => {
+  const definition = defineApi({
+    id: "fixture-api",
+    name: "Fixture API",
+    baseUrl: "https://example.test",
+    openApiSchema: {
+      openapi: "3.1.0",
+      paths: {
+        "/one": {
+          get: { operationId: "first_operation", responses: { 200: {} } },
+        },
+        "/two": {
+          post: { operationId: "second_operation", responses: { 200: {} } },
+        },
+      },
+    },
+  });
+  const arrayPlugin = createOpenApiToolsPlugin({ apis: [definition] });
+  const mapPlugin = createOpenApiToolsPlugin({
+    apis: { fixture: definition },
+  });
+  assertEquals(Object.keys(mapPlugin.actions), [
+    "first_operation",
+    "second_operation",
+  ]);
+  assertEquals(Object.keys(mapPlugin.resources.tools), [
+    "first_operation",
+    "second_operation",
+  ]);
+  assertEquals(
+    Object.keys(mapPlugin.actions),
+    Object.keys(arrayPlugin.actions),
+  );
+});
+
+Deno.test("defineApi snapshots mutable JSON and OpenAPI maps reject unsafe declarations", () => {
+  const schema = {
+    openapi: "3.1.0",
+    paths: {
+      "/status": {
+        get: { operationId: "original_status", responses: { 200: {} } },
+      },
+    },
+  };
+  const api = defineApi({
+    id: "snapshot-api",
+    name: "Snapshot API",
+    baseUrl: "https://example.test",
+    openApiSchema: schema,
+    headers: { "X-Original": "yes" },
+  });
+  schema.paths["/status"].get.operationId = "mutated_status";
+  const plugin = createOpenApiToolsPlugin({ apis: { fixture: api } });
+  assertEquals(Object.keys(plugin.actions), ["original_status"]);
+
+  assertThrows(
+    () => createOpenApiToolsPlugin({ apis: { "not-valid": api } }),
+    TypeError,
+    "invalid alias",
+  );
+  const unsafe = Object.create(null) as Record<string, typeof api>;
+  unsafe.__proto__ = api;
+  assertThrows(
+    () => createOpenApiToolsPlugin({ apis: unsafe }),
+    TypeError,
+    "invalid alias",
+  );
+  const customPrototype = Object.create({ inherited: api });
+  customPrototype.fixture = api;
+  assertThrows(
+    () => createOpenApiToolsPlugin({ apis: customPrototype }),
+    TypeError,
+    "plain alias map",
   );
 });
 

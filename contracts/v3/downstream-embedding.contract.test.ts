@@ -68,7 +68,7 @@ function migratedApplicationPlugin() {
           id: "support",
           name: "Support",
           role: "Support agent",
-          models: { generate: "injected" },
+          models: { generate: ["injected"] },
         },
       },
       models: { injected: model },

@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.62.0 — 2026-08-23
+## 0.62.0 — 2026-08-24
 
 Final plugin-first runtime and deployed-data migration release.
 
@@ -9,9 +9,10 @@ Final plugin-first runtime and deployed-data migration release.
 - The root now exposes one application factory and the narrow
   `{ send, observe, close }` surface. Runtime internals, semantic DTOs, and host
   capabilities live on explicit subpaths or inside their owning plugins.
-- LLM calls and every concrete Tool are native Actions. Model Resources and LLM
-  Adapters are application-owned; Tool Resources are data-only presentations of
-  the same Action aliases Core invokes.
+- LLM calls and every concrete Tool are native Actions. Built-in providers are
+  selected directly by ordered Model Resources; custom LLM Adapters remain
+  application-owned. Tool Resources are data-only presentations of the same
+  Action aliases Core invokes.
 - Goals, Channels, Memory, Knowledge, Skills, Schedules, Usage, and Admin are
   ordinary plugins built from Collections, Actions, Processors, Resources, and
   Adapters. The legacy controller/catalog/executor paths are removed.
@@ -24,6 +25,16 @@ Final plugin-first runtime and deployed-data migration release.
   subscriber-owned byte follower per `stream.output` descriptor.
 - Core-owned conversation contracts, projections, and portable CLI adapters on
   `/core`, `/core/cli`, and `/core/cli/node`.
+- Parallel Tool branches with sequential `jq` pipelines, durable fan-in, nested
+  Agent asks, public/private Ask history, and participant-aware CLI streaming.
+- Frozen Agent instruction hooks, Tool/API authoring helpers, reusable dynamic
+  LLM credential Resources, and built-in provider Models that require no
+  manually instantiated provider Adapter.
+- Per-provider-attempt Usage accounting. Framework-rejected streams drain to
+  final metering before recovery, while credentials remain process-local and
+  absent from Action lifecycle data.
+- OpenAPI response Asset promotion for configured data URL/base64 fields, with
+  canonical Asset references replacing raw media payloads.
 - The sole deployed-data migration, `/migration/v4#migrateToV4`, for the exact
   legacy graph profile used by Copilotz 0.47/0.48. It archives old tables,
   creates ordinary v4 source Events, rebuilds and verifies projections, and

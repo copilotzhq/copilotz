@@ -27,6 +27,8 @@ const MAX_ASK_DEPTH = 8;
 export type AskInput = Readonly<{
   target: string;
   message: string;
+  /** Public is a group-visible ask; private limits delivery to both agents. */
+  mode?: "public" | "private";
 }>;
 
 export type AskOutput = Readonly<{ status: "deferred" }>;
@@ -43,7 +45,14 @@ const askInputSchema = {
     message: {
       type: "string",
       minLength: 1,
-      description: "The complete public question for that agent.",
+      description: "The complete question for that agent.",
+    },
+    mode: {
+      type: "string",
+      enum: ["public", "private"],
+      default: "public",
+      description:
+        "Controls Ask visibility. 'public' (default) adds the question, discussion, and answer to shared conversation history. 'private' limits that Ask history to the asking and asked agents.",
     },
   },
   required: ["target", "message"],
@@ -136,6 +145,14 @@ async function executeAsk(
     typeof input.message === "string" ? input.message : undefined,
     "Ask message",
   );
+  const requestedMode: "public" | "private" =
+    input.mode === undefined || input.mode === "public"
+      ? "public"
+      : input.mode === "private"
+      ? "private"
+      : (() => {
+        throw new TypeError("Ask mode must be public or private.");
+      })();
   const metadata = coreToolActionMetadata(context.action.metadata);
   if (!metadata || metadata.action !== "ask") {
     throw new Error("The ask Action requires Core Tool plan metadata.");
@@ -184,6 +201,9 @@ async function executeAsk(
   }
 
   const parentAsk = metadata.ask;
+  const mode: "public" | "private" = parentAsk?.mode === "private"
+    ? "private"
+    : requestedMode;
   const depth = (parentAsk?.depth ?? 0) + 1;
   if (depth > MAX_ASK_DEPTH) {
     throw new Error(
@@ -205,6 +225,7 @@ async function executeAsk(
     schema: "copilotz.ask.v1",
     askId,
     phase: "question",
+    mode,
     toolActionRunId: context.action.runId,
     toolCallId: metadata.toolCallId,
     toolInvocation,
@@ -231,7 +252,13 @@ async function executeAsk(
     sender: askingParticipant,
     recipientIds: [String(askedParticipant.id)],
     content: message,
-    visibility: { kind: "public" },
+    visibility: mode === "public" ? { kind: "public" } : {
+      kind: "participants",
+      participantIds: [
+        String(askingParticipant.id),
+        String(askedParticipant.id),
+      ],
+    },
     metadata: withAgentAskMetadata(undefined, ask),
   }, {
     operationKey: `ask:${askId}:question`,
@@ -256,6 +283,6 @@ export const askAction: ActionDefinition<
 export const askTool: ToolResource<"ask"> = defineTool("ask", askAction, {
   name: "Ask Agent",
   description:
-    "Ask another agent in this thread a public question and resume after its public answer.",
+    "Ask another agent and resume after its canonical answer. Defaults to public group conversation; use mode 'private' for a DM-like exchange limited to the asking and asked agents.",
   history: { visibility: "public_status" },
 });

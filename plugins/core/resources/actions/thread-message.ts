@@ -194,9 +194,10 @@ function asSender(value: unknown): ThreadMessageSender {
   return record as ThreadMessageSender;
 }
 
-async function executeCreateThreadMessage(
+/** Idempotent Core domain write, usable without creating a child Action receipt. */
+export async function createThreadMessage(
   input: unknown,
-  context: ActionContext,
+  context: Pick<ActionContext, "collections" | "content" | "transaction">,
 ): Promise<CollectionRecord> {
   const data = asRecord(input);
   const id = requireText(data.id, "Message ID");
@@ -218,7 +219,7 @@ async function executeCreateThreadMessage(
   const content = await prepareActionContent(
     data.content ?? [],
     context,
-    "message-content",
+    `message-content:${id}`,
   );
   await context.transaction(async (tx) => {
     const collections = tx.collections;
@@ -276,6 +277,13 @@ const createInputSchema = {
   },
   required: ["id", "threadId", "sender"],
 } as const;
+
+async function executeCreateThreadMessage(
+  input: unknown,
+  context: ActionContext,
+): Promise<CollectionRecord> {
+  return await createThreadMessage(input, context);
+}
 
 export const createThreadMessageAction: ActionDefinition<
   unknown,

@@ -98,7 +98,7 @@ function agent(id: string, name: string, withTool = false): AgentResource {
     name,
     role: "goal fixture",
     instructions: `ACTIVE_AGENT=${id}`,
-    models: { generate: "goalModel" },
+    models: { generate: ["goalModel"] },
     ...(withTool ? { capabilities: { tools: ["fixture_tool"] } } : {}),
   });
 }

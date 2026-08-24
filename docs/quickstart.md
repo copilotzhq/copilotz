@@ -8,7 +8,6 @@ embedded Gateway and Worker over a private in-process transport.
 ```ts
 import { createCopilotz } from "jsr:@copilotz/copilotz@^0.62.0";
 import { corePlugin, message } from "jsr:@copilotz/copilotz@^0.62.0/core";
-import { createOpenAiAdapter } from "jsr:@copilotz/copilotz@^0.62.0/llm";
 
 const apiKey = Deno.env.get("OPENAI_API_KEY");
 if (!apiKey) throw new Error("OPENAI_API_KEY is required.");
@@ -23,30 +22,56 @@ const app = await createCopilotz({
         id: "support",
         name: "Support",
         role: "Answer clearly and use only granted capabilities.",
-        models: { generate: "fast" },
+        models: { generate: ["fast"] },
         capabilities: {},
       },
     },
     models: {
       fast: {
-        adapter: "openai",
+        provider: "openai",
         model: "your-provider-model-id",
-      },
-    },
-  },
-  adapters: {
-    llm: {
-      openai: createOpenAiAdapter({
         apiKey,
-      }),
+      },
     },
   },
 });
 ```
 
-The Model Resource is durable, provider-neutral data. The Adapter captures the
-credential and transport at composition time. Neither the API key nor client is
-persisted in an Agent, Action input, or lifecycle output.
+Resources are immutable process-local semantic definitions. Their declarative
+fields are provider-neutral data; a Resource contract may also expose a typed,
+read-only policy hook (for example, dynamic Agent instructions). Hooks run from
+the composed Resource and are never persisted. A built-in Model Resource selects
+its provider driver and captures credentials and transport configuration at
+composition time. Neither the API key nor client is persisted in an Agent,
+Action input, or lifecycle output. Custom providers use
+`createLlmAdapter({ call })` from `/llm`; built-in providers need no Adapter
+declaration or factory import.
+
+When several Models use the same account, declare the credential once:
+
+```ts
+import { defineLlmCredential } from "jsr:@copilotz/copilotz@^0.62.0/llm";
+
+const openai = defineLlmCredential({ provider: "openai", apiKey });
+
+const resources = {
+  llmCredentials: { openai },
+  models: {
+    fast: { provider: "openai", model: "fast-model", credentials: "openai" },
+    strong: {
+      provider: "openai",
+      model: "strong-model",
+      credentials: "openai",
+    },
+  },
+};
+```
+
+`defineLlmCredential({ provider, resolve })` supports a tenant/user-scoped
+connected account. The resolver receives a narrow trusted runtime context, runs
+at most once for that credential alias in one `llm.call`, and returns either
+ephemeral key/headers or `{ available: false }` so fallback skips the Model
+without provider I/O. Resolver output is never persisted.
 
 ## Send typed ingress
 
@@ -82,12 +107,15 @@ is drained. Detached Processors remain durable but do not delay this handle.
 ## Add a native Tool
 
 ```ts
-import { defineAction } from "jsr:@copilotz/copilotz@^0.62.0/actions";
-import { definePlugin } from "jsr:@copilotz/copilotz@^0.62.0/plugins";
-import { defineTool } from "jsr:@copilotz/copilotz@^0.62.0/tools";
+import {
+  createToolsPlugin,
+  defineTool,
+} from "jsr:@copilotz/copilotz@^0.62.0/tools";
 
-const lookupCustomer = defineAction({
+const lookupCustomer = defineTool({
   id: "acme.customer.lookup",
+  name: "Lookup customer",
+  description: "Fetch a customer by ID.",
   inputSchema: {
     type: "object",
     properties: { id: { type: "string" } },
@@ -98,18 +126,10 @@ const lookupCustomer = defineAction({
   },
 });
 
-const customerPlugin = definePlugin({
+const customerPlugin = createToolsPlugin({
   id: "@acme/customer-support",
   version: "1.0.0",
-  actions: { lookup_customer: lookupCustomer },
-  resources: {
-    tools: {
-      lookup_customer: defineTool("lookup_customer", lookupCustomer, {
-        name: "Lookup customer",
-        description: "Fetch a customer by ID.",
-      }),
-    },
-  },
+  tools: { lookup_customer: lookupCustomer },
 });
 ```
 
@@ -123,3 +143,7 @@ capabilities: {
 
 Installing a Tool does not grant it. The Tool Resource describes one existing
 Action alias; Core invokes that Action directly, so there is one lifecycle.
+`defineTool({ execute })` plus `createToolsPlugin` is intentionally a compiler
+convenience: it creates the native Action and its data-only Tool Resource. Use
+an Action, rather than a Resource hook, for work that needs retries, durable
+provenance, or external side effects.

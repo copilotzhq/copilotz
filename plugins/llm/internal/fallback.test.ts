@@ -5,10 +5,7 @@ import {
   assertRejects,
 } from "https://deno.land/std@0.208.0/assert/mod.ts";
 
-import {
-  isCrossResourceFailover,
-  LLMProviderError,
-} from "./errors.ts";
+import { isCrossResourceFailover, LLMProviderError } from "./errors.ts";
 import { chat } from "./orchestrator.ts";
 import type { ProviderRegistry } from "./types.ts";
 

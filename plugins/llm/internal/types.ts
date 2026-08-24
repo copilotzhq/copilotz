@@ -345,6 +345,26 @@ export interface ToolCallStreamDelta {
   toolCallId?: string;
 }
 
+/** Internal provider representation of one sequential tool-call branch. */
+export interface ToolPipelineToolStage {
+  type: "tool";
+  id: string;
+  tool: { id: string; name?: string };
+  args: string;
+}
+
+export interface ToolPipelineJqStage {
+  type: "jq";
+  filter: string;
+}
+
+export type ToolPipelineStage = ToolPipelineToolStage | ToolPipelineJqStage;
+
+export interface ToolPipeline {
+  id: string;
+  stages: ToolPipelineStage[];
+}
+
 // Unified Tool Invocation payload mapping executions end-to-end
 export interface ToolInvocation {
   /** Framework-owned correlation ID. Model/provider-supplied IDs are ignored. */
@@ -362,6 +382,8 @@ export interface ToolInvocation {
     | "failed"
     | "expired"
     | "overwritten";
+  /** Sequential branch plan, retained through prompt rehydration. */
+  pipeline?: ToolPipeline;
 }
 
 // Response from chat completions with media processing results

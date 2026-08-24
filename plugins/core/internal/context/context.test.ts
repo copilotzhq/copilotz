@@ -1,9 +1,6 @@
 import { assertEquals, assertRejects, assertThrows } from "@std/assert";
 import type { AgentResource } from "../../agent.ts";
-import type {
-  ConversationThread,
-  Participant,
-} from "../../contracts.ts";
+import type { ConversationThread, Participant } from "../../contracts.ts";
 import type { ProcessorContext } from "@copilotz/copilotz/plugins";
 import {
   collectContextContributions,

@@ -52,12 +52,12 @@ export type CreateLongTermMemoryPluginOptions =
   & (
     | Readonly<{
       enabled?: boolean;
-      /** Alias in the application's composed `resources.models` map. */
-      model: string;
+      /** Ordered aliases in the application's composed `resources.models`. */
+      models: readonly [string, ...string[]];
     }>
     | Readonly<{
       enabled: false;
       /** Required only if disabled maintenance is invoked manually. */
-      model?: never;
+      models?: never;
     }>
   );

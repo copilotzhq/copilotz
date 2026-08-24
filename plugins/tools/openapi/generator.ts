@@ -3,11 +3,13 @@ import type {
   APIPrepareRequestContext,
   APIPrepareRequestInput,
   APIResponseAssetMapping,
+  APIResponseAssetMappings,
 } from "../resources.ts";
 import {
   assetIdFromRef,
   base64ToBytes,
   type ContentRef,
+  parseDataUrl,
 } from "@copilotz/copilotz/content";
 import {
   type ActionContext,
@@ -17,6 +19,7 @@ import {
 import { type CopilotzPlugin, definePlugin } from "@copilotz/copilotz/plugins";
 import { parse as parseYaml } from "../../../dependencies/yaml.ts";
 import { defineTool, type ToolResource } from "../contracts.ts";
+import { cloneLosslessJson } from "../lifecycle-json.ts";
 import {
   assertGeneratedEntryUnique,
   generatedActionAlias,
@@ -102,6 +105,119 @@ function responseField(
   return value;
 }
 
+const DEFAULT_RESPONSE_ASSET_MAX_BYTES = 20 * 1024 * 1024;
+
+type ResponseAssetCandidate = Readonly<{
+  mappingIndex: number;
+  sourceField: string;
+  outputField: string;
+  mediaType: string;
+  bytes: Uint8Array;
+  name?: string;
+}>;
+
+function responseAssetMappings(
+  configured: APIResponseAssetMappings,
+): readonly APIResponseAssetMapping[] {
+  const mappings = Array.isArray(configured) ? configured : [configured];
+  if (mappings.length === 0) {
+    throw new TypeError("Response asset mappings cannot be empty.");
+  }
+  return mappings as readonly APIResponseAssetMapping[];
+}
+
+function responseAssetSource(
+  response: Record<string, unknown>,
+  mapping: APIResponseAssetMapping,
+): Readonly<{ field: string; mediaType: string; bytes: Uint8Array }> | null {
+  const dataUrlMapping = "dataUrlField" in mapping &&
+    typeof mapping.dataUrlField === "string";
+  const base64Mapping = "dataBase64Field" in mapping &&
+    typeof mapping.dataBase64Field === "string";
+  if (dataUrlMapping === base64Mapping) {
+    throw new TypeError(
+      "Response asset mapping requires exactly one dataUrlField or dataBase64Field.",
+    );
+  }
+
+  const field = dataUrlMapping ? mapping.dataUrlField : mapping.dataBase64Field;
+  const raw = response[field];
+  if ((raw === undefined || raw === null) && mapping.optional) return null;
+  if (typeof raw !== "string" || !raw.trim()) {
+    throw new TypeError(
+      `Asset-producing API response requires asset data field '${field}'.`,
+    );
+  }
+
+  if (dataUrlMapping) {
+    const parsed = parseDataUrl(raw);
+    if (!parsed) {
+      throw new TypeError(
+        `Asset-producing API response field '${field}' is not a valid data URL.`,
+      );
+    }
+    return Object.freeze({ field, ...parsed });
+  }
+
+  const mediaType = responseField(
+    response,
+    mapping.mediaTypeField,
+    "media type",
+  );
+  try {
+    return Object.freeze({
+      field,
+      mediaType,
+      bytes: base64ToBytes(raw),
+    });
+  } catch {
+    throw new TypeError(
+      `Asset-producing API response field '${field}' is not valid base64.`,
+    );
+  }
+}
+
+function validateResponseAsset(
+  source: Readonly<{ mediaType: string; bytes: Uint8Array }>,
+  mapping: APIResponseAssetMapping,
+): void {
+  const mediaTypes = mapping.mediaTypes;
+  if (mediaTypes !== undefined) {
+    if (
+      !Array.isArray(mediaTypes) || mediaTypes.length === 0 ||
+      mediaTypes.some((value) => typeof value !== "string" || !value.trim())
+    ) {
+      throw new TypeError(
+        "Response asset mediaTypes must be non-empty strings.",
+      );
+    }
+    const mediaType = source.mediaType.toLowerCase();
+    const allowed = mediaTypes.some((value) => {
+      const expected = value.trim().toLowerCase();
+      return expected.endsWith("/*")
+        ? mediaType.startsWith(expected.slice(0, -1))
+        : mediaType === expected;
+    });
+    if (!allowed) {
+      throw new TypeError(
+        `Response asset media type '${source.mediaType}' is not allowed.`,
+      );
+    }
+  }
+
+  const maxBytes = mapping.maxBytes ?? DEFAULT_RESPONSE_ASSET_MAX_BYTES;
+  if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) {
+    throw new TypeError(
+      "Response asset maxBytes must be a positive safe integer.",
+    );
+  }
+  if (source.bytes.byteLength > maxBytes) {
+    throw new TypeError(
+      `Response asset exceeds the configured ${maxBytes}-byte limit.`,
+    );
+  }
+}
+
 function attachmentKind(
   mediaType: string,
 ): "image" | "audio" | "video" | "file" {
@@ -115,51 +231,75 @@ function attachmentName(value: string): string {
   return value.split(/[\\/]/).filter(Boolean).at(-1) ?? value;
 }
 
-async function promoteResponseAsset(
+async function promoteResponseAssets(
   value: unknown,
-  mapping: APIResponseAssetMapping,
+  configured: APIResponseAssetMappings,
   context: ActionContext,
   actionAlias: string,
 ): Promise<Readonly<Record<string, unknown>>> {
   const response = responseRecord(value);
-  const dataBase64 = responseField(
-    response,
-    mapping.dataBase64Field,
-    "base64 data",
-  );
-  const mediaType = responseField(
-    response,
-    mapping.mediaTypeField,
-    "media type",
-  );
-  const nameValue = mapping.nameField
-    ? responseField(response, mapping.nameField, "name")
-    : undefined;
-  const output = Object.fromEntries(
-    Object.entries(response).filter(([field]) =>
-      field !== mapping.dataBase64Field
-    ),
-  );
-  const name = nameValue ? attachmentName(nameValue) : undefined;
-  const asset = await context.content.publish({
-    body: base64ToBytes(dataBase64),
-    mediaType,
-    ...(name ? { metadata: { name } } : {}),
-  }, {
-    operationKey: `openapi:${actionAlias}:response-asset`,
-  });
-  const ref: ContentRef = Object.freeze({
-    assetId: asset.id,
-    kind: attachmentKind(mediaType),
-    role: "attachment",
-    mediaType,
-    disposition: "attachment",
-    ...(name ? { name } : {}),
-  });
-  return Object.freeze({
-    ...output,
-    [mapping.outputField?.trim() || "asset"]: ref,
-  });
+  const mappings = responseAssetMappings(configured);
+  const output: Record<string, unknown> = { ...response };
+  const outputFields = new Set<string>();
+  const candidates: ResponseAssetCandidate[] = [];
+
+  for (const [index, mapping] of mappings.entries()) {
+    if (!mapping || typeof mapping !== "object" || Array.isArray(mapping)) {
+      throw new TypeError("Response asset mapping must be an object.");
+    }
+    const source = responseAssetSource(response, mapping);
+    if (!source) continue;
+    validateResponseAsset(source, mapping);
+    const outputField = mapping.outputField?.trim() ||
+      (mappings.length === 1 ? "asset" : `${source.field}Asset`);
+    if (!outputField || outputFields.has(outputField)) {
+      throw new TypeError(
+        `Response asset output field '${outputField}' must be unique.`,
+      );
+    }
+    if (
+      outputField !== source.field && Object.hasOwn(response, outputField)
+    ) {
+      throw new TypeError(
+        `Response asset output field '${outputField}' would overwrite response data.`,
+      );
+    }
+    outputFields.add(outputField);
+    const nameValue = mapping.nameField
+      ? responseField(response, mapping.nameField, "name")
+      : undefined;
+    candidates.push(Object.freeze({
+      mappingIndex: index,
+      sourceField: source.field,
+      outputField,
+      mediaType: source.mediaType,
+      bytes: source.bytes,
+      ...(nameValue ? { name: attachmentName(nameValue) } : {}),
+    }));
+    delete output[source.field];
+  }
+
+  for (const candidate of candidates) {
+    const asset = await context.content.publish({
+      body: candidate.bytes,
+      mediaType: candidate.mediaType,
+      ...(candidate.name ? { metadata: { name: candidate.name } } : {}),
+    }, {
+      operationKey: mappings.length === 1
+        ? `openapi:${actionAlias}:response-asset`
+        : `openapi:${actionAlias}:response-asset:${candidate.mappingIndex}:${candidate.outputField}`,
+    });
+    const ref: ContentRef = Object.freeze({
+      assetId: asset.id,
+      kind: attachmentKind(candidate.mediaType),
+      role: "attachment",
+      mediaType: candidate.mediaType,
+      disposition: "attachment",
+      ...(candidate.name ? { name: candidate.name } : {}),
+    });
+    output[candidate.outputField] = ref;
+  }
+  return Object.freeze(output);
 }
 
 /**
@@ -1053,7 +1193,7 @@ function createApiExecutor(
 
       const assetMapping = apiConfig.responseAssets?.[toolKey];
       const result = assetMapping
-        ? await promoteResponseAsset(
+        ? await promoteResponseAssets(
           responseData,
           assetMapping,
           context,
@@ -1180,30 +1320,167 @@ function generateApiEntries(apiConfig: API): readonly GeneratedOpenApiTool[] {
   return Object.freeze(entries);
 }
 
+export type DefinedApi<TApi extends API = API> = TApi;
+
+const API_CONFIG_KEYS = new Set([
+  "id",
+  "name",
+  "externalId",
+  "description",
+  "openApiSchema",
+  "baseUrl",
+  "headers",
+  "auth",
+  "timeout",
+  "includeResponseHeaders",
+  "streamNdjson",
+  "prepareRequest",
+  "responseAssets",
+  "metadata",
+  "historyPolicyDefaults",
+  "toolPolicies",
+]);
+const API_DECLARATION_ALIAS = /^[a-z][a-zA-Z0-9_]*$/;
+const UNSAFE_API_DECLARATION_ALIASES = new Set([
+  "__proto__",
+  "constructor",
+  "prototype",
+]);
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+function snapshotApiJson<T>(value: T, label: string): T {
+  return value === undefined || value === null
+    ? value
+    : cloneLosslessJson(value, label);
+}
+
+function declarationAlias(value: string): string {
+  if (
+    !API_DECLARATION_ALIAS.test(value) ||
+    UNSAFE_API_DECLARATION_ALIASES.has(value)
+  ) {
+    throw new TypeError(`OpenAPI declaration has invalid alias '${value}'.`);
+  }
+  return value;
+}
+
+/**
+ * Names an OpenAPI integration at its declaration site. It deliberately keeps
+ * transport callbacks on the API definition; generated Tool Resources remain
+ * data-only.
+ */
+export function defineApi<const TApi extends API>(
+  config: TApi,
+): DefinedApi<TApi> {
+  if (!isPlainRecord(config)) {
+    throw new TypeError("API definition must be an object.");
+  }
+  const unknown = Object.keys(config).find((key) => !API_CONFIG_KEYS.has(key));
+  if (unknown) {
+    throw new TypeError(`API definition cannot declare '${unknown}'.`);
+  }
+  if (typeof config.id !== "string" || !config.id.trim()) {
+    throw new TypeError("API id is required.");
+  }
+  if (typeof config.name !== "string" || !config.name.trim()) {
+    throw new TypeError("API name is required.");
+  }
+  return Object.freeze({
+    ...config,
+    ...(config.openApiSchema && typeof config.openApiSchema === "object"
+      ? {
+        openApiSchema: snapshotApiJson(
+          config.openApiSchema,
+          "API OpenAPI schema",
+        ),
+      }
+      : {}),
+    ...(config.headers
+      ? { headers: snapshotApiJson(config.headers, "API headers") }
+      : {}),
+    ...(config.metadata
+      ? { metadata: snapshotApiJson(config.metadata, "API metadata") }
+      : {}),
+    ...(config.responseAssets
+      ? {
+        responseAssets: snapshotApiJson(
+          config.responseAssets,
+          "API response assets",
+        ),
+      }
+      : {}),
+    ...(config.historyPolicyDefaults
+      ? {
+        historyPolicyDefaults: snapshotApiJson(
+          config.historyPolicyDefaults,
+          "API history policy",
+        ),
+      }
+      : {}),
+    ...(config.toolPolicies
+      ? {
+        toolPolicies: snapshotApiJson(config.toolPolicies, "API Tool policies"),
+      }
+      : {}),
+  }) as DefinedApi<TApi>;
+}
+
+export type OpenApiDefinitions = Readonly<Record<string, API>>;
+
 export type CreateOpenApiToolsPluginOptions = Readonly<{
-  apis: readonly API[];
+  /** Array form retains one generated Tool per operation. */
+  apis: readonly API[] | OpenApiDefinitions;
   id?: string;
   version?: string;
 }>;
 
+/** Concrete plugin shape produced by OpenAPI discovery. */
+export type OpenApiToolsPlugin = CopilotzPlugin<
+  string,
+  string,
+  readonly [],
+  Readonly<Record<never, never>>,
+  Readonly<Record<string, AnyActionDefinition>>,
+  Readonly<Record<never, never>>,
+  Readonly<{ tools: Readonly<Record<string, ToolResource>> }>
+>;
+
 /** Discovers every OpenAPI operation before runtime composition. */
 export function createOpenApiToolsPlugin(
   options: CreateOpenApiToolsPluginOptions,
-): CopilotzPlugin {
-  if (!options || !Array.isArray(options.apis)) {
-    throw new TypeError("OpenAPI Tool plugin requires an APIs array.");
+): OpenApiToolsPlugin {
+  if (!options || !options.apis || typeof options.apis !== "object") {
+    throw new TypeError("OpenAPI Tool plugin requires APIs.");
   }
   const entries: GeneratedOpenApiTool[] = [];
   const aliases = new Set<string>();
   const actionIds = new Set<string>();
-  for (const api of options.apis) {
-    for (const entry of generateApiEntries(api)) {
+  const apiEntries = Array.isArray(options.apis)
+    ? options.apis.map((api) => [undefined, api] as const)
+    : (() => {
+      if (!isPlainRecord(options.apis)) {
+        throw new TypeError(
+          "OpenAPI APIs must be an array or plain alias map.",
+        );
+      }
+      return Object.entries(options.apis).map(([alias, api]) =>
+        [declarationAlias(alias), api as API] as const
+      );
+    })();
+  for (const [alias, api] of apiEntries) {
+    const generated = generateApiEntries(api);
+    for (const entry of generated) {
       assertGeneratedEntryUnique(
         aliases,
         actionIds,
         entry.alias,
         entry.action.id,
-        `OpenAPI '${api.id}'`,
+        `OpenAPI '${api.id}'${alias === undefined ? "" : ` (${alias})`}`,
       );
       entries.push(entry);
     }
@@ -1219,5 +1496,5 @@ export function createOpenApiToolsPlugin(
         entries.map((entry) => [entry.alias, entry.tool]),
       ),
     },
-  });
+  }) as unknown as OpenApiToolsPlugin;
 }

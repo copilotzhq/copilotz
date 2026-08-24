@@ -12,6 +12,11 @@ import type {
   PreparedContent,
   ResolvedContent,
 } from "@copilotz/copilotz/content";
+import {
+  type ActionEventData,
+  createActionCallers,
+  createActionLifecycleEmitter,
+} from "@copilotz/copilotz/actions";
 import type {
   ContentStreamOpenInput,
   ContentStreamWriter,
@@ -29,6 +34,8 @@ import {
   type LlmAdapterFrame,
   type LlmAdapterResult,
   type LlmCallInput,
+  type LlmCredentialResolution,
+  type LlmCredentialResource,
   type ModelResource,
 } from "./contracts.ts";
 import { llmPlugin } from "./plugin.ts";
@@ -88,7 +95,8 @@ type OpenedStream = {
 
 type FixtureOptions = Readonly<{
   models: Readonly<Record<string, ModelResource | undefined>>;
-  adapters: Readonly<Record<string, LlmAdapter | undefined>>;
+  llmCredentials?: Readonly<Record<string, LlmCredentialResource | undefined>>;
+  adapters?: Readonly<Record<string, LlmAdapter | undefined>>;
   resolved?: Readonly<Record<string, ResolvedContent>>;
   signal?: AbortSignal;
   onAppend?: () => void;
@@ -104,6 +112,7 @@ function fixture(options: FixtureOptions) {
   const opened: OpenedStream[] = [];
   let inputFollowerCancelled = 0;
   let progressCalls = 0;
+  const progressValues: unknown[] = [];
 
   const prepare = (
     input: ContentInput | readonly ContentInput[],
@@ -140,8 +149,15 @@ function fixture(options: FixtureOptions) {
     namespace: "tenant-a",
     operationKey: "operation-a",
     identity: Object.freeze({ correlationId: "correlation-a" }),
-    resources: Object.freeze({ models: options.models }),
-    adapters: Object.freeze({ llm: options.adapters }),
+    resources: Object.freeze({
+      models: options.models,
+      ...(options.llmCredentials
+        ? { llmCredentials: options.llmCredentials }
+        : {}),
+    }),
+    adapters: options.adapters
+      ? Object.freeze({ llm: options.adapters })
+      : Object.freeze({}),
     actions: Object.freeze({}),
     collections: Object.freeze({}),
     content: Object.freeze({
@@ -245,8 +261,9 @@ function fixture(options: FixtureOptions) {
       runId: "run-a",
       metadata: Object.freeze({}),
     }),
-    progress() {
+    progress(value: unknown) {
       progressCalls += 1;
+      progressValues.push(structuredClone(value));
       return Promise.resolve();
     },
     now: () => new Date("2026-08-23T00:00:00.000Z"),
@@ -262,23 +279,23 @@ function fixture(options: FixtureOptions) {
     opened,
     inputFollowerCancelled: () => inputFollowerCancelled,
     progressCalls: () => progressCalls,
+    progressValues: () => structuredClone(progressValues),
   };
 }
 
 const emptyInput = Object.freeze({
-  model: "primary",
+  models: Object.freeze(["primary"] as const),
+  mode: "generate" as const,
   request: Object.freeze({ messages: Object.freeze([]) }),
 }) satisfies LlmCallInput;
 
 function model(
   adapter: string,
   name: string,
-  fallbacks?: readonly string[],
 ): ModelResource {
   return Object.freeze({
     adapter,
     model: name,
-    ...(fallbacks ? { fallbacks: Object.freeze(fallbacks) } : {}),
   });
 }
 
@@ -314,6 +331,474 @@ Deno.test("llmPlugin installs only the callLlm Action", () => {
   assertEquals(llmPlugin.adapters, {});
 });
 
+Deno.test("llm.call runs a built-in Model without adapters and never returns its profile secrets", async () => {
+  const originalFetch = globalThis.fetch;
+  let authorization: string | null = null;
+  let requestedUrl = "";
+  globalThis.fetch = (input, init) => {
+    requestedUrl = String(input);
+    authorization = new Headers(init?.headers).get("authorization");
+    return Promise.resolve(
+      new Response(
+        [
+          'data: {"choices":[{"delta":{"content":"hello"},"finish_reason":null}]}',
+          'data: {"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}',
+          "data: [DONE]",
+          "",
+        ].join("\n\n"),
+        { headers: { "content-type": "text/event-stream" } },
+      ),
+    );
+  };
+
+  const test = fixture({
+    models: {
+      primary: {
+        provider: "openai",
+        model: "provider-model",
+        apiKey: "built-in-secret",
+        baseUrl: "https://account.example/v1",
+        extraHeaders: { "X-Account": "primary" },
+        options: { estimateCost: false, openaiApi: "chat_completions" },
+      },
+    },
+  });
+  try {
+    const output = await callLlmAction.execute(emptyInput, test.context);
+    assertEquals(requestedUrl, "https://account.example/v1/chat/completions");
+    assertEquals(authorization, "Bearer built-in-secret");
+    assertEquals(output.model, "primary");
+    assertEquals(output.adapter, "openai");
+    assertEquals(output.attempts?.[0]?.model, "primary");
+    assertEquals(
+      JSON.stringify({ input: emptyInput, output }).includes("built-in-secret"),
+      false,
+    );
+    assertEquals(
+      JSON.stringify(output).includes("https://account.example/v1"),
+      false,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("resolved credentials never enter durable Action lifecycle data", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (_input, init) => {
+    assertEquals(
+      new Headers(init?.headers).get("authorization"),
+      "Bearer ephemeral-resolver-secret",
+    );
+    assertEquals(
+      new Headers(init?.headers).get("x-connected-account"),
+      "account-secret",
+    );
+    return Promise.resolve(
+      new Response(
+        [
+          'data: {"choices":[{"delta":{"content":"safe"},"finish_reason":null}]}',
+          'data: {"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}',
+          "data: [DONE]",
+          "",
+        ].join("\n\n"),
+        { headers: { "content-type": "text/event-stream" } },
+      ),
+    );
+  };
+  const test = fixture({
+    models: {
+      primary: {
+        provider: "openai",
+        model: "provider-model",
+        credentials: "connected",
+        baseUrl: "https://nonsecret-endpoint.example/v1",
+        options: { estimateCost: false, openaiApi: "chat_completions" },
+      },
+    },
+    llmCredentials: {
+      connected: {
+        provider: "openai",
+        resolve: () => ({
+          available: true,
+          apiKey: "ephemeral-resolver-secret",
+          extraHeaders: { "X-Connected-Account": "account-secret" },
+        }),
+      },
+    },
+  });
+  const lifecycleData: ActionEventData[] = [];
+  const lifecycle = createActionLifecycleEmitter({
+    namespace: "tenant-a",
+    append(input) {
+      lifecycleData.push(structuredClone(input.data));
+      return Promise.resolve(undefined as never);
+    },
+  });
+  const actions = createActionCallers({ callLlm: callLlmAction }, {
+    actionLifecycle: lifecycle,
+    signal: test.context.signal,
+    createInvocationKey: () => "credential-lifecycle",
+    createContext(input) {
+      return Object.freeze({
+        ...test.context,
+        action: Object.freeze({
+          id: input.frame.actionId,
+          runId: input.frame.actionRunId,
+          metadata: input.frame.metadata,
+        }),
+        progress: input.progress,
+      });
+    },
+  });
+
+  try {
+    await actions.callLlm(emptyInput, { operationKey: "credential-test" });
+    assertEquals(lifecycleData.map((data) => data.status), [
+      "invoked",
+      "completed",
+    ]);
+    const durable = JSON.stringify(lifecycleData);
+    assertEquals(durable.includes("ephemeral-resolver-secret"), false);
+    assertEquals(durable.includes("account-secret"), false);
+    assertEquals(durable.includes("X-Connected-Account"), false);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("llm.call reuses one dynamic credential resolver across fallback Models", async () => {
+  const originalFetch = globalThis.fetch;
+  let resolverCalls = 0;
+  let providerCalls = 0;
+  const seen: Array<Readonly<Record<string, unknown>>> = [];
+  globalThis.fetch = (_input, init) => {
+    providerCalls += 1;
+    if (providerCalls === 1) {
+      return Promise.reject(new Error("provider unavailable"));
+    }
+    assertEquals(
+      new Headers(init?.headers).get("authorization"),
+      "Bearer oauth-secret",
+    );
+    assertEquals(new Headers(init?.headers).get("x-account"), "account-1");
+    return Promise.resolve(
+      new Response(
+        [
+          'data: {"choices":[{"delta":{"content":"resolved"},"finish_reason":null}]}',
+          'data: {"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}',
+          "data: [DONE]",
+          "",
+        ].join("\n\n"),
+        { headers: { "content-type": "text/event-stream" } },
+      ),
+    );
+  };
+  const test = fixture({
+    models: {
+      primary: {
+        provider: "openai",
+        model: "gpt-primary",
+        credentials: "connected",
+        options: { estimateCost: false, openaiApi: "chat_completions" },
+      },
+      backup: {
+        provider: "openai",
+        model: "gpt-backup",
+        credentials: "connected",
+        options: { estimateCost: false, openaiApi: "chat_completions" },
+      },
+    },
+    llmCredentials: {
+      connected: {
+        provider: "openai",
+        resolve(context, execution) {
+          resolverCalls += 1;
+          seen.push({
+            namespace: context.namespace,
+            operationKey: context.operationKey,
+            runId: context.action.runId,
+            correlationId: context.identity.correlationId,
+            credential: execution.credential,
+          });
+          return {
+            available: true,
+            apiKey: "oauth-secret",
+            extraHeaders: { "X-Account": "account-1" },
+          };
+        },
+      },
+    },
+  });
+  try {
+    const output = await callLlmAction.execute({
+      ...emptyInput,
+      models: ["primary", "backup"],
+    }, test.context);
+    assertEquals(resolverCalls, 1);
+    assertEquals(providerCalls, 2);
+    assertEquals(seen, [{
+      namespace: "tenant-a",
+      operationKey: "operation-a",
+      runId: "run-a",
+      correlationId: "correlation-a",
+      credential: "connected",
+    }]);
+    assertEquals(output.model, "backup");
+    assertEquals(
+      JSON.stringify({ input: emptyInput, output }).includes("oauth-secret"),
+      false,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("an unavailable credential skips its Model without a provider attempt", async () => {
+  const originalFetch = globalThis.fetch;
+  let providerCalls = 0;
+  globalThis.fetch = (input) => {
+    providerCalls += 1;
+    assertEquals(String(input), "https://backup.example/v1/chat/completions");
+    return Promise.resolve(
+      new Response(
+        [
+          'data: {"choices":[{"delta":{"content":"backup"},"finish_reason":null}]}',
+          'data: {"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}',
+          "data: [DONE]",
+          "",
+        ].join("\n\n"),
+        { headers: { "content-type": "text/event-stream" } },
+      ),
+    );
+  };
+  const test = fixture({
+    models: {
+      connected: {
+        provider: "openai",
+        model: "connected-model",
+        credentials: "account",
+        options: { estimateCost: false, openaiApi: "chat_completions" },
+      },
+      backup: {
+        provider: "openai",
+        model: "backup-model",
+        apiKey: "backup-secret",
+        baseUrl: "https://backup.example/v1",
+        options: { estimateCost: false, openaiApi: "chat_completions" },
+      },
+    },
+    llmCredentials: {
+      account: {
+        provider: "openai",
+        resolve: () => ({ available: false, reason: "not connected" }),
+      },
+    },
+  });
+  try {
+    const output = await callLlmAction.execute({
+      ...emptyInput,
+      models: ["connected", "backup"],
+    }, test.context);
+    assertEquals(providerCalls, 1);
+    assertEquals(output.model, "backup");
+    assertEquals(output.attempts?.map((attempt) => attempt.model), ["backup"]);
+    assertEquals(JSON.stringify(output).includes("backup-secret"), false);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("an invalid dynamic credential result is sanitized and falls back", async () => {
+  const backup: LlmAdapter = {
+    call() {
+      return invocation({
+        content: "backup",
+        attempts: [{ status: "completed" }],
+      });
+    },
+  };
+  const test = fixture({
+    models: {
+      connected: {
+        provider: "openai",
+        model: "connected-model",
+        credentials: "account",
+      },
+      backup: model("backup", "backup-model"),
+    },
+    llmCredentials: {
+      account: {
+        provider: "openai",
+        resolve: () =>
+          ({ available: true }) as unknown as LlmCredentialResolution,
+      },
+    },
+    adapters: { backup },
+  });
+
+  const output = await callLlmAction.execute({
+    ...emptyInput,
+    models: ["connected", "backup"],
+  }, test.context);
+  assertEquals(output.model, "backup");
+  assertEquals(
+    output.attempts?.map((attempt) => ({
+      model: attempt.model,
+      providerRequest: attempt.providerRequest,
+      code: attempt.error?.code,
+    })),
+    [{
+      model: "connected",
+      providerRequest: false,
+      code: "credential_unavailable",
+    }, {
+      model: "backup",
+      providerRequest: true,
+      code: undefined,
+    }],
+  );
+});
+
+Deno.test("settled attempts remain accounted when later credentials are unavailable", async () => {
+  const primary: LlmAdapter = {
+    call() {
+      return invocation(Promise.reject(
+        new LlmAdapterCallError(
+          "primary failed",
+          {
+            attempts: [{
+              status: "failed",
+              usage: { inputTokens: 3, totalTokens: 3 },
+            }],
+          },
+        ),
+      ));
+    },
+  };
+  const test = fixture({
+    models: {
+      primary: model("primary", "primary-model"),
+      connected: {
+        provider: "openai",
+        model: "connected-model",
+        credentials: "account",
+      },
+    },
+    llmCredentials: {
+      account: {
+        provider: "openai",
+        resolve: () => ({ available: false }),
+      },
+    },
+    adapters: { primary },
+  });
+
+  await assertRejects(
+    async () =>
+      await callLlmAction.execute({
+        ...emptyInput,
+        models: ["primary", "connected"],
+      }, test.context),
+    Error,
+    "No LLM credential is available",
+  );
+  assertEquals(test.progressValues(), [{
+    schema: "copilotz.llm.attempt-accounting.v1",
+    attempts: [{
+      id: "run-a:attempt:0",
+      index: 0,
+      providerRequest: true,
+      model: "primary",
+      adapter: "primary",
+      providerModel: "primary-model",
+      status: "failed",
+      usage: { inputTokens: 3, totalTokens: 3 },
+      error: { message: "primary failed" },
+    }],
+  }]);
+});
+
+Deno.test("all unavailable credentials fail without a provider request", async () => {
+  const originalFetch = globalThis.fetch;
+  let providerCalls = 0;
+  globalThis.fetch = () => {
+    providerCalls += 1;
+    throw new Error("provider must not be called");
+  };
+  const test = fixture({
+    models: {
+      connected: {
+        provider: "openai",
+        model: "connected-model",
+        credentials: "account",
+        options: { estimateCost: false, openaiApi: "chat_completions" },
+      },
+    },
+    llmCredentials: {
+      account: {
+        provider: "openai",
+        resolve: () => ({ available: false }),
+      },
+    },
+  });
+  try {
+    await assertRejects(
+      async () =>
+        await callLlmAction.execute(
+          { ...emptyInput, models: ["connected"] },
+          test.context,
+        ),
+      Error,
+      "No LLM credential is available",
+    );
+    assertEquals(providerCalls, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("credential aliases and providers are preflighted before provider I/O", async () => {
+  let providerCalls = 0;
+  const test = fixture({
+    models: {
+      first: {
+        provider: "openai",
+        model: "first-model",
+        apiKey: "inline-secret",
+        options: { estimateCost: false, openaiApi: "chat_completions" },
+      },
+      invalid: {
+        provider: "anthropic",
+        model: "second-model",
+        credentials: "openai-credential",
+      },
+    },
+    llmCredentials: {
+      "openai-credential": { provider: "openai", apiKey: "shared-secret" },
+    },
+  });
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = () => {
+    providerCalls += 1;
+    throw new Error("provider must not be called");
+  };
+  try {
+    await assertRejects(
+      async () =>
+        await callLlmAction.execute(
+          { ...emptyInput, models: ["first", "invalid"] },
+          test.context,
+        ),
+      TypeError,
+      "provider must match",
+    );
+    assertEquals(providerCalls, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 Deno.test("llm.call rejects invalid durable input before Adapter use", async () => {
   let calls = 0;
   const adapter: LlmAdapter = {
@@ -342,7 +827,8 @@ Deno.test("llm.call rejects invalid durable input before Adapter use", async () 
   await assertRejects(
     async () =>
       await callLlmAction.execute({
-        model: "primary",
+        models: ["primary"],
+        mode: "generate",
         request: { messages: [{ role: "operator", content: [] }] },
       } as unknown as LlmCallInput, test.context),
     TypeError,
@@ -351,16 +837,26 @@ Deno.test("llm.call rejects invalid durable input before Adapter use", async () 
   await assertRejects(
     async () =>
       await callLlmAction.execute({
-        model: "primary",
+        models: ["primary"],
+        mode: "generate",
         request: { messages: [{ role: "user", content: ["inline"] }] },
       } as unknown as LlmCallInput, test.context),
     TypeError,
     "ContentRefs",
   );
+  await assertRejects(
+    async () =>
+      await callLlmAction.execute({
+        ...emptyInput,
+        models: ["primary", "primary"],
+      }, test.context),
+    TypeError,
+    "duplicates",
+  );
   assertEquals(calls, 0);
 });
 
-Deno.test("llm.call validates the complete fallback graph before calling", async () => {
+Deno.test("llm.call validates the complete candidate list before calling", async () => {
   let calls = 0;
   const adapter: LlmAdapter = {
     call() {
@@ -373,32 +869,89 @@ Deno.test("llm.call validates the complete fallback graph before calling", async
   };
   const missing = fixture({
     models: {
-      primary: model("provider", "model-a", ["missing"]),
+      primary: model("provider", "model-a"),
     },
     adapters: { provider: adapter },
   });
   await assertRejects(
-    async () => await callLlmAction.execute(emptyInput, missing.context),
+    async () =>
+      await callLlmAction.execute({
+        ...emptyInput,
+        models: ["primary", "missing"],
+      }, missing.context),
     Error,
     "Unknown LLM Model 'missing'",
   );
 
-  const cycle = fixture({
+  const invalidAdapter = fixture({
     models: {
-      primary: model("provider", "model-a", ["backup"]),
-      backup: model("provider", "model-b", ["primary"]),
+      primary: model("provider", "model-a"),
+      backup: model("absent", "model-b"),
     },
     adapters: { provider: adapter },
   });
   await assertRejects(
-    async () => await callLlmAction.execute(emptyInput, cycle.context),
+    async () =>
+      await callLlmAction.execute({
+        ...emptyInput,
+        models: ["primary", "backup"],
+      }, invalidAdapter.context),
     Error,
-    "primary -> backup -> primary",
+    "Unknown LLM adapter 'absent'",
+  );
+
+  const invalidProfile = fixture({
+    models: {
+      primary: model("provider", "model-a"),
+      broken: {
+        provider: "openai",
+        model: "model-b",
+        apiKey: "",
+      } as ModelResource,
+    },
+    adapters: { provider: adapter },
+  });
+  await assertRejects(
+    async () =>
+      await callLlmAction.execute({
+        ...emptyInput,
+        models: ["primary", "broken"],
+      }, invalidProfile.context),
+    TypeError,
+    "apiKey",
+  );
+
+  const laterBuiltin = fixture({
+    models: {
+      primary: model("provider", "model-a"),
+      builtin: { provider: "openai", model: "model-b" },
+    },
+    adapters: { provider: adapter },
+  });
+  await assertRejects(
+    async () =>
+      await callLlmAction.execute({
+        ...emptyInput,
+        models: ["primary", "builtin"],
+        options: { apiKey: "must-not-reach-a-provider" },
+      }, laterBuiltin.context),
+    TypeError,
+    "Unsupported durable LLM provider option 'apiKey'",
+  );
+  await assertRejects(
+    async () =>
+      await callLlmAction.execute({
+        ...emptyInput,
+        models: ["primary", "builtin"],
+        mode: "session",
+      }, laterBuiltin.context),
+    TypeError,
+    "does not implement LLM session mode",
   );
   assertEquals(calls, 0);
 });
 
-Deno.test("llm.call flattens fallback priority and owns deterministic attempts", async () => {
+Deno.test("llm.call owns exact ordered candidate attempts", async () => {
   const calls: string[] = [];
   const adapter: LlmAdapter = {
     call(input) {
@@ -420,15 +973,18 @@ Deno.test("llm.call flattens fallback priority and owns deterministic attempts",
   };
   const test = fixture({
     models: {
-      primary: model("provider", "first", ["backup", "last"]),
-      backup: model("provider", "second", ["nested"]),
+      primary: model("provider", "first"),
+      backup: model("provider", "second"),
       nested: model("provider", "third"),
       last: model("provider", "last"),
     },
     adapters: { provider: adapter },
   });
 
-  const output = await callLlmAction.execute(emptyInput, test.context);
+  const output = await callLlmAction.execute({
+    ...emptyInput,
+    models: ["primary", "backup", "nested", "last"],
+  }, test.context);
   assertEquals(calls, ["primary", "backup", "nested", "last"]);
   assertEquals(output.model, "last");
   assertEquals(output.adapter, "provider");
@@ -438,13 +994,14 @@ Deno.test("llm.call flattens fallback priority and owns deterministic attempts",
     output.attempts?.map((attempt) => ({
       id: attempt.id,
       index: attempt.index,
+      model: attempt.model,
       status: attempt.status,
     })),
     [
-      { id: "run-a:attempt:0", index: 0, status: "failed" },
-      { id: "run-a:attempt:1", index: 1, status: "failed" },
-      { id: "run-a:attempt:2", index: 2, status: "failed" },
-      { id: "run-a:attempt:3", index: 3, status: "completed" },
+      { id: "run-a:attempt:0", index: 0, model: "primary", status: "failed" },
+      { id: "run-a:attempt:1", index: 1, model: "backup", status: "failed" },
+      { id: "run-a:attempt:2", index: 2, model: "nested", status: "failed" },
+      { id: "run-a:attempt:3", index: 3, model: "last", status: "completed" },
     ],
   );
   assertEquals(output.attempts?.[3].startedAt, "2026-08-23T00:00:01.000Z");
@@ -517,13 +1074,16 @@ Deno.test("llm.call propagates Model fallback availability and aggregates every 
   };
   const test = fixture({
     models: {
-      primary: model("primary", "model-a", ["backup"]),
+      primary: model("primary", "model-a"),
       backup: model("backup", "model-b"),
     },
     adapters: { primary, backup },
   });
 
-  const output = await callLlmAction.execute(emptyInput, test.context);
+  const output = await callLlmAction.execute({
+    ...emptyInput,
+    models: ["primary", "backup"],
+  }, test.context);
   assertEquals(availability, [true, false]);
   assertEquals(output.model, "backup");
   assertEquals(output.usage, {
@@ -537,6 +1097,7 @@ Deno.test("llm.call propagates Model fallback availability and aggregates every 
   assertEquals(
     output.attempts?.map((attempt) => ({
       index: attempt.index,
+      model: attempt.model,
       adapter: attempt.adapter,
       providerModel: attempt.providerModel,
       status: attempt.status,
@@ -544,24 +1105,28 @@ Deno.test("llm.call propagates Model fallback availability and aggregates every 
     [
       {
         index: 0,
+        model: "primary",
         adapter: "primary",
         providerModel: "model-a",
         status: "failed",
       },
       {
         index: 1,
+        model: "primary",
         adapter: "primary",
         providerModel: "model-a",
         status: "failed",
       },
       {
         index: 2,
+        model: "backup",
         adapter: "backup",
         providerModel: "model-b",
         status: "failed",
       },
       {
         index: 3,
+        model: "backup",
         adapter: "backup",
         providerModel: "model-b",
         status: "completed",
@@ -603,13 +1168,16 @@ Deno.test("llm.call omits mixed-currency aggregate cost and preserves attempt co
   };
   const test = fixture({
     models: {
-      primary: model("primary", "model-a", ["backup"]),
+      primary: model("primary", "model-a"),
       backup: model("backup", "model-b"),
     },
     adapters: { primary, backup },
   });
 
-  const output = await callLlmAction.execute(emptyInput, test.context);
+  const output = await callLlmAction.execute({
+    ...emptyInput,
+    models: ["primary", "backup"],
+  }, test.context);
   assertEquals(output.usage, { inputTokens: 3, totalTokens: 3 });
   assertEquals(
     output.attempts?.map((attempt) => attempt.usage?.cost),
@@ -653,7 +1221,6 @@ Deno.test("llm.call resolves request content and overlays call options", async (
       primary: {
         adapter: "provider",
         model: "provider-model",
-        mode: "session",
         options: { temperature: 0.8, topP: 0.9 },
       },
     },
@@ -673,7 +1240,8 @@ Deno.test("llm.call resolves request content and overlays call options", async (
     },
   });
   const output = await callLlmAction.execute({
-    model: "primary",
+    models: ["primary"],
+    mode: "session",
     request: {
       instructions: "",
       messages: [{
@@ -832,7 +1400,7 @@ Deno.test("llm.call never falls back after publishing visible output", async () 
   };
   const test = fixture({
     models: {
-      primary: model("primary", "model-a", ["backup"]),
+      primary: model("primary", "model-a"),
       backup: model("backup", "model-b"),
     },
     adapters: { primary, backup },
@@ -843,6 +1411,7 @@ Deno.test("llm.call never falls back after publishing visible output", async () 
     async () =>
       await callLlmAction.execute({
         ...emptyInput,
+        models: ["primary", "backup"],
         stream: { id: "visible" },
       }, test.context),
     Error,
@@ -858,22 +1427,14 @@ Deno.test("llm.call aborts and settles both invocation branches before fallback"
   let frameCancelled = false;
   let backupObservedSettled = false;
   const primary: LlmAdapter = {
-    call(input) {
+    call() {
       const result = new Promise<LlmAdapterResult>((_resolve, reject) => {
-        input.signal.addEventListener("abort", () => {
+        queueMicrotask(() => {
           primaryResultSettled = true;
-          reject(new Error("primary stopped"));
-        }, { once: true });
+          reject(new Error("primary failed"));
+        });
       });
       const frames = new ReadableStream<LlmAdapterFrame>({
-        start(controller) {
-          controller.enqueue({
-            lane: "content",
-            mediaType: "text/plain",
-            bytes: new Uint8Array(),
-            extra: true,
-          } as LlmAdapterFrame);
-        },
         cancel() {
           frameCancelled = true;
         },
@@ -892,13 +1453,16 @@ Deno.test("llm.call aborts and settles both invocation branches before fallback"
   };
   const test = fixture({
     models: {
-      primary: model("primary", "model-a", ["backup"]),
+      primary: model("primary", "model-a"),
       backup: model("backup", "model-b"),
     },
     adapters: { primary, backup },
   });
 
-  const output = await callLlmAction.execute(emptyInput, test.context);
+  const output = await callLlmAction.execute({
+    ...emptyInput,
+    models: ["primary", "backup"],
+  }, test.context);
   assert(backupObservedSettled);
   assertEquals(output.model, "backup");
   assertEquals(output.attempts?.map((item) => item.status), [
@@ -935,14 +1499,17 @@ Deno.test("llm.call falls back without awaiting non-cooperative frame cancellati
   };
   const test = fixture({
     models: {
-      primary: model("primary", "model-a", ["backup"]),
+      primary: model("primary", "model-a"),
       backup: model("backup", "model-b"),
     },
     adapters: { primary, backup },
   });
 
   const output = await within(
-    Promise.resolve(callLlmAction.execute(emptyInput, test.context)),
+    Promise.resolve(callLlmAction.execute({
+      ...emptyInput,
+      models: ["primary", "backup"],
+    }, test.context)),
   );
   assertEquals(output.model, "backup");
   assert(cancellationRequested);
@@ -1042,13 +1609,16 @@ Deno.test("llm.call rejects untrusted Adapter data before persistence", async ()
   };
   const test = fixture({
     models: {
-      primary: model("invalid", "model-a", ["backup"]),
+      primary: model("invalid", "model-a"),
       backup: model("backup", "model-b"),
     },
     adapters: { invalid, backup },
   });
 
-  const output = await callLlmAction.execute(emptyInput, test.context);
+  const output = await callLlmAction.execute({
+    ...emptyInput,
+    models: ["primary", "backup"],
+  }, test.context);
   assertEquals(output.model, "backup");
   assertEquals(output.attempts?.[0].status, "failed");
 
@@ -1115,6 +1685,293 @@ Deno.test("llm.call rejects untrusted Adapter data before persistence", async ()
   );
 });
 
+Deno.test("llm.call drains a framework-rejected stream before fallback accounting", async () => {
+  let releaseResult!: () => void;
+  const resultReady = new Promise<void>((resolve) => {
+    releaseResult = resolve;
+  });
+  let backupObservedTerminalUsage = false;
+  const primary: LlmAdapter = {
+    call() {
+      return invocation(
+        resultReady.then(() => ({
+          content: "provider answer",
+          toolCalls: [{ id: "", action: "search", input: {} }],
+          attempts: [{
+            status: "completed" as const,
+            usage: { inputTokens: 3, outputTokens: 2, totalTokens: 5 },
+          }],
+        } as unknown as LlmAdapterResult)),
+      );
+    },
+  };
+  const backup: LlmAdapter = {
+    call() {
+      backupObservedTerminalUsage = true;
+      return invocation({
+        content: "recovered",
+        attempts: [{
+          status: "completed",
+          usage: { inputTokens: 4, outputTokens: 1, totalTokens: 5 },
+        }],
+      });
+    },
+  };
+  const test = fixture({
+    models: {
+      primary: model("primary", "primary-model"),
+      backup: model("backup", "backup-model"),
+    },
+    adapters: { primary, backup },
+  });
+
+  const executing = callLlmAction.execute({
+    ...emptyInput,
+    models: ["primary", "backup"],
+  }, test.context);
+  await Promise.resolve();
+  releaseResult();
+  const output = await executing;
+
+  assert(backupObservedTerminalUsage);
+  assertEquals(output.model, "backup");
+  assertEquals(
+    output.attempts?.map((attempt) => ({
+      model: attempt.model,
+      providerRequest: attempt.providerRequest,
+      status: attempt.status,
+      totalTokens: attempt.usage?.totalTokens,
+    })),
+    [
+      {
+        model: "primary",
+        providerRequest: true,
+        status: "failed",
+        totalTokens: 5,
+      },
+      {
+        model: "backup",
+        providerRequest: true,
+        status: "completed",
+        totalTokens: 5,
+      },
+    ],
+  );
+});
+
+Deno.test("llm.call drains invalid local frames before fallback accounting", async () => {
+  let releaseResult!: () => void;
+  const resultReady = new Promise<void>((resolve) => {
+    releaseResult = resolve;
+  });
+  let backupCalls = 0;
+  const primary: LlmAdapter = {
+    call() {
+      return invocation(
+        resultReady.then(() => ({
+          content: "provider answer",
+          attempts: [{
+            status: "completed" as const,
+            usage: { inputTokens: 6, outputTokens: 2, totalTokens: 8 },
+          }],
+        })),
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue({
+              lane: "content",
+              mediaType: "text/plain",
+              bytes: "not-bytes",
+            } as unknown as LlmAdapterFrame);
+            controller.close();
+          },
+        }),
+      );
+    },
+  };
+  const backup: LlmAdapter = {
+    call() {
+      backupCalls += 1;
+      return invocation({
+        content: "recovered",
+        attempts: [{ status: "completed" }],
+      });
+    },
+  };
+  const test = fixture({
+    models: {
+      primary: model("primary", "primary-model"),
+      backup: model("backup", "backup-model"),
+    },
+    adapters: { primary, backup },
+  });
+
+  const executing = callLlmAction.execute({
+    ...emptyInput,
+    models: ["primary", "backup"],
+  }, test.context);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assertEquals(backupCalls, 0);
+  releaseResult();
+  const output = await executing;
+
+  assertEquals(backupCalls, 1);
+  assertEquals(
+    output.attempts?.map((attempt) => ({
+      model: attempt.model,
+      status: attempt.status,
+      totalTokens: attempt.usage?.totalTokens,
+    })),
+    [{ model: "primary", status: "failed", totalTokens: 8 }, {
+      model: "backup",
+      status: "completed",
+      totalTokens: undefined,
+    }],
+  );
+});
+
+Deno.test("llm.call reports finalized attempts before a terminal framework failure", async () => {
+  const adapter: LlmAdapter = {
+    call() {
+      return invocation({
+        content: "answer",
+        toolCalls: [{ id: "", action: "search", input: {} }],
+        attempts: [{
+          status: "completed",
+          usage: { inputTokens: 3, outputTokens: 1, totalTokens: 4 },
+        }],
+      } as unknown as LlmAdapterResult);
+    },
+  };
+  const test = fixture({
+    models: { primary: model("provider", "model") },
+    adapters: { provider: adapter },
+  });
+  await assertRejects(
+    async () => await callLlmAction.execute(emptyInput, test.context),
+    Error,
+    ".id",
+  );
+  assertEquals(test.progressValues(), [{
+    schema: "copilotz.llm.attempt-accounting.v1",
+    attempts: [{
+      id: "run-a:attempt:0",
+      index: 0,
+      providerRequest: true,
+      model: "primary",
+      adapter: "provider",
+      providerModel: "model",
+      status: "failed",
+      usage: { inputTokens: 3, outputTokens: 1, totalTokens: 4 },
+      error: {
+        message:
+          "LLM Adapter result.toolCalls[0].id must be a non-empty string.",
+      },
+    }],
+  }]);
+});
+
+Deno.test("llm.call canonicalizes durable pipeline roots and bounds pipeline plans", async () => {
+  const valid: LlmAdapter = {
+    call() {
+      return invocation({
+        content: "answer",
+        toolCalls: [{
+          id: "root",
+          action: "extract",
+          input: { a: 1, b: { x: true, y: false } },
+          pipeline: {
+            id: "branch",
+            stages: [{
+              type: "tool",
+              id: "root",
+              action: "extract",
+              // The durable boundary compares structure, not insertion order.
+              input: { b: { y: false, x: true }, a: 1 },
+            }, {
+              type: "jq",
+              filter: ".items",
+            }, {
+              type: "tool",
+              id: "save",
+              action: "save",
+              input: { notify: true },
+            }],
+          },
+        }],
+        attempts: [{ status: "completed" }],
+      });
+    },
+  };
+  const accepted = fixture({
+    models: { primary: model("valid", "model") },
+    adapters: { valid },
+  });
+  const output = await callLlmAction.execute(emptyInput, accepted.context);
+  assertEquals(output.toolCalls?.[0]?.pipeline?.stages[0], {
+    type: "tool",
+    id: "root",
+    action: "extract",
+    input: { a: 1, b: { x: true, y: false } },
+  });
+
+  const rejectsPlan = async (toolCalls: unknown, message: string) => {
+    const adapter: LlmAdapter = {
+      call() {
+        return invocation({
+          content: "answer",
+          toolCalls,
+          attempts: [{ status: "completed" }],
+        } as unknown as LlmAdapterResult);
+      },
+    };
+    const test = fixture({
+      models: { primary: model("invalid", "model") },
+      adapters: { invalid: adapter },
+    });
+    await assertRejects(
+      async () => await callLlmAction.execute(emptyInput, test.context),
+      TypeError,
+      message,
+    );
+  };
+
+  await rejectsPlan(
+    Array.from({ length: 65 }, (_, index) => ({
+      id: `call-${index}`,
+      action: "search",
+      input: {},
+    })),
+    "parallel branches",
+  );
+  await rejectsPlan([{
+    id: "root",
+    action: "search",
+    input: {},
+    pipeline: {
+      id: "branch",
+      stages: Array.from(
+        { length: 33 },
+        (_, index) =>
+          index === 0
+            ? { type: "tool", id: "root", action: "search", input: {} }
+            : { type: "jq", filter: "." },
+      ),
+    },
+  }], "at most 32 stages");
+  await rejectsPlan([{
+    id: "root",
+    action: "search",
+    input: {},
+    pipeline: {
+      id: "branch",
+      stages: [{ type: "tool", id: "root", action: "search", input: {} }, {
+        type: "jq",
+        filter: "x".repeat(16_385),
+      }],
+    },
+  }], "at most 16384 characters");
+});
+
 Deno.test("llm.call observes a rejecting result on an invalid invocation", async () => {
   const adapter: LlmAdapter = {
     call() {
@@ -1159,13 +2016,17 @@ Deno.test("llm.call does not fall back on abort", async () => {
   };
   const test = fixture({
     models: {
-      primary: model("primary", "model-a", ["backup"]),
+      primary: model("primary", "model-a"),
       backup: model("backup", "model-b"),
     },
     adapters: { primary, backup },
   });
   await assertRejects(
-    async () => await callLlmAction.execute(emptyInput, test.context),
+    async () =>
+      await callLlmAction.execute({
+        ...emptyInput,
+        models: ["primary", "backup"],
+      }, test.context),
     DOMException,
     "cancelled",
   );
@@ -1207,7 +2068,7 @@ Deno.test("llm.call settles every opened writer when stream materialization fail
   };
   const test = fixture({
     models: {
-      primary: model("primary", "model-a", ["backup"]),
+      primary: model("primary", "model-a"),
       backup: model("backup", "model-b"),
     },
     adapters: { primary, backup },
@@ -1217,6 +2078,7 @@ Deno.test("llm.call settles every opened writer when stream materialization fail
     async () =>
       await callLlmAction.execute({
         ...emptyInput,
+        models: ["primary", "backup"],
         stream: { id: "visible" },
       }, test.context),
     Error,
@@ -1226,4 +2088,16 @@ Deno.test("llm.call settles every opened writer when stream materialization fail
   assertEquals(test.opened.length, 2);
   assert(test.opened[0].closed);
   assert(test.opened[1].aborted);
+  assertEquals(test.progressValues(), [{
+    schema: "copilotz.llm.attempt-accounting.v1",
+    attempts: [{
+      id: "run-a:attempt:0",
+      index: 0,
+      providerRequest: true,
+      model: "primary",
+      adapter: "primary",
+      providerModel: "model-a",
+      status: "completed",
+    }],
+  }]);
 });

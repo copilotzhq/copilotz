@@ -33,6 +33,7 @@ Deno.test("core plugin is direct static plugin composition", () => {
     "projectToolResult",
     "completeAsk",
     "failAsk",
+    "toolPlanCoordinator",
   ]);
   assertEquals(corePlugin.plugins, [llmPlugin]);
   assertEquals(corePlugin.adapters, {});
@@ -45,7 +46,7 @@ Deno.test("core plugin is direct static plugin composition", () => {
   );
 });
 
-Deno.test("application owns every Model Resource and LLM Adapter", () => {
+Deno.test("application owns every Model Resource and custom LLM Adapter", () => {
   const adapter = {
     call: () => {
       throw new Error("not invoked by composition");

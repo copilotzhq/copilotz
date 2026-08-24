@@ -10,6 +10,7 @@ import * as plugins from "../../runtime/plugins/index.ts";
 import * as persistence from "../../runtime/persistence/index.ts";
 import * as server from "../../server/index.ts";
 import * as migration from "../../migration/v4/index.ts";
+import * as tools from "../../plugins/tools/index.ts";
 import * as builtinTools from "../../plugins/tools/builtin/plugin.ts";
 import * as denoTools from "../../plugins/tools/deno/index.ts";
 import * as financeTools from "../../plugins/tools/finance/plugin.ts";
@@ -115,6 +116,8 @@ Deno.test("package subpaths expose cohesive factories", () => {
   assertFunctions(mcpTools, ["createMcpToolsPlugin"]);
   assertFunctions(stdioMcpTools, ["connectMcp"]);
   assertFunctions(openApiTools, ["createOpenApiToolsPlugin"]);
+  assertFunctions(openApiTools, ["defineApi"]);
+  assertFunctions(tools, ["createToolsPlugin", "defineTool"]);
   assertFunctions(persistentTerminalTools, [
     "createPersistentTerminalToolsPlugin",
   ]);
@@ -144,16 +147,18 @@ Deno.test("package subpaths expose cohesive factories", () => {
     "mapThreadRecord",
   ]);
   assertEquals(typeof core.corePlugin, "object");
-  assertFunctions(llm, [
-    "createAnthropicAdapter",
-    "createDeepSeekAdapter",
-    "createGeminiAdapter",
-    "createGroqAdapter",
-    "createMinimaxAdapter",
-    "createOllamaAdapter",
-    "createOpenAiAdapter",
-    "defineModel",
-  ]);
+  assertFunctions(llm, ["createLlmAdapter", "defineModel"]);
+  for (
+    const removed of [
+      "createAnthropicAdapter",
+      "createDeepSeekAdapter",
+      "createGeminiAdapter",
+      "createGroqAdapter",
+      "createMinimaxAdapter",
+      "createOllamaAdapter",
+      "createOpenAiAdapter",
+    ]
+  ) assertEquals(removed in llm, false, removed);
   assertEquals(typeof llm.callLlmAction, "object");
   assertEquals(typeof llm.llmPlugin, "object");
   assertFunctions(goals, [

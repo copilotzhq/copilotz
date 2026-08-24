@@ -19,8 +19,9 @@ Plugins contribute five primitives:
 - Collections: durable semantic state and relations.
 - Actions: executable capabilities with one durable lifecycle.
 - Processors: event-driven orchestration.
-- Resources: declarative agents, models, tools, skills, and policy.
-- Adapters: application-owned external implementations and credentials.
+- Resources: process-local agents, models, tools, skills, configuration, and
+  policy.
+- Adapters: application-owned custom external implementations.
 
 Messages, agents, models, tools, goals, and channels belong to their semantic
 plugins. The generic runtime contains no provider catalog, Tool executor,
@@ -40,9 +41,9 @@ pull in filesystem, subprocess, terminal, MCP stdio, or provider credentials.
 ```ts
 import { createCopilotz } from "jsr:@copilotz/copilotz@^0.62.0";
 import { corePlugin, message } from "jsr:@copilotz/copilotz@^0.62.0/core";
-import type { LlmAdapter } from "jsr:@copilotz/copilotz@^0.62.0/llm";
 
-declare const myLlmAdapter: LlmAdapter;
+const openAiKey = Deno.env.get("OPENAI_API_KEY");
+if (!openAiKey) throw new Error("OPENAI_API_KEY is required");
 
 const app = await createCopilotz({
   namespace: "acme",
@@ -54,15 +55,18 @@ const app = await createCopilotz({
         id: "support",
         name: "Support",
         role: "Answer clearly and use only explicitly granted capabilities.",
-        models: { generate: "default" },
+        models: { generate: ["default"] },
         capabilities: {},
       },
     },
     models: {
-      default: { adapter: "default", model: "provider-model-id" },
+      default: {
+        provider: "openai",
+        model: "provider-model-id",
+        apiKey: openAiKey,
+      },
     },
   },
-  adapters: { llm: { default: myLlmAdapter } },
 });
 
 // A Channel, Goal, onboarding plugin, or trusted Gateway route has already
@@ -95,8 +99,12 @@ adds `fetch`, while Worker returns `{ ready, closed, close }`.
   and Action identities make retries restore the same result.
 - Action lifecycle data is self-contained and authenticated by runtime-created
   Event Bodies. Public input cannot forge a registered lifecycle receipt.
-- Model Resources contain only durable configuration. LLM Adapters capture
-  credentials, clients, endpoints, and runtime transport.
+- Model Resources describe atomic model deployments. Agents and direct LLM calls
+  own an ordered list of model aliases for fallback. Built-in Model Resources
+  carry inline process-local credentials or reference one reusable,
+  provider-bound `llmCredentials` Resource. Credential resolvers run once per
+  alias and LLM call; their secrets never enter the durable call contract.
+  `createLlmAdapter` defines a genuinely custom provider implementation.
 - Tool Resources are data-only presentations of the same Action aliases that
   Core invokes. There is no second Tool execution path.
 - Progressive `stream.output` observations contain generic content metadata and

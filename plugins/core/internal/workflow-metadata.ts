@@ -2,20 +2,25 @@ import type { EventVisibility } from "@copilotz/copilotz/events";
 
 const WORKFLOW_METADATA_KEY = "copilotzWorkflow";
 const AGENT_ASK_METADATA_KEY = "copilotzAsk";
+const AGENT_ASK_RESULT_METADATA_KEY = "copilotzAskResult";
 const TOOL_PLAN_METADATA_KEY = "copilotzToolPlan";
 const TOOL_ACTION_METADATA_KEY = "copilotzToolAction";
+const TOOL_PLAN_RESULT_METADATA_KEY = "copilotzToolPlanResult";
 export const CORE_LLM_CALL_METADATA_SCHEMA = "copilotz.core.llm-call.v1";
 export const CORE_TOOL_ACTION_METADATA_SCHEMA = "copilotz.core.tool-action.v1";
 export const CORE_TOOL_PLAN_METADATA_SCHEMA = "copilotz.core.tool-plan.v1";
 export const CORE_LLM_STREAM_METADATA_SCHEMA = "copilotz.core.llm-stream.v1";
 
 export type AgentAskPhase = "question" | "progress" | "answer";
+export type AgentAskMode = "public" | "private";
 
 /** Public causal metadata shared by every message in one agent ask. */
 export type AgentAskMetadata = Readonly<{
   schema: "copilotz.ask.v1";
   askId: string;
   phase: AgentAskPhase;
+  /** Missing only on pre-mode rows; readers treat it as public. */
+  mode?: AgentAskMode;
   toolActionRunId: string;
   toolCallId?: string;
   toolInvocation?: Readonly<Record<string, unknown>>;
@@ -36,6 +41,16 @@ export type AgentAskMetadata = Readonly<{
   depth: number;
 }>;
 
+/** Receipt attached to a projected Ask Tool result.  The Answer Message owns content. */
+export type AgentAskResultMetadata = Readonly<{
+  schema: "copilotz.ask-result.v1";
+  askId: string;
+  status: "completed" | "failed" | "cancelled";
+  askedParticipantId: string;
+  askedAgentId: string;
+  answerMessageId?: string;
+}>;
+
 /** Durable Core provenance attached to one provider-neutral `llm.call`. */
 export type CoreLlmCallMetadata = Readonly<{
   schema: typeof CORE_LLM_CALL_METADATA_SCHEMA;
@@ -49,6 +64,8 @@ export type CoreLlmCallMetadata = Readonly<{
   responseVisibility: EventVisibility;
   parentActionRunId?: string;
   ask?: AgentAskMetadata;
+  /** Optional opaque prompt-policy revision, never resolved instructions. */
+  instructionRevision?: string;
 }>;
 
 /** Opaque Core hint attached to each progressive LLM output stream. */
@@ -70,6 +87,9 @@ export type CoreToolActionOrigin = Readonly<{
   planId: string;
   planMessageId: string;
   planIndex: number;
+  stageIndex: number;
+  /** Immutable number of stages in this root branch (tools and jq). */
+  stageCount: number;
   planSize: number;
   toolCallId: string;
   action: string;
@@ -104,6 +124,74 @@ export type CoreToolActionMessageMetadata =
   & Readonly<{
     actionRunId: string;
   }>;
+
+/** Branch-result provenance when no Action lifecycle exists (e.g. unavailable root). */
+export type CoreToolPlanResultMetadata = Readonly<{
+  schema: "copilotz.core.tool-plan-result.v1";
+  resultKind: "unavailable" | "pipeline_failure";
+  origin: CoreToolActionOrigin;
+  failedStageIndex: number;
+  failedAction: string;
+  sourceAction?: Readonly<{ stageIndex: number; actionRunId: string }>;
+  ask?: AgentAskMetadata;
+}>;
+
+export function withCoreToolPlanResultMetadata(
+  metadata: Readonly<Record<string, unknown>> | undefined,
+  value: CoreToolPlanResultMetadata,
+): Record<string, unknown> {
+  return {
+    ...structuredClone(metadata ?? {}),
+    [TOOL_PLAN_RESULT_METADATA_KEY]: structuredClone(value),
+  };
+}
+export function coreToolPlanResultMetadata(
+  value: unknown,
+): CoreToolPlanResultMetadata | null {
+  const candidate = record(record(value)[TOOL_PLAN_RESULT_METADATA_KEY]);
+  const keys = Object.keys(candidate);
+  if (
+    keys.some((key) =>
+      ![
+        "schema",
+        "resultKind",
+        "origin",
+        "failedStageIndex",
+        "failedAction",
+        "sourceAction",
+        "ask",
+      ].includes(key)
+    ) || candidate.schema !== "copilotz.core.tool-plan-result.v1" ||
+    (candidate.resultKind !== "unavailable" &&
+      candidate.resultKind !== "pipeline_failure") ||
+    !coreToolActionOrigin(candidate.origin) ||
+    !Number.isSafeInteger(candidate.failedStageIndex) ||
+    Number(candidate.failedStageIndex) < 0 ||
+    Number(candidate.failedStageIndex) >=
+      Number((candidate.origin as CoreToolActionOrigin).stageCount) ||
+    !optionalMetadataText(candidate.failedAction) ||
+    (candidate.ask !== undefined && !validAgentAsk(record(candidate.ask)))
+  ) return null;
+  if (candidate.sourceAction !== undefined) {
+    const source = record(candidate.sourceAction);
+    if (
+      Object.keys(source).length !== 2 ||
+      !Number.isSafeInteger(source.stageIndex) ||
+      Number(source.stageIndex) < 0 ||
+      Number(source.stageIndex) >=
+        Number((candidate.origin as CoreToolActionOrigin).stageCount) ||
+      !optionalMetadataText(source.actionRunId)
+    ) return null;
+  }
+  return candidate as CoreToolPlanResultMetadata;
+}
+/** Common durable plan cursor for action-backed and no-source branch results. */
+export function coreToolResultOrigin(
+  value: unknown,
+): CoreToolActionOrigin | null {
+  return coreToolActionMessageMetadata(value) ??
+    coreToolPlanResultMetadata(value)?.origin ?? null;
+}
 
 export type WorkflowMetadata = Readonly<{
   kind:
@@ -168,6 +256,7 @@ const AGENT_ASK_KEYS = new Set([
   "schema",
   "askId",
   "phase",
+  "mode",
   "toolActionRunId",
   "toolCallId",
   "toolInvocation",
@@ -195,6 +284,10 @@ function validAgentAsk(
     (candidate.phase !== "question" && candidate.phase !== "progress" &&
       candidate.phase !== "answer") ||
     !Number.isSafeInteger(candidate.depth) || Number(candidate.depth) < 1
+  ) return null;
+  if (
+    candidate.mode !== undefined && candidate.mode !== "public" &&
+    candidate.mode !== "private"
   ) return null;
   const required = [
     "askId",
@@ -240,6 +333,54 @@ function validAgentAsk(
 
 export function agentAskMetadata(value: unknown): AgentAskMetadata | null {
   return validAgentAsk(record(record(value)[AGENT_ASK_METADATA_KEY]));
+}
+
+export function withAgentAskResultMetadata(
+  metadata: Readonly<Record<string, unknown>> | undefined,
+  result: AgentAskResultMetadata,
+): Record<string, unknown> {
+  const validated = agentAskResultMetadata({
+    [AGENT_ASK_RESULT_METADATA_KEY]: result,
+  });
+  if (!validated) throw new TypeError("Invalid Ask result metadata.");
+  return {
+    ...structuredClone(metadata ?? {}),
+    [AGENT_ASK_RESULT_METADATA_KEY]: structuredClone(validated),
+  };
+}
+
+export function agentAskResultMetadata(
+  value: unknown,
+): AgentAskResultMetadata | null {
+  const candidate = record(record(value)[AGENT_ASK_RESULT_METADATA_KEY]);
+  const allowed = new Set([
+    "schema",
+    "askId",
+    "status",
+    "askedParticipantId",
+    "askedAgentId",
+    "answerMessageId",
+  ]);
+  if (
+    Object.keys(candidate).some((key) => !allowed.has(key)) ||
+    candidate.schema !== "copilotz.ask-result.v1" ||
+    (candidate.status !== "completed" && candidate.status !== "failed" &&
+      candidate.status !== "cancelled") ||
+    !optionalMetadataText(candidate.askId) ||
+    !optionalMetadataText(candidate.askedParticipantId) ||
+    !optionalMetadataText(candidate.askedAgentId)
+  ) return null;
+  if (
+    candidate.answerMessageId !== undefined &&
+    !optionalMetadataText(candidate.answerMessageId)
+  ) return null;
+  if (
+    candidate.status === "completed" !==
+      (candidate.answerMessageId !== undefined)
+  ) {
+    return null;
+  }
+  return candidate as AgentAskResultMetadata;
 }
 
 /**
@@ -293,6 +434,7 @@ const CORE_LLM_CALL_KEYS = new Set([
   "responseVisibility",
   "parentActionRunId",
   "ask",
+  "instructionRevision",
 ]);
 
 /** Reads the self-contained provenance of a Core-owned `llm.call`. */
@@ -319,6 +461,10 @@ export function coreLlmCallMetadata(
   if (
     candidate.parentActionRunId !== undefined &&
     !optionalMetadataText(candidate.parentActionRunId)
+  ) return null;
+  if (
+    candidate.instructionRevision !== undefined &&
+    !optionalMetadataText(candidate.instructionRevision)
   ) return null;
   if (
     !Array.isArray(candidate.availableToolIds) ||
@@ -398,6 +544,8 @@ const TOOL_ACTION_ORIGIN_KEYS = new Set([
   "planId",
   "planMessageId",
   "planIndex",
+  "stageIndex",
+  "stageCount",
   "planSize",
   "toolCallId",
   "action",
@@ -430,6 +578,11 @@ function validToolActionOrigin(
   if (
     required.some((key) => !optionalMetadataText(candidate[key])) ||
     !validPlanPosition(candidate) ||
+    !Number.isSafeInteger(candidate.stageIndex) ||
+    Number(candidate.stageIndex) < 0 ||
+    !Number.isSafeInteger(candidate.stageCount) ||
+    Number(candidate.stageCount) < 1 ||
+    Number(candidate.stageIndex) >= Number(candidate.stageCount) ||
     !validStringArray(candidate.availableToolIds) ||
     !coreEventVisibility(candidate.responseVisibility)
   ) return null;

@@ -5,12 +5,13 @@ import {
   assertRejects,
   assertStringIncludes,
 } from "@std/assert";
-import type { AgentResource } from "@copilotz/copilotz/core";
 import {
   corePlugin,
   coreProcessors,
+  defineAgent,
   message as coreMessage,
 } from "@copilotz/copilotz/core";
+import type { AgentResource } from "@copilotz/copilotz/core";
 import type {
   LlmAdapter,
   LlmAdapterCallInput,
@@ -26,7 +27,10 @@ import {
   definePlugin,
   defineProcessor,
 } from "../../runtime/plugins/index.ts";
-import type { CoreToolProcessorContext } from "./context.ts";
+import type {
+  CoreProcessorContext,
+  CoreToolProcessorContext,
+} from "./context.ts";
 import {
   type CopilotzEngine,
   createCopilotzEngine,
@@ -108,8 +112,8 @@ function agent(mode: LlmMode = "generate"): AgentResource {
     role: "assistant",
     instructions: "CORE_AGENT_INSTRUCTIONS",
     models: mode === "session"
-      ? { session: "primaryModel" }
-      : { generate: "primaryModel" },
+      ? { session: ["primaryModel"] as const }
+      : { generate: ["primaryModel"] as const },
     capabilities: { tools: ["contract_tool"] },
   });
 }
@@ -125,6 +129,7 @@ async function createFixture(
   handler: AdapterHandler,
   mode: LlmMode = "generate",
   semanticPlugin: CopilotzPlugin = corePlugin,
+  agentResource: AgentResource = agent(mode),
 ): Promise<Fixture> {
   toolExecutions.splice(0);
   const db = await createTestDatabase({ url: ":memory:" });
@@ -138,13 +143,16 @@ async function createFixture(
     version: "1.0.0",
     actions: { contract_tool: contractToolAction },
     resources: {
-      agents: { north: agent(mode) },
+      agents: { north: agentResource },
       tools: { contract_tool: contractTool },
       models: {
         primaryModel: {
           adapter: "test",
           model: `${mode}-provider-model`,
-          mode,
+        },
+        backupModel: {
+          adapter: "test",
+          model: "backup-provider-model",
         },
       },
     },
@@ -317,26 +325,37 @@ function inputText(input: LlmAdapterCallInput): string {
 }
 
 Deno.test("Core invokes llm.call with explicit application Models and Adapters", async () => {
-  const fixture = await createFixture((_input) => ({
-    result: {
-      content: { type: "text", text: "Hello from North", role: "body" },
-      reasoning: {
-        type: "text",
-        text: "private reasoning",
-        role: "reasoning",
+  const orderedAgent = Object.freeze({
+    ...agent(),
+    models: Object.freeze({
+      generate: ["primaryModel", "backupModel"] as const,
+    }),
+  }) satisfies AgentResource;
+  const fixture = await createFixture(
+    (_input) => ({
+      result: {
+        content: { type: "text", text: "Hello from North", role: "body" },
+        reasoning: {
+          type: "text",
+          text: "private reasoning",
+          role: "reasoning",
+        },
+        attempts: [{
+          status: "completed",
+          usage: { inputTokens: 3, outputTokens: 4, totalTokens: 7 },
+        }],
+        finishReason: "stop",
       },
-      attempts: [{
-        status: "completed",
-        usage: { inputTokens: 3, outputTokens: 4, totalTokens: 7 },
+      frames: [{
+        lane: "content",
+        mediaType: "text/plain",
+        bytes: new TextEncoder().encode("Hello from North"),
       }],
-      finishReason: "stop",
-    },
-    frames: [{
-      lane: "content",
-      mediaType: "text/plain",
-      bytes: new TextEncoder().encode("Hello from North"),
-    }],
-  }));
+    }),
+    "generate",
+    corePlugin,
+    orderedAgent,
+  );
   try {
     const root = await startRun(fixture, "Answer this message");
     await waitForRun(fixture, root, 2);
@@ -369,7 +388,14 @@ Deno.test("Core invokes llm.call with explicit application Models and Adapters",
       "llm.call",
     );
     const completed = lifecycle.find((event) => event.status === "completed");
+    const invoked = lifecycle.find((event) => event.status === "invoked");
+    assertExists(invoked);
     assertExists(completed);
+    assertEquals(
+      (invoked.input as Record<string, unknown>).models,
+      ["primaryModel", "backupModel"],
+    );
+    assertEquals((invoked.input as Record<string, unknown>).mode, "generate");
     assertEquals(completed.metadata, {
       schema: "copilotz.core.llm-call.v1",
       threadId: "thread-a",
@@ -515,7 +541,10 @@ Deno.test("Core invokes and projects an Action-backed Tool plan", async () => {
     );
     await waitForRun(fixture, root, 6);
     assertEquals(call, 2);
-    assertEquals(toolExecutions, ["first", "second", "empty-array"]);
+    assertEquals(
+      new Set(toolExecutions),
+      new Set(["first", "second", "empty-array"]),
+    );
     const messages = await projectMessages(
       fixture.engine,
       NAMESPACE,
@@ -573,6 +602,8 @@ Deno.test("Core invokes and projects an Action-backed Tool plan", async () => {
         "planSize",
         "responseVisibility",
         "schema",
+        "stageCount",
+        "stageIndex",
         "threadId",
         "toolCallId",
         "triggerMessageId",
@@ -658,7 +689,6 @@ Deno.test("public lifecycle forgery cannot project Core or Usage effects", async
         primaryModel: {
           adapter: "test",
           model: "authority-provider-model",
-          mode: "generate" as const,
         },
       },
     },
@@ -811,7 +841,7 @@ Deno.test("Tool terminal delivery retry recovers effects and one continuation", 
     const root = await startRun(fixture, "Exercise retry recovery");
     await waitForRun(fixture, root, 5);
     assertEquals(injectedFailures, 1);
-    assertEquals(toolExecutions, ["first", "second"]);
+    assertEquals(new Set(toolExecutions), new Set(["first", "second"]));
     assertEquals(llmCalls, 2);
     const messages = await projectMessages(
       fixture.engine,
@@ -860,6 +890,198 @@ Deno.test("Core selects an Agent session Model alias without a wrapper Action", 
       "llm.call",
     );
     assertEquals(lifecycle.at(-1)?.status, "completed");
+  } finally {
+    await fixture.close();
+  }
+});
+
+Deno.test("dynamic Agent instructions resolve for each routed LLM request", async () => {
+  const resolverCalls: string[] = [];
+  const authored = defineAgent({
+    id: "north",
+    name: "North",
+    role: "assistant",
+    models: { generate: ["primaryModel"] },
+    instructions: {
+      base: "DYNAMIC_BASE",
+      resolve(_facts, execution) {
+        resolverCalls.push(execution.triggerMessageId);
+        return execution.triggerMessageId === "message:user"
+          ? { instructions: "DYNAMIC_OVERRIDE", revision: "ab-override-v1" }
+          : { instructions: null, revision: "ab-base-v1" };
+      },
+    },
+  });
+  const db = await createTestDatabase({ url: ":memory:" });
+  const inputs: LlmAdapterCallInput[] = [];
+  const app = definePlugin({
+    id: "test.dynamic-agent-model",
+    version: "1.0.0",
+    resources: {
+      agents: { north: authored },
+      models: { primaryModel: { adapter: "test", model: "dynamic-model" } },
+    },
+    adapters: {
+      llm: {
+        test: adapterFrom((input) => {
+          inputs.push(input);
+          return {
+            result: {
+              content: { type: "text", role: "body", text: "answer" },
+              attempts: [{ status: "completed" }],
+            },
+          };
+        }),
+      },
+    },
+  });
+  const registry = await createPluginRegistry({
+    plugins: [corePlugin, app],
+  });
+  const engine = await createCopilotzEngine({
+    session: createSqlSession(db),
+    registry,
+    defaultDatabaseSchema: TEST_SCHEMA,
+    retryBaseMs: 0,
+    random: () => 0,
+  });
+  const fixture: Fixture = Object.freeze({
+    db,
+    engine,
+    inputs,
+    async close() {
+      await engine.shutdown();
+      await db.close();
+    },
+  });
+  try {
+    const first = await startRun(fixture);
+    await waitForRun(fixture, first, 2);
+    const second = await continueRun(fixture, "message:second", "Again");
+    await waitForRun(fixture, second, 4);
+    assertEquals(resolverCalls, ["message:user", "message:second"]);
+    assertStringIncludes(
+      inputs[0].request.instructions ?? "",
+      "DYNAMIC_OVERRIDE",
+    );
+    assertStringIncludes(inputs[1].request.instructions ?? "", "DYNAMIC_BASE");
+    const llmEvents = await projectActionEvents(
+      fixture.engine,
+      NAMESPACE,
+      "llm.call",
+      { status: "invoked" },
+    );
+    assertEquals(
+      llmEvents.map((event) =>
+        (event.metadata as { instructionRevision?: string }).instructionRevision
+      ),
+      ["ab-override-v1", "ab-base-v1"],
+    );
+    assertEquals(
+      await projectActionEvents(
+        fixture.engine,
+        NAMESPACE,
+        "copilotz.core.agent-resolver.north",
+      ),
+      [],
+    );
+  } finally {
+    await fixture.close();
+  }
+});
+
+Deno.test("pure dynamic instructions survive router delivery retry without another llm.call", async () => {
+  let injectedFailures = 0;
+  const retriedFacts: string[] = [];
+  const retryingRouter = defineProcessor<CoreProcessorContext>({
+    id: coreProcessors.messageRouter.id,
+    on: coreProcessors.messageRouter.on,
+    async handle(event, context) {
+      await coreProcessors.messageRouter.handle(event, context);
+      if (injectedFailures === 0) {
+        injectedFailures += 1;
+        throw new Error("injected failure after llm.call");
+      }
+    },
+  });
+  const retryingCore = definePlugin({
+    id: "test.core-instruction-retry",
+    version: "1.0.0",
+    plugins: corePlugin.plugins,
+    collections: corePlugin.collections,
+    actions: corePlugin.actions,
+    processors: { ...corePlugin.processors, messageRouter: retryingRouter },
+    resources: corePlugin.resources,
+    adapters: corePlugin.adapters,
+  });
+  const dynamic = defineAgent({
+    id: "north",
+    name: "North",
+    role: "assistant",
+    models: { generate: ["primaryModel"] },
+    instructions: {
+      resolve(facts, execution) {
+        retriedFacts.push(`${facts.thread.id}:${execution.triggerMessageId}`);
+        return { instructions: "RETRY_STABLE", revision: "retry-v1" };
+      },
+    },
+  });
+  const fixture = await createFixture(
+    () => ({
+      result: {
+        content: { type: "text", role: "body", text: "retried" },
+        attempts: [{ status: "completed" }],
+      },
+    }),
+    "generate",
+    retryingCore,
+    dynamic,
+  );
+  try {
+    const root = await startRun(fixture);
+    await waitForRun(fixture, root, 2);
+    assertEquals(injectedFailures, 1);
+    assertEquals(retriedFacts, [
+      "thread-a:message:user",
+      "thread-a:message:user",
+    ]);
+    assertEquals(fixture.inputs.length, 1);
+    assertStringIncludes(
+      fixture.inputs[0].request.instructions ?? "",
+      "RETRY_STABLE",
+    );
+  } finally {
+    await fixture.close();
+  }
+});
+
+Deno.test("invalid dynamic Agent instruction output fails before llm.call", async () => {
+  const invalid = defineAgent({
+    id: "north",
+    name: "North",
+    role: "assistant",
+    models: { generate: ["primaryModel"] },
+    instructions: {
+      resolve:
+        () => ({ instructions: 42 } as unknown as { instructions: null }),
+    },
+  });
+  const fixture = await createFixture(
+    () => {
+      throw new Error("llm.call must not run for invalid instructions");
+    },
+    "generate",
+    corePlugin,
+    invalid,
+  );
+  try {
+    const root = await startRun(fixture);
+    await assertRejects(
+      () => waitForRun(fixture, root, 2),
+      Error,
+      "dead-lettered",
+    );
+    assertEquals(fixture.inputs, []);
   } finally {
     await fixture.close();
   }

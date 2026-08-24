@@ -4,6 +4,8 @@ import {
   messageCollection,
   participantCollection,
   threadCollection,
+  toolPlanCollection,
+  toolPlanStageResultCollection,
 } from "./resources/collections/index.ts";
 import {
   completeAskProcessor,
@@ -12,6 +14,7 @@ import {
   messageRouterProcessor,
   projectTextResultProcessor,
   projectToolResultProcessor,
+  toolPlanCoordinatorProcessor,
 } from "./resources/processors/index.ts";
 import { createThreadMessageAction } from "./resources/actions/thread-message.ts";
 import {
@@ -29,6 +32,8 @@ export type CoreCollections = Readonly<{
   participant: typeof participantCollection;
   thread: typeof threadCollection;
   message: typeof messageCollection;
+  toolPlan: typeof toolPlanCollection;
+  toolPlanStageResult: typeof toolPlanStageResultCollection;
 }>;
 
 export type CoreActions = Readonly<{
@@ -47,6 +52,7 @@ export type CoreProcessors = Readonly<{
   projectToolResult: typeof projectToolResultProcessor;
   completeAsk: typeof completeAskProcessor;
   failAsk: typeof failAskProcessor;
+  toolPlanCoordinator: typeof toolPlanCoordinatorProcessor;
 }>;
 
 type CoreCollectionsProcessors = Readonly<{
@@ -63,6 +69,8 @@ export const coreCollections: CoreCollections = Object.freeze({
   participant: participantCollection,
   thread: threadCollection,
   message: messageCollection,
+  toolPlan: toolPlanCollection,
+  toolPlanStageResult: toolPlanStageResultCollection,
 });
 
 export const coreActions: CoreActions = Object.freeze({
@@ -81,6 +89,7 @@ export const coreProcessors: CoreProcessors = Object.freeze({
   projectToolResult: projectToolResultProcessor,
   completeAsk: completeAskProcessor,
   failAsk: failAskProcessor,
+  toolPlanCoordinator: toolPlanCoordinatorProcessor,
 });
 
 /** Collections and Actions without Core's semantic routing processors. */

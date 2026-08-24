@@ -1,7 +1,10 @@
 import type {
+  ActionContext,
+  ActionDefinition,
   ActionSchema,
   AnyActionDefinition,
 } from "@copilotz/copilotz/actions";
+import { defineAction } from "@copilotz/copilotz/actions";
 import { cloneLosslessJson } from "./lifecycle-json.ts";
 
 const ALIAS_PATTERN = /^[a-z][a-zA-Z0-9_]*$/;
@@ -13,6 +16,16 @@ const PRESENTATION_KEYS = new Set([
   "metadata",
 ]);
 const HISTORY_KEYS = new Set(["visibility"]);
+const AUTHORING_KEYS = new Set([
+  "id",
+  "name",
+  "description",
+  "inputSchema",
+  "outputSchema",
+  "history",
+  "metadata",
+  "execute",
+]);
 
 export type ToolHistoryVisibility =
   | "requester_only"
@@ -43,6 +56,32 @@ export type ToolPresentation = Readonly<{
   description: string;
   history?: ToolHistory;
   metadata?: Readonly<Record<string, unknown>>;
+}>;
+
+/** An executable Tool definition awaiting an alias from `createToolsPlugin`. */
+export type ToolDefinition<
+  TAction extends AnyActionDefinition = AnyActionDefinition,
+  TPresentation extends ToolPresentation = ToolPresentation,
+> = Readonly<{
+  action: TAction;
+  presentation: TPresentation;
+}>;
+
+export type DefineToolObject<
+  TInput = unknown,
+  TOutput = unknown,
+  TContext = ActionContext,
+  TInputSchema extends ActionSchema | undefined = ActionSchema | undefined,
+  TOutputSchema extends ActionSchema | undefined = ActionSchema | undefined,
+> = Readonly<{
+  id: string;
+  name: string;
+  description: string;
+  inputSchema?: TInputSchema;
+  outputSchema?: TOutputSchema;
+  history?: ToolHistory;
+  metadata?: Readonly<Record<string, unknown>>;
+  execute(input: TInput, context: TContext): TOutput | Promise<TOutput>;
 }>;
 
 export type DefinedToolResource<
@@ -148,7 +187,7 @@ function metadata(
  * Optional convenience that copies an Action's schemas into its ordinary Tool
  * Resource presentation. It neither registers nor executes either value.
  */
-export function defineTool<
+function defineToolResource<
   const TAlias extends string,
   const TAction extends AnyActionDefinition,
   const TPresentation extends ToolPresentation,
@@ -184,4 +223,85 @@ export function defineTool<
     ...(normalizedHistory ? { history: normalizedHistory } : {}),
     ...(normalizedMetadata ? { metadata: normalizedMetadata } : {}),
   }) as DefinedToolResource<TAlias, TAction, TPresentation>;
+}
+
+export function defineTool<
+  const TAlias extends string,
+  const TAction extends AnyActionDefinition,
+  const TPresentation extends ToolPresentation,
+>(
+  actionAlias: TAlias,
+  actionDefinition: TAction,
+  presentation: TPresentation,
+): DefinedToolResource<TAlias, TAction, TPresentation>;
+/**
+ * Defines one Tool's native Action and presentation before it is assigned an
+ * alias by `createToolsPlugin`. The executable stays in the Action; the later
+ * Tool Resource is strictly data-only.
+ */
+export function defineTool<
+  TInput = unknown,
+  TOutput = unknown,
+  TContext = ActionContext,
+  const TInputSchema extends ActionSchema | undefined = undefined,
+  const TOutputSchema extends ActionSchema | undefined = undefined,
+>(
+  definition: DefineToolObject<
+    TInput,
+    TOutput,
+    TContext,
+    TInputSchema,
+    TOutputSchema
+  >,
+): ToolDefinition<
+  ActionDefinition<
+    TInput,
+    Awaited<TOutput>,
+    TContext,
+    TInputSchema,
+    TOutputSchema
+  >,
+  ToolPresentation
+>;
+export function defineTool(
+  actionAliasOrDefinition: string | DefineToolObject,
+  actionDefinition?: AnyActionDefinition,
+  presentation?: ToolPresentation,
+): ToolResource | ToolDefinition {
+  if (typeof actionAliasOrDefinition === "string") {
+    // The overload signature preserves the established positional API.
+    return defineToolResource(
+      actionAliasOrDefinition,
+      actionDefinition as AnyActionDefinition,
+      presentation as ToolPresentation,
+    );
+  }
+  const definition = actionAliasOrDefinition;
+  if (!isPlainRecord(definition)) {
+    throw new TypeError("Tool definition must be an object.");
+  }
+  assertKnownKeys(definition, AUTHORING_KEYS, "Tool definition");
+  const action = defineAction({
+    id: definition.id,
+    ...(definition.inputSchema === undefined
+      ? {}
+      : { inputSchema: definition.inputSchema }),
+    ...(definition.outputSchema === undefined
+      ? {}
+      : { outputSchema: definition.outputSchema }),
+    execute: definition.execute,
+  });
+  return Object.freeze({
+    action,
+    presentation: Object.freeze({
+      name: requiredText(definition.name, "name"),
+      description: requiredText(definition.description, "description"),
+      ...(definition.history === undefined
+        ? {}
+        : { history: history(definition.history) }),
+      ...(definition.metadata === undefined
+        ? {}
+        : { metadata: metadata(definition.metadata) }),
+    }),
+  });
 }

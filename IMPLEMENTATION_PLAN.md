@@ -511,12 +511,13 @@ There is no `resource(...)`, `resources(...)`, locator, selector, binding token,
 or dependency declaration. The two composed namespace/key maps are the runtime
 registries; there is no second lookup API beside the injected context.
 
-Plain typed objects are canonical:
+Declarative Resource fields are ordinary typed data:
 
 ```ts
 const model = {
-  adapter: "openai",
+  provider: "openai",
   model: "gpt-5",
+  apiKey,
 } satisfies ModelResource;
 ```
 
@@ -524,17 +525,28 @@ Equivalent helpers are optional:
 
 ```ts
 const model = defineModel({
-  adapter: "openai",
+  provider: "openai",
   model: "gpt-5",
+  apiKey,
 });
 ```
 
-A helper is justified only by useful inference, defaults, normalization,
-branding, or runtime validation of dynamic input. It must not register the value
-implicitly or produce a privileged representation that plain declarations cannot
-satisfy. Cross-resource references such as a Model's Adapter name are resolved
-and checked by the semantic Action that understands them; the generic runtime
-does not encode those relationships.
+A Resource is an immutable process-local semantic definition. Its contract may
+include a typed policy hook—for example dynamic Agent instructions or Context
+contribution—when the hook only reads its typed input and returns the Resource's
+policy value. Hooks are not lifecycle executions and never enter Event Bodies,
+Action data, Collection records, or resource snapshots. A callback that needs
+durability, retries, observable execution, or external side effects is an
+Action. A typed Resource may carry process-local credentials and transport
+policy consumed by a built-in semantic implementation; a genuinely custom
+external client or executable transport is an Adapter.
+
+A helper is justified by useful inference, defaults, normalization, branding, or
+runtime validation. It validates and freezes the semantic Resource rather than
+registering it implicitly or producing a privileged runtime identity.
+Cross-resource references such as a custom Model's Adapter name are resolved and
+checked by the semantic Action that understands them; the generic runtime does
+not encode those relationships.
 
 A Tool is primarily a Resource describing how an existing Action is presented to
 an LLM. It references the Action rather than carrying a second execution
@@ -562,10 +574,12 @@ For `resources.tools.search`, the invariant is
 `resource alias === tool.action === action alias`. Core validates that invariant
 when building an LLM request and executes the Tool through the already-composed
 `context.actions[tool.action](input, options)` function. This is ordinary direct
-map access, not a locator API. `defineTool(alias, action, presentation)` may
-copy the Action schemas for inference, but its result is structurally equivalent
-to the plain object. A Tool has no `execute` method, host context, independent
-validator, wrapper Action, catalog entry, or second lifecycle.
+map access, not a locator API. The low-level
+`defineTool(alias, action, presentation)` copies Action schemas into the plain
+Resource. The object-form `defineTool({ ... execute })` is an authoring
+definition consumed by `createToolsPlugin`, which emits that same Action plus
+Resource pair. The final Tool Resource has no `execute` method, host context,
+independent validator, wrapper Action, catalog entry, or second lifecycle.
 
 `resources.tools` is the complete composed Tool set; there is no second catalog
 or resolver. Agent policy may select a deterministic subset of that map, but
@@ -578,12 +592,42 @@ sole durable execution record.
 The provider-neutral LLM boundary follows the same reference rule:
 
 ```ts
-type ModelResource<TOptions = unknown> = Readonly<{
+type LlmBuiltinModelResource<TOptions = unknown> = Readonly<{
+  provider:
+    | "openai"
+    | "anthropic"
+    | "gemini"
+    | "groq"
+    | "deepseek"
+    | "minimax"
+    | "ollama";
+  model: string;
+  credentials?: string; // resources.llmCredentials alias
+  apiKey?: string;
+  baseUrl?: string;
+  extraHeaders?: Readonly<Record<string, string>>;
+  options?: TOptions;
+}>;
+
+type LlmCustomModelResource<TOptions = unknown> = Readonly<{
   adapter: string; // context.adapters.llm alias
   model: string;
-  mode?: "generate" | "session";
   options?: TOptions;
-  fallbacks?: readonly string[]; // context.resources.models aliases
+}>;
+
+type ModelResource<TOptions = unknown> =
+  | LlmBuiltinModelResource<TOptions>
+  | LlmCustomModelResource<TOptions>;
+
+type LlmCredentialResource = Readonly<{
+  provider: LlmBuiltinModelResource["provider"];
+  // Exactly one static apiKey/extraHeaders shape or a runtime-only resolver.
+  apiKey?: string;
+  extraHeaders?: Readonly<Record<string, string>>;
+  resolve?: (
+    context: LlmCredentialContext,
+    execution: Readonly<{ credential: string }>,
+  ) => LlmCredentialResolution | Promise<LlmCredentialResolution>;
 }>;
 
 type LlmAdapter = Readonly<{
@@ -600,7 +644,8 @@ The common Action boundary is provider-neutral and JSON-safe:
 
 ```ts
 type LlmCallInput = Readonly<{
-  model: string; // context.resources.models alias
+  models: readonly [string, ...string[]]; // ordered Resource aliases
+  mode: "generate" | "session";
   request: LlmRequest;
   stream?: LlmStreamDescriptor;
   inputStreamId?: string;
@@ -631,16 +676,25 @@ Raw tokens and provider frames are Stream output, not Action progress.
 completing, so its lifecycle output contains neither a live Stream nor a
 Promise.
 
-`llm.call` resolves the requested Model Resource and Adapter, emits the one
-Action lifecycle, uses `context.streams` for raw frames, and returns a fully
-settled JSON-safe result containing canonical content, tool calls, usage, and
-provider/model identities. Provider credentials, clients, endpoints, and
-protocol quirks exist only in Adapter construction and must never enter a Model
-Resource, `LlmCallInput`, Action-call metadata, or lifecycle input/output.
-`llmPlugin` installs no configured model or provider; applications add every
-`resources.models` value and `adapters.llm` value explicitly. Optional provider
-plugins/factories are composition conveniences around the same plain Adapter
-values and never install a hidden default Model or Adapter.
+`llm.call` validates the complete ordered Model Resource list before attempt
+one, emits the one Action lifecycle, uses `context.streams` for raw frames, and
+returns a fully settled JSON-safe result containing canonical content, tool
+calls, usage, and provider/model identities. Each built-in Model Resource is a
+complete process-local deployment definition, including its provider,
+credential, endpoint, and model identifier; those sensitive fields are resolved
+from composition and never copied into `LlmCallInput`, Action-call metadata, or
+lifecycle input/output. `llmPlugin` owns all built-in provider drivers. Only a
+genuinely custom provider requires an `adapters.llm` value, created with
+`createLlmAdapter`; provider-specific factory APIs do not exist.
+
+Reusable `resources.llmCredentials` entries are provider-bound. Static entries
+are fully preflighted; dynamic entries resolve lazily and once per alias for the
+current `llm.call`. Their key/header result is runtime-only, and unavailable
+credentials skip a candidate without creating a provider attempt. Usage is
+projected per reported provider attempt, never as both attempt rows and a
+logical-call aggregate. Framework-side response rejection drains/finalizes the
+provider accounting before recovery, while external cancellation does not wait
+for a non-cooperative transport.
 
 ### 4.6 Reference AI harness
 
@@ -656,28 +710,44 @@ const corePlugin = definePlugin({
 });
 ```
 
-Neither plugin contributes a configured Model or LLM Adapter. The application
-must provide `resources.models` and `adapters.llm`; Core resolves its selected
-Agent and prompt policy, then calls `context.actions.callLlm(...)` with semantic
-provenance in `ActionCallOptions.metadata`.
+Neither plugin contributes a configured Model. The application must provide
+`resources.models`; a built-in-only application needs no `adapters` option. Core
+resolves its selected Agent, ordered model candidates, and prompt policy, then
+calls `context.actions.callLlm(...)` with semantic provenance in
+`ActionCallOptions.metadata`.
+
+Applications may compose a static Agent Resource directly. `defineAgent` may
+also retain a typed dynamic-instructions hook beside its base instructions on
+that same immutable Agent Resource; no `createAgentsPlugin` or resolver Action
+is involved. Core evaluates the hook for each Agent turn before building the
+request. It receives read-only conversation facts and execution metadata, and
+its returned string replaces the base instructions for that turn. The hook is
+pure, deterministic process-local policy: delivery retry may evaluate it again,
+and it cannot emit durable work. The callback is never persisted; the selected
+final prompt is already part of the durable `llm.call` input, while an optional
+small instruction revision is retained in that Action's metadata for
+attribution.
 
 When `llm.call` returns multiple tool calls, Core derives one deterministic plan
-from their provider order. It invokes each referenced Action sequentially with a
-stable operation key and plan/call provenance in Action metadata. Retries run
-the same ordered plan and recover already-terminal Action calls rather than
-duplicating effects. Parallel `Promise.all` execution is not part of this
-contract because tool order and preceding mutations may be semantically
-significant.
+whose ordered top-level calls are parallel branches. A branch may carry a
+pipeline of sequential Tool and `jq` stages. Core invokes every ready branch
+through ordinary Actions with stable plan/branch/stage provenance, persists the
+fan-out/fan-in cursor, and recovers already-terminal stages after retry rather
+than duplicating effects. A pipe is the explicit dependency boundary: its next
+Tool receives the preceding result after deterministic transforms and argument
+merge. Flat sibling calls have no dependency and may run concurrently.
 
-A normal tool result is projected from that Action's terminal Event and the plan
-continues. The Core-owned ask Action durably creates its question and completes
-normally with its plugin-owned `{ status: "deferred" }` output. Core's terminal
-Processor recognizes that semantic output and neither projects a result nor
-advances the plan. The later answer or failure Event supplies the durable resume
-trigger. The originating Action lifecycle data plus Core-owned Message metadata
-must preserve the plan identity and cursor needed to resume remaining calls and
-issue exactly one next `llm.call`. No Action promise stays open across that
-wait; the generic runtime has no deferred settlement or Tool-executor status.
+A normal Tool lifecycle settles its branch stage. A failed stage skips only its
+dependent downstream stages while independent branches continue. The Core-owned
+ask Action durably creates its question and completes normally with its
+plugin-owned `{ status: "deferred" }` output, but that terminal does not settle
+the branch stage. The later final answer or failure Event does so after the
+asked Agent has completed any number of its own Tool plans and nested asks.
+Every nested plan owns its own durable barrier. Once all branches settle, Core
+projects one final result per root call in stable provider order and issues
+exactly one next `llm.call`; intermediate pipeline stage lifecycles never create
+unmatched transcript calls. No Action promise stays open across an Agent wait;
+the generic runtime has no deferred settlement or Tool-executor status.
 
 ### 4.7 Plugin
 
@@ -962,17 +1032,19 @@ it were removed without an alias.
 1. **LLM vertical (closed):** move the common `llm.call` Action, Model Resource
    and LLM Adapter contracts, provider normalization/recovery, usage output, and
    first-party OpenAI/Anthropic/Google-Gemini/Groq/DeepSeek/Ollama/MiniMax
-   Adapter factories to `plugins/llm/**`. The application remains the only owner
-   of configured Models, Adapters, clients, and credentials. Migrate Core's LLM
-   callers to the one `llm.call` Action, make `corePlugin.plugins` include
-   `llmPlugin`, and delete `runtime/llm/**`, the old Core LLM wrapper Actions
-   and provider directories, and their obsolete exports before closing this
-   checkpoint. This checkpoint introduced no parallel Tool execution path.
+   drivers to `plugins/llm/**`. Built-in credentials and transport configuration
+   live directly in process-local Model Resources; only a genuinely custom
+   implementation uses `createLlmAdapter`. Migrate Core's LLM callers to the one
+   `llm.call` Action, make `corePlugin.plugins` include `llmPlugin`, and delete
+   `runtime/llm/**`, the old Core LLM wrapper Actions and provider directories,
+   and their obsolete exports before closing this checkpoint. Parallel
+   branch/pipeline semantics remain Core-owned rather than becoming an LLM
+   Adapter or generic runtime execution path.
 2. **Tool + Core checkpoint (closed):** make every concrete Tool an Action and
    every Tool Resource a data-only Action presentation. OpenAPI and MCP generate
    Actions plus Tool Resources, not executable Tool objects. In the same atomic
    cut, move Agent Resources and prompt policy fully into Core; implement
-   deterministic sequential tool planning, the
+   deterministic durable Tool planning, the
    `schema: "copilotz.core.tool-action.v1"` lifecycle Processors, and ask
    continuation; and migrate all callers. Then remove `Tool.execute`, the
    executable Tool object type, catalog, executor, host/execution contexts,
@@ -1143,8 +1215,10 @@ Architecture-specific closure checks must prove:
   wrapper Action, host context, or second lifecycle remains;
 - Core Tool Action lifecycle metadata uses the stable
   `schema: "copilotz.core.tool-action.v1"` discriminator;
-- multi-tool plans run sequentially in stable provider order, retry without
-  repeating terminal Actions, and resume ask continuations from durable data;
+- multi-tool plans run flat branches concurrently, run piped stages
+  sequentially, retry without repeating terminal Actions, project one final
+  result per root call in stable provider order, and resume arbitrarily nested
+  ask continuations from durable data with exactly one fan-in continuation;
 - `llm.call` settles its frame stream and final result before completion, while
   Models and LLM Adapters are application-configured and no credential or client
   enters durable Action data;

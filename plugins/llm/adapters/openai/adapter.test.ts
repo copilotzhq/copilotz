@@ -56,7 +56,7 @@ Deno.test("OpenAI builds Responses bodies with Responses field names", () => {
   assertEquals(body.prompt_cache_key, "stable-internal-key");
   assertEquals(body.text, { format: { type: "text" } });
   assertEquals(body.reasoning, { summary: "auto" });
-  assertEquals(body.parallel_tool_calls, false);
+  assertEquals(body.parallel_tool_calls, true);
   assertEquals("messages" in body, false);
   assertEquals("max_completion_tokens" in body, false);
   assertEquals("response_format" in body, false);

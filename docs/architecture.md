@@ -26,9 +26,9 @@ The generic runtime owns:
 
 Plugins own semantic contracts and workflows. Core owns participants, threads,
 messages, Agent Resources, prompt policy, and the conversation loop. LLM owns
-`llm.call`, Model Resources, Adapter contracts, and provider factories. Tools,
-Goals, Channels, Memory, Knowledge, Skills, Schedules, Usage, and Admin own
-their respective Collections, Actions, Processors, Resources, and Adapters.
+`llm.call`, Model Resources, Adapter contracts, and built-in provider drivers.
+Tools, Goals, Channels, Memory, Knowledge, Skills, Schedules, Usage, and Admin
+own their respective Collections, Actions, Processors, Resources, and Adapters.
 
 Runtime production code never imports a concrete plugin.
 
@@ -37,8 +37,10 @@ Runtime production code never imports a concrete plugin.
 - Collections describe durable state.
 - Actions describe executable capabilities.
 - Processors decide when capabilities or mutations run.
-- Resources are named declarative data and policy.
-- Adapters are runtime-only interchangeable implementations.
+- Resources are immutable process-local semantic definitions. Their contracts
+  may include typed, read-only policy hooks.
+- Adapters are runtime-only interchangeable external or infrastructure
+  implementations.
 
 Resources and Adapters compose independently. Application overlays win after
 plugin dependencies and root plugins. Plain typed values are canonical; helpers
@@ -66,15 +68,22 @@ fail the foreground operation.
 
 ## AI harness
 
-Agent, Model, Tool, Goal, and Skill values are data-only Resources. Provider
-credentials and clients exist only inside Adapters. Core turns a Model Resource
-alias into one `llm.call` Action. Tool Resources map model presentation to the
+Agent, Model, Tool, Goal, and Skill values are Resources. Declarative fields are
+data; Agent instruction resolution, Context contribution, and Skill reading are
+examples of typed process-local policy hooks. Hooks are neither durable Actions
+nor persisted configuration. Built-in provider credentials and transport
+configuration live only in process-local Model Resources; custom provider
+implementations live in Adapters. Core turns an Agent's ordered Model Resource
+aliases into one `llm.call` Action. Tool Resources map model presentation to the
 same Action aliases present under `context.actions`; there is no Tool catalog,
-executor, wrapper Action, or second validation lifecycle.
+executor, wrapper Action, or second validation lifecycle. Tool and OpenAPI
+factories are compiler conveniences that materialize native Actions plus those
+data-only Tool Resources.
 
-Multiple model-produced Tool calls form a deterministic plan and run
-sequentially in provider order. Ask uses a native Core Action and durable
-question/answer messages; nested continuation state is stored in compact
+Multiple model-produced Tool calls form a deterministic plan. Independent root
+branches run concurrently, stages inside each pipeline run sequentially, and the
+fan-in projects results in provider order. Ask uses a native Core Action and
+durable question/answer messages; nested continuation state is stored in compact
 non-recursive metadata rather than an in-memory promise.
 
 ## Content and streams

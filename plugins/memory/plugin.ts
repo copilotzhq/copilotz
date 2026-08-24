@@ -1,4 +1,7 @@
-import type { AgentResource } from "@copilotz/copilotz/core";
+import {
+  agentInstructionBase,
+  type AgentResource,
+} from "@copilotz/copilotz/core";
 import type {
   ContentRef,
   PreparedAsset,
@@ -204,6 +207,25 @@ function requiredText(value: unknown, label: string): string {
   const normalized = typeof value === "string" ? value.trim() : "";
   if (!normalized) throw new TypeError(`${label} must be non-empty.`);
   return normalized;
+}
+
+type MemoryModelSelection = readonly [string, ...string[]];
+
+function modelSelection(
+  value: unknown,
+  label: string,
+): MemoryModelSelection | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new TypeError(`${label} must be a non-empty array of aliases.`);
+  }
+  const models = value.map((entry, index) =>
+    requiredText(entry, `${label} at index ${index}`)
+  );
+  if (new Set(models).size !== models.length) {
+    throw new TypeError(`${label} must not contain duplicate aliases.`);
+  }
+  return Object.freeze(models) as unknown as MemoryModelSelection;
 }
 
 function optionalText(value: unknown): string | undefined {
@@ -914,7 +936,7 @@ async function buildMemoryLlmRequest(
     `Role: ${input.agent.role}.`,
     input.agent.description,
     input.agent.personality,
-    input.agent.instructions,
+    agentInstructionBase(input.agent.instructions),
     input.instruction,
   ].filter((value): value is string => Boolean(value?.trim())).join("\n\n");
   const systemContent = await materializeMemoryText(
@@ -1749,7 +1771,7 @@ function consolidateMemoryTool(
 }
 
 function createMemoryMaintenanceAction(
-  model: string | undefined,
+  models: MemoryModelSelection | undefined,
   consolidateTool: ToolResource<typeof CONSOLIDATE_MEMORY_TOOL_ID>,
   maxRepairAttempts: number,
 ): ActionDefinition<
@@ -1767,7 +1789,12 @@ function createMemoryMaintenanceAction(
         input.checkpointId,
         "Memory checkpoint id",
       );
-      const llmModel = requiredText(model, "Memory LLM model alias");
+      const llmModels = models;
+      if (!llmModels) {
+        throw new TypeError(
+          "Memory LLM models must be a non-empty array of aliases.",
+        );
+      }
       const context = actionContext;
       const sourceEvent = input.sourceEvent;
       let repairReason: string | undefined;
@@ -1850,7 +1877,8 @@ function createMemoryMaintenanceAction(
           tool: consolidateTool,
         });
         const llmInput: LlmCallInput = Object.freeze({
-          model: llmModel,
+          models: llmModels,
+          mode: "generate",
           request,
         });
         const response = await context.actions.callLlm(llmInput, {
@@ -2432,9 +2460,11 @@ export function createLongTermMemoryPlugin(
   options: CreateLongTermMemoryPluginOptions,
 ): LongTermMemoryPlugin {
   const enabled = options?.enabled !== false;
-  const model = optionalText(options?.model);
-  if (enabled && !model) {
-    throw new TypeError("Memory LLM model alias must be non-empty.");
+  const models = modelSelection(options?.models, "Memory LLM models");
+  if (enabled && !models) {
+    throw new TypeError(
+      "Memory LLM models must be a non-empty array of aliases.",
+    );
   }
   const config = normalizedConfig(options.config);
   const consolidateMemory = createConsolidateMemoryAction(config);
@@ -2452,7 +2482,7 @@ export function createLongTermMemoryPlugin(
   });
   const maxRepairAttempts = nonNegativeInteger(options.maxRepairAttempts, 1);
   const maintainMemory = createMemoryMaintenanceAction(
-    model,
+    models,
     consolidateTool,
     maxRepairAttempts,
   );

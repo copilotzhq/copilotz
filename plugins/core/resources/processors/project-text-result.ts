@@ -14,8 +14,10 @@ import { defineProcessor, type Processor } from "@copilotz/copilotz/plugins";
 import type { CoreToolProcessorContext } from "../../context.ts";
 import {
   type CoreToolPlanBase,
-  invokeToolPlanAction,
-  toolActionMetadataAt,
+  createDurableToolPlan,
+  snapshotRootTools,
+  snapshotToolStageActionIds,
+  snapshotToolStageHistory,
   validateCoreToolPlan,
 } from "../../internal/tool-plan.ts";
 import { asRecord, loadParticipant } from "./helpers.ts";
@@ -116,7 +118,7 @@ export const projectTextResultProcessor: Processor<
       id: planMessageId,
       threadId: metadata.threadId,
       sender: participant,
-      recipientIds: [],
+      recipientIds: outputAsk ? [outputAsk.askingParticipantId] : [],
       content: output.content,
       visibility: structuredClone(metadata.responseVisibility),
       metadata: messageMetadata,
@@ -138,11 +140,11 @@ export const projectTextResultProcessor: Processor<
       availableToolIds: metadata.availableToolIds,
       responseVisibility: metadata.responseVisibility,
       parentLlmActionRunId: actionRunId,
+      rootTools: snapshotRootTools(context, toolCalls),
+      stageHistoryVisibility: snapshotToolStageHistory(context, toolCalls),
+      stageActionIds: snapshotToolStageActionIds(context, toolCalls),
       ...(metadata.ask ? { ask: metadata.ask } : {}),
     });
-    await invokeToolPlanAction(
-      context,
-      toolActionMetadataAt(plan, toolCalls[0], 0),
-    );
+    await createDurableToolPlan(context, plan, toolCalls);
   },
 });

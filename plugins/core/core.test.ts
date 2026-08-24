@@ -153,6 +153,8 @@ Deno.test("core collections cover semantic conversation state only", () => {
     "participant",
     "thread",
     "message",
+    "toolPlan",
+    "toolPlanStageResult",
   ]);
   assertEquals(
     CORE_COLLECTION_NAMES.includes(

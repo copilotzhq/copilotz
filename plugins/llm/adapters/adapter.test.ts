@@ -6,19 +6,36 @@ import {
 } from "@std/assert";
 
 import {
+  defineModel,
+  type LlmAdapter,
   LlmAdapterCallError,
   type LlmAdapterCallInput,
   type LlmAdapterFrame,
+  type LlmBuiltinModelResource,
+  type LlmBuiltinProvider,
 } from "../contracts.ts";
-import {
-  createAnthropicAdapter,
-  createDeepSeekAdapter,
-  createGeminiAdapter,
-  createGroqAdapter,
-  createMinimaxAdapter,
-  createOllamaAdapter,
-  createOpenAiAdapter,
-} from "./index.ts";
+import { materializeBuiltinModel } from "./builtin.ts";
+
+function builtin(
+  provider: LlmBuiltinProvider,
+  configuration: Partial<
+    Omit<LlmBuiltinModelResource, "provider" | "model">
+  > = {},
+): LlmAdapter {
+  const resource = defineModel({
+    provider,
+    model: "fixture-model",
+    ...configuration,
+  });
+  if (resource.provider === undefined) {
+    throw new Error("Expected built-in Model.");
+  }
+  return materializeBuiltinModel(
+    resource,
+    "generate",
+    resource.options ?? {},
+  );
+}
 
 function callInput(
   overrides: Partial<LlmAdapterCallInput> = {},
@@ -74,15 +91,15 @@ function openAiStream(content: string, usage = true): Response {
   });
 }
 
-Deno.test("all first-party provider factories expose only the LlmAdapter call boundary", () => {
+Deno.test("all first-party Model providers materialize only the LlmAdapter call boundary", () => {
   const adapters = [
-    createOpenAiAdapter(),
-    createAnthropicAdapter(),
-    createGeminiAdapter(),
-    createGroqAdapter(),
-    createDeepSeekAdapter(),
-    createOllamaAdapter(),
-    createMinimaxAdapter(),
+    builtin("openai"),
+    builtin("anthropic"),
+    builtin("gemini"),
+    builtin("groq"),
+    builtin("deepseek"),
+    builtin("ollama"),
+    builtin("minimax"),
   ];
   for (const adapter of adapters) {
     assertEquals(Object.keys(adapter), ["call"]);
@@ -90,7 +107,7 @@ Deno.test("all first-party provider factories expose only the LlmAdapter call bo
   }
 });
 
-Deno.test("provider configuration stays construction-owned while frames and settled usage normalize", async () => {
+Deno.test("provider configuration stays Model-owned while frames and settled usage normalize", async () => {
   const originalFetch = globalThis.fetch;
   const extraHeaders = { "X-Application": "copilotz-test" };
   const seen: Array<Readonly<{ url: string; init?: RequestInit }>> = [];
@@ -99,7 +116,7 @@ Deno.test("provider configuration stays construction-owned while frames and sett
     return Promise.resolve(openAiStream("Hello"));
   };
 
-  const adapter = createOpenAiAdapter({
+  const adapter = builtin("openai", {
     apiKey: "captured-secret",
     baseUrl: "https://provider.example/v1",
     extraHeaders,
@@ -151,6 +168,47 @@ Deno.test("provider configuration stays construction-owned while frames and sett
   }
 });
 
+Deno.test("separate built-in Models keep same-provider accounts and endpoints isolated", async () => {
+  const originalFetch = globalThis.fetch;
+  const seen: Array<Readonly<{ url: string; authorization: string | null }>> =
+    [];
+  globalThis.fetch = (input, init) => {
+    seen.push({
+      url: String(input),
+      authorization: new Headers(init?.headers).get("authorization"),
+    });
+    return Promise.resolve(openAiStream("ok"));
+  };
+  const first = builtin("openai", {
+    apiKey: "account-one-secret",
+    baseUrl: "https://one.example/v1",
+    options: { estimateCost: false, openaiApi: "chat_completions" },
+  });
+  const second = builtin("openai", {
+    apiKey: "account-two-secret",
+    baseUrl: "https://two.example/v1",
+    options: { estimateCost: false, openaiApi: "chat_completions" },
+  });
+
+  try {
+    for (const adapter of [first, second]) {
+      const invocation = adapter.call(callInput());
+      const frames = collectFrames(invocation.frames);
+      await invocation.result;
+      await frames;
+    }
+    assertEquals(seen, [{
+      url: "https://one.example/v1/chat/completions",
+      authorization: "Bearer account-one-secret",
+    }, {
+      url: "https://two.example/v1/chat/completions",
+      authorization: "Bearer account-two-secret",
+    }]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 Deno.test("first-party bridge defers two empty responses to external Model fallback", async () => {
   const originalFetch = globalThis.fetch;
   let calls = 0;
@@ -158,7 +216,7 @@ Deno.test("first-party bridge defers two empty responses to external Model fallb
     calls += 1;
     return Promise.resolve(openAiStream(""));
   };
-  const adapter = createOpenAiAdapter({
+  const adapter = builtin("openai", {
     apiKey: "test",
     baseUrl: "https://provider.example/v1",
     options: { estimateCost: false, openaiApi: "chat_completions" },
@@ -204,7 +262,7 @@ Deno.test("failed Model accounting awaits finalized usage and sanitizes provider
       ),
     );
   };
-  const adapter = createOpenAiAdapter({
+  const adapter = builtin("openai", {
     apiKey: "test",
     baseUrl: "https://provider.example/v1",
     options: { estimateCost: false, openaiApi: "chat_completions" },
@@ -250,7 +308,7 @@ Deno.test("provider option defaults are deeply snapshotted at construction", asy
     );
   };
   const thinking = { includeThoughts: true, thinkingBudget: 111 };
-  const adapter = createGeminiAdapter({
+  const adapter = builtin("gemini", {
     apiKey: "test",
     options: {
       estimateCost: false,
@@ -284,7 +342,7 @@ Deno.test("durable options reject transport and credential fields before provide
   };
 
   try {
-    const invocation = createOpenAiAdapter({
+    const invocation = builtin("openai", {
       apiKey: "captured-secret",
       baseUrl: "https://provider.example/v1",
     }).call(callInput({
@@ -296,7 +354,7 @@ Deno.test("durable options reject transport and credential fields before provide
     await assertRejects(
       () => invocation.result,
       TypeError,
-      "Transport and credentials belong to Adapter construction",
+      "Transport and credentials belong to built-in Model configuration",
     );
     await assertRejects(() => collectFrames(invocation.frames));
     assertEquals(calls, 0);
@@ -316,7 +374,7 @@ Deno.test("provider tool names normalize to Action aliases in frames and result"
     );
 
   try {
-    const adapter = createOpenAiAdapter({
+    const adapter = builtin("openai", {
       apiKey: "test",
       baseUrl: "https://provider.example/v1",
       options: { estimateCost: false, openaiApi: "chat_completions" },
@@ -344,8 +402,19 @@ Deno.test("provider tool names normalize to Action aliases in frames and result"
     const frames = await framesPromise;
 
     assertEquals(result.toolCalls?.length, 1);
-    assertEquals(result.toolCalls?.[0]?.action, "search");
-    assertEquals(result.toolCalls?.[0]?.input, { q: "news" });
+    const call = result.toolCalls?.[0];
+    assert(call);
+    assertEquals(call.action, "search");
+    assertEquals(call.input, { q: "news" });
+    assertEquals(call.pipeline, {
+      id: call.id,
+      stages: [{
+        type: "tool",
+        id: call.id,
+        action: "search",
+        input: { q: "news" },
+      }],
+    });
     const toolFrames = frames
       .filter((frame) => frame.lane === "tool-calls")
       .map((frame) => new TextDecoder().decode(frame.bytes))
@@ -359,7 +428,7 @@ Deno.test("provider tool names normalize to Action aliases in frames and result"
 Deno.test("caller cancellation remains an AbortError and never becomes a provider failure", async () => {
   const controller = new AbortController();
   controller.abort("cancelled by caller");
-  const invocation = createOpenAiAdapter({ apiKey: "unused" }).call(
+  const invocation = builtin("openai", { apiKey: "unused" }).call(
     callInput({ signal: controller.signal }),
   );
   const error = await assertRejects(() => invocation.result);
@@ -368,8 +437,8 @@ Deno.test("caller cancellation remains an AbortError and never becomes a provide
   await assertRejects(() => collectFrames(invocation.frames));
 });
 
-Deno.test("HTTP provider factories reject unsupported live-session mode explicitly", async () => {
-  const invocation = createGeminiAdapter({ apiKey: "unused" }).call(
+Deno.test("built-in HTTP providers reject unsupported live-session mode explicitly", async () => {
+  const invocation = builtin("gemini", { apiKey: "unused" }).call(
     callInput({
       adapter: "gemini",
       providerModel: "gemini-2.5-flash",
@@ -383,7 +452,7 @@ Deno.test("HTTP provider factories reject unsupported live-session mode explicit
   );
   await assertRejects(() => collectFrames(invocation.frames));
 
-  const streamedInput = createOpenAiAdapter({ apiKey: "unused" }).call(
+  const streamedInput = builtin("openai", { apiKey: "unused" }).call(
     callInput({
       input: new ReadableStream<Uint8Array>({
         start(controller) {

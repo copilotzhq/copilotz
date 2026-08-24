@@ -97,7 +97,7 @@ Deno.test("formatMessages keeps deterministic system and tool ordering", () => {
   assertEquals(JSON.stringify(first).includes("prompt_cache"), false);
 });
 
-Deno.test("tool prompts describe sequential JSON-lines without retired syntax", () => {
+Deno.test("tool prompts describe parallel JSON-line branches and sequential pipelines", () => {
   const tools = [{
     type: "function" as const,
     function: {
@@ -110,12 +110,11 @@ Deno.test("tool prompts describe sequential JSON-lines without retired syntax", 
   for (const variant of ["baseline", "strict-minimal"] as const) {
     const prompt = generateToolSystemPromptVariant(tools, variant);
     assertEquals(
-      prompt.includes("Calls run sequentially in line order."),
+      prompt.toLowerCase().includes("new lines run in parallel"),
       true,
     );
-    assertEquals(prompt.toLowerCase().includes("parallel"), false);
-    assertEquals(prompt.includes(" | "), false);
-    assertEquals(prompt.includes("jq"), false);
+    assertEquals(prompt.includes(" | "), true);
+    assertEquals(prompt.includes("jq"), true);
     assertEquals(prompt.includes("batch_id"), false);
   }
 });
@@ -881,16 +880,36 @@ Deno.test("recorded tool calls rehydrate as ordered ordinary JSON lines", () => 
   ]);
 });
 
-Deno.test("parseToolCallsFromResponse rejects pipe and jq syntax", () => {
-  const piped = parseToolCallsFromResponse(
-    '<tool_calls>\n{"name":"extract","arguments":{}} | {"name":"save","arguments":{}}\n</tool_calls>',
-  );
-  const transformed = parseToolCallsFromResponse(
-    '<tool_calls>\n{"jq":"."}\n</tool_calls>',
+Deno.test("parseToolCallsFromResponse preserves parallel branches and sequential jq pipelines", () => {
+  const parsed = parseToolCallsFromResponse(
+    '<tool_calls>\n{"name":"extract","arguments":{}} | {"jq":".items | map({id})"} | {"name":"save","arguments":{"notify":true}}\n{"name":"independent","arguments":{}}\n</tool_calls>',
   );
 
-  assertEquals(piped.toolCalls.length, 0);
-  assertEquals(transformed.toolCalls.length, 0);
+  assertEquals(parsed.toolCalls.map((call) => call.tool.id), [
+    "extract",
+    "independent",
+  ]);
+  assertEquals(
+    parsed.toolCalls[0].pipeline?.stages.map((stage) => stage.type),
+    [
+      "tool",
+      "jq",
+      "tool",
+    ],
+  );
+  assertEquals(parsed.toolCalls[0].pipeline?.stages[1], {
+    type: "jq",
+    filter: ".items | map({id})",
+  });
+  const rehydrated = buildToolCallsBlock(parsed.toolCalls);
+  assertEquals(rehydrated.includes(" | "), true);
+  assertEquals(parseToolCallsFromResponse(rehydrated).toolCalls.length, 2);
+  assertEquals(
+    parseToolCallsFromResponse(
+      '<tool_calls>\n{"jq":"."} | {"name":"save","arguments":{}}\n</tool_calls>',
+    ).toolCalls.length,
+    0,
+  );
 });
 
 Deno.test("parseToolCallsFromResponse closes truncated JSON-line containers", () => {

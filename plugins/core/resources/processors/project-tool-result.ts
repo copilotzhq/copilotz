@@ -30,6 +30,7 @@ export const projectToolResultProcessor: Processor<
       context,
       parsed.metadata,
       parsed.terminal,
+      { actionId: parsed.actionId, causationId: parsed.causationId },
     );
   },
 });

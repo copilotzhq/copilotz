@@ -1,6 +1,7 @@
 import { assert, assertEquals, assertThrows } from "@std/assert";
 import { type ActionSchema, defineAction } from "@copilotz/copilotz/actions";
 import { defineTool, type ToolResource } from "./contracts.ts";
+import { createToolsPlugin } from "./plugin.ts";
 
 const inputSchema = {
   type: "object",
@@ -98,6 +99,41 @@ Deno.test("defineTool preserves its alias and snapshots optional Action schemas"
   assert(Object.isFrozen(tool.outputSchema?.properties));
   assert(Object.isFrozen(tool.history));
   assert(Object.isFrozen(tool.metadata));
+});
+
+Deno.test("object-form defineTool infers an Action and createToolsPlugin keeps Resources data-only", async () => {
+  const lookup = defineTool({
+    id: "tool.lookup",
+    name: "Lookup",
+    description: "Looks up one value.",
+    inputSchema,
+    outputSchema,
+    history: { visibility: "public" },
+    metadata: { category: "example" },
+    execute(input: Readonly<{ query: string }>) {
+      return { result: input.query.toUpperCase() };
+    },
+  });
+  const plugin = createToolsPlugin({ tools: { lookup } });
+  const action = plugin.actions.lookup;
+  const tool = plugin.resources.tools.lookup as ToolResource<"lookup">;
+
+  assertEquals(lookup.action.id, "tool.lookup");
+  assertEquals(await action.execute({ query: "copilotz" }, {} as never), {
+    result: "COPILOTZ",
+  });
+  assertEquals(tool, {
+    action: "lookup",
+    name: "Lookup",
+    description: "Looks up one value.",
+    inputSchema,
+    outputSchema,
+    history: { visibility: "public" },
+    metadata: { category: "example" },
+  });
+  assertEquals("execute" in tool, false);
+  assertEquals(Object.keys(plugin.actions), ["lookup"]);
+  assertEquals(Object.keys(plugin.resources.tools), ["lookup"]);
 });
 
 Deno.test("defineTool isolates schema and metadata mutations deeply", () => {

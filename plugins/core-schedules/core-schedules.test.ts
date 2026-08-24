@@ -209,7 +209,7 @@ Deno.test("scheduled payload metadata cannot suppress Agent LLM routing", async 
           id: "scheduled-agent",
           name: "Scheduled Agent",
           role: "assistant",
-          models: { generate: "scheduledModel" },
+          models: { generate: ["scheduledModel"] },
         },
       },
       models: {

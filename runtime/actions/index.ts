@@ -1,6 +1,7 @@
 export { defineAction, isActionDefinition } from "./define.ts";
 export { createActionContext } from "./host.ts";
 export {
+  actionCallerDefinitionId,
   actionTransactionIdentity,
   createActionCallers,
   isSettledActionError,

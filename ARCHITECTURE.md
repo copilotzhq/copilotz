@@ -23,9 +23,10 @@ capabilities that contributes some combination of five primitives:
   events as they execute.
 - **Processors** react to events and implement orchestration and business logic
   by deciding which actions or mutations should happen next.
-- **Resources** are named, declarative definitions and configuration consumed by
-  the runtime and its plugins, such as agents, tools, models, prompts, or
-  routing policies.
+- **Resources** are named, immutable process-local semantic definitions consumed
+  by the runtime and its plugins, such as agents, tools, models, prompts, or
+  routing policies. A Resource may carry a typed policy hook when that hook is
+  part of its semantic definition.
 - **Adapters** provide interchangeable implementations for variable external or
   infrastructural boundaries, such as different LLM providers, storage systems,
   search engines, or execution environments.
@@ -69,14 +70,16 @@ agent loop is expressed through Processors that react to conversation and Action
 Events and determine the next operation to perform.
 
 Concepts such as **agents**, **tools**, and **models** primarily enter the
-system as resources. An agent resource can describe its identity, instructions,
-model preferences, available tools, and policies. A tool resource can describe
-how an existing action should be exposed to an LLM: its `action` field is the
-same alias used by both `resources.tools` and `context.actions`. It does not
-carry an `execute` method or a second execution lifecycle. A model resource can
-describe which model and adapter should be used for an LLM operation. These
-definitions remain declarative; the actual behavior comes from actions and
-processors.
+system as resources. An Agent can describe its identity, model preferences,
+available tools, and an instructions policy hook. A Context Resource can
+contribute prompt material and a Skill can provide its files through similarly
+typed local hooks. These hooks are evaluated from the composed Resource; they
+are not Action lifecycles, Event data, or persisted configuration. A Tool
+Resource instead describes how an existing Action is exposed to an LLM: its
+`action` field is the same alias used by both `resources.tools` and
+`context.actions`. It does not carry an `execute` method or a second execution
+lifecycle. A Model Resource describes one atomic model deployment. Ordered model
+preference and fallback belong to the Agent or direct LLM call.
 
 Provider-specific behavior is isolated behind adapters. For example, an
 `llm.call` action may own the common workflow for preparing an LLM request,
@@ -84,11 +87,22 @@ consuming a streamed response, normalizing its output, and integrating the
 result into the runtime. The portions that differ between OpenAI, Google, or
 another provider are delegated to their respective LLM adapters. Consequently,
 the orchestration and business logic remains unchanged when the underlying
-provider changes. The LLM plugin installs only the provider-neutral Action and
-contracts; applications explicitly contribute Model Resources and provider
-Adapters through ordinary composition. Credentials and clients live only inside
-those runtime Adapter values; they never enter Model Resources, Action input,
-Action-call metadata, or durable lifecycle output.
+provider changes. The LLM plugin installs the provider-neutral Action,
+contracts, and built-in provider drivers. Applications explicitly contribute
+Model Resources containing process-local provider configuration. A Model may
+carry a simple inline key or reference a reusable, provider-bound
+`llmCredentials` Resource; a custom provider is defined with `createLlmAdapter`
+and referenced by its Model Resource. Credential resolver output and clients
+never enter Action input, Action-call metadata, progress, output, or Usage
+records.
+
+Each reported provider request becomes one durable Usage ledger row identified
+by the LLM Action run and attempt index. A completed logical call does not add a
+second aggregate row. If Copilotz rejects a provider response locally and may
+recover, it stops projecting that response but drains the provider transport and
+awaits finalized attempt usage before the next candidate. External cancellation
+is propagated immediately and records only accounting already reported by the
+provider.
 
 The runtime acts as the **composition boundary** for all of this. When plugins
 are installed, their collections, actions, processors, resources, and adapters
@@ -224,13 +238,37 @@ order: deleting either endpoint retires the relation, recreating that endpoint
 does not resurrect it, and a later `relation.upserted` Event is required to make
 it live again.
 
-Plain typed objects are the canonical way to declare resources and adapters.
-Semantic plugins may export optional helpers such as `defineAgent`,
-`defineModel`, or provider-adapter factories when those helpers add useful
-inference, defaults, normalization, or runtime validation. A helper must not
-create a privileged object form: an equivalent plain object satisfying the same
-public interface remains valid. Dynamic configuration is validated by the
-semantic plugin that understands it, not by the generic runtime.
+Resources are immutable process-local semantic definitions. Their declarative
+fields are ordinary typed data; a semantic Resource may additionally retain a
+typed, read-only policy hook where its own contract defines one. Those hooks are
+pure and deterministic over their supplied snapshot because durable Processor
+delivery is at least once and may evaluate the hook again. Hooks are never
+serialized into Event Bodies, Action input/output, or Collection records:
+recovery uses the Resource composed in the current process. They may return only
+their policy value. A hook that needs a durable lifecycle, retry identity,
+external side effect, or independently observable execution is an Action
+instead.
+
+An LLM credential resolver is a narrower operational boundary: it resolves or
+refreshes authentication for the current trusted Action context, not semantic
+application behavior. Resolution is lazy and memoized once per credential alias
+inside one `llm.call`; `{ available: false }` skips that Model without provider
+I/O. Any scoped refresh write must use the supplied stable operation identity so
+at-least-once Action execution remains safe. Only the configured Resource and
+sanitized availability cross composition; resolved keys and headers remain
+ephemeral.
+
+Adapters own interchangeable custom external or infrastructural implementations.
+A semantic Resource may instead carry process-local credentials and transport
+policy for a built-in implementation. Neither is a policy hook. Semantic helpers
+such as `defineAgent`, `defineModel`, `defineContextResource`, `defineSkill`,
+and `defineApi` validate and freeze their corresponding Resource definition;
+they do not create a privileged runtime representation. In contrast,
+`createToolsPlugin` and `createOpenApiToolsPlugin` are explicit compilers: each
+creates one or more native Actions plus matching data-only Tool Resources. The
+compiled maps remain inspectable, and there is still only one Action lifecycle
+and one executor. Generic runtime code never invents or interprets semantic
+hooks.
 
 Both actions and processors may consume the composed resources and adapters
 through their declared context interfaces. Their architectural roles still guide
@@ -245,23 +283,36 @@ plugin owns conversation state, agent resources, ingress helpers, and the prompt
 policy and Processors that implement the agent loop. Core depends on the
 first-party LLM plugin through ordinary plugin composition. The LLM plugin owns
 the common `llm.call` Action, Model Resource contract, LLM Adapter contract, and
-first-party provider Adapter factories. Applications choose and configure every
-Model and provider Adapter explicitly; neither LLM nor Core installs a default
-Model, Adapter, client, or credential.
+first-party provider drivers. Applications choose and configure every Model
+explicitly; only genuinely custom providers require an Adapter. Neither LLM nor
+Core installs a default Model, client, or credential.
 
 Core exposes an LLM tool by mapping a data-only Tool Resource to an existing
-Action alias. It invokes that Action directly, so the Action's ordinary durable
-lifecycle is the only tool-execution lifecycle. Core marks these calls with
-plugin-owned Action metadata whose discriminator is
-`schema: "copilotz.core.tool-action.v1"`; lifecycle Processors match that
-durable body data. Multiple tool calls from one LLM result form one
-deterministic plan and execute sequentially in provider order with retry-stable
-identities. A Core-owned ask Action durably creates its question and completes
-normally with the plugin-owned semantic output `{ status: "deferred" }`. Core's
-terminal Processor recognizes that output and does not project a result or
-advance the plan until the later answer or failure Event. The originating
-lifecycle data and Core Message metadata carry enough plan identity to resume
-the remaining calls and produce exactly one subsequent LLM continuation. No
+Action alias. An object-form `defineTool({ ... execute })` is authoring sugar:
+`createToolsPlugin` compiles `execute` into that native Action and publishes a
+separate data-only Tool Resource under the same alias. Core invokes the Action
+directly, so its ordinary durable lifecycle is the only tool-execution
+lifecycle. Core marks these calls with plugin-owned Action metadata whose
+discriminator is `schema: "copilotz.core.tool-action.v1"`; lifecycle Processors
+match that durable body data. Multiple tool calls from one LLM result form one
+deterministic durable plan. Top-level calls are ordered parallel branches. A
+branch may contain a pipeline: Tool stages and deterministic `jq` transforms
+execute sequentially, with each Tool result transformed and merged into the next
+Tool's explicit input. Branch roots execute concurrently through their ordinary
+Actions, while Core persists each branch/stage cursor and a retry-stable fan-in
+barrier. Each branch projects only its final value or failure, associated with
+the root provider Tool-call ID; intermediate stage lifecycles remain durable but
+do not manufacture unmatched transcript calls. Branch results are projected in
+deterministic provider order regardless of completion order, and the completed
+plan produces exactly one subsequent LLM continuation.
+
+A Core-owned ask Action durably creates its question and completes normally with
+the plugin-owned semantic output `{ status: "deferred" }`. That Action terminal
+does not settle its plan member. The member settles only when the asked Agent
+eventually produces its final answer or failure, after any number of its own
+Tool pipelines or nested asks. Nested asks compose the same local durable
+barrier recursively, so sibling Agents and their descendant work may progress
+concurrently while completion propagates upward one durable plan at a time. No
 in-memory Action stays open, and the generic runtime gains no deferred
 settlement or Tool-outcome concept.
 

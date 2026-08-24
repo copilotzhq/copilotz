@@ -159,11 +159,7 @@ function eventAgentName(event: CopilotzEvent): string {
     : "assistant";
 }
 
-/**
- * Stream observations deliberately have no Core participant fields. Resolve the
- * display label from the trusted CLI scope and its host-provided inspection
- * snapshot instead of treating a stream's generic metadata as agent data.
- */
+/** Uses a scope/inspection fallback only for legacy or custom streams. */
 function responseAgentName(
   scope: CliMessageScope,
   inspection: CliInspection,
@@ -347,7 +343,6 @@ export function createInteractiveCli(options: InteractiveCliOptions): Readonly<{
   const renderAgentHeader = (agentName: string): void => {
     if (currentAgent === agentName) return;
     if (inReasoning || sawVisibleOutput) io.write("\n");
-    io.write(color("assistant " + agentName, "green") + "\n");
     currentAgent = agentName;
     inReasoning = false;
     sawVisibleOutput = false;
@@ -360,7 +355,7 @@ export function createInteractiveCli(options: InteractiveCliOptions): Readonly<{
     const isReasoning = event.type === "reasoning.delta";
     renderAgentHeader(agentName);
     if (isReasoning && !inReasoning) {
-      io.write(color("thinking> ", "dim"));
+      io.write(color(currentAgent + " thinking> ", "dim"));
       inReasoning = true;
     } else if (!isReasoning && inReasoning) {
       io.write("\n" + color(currentAgent + "> ", "cyan"));
@@ -395,7 +390,10 @@ export function createInteractiveCli(options: InteractiveCliOptions): Readonly<{
     let decoded = "";
     for (let index = start; index < input.length; index += 1) {
       const char = input[index];
-      if (char === '"') return decoded;
+      if (char === '"') {
+        const last = decoded.charCodeAt(decoded.length - 1);
+        return last >= 0xd800 && last <= 0xdbff ? undefined : decoded;
+      }
       if (char !== "\\") {
         decoded += char;
         continue;
@@ -403,8 +401,14 @@ export function createInteractiveCli(options: InteractiveCliOptions): Readonly<{
       const escaped = input[index + 1];
       if (escaped === undefined) return complete ? undefined : decoded;
       const escapes: Record<string, string> = {
-        '"': '"', "\\": "\\", "/": "/", b: "\b", f: "\f", n: "\n",
-        r: "\r", t: "\t",
+        '"': '"',
+        "\\": "\\",
+        "/": "/",
+        b: "\b",
+        f: "\f",
+        n: "\n",
+        r: "\r",
+        t: "\t",
       };
       if (escaped === "u") {
         const hex = input.slice(index + 2, index + 6);
@@ -419,7 +423,9 @@ export function createInteractiveCli(options: InteractiveCliOptions): Readonly<{
       decoded += escapes[escaped];
       index += 1;
     }
-    return complete ? undefined : decoded;
+    if (complete) return undefined;
+    const last = decoded.charCodeAt(decoded.length - 1);
+    return last >= 0xd800 && last <= 0xdbff ? decoded.slice(0, -1) : decoded;
   };
 
   const renderAskDraft = (
@@ -458,6 +464,7 @@ export function createInteractiveCli(options: InteractiveCliOptions): Readonly<{
       if (message.length > draft.renderedMessage.length) {
         io.write(message.slice(draft.renderedMessage.length));
         draft.renderedMessage = message;
+        sawVisibleOutput = true;
       }
     }
     if (phase === "complete" && !draft.rendered) {
@@ -574,7 +581,9 @@ export function createInteractiveCli(options: InteractiveCliOptions): Readonly<{
         renderAgentHeader(streamAgentName);
         if (lane === "reasoning") {
           if (sawVisibleOutput) io.write("\n");
-          if (!inReasoning) io.write(color("thinking> ", "dim"));
+          if (!inReasoning) {
+            io.write(color(currentAgent + " thinking> ", "dim"));
+          }
           inReasoning = true;
         } else if (lane === "content") {
           if (inReasoning) {

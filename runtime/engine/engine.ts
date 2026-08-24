@@ -167,8 +167,11 @@ export async function createCopilotzEngine(
           return;
         }
         const dispatched = await publishLive(output, {
-          inline: true, signal: base.signal, databaseSchema: base.databaseSchema,
-          eventHub: scopedEventHub, settlementScopeId: base.settlementScopeId,
+          inline: true,
+          signal: base.signal,
+          databaseSchema: base.databaseSchema,
+          eventHub: scopedEventHub,
+          settlementScopeId: base.settlementScopeId,
         });
         await dispatched.done;
       },

@@ -50,7 +50,7 @@ const agent: AgentResource = {
   name: "North",
   role: "assistant",
   instructions: "Preserve durable meaning and provenance.",
-  models: { generate: "contractModel" },
+  models: { generate: ["contractModel"] },
 };
 
 const usage: LlmUsage = {
@@ -80,7 +80,7 @@ type FixtureOptions = Readonly<{
 }>;
 
 Deno.test("memory plugin exposes final maps and detached reservation", () => {
-  const plugin = createLongTermMemoryPlugin({ model: "contractModel" });
+  const plugin = createLongTermMemoryPlugin({ models: ["contractModel"] });
   assertEquals(Object.keys(plugin.collections).sort(), [
     "longTermMemory",
     "memoryRecord",
@@ -133,15 +133,15 @@ Deno.test("memory plugin exposes final maps and detached reservation", () => {
   assertEquals(reservation.settlement, "detached");
 });
 
-Deno.test("memory plugin requires an explicit Model Resource alias", () => {
+Deno.test("memory plugin requires ordered Model Resource aliases", () => {
   assertThrows(
     () => createLongTermMemoryPlugin({} as never),
     TypeError,
-    "Memory LLM model alias",
+    "Memory LLM models",
   );
 });
 
-Deno.test("disabled memory defers its Model alias requirement", async () => {
+Deno.test("disabled memory defers its Model selection requirement", async () => {
   const plugin = createLongTermMemoryPlugin({ enabled: false });
   assertEquals(plugin.processors, {});
   await assertRejects(
@@ -151,7 +151,7 @@ Deno.test("disabled memory defers its Model alias requirement", async () => {
         sourceEvent: {} as never,
       }, {} as never),
     TypeError,
-    "Memory LLM model alias",
+    "Memory LLM models",
   );
 });
 
@@ -222,7 +222,7 @@ async function createFixture(
     const registry = await createPluginRegistry({
       plugins: [
         createLongTermMemoryPlugin({
-          model: "contractModel",
+          models: ["contractModel"],
           enabled: options.memoryEnabled,
           config: {
             triggerEstimatedTokens: 1,
@@ -524,7 +524,8 @@ Deno.test("native consolidation uses one internal tool grant and emits no public
     );
     assertEquals(llm.map((event) => event.status), ["invoked", "completed"]);
     assertEquals(record(llm[0].metadata).schema, "copilotz.memory.llm-call.v1");
-    assertEquals(record(llm[0].input).model, "contractModel");
+    assertEquals(record(llm[0].input).models, ["contractModel"]);
+    assertEquals(record(llm[0].input).mode, "generate");
     assertEquals(record(record(llm[1]).output).adapter, "contract");
     assertEquals(record(record(llm[1]).output).providerModel, "contract-model");
     const messages = await projectMessages(

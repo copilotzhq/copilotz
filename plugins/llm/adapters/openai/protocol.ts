@@ -448,7 +448,7 @@ function buildResponsesBody(
     stream: true,
     store: false,
     top_p: config.topP,
-    parallel_tool_calls: false,
+    parallel_tool_calls: true,
     // The ChatGPT Codex Responses backend rejects these public API controls.
     ...(chatGPTCodex ? {} : {
       temperature: config.temperature || 1,

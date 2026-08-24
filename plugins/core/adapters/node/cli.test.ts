@@ -12,6 +12,8 @@ Deno.test("Node CLI adapter explicitly owns readline terminal access", async () 
   assert(/from\s+["']node:readline\/promises["']/.test(source));
   assert(/from\s+["']node:process["']/.test(source));
   assert(!/^\s*(?:export\s+)?class\s/m.test(source));
-  const generic = await Deno.readTextFile(new URL("../index.ts", import.meta.url));
+  const generic = await Deno.readTextFile(
+    new URL("../index.ts", import.meta.url),
+  );
   assert(!/node:|node\//.test(generic));
 });

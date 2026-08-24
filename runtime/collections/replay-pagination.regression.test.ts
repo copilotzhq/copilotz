@@ -3,7 +3,10 @@ import { assertEquals } from "@std/assert";
 import { digestContent } from "../content/digest.ts";
 import type { DurableEvent, EventStore, SqlExecutor } from "../events/index.ts";
 import { defineCollection } from "./definition.ts";
-import { loadCollectionEventBodies, rebuildNamespaceProjections } from "./replay.ts";
+import {
+  loadCollectionEventBodies,
+  rebuildNamespaceProjections,
+} from "./replay.ts";
 
 const EVENT_COUNT = 10_001;
 const EVENT_BODY = JSON.stringify({
@@ -133,8 +136,7 @@ Deno.test("namespace rebuild uses two bounded event scans without eager loading"
     Object.freeze({
       ...durableEvent(index + 1),
       subject: undefined,
-    })
-  );
+    }));
   let listCalls = 0;
   const store = {
     databaseSchema: "tenant-replay-schema",
@@ -150,9 +152,12 @@ Deno.test("namespace rebuild uses two bounded event scans without eager loading"
       listCalls++;
       const after = Number(options.afterPosition ?? 0);
       const limit = options.limit ?? 1_000;
-      return Promise.resolve(events.filter((event) =>
-        Number(event.position) > after
-      ).slice(0, limit));
+      return Promise.resolve(
+        events.filter((event) => Number(event.position) > after).slice(
+          0,
+          limit,
+        ),
+      );
     },
   } as unknown as EventStore;
   const executor: SqlExecutor = {

@@ -8,10 +8,14 @@ import {
   type LlmAdapterContentPart,
   type LlmAdapterFrame,
   type LlmAdapterResult,
+  type LlmBuiltinModelResource,
   type LlmJsonObject,
   type LlmJsonValue,
+  type LlmMode,
   type LlmToolCall,
   type LlmToolDefinition,
+  type LlmToolPipeline,
+  type LlmToolPipelineStage,
   type LlmUsage,
 } from "../contracts.ts";
 import { LLMProviderError } from "../internal/errors.ts";
@@ -20,7 +24,6 @@ import type {
   ChatContentPart,
   ChatMessage,
   ChatResponse,
-  LLMRuntimeDiagnostics,
   LLMUsageAttempt,
   ProviderConfig,
   ProviderFactory,
@@ -31,18 +34,13 @@ import type {
 } from "../internal/types.ts";
 
 /**
- * Runtime-only provider configuration captured by a concrete Adapter value.
- * Credentials and transport configuration never enter a Model Resource or an
- * LLM Action input/output.
+ * Runtime-only provider configuration copied from one process-local built-in
+ * Model Resource. It never enters LLM Action input, metadata, or output.
  */
-export type LlmProviderAdapterConfig = Readonly<{
-  apiKey?: string;
-  baseUrl?: string;
-  extraHeaders?: Readonly<Record<string, string>>;
-  runtimeDiagnostics?: Readonly<LLMRuntimeDiagnostics>;
-  /** Non-secret defaults applied before each Model/Action options overlay. */
-  options?: LlmJsonObject;
-}>;
+type BuiltinProviderConfiguration = Omit<
+  LlmBuiltinModelResource,
+  "provider" | "model"
+>;
 
 const SAFE_PROVIDER_OPTIONS = new Set([
   "attemptTimeoutMs",
@@ -110,12 +108,26 @@ function runtimeOptions(value: LlmJsonObject | undefined): ProviderConfig {
     if (!SAFE_PROVIDER_OPTIONS.has(key)) {
       throw new TypeError(
         "Unsupported durable LLM provider option '" + key +
-          "'. Transport and credentials belong to Adapter construction.",
+          "'. Transport and credentials belong to built-in Model configuration.",
       );
     }
     result[key] = entry;
   }
   return result as ProviderConfig;
+}
+
+/** Preflights one built-in candidate before any candidate performs I/O. */
+export function validateBuiltinProviderCall(
+  provider: ProviderName,
+  mode: LlmMode,
+  options: LlmJsonObject,
+): void {
+  runtimeOptions(options);
+  if (mode !== "generate") {
+    throw new TypeError(
+      provider + " Adapter does not implement LLM session mode.",
+    );
+  }
 }
 
 function captureJson(
@@ -224,10 +236,41 @@ function adapterPartToChatPart(
 }
 
 function toolInvocation(call: LlmToolCall): ToolInvocation {
+  const pipeline = toolPipelineInvocation(call);
+  const root = pipeline.stages[0];
+  if (root.type !== "tool") {
+    throw new TypeError("LLM tool pipeline must begin with a tool stage.");
+  }
   return {
     id: call.id,
-    tool: { id: call.action },
-    args: JSON.stringify(call.input),
+    tool: root.tool,
+    args: root.args,
+    pipeline,
+  };
+}
+
+function toolPipelineInvocation(
+  call: LlmToolCall,
+): NonNullable<ToolInvocation["pipeline"]> {
+  const source = call.pipeline ?? {
+    id: call.id,
+    stages: [{
+      type: "tool" as const,
+      id: call.id,
+      action: call.action,
+      input: call.input,
+    }],
+  };
+  return {
+    id: source.id,
+    stages: source.stages.map((stage) =>
+      stage.type === "jq" ? { type: "jq" as const, filter: stage.filter } : {
+        type: "tool" as const,
+        id: stage.id,
+        tool: { id: stage.action },
+        args: JSON.stringify(stage.input),
+      }
+    ),
   };
 }
 
@@ -301,22 +344,71 @@ function plainJsonObject(value: unknown, field: string): LlmJsonObject {
 }
 
 function normalizeToolCall(call: ToolInvocation): LlmToolCall {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(call.args);
-  } catch (error) {
-    throw new TypeError(
-      "LLM tool call '" + call.id + "' contains invalid JSON input.",
-      { cause: error },
-    );
+  const pipeline = normalizeToolPipeline(call);
+  const root = pipeline.stages[0];
+  if (root.type !== "tool") {
+    throw new TypeError("LLM tool pipeline must begin with a tool stage.");
   }
   return Object.freeze({
     id: requiredText(call.id, "tool call id"),
-    action: requiredText(call.tool.id, "tool call action"),
-    input: plainJsonObject(
-      parsed,
-      "LLM tool call '" + call.id + "' input",
-    ),
+    action: root.action,
+    input: root.input,
+    pipeline,
+  });
+}
+
+function normalizeToolPipeline(call: ToolInvocation): LlmToolPipeline {
+  const source = call.pipeline ?? {
+    id: call.id,
+    stages: [{
+      type: "tool" as const,
+      id: call.id,
+      tool: call.tool,
+      args: call.args,
+    }],
+  };
+  const stages = source.stages.map((stage, index): LlmToolPipelineStage => {
+    if (stage.type === "jq") {
+      return Object.freeze({
+        type: "jq" as const,
+        filter: requiredText(stage.filter, "LLM jq stage filter"),
+      });
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(stage.args);
+    } catch (error) {
+      throw new TypeError(
+        "LLM tool call '" + call.id + "' contains invalid JSON input.",
+        { cause: error },
+      );
+    }
+    return Object.freeze({
+      type: "tool" as const,
+      id: requiredText(stage.id, `LLM tool pipeline stage ${index} id`),
+      action: requiredText(
+        stage.tool.id,
+        `LLM tool pipeline stage ${index} action`,
+      ),
+      input: plainJsonObject(parsed, `LLM tool pipeline stage ${index} input`),
+    });
+  });
+  const first = stages[0];
+  if (!first || first.type !== "tool") {
+    throw new TypeError("LLM tool pipeline must begin with a tool stage.");
+  }
+  const rootId = requiredText(call.id, "tool call id");
+  if (first.id !== rootId) {
+    throw new TypeError(
+      "LLM tool pipeline root stage id must match its tool call id.",
+    );
+  }
+  return Object.freeze({
+    id: requiredText(source.id, "LLM tool pipeline id"),
+    stages: Object.freeze(stages) as unknown as readonly [
+      typeof first,
+      ...LlmToolPipelineStage[],
+    ],
   });
 }
 
@@ -544,7 +636,7 @@ function frameChannel(sourceSignal: AbortSignal): FrameChannel {
 function providerConfig(
   provider: ProviderName,
   input: LlmAdapterCallInput,
-  captured: LlmProviderAdapterConfig,
+  captured: BuiltinProviderConfiguration,
 ): ProviderConfig {
   return {
     ...runtimeOptions(captured.options),
@@ -564,7 +656,7 @@ function providerConfig(
 /** Private bridge from the mature wire protocol runner to the final contract. */
 export function createProviderAdapter(
   provider: ProviderName,
-  configuration: LlmProviderAdapterConfig,
+  configuration: BuiltinProviderConfiguration,
   protocol: ProviderFactory,
 ): LlmAdapter {
   const options = configuration.options

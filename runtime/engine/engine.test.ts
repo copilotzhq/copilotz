@@ -454,9 +454,7 @@ Deno.test("lazy database scopes validate with read-only SQL and reject unprovisi
     assertEquals(/copilotz_schema_metadata/i.test(observed[1]), true);
     assertEquals(/information_schema\.tables/i.test(observed[2]), true);
     assert(
-      observed.every((sql) =>
-        !/\b(CREATE|ALTER|DROP|TRUNCATE)\b/i.test(sql)
-      ),
+      observed.every((sql) => !/\b(CREATE|ALTER|DROP|TRUNCATE)\b/i.test(sql)),
     );
 
     await assertRejects(

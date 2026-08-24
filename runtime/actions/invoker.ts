@@ -23,6 +23,19 @@ import type {
 
 const ALIAS_PATTERN = /^[a-z][a-zA-Z0-9_]*$/;
 const settledActionErrors = new WeakSet<object>();
+// A composed Action alias is presentation only: Core needs the immutable
+// definition identity behind a caller when it persists a deferred workflow.
+// Keep that association private to the runtime rather than widening every
+// caller's public callable shape.
+const callerDefinitionIds = new WeakMap<object, string>();
+
+/** Returns the registered Action definition id for a composed caller. */
+export function actionCallerDefinitionId(value: unknown): string | undefined {
+  return (typeof value === "function" ||
+      (typeof value === "object" && value !== null))
+    ? callerDefinitionIds.get(value as object)
+    : undefined;
+}
 
 export type ActionInvocationFrame = Readonly<{
   actionId: string;
@@ -426,9 +439,10 @@ export function createActionCallers<const TActions extends ActionMap>(
   options: CreateActionCallersOptions,
   parent?: ActionInvocationFrame,
 ): ActionCallers<TActions> {
-  const entries = Object.entries(actions).map(([rawAlias, action]) => [
-    requireAlias(rawAlias),
-    actionCaller(action, actions, options, parent),
-  ]);
+  const entries = Object.entries(actions).map(([rawAlias, action]) => {
+    const caller = actionCaller(action, actions, options, parent);
+    callerDefinitionIds.set(caller as object, action.id);
+    return [requireAlias(rawAlias), caller] as const;
+  });
   return Object.freeze(Object.fromEntries(entries)) as ActionCallers<TActions>;
 }

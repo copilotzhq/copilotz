@@ -15,6 +15,7 @@ import type { CoreResources } from "../../context.ts";
 import { resolveToolGrants } from "../../internal/capabilities/grants.ts";
 import type { MessageBranch } from "../../contracts.ts";
 import { projectActiveMessageBranch } from "../../projections.ts";
+import { coreToolResultOrigin } from "../../internal/workflow-metadata.ts";
 
 export type CoreToolEntry = Readonly<{
   alias: string;
@@ -170,10 +171,51 @@ export async function listThreadMessages(
     order: { field: "createdAt", direction: "asc" },
     limit: 1_000,
   });
-  return projectActiveMessageBranch(
+  return orderToolPlanResults(projectActiveMessageBranch(
     records,
     thread?.activeMessageBranch as MessageBranch | undefined,
-  );
+  ));
+}
+
+/**
+ * A plan may settle in any wall-clock order (and clocks may share a tick), but
+ * its provider transcript is declared order. Keep each plan's projected root
+ * results contiguous at its first message position and order by durable cursor.
+ */
+export function orderToolPlanResults(
+  records: readonly CollectionRecord[],
+): readonly CollectionRecord[] {
+  const groups = new Map<string, CollectionRecord[]>();
+  const first = new Map<string, number>();
+  records.forEach((entry, index) => {
+    const cursor = coreToolResultOrigin(entry.metadata);
+    if (!cursor) return;
+    const bucket = groups.get(cursor.planId) ?? [];
+    bucket.push(entry);
+    groups.set(cursor.planId, bucket);
+    if (!first.has(cursor.planId)) first.set(cursor.planId, index);
+  });
+  for (const bucket of groups.values()) {
+    bucket.sort((left, right) =>
+      coreToolResultOrigin(left.metadata)!.planIndex -
+      coreToolResultOrigin(right.metadata)!.planIndex
+    );
+  }
+  const emitted = new Set<string>();
+  const result: CollectionRecord[] = [];
+  records.forEach((entry, index) => {
+    const cursor = coreToolResultOrigin(entry.metadata);
+    if (!cursor) {
+      result.push(entry);
+      return;
+    }
+    if (first.get(cursor.planId) !== index || emitted.has(cursor.planId)) {
+      return;
+    }
+    emitted.add(cursor.planId);
+    result.push(...(groups.get(cursor.planId) ?? []));
+  });
+  return Object.freeze(result);
 }
 
 /** Resolves one Agent's least-authority Tool Resources in stable grant order. */

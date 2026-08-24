@@ -1,4 +1,9 @@
 import type { ContentInput, ContentSequence } from "@copilotz/copilotz/content";
+import type {
+  ActionInvocationMetadata,
+  RuntimeCollections,
+  RuntimeIdentity,
+} from "@copilotz/copilotz/actions";
 
 /** JSON values that may cross the durable LLM Action boundary. */
 export type LlmJsonValue =
@@ -15,16 +20,133 @@ export type LlmJsonObject = Readonly<{
 
 export type LlmMode = "generate" | "session";
 
-/** Application-owned selection of one provider Adapter and provider model. */
-export type ModelResource<
+export type LlmBuiltinProvider =
+  | "openai"
+  | "anthropic"
+  | "gemini"
+  | "groq"
+  | "deepseek"
+  | "minimax"
+  | "ollama";
+
+export type LlmCredentialSource =
+  | "connected_account"
+  | "service_api_key"
+  | "environment"
+  | "explicit";
+
+/** Runtime-only diagnostics which never cross the durable Action boundary. */
+export type LlmRuntimeDiagnostics = Readonly<{
+  enabled?: boolean;
+  credentialSource?: LlmCredentialSource;
+}>;
+
+/** Stable identity of the reusable credential being resolved. */
+export type LlmCredentialExecution = Readonly<{
+  credential: string;
+}>;
+
+/**
+ * The deliberately narrow, trusted runtime view available to a credential
+ * resolver. It permits tenant/user-scoped collection lookups without handing
+ * a credential policy the ability to invoke Actions or publish content.
+ */
+export type LlmCredentialContext = Readonly<{
+  namespace: string;
+  operationKey: string;
+  identity: RuntimeIdentity;
+  action: Readonly<{
+    id: string;
+    runId: string;
+    parentRunId?: string;
+    metadata: ActionInvocationMetadata;
+  }>;
+  collections: RuntimeCollections;
+  signal: AbortSignal;
+  now(): Date;
+}>;
+
+/** Runtime-only result from a credential resolver. */
+export type LlmCredentialResolution =
+  | Readonly<{
+    available: true;
+    apiKey: string;
+    extraHeaders?: Readonly<Record<string, string>>;
+  }>
+  | Readonly<{
+    available: true;
+    apiKey?: string;
+    extraHeaders: Readonly<Record<string, string>>;
+  }>
+  | Readonly<{
+    available: false;
+    reason?: string;
+  }>;
+
+/**
+ * Reusable process-local credentials for one built-in provider. Static values
+ * are useful for service keys; `resolve` supports connected accounts safely.
+ */
+type LlmStaticCredentialResource =
+  | Readonly<{
+    provider: LlmBuiltinProvider;
+    apiKey: string;
+    extraHeaders?: Readonly<Record<string, string>>;
+    resolve?: never;
+  }>
+  | Readonly<{
+    provider: LlmBuiltinProvider;
+    apiKey?: string;
+    extraHeaders: Readonly<Record<string, string>>;
+    resolve?: never;
+  }>;
+
+export type LlmCredentialResource =
+  | LlmStaticCredentialResource
+  | Readonly<{
+    provider: LlmBuiltinProvider;
+    resolve(
+      context: LlmCredentialContext,
+      execution: LlmCredentialExecution,
+    ): LlmCredentialResolution | Promise<LlmCredentialResolution>;
+    apiKey?: never;
+    extraHeaders?: never;
+  }>;
+
+/** Atomic selection and configuration of one first-party provider model. */
+export type LlmBuiltinModelResource<
+  TOptions extends LlmJsonObject = LlmJsonObject,
+> = Readonly<{
+  provider: LlmBuiltinProvider;
+  model: string;
+  /** Alias of one reusable `resources.llmCredentials` entry. */
+  credentials?: string;
+  apiKey?: string;
+  baseUrl?: string;
+  extraHeaders?: Readonly<Record<string, string>>;
+  options?: TOptions;
+  runtimeDiagnostics?: LlmRuntimeDiagnostics;
+  adapter?: never;
+}>;
+
+/** Selection of an application-defined executable Adapter and provider model. */
+export type LlmCustomModelResource<
   TOptions extends LlmJsonObject = LlmJsonObject,
 > = Readonly<{
   adapter: string;
   model: string;
-  mode?: LlmMode;
   options?: TOptions;
-  fallbacks?: readonly string[];
+  provider?: never;
+  apiKey?: never;
+  baseUrl?: never;
+  extraHeaders?: never;
+  runtimeDiagnostics?: never;
+  credentials?: never;
 }>;
+
+export type ModelResource<
+  TOptions extends LlmJsonObject = LlmJsonObject,
+> = LlmBuiltinModelResource<TOptions> | LlmCustomModelResource<TOptions>;
 
 export type LlmToolDefinition = Readonly<{
   name: string;
@@ -32,11 +154,44 @@ export type LlmToolDefinition = Readonly<{
   inputSchema?: LlmJsonObject;
 }>;
 
-/** Provider-neutral, JSON-safe tool call returned by an LLM. */
+/** One executable stage within a provider-neutral tool-call branch. */
+export type LlmToolPipelineToolStage = Readonly<{
+  type: "tool";
+  /** Framework-owned correlation id for this executable stage. */
+  id: string;
+  action: string;
+  input: LlmJsonObject;
+}>;
+
+/** A pure JSON transform applied between executable tool stages. */
+export type LlmToolPipelineJqStage = Readonly<{
+  type: "jq";
+  filter: string;
+}>;
+
+export type LlmToolPipelineStage =
+  | LlmToolPipelineToolStage
+  | LlmToolPipelineJqStage;
+
+/**
+ * One sequential branch of a tool-call response. Separate LlmToolCalls are
+ * parallel branches in provider order; stages in this pipeline are sequential.
+ */
+export type LlmToolPipeline = Readonly<{
+  id: string;
+  stages: readonly [LlmToolPipelineToolStage, ...LlmToolPipelineStage[]];
+}>;
+
+/** Provider-neutral, JSON-safe root tool call returned by an LLM. */
 export type LlmToolCall = Readonly<{
   id: string;
   action: string;
   input: LlmJsonObject;
+  /**
+   * Optional for backwards-compatible history. When present, its first tool
+   * stage is this root call; subsequent stages form a sequential branch.
+   */
+  pipeline?: LlmToolPipeline;
 }>;
 
 type LlmMessageBase = Readonly<{
@@ -77,7 +232,9 @@ export type LlmStreamDescriptor = Readonly<{
 
 /** Durable input to the provider-neutral `llm.call` Action. */
 export type LlmCallInput = Readonly<{
-  model: string;
+  /** Non-empty provider candidate list, attempted in exact caller order. */
+  models: readonly [string, ...string[]];
+  mode: LlmMode;
   request: LlmRequest;
   stream?: LlmStreamDescriptor;
   inputStreamId?: string;
@@ -103,6 +260,11 @@ export type LlmAttemptStatus = "completed" | "failed" | "cancelled";
 export type LlmAttemptUsage = Readonly<{
   id: string;
   index: number;
+  /** True only when the Adapter reported a provider request actually began. */
+  providerRequest: boolean;
+  /** Model Resource alias selected for this provider attempt. */
+  model: string;
+  /** Built-in provider name or custom Adapter alias. */
   adapter: string;
   providerModel: string;
   status: LlmAttemptStatus;
@@ -119,6 +281,7 @@ export type LlmAttemptUsage = Readonly<{
 /** Settled, JSON-safe output persisted by the `llm.call` Action lifecycle. */
 export type LlmCallOutput = Readonly<{
   model: string;
+  /** Built-in provider name or selected custom LLM Adapter alias. */
   adapter: string;
   providerModel: string;
   content: ContentSequence;
@@ -170,7 +333,7 @@ export type LlmAdapterRequest = Readonly<{
 export type LlmAdapterCallInput = Readonly<{
   /** Selected Model Resource alias. */
   model: string;
-  /** Selected LLM Adapter alias. */
+  /** Built-in provider name or selected custom LLM Adapter alias. */
   adapter: string;
   /** Provider-specific model identifier from the selected Model Resource. */
   providerModel: string;
@@ -252,11 +415,67 @@ export type LlmAdapter = Readonly<{
   call(input: LlmAdapterCallInput): LlmInvocation;
 }>;
 
+/**
+ * Validates and freezes one custom executable Adapter. First-party providers
+ * are configured directly by {@link LlmBuiltinModelResource} values instead.
+ */
+export function createLlmAdapter<const TAdapter extends LlmAdapter>(
+  adapter: TAdapter,
+): TAdapter {
+  if (!adapter || typeof adapter !== "object" || Array.isArray(adapter)) {
+    throw new TypeError("Custom LLM Adapter must be a plain object.");
+  }
+  const prototype = Object.getPrototypeOf(adapter);
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw new TypeError("Custom LLM Adapter must be a plain object.");
+  }
+  const keys = Reflect.ownKeys(adapter);
+  if (keys.length !== 1 || keys[0] !== "call") {
+    throw new TypeError("Custom LLM Adapter may only define call(input).");
+  }
+  const descriptor = Object.getOwnPropertyDescriptor(adapter, "call");
+  if (
+    !descriptor || !("value" in descriptor) ||
+    typeof descriptor.value !== "function"
+  ) {
+    throw new TypeError("Custom LLM Adapter requires call(input).");
+  }
+  return Object.freeze({ call: descriptor.value }) as TAdapter;
+}
+
 function requiredText(value: unknown, field: string): string {
   if (typeof value !== "string" || !value.trim()) {
     throw new TypeError(`Model ${field} must be a non-empty string.`);
   }
   return value.trim();
+}
+
+function plainDataEntries(
+  value: unknown,
+  path: string,
+): readonly (readonly [string, unknown])[] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError(`${path} must be a plain object.`);
+  }
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw new TypeError(`${path} must be a plain object.`);
+  }
+  const entries: Array<readonly [string, unknown]> = [];
+  for (const key of Reflect.ownKeys(value)) {
+    if (typeof key !== "string") {
+      throw new TypeError(`${path} must not contain symbol fields.`);
+    }
+    if (key === "__proto__") {
+      throw new TypeError(`${path} must not contain '__proto__'.`);
+    }
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (!descriptor?.enumerable || !("value" in descriptor)) {
+      throw new TypeError(`${path}.${key} must be an enumerable data field.`);
+    }
+    entries.push([key, descriptor.value]);
+  }
+  return entries;
 }
 
 function canonicalJson(
@@ -285,28 +504,127 @@ function canonicalJson(
   active.add(value);
   try {
     if (Array.isArray(value)) {
-      return Object.freeze(
-        value.map((item, index) =>
-          canonicalJson(item, `${path}[${index}]`, active)
-        ),
-      );
+      if (Object.getPrototypeOf(value) !== Array.prototype) {
+        throw new TypeError(`${path} must be a plain JSON array.`);
+      }
+      for (const key of Reflect.ownKeys(value)) {
+        if (typeof key !== "string") {
+          throw new TypeError(`${path} must not contain symbol fields.`);
+        }
+        if (key === "length") continue;
+        if (!/^(0|[1-9][0-9]*)$/.test(key) || Number(key) >= value.length) {
+          throw new TypeError(`${path} must not contain tagged array fields.`);
+        }
+      }
+      return Object.freeze(Array.from({ length: value.length }, (_, index) => {
+        const descriptor = Object.getOwnPropertyDescriptor(
+          value,
+          String(index),
+        );
+        if (!descriptor?.enumerable || !("value" in descriptor)) {
+          throw new TypeError(`${path} must be a dense data array.`);
+        }
+        return canonicalJson(descriptor.value, `${path}[${index}]`, active);
+      }));
     }
-    const prototype = Object.getPrototypeOf(value);
-    if (prototype !== Object.prototype && prototype !== null) {
-      throw new TypeError(`${path} must be a plain JSON object.`);
-    }
-    const result: Record<string, LlmJsonValue> = {};
-    for (const key of Object.keys(value).sort()) {
-      result[key] = canonicalJson(
-        (value as Record<string, unknown>)[key],
-        `${path}.${key}`,
-        active,
-      );
-    }
-    return Object.freeze(result);
+    const entries = plainDataEntries(value, path)
+      .map(([key, child]) =>
+        [
+          key,
+          canonicalJson(child, `${path}.${key}`, active),
+        ] as const
+      )
+      .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0);
+    return Object.freeze(Object.fromEntries(entries));
   } finally {
     active.delete(value);
   }
+}
+
+const BUILTIN_PROVIDERS = new Set<LlmBuiltinProvider>([
+  "openai",
+  "anthropic",
+  "gemini",
+  "groq",
+  "deepseek",
+  "minimax",
+  "ollama",
+]);
+
+function builtinProvider(value: unknown, path: string): LlmBuiltinProvider {
+  if (
+    typeof value !== "string" ||
+    !BUILTIN_PROVIDERS.has(value as LlmBuiltinProvider)
+  ) {
+    throw new TypeError(`${path} must be a built-in LLM provider.`);
+  }
+  return value as LlmBuiltinProvider;
+}
+
+function optionalText(value: unknown, field: string): string | undefined {
+  return value === undefined ? undefined : requiredText(value, field);
+}
+
+function headerRecord(
+  value: unknown,
+  path: string,
+): Readonly<Record<string, string>> | undefined {
+  if (value === undefined) return undefined;
+  return Object.freeze(Object.fromEntries(
+    plainDataEntries(value, path).map(([key, entry]) => {
+      if (!key.trim() || typeof entry !== "string") {
+        throw new TypeError(
+          `${path} requires non-empty names and string values.`,
+        );
+      }
+      return [key, entry];
+    }),
+  ));
+}
+
+/** Validates and freezes one reusable process-local credential Resource. */
+export function defineLlmCredential(
+  resource: LlmCredentialResource,
+): LlmCredentialResource {
+  const record = Object.fromEntries(
+    plainDataEntries(resource, "LLM credential resource"),
+  ) as Readonly<Record<string, unknown>>;
+  const dynamic = record.resolve !== undefined;
+  const allowed = dynamic
+    ? new Set(["provider", "resolve"])
+    : new Set(["provider", "apiKey", "extraHeaders"]);
+  const extra = Object.keys(record).find((key) => !allowed.has(key));
+  if (extra) {
+    throw new TypeError(`Unknown LLM credential resource field '${extra}'.`);
+  }
+  const provider = builtinProvider(record.provider, "LLM credential provider");
+  if (dynamic) {
+    if (typeof record.resolve !== "function") {
+      throw new TypeError("LLM credential resolve must be a function.");
+    }
+    return Object.freeze({
+      provider,
+      resolve: record.resolve as (
+        context: LlmCredentialContext,
+        execution: LlmCredentialExecution,
+      ) => LlmCredentialResolution | Promise<LlmCredentialResolution>,
+    }) as LlmCredentialResource;
+  }
+  const apiKey = optionalText(record.apiKey, "LLM credential apiKey");
+  const extraHeaders = headerRecord(
+    record.extraHeaders,
+    "LLM credential extraHeaders",
+  );
+  if (apiKey === undefined && extraHeaders === undefined) {
+    throw new TypeError(
+      "LLM credential resource requires apiKey, extraHeaders, or resolve.",
+    );
+  }
+  return Object.freeze({
+    provider,
+    ...(apiKey === undefined ? {} : { apiKey }),
+    ...(extraHeaders === undefined ? {} : { extraHeaders }),
+  }) as LlmCredentialResource;
 }
 
 /**
@@ -317,24 +635,26 @@ function canonicalJson(
 export function defineModel<TOptions extends LlmJsonObject = LlmJsonObject>(
   resource: ModelResource<TOptions>,
 ): ModelResource<TOptions> {
-  if (!resource || typeof resource !== "object" || Array.isArray(resource)) {
-    throw new TypeError("Model resource must be a plain object.");
-  }
-  const prototype = Object.getPrototypeOf(resource);
-  if (prototype !== Object.prototype && prototype !== null) {
-    throw new TypeError("Model resource must be a plain object.");
-  }
-  const record = resource as Readonly<Record<string, unknown>>;
-  const allowed = new Set(["adapter", "model", "mode", "options", "fallbacks"]);
+  const record = Object.fromEntries(
+    plainDataEntries(resource, "Model resource"),
+  ) as Readonly<Record<string, unknown>>;
+  const builtin = Object.hasOwn(record, "provider");
+  const allowed = builtin
+    ? new Set([
+      "provider",
+      "model",
+      "credentials",
+      "apiKey",
+      "baseUrl",
+      "extraHeaders",
+      "options",
+      "runtimeDiagnostics",
+    ])
+    : new Set(["adapter", "model", "options"]);
   const extra = Object.keys(record).find((key) => !allowed.has(key));
   if (extra) throw new TypeError(`Unknown Model resource field '${extra}'.`);
 
-  const adapter = requiredText(record.adapter, "adapter");
   const model = requiredText(record.model, "model");
-  const mode = record.mode;
-  if (mode !== undefined && mode !== "generate" && mode !== "session") {
-    throw new TypeError("Model mode must be 'generate' or 'session'.");
-  }
   const options = record.options === undefined
     ? undefined
     : canonicalJson(record.options, "Model options");
@@ -344,23 +664,85 @@ export function defineModel<TOptions extends LlmJsonObject = LlmJsonObject>(
   ) {
     throw new TypeError("Model options must be a plain JSON object.");
   }
-  let fallbacks: readonly string[] | undefined;
-  if (record.fallbacks !== undefined) {
-    if (!Array.isArray(record.fallbacks)) {
-      throw new TypeError("Model fallbacks must be an array of aliases.");
-    }
-    fallbacks = Object.freeze(
-      record.fallbacks.map((fallback, index) =>
-        requiredText(fallback, `fallback at index ${index}`)
-      ),
+  if (!builtin) {
+    const adapter = requiredText(record.adapter, "adapter");
+    return Object.freeze({
+      adapter,
+      model,
+      ...(options ? { options: options as TOptions } : {}),
+    });
+  }
+
+  const provider = builtinProvider(record.provider, "Model provider");
+  const credentials = optionalText(record.credentials, "credentials");
+  const apiKey = optionalText(record.apiKey, "apiKey");
+  const baseUrl = optionalText(record.baseUrl, "baseUrl");
+  if (
+    credentials !== undefined &&
+    (apiKey !== undefined || record.extraHeaders !== undefined)
+  ) {
+    throw new TypeError(
+      "Model credentials cannot be combined with inline apiKey or extraHeaders.",
     );
   }
 
+  const extraHeaders = headerRecord(record.extraHeaders, "Model extraHeaders");
+
+  let runtimeDiagnostics: LlmRuntimeDiagnostics | undefined;
+  if (record.runtimeDiagnostics !== undefined) {
+    const diagnostics = Object.fromEntries(plainDataEntries(
+      record.runtimeDiagnostics,
+      "Model runtimeDiagnostics",
+    ));
+    const diagnosticExtra = Object.keys(diagnostics).find((key) =>
+      key !== "enabled" && key !== "credentialSource"
+    );
+    if (diagnosticExtra) {
+      throw new TypeError(
+        `Unknown Model runtimeDiagnostics field '${diagnosticExtra}'.`,
+      );
+    }
+    if (
+      diagnostics.enabled !== undefined &&
+      typeof diagnostics.enabled !== "boolean"
+    ) {
+      throw new TypeError("Model runtimeDiagnostics.enabled must be boolean.");
+    }
+    const credentialSources = new Set<LlmCredentialSource>([
+      "connected_account",
+      "service_api_key",
+      "environment",
+      "explicit",
+    ]);
+    if (
+      diagnostics.credentialSource !== undefined &&
+      (typeof diagnostics.credentialSource !== "string" ||
+        !credentialSources.has(
+          diagnostics.credentialSource as LlmCredentialSource,
+        ))
+    ) {
+      throw new TypeError(
+        "Model runtimeDiagnostics.credentialSource is invalid.",
+      );
+    }
+    runtimeDiagnostics = Object.freeze({
+      ...(diagnostics.enabled === undefined
+        ? {}
+        : { enabled: diagnostics.enabled as boolean }),
+      ...(diagnostics.credentialSource === undefined ? {} : {
+        credentialSource: diagnostics.credentialSource as LlmCredentialSource,
+      }),
+    });
+  }
+
   return Object.freeze({
-    adapter,
+    provider,
     model,
-    ...(mode ? { mode } : {}),
+    ...(credentials === undefined ? {} : { credentials }),
+    ...(apiKey === undefined ? {} : { apiKey }),
+    ...(baseUrl === undefined ? {} : { baseUrl }),
+    ...(extraHeaders === undefined ? {} : { extraHeaders }),
     ...(options ? { options: options as TOptions } : {}),
-    ...(fallbacks ? { fallbacks } : {}),
+    ...(runtimeDiagnostics === undefined ? {} : { runtimeDiagnostics }),
   });
 }

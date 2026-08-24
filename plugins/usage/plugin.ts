@@ -13,6 +13,7 @@ import type { UsageCost, UsageOptions, UsageRecord } from "./types.ts";
 
 const DEFAULT_PLUGIN_ID = "@copilotz/core-usage";
 const DEFAULT_PLUGIN_VERSION = "3.0.0";
+const LLM_ATTEMPT_ACCOUNTING_SCHEMA = "copilotz.llm.attempt-accounting.v1";
 
 const TOKEN_METRICS = [
   "inputTokens",
@@ -263,56 +264,65 @@ async function persistUsage(
   });
 }
 
-function llmUsageRecord(
+function llmAttemptUsageRecords(
   lifecycle: Record<string, unknown>,
   event: CopilotzEvent,
   attribution: LlmAttribution,
   initiatedById: string | null,
-): UsageRecord {
-  const input = record(lifecycle.input);
-  const output = record(lifecycle.output);
-  const error = record(lifecycle.error);
-  const usage = record(output.usage);
+  attemptsValue: unknown,
+): readonly UsageRecord[] {
+  if (!Array.isArray(attemptsValue)) return Object.freeze([]);
   const actionRunId = optionalText(lifecycle.actionRunId) ??
     (event.durable ? event.id : event.correlationId);
-  const id = `usage:llm:${actionRunId}`;
-  const model = optionalText(output.model) ?? optionalText(input.model) ??
-    "unknown";
-  const adapter = optionalText(output.adapter) ?? null;
-  const providerModel = optionalText(output.providerModel) ?? null;
-  const reportedCost = record(usage.cost);
-  const costAmount = finiteNumber(reportedCost.amount);
-  const costCurrency = optionalText(reportedCost.currency);
-  return {
-    id,
-    kind: "llm",
-    resource: model,
-    model,
-    provider: null,
-    adapter,
-    providerModel,
-    operation: "llm.call",
-    status: optionalText(lifecycle.status) ?? null,
-    statusReason: optionalText(output.finishReason) ??
-      optionalText(error.name) ?? null,
-    threadId: attribution.threadId,
-    eventId: event.durable ? event.id : null,
-    messageId: attribution.messageId,
-    agentId: attribution.agentId,
-    initiatedById,
-    metrics: tokenMetrics(usage),
-    cost: costAmount !== undefined && costCurrency
-      ? {
-        total: costAmount,
-        currency: costCurrency,
-        source: adapter ?? "llm.call",
-        ...(providerModel ? { pricingModelId: providerModel } : {}),
-      }
-      : null,
-    dedupeKey: actionRunId,
-    occurredAt: event.createdAt,
-    raw: { source: "llm.call" },
-  };
+  const records: UsageRecord[] = [];
+  for (const [index, value] of attemptsValue.entries()) {
+    const attempt = record(value);
+    if (attempt.providerRequest !== true) continue;
+    const usage = record(attempt.usage);
+    const model = optionalText(attempt.model) ?? "unknown";
+    const adapter = optionalText(attempt.adapter) ?? null;
+    const providerModel = optionalText(attempt.providerModel) ?? null;
+    const attemptIndex = Number.isSafeInteger(attempt.index) &&
+        Number(attempt.index) >= 0
+      ? Number(attempt.index)
+      : index;
+    const reportedCost = record(usage.cost);
+    const costAmount = finiteNumber(reportedCost.amount);
+    const costCurrency = optionalText(reportedCost.currency);
+    const error = record(attempt.error);
+    const finishReason = optionalText(attempt.finishReason) ??
+      optionalText(error.code) ?? null;
+    records.push({
+      id: `usage:llm:${actionRunId}:attempt:${attemptIndex}`,
+      kind: "llm",
+      resource: model,
+      model,
+      provider: null,
+      adapter,
+      providerModel,
+      operation: "llm.call",
+      status: optionalText(attempt.status) ?? null,
+      statusReason: finishReason,
+      threadId: attribution.threadId,
+      eventId: event.durable ? event.id : null,
+      messageId: attribution.messageId,
+      agentId: attribution.agentId,
+      initiatedById,
+      metrics: tokenMetrics(usage),
+      cost: costAmount !== undefined && costCurrency
+        ? {
+          total: costAmount,
+          currency: costCurrency,
+          source: adapter ?? "llm.call",
+          ...(providerModel ? { pricingModelId: providerModel } : {}),
+        }
+        : null,
+      dedupeKey: `${actionRunId}:attempt:${attemptIndex}`,
+      occurredAt: optionalText(attempt.finishedAt) ?? event.createdAt,
+      raw: { source: "llm.call.attempt" },
+    });
+  }
+  return Object.freeze(records);
 }
 
 function toolUsageRecord(
@@ -355,11 +365,12 @@ function llmUsageProcessor(
       { eventType: "llm.call.completed" },
       { eventType: "llm.call.failed" },
       { eventType: "llm.call.cancelled" },
+      { eventType: "llm.call.progress" },
     ],
     async handle(event, context) {
       const lifecycle = parseActionLifecycleEvent(event, {
         actionId: "llm.call",
-        statuses: ["completed", "failed", "cancelled"],
+        statuses: ["completed", "failed", "cancelled", "progress"],
       });
       if (!lifecycle) return;
       const attribution = llmAttribution(lifecycle.metadata);
@@ -367,12 +378,35 @@ function llmUsageProcessor(
         context,
         attribution.initiatorParticipantId,
       );
-      await persistUsage(
-        llmUsageRecord(lifecycle, event, attribution, initiatedById),
-        lifecycle,
-        context,
-        options,
-      );
+      if (lifecycle.status === "progress") {
+        const progress = record(lifecycle.progress);
+        if (progress.schema !== LLM_ATTEMPT_ACCOUNTING_SCHEMA) return;
+        for (
+          const usage of llmAttemptUsageRecords(
+            lifecycle,
+            event,
+            attribution,
+            initiatedById,
+            progress.attempts,
+          )
+        ) {
+          await persistUsage(usage, lifecycle, context, options);
+        }
+        return;
+      }
+      if (lifecycle.status !== "completed") return;
+      const output = record(lifecycle.output);
+      for (
+        const usage of llmAttemptUsageRecords(
+          lifecycle,
+          event,
+          attribution,
+          initiatedById,
+          output.attempts,
+        )
+      ) {
+        await persistUsage(usage, lifecycle, context, options);
+      }
     },
   });
 }

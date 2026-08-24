@@ -7,7 +7,7 @@ export const LLM_PLUGIN_VERSION = "0.62.0";
 type EmptyMap = Readonly<Record<never, never>>;
 type LlmActions = Readonly<{ callLlm: typeof callLlmAction }>;
 
-/** Provider-neutral LLM contracts and lifecycle; installs no configuration. */
+/** Provider-neutral lifecycle and built-in drivers; installs no configured Model. */
 export const llmPlugin: CopilotzPlugin<
   typeof LLM_PLUGIN_ID,
   typeof LLM_PLUGIN_VERSION,

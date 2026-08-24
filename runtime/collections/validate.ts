@@ -1,4 +1,5 @@
 import { addFormats, Ajv } from "../../dependencies/ajv.ts";
+import { markNonRetryable } from "../failure.ts";
 
 type JsonSchema = Record<string, unknown>;
 type AjvValidator = ((value: unknown) => boolean) & {
@@ -26,15 +27,20 @@ export function validateAgainstJsonSchema(
   value: unknown,
   label: string,
 ): void {
-  let validator = validators.get(schema);
-  if (!validator) {
-    validator = ajv.compile(schema as JsonSchema) as AjvValidator;
-    validators.set(schema, validator);
+  try {
+    let validator = validators.get(schema);
+    if (!validator) {
+      validator = ajv.compile(schema as JsonSchema) as AjvValidator;
+      validators.set(schema, validator);
+    }
+    const candidate = structuredClone(value);
+    if (validator(candidate)) return;
+    const details = ajv.errorsText(validator.errors ?? [], { separator: "; " });
+    throw new TypeError(`${label} failed schema validation: ${details}`);
+  } catch (error) {
+    if (error instanceof Error) throw markNonRetryable(error);
+    throw markNonRetryable(new Error(String(error)));
   }
-  const candidate = structuredClone(value);
-  if (validator(candidate)) return;
-  const details = ajv.errorsText(validator.errors ?? [], { separator: "; " });
-  throw new TypeError(`${label} failed schema validation: ${details}`);
 }
 
 export function validateCollectionRecord(

@@ -8,6 +8,7 @@ import { listen } from "../adapters/deno/listen.ts";
 import {
   type AnyCopilotzPlugin,
   definePlugin,
+  markNonRetryable,
   type ProcessorContext,
 } from "../plugins/index.ts";
 import { defineProcessor } from "../plugins/processor.ts";
@@ -94,6 +95,43 @@ function cascadingPlugin(): AnyCopilotzPlugin {
     id: "@copilotz/topology-test",
     version: "1.0.0",
     processors: { first, second },
+  });
+}
+
+function deliveryFailurePlugin(calls: {
+  retryOnce: number;
+  exhaust: number;
+  permanent: number;
+}): AnyCopilotzPlugin {
+  return definePlugin({
+    id: "@copilotz/topology-delivery-failures",
+    version: "1.0.0",
+    processors: {
+      retryOnce: defineProcessor({
+        id: "topology.delivery-retry-once",
+        on: [{ eventType: "topology.delivery-retry-once" }],
+        handle() {
+          calls.retryOnce += 1;
+          if (calls.retryOnce === 1) throw new Error("retry me once");
+        },
+      }),
+      exhaust: defineProcessor({
+        id: "topology.delivery-exhaust",
+        on: [{ eventType: "topology.delivery-exhaust" }],
+        handle() {
+          calls.exhaust += 1;
+          throw new Error("retry until exhausted");
+        },
+      }),
+      permanent: defineProcessor({
+        id: "topology.delivery-permanent",
+        on: [{ eventType: "topology.delivery-permanent" }],
+        handle() {
+          calls.permanent += 1;
+          throw markNonRetryable(new TypeError("permanent processor defect"));
+        },
+      }),
+    },
   });
 }
 
@@ -221,6 +259,95 @@ Deno.test("Gateway and Worker preserve live output and cascading durable work", 
     await Promise.allSettled([
       gateway.shutdown("topology test complete"),
       worker.stop("topology test complete"),
+    ]);
+    await database.close();
+  }
+});
+
+Deno.test("Gateway automatically retries or terminalizes Worker delivery failures", async () => {
+  const database = await createTestDatabase({ url: ":memory:" });
+  const transport = {
+    type: "in-process",
+    config: { topic: `copilotz.retry.${crypto.randomUUID()}` },
+  } as const;
+  const workerId = "copilotz-delivery-retry-worker";
+  const calls = { retryOnce: 0, exhaust: 0, permanent: 0 };
+  const plugin = deliveryFailurePlugin(calls);
+  const gateway = await createCopilotzGateway({
+    namespace,
+    database,
+    plugins: [plugin],
+    transports: [transport],
+    target: { workerId },
+    engine: { retryBaseMs: 0, random: () => 0 },
+  });
+  const worker = await createCopilotzWorker({
+    namespace,
+    database,
+    plugins: [plugin],
+    id: workerId,
+    transport,
+    capacity: 1,
+    engine: { retryBaseMs: 0, random: () => 0 },
+  });
+
+  try {
+    await worker.ready;
+
+    const recovered = await gateway.send({
+      type: "topology.delivery-retry-once",
+      namespace,
+      payload: {},
+    });
+    await recovered.done;
+    assertEquals(calls.retryOnce, 2);
+    assertEquals(
+      (await gateway.application.deliveries.list({
+        namespace,
+        eventId: recovered.eventId,
+      }))[0]?.status,
+      "succeeded",
+    );
+
+    const exhausted = await gateway.send({
+      type: "topology.delivery-exhaust",
+      namespace,
+      payload: {},
+    });
+    await assertRejects(
+      () => exhausted.done,
+      Error,
+      "dead-lettered work",
+    );
+    const exhaustedDelivery = (await gateway.application.deliveries.list({
+      namespace,
+      eventId: exhausted.eventId,
+    }))[0];
+    assertEquals(exhaustedDelivery?.status, "dead_letter");
+    assertEquals(calls.exhaust, exhaustedDelivery?.maxAttempts);
+
+    const permanent = await gateway.send({
+      type: "topology.delivery-permanent",
+      namespace,
+      payload: {},
+    });
+    await assertRejects(
+      () => permanent.done,
+      Error,
+      "dead-lettered work",
+    );
+    const permanentDelivery = (await gateway.application.deliveries.list({
+      namespace,
+      eventId: permanent.eventId,
+    }))[0];
+    assertEquals(permanentDelivery?.status, "dead_letter");
+    assertEquals(permanentDelivery?.attempts, 1);
+    assertEquals(permanentDelivery?.lastError?.retryable, false);
+    assertEquals(calls.permanent, 1);
+  } finally {
+    await Promise.allSettled([
+      gateway.shutdown("delivery retry test complete"),
+      worker.stop("delivery retry test complete"),
     ]);
     await database.close();
   }

@@ -718,6 +718,11 @@ Deno.test("llm.call resolves request content and overlays call options", async (
   assertEquals(output.toolCalls, [
     { id: "call-a", action: "search", input: { q: "x" } },
   ]);
+  assertEquals(output.content[0].assetId, "prepared:attempt:0:content:0");
+  assertEquals(
+    output.reasoning?.[0].assetId,
+    "prepared:attempt:0:reasoning:0",
+  );
   assertEquals(output.usage?.cost, { amount: 0.01, currency: "USD" });
   assertEquals(test.prepared.map((item) => item.operationKey), [
     "attempt:0:content",

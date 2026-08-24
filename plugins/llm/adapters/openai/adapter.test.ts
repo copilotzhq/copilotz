@@ -231,6 +231,41 @@ Deno.test("OpenAI maps multimodal content for Responses", () => {
   }]);
 });
 
+Deno.test("OpenAI Responses replays assistant history as output text", () => {
+  const config = keyedConfig({ model: "gpt-5-mini" });
+  const body = openaiProvider(config).body([{
+    role: "system",
+    content: [{ type: "text", text: "Be concise." }],
+  }, {
+    role: "user",
+    content: [{ type: "text", text: "First question" }],
+  }, {
+    role: "assistant",
+    content: [{ type: "text", text: "First answer" }],
+  }, {
+    role: "user",
+    content: [{ type: "text", text: "Follow-up question" }],
+  }], config) as Record<string, unknown>;
+
+  assertEquals(body.input, [{
+    role: "system",
+    content: [{ type: "input_text", text: "Be concise." }],
+  }, {
+    role: "user",
+    content: [{ type: "input_text", text: "First question" }],
+  }, {
+    role: "assistant",
+    content: [{
+      type: "output_text",
+      text: "First answer",
+      annotations: [],
+    }],
+  }, {
+    role: "user",
+    content: [{ type: "input_text", text: "Follow-up question" }],
+  }]);
+});
+
 Deno.test("OpenAI usage normalizes cache reads and writes", () => {
   const config = keyedConfig({ openaiApi: "chat_completions" });
   const usage = openaiProvider(config).extractUsage?.({

@@ -28,7 +28,13 @@ stream subscribers do not create work rows.
 
 Delivery states are `pending`, `leased`, `retry_wait`, `succeeded`, `cancelled`,
 and `dead_letter`. Execution is at least once: an expired lease or retryable
-failure may run the same logical delivery again.
+failure may run the same logical delivery again. The Gateway requeues a failed
+delivery at its persisted `availableAt` until it succeeds or exhausts its
+bounded attempts. Unknown errors are retryable by default. A Processor can
+classify a deterministic failure with `markNonRetryable(error)`; that delivery
+dead-letters on its current attempt, so an inherited `send().done` rejects
+without a pointless retry. Collection schema-validation errors carry this
+classification automatically.
 
 Stable Collection operation keys and Action invocation identities are therefore
 part of plugin correctness. On retry, built-in mutations and Actions first load

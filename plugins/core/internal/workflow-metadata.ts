@@ -7,6 +7,7 @@ const TOOL_ACTION_METADATA_KEY = "copilotzToolAction";
 export const CORE_LLM_CALL_METADATA_SCHEMA = "copilotz.core.llm-call.v1";
 export const CORE_TOOL_ACTION_METADATA_SCHEMA = "copilotz.core.tool-action.v1";
 export const CORE_TOOL_PLAN_METADATA_SCHEMA = "copilotz.core.tool-plan.v1";
+export const CORE_LLM_STREAM_METADATA_SCHEMA = "copilotz.core.llm-stream.v1";
 
 export type AgentAskPhase = "question" | "progress" | "answer";
 
@@ -21,8 +22,12 @@ export type AgentAskMetadata = Readonly<{
   questionMessageId: string;
   askingParticipantId: string;
   askingAgentId: string;
+  /** Captured display name; omitted only by pre-display-metadata asks. */
+  askingAgentName?: string;
   askedParticipantId: string;
   askedAgentId: string;
+  /** Captured display name; omitted only by pre-display-metadata asks. */
+  askedAgentName?: string;
   callingAttemptId?: string;
   answerAttemptId?: string;
   parentAskId?: string;
@@ -44,6 +49,19 @@ export type CoreLlmCallMetadata = Readonly<{
   responseVisibility: EventVisibility;
   parentActionRunId?: string;
   ask?: AgentAskMetadata;
+}>;
+
+/** Opaque Core hint attached to each progressive LLM output stream. */
+export type CoreLlmStreamMetadata = Readonly<{
+  schema: typeof CORE_LLM_STREAM_METADATA_SCHEMA;
+  agent: Readonly<{ id: string; name: string }>;
+  ask?: Readonly<{
+    askId: string;
+    phase: AgentAskPhase;
+    questionMessageId: string;
+    askingAgent: Readonly<{ id: string; name: string }>;
+    askedAgent: Readonly<{ id: string; name: string }>;
+  }>;
 }>;
 
 /** Stable plan cursor retained by an ask while another agent answers. */
@@ -156,8 +174,10 @@ const AGENT_ASK_KEYS = new Set([
   "questionMessageId",
   "askingParticipantId",
   "askingAgentId",
+  "askingAgentName",
   "askedParticipantId",
   "askedAgentId",
+  "askedAgentName",
   "callingAttemptId",
   "answerAttemptId",
   "parentAskId",
@@ -195,6 +215,8 @@ function validAgentAsk(
       "parentAskId",
       "parentQuestionMessageId",
       "toolCallId",
+      "askingAgentName",
+      "askedAgentName",
     ] as const
   ) {
     if (candidate[key] !== undefined && !optionalMetadataText(candidate[key])) {
@@ -218,6 +240,46 @@ function validAgentAsk(
 
 export function agentAskMetadata(value: unknown): AgentAskMetadata | null {
   return validAgentAsk(record(record(value)[AGENT_ASK_METADATA_KEY]));
+}
+
+/**
+ * Produces transport-safe, semantic stream hints without making streams a Core
+ * primitive. The question itself remains the immutable Core Message referenced
+ * by `questionMessageId`; reasoning and content remain distinct runtime lanes.
+ */
+export function coreLlmStreamMetadata(
+  agent: Readonly<{ id: string; name: string }>,
+  ask?: AgentAskMetadata,
+): Readonly<{ copilotzCore: CoreLlmStreamMetadata }> {
+  const agentId = optionalMetadataText(agent.id);
+  const agentName = optionalMetadataText(agent.name);
+  if (!agentId || !agentName) {
+    throw new TypeError(
+      "Core LLM stream metadata requires an agent ID and name.",
+    );
+  }
+  const metadata: CoreLlmStreamMetadata = Object.freeze({
+    schema: CORE_LLM_STREAM_METADATA_SCHEMA,
+    agent: Object.freeze({ id: agentId, name: agentName }),
+    ...(ask
+      ? {
+        ask: Object.freeze({
+          askId: ask.askId,
+          phase: ask.phase,
+          questionMessageId: ask.questionMessageId,
+          askingAgent: Object.freeze({
+            id: ask.askingAgentId,
+            name: ask.askingAgentName ?? ask.askingAgentId,
+          }),
+          askedAgent: Object.freeze({
+            id: ask.askedAgentId,
+            name: ask.askedAgentName ?? ask.askedAgentId,
+          }),
+        }),
+      }
+      : {}),
+  });
+  return Object.freeze({ copilotzCore: metadata });
 }
 
 const CORE_LLM_CALL_KEYS = new Set([

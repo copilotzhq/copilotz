@@ -71,6 +71,19 @@ Processors inherit the triggering settlement scope by default. Set
 `settlement: "detached"` only when durable background work should not delay or
 fail the foreground operation.
 
+Thrown errors retry with bounded backoff by default. Deterministic defects that
+cannot heal—such as invalid configuration—should retain their useful error type
+and opt out explicitly:
+
+```ts
+import { markNonRetryable } from "@copilotz/copilotz/plugins";
+
+throw markNonRetryable(new TypeError("Archive configuration is invalid."));
+```
+
+The delivery then dead-letters immediately. Do not infer permanence from broad
+JavaScript classes such as `TypeError`; network APIs can throw the same class.
+
 ## Runtime context
 
 Actions and Processors receive the same complete runtime-neutral context. A

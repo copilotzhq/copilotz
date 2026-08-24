@@ -37,10 +37,7 @@ import {
   createTestDatabase,
   type TestDatabase,
 } from "../../runtime/testing/ominipg.ts";
-import {
-  projectActionEvents,
-  projectMessages,
-} from "./testing/projections.ts";
+import { projectActionEvents, projectMessages } from "./testing/projections.ts";
 import type { ConversationMessage } from "@copilotz/copilotz/core";
 import { createCopilotzApplication } from "../../runtime/application/application.ts";
 import { createTestDomainContext } from "./testing/context.ts";
@@ -231,6 +228,34 @@ async function startRun(
   return created.event.id;
 }
 
+async function continueRun(
+  fixture: Fixture,
+  id: string,
+  text: string,
+): Promise<string> {
+  const content = await fixture.engine.content.preparer.prepare(text, {
+    namespace: NAMESPACE,
+    idempotencyKey: `${id}:content`,
+  });
+  const created = await collection(fixture.engine, "message").create({
+    id,
+    threadId: "thread-a",
+    senderId: "user-a",
+    recipientIds: ["agent-north"],
+    content,
+    metadata: {},
+  }, {
+    namespace: NAMESPACE,
+    threadId: "thread-a",
+    routing: { senderId: "user-a", recipientIds: ["agent-north"] },
+    identity: {
+      correlationId: `${id}:correlation`,
+      deduplicationId: `${id}:create`,
+    },
+  });
+  return created.event.id;
+}
+
 async function waitForRun(
   fixture: Fixture,
   rootEventId: string,
@@ -359,6 +384,52 @@ Deno.test("Core invokes llm.call with explicit application Models and Adapters",
       "threadId" in (completed.input as Record<string, unknown>),
       false,
     );
+  } finally {
+    await fixture.close();
+  }
+});
+
+Deno.test("Core sends assistant history on a second conversation turn", async () => {
+  let call = 0;
+  const fixture = await createFixture(() => {
+    call += 1;
+    return {
+      result: {
+        content: {
+          type: "text",
+          text: call === 1 ? "First answer" : "Second answer",
+          role: "body",
+        },
+        attempts: [{ status: "completed" }],
+        finishReason: "stop",
+      },
+    };
+  });
+  try {
+    const first = await startRun(fixture, "First question");
+    await waitForRun(fixture, first, 2);
+    const second = await continueRun(
+      fixture,
+      "message:user:follow-up",
+      "Follow-up question",
+    );
+    await waitForRun(fixture, second, 4);
+
+    assertEquals(fixture.inputs.length, 2);
+    assertEquals(
+      fixture.inputs[1].request.messages.map((message) => message.role),
+      ["user", "assistant", "user"],
+    );
+    assertStringIncludes(inputText(fixture.inputs[1]), "First question");
+    assertStringIncludes(inputText(fixture.inputs[1]), "First answer");
+    assertStringIncludes(inputText(fixture.inputs[1]), "Follow-up question");
+
+    const messages = await projectMessages(
+      fixture.engine,
+      NAMESPACE,
+      "thread-a",
+    );
+    assertEquals(await messageText(fixture, messages[3]), "Second answer");
   } finally {
     await fixture.close();
   }

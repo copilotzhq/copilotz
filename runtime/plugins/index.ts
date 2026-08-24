@@ -46,3 +46,5 @@ export type {
   ProcessorContextOf,
   ProcessorMap,
 } from "./types.ts";
+export { isNonRetryableError, markNonRetryable } from "../failure.ts";
+export type { NonRetryableError } from "../failure.ts";

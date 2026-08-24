@@ -127,6 +127,14 @@ events, so a final remote frame cannot disappear between Worker completion and
 Gateway delivery. The application-wide `observe()` sink receives the same
 generic durable and transient Events independently of any active `send`.
 
+Durable delivery failures have an explicit disposition. Unknown failures are
+retryable by default and the recovery-owning Gateway executor requeues them at
+their persisted availability time until success or bounded dead-letter
+exhaustion. A deterministic failure may be marked non-retryable at the throw
+site; it dead-letters on that attempt. JavaScript error classes are never used
+as retryability heuristics. An inherited `send` therefore reaches success or a
+terminal rejection rather than remaining indefinitely in `retry_wait`.
+
 `context.transaction(callback)` records an atomic graph-mutation plan; it does
 not open SQL around arbitrary plugin code. Its Collection surface is
 mutation-only and returns stable `{ id }` references rather than speculative

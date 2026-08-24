@@ -11,11 +11,11 @@ import {
   createCoreTableNames,
   createEventStore,
   createSqlSession,
-  provisionCopilotzSchema,
-  validateCopilotzSchema,
   type EventStore,
   isEventStoreError,
+  provisionCopilotzSchema,
   type SqlSession,
+  validateCopilotzSchema,
 } from "./index.ts";
 
 const TEST_SCHEMA = "copilotz_event_native";
@@ -481,6 +481,44 @@ Deno.test("A22 delivery claims retry three times, dead-letter, retry, and discar
     await failThreeTimes(store, id);
     assertEquals(await store.discardDeadLetter(id), true);
     assertEquals((await store.getDelivery(id))?.status, "cancelled");
+  } finally {
+    await closeFixture(fixture);
+  }
+});
+
+Deno.test("non-retryable delivery failures dead-letter on the first attempt", async () => {
+  const fixture = await createFixture();
+  const { store } = fixture;
+  try {
+    const committed = await store.append({
+      type: "work.invalid",
+      namespace: "tenant-a",
+      payload: {},
+      correlationId: "non-retryable-scope",
+    }, ["worker"]);
+    const id = committed.deliveries[0].id;
+    const claimed = await store.claimDelivery({
+      id,
+      owner: "owner-permanent",
+      leaseMs: 60_000,
+    });
+    assertEquals(claimed?.attempts, 1);
+
+    const failed = await store.failDelivery({
+      id,
+      owner: "owner-permanent",
+      error: new TypeError("invalid durable input"),
+      retryable: false,
+    });
+
+    assertEquals(failed?.status, "dead_letter");
+    assertEquals(failed?.attempts, 1);
+    assertEquals(failed?.lastError?.retryable, false);
+    assertExists(failed?.settledAt);
+    assertEquals(
+      await store.scopeSettlement("tenant-a", committed.event.id),
+      { unsettled: 0, deadLetters: 1, cancelled: 0, succeeded: 0 },
+    );
   } finally {
     await closeFixture(fixture);
   }

@@ -2,6 +2,7 @@ import { isSettledActionError } from "@copilotz/copilotz/actions";
 import {
   agentAskMetadata,
   CORE_LLM_CALL_METADATA_SCHEMA,
+  coreLlmStreamMetadata,
   coreToolActionMessageMetadata,
   defineCoreLlmCallMetadata,
   workflowMetadata,
@@ -103,7 +104,9 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
           await context.actions.callLlm({
             model: modelFor(agent),
             request,
-            stream: {},
+            stream: {
+              metadata: coreLlmStreamMetadata(agent, ask ?? undefined),
+            },
           }, {
             operationKey: `route:${continuationKey}`,
             identity: {

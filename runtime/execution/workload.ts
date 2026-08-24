@@ -1,4 +1,5 @@
 import type { EventDelivery } from "../events/index.ts";
+import { isNonRetryableError } from "../failure.ts";
 import { resolveProcessorEvent } from "../plugins/event-data.ts";
 import type {
   CreateDeliveryWorkloadOptions,
@@ -239,6 +240,7 @@ export function createDeliveryWorkload(
         id: delivery.id,
         owner: metadata.dispatchAttemptId,
         error,
+        retryable: !isNonRetryableError(error),
       });
       const current = failed ?? await store.getDelivery(delivery.id);
       return {

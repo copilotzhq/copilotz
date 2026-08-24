@@ -1,8 +1,92 @@
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 
 import { type InteractiveCliIo, startInteractiveCli } from "./cli.ts";
+import type { ApplicationOutput } from "@copilotz/copilotz/application";
 import { createEphemeralEvent } from "@copilotz/copilotz/events";
 import type { CoreMessageInputEnvelope } from "../resources/inputs/index.ts";
+
+const encoder = new TextEncoder();
+
+function stripCliFormatting(value: string): string {
+  for (
+    const sequence of [
+      "\x1b[0m",
+      "\x1b[1m",
+      "\x1b[2m",
+      "\x1b[32m",
+      "\x1b[33m",
+      "\x1b[35m",
+      "\x1b[36m",
+    ]
+  ) value = value.replaceAll(sequence, "");
+  return value;
+}
+
+function streamedText(
+  role: "content" | "reasoning",
+  streamId: string,
+  chunks: readonly string[],
+  agent?: Readonly<{ id: string; name: string }>,
+): ApplicationOutput {
+  return Object.freeze({
+    type: "stream.output" as const,
+    namespace: "tenant-a",
+    streamId,
+    mediaType: "text/plain",
+    kind: "text" as const,
+    role,
+    correlationId: "correlation-a",
+    metadata: Object.freeze({
+      lane: role,
+      ...(agent
+        ? {
+          copilotzCore: {
+            schema: "copilotz.core.llm-stream.v1",
+            agent,
+          },
+        }
+        : {}),
+    }),
+    payload: new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const chunk of chunks) controller.enqueue(encoder.encode(chunk));
+        controller.close();
+      },
+    }),
+  });
+}
+
+function streamedToolCalls(
+  chunks: readonly string[],
+  agent?: Readonly<{ id: string; name: string }>,
+): ApplicationOutput {
+  return Object.freeze({
+    type: "stream.output" as const,
+    namespace: "tenant-a",
+    streamId: "tool-calls-a",
+    mediaType: "application/x-ndjson",
+    kind: "text" as const,
+    role: "tool-calls",
+    correlationId: "correlation-a",
+    metadata: Object.freeze({
+      lane: "tool-calls",
+      ...(agent
+        ? {
+          copilotzCore: {
+            schema: "copilotz.core.llm-stream.v1",
+            agent,
+          },
+        }
+        : {}),
+    }),
+    payload: new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const chunk of chunks) controller.enqueue(encoder.encode(chunk));
+        controller.close();
+      },
+    }),
+  });
+}
 
 Deno.test("portable CLI preserves interactive run, rendering, and session commands", async () => {
   const answers = [
@@ -73,7 +157,7 @@ Deno.test("portable CLI preserves interactive run, rendering, and session comman
   const rendered = output.join("");
   assertStringIncludes(rendered, "Copilotz Interactive Session");
   assertStringIncludes(rendered, "assistant Support");
-  assertStringIncludes(rendered, "answer>");
+  assertStringIncludes(rendered, "Support>");
   assertStringIncludes(rendered, "last event id: event-a");
   assertStringIncludes(rendered, "Available tools: 1");
   assertStringIncludes(rendered, "support-guide: Support guidance");
@@ -169,10 +253,148 @@ Deno.test("portable CLI renders one labelled line for a streamed tool-call draft
 
   await handle.closed;
   const rendered = output.join("");
-  assertEquals(rendered.match(/tool>\x1b\[0m get_current_time/g)?.length, 1);
+  assertEquals(rendered.split("tool>\x1b[0m get_current_time").length - 1, 1);
   assertEquals(rendered.includes("tool>\x1b[0m tool"), false);
-  assertEquals(rendered.match(/answer>/g)?.length, 2);
+  assertEquals(rendered.match(/Support>/g)?.length, 2);
   assertStringIncludes(rendered, "It is noon.");
+});
+
+Deno.test("portable CLI renders tool-call NDJSON as one safe tool block", async () => {
+  const answers = ["what time is it?", "/exit"];
+  const output: string[] = [];
+  const io: InteractiveCliIo = Object.freeze({
+    question: () => Promise.resolve(answers.shift() ?? "/exit"),
+    write: (value) => output.push(value),
+    close: () => undefined,
+  });
+  const frames = [{
+    providerAttemptId: "attempt-a",
+    draftId: "attempt-a:0",
+    callIndex: 0,
+    sequence: 0,
+    toolName: "get_current_time",
+    phase: "start",
+    delta: '{"name":"get_current_time"',
+    action: "get_current_time",
+  }, {
+    providerAttemptId: "attempt-a",
+    draftId: "attempt-a:0",
+    callIndex: 0,
+    sequence: 1,
+    toolName: "get_current_time",
+    phase: "delta",
+    delta: ',"arguments":{"timezone":"local"}}',
+    action: "get_current_time",
+  }, {
+    providerAttemptId: "attempt-a",
+    draftId: "attempt-a:0",
+    callIndex: 0,
+    sequence: 2,
+    toolName: "get_current_time",
+    phase: "complete",
+    delta: "",
+    toolCallId: "call-a",
+    action: "get_current_time",
+  }];
+  const ndjson = frames.map((frame) => JSON.stringify(frame) + "\n").join("");
+  const outputs = [
+    streamedText("content", "content-before-tool", ["Checking now."]),
+    streamedToolCalls([
+      ndjson.slice(0, 19),
+      ndjson.slice(19, 121),
+      ndjson.slice(121),
+    ]),
+    streamedText("content", "content-after-tool", ["It is noon."]),
+  ];
+  const handle = startInteractiveCli({
+    io,
+    scope: {
+      thread: "thread-a",
+      participant: "user-a",
+      recipientIds: ["agent-a"],
+    },
+    application: Object.freeze({
+      namespace: "tenant-a",
+      send() {
+        return Promise.resolve({
+          eventId: "event-a",
+          correlationId: "correlation-a",
+          outputs: new ReadableStream<ApplicationOutput>({
+            start(controller) {
+              for (const stream of outputs) controller.enqueue(stream);
+              controller.close();
+            },
+          }),
+          done: Promise.resolve(),
+          cancel: () => Promise.resolve(),
+        });
+      },
+    }),
+  });
+
+  await handle.closed;
+  const rendered = stripCliFormatting(output.join(""));
+  assertEquals(rendered.split("tool> get_current_time").length - 1, 1);
+  assertStringIncludes(
+    rendered,
+    "agent-a> Checking now.\ntool> get_current_time",
+  );
+  assertStringIncludes(rendered, "tool> get_current_time\nagent-a> It is noon.");
+  assertEquals(rendered.includes("providerAttemptId"), false);
+  assertEquals(rendered.includes("draftId"), false);
+  assertEquals(rendered.includes('"phase":"delta"'), false);
+});
+
+Deno.test("portable CLI renders reasoning and answer streams separately", async () => {
+  const answers = ["work it out", "/exit"];
+  const output: string[] = [];
+  const io: InteractiveCliIo = Object.freeze({
+    question: () => Promise.resolve(answers.shift() ?? "/exit"),
+    write: (value) => output.push(value),
+    close: () => undefined,
+  });
+  const outputs = [
+    streamedText("reasoning", "reasoning-a", ["Inspect ", "the facts."]),
+    streamedText("content", "content-a", ["Final ", "answer."]),
+  ];
+  const handle = startInteractiveCli({
+    io,
+    scope: {
+      thread: "thread-a",
+      participant: "user-a",
+      recipientIds: ["agent-a"],
+    },
+    inspect: () => ({
+      agents: [{ id: "agent-a", name: "Northstar" }],
+      tools: [],
+      skills: [],
+    }),
+    application: Object.freeze({
+      namespace: "tenant-a",
+      send() {
+        return Promise.resolve({
+          eventId: "event-a",
+          correlationId: "correlation-a",
+          outputs: new ReadableStream<ApplicationOutput>({
+            start(controller) {
+              for (const stream of outputs) controller.enqueue(stream);
+              controller.close();
+            },
+          }),
+          done: Promise.resolve(),
+          cancel: () => Promise.resolve(),
+        });
+      },
+    }),
+  });
+
+  await handle.closed;
+  const rendered = stripCliFormatting(output.join(""));
+  assertStringIncludes(
+    rendered,
+    "assistant Northstar\nthinking> Inspect the facts.\nNorthstar> Final answer.",
+  );
+  assertEquals(rendered.includes("the facts.Final answer."), false);
 });
 
 Deno.test("portable CLI is factory-first and imports no host terminal API", async () => {

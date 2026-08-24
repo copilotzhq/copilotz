@@ -12,6 +12,7 @@ import {
   createPluginRegistry,
   definePlugin,
   defineProcessor,
+  markNonRetryable,
   type PluginRegistry,
 } from "../plugins/index.ts";
 import {
@@ -119,6 +120,19 @@ async function closeFixture(fixture: Fixture): Promise<void> {
   await fixture.db.close();
 }
 
+async function waitForDeliveryStatus(
+  store: EventStore,
+  id: string,
+  status: "succeeded" | "dead_letter",
+): Promise<NonNullable<Awaited<ReturnType<EventStore["getDelivery"]>>>> {
+  for (let attempt = 0; attempt < 500; attempt += 1) {
+    const delivery = await store.getDelivery(id);
+    if (delivery?.status === status) return delivery;
+    await new Promise((resolve) => setTimeout(resolve, 2));
+  }
+  throw new Error(`Delivery '${id}' did not reach '${status}'.`);
+}
+
 Deno.test("A24 private in-process Oxian recovers and executes a durable delivery", async () => {
   const fixture = await createFixture();
   const committed = await appendMessage(fixture);
@@ -183,11 +197,14 @@ Deno.test("delivery failures retry through the same logical consumer and stable 
   try {
     const first = await executor.dispatchDelivery(delivery);
     assertEquals((await first.done).delivery.status, "retry_wait");
-    const second = await executor.dispatchDelivery(delivery.id);
-    const settled = await second.done;
+    const settled = await waitForDeliveryStatus(
+      fixture.store,
+      delivery.id,
+      "succeeded",
+    );
 
-    assertEquals(settled.delivery.status, "succeeded");
-    assertEquals(settled.delivery.attempts, 2);
+    assertEquals(settled.status, "succeeded");
+    assertEquals(settled.attempts, 2);
     assertEquals(fixture.calls.length, 2);
     assertEquals(
       new Set(fixture.calls.map((call) => call.idempotencyKey)),
@@ -199,6 +216,70 @@ Deno.test("delivery failures retry through the same logical consumer and stable 
       ),
       new Set([`delivery:${delivery.id}:effect`]),
     );
+  } finally {
+    await executor.shutdown();
+    await closeFixture(fixture);
+  }
+});
+
+Deno.test("retryable failures automatically exhaust into a dead letter", async () => {
+  let calls = 0;
+  const fixture = await createFixture({
+    handle() {
+      calls += 1;
+      throw new Error("persistent transient failure");
+    },
+  });
+  const committed = await appendMessage(fixture);
+  const delivery = committed.deliveries[0];
+  const executor = createDeliveryExecutor({
+    store: fixture.store,
+    registry: fixture.registry,
+    createContext: fixture.createContext,
+    workerId: "copilotz-retry-exhaustion-test",
+  });
+  try {
+    const first = await executor.dispatchDelivery(delivery);
+    assertEquals((await first.done).delivery.status, "retry_wait");
+    const terminal = await waitForDeliveryStatus(
+      fixture.store,
+      delivery.id,
+      "dead_letter",
+    );
+
+    assertEquals(terminal.attempts, terminal.maxAttempts);
+    assertEquals(calls, terminal.maxAttempts);
+    assertEquals(terminal.lastError?.retryable, true);
+  } finally {
+    await executor.shutdown();
+    await closeFixture(fixture);
+  }
+});
+
+Deno.test("marked non-retryable Processor errors dead-letter immediately", async () => {
+  let calls = 0;
+  const fixture = await createFixture({
+    handle() {
+      calls += 1;
+      throw markNonRetryable(new TypeError("invalid processor configuration"));
+    },
+  });
+  const committed = await appendMessage(fixture);
+  const delivery = committed.deliveries[0];
+  const executor = createDeliveryExecutor({
+    store: fixture.store,
+    registry: fixture.registry,
+    createContext: fixture.createContext,
+    workerId: "copilotz-non-retryable-test",
+  });
+  try {
+    const handle = await executor.dispatchDelivery(delivery);
+    const terminal = await handle.done;
+
+    assertEquals(terminal.delivery.status, "dead_letter");
+    assertEquals(terminal.delivery.attempts, 1);
+    assertEquals(terminal.delivery.lastError?.retryable, false);
+    assertEquals(calls, 1);
   } finally {
     await executor.shutdown();
     await closeFixture(fixture);

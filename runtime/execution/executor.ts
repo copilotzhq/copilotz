@@ -202,11 +202,24 @@ export function createDeliveryExecutor(
   ).then(() => undefined);
   void ready.catch(() => {});
 
+  const retryScheduler = options.scheduler ?? Object.freeze({
+    schedule(callback: () => void, delayMs: number): unknown {
+      return setTimeout(callback, delayMs);
+    },
+    cancel(handle: unknown): void {
+      clearTimeout(handle as ReturnType<typeof setTimeout>);
+    },
+  });
+
   let closed = false;
   const active = new Map<string, DeliveryExecutionHandle>();
   const activeOutputScopes = new Map<string, Set<Promise<unknown>>>();
   const dispatchTasks = new Map<string, Promise<DeliveryExecutionHandle>>();
   const scheduled = new Map<string, string | EventDelivery>();
+  const retryTimers = new Map<
+    string,
+    Readonly<{ handle: unknown; dueAtMs: number }>
+  >();
   let scheduling = false;
   let scheduleTimer: ReturnType<typeof setTimeout> | undefined;
   const deliveryKey = (
@@ -271,6 +284,30 @@ export function createDeliveryExecutor(
     }
   };
 
+  const cancelRetryTimer = (key: string): void => {
+    const timer = retryTimers.get(key);
+    if (!timer) return;
+    retryTimers.delete(key);
+    retryScheduler.cancel(timer.handle);
+  };
+
+  const scheduleRetry = (delivery: EventDelivery): void => {
+    if (closed || delivery.status !== "retry_wait") return;
+    const key = deliveryKey(delivery);
+    const parsed = Date.parse(delivery.availableAt);
+    const dueAtMs = Number.isFinite(parsed) ? parsed : Date.now();
+    const existing = retryTimers.get(key);
+    if (existing && existing.dueAtMs <= dueAtMs) return;
+    if (existing) retryScheduler.cancel(existing.handle);
+    const handle = retryScheduler.schedule(() => {
+      retryTimers.delete(key);
+      if (closed || active.has(key) || dispatchTasks.has(key)) return;
+      scheduled.set(key, delivery);
+      schedulePump();
+    }, Math.max(0, dueAtMs - Date.now()));
+    retryTimers.set(key, Object.freeze({ handle, dueAtMs }));
+  };
+
   const createHandle = (
     delivery: EventDelivery,
     event: DurableEvent,
@@ -301,6 +338,7 @@ export function createDeliveryExecutor(
           `Delivery '${delivery.id}' disappeared after execution.`,
         );
       }
+      scheduleRetry(current);
       return Object.freeze({
         event,
         delivery: current,
@@ -339,6 +377,7 @@ export function createDeliveryExecutor(
       throw new Error(`Delivery '${deliveryInput}' was not found.`);
     }
     const key = deliveryKey(delivery);
+    cancelRetryTimer(key);
     const existing = active.get(key);
     if (existing) return existing;
     const dispatching = dispatchTasks.get(key);
@@ -406,6 +445,7 @@ export function createDeliveryExecutor(
       if (closed) throw new Error("Delivery executor is shut down.");
       const id = deliveryKey(delivery);
       if (active.has(id) || dispatchTasks.has(id) || scheduled.has(id)) return;
+      cancelRetryTimer(id);
       scheduled.set(id, delivery);
       schedulePump();
     },
@@ -481,6 +521,10 @@ export function createDeliveryExecutor(
       closed = true;
       if (scheduleTimer !== undefined) clearTimeout(scheduleTimer);
       scheduleTimer = undefined;
+      for (const timer of retryTimers.values()) {
+        retryScheduler.cancel(timer.handle);
+      }
+      retryTimers.clear();
       scheduled.clear();
       const pending = await Promise.allSettled([...dispatchTasks.values()]);
       const handles = new Map(active);

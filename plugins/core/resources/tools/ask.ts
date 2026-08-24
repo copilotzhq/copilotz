@@ -211,8 +211,10 @@ async function executeAsk(
     questionMessageId,
     askingParticipantId: String(askingParticipant.id),
     askingAgentId: askingAgent.id,
+    askingAgentName: askingAgent.name,
     askedParticipantId: String(askedParticipant.id),
     askedAgentId: askedAgent.id,
+    askedAgentName: askedAgent.name,
     callingAttemptId: metadata.parentLlmActionRunId,
     ...(parentAsk
       ? {

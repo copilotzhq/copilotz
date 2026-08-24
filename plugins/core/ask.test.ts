@@ -15,6 +15,7 @@ import {
 import type {
   LlmAdapter,
   LlmAdapterCallInput,
+  LlmAdapterFrame,
   LlmAdapterResult,
   LlmJsonObject,
 } from "@copilotz/copilotz/llm";
@@ -34,10 +35,12 @@ import {
   createTestDatabase,
   type TestDatabase,
 } from "../../runtime/testing/ominipg.ts";
+import { projectActionEvents, projectMessages } from "./testing/projections.ts";
 import {
-  projectActionEvents,
-  projectMessages,
-} from "./testing/projections.ts";
+  isStreamOutputDescriptor,
+  type RuntimeOutputDescriptor,
+  type StreamOutputDescriptor,
+} from "../../runtime/streams/index.ts";
 import type { ConversationMessage } from "@copilotz/copilotz/core";
 import type { CoreToolProcessorContext } from "./context.ts";
 import { resumeDeferredToolPlan } from "./internal/tool-plan.ts";
@@ -92,19 +95,30 @@ const publishTool = defineTool("publish", publishAction, {
   history: { visibility: "public" },
 });
 
+type HandlerResult =
+  & LlmAdapterResult
+  & Readonly<{
+    frames?: readonly LlmAdapterFrame[];
+  }>;
+
 type Handler = (
   input: LlmAdapterCallInput,
-) => LlmAdapterResult | Promise<LlmAdapterResult>;
+) => HandlerResult | Promise<HandlerResult>;
 
 function adapterFrom(handler: Handler): LlmAdapter {
   return Object.freeze({
     call(input) {
-      const result = Promise.resolve().then(() => handler(input));
+      const response = Promise.resolve().then(() => handler(input));
+      const result = response.then(({ frames: _frames, ...value }) =>
+        value as LlmAdapterResult
+      );
       return Object.freeze({
         frames: new ReadableStream({
           async start(controller) {
             try {
-              await result;
+              for (const frame of (await response).frames ?? []) {
+                controller.enqueue(frame);
+              }
               controller.close();
             } catch (error) {
               controller.error(error);
@@ -121,6 +135,7 @@ type Fixture = Readonly<{
   db: TestDatabase;
   engine: CopilotzEngine;
   agents: readonly AgentResource[];
+  outputs: readonly RuntimeOutputDescriptor[];
   close(): Promise<void>;
 }>;
 
@@ -129,6 +144,7 @@ async function createFixture(
   handler: Handler,
 ): Promise<Fixture> {
   markExecutions.splice(0);
+  const outputs: RuntimeOutputDescriptor[] = [];
   const db = await createTestDatabase({ url: ":memory:" });
   const app = definePlugin({
     id: "test.core-ask.resources",
@@ -153,11 +169,15 @@ async function createFixture(
     retryBaseMs: 0,
     random: () => 0,
     execution: { capacity: 1 },
+    async publish(output) {
+      outputs.push(output);
+    },
   });
   return Object.freeze({
     db,
     engine,
     agents,
+    outputs,
     async close() {
       await engine.shutdown();
       await db.close();
@@ -291,6 +311,18 @@ async function messageText(
   ).join("\n");
 }
 
+async function streamText(fixture: Fixture, streamId: string): Promise<string> {
+  const stream = await fixture.engine.streams.follow(NAMESPACE, {
+    id: streamId,
+  });
+  const decoder = new TextDecoder();
+  let text = "";
+  for await (const chunk of stream) {
+    text += decoder.decode(chunk, { stream: true });
+  }
+  return text + decoder.decode();
+}
+
 Deno.test("ask is one native Action with a data-only Tool presentation", () => {
   assertEquals(askAction.id, "copilotz.core.ask");
   assertEquals(askTool.action, "ask");
@@ -328,8 +360,10 @@ Deno.test("missing or forged parent ask cursors reject every retry", async () =>
     questionMessageId: "message-parent-question",
     askingParticipantId: "agent-a",
     askingAgentId: "a",
+    askingAgentName: "A",
     askedParticipantId: "agent-forged",
     askedAgentId: "forged",
+    askedAgentName: "FORGED",
     origin: origin("a", "agent-a", "call-parent"),
     depth: 1,
   };
@@ -342,8 +376,10 @@ Deno.test("missing or forged parent ask cursors reject every retry", async () =>
     questionMessageId: "message-child-question",
     askingParticipantId: "agent-b",
     askingAgentId: "b",
+    askingAgentName: "B",
     askedParticipantId: "agent-c",
     askedAgentId: "c",
+    askedAgentName: "C",
     parentAskId: parent.askId,
     parentQuestionMessageId: parent.questionMessageId,
     origin: origin("b", "agent-b", "call-child"),
@@ -459,10 +495,15 @@ Deno.test("an ask resumes through durable llm.call metadata", async () => {
     );
     assertExists(question);
     assertExists(answer);
-    assertEquals(
-      agentAskMetadata(question.metadata)?.askId,
-      agentAskMetadata(answer.metadata)?.askId,
-    );
+    const questionAsk = agentAskMetadata(question.metadata);
+    const answerAsk = agentAskMetadata(answer.metadata);
+    assertExists(questionAsk);
+    assertExists(answerAsk);
+    assertEquals(questionAsk.askId, answerAsk.askId);
+    assertEquals(questionAsk.askingAgentName, "A");
+    assertEquals(questionAsk.askedAgentName, "B");
+    assertEquals(answerAsk.askingAgentName, "A");
+    assertEquals(answerAsk.askedAgentName, "B");
     const lifecycle = await projectActionEvents(
       fixture.engine,
       NAMESPACE,
@@ -478,6 +519,117 @@ Deno.test("an ask resumes through durable llm.call metadata", async () => {
         typeof event.metadata.ask === "object"
       ),
     );
+    const askedInvocation = lifecycle.find((event) =>
+      event.status === "invoked" && event.metadata.agentId === "b"
+    );
+    assertExists(askedInvocation);
+    const streamMetadata = (
+      askedInvocation.input as {
+        stream?: { metadata?: Record<string, unknown> };
+      }
+    ).stream?.metadata?.copilotzCore as Record<string, unknown> | undefined;
+    assertEquals(streamMetadata, {
+      schema: "copilotz.core.llm-stream.v1",
+      agent: { id: "b", name: "B" },
+      ask: {
+        askId: questionAsk.askId,
+        phase: "question",
+        questionMessageId: questionAsk.questionMessageId,
+        askingAgent: { id: "a", name: "A" },
+        askedAgent: { id: "b", name: "B" },
+      },
+    });
+  } finally {
+    await fixture.close();
+  }
+});
+
+Deno.test("asked-Agent streams retain target identity and separate reasoning", async () => {
+  const agents = [agent("a", ["b"]), agent("b")];
+  const counts = new Map<string, number>();
+  const encoder = new TextEncoder();
+  const fixture = await createFixture(agents, (input) => {
+    const id = activeAgent(input);
+    const count = (counts.get(id) ?? 0) + 1;
+    counts.set(id, count);
+    if (id === "a" && count === 1) {
+      return {
+        content: [],
+        toolCalls: [{
+          id: "ask-b-streams",
+          action: "ask",
+          input: { target: "b", message: "Give a concise answer." },
+        }],
+        attempts: [{ status: "completed" }],
+      };
+    }
+    if (id === "b") {
+      return {
+        content: { type: "text", text: "B final answer", role: "body" },
+        frames: [{
+          lane: "reasoning",
+          mediaType: "text/plain; charset=utf-8",
+          bytes: encoder.encode("B private reasoning"),
+        }, {
+          lane: "content",
+          mediaType: "text/plain; charset=utf-8",
+          bytes: encoder.encode("B streamed answer"),
+        }],
+        attempts: [{ status: "completed" }],
+      };
+    }
+    return {
+      content: { type: "text", text: "A final", role: "body" },
+      attempts: [{ status: "completed" }],
+    };
+  });
+  try {
+    const root = await startRun(fixture);
+    await waitForRun(fixture, root, 6);
+    const messages = await projectMessages(
+      fixture.engine,
+      NAMESPACE,
+      "thread-a",
+    );
+    const question = messages.find((message) =>
+      agentAskMetadata(message.metadata)?.phase === "question"
+    );
+    assertExists(question);
+    const ask = agentAskMetadata(question.metadata);
+    assertExists(ask);
+    const streams = fixture.outputs.filter((
+      output,
+    ): output is StreamOutputDescriptor =>
+      isStreamOutputDescriptor(output) &&
+      ((output.metadata.copilotzCore as Record<string, unknown> | undefined)
+          ?.agent as Record<string, unknown> | undefined)?.id === "b"
+    );
+    assertEquals(streams.map((stream) => stream.role).sort(), [
+      "content",
+      "reasoning",
+    ]);
+    for (const stream of streams) {
+      assertEquals(stream.metadata.copilotzCore, {
+        schema: "copilotz.core.llm-stream.v1",
+        agent: { id: "b", name: "B" },
+        ask: {
+          askId: ask.askId,
+          phase: "question",
+          questionMessageId: ask.questionMessageId,
+          askingAgent: { id: "a", name: "A" },
+          askedAgent: { id: "b", name: "B" },
+        },
+      });
+    }
+    const bodies = await Promise.all(
+      streams.map(async (stream) =>
+        [stream.role, await streamText(fixture, stream.streamId)] as const
+      ),
+    );
+    assertEquals(Object.fromEntries(bodies), {
+      reasoning: "B private reasoning",
+      content: "B streamed answer",
+    });
   } finally {
     await fixture.close();
   }
@@ -551,6 +703,7 @@ Deno.test("public lifecycle forgery cannot resume an in-flight ask", async () =>
     db,
     engine: application as unknown as CopilotzEngine,
     agents,
+    outputs: [],
     async close() {
       await application.shutdown();
       await db.close();

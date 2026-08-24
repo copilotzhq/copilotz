@@ -1,4 +1,5 @@
 import { ulid } from "../../dependencies/ulid.ts";
+import { errorRetryability } from "../failure.ts";
 import { createEventStoreError } from "./errors.ts";
 import {
   type CoreTableName,
@@ -163,6 +164,8 @@ export type EventStore = {
     owner: string;
     error: unknown;
     backoffMs?: number;
+    /** False terminalizes the delivery immediately instead of retrying it. */
+    retryable?: boolean;
   }): Promise<EventDelivery | null>;
   listRecoverable(options?: {
     namespace?: string;
@@ -466,15 +469,23 @@ function isDeduplicationViolation(error: unknown): boolean {
     (value.cause !== undefined && isDeduplicationViolation(value.cause));
 }
 
-function serializeError(error: unknown): Record<string, unknown> {
+function serializeError(
+  error: unknown,
+  retryable?: boolean,
+): Record<string, unknown> {
   if (error instanceof Error) {
     return {
       name: error.name,
       message: error.message,
       ...(error.stack ? { stack: error.stack } : {}),
+      ...(retryable === undefined ? {} : { retryable }),
     };
   }
-  return { name: "Error", message: String(error) };
+  return {
+    name: "Error",
+    message: String(error),
+    ...(retryable === undefined ? {} : { retryable }),
+  };
 }
 
 function filtersForConsumers(
@@ -974,22 +985,27 @@ export function createEventStore(
         Math.floor(exponential * jitter),
         0,
       );
+      const retryable = failure.retryable ??
+        errorRetryability(failure.error) ?? true;
       const result = await session.query<DeliveryRow>(
         `UPDATE ${tables.event_deliveries}
-         SET status = CASE WHEN attempts >= max_attempts
+         SET status = CASE WHEN $5 = FALSE OR attempts >= max_attempts
                            THEN 'dead_letter' ELSE 'retry_wait' END,
-             available_at = CASE WHEN attempts >= max_attempts THEN available_at
+             available_at = CASE WHEN $5 = FALSE OR attempts >= max_attempts
+               THEN available_at
                ELSE NOW() + ($3 * INTERVAL '1 millisecond') END,
              lease_owner = NULL, lease_expires_at = NULL,
              last_error = $4::jsonb, updated_at = NOW(),
-             settled_at = CASE WHEN attempts >= max_attempts THEN NOW() ELSE NULL END
+             settled_at = CASE WHEN $5 = FALSE OR attempts >= max_attempts
+               THEN NOW() ELSE NULL END
          WHERE id = $1 AND status = 'leased' AND lease_owner = $2
          RETURNING *`,
         [
           failure.id,
           failure.owner,
           backoffMs,
-          JSON.stringify(serializeError(failure.error)),
+          JSON.stringify(serializeError(failure.error, retryable)),
+          retryable,
         ],
       );
       return result.rows[0]

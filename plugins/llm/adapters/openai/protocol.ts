@@ -324,12 +324,30 @@ function safeInputFilename(
 
 function toResponsesContent(
   content: ChatMessage["content"],
+  role: string,
 ): string | any[] {
-  if (typeof content === "string") return content;
+  const assistant = role === "assistant";
+  const outputText = (text: string) => ({
+    type: "output_text",
+    text,
+    annotations: [],
+  });
+  if (typeof content === "string") {
+    return assistant ? [outputText(content)] : content;
+  }
 
   return (content as ChatContentPart[]).flatMap((part) => {
     if (part.type === "text") {
-      return [{ type: "input_text", text: part.text }];
+      return [
+        assistant
+          ? outputText(part.text)
+          : { type: "input_text", text: part.text },
+      ];
+    }
+    if (assistant) {
+      throw new TypeError(
+        `OpenAI Responses cannot replay assistant '${part.type}' content.`,
+      );
     }
     if (part.type === "image_url" && part.image_url?.url) {
       return [{
@@ -372,10 +390,13 @@ function toResponsesContent(
 function toResponsesInput(
   messages: ChatMessage[],
 ): any[] {
-  return messages.map((message) => ({
-    role: toResponsesRole(message.role),
-    content: toResponsesContent(message.content),
-  }));
+  return messages.map((message) => {
+    const role = toResponsesRole(message.role);
+    return {
+      role,
+      content: toResponsesContent(message.content, role),
+    };
+  });
 }
 
 function buildChatCompletionsBody(

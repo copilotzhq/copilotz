@@ -5,6 +5,7 @@ import type {
 import type { ContentInput } from "@copilotz/copilotz/content";
 import type { CopilotzEvent } from "@copilotz/copilotz/events";
 import { type CoreMessageInput, message } from "../resources/inputs/index.ts";
+import { CORE_LLM_STREAM_METADATA_SCHEMA } from "../internal/workflow-metadata.ts";
 
 export type CliMessageScope = Readonly<
   Omit<
@@ -116,12 +117,67 @@ function isStreamOutput(
     );
 }
 
+function llmStreamLane(
+  output: Extract<ApplicationOutput, { type: "stream.output" }>,
+): "content" | "reasoning" | "tool-calls" | null {
+  const role = output.role.trim().toLowerCase();
+  if (
+    role === "content" || role === "reasoning" || role === "tool-calls"
+  ) return role;
+  const metadataLane = output.metadata.lane;
+  const lane = typeof metadataLane === "string"
+    ? metadataLane.trim().toLowerCase()
+    : "";
+  return lane === "content" || lane === "reasoning" || lane === "tool-calls"
+    ? lane
+    : null;
+}
+
+function record(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function nonEmptyText(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function coreStreamAgentName(
+  output: Extract<ApplicationOutput, { type: "stream.output" }>,
+): string | undefined {
+  const core = record(output.metadata.copilotzCore);
+  if (core?.schema !== CORE_LLM_STREAM_METADATA_SCHEMA) return undefined;
+  return nonEmptyText(record(core.agent)?.name);
+}
+
 function eventAgentName(event: CopilotzEvent): string {
   const agent = eventPayload(event).agent;
   return agent && typeof agent === "object" && !Array.isArray(agent) &&
       typeof (agent as Record<string, unknown>).name === "string"
     ? String((agent as Record<string, unknown>).name)
     : "assistant";
+}
+
+/**
+ * Stream observations deliberately have no Core participant fields. Resolve the
+ * display label from the trusted CLI scope and its host-provided inspection
+ * snapshot instead of treating a stream's generic metadata as agent data.
+ */
+function responseAgentName(
+  scope: CliMessageScope,
+  inspection: CliInspection,
+): string {
+  const agents = [
+    ...(inspection.agent ? [inspection.agent] : []),
+    ...inspection.agents,
+  ];
+  const recipientIds = new Set(scope.recipientIds ?? []);
+  const recipient = agents.find((agent) =>
+    Boolean(agent.id) && recipientIds.has(agent.id!)
+  );
+  return recipient?.name ?? inspection.agent?.name ??
+    (scope.recipientIds?.[0] ?? "assistant");
 }
 
 function threadLabel(scope: CliMessageScope): string {
@@ -145,6 +201,12 @@ export function createInteractiveCli(options: InteractiveCliOptions): Readonly<{
   let sawVisibleOutput = false;
   let activeEventId = "";
   const renderedToolDrafts = new Set<string>();
+  const askToolDrafts = new Map<string, {
+    raw: string;
+    sequence: number;
+    renderedMessage: string;
+    rendered: boolean;
+  }>();
 
   const printLine = (line: string): void => io.write(line + "\n");
   const cwd = (): string => options.cwd ?? io.cwd?.() ?? ".";
@@ -279,6 +341,16 @@ export function createInteractiveCli(options: InteractiveCliOptions): Readonly<{
     inReasoning = false;
     sawVisibleOutput = false;
     renderedToolDrafts.clear();
+    askToolDrafts.clear();
+  };
+
+  const renderAgentHeader = (agentName: string): void => {
+    if (currentAgent === agentName) return;
+    if (inReasoning || sawVisibleOutput) io.write("\n");
+    io.write(color("assistant " + agentName, "green") + "\n");
+    currentAgent = agentName;
+    inReasoning = false;
+    sawVisibleOutput = false;
   };
 
   const renderDelta = (event: CopilotzEvent): void => {
@@ -286,29 +358,118 @@ export function createInteractiveCli(options: InteractiveCliOptions): Readonly<{
     const agentName = eventAgentName(event);
     const text = typeof payload.text === "string" ? payload.text : "";
     const isReasoning = event.type === "reasoning.delta";
-    if (currentAgent !== agentName) {
-      io.write("\n" + color("assistant " + agentName, "green") + "\n");
-      currentAgent = agentName;
-      inReasoning = false;
-    }
+    renderAgentHeader(agentName);
     if (isReasoning && !inReasoning) {
       io.write(color("thinking> ", "dim"));
       inReasoning = true;
     } else if (!isReasoning && inReasoning) {
-      io.write("\n" + color("answer> ", "cyan"));
+      io.write("\n" + color(currentAgent + "> ", "cyan"));
       inReasoning = false;
     } else if (!isReasoning && !sawVisibleOutput) {
-      io.write(color("answer> ", "cyan"));
+      io.write(color(currentAgent + "> ", "cyan"));
     }
     if (!isReasoning) sawVisibleOutput = true;
     io.write(text);
   };
 
-  const renderToolCall = (event: CopilotzEvent): void => {
-    const payload = eventPayload(event);
-    const phase = typeof payload.phase === "string" ? payload.phase : "";
-    if (phase === "delta" || phase === "discarded") return;
+  const renderGenericToolCall = (
+    name: string,
+    draftId: string,
+  ): void => {
+    if (draftId && renderedToolDrafts.has(draftId)) return;
+    if (draftId) renderedToolDrafts.add(draftId);
+    if (inReasoning || sawVisibleOutput) io.write("\n");
+    inReasoning = false;
+    sawVisibleOutput = false;
+    printLine(color("tool>", "yellow") + " " + name);
+  };
 
+  const jsonStringProperty = (
+    input: string,
+    property: "target" | "message",
+    complete: boolean,
+  ): string | undefined => {
+    const match = new RegExp(`"${property}"\\s*:\\s*"`).exec(input);
+    if (!match) return undefined;
+    const start = match.index + match[0].length;
+    let decoded = "";
+    for (let index = start; index < input.length; index += 1) {
+      const char = input[index];
+      if (char === '"') return decoded;
+      if (char !== "\\") {
+        decoded += char;
+        continue;
+      }
+      const escaped = input[index + 1];
+      if (escaped === undefined) return complete ? undefined : decoded;
+      const escapes: Record<string, string> = {
+        '"': '"', "\\": "\\", "/": "/", b: "\b", f: "\f", n: "\n",
+        r: "\r", t: "\t",
+      };
+      if (escaped === "u") {
+        const hex = input.slice(index + 2, index + 6);
+        if (!/^[0-9a-fA-F]{4}$/.test(hex)) {
+          return complete ? undefined : decoded;
+        }
+        decoded += String.fromCharCode(Number.parseInt(hex, 16));
+        index += 5;
+        continue;
+      }
+      if (!(escaped in escapes)) return complete ? undefined : decoded;
+      decoded += escapes[escaped];
+      index += 1;
+    }
+    return complete ? undefined : decoded;
+  };
+
+  const renderAskDraft = (
+    payload: Record<string, unknown>,
+    askingAgentName: string,
+  ): void => {
+    const draftId = nonEmptyText(payload.draftId);
+    const phase = nonEmptyText(payload.phase) ?? "";
+    const delta = typeof payload.delta === "string" ? payload.delta : "";
+    if (!draftId) return;
+    const sequence = typeof payload.sequence === "number" &&
+        Number.isSafeInteger(payload.sequence)
+      ? payload.sequence
+      : -1;
+    let draft = askToolDrafts.get(draftId);
+    if (!draft || phase === "start") {
+      draft = { raw: "", sequence: -1, renderedMessage: "", rendered: false };
+      askToolDrafts.set(draftId, draft);
+    }
+    if (phase === "discarded") return;
+    if (sequence >= 0 && sequence <= draft.sequence) return;
+    if (sequence >= 0) draft.sequence = sequence;
+    if (phase === "start") draft.raw = delta;
+    else if (phase === "delta") draft.raw += delta;
+
+    const target = jsonStringProperty(draft.raw, "target", true);
+    const message = jsonStringProperty(draft.raw, "message", false);
+    if (target && message !== undefined) {
+      if (!draft.rendered) {
+        if (inReasoning || sawVisibleOutput) io.write("\n");
+        inReasoning = false;
+        sawVisibleOutput = false;
+        io.write(color(`${askingAgentName} → @${target}> `, "yellow"));
+        draft.rendered = true;
+      }
+      if (message.length > draft.renderedMessage.length) {
+        io.write(message.slice(draft.renderedMessage.length));
+        draft.renderedMessage = message;
+      }
+    }
+    if (phase === "complete" && !draft.rendered) {
+      renderGenericToolCall("ask", draftId);
+    }
+  };
+
+  const renderToolCallPayload = (
+    payload: Record<string, unknown>,
+    askingAgentName = currentAgent || "assistant",
+  ): void => {
+    const phase = typeof payload.phase === "string" ? payload.phase : "";
     const name = typeof payload.toolName === "string"
       ? payload.toolName
       : typeof payload.name === "string"
@@ -324,13 +485,16 @@ export function createInteractiveCli(options: InteractiveCliOptions): Readonly<{
           typeof payload.callIndex === "number"
       ? `${payload.providerAttemptId}:${payload.callIndex}`
       : "";
-    if (draftId && renderedToolDrafts.has(draftId)) return;
-    if (draftId) renderedToolDrafts.add(draftId);
+    if (name === "ask") {
+      renderAskDraft(payload, askingAgentName);
+      return;
+    }
+    if (phase === "delta" || phase === "discarded") return;
+    renderGenericToolCall(name, draftId);
+  };
 
-    if (inReasoning || sawVisibleOutput) io.write("\n");
-    inReasoning = false;
-    sawVisibleOutput = false;
-    printLine(color("tool>", "yellow") + " " + name);
+  const renderToolCall = (event: CopilotzEvent): void => {
+    renderToolCallPayload(eventPayload(event));
   };
 
   const renderEvent = (event: CopilotzEvent): void => {
@@ -344,11 +508,91 @@ export function createInteractiveCli(options: InteractiveCliOptions): Readonly<{
     }
   };
 
-  const renderOutput = async (output: ApplicationOutput): Promise<void> => {
+  const renderToolCallStream = async (
+    output: Extract<ApplicationOutput, { type: "stream.output" }>,
+    askingAgentName: string,
+  ): Promise<void> => {
+    if (output.mediaType !== "application/x-ndjson") return;
+    const decoder = new TextDecoder();
+    const reader = output.payload.getReader();
+    let buffered = "";
+    const renderLine = (line: string): void => {
+      const normalized = line.trim();
+      if (!normalized) return;
+      try {
+        const parsed: unknown = JSON.parse(normalized);
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          renderToolCallPayload(
+            parsed as Record<string, unknown>,
+            askingAgentName,
+          );
+        }
+      } catch {
+        // Ignore malformed provider frames instead of leaking raw protocol data.
+      }
+    };
+    const consume = (text: string): void => {
+      buffered += text;
+      while (true) {
+        const delimiter = buffered.indexOf("\n");
+        if (delimiter < 0) return;
+        renderLine(buffered.slice(0, delimiter));
+        buffered = buffered.slice(delimiter + 1);
+      }
+    };
+    try {
+      while (true) {
+        const next = await reader.read();
+        if (next.done) break;
+        consume(decoder.decode(next.value, { stream: true }));
+      }
+      consume(decoder.decode());
+      renderLine(buffered);
+    } finally {
+      reader.releaseLock();
+    }
+  };
+
+  const renderOutput = async (
+    output: ApplicationOutput,
+    respondingAgentName: string,
+  ): Promise<void> => {
     if (!isStreamOutput(output)) {
       renderEvent(output);
       return;
     }
+    const lane = llmStreamLane(output);
+    const streamAgentName = coreStreamAgentName(output) ?? respondingAgentName;
+    if (lane === "tool-calls") {
+      await renderToolCallStream(output, streamAgentName);
+      return;
+    }
+    let started = false;
+    const writeStreamText = (text: string): void => {
+      if (!text) return;
+      if (!started) {
+        renderAgentHeader(streamAgentName);
+        if (lane === "reasoning") {
+          if (sawVisibleOutput) io.write("\n");
+          if (!inReasoning) io.write(color("thinking> ", "dim"));
+          inReasoning = true;
+        } else if (lane === "content") {
+          if (inReasoning) {
+            io.write("\n" + color(currentAgent + "> ", "cyan"));
+          } else if (!sawVisibleOutput) {
+            io.write(color(currentAgent + "> ", "cyan"));
+          }
+          inReasoning = false;
+          sawVisibleOutput = true;
+        } else {
+          if (inReasoning) io.write("\n");
+          inReasoning = false;
+          sawVisibleOutput = true;
+        }
+        started = true;
+      }
+      io.write(text);
+    };
     const decoder = new TextDecoder();
     const reader = output.payload.getReader();
     try {
@@ -356,15 +600,10 @@ export function createInteractiveCli(options: InteractiveCliOptions): Readonly<{
         const next = await reader.read();
         if (next.done) break;
         const chunk = decoder.decode(next.value, { stream: true });
-        if (!chunk) continue;
-        sawVisibleOutput = true;
-        io.write(chunk);
+        writeStreamText(chunk);
       }
       const tail = decoder.decode();
-      if (tail) {
-        sawVisibleOutput = true;
-        io.write(tail);
-      }
+      writeStreamText(tail);
     } finally {
       reader.releaseLock();
     }
@@ -380,6 +619,10 @@ export function createInteractiveCli(options: InteractiveCliOptions): Readonly<{
         : "[rich content]");
     resetRenderState();
     printLine("");
+    const respondingAgentName = responseAgentName(
+      options.scope,
+      await inspect(),
+    );
     const handle = await options.application.send(message({
       ...options.scope,
       content,
@@ -390,7 +633,9 @@ export function createInteractiveCli(options: InteractiveCliOptions): Readonly<{
       at: now().toISOString(),
       eventId: handle.eventId,
     });
-    for await (const output of handle.outputs) await renderOutput(output);
+    for await (const output of handle.outputs) {
+      await renderOutput(output, respondingAgentName);
+    }
     await handle.done;
     if (inReasoning || sawVisibleOutput) io.write("\n");
     printLine(color("─".repeat(60), "dim"));

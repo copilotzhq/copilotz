@@ -33,7 +33,7 @@ import {
   matchProcessor,
   type Processor,
   type ProcessorContext,
-  resolveProcessorEventData,
+  resolveProcessorEvent,
 } from "../plugins/index.ts";
 import { createProcessorContext } from "./context.ts";
 import {
@@ -293,9 +293,8 @@ export async function createCopilotzEngine(
         }
       }
       if (publish) {
-        const eventData = event.durable
-          ? await resolveProcessorEventData(scoped.store, event)
-          : event.payload;
+        const resolvedEvent = await resolveProcessorEvent(scoped.store, event);
+        const eventData = resolvedEvent.data;
         await scoped.hub.publish(event);
         await invokeLiveProcessors({
           databaseSchema: context.databaseSchema,
@@ -303,10 +302,11 @@ export async function createCopilotzEngine(
           transients: transientsFor(context.databaseSchema),
           event,
           eventData,
+          resolvedEvent,
           signal: new AbortController().signal,
           createContext: createLiveContext,
         }).catch(() => undefined);
-        await options.publish?.(event, context);
+        await options.publish?.(resolvedEvent, context);
         await options.execution?.onOutput?.(event, context);
       }
       if (!event.durable) return;
@@ -341,11 +341,10 @@ export async function createCopilotzEngine(
     const scopedStore = scopedDatabaseSchema === databaseSchema
       ? store
       : (await resolveAdditionalScope(scopedDatabaseSchema)).runtime.store;
-    const eventData = event.durable
-      ? await resolveProcessorEventData(scopedStore, event)
-      : event.payload;
+    const resolvedEvent = await resolveProcessorEvent(scopedStore, event);
+    const eventData = resolvedEvent.data;
     await scopedEventHub.publish(event);
-    await options.publish?.(event, {
+    await options.publish?.(resolvedEvent, {
       databaseSchema: scopedDatabaseSchema,
       ...(publishOptions.settlementScopeId
         ? { settlementScopeId: publishOptions.settlementScopeId }
@@ -367,6 +366,7 @@ export async function createCopilotzEngine(
       transients: scopedTransients,
       event,
       eventData,
+      resolvedEvent,
       signal: abort.signal,
       settlementScopeId: publishOptions.settlementScopeId,
       createContext: createLiveContext,
@@ -535,7 +535,8 @@ export async function createCopilotzEngine(
               limit: 1_000,
             });
             for (const event of events) {
-              const eventData = await resolveProcessorEventData(store, event);
+              const resolvedEvent = await resolveProcessorEvent(store, event);
+              const eventData = resolvedEvent.data;
               if (!matchProcessor(catchupProcessor, event, eventData)) continue;
               await invokeLiveProcessors({
                 databaseSchema,
@@ -543,6 +544,7 @@ export async function createCopilotzEngine(
                 transients: solo,
                 event,
                 eventData,
+                resolvedEvent,
                 signal,
                 createContext: createLiveContext,
               });

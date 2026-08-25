@@ -1,4 +1,6 @@
-export { agentInstructionBase, defineAgent } from "./agent.ts";
+/** Exposes Core's public semantic and conversation surface. @module */
+
+export { agentInstructionBase, defineAgent } from "./resources/agent/index.ts";
 export type {
   AgentCapabilities,
   AgentCapabilitySelection,
@@ -9,11 +11,11 @@ export type {
   AgentModels,
   AgentModelSelection,
   AgentResource,
-} from "./agent.ts";
+} from "./resources/agent/index.ts";
 export type {
   ReasoningHistoryInclude,
   ReasoningHistoryOptions,
-} from "./reasoning.ts";
+} from "./internal/reasoning.ts";
 export {
   CORE_PLUGIN_ID,
   CORE_PLUGIN_VERSION,
@@ -30,33 +32,34 @@ export {
   createThreadAction,
   DELETE_THREAD_MESSAGES_ACTION_ID,
   deleteThreadMessagesAction,
-} from "./resources/actions/thread.ts";
+} from "../core-collections/actions/index.ts";
 export {
   CREATE_THREAD_MESSAGE_ACTION_ID,
   createThreadMessageAction,
-} from "./resources/actions/thread-message.ts";
+} from "../core-collections/actions/index.ts";
 export {
   REVISE_MESSAGE_ACTION_ID,
   reviseMessageAction,
-} from "./resources/actions/message.ts";
-export { ASK_ACTION_ID, askAction, askTool } from "./resources/tools/ask.ts";
-export type { AskInput, AskOutput } from "./resources/tools/ask.ts";
+} from "../core-collections/actions/index.ts";
+export { ASK_ACTION_ID, askAction } from "./actions/ask/index.ts";
+export type { AskInput, AskOutput } from "./actions/ask/index.ts";
+export { askTool } from "./resources/ask-tool/index.ts";
 export {
   core,
   CORE_MESSAGE_INPUT_EVENT,
   message,
-} from "./resources/inputs/index.ts";
+} from "../core-collections/authoring/index.ts";
 export type {
   CoreMessageInput,
   CoreMessageInputEnvelope,
-} from "./resources/inputs/index.ts";
+} from "../core-collections/authoring/index.ts";
 export {
   CORE_COLLECTION_NAMES,
   messageCollection,
   messageRevisionFrom,
   participantCollection,
   threadCollection,
-} from "./resources/collections/index.ts";
+} from "../core-collections/collections/index.ts";
 export type {
   ConversationMessage,
   ConversationThread,
@@ -65,8 +68,8 @@ export type {
   Participant,
   ParticipantInput,
   ParticipantType,
-} from "./contracts.ts";
-export type { MessageRecord } from "./resources/collections/index.ts";
+} from "../core-collections/internal/contracts.ts";
+export type { MessageRecord } from "../core-collections/collections/index.ts";
 export {
   listThreadMessageRecords,
   loadMessageRecord,
@@ -76,8 +79,11 @@ export {
   mapParticipantRecord,
   mapThreadRecord,
   projectActiveMessageBranch,
-} from "./projections.ts";
+} from "../core-collections/internal/projections.ts";
 export * from "./internal/capabilities/index.ts";
-export * from "./internal/context/index.ts";
+export * from "./resources/context/index.ts";
 export * from "./internal/thread-metadata.ts";
 export * from "./internal/workflow-metadata.ts";
+export * from "./actions/index.ts";
+export * from "./authoring/index.ts";
+export * from "./resources/index.ts";

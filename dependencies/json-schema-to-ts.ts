@@ -1,1 +1,1 @@
-export * from "npm:json-schema-to-ts@3.1.1";
+export * from "json-schema-to-ts";

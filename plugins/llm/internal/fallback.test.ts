@@ -3,7 +3,7 @@ import {
   assertInstanceOf,
   assertNotEquals,
   assertRejects,
-} from "https://deno.land/std@0.208.0/assert/mod.ts";
+} from "@std/assert";
 
 import { isCrossResourceFailover, LLMProviderError } from "./errors.ts";
 import { chat } from "./orchestrator.ts";

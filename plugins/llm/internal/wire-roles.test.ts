@@ -2,13 +2,13 @@ import { assertEquals } from "@std/assert";
 
 import type { ChatMessage, ProviderConfig, ProviderFactory } from "./types.ts";
 import { formatMessages } from "./utils.ts";
-import { anthropicProvider } from "../adapters/anthropic/protocol.ts";
-import { deepseekProvider } from "../adapters/deepseek/protocol.ts";
-import { geminiProvider } from "../adapters/gemini/protocol.ts";
-import { groqProvider } from "../adapters/groq/protocol.ts";
-import { minimaxProvider } from "../adapters/minimax/protocol.ts";
-import { ollamaProvider } from "../adapters/ollama/protocol.ts";
-import { openaiProvider } from "../adapters/openai/protocol.ts";
+import { anthropicProvider } from "../adapters/anthropic/index.ts";
+import { deepseekProvider } from "../adapters/deepseek/index.ts";
+import { geminiProvider } from "../adapters/gemini/index.ts";
+import { groqProvider } from "../adapters/groq/index.ts";
+import { minimaxProvider } from "../adapters/minimax/index.ts";
+import { ollamaProvider } from "../adapters/ollama/index.ts";
+import { openaiProvider } from "../adapters/openai/index.ts";
 
 const history: ChatMessage[] = [
   { role: "user", content: "Check the service." },

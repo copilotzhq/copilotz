@@ -1,0 +1,624 @@
+/** OpenAI provider adapter wire protocol. @module */
+// deno-lint-ignore-file no-explicit-any
+// Private vendor-wire decoder: payload shapes are provider-controlled JSON.
+import type {
+  ChatContentPart,
+  ChatMessage,
+  ExtractedPart,
+  ProviderConfig,
+  ProviderFactory,
+  ProviderFinishReason,
+  ProviderUsageUpdate,
+} from "../../internal/types.ts";
+import {
+  isOpenAIReasoningModel,
+  type OpenAIApiMode,
+  resolveOpenAIApiMode,
+} from "../../internal/openai-api-mode.ts";
+import { readInternalPromptCacheKey } from "../../internal/internal-cache-key.ts";
+
+interface OpenAIResponsesExtractionState {
+  reasoningDeltaReceived: boolean;
+}
+
+function isOpenAIDebugEnabled(config: ProviderConfig): boolean {
+  return config.runtimeDiagnostics?.enabled === true;
+}
+
+function summarizeBodyForDebug(
+  body: Record<string, unknown>,
+  apiMode: OpenAIApiMode,
+): Record<string, unknown> {
+  const messages = Array.isArray(body.messages) ? body.messages : undefined;
+  const input = Array.isArray(body.input) ? body.input : undefined;
+  return {
+    apiMode,
+    model: body.model,
+    stream: body.stream,
+    messageCount: messages?.length ?? input?.length ?? 0,
+    bodyKeys: Object.keys(body).sort(),
+    maxCompletionTokens: body.max_completion_tokens,
+    maxOutputTokens: body.max_output_tokens,
+    temperature: body.temperature,
+    reasoning: body.reasoning,
+    text: body.text,
+    responseFormat: body.response_format,
+    hasStop: body.stop !== undefined,
+    hasPromptCacheKey: body.prompt_cache_key !== undefined,
+  };
+}
+
+function summarizeOpenAIStreamError(data: any): Record<string, unknown> {
+  const error = data?.error ?? data?.response?.error ?? {};
+  return {
+    type: data?.type,
+    responseId: data?.response?.id ?? data?.id,
+    responseStatus: data?.response?.status ?? data?.status,
+    errorType: error?.type,
+    errorCode: error?.code,
+    errorParam: error?.param,
+    errorMessage: error?.message,
+  };
+}
+
+function extractOpenAIChatUsage(data: any): ProviderUsageUpdate | null {
+  const usage = data?.usage;
+  if (!usage || typeof usage !== "object" || Array.isArray(usage)) return null;
+
+  return {
+    inputTokens: typeof usage.prompt_tokens === "number"
+      ? usage.prompt_tokens
+      : undefined,
+    outputTokens: typeof usage.completion_tokens === "number"
+      ? usage.completion_tokens
+      : undefined,
+    reasoningTokens:
+      typeof usage.completion_tokens_details?.reasoning_tokens === "number"
+        ? usage.completion_tokens_details.reasoning_tokens
+        : undefined,
+    cacheReadInputTokens:
+      typeof usage.prompt_tokens_details?.cached_tokens === "number"
+        ? usage.prompt_tokens_details.cached_tokens
+        : undefined,
+    cacheCreationInputTokens:
+      typeof usage.prompt_tokens_details?.cache_write_tokens === "number"
+        ? usage.prompt_tokens_details.cache_write_tokens
+        : undefined,
+    totalTokens: typeof usage.total_tokens === "number"
+      ? usage.total_tokens
+      : undefined,
+    rawUsage: usage as Record<string, unknown>,
+  };
+}
+
+function extractOpenAIResponsesUsage(data: any): ProviderUsageUpdate | null {
+  const usage = data?.response?.usage ?? data?.usage;
+  if (!usage || typeof usage !== "object" || Array.isArray(usage)) return null;
+
+  const inputTokens = typeof usage.input_tokens === "number"
+    ? usage.input_tokens
+    : undefined;
+  const outputTokens = typeof usage.output_tokens === "number"
+    ? usage.output_tokens
+    : undefined;
+
+  return {
+    inputTokens,
+    outputTokens,
+    reasoningTokens:
+      typeof usage.output_tokens_details?.reasoning_tokens === "number"
+        ? usage.output_tokens_details.reasoning_tokens
+        : undefined,
+    cacheReadInputTokens:
+      typeof usage.input_tokens_details?.cached_tokens === "number"
+        ? usage.input_tokens_details.cached_tokens
+        : undefined,
+    cacheCreationInputTokens:
+      typeof usage.input_tokens_details?.cache_write_tokens === "number"
+        ? usage.input_tokens_details.cache_write_tokens
+        : undefined,
+    totalTokens: typeof usage.total_tokens === "number"
+      ? usage.total_tokens
+      : inputTokens !== undefined && outputTokens !== undefined
+      ? inputTokens + outputTokens
+      : undefined,
+    rawUsage: usage as Record<string, unknown>,
+  };
+}
+
+function extractOpenAIChatFinishReason(data: any): ProviderFinishReason | null {
+  const reason = data?.choices?.[0]?.finish_reason;
+  if (reason === "length") return "length";
+  if (reason === "stop") return "stop";
+  if (reason === "tool_calls" || reason === "function_call") {
+    return "tool_calls";
+  }
+  if (reason === "content_filter") return "content_filter";
+  return typeof reason === "string" ? "unknown" : null;
+}
+
+function extractOpenAIResponsesFinishReason(
+  data: any,
+): ProviderFinishReason | null {
+  const status = data?.response?.status ?? data?.status;
+  const reason = data?.response?.incomplete_details?.reason ??
+    data?.incomplete_details?.reason;
+
+  if (data?.type === "response.completed" || status === "completed") {
+    return "stop";
+  }
+  if (data?.type === "response.incomplete" || status === "incomplete") {
+    if (reason === "max_output_tokens") return "length";
+    if (reason === "content_filter") return "content_filter";
+    return "unknown";
+  }
+  if (data?.type === "response.failed" || status === "failed") {
+    return "error";
+  }
+
+  return null;
+}
+
+function openAIResponsesStreamErrorStatus(code: string | undefined): number {
+  if (code === "insufficient_quota" || code === "rate_limit_exceeded") {
+    return 429;
+  }
+  if (code === "invalid_api_key") return 401;
+  if (code === "permission_denied") return 403;
+  return 400;
+}
+
+function throwOpenAIResponsesStreamError(
+  data: any,
+  diagnosticsEnabled: boolean,
+): never {
+  if (diagnosticsEnabled) {
+    console.warn(
+      "[openai.debug] responses stream error",
+      summarizeOpenAIStreamError(data),
+    );
+  }
+
+  const error = data?.error ?? data?.response?.error ?? {};
+  const code = typeof error?.code === "string" ? error.code : undefined;
+  const message = typeof error?.message === "string" && error.message.length > 0
+    ? error.message
+    : "OpenAI Responses stream failed";
+  throw Object.assign(new Error(message), {
+    status: openAIResponsesStreamErrorStatus(code),
+    code,
+  });
+}
+
+function isOpenAIResponsesStreamActivity(data: any): boolean {
+  const type = data?.type;
+  if (type === "error" || type === "response.failed") return false;
+  return typeof type === "string" && type.startsWith("response.");
+}
+
+function openAIEndpoint(config: ProviderConfig, mode: OpenAIApiMode): string {
+  const baseUrl = typeof config.baseUrl === "string" && config.baseUrl.trim()
+    ? config.baseUrl.trim().replace(/\/+$/, "")
+    : "https://api.openai.com/v1";
+  return `${baseUrl}/${
+    mode === "responses" ? "responses" : "chat/completions"
+  }`;
+}
+
+function isChatGPTCodexTransport(config: ProviderConfig): boolean {
+  if (typeof config.baseUrl !== "string") return false;
+  try {
+    const url = new URL(config.baseUrl);
+    return url.protocol === "https:" &&
+      url.hostname === "chatgpt.com" &&
+      (
+        url.pathname.replace(/\/+$/, "") === "/backend-api/codex" ||
+        url.pathname.startsWith("/backend-api/codex/")
+      );
+  } catch {
+    return false;
+  }
+}
+
+function supportsChatCompletionsFileInput(model: string): boolean {
+  const normalized = model.toLowerCase().replace(/^openai\//, "");
+  const version = /^gpt-(\d+)\.(\d+)(?:-|$)/.exec(normalized);
+  if (!version) return false;
+  const major = Number(version[1]);
+  const minor = Number(version[2]);
+  return major > 5 || (major === 5 && minor >= 6);
+}
+
+function toChatCompletionsMessages(
+  messages: ChatMessage[],
+  supportsFile: boolean,
+): any[] {
+  return messages.map((msg) => {
+    if (Array.isArray(msg.content)) {
+      const parts = (msg.content as ChatContentPart[]).flatMap((p) => {
+        if (p.type === "text") {
+          return [{ type: "text", text: p.text }];
+        }
+        if (p.type === "image_url" && p.image_url?.url) {
+          return [{
+            type: "image_url",
+            image_url: { url: p.image_url.url },
+          }];
+        }
+        if (p.type === "input_audio" && p.input_audio?.data) {
+          return [{
+            type: "input_audio",
+            input_audio: {
+              data: p.input_audio.data,
+              format: p.input_audio.format || "wav",
+            },
+          }];
+        }
+        if (p.type === "file" && p.file?.file_data) {
+          const data = p.file.file_data;
+          if (typeof data === "string" && data.startsWith("data:image/")) {
+            return [{ type: "image_url", image_url: { url: data } }];
+          }
+          if (supportsFile) {
+            return [{
+              type: "file",
+              file: {
+                file_data: data,
+                ...(p.file.filename ? { filename: p.file.filename } : {}),
+              },
+            }];
+          }
+        }
+        return [] as any[];
+      });
+      return { role: msg.role, content: parts } as any;
+    }
+    return { role: msg.role, content: msg.content } as any;
+  });
+}
+
+function toResponsesRole(role: ChatMessage["role"]): string {
+  if (role === "tool" || role === "tool_result") return "user";
+  return role;
+}
+
+function mimeFromDataUrl(value: string): string | undefined {
+  const match = /^data:([^;,]+)/i.exec(value);
+  return match?.[1]?.toLowerCase();
+}
+
+function extensionForMime(mime?: string): string {
+  const normalized = mime?.split(";")[0]?.trim().toLowerCase();
+  const known: Record<string, string> = {
+    "application/pdf": "pdf",
+    "application/json": "json",
+    "text/csv": "csv",
+    "text/plain": "txt",
+    "audio/mpeg": "mp3",
+    "audio/mp3": "mp3",
+    "audio/wav": "wav",
+    "audio/x-wav": "wav",
+    "audio/ogg": "ogg",
+    "audio/opus": "opus",
+    "audio/flac": "flac",
+  };
+  if (normalized && known[normalized]) return known[normalized];
+  const subtype = normalized?.split("/")[1]?.replace(/^x-/, "")
+    .replace(/[^a-z0-9]+/g, "");
+  return subtype || "bin";
+}
+
+function safeInputFilename(
+  filename: string | undefined,
+  mime: string | undefined,
+  stem = "attachment",
+): string {
+  const basename = filename?.replaceAll("\\", "/").split("/").at(-1)?.trim();
+  const sanitized = basename
+    ?.replace(/[^A-Za-z0-9._ -]+/g, "_")
+    .replace(/^\.+/, "")
+    .slice(0, 180);
+  if (sanitized && /\.[A-Za-z0-9]{1,12}$/.test(sanitized)) return sanitized;
+  const base = sanitized || stem;
+  return `${base}.${extensionForMime(mime)}`;
+}
+
+function toResponsesContent(
+  content: ChatMessage["content"],
+  role: string,
+): string | any[] {
+  const assistant = role === "assistant";
+  const outputText = (text: string) => ({
+    type: "output_text",
+    text,
+    annotations: [],
+  });
+  if (typeof content === "string") {
+    return assistant ? [outputText(content)] : content;
+  }
+
+  return (content as ChatContentPart[]).flatMap((part) => {
+    if (part.type === "text") {
+      return [
+        assistant
+          ? outputText(part.text)
+          : { type: "input_text", text: part.text },
+      ];
+    }
+    if (assistant) {
+      throw new TypeError(
+        `OpenAI Responses cannot replay assistant '${part.type}' content.`,
+      );
+    }
+    if (part.type === "image_url" && part.image_url?.url) {
+      return [{
+        type: "input_image",
+        image_url: part.image_url.url,
+      }];
+    }
+    if (part.type === "input_audio" && part.input_audio?.data) {
+      const format = part.input_audio.format || "wav";
+      const mime = `audio/${format}`;
+      return [{
+        type: "input_file",
+        file_data: `data:${mime};base64,${part.input_audio.data}`,
+        filename: safeInputFilename(
+          part.input_audio.filename,
+          mime,
+          "audio",
+        ),
+      }];
+    }
+    if (part.type === "file" && part.file?.file_data) {
+      const data = part.file.file_data;
+      if (typeof data !== "string" || data.length === 0) return [] as any[];
+      if (data.startsWith("data:image/")) {
+        return [{ type: "input_image", image_url: data }];
+      }
+      return [{
+        type: "input_file",
+        file_data: data,
+        filename: safeInputFilename(
+          part.file.filename,
+          part.file.mime_type ?? mimeFromDataUrl(data),
+        ),
+      }];
+    }
+    return [] as any[];
+  });
+}
+
+function toResponsesInput(
+  messages: ChatMessage[],
+): any[] {
+  return messages.map((message) => {
+    const role = toResponsesRole(message.role);
+    return {
+      role,
+      content: toResponsesContent(message.content, role),
+    };
+  });
+}
+
+function buildChatCompletionsBody(
+  messages: ChatMessage[],
+  config: ProviderConfig,
+): Record<string, unknown> {
+  const modelName = config.model || "gpt-4o-mini";
+  const bodyConfig: Record<string, unknown> = {
+    model: modelName,
+    messages: toChatCompletionsMessages(
+      messages,
+      supportsChatCompletionsFileInput(modelName),
+    ),
+    stream: true,
+    stream_options: { include_usage: true },
+    temperature: config.temperature || 1,
+    top_p: config.topP,
+    presence_penalty: config.presencePenalty,
+    frequency_penalty: config.frequencyPenalty,
+    stop: config.stop,
+    seed: config.seed,
+    user: config.user,
+    reasoning_effort: config.reasoningEffort,
+    verbosity: config.verbosity,
+    response_format: config.responseType === "json"
+      ? { type: "json_object" }
+      : undefined,
+  };
+
+  const maxComp = config.maxCompletionTokens ?? config.maxTokens ?? 1000;
+  if (typeof maxComp === "number") {
+    bodyConfig.max_completion_tokens = maxComp;
+  }
+  const promptCacheKey = readInternalPromptCacheKey(config);
+  if (promptCacheKey) bodyConfig.prompt_cache_key = promptCacheKey;
+
+  return bodyConfig;
+}
+
+function buildResponsesBody(
+  messages: ChatMessage[],
+  config: ProviderConfig,
+): Record<string, unknown> {
+  const modelName = config.model || "gpt-4o-mini";
+  const chatGPTCodex = isChatGPTCodexTransport(config);
+  const bodyConfig: Record<string, unknown> = {
+    model: modelName,
+    input: toResponsesInput(messages),
+    stream: true,
+    store: false,
+    top_p: config.topP,
+    parallel_tool_calls: true,
+    // The ChatGPT Codex Responses backend rejects these public API controls.
+    ...(chatGPTCodex ? {} : {
+      temperature: config.temperature || 1,
+      truncation: "disabled",
+    }),
+  };
+
+  const maxOutput = config.maxCompletionTokens ?? config.maxTokens ?? 1000;
+  if (!chatGPTCodex && typeof maxOutput === "number") {
+    bodyConfig.max_output_tokens = maxOutput;
+  }
+  const promptCacheKey = readInternalPromptCacheKey(config);
+  if (promptCacheKey) bodyConfig.prompt_cache_key = promptCacheKey;
+
+  if (config.seed !== undefined) bodyConfig.seed = config.seed;
+  if (config.user) bodyConfig.safety_identifier = config.user;
+
+  const textConfig: Record<string, unknown> = {
+    format: config.responseType === "json"
+      ? { type: "json_object" }
+      : { type: "text" },
+  };
+  if (
+    config.verbosity === "low" ||
+    config.verbosity === "medium" ||
+    config.verbosity === "high"
+  ) {
+    textConfig.verbosity = config.verbosity;
+  }
+  bodyConfig.text = textConfig;
+
+  if (isOpenAIReasoningModel(modelName)) {
+    const reasoning: Record<string, unknown> = {};
+    if (config.reasoningEffort) reasoning.effort = config.reasoningEffort;
+    if (config.openaiReasoningSummary !== false) {
+      reasoning.summary = config.openaiReasoningSummary ?? "auto";
+    }
+    if (Object.keys(reasoning).length > 0) {
+      bodyConfig.reasoning = reasoning;
+    }
+  }
+
+  return bodyConfig;
+}
+
+function extractOpenAIChatContent(data: any): ExtractedPart[] | null {
+  const delta = data?.choices?.[0]?.delta;
+  if (!delta || typeof delta !== "object") return null;
+
+  const parts: ExtractedPart[] = [];
+
+  const reasoning = delta.reasoning_content;
+  if (typeof reasoning === "string" && reasoning.length > 0) {
+    parts.push({ text: reasoning, isReasoning: true });
+  }
+
+  if (typeof delta.content === "string" && delta.content.length > 0) {
+    parts.push({ text: delta.content });
+  }
+
+  return parts.length > 0 ? parts : null;
+}
+
+function extractOpenAIResponsesContent(
+  data: any,
+  state?: OpenAIResponsesExtractionState,
+  diagnosticsEnabled = false,
+): ExtractedPart[] | null {
+  const parts: ExtractedPart[] = [];
+  const type = data?.type;
+  const delta = data?.delta;
+
+  if (type === "error" || type === "response.failed") {
+    throwOpenAIResponsesStreamError(data, diagnosticsEnabled);
+  }
+
+  if (
+    (type === "response.output_text.delta" ||
+      type === "response.refusal.delta") &&
+    typeof delta === "string" &&
+    delta.length > 0
+  ) {
+    parts.push({ text: delta });
+  }
+
+  if (
+    (type === "response.reasoning_summary_text.delta" ||
+      type === "response.reasoning_text.delta") &&
+    typeof delta === "string" &&
+    delta.length > 0
+  ) {
+    if (state) state.reasoningDeltaReceived = true;
+    parts.push({ text: delta, isReasoning: true });
+  }
+
+  const reasoningItems = !state?.reasoningDeltaReceived &&
+      Array.isArray(data?.response?.output)
+    ? data.response.output
+    : !state?.reasoningDeltaReceived && data?.item?.type === "reasoning"
+    ? [data.item]
+    : [];
+  for (const item of reasoningItems) {
+    if (!item || item.type !== "reasoning") continue;
+    const summary = Array.isArray(item.summary) ? item.summary : [];
+    for (const entry of summary) {
+      if (entry?.type !== "summary_text") continue;
+      if (typeof entry.text === "string" && entry.text.length > 0) {
+        parts.push({ text: entry.text, isReasoning: true });
+      }
+    }
+    const content = Array.isArray(item.content) ? item.content : [];
+    for (const entry of content) {
+      if (entry?.type !== "reasoning_text") continue;
+      if (typeof entry.text === "string" && entry.text.length > 0) {
+        parts.push({ text: entry.text, isReasoning: true });
+      }
+    }
+  }
+
+  return parts.length > 0 ? parts : null;
+}
+
+export const openaiProvider: ProviderFactory = (config: ProviderConfig) => {
+  const apiMode = resolveOpenAIApiMode(config);
+  const diagnosticsEnabled = isOpenAIDebugEnabled(config);
+  const responsesExtractionState: OpenAIResponsesExtractionState = {
+    reasoningDeltaReceived: false,
+  };
+
+  return {
+    endpoint: openAIEndpoint(config, apiMode),
+
+    headers: (config: ProviderConfig) => ({
+      ...(config.extraHeaders ?? {}),
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${config.apiKey}`,
+    }),
+
+    body: (messages: ChatMessage[], config: ProviderConfig) => {
+      const body = apiMode === "responses"
+        ? buildResponsesBody(messages, config)
+        : buildChatCompletionsBody(messages, config);
+      if (diagnosticsEnabled) {
+        console.log(
+          "[openai.debug] request body summary",
+          summarizeBodyForDebug(body, apiMode),
+        );
+      }
+      return body;
+    },
+
+    extractContent: (data: any): ExtractedPart[] | null => {
+      return apiMode === "responses"
+        ? extractOpenAIResponsesContent(
+          data,
+          responsesExtractionState,
+          diagnosticsEnabled,
+        )
+        : extractOpenAIChatContent(data);
+    },
+
+    isStreamActivity: apiMode === "responses"
+      ? isOpenAIResponsesStreamActivity
+      : undefined,
+    extractUsage: apiMode === "responses"
+      ? extractOpenAIResponsesUsage
+      : extractOpenAIChatUsage,
+    extractFinishReason: apiMode === "responses"
+      ? extractOpenAIResponsesFinishReason
+      : extractOpenAIChatFinishReason,
+  };
+};

@@ -1,1 +1,1 @@
-export * from "jsr:@std/ulid@1.0.0";
+export * from "@std/ulid";

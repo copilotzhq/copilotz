@@ -1,8 +1,14 @@
-export { usageCollection } from "./collection.ts";
+/**
+ * Public API for the concrete Usage plugin.
+ *
+ * @module
+ */
+
+export { usageCollection } from "./collections/index.ts";
 export { createUsageWorkflowPlugin } from "./plugin.ts";
-export type { CreateUsageWorkflowPluginOptions } from "./plugin.ts";
-export { METRIC_DESCRIPTORS } from "./types.ts";
+export { METRIC_DESCRIPTORS } from "./internal/contracts.ts";
 export type {
+  CreateUsageWorkflowPluginOptions,
   MetricDescriptor,
   UsageCost,
   UsageEvent,
@@ -12,4 +18,4 @@ export type {
   UsageRecord,
   UsageResolveCost,
   UsageResolveCostContext,
-} from "./types.ts";
+} from "./internal/contracts.ts";

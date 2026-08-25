@@ -37,45 +37,50 @@ work placement; neither defines plugin business semantics.
 
 - `ARCHITECTURE.md` — canonical first-principles architecture; read before any
   implementation, refactor, or API decision
-- `IMPLEMENTATION_PLAN.md` — current audit, target APIs, ownership, deletion
-  rules, and implementation order; subordinate to `ARCHITECTURE.md`
 
 `README.md` and the curated `docs/` guides describe the executable public
 surface. Historical design plans are intentionally not shipped.
 
+Plugin source ownership and the canonical directory template are defined in
+`docs/plugin-layout.md`.
+
 ## Current Code Map
 
-This map describes the current implementation. Use `IMPLEMENTATION_PLAN.md` for
-the remaining cut order.
+This map describes the current implementation.
 
 - Public application composition: `create-copilotz.ts`; generic application
   contracts: `runtime/application/public.ts`
 - Action definition, lifecycle, and invocation: `runtime/actions/`
 - Canonical graph Collections and mutation planning: `runtime/collections/`
 - Canonical content/assets: `runtime/content/`
-- Conversation DTOs and projections: `plugins/core/contracts.ts` and
-  `plugins/core/projections.ts`
+- Conversation Collections, mutation Actions, and projections:
+  `plugins/core-collections/`; Agent routing and prompt policy: `plugins/core/`
 - Immutable events/deliveries: `runtime/events/`
 - Oxian placement: `runtime/execution/`
 - Plugin definition/composition: `runtime/plugins/`
-- Semantic Resources: their owning plugin (`plugins/core/agent.ts`,
-  `plugins/llm/contracts.ts`, `plugins/tools/`, `plugins/skills/contracts.ts`)
+- Semantic Resources: their owning primitive directory, such as
+  `plugins/core/resources/`, `plugins/llm/resources/`, and
+  `plugins/skills/resources/`
 - Agent contract, prompt policy, and conversation loop: `plugins/core/`
 - Provider-neutral LLM Action, Model/Adapter contracts, and providers:
   `plugins/llm/`
-- Native Tool Actions, data-only Tool Resources, and generated integration
-  factories: `plugins/tools/`
+- Provider-aware token estimation: `plugins/llm/authoring/token-estimation/`
+- Tool authoring contracts: `plugins/tools/`; concrete Tool plugins:
+  `plugins/tool-*/`
 - Text/ask processors: `plugins/core/`
 - Generic progressive stream output: `runtime/streams/`
 - Admin, knowledge, and skills: `plugins/admin/`, `plugins/knowledge/`,
   `plugins/skills/`
-- Schedules, usage, and goals: corresponding `plugins/` modules
-- Channel plugins and transports: `plugins/channels/`
+- Schedules and usage: corresponding `plugins/` modules
+- Minimal Goal authoring loop: `plugins/core/authoring/goals/`
+- Channel family barrel: `plugins/channels/`; concrete Channel plugins and
+  transports: `plugins/channel-*/`
 - Semantic memory plugin: `plugins/memory/`
 - Physical persistence: `runtime/persistence/`; Deno host listeners and Body
   storage: `runtime/adapters/deno/`; portable/Node CLI: `plugins/core/adapters/`
 - Web Fetch boundary: `server/`
 - Isolated legacy-graph-v1 (0.47/0.48) upgrade: `migration/v4/`
+- Package conformance tests and cross-runtime smoke programs: `contracts/`
 
 ## Invariants
 

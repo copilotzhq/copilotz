@@ -14,10 +14,10 @@ import {
 import { defineProcessor } from "../plugins/processor.ts";
 import type { CopilotzDatabase } from "@copilotz/copilotz/persistence";
 import { isCopilotzPersistenceError } from "@copilotz/copilotz/persistence";
-import { coreCollectionsPlugin } from "../../plugins/core/plugin.ts";
-import { createTestDomainContext } from "../../plugins/core/testing/context.ts";
-import { projectMessages } from "../../plugins/core/testing/projections.ts";
-import type { StreamOutput } from "../streams/index.ts";
+import { coreCollectionsPlugin } from "../../plugins/core-collections/plugin.ts";
+import { createTestDomainContext } from "../../plugins/core/internal/testing/context.ts";
+import { projectMessages } from "../../plugins/core/internal/testing/projections.ts";
+import type { ApplicationOutput, StreamOutput } from "../streams/index.ts";
 
 const namespace = "copilotz-topology-test";
 function cascadingPlugin(): AnyCopilotzPlugin {
@@ -141,6 +141,18 @@ async function collect<T>(stream: ReadableStream<T>): Promise<T[]> {
   return values;
 }
 
+function assertResolvedMessage(outputs: readonly ApplicationOutput[]): void {
+  const output = outputs.find((item) => item.type === "message.created");
+  assertExists(output);
+  assert(output.type !== "stream.output");
+  assert("data" in output);
+  assertEquals(Object.isFrozen(output.data), true);
+  assertExists(
+    (output.payload as { dataRef?: { eventBodyId?: string } }).dataRef
+      ?.eventBodyId,
+  );
+}
+
 Deno.test("Gateway and Worker preserve live output and cascading durable work", async () => {
   const database = await createTestDatabase({ url: ":memory:" });
   const transport = {
@@ -228,6 +240,7 @@ Deno.test("Gateway and Worker preserve live output and cascading durable work", 
       observed.filter((event) => event.type === "message.created").length,
       3,
     );
+    assertResolvedMessage(observed);
     assertEquals(
       observed.filter((event) => event.type === "stream.output").length,
       1,
@@ -547,6 +560,7 @@ Deno.test({
         observed.filter((event) => event.type === "message.created").length,
         3,
       );
+      assertResolvedMessage(observed);
       assertEquals(
         observed.filter((event) => event.type === "stream.output").length,
         1,

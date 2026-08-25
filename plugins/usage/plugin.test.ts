@@ -4,7 +4,7 @@ import {
   type CreateUsageWorkflowPluginOptions,
 } from "./index.ts";
 import { createCopilotzApplication } from "../../runtime/application/application.ts";
-import { createTestDomainContext } from "../core/testing/context.ts";
+import { createTestDomainContext } from "../core/internal/testing/context.ts";
 import {
   createTestDatabase,
   type TestDatabase,
@@ -25,7 +25,7 @@ import {
   defineAction,
 } from "../../runtime/actions/index.ts";
 import { coreCollections, createThreadAction } from "../core/index.ts";
-import type { LlmCallInput, LlmCallOutput } from "../llm/contracts.ts";
+import type { LlmCallInput, LlmCallOutput } from "@copilotz/copilotz/llm";
 
 const NAMESPACE = "tenant-a";
 const THREAD_ID = "thread-a";

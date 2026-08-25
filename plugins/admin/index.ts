@@ -1,4 +1,4 @@
-/** First-party semantic Admin plugin. */
+/** @module Public API barrel for the Admin plugin. */
 export { createAdminPlugin } from "./plugin.ts";
 export type {
   AdminActivityPoint,
@@ -6,4 +6,4 @@ export type {
   AdminResponse,
   AdminUsageTotals,
   CreateAdminPluginOptions,
-} from "./types.ts";
+} from "./internal/contracts.ts";

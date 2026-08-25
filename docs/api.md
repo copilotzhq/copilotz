@@ -58,8 +58,11 @@ type ApplicationSendHandle = Readonly<{
 }>;
 ```
 
-`observe()` receives the same generic durable Events and transient stream output
-independently of any one operation. `close()` is idempotent.
+`observe()` receives the same application outputs independently of any one
+operation. Normal Events retain their immutable envelope and add deeply frozen
+resolved `data`; durable Events keep their original `payload.dataRef`.
+Progressive `stream.output` values remain subscriber-owned byte streams.
+`close()` is idempotent.
 
 ## Gateway Fetch
 

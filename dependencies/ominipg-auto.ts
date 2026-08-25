@@ -1,1 +1,1 @@
-export * from "jsr:@oxian/ominipg@0.9.0-rc.10/auto";
+export * from "@oxian/ominipg/auto";

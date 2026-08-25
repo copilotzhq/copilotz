@@ -23,14 +23,15 @@ Plugins contribute five primitives:
   policy.
 - Adapters: application-owned custom external implementations.
 
-Messages, agents, models, tools, goals, and channels belong to their semantic
-plugins. The generic runtime contains no provider catalog, Tool executor,
-conversation DTO, or hidden workflow controller.
+Messages, agents, models, tools, and channels belong to their semantic plugins.
+Goals are a small Core authoring loop over ordinary application sends. The
+generic runtime contains no provider catalog, Tool executor, conversation DTO,
+or hidden workflow controller.
 
 ## Install
 
 ```ts
-import { createCopilotz } from "jsr:@copilotz/copilotz@^0.62.1";
+import { createCopilotz } from "jsr:@copilotz/copilotz@^0.63.0";
 ```
 
 Host-only capabilities live on explicit subpaths. Importing the root does not
@@ -39,8 +40,8 @@ pull in filesystem, subprocess, terminal, MCP stdio, or provider credentials.
 ## Compose an AI application
 
 ```ts
-import { createCopilotz } from "jsr:@copilotz/copilotz@^0.62.1";
-import { corePlugin, message } from "jsr:@copilotz/copilotz@^0.62.1/core";
+import { createCopilotz } from "jsr:@copilotz/copilotz@^0.63.0";
+import { corePlugin, message } from "jsr:@copilotz/copilotz@^0.63.0/core";
 
 const openAiKey = Deno.env.get("OPENAI_API_KEY");
 if (!openAiKey) throw new Error("OPENAI_API_KEY is required");
@@ -69,7 +70,7 @@ const app = await createCopilotz({
   },
 });
 
-// A Channel, Goal, onboarding plugin, or trusted Gateway route has already
+// A Channel, onboarding flow, or trusted Gateway route has already
 // created this thread and its human/agent participants.
 const operation = await app.send(message({
   thread: "thread-1",
@@ -87,9 +88,15 @@ await app.close();
 
 `send()` accepts one plugin-owned input envelope. It returns the durable ingress
 Event identity, a request-bound output stream, a settlement Promise, and
-cancellation. `observe()` creates an independent application-wide subscription.
-The public application surface is exactly `{ send, observe, close }`; Gateway
-adds `fetch`, while Worker returns `{ ready, closed, close }`.
+cancellation. Normal Event outputs include deeply frozen resolved `data` while
+retaining the immutable envelope and durable `payload.dataRef`. `observe()`
+creates an independent application-wide subscription. The public application
+surface is exactly `{ send, observe, close }`; Gateway adds `fetch`, while
+Worker returns `{ ready, closed, close }`.
+
+For multi-turn evaluation, `runGoal` from `@copilotz/copilotz/goals` alternates
+settled target and lead sends without introducing another durable state machine.
+See [Goal runner](./docs/goals.md).
 
 ## Core guarantees
 
@@ -117,8 +124,8 @@ adds `fetch`, while Worker returns `{ ready, closed, close }`.
 | Area               | Subpaths                                                                                                                              |
 | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------- |
 | Application        | root factory; `/application` types                                                                                                    |
-| Generic primitives | `/actions`, `/collections`, `/content`, `/streams`, `/events`, `/plugins`, `/persistence`, `/tokens`                                  |
-| AI harness         | `/core`, `/llm`, `/tools`, `/skills`, `/knowledge`, `/memory`, `/goals`, `/usage`                                                     |
+| Generic primitives | `/actions`, `/collections`, `/content`, `/streams`, `/events`, `/plugins`, `/persistence`                                             |
+| AI harness         | `/core`, `/llm`, `/llm/tokens`, `/tools`, `/skills`, `/knowledge`, `/memory`, `/goals`, `/usage`                                      |
 | Integrations       | `/channels`, `/schedules`, `/schedules/core`, `/admin`, `/server`                                                                     |
 | Host capabilities  | `/adapters/deno`, `/core/cli`, `/core/cli/node`, `/skills/deno`, `/tools/deno`, `/tools/mcp/stdio`, `/tools/persistent-terminal/deno` |
 | Tool factories     | `/tools/builtin`, `/tools/finance`, `/tools/mcp`, `/tools/openapi`, `/tools/persistent-terminal`, `/tools/web`                        |

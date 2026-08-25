@@ -11,7 +11,7 @@
  * - MiniMax (Anthropic-compatible Messages API): supports `text`, `image`, and `video` (MiniMax-M3 only).
  *   The `video` part carries a data URL, public URL, or `mm_file://{file_id}` reference.
  */
-import type { TokenMediaMetadata } from "@copilotz/copilotz/tokens";
+import type { TokenMediaMetadata } from "../authoring/token-estimation/index.ts";
 import type { ChatTokenEstimate } from "./chat-tokens.ts";
 
 export type ChatContentPart =

@@ -17,6 +17,7 @@ export {
 } from "./observation.ts";
 export type {
   ApplicationOutput,
+  ApplicationOutputDescriptor,
   RuntimeOutputDescriptor,
   StreamOutput,
   StreamOutputDescriptor,

@@ -1,12 +1,12 @@
 import type { AgentResource } from "@copilotz/copilotz/core";
-import { channelIngress } from "../plugins/channels/input.ts";
-import { defineChannelResource } from "../plugins/channels/resource.ts";
+import { channelIngress } from "../plugins/channel-core/authoring/channel-ingress/index.ts";
+import { defineChannelResource } from "../plugins/channel-core/authoring/channel-resource/index.ts";
 import type {
   ChannelAcceptResult,
   ChannelAdapter,
   ChannelIngressOccurrence,
   ChannelRequest,
-} from "../plugins/channels/types.ts";
+} from "../plugins/channel-core/internal/contracts.ts";
 import {
   getThread,
   listMessages,

@@ -5,9 +5,9 @@ import {
   provisionCopilotzSchema,
   type SqlSession,
 } from "../events/index.ts";
-import { createTestDomainContext } from "../../plugins/core/testing/context.ts";
+import { createTestDomainContext } from "../../plugins/core/internal/testing/context.ts";
 import { waitForTestDelivery } from "../../runtime/testing/deliveries.ts";
-import { projectActionEvents } from "../../plugins/core/testing/projections.ts";
+import { projectActionEvents } from "../../plugins/core/internal/testing/projections.ts";
 import {
   createPluginRegistry,
   definePlugin,

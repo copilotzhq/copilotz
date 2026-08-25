@@ -5,7 +5,7 @@ participant, channel, or provider primitives.
 
 ## Application output
 
-`ApplicationOutput` is either a normal Copilotz Event or:
+`ApplicationOutput` is either a resolved Copilotz Event or:
 
 ```ts
 type StreamOutput = Readonly<{
@@ -29,6 +29,13 @@ type StreamOutput = Readonly<{
 The descriptor deliberately has no thread, participant, routing, visibility,
 Collection, or plugin fields. A semantic plugin may place opaque JSON hints in
 `metadata`; the runtime does not interpret them.
+
+Normal Event outputs retain their immutable Event envelope and add a deeply
+frozen `data` field. For durable Events, `data` is the resolved Event Body and
+`payload.dataRef` remains available for durable identity or later verification.
+For transient Events, `data` is the Event payload. Event data is strict
+transport-safe JSON; progressive or binary bytes belong in Streams and Assets
+rather than Event payloads.
 
 Every `send().outputs` and `observe()` subscription receives its own lazy Body
 follower. Two subscribers never share one `ReadableStream` instance, and bytes

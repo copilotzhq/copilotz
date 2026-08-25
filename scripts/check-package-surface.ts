@@ -1,10 +1,20 @@
+import { moduleSpecifiers } from "./check-plugin-boundaries.ts";
+
 const repositoryRoot = new URL("../", import.meta.url);
 const configuration = JSON.parse(
   await Deno.readTextFile(new URL("deno.json", repositoryRoot)),
 ) as {
+  name: string;
   exports: Record<string, string>;
   imports: Record<string, string>;
 };
+
+const packageName = "@copilotz/copilotz";
+if (configuration.name !== packageName) {
+  throw new Error(
+    `Package name must remain ${packageName}: ${configuration.name}`,
+  );
+}
 
 const exportTargets = Object.values(configuration.exports);
 for (const [subpath, target] of Object.entries(configuration.exports)) {
@@ -14,27 +24,19 @@ for (const [subpath, target] of Object.entries(configuration.exports)) {
   }
 }
 
-const selfImports = Object.entries(configuration.imports).filter((
-  [specifier],
-) => specifier.startsWith("@copilotz/copilotz/"));
-for (const [specifier, target] of selfImports) {
-  if (!target.startsWith("./")) {
-    throw new Error(
-      `Package self-import ${specifier} must use a local target.`,
-    );
-  }
-  const stat = await Deno.stat(new URL(target, repositoryRoot));
-  if (!stat.isFile) {
-    throw new Error(
-      `Package self-import ${specifier} is not a file: ${target}`,
-    );
-  }
-  if (!exportTargets.includes(target)) {
-    throw new Error(
-      `Package self-import ${specifier} does not match a public export target: ${target}`,
-    );
-  }
+const redundantSelfMappings = Object.keys(configuration.imports).filter((
+  specifier,
+) => specifier === packageName || specifier.startsWith(`${packageName}/`));
+if (redundantSelfMappings.length) {
+  throw new Error(
+    "Package self-references must resolve through name + exports; remove " +
+      `redundant import mappings: ${redundantSelfMappings.sort().join(", ")}`,
+  );
 }
+
+const externalImports = Object.entries(configuration.imports).filter((
+  [specifier],
+) => specifier !== packageName && !specifier.startsWith(`${packageName}/`));
 
 const check = new Deno.Command(Deno.execPath(), {
   args: ["check", ...exportTargets],
@@ -62,7 +64,7 @@ async function* productionSources(
       !path.startsWith("contracts/") &&
       !path.startsWith("scripts/") &&
       !path.startsWith("runtime/testing/") &&
-      !path.startsWith("plugins/core/testing/")
+      !path.startsWith("plugins/core/internal/testing/")
     ) yield { path, text: await Deno.readTextFile(url) };
   }
 }
@@ -70,6 +72,18 @@ async function* productionSources(
 const production = [];
 for await (const file of productionSources(repositoryRoot)) {
   production.push(file);
+}
+
+const inlineExternalImports = production.flatMap((file) =>
+  moduleSpecifiers(file.text)
+    .filter((specifier) => /^(?:jsr:|npm:|https?:\/\/)/.test(specifier))
+    .map((specifier) => `${file.path}: ${specifier}`)
+);
+if (inlineExternalImports.length) {
+  throw new Error(
+    "External dependency versions belong in deno.json imports:\n" +
+      inlineExternalImports.sort().join("\n"),
+  );
 }
 
 const decoder = new TextDecoder();
@@ -174,5 +188,5 @@ if (unusedDependencies.length) {
 }
 
 console.log(
-  `Package surface passed: ${exportTargets.length} exports, ${selfImports.length} self-imports, ${production.length} production modules, and dependency wrappers are reachable and release-clean.`,
+  `Package surface passed: ${exportTargets.length} exports resolve by package self-reference, ${externalImports.length} external imports, ${production.length} production modules, and dependency wrappers are reachable and release-clean.`,
 );

@@ -12,7 +12,7 @@ import {
   defineProcessor,
   type ProcessorContext,
 } from "../plugins/index.ts";
-import { createTestDomainContext } from "../../plugins/core/testing/context.ts";
+import { createTestDomainContext } from "../../plugins/core/internal/testing/context.ts";
 import { waitForTestDelivery } from "../testing/deliveries.ts";
 import { createTestDatabase } from "../testing/ominipg.ts";
 import { coreCollectionsPlugin } from "@copilotz/copilotz/core";

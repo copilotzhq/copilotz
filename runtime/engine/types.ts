@@ -22,7 +22,10 @@ import type {
   EventDispatchReport,
   SqlSession,
 } from "../events/index.ts";
-import type { RuntimeOutputDescriptor } from "../streams/index.ts";
+import type {
+  ApplicationOutputDescriptor,
+  RuntimeOutputDescriptor,
+} from "../streams/index.ts";
 import type {
   CreateDeliveryExecutorOptions,
   DeliveryExecutorOwnership,
@@ -46,7 +49,7 @@ import type { ActionLifecycleEmitter } from "../actions/index.ts";
 
 export type EphemeralEventInput = EphemeralEventDraft;
 export type RuntimeOutputPublisher = (
-  output: RuntimeOutputDescriptor,
+  output: ApplicationOutputDescriptor,
   context?: Readonly<{ databaseSchema: string; settlementScopeId?: string }>,
 ) => void | Promise<void>;
 export type EngineMutationIdentityFactory = (

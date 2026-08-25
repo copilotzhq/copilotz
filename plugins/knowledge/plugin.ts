@@ -1,39 +1,31 @@
-import {
-  type AnyActionDefinition,
-  isSettledActionError,
-} from "@copilotz/copilotz/actions";
-import {
-  type CopilotzPlugin,
-  definePlugin,
-  defineProcessor,
-  type Processor,
-  type ProcessorContext,
-} from "@copilotz/copilotz/plugins";
+/** Composes concrete Knowledge primitives into one plugin. @module */
+
+import type { AnyActionDefinition } from "@copilotz/copilotz/actions";
+import { definePlugin } from "@copilotz/copilotz/plugins";
+import type { CopilotzPlugin } from "@copilotz/copilotz/plugins";
 import type { ToolResource } from "@copilotz/copilotz/tools";
 import {
   createIndexKnowledgeDocumentAction,
   type IndexKnowledgeDocumentAction,
-  type KnowledgeIndexActionCallers,
-} from "./actions.ts";
+} from "./actions/index.ts";
 import {
-  KNOWLEDGE_DOCUMENT_COLLECTION,
   knowledgeChunkCollection,
   knowledgeDocumentCollection,
-} from "./collections.ts";
+} from "./collections/index.ts";
 import {
   createDefaultKnowledgeSourceLoader,
   createDefaultKnowledgeTextExtractor,
-} from "./source.ts";
-import { createKnowledgeActionResources } from "./tools.ts";
+  createKnowledgeActionResources,
+} from "./authoring/index.ts";
+import { indexKnowledgeDocumentProcessor } from "./processors/index.ts";
 import type {
   CreateKnowledgePluginOptions,
   KnowledgeChunkingConfig,
   KnowledgeEmbeddingConfig,
-} from "./types.ts";
+} from "./internal/types.ts";
 
 const DEFAULT_ID = "@copilotz/knowledge";
 const DEFAULT_VERSION = "3.0.0";
-const PROCESSOR_ID = "copilotz.knowledge.index-document";
 
 function required(value: string | undefined, name: string): string {
   const normalized = value?.trim();
@@ -53,9 +45,9 @@ function positiveInteger(
   return result;
 }
 
-function chunking(value: KnowledgeChunkingConfig = {}): Required<
-  KnowledgeChunkingConfig
-> {
+function chunking(
+  value: KnowledgeChunkingConfig = {},
+): Required<KnowledgeChunkingConfig> {
   const chunkSize = positiveInteger(value.chunkSize, 512, "Chunk size");
   const chunkOverlap = value.chunkOverlap ?? 50;
   if (
@@ -86,56 +78,19 @@ function embedding(value: KnowledgeEmbeddingConfig): KnowledgeEmbeddingConfig {
   });
 }
 
-type KnowledgeProcessorContext =
-  & Omit<ProcessorContext, "actions">
-  & Readonly<{ actions: KnowledgeIndexActionCallers }>;
-
-function createIndexProcessor(): Processor<KnowledgeProcessorContext> {
-  return defineProcessor<KnowledgeProcessorContext>({
-    id: PROCESSOR_ID,
-    on: [{
-      eventType: "document.created",
-      subject: { type: KNOWLEDGE_DOCUMENT_COLLECTION },
-    }],
-    async handle(event, context) {
-      if (!event.durable || !event.subject) return;
-      try {
-        await context.actions.indexKnowledgeDocument({
-          id: event.subject.id,
-        }, {
-          operationKey: `index:${event.subject.id}`,
-          identity: {
-            causationId: event.id,
-            correlationId: event.correlationId,
-            deduplicationId: event.deduplicationId,
-            settlementScopeId: context.identity.settlementScopeId,
-          },
-          signal: context.signal,
-        });
-      } catch (error) {
-        // A durable Action failure is a settled semantic outcome. Only an
-        // infrastructure failure before lifecycle settlement retries delivery.
-        if (!isSettledActionError(error)) throw error;
-      }
-    },
-  });
-}
-
-type KnowledgeCollections = Readonly<{
-  document: typeof knowledgeDocumentCollection;
-  chunk: typeof knowledgeChunkCollection;
-}>;
-
+type KnowledgeCollections = Readonly<
+  {
+    document: typeof knowledgeDocumentCollection;
+    chunk: typeof knowledgeChunkCollection;
+  }
+>;
 type KnowledgeActions =
   & Readonly<{ indexKnowledgeDocument: IndexKnowledgeDocumentAction }>
   & Readonly<Record<string, AnyActionDefinition>>;
-
-type KnowledgeProcessors = Readonly<{
-  indexKnowledgeDocument: Processor<KnowledgeProcessorContext>;
-}>;
-
+type KnowledgeProcessors = Readonly<
+  { indexKnowledgeDocument: typeof indexKnowledgeDocumentProcessor }
+>;
 type KnowledgeTools = Readonly<Record<string, ToolResource>>;
-
 type KnowledgeResources = Readonly<{ tools: KnowledgeTools }>;
 
 export type KnowledgePlugin = CopilotzPlugin<
@@ -149,16 +104,13 @@ export type KnowledgePlugin = CopilotzPlugin<
   Readonly<Record<never, never>>
 >;
 
-/** Packages Knowledge Collections, Actions, Processors, and Tool Resources. */
+/** Composes Knowledge documents, indexing, search, and generated tool resources. */
 export function createKnowledgePlugin(
   input: CreateKnowledgePluginOptions,
 ): KnowledgePlugin {
   const embeddingConfig = embedding(input.embedding);
   const contribution = input.tools === false
-    ? Object.freeze({
-      actions: Object.freeze({}),
-      tools: Object.freeze({}),
-    })
+    ? Object.freeze({ actions: Object.freeze({}), tools: Object.freeze({}) })
     : createKnowledgeActionResources(embeddingConfig, input.tools);
   if (Object.hasOwn(contribution.actions, "indexKnowledgeDocument")) {
     throw new TypeError(
@@ -182,7 +134,7 @@ export function createKnowledgePlugin(
       chunk: knowledgeChunkCollection,
     },
     actions,
-    processors: { indexKnowledgeDocument: createIndexProcessor() },
+    processors: { indexKnowledgeDocument: indexKnowledgeDocumentProcessor },
     resources: { tools: contribution.tools },
   });
 }

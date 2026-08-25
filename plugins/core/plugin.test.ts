@@ -69,22 +69,24 @@ Deno.test("application owns every Model Resource and custom LLM Adapter", () => 
 Deno.test("core production modules consume public Copilotz subpaths", async () => {
   const files = [
     "plugin.ts",
-    "context.ts",
-    "resources/actions/thread-message.ts",
-    "resources/actions/thread.ts",
-    "resources/actions/message.ts",
-    "resources/processors/helpers.ts",
-    "resources/processors/index.ts",
-    "resources/processors/message-router.ts",
-    "resources/processors/message-input.ts",
-    "resources/processors/project-text-result.ts",
-    "resources/processors/project-tool-result.ts",
-    "resources/processors/complete-ask.ts",
-    "resources/processors/fail-ask.ts",
-    "resources/tools/ask.ts",
-    "resources/collections/participant.ts",
-    "resources/collections/thread.ts",
-    "resources/collections/message.ts",
+    "internal/runtime-context.ts",
+    "actions/ask/index.ts",
+    "processors/internal/helpers.ts",
+    "processors/index.ts",
+    "processors/message-router/index.ts",
+    "processors/project-text-result/index.ts",
+    "processors/project-tool-result/index.ts",
+    "processors/complete-ask/index.ts",
+    "processors/fail-ask/index.ts",
+    "processors/tool-plan-coordinator/index.ts",
+    "resources/ask-tool/index.ts",
+    "../core-collections/actions/create-thread-message/index.ts",
+    "../core-collections/actions/create-thread/index.ts",
+    "../core-collections/actions/revise-message/index.ts",
+    "../core-collections/processors/message-input/index.ts",
+    "../core-collections/collections/participant/index.ts",
+    "../core-collections/collections/thread/index.ts",
+    "../core-collections/collections/message/index.ts",
     "internal/agents/prompt.ts",
     "internal/agents/transcript.ts",
     "internal/tool-plan.ts",
@@ -95,7 +97,10 @@ Deno.test("core production modules consume public Copilotz subpaths", async () =
     assert(!/from\s+["']\.\.\/runtime\//.test(source), file);
   }
   const action = await Deno.readTextFile(
-    new URL("resources/actions/thread-message.ts", import.meta.url),
+    new URL(
+      "../core-collections/actions/create-thread-message/index.ts",
+      import.meta.url,
+    ),
   );
   assert(action.includes("@copilotz/copilotz/actions"));
 });

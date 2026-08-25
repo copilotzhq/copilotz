@@ -4,10 +4,7 @@ import type {
   ApplicationOutput,
   StreamOutput,
 } from "../runtime/streams/index.ts";
-import {
-  createEphemeralEvent,
-  type DurableEvent,
-} from "../runtime/events/index.ts";
+import { createEphemeralEvent } from "../runtime/events/index.ts";
 import {
   EVENT_NATIVE_OUTPUT_STREAM,
   type EventNativeApp,
@@ -185,12 +182,15 @@ Deno.test("Fetch adapter is runtime-neutral and factory-first", async () => {
 });
 
 Deno.test("Fetch adapter incrementally projects request-bound outputs as SSE without embedding byte streams", async () => {
-  const semantic = createEphemeralEvent({
-    type: "text.delta",
-    namespace: "tenant-a",
-    threadId: "thread-a",
-    payload: { text: "Hello" },
-    correlationId: "correlation-a",
+  const semantic: ApplicationOutput = Object.freeze({
+    ...createEphemeralEvent({
+      type: "text.delta",
+      namespace: "tenant-a",
+      threadId: "thread-a",
+      payload: { text: "Hello" },
+      correlationId: "correlation-a",
+    }),
+    data: Object.freeze({ text: "Hello" }),
   });
   const media: StreamOutput = Object.freeze({
     type: "stream.output",
@@ -254,11 +254,14 @@ Deno.test("Fetch adapter supports versioned SSE projection and cancels request w
     type: EVENT_NATIVE_OUTPUT_STREAM,
     outputs: new ReadableStream<ApplicationOutput>({
       start(controller) {
-        controller.enqueue(createEphemeralEvent({
-          type: "text.delta",
-          namespace: "tenant-a",
-          payload: { text: "Hi" },
-          correlationId: "correlation-a",
+        controller.enqueue(Object.freeze({
+          ...createEphemeralEvent({
+            type: "text.delta",
+            namespace: "tenant-a",
+            payload: { text: "Hi" },
+            correlationId: "correlation-a",
+          }),
+          data: Object.freeze({ text: "Hi" }),
         }));
       },
       cancel() {
@@ -297,7 +300,7 @@ Deno.test("Fetch adapter supports versioned SSE projection and cancels request w
 });
 
 Deno.test("Fetch adapter emits durable event position as SSE id", async () => {
-  const durable: DurableEvent = Object.freeze({
+  const durable: ApplicationOutput = Object.freeze({
     durable: true,
     id: "event-uuid",
     position: "42",
@@ -311,6 +314,7 @@ Deno.test("Fetch adapter emits durable event position as SSE id", async () => {
     metadata: {},
     correlationId: "correlation-a",
     createdAt: "2026-08-19T00:00:00.000Z",
+    data: Object.freeze({ ok: true }),
   });
   const stream: EventNativeOutputStream = Object.freeze({
     type: EVENT_NATIVE_OUTPUT_STREAM,

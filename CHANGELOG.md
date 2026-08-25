@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.62.1 — 2026-08-24
+## 0.63.0 — 2026-08-25
 
 Final plugin-first runtime and deployed-data migration release.
 
@@ -13,16 +13,23 @@ Final plugin-first runtime and deployed-data migration release.
   selected directly by ordered Model Resources; custom LLM Adapters remain
   application-owned. Tool Resources are data-only presentations of the same
   Action aliases Core invokes.
-- Goals, Channels, Memory, Knowledge, Skills, Schedules, Usage, and Admin are
-  ordinary plugins built from Collections, Actions, Processors, Resources, and
-  Adapters. The legacy controller/catalog/executor paths are removed.
+- Channels, Memory, Knowledge, Skills, Schedules, Usage, and Admin are ordinary
+  plugins built from Collections, Actions, Processors, Resources, and Adapters.
+  The former Goals workflow plugin is replaced by the local Core `runGoal`
+  authoring loop over settled application sends.
 - `/domain`, `/attachments`, `/adapters`, `/adapters/node`, `/migration/v1`,
   `/migration/content-v2`, and `/migration/memory-v4` are removed.
+- Provider-aware token estimation moves from the generic `/tokens` subpath to
+  `/llm/tokens`; mutable calibration is now private to the LLM plugin.
 
 ### Added
 
 - Generic application stream observation through `/streams`, with one
   subscriber-owned byte follower per `stream.output` descriptor.
+- Resolved immutable Event data on `send().outputs` and `observe()`, retaining
+  each durable Event's original body reference.
+- Minimal target/lead Goal conversations through `/goals#runGoal`; ordinary Core
+  Messages and Action lifecycles remain their only durable record.
 - Core-owned conversation contracts, projections, and portable CLI adapters on
   `/core`, `/core/cli`, and `/core/cli/node`.
 - Parallel Tool branches with sequential `jq` pipelines, durable fan-in, nested
@@ -47,6 +54,12 @@ Final plugin-first runtime and deployed-data migration release.
   readiness marker, and continues through the final Core/LLM seam.
 - The package passes the complete type, architecture, boundary, runtime test,
   and publish dry-run ladder.
+
+## 0.62.1 — 2026-08-24
+
+Published the initial plugin-first v4 baseline and repaired its PostgreSQL
+schema-readiness gate. Version 0.63.0 finalizes the physical plugin layout and
+public package surface before 1.0.
 
 ## 0.61.0 — 2026-08-18
 

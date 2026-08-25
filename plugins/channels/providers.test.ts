@@ -3,47 +3,47 @@ import { assert, assertEquals, assertExists } from "@std/assert";
 import {
   createDiscordChannelAdapter,
   createDiscordChannelResource,
-} from "./discord/channel.ts";
+} from "../channel-discord/index.ts";
 import type {
   DiscordConfig,
   DiscordMediaInput,
   DiscordTransport,
-} from "./discord/types.ts";
+} from "../channel-discord/index.ts";
 import {
   createTelegramChannelAdapter,
   createTelegramChannelResource,
-} from "./telegram/channel.ts";
+} from "../channel-telegram/index.ts";
 import type {
   TelegramConfig,
   TelegramMediaInput,
   TelegramTransport,
-} from "./telegram/types.ts";
+} from "../channel-telegram/index.ts";
 import {
   buildWhatsAppMediaCarouselMessage,
   buildWhatsAppReplyButtonsMessage,
   normalizeWhatsAppReplyButtons,
   resolveWhatsAppMediaCarouselAction,
   splitWhatsAppText,
-} from "./whatsapp/protocol.ts";
+} from "../channel-whatsapp/index.ts";
 import {
   createWhatsAppChannelAdapter,
   createWhatsAppChannelResource,
-} from "./whatsapp/channel.ts";
-import { verifyWhatsAppSignature } from "./whatsapp/transport.ts";
+} from "../channel-whatsapp/index.ts";
+import { verifyWhatsAppSignature } from "../channel-whatsapp/index.ts";
 import type {
   WhatsAppConfig,
   WhatsAppMediaInput,
   WhatsAppTransport,
-} from "./whatsapp/types.ts";
+} from "../channel-whatsapp/index.ts";
 import {
   createZendeskChannelAdapter,
   createZendeskChannelResource,
-} from "./zendesk/channel.ts";
+} from "../channel-zendesk/index.ts";
 import type {
   ZendeskConfig,
   ZendeskMediaInput,
   ZendeskTransport,
-} from "./zendesk/types.ts";
+} from "../channel-zendesk/index.ts";
 import type {
   ChannelAcceptContext,
   ChannelDeliveryAttempt,
@@ -51,7 +51,7 @@ import type {
   ChannelJsonObject,
   ChannelRequest,
   ChannelResource,
-} from "./types.ts";
+} from "../channel-core/internal/contracts.ts";
 
 const NAMESPACE = "channel-provider-contract";
 

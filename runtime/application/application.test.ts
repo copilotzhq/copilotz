@@ -8,9 +8,9 @@ import {
   defineProcessor,
   type ProcessorContext,
 } from "../plugins/index.ts";
-import { createTestDomainContext } from "../../plugins/core/testing/context.ts";
+import { createTestDomainContext } from "../../plugins/core/internal/testing/context.ts";
 import { waitForTestDelivery } from "../../runtime/testing/deliveries.ts";
-import { projectMessages } from "../../plugins/core/testing/projections.ts";
+import { projectMessages } from "../../plugins/core/internal/testing/projections.ts";
 import { createCopilotzApplication } from "./application.ts";
 import type { CopilotzDatabase } from "@copilotz/copilotz/persistence";
 import { isCopilotzPersistenceError } from "@copilotz/copilotz/persistence";

@@ -93,6 +93,11 @@ export type CopilotzEvent<TPayload = unknown> =
   | DurableEvent<TPayload>
   | EphemeralEvent<TPayload>;
 
+/** Immutable event view with its durable body resolved for consumption. */
+export type ResolvedCopilotzEvent<TData = unknown> = CopilotzEvent & {
+  readonly data: TData;
+};
+
 /** Input used to append one immutable semantic event. */
 export type DurableEventDraft<TPayload = unknown> = {
   type: string;
@@ -169,6 +174,70 @@ export function isDurableEvent(
   return event.durable;
 }
 
+function invalidEventData(label: string): never {
+  throw new TypeError(`${label} must contain strict JSON data only.`);
+}
+
+/** Captures transport-safe Event data without invoking object accessors. */
+export function snapshotEventData<T>(value: T, label = "Event data"): T {
+  const ancestors = new WeakSet<object>();
+  const snapshot = (candidate: unknown): unknown => {
+    if (
+      candidate === null || typeof candidate === "string" ||
+      typeof candidate === "boolean"
+    ) return candidate;
+    if (typeof candidate === "number") {
+      if (!Number.isFinite(candidate)) invalidEventData(label);
+      return Object.is(candidate, -0) ? 0 : candidate;
+    }
+    if (!candidate || typeof candidate !== "object") invalidEventData(label);
+    if (ancestors.has(candidate)) invalidEventData(label);
+    ancestors.add(candidate);
+    try {
+      if (Array.isArray(candidate)) {
+        if (Object.getPrototypeOf(candidate) !== Array.prototype) {
+          invalidEventData(label);
+        }
+        const keys = Reflect.ownKeys(candidate);
+        if (
+          keys.length !== candidate.length + 1 ||
+          keys.at(-1) !== "length"
+        ) invalidEventData(label);
+        const result: unknown[] = [];
+        for (let index = 0; index < candidate.length; index += 1) {
+          if (keys[index] !== String(index)) invalidEventData(label);
+          const descriptor = Object.getOwnPropertyDescriptor(
+            candidate,
+            String(index),
+          );
+          if (!descriptor?.enumerable || !("value" in descriptor)) {
+            invalidEventData(label);
+          }
+          result.push(snapshot(descriptor.value));
+        }
+        return Object.freeze(result);
+      }
+      const prototype = Object.getPrototypeOf(candidate);
+      if (prototype !== Object.prototype && prototype !== null) {
+        invalidEventData(label);
+      }
+      const entries: [string, unknown][] = [];
+      for (const key of Reflect.ownKeys(candidate)) {
+        if (typeof key !== "string") invalidEventData(label);
+        const descriptor = Object.getOwnPropertyDescriptor(candidate, key);
+        if (!descriptor?.enumerable || !("value" in descriptor)) {
+          invalidEventData(label);
+        }
+        entries.push([key, snapshot(descriptor.value)]);
+      }
+      return Object.freeze(Object.fromEntries(entries));
+    } finally {
+      ancestors.delete(candidate);
+    }
+  };
+  return snapshot(value) as T;
+}
+
 /** Validates and freezes one non-persistent stream/control event. */
 export function createEphemeralEvent<TPayload>(
   draft: EphemeralEventDraft<TPayload>,
@@ -192,18 +261,25 @@ export function createEphemeralEvent<TPayload>(
   ) {
     throw new TypeError("Ephemeral event sequence must be non-negative.");
   }
-  const visibility: EventVisibility = draft.visibility
-    ? structuredClone(draft.visibility)
-    : { kind: "public" };
+  const visibility = snapshotEventData<EventVisibility>(
+    draft.visibility ?? { kind: "public" },
+    "Ephemeral Event visibility",
+  );
   return Object.freeze({
     durable: false,
     type: type as EphemeralEvent["type"],
     namespace,
     ...(draft.threadId?.trim() ? { threadId: draft.threadId.trim() } : {}),
-    payload: structuredClone(draft.payload),
-    routing: Object.freeze(structuredClone(draft.routing ?? {})),
-    visibility: Object.freeze(visibility),
-    metadata: Object.freeze(structuredClone(draft.metadata ?? {})),
+    payload: snapshotEventData(draft.payload, "Ephemeral Event payload"),
+    routing: snapshotEventData(
+      draft.routing ?? {},
+      "Ephemeral Event routing",
+    ),
+    visibility,
+    metadata: snapshotEventData(
+      draft.metadata ?? {},
+      "Ephemeral Event metadata",
+    ),
     ...(draft.causationId?.trim()
       ? { causationId: draft.causationId.trim() }
       : {}),

@@ -22,6 +22,11 @@
           "title": "API Reference",
           "slug": "api",
           "description": "Root role factory, returned surfaces, and explicit subpaths."
+        },
+        {
+          "title": "Goal Runner",
+          "slug": "goals",
+          "description": "Minimal target/lead loops over settled Core sends."
         }
       ]
     },
@@ -32,6 +37,11 @@
           "title": "Plugins and Processors",
           "slug": "plugins-and-processors",
           "description": "Compose the five plugin primitives and retry-safe orchestration."
+        },
+        {
+          "title": "Plugin Source Layout",
+          "slug": "plugin-layout",
+          "description": "Concrete plugin ownership, primitive directories, and authoring helpers."
         },
         {
           "title": "Events, Deliveries, and Recovery",

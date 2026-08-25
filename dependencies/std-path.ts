@@ -1,1 +1,1 @@
-export * from "jsr:@std/path@1";
+export * from "@std/path";

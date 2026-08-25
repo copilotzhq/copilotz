@@ -2,7 +2,10 @@ import { assertEquals, assertRejects } from "@std/assert";
 
 import { createPluginRegistry, definePlugin } from "@copilotz/copilotz/plugins";
 import { defineAction } from "@copilotz/copilotz/actions";
-import type { AgentCapabilitySelection, AgentResource } from "../../agent.ts";
+import type {
+  AgentCapabilitySelection,
+  AgentResource,
+} from "../../resources/agent/index.ts";
 import {
   createSkillsPlugin,
   defineInlineSkill,

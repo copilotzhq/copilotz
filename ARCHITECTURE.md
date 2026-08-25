@@ -139,7 +139,10 @@ drains any relayed execution output, and then confirms durable settlement again
 before closing the operation. Closing the observation preserves already-queued
 events, so a final remote frame cannot disappear between Worker completion and
 Gateway delivery. The application-wide `observe()` sink receives the same
-generic durable and transient Events independently of any active `send`.
+application outputs independently of any active `send`. Normal Event outputs
+retain their immutable envelope and expose resolved, deeply frozen `data`;
+durable Events also retain the original `payload.dataRef`. Progressive
+`stream.output` observations remain subscriber-owned byte streams.
 
 Durable delivery failures have an explicit disposition. Unknown failures are
 retryable by default and the recovery-owning Gateway executor requeues them at
@@ -319,9 +322,17 @@ settlement or Tool-outcome concept.
 There is consequently no `Tool.execute`, Tool catalog, Tool executor, Tool host
 context, Core wrapper Action, or second validation/lifecycle path. The composed
 `resources.tools` and `context.actions` maps are the one definition and
-execution path. Memory, knowledge, schedules, channels, concrete tools, goals,
-usage accounting, and admin behavior remain optional first-party plugins rather
-than hidden Core behavior.
+execution path. Memory, knowledge, schedules, channels, concrete tools, usage
+accounting, and admin behavior remain optional first-party plugins rather than
+hidden Core behavior.
+
+Goals are a Core authoring helper over this existing application boundary, not a
+plugin primitive or durable workflow of their own. `runGoal` serially alternates
+ordinary `send()` operations between explicit target and lead threads. Each
+`send().done` is the complete causal-turn barrier; the next turn receives the
+exact canonical Message ContentRefs observed from the settled scope. Messages
+and Action lifecycles remain durable and restart-visible, while the local loop
+deliberately does not auto-resume after process loss.
 
 Optional semantic plugins receive no runtime back doors. The base Schedules
 plugin, for example, owns only timing/status, opaque JSON payload, optional

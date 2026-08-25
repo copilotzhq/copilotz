@@ -19,10 +19,10 @@ import type {
   LlmToolPipelineStage,
 } from "@copilotz/copilotz/llm";
 import type { Processor } from "@copilotz/copilotz/plugins";
-import { coreAgent, type CoreToolProcessorContext } from "../context.ts";
-import { toolsForAgent } from "../resources/processors/helpers.ts";
+import { coreAgent, type CoreToolProcessorContext } from "./runtime-context.ts";
+import { toolsForAgent } from "../processors/internal/helpers.ts";
 import { resolveToolGrants } from "./capabilities/grants.ts";
-import { createThreadMessage } from "../resources/actions/thread-message.ts";
+import { createThreadMessage } from "../../core-collections/actions/create-thread-message/index.ts";
 import {
   type AgentAskMetadata,
   agentAskMetadata,

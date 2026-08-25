@@ -5,6 +5,7 @@ import {
   type PluginRegistry,
   type Processor,
   type ProcessorContext,
+  type ProcessorEvent,
   type TransientProcessorSet,
   withProcessorEventData,
 } from "../plugins/index.ts";
@@ -64,6 +65,8 @@ export type InvokeLiveProcessorsOptions = Readonly<{
   event: CopilotzEvent;
   /** Resolved durable Event Body; ephemeral events use their payload. */
   eventData?: unknown;
+  /** Reused immutable view also published to application observers. */
+  resolvedEvent?: ProcessorEvent;
   signal: AbortSignal;
   settlementScopeId?: string;
   createContext: LiveProcessorContextFactory;
@@ -214,10 +217,13 @@ function lookupProcessor(
 function matchingTransient(
   options: Pick<
     InvokeLiveProcessorsOptions,
-    "transients" | "event" | "eventData"
+    "transients" | "event" | "eventData" | "resolvedEvent"
   >,
 ): readonly Processor[] {
-  return options.transients?.match(options.event, options.eventData) ?? [];
+  return options.transients?.match(
+    options.event,
+    options.resolvedEvent?.data ?? options.eventData,
+  ) ?? [];
 }
 
 function sourceEventId(event: CopilotzEvent): string | undefined {
@@ -256,7 +262,11 @@ async function invokeOne(
   const processor = lookupProcessor(options, processorId);
   if (
     !isProcessor(processor) ||
-    !matchProcessor(processor, options.event, options.eventData)
+    !matchProcessor(
+      processor,
+      options.event,
+      options.resolvedEvent?.data ?? options.eventData,
+    )
   ) {
     throw new Error(
       `Live processor '${processorId}' is unavailable or no longer matches.`,
@@ -282,7 +292,7 @@ async function invokeOne(
   const context = await options.createContext(base);
   options.signal.throwIfAborted();
   await processor.handle(
-    withProcessorEventData(
+    options.resolvedEvent ?? withProcessorEventData(
       options.event,
       options.eventData === undefined
         ? options.event.payload

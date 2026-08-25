@@ -1,22 +1,22 @@
 import type { CollectionRecord } from "@copilotz/copilotz/collections";
-import type { AgentResource } from "../../agent.ts";
+import type { AgentResource } from "../../resources/agent/index.ts";
 import type {
   ConversationMessage,
   ConversationThread,
   Participant,
-} from "../../contracts.ts";
+} from "../../../core-collections/internal/contracts.ts";
 import {
   listThreadMessageRecords,
   loadThreadRecord,
   mapParticipantRecord,
-} from "../../projections.ts";
+} from "../../../core-collections/internal/projections.ts";
 import type {
   LlmJsonObject,
   LlmRequest,
   LlmToolDefinition,
 } from "@copilotz/copilotz/llm";
-import type { CoreProcessorContext } from "../../context.ts";
-import type { CoreToolEntry } from "../../resources/processors/helpers.ts";
+import type { CoreProcessorContext } from "../runtime-context.ts";
+import type { CoreToolEntry } from "../../processors/internal/helpers.ts";
 import {
   resolveAgentGrants,
   resolveSkillGrants,
@@ -24,7 +24,7 @@ import {
 import {
   collectContextContributions,
   renderContextContent,
-} from "../context/index.ts";
+} from "../../resources/context/index.ts";
 import { getPublicThreadMetadata } from "../thread-metadata.ts";
 import { buildLlmTranscript } from "./transcript.ts";
 

@@ -4,7 +4,7 @@ import {
   definePlugin,
   defineProcessor,
 } from "../plugins/index.ts";
-import { createTestDomainContext } from "../../plugins/core/testing/context.ts";
+import { createTestDomainContext } from "../../plugins/core/internal/testing/context.ts";
 import { createSqlSession } from "../events/index.ts";
 import { coreCollectionsPlugin } from "../../plugins/core/plugin.ts";
 import { createCopilotzEngine } from "./index.ts";

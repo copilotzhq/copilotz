@@ -6,7 +6,7 @@ import type {
   ContentRole,
   PreparedContent,
 } from "../content/types.ts";
-import type { CopilotzEvent } from "../events/index.ts";
+import type { CopilotzEvent, ResolvedCopilotzEvent } from "../events/index.ts";
 
 /** Serializable stream publication carried between runtime execution contexts. */
 export type StreamOutputDescriptor = Readonly<{
@@ -33,7 +33,11 @@ export type StreamOutput =
   }>;
 
 export type RuntimeOutputDescriptor = CopilotzEvent | StreamOutputDescriptor;
-export type ApplicationOutput = CopilotzEvent | StreamOutput;
+/** Application-facing event outputs retain their immutable envelope and add data. */
+export type ApplicationOutputDescriptor =
+  | ResolvedCopilotzEvent
+  | StreamOutputDescriptor;
+export type ApplicationOutput = ResolvedCopilotzEvent | StreamOutput;
 
 export type ContentStreamOpenInput = Readonly<{
   id?: string;

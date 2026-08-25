@@ -6,11 +6,11 @@ import {
   assertStringIncludes,
   assertThrows,
 } from "@std/assert";
-import { createTestDomainContext } from "../core/testing/context.ts";
+import { createTestDomainContext } from "../core/internal/testing/context.ts";
 import {
   projectActionEvents,
   projectMessages,
-} from "../core/testing/projections.ts";
+} from "../core/internal/testing/projections.ts";
 import { defineContextResource } from "@copilotz/copilotz/core";
 import {
   createSqlSession,
@@ -42,8 +42,11 @@ import {
   CONSOLIDATE_MEMORY_ACTION_ID,
   createLongTermMemoryPlugin,
 } from "./plugin.ts";
-import { type MemoryKindDefinition, memorySourceKey } from "./ontology.ts";
-import type { MemoryEmbed } from "./types.ts";
+import {
+  type MemoryKindDefinition,
+  memorySourceKey,
+} from "./authoring/ontology/index.ts";
+import type { MemoryEmbed } from "./authoring/contracts/index.ts";
 
 const agent: AgentResource = {
   id: "north",

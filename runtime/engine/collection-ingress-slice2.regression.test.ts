@@ -9,8 +9,8 @@ import { createSqlSession } from "../events/index.ts";
 import { createPluginRegistry, definePlugin } from "../plugins/index.ts";
 import { createTestDatabase } from "../testing/ominipg.ts";
 import { createCopilotzEngine } from "./index.ts";
-import { createTestDomainContext } from "../../plugins/core/testing/context.ts";
-import { projectThreadById } from "../../plugins/core/testing/projections.ts";
+import { createTestDomainContext } from "../../plugins/core/internal/testing/context.ts";
+import { projectThreadById } from "../../plugins/core/internal/testing/projections.ts";
 
 const NAMESPACE = "tenant-collection-ingress-slice-2";
 

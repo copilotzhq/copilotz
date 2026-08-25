@@ -55,6 +55,7 @@ export type {
   EventStoreErrorCode,
   EventSubject,
   EventVisibility,
+  ResolvedCopilotzEvent,
 } from "./types.ts";
 export {
   deriveWorkflowId,

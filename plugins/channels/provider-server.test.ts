@@ -3,35 +3,44 @@ import type { LlmAdapter } from "@copilotz/copilotz/llm";
 import { definePlugin } from "@copilotz/copilotz/plugins";
 import { assertEquals, assertExists } from "@std/assert";
 import { createCopilotzApplication } from "../../runtime/application/application.ts";
-import { createTestDomainContext } from "../core/testing/context.ts";
+import { createTestDomainContext } from "../core/internal/testing/context.ts";
 import { createTestDatabase } from "../../runtime/testing/ominipg.ts";
-import { projectActionEvents } from "../core/testing/projections.ts";
+import { projectActionEvents } from "../core/internal/testing/projections.ts";
 import { createEventNativeApp } from "../../server/event-native.ts";
-import { CHANNEL_INGRESS_ACTION_ID } from "./actions.ts";
+import { CHANNEL_INGRESS_ACTION_ID } from "../channel-core/actions/ingress/index.ts";
 import {
   createDiscordChannelAdapter,
   createDiscordChannelResource,
-} from "./discord/channel.ts";
-import type { DiscordConfig, DiscordTransport } from "./discord/types.ts";
-import { createWhatsAppChannelPlugin } from "./whatsapp/channel.ts";
+} from "../channel-discord/index.ts";
+import type {
+  DiscordConfig,
+  DiscordTransport,
+} from "../channel-discord/index.ts";
+import { createWhatsAppChannelPlugin } from "../channel-whatsapp/index.ts";
 import type {
   WhatsAppConfig,
   WhatsAppMediaInput,
   WhatsAppTransport,
-} from "./whatsapp/types.ts";
+} from "../channel-whatsapp/index.ts";
 import {
   createZendeskChannelAdapter,
   createZendeskChannelResource,
-} from "./zendesk/channel.ts";
-import type { ZendeskConfig, ZendeskTransport } from "./zendesk/types.ts";
-import { channelsPlugin } from "./plugin.ts";
+} from "../channel-zendesk/index.ts";
+import type {
+  ZendeskConfig,
+  ZendeskTransport,
+} from "../channel-zendesk/index.ts";
+import { channelsPlugin } from "../channel-core/plugin.ts";
 import {
   createTelegramChannelAdapter,
   createTelegramChannelResource,
-} from "./telegram/channel.ts";
-import type { TelegramConfig, TelegramTransport } from "./telegram/types.ts";
-import type { ChannelAdapter } from "./types.ts";
-import { CHANNEL_INGRESS_INPUT_EVENT } from "./types.ts";
+} from "../channel-telegram/index.ts";
+import type {
+  TelegramConfig,
+  TelegramTransport,
+} from "../channel-telegram/index.ts";
+import type { ChannelAdapter } from "../channel-core/internal/contracts.ts";
+import { CHANNEL_INGRESS_INPUT_EVENT } from "../channel-core/internal/contracts.ts";
 
 const NAMESPACE = "channel-provider-server";
 const CONFIG: WhatsAppConfig = Object.freeze({

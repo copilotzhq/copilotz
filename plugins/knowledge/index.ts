@@ -1,4 +1,5 @@
-/** First-party semantic Knowledge plugin. */
+/** Public API for the first-party Knowledge plugin. @module */
+
 export {
   KNOWLEDGE_CHUNK_COLLECTION,
   KNOWLEDGE_DERIVED_FROM_EDGE,
@@ -7,7 +8,8 @@ export {
   KNOWLEDGE_HAS_CHUNK_EDGE,
   knowledgeChunkCollection,
   knowledgeDocumentCollection,
-} from "./collections.ts";
+} from "./collections/index.ts";
+export type { KnowledgeEventType } from "./collections/index.ts";
 export {
   createIndexKnowledgeDocumentAction,
   createSearchKnowledgeAction,
@@ -17,7 +19,7 @@ export {
   INGEST_KNOWLEDGE_DOCUMENT_ACTION_ID,
   ingestKnowledgeDocumentAction,
   SEARCH_KNOWLEDGE_ACTION_ID,
-} from "./actions.ts";
+} from "./actions/index.ts";
 export type {
   CreateIndexKnowledgeDocumentActionOptions,
   DeleteKnowledgeDocumentInput,
@@ -32,23 +34,23 @@ export type {
   SearchKnowledgeAction,
   SearchKnowledgeActionInput,
   SearchKnowledgeActionResult,
-} from "./actions.ts";
+} from "./actions/index.ts";
 export { createKnowledgePlugin } from "./plugin.ts";
 export type { KnowledgePlugin } from "./plugin.ts";
 export {
   defineKnowledgeEmbeddingProvider,
   embedKnowledgeTexts,
   isKnowledgeEmbeddingProvider,
-} from "./resources.ts";
+} from "./resources/index.ts";
 export {
   createDefaultKnowledgeSourceLoader,
   createDefaultKnowledgeTextExtractor,
-} from "./source.ts";
-export { createKnowledgeActionResources } from "./tools.ts";
+  createKnowledgeActionResources,
+} from "./authoring/index.ts";
 export type {
   KnowledgeActionResourcesContribution,
   KnowledgeToolAliases,
-} from "./tools.ts";
+} from "./authoring/index.ts";
 export type {
   CompleteKnowledgeDocumentInput,
   CreateKnowledgeDocumentInput,
@@ -71,4 +73,4 @@ export type {
   KnowledgeTextExtractor,
   LoadedKnowledgeSource,
   MarkKnowledgeDocumentDuplicateInput,
-} from "./types.ts";
+} from "./internal/types.ts";

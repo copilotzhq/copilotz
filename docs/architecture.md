@@ -27,8 +27,9 @@ The generic runtime owns:
 Plugins own semantic contracts and workflows. Core owns participants, threads,
 messages, Agent Resources, prompt policy, and the conversation loop. LLM owns
 `llm.call`, Model Resources, Adapter contracts, and built-in provider drivers.
-Tools, Goals, Channels, Memory, Knowledge, Skills, Schedules, Usage, and Admin
-own their respective Collections, Actions, Processors, Resources, and Adapters.
+Tools, Channels, Memory, Knowledge, Skills, Schedules, Usage, and Admin own
+their respective Collections, Actions, Processors, Resources, and Adapters.
+Goals are a Core authoring loop over ordinary application sends.
 
 Runtime production code never imports a concrete plugin.
 
@@ -68,8 +69,8 @@ fail the foreground operation.
 
 ## AI harness
 
-Agent, Model, Tool, Goal, and Skill values are Resources. Declarative fields are
-data; Agent instruction resolution, Context contribution, and Skill reading are
+Agent, Model, Tool, and Skill values are Resources. Declarative fields are data;
+Agent instruction resolution, Context contribution, and Skill reading are
 examples of typed process-local policy hooks. Hooks are neither durable Actions
 nor persisted configuration. Built-in provider credentials and transport
 configuration live only in process-local Model Resources; custom provider
@@ -110,9 +111,11 @@ topologies without changing plugin contracts.
 
 `send()` subscribes before append and waits for its explicit settlement scope,
 relayed output drain, and a final settlement check. `observe()` is an
-independent application-wide subscription. A transient persistence outage
-interrupts active handles but does not pretend to cancel durable deliveries;
-normal recovery resumes them after reconnection.
+independent application-wide subscription. Both expose resolved, deeply frozen
+`data` on normal Events while preserving the original immutable envelope and
+durable body reference. Progressive streams remain separate outputs. A transient
+persistence outage interrupts active handles but does not pretend to cancel
+durable deliveries; normal recovery resumes them after reconnection.
 
 ## Storage and replay
 

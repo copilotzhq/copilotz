@@ -7,8 +7,8 @@ import { type CopilotzEngine, createCopilotzEngine } from "../engine/index.ts";
 import { createPluginRegistry } from "../plugins/index.ts";
 import {
   type ApplicationOutput,
+  type ApplicationOutputDescriptor,
   isStreamOutputDescriptor,
-  type RuntimeOutputDescriptor,
 } from "../streams/index.ts";
 import type {
   ApplicationSendHandle,
@@ -161,13 +161,16 @@ type ApplicationOutputSubscription = Readonly<{
 
 type ApplicationOutputHub = Readonly<{
   subscribe(filter?: ApplicationOutputFilter): ApplicationOutputSubscription;
-  emit(output: RuntimeOutputDescriptor, databaseSchema: string): Promise<void>;
+  emit(
+    output: ApplicationOutputDescriptor,
+    databaseSchema: string,
+  ): Promise<void>;
   close(): void;
 }>;
 
 function createApplicationOutputHub(
   projectStream: (
-    output: Extract<RuntimeOutputDescriptor, { type: "stream.output" }>,
+    output: Extract<ApplicationOutputDescriptor, { type: "stream.output" }>,
     databaseSchema: string,
   ) => Promise<ApplicationOutput>,
 ): ApplicationOutputHub {

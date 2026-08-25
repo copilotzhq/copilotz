@@ -1,0 +1,261 @@
+/** Anthropic provider adapter wire protocol. @module */
+// deno-lint-ignore-file no-explicit-any
+// Private vendor-wire decoder: payload shapes are provider-controlled JSON.
+import type {
+  ChatContentPart,
+  ChatMessage,
+  ExtractedPart,
+  ProviderConfig,
+  ProviderFactory,
+  ProviderFinishReason,
+  ProviderUsageUpdate,
+} from "../../internal/types.ts";
+import { withInclusiveInputTokens } from "../../internal/usage.ts";
+import { resolveProviderStopSequences } from "../../internal/utils.ts";
+import { providerEndpoint } from "../transport/index.ts";
+
+const EFFORT_BUDGET_MAP: Record<string, number> = {
+  minimal: 1024,
+  low: 4096,
+  medium: 16384,
+  high: 65536,
+};
+
+const ADAPTIVE_EFFORT_MAP: Record<string, string> = {
+  // Anthropic's adaptive API accepts low/medium/high (and newer levels such
+  // as xhigh/max), but not Copilotz's provider-neutral "minimal" label.
+  minimal: "low",
+  low: "low",
+  medium: "medium",
+  high: "high",
+};
+
+function isAdaptiveThinkingModel(model: string): boolean {
+  const normalized = model.trim().toLowerCase();
+  return [
+    /^claude-(?:fable|mythos)-5(?:-|$)/,
+    /^claude-mythos-preview(?:-|$)/,
+    /^claude-opus-4-(?:6|7|8)(?:-|$)/,
+    /^claude-sonnet-(?:4-6|5)(?:-|$)/,
+  ].some((pattern) => pattern.test(normalized));
+}
+
+function isAlwaysOnAdaptiveThinkingModel(model: string): boolean {
+  const normalized = model.trim().toLowerCase();
+  return /^claude-(?:fable|mythos)-5(?:-|$)/.test(normalized) ||
+    /^claude-mythos-preview(?:-|$)/.test(normalized) ||
+    /^claude-sonnet-5(?:-|$)/.test(normalized);
+}
+
+function extractAnthropicFinishReason(data: any): ProviderFinishReason | null {
+  const reason = data?.delta?.stop_reason ?? data?.message?.stop_reason;
+  if (reason === "max_tokens") return "length";
+  if (reason === "end_turn" || reason === "stop_sequence") return "stop";
+  if (reason === "tool_use") return "tool_calls";
+  return typeof reason === "string" ? "unknown" : null;
+}
+
+function dataUrlSource(dataUrl: string): {
+  mimeType: string;
+  base64Data: string;
+} | null {
+  if (!dataUrl.startsWith("data:")) return null;
+  const header = dataUrl.substring(5);
+  const [mimeType, base64Data] = header.split(";base64,");
+  if (!mimeType || !base64Data) return null;
+  return { mimeType, base64Data };
+}
+
+export const anthropicProvider: ProviderFactory = (config: ProviderConfig) => {
+  const transformMessages = (messages: ChatMessage[]) => {
+    const systemPrompts: string[] = [];
+    const userMessages: any[] = [];
+
+    messages.forEach((msg) => {
+      if (msg.role === "system") {
+        if (typeof msg.content === "string") {
+          systemPrompts.push(msg.content);
+        } else if (Array.isArray(msg.content)) {
+          const text = (msg.content as ChatContentPart[])
+            .filter((p) => p.type === "text")
+            .map((p) => (p as Extract<ChatContentPart, { type: "text" }>).text)
+            .join("");
+          if (text) systemPrompts.push(text);
+        }
+      } else {
+        let contentBlocks: any[] = [];
+        if (typeof msg.content === "string") {
+          contentBlocks = [{ type: "text", text: msg.content }];
+        } else if (Array.isArray(msg.content)) {
+          contentBlocks = (msg.content as ChatContentPart[]).flatMap((p) => {
+            if (p.type === "text") return [{ type: "text", text: p.text }];
+            if (p.type === "image_url" && p.image_url?.url) {
+              const url = p.image_url.url;
+              if (typeof url === "string" && url.startsWith("data:")) {
+                const source = dataUrlSource(url);
+                if (source) {
+                  return [{
+                    type: "image",
+                    source: {
+                      type: "base64",
+                      media_type: source.mimeType,
+                      data: source.base64Data,
+                    },
+                  }];
+                }
+              }
+              return [{ type: "image", source: { type: "url", url } }];
+            }
+            if (p.type === "file" && p.file?.file_data) {
+              const fileData = p.file.file_data;
+              if (
+                typeof fileData === "string" && fileData.startsWith("data:")
+              ) {
+                const source = dataUrlSource(fileData);
+                if (!source) return [] as any[];
+                const mediaType = p.file.mime_type ?? source.mimeType;
+                if (mediaType.toLowerCase() === "application/pdf") {
+                  return [{
+                    type: "document",
+                    source: {
+                      type: "base64",
+                      media_type: "application/pdf",
+                      data: source.base64Data,
+                    },
+                  }];
+                }
+                if (mediaType.toLowerCase().startsWith("image/")) {
+                  return [{
+                    type: "image",
+                    source: {
+                      type: "base64",
+                      media_type: mediaType,
+                      data: source.base64Data,
+                    },
+                  }];
+                }
+              }
+            }
+            return [] as any[];
+          });
+        }
+        userMessages.push({ role: msg.role, content: contentBlocks });
+      }
+    });
+
+    return {
+      messages: userMessages,
+      system: systemPrompts.join("\n") || undefined,
+    };
+  };
+
+  return {
+    endpoint: providerEndpoint(
+      config.baseUrl,
+      "https://api.anthropic.com/v1",
+      "messages",
+    ),
+
+    headers: (config: ProviderConfig) => ({
+      ...(config.extraHeaders ?? {}),
+      "Content-Type": "application/json",
+      "x-api-key": config.apiKey || "",
+      "anthropic-version": "2023-06-01",
+    }),
+
+    transformMessages,
+
+    body: (messages: ChatMessage[], config: ProviderConfig) => {
+      const transformed = transformMessages(messages);
+      const model = config.model || "claude-3-haiku-20240307";
+      const adaptiveThinking = isAdaptiveThinkingModel(model);
+      const alwaysOnAdaptiveThinking = isAlwaysOnAdaptiveThinkingModel(model);
+      const adaptiveThinkingRequested = adaptiveThinking &&
+        (alwaysOnAdaptiveThinking || Boolean(config.reasoningEffort));
+
+      const budgetTokens = !adaptiveThinking && config.reasoningEffort
+        ? EFFORT_BUDGET_MAP[config.reasoningEffort]
+        : undefined;
+      const maxTokens = config.maxTokens || 1000;
+
+      const body: Record<string, unknown> = {
+        model,
+        messages: transformed.messages,
+        stream: true,
+        max_tokens: budgetTokens
+          ? Math.max(maxTokens, budgetTokens + 1)
+          : maxTokens,
+        stop_sequences: resolveProviderStopSequences(config),
+        system: transformed.system,
+        metadata: config.metadata,
+      };
+
+      // Claude Fable 5, Opus 4.8, and the other adaptive-thinking models
+      // reject non-default sampling parameters, including temperature 0.
+      // Omit all of them rather than serializing an invalid request.
+      if (!adaptiveThinking) {
+        body.temperature = config.temperature || 0;
+        body.top_p = config.topP;
+        body.top_k = config.topK;
+      }
+
+      if (adaptiveThinkingRequested) {
+        body.thinking = { type: "adaptive" };
+        const effort = config.reasoningEffort
+          ? ADAPTIVE_EFFORT_MAP[config.reasoningEffort]
+          : undefined;
+        if (effort) body.output_config = { effort };
+      } else if (budgetTokens) {
+        body.thinking = { type: "enabled", budget_tokens: budgetTokens };
+        delete body.temperature;
+      }
+
+      return body;
+    },
+
+    extractContent: (data: any): ExtractedPart[] | null => {
+      if (data.type !== "content_block_delta" || !data.delta) return null;
+      const parts: ExtractedPart[] = [];
+
+      if (data.delta.type === "thinking_delta") {
+        const thinking = data.delta.thinking || "";
+        if (thinking) parts.push({ text: thinking, isReasoning: true });
+      } else if (data.delta.type === "text_delta") {
+        const text = data.delta.text || "";
+        if (text) parts.push({ text });
+      }
+
+      return parts.length > 0 ? parts : null;
+    },
+
+    extractUsage: (data: any): ProviderUsageUpdate | null => {
+      const usage = data?.type === "message_start"
+        ? data?.message?.usage
+        : data?.usage;
+      if (!usage || typeof usage !== "object" || Array.isArray(usage)) {
+        return null;
+      }
+
+      const inputTokens = typeof usage.input_tokens === "number"
+        ? usage.input_tokens
+        : undefined;
+      const outputTokens = typeof usage.output_tokens === "number"
+        ? usage.output_tokens
+        : undefined;
+
+      return withInclusiveInputTokens({
+        inputTokens,
+        outputTokens,
+        cacheReadInputTokens: typeof usage.cache_read_input_tokens === "number"
+          ? usage.cache_read_input_tokens
+          : undefined,
+        cacheCreationInputTokens:
+          typeof usage.cache_creation_input_tokens === "number"
+            ? usage.cache_creation_input_tokens
+            : undefined,
+        rawUsage: usage as Record<string, unknown>,
+      });
+    },
+    extractFinishReason: extractAnthropicFinishReason,
+  };
+};

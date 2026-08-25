@@ -1,49 +1,34 @@
+/**
+ * Composes Core storage, LLM routing, Ask, and Tool-plan semantics.
+ *
+ * @module
+ */
+
 import { type CopilotzPlugin, definePlugin } from "@copilotz/copilotz/plugins";
 import { llmPlugin } from "@copilotz/copilotz/llm";
 import {
-  messageCollection,
-  participantCollection,
-  threadCollection,
-  toolPlanCollection,
-  toolPlanStageResultCollection,
-} from "./resources/collections/index.ts";
+  coreCollectionActions,
+  coreCollections,
+  coreCollectionsPlugin,
+  messageInputProcessor,
+} from "../core-collections/index.ts";
 import {
   completeAskProcessor,
   failAskProcessor,
-  messageInputProcessor,
   messageRouterProcessor,
   projectTextResultProcessor,
   projectToolResultProcessor,
   toolPlanCoordinatorProcessor,
-} from "./resources/processors/index.ts";
-import { createThreadMessageAction } from "./resources/actions/thread-message.ts";
-import {
-  addThreadParticipantAction,
-  createThreadAction,
-  deleteThreadMessagesAction,
-} from "./resources/actions/thread.ts";
-import { reviseMessageAction } from "./resources/actions/message.ts";
-import { askAction, askTool } from "./resources/tools/ask.ts";
+} from "./processors/index.ts";
+import { askTool } from "./resources/ask-tool/index.ts";
 
 export const CORE_PLUGIN_ID = "@copilotz/core";
-export const CORE_PLUGIN_VERSION = "0.62.1";
+export const CORE_PLUGIN_VERSION = "0.63.0";
 
-export type CoreCollections = Readonly<{
-  participant: typeof participantCollection;
-  thread: typeof threadCollection;
-  message: typeof messageCollection;
-  toolPlan: typeof toolPlanCollection;
-  toolPlanStageResult: typeof toolPlanStageResultCollection;
-}>;
+export type CoreCollections = typeof coreCollections;
+export type CoreActions = typeof coreCollectionActions;
 
-export type CoreActions = Readonly<{
-  createThread: typeof createThreadAction;
-  addThreadParticipant: typeof addThreadParticipantAction;
-  deleteThreadMessages: typeof deleteThreadMessagesAction;
-  reviseMessage: typeof reviseMessageAction;
-  createThreadMessage: typeof createThreadMessageAction;
-  ask: typeof askAction;
-}>;
+export const coreActions = coreCollectionActions;
 
 export type CoreProcessors = Readonly<{
   messageRouter: typeof messageRouterProcessor;
@@ -55,32 +40,11 @@ export type CoreProcessors = Readonly<{
   toolPlanCoordinator: typeof toolPlanCoordinatorProcessor;
 }>;
 
-type CoreCollectionsProcessors = Readonly<{
-  messageInput: typeof messageInputProcessor;
-}>;
-
 type CorePluginResources = Readonly<{
   tools: Readonly<{ ask: typeof askTool }>;
 }>;
 
 type EmptyPluginNamespaces = Readonly<Record<never, never>>;
-
-export const coreCollections: CoreCollections = Object.freeze({
-  participant: participantCollection,
-  thread: threadCollection,
-  message: messageCollection,
-  toolPlan: toolPlanCollection,
-  toolPlanStageResult: toolPlanStageResultCollection,
-});
-
-export const coreActions: CoreActions = Object.freeze({
-  createThread: createThreadAction,
-  addThreadParticipant: addThreadParticipantAction,
-  deleteThreadMessages: deleteThreadMessagesAction,
-  reviseMessage: reviseMessageAction,
-  createThreadMessage: createThreadMessageAction,
-  ask: askAction,
-});
 
 export const coreProcessors: CoreProcessors = Object.freeze({
   messageRouter: messageRouterProcessor,
@@ -90,24 +54,6 @@ export const coreProcessors: CoreProcessors = Object.freeze({
   completeAsk: completeAskProcessor,
   failAsk: failAskProcessor,
   toolPlanCoordinator: toolPlanCoordinatorProcessor,
-});
-
-/** Collections and Actions without Core's semantic routing processors. */
-export const coreCollectionsPlugin: CopilotzPlugin<
-  "@copilotz/core-collections",
-  typeof CORE_PLUGIN_VERSION,
-  readonly [],
-  CoreCollections,
-  CoreActions,
-  CoreCollectionsProcessors,
-  EmptyPluginNamespaces,
-  EmptyPluginNamespaces
-> = definePlugin({
-  id: "@copilotz/core-collections",
-  version: CORE_PLUGIN_VERSION,
-  collections: coreCollections,
-  actions: coreActions,
-  processors: { messageInput: messageInputProcessor },
 });
 
 /** The minimum semantic plugin for an end-to-end multi-provider agent. */
@@ -129,3 +75,5 @@ export const corePlugin: CopilotzPlugin<
   processors: coreProcessors,
   resources: { tools: { ask: askTool } },
 });
+
+export { coreCollections, coreCollectionsPlugin };

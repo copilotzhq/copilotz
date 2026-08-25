@@ -1,10 +1,16 @@
+/**
+ * Composes Skill Resources and optional progressive-disclosure tools.
+ *
+ * @module
+ */
+
 import { type CopilotzPlugin, definePlugin } from "@copilotz/copilotz/plugins";
-import type { Skill } from "./contracts.ts";
+import type { Skill } from "./internal/contracts.ts";
 import {
   createSkillActionResources,
   SKILL_TOOL_IDS,
   type SkillToolId,
-} from "./tools.ts";
+} from "./authoring/action-resources/index.ts";
 
 export type CreateSkillsPluginOptions = Readonly<{
   id?: string;

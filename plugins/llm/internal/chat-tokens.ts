@@ -4,11 +4,11 @@ import {
   type TokenEstimate,
   type TokenEstimatePart,
   type TokenMediaMetadata,
-} from "@copilotz/copilotz/tokens";
+} from "../authoring/token-estimation/index.ts";
 import {
   getTokenCalibrationFactor,
   tokenCalibrationKey,
-} from "@copilotz/copilotz/tokens";
+} from "./token-calibration.ts";
 
 function mediaMetadata(part: ChatContentPart): TokenMediaMetadata {
   return "tokenMetadata" in part && part.tokenMetadata

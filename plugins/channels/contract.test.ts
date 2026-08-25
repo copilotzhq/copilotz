@@ -1,13 +1,13 @@
 import { assertEquals, assertThrows } from "@std/assert";
 import * as channelPublic from "./index.ts";
-import { channelIngress } from "./input.ts";
-import { channelsPlugin } from "./plugin.ts";
-import { defineChannelResource } from "./resource.ts";
-import { createDiscordChannelPlugin } from "./discord/channel.ts";
-import { createTelegramChannelPlugin } from "./telegram/channel.ts";
-import { createWebChannelPlugin } from "./web.ts";
-import { createWhatsAppChannelPlugin } from "./whatsapp/channel.ts";
-import { createZendeskChannelPlugin } from "./zendesk/channel.ts";
+import { channelIngress } from "../channel-core/authoring/channel-ingress/index.ts";
+import { channelsPlugin } from "../channel-core/plugin.ts";
+import { defineChannelResource } from "../channel-core/authoring/channel-resource/index.ts";
+import { createDiscordChannelPlugin } from "../channel-discord/index.ts";
+import { createTelegramChannelPlugin } from "../channel-telegram/index.ts";
+import { createWebChannelPlugin } from "../channel-web/index.ts";
+import { createWhatsAppChannelPlugin } from "../channel-whatsapp/index.ts";
+import { createZendeskChannelPlugin } from "../channel-zendesk/index.ts";
 
 Deno.test("Channel Resource snapshots exact data without invoking accessors", () => {
   let reads = 0;

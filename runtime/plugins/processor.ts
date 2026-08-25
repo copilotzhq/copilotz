@@ -9,7 +9,9 @@ import type {
   EventRouting,
   EventSubject,
   EventVisibility,
+  ResolvedCopilotzEvent,
 } from "../events/types.ts";
+import { snapshotEventData } from "../events/types.ts";
 
 /** Determines whether durable work participates in its triggering scope. */
 export type ProcessorSettlement = "inherit" | "detached";
@@ -34,9 +36,8 @@ export type ProcessorMatchClause = Readonly<{
   data?: unknown;
 }>;
 
-export type ProcessorEvent<TData = unknown> = CopilotzEvent & {
-  data: TData;
-};
+/** Backwards-compatible Processor name for the shared resolved Event view. */
+export type ProcessorEvent<TData = unknown> = ResolvedCopilotzEvent<TData>;
 
 declare const processorContextType: unique symbol;
 
@@ -144,22 +145,12 @@ export function isProcessor(value: unknown): value is Processor {
     typeof candidate.handle === "function";
 }
 
-export function deepFreezeValue<T>(value: T): T {
-  if (value && typeof value === "object" && !Object.isFrozen(value)) {
-    for (const child of Object.values(value as Record<string, unknown>)) {
-      deepFreezeValue(child);
-    }
-    Object.freeze(value);
-  }
-  return value;
-}
-
 export function withProcessorEventData<TData>(
   event: CopilotzEvent,
   data: TData,
 ): ProcessorEvent<TData> {
   return Object.freeze({
     ...event,
-    data: deepFreezeValue(structuredClone(data)),
+    data: snapshotEventData(data, "Resolved Event data"),
   }) as ProcessorEvent<TData>;
 }

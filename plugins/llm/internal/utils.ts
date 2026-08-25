@@ -18,7 +18,7 @@ import type {
   WireChatMessage,
 } from "./types.ts";
 import { LLMTranscriptError } from "./errors.ts";
-import { estimateTextTokens } from "@copilotz/copilotz/tokens";
+import { estimateTextTokens } from "../authoring/token-estimation/index.ts";
 import { type ChatTokenEstimate, estimateChatMessages } from "./chat-tokens.ts";
 
 const LOCAL_DEFAULT_STOP_SEQUENCES = [

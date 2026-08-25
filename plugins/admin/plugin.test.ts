@@ -1,4 +1,4 @@
-import { assert, assertEquals, assertExists } from "@std/assert";
+import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
 
 import type { AgentResource } from "@copilotz/copilotz/core";
 import { createCopilotzApplication } from "../../runtime/application/index.ts";
@@ -9,7 +9,7 @@ import {
 import { corePlugin, message } from "../core/index.ts";
 import { createUsageWorkflowPlugin } from "../usage/index.ts";
 import { createAdminPlugin } from "./plugin.ts";
-import { createTestDomainContext } from "../core/testing/context.ts";
+import { createTestDomainContext } from "../core/internal/testing/context.ts";
 
 const SCHEMA = "copilotz_admin_plugin";
 const NAMESPACE = "tenant-a";
@@ -199,7 +199,19 @@ Deno.test("admin plugin projects Collection state without raw storage access", a
 
 Deno.test("admin plugin remains factory-first, runtime-neutral, and storage-opaque", async () => {
   for (
-    const module of ["plugin.ts", "projections.ts", "types.ts", "index.ts"]
+    const module of [
+      "plugin.ts",
+      "internal/contracts.ts",
+      "actions/internal/request.ts",
+      "actions/internal/projections.ts",
+      "actions/overview/index.ts",
+      "actions/activity/index.ts",
+      "actions/threads/index.ts",
+      "actions/participants/index.ts",
+      "actions/usage/index.ts",
+      "actions/agents/index.ts",
+      "index.ts",
+    ]
   ) {
     const source = await Deno.readTextFile(new URL(module, import.meta.url));
     assertEquals(/\bclass\s+\w+/.test(source), false, module);
@@ -217,4 +229,28 @@ Deno.test("admin plugin remains factory-first, runtime-neutral, and storage-opaq
     );
     assertEquals(/server\//.test(source), false, module);
   }
+});
+
+Deno.test("admin Actions own their executable definitions at their primitive roots", async () => {
+  const actions = [
+    ["overview", "copilotz.admin.overview"],
+    ["activity", "copilotz.admin.activity"],
+    ["threads", "copilotz.admin.threads"],
+    ["participants", "copilotz.admin.participants"],
+    ["usage", "copilotz.admin.usage"],
+    ["agents", "copilotz.admin.agents"],
+  ] as const;
+  for (const [name, id] of actions) {
+    const source = await Deno.readTextFile(
+      new URL(`actions/${name}/index.ts`, import.meta.url),
+    );
+    assertEquals(source.includes("defineAction"), true, name);
+    assertEquals(source.includes(`id: \"${id}\"`), true, name);
+    assertEquals(source.includes("orchestration"), false, name);
+  }
+  await assertRejects(
+    () =>
+      Deno.stat(new URL("actions/internal/orchestration.ts", import.meta.url)),
+    Deno.errors.NotFound,
+  );
 });

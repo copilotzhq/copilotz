@@ -18,7 +18,7 @@ import type { PreparedAttemptTranscript } from "./transcript.ts";
 import { normalizeProviderUsage } from "./usage.ts";
 import { estimateUsageCost } from "./pricing.ts";
 import { countTokens, estimateUsage } from "./utils.ts";
-import { observeTokenCalibration } from "@copilotz/copilotz/tokens";
+import { observeTokenCalibration } from "./token-calibration.ts";
 
 function usageStatusForReason(
   statusReason?: TokenUsageStatusReason,

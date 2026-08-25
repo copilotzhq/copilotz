@@ -5,7 +5,7 @@ import {
   assertRejects,
   assertStringIncludes,
 } from "@std/assert";
-import { createTestDomainContext } from "../plugins/core/testing/context.ts";
+import { createTestDomainContext } from "../plugins/core/internal/testing/context.ts";
 
 import {
   type ApplicationOutput,

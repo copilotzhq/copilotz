@@ -4,7 +4,7 @@ import {
   observeTokenCalibration,
   resetTokenCalibration,
   tokenCalibrationKey,
-} from "@copilotz/copilotz/tokens";
+} from "./token-calibration.ts";
 import { estimateChatMessages } from "./chat-tokens.ts";
 
 Deno.test("process-local calibration is isolated by provider, model, and modality", () => {

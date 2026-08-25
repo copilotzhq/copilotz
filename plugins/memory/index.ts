@@ -1,13 +1,19 @@
+/**
+ * Public semantic-memory plugin API.
+ *
+ * @module
+ */
+
 export {
   DEFAULT_LONG_TERM_MEMORY_CONFIG,
   type LongTermMemoryConfig,
-} from "./resources.ts";
+} from "./resources/config/index.ts";
 export {
   longTermMemoryCollection,
   memoryRecordCollection,
   memorySpaceAccessCollection,
   memorySpaceCollection,
-} from "./collections.ts";
+} from "./collections/index.ts";
 export {
   buildMemoryConsolidationInstruction,
   parseConsolidateMemoryInput,
@@ -15,7 +21,7 @@ export {
   renderLongTermMemory,
   selectLongTermMemoryRange as selectEventLongTermMemoryRange,
   stableMemoryRecordId,
-} from "./consolidation.ts";
+} from "./authoring/consolidation/index.ts";
 export type {
   MemoryRecordProjection,
   MemoryRecordRelation,
@@ -23,7 +29,7 @@ export type {
   MemorySpaceDescriptor,
   RetrievedMemoryRecord,
   SelectedMemoryRange,
-} from "./consolidation.ts";
+} from "./authoring/consolidation/index.ts";
 export {
   CORE_MEMORY_KINDS,
   defaultMemoryLifecycle,
@@ -33,7 +39,7 @@ export {
   MEMORY_RELATION_TYPES,
   memoryLifecycleAllows,
   memorySourceKey,
-} from "./ontology.ts";
+} from "./authoring/ontology/index.ts";
 export type {
   AssertionMemoryDraft,
   ConsolidateMemoryInput,
@@ -55,22 +61,26 @@ export type {
   OccurrenceMemoryDraft,
   ProcedureMemoryDraft,
   ProposedMemoryRef,
-} from "./ontology.ts";
+} from "./authoring/ontology/index.ts";
 export {
   CONSOLIDATE_MEMORY_ACTION_ID,
   createLongTermMemoryPlugin,
   MAINTAIN_MEMORY_ACTION_ID,
 } from "./plugin.ts";
+export type { LongTermMemoryPlugin } from "./plugin.ts";
 export type {
   ConsolidateMemoryActionInput,
   ConsolidateMemoryActionResult,
-  LongTermMemoryPlugin,
+} from "./actions/consolidate-memory/index.ts";
+export type {
   MaintainMemoryActionInput,
   MaintainMemoryActionResult,
+} from "./actions/maintain-memory/index.ts";
+export type {
   MemoryActionCallers,
   MemoryActionContext,
   MemoryProcessorContext,
-} from "./plugin.ts";
+} from "./internal/implementation.ts";
 export type {
   CreateLongTermMemoryPluginOptions,
   MemoryAdapters,
@@ -78,4 +88,5 @@ export type {
   MemoryEmbeddingInput,
   MemoryResources,
   MemoryRuntimeContext,
-} from "./types.ts";
+} from "./authoring/contracts/index.ts";
+export * from "./authoring/index.ts";

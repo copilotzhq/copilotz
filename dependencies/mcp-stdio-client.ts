@@ -1,3 +1,3 @@
-import "npm:zod@3.25.76";
+import "zod";
 
-export * from "npm:@modelcontextprotocol/sdk@1.29.0/client/stdio";
+export * from "@modelcontextprotocol/sdk/client/stdio";

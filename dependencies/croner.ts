@@ -1,1 +1,1 @@
-export * from "npm:croner@9.0.0";
+export * from "croner";

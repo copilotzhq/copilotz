@@ -9,6 +9,7 @@ plans and removed migration APIs are intentionally not published.
 2. [Architecture](architecture.md)
 3. [API and package reference](api.md)
 4. [Plugins and processors](plugins-and-processors.md)
+5. [Goal runner](goals.md)
 
 ## Runtime mechanics
 

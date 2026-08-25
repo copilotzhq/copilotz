@@ -6,8 +6,8 @@ embedded Gateway and Worker over a private in-process transport.
 ## Compose Core and one model
 
 ```ts
-import { createCopilotz } from "jsr:@copilotz/copilotz@^0.62.1";
-import { corePlugin, message } from "jsr:@copilotz/copilotz@^0.62.1/core";
+import { createCopilotz } from "jsr:@copilotz/copilotz@^0.63.0";
+import { corePlugin, message } from "jsr:@copilotz/copilotz@^0.63.0/core";
 
 const apiKey = Deno.env.get("OPENAI_API_KEY");
 if (!apiKey) throw new Error("OPENAI_API_KEY is required.");
@@ -50,7 +50,7 @@ declaration or factory import.
 When several Models use the same account, declare the credential once:
 
 ```ts
-import { defineLlmCredential } from "jsr:@copilotz/copilotz@^0.62.1/llm";
+import { defineLlmCredential } from "jsr:@copilotz/copilotz@^0.63.0/llm";
 
 const openai = defineLlmCredential({ provider: "openai", apiKey });
 
@@ -75,9 +75,11 @@ without provider I/O. Resolver output is never persisted.
 
 ## Send typed ingress
 
-Core messages target an existing thread and participant graph. Channel and Goal
-plugins create that graph as part of their atomic ingress; a trusted Gateway
-host can also bootstrap Collections through its `/v3/collections/*` routes.
+Core messages target an existing thread and participant graph. Channel or
+onboarding workflows may create that graph as part of their atomic ingress; a
+trusted Gateway host can also bootstrap Collections through its
+`/v3/collections/*` routes. The Goal runner consumes existing target and lead
+threads rather than provisioning them.
 
 ```ts
 const operation = await app.send(message({
@@ -110,7 +112,7 @@ is drained. Detached Processors remain durable but do not delay this handle.
 import {
   createToolsPlugin,
   defineTool,
-} from "jsr:@copilotz/copilotz@^0.62.1/tools";
+} from "jsr:@copilotz/copilotz@^0.63.0/tools";
 
 const lookupCustomer = defineTool({
   id: "acme.customer.lookup",

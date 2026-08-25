@@ -42,6 +42,10 @@ export function createProcessorContext(
   options: CreateProcessorContextOptions,
 ): ProcessorContext {
   const namespace = requiredText(options.base.event.namespace, "Namespace");
+  const databaseSchema = requiredText(
+    options.base.databaseSchema,
+    "Database schema",
+  );
   const mutation = (operationKey: string) =>
     options.base.createMutationIdentity(
       requiredText(operationKey, "Mutation operation key"),
@@ -208,6 +212,7 @@ export function createProcessorContext(
 
   const context: ProcessorContext = Object.freeze({
     namespace,
+    databaseSchema,
     operationKey: processorOperationKey,
     identity: contextIdentity,
     resources: options.registry.resources,

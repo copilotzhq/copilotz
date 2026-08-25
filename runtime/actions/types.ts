@@ -110,9 +110,11 @@ export type ActionTransactionContext<
 }>;
 
 /**
- * Runtime-owned context shared by Actions and Processors. Semantic code may
- * narrow the composed maps through an ordinary TypeScript interface; the
- * runtime still passes the complete context without filtering it.
+ * Runtime-owned context shared by Actions and Processors. `databaseSchema` is
+ * the immutable physical persistence scope selected by the runtime for this
+ * execution; it is not Action metadata or caller-controlled input. Semantic
+ * code may narrow the composed maps through an ordinary TypeScript interface;
+ * the runtime still passes the complete context without filtering it.
  */
 export interface RuntimeContext<
   TResources extends RuntimeContextNamespaces = RuntimeContextNamespaces,
@@ -121,6 +123,7 @@ export interface RuntimeContext<
   TCollections extends RuntimeCollections = RuntimeCollections,
 > {
   readonly namespace: string;
+  readonly databaseSchema: string;
   readonly operationKey: string;
   readonly identity: RuntimeIdentity;
   readonly resources: TResources;

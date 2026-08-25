@@ -1109,6 +1109,7 @@ function createApiExecutor(
           actionMetadata: context.action.metadata,
           signal: context.signal,
           namespace: context.namespace,
+          databaseSchema: context.databaseSchema,
           collections: context.collections,
           async resolveAsset(ref) {
             const id = assetIdFromRef(context.namespace, ref);

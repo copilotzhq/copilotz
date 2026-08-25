@@ -19,7 +19,6 @@ import { coreCollectionsPlugin } from "@copilotz/copilotz/core";
 import { createCopilotzEngine } from "./index.ts";
 
 const EXECUTOR_FIELDS = Object.freeze([
-  "databaseSchema",
   "event",
   "delivery",
   "settlementScopeId",
@@ -39,6 +38,9 @@ type ProbeResult = Readonly<{
 
 Deno.test("Actions and Processors receive one runtime-neutral composed context", async () => {
   const namespace = "tenant-action-context";
+  const databaseSchema = "copilotz_action_context";
+  const actionDatabaseSchemas: string[] = [];
+  const processorDatabaseSchemas: string[] = [];
   let processorResult: ProbeResult | undefined;
   let completedData: ActionCompletedData | undefined;
   const customAdapter = Object.freeze({ id: "adapter-a" });
@@ -53,6 +55,7 @@ Deno.test("Actions and Processors receive one runtime-neutral composed context",
   const probeAction = defineAction<unknown, ProbeResult, ProbeActionContext>({
     id: "test.context.probe",
     execute(_input, context) {
+      actionDatabaseSchemas.push(context.databaseSchema);
       return Object.freeze({
         namespace: context.namespace,
         adapterId: context.adapters.custom.primary.id,
@@ -75,6 +78,7 @@ Deno.test("Actions and Processors receive one runtime-neutral composed context",
     id: "test.context.processor",
     on: [{ eventType: "thread.created" }],
     async handle(_event, context) {
+      processorDatabaseSchemas.push(context.databaseSchema);
       assertEquals(context.adapters.custom.primary, customAdapter);
       assertEquals(
         EXECUTOR_FIELDS.filter((key) => Object.hasOwn(context, key)),
@@ -103,7 +107,7 @@ Deno.test("Actions and Processors receive one runtime-neutral composed context",
     registry: await createPluginRegistry({
       plugins: [coreCollectionsPlugin, plugin],
     }),
-    defaultDatabaseSchema: "copilotz_action_context",
+    defaultDatabaseSchema: databaseSchema,
   });
   try {
     const directContext = createTestDomainContext(engine, namespace);
@@ -115,6 +119,7 @@ Deno.test("Actions and Processors receive one runtime-neutral composed context",
     assertEquals(directResult.namespace, namespace);
     assertEquals(directResult.hasSignal, true);
     assertEquals(directResult.hasStreams, true);
+    assertEquals(actionDatabaseSchemas, [databaseSchema]);
 
     await directContext.actions.createThread({
       id: "thread-a",
@@ -141,9 +146,12 @@ Deno.test("Actions and Processors receive one runtime-neutral composed context",
     assertEquals(processorResult.namespace, namespace);
     assertEquals(processorResult.hasSignal, true);
     assertEquals(processorResult.hasStreams, true);
+    assertEquals(processorDatabaseSchemas, [databaseSchema]);
+    assertEquals(actionDatabaseSchemas, [databaseSchema, databaseSchema]);
     assertExists(completedData);
     assertEquals(completedData.status, "completed");
     assertEquals(completedData.output, processorResult);
+    assertEquals(JSON.stringify(completedData).includes(databaseSchema), false);
   } finally {
     await engine.shutdown();
     await db.close();

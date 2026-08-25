@@ -36,6 +36,7 @@ function actionContext(
 ): ActionContext {
   return {
     namespace: "tenant-a",
+    databaseSchema: "tenant_a",
     operationKey: "openapi-test",
     identity: { correlationId: "correlation-a" },
     action: {
@@ -107,6 +108,7 @@ Deno.test("OpenAPI factory injects native Action context into request preparatio
     assertEquals(observed?.actionRunId, "action-run-a");
     assertStrictEquals(observed?.signal, context.signal);
     assertEquals(observed?.namespace, "tenant-a");
+    assertEquals(observed?.databaseSchema, "tenant_a");
     assertStrictEquals(observed?.collections.records, collection as never);
     assertEquals(Object.keys(plugin.actions), ["scoped_lookup"]);
     assertEquals(
@@ -114,6 +116,32 @@ Deno.test("OpenAPI factory injects native Action context into request preparatio
       "scoped_lookup",
     );
     assert(!("execute" in (plugin.resources.tools.scoped_lookup as object)));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("OpenAPI request preparation receives each execution's runtime database scope", async () => {
+  const observed: string[] = [];
+  const definition = api("schema_scoped_lookup", {
+    prepareRequest(request, context) {
+      observed.push(context.databaseSchema);
+      return request;
+    },
+  });
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = () => Promise.resolve(Response.json({ ok: true }));
+  try {
+    const plugin = createOpenApiToolsPlugin({ apis: [definition] });
+    await action(plugin, "schema_scoped_lookup").execute(
+      {},
+      actionContext({ databaseSchema: "tenant_a" }),
+    );
+    await action(plugin, "schema_scoped_lookup").execute(
+      {},
+      actionContext({ databaseSchema: "tenant_b" }),
+    );
+    assertEquals(observed, ["tenant_a", "tenant_b"]);
   } finally {
     globalThis.fetch = originalFetch;
   }

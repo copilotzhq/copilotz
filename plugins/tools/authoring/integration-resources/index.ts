@@ -70,6 +70,8 @@ export type APIPrepareRequestContext = Readonly<{
   actionMetadata: ActionInvocationMetadata;
   signal: AbortSignal;
   namespace: string;
+  /** Immutable physical persistence scope selected by the runtime. */
+  databaseSchema: string;
   /** Tenant-scoped graph collections available to this Action execution. */
   collections: Readonly<Record<string, ScopedCollection>>;
   resolveAsset: (

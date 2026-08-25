@@ -71,6 +71,7 @@ Deno.test("Action transactions expose atomic relation projection", async () => {
   } as unknown as CollectionRuntime;
   const context = createActionContext({
     namespace: "tenant-actions",
+    databaseSchema: "copilotz_action_host",
     plugins,
     collections,
     actionLifecycle: {

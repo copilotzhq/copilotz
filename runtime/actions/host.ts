@@ -61,6 +61,7 @@ export type ActionContentHandle = Readonly<{
 
 export type ActionHostContext = Readonly<{
   namespace: string;
+  databaseSchema: string;
   resources: PluginRegistry["resources"];
   adapters: PluginRegistry["adapters"];
   actions: ActionCallers;
@@ -74,6 +75,8 @@ export type ActionHostContext = Readonly<{
 
 export type ActionContextBindings = Readonly<{
   namespace: string;
+  /** Immutable physical persistence scope for this direct Action host. */
+  databaseSchema: string;
   plugins: PluginRegistry;
   collections: CollectionRuntime;
   transaction?: CollectionRuntime["transaction"];
@@ -129,6 +132,7 @@ function throwIfAborted(signal: AbortSignal | undefined): void {
 type ActionInvocationHost = Pick<
   RuntimeContext,
   | "namespace"
+  | "databaseSchema"
   | "resources"
   | "adapters"
   | "collections"
@@ -212,12 +216,16 @@ export function createActionInvocationContext(
   }) as ActionContext;
 }
 
-/** Builds the direct Action host for one trusted namespace scope. */
+/** Builds the direct Action host for one trusted namespace and database scope. */
 export function createActionContext(
   bindings: ActionContextBindings,
 ): ActionHostContext {
   const namespace = bindings.namespace.trim();
   if (!namespace) throw new TypeError("Namespace must be non-empty.");
+  const databaseSchema = bindings.databaseSchema.trim();
+  if (!databaseSchema) {
+    throw new TypeError("Database schema must be non-empty.");
+  }
   const collections = scopedCollections({ ...bindings, namespace });
   const runtimeTransaction = bindings.transaction ??
     bindings.collections.transaction;
@@ -271,6 +279,7 @@ export function createActionContext(
 
   const host: ActionHostContext = Object.freeze({
     namespace,
+    databaseSchema,
     resources: bindings.plugins.resources,
     adapters: bindings.plugins.adapters,
     actions,

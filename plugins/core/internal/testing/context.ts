@@ -27,6 +27,7 @@ import {
 } from "../../../core-collections/internal/projections.ts";
 
 export type TestDomainHost = Readonly<{
+  databaseSchema: string;
   plugins: PluginRegistry;
   collections: CollectionRuntime;
   content: Readonly<{
@@ -69,6 +70,7 @@ export function createTestDomainContext(
   const lifecycle = new Map<string, ActionEventData>();
   return createActionContext({
     namespace,
+    databaseSchema: host.databaseSchema,
     plugins: host.plugins,
     collections: host.collections,
     now: options.now,

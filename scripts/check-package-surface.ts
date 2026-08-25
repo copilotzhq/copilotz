@@ -24,13 +24,28 @@ for (const [subpath, target] of Object.entries(configuration.exports)) {
   }
 }
 
-const redundantSelfMappings = Object.keys(configuration.imports).filter((
-  specifier,
-) => specifier === packageName || specifier.startsWith(`${packageName}/`));
-if (redundantSelfMappings.length) {
+const expectedSelfMappings = Object.fromEntries(
+  Object.entries(configuration.exports).map(([subpath, target]) => [
+    subpath === "." ? packageName : `${packageName}${subpath.slice(1)}`,
+    target,
+  ]),
+);
+const actualSelfMappings = Object.fromEntries(
+  Object.entries(configuration.imports).filter(([specifier]) =>
+    specifier === packageName || specifier.startsWith(`${packageName}/`)
+  ),
+);
+const sortedEntries = (record: Record<string, string>) =>
+  Object.entries(record).sort(([left], [right]) => left.localeCompare(right));
+if (
+  JSON.stringify(sortedEntries(actualSelfMappings)) !==
+    JSON.stringify(sortedEntries(expectedSelfMappings))
+) {
   throw new Error(
-    "Package self-references must resolve through name + exports; remove " +
-      `redundant import mappings: ${redundantSelfMappings.sort().join(", ")}`,
+    "Package self-import mappings must exactly mirror exports for JSR graph " +
+      `construction. Expected ${JSON.stringify(expectedSelfMappings)}, got ${
+        JSON.stringify(actualSelfMappings)
+      }`,
   );
 }
 
@@ -188,5 +203,5 @@ if (unusedDependencies.length) {
 }
 
 console.log(
-  `Package surface passed: ${exportTargets.length} exports resolve by package self-reference, ${externalImports.length} external imports, ${production.length} production modules, and dependency wrappers are reachable and release-clean.`,
+  `Package surface passed: ${exportTargets.length} exports have JSR-safe self-import mappings, ${externalImports.length} external imports, ${production.length} production modules, and dependency wrappers are reachable and release-clean.`,
 );

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.63.2 — 2026-08-25
+
+Restores explicit package self-import mappings for every public export so JSR
+can construct the publication module graph. The package-surface gate now
+requires those mappings to mirror `exports` exactly.
+
 ## 0.63.1 — 2026-08-25
 
 Adds the schema-level Secret lifecycle, compiled Server façade, named Collection

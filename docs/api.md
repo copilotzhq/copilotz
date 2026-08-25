@@ -66,10 +66,16 @@ Progressive `stream.output` values remain subscriber-owned byte streams.
 
 ## Gateway Fetch
 
-`gateway.fetch` is the portable event-native HTTP boundary, rooted at `/v3` by
-default. Gateway options may provide `http` options and a trusted
-`resolveDatabaseSchema(request)` callback. The resolver is the physical-schema
-authorization boundary; request context cannot override it.
+`gateway.fetch` always retains the trusted event-native `/v3` boundary. When the
+composition includes `createServerPlugin()`, it also mounts the plugin's
+compiled façade (by default at `/api/v1`). That façade discovers eligible
+Actions, Collections, and Channels, applies glob exposure and explicit route
+overrides, and generates OpenAPI 3.2 from the same immutable route table.
+
+The Server guard is the public physical-schema authorization boundary. It may
+return trusted namespace/schema/identity metadata or terminate with a
+`Response`; request content cannot select those values or its target Action. See
+[Server Façade](server.md).
 
 The Deno listener accepts any structural Fetch-capable host:
 
@@ -87,6 +93,48 @@ application that deliberately shares one reconnectable database facade across
 several internal roles. The public application factory accepts that facade in
 its `persistence` option; its creator retains the final `close()` ownership.
 
+## Protected Action values
+
+Use `secret(schema)` from `/actions`, or add the exact raw boolean extension
+`"x-copilotz-secret": true`, at any input/output schema subtree:
+
+```ts
+import {
+  createSecretAdapter,
+  defineAction,
+  secret,
+} from "@copilotz/copilotz/actions";
+
+const exchange = defineAction({
+  id: "myapp.auth.exchange",
+  inputSchema: {
+    type: "object",
+    properties: { code: secret({ type: "string" }) },
+    required: ["code"],
+    additionalProperties: false,
+  },
+  execute: async ({ code }) => exchangeCode(code),
+});
+
+const secretAdapter = createSecretAdapter({ seal, open });
+const app = await createCopilotz({
+  plugins: [authPlugin],
+  adapters: { secrets: { default: secretAdapter } },
+});
+```
+
+The Adapter receives bytes plus stable additional authenticated data and stays
+process-local. Its ciphertext is stored through BodyStore under an internal
+protected-value owner; plaintext never enters the Action Event Body or ordinary
+observation. The Action still receives and directly returns the hydrated value.
+Composition fails when a registered secret-bearing Action has no default Secret
+Adapter. Metadata must not contain marked input values, and secret-bearing
+Actions cannot emit progress until an inspectable progress schema exists.
+
+`resolveActionSourceData(context)` is the narrow bridge helper for an Action
+invoked from a protected durable source Event. It resolves only that exact
+causal Event in the current namespace; it is not a general Event lookup.
+
 ## Explicit primitive and plugin packages
 
 The root exports only `createCopilotz`, `CreateCopilotzOptions`, and generic
@@ -96,8 +144,9 @@ subpaths: `/actions`, `/collections`, `/content`, `/events`, `/plugins`, and
 `/core`, `/llm`, `/channels`, `/knowledge`, `/schedules`, and `/usage`.
 
 `/application` exports generic application types only; it does not expose a
-factory or runtime authority. `/server` remains an explicit server-projection
-package for host integrations, not a backdoor to runtime internals.
+factory or runtime authority. `/server` exports the semantic Server plugin,
+route compiler, portable Fetch façade, multipart encoder/decoder, and their
+contracts—not runtime storage or execution authority.
 
 Host-specific entrypoints are `/adapters/deno`, `/core/cli`, `/core/cli/node`,
 `/skills/deno`, `/tools/deno`, `/tools/mcp/stdio`, and

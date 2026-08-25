@@ -2,6 +2,8 @@ import type { JsonSchema } from "../../dependencies/ominipg.ts";
 import type { FromSchema } from "../../dependencies/json-schema-to-ts.ts";
 import type { CollectionQuery } from "./types.ts";
 
+export type CollectionNamedQuerySchema = Exclude<JsonSchema, boolean>;
+
 export type CollectionIndex =
   | string
   | readonly string[]
@@ -53,6 +55,10 @@ export type CollectionNamedQueryRead = Readonly<{
 }>;
 
 export type CollectionNamedQuery = Readonly<{
+  /** Optional JSON Schema validated before this query runs. */
+  inputSchema?: CollectionNamedQuerySchema;
+  /** Optional JSON Schema validated against the complete query result. */
+  outputSchema?: CollectionNamedQuerySchema;
   filter?: (
     context: Readonly<{ input: Record<string, unknown> }>,
   ) => CollectionQuery["where"];
@@ -147,6 +153,34 @@ function requiredMemberName(value: string, kind: string): string {
     );
   }
   return name;
+}
+
+function isSchema(value: unknown): value is CollectionNamedQuerySchema {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function freezeSnapshot<T>(value: T, seen = new WeakSet<object>()): T {
+  if (!value || typeof value !== "object") return value;
+  if (seen.has(value)) return value;
+  seen.add(value);
+  for (const nested of Object.values(value as Record<string, unknown>)) {
+    freezeSnapshot(nested, seen);
+  }
+  return Object.freeze(value);
+}
+
+function optionalQuerySchema(
+  queryName: string,
+  name: "inputSchema" | "outputSchema",
+  value: unknown,
+): CollectionNamedQuerySchema | undefined {
+  if (value === undefined) return undefined;
+  if (!isSchema(value)) {
+    throw new TypeError(
+      `Collection query '${queryName}' ${name} must be a JSON Schema object.`,
+    );
+  }
+  return freezeSnapshot(structuredClone(value)) as CollectionNamedQuerySchema;
 }
 
 function createRelation(
@@ -260,7 +294,24 @@ export function defineCollection<S extends JsonSchema>(
             `Collection query '${name}' requires filter, query, or select.`,
           );
         }
-        return [name, Object.freeze({ ...definition })];
+        const inputSchema = optionalQuerySchema(
+          name,
+          "inputSchema",
+          definition.inputSchema,
+        );
+        const outputSchema = optionalQuerySchema(
+          name,
+          "outputSchema",
+          definition.outputSchema,
+        );
+        return [
+          name,
+          Object.freeze({
+            ...definition,
+            ...(inputSchema ? { inputSchema } : {}),
+            ...(outputSchema ? { outputSchema } : {}),
+          }),
+        ];
       }),
     ))
     : undefined;

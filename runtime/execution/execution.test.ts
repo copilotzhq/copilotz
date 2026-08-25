@@ -65,7 +65,6 @@ async function createFixture(options?: {
       if (!event.durable) throw new Error("Expected a durable event.");
       assertEquals(
         [
-          "databaseSchema",
           "event",
           "delivery",
           "settlementScopeId",
@@ -75,6 +74,7 @@ async function createFixture(options?: {
         ].filter((key) => Object.hasOwn(context, key)),
         [],
       );
+      assertEquals(context.databaseSchema, schema);
       const idempotencyKey = context.operationKey;
       await options?.handle?.(event.id, idempotencyKey);
     },

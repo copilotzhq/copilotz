@@ -4,6 +4,7 @@ import type {
   ActionSchema,
   AnyActionDefinition,
 } from "./types.ts";
+import { snapshotActionSchema } from "./secret.ts";
 
 const ACTION_KEYS = new Set([
   "id",
@@ -34,7 +35,7 @@ function optionalSchema(
   if (!isRecord(value)) {
     throw new TypeError(`Action '${id}' ${name} must be a JSON Schema object.`);
   }
-  return value as ActionSchema;
+  return snapshotActionSchema(value as ActionSchema);
 }
 
 export function isActionDefinition(

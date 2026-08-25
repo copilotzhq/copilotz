@@ -64,6 +64,11 @@
           "description": "Embedded, split, remote, and injected-dispatcher placement."
         },
         {
+          "title": "Server Façade",
+          "slug": "server",
+          "description": "Automatic primitive routes, guards, OpenAPI, and lossless multipart outputs."
+        },
+        {
           "title": "Host Capability Adapters",
           "slug": "runtime-adapters",
           "description": "Deno, Node CLI, MCP stdio, and host-owned capabilities."

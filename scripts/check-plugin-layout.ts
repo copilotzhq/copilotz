@@ -31,6 +31,7 @@ export const CONCRETE_PLUGIN_ROOTS = Object.freeze(
     "memory",
     "schedule-core",
     "schedules",
+    "server",
     "skills",
     "tool-builtin",
     "tool-deno",

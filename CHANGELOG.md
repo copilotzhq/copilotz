@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.63.1 — 2026-08-25
+
+Adds the schema-level Secret lifecycle, compiled Server façade, named Collection
+query schemas, and trusted event recovery required by the Compass 0.63
+migration. Secret-bearing Action values are encrypted through a process-local
+Adapter, remain redacted in ordinary observation, and never become public
+Assets.
+
 ## 0.63.0 — 2026-08-25
 
 Final plugin-first runtime and deployed-data migration release.

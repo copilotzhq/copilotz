@@ -14,6 +14,8 @@ import type {
   AnyActionDefinition,
   RuntimeIdentity,
 } from "./types.ts";
+import { actionDefinitionHasSecrets } from "./protected-lifecycle.ts";
+import { splitSecretActionValue } from "./secret.ts";
 import type {
   ActionEventData,
   ActionInvokedData,
@@ -136,14 +138,93 @@ function isCancellationError(error: unknown): boolean {
   return error instanceof Error && error.name === "AbortError";
 }
 
-function safeError(error: unknown): SerializedActionError {
+function safeError(
+  error: unknown,
+  protectedStrings: readonly string[] = [],
+): SerializedActionError {
+  const redact = (value: string): string => {
+    let result = value;
+    for (const secret of protectedStrings) {
+      if (secret) result = result.split(secret).join("[redacted]");
+    }
+    return result;
+  };
   if (error instanceof Error) {
     return Object.freeze({
       name: error.name || "Error",
-      message: error.message || error.name || "Action failed.",
+      message: redact(error.message || error.name || "Action failed."),
     });
   }
-  return Object.freeze({ name: "Error", message: String(error) });
+  return Object.freeze({ name: "Error", message: redact(String(error)) });
+}
+
+function protectedActionError(
+  cancelled: boolean,
+): SerializedActionError {
+  return Object.freeze({
+    name: cancelled ? "AbortError" : "Error",
+    message: cancelled
+      ? "Action execution was cancelled."
+      : "Action execution failed.",
+  });
+}
+
+function isRedactedSecret(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return Reflect.ownKeys(record).length === 1 &&
+    record["$copilotz-secret"] === true;
+}
+
+function protectedStrings(
+  schema: AnyActionDefinition["inputSchema"],
+  value: unknown,
+): readonly string[] {
+  const projected = splitSecretActionValue(schema, value).publicValue;
+  const strings = new Set<string>();
+  const visit = (raw: unknown, safe: unknown): void => {
+    if (isRedactedSecret(safe)) {
+      const nested = (candidate: unknown): void => {
+        if (typeof candidate === "string" && candidate.length > 0) {
+          strings.add(candidate);
+        } else if (Array.isArray(candidate)) {
+          candidate.forEach(nested);
+        } else if (candidate && typeof candidate === "object") {
+          Object.values(candidate as Record<string, unknown>).forEach(nested);
+        }
+      };
+      nested(raw);
+      return;
+    }
+    if (Array.isArray(raw) && Array.isArray(safe)) {
+      raw.forEach((child, index) => visit(child, safe[index]));
+      return;
+    }
+    if (
+      raw && typeof raw === "object" && !Array.isArray(raw) &&
+      safe && typeof safe === "object" && !Array.isArray(safe)
+    ) {
+      for (const [key, child] of Object.entries(raw)) {
+        visit(child, (safe as Record<string, unknown>)[key]);
+      }
+    }
+  };
+  visit(value, projected);
+  return Object.freeze(
+    [...strings].sort((left, right) => right.length - left.length),
+  );
+}
+
+function assertMetadataIsSecretFree(
+  metadata: ActionInvocationMetadata,
+  secrets: readonly string[],
+): void {
+  const encoded = JSON.stringify(metadata);
+  if (secrets.some((secret) => secret && encoded.includes(secret))) {
+    throw new TypeError(
+      "Action invocation metadata cannot contain schema-marked secret values.",
+    );
+  }
 }
 
 function restoredActionError(
@@ -308,8 +389,18 @@ function actionCaller(
     const frame = createFrame(action, options, parent, invoker);
     throwIfAborted(frame.signal);
 
-    // Executed values and persisted values are deliberately identical.
+    // Execution receives the canonical value; lifecycle persistence applies
+    // the schema-owned protected projection inside its storage boundary.
     const durableInput = durableActionValue(input);
+    if (action.inputSchema) {
+      validateAgainstJsonSchema(
+        action.inputSchema,
+        durableInput,
+        `Action '${action.id}' input`,
+      );
+    }
+    const inputSecrets = protectedStrings(action.inputSchema, durableInput);
+    assertMetadataIsSecretFree(frame.metadata, inputSecrets);
     const existing = await loadTerminal(
       invoker.actionLifecycle,
       frame,
@@ -333,6 +424,13 @@ function actionCaller(
     let progressIndex = 0;
     let progressTail: Promise<void> = Promise.resolve();
     const progress = (value: unknown): Promise<void> => {
+      if (actionDefinitionHasSecrets(action)) {
+        return Promise.reject(
+          new TypeError(
+            `Action '${action.id}' cannot persist progress while it declares secret input or output; progressSchema is not supported.`,
+          ),
+        );
+      }
       const index = ++progressIndex;
       const durableProgress = durableActionValue(value);
       progressTail = progressTail.then(async () => {
@@ -363,13 +461,6 @@ function actionCaller(
     });
 
     try {
-      if (action.inputSchema) {
-        validateAgainstJsonSchema(
-          action.inputSchema,
-          durableInput,
-          `Action '${action.id}' input`,
-        );
-      }
       throwIfAborted(frame.signal);
       const output = await action.execute(
         durableInput as never,
@@ -416,7 +507,9 @@ function actionCaller(
         await invoker.actionLifecycle.emit({
           ...lifecycleCommon(frame, durableInput),
           status,
-          error: safeError(error),
+          error: actionDefinitionHasSecrets(action)
+            ? protectedActionError(status === "cancelled")
+            : safeError(error, inputSecrets),
           deduplicationId: `${frame.actionRunId}:action:terminal`,
         });
       } catch (settlementError) {

@@ -2,6 +2,7 @@ import type { CopilotzEvent } from "../events/index.ts";
 import type { ProcessorContext } from "../plugins/index.ts";
 
 export type TestProcessorContextSeed = Readonly<{
+  databaseSchema?: string;
   event: CopilotzEvent;
   idempotencyKey: string;
   settlementScopeId?: string;
@@ -28,6 +29,7 @@ export function createTestProcessorContext(
   });
   return Object.freeze({
     namespace: seed.event.namespace,
+    databaseSchema: seed.databaseSchema ?? "public",
     operationKey: seed.idempotencyKey,
     identity: Object.freeze({
       ...(seed.event.durable

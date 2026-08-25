@@ -315,6 +315,82 @@ Deno.test("defineCollection rejects names that cannot form events", () => {
   );
 });
 
+Deno.test("named queries validate schemas for direct invocation", async () => {
+  const fixture = await createFixture(
+    ":memory:",
+    "copilotz_named_query_schemas",
+  );
+  let strictCalls = 0;
+  const definition = defineCollection({
+    name: "named_query_schema",
+    schema: { type: "object", properties: {} },
+    queries: {
+      strict: {
+        inputSchema: {
+          type: "object",
+          additionalProperties: false,
+          properties: { value: { type: "string" } },
+          required: ["value"],
+        },
+        outputSchema: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            properties: { value: { type: "string" } },
+            required: ["value"],
+          },
+        },
+        select({ input }) {
+          strictCalls++;
+          return [{ value: input.value }];
+        },
+      },
+      invalidOutput: {
+        outputSchema: {
+          type: "array",
+          items: {
+            type: "object",
+            required: ["value"],
+            properties: { value: { type: "string" } },
+          },
+        },
+        select: () => [{ other: true }],
+      },
+      legacy: {
+        select: ({ input }) => [{ value: input.value }],
+      },
+    },
+  });
+  const queries = fixture.runtime.bind(definition).query;
+  try {
+    await assertRejects(
+      () => queries.strict("tenant-a", {}),
+      TypeError,
+      "named_query_schema.strict input failed schema validation",
+    );
+    assertEquals(strictCalls, 0);
+
+    assertEquals(
+      await queries.strict("tenant-a", { value: "valid" }),
+      [{ value: "valid" }] as never,
+    );
+    assertEquals(strictCalls, 1);
+
+    await assertRejects(
+      () => queries.invalidOutput("tenant-a"),
+      TypeError,
+      "named_query_schema.invalidOutput output failed schema validation",
+    );
+    assertEquals(
+      await queries.legacy("tenant-a", { value: 42 }),
+      [{ value: 42 }] as never,
+    );
+  } finally {
+    await closeFixture(fixture);
+  }
+});
+
 async function runKernelSuite(url: string, schema: string): Promise<void> {
   const fixture = await createFixture(url, schema);
   const { jobs, notes, store, session, runtime } = fixture;

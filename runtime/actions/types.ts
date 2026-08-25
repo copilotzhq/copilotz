@@ -1,4 +1,4 @@
-import type { JSONSchema } from "../../dependencies/json-schema-to-ts.ts";
+import type { ExtendedJSONSchema } from "../../dependencies/json-schema-to-ts.ts";
 import type { CoordinatedMutationResult } from "../events/coordinator.ts";
 import type { DurableEvent, DurableEventDraft } from "../events/types.ts";
 import type {
@@ -159,7 +159,24 @@ export interface ActionContext<
   progress(value: unknown): Promise<void>;
 }
 
-export type ActionSchema = Exclude<JSONSchema, boolean>;
+type ActionSchemaExtensions = Readonly<{
+  "x-copilotz-secret": boolean;
+  $defs: Readonly<
+    Record<string, ExtendedJSONSchema<ActionSchemaExtensions>>
+  >;
+  prefixItems: readonly ExtendedJSONSchema<ActionSchemaExtensions>[];
+  dependentSchemas: Readonly<
+    Record<string, ExtendedJSONSchema<ActionSchemaExtensions>>
+  >;
+  unevaluatedProperties: ExtendedJSONSchema<ActionSchemaExtensions>;
+  example: unknown;
+}>;
+
+/** JSON Schema object with the recursively typed Copilotz secret extension. */
+export type ActionSchema = Exclude<
+  ExtendedJSONSchema<ActionSchemaExtensions>,
+  boolean
+>;
 
 declare const actionDefinitionTypes: unique symbol;
 

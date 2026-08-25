@@ -33,7 +33,7 @@ import type {
 
 export type EventNativeAppRequest = Readonly<{
   resource: string;
-  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "QUERY";
   path?: readonly string[];
   query?: Readonly<Record<string, string | readonly string[] | undefined>>;
   body?: unknown;
@@ -567,7 +567,12 @@ async function handleCollections(
   if (!name) {
     throw appError(404, "route_not_found", "Collection route was not found.");
   }
-  const collection = application.collections.withScope({ namespace })[name];
+  const collectionAlias = Object.entries(application.plugins.collections)
+    .find(([, definition]) => definition.name === name)?.[0] ?? name;
+  const scopedCollections = application.collections.withScope({ namespace });
+  const collection = scopedCollections[name] ?? scopedCollections[
+    collectionAlias
+  ];
   if (!collection) {
     throw appError(
       404,
@@ -592,6 +597,19 @@ async function handleCollections(
     });
     return { status: 201, data: created };
   }
+  if (
+    request.method === "QUERY" && path.length === 3 && path[1] === "queries"
+  ) {
+    const namedQuery = collection.queries[path[2]];
+    if (!namedQuery) {
+      throw appError(
+        404,
+        "query_not_found",
+        "Collection query was not found.",
+      );
+    }
+    return { status: 200, data: await namedQuery(record(request.body)) };
+  }
   const id = path[1];
   if (
     id && request.method === "POST" && path.length === 4 &&
@@ -605,7 +623,7 @@ async function handleCollections(
         "Collection command was not found.",
       );
     }
-    const commanded = await command({ id, ...record(request.body) }, {
+    const commanded = await command({ ...record(request.body), id }, {
       identity: mutationIdentity(request),
     });
     return { status: 200, data: commanded };
@@ -961,7 +979,14 @@ export function createEventNativeApp(
     },
     {
       name: "collections",
-      methods: Object.freeze(["GET", "POST", "PATCH", "PUT", "DELETE"]),
+      methods: Object.freeze([
+        "GET",
+        "POST",
+        "PATCH",
+        "PUT",
+        "DELETE",
+        "QUERY",
+      ]),
     },
     { name: "deliveries", methods: Object.freeze(["GET", "POST"]) },
     { name: "events", methods: Object.freeze(["GET"]) },

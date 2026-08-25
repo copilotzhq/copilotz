@@ -1390,11 +1390,17 @@ export function createDatabaseAssetRepository(
               );
               const owner = await transaction.query<{ id: string }>(
                 `SELECT id FROM ${tables.nodes}
-                 WHERE type = 'asset'
+                 WHERE type IN ('asset', 'protected_value')
                    AND data ->> 'state' = 'ready'
                    AND data ->> 'bodyId' = $1
                    AND data -> 'location' ->> 'kind' = $2
-                   AND COALESCE(data -> 'location' ->> 'backendId', '') = $3
+                   AND (
+                     (type = 'asset' AND
+                       COALESCE(data -> 'location' ->> 'backendId', '') = $3)
+                     OR
+                     (type = 'protected_value' AND
+                       data -> 'location' ->> 'backendId' = $4)
+                   )
                  LIMIT 1`,
                 [
                   body.bodyId,
@@ -1402,6 +1408,7 @@ export function createDatabaseAssetRepository(
                   storage.writer!.kind === "database"
                     ? ""
                     : storage.writer!.backendId,
+                  storage.writer!.backendId,
                 ],
               );
               if (owner.rows[0]) return false;

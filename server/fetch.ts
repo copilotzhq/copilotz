@@ -10,6 +10,7 @@ import type {
   ApplicationOutput,
   StreamOutput,
 } from "../runtime/streams/index.ts";
+import { applicationOutputsMultipartResponse } from "./multipart.ts";
 
 export type EventNativeSseProjector = (
   output: ApplicationOutput,
@@ -27,12 +28,15 @@ export type CreateEventNativeFetchHandlerOptions = Readonly<{
     request: Request,
   ) =>
     | EventNativeAppRequest["context"]
-    | Promise<EventNativeAppRequest["context"]>;
+    | Response
+    | Promise<EventNativeAppRequest["context"] | Response>;
   responseHeaders?: Readonly<Record<string, string>>;
   /** Optional versioned projection applied only to request-bound SSE output. */
   projectSseOutput?: EventNativeSseProjector;
   /** Optional SSE event name derived from a projected output value. */
   sseEventName?: (value: unknown) => string | undefined;
+  /** New facades negotiate JSON, SSE, or lossless multipart. Legacy defaults to SSE. */
+  streamResponseMode?: "sse" | "negotiate";
   onError?: (error: unknown, request: Request) => void | Promise<void>;
 }>;
 
@@ -44,6 +48,7 @@ const METHODS = new Set<EventNativeAppRequest["method"]>([
   "PUT",
   "PATCH",
   "DELETE",
+  "QUERY",
 ]);
 
 function basePath(value: string | undefined): string {
@@ -126,11 +131,11 @@ function responseHeaders(
   return result;
 }
 
-function jsonResponse(
+async function jsonResponse(
   result: EventNativeAppResponse,
   options: CreateEventNativeFetchHandlerOptions,
   request: Request,
-): Response {
+): Promise<Response> {
   if (result.status === 204) {
     return new Response(null, {
       status: result.status,
@@ -139,6 +144,24 @@ function jsonResponse(
   }
   if (result.data instanceof Response) return result.data;
   if (isEventNativeOutputStream(result.data)) {
+    if (options.streamResponseMode === "negotiate") {
+      const accept = request.headers.get("accept")?.toLowerCase() ?? "";
+      if (accept.includes("multipart/mixed")) {
+        return applicationOutputsMultipartResponse(result.data, {
+          headers: responseHeaders(options, result.headers),
+        });
+      }
+      if (!accept.includes("text/event-stream")) {
+        for await (const _output of result.data.outputs) {
+          // JSON mode intentionally drains progressive output before settlement.
+        }
+        await result.data.done;
+        return new Response(JSON.stringify({ data: { completed: true } }), {
+          status: 200,
+          headers: responseHeaders(options, result.headers),
+        });
+      }
+    }
     return sseResponse(result.data, request, options, result.headers);
   }
   return new Response(
@@ -309,8 +332,9 @@ export function createEventNativeFetchHandler(
           code: "route_not_found",
         });
       }
-      const parsedBody = await body(request);
       const context = await options.resolveContext?.(request);
+      if (context instanceof Response) return context;
+      const parsedBody = await body(request);
       const result = await app.handle({
         resource: parts[0],
         method: method as EventNativeAppRequest["method"],
@@ -323,7 +347,7 @@ export function createEventNativeFetchHandler(
           ...(parsedBody.raw ? { rawBody: parsedBody.raw } : {}),
         }),
       });
-      return jsonResponse(result, options, request);
+      return await jsonResponse(result, options, request);
     } catch (error) {
       await options.onError?.(error, request);
       return errorResponse(error, options);

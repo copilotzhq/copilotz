@@ -121,6 +121,7 @@ subpaths in the final column remain stable while internal paths move.
 | `plugins/memory/plugin.ts#createLongTermMemoryPlugin`                             | `plugins/memory/`                   | Collections, Actions, Processors, Resources, Adapters  | `./memory`                                                        |
 | `plugins/schedules/plugin.ts#schedulesPlugin`                                     | `plugins/schedules/`                | Collections, Actions, Processors                       | `./schedules`                                                     |
 | `plugins/core-schedules/plugin.ts#coreSchedulesPlugin`                            | `plugins/schedule-core/`            | Actions, Processors, Resources                         | `./schedules/core`                                                |
+| `plugins/server/plugin.ts#createServerPlugin`                                     | `plugins/server/`                   | Actions, Processors, Resources, authoring              | `./server`                                                        |
 | `plugins/usage/plugin.ts#createUsageWorkflowPlugin`                               | `plugins/usage/`                    | Collections, Processors                                | `./usage`                                                         |
 | `plugins/tools/plugin.ts#createToolsPlugin`                                       | `plugins/tools/authoring/`          | generated Actions and Resources                        | `./tools`                                                         |
 | `plugins/tools/builtin/plugin.ts#createBuiltInToolsPlugin`                        | `plugins/tool-builtin/`             | Actions, Resources                                     | `./tools/builtin`                                                 |
@@ -151,6 +152,7 @@ The restructuring preserves these published entrypoints:
 ./memory
 ./schedules
 ./schedules/core
+./server
 ./skills
 ./skills/deno
 ./tools

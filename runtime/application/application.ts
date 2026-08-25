@@ -16,6 +16,7 @@ import type {
   CreateCopilotzApplicationOptions,
   InternalCopilotzApplication,
 } from "./types.ts";
+import type { ActionSchema } from "../actions/index.ts";
 
 export function observeApplicationPersistence(
   persistence: OpenCopilotzPersistence,
@@ -367,8 +368,9 @@ export async function createCopilotzApplication(
     shutdownTask.catch(() => undefined);
     return shutdownTask;
   };
-  const send = async (
+  const sendWithProtection = async (
     input: ApplicationSendInput,
+    protection?: Readonly<{ schema: ActionSchema; ownerId: string }>,
   ): Promise<ApplicationSendHandle> => {
     await persistence.recovery?.admit();
     const inputType = requiredType(input.type);
@@ -385,7 +387,7 @@ export async function createCopilotzApplication(
       const scopedEngine = inputDatabaseSchema === databaseSchema
         ? engine
         : await engine.databaseScope(inputDatabaseSchema);
-      committed = await scopedEngine.events.append({
+      const draft = {
         type: inputType,
         namespace: inputNamespace,
         payload: structuredClone(input.payload),
@@ -401,7 +403,14 @@ export async function createCopilotzApplication(
         ...(input.deduplicationId?.trim()
           ? { deduplicationId: input.deduplicationId.trim() }
           : {}),
-      });
+      };
+      committed = protection
+        ? await scopedEngine.events.appendProtected(
+          draft,
+          protection.schema,
+          protection.ownerId,
+        )
+        : await scopedEngine.events.append(draft);
     } catch (error) {
       subscription.error(error);
       throw error;
@@ -442,6 +451,7 @@ export async function createCopilotzApplication(
     activeSends.set(sendHandle, Object.freeze({ subscription, abort }));
     return sendHandle;
   };
+  const send = (input: ApplicationSendInput) => sendWithProtection(input);
 
   const pluginIds = registry.plugins.map((plugin) => plugin.id);
   const {
@@ -461,6 +471,9 @@ export async function createCopilotzApplication(
     engine,
     execution: engine.execution,
     interruptActiveSends,
+    sendProtected(input, schema, ownerId) {
+      return sendWithProtection(input, { schema, ownerId });
+    },
     async databaseScope(requestedDatabaseSchema) {
       await persistence.recovery?.admit();
       return await engine.databaseScope(requestedDatabaseSchema);

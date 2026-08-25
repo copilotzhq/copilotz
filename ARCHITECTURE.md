@@ -54,6 +54,18 @@ envelope and is not inherited by nested Action calls: a caller that wants to
 propagate it passes it explicitly. This makes provenance durable without making
 the runtime interpret it or silently couple two capabilities.
 
+Action input and output schemas may mark confidential subtrees with the raw
+boolean extension `x-copilotz-secret: true`; `secret(schema)` is exact authoring
+sugar for that marker. A process-local Secret Adapter encrypts those values into
+BodyStore objects owned by internal `protected_value` projections. Lifecycle
+Event Bodies contain only schema-shaped redaction markers, opaque references,
+and keyed commitments. They are hydrated for trusted execution and replay, but
+ordinary Processors, observation, Admin projections, and streams receive the
+redacted lifecycle. Protected values are not Assets and create neither a
+ContentRef nor `asset.created`. Secret-bearing Actions cannot publish progress,
+and their durable failures are bounded rather than reflecting application error
+text.
+
 A durable Processor may use `eventType: "*"` only with a non-empty structural
 guard in `subject`, Event-envelope `metadata`, or resolved `data`. Namespace,
 thread, routing, or visibility alone are not sufficient guards, and empty
@@ -143,6 +155,17 @@ application outputs independently of any active `send`. Normal Event outputs
 retain their immutable envelope and expose resolved, deeply frozen `data`;
 durable Events also retain the original `payload.dataRef`. Progressive
 `stream.output` observations remain subscriber-owned byte streams.
+
+The optional Server plugin compiles the composed Action, Collection, and Channel
+registries into one immutable HTTP route table and OpenAPI document. Canonical
+paths derive from stable primitive identity; application-owned include/exclude
+globs and exact overrides control public presentation. A process-local guard
+selects trusted namespace, physical schema, identity, and Action metadata before
+work begins. The client never selects executable identity or persistence scope.
+The package Server boundary is Fetch-native and Oxian-compatible; it does not
+own a listener. Request observation uses one multipart response containing the
+exact causal `ApplicationOutput` sequence and raw progressive bytes, while input
+streaming remains a separate contract.
 
 Durable delivery failures have an explicit disposition. Unknown failures are
 retryable by default and the recovery-owning Gateway executor requeues them at

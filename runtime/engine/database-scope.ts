@@ -17,6 +17,24 @@ import {
   isReservedActionLifecycleDeduplicationId,
 } from "../actions/index.ts";
 import {
+  createProtectedValueRuntime,
+  PROTECTED_VALUE_NODE_TYPE,
+  type ProtectedValueRuntime,
+} from "../actions/protected-value.ts";
+import {
+  actionDefinitionById,
+  hydrateActionLifecycleBody,
+  protectedActionLifecycleRefs,
+  publicActionLifecycleData,
+} from "../actions/protected-lifecycle.ts";
+import {
+  prepareProtectedEventBody,
+  protectedEventRefs,
+  resolveProtectedEventData,
+  samePreparedProtectedEventBody,
+} from "../actions/protected-event.ts";
+import { parseActionLifecycleEvent } from "../actions/event.ts";
+import {
   type CopilotzEvent,
   type CopilotzEventHub,
   createEphemeralEvent,
@@ -26,6 +44,11 @@ import {
   type EventStore,
   waitForCopilotzEvent,
 } from "../events/index.ts";
+import {
+  eventDataRef,
+  readEventBody,
+  writeEventBody,
+} from "../events/body-store.ts";
 import type {
   DeliveryExecutor,
   LiveEventDispatchHandle,
@@ -39,6 +62,8 @@ import type {
   PluginRegistry,
   TransientProcessorSet,
 } from "../plugins/index.ts";
+import { resolveProcessorEvent } from "../plugins/index.ts";
+import { withProcessorEventData } from "../plugins/processor.ts";
 import type {
   CopilotzEngineDatabaseScope,
   CopilotzEngineMaintenanceResult,
@@ -49,6 +74,7 @@ export type DatabaseScopeCapabilities = Readonly<{
   assets: DatabaseAssetRepository;
   collections: CollectionRuntime;
   streamBodyStore: BodyStore;
+  protectedValues?: ProtectedValueRuntime;
 }>;
 
 export type DatabaseScopeRuntime = Readonly<{
@@ -132,17 +158,6 @@ export function createDatabaseScope(
     authorize: engine.authorizeContent,
     digest: engine.digest,
   });
-  const collections = createCollectionRuntime({
-    coordinator,
-    session: engine.session,
-    eventStore: store,
-    assets: collectionAssetAdopterFor(assets),
-    createId: engine.createId,
-    now: options.now,
-  });
-  for (const resource of Object.values(options.registry.collections)) {
-    if (isKernelCollection(resource)) collections.bind(resource);
-  }
   const streamBodyStore = engine.assetStorage?.adapter?.forScope({
     namespace: "@copilotz/stream",
     databaseSchema,
@@ -151,10 +166,48 @@ export function createDatabaseScope(
       session: engine.session,
       schema: databaseSchema,
     });
+  const protectedValues = engine.secretAdapter
+    ? createProtectedValueRuntime({
+      databaseSchema,
+      session: engine.session,
+      storage: engine.assetStorage!,
+      adapter: engine.secretAdapter,
+      createId: engine.createId,
+    })
+    : undefined;
+  const collections = createCollectionRuntime({
+    coordinator,
+    session: engine.session,
+    eventStore: store,
+    assets: collectionAssetAdopterFor(assets),
+    createId: engine.createId,
+    now: options.now,
+    ...(protectedValues
+      ? {
+        runtimeProjections: Object.freeze({
+          nodeTypes: Object.freeze([PROTECTED_VALUE_NODE_TYPE]),
+          async projectBody(context, namespace, body) {
+            for (
+              const ref of [
+                ...protectedActionLifecycleRefs(body),
+                ...protectedEventRefs(body),
+              ]
+            ) {
+              await protectedValues.project(context, namespace, ref);
+            }
+          },
+        }),
+      }
+      : {}),
+  });
+  for (const resource of Object.values(options.registry.collections)) {
+    if (isKernelCollection(resource)) collections.bind(resource);
+  }
   const capabilities: DatabaseScopeCapabilities = Object.freeze({
     assets,
     collections,
     streamBodyStore,
+    ...(protectedValues ? { protectedValues } : {}),
   });
   const deliveryInNamespace = async (namespace: string, id: string) => {
     const delivery = await store.getDelivery(id);
@@ -185,6 +238,55 @@ export function createDatabaseScope(
       }
       return coordinator.append(draft, appendOptions);
     },
+    async appendProtected(draft, schema, ownerId) {
+      const deduplicationId = draft.deduplicationId?.trim();
+      if (!deduplicationId) {
+        throw new TypeError(
+          "Protected Event ingress requires deduplicationId.",
+        );
+      }
+      const prepared = await prepareProtectedEventBody({
+        namespace: draft.namespace,
+        ownerId,
+        data: draft.payload,
+        schema,
+        protectedValues,
+      });
+      const bodyId = `event-body:${draft.namespace}:${deduplicationId}`;
+      const payload = Object.freeze({
+        dataRef: Object.freeze({
+          eventBodyId: bodyId,
+          schemaVersion: 1,
+          mediaType: "application/json" as const,
+        }),
+      });
+      return await coordinator.commitMutation({
+        draft: { ...draft, payload },
+        matchData: prepared.publicData,
+        mutate: async (context) => {
+          for (const value of prepared.prepared) {
+            await protectedValues!.adopt(context, draft.namespace, value);
+          }
+          await writeEventBody(context, {
+            namespace: draft.namespace,
+            id: bodyId,
+            json: prepared.body,
+          });
+        },
+        recoverDuplicate: async (event, context) => {
+          const existing = await readEventBody(
+            context,
+            event.namespace,
+            eventDataRef(event.payload),
+          );
+          if (!samePreparedProtectedEventBody(existing, prepared.body)) {
+            throw new Error(
+              `Protected Event '${event.id}' was retried with different data.`,
+            );
+          }
+        },
+      });
+    },
     async emit(input) {
       const event = createEphemeralEvent(input, options.now);
       const dispatched = await options.publishLive(event);
@@ -213,6 +315,52 @@ export function createDatabaseScope(
     async get(namespace, id) {
       const event = await store.getEvent(id);
       return event?.namespace === namespace ? event : null;
+    },
+    async resolve(namespace, id) {
+      const event = await store.getEvent(id);
+      if (!event || event.namespace !== namespace) return null;
+      return await resolveProcessorEvent(store, event);
+    },
+    async resolveProtected(namespace, id, schema) {
+      const event = await store.getEvent(id);
+      if (!event || event.namespace !== namespace) return null;
+      if (!protectedValues) {
+        throw new Error("Protected Event recovery requires a Secret Adapter.");
+      }
+      return withProcessorEventData(
+        event,
+        await resolveProtectedEventData({
+          store,
+          event,
+          schema,
+          protectedValues,
+        }),
+      );
+    },
+    async resolveActionLifecycle(namespace, id) {
+      const event = await store.getEvent(id);
+      if (!event || event.namespace !== namespace) return null;
+      let raw: unknown;
+      try {
+        raw = await readEventBody(
+          { transaction: store.session, tables: store.tables },
+          namespace,
+          eventDataRef(event.payload),
+        );
+      } catch {
+        return null;
+      }
+      const parsed = parseActionLifecycleEvent(withProcessorEventData(
+        event,
+        publicActionLifecycleData(raw),
+      ));
+      if (!parsed) return null;
+      return await hydrateActionLifecycleBody({
+        namespace,
+        body: raw as never,
+        action: actionDefinitionById(options.registry.actions, parsed.actionId),
+        protectedValues,
+      });
     },
     list: (listOptions) => store.listEvents(listOptions),
     settlement: (namespace, settlementScopeId) =>

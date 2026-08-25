@@ -4,6 +4,7 @@ import {
   createEventNativeFetchHandler,
   type CreateEventNativeFetchHandlerOptions,
 } from "./server/fetch.ts";
+import { createServerFacadeFetchHandler } from "./server/facade.ts";
 import { createCopilotz as createEmbeddedCopilotz } from "./runtime/application/copilotz.ts";
 import type { CreateCopilotzOptions as RuntimeEmbeddedOptions } from "./runtime/application/copilotz.ts";
 import {
@@ -84,7 +85,7 @@ export async function createCopilotz(
       const native = createEventNativeApp(gateway.application, {
         resolveDatabaseSchema,
       });
-      const fetch = createEventNativeFetchHandler(
+      const legacyFetch = createEventNativeFetchHandler(
         Object.freeze({
           resources: native.resources,
           async handle(request) {
@@ -94,6 +95,27 @@ export async function createCopilotz(
         }),
         { basePath: "/v3", ...(http ?? {}) },
       );
+      const hasServerFacade = Boolean(
+        gateway.application.plugins.resources.server?.default,
+      );
+      const facadeFetch = hasServerFacade
+        ? createServerFacadeFetchHandler(gateway.application, {
+          admit: gateway.admit,
+          resolveContext: http?.resolveContext,
+          responseHeaders: http?.responseHeaders,
+          onError: http?.onError,
+        })
+        : undefined;
+      const fetch = facadeFetch
+        ? async (request: Request): Promise<Response> => {
+          const pathname = new URL(request.url).pathname.replace(/\/+$/, "") ||
+            "/";
+          const basePath = facadeFetch.routes.basePath;
+          return pathname === basePath || pathname.startsWith(`${basePath}/`)
+            ? await facadeFetch(request)
+            : await legacyFetch(request);
+        }
+        : legacyFetch;
       gateway.installFetchFallback(fetch);
       return Object.freeze({
         send: gateway.send,

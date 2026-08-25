@@ -11,6 +11,7 @@ import type { CopilotzPersistenceOptions } from "@copilotz/copilotz/persistence"
 import type { BodyStorageOptions } from "../content/index.ts";
 import type { EventVisibility } from "../events/index.ts";
 import type { ApplicationOutput } from "../streams/index.ts";
+import type { ActionSchema } from "../actions/index.ts";
 
 export type { ApplicationOutput } from "../streams/index.ts";
 
@@ -89,6 +90,12 @@ export type InternalCopilotzApplication =
   & Readonly<{
     config: CopilotzApplicationConfig;
     engine: CopilotzEngine;
+    /** Package-owned bridge ingress; never exposed on CopilotzApplication. */
+    sendProtected(
+      input: ApplicationSendInput,
+      schema: ActionSchema,
+      ownerId: string,
+    ): Promise<ApplicationSendHandle>;
     /** Internal-only transport interruption used by persistence recovery. */
     interruptActiveSends(error: unknown): void;
   }>;

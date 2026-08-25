@@ -1884,7 +1884,11 @@ export function createMemoryMaintenanceAction(
           );
         } catch (error) {
           if (
-            isSettledActionError(error) && error instanceof TypeError &&
+            // Action input validation deliberately happens before its first
+            // durable lifecycle Event. A malformed model Tool call therefore
+            // has no settled child Action terminal, but it is still a bounded
+            // LLM-contract repair rather than a maintenance failure.
+            error instanceof TypeError &&
             error.message.includes("input failed schema validation")
           ) {
             lastContractError = new MemoryLlmContractError(

@@ -21,6 +21,10 @@ import type { ContentStreamRuntime } from "../streams/index.ts";
 import type { PluginRegistry } from "../plugins/index.ts";
 import { createActionLifecycleEmitter } from "./lifecycle.ts";
 import {
+  protectedEventResolverFrom,
+  withProtectedEventResolver,
+} from "./protected-context.ts";
+import {
   type ActionInvocationFrame,
   actionTransactionIdentity,
   createActionCallers,
@@ -180,7 +184,7 @@ export function createActionInvocationContext(
       });
     },
   });
-  return Object.freeze({
+  return Object.freeze(withProtectedEventResolver({
     ...host,
     action: Object.freeze({
       id: frame.actionId,
@@ -213,7 +217,7 @@ export function createActionInvocationContext(
         signal: transactionOptions.signal ?? frame.signal,
       }) as never;
     },
-  }) as ActionContext;
+  }, protectedEventResolverFrom(host))) as ActionContext;
 }
 
 /** Builds the direct Action host for one trusted namespace and database scope. */

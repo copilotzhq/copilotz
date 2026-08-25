@@ -58,7 +58,10 @@ import type {
   GraphRelationIntent,
   GraphRelationUpsertInput,
 } from "./types.ts";
-import { validateCollectionRecord } from "./validate.ts";
+import {
+  validateAgainstJsonSchema,
+  validateCollectionRecord,
+} from "./validate.ts";
 
 export type CreateCollectionRuntimeOptions = Readonly<{
   coordinator: EventCoordinator;
@@ -67,6 +70,14 @@ export type CreateCollectionRuntimeOptions = Readonly<{
   assets?: CollectionAssetAdopter;
   createId?: () => string;
   now?: () => Date;
+  runtimeProjections?: Readonly<{
+    nodeTypes: readonly string[];
+    projectBody(
+      context: EventMutationContext,
+      namespace: string,
+      body: unknown,
+    ): Promise<void>;
+  }>;
 }>;
 
 /** Internal content-adoption seam used only by the Collection kernel. */
@@ -2019,6 +2030,14 @@ export function createCollectionRuntime(
         queryName,
         async (namespace: string, input: Record<string, unknown> = {}) => {
           const queryInput = asRecord(input);
+          if (spec.inputSchema) {
+            validateAgainstJsonSchema(
+              spec.inputSchema,
+              queryInput,
+              `${name}.${queryName} input`,
+            );
+          }
+          let output: readonly TSelect[];
           if (spec.select) {
             const read = Object.freeze({
               get: (collectionName: string, id: string) => {
@@ -2040,17 +2059,25 @@ export function createCollectionRuntime(
                 return target.list(namespace, query);
               },
             });
-            return await spec.select({
+            output = await spec.select({
               input: queryInput,
               read,
             }) as readonly TSelect[];
+          } else if (spec.query) {
+            output = await list(namespace, spec.query({ input: queryInput }));
+          } else {
+            output = await list(namespace, {
+              where: spec.filter?.({ input: queryInput }),
+            });
           }
-          if (spec.query) {
-            return await list(namespace, spec.query({ input: queryInput }));
+          if (spec.outputSchema) {
+            validateAgainstJsonSchema(
+              spec.outputSchema,
+              output,
+              `${name}.${queryName} output`,
+            );
           }
-          return await list(namespace, {
-            where: spec.filter?.({ input: queryInput }),
-          });
+          return output;
         },
       ]),
     );
@@ -3030,6 +3057,7 @@ export function createCollectionRuntime(
           options.eventStore,
           [...bound.values()].map((collection) => collection.definition),
           requireText(namespace, "Namespace"),
+          options.runtimeProjections,
         )
       );
     },

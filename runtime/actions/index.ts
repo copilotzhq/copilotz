@@ -1,5 +1,15 @@
 export { defineAction, isActionDefinition } from "./define.ts";
+export { secret } from "./secret.ts";
+export { createSecretAdapter } from "./secret-adapter.ts";
+export type {
+  SecretAdapter,
+  SecretAdapterOpenInput,
+  SecretAdapterSealInput,
+  SecretAdapterSealResult,
+} from "./secret-adapter.ts";
+export type { SecretActionSchema } from "./secret.ts";
 export { createActionContext } from "./host.ts";
+export { resolveActionSourceData } from "./protected-context.ts";
 export {
   actionCallerDefinitionId,
   actionTransactionIdentity,

@@ -196,7 +196,20 @@ Deno.test("package subpaths expose cohesive factories", () => {
   ]);
   assertFunctions(events, ["createEventStore", "createEventCoordinator"]);
   assertFunctions(plugins, ["definePlugin", "defineProcessor"]);
-  assertFunctions(actions, ["defineAction"]);
+  assertFunctions(actions, [
+    "createSecretAdapter",
+    "defineAction",
+    "resolveActionSourceData",
+    "secret",
+  ]);
+  assertFunctions(server, [
+    "compileServerRoutes",
+    "createServerFacadeFetchHandler",
+    "createServerPlugin",
+    "decodeCopilotzOutputs",
+    "defineServerFacade",
+  ]);
+  assertEquals(typeof server.serverPlugin, "object");
 });
 
 Deno.test("server and the single published-data migration remain explicit bounded subpaths", () => {

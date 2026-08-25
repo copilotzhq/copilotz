@@ -4,6 +4,9 @@ import {
   createActionLifecycleEmitter,
   createActionLifecycleLoader,
 } from "../actions/index.ts";
+import { actionDefinitionHasSecrets } from "../actions/protected-lifecycle.ts";
+import { createSecretAdapter } from "../actions/secret-adapter.ts";
+import { openProtectedEventBody } from "../actions/protected-event.ts";
 import {
   createBodyStorageRuntime,
   createContentPreparer,
@@ -17,6 +20,7 @@ import {
   provisionCopilotzSchema,
   validateCopilotzSchema,
 } from "../events/index.ts";
+import { eventDataRef, readEventBody } from "../events/body-store.ts";
 import {
   COPILOTZ_LIVE_WORKLOAD,
   createDeliveryExecutor,
@@ -67,12 +71,25 @@ export async function createCopilotzEngine(
   options: CreateCopilotzEngineOptions,
 ): Promise<CopilotzEngine> {
   const databaseSchema = options.defaultDatabaseSchema ?? "public";
-  const engineOptions: CreateCopilotzEngineOptions = options.assetStorage
-    ? options
-    : Object.freeze({
-      ...options,
-      assetStorage: createBodyStorageRuntime(options.assets),
-    });
+  const configuredSecretAdapter = options.secretAdapter ??
+    options.registry.adapters.secrets?.default;
+  const secretAdapter = configuredSecretAdapter === undefined
+    ? undefined
+    : createSecretAdapter(configuredSecretAdapter as never);
+  const requiresSecrets = Object.values(options.registry.actions).some(
+    actionDefinitionHasSecrets,
+  );
+  if (requiresSecrets && !secretAdapter) {
+    throw new TypeError(
+      "Actions with x-copilotz-secret schemas require adapters.secrets.default.",
+    );
+  }
+  const engineOptions: CreateCopilotzEngineOptions = Object.freeze({
+    ...options,
+    assetStorage: options.assetStorage ??
+      createBodyStorageRuntime(options.assets),
+    ...(secretAdapter ? { secretAdapter } : {}),
+  });
   await prepareDefaultDatabaseSchema(options, databaseSchema);
   const now = options.now ?? (() => new Date());
   const eventHub = options.eventHub ?? createCopilotzEventHub();
@@ -179,9 +196,14 @@ export async function createCopilotzEngine(
         namespace: base.event.namespace,
         append: createActionLifecycleAppender({
           coordinator: scopedCoordinator,
+          store: scopedStore,
+          actions: options.registry.actions,
+          protectedValues: scopedCapabilities.protectedValues,
         }),
         load: createActionLifecycleLoader({
           store: scopedStore,
+          actions: options.registry.actions,
+          protectedValues: scopedCapabilities.protectedValues,
         }),
         metadata: {
           ...(base.event.durable ? { sourceEventId: base.event.id } : {}),
@@ -201,6 +223,24 @@ export async function createCopilotzEngine(
             : {}),
         },
       }),
+      protectedEventResolver: async () => {
+        const eventId = base.event.durable ? base.event.id : undefined;
+        if (!eventId) throw new Error("Action source Event is not durable.");
+        const event = await scopedStore.getEvent(eventId);
+        if (!event || event.namespace !== base.event.namespace) {
+          throw new Error("Protected Event is unavailable in this scope.");
+        }
+        const raw = await readEventBody(
+          { transaction: scopedStore.session, tables: scopedStore.tables },
+          event.namespace,
+          eventDataRef(event.payload),
+        );
+        return await openProtectedEventBody({
+          namespace: event.namespace,
+          body: raw,
+          protectedValues: scopedCapabilities.protectedValues,
+        });
+      },
       now,
     });
   };

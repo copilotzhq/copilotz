@@ -8,6 +8,7 @@ export type {
   CollectionMutateContext,
   CollectionMutatePatch,
   CollectionNamedQuery,
+  CollectionNamedQuerySchema,
   CollectionRelation,
 } from "./definition.ts";
 export {

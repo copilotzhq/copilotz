@@ -78,7 +78,8 @@ This map describes the current implementation.
 - Semantic memory plugin: `plugins/memory/`
 - Physical persistence: `runtime/persistence/`; Deno host listeners and Body
   storage: `runtime/adapters/deno/`; portable/Node CLI: `plugins/core/adapters/`
-- Web Fetch boundary: `server/`
+- Semantic automatic HTTP facade: `plugins/server/`; portable Fetch, multipart
+  output, and host integration: `server/`
 - Isolated legacy-graph-v1 (0.47/0.48) upgrade: `migration/v4/`
 - Package conformance tests and cross-runtime smoke programs: `contracts/`
 

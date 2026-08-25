@@ -27,7 +27,7 @@ Deno.test("published documentation matches the final version and subpaths", asyn
     version: string;
     exports: Record<string, string>;
   };
-  assertEquals(configuration.version, "0.63.0");
+  assertEquals(configuration.version, "0.63.1");
   const readme = await source("README.md");
   assertStringIncludes(readme, `@^${configuration.version}`);
   for (const subpath of Object.keys(configuration.exports)) {
@@ -149,7 +149,7 @@ Deno.test("external dependency versions are centralized in deno.json imports", a
   );
   assertEquals(
     configuration.imports["@oxian/oxian-js"],
-    "jsr:@oxian/oxian-js@0.21.0-rc.4",
+    "jsr:@oxian/oxian-js@0.21.0",
   );
   assertEquals(
     configuration.imports["@modelcontextprotocol/sdk"],

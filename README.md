@@ -31,7 +31,7 @@ or hidden workflow controller.
 ## Install
 
 ```ts
-import { createCopilotz } from "jsr:@copilotz/copilotz@^0.63.0";
+import { createCopilotz } from "jsr:@copilotz/copilotz@^0.63.1";
 ```
 
 Host-only capabilities live on explicit subpaths. Importing the root does not
@@ -40,8 +40,8 @@ pull in filesystem, subprocess, terminal, MCP stdio, or provider credentials.
 ## Compose an AI application
 
 ```ts
-import { createCopilotz } from "jsr:@copilotz/copilotz@^0.63.0";
-import { corePlugin, message } from "jsr:@copilotz/copilotz@^0.63.0/core";
+import { createCopilotz } from "jsr:@copilotz/copilotz@^0.63.1";
+import { corePlugin, message } from "jsr:@copilotz/copilotz@^0.63.1/core";
 
 const openAiKey = Deno.env.get("OPENAI_API_KEY");
 if (!openAiKey) throw new Error("OPENAI_API_KEY is required");
@@ -143,6 +143,7 @@ subpaths.
 - [Plugins and processors](docs/plugins-and-processors.md)
 - [Events, deliveries, and recovery](docs/events-deliveries-recovery.md)
 - [Content and assets](docs/content-assets.md)
+- [Server façade](docs/server.md)
 - [Progressive streams](docs/streams.md)
 - [Embedding, Gateway, and Worker roles](docs/embedding-and-hypervisors.md)
 - [Legacy 0.47/0.48 to v4 migration](docs/migration-v4.md)

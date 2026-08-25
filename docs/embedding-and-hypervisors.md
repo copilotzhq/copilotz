@@ -53,8 +53,10 @@ application, engine, database scopes, event stores, or Hypervisor.
 
 ## HTTP and WebSocket hosts
 
-`gateway.fetch` is the portable event-native HTTP projection. A Deno listener
-accepts any structural Fetch-capable host:
+`gateway.fetch` is portable Fetch. It includes trusted `/v3` event-native routes
+and, when `createServerPlugin()` is composed, the configured public primitive
+façade. Oxian applications use it directly as their handler; a Deno listener
+also accepts the same structural Fetch-capable host:
 
 ```ts
 import { listen } from "@copilotz/copilotz/adapters/deno";

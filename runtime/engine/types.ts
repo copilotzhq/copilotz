@@ -42,10 +42,14 @@ import type {
   AnyProcessor,
   PluginRegistry,
   Processor,
+  ProcessorEvent,
 } from "../plugins/index.ts";
 import type { ProgressiveBodyMaintenanceResult } from "../content/index.ts";
 import type { ContentStreamFollowInput } from "../streams/index.ts";
 import type { ActionLifecycleEmitter } from "../actions/index.ts";
+import type { SecretAdapter } from "../actions/secret-adapter.ts";
+import type { ActionEventData, ActionSchema } from "../actions/types.ts";
+import type { ProtectedEventResolver } from "../actions/protected-context.ts";
 
 export type EphemeralEventInput = EphemeralEventDraft;
 export type RuntimeOutputPublisher = (
@@ -104,6 +108,8 @@ export type CreateCopilotzEngineOptions = Readonly<{
   assets?: BodyStorageOptions;
   /** Compiled once by the engine so memory/custom stores span database scopes. */
   assetStorage?: BodyStorageRuntime;
+  /** Runtime-validated local protection boundary. */
+  secretAdapter?: SecretAdapter;
   leaseMs?: number;
   maxAttempts?: number;
   retryBaseMs?: number;
@@ -183,6 +189,12 @@ export type CopilotzEngine = Readonly<{
       draft: DurableEventDraft,
       options?: { priority?: number; maxAttempts?: number },
     ): Promise<CoordinatedMutationResult<void>>;
+    /** Internal bridge ingress that seals schema-marked values before commit. */
+    appendProtected(
+      draft: DurableEventDraft,
+      schema: ActionSchema,
+      ownerId: string,
+    ): Promise<CoordinatedMutationResult<void>>;
     emit(input: EphemeralEventInput): Promise<EphemeralEvent>;
     subscribe(filter?: CopilotzEventFilter): ReadableStream<CopilotzEvent>;
     waitFor(
@@ -194,6 +206,19 @@ export type CopilotzEngine = Readonly<{
       signal?: AbortSignal,
     ): Promise<CopilotzEvent>;
     get(namespace: string, id: string): Promise<DurableEvent | null>;
+    /** Resolves one durable Event's integrity-checked body for internal consumers. */
+    resolve(namespace: string, id: string): Promise<ProcessorEvent | null>;
+    /** Internal trusted hydration for one explicitly authorized bridge Event. */
+    resolveProtected(
+      namespace: string,
+      id: string,
+      schema: ActionSchema,
+    ): Promise<ProcessorEvent | null>;
+    /** Internal trusted hydration for one registered Action lifecycle Event. */
+    resolveActionLifecycle(
+      namespace: string,
+      id: string,
+    ): Promise<ActionEventData | null>;
     list(options: {
       namespace: string;
       threadId?: string;
@@ -265,6 +290,7 @@ export type CreateProcessorContextOptions = Readonly<{
   actionLifecycle: ActionLifecycleEmitter;
   now?: () => Date;
   streamBodyStore: BodyStore;
+  protectedEventResolver?: ProtectedEventResolver;
 }>;
 
 export type CopilotzEngineDispatchReport = EventDispatchReport;

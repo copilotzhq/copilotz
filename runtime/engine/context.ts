@@ -12,6 +12,7 @@ import type {
   CreateProcessorContextOptions,
   EngineContextSeed,
 } from "./types.ts";
+import { withProtectedEventResolver } from "../actions/protected-context.ts";
 
 function requiredText(value: string, name: string): string {
   const normalized = value.trim();
@@ -210,7 +211,7 @@ export function createProcessorContext(
     },
   });
 
-  const context: ProcessorContext = Object.freeze({
+  const contextValue = withProtectedEventResolver({
     namespace,
     databaseSchema,
     operationKey: processorOperationKey,
@@ -224,6 +225,7 @@ export function createProcessorContext(
     signal: options.base.signal,
     now: options.now ?? (() => new Date()),
     transaction,
-  });
+  }, options.protectedEventResolver);
+  const context: ProcessorContext = Object.freeze(contextValue);
   return context;
 }

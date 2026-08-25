@@ -316,6 +316,14 @@ export async function rebuildNamespaceProjections(
   store: EventStore,
   definitions: readonly CollectionDefinition[],
   namespace: string,
+  runtime?: Readonly<{
+    nodeTypes: readonly string[];
+    projectBody(
+      context: EventMutationContext,
+      namespace: string,
+      body: unknown,
+    ): Promise<void>;
+  }>,
 ): Promise<void> {
   await executor.query(
     "SELECT pg_advisory_xact_lock_shared(hashtext($1), hashtext($2))",
@@ -336,13 +344,14 @@ export async function rebuildNamespaceProjections(
   if (byName.size !== definitions.length) {
     throw new TypeError("Namespace rebuild received duplicate Collections.");
   }
+  const runtimeNodeTypes = new Set(runtime?.nodeTypes ?? []);
   const storedTypes = await executor.query<{ type: string }>(
     `SELECT DISTINCT type FROM ${store.tables.nodes}
      WHERE namespace = $1 AND type <> 'asset'`,
     [namespace],
   );
   const unknownStoredTypes = storedTypes.rows.map((row) => row.type).filter(
-    (name) => !byName.has(name),
+    (name) => !byName.has(name) && !runtimeNodeTypes.has(name),
   );
   if (unknownStoredTypes.length) {
     throw new Error(
@@ -409,8 +418,13 @@ export async function rebuildNamespaceProjections(
     [namespace],
   );
   await eachEvent(async (event) => {
+    let rawBody = runtime ? await bodyFor(event) : undefined;
+    if (rawBody !== undefined) {
+      await runtime?.projectBody(context, namespace, rawBody);
+    }
     if (isRelationLifecycleEvent(event)) {
-      const body = await bodyFor(event) as GraphRelationEventBody;
+      rawBody ??= await bodyFor(event);
+      const body = rawBody as GraphRelationEventBody;
       if (
         body?.operation !== "upsert" ||
         body.relation?.id !== event.subject!.id ||
@@ -425,7 +439,8 @@ export async function rebuildNamespaceProjections(
       return;
     }
     if (isAssetLifecycleEvent(event)) {
-      const body = await bodyFor(event) as AssetEventBody;
+      rawBody ??= await bodyFor(event);
+      const body = rawBody as AssetEventBody;
       await projectAssetLifecycle(context, namespace, event, body);
       return;
     }
@@ -435,7 +450,8 @@ export async function rebuildNamespaceProjections(
     if (!definition || !collectionEventNames(definition).has(event.type)) {
       return;
     }
-    const body = await bodyFor(event) as CollectionEventBody<CollectionRecord>;
+    rawBody ??= await bodyFor(event);
+    const body = rawBody as CollectionEventBody<CollectionRecord>;
     assertCollectionEventBody(body, event, definition);
     await projectCollectionEvent(context, definition, body);
   });

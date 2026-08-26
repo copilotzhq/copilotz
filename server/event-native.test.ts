@@ -2,6 +2,7 @@ import { message as coreMessage } from "@copilotz/copilotz/core";
 import {
   assert,
   assertEquals,
+  assertExists,
   assertRejects,
   assertStringIncludes,
 } from "@std/assert";
@@ -24,8 +25,9 @@ import {
   defineProcessor,
   type ProcessorContext,
 } from "../runtime/plugins/index.ts";
-import { coreCollectionsPlugin } from "../plugins/core/plugin.ts";
+import { coreCollectionsPlugin, corePlugin } from "../plugins/core/plugin.ts";
 import type { AgentResource } from "@copilotz/copilotz/core";
+import type { LlmAdapter, LlmAdapterResult } from "@copilotz/copilotz/llm";
 import { createTestDatabase } from "../runtime/testing/ominipg.ts";
 import {
   createEventNativeApp,
@@ -798,6 +800,152 @@ Deno.test("event-native app returns request-bound channel output before delivery
     await cancellation;
     await assertRejects(() => output.done);
     await reader.cancel("test_cleanup").catch(() => undefined);
+  } finally {
+    release();
+    await application.shutdown();
+  }
+});
+
+Deno.test("event-native Channel request observes delayed Core LLM work through its terminal output", async () => {
+  let release!: () => void;
+  const response = new Promise<LlmAdapterResult>((resolve) => {
+    release = () =>
+      resolve({
+        content: { type: "text", text: "Hello from Support", role: "body" },
+        attempts: [{
+          status: "completed",
+          usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+        }],
+        finishReason: "stop",
+      });
+  });
+  let called!: () => void;
+  const calledPromise = new Promise<void>((resolve) => called = resolve);
+  const delayedAdapter: LlmAdapter = Object.freeze({
+    call() {
+      called();
+      return Object.freeze({
+        frames: new ReadableStream({
+          async start(controller) {
+            const result = await response;
+            controller.enqueue({
+              lane: "content",
+              mediaType: "text/plain",
+              bytes: new TextEncoder().encode(
+                (result.content as { text: string }).text,
+              ),
+            });
+            controller.close();
+          },
+        }),
+        result: response,
+      });
+    },
+  });
+  const configuration = definePlugin({
+    id: "test.request-observation-delayed-llm",
+    version: "1.0.0",
+    resources: {
+      agents: {
+        support: Object.freeze(
+          {
+            id: "support",
+            name: "Support",
+            role: "support",
+            instructions: "Reply concisely.",
+            models: { generate: ["delayed"] as const },
+            capabilities: { tools: [] },
+          } satisfies AgentResource,
+        ),
+      },
+      models: { delayed: { adapter: "delayed", model: "delayed-model" } },
+    },
+    adapters: { llm: { delayed: delayedAdapter } },
+  });
+  const channelProvider = definePlugin({
+    id: "test.request-observation-delayed-channel",
+    version: "1.0.0",
+    plugins: [channelsPlugin] as const,
+    resources: { channels: { web: createWebChannelResource() } },
+    adapters: { channels: { web: createWebChannelAdapter() } },
+  });
+  const application = await createCopilotzApplication({
+    namespace: NAMESPACE,
+    databaseSchema: `${SCHEMA}_delayed_llm`,
+    plugins: [corePlugin, channelProvider, configuration],
+    engine: { retryBaseMs: 0, random: () => 0 },
+  });
+  try {
+    const response = await createEventNativeApp(application).handle({
+      resource: "channels",
+      method: "POST",
+      path: ["web"],
+      body: {
+        id: "delayed-llm-a",
+        input: {
+          externalThreadId: "delayed-llm-thread",
+          sender: {
+            externalId: "delayed-llm-user",
+            participantType: "human",
+          },
+          recipients: [{
+            externalId: "support",
+            participantType: "agent",
+            agentId: "support",
+          }],
+          content: "Hello",
+        },
+      },
+    });
+    assertEquals(response.status, 200);
+    assert(isEventNativeOutputStream(response.data));
+    const output = response.data;
+    const outputs = collect(output.outputs);
+    await calledPromise;
+    let settled = false;
+    void output.done.then(() => settled = true, () => undefined);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assertEquals(settled, false);
+
+    release();
+    await output.done;
+    const observed = await outputs;
+    assertEquals(
+      observed.some((event) => event.type === "llm.call.invoked"),
+      true,
+    );
+    assertEquals(
+      observed.some((event) => event.type === "llm.call.completed"),
+      true,
+    );
+    const stream = observed.find(
+      (event): event is Extract<ApplicationOutput, { type: "stream.output" }> =>
+        event.type === "stream.output",
+    );
+    assertExists(stream);
+    assertEquals(
+      await new Response(stream.payload).text(),
+      "Hello from Support",
+    );
+    assertEquals(
+      observed.filter((event) => event.type === "message.created").length,
+      2,
+    );
+    const ingress = observed.find((event) =>
+      event.type === "copilotz.channels.ingress.input"
+    );
+    if (!ingress || !("id" in ingress) || typeof ingress.id !== "string") {
+      throw new Error(
+        "The request observation did not include its ingress Event.",
+      );
+    }
+    const settlement = await application.events.settlement(
+      NAMESPACE,
+      ingress.id,
+    );
+    assertEquals(settlement.unsettled, 0);
+    assertEquals(settlement.deadLetters, 0);
+    assertEquals(settlement.cancelled, 0);
   } finally {
     release();
     await application.shutdown();

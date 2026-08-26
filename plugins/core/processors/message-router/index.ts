@@ -273,6 +273,7 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
             identity: {
               correlationId: event.correlationId,
               causationId: event.id,
+              settlementScopeId: context.identity.settlementScopeId,
             },
             metadata,
             signal: context.signal,

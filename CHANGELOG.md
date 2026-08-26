@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.63.4 — 2026-08-26
+
+Keeps routed LLM work inside the originating durable settlement scope so Web
+Channel request observation remains open through delayed Agent output and
+cancels provider work with its parent request.
+
 ## 0.63.3 — 2026-08-25
 
 Aligns the retained package-configuration contract with the JSR-safe explicit

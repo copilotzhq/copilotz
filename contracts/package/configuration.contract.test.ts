@@ -24,7 +24,7 @@ const noRemovedConfigurationKeys: RemovedConfigurationKeys extends never ? true
   : false = true;
 void noRemovedConfigurationKeys;
 
-Deno.test("package self-references resolve through name and exports", async () => {
+Deno.test("package self-references mirror exports and resolve locally", async () => {
   const repositoryRoot = new URL("../../", import.meta.url);
   const configuration = JSON.parse(
     await Deno.readTextFile(new URL("deno.json", repositoryRoot)),
@@ -35,12 +35,27 @@ Deno.test("package self-references resolve through name and exports", async () =
   };
 
   assertEquals(configuration.name, "@copilotz/copilotz");
-  assertEquals(
-    Object.keys(configuration.imports).filter((specifier) =>
+  const expectedSelfMappings = Object.fromEntries(
+    Object.entries(configuration.exports).map(([subpath, target]) => [
+      subpath === "."
+        ? configuration.name
+        : configuration.name + subpath.slice(1),
+      target,
+    ]),
+  );
+  const actualSelfMappings = Object.fromEntries(
+    Object.entries(configuration.imports).filter(([specifier]) =>
       specifier === configuration.name ||
       specifier.startsWith(`${configuration.name}/`)
     ),
-    [],
+  );
+  assertEquals(
+    Object.entries(actualSelfMappings).sort(([left], [right]) =>
+      left.localeCompare(right)
+    ),
+    Object.entries(expectedSelfMappings).sort(([left], [right]) =>
+      left.localeCompare(right)
+    ),
   );
   for (const [subpath, target] of Object.entries(configuration.exports)) {
     const specifier = subpath === "."

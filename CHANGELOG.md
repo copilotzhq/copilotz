@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.63.3 — 2026-08-25
+
+Aligns the retained package-configuration contract with the JSR-safe explicit
+self-import graph introduced in 0.63.2.
+
 ## 0.63.2 — 2026-08-25
 
 Restores explicit package self-import mappings for every public export so JSR

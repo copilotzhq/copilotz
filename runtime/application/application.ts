@@ -346,10 +346,12 @@ export async function createCopilotzApplication(
     if (shutdownTask) return shutdownTask;
     stopObservingPersistence();
     shutdownTask = (async () => {
-      const active = [...activeSends.keys()];
+      // Shutting down this application is not a caller-directed cancellation of
+      // durable work.  Interrupt only this application's local observers and
+      // settlement waiters; another Gateway/Worker may recover the scope.
+      interruptActiveSends(new Error(reason));
       activeSends.clear();
       const settled = await Promise.allSettled([
-        ...active.map((handle) => handle.cancel(reason)),
         engine.shutdown(reason),
         persistence.close(reason),
       ]);
@@ -431,6 +433,10 @@ export async function createCopilotzApplication(
       subscription.close();
       activeSends.delete(sendHandle);
     });
+    // A caller may deliberately consume only `outputs`.  Keep a shutdown or
+    // persistence interruption from becoming an unhandled rejected promise;
+    // the original `done` promise remains observable to callers.
+    void done.catch(() => undefined);
     const sendHandle: ApplicationSendHandle = Object.freeze({
       eventId: committed.event.id,
       correlationId,

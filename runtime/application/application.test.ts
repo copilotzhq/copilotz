@@ -788,6 +788,114 @@ Deno.test("persistence outage interrupts active send observers without cancellin
   assertEquals(closedGenerations, [1, 2]);
 });
 
+Deno.test("application shutdown interrupts local sends without cancelling their durable scope", async () => {
+  const db = await createTestDatabase({ url: ":memory:" });
+  let waitForAbort = true;
+  let processorStarted = () => {};
+  const started = new Promise<void>((resolve) => processorStarted = resolve);
+  const processor = defineProcessor<ProcessorContext>({
+    id: "test.application.shutdown-interrupt",
+    on: [{ eventType: "test.application.shutdown-interrupt" }],
+    async handle(_event, context) {
+      processorStarted();
+      if (!waitForAbort) return;
+      await new Promise<void>((resolve) =>
+        context.signal.addEventListener("abort", () => resolve(), {
+          once: true,
+        })
+      );
+    },
+  });
+  const application = await createCopilotzApplication({
+    database: db,
+    namespace: NAMESPACE,
+    databaseSchema: `${SCHEMA}_shutdown_scope`,
+    plugins: [definePlugin({
+      id: "test.application.shutdown-interrupt",
+      version: "1.0.0",
+      processors: { shutdownInterrupt: processor },
+    })],
+    engine: { retryBaseMs: 0, random: () => 0 },
+  });
+  let recovered:
+    | Awaited<ReturnType<typeof createCopilotzApplication>>
+    | undefined;
+  try {
+    const send = await application.send({
+      type: "test.application.shutdown-interrupt",
+      namespace: NAMESPACE,
+    });
+    const reader = send.outputs.getReader();
+    await started;
+
+    await application.shutdown("test_application_shutdown");
+
+    await assertRejects(
+      () => reader.read(),
+      Error,
+      "test_application_shutdown",
+    );
+    await assertRejects(() => send.done, Error, "test_application_shutdown");
+    const settlement = await application.events.settlement(
+      NAMESPACE,
+      send.eventId,
+    );
+    assertEquals(settlement.cancelled, 0);
+    assertEquals(settlement.unsettled > 0, true);
+
+    waitForAbort = false;
+    recovered = await createCopilotzApplication({
+      database: db,
+      namespace: NAMESPACE,
+      databaseSchema: `${SCHEMA}_shutdown_scope`,
+      plugins: [definePlugin({
+        id: "test.application.shutdown-interrupt",
+        version: "1.0.0",
+        processors: { shutdownInterrupt: processor },
+      })],
+      engine: { retryBaseMs: 0, random: () => 0 },
+    });
+    await recovered.recoverAll({ limit: 100 });
+    await waitForTestDelivery(
+      recovered,
+      NAMESPACE,
+      send.eventId,
+      "succeeded",
+    );
+    assertEquals(
+      (await recovered.events.settlement(NAMESPACE, send.eventId)).cancelled,
+      0,
+    );
+
+    let explicitCancelStarted = () => {};
+    const explicitCancelStartedPromise = new Promise<void>((resolve) =>
+      explicitCancelStarted = resolve
+    );
+    processorStarted = explicitCancelStarted;
+    waitForAbort = true;
+    const explicitlyCancelled = await recovered.send({
+      type: "test.application.shutdown-interrupt",
+      namespace: NAMESPACE,
+    });
+    await explicitCancelStartedPromise;
+    await explicitlyCancelled.cancel("test_explicit_send_cancel");
+    const explicitSettlement = await recovered.events.settlement(
+      NAMESPACE,
+      explicitlyCancelled.eventId,
+    );
+    assertEquals(explicitSettlement.cancelled > 0, true);
+    await assertRejects(
+      () => explicitlyCancelled.done,
+      Error,
+      "test_explicit_send_cancel",
+    );
+  } finally {
+    await application.shutdown();
+    await recovered?.shutdown();
+    await db.close();
+  }
+});
+
 Deno.test("application composition remains factory-first and runtime-neutral", async () => {
   for (
     const module of [

@@ -81,6 +81,8 @@ type ParseConsolidationOptions = Readonly<{
   writableMemorySpaceIds: ReadonlySet<string>;
   defaultWriteMemorySpaceId: string;
   allowedEvidenceSources: ReadonlySet<string>;
+  /** Evidence used when a draft deliberately omits an explicit source list. */
+  defaultEvidenceSources?: readonly ContextSourceRef[];
   visibleMemoryIds: ReadonlySet<string>;
   visibleNodeIds: ReadonlySet<string>;
 }>;
@@ -144,6 +146,9 @@ function parseSources(
   options: ParseConsolidationOptions,
   label: string,
 ): readonly ContextSourceRef[] {
+  if (value === undefined && options.defaultEvidenceSources?.length) {
+    return Object.freeze(structuredClone(options.defaultEvidenceSources));
+  }
   if (!Array.isArray(value) || !value.length) {
     throw new TypeError(`${label} requires at least one evidence source.`);
   }

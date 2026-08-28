@@ -19,11 +19,7 @@ export function defineContextResource(
   if (!resource.purposes.length) {
     throw new TypeError(`Context resource '${id}' requires a purpose.`);
   }
-  if (
-    resource.purposes.some((purpose) =>
-      purpose !== "conversation" && purpose !== "memory_consolidation"
-    )
-  ) {
+  if (resource.purposes.some((purpose) => purpose !== "conversation")) {
     throw new TypeError(`Context resource '${id}' has an invalid purpose.`);
   }
   if (typeof resource.contribute !== "function") {

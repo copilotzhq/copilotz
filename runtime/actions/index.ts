@@ -14,6 +14,7 @@ export {
   actionCallerDefinitionId,
   actionTransactionIdentity,
   createActionCallers,
+  isActionInputValidationError,
   isSettledActionError,
 } from "./invoker.ts";
 export { createActionLifecycleEmitter } from "./lifecycle.ts";
@@ -33,6 +34,7 @@ export type {
   ActionHostContext,
 } from "./host.ts";
 export type {
+  ActionInputValidationError,
   ActionInvocationFrame,
   CreateActionCallersOptions,
 } from "./invoker.ts";

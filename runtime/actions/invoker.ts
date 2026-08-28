@@ -1,4 +1,8 @@
-import { validateAgainstJsonSchema } from "../collections/validate.ts";
+import {
+  isJsonSchemaValidationError,
+  validateAgainstJsonSchema,
+} from "../collections/validate.ts";
+import { markNonRetryable } from "../failure.ts";
 import {
   durableActionMetadata,
   durableActionValue,
@@ -25,11 +29,44 @@ import type {
 
 const ALIAS_PATTERN = /^[a-z][a-zA-Z0-9_]*$/;
 const settledActionErrors = new WeakSet<object>();
+const actionInputValidationErrors = new WeakSet<object>();
 // A composed Action alias is presentation only: Core needs the immutable
 // definition identity behind a caller when it persists a deferred workflow.
 // Keep that association private to the runtime rather than widening every
 // caller's public callable shape.
 const callerDefinitionIds = new WeakMap<object, string>();
+
+/**
+ * Identifies a caller value that failed an Action's input schema before an
+ * invocation lifecycle began. Orchestrators may turn this into a semantic
+ * failure while unrelated preflight and infrastructure errors still surface.
+ */
+export type ActionInputValidationError =
+  & TypeError
+  & Readonly<{ actionId: string }>;
+
+function actionInputValidationError(
+  actionId: string,
+  cause: TypeError,
+): ActionInputValidationError {
+  const error = markNonRetryable(new TypeError(cause.message, { cause }));
+  error.name = "ActionInputValidationError";
+  Object.defineProperty(error, "actionId", {
+    value: actionId,
+    enumerable: true,
+    configurable: false,
+    writable: false,
+  });
+  actionInputValidationErrors.add(error);
+  return error as unknown as ActionInputValidationError;
+}
+
+/** True only for pre-lifecycle Action input-schema failures. */
+export function isActionInputValidationError(
+  error: unknown,
+): error is ActionInputValidationError {
+  return error instanceof TypeError && actionInputValidationErrors.has(error);
+}
 
 /** Returns the registered Action definition id for a composed caller. */
 export function actionCallerDefinitionId(value: unknown): string | undefined {
@@ -393,11 +430,18 @@ function actionCaller(
     // the schema-owned protected projection inside its storage boundary.
     const durableInput = durableActionValue(input);
     if (action.inputSchema) {
-      validateAgainstJsonSchema(
-        action.inputSchema,
-        durableInput,
-        `Action '${action.id}' input`,
-      );
+      try {
+        validateAgainstJsonSchema(
+          action.inputSchema,
+          durableInput,
+          `Action '${action.id}' input`,
+        );
+      } catch (error) {
+        if (isJsonSchemaValidationError(error)) {
+          throw actionInputValidationError(action.id, error);
+        }
+        throw error;
+      }
     }
     const inputSecrets = protectedStrings(action.inputSchema, durableInput);
     assertMetadataIsSecretFree(frame.metadata, inputSecrets);

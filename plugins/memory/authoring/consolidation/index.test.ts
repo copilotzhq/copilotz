@@ -107,6 +107,24 @@ Deno.test("no_changes is explicit and cannot conceal mutations", () => {
   );
 });
 
+Deno.test("omitted record sources inherit the bounded trusted catalogue", () => {
+  const parsed = parseConsolidateMemoryInput({
+    outcome: "changes",
+    entities: [{
+      localId: "project",
+      kind: "entity.project",
+      summary: "Compass is the active project.",
+      name: "Compass",
+    }],
+  }, {
+    ...options(),
+    defaultEvidenceSources: [{ type: "message", id: "message-a" }],
+  });
+  assertEquals(parsed.entities?.[0].sources, [
+    { type: "message", id: "message-a" },
+  ]);
+});
+
 Deno.test("unauthorized, stale, and context-only sources are rejected", () => {
   const entity = (sources: unknown[]) => ({
     outcome: "changes",

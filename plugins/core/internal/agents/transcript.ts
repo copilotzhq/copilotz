@@ -175,11 +175,14 @@ export async function buildLlmTranscript(
     threadId: string;
     messageIds?: readonly string[];
     participantId?: string;
+    historyScopeId?: string;
   }>,
 ): Promise<readonly LlmMessage[]> {
   const thread = await loadThreadRecord(context, input.threadId);
   if (!thread) throw new Error(`Thread '${input.threadId}' was not found.`);
-  const history = await listThreadMessageRecords(context, input.threadId);
+  const history = await listThreadMessageRecords(context, input.threadId, {
+    ...(input.historyScopeId ? { historyScopeId: input.historyScopeId } : {}),
+  });
   const selected = input.messageIds?.length
     ? (() => {
       const byId = new Map(history.map((message) => [message.id, message]));

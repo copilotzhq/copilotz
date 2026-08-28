@@ -27,6 +27,10 @@ export type MessageRecord = Readonly<{
   revision?: MessageRevision;
 }>;
 
+type HistoryMessageRecord =
+  & MessageRecord
+  & Readonly<Record<string, unknown>>;
+
 /** Builds revision fields for a new `message.created` row. */
 export function messageRevisionFrom(
   previous: MessageRecord,
@@ -56,6 +60,8 @@ export const messageCollection: CollectionDefinition = defineCollection({
       },
       content: contentSequenceSchema,
       metadata: metadataSchema,
+      visibility: { type: "object" },
+      historyScopeId: { type: "string" },
       revision: {
         type: "object",
         additionalProperties: false,
@@ -129,7 +135,7 @@ export const messageCollection: CollectionDefinition = defineCollection({
           where: { threadId },
           order: { field: "createdAt", direction: "asc" },
           limit: 1_000,
-        }) as readonly MessageRecord[];
+        }) as readonly HistoryMessageRecord[];
         const thread = await read.get("thread", threadId);
         const projected = input.view === "all"
           ? records
@@ -137,10 +143,23 @@ export const messageCollection: CollectionDefinition = defineCollection({
             records,
             thread?.activeMessageBranch as MessageBranch | undefined,
           );
-        let bounded = [...projected];
+        // Public collection history excludes all internal/scoped messages.
+        // Core's private raw readers apply their own exact-scope policy.
+        const visible = projected.filter((message) => {
+          const scope = typeof message.historyScopeId === "string" &&
+              message.historyScopeId.trim()
+            ? message.historyScopeId.trim()
+            : undefined;
+          const visibility =
+            message.visibility && typeof message.visibility === "object"
+              ? message.visibility as Record<string, unknown>
+              : {};
+          return !scope && visibility.kind !== "internal";
+        });
+        let bounded = [...visible];
         const cursorId = after ?? before;
         if (cursorId) {
-          const cursor = projected.findIndex((message) =>
+          const cursor = visible.findIndex((message) =>
             message.id === cursorId
           );
           if (cursor < 0) {

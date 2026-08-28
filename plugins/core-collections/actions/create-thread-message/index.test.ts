@@ -3,6 +3,7 @@ import { createTestDomainContext } from "../../../core/internal/testing/context.
 import { createCopilotzApplication } from "../../../../runtime/application/index.ts";
 import { createTestDatabase } from "../../../../runtime/testing/ominipg.ts";
 import { coreCollectionsPlugin } from "../../plugin.ts";
+import { listThreadMessageRecords } from "../../internal/projections.ts";
 
 const NAMESPACE = "tenant-thread-message";
 
@@ -88,6 +89,35 @@ Deno.test("createThreadMessage ensures participant, membership, and message atom
         .filter((event) => event.type === "thread.updated").length,
       1,
     );
+
+    await context.actions.createThreadMessage({
+      id: "message-internal-turn",
+      threadId: "thread-a",
+      sender: {
+        externalId: "copilotz.maintenance",
+        participantType: "job",
+      },
+      recipientIds: ["human-a"],
+      content: "Private task",
+      visibility: { kind: "internal" },
+      historyScopeId: "turn:maintenance-a",
+    }, { operationKey: "thread-message:internal-turn" });
+    const publicHistory = await collections.message.queries.history({
+      threadId: "thread-a",
+      limit: 100,
+    });
+    assertEquals(publicHistory.map((item) => item.id), [
+      "message-human",
+      "message-job",
+    ]);
+    const scoped = await listThreadMessageRecords(context, "thread-a", {
+      historyScopeId: "turn:maintenance-a",
+    });
+    assertEquals(scoped.map((item) => item.id), [
+      "message-human",
+      "message-job",
+      "message-internal-turn",
+    ]);
   } finally {
     await application.shutdown();
     await db.close();

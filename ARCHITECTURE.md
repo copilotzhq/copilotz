@@ -366,9 +366,20 @@ A separate plugin depending on both Schedules and Core owns the typed
 scheduled-message payload and due-to-message workflow. Jobs contain a semantic
 payload discriminator, never an Action alias or executable locator. The runtime
 has no schedule service. Admin derives its views from semantic Message and Usage
-state rather than Event or delivery internals. Memory uses Collection graph
-relations and carries its triggering Event data explicitly in maintenance Action
-input rather than reaching into a domain repository.
+state rather than Event or delivery internals.
+
+Core also offers one semantic-neutral private Agent-turn cursor. A trusted
+plugin may create an internal Message with an opaque transcript scope, an owner
+Agent, and an optional successful-Action completion condition. Core routes that
+Message through the exact ordinary prompt, Model, credential, Tool, Ask, and
+continuation machinery, while excluding the private scope from ordinary prompt
+and HTTP history. Core never interprets the caller's domain task.
+
+Memory uses that cursor to dispatch consolidation to the owning Agent. Memory
+alone owns checkpoint reservation, frozen evidence, source authorization,
+ontology validation, graph mutation, bounded repair, and atomic settlement.
+`consolidate_memory` remains an ordinary granted Tool outside that private turn;
+only the Memory-owned cursor changes whether its successful call ends the turn.
 
 At a high level, the architecture can therefore be thought of as:
 

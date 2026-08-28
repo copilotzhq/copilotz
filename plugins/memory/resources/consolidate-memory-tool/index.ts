@@ -9,7 +9,7 @@ export function createConsolidateMemoryTool(
   return defineTool("consolidate_memory", action, {
     name: "Consolidate Memory",
     description:
-      "Persist one internal, provenance-aware semantic memory consolidation. This tool is granted only during Copilotz memory maintenance.",
+      "Persist a provenance-aware semantic memory consolidation from the current trusted Agent turn. Use it whenever durable memory should be created, corrected, or explicitly left unchanged.",
     history: { visibility: "requester_only" },
   });
 }

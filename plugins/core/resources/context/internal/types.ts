@@ -9,7 +9,7 @@ import type {
 import type { ScopedCollections } from "@copilotz/copilotz/collections";
 import type { ContentInput, ContentRef } from "@copilotz/copilotz/content";
 
-export type ContextPurpose = "conversation" | "memory_consolidation";
+export type ContextPurpose = "conversation";
 
 export type ContextSourceRef =
   | Readonly<{ type: "message"; id: string }>

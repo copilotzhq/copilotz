@@ -49,21 +49,9 @@ type LongTermMemoryPluginOptionsBase = Readonly<{
   version?: string;
   config?: Partial<LongTermMemoryConfig>;
   embed?: MemoryEmbed;
-  /** Number of internal contract-repair attempts after the initial call. */
-  maxRepairAttempts?: number;
 }>;
 
+/** Memory uses the target Agent's ordinary model selection and tool lifecycle. */
 export type CreateLongTermMemoryPluginOptions =
   & LongTermMemoryPluginOptionsBase
-  & (
-    | Readonly<{
-      enabled?: boolean;
-      /** Ordered aliases in the application's composed `resources.models`. */
-      models: readonly [string, ...string[]];
-    }>
-    | Readonly<{
-      enabled: false;
-      /** Required only if disabled maintenance is invoked manually. */
-      models?: never;
-    }>
-  );
+  & Readonly<{ enabled?: boolean }>;

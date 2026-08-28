@@ -65,17 +65,12 @@ export type {
 export {
   CONSOLIDATE_MEMORY_ACTION_ID,
   createLongTermMemoryPlugin,
-  MAINTAIN_MEMORY_ACTION_ID,
 } from "./plugin.ts";
 export type { LongTermMemoryPlugin } from "./plugin.ts";
 export type {
   ConsolidateMemoryActionInput,
   ConsolidateMemoryActionResult,
 } from "./actions/consolidate-memory/index.ts";
-export type {
-  MaintainMemoryActionInput,
-  MaintainMemoryActionResult,
-} from "./actions/maintain-memory/index.ts";
 export type {
   MemoryActionCallers,
   MemoryActionContext,

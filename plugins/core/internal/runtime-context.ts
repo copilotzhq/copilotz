@@ -13,6 +13,7 @@ import type {
 /** Defines the composed runtime contexts used by Core primitives. @module */
 
 import type { AgentResource } from "../resources/agent/index.ts";
+import type { PromptInstructionResource } from "../resources/prompt-instructions/index.ts";
 import type { ToolResource } from "@copilotz/copilotz/tools";
 import type { Skill } from "@copilotz/copilotz/skills";
 import type { createThreadMessageAction } from "../../core-collections/actions/create-thread-message/index.ts";
@@ -24,6 +25,9 @@ export type CoreResources =
     tools: Readonly<Record<string, ToolResource | undefined>>;
     skills: Readonly<Record<string, Skill | undefined>>;
     models: Readonly<Record<string, ModelResource | undefined>>;
+    promptInstructions: Readonly<
+      Record<string, PromptInstructionResource | undefined>
+    >;
   }>;
 
 export type CoreAdapters =

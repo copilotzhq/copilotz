@@ -1,4 +1,4 @@
-import { assert, assertEquals, assertExists, assertThrows } from "@std/assert";
+import { assertEquals, assertExists, assertThrows } from "@std/assert";
 import { defineAction } from "@copilotz/copilotz/actions";
 import { corePlugin, defineAgent } from "@copilotz/copilotz/core";
 import {

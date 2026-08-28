@@ -12,7 +12,9 @@ can recognize and dispatch.
 ## How to use it
 
 Call `scheduledMessageJob(...)`, or normalize and inspect an equivalent plain
-job payload with the exported helpers.
+job payload with the exported helpers. Application-authored jobs provide a
+non-empty `message.recipients` list because they have no trusted calling Agent
+from which to derive the Tool's default.
 
 ## How it works
 

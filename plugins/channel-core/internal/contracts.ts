@@ -81,6 +81,8 @@ export type ChannelThreadInput = Readonly<{
   description?: string;
   status?: string;
   metadata?: ChannelJsonObject;
+  /** Durable thread members, independent of this message's recipients. */
+  participants?: readonly ChannelParticipantRef[];
 }>;
 
 /** Provider-relative policy lowered to Core participant IDs by the Action. */

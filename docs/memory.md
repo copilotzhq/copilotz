@@ -7,7 +7,6 @@ Collections, native Actions, Tool Resources, and durable Processors.
 import { createLongTermMemoryPlugin } from "@copilotz/copilotz/memory";
 
 const memoryPlugin = createLongTermMemoryPlugin({
-  models: ["memoryModel", "memoryBackup"],
   config: {
     triggerEstimatedTokens: 8_000,
     retainRecentEstimatedTokens: 2_000,
@@ -15,10 +14,10 @@ const memoryPlugin = createLongTermMemoryPlugin({
 });
 ```
 
-`models` is a non-empty ordered list of aliases in the application's
-`resources.models` map. Memory never infers an Agent's Models; its maintenance
-Action calls the composed `llm.call` Action explicitly and uses the same ordered
-fallback semantics as Core.
+Memory uses the owning Agent's ordinary Model selection, credentials,
+instructions, Context, Skills, and explicitly granted Tool catalog. Add
+`consolidate_memory` to the `capabilities.tools` of every Agent that may write
+semantic memory.
 
 ## Durable model
 
@@ -34,17 +33,31 @@ explicit relations rather than silently overwriting historical evidence.
 ## Consolidation
 
 The plugin reserves a deterministic source range after its token threshold, then
-runs detached durable maintenance. The model may call only `consolidate_memory`;
-missing, multiple, unauthorized, or schema-invalid calls receive a bounded
-contract repair. Provider, cancellation, persistence, and infrastructure
-failures are not reinterpreted as prompt-repair opportunities.
+creates one detached internal Agent turn. It is routed by Core like every other
+turn and ends only when that scoped turn successfully calls
+`consolidate_memory`. A missing completion call receives one scoped repair;
+provider failures and cancellation settle the checkpoint without exposing the
+internal workflow in normal history.
 
 Collection state stores every checkpoint and terminal status, including
-`cancelled`. Restart recovery reuses the durable parent Action and cannot bill a
-second LLM call merely because checkpoint settlement was interrupted.
+`cancelled`. Restart recovery reuses deterministic Message, LLM Action,
+Tool-plan, and checkpoint identities; it cannot bill a second provider request
+merely because projection or checkpoint settlement was interrupted.
 
 New/updated records, relations, frozen evidence refs, lifecycle changes, and the
 ready checkpoint commit atomically.
+
+The internal maintenance instruction is appended as the last private Message,
+after the same ordinary history and prompt prefix used by the Agent. This keeps
+the Agent's instructions, Context, Skills, tools, Model ordering, and credential
+routing identical to a user-facing turn and preserves provider prompt-cache
+opportunities. The private scope is never accepted from HTTP history input.
+
+`consolidate_memory` may also be called during an ordinary turn. Core does not
+special-case that Tool: Memory derives a deterministic on-demand checkpoint from
+trusted Tool provenance, and the Agent continues after the Tool result. Only
+Memory's own private turn carries the generic Core completion condition that
+ends after a successful consolidation.
 
 ## Tools and grants
 

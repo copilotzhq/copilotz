@@ -27,7 +27,7 @@ Deno.test("published documentation matches the final version and subpaths", asyn
     version: string;
     exports: Record<string, string>;
   };
-  assertEquals(configuration.version, "0.63.4");
+  assertEquals(configuration.version, "0.63.5");
   const readme = await source("README.md");
   assertStringIncludes(readme, `@^${configuration.version}`);
   for (const subpath of Object.keys(configuration.exports)) {

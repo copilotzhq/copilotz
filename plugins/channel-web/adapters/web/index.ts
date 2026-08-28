@@ -100,6 +100,43 @@ function participant(value: unknown, label: string): ChannelParticipantInput {
   });
 }
 
+function thread(value: unknown): ChannelThreadInput {
+  const input = record(value, "Web Channel thread");
+  const participants = input.participants === undefined
+    ? undefined
+    : Array.isArray(input.participants)
+    ? Object.freeze(
+      input.participants.map((value, index) =>
+        typeof value === "string"
+          ? required(value, `Web Channel thread participant[${index}]`)
+          : participant(value, `Web Channel thread participant[${index}]`)
+      ),
+    ) as readonly ChannelParticipantRef[]
+    : (() => {
+      throw new TypeError("Web Channel thread participants must be an array.");
+    })();
+  return Object.freeze({
+    ...(typeof input.name === "string"
+      ? { name: required(input.name, "Web Channel thread name") }
+      : {}),
+    ...(typeof input.description === "string"
+      ? {
+        description: required(
+          input.description,
+          "Web Channel thread description",
+        ),
+      }
+      : {}),
+    ...(typeof input.status === "string"
+      ? { status: required(input.status, "Web Channel thread status") }
+      : {}),
+    ...(input.metadata && typeof input.metadata === "object"
+      ? { metadata: input.metadata as ChannelJsonObject }
+      : {}),
+    ...(participants ? { participants } : {}),
+  });
+}
+
 /** Converts one typed Web body into a durable occurrence and worker semantics. */
 export function createWebChannelAdapter(): ChannelAdapter {
   return Object.freeze({
@@ -142,7 +179,7 @@ export function createWebChannelAdapter(): ChannelAdapter {
         ...(recipients ? { recipients } : {}),
         content: content(input.content) as never,
         ...(input.thread && typeof input.thread === "object"
-          ? { thread: input.thread as ChannelThreadInput }
+          ? { thread: thread(input.thread) }
           : {}),
         ...(input.route && typeof input.route === "object"
           ? { route: input.route as ChannelJsonObject }

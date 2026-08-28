@@ -20,8 +20,10 @@ import type {
   CoreScheduledMessageOccurrence,
   DispatchScheduledMessageResult,
 } from "../../internal/contracts.ts";
-
-type CoreAgent = NonNullable<CoreResources["agents"][string]>;
+import {
+  type CoreScheduledAgent,
+  resolveConfiguredScheduledAgent,
+} from "../../internal/recipients.ts";
 
 type ParticipantPlan =
   | Readonly<{ existing: CollectionRecord }>
@@ -105,7 +107,7 @@ async function resolveSender(
 }
 
 async function resolveAgentParticipant(
-  agent: CoreAgent,
+  agent: CoreScheduledAgent,
   context: CoreSchedulesActionContext,
 ): Promise<ParticipantPlan> {
   const externalId = agent.id;
@@ -138,8 +140,7 @@ async function resolveRecipient(
     await byExternalId(context, "participant", id);
   if (existing) return existingParticipant(existing);
   const agents = context.resources.agents ?? {};
-  const agent = agents[id] ??
-    Object.values(agents).find((value) => value?.id === id);
+  const agent = resolveConfiguredScheduledAgent(id, agents);
   if (agent) return await resolveAgentParticipant(agent, context);
   throw new Error(`Scheduled recipient '${id}' was not found.`);
 }
@@ -154,24 +155,6 @@ async function findThread(
     : descriptor?.externalId
     ? await byExternalId(context, "thread", descriptor.externalId)
     : await byExternalId(context, "thread", `scheduled-job:${item.jobId}`);
-}
-
-async function existingAgentRecipients(
-  thread: CollectionRecord,
-  context: CoreSchedulesActionContext,
-): Promise<readonly ParticipantPlan[]> {
-  const participants = await Promise.all(
-    stringArray(thread.participantIds).map((id) =>
-      context.collections.participant.get({ id })
-    ),
-  );
-  return Object.freeze(
-    participants
-      .filter((value): value is CollectionRecord =>
-        value !== null && value.participantType === "agent"
-      )
-      .map(existingParticipant),
-  );
 }
 
 function uniqueParticipantPlans(
@@ -201,7 +184,7 @@ async function dispatchScheduledMessage(
   }
   const sender = await resolveSender(item, context);
   const existingThread = await findThread(item, context);
-  let recipients = uniqueParticipantPlans(
+  const recipients = uniqueParticipantPlans(
     await Promise.all(
       (item.payload.recipientIds ?? []).map((value) =>
         resolveRecipient(value, context)
@@ -209,12 +192,7 @@ async function dispatchScheduledMessage(
     ),
   );
   if (recipients.length === 0) {
-    recipients = existingThread
-      ? await existingAgentRecipients(existingThread, context)
-      : Object.freeze([]);
-  }
-  if (recipients.length === 0) {
-    throw new Error(`Scheduled job '${item.jobId}' has no agent recipient.`);
+    throw new Error(`Scheduled job '${item.jobId}' has no recipient.`);
   }
   const metadata = {
     scheduledJob: {

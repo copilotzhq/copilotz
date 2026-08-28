@@ -8,6 +8,7 @@ import {
   CORE_TOOL_PLAN_METADATA_SCHEMA,
   coreLlmCallMetadata,
   withAgentAskMetadata,
+  withCoreAgentTurnMetadata,
   withCoreToolPlanMetadata,
   withWorkflowMetadata,
 } from "../../internal/workflow-metadata.ts";
@@ -110,8 +111,12 @@ export const projectTextResultProcessor: Processor<
         parentLlmAttemptId: metadata.parentActionRunId,
         sourceMessageId: metadata.triggerMessageId,
         agentParticipantId: participant.id,
+        initiatorParticipantId: metadata.initiatorParticipantId,
       },
     );
+    const scopedMessageMetadata = metadata.agentTurn
+      ? withCoreAgentTurnMetadata(messageMetadata, metadata.agentTurn)
+      : messageMetadata;
     const createMessage = context.actions.createThreadMessage;
     if (typeof createMessage !== "function") {
       throw new Error("Core requires the createThreadMessage Action.");
@@ -123,7 +128,8 @@ export const projectTextResultProcessor: Processor<
       recipientIds: outputAsk ? [outputAsk.askingParticipantId] : [],
       content: output.content,
       visibility: structuredClone(metadata.responseVisibility),
-      metadata: messageMetadata,
+      metadata: scopedMessageMetadata,
+      ...(metadata.agentTurn ? { historyScopeId: metadata.agentTurn.id } : {}),
     }, {
       operationKey: "project:agent-message",
       signal: context.signal,
@@ -142,6 +148,7 @@ export const projectTextResultProcessor: Processor<
       availableToolIds: metadata.availableToolIds,
       responseVisibility: metadata.responseVisibility,
       parentLlmActionRunId: actionRunId,
+      ...(metadata.agentTurn ? { agentTurn: metadata.agentTurn } : {}),
       rootTools: snapshotRootTools(context, toolCalls),
       stageHistoryVisibility: snapshotToolStageHistory(context, toolCalls),
       stageActionIds: snapshotToolStageActionIds(context, toolCalls),

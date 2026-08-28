@@ -6,6 +6,7 @@ const AGENT_ASK_RESULT_METADATA_KEY = "copilotzAskResult";
 const TOOL_PLAN_METADATA_KEY = "copilotzToolPlan";
 const TOOL_ACTION_METADATA_KEY = "copilotzToolAction";
 const TOOL_PLAN_RESULT_METADATA_KEY = "copilotzToolPlanResult";
+const AGENT_TURN_METADATA_KEY = "copilotzAgentTurn";
 export const CORE_LLM_CALL_METADATA_SCHEMA = "copilotz.core.llm-call.v1";
 export const CORE_TOOL_ACTION_METADATA_SCHEMA = "copilotz.core.tool-action.v1";
 export const CORE_TOOL_PLAN_METADATA_SCHEMA = "copilotz.core.tool-plan.v1";
@@ -51,6 +52,17 @@ export type AgentAskResultMetadata = Readonly<{
   answerMessageId?: string;
 }>;
 
+/** Generic caller-owned control for one private Agent turn. */
+export type CoreAgentTurnMetadata = Readonly<{
+  schema: "copilotz.core.agent-turn.v1";
+  /** Opaque private transcript scope. */
+  id: string;
+  /** Only this participant may satisfy `completeOn`. */
+  ownerParticipantId: string;
+  /** Successful matching Action stops this turn only. */
+  completeOn?: Readonly<{ action: string }>;
+}>;
+
 /** Durable Core provenance attached to one provider-neutral `llm.call`. */
 export type CoreLlmCallMetadata = Readonly<{
   schema: typeof CORE_LLM_CALL_METADATA_SCHEMA;
@@ -64,6 +76,7 @@ export type CoreLlmCallMetadata = Readonly<{
   responseVisibility: EventVisibility;
   parentActionRunId?: string;
   ask?: AgentAskMetadata;
+  agentTurn?: CoreAgentTurnMetadata;
   /** Optional opaque prompt-policy revision, never resolved instructions. */
   instructionRevision?: string;
 }>;
@@ -102,6 +115,7 @@ export type CoreToolActionOrigin = Readonly<{
   /** Original response audience retained across every Tool continuation. */
   responseVisibility: EventVisibility;
   parentLlmActionRunId: string;
+  agentTurn?: CoreAgentTurnMetadata;
 }>;
 
 /** Core provenance attached directly to each ordinary Tool Action call. */
@@ -198,7 +212,6 @@ export type WorkflowMetadata = Readonly<{
     | "agent_output"
     | "tool_result"
     | "provider_attempt"
-    | "memory_consolidation"
     | "realtime_message";
   continuation?: "text" | "realtime" | "none";
   realtimeStreamId?: string;
@@ -206,6 +219,7 @@ export type WorkflowMetadata = Readonly<{
   parentLlmAttemptId?: string;
   sourceMessageId?: string;
   agentParticipantId?: string;
+  initiatorParticipantId?: string;
 }>;
 
 function record(value: unknown): Record<string, unknown> {
@@ -234,10 +248,62 @@ export function workflowMetadata(value: unknown): WorkflowMetadata | null {
   const kind = candidate.kind;
   if (
     kind !== "agent_output" && kind !== "tool_result" &&
-    kind !== "provider_attempt" &&
-    kind !== "memory_consolidation" && kind !== "realtime_message"
+    kind !== "provider_attempt" && kind !== "realtime_message"
+  ) return null;
+  if (
+    candidate.initiatorParticipantId !== undefined &&
+    !optionalMetadataText(candidate.initiatorParticipantId)
   ) return null;
   return candidate as WorkflowMetadata;
+}
+
+const AGENT_TURN_KEYS = new Set([
+  "schema",
+  "id",
+  "ownerParticipantId",
+  "completeOn",
+]);
+
+function validCoreAgentTurnMetadata(
+  value: unknown,
+): CoreAgentTurnMetadata | null {
+  const candidate = record(value);
+  if (
+    Object.keys(candidate).some((key) => !AGENT_TURN_KEYS.has(key)) ||
+    candidate.schema !== "copilotz.core.agent-turn.v1" ||
+    !optionalMetadataText(candidate.id) ||
+    !optionalMetadataText(candidate.ownerParticipantId)
+  ) return null;
+  if (candidate.completeOn !== undefined) {
+    const completeOn = record(candidate.completeOn);
+    if (
+      Object.keys(completeOn).length !== 1 ||
+      !optionalMetadataText(completeOn.action)
+    ) return null;
+  }
+  return candidate as CoreAgentTurnMetadata;
+}
+
+/** Attaches validated generic turn control without replacing plugin metadata. */
+export function withCoreAgentTurnMetadata(
+  metadata: Readonly<Record<string, unknown>> | undefined,
+  agentTurn: CoreAgentTurnMetadata,
+): Record<string, unknown> {
+  const validated = validCoreAgentTurnMetadata(agentTurn);
+  if (!validated) throw new TypeError("Invalid Core Agent turn metadata.");
+  return {
+    ...structuredClone(metadata ?? {}),
+    [AGENT_TURN_METADATA_KEY]: structuredClone(validated),
+  };
+}
+
+/** Reads validated generic turn control from a durable Message. */
+export function coreAgentTurnMetadata(
+  value: unknown,
+): CoreAgentTurnMetadata | null {
+  return validCoreAgentTurnMetadata(
+    record(value)[AGENT_TURN_METADATA_KEY],
+  );
 }
 
 /** Adds one public ask descriptor without replacing unrelated metadata. */
@@ -434,6 +500,7 @@ const CORE_LLM_CALL_KEYS = new Set([
   "responseVisibility",
   "parentActionRunId",
   "ask",
+  "agentTurn",
   "instructionRevision",
 ]);
 
@@ -477,6 +544,14 @@ export function coreLlmCallMetadata(
     candidate.ask !== undefined &&
     !validAgentAsk(record(candidate.ask))
   ) return null;
+  const agentTurn = candidate.agentTurn === undefined
+    ? undefined
+    : validCoreAgentTurnMetadata(candidate.agentTurn);
+  if (candidate.agentTurn !== undefined && !agentTurn) return null;
+  if (
+    agentTurn?.completeOn &&
+    !candidate.availableToolIds.includes(agentTurn.completeOn.action)
+  ) return null;
   return candidate as CoreLlmCallMetadata;
 }
 
@@ -494,6 +569,9 @@ export function defineCoreLlmCallMetadata(
       validated.responseVisibility,
     ),
     ...(validated.ask ? { ask: Object.freeze(validated.ask) } : {}),
+    ...(validated.agentTurn
+      ? { agentTurn: Object.freeze(structuredClone(validated.agentTurn)) }
+      : {}),
   });
 }
 
@@ -557,6 +635,7 @@ const TOOL_ACTION_ORIGIN_KEYS = new Set([
   "availableToolIds",
   "responseVisibility",
   "parentLlmActionRunId",
+  "agentTurn",
 ]);
 
 function validToolActionOrigin(
@@ -585,6 +664,14 @@ function validToolActionOrigin(
     Number(candidate.stageIndex) >= Number(candidate.stageCount) ||
     !validStringArray(candidate.availableToolIds) ||
     !coreEventVisibility(candidate.responseVisibility)
+  ) return null;
+  const agentTurn = candidate.agentTurn === undefined
+    ? undefined
+    : validCoreAgentTurnMetadata(candidate.agentTurn);
+  if (candidate.agentTurn !== undefined && !agentTurn) return null;
+  if (
+    agentTurn?.completeOn &&
+    !candidate.availableToolIds.includes(agentTurn.completeOn.action)
   ) return null;
   return candidate as CoreToolActionOrigin;
 }
@@ -633,6 +720,9 @@ export function defineCoreToolActionMetadata(
       validated.responseVisibility,
     ),
     ...(validated.ask ? { ask: Object.freeze(validated.ask) } : {}),
+    ...(validated.agentTurn
+      ? { agentTurn: Object.freeze(structuredClone(validated.agentTurn)) }
+      : {}),
   });
 }
 
@@ -718,5 +808,5 @@ export function providerAttemptEventMetadata(value: unknown): boolean {
 
 export function textWorkflowAttemptEventMetadata(value: unknown): boolean {
   const kind = workflowMetadata(value)?.kind;
-  return kind !== "provider_attempt" && kind !== "memory_consolidation";
+  return kind !== "provider_attempt";
 }

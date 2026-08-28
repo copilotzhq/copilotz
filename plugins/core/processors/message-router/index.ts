@@ -4,6 +4,7 @@ import { isSettledActionError } from "@copilotz/copilotz/actions";
 import {
   agentAskMetadata,
   CORE_LLM_CALL_METADATA_SCHEMA,
+  coreAgentTurnMetadata,
   coreLlmStreamMetadata,
   coreToolActionMessageMetadata,
   coreToolPlanResultMetadata,
@@ -187,6 +188,19 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
       const toolAction = coreToolActionMessageMetadata(record.metadata);
       const branchResult = coreToolPlanResultMetadata(record.metadata);
       const toolCursor = toolAction ?? branchResult?.origin;
+      const directTurn = coreAgentTurnMetadata(record.metadata);
+      const agentTurn = directTurn ?? toolCursor?.agentTurn;
+      if (
+        agentTurn && (
+          event.visibility?.kind !== "internal" ||
+          asRecord(record.visibility).kind !== "internal" ||
+          record.historyScopeId !== agentTurn.id
+        )
+      ) {
+        throw new Error(
+          "Core Agent turn requires a matching internal Message.",
+        );
+      }
       // A projected Tool result retains an outer ask under its durable cursor;
       // use it when the Message itself is not an ask-question/answer Message.
       const ask = agentAskMetadata(asRecord(record.metadata)) ??
@@ -201,6 +215,7 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
       const history = await listThreadMessages(
         context,
         String(record.threadId),
+        agentTurn ? { historyScopeId: agentTurn.id } : undefined,
       );
       const triggerIndex = history.findIndex((item) => item.id === record.id);
       if (triggerIndex < 0) {
@@ -231,6 +246,7 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
           threadId: String(record.threadId),
           messageIds: historyIds,
           tools: availableTools,
+          ...(agentTurn ? { historyScopeId: agentTurn.id } : {}),
         });
         const continuationKey = workflow?.kind === "tool_result"
           ? `${requiredText(toolCursor?.planId, "Tool plan id")}:${recipientId}`
@@ -242,6 +258,8 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
           agentId,
           agentParticipantId: String(participant.id),
           initiatorParticipantId: toolCursor?.initiatorParticipantId ??
+            ask?.origin.initiatorParticipantId ??
+            workflow?.initiatorParticipantId ??
             String(sender.id),
           availableToolIds,
           responseVisibility: structuredClone(
@@ -255,6 +273,7 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
             }
             : {}),
           ...(ask ? { ask: structuredClone(ask) } : {}),
+          ...(agentTurn ? { agentTurn: structuredClone(agentTurn) } : {}),
           ...(resolved.instructionRevision
             ? { instructionRevision: resolved.instructionRevision }
             : {}),

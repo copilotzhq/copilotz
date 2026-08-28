@@ -164,14 +164,20 @@ export function participantInput(participant: CollectionRecord) {
 export async function listThreadMessages(
   context: Pick<ProcessorContext, "collections">,
   threadId: string,
+  options: Readonly<{ historyScopeId?: string }> = {},
 ): Promise<readonly CollectionRecord[]> {
   const threads = requireCollection(context, "thread");
   const messages = requireCollection(context, "message");
   const thread = await threads.get({ id: threadId });
-  const records = await messages.list({
+  const records = (await messages.list({
     where: { threadId },
     order: { field: "createdAt", direction: "asc" },
     limit: 1_000,
+  })).filter((record) => {
+    const scope = optionalText(record.historyScopeId);
+    const visibility = asRecord(record.visibility);
+    if (!scope) return visibility.kind !== "internal";
+    return scope === options.historyScopeId && visibility.kind === "internal";
   });
   return orderToolPlanResults(projectActiveMessageBranch(
     records,

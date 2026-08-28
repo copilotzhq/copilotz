@@ -62,6 +62,7 @@ const THREAD_KEYS = new Set([
   "description",
   "status",
   "metadata",
+  "participants",
 ]);
 const PARTICIPANT_TYPES = new Set<ChannelParticipantType>([
   "human",
@@ -235,6 +236,16 @@ function thread(value: unknown): ChannelThreadInput {
   const metadata = snapshot.metadata === undefined
     ? undefined
     : jsonObject(snapshot.metadata, "Channel thread metadata");
+  const participants = snapshot.participants === undefined
+    ? undefined
+    : Object.freeze(
+      dataArray(snapshot.participants, "Channel thread participants").map(
+        (item, index): ChannelParticipantRef =>
+          typeof item === "string"
+            ? requiredText(item, `Channel thread participant[${index}]`)
+            : participant(item, `Channel thread participant[${index}]`),
+      ),
+    );
   return Object.freeze({
     ...(optionalText(snapshot.name, "Channel thread name")
       ? { name: optionalText(snapshot.name, "Channel thread name") }
@@ -251,6 +262,7 @@ function thread(value: unknown): ChannelThreadInput {
       ? { status: optionalText(snapshot.status, "Channel thread status") }
       : {}),
     ...(metadata ? { metadata } : {}),
+    ...(participants ? { participants } : {}),
   });
 }
 
@@ -644,6 +656,18 @@ async function executeChannelIngress(
           `Channel '${input.channelId}' ingress has no recipient participant.`,
         );
       }
+      const declaredParticipants = received.thread?.participants === undefined
+        ? undefined
+        : await Promise.all(
+          received.thread.participants.map((value) =>
+            recipientPlan(context, input.channelId, value)
+          ),
+        );
+      const threadParticipants = uniquePlans(
+        declaredParticipants === undefined
+          ? [sender, ...recipients]
+          : [sender, ...recipients, ...declaredParticipants],
+      );
       const eventMetadata = Object.freeze({
         channel: Object.freeze({
           channelId: input.channelId,
@@ -665,18 +689,39 @@ async function executeChannelIngress(
         },
       );
       await context.transaction(async (transaction) => {
-        const senderRef = await stageParticipant(
-          sender,
-          transaction.collections,
-          eventMetadata,
-        );
-        const recipientRefs = await Promise.all(
-          recipients.map((plan) =>
-            stageParticipant(plan, transaction.collections, eventMetadata)
+        const stagedParticipants = await Promise.all(
+          uniquePlans([...threadParticipants, ...recipients]).map(
+            async (plan) =>
+              Object.freeze({
+                id: plan.id,
+                ref: await stageParticipant(
+                  plan,
+                  transaction.collections,
+                  eventMetadata,
+                ),
+              }),
           ),
         );
+        const participantRefs = new Map(
+          stagedParticipants.map((entry) => [entry.id, entry.ref]),
+        );
+        const senderRef = participantRefs.get(sender.id);
+        if (!senderRef) throw new Error("Channel sender was not staged.");
+        const recipientRefs = recipients.map((plan) => {
+          const ref = participantRefs.get(plan.id);
+          if (!ref) throw new Error("Channel recipient was not staged.");
+          return ref;
+        });
         const participantIds = Object.freeze([
-          ...new Set([senderRef.id, ...recipientRefs.map((ref) => ref.id)]),
+          ...new Set(
+            threadParticipants.map((plan) => {
+              const ref = participantRefs.get(plan.id);
+              if (!ref) {
+                throw new Error("Channel thread participant was not staged.");
+              }
+              return ref.id;
+            }),
+          ),
         ]);
         if (existingThread) {
           const set: Record<string, unknown> = { metadata: threadMetadata };

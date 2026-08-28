@@ -1,5 +1,6 @@
 import {
   actionCallerDefinitionId,
+  isActionInputValidationError,
   isSettledActionError,
   parseActionLifecycleEvent,
 } from "@copilotz/copilotz/actions";
@@ -29,12 +30,14 @@ import {
   type AgentAskResultMetadata,
   agentAskResultMetadata,
   CORE_TOOL_ACTION_METADATA_SCHEMA,
+  type CoreAgentTurnMetadata,
   type CoreToolActionMetadata,
   coreToolActionMetadata,
   type CoreToolActionOrigin,
   coreToolPlanMetadata,
   defineCoreToolActionMetadata,
   withAgentAskResultMetadata,
+  withCoreAgentTurnMetadata,
   withCoreToolActionMessageMetadata,
   withCoreToolPlanResultMetadata,
   withWorkflowMetadata,
@@ -67,6 +70,7 @@ export type CoreToolPlanBase = Readonly<{
   responseVisibility: EventVisibility;
   parentLlmActionRunId:
     string; /** Immutable root Tool presentation, independent of restart composition. */
+  agentTurn?: CoreAgentTurnMetadata;
   rootTools: readonly Readonly<
     { alias: string; name: string }
   >[]; /** Immutable Tool history policy per pipeline stage. */
@@ -287,6 +291,7 @@ export function toolActionMetadataAt(
     availableToolIds: plan.availableToolIds,
     responseVisibility: plan.responseVisibility,
     parentLlmActionRunId: plan.parentLlmActionRunId,
+    ...(plan.agentTurn ? { agentTurn: plan.agentTurn } : {}),
     ...(plan.ask ? { ask: plan.ask } : {}),
   });
 }
@@ -575,7 +580,22 @@ export async function invokeToolPlanAction(
       },
     );
   } catch (error) {
-    if (!isSettledActionError(error)) throw error;
+    if (isSettledActionError(error)) return;
+    if (!isActionInputValidationError(error)) throw error;
+    // Model-authored arguments may fail a valid Tool Action schema before an
+    // Action lifecycle begins. That is a recoverable Tool result, not broken
+    // orchestration. Keep the schema diagnostic bounded and never persist the
+    // rejected input (which may contain schema-marked secret values).
+    const diagnostic = error.message.trim();
+    await projectAndAdvanceToolPlan(context, metadata, {
+      status: "failed",
+      error: {
+        name: "ToolInputValidationError",
+        message: diagnostic
+          ? diagnostic.slice(0, 1_000)
+          : `Tool Action '${metadata.action}' input failed validation.`,
+      },
+    });
   }
 }
 export async function createDurableToolPlan(
@@ -1023,6 +1043,29 @@ export async function projectDurableToolPlan(
     return;
   }
   const base = baseFrom(claimed), loaded = await loadPlan(context, base);
+  const completionAction = base.agentTurn?.ownerParticipantId ===
+      base.agentParticipantId
+    ? base.agentTurn.completeOn?.action
+    : undefined;
+  const completesTurn = completionAction
+    ? (await Promise.all(loaded.calls.map(async (call, index) => {
+      const current = branch(claimed, index);
+      const resultId = current?.finalResultId;
+      if (!resultId) return false;
+      const result = await readTerminal(
+        context,
+        text(resultId, "Final stage result ID"),
+        {
+          planId: base.planId,
+          branchIndex: index,
+        },
+      );
+      const source = result.terminal.sourceAction;
+      const stage = source ? stages(call)[source.stageIndex] : undefined;
+      return result.terminal.status === "completed" &&
+        stage?.type === "tool" && stage.action === completionAction;
+    }))).some(Boolean)
+    : false;
   for (const [index, call] of loaded.calls.entries()) {
     const current = branch(claimed, index);
     const result = await readTerminal(
@@ -1092,12 +1135,19 @@ export async function projectDurableToolPlan(
       toolPlanSize: base.planSize,
     } as never, {
       kind: "tool_result",
-      ...(hasNext ? { continuation: "none" as const } : {}),
+      ...(hasNext || completesTurn ? { continuation: "none" as const } : {}),
       llmAttemptId: base.parentLlmActionRunId,
       parentLlmAttemptId: base.parentLlmActionRunId,
       sourceMessageId: base.planMessageId,
       agentParticipantId: base.agentParticipantId,
+      initiatorParticipantId: base.initiatorParticipantId,
     });
+    if (base.agentTurn) {
+      branchMetadata = withCoreAgentTurnMetadata(
+        branchMetadata,
+        base.agentTurn,
+      );
+    }
     // A failed/cancelled Ask remains an ordinary terminal Tool error.  Only a
     // completed Ask has a canonical Answer Message to reference.
     const receipt = rootTerminal?.terminal.askResult?.status === "completed"
@@ -1151,6 +1201,7 @@ export async function projectDurableToolPlan(
         : resultContent(result.terminal, false),
       visibility,
       metadata,
+      ...(base.agentTurn ? { historyScopeId: base.agentTurn.id } : {}),
     }, context);
   }
   await collection.commands.finishProjection({ id: plan.id, owner: event.id }, {

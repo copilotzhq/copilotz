@@ -360,6 +360,11 @@ type ThreadActivityDelivery = Readonly<{
   updatedAt: string;
 }>;
 
+type ActivityDeliveryEntry = Readonly<{
+  delivery: ThreadActivityDelivery;
+  foreground: boolean;
+}>;
+
 function activityDelivery(
   event: DurableEvent,
   delivery: EventDelivery,
@@ -378,6 +383,27 @@ function activityDelivery(
   });
 }
 
+/**
+ * Activity represents one logical run, rather than every delivery ever
+ * created for a Thread. Older Events can predate correlation IDs, so keep
+ * each missing identifier isolated instead of accidentally merging them.
+ */
+function activityGroupKey(event: DurableEvent): string {
+  const correlationId = event.correlationId.trim();
+  return correlationId ? `correlation:${correlationId}` : `event:${event.id}`;
+}
+
+function isNewerActivityEvent(
+  candidate: DurableEvent,
+  current: DurableEvent | undefined,
+): boolean {
+  if (!current) return true;
+  if (candidate.createdAt !== current.createdAt) {
+    return candidate.createdAt > current.createdAt;
+  }
+  return candidate.id > current.id;
+}
+
 async function threadActivity(
   application: CopilotzApplication,
   namespace: string,
@@ -390,28 +416,49 @@ async function threadActivity(
     threadId: thread.id,
     limit,
   });
-  const deliveries = (
+  const latest = events.reduce<DurableEvent | undefined>(
+    (current, event) => isNewerActivityEvent(event, current) ? event : current,
+    undefined,
+  );
+  const activeGroup = latest ? activityGroupKey(latest) : undefined;
+  const scopedEvents = activeGroup
+    ? events.filter((event) => activityGroupKey(event) === activeGroup)
+    : [];
+  const deliveryEntries = (
     await Promise.all(
-      events.map(async (event) =>
+      scopedEvents.map(async (event) =>
         (await application.deliveries.list({
           namespace,
           eventId: event.id,
           limit: 1_000,
-        })).map((delivery) => activityDelivery(event, delivery))
+        })).map((delivery): ActivityDeliveryEntry =>
+          Object.freeze({
+            delivery: activityDelivery(event, delivery),
+            foreground: !delivery.settlementScopeId.startsWith("detached:"),
+          })
+        )
       ),
     )
   ).flat();
-  const active = deliveries.filter((delivery) =>
+  // Detached processors are durable background work (for example memory
+  // reservation), not work that keeps a conversation turn in progress.
+  const foregroundDeliveries = deliveryEntries.filter((entry) =>
+    entry.foreground
+  ).map((entry) => entry.delivery);
+  const active = foregroundDeliveries.filter((delivery) =>
     delivery.status === "pending" || delivery.status === "leased" ||
     delivery.status === "retry_wait"
   );
-  const failures = deliveries.filter((delivery) =>
+  const failures = foregroundDeliveries.filter((delivery) =>
     delivery.status === "dead_letter"
   ).sort((left, right) => left.updatedAt.localeCompare(right.updatedAt));
-  const updatedAt = deliveries.reduce(
+  const updatedAt = foregroundDeliveries.reduce(
     (latest, delivery) =>
       delivery.updatedAt > latest ? delivery.updatedAt : latest,
-    thread.updatedAt,
+    scopedEvents.reduce(
+      (latest, event) => event.createdAt > latest ? event.createdAt : latest,
+      thread.updatedAt,
+    ),
   );
   const includeDeliveries = queryText(request.query, "includeDeliveries") ===
     "true";

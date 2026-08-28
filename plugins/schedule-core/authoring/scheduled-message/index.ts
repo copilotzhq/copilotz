@@ -38,12 +38,17 @@ function optionalRecord(
 function stringList(
   value: unknown,
   name: string,
-): readonly string[] | undefined {
-  if (value === undefined) return undefined;
+): readonly string[] {
   if (!Array.isArray(value)) throw new TypeError(`${name} must be an array.`);
-  return Object.freeze(
-    value.map((item) => requireScheduledText(item, name)),
-  );
+  const values = [
+    ...new Set(
+      value.map((item) => requireScheduledText(item, name)),
+    ),
+  ];
+  if (values.length === 0) {
+    throw new TypeError(`${name} must contain at least one value.`);
+  }
+  return Object.freeze(values);
 }
 
 export function normalizeCoreScheduledMessagePayload(
@@ -116,14 +121,10 @@ export function normalizeCoreScheduledMessagePayload(
         },
       }
       : {}),
-    ...(stringList(input.recipientIds, "Scheduled recipient ID")
-      ? {
-        recipientIds: stringList(
-          input.recipientIds,
-          "Scheduled recipient ID",
-        ),
-      }
-      : {}),
+    recipientIds: stringList(
+      input.recipientIds,
+      "Scheduled recipient ID",
+    ),
     ...(metadata ? { metadata } : {}),
   });
 }
@@ -137,7 +138,7 @@ export function scheduledMessageJob(
     type: CORE_SCHEDULED_MESSAGE_PAYLOAD_TYPE,
     ...(message.thread ? { thread: message.thread } : {}),
     ...(message.sender ? { sender: message.sender } : {}),
-    ...(message.recipientIds ? { recipientIds: message.recipientIds } : {}),
+    recipientIds: message.recipients,
     ...(message.metadata ? { metadata: message.metadata } : {}),
   });
   return Object.freeze({

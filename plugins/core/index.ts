@@ -82,6 +82,7 @@ export {
 } from "../core-collections/internal/projections.ts";
 export * from "./internal/capabilities/index.ts";
 export * from "./resources/context/index.ts";
+export * from "./resources/prompt-instructions/index.ts";
 export * from "./internal/thread-metadata.ts";
 export * from "./internal/workflow-metadata.ts";
 export * from "./actions/index.ts";

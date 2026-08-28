@@ -25,6 +25,7 @@ import {
   collectContextContributions,
   renderContextContent,
 } from "../../resources/context/index.ts";
+import { collectPromptInstructions } from "../../resources/prompt-instructions/internal/collection.ts";
 import { getPublicThreadMetadata } from "../thread-metadata.ts";
 import { buildLlmTranscript } from "./transcript.ts";
 
@@ -33,6 +34,11 @@ type RenderedContext = Readonly<{
   role: "context" | "evidence";
   text: string;
   historyAfterMessageId?: string;
+}>;
+
+type RenderedPromptInstruction = Readonly<{
+  id: string;
+  instructions: string;
 }>;
 
 function record(value: unknown): Record<string, unknown> {
@@ -74,6 +80,7 @@ function systemPrompt(
     agents: readonly AgentResource[];
     skillDescriptions: readonly string[];
     userMetadata?: Readonly<Record<string, unknown>>;
+    promptInstructions: readonly RenderedPromptInstruction[];
     context: readonly RenderedContext[];
   }>,
 ): string {
@@ -167,6 +174,15 @@ function systemPrompt(
         ...input.skillDescriptions,
       ].join("\n")
       : "",
+    input.promptInstructions.length
+      ? [
+        "## SHARED INSTRUCTIONS",
+        ...input.promptInstructions.flatMap((instruction) => [
+          `### ${instruction.id}`,
+          instruction.instructions,
+        ]),
+      ].join("\n\n")
+      : "",
     [
       "## IDENTITY",
       `You are ${input.agent.name}`,
@@ -250,6 +266,7 @@ export async function buildCoreLlmRequest(
     threadId: string;
     messageIds: readonly string[];
     tools: readonly CoreToolEntry[];
+    historyScopeId?: string;
   }>,
 ): Promise<LlmRequest> {
   const participant = mapParticipantRecord(input.participant);
@@ -259,7 +276,9 @@ export async function buildCoreLlmRequest(
     candidate.participantType === "human"
   );
   const userMetadata = human ? visibleMetadata(human.metadata) : undefined;
-  const rawHistory = await listThreadMessageRecords(context, input.threadId);
+  const rawHistory = await listThreadMessageRecords(context, input.threadId, {
+    ...(input.historyScopeId ? { historyScopeId: input.historyScopeId } : {}),
+  });
   const contributions = await collectContextContributions(context, {
     purpose: "conversation",
     agent: input.agent,
@@ -278,6 +297,9 @@ export async function buildCoreLlmRequest(
       })
     )),
   );
+  const promptInstructions = collectPromptInstructions(
+    context.resources.promptInstructions,
+  );
   const messageIds = historyIdsAfterContext(
     input.messageIds,
     rawHistory,
@@ -287,6 +309,7 @@ export async function buildCoreLlmRequest(
     threadId: input.threadId,
     messageIds,
     participantId: participant.id,
+    ...(input.historyScopeId ? { historyScopeId: input.historyScopeId } : {}),
   });
   const agents = Object.values(context.resources.agents ?? {}).filter(
     (value): value is AgentResource => Boolean(value),
@@ -309,6 +332,7 @@ export async function buildCoreLlmRequest(
         `- **${skill.name}**: ${skill.description}`
       ),
       ...(userMetadata ? { userMetadata } : {}),
+      promptInstructions,
       context: rendered,
     }),
   });

@@ -29,6 +29,7 @@ import { coreCollectionsPlugin, corePlugin } from "../plugins/core/plugin.ts";
 import type { AgentResource } from "@copilotz/copilotz/core";
 import type { LlmAdapter, LlmAdapterResult } from "@copilotz/copilotz/llm";
 import { createTestDatabase } from "../runtime/testing/ominipg.ts";
+import { waitForTestDelivery } from "../runtime/testing/deliveries.ts";
 import {
   createEventNativeApp,
   type EventNativeAppError,
@@ -468,6 +469,180 @@ Deno.test("event-native app exposes graph, event, asset, collection, and plugin 
       );
     }
   } finally {
+    await application.shutdown();
+  }
+});
+
+Deno.test("thread activity is scoped to the newest logical event correlation", async () => {
+  let releaseOlderWork!: () => void;
+  const olderWork = new Promise<void>((resolve) => {
+    releaseOlderWork = resolve;
+  });
+  const activityPlugin = definePlugin({
+    id: "test.event-native-activity",
+    version: "1.0.0",
+    processors: {
+      hold: defineProcessor<ProcessorContext>({
+        id: "test.event-native-activity-hold",
+        on: [{ eventType: "test.activity.hold" }],
+        async handle() {
+          await olderWork;
+        },
+      }),
+      complete: defineProcessor<ProcessorContext>({
+        id: "test.event-native-activity-complete",
+        on: [{ eventType: "test.activity.complete" }],
+        handle() {},
+      }),
+      detachedHold: defineProcessor<ProcessorContext>({
+        id: "test.event-native-activity-detached-hold",
+        on: [{ eventType: "test.activity.detached-hold" }],
+        settlement: "detached",
+        async handle() {
+          await olderWork;
+        },
+      }),
+      fail: defineProcessor<ProcessorContext>({
+        id: "test.event-native-activity-fail",
+        on: [{ eventType: "test.activity.fail" }],
+        handle() {
+          throw new Error("expected activity failure");
+        },
+      }),
+    },
+  });
+  const application = await createCopilotzApplication({
+    namespace: NAMESPACE,
+    databaseSchema: `${SCHEMA}_activity`,
+    plugins: [coreCollectionsPlugin, activityPlugin],
+  });
+  const app = createEventNativeApp(application);
+  try {
+    const domain = createTestDomainContext(application, NAMESPACE);
+    await domain.actions.createThread({
+      id: "activity-thread",
+      externalId: "activity-thread",
+      participants: [],
+    });
+
+    const olderActive = await application.events.append({
+      type: "test.activity.hold",
+      namespace: NAMESPACE,
+      threadId: "activity-thread",
+      payload: null,
+      correlationId: "activity:older",
+    });
+    await waitForTestDelivery(
+      application,
+      NAMESPACE,
+      olderActive.event.id,
+      "leased",
+    );
+    const olderFailure = await application.events.append({
+      type: "test.activity.fail",
+      namespace: NAMESPACE,
+      threadId: "activity-thread",
+      payload: null,
+      correlationId: "activity:older",
+    }, { maxAttempts: 1 });
+    await waitForTestDelivery(
+      application,
+      NAMESPACE,
+      olderFailure.event.id,
+      "dead_letter",
+    );
+    const newerComplete = await application.events.append({
+      type: "test.activity.complete",
+      namespace: NAMESPACE,
+      threadId: "activity-thread",
+      payload: null,
+      correlationId: "activity:complete",
+    });
+    await waitForTestDelivery(
+      application,
+      NAMESPACE,
+      newerComplete.event.id,
+      "succeeded",
+    );
+    const newerDetached = await application.events.append({
+      type: "test.activity.detached-hold",
+      namespace: NAMESPACE,
+      threadId: "activity-thread",
+      payload: null,
+      correlationId: "activity:complete",
+    });
+    await waitForTestDelivery(
+      application,
+      NAMESPACE,
+      newerDetached.event.id,
+      "leased",
+    );
+
+    const completed = object(
+      (await app.handle({
+        resource: "threads",
+        method: "GET",
+        path: ["activity-thread", "activity"],
+        query: { includeDeliveries: "true" },
+      })).data,
+    );
+    assertEquals(completed.status, "idle");
+    assertEquals(completed.activeCount, 0);
+    assertEquals(completed.activeDeliveries, []);
+    assertEquals(completed.lastFailure, null);
+
+    const newestFailure = await application.events.append({
+      type: "test.activity.fail",
+      namespace: NAMESPACE,
+      threadId: "activity-thread",
+      payload: null,
+      correlationId: "activity:failed",
+    }, { maxAttempts: 1 });
+    await waitForTestDelivery(
+      application,
+      NAMESPACE,
+      newestFailure.event.id,
+      "dead_letter",
+    );
+    const failed = object(
+      (await app.handle({
+        resource: "threads",
+        method: "GET",
+        path: ["activity-thread", "activity"],
+      })).data,
+    );
+    assertEquals(failed.status, "failed");
+    assertEquals(object(failed.lastFailure).eventId, newestFailure.event.id);
+
+    const newestActive = await application.events.append({
+      type: "test.activity.hold",
+      namespace: NAMESPACE,
+      threadId: "activity-thread",
+      payload: null,
+      correlationId: "activity:active",
+    });
+    await waitForTestDelivery(
+      application,
+      NAMESPACE,
+      newestActive.event.id,
+      "leased",
+    );
+    const running = object(
+      (await app.handle({
+        resource: "threads",
+        method: "GET",
+        path: ["activity-thread", "activity"],
+        query: { includeDeliveries: "true" },
+      })).data,
+    );
+    assertEquals(running.status, "running");
+    assertEquals(running.activeCount, 1);
+    assertEquals(
+      object(array(running.activeDeliveries)[0]).eventId,
+      newestActive.event.id,
+    );
+  } finally {
+    releaseOlderWork();
     await application.shutdown();
   }
 });

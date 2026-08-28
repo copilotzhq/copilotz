@@ -11,6 +11,7 @@ import {
   askAction,
   askTool,
   corePlugin,
+  coreToolActionMetadata,
 } from "@copilotz/copilotz/core";
 import type {
   LlmAdapter,
@@ -55,7 +56,11 @@ import {
 const TEST_SCHEMA = "copilotz_core_ask";
 const NAMESPACE = "tenant-a";
 
-function agent(id: string, agents: readonly string[] = []): AgentResource {
+function agent(
+  id: string,
+  agents: readonly string[] = [],
+  tools: readonly string[] = id === "a" ? ["mark", "publish"] : [],
+): AgentResource {
   return Object.freeze({
     id,
     name: id.toUpperCase(),
@@ -64,7 +69,7 @@ function agent(id: string, agents: readonly string[] = []): AgentResource {
     models: { generate: ["askModel"] as const },
     capabilities: {
       agents,
-      ...(id === "a" ? { tools: ["mark", "publish"] } : {}),
+      ...(tools.length > 0 ? { tools } : {}),
     },
   });
 }
@@ -544,6 +549,7 @@ Deno.test("an ask resumes through durable llm.call metadata", async () => {
       event.status === "invoked" && event.metadata.agentId === "b"
     );
     assertExists(askedInvocation);
+    assertEquals(askedInvocation.metadata.initiatorParticipantId, "user-a");
     const askedCompletion = lifecycle.find((event) =>
       event.status === "completed" && event.metadata.agentId === "b"
     );
@@ -565,6 +571,92 @@ Deno.test("an ask resumes through durable llm.call metadata", async () => {
         askedAgent: { id: "b", name: "B" },
       },
     });
+  } finally {
+    await fixture.close();
+  }
+});
+
+Deno.test("asked Agent Tool Actions retain the root human initiator", async () => {
+  const agents = [agent("a", ["b"]), agent("b", [], ["mark"])];
+  const calls: string[] = [];
+  const counts = new Map<string, number>();
+  const fixture = await createFixture(agents, (input) => {
+    const id = activeAgent(input);
+    calls.push(id);
+    const count = (counts.get(id) ?? 0) + 1;
+    counts.set(id, count);
+    if (id === "a" && count === 1) {
+      return {
+        content: [],
+        toolCalls: [{
+          id: "ask-b-to-use-tool",
+          action: "ask",
+          input: {
+            target: "b",
+            message: "Use Mark, then report its result.",
+          } as LlmJsonObject,
+        }],
+        attempts: [{ status: "completed" }],
+      };
+    }
+    if (id === "b" && count === 1) {
+      assertEquals(input.request.tools?.map((tool) => tool.name), ["mark"]);
+      return {
+        content: [],
+        toolCalls: [{
+          id: "asked-agent-mark",
+          action: "mark",
+          input: { value: "asked-agent-tool" } as LlmJsonObject,
+        }],
+        attempts: [{ status: "completed" }],
+      };
+    }
+    if (id === "b") {
+      assertStringIncludes(requestText(input), "asked-agent-tool");
+      return {
+        content: { type: "text", text: "B used Mark", role: "body" },
+        attempts: [{ status: "completed" }],
+      };
+    }
+    assertStringIncludes(requestText(input), "B used Mark");
+    return {
+      content: { type: "text", text: "A received B", role: "body" },
+      attempts: [{ status: "completed" }],
+    };
+  });
+  try {
+    const root = await startRun(fixture);
+    await waitForRun(fixture, root, 8);
+    assertEquals(calls, ["a", "b", "b", "a"]);
+    assertEquals(markExecutions, ["asked-agent-tool"]);
+
+    const llmLifecycle = await projectActionEvents(
+      fixture.engine,
+      NAMESPACE,
+      "llm.call",
+    );
+    const askedAgentInvocations = llmLifecycle.filter((event) =>
+      event.status === "invoked" && event.metadata.agentId === "b"
+    );
+    assertEquals(askedAgentInvocations.length, 2);
+    for (const invocation of askedAgentInvocations) {
+      assertEquals(invocation.metadata.initiatorParticipantId, "user-a");
+    }
+
+    const toolLifecycle = await projectActionEvents(
+      fixture.engine,
+      NAMESPACE,
+      "test.ask.mark",
+    );
+    const toolInvocation = toolLifecycle.find((event) =>
+      event.status === "invoked"
+    );
+    assertExists(toolInvocation);
+    const provenance = coreToolActionMetadata(toolInvocation.metadata);
+    assertExists(provenance);
+    assertEquals(provenance.agentId, "b");
+    assertEquals(provenance.agentParticipantId, "agent-b");
+    assertEquals(provenance.initiatorParticipantId, "user-a");
   } finally {
     await fixture.close();
   }

@@ -120,6 +120,13 @@ export function applicationOutputsMultipartResponse(
       ));
     } catch (error) {
       if (!cancelled) {
+        console.error("[copilotz:multipart] progressive stream failed", {
+          streamId: output.streamId,
+          name: error instanceof Error && error.name ? error.name : "Error",
+          message: error instanceof Error
+            ? error.message.slice(0, 1_000)
+            : "Unknown progressive stream failure.",
+        });
         await write(part(boundary, "stream-error", boundedStreamError(error), {
           streamId: output.streamId,
           offset,

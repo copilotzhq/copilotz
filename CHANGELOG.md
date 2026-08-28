@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.63.5 — 2026-08-28
+
+Routes semantic-memory consolidation through the owning Agent's ordinary Core
+Message, prompt, Model, credential, Tool-plan, Ask, and Action lifecycle. A
+generic private Agent-turn scope keeps background work out of public history,
+while `consolidate_memory` remains available in ordinary turns and provider
+prompt prefixes stay cache-compatible. The obsolete Memory-owned Model list,
+maintenance Action, direct LLM loop, and manual Tool parser are removed.
+
+Also adds trusted shared prompt-instruction Resources, durable channel thread
+membership, recoverable model-authored Tool input validation, explicit
+scheduled-message recipient selection, correlation-scoped thread activity, and
+safe progressive-stream failure diagnostics.
+
 ## 0.63.4 — 2026-08-26
 
 Keeps routed LLM work inside the originating durable settlement scope so Web

@@ -1,6 +1,10 @@
-import { assertEquals, assertRejects } from "@std/assert";
+import { assert, assertEquals, assertRejects } from "@std/assert";
+import { isNonRetryableError } from "../failure.ts";
 import { defineAction } from "./define.ts";
-import { createActionCallers } from "./invoker.ts";
+import {
+  createActionCallers,
+  isActionInputValidationError,
+} from "./invoker.ts";
 import type {
   ActionCompletedData,
   ActionContext,
@@ -150,6 +154,70 @@ Deno.test("Action metadata has one required empty lifecycle shape when omitted",
   ]);
   assertEquals(emitted.map((event) => event.metadata), [{}, {}, {}]);
   assertEquals(emitted.every((event) => Object.isFrozen(event.metadata)), true);
+});
+
+Deno.test("Action input-schema failures are typed before lifecycle invocation", async () => {
+  const { lifecycle, emitted } = recordingLifecycle();
+  let executions = 0;
+  const action = defineAction({
+    id: "test.input-validation",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: { value: { type: "string" } },
+      required: ["value"],
+    },
+    execute() {
+      executions += 1;
+      return { ok: true };
+    },
+  });
+  const actions = createActionCallers({ action }, {
+    actionLifecycle: lifecycle,
+    signal: new AbortController().signal,
+    createInvocationKey: () => "run-input-validation",
+    createContext: invocationContext,
+  });
+
+  for (
+    const input of [
+      { value: "valid", unexpected: true },
+      {},
+      { value: 42 },
+    ]
+  ) {
+    const error = await assertRejects(() => actions.action(input));
+    assert(isActionInputValidationError(error));
+    assert(error instanceof TypeError);
+    assert(isNonRetryableError(error));
+    assertEquals(error.actionId, action.id);
+  }
+  assertEquals(executions, 0);
+  assertEquals(emitted, []);
+});
+
+Deno.test("invalid Action schemas are not classified as caller input failures", async () => {
+  const { lifecycle, emitted } = recordingLifecycle();
+  let executions = 0;
+  const action = defineAction({
+    id: "test.invalid-input-schema",
+    inputSchema: { type: "string", pattern: "[" },
+    execute() {
+      executions += 1;
+      return null;
+    },
+  });
+  const actions = createActionCallers({ action }, {
+    actionLifecycle: lifecycle,
+    signal: new AbortController().signal,
+    createInvocationKey: () => "run-invalid-input-schema",
+    createContext: invocationContext,
+  });
+
+  const error = await assertRejects(() => actions.action({}));
+  assertEquals(isActionInputValidationError(error), false);
+  assertEquals(executions, 0);
+  assertEquals(emitted, []);
 });
 
 Deno.test("Action metadata propagates through every lifecycle status", async () => {

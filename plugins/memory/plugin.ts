@@ -5,7 +5,7 @@
  */
 
 import { type CopilotzPlugin, definePlugin } from "@copilotz/copilotz/plugins";
-import { llmPlugin } from "@copilotz/copilotz/llm";
+import { corePlugin } from "@copilotz/copilotz/core";
 import {
   CORE_MEMORY_KINDS,
   defineMemoryKind,
@@ -15,20 +15,14 @@ import type {
   CreateLongTermMemoryPluginOptions,
   MemoryEmbed,
 } from "./authoring/contracts/index.ts";
-import {
-  modelSelection,
-  nonNegativeInteger,
-  normalizedConfig,
-} from "./internal/implementation.ts";
+import { normalizedConfig } from "./internal/implementation.ts";
 import {
   CONSOLIDATE_MEMORY_ACTION_ID,
   createConsolidateMemoryAction,
   createInspectMemoryAction,
   createListKnowledgeSpacesAction,
-  createMemoryMaintenanceAction,
   createSearchMemoryAction,
   createSetMemoryStatusAction,
-  MAINTAIN_MEMORY_ACTION_ID,
 } from "./actions/index.ts";
 import {
   longTermMemoryCollection,
@@ -37,8 +31,9 @@ import {
   memorySpaceCollection,
 } from "./collections/index.ts";
 import {
+  createDispatchMemoryConsolidationProcessor,
   createMemoryReservationProcessor,
-  createPrepareMemoryMaintenanceProcessor,
+  createSettleMemoryConsolidationProcessor,
 } from "./processors/index.ts";
 import {
   createConsolidateMemoryTool,
@@ -52,7 +47,7 @@ import {
 const DEFAULT_PLUGIN_ID = "@copilotz/core-long-term-memory";
 const DEFAULT_PLUGIN_VERSION = "4.0.0";
 
-export { CONSOLIDATE_MEMORY_ACTION_ID, MAINTAIN_MEMORY_ACTION_ID };
+export { CONSOLIDATE_MEMORY_ACTION_ID };
 
 type LongTermMemoryCollections = Readonly<{
   memorySpace: typeof memorySpaceCollection;
@@ -63,7 +58,6 @@ type LongTermMemoryCollections = Readonly<{
 
 type LongTermMemoryActions = Readonly<{
   consolidate_memory: ReturnType<typeof createConsolidateMemoryAction>;
-  maintainMemory: ReturnType<typeof createMemoryMaintenanceAction>;
   list_knowledge_spaces: ReturnType<
     typeof createListKnowledgeSpacesAction
   >;
@@ -76,8 +70,11 @@ type LongTermMemoryProcessors =
   | Readonly<Record<never, never>>
   | Readonly<{
     reserveMemory: ReturnType<typeof createMemoryReservationProcessor>;
-    prepareMemoryMaintenance: ReturnType<
-      typeof createPrepareMemoryMaintenanceProcessor
+    dispatchConsolidation: ReturnType<
+      typeof createDispatchMemoryConsolidationProcessor
+    >;
+    settleConsolidation: ReturnType<
+      typeof createSettleMemoryConsolidationProcessor
     >;
   }>;
 
@@ -104,7 +101,7 @@ type LongTermMemoryAdapters = Readonly<{
 export type LongTermMemoryPlugin = CopilotzPlugin<
   string,
   string,
-  readonly [typeof llmPlugin],
+  readonly [typeof corePlugin],
   LongTermMemoryCollections,
   LongTermMemoryActions,
   LongTermMemoryProcessors,
@@ -116,12 +113,6 @@ export function createLongTermMemoryPlugin(
   options: CreateLongTermMemoryPluginOptions,
 ): LongTermMemoryPlugin {
   const enabled = options?.enabled !== false;
-  const models = modelSelection(options?.models, "Memory LLM models");
-  if (enabled && !models) {
-    throw new TypeError(
-      "Memory LLM models must be a non-empty array of aliases.",
-    );
-  }
   const config = normalizedConfig(options.config);
   const consolidateMemory = createConsolidateMemoryAction(config);
   const listMemorySpaces = createListKnowledgeSpacesAction();
@@ -129,17 +120,12 @@ export function createLongTermMemoryPlugin(
   const inspectMemory = createInspectMemoryAction();
   const setMemoryStatus = createSetMemoryStatusAction();
   const consolidateTool = createConsolidateMemoryTool(consolidateMemory);
-  const maintainMemory = createMemoryMaintenanceAction(
-    models,
-    consolidateTool,
-    nonNegativeInteger(options.maxRepairAttempts, 1),
-  );
   const context = createMemoryContextResource(enabled);
   const kinds = Object.freeze(CORE_MEMORY_KINDS.map(defineMemoryKind));
   return definePlugin({
     id: options.id ?? DEFAULT_PLUGIN_ID,
     version: options.version ?? DEFAULT_PLUGIN_VERSION,
-    plugins: [llmPlugin] as const,
+    plugins: [corePlugin] as const,
     collections: {
       memorySpace: memorySpaceCollection,
       memorySpaceAccess: memorySpaceAccessCollection,
@@ -148,7 +134,6 @@ export function createLongTermMemoryPlugin(
     },
     actions: {
       consolidate_memory: consolidateMemory,
-      maintainMemory,
       list_knowledge_spaces: listMemorySpaces,
       search_memory: searchMemory,
       inspect_memory: inspectMemory,
@@ -157,7 +142,8 @@ export function createLongTermMemoryPlugin(
     processors: enabled
       ? {
         reserveMemory: createMemoryReservationProcessor(config),
-        prepareMemoryMaintenance: createPrepareMemoryMaintenanceProcessor(),
+        dispatchConsolidation: createDispatchMemoryConsolidationProcessor(),
+        settleConsolidation: createSettleMemoryConsolidationProcessor(),
       }
       : {},
     resources: {

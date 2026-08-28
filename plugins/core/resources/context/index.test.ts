@@ -89,7 +89,7 @@ Deno.test("context resources are purpose-scoped, ordered, and receive stable cap
   const workspace = defineContextResource({
     id: "app.workspace",
     type: "context",
-    purposes: ["conversation", "memory_consolidation"],
+    purposes: ["conversation"],
     contribute(input) {
       observed.push(input);
       return [{
@@ -113,7 +113,7 @@ Deno.test("context resources are purpose-scoped, ordered, and receive stable cap
   });
   const processor = context([conversation, workspace]);
   const values = await collectContextContributions(processor, {
-    purpose: "memory_consolidation",
+    purpose: "conversation",
     agent,
     participant,
     thread,
@@ -124,11 +124,15 @@ Deno.test("context resources are purpose-scoped, ordered, and receive stable cap
     },
   });
 
-  assertEquals(values.map((value) => value.id), ["document", "board"]);
+  assertEquals(values.map((value) => value.id), [
+    "conversation",
+    "document",
+    "board",
+  ]);
   const input = observed[0] as Record<string, unknown>;
   assertEquals(
     input.idempotencyKey,
-    "delivery-a:context:app.workspace:memory_consolidation",
+    "delivery-a:context:app.workspace:conversation",
   );
   assertEquals(input.collections, processor.collections);
   assertEquals(
@@ -179,7 +183,7 @@ Deno.test("context contribution contracts reject ambiguity and unproven evidence
   const missingSource = defineContextResource({
     id: "missing-source",
     type: "context",
-    purposes: ["memory_consolidation"],
+    purposes: ["conversation"],
     contribute: () => ({
       id: "evidence",
       title: "Unsupported evidence",
@@ -190,7 +194,7 @@ Deno.test("context contribution contracts reject ambiguity and unproven evidence
   await assertRejects(
     () =>
       collectContextContributions(context([missingSource]), {
-        purpose: "memory_consolidation",
+        purpose: "conversation",
         agent,
         participant,
         thread,

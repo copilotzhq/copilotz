@@ -84,7 +84,7 @@ Deno.test("Core Schedules composes its dependencies and turns only typed due pay
         schedule: { type: "cron", expression: "* * * * *", timezone: "UTC" },
         message: {
           thread: { id: "thread-a" },
-          recipientIds: ["recipient-a"],
+          recipients: ["recipient-a"],
           content: prepared,
           metadata: {
             source: "schedule-test",
@@ -243,7 +243,9 @@ Deno.test("scheduled payload metadata cannot suppress Agent LLM routing", async 
           timezone: "UTC",
         },
         message: {
-          recipientIds: ["scheduled-agent"],
+          // Model-facing Tool calls commonly use the Agent's display name.
+          // The dispatcher must resolve it to the canonical Agent identity.
+          recipients: ["Scheduled Agent"],
           content: prepared,
           metadata: {
             copilotzWorkflow: {
@@ -467,7 +469,7 @@ Deno.test("scheduled_jobs Action manages only Core scheduled-message jobs", asyn
       schedule: { expression: "* * * * *", timezone: "UTC" },
       run: {
         content: "Run from the Tool",
-        recipientIds: ["recipient-tool"],
+        recipients: ["recipient-tool"],
       },
     });
     assertEquals(

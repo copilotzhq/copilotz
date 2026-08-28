@@ -16,6 +16,7 @@ import {
   coreToolActionMetadata,
   coreToolActionOriginFrom,
   withAgentAskMetadata,
+  withCoreAgentTurnMetadata,
 } from "../../internal/workflow-metadata.ts";
 import { resolveAgentGrants } from "../../internal/capabilities/grants.ts";
 import {
@@ -250,20 +251,31 @@ async function executeAsk(
     origin: coreToolActionOriginFrom(metadata),
     depth,
   });
+  const questionMetadata = metadata.agentTurn
+    ? withCoreAgentTurnMetadata(
+      withAgentAskMetadata(undefined, ask),
+      metadata.agentTurn,
+    )
+    : withAgentAskMetadata(undefined, ask);
   await context.actions.createThreadMessage({
     id: questionMessageId,
     threadId: metadata.threadId,
     sender: askingParticipant,
     recipientIds: [String(askedParticipant.id)],
     content: message,
-    visibility: mode === "public" ? { kind: "public" } : {
-      kind: "participants",
-      participantIds: [
-        String(askingParticipant.id),
-        String(askedParticipant.id),
-      ],
-    },
-    metadata: withAgentAskMetadata(undefined, ask),
+    visibility: metadata.agentTurn
+      ? { kind: "internal" }
+      : mode === "public"
+      ? { kind: "public" }
+      : {
+        kind: "participants",
+        participantIds: [
+          String(askingParticipant.id),
+          String(askedParticipant.id),
+        ],
+      },
+    metadata: questionMetadata,
+    ...(metadata.agentTurn ? { historyScopeId: metadata.agentTurn.id } : {}),
   }, {
     operationKey: `ask:${askId}:question`,
     signal: context.signal,

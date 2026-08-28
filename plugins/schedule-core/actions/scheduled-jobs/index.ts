@@ -35,6 +35,12 @@ import type {
   CoreScheduledMessageSender,
   CoreScheduledMessageThread,
 } from "../../internal/contracts.ts";
+import type { CoreResources } from "../../../core/internal/runtime-context.ts";
+import { coreToolActionMetadata } from "../../../core/internal/workflow-metadata.ts";
+import {
+  resolveScheduledRecipientSelection,
+  type ScheduledRecipientSelection,
+} from "../../internal/recipients.ts";
 
 type ScheduledJobsToolAction =
   | "create"
@@ -47,7 +53,7 @@ type ScheduledJobsToolAction =
   | "run_now";
 
 type ScheduledJobsActionContext = ActionContext<
-  ActionContext["resources"],
+  CoreResources,
   ActionContext["adapters"],
   Readonly<{
     runScheduledJobNow: ActionCaller<typeof runScheduledJobNowAction>;
@@ -57,10 +63,18 @@ type ScheduledJobsActionContext = ActionContext<
 type ParsedMessage = Readonly<{
   thread?: CoreScheduledMessageThread;
   sender?: CoreScheduledMessageSender;
-  recipientIds?: readonly string[];
+  recipients?: ScheduledRecipientSelection;
   content?: ContentInput | readonly ContentInput[];
   metadata?: Readonly<Record<string, unknown>>;
 }>;
+
+type PreparedMessage =
+  & Omit<ParsedMessage, "content">
+  & Readonly<{ content?: DurableContentInput }>;
+
+type ResolvedMessage =
+  & Omit<PreparedMessage, "recipients">
+  & Readonly<{ recipientIds?: readonly string[] }>;
 
 function record(value: unknown, name = "Input"): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -122,6 +136,20 @@ function stringList(
   if (value === undefined) return undefined;
   if (!Array.isArray(value)) throw new TypeError(`${name} must be an array.`);
   return Object.freeze(value.map((item) => requiredText(item, name)));
+}
+
+function recipients(
+  value: unknown,
+): ScheduledRecipientSelection | undefined {
+  if (value === undefined) return undefined;
+  if (value === "caller" || value === "all") return value;
+  const values = stringList(value, "Scheduled recipient");
+  if (!values?.length) {
+    throw new TypeError(
+      "Scheduled recipients must contain at least one value.",
+    );
+  }
+  return Object.freeze([...new Set(values)]);
 }
 
 function thread(value: unknown): CoreScheduledMessageThread | undefined {
@@ -192,12 +220,9 @@ function message(
     }),
     ...(targetThread ? { thread: targetThread } : {}),
     ...(input.sender === undefined ? {} : { sender: sender(input.sender) }),
-    ...(input.recipientIds === undefined ? {} : {
-      recipientIds: stringList(
-        input.recipientIds,
-        "Scheduled recipient ID",
-      ),
-    }),
+    ...(input.recipients === undefined
+      ? {}
+      : { recipients: recipients(input.recipients) }),
     ...(input.metadata === undefined ? {} : {
       metadata: structuredClone(
         record(input.metadata, "Scheduled run metadata"),
@@ -210,7 +235,7 @@ async function prepareMessageContent(
   input: ParsedMessage,
   context: ScheduledJobsActionContext,
   operationKey: string,
-): Promise<Omit<ParsedMessage, "content"> & { content?: DurableContentInput }> {
+): Promise<PreparedMessage> {
   const { content, ...message } = input;
   if (content === undefined) return Object.freeze(message);
   return Object.freeze({
@@ -218,6 +243,27 @@ async function prepareMessageContent(
     content: await context.content.prepare(content, {
       operationKey: `${operationKey}:content`,
     }),
+  });
+}
+
+async function resolveMessageRecipients(
+  message: PreparedMessage,
+  context: ScheduledJobsActionContext,
+  defaultToCaller: boolean,
+): Promise<ResolvedMessage> {
+  const { recipients: selection, ...rest } = message;
+  const selected = selection ?? (defaultToCaller ? "caller" : undefined);
+  return Object.freeze({
+    ...rest,
+    ...(selected
+      ? {
+        recipientIds: await resolveScheduledRecipientSelection(
+          selected,
+          message.thread,
+          context,
+        ),
+      }
+      : {}),
   });
 }
 
@@ -286,10 +332,18 @@ const runSchema = {
       additionalProperties: true,
       description: "Optional public job participant descriptor.",
     },
-    recipientIds: {
-      type: "array",
-      items: { type: "string" },
-      description: "Participant identities or agent resource IDs.",
+    recipients: {
+      description:
+        "Defaults to the calling Agent; use 'all' or a non-empty list of participant/Agent identities to override it.",
+      oneOf: [
+        { type: "string", enum: ["caller", "all"], default: "caller" },
+        {
+          type: "array",
+          minItems: 1,
+          uniqueItems: true,
+          items: { type: "string", minLength: 1 },
+        },
+      ],
     },
     metadata: { type: "object", additionalProperties: true },
   },
@@ -347,20 +401,36 @@ export const scheduledJobsAction: ActionDefinition<
     const input = record(raw);
     const action = selectedAction(input.action);
     const operation = `${context.operationKey}:${action}`;
-    const defaultThreadId =
-      typeof context.action.metadata.threadId === "string" &&
-        context.action.metadata.threadId.trim()
+    const toolMetadata = coreToolActionMetadata(context.action.metadata);
+    const defaultThreadId = toolMetadata?.threadId ??
+      (typeof context.action.metadata.threadId === "string" &&
+          context.action.metadata.threadId.trim()
         ? context.action.metadata.threadId.trim()
-        : undefined;
+        : undefined);
     if (action === "create") {
-      const parsed = await prepareMessageContent(
-        message(input.run, {
-          partial: false,
-          defaultThreadId,
-        }),
+      const resolved = await resolveMessageRecipients(
+        await prepareMessageContent(
+          message(input.run, {
+            partial: false,
+            defaultThreadId,
+          }),
+          context,
+          operation,
+        ),
         context,
-        operation,
-      ) as CoreScheduledMessageInput;
+        true,
+      );
+      const { recipientIds, content, ...messageFields } = resolved;
+      if (!recipientIds?.length || !content) {
+        throw new TypeError(
+          "A scheduled message requires content and recipients.",
+        );
+      }
+      const scheduledMessage: CoreScheduledMessageInput = Object.freeze({
+        ...messageFields,
+        recipients: recipientIds,
+        content,
+      });
       const job = await createScheduledJob(
         scheduledMessageJob({
           ...(optionalText(input.jobId, "Scheduled job ID")
@@ -375,7 +445,7 @@ export const scheduledJobsAction: ActionDefinition<
             })()
             : jobStatus(input.status) as "active" | "paused",
           schedule: schedule(input.schedule),
-          message: parsed,
+          message: scheduledMessage,
           ...(input.metadata === undefined ? {} : {
             metadata: structuredClone(
               record(input.metadata, "Scheduled job metadata"),
@@ -449,12 +519,16 @@ export const scheduledJobsAction: ActionDefinition<
     if (input.status !== undefined) patch.status = jobStatus(input.status);
     if (input.schedule !== undefined) patch.schedule = schedule(input.schedule);
     if (input.run !== undefined) {
-      const parsed = await prepareMessageContent(
-        message(input.run, { partial: true }),
+      const resolved = await resolveMessageRecipients(
+        await prepareMessageContent(
+          message(input.run, { partial: true }),
+          context,
+          operation,
+        ),
         context,
-        operation,
+        false,
       );
-      const { content, ...payloadFields } = parsed;
+      const { content, ...payloadFields } = resolved;
       if (Object.keys(payloadFields).length) {
         patch.payload = normalizeCoreScheduledMessagePayload({
           ...structuredClone(existing.payload),

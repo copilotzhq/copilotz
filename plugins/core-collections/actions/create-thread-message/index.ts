@@ -210,6 +210,11 @@ export async function createThreadMessage(
   const sender = asSender(data.sender);
   const recipientIds = stringArray(data.recipientIds);
   const eventVisibility = visibility(data.visibility);
+  const messageVisibility = eventVisibility ?? { kind: "public" as const };
+  const historyScopeId = optionalText(data.historyScopeId);
+  if (historyScopeId && messageVisibility.kind !== "internal") {
+    throw new TypeError("Scoped Message history requires internal visibility.");
+  }
   const metadata = structuredClone(asRecord(data.metadata));
   const threadCollection = context.collections.thread;
   if (!threadCollection) {
@@ -243,7 +248,7 @@ export async function createThreadMessage(
     const options: ScopedCollectionCallOptions = {
       threadId,
       routing: { senderId: ensured.id, recipientIds: [...recipientIds] },
-      visibility: eventVisibility ?? { kind: "public" },
+      visibility: messageVisibility,
       identity: { metadata },
     };
     const created = await collections.message.create({
@@ -253,6 +258,8 @@ export async function createThreadMessage(
       recipientIds: [...recipientIds],
       content,
       metadata,
+      visibility: messageVisibility,
+      ...(historyScopeId ? { historyScopeId } : {}),
     }, options);
     if (!existingParticipantIds.includes(ensured.id)) {
       await addSenderToThreadInTransaction(
@@ -279,6 +286,7 @@ const createInputSchema = {
     content: {},
     metadata: { type: "object" },
     visibility: { type: "object" },
+    historyScopeId: { type: "string" },
   },
   required: ["id", "threadId", "sender"],
 } as const;

@@ -176,15 +176,16 @@ export async function loadThreadRecord(
 export async function listThreadMessageRecords(
   context: Pick<ProcessorContext, "collections">,
   threadId: string,
+  options: Readonly<{ historyScopeId?: string }> = {},
 ): Promise<readonly ConversationMessage[]> {
   const messages = requireScopedCollection(context, "message");
   const participants = requireScopedCollection(context, "participant");
   const thread = await loadThreadRecord(context, threadId);
-  const records = await messages.list({
+  const records = (await messages.list({
     where: { threadId },
     order: { field: "createdAt", direction: "asc" },
     limit: 1_000,
-  });
+  })).filter((record) => visibleInHistoryScope(record, options.historyScopeId));
   const hydrated: ConversationMessage[] = [];
   for (const record of records) {
     const sender = await participants.get({ id: String(record.senderId) });
@@ -194,6 +195,17 @@ export async function listThreadMessageRecords(
     hydrated.push(mapMessageRecord(record, mapParticipantRecord(sender)));
   }
   return projectActiveMessageBranch(hydrated, thread?.activeMessageBranch);
+}
+
+/** Private Core reader policy; the public history query never exposes scopes. */
+function visibleInHistoryScope(
+  record: CollectionRecord,
+  historyScopeId?: string,
+): boolean {
+  const scope = optionalText(record.historyScopeId);
+  const visibility = asRecord(record.visibility);
+  if (!scope) return visibility.kind !== "internal";
+  return historyScopeId === scope && visibility.kind === "internal";
 }
 
 export async function loadMessageRecord(

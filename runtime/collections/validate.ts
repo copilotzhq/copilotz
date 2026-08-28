@@ -7,6 +7,14 @@ type AjvValidator = ((value: unknown) => boolean) & {
 };
 
 const validators = new WeakMap<object, AjvValidator>();
+const jsonSchemaValidationErrors = new WeakSet<object>();
+
+/** True only when a value failed an otherwise valid JSON Schema. */
+export function isJsonSchemaValidationError(
+  error: unknown,
+): error is TypeError {
+  return error instanceof TypeError && jsonSchemaValidationErrors.has(error);
+}
 
 function createAjv() {
   // deno-lint-ignore no-explicit-any
@@ -36,7 +44,11 @@ export function validateAgainstJsonSchema(
     const candidate = structuredClone(value);
     if (validator(candidate)) return;
     const details = ajv.errorsText(validator.errors ?? [], { separator: "; " });
-    throw new TypeError(`${label} failed schema validation: ${details}`);
+    const error = new TypeError(
+      `${label} failed schema validation: ${details}`,
+    );
+    jsonSchemaValidationErrors.add(error);
+    throw error;
   } catch (error) {
     if (error instanceof Error) throw markNonRetryable(error);
     throw markNonRetryable(new Error(String(error)));

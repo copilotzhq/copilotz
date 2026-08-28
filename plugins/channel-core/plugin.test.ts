@@ -218,6 +218,115 @@ Deno.test("Channel occurrence becomes one atomic binding graph and external egre
   }
 });
 
+Deno.test("declared thread participants are durable members, not message recipients", async () => {
+  const database = await createTestDatabase({ url: ":memory:" });
+  const north = Object.freeze({
+    externalId: "north",
+    participantType: "human" as const,
+    name: "North",
+  });
+  const south = Object.freeze({
+    externalId: "south",
+    participantType: "human" as const,
+    name: "South",
+  });
+  const east = Object.freeze({
+    externalId: "east",
+    participantType: "human" as const,
+    name: "East",
+  });
+  const west = Object.freeze({
+    externalId: "west",
+    participantType: "human" as const,
+    name: "West",
+  });
+  const adapter: ChannelAdapter = Object.freeze({
+    accept() {
+      throw new Error("Host accept is not used by the worker test.");
+    },
+    receive() {
+      return Object.freeze({
+        externalThreadId: "declared-members",
+        sender: Object.freeze({
+          externalId: "user",
+          participantType: "human" as const,
+          name: "User",
+        }),
+        recipients: Object.freeze([north]),
+        content: "hello north",
+        thread: Object.freeze({
+          participants: Object.freeze([south, east, west]),
+        }),
+      });
+    },
+  });
+  const application = await createCopilotzApplication({
+    database,
+    namespace: NAMESPACE,
+    databaseSchema: "copilotz_channels_declared_members",
+    plugins: [channelsPlugin],
+    resources: {
+      channels: {
+        fixture: defineChannelResource({ egress: "request-observation" }),
+      },
+    },
+    adapters: { channels: { fixture: adapter } },
+  });
+  try {
+    const handle = await application.send(channelIngress("fixture", {
+      id: "declared-members-message",
+      input: {},
+    }));
+    await handle.done;
+
+    const context = createTestDomainContext(application, NAMESPACE);
+    const [binding] = await context.collections.channelBinding.queries
+      .byChannelThread({
+        channelId: "fixture",
+        externalThreadId: "declared-members",
+      });
+    assertExists(binding);
+    const thread = await context.collections.thread.get({
+      id: String(binding.threadId),
+    });
+    assertExists(thread);
+    const members = await Promise.all(
+      (thread.participantIds as readonly string[]).map((id) =>
+        context.collections.participant.get({ id })
+      ),
+    );
+    assertEquals(
+      members.map((member) => member?.name).sort(),
+      ["East", "North", "South", "User", "West"],
+    );
+
+    const [message] = await context.collections.message.queries.byThreadId({
+      threadId: thread.id,
+    });
+    assertExists(message);
+    const [northRecipient] = await Promise.all(
+      (message.recipientIds as readonly string[]).map((id) =>
+        context.collections.participant.get({ id })
+      ),
+    );
+    assertExists(northRecipient);
+    assertEquals(northRecipient?.name, "North");
+    assertEquals(message.recipientIds, [northRecipient.id]);
+    const created = (await application.events.list({ namespace: NAMESPACE }))
+      .find((event) =>
+        event.type === "message.created" && event.subject?.id === message.id
+      );
+    assertExists(created);
+    assertEquals(created.routing, {
+      senderId: String(message.senderId),
+      recipientIds: [northRecipient.id],
+    });
+  } finally {
+    await application.shutdown();
+    await database.close();
+  }
+});
+
 Deno.test("concurrent same-thread occurrences re-plan graph writes without repeating receive", async () => {
   const database = await createTestDatabase({ url: ":memory:" });
   const gate = Promise.withResolvers<void>();

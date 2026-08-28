@@ -38,14 +38,15 @@ export type CoreScheduledMessagePayload =
     thread?: CoreScheduledMessageThread;
     sender?: CoreScheduledMessageSender;
     /** Participant IDs/external IDs or Core Agent Resource IDs. */
-    recipientIds?: readonly string[];
+    recipientIds: readonly string[];
     metadata?: Readonly<Record<string, unknown>>;
   }>;
 
 export type CoreScheduledMessageInput = Readonly<{
   thread?: CoreScheduledMessageThread;
   sender?: CoreScheduledMessageSender;
-  recipientIds?: readonly string[];
+  /** Explicit participant identities or Core Agent references. */
+  recipients: readonly string[];
   content: DurableContentInput;
   metadata?: Readonly<Record<string, unknown>>;
 }>;

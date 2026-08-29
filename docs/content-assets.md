@@ -20,6 +20,13 @@ type ContentRef = Readonly<{
 Control data stays inline. Potentially large or binary bodies become immutable
 Assets, and semantic records store only refs.
 
+For LLM input, `disposition: "attachment"` is a reference boundary: the body is
+not resolved for the provider and the model receives a deterministic `asset://`
+descriptor suitable for an Asset Tool. `disposition: "inline"` allows normal
+materialization. A `file` with no disposition defaults to the safer attachment
+behavior; text, JSON, image, audio, and video keep their existing inline
+default.
+
 ## Prepare, adopt, resolve
 
 Actions prepare content before a semantic transaction:

@@ -4,6 +4,7 @@ export { createServerPlugin, serverPlugin } from "./plugin.ts";
 export * from "./authoring/index.ts";
 export * from "./resources/index.ts";
 export {
+  DEFAULT_SERVER_ASSET_UPLOAD_BYTES,
   SERVER_ACTION_REQUEST_EVENT_TYPE,
   SERVER_ACTION_REQUEST_SCHEMA,
   type ServerEndpointDescriptor,

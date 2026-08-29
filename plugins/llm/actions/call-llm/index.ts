@@ -12,6 +12,7 @@ import type {
   ContentSequence,
   ResolvedContent,
 } from "@copilotz/copilotz/content";
+import { formatAssetRef } from "@copilotz/copilotz/content";
 import {
   type LlmAdapter,
   type LlmAdapterAttempt,
@@ -571,20 +572,56 @@ function resolvedPart(value: ResolvedContent): LlmAdapterContentPart {
   }) as LlmAdapterContentPart;
 }
 
+/**
+ * Attachment bodies remain application-owned. Adapters receive only this
+ * provider-neutral notice, so an Agent can deliberately use an asset Tool
+ * instead of silently inlining a potentially large or sensitive body.
+ */
+function attachmentPart(
+  ref: ContentRef,
+  namespace: string,
+): LlmAdapterContentPart {
+  const descriptor = JSON.stringify({
+    name: ref.name ?? ref.assetId,
+    mediaType: ref.mediaType,
+    assetRef: formatAssetRef(namespace, ref.assetId),
+  });
+  return Object.freeze({
+    type: "text",
+    text:
+      `Copilotz attachment ${descriptor}. Use an asset tool to retrieve or inspect this attachment; its body is not included in this LLM request.`,
+    role: ref.role,
+    mediaType: "text/plain; charset=utf-8",
+    ...(ref.name ? { name: ref.name } : {}),
+  }) as LlmAdapterContentPart;
+}
+
+function isReferenceOnly(ref: ContentRef): boolean {
+  return ref.disposition === "attachment" ||
+    (ref.disposition === undefined && ref.kind === "file");
+}
+
 async function resolveMessage(
   message: LlmMessage,
   context: LlmActionContext,
 ): Promise<LlmAdapterMessage> {
-  const resolved = await context.content.resolveMany(message.content);
-  if (resolved.length !== message.content.length) {
+  const inline = message.content.filter((ref) => !isReferenceOnly(ref));
+  const resolved = inline.length
+    ? await context.content.resolveMany(inline)
+    : [];
+  if (resolved.length !== inline.length) {
     throw new Error("LLM content resolution returned an incomplete sequence.");
   }
   for (let index = 0; index < resolved.length; index += 1) {
-    if (resolved[index].ref.assetId !== message.content[index].assetId) {
+    if (resolved[index].ref.assetId !== inline[index].assetId) {
       throw new Error("LLM content resolution changed sequence order.");
     }
   }
-  const content = Object.freeze(resolved.map(resolvedPart));
+  let inlineIndex = 0;
+  const content = Object.freeze(message.content.map((ref) => {
+    if (isReferenceOnly(ref)) return attachmentPart(ref, context.namespace);
+    return resolvedPart(resolved[inlineIndex++]!);
+  }));
   const common = {
     content,
     ...(message.name ? { name: message.name } : {}),

@@ -110,6 +110,7 @@ function fixture(options: FixtureOptions) {
   }> = [];
   const materialized: DurableContentInput[] = [];
   const opened: OpenedStream[] = [];
+  const resolvedRequests: ContentRef[][] = [];
   let inputFollowerCancelled = 0;
   let progressCalls = 0;
   const progressValues: unknown[] = [];
@@ -186,6 +187,7 @@ function fixture(options: FixtureOptions) {
         return Promise.resolve(resolved);
       },
       resolveMany(values: readonly ContentRef[]) {
+        resolvedRequests.push([...values]);
         return Promise.all(values.map((value) => {
           const resolved = options.resolved?.[value.assetId];
           if (!resolved) {
@@ -277,6 +279,7 @@ function fixture(options: FixtureOptions) {
     prepared,
     materialized,
     opened,
+    resolvedRequests: () => resolvedRequests.map((values) => [...values]),
     inputFollowerCancelled: () => inputFollowerCancelled,
     progressCalls: () => progressCalls,
     progressValues: () => structuredClone(progressValues),
@@ -1296,6 +1299,135 @@ Deno.test("llm.call resolves request content and overlays call options", async (
     "attempt:0:content",
     "attempt:0:reasoning",
   ]);
+});
+
+Deno.test("llm.call keeps attachments reference-only while preserving mixed content order", async () => {
+  const textRef = ref("text-a");
+  const exportedAttachment = Object.freeze({
+    ...ref("tool-export-a", "image", "image/png"),
+    role: "tool.output",
+    name: "render.png",
+    disposition: "attachment" as const,
+  });
+  const defaultFile = Object.freeze({
+    ...ref("file-a", "file", "application/pdf"),
+    name: "brief.pdf",
+  });
+  const inlineFile = Object.freeze({
+    ...ref("file-inline-a", "file", "application/pdf"),
+    name: "included.pdf",
+    disposition: "inline" as const,
+  });
+  let seen: LlmAdapterCallInput | undefined;
+  const test = fixture({
+    models: { primary: model("provider", "provider-model") },
+    adapters: {
+      provider: {
+        call(input) {
+          seen = input;
+          return invocation({
+            content: { type: "text", text: "answer" },
+            attempts: [{ status: "completed" }],
+          });
+        },
+      },
+    },
+    resolved: {
+      "text-a": resolved(textRef, {
+        bytes: encoder.encode("before attachment"),
+        text: "before attachment",
+      }),
+      "file-inline-a": resolved(inlineFile, {
+        bytes: new Uint8Array([1, 2, 3]),
+      }),
+    },
+  });
+
+  await callLlmAction.execute({
+    ...emptyInput,
+    request: {
+      messages: [{
+        role: "user",
+        content: [textRef, exportedAttachment, defaultFile, inlineFile],
+      }],
+    },
+  }, test.context);
+
+  assertEquals(
+    test.resolvedRequests().map((refs) => refs.map((item) => item.assetId)),
+    [["text-a", "file-inline-a"]],
+  );
+  assertEquals(seen?.request.messages[0].content, [
+    {
+      type: "text",
+      text: "before attachment",
+      role: "body",
+      mediaType: "text/plain",
+    },
+    {
+      type: "text",
+      text:
+        'Copilotz attachment {"name":"render.png","mediaType":"image/png","assetRef":"asset://tenant-a/tool-export-a"}. Use an asset tool to retrieve or inspect this attachment; its body is not included in this LLM request.',
+      role: "tool.output",
+      mediaType: "text/plain; charset=utf-8",
+      name: "render.png",
+    },
+    {
+      type: "text",
+      text:
+        'Copilotz attachment {"name":"brief.pdf","mediaType":"application/pdf","assetRef":"asset://tenant-a/file-a"}. Use an asset tool to retrieve or inspect this attachment; its body is not included in this LLM request.',
+      role: "body",
+      mediaType: "text/plain; charset=utf-8",
+      name: "brief.pdf",
+    },
+    {
+      type: "file",
+      bytes: new Uint8Array([1, 2, 3]),
+      role: "body",
+      mediaType: "application/pdf",
+      name: "included.pdf",
+      disposition: "inline",
+    },
+  ]);
+  assert(
+    !seen?.request.messages[0].content.some((part) =>
+      part.type === "file" && part.name !== "included.pdf"
+    ),
+  );
+});
+
+Deno.test("llm.call does not resolve an attachment-only request", async () => {
+  const attachment = Object.freeze({
+    ...ref("attachment-a", "file", "application/pdf"),
+    name: "private.pdf",
+    disposition: "attachment" as const,
+  });
+  let seen: LlmAdapterCallInput | undefined;
+  const test = fixture({
+    models: { primary: model("provider", "provider-model") },
+    adapters: {
+      provider: {
+        call(input) {
+          seen = input;
+          return invocation({
+            content: { type: "text", text: "answer" },
+            attempts: [{ status: "completed" }],
+          });
+        },
+      },
+    },
+  });
+
+  await callLlmAction.execute({
+    ...emptyInput,
+    request: { messages: [{ role: "user", content: [attachment] }] },
+  }, test.context);
+
+  assertEquals(test.resolvedRequests(), []);
+  const part = seen?.request.messages[0].content[0];
+  assertEquals(part?.type, "text");
+  assert(!("bytes" in (part ?? {})));
+  assert(!("file_data" in (part ?? {})));
 });
 
 Deno.test("llm.call publishes frames only through Streams and materializes them", async () => {

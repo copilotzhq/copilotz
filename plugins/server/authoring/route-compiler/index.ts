@@ -159,6 +159,28 @@ function responseSchema(
   route: CompiledServerRoute,
 ): Readonly<Record<string, unknown>> {
   const endpoint = route.endpoint;
+  if (endpoint.kind === "asset" && endpoint.operation === "upload") {
+    return jsonEnvelope({
+      type: "object",
+      properties: {
+        asset: { type: "object" },
+        assetRef: { type: "string" },
+        content: {
+          type: "object",
+          properties: {
+            assetId: { type: "string" },
+            kind: { const: "file" },
+            role: { const: "attachment" },
+            mediaType: { type: "string" },
+            disposition: { const: "attachment" },
+            name: { type: "string" },
+          },
+          required: ["assetId", "kind", "role", "mediaType", "disposition"],
+        },
+      },
+      required: ["asset", "assetRef", "content"],
+    });
+  }
   if (endpoint.kind === "agents") {
     return jsonEnvelope({ type: "array", items: {} });
   }
@@ -202,9 +224,20 @@ function operationObject(route: CompiledServerRoute): Record<string, unknown> {
     ? `${value.id}.${value.operation}`
     : value.kind === "channel"
     ? `${value.id}.${value.method.toLowerCase()}`
+    : value.kind === "asset" && value.operation
+    ? `${value.id}.${value.operation}`
     : value.id;
-  const requestBody = value.inputSchema &&
-      value.method !== "GET" && value.method !== "DELETE"
+  const requestBody = value.kind === "asset" && value.operation === "upload"
+    ? {
+      required: true,
+      content: {
+        "application/octet-stream": {
+          schema: { type: "string", format: "binary" },
+        },
+      },
+    }
+    : value.inputSchema &&
+        value.method !== "GET" && value.method !== "DELETE"
     ? {
       required: true,
       content: {
@@ -214,8 +247,9 @@ function operationObject(route: CompiledServerRoute): Record<string, unknown> {
     : undefined;
   const noContent = value.kind === "collection" &&
     value.operation === "delete";
-  const successStatus = value.kind === "collection" &&
-      value.operation === "create"
+  const successStatus = (value.kind === "collection" &&
+      value.operation === "create") ||
+      (value.kind === "asset" && value.operation === "upload")
     ? "201"
     : noContent
     ? "204"
@@ -240,10 +274,25 @@ function operationObject(route: CompiledServerRoute): Record<string, unknown> {
       required: true,
       schema: { type: "string" },
     }));
+  const headers = value.kind === "asset" && value.operation === "upload"
+    ? [{
+      name: "Idempotency-Key",
+      in: "header",
+      required: false,
+      schema: { type: "string" },
+    }, {
+      name: "Content-Disposition",
+      in: "header",
+      required: false,
+      schema: { type: "string" },
+    }]
+    : [];
   return {
     operationId,
     tags: [value.kind],
-    ...(parameters.length ? { parameters } : {}),
+    ...(parameters.length || headers.length
+      ? { parameters: [...parameters, ...headers] }
+      : {}),
     ...(requestBody ? { requestBody } : {}),
     responses: {
       [successStatus]: {
@@ -411,6 +460,13 @@ export function compileServerRoutes(
   }
 
   endpoints.push(
+    endpoint({
+      kind: "asset",
+      id: "assets",
+      method: "POST",
+      path: "/assets",
+      operation: "upload",
+    }),
     endpoint({
       kind: "asset",
       id: "assets",

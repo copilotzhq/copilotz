@@ -7,6 +7,9 @@ import type {
   ServerPatternPolicy,
   ServerRouteOverride,
 } from "../../internal/contracts.ts";
+import { DEFAULT_SERVER_ASSET_UPLOAD_BYTES as defaultMaxAssetUploadBytes } from "../../internal/contracts.ts";
+
+export { DEFAULT_SERVER_ASSET_UPLOAD_BYTES } from "../../internal/contracts.ts";
 
 function plainRecord(value: unknown, label: string): Record<string, unknown> {
   if (
@@ -121,6 +124,16 @@ function overrides(
   ));
 }
 
+function maxAssetUploadBytes(value: unknown): number {
+  if (value === undefined) return defaultMaxAssetUploadBytes;
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1) {
+    throw new TypeError(
+      "Server facade maxAssetUploadBytes must be a positive integer.",
+    );
+  }
+  return value;
+}
+
 /** Validates one process-local Server facade declaration. */
 export function defineServerFacade(
   input: DefineServerFacadeInput = {},
@@ -129,7 +142,7 @@ export function defineServerFacade(
     !input || typeof input !== "object" || Array.isArray(input) ||
     Reflect.ownKeys(input).some((key) =>
       key !== "basePath" && key !== "expose" && key !== "overrides" &&
-      key !== "guard"
+      key !== "guard" && key !== "maxAssetUploadBytes"
     )
   ) throw new TypeError("Server facade definition is invalid.");
   if (input.guard !== undefined && typeof input.guard !== "function") {
@@ -151,6 +164,7 @@ export function defineServerFacade(
   ) throw new TypeError("Server facade categories are invalid.");
   return Object.freeze({
     basePath: routePath(input.basePath ?? "/api/v1", "Server facade basePath"),
+    maxAssetUploadBytes: maxAssetUploadBytes(input.maxAssetUploadBytes),
     expose: Object.freeze({
       actions: exposure(expose.actions, "Server action exposure") as
         | boolean

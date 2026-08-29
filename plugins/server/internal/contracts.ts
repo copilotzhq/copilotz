@@ -11,6 +11,8 @@ export const SERVER_ACTION_REQUEST_EVENT_TYPE =
   "copilotz.server.action.requested";
 export const SERVER_ACTION_REQUEST_SCHEMA = "copilotz.server.action-request.v1";
 export const SERVER_ACTION_METADATA_SCHEMA = "copilotz.server.action.v1";
+/** Default maximum raw request body accepted by POST /assets. */
+export const DEFAULT_SERVER_ASSET_UPLOAD_BYTES = 20 * 1024 * 1024;
 
 export type ServerHttpMethod =
   | "GET"
@@ -99,6 +101,8 @@ export type ServerGuard = (
 
 export type ServerFacadeResource = Readonly<{
   basePath: string;
+  /** Maximum raw bytes accepted by the generic asset upload endpoint. */
+  maxAssetUploadBytes: number;
   expose: Readonly<{
     actions: boolean | ServerPatternPolicy;
     collections: boolean | ServerCollectionExposure;
@@ -114,6 +118,8 @@ export type ServerFacadeResource = Readonly<{
 
 export type DefineServerFacadeInput = Readonly<{
   basePath?: string;
+  /** Defaults to 20 MiB. */
+  maxAssetUploadBytes?: number;
   expose?: ServerExposureOptions;
   overrides?: ServerOverrideOptions;
   guard?: ServerGuard;

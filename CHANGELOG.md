@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.63.6 — 2026-08-29
+
+Adds bounded raw Asset uploads to the compiled Server facade. `POST /assets`
+publishes directly to the configured Asset body store, supports exact idempotent
+replay, and returns a canonical attachment ContentRef without copying bytes into
+Action or Event payloads. Streaming request limits are enforced while consuming
+the body, including chunked uploads without a declared content length.
+
+LLM calls now preserve the ContentRef disposition boundary: attachments and
+unspecified files become deterministic `asset://` descriptors for Asset Tools,
+while only explicitly inline content is materialized into provider requests.
+
 ## 0.63.5 — 2026-08-28
 
 Routes semantic-memory consolidation through the owning Agent's ordinary Core

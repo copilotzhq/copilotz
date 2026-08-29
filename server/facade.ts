@@ -1,6 +1,7 @@
 /** Compiled Fetch facade over composed Copilotz primitives. @module */
 
 import type { ActionEventData } from "@copilotz/copilotz/actions";
+import { type ContentRef, formatAssetRef } from "../runtime/content/index.ts";
 import type { InternalCopilotzApplication } from "../runtime/application/types.ts";
 import { SERVER_INVOKE_ACTION_ID } from "../plugins/server/actions/invoke-action/index.ts";
 import { actionSchemaHasSecrets } from "../runtime/actions/secret.ts";
@@ -31,6 +32,7 @@ import {
   type CreateEventNativeFetchHandlerOptions,
   type EventNativeFetchHandler,
 } from "./fetch.ts";
+import { eventNativeAsset } from "./assets.ts";
 
 export type CreateServerFacadeFetchHandlerOptions = Readonly<{
   facade?: ServerFacadeResource;
@@ -81,6 +83,62 @@ function header(
     if (key.toLowerCase() === lower && value.trim()) return value.trim();
   }
   return undefined;
+}
+
+function uploadTooLarge(maxBytes: number): Error {
+  return appError(
+    413,
+    "asset_too_large",
+    `Asset upload exceeds the ${maxBytes}-byte limit.`,
+  );
+}
+
+/** Reject a declared oversized upload before Fetch consumes its request body. */
+function assertUploadContentLength(
+  request: Request,
+  endpoint: ServerEndpointDescriptor,
+  maxBytes: number,
+): void {
+  if (endpoint.kind !== "asset" || endpoint.operation !== "upload") return;
+  const contentLength = request.headers.get("content-length")?.trim();
+  if (!contentLength || !/^\d+$/.test(contentLength)) return;
+  const byteLength = Number(contentLength);
+  if (Number.isSafeInteger(byteLength) && byteLength > maxBytes) {
+    throw uploadTooLarge(maxBytes);
+  }
+}
+
+function uploadMediaType(headers: EventNativeAppRequest["headers"]): string {
+  const mediaType = header(headers, "content-type")?.split(";", 1)[0]
+    ?.trim().toLowerCase();
+  return mediaType || "application/octet-stream";
+}
+
+function uploadFilename(
+  headers: EventNativeAppRequest["headers"],
+): string | undefined {
+  const disposition = header(headers, "content-disposition");
+  if (!disposition) return undefined;
+  const extended = /(?:^|;)\s*filename\*=\s*([^;]+)/i.exec(disposition)?.[1];
+  const plain = /(?:^|;)\s*filename\s*=\s*(?:"([^"]*)"|([^;]*))/i
+    .exec(disposition);
+  let value = extended ?? plain?.[1] ?? plain?.[2];
+  if (!value) return undefined;
+  value = value.trim().replace(/^"|"$/g, "");
+  if (extended) {
+    value = value.replace(/^utf-8''/i, "");
+    try {
+      value = decodeURIComponent(value);
+    } catch {
+      return undefined;
+    }
+  }
+  const filename = [...value.replace(/[\\/]/g, "/").split("/").at(-1)!]
+    .filter((character) => {
+      const codePoint = character.codePointAt(0)!;
+      return codePoint >= 0x20 && codePoint !== 0x7f;
+    }).join("").trim().slice(0, 255);
+  return filename || undefined;
 }
 
 function facadeResource(
@@ -423,6 +481,61 @@ async function actionResponse(
   };
 }
 
+async function assetUploadResponse(
+  application: InternalCopilotzApplication,
+  endpoint: ServerEndpointDescriptor,
+  request: EventNativeAppRequest,
+  context: FacadeContext,
+  maxBytes: number,
+): Promise<EventNativeAppResponse> {
+  if (endpoint.operation !== "upload") {
+    throw appError(405, "method_not_allowed", "Asset method is not allowed.");
+  }
+  const rawBody = (request.context as { rawBody?: unknown } | undefined)
+    ?.rawBody;
+  if (!(rawBody instanceof Uint8Array) || rawBody.byteLength === 0) {
+    throw appError(400, "asset_body_required", "Asset upload requires a body.");
+  }
+  if (rawBody.byteLength > maxBytes) throw uploadTooLarge(maxBytes);
+  const namespace = context.namespace ?? application.config.namespace;
+  if (!namespace) {
+    throw appError(400, "namespace_required", "Tenant namespace is required.");
+  }
+  const databaseSchema = context.databaseSchema ??
+    application.config.databaseSchema;
+  const scope = databaseSchema === application.config.databaseSchema
+    ? application
+    : await application.databaseScope(databaseSchema);
+  const name = uploadFilename(request.headers);
+  const asset = await scope.content.assets.publish({
+    namespace,
+    mediaType: uploadMediaType(request.headers),
+    body: rawBody,
+    idempotencyKey: header(request.headers, "idempotency-key") ??
+      crypto.randomUUID(),
+    ...(name ? { metadata: { name } } : {}),
+  });
+  const canonicalName = typeof asset.metadata?.name === "string"
+    ? asset.metadata.name
+    : undefined;
+  const content: ContentRef = Object.freeze({
+    assetId: asset.id,
+    kind: "file",
+    role: "attachment",
+    mediaType: asset.mediaType,
+    disposition: "attachment",
+    ...(canonicalName ? { name: canonicalName } : {}),
+  });
+  return {
+    status: 201,
+    data: Object.freeze({
+      asset: eventNativeAsset(asset),
+      assetRef: formatAssetRef(namespace, asset.id),
+      content,
+    }),
+  };
+}
+
 function nativeRequest(
   endpoint: ServerEndpointDescriptor,
   params: Readonly<Record<string, string>>,
@@ -502,6 +615,15 @@ export function createServerFacadeFetchHandler(
       if (endpoint.kind === "action") {
         return await actionResponse(application, endpoint, request, context);
       }
+      if (endpoint.kind === "asset" && endpoint.operation === "upload") {
+        return await assetUploadResponse(
+          application,
+          endpoint,
+          request,
+          context,
+          facade.maxAssetUploadBytes,
+        );
+      }
       return await native.handle(nativeRequest(
         endpoint,
         context.serverParams,
@@ -514,6 +636,22 @@ export function createServerFacadeFetchHandler(
     responseHeaders: options.responseHeaders,
     streamResponseMode: "negotiate",
     onError: options.onError,
+    rawBody(_request, context) {
+      const key = (context as FacadeContext | undefined)?.serverEndpointKey;
+      const upload = routes.routes.some((route) =>
+        route.endpoint.key === key && route.endpoint.kind === "asset" &&
+        route.endpoint.operation === "upload"
+      );
+      return upload
+        ? Object.freeze({
+          maxBytes: facade.maxAssetUploadBytes,
+          tooLarge: Object.freeze({
+            code: "asset_too_large",
+            message: uploadTooLarge(facade.maxAssetUploadBytes).message,
+          }),
+        })
+        : false;
+    },
     async resolveContext(request) {
       await options.admit?.();
       const match = routes.match(request.method, new URL(request.url).pathname);
@@ -537,6 +675,11 @@ export function createServerFacadeFetchHandler(
       );
       if (guarded instanceof Response) return guarded;
       const scope = authorizedScope(guarded);
+      assertUploadContentLength(
+        request,
+        match.endpoint,
+        facade.maxAssetUploadBytes,
+      );
       return Object.freeze({
         ...(hostContext ?? {}),
         ...(scope.context ?? {}),

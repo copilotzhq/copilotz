@@ -209,6 +209,12 @@ Asset provenance is runtime-neutral. It is one opaque provenance identity
 standalone runtime publication may use the namespace. The runtime neither
 enumerates those types nor gives them special storage behavior.
 
+LLM materialization honors the existing ContentRef disposition boundary.
+`attachment` projects a deterministic Asset descriptor without resolving its
+body, while `inline` permits provider materialization; an unspecified `file`
+defaults to attachment. This keeps arbitrary files addressable through Asset
+Tools without silently copying their bodies into provider requests.
+
 The transaction callback remains ordinary code. Action or Adapter calls made in
 it run during planning, before SQL, and are neither rolled back nor implicitly
 retried by the runtime. Only the staged graph mutations are atomic. This keeps

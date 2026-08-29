@@ -21,6 +21,13 @@ export type EventNativeSseProjector = (
   | null
   | Promise<unknown | readonly unknown[] | null>;
 
+export type EventNativeRawBodyPolicy = Readonly<{
+  /** Hard byte cap enforced while consuming the request stream. */
+  maxBytes: number;
+  /** Optional bounded 413 error projection for the selected raw route. */
+  tooLarge?: Readonly<{ code: string; message: string }>;
+}>;
+
 export type CreateEventNativeFetchHandlerOptions = Readonly<{
   /** Optional route prefix, for example /v2. */
   basePath?: string;
@@ -30,6 +37,11 @@ export type CreateEventNativeFetchHandlerOptions = Readonly<{
     | EventNativeAppRequest["context"]
     | Response
     | Promise<EventNativeAppRequest["context"] | Response>;
+  /** Selects routes whose body is opaque bytes even when Content-Type is JSON. */
+  rawBody?: (
+    request: Request,
+    context: EventNativeAppRequest["context"] | undefined,
+  ) => boolean | EventNativeRawBodyPolicy;
   responseHeaders?: Readonly<Record<string, string>>;
   /** Optional versioned projection applied only to request-bound SSE output. */
   projectSseOutput?: EventNativeSseProjector;
@@ -81,7 +93,60 @@ function headers(request: Request): Readonly<Record<string, string>> {
   return Object.freeze(Object.fromEntries(request.headers.entries()));
 }
 
-async function body(request: Request): Promise<
+function rawBodyTooLarge(policy: EventNativeRawBodyPolicy): Error {
+  return Object.assign(
+    new Error(
+      policy.tooLarge?.message ??
+        `Request body exceeds the ${policy.maxBytes}-byte limit.`,
+    ),
+    {
+      status: 413,
+      code: policy.tooLarge?.code ?? "request_body_too_large",
+    },
+  );
+}
+
+async function readBodyBytes(
+  request: Request,
+  policy: EventNativeRawBodyPolicy | undefined,
+): Promise<Uint8Array> {
+  if (!policy) return new Uint8Array(await request.arrayBuffer());
+  if (!Number.isSafeInteger(policy.maxBytes) || policy.maxBytes <= 0) {
+    throw new TypeError(
+      "Raw request body maxBytes must be a positive integer.",
+    );
+  }
+  if (!request.body) return new Uint8Array();
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > policy.maxBytes) {
+        void reader.cancel(rawBodyTooLarge(policy)).catch(() => undefined);
+        throw rawBodyTooLarge(policy);
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const raw = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    raw.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return raw;
+}
+
+async function body(
+  request: Request,
+  rawPolicy: boolean | EventNativeRawBodyPolicy = false,
+): Promise<
   Readonly<{
     value: unknown;
     raw?: Uint8Array;
@@ -90,11 +155,18 @@ async function body(request: Request): Promise<
   if (request.method === "GET" || request.method === "HEAD") {
     return { value: undefined };
   }
-  const raw = new Uint8Array(await request.arrayBuffer());
+  const rawOnly = Boolean(rawPolicy);
+  const raw = await readBodyBytes(
+    request,
+    typeof rawPolicy === "object" ? rawPolicy : undefined,
+  );
   if (!raw.length) return { value: undefined, raw };
   const mediaType = request.headers.get("content-type")?.split(";", 1)[0]
     .trim().toLowerCase();
-  if (mediaType === "application/json" || mediaType?.endsWith("+json")) {
+  if (
+    !rawOnly &&
+    (mediaType === "application/json" || mediaType?.endsWith("+json"))
+  ) {
     try {
       return { value: JSON.parse(new TextDecoder().decode(raw)), raw };
     } catch {
@@ -104,7 +176,10 @@ async function body(request: Request): Promise<
       });
     }
   }
-  if (mediaType?.startsWith("text/") || mediaType === "application/xml") {
+  if (
+    !rawOnly &&
+    (mediaType?.startsWith("text/") || mediaType === "application/xml")
+  ) {
     return { value: new TextDecoder().decode(raw), raw };
   }
   return { value: raw, raw };
@@ -334,7 +409,10 @@ export function createEventNativeFetchHandler(
       }
       const context = await options.resolveContext?.(request);
       if (context instanceof Response) return context;
-      const parsedBody = await body(request);
+      const parsedBody = await body(
+        request,
+        options.rawBody?.(request, context),
+      );
       const result = await app.handle({
         resource: parts[0],
         method: method as EventNativeAppRequest["method"],

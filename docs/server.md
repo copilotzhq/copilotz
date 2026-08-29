@@ -58,7 +58,15 @@ not acquire this authority automatically.
   and `POST /collections/:name/:id/commands/:command`.
 - A composed Channel alias receives `/channels/:alias`.
 - Assets, a sanitized Agent list, and `/openapi.json` are deliberate built-in
-  projections. Arbitrary Resources are never enumerated.
+  projections. `POST /assets` publishes a bounded raw request body directly as
+  an Asset and returns its canonical attachment ContentRef; `GET /assets/:id`
+  retains the guarded read projection. Arbitrary Resources are never enumerated.
+
+Asset upload defaults to 20 MiB and can be bounded further with
+`maxAssetUploadBytes`. `Content-Type` supplies the media type,
+`Content-Disposition` may supply the filename, and `Idempotency-Key` makes an
+exact retry return the same immutable Asset. The body is never copied into an
+Action or Event payload.
 
 Include and exclude lists use a small case-sensitive glob language where `*`
 matches zero or more characters. Include defaults to `*`, exclude defaults to

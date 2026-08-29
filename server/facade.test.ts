@@ -401,6 +401,100 @@ Deno.test("Server facade executes Actions and Collections through one guarded ro
   }
 });
 
+Deno.test("Server facade publishes raw asset uploads without Action payload copies", async () => {
+  const seen: ServerEndpointDescriptor[] = [];
+  const application = await createCopilotzApplication({
+    namespace: "tenant-a",
+    databaseSchema: "server_facade_asset_upload",
+    plugins: [
+      createServerPlugin({
+        maxAssetUploadBytes: 4,
+        guard(_request, context) {
+          seen.push(context.endpoint);
+          return { namespace: "tenant-a" };
+        },
+      }),
+    ],
+  });
+  const fetch = createServerFacadeFetchHandler(application);
+  const upload = () =>
+    fetch(
+      new Request("https://example.test/api/v1/assets", {
+        method: "POST",
+        headers: {
+          // The body is intentionally invalid JSON: asset upload treats declared
+          // media as metadata and consumes raw bytes rather than JSON-decoding it.
+          "content-type": "application/json",
+          "content-disposition": 'attachment; filename="notes.txt"',
+          "idempotency-key": "server-asset-upload-a",
+        },
+        body: new TextEncoder().encode("test"),
+      }),
+    );
+  try {
+    const first = await upload();
+    assertEquals(first.status, 201, await first.clone().text());
+    const firstBody = await first.json();
+    assertEquals(firstBody.data.content, {
+      assetId: firstBody.data.asset.id,
+      kind: "file",
+      role: "attachment",
+      mediaType: "application/json",
+      disposition: "attachment",
+      name: "notes.txt",
+    });
+    assertEquals(firstBody.data.asset.metadata, { name: "notes.txt" });
+    assertEquals(firstBody.data.asset.location, undefined);
+    assertEquals(
+      firstBody.data.assetRef,
+      `asset://tenant-a/${firstBody.data.asset.id}`,
+    );
+
+    const replay = await upload();
+    assertEquals(replay.status, 201, await replay.clone().text());
+    assertEquals((await replay.json()).data.asset.id, firstBody.data.asset.id);
+
+    const noBody = await fetch(
+      new Request("https://example.test/api/v1/assets", {
+        method: "POST",
+        headers: { "idempotency-key": "server-asset-upload-empty" },
+      }),
+    );
+    assertEquals(noBody.status, 400);
+    assertEquals((await noBody.json()).error.code, "asset_body_required");
+
+    let cancelledOversizedBody = false;
+    const oversized = await fetch(
+      new Request("https://example.test/api/v1/assets", {
+        method: "POST",
+        headers: { "idempotency-key": "server-asset-upload-large" },
+        // No Content-Length: the Fetch boundary must enforce the cap while
+        // consuming a chunked/streamed body, before buffering all of it.
+        body: new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode("larg"));
+            controller.enqueue(new TextEncoder().encode("e"));
+          },
+          cancel() {
+            cancelledOversizedBody = true;
+          },
+        }),
+      }),
+    );
+    assertEquals(oversized.status, 413);
+    assertEquals((await oversized.json()).error.code, "asset_too_large");
+    assertEquals(cancelledOversizedBody, true);
+    assertEquals(seen.map((endpoint) => endpoint.operation), [
+      "upload",
+      "upload",
+      "upload",
+      "upload",
+    ]);
+  } finally {
+    await application.close("server_facade_asset_upload_done");
+  }
+});
+
 Deno.test("Server facade guard may terminate and multipart observes one Action scope", async () => {
   let trustedContext: Readonly<Record<string, unknown>> | undefined;
   const application = await createCopilotzApplication({

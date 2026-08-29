@@ -147,6 +147,38 @@ Deno.test("route compiler maps IDs, queries, commands, overrides, and OpenAPI", 
   assertEquals(Object.isFrozen(listSchema), true);
 });
 
+Deno.test("route compiler exposes the generic binary asset upload contract", () => {
+  const routes = compileServerRoutes(
+    createPluginRegistry({ plugins: [fixture] }),
+    defineServerFacade(),
+  );
+  const upload = routes.match("POST", "/api/v1/assets");
+  assertEquals(upload?.endpoint, {
+    key: "POST:/assets",
+    kind: "asset",
+    id: "assets",
+    method: "POST",
+    path: "/assets",
+    operation: "upload",
+  });
+  assertEquals(
+    routes.match("GET", "/api/v1/assets/a-1")?.endpoint.kind,
+    "asset",
+  );
+  const paths = routes.openApi.paths as Record<string, Record<string, unknown>>;
+  const operation = paths["/api/v1/assets"].post as Record<string, unknown>;
+  assertEquals(operation.operationId, "assets.upload");
+  assertEquals(
+    ((operation.requestBody as Record<string, Record<string, unknown>>).content[
+      "application/octet-stream"
+    ] as Record<string, unknown>).schema,
+    { type: "string", format: "binary" },
+  );
+  assertEquals(Object.keys(operation.responses as Record<string, unknown>), [
+    "201",
+  ]);
+});
+
 Deno.test("route compiler applies glob exclusion and rejects bad overrides", () => {
   const registry = createPluginRegistry({ plugins: [fixture] });
   const routes = compileServerRoutes(

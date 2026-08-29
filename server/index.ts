@@ -15,6 +15,7 @@ export type {
 export {
   compileServerRoutes,
   createServerPlugin,
+  DEFAULT_SERVER_ASSET_UPLOAD_BYTES,
   defineServerFacade,
   serverPlugin,
 } from "../plugins/server/index.ts";

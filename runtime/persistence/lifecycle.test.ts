@@ -34,6 +34,19 @@ function connectionError(): Error & { code: string } {
   });
 }
 
+function hypervisorSessionError(
+  code:
+    | "connection_lost"
+    | "indeterminate"
+    | "worker_unavailable"
+    | "shutting_down",
+): Error & { name: "HypervisorError"; code: typeof code } {
+  return Object.assign(new Error(`Oxian session ${code}`), {
+    name: "HypervisorError" as const,
+    code,
+  });
+}
+
 function databaseGeneration(
   id: number,
   options: Readonly<{
@@ -280,6 +293,47 @@ Deno.test("persistence never replays an indeterminate transaction callback", asy
   }
 });
 
+Deno.test("persistence rotates an OminiPG Oxian session loss without replaying the active query", async () => {
+  let connections = 0;
+  let failedCalls = 0;
+  const persistence = await openCopilotzPersistence({
+    database: {
+      connect({ generation }) {
+        connections += 1;
+        return databaseGeneration(generation, {
+          async query(sql) {
+            if (generation === 1 && sql === "in-flight") {
+              failedCalls += 1;
+              throw hypervisorSessionError("indeterminate");
+            }
+            return [{ generation }];
+          },
+        });
+      },
+    },
+    databaseRecovery: { waitMs: 100 },
+  });
+  try {
+    const error = await assertRejects(() =>
+      persistence.database.query("in-flight")
+    );
+    assert(isCopilotzPersistenceError(error));
+    assertEquals(error.code, "persistence_indeterminate");
+    assertEquals(error.indeterminate, true);
+    assertEquals(failedCalls, 1);
+
+    await persistence.recovery!.admit();
+    assertEquals(connections, 2);
+    assertEquals(
+      (await persistence.database.query<{ generation: number }>("next")).rows,
+      [{ generation: 2 }],
+    );
+    assertEquals(failedCalls, 1);
+  } finally {
+    await persistence.close();
+  }
+});
+
 Deno.test("persistence classifier excludes domain and constraint failures", () => {
   assertEquals(
     isPersistenceUnavailable(Object.assign(new Error("duplicate key"), {
@@ -302,6 +356,30 @@ Deno.test("persistence classifier excludes domain and constraint failures", () =
   assertEquals(
     isPersistenceUnavailable(new Error("Ominipg session is closed")),
     true,
+  );
+  for (
+    const code of [
+      "connection_lost",
+      "indeterminate",
+      "worker_unavailable",
+      "shutting_down",
+    ] as const
+  ) {
+    assertEquals(isPersistenceUnavailable(hypervisorSessionError(code)), true);
+    assertEquals(
+      isPersistenceUnavailable(
+        new Error("Ominipg session failed", {
+          cause: hypervisorSessionError(code),
+        }),
+      ),
+      true,
+    );
+  }
+  assertEquals(
+    isPersistenceUnavailable(Object.assign(new Error("domain outcome"), {
+      code: "indeterminate",
+    })),
+    false,
   );
 });
 

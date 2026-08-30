@@ -170,8 +170,41 @@ function errorMessage(error: unknown): string {
   return typeof error === "string" ? error : "";
 }
 
+const OXIAN_SESSION_LOSS_CODES = new Set([
+  "connection_lost",
+  "indeterminate",
+  "worker_unavailable",
+  "shutting_down",
+]);
+
+/**
+ * OminiPG surfaces its Oxian session failure directly or as an Error cause.
+ * These terminal transport states do not say whether the SQL operation was
+ * observed by the worker, so callers must receive an indeterminate outcome.
+ */
+function hasOxianSessionLoss(error: unknown): boolean {
+  const seen = new Set<object>();
+  let current = error;
+  while (current && typeof current === "object" && !seen.has(current)) {
+    seen.add(current);
+    const candidate = current as Readonly<{
+      name?: unknown;
+      code?: unknown;
+      cause?: unknown;
+    }>;
+    if (
+      candidate.name === "HypervisorError" &&
+      typeof candidate.code === "string" &&
+      OXIAN_SESSION_LOSS_CODES.has(candidate.code)
+    ) return true;
+    current = candidate.cause;
+  }
+  return false;
+}
+
 /** Conservative default: domain, validation, and SQL constraint errors do not reconnect. */
 export function isPersistenceUnavailable(error: unknown): boolean {
+  if (hasOxianSessionLoss(error)) return true;
   const code = errorCode(error);
   if (
     code &&

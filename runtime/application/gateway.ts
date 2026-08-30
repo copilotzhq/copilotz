@@ -146,6 +146,7 @@ export async function createCopilotzGateway(
           dispatcher,
           target: options.target,
           workloadTargets: options.workloadTargets,
+          continuousRecovery: true,
         },
       },
     });
@@ -163,6 +164,20 @@ export async function createCopilotzGateway(
     persistence,
     application,
   );
+  try {
+    // Persistence listeners only receive future ready transitions. The
+    // Gateway owns durable recovery, so it must also sweep an already-ready
+    // database before serving work.
+    await application.startRecovery();
+  } catch (error) {
+    stopObservingPersistence();
+    await settleAll([
+      () => application!.shutdown("copilotz_gateway_recovery_failed"),
+      () => hypervisor?.shutdown("copilotz_gateway_recovery_failed"),
+      () => persistence.close("copilotz_gateway_recovery_failed"),
+    ], "Copilotz Gateway recovery cleanup failed.").catch(() => undefined);
+    throw error;
+  }
   let shutdownTask: Promise<void> | undefined;
   const shutdown = (reason = "copilotz_gateway_shutdown"): Promise<void> => {
     if (shutdownTask) return shutdownTask;

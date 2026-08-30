@@ -19,6 +19,12 @@ import {
   coreCollectionsPlugin,
   corePlugin,
 } from "../../plugins/core/plugin.ts";
+import {
+  createCoreTableNames,
+  createEventStore,
+  createSqlSession,
+  provisionCopilotzSchema,
+} from "../events/index.ts";
 import type { TestDatabase } from "../testing/ominipg.ts";
 import { createTestDatabase } from "../testing/ominipg.ts";
 import type { ApplicationOutput, StreamOutput } from "../streams/index.ts";
@@ -107,6 +113,22 @@ function correlatedOutputPlugin(): AnyCopilotzPlugin {
     id: "test.application.correlated-output",
     version: "1.0.0",
     processors: { correlatedOutput: processor },
+  });
+}
+
+function startupRecoveryPlugin(calls: { count: number }): AnyCopilotzPlugin {
+  return definePlugin({
+    id: "test.application.startup-recovery",
+    version: "1.0.0",
+    processors: {
+      complete: defineProcessor<ProcessorContext>({
+        id: "test.application.startup-recovery-complete",
+        on: [{ eventType: "test.application.startup-recovery" }],
+        handle() {
+          calls.count += 1;
+        },
+      }),
+    },
   });
 }
 
@@ -621,6 +643,116 @@ Deno.test("application never closes an injected database", async () => {
   assertEquals(closes, 1);
 });
 
+Deno.test("recovery owner startup reclaims an expired delivery lease left by a crashed runtime", async () => {
+  const database = await createTestDatabase({ url: ":memory:" });
+  const schema = `${SCHEMA}_startup_recovery`;
+  const calls = { count: 0 };
+  const plugin = startupRecoveryPlugin(calls);
+  const starter = await createCopilotzApplication({
+    database,
+    namespace: NAMESPACE,
+    databaseSchema: schema,
+    plugins: [plugin],
+  });
+  let recovered:
+    | Awaited<ReturnType<typeof createCopilotzApplication>>
+    | undefined;
+  try {
+    await starter.shutdown();
+    const store = createEventStore({
+      session: createSqlSession(database),
+      schema,
+    });
+    const committed = await store.append({
+      type: "test.application.startup-recovery",
+      namespace: NAMESPACE,
+      payload: {},
+    }, ["processor:test.application.startup-recovery-complete"]);
+    const delivery = committed.deliveries[0];
+    assertExists(delivery);
+    assertExists(
+      await store.claimDelivery({ id: delivery.id, owner: "crashed" }),
+    );
+    const tables = createCoreTableNames(schema);
+    await database.query(
+      `UPDATE ${tables.event_deliveries}
+       SET lease_expires_at = NOW() - INTERVAL '1 millisecond'
+       WHERE id = $1`,
+      [delivery.id],
+    );
+
+    recovered = await createCopilotzApplication({
+      database,
+      namespace: NAMESPACE,
+      databaseSchema: schema,
+      plugins: [plugin],
+    });
+    await recovered.startRecovery();
+    const settled = await waitForTestDelivery(
+      recovered,
+      NAMESPACE,
+      committed.event.id,
+      "succeeded",
+    );
+    assertEquals(settled.attempts, 2);
+    assertEquals(calls.count, 1);
+  } finally {
+    await starter.shutdown();
+    await recovered?.shutdown();
+    await database.close();
+  }
+});
+
+Deno.test("opening a tenant scope recovers its expired delivery lease", async () => {
+  const database = await createTestDatabase({ url: ":memory:" });
+  const schema = `${SCHEMA}_tenant_startup_recovery`;
+  const tenantSchema = `${schema}_tenant`;
+  const calls = { count: 0 };
+  const plugin = startupRecoveryPlugin(calls);
+  const session = createSqlSession(database);
+  await provisionCopilotzSchema(session, tenantSchema);
+  const store = createEventStore({ session, schema: tenantSchema });
+  const committed = await store.append({
+    type: "test.application.startup-recovery",
+    namespace: NAMESPACE,
+    payload: {},
+  }, ["processor:test.application.startup-recovery-complete"]);
+  const delivery = committed.deliveries[0];
+  assertExists(delivery);
+  assertExists(
+    await store.claimDelivery({ id: delivery.id, owner: "crashed" }),
+  );
+  const tables = createCoreTableNames(tenantSchema);
+  await database.query(
+    `UPDATE ${tables.event_deliveries}
+     SET lease_expires_at = NOW() - INTERVAL '1 millisecond'
+     WHERE id = $1`,
+    [delivery.id],
+  );
+  const application = await createCopilotzApplication({
+    database,
+    namespace: NAMESPACE,
+    databaseSchema: schema,
+    plugins: [plugin],
+  });
+  try {
+    await application.startRecovery();
+    assertEquals(calls.count, 0);
+    const tenant = await application.databaseScope(tenantSchema);
+    const settled = await waitForTestDelivery(
+      tenant,
+      NAMESPACE,
+      committed.event.id,
+      "succeeded",
+    );
+    assertEquals(settled.attempts, 2);
+    assertEquals(calls.count, 1);
+  } finally {
+    await application.shutdown();
+    await database.close();
+  }
+});
+
 Deno.test("persistence outage interrupts active send observers without cancelling durable work", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   let generation = 0;
@@ -734,6 +866,7 @@ Deno.test("persistence outage interrupts active send observers without cancellin
       NAMESPACE,
       messageEvent.id,
       "retry_wait",
+      5_000,
     );
     assertEquals(messageDelivery.status, "retry_wait");
     assertEquals(processorCalls, 1);

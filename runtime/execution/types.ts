@@ -147,6 +147,8 @@ export type CreateDeliveryExecutorOptions = Readonly<{
   capacity?: number;
   leaseMs?: number;
   heartbeatMs?: number;
+  /** Enables Gateway-owned continuous recovery after an unfiltered sweep. */
+  continuousRecovery?: boolean;
   scheduler?: DeliveryWorkloadScheduler;
   createDispatchAttemptId?: () => string;
   /** Relays generic event and stream descriptors from a remote Worker. */

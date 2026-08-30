@@ -98,4 +98,6 @@ export type InternalCopilotzApplication =
     ): Promise<ApplicationSendHandle>;
     /** Internal-only transport interruption used by persistence recovery. */
     interruptActiveSends(error: unknown): void;
+    /** Gives the Gateway ownership of durable lease recovery for this runtime. */
+    startRecovery(): Promise<void>;
   }>;

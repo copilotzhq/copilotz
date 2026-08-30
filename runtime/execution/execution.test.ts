@@ -4,6 +4,7 @@ import { createWorker } from "../../dependencies/oxian-worker.ts";
 import { createTestDatabase, type TestDatabase } from "../testing/ominipg.ts";
 import {
   createCoreSchemaStatements,
+  createCoreTableNames,
   createEventStore,
   createSqlSession,
   type EventStore,
@@ -133,6 +134,17 @@ async function waitForDeliveryStatus(
   throw new Error(`Delivery '${id}' did not reach '${status}'.`);
 }
 
+async function waitForScheduledCallback(
+  callbacks: readonly (() => void)[],
+): Promise<() => void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const callback = callbacks.at(-1);
+    if (callback) return callback;
+    await new Promise((resolve) => setTimeout(resolve, 2));
+  }
+  throw new Error("Expected a delivery recovery callback to be scheduled.");
+}
+
 Deno.test("A24 private in-process Oxian recovers and executes a durable delivery", async () => {
   const fixture = await createFixture();
   const committed = await appendMessage(fixture);
@@ -172,6 +184,122 @@ Deno.test("A24 private in-process Oxian recovers and executes a durable delivery
         },
       },
     }]);
+  } finally {
+    await executor.shutdown();
+    await closeFixture(fixture);
+  }
+});
+
+Deno.test("recovery owner automatically reclaims a lease that expires after its first sweep", async () => {
+  const fixture = await createFixture();
+  const committed = await appendMessage(fixture);
+  const delivery = committed.deliveries[0];
+  const callbacks: Array<() => void> = [];
+  const executor = createDeliveryExecutor({
+    store: fixture.store,
+    registry: fixture.registry,
+    createContext: fixture.createContext,
+    workerId: "copilotz-expired-lease-recovery-test",
+    continuousRecovery: true,
+    scheduler: {
+      schedule(callback) {
+        callbacks.push(callback);
+        return callback;
+      },
+      cancel() {},
+    },
+  });
+  try {
+    assertExists(
+      await fixture.store.claimDelivery({
+        id: delivery.id,
+        owner: "crashed",
+        leaseMs: 60_000,
+      }),
+    );
+    const initial = await executor.dispatchRecoverable();
+    assertEquals(initial.handles, []);
+    const recoverExpiredLease = await waitForScheduledCallback(callbacks);
+    const tables = createCoreTableNames("copilotz_execution");
+    await fixture.db.query(
+      `UPDATE ${tables.event_deliveries}
+       SET lease_expires_at = NOW() - INTERVAL '1 millisecond'
+       WHERE id = $1`,
+      [delivery.id],
+    );
+
+    // The timer is the only second recovery trigger: no caller invokes
+    // dispatchRecoverable again after the lease becomes expired.
+    recoverExpiredLease();
+    const settled = await waitForDeliveryStatus(
+      fixture.store,
+      delivery.id,
+      "succeeded",
+    );
+    assertEquals(settled.attempts, 2);
+    assertEquals(fixture.calls.length, 1);
+  } finally {
+    await executor.shutdown();
+    await closeFixture(fixture);
+  }
+});
+
+Deno.test("a filtered recovery cannot activate a cross-tenant continuous sweep", async () => {
+  const fixture = await createFixture();
+  const consumer = "processor:messages.observe";
+  const tenantA = await fixture.store.append({
+    type: "message.created",
+    namespace: "tenant-a",
+    threadId: "thread-a",
+    payload: { content: "tenant A" },
+  }, [consumer]);
+  const tenantB = await fixture.store.append({
+    type: "message.created",
+    namespace: "tenant-b",
+    threadId: "thread-b",
+    payload: { content: "tenant B" },
+  }, [consumer]);
+  const deliveryA = tenantA.deliveries[0];
+  const deliveryB = tenantB.deliveries[0];
+  const callbacks: Array<() => void> = [];
+  const executor = createDeliveryExecutor({
+    store: fixture.store,
+    registry: fixture.registry,
+    createContext: fixture.createContext,
+    workerId: "copilotz-filtered-recovery-test",
+    continuousRecovery: true,
+    scheduler: {
+      schedule(callback) {
+        callbacks.push(callback);
+        return callback;
+      },
+      cancel() {},
+    },
+  });
+  try {
+    for (const delivery of [deliveryA, deliveryB]) {
+      assertExists(
+        await fixture.store.claimDelivery({
+          id: delivery.id,
+          owner: "crashed",
+          leaseMs: 60_000,
+        }),
+      );
+    }
+    const recovered = await executor.dispatchRecoverable({
+      namespace: "tenant-a",
+    });
+    assertEquals(recovered.handles, []);
+    // Filtered recovery is an ordinary targeted operation, not a Gateway
+    // recovery-owner activation. It therefore cannot later sweep tenant B.
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assertEquals(callbacks, []);
+    assertEquals((await fixture.store.getDelivery(deliveryA.id))?.attempts, 1);
+    assertEquals((await fixture.store.getDelivery(deliveryB.id))?.attempts, 1);
+    assertEquals(
+      (await fixture.store.getDelivery(deliveryB.id))?.status,
+      "leased",
+    );
   } finally {
     await executor.shutdown();
     await closeFixture(fixture);

@@ -295,9 +295,7 @@ export async function createCopilotzApplication(
 
   let engine: CopilotzEngine;
   const outputHub = createApplicationOutputHub(async (output, schema) => {
-    const scoped = schema === databaseSchema
-      ? engine
-      : await engine.databaseScope(schema);
+    const scoped = await openRecoveredScope(schema);
     return Object.freeze({
       ...output,
       payload: lazyStreamFollower(() =>
@@ -325,6 +323,29 @@ export async function createCopilotzApplication(
       () => undefined,
     );
     throw error;
+  }
+
+  const scopeRecoveries = new Map<string, Promise<void>>();
+  let recoveryOwner = false;
+  async function openRecoveredScope(
+    requestedDatabaseSchema: string,
+  ): Promise<Awaited<ReturnType<CopilotzEngine["databaseScope"]>>> {
+    const schema = requestedDatabaseSchema.trim();
+    const scoped = schema === databaseSchema
+      ? engine
+      : await engine.databaseScope(schema);
+    let recovery = recoveryOwner ? scopeRecoveries.get(schema) : undefined;
+    if (recoveryOwner && !recovery) {
+      recovery = scoped.recover({ limit: 1_000 }).then(() => undefined);
+      scopeRecoveries.set(schema, recovery);
+      void recovery.catch(() => {
+        if (scopeRecoveries.get(schema) === recovery) {
+          scopeRecoveries.delete(schema);
+        }
+      });
+    }
+    await recovery;
+    return scoped;
   }
 
   const activeSends = new Map<
@@ -386,9 +407,7 @@ export async function createCopilotzApplication(
     });
     let committed;
     try {
-      const scopedEngine = inputDatabaseSchema === databaseSchema
-        ? engine
-        : await engine.databaseScope(inputDatabaseSchema);
+      const scopedEngine = await openRecoveredScope(inputDatabaseSchema);
       const draft = {
         type: inputType,
         namespace: inputNamespace,
@@ -419,9 +438,7 @@ export async function createCopilotzApplication(
     }
     const abort = new AbortController();
     const settlementScopeId = committed.settlementScopeId;
-    const eventScope = inputDatabaseSchema === databaseSchema
-      ? engine
-      : await engine.databaseScope(inputDatabaseSchema);
+    const eventScope = await openRecoveredScope(inputDatabaseSchema);
     const done = waitForApplicationScope(
       eventScope,
       engine.execution,
@@ -444,13 +461,11 @@ export async function createCopilotzApplication(
       done,
       async cancel(reason = "application_send_cancelled") {
         if (!abort.signal.aborted) abort.abort(new Error(reason));
-        await (inputDatabaseSchema === databaseSchema
-          ? engine
-          : await engine.databaseScope(inputDatabaseSchema)).events.cancel(
-            inputNamespace,
-            settlementScopeId,
-            reason,
-          );
+        await (await openRecoveredScope(inputDatabaseSchema)).events.cancel(
+          inputNamespace,
+          settlementScopeId,
+          reason,
+        );
         await done.catch(() => undefined);
       },
     });
@@ -477,12 +492,27 @@ export async function createCopilotzApplication(
     engine,
     execution: engine.execution,
     interruptActiveSends,
+    async startRecovery() {
+      recoveryOwner = true;
+      const recovery = engine.recoverAll({ limit: 1_000 }).then(() =>
+        undefined
+      );
+      scopeRecoveries.set(databaseSchema, recovery);
+      try {
+        await recovery;
+      } catch (error) {
+        if (scopeRecoveries.get(databaseSchema) === recovery) {
+          scopeRecoveries.delete(databaseSchema);
+        }
+        throw error;
+      }
+    },
     sendProtected(input, schema, ownerId) {
       return sendWithProtection(input, { schema, ownerId });
     },
     async databaseScope(requestedDatabaseSchema) {
       await persistence.recovery?.admit();
-      return await engine.databaseScope(requestedDatabaseSchema);
+      return await openRecoveredScope(requestedDatabaseSchema);
     },
     send,
     observe() {

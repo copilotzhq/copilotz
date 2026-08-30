@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.63.7 — 2026-08-29
+
+Makes Gateway delivery recovery continuous and restart-safe. Gateways now sweep
+already-ready persistence before serving, arm one schema-scoped wakeup for the
+next persisted retry or lease-expiry deadline, and recover dynamically opened
+database scopes. A process that restarts before an abandoned lease expires can
+therefore resume the delivery after expiry instead of leaving it permanently
+leased. Worker roles remain passive, filtered recovery cannot widen its scope,
+and recovery timers are cancelled at shutdown.
+
 ## 0.63.6 — 2026-08-29
 
 Adds bounded raw Asset uploads to the compiled Server facade. `POST /assets`

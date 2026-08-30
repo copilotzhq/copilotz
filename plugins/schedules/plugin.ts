@@ -16,7 +16,7 @@ import {
 } from "./processors/index.ts";
 
 export const SCHEDULES_PLUGIN_ID = "@copilotz/schedules";
-export const SCHEDULES_PLUGIN_VERSION = "0.63.6";
+export const SCHEDULES_PLUGIN_VERSION = "0.63.7";
 
 type EmptyMap = Readonly<Record<never, never>>;
 type SchedulesCollections = Readonly<{

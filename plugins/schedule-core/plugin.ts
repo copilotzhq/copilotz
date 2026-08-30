@@ -15,7 +15,7 @@ import { dispatchScheduledMessageProcessor } from "./processors/index.ts";
 import { scheduledJobsToolResource } from "./resources/index.ts";
 
 export const CORE_SCHEDULES_PLUGIN_ID = "@copilotz/core-schedules";
-export const CORE_SCHEDULES_PLUGIN_VERSION = "0.63.6";
+export const CORE_SCHEDULES_PLUGIN_VERSION = "0.63.7";
 
 type EmptyMap = Readonly<Record<never, never>>;
 type CoreSchedulesActions = Readonly<{

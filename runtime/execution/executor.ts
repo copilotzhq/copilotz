@@ -17,6 +17,8 @@ import {
 import { createDeliveryWorkload } from "./workload.ts";
 import { relayCopilotzWorkHandle } from "./protocol.ts";
 
+const RECOVERY_MINIMUM_DELAY_MS = 1_000;
+
 function positiveCapacity(value: number | undefined): number {
   const capacity = value ?? 8;
   if (!Number.isSafeInteger(capacity) || capacity <= 0) {
@@ -220,6 +222,11 @@ export function createDeliveryExecutor(
     string,
     Readonly<{ handle: unknown; dueAtMs: number }>
   >();
+  const recoveryTimers = new Map<
+    string,
+    Readonly<{ handle: unknown; dueAtMs: number }>
+  >();
+  const continuousRecoverySchemas = new Set<string>();
   let scheduling = false;
   let scheduleTimer: ReturnType<typeof setTimeout> | undefined;
   const deliveryKey = (
@@ -306,6 +313,13 @@ export function createDeliveryExecutor(
       schedulePump();
     }, Math.max(0, dueAtMs - Date.now()));
     retryTimers.set(key, Object.freeze({ handle, dueAtMs }));
+  };
+
+  const cancelRecoveryTimer = (databaseSchema: string): void => {
+    const timer = recoveryTimers.get(databaseSchema);
+    if (!timer) return;
+    recoveryTimers.delete(databaseSchema);
+    retryScheduler.cancel(timer.handle);
   };
 
   const createHandle = (
@@ -417,6 +431,9 @@ export function createDeliveryExecutor(
       });
       const handle = createHandle(delivery, event, store, attemptId, work);
       active.set(key, handle);
+      if (continuousRecoverySchemas.has(delivery.databaseSchema)) {
+        refreshRecoverySchedule(delivery.databaseSchema);
+      }
       // Register first, then attach cleanup. A fast embedded operation may
       // already be settled when createHandle returns.
       void handle.done.finally(() => {
@@ -437,6 +454,70 @@ export function createDeliveryExecutor(
     }
   };
 
+  const dispatchRecoverable = async (
+    listOptions: Parameters<DeliveryExecutor["dispatchRecoverable"]>[0] = {},
+  ): Promise<DeliveryRecoveryDispatch> => {
+    const databaseSchema = listOptions.databaseSchema?.trim() ||
+      defaultDatabaseSchema;
+    const continuous = listOptions.namespace === undefined &&
+      listOptions.consumerIds === undefined;
+    if (options.continuousRecovery === true && continuous) {
+      continuousRecoverySchemas.add(databaseSchema);
+    }
+    try {
+      const store = await resolveStore(databaseSchema);
+      const { databaseSchema: _databaseSchema, ...filters } = listOptions;
+      const deliveries = await store.listRecoverable(filters);
+      const settled = await Promise.allSettled(
+        deliveries.map((delivery) =>
+          dispatchDelivery(delivery, { databaseSchema })
+        ),
+      );
+      const handles: DeliveryExecutionHandle[] = [];
+      const failures: Array<{ deliveryId: string; error: unknown }> = [];
+      settled.forEach((result, index) => {
+        if (result.status === "fulfilled") handles.push(result.value);
+        else {
+          failures.push({
+            deliveryId: deliveries[index].id,
+            error: result.reason,
+          });
+        }
+      });
+      return Object.freeze({
+        handles: Object.freeze(handles),
+        failures: Object.freeze(failures),
+      });
+    } finally {
+      if (continuous) refreshRecoverySchedule(databaseSchema);
+    }
+  };
+
+  function refreshRecoverySchedule(requestedDatabaseSchema: string): void {
+    const databaseSchema = requestedDatabaseSchema.trim();
+    if (closed || !continuousRecoverySchemas.has(databaseSchema)) return;
+    void resolveStore(databaseSchema).then((store) =>
+      store.nextRecoveryDelayMs()
+    ).then((delay) => {
+      if (closed) return;
+      if (delay === null) {
+        cancelRecoveryTimer(databaseSchema);
+        return;
+      }
+      const dueAtMs = Date.now() + Math.max(RECOVERY_MINIMUM_DELAY_MS, delay);
+      const existing = recoveryTimers.get(databaseSchema);
+      if (existing && existing.dueAtMs <= dueAtMs) return;
+      if (existing) retryScheduler.cancel(existing.handle);
+      const handle = retryScheduler.schedule(() => {
+        recoveryTimers.delete(databaseSchema);
+        if (closed) return;
+        // dispatchRecoverable rearms the schema in its own finally block.
+        void dispatchRecoverable({ databaseSchema }).catch(() => undefined);
+      }, Math.max(0, dueAtMs - Date.now()));
+      recoveryTimers.set(databaseSchema, Object.freeze({ handle, dueAtMs }));
+    }).catch(() => undefined);
+  }
+
   return Object.freeze({
     ownership,
     workload,
@@ -447,6 +528,19 @@ export function createDeliveryExecutor(
       if (active.has(id) || dispatchTasks.has(id) || scheduled.has(id)) return;
       cancelRetryTimer(id);
       scheduled.set(id, delivery);
+      if (
+        continuousRecoverySchemas.has(
+          typeof delivery === "string"
+            ? defaultDatabaseSchema
+            : delivery.databaseSchema,
+        )
+      ) {
+        refreshRecoverySchedule(
+          typeof delivery === "string"
+            ? defaultDatabaseSchema
+            : delivery.databaseSchema,
+        );
+      }
       schedulePump();
     },
     async dispatchWork(input) {
@@ -475,35 +569,7 @@ export function createDeliveryExecutor(
       });
     },
     dispatchDelivery,
-    async dispatchRecoverable(
-      listOptions = {},
-    ): Promise<DeliveryRecoveryDispatch> {
-      const databaseSchema = listOptions.databaseSchema?.trim() ||
-        defaultDatabaseSchema;
-      const store = await resolveStore(databaseSchema);
-      const { databaseSchema: _databaseSchema, ...filters } = listOptions;
-      const deliveries = await store.listRecoverable(filters);
-      const settled = await Promise.allSettled(
-        deliveries.map((delivery) =>
-          dispatchDelivery(delivery, { databaseSchema })
-        ),
-      );
-      const handles: DeliveryExecutionHandle[] = [];
-      const failures: Array<{ deliveryId: string; error: unknown }> = [];
-      settled.forEach((result, index) => {
-        if (result.status === "fulfilled") handles.push(result.value);
-        else {
-          failures.push({
-            deliveryId: deliveries[index].id,
-            error: result.reason,
-          });
-        }
-      });
-      return Object.freeze({
-        handles: Object.freeze(handles),
-        failures: Object.freeze(failures),
-      });
-    },
+    dispatchRecoverable,
     async settleOutputs(scope) {
       const key = outputScopeKey(
         scope.databaseSchema?.trim() || defaultDatabaseSchema,
@@ -525,6 +591,10 @@ export function createDeliveryExecutor(
         retryScheduler.cancel(timer.handle);
       }
       retryTimers.clear();
+      for (const timer of recoveryTimers.values()) {
+        retryScheduler.cancel(timer.handle);
+      }
+      recoveryTimers.clear();
       scheduled.clear();
       const pending = await Promise.allSettled([...dispatchTasks.values()]);
       const handles = new Map(active);

@@ -3,11 +3,11 @@
 ## 0.63.8 — 2026-08-29
 
 - Persistence now recognizes typed Oxian session-loss outcomes, retires the
-  affected OminiPG generation, and returns a bounded indeterminate error
-  without replaying the in-flight database operation.
-- OminiPG advances to `0.9.0-rc.11` and Oxian to `0.21.1`. In-process workers
-  no longer self-expire after a request-scoped CPU pause, while WebSocket
-  workers retain heartbeat lease fencing.
+  affected OminiPG generation, and returns a bounded indeterminate error without
+  replaying the in-flight database operation.
+- OminiPG advances to `0.9.0-rc.11` and Oxian to `0.21.1`. In-process workers no
+  longer self-expire after a request-scoped CPU pause, while WebSocket workers
+  retain heartbeat lease fencing.
 
 ## 0.63.7 — 2026-08-29
 

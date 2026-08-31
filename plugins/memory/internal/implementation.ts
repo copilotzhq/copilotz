@@ -66,6 +66,7 @@ import {
 import { memoryRecordCollection } from "../collections/internal/definitions.ts";
 import {
   type AssertionMemoryDraft,
+  CORE_MEMORY_KINDS,
   defaultMemoryLifecycle,
   defineMemoryKind,
   MEMORY_FORMS,
@@ -1161,23 +1162,49 @@ async function settleCheckpoint(
   );
 }
 
-const consolidationInputSchema: ActionSchema = {
+const consolidationInputSchemaBase: ActionSchema = {
   type: "object",
   additionalProperties: false,
   required: ["outcome"],
+  example: { outcome: "no_changes" },
   $defs: {
     source: {
-      type: "object",
-      additionalProperties: false,
-      required: ["type", "id"],
-      properties: {
-        type: { enum: ["message", "asset", "external", "collection_record"] },
-        id: { type: "string", minLength: 1 },
-        collection: { type: "string" },
-        version: { type: ["string", "number"] },
-        updatedAt: { type: "string" },
-        fragment: { type: "string" },
-      },
+      description:
+        "Trusted evidence reference. Explicit references must use canonical IDs authorized for the current checkpoint; do not invent IDs. Omit draft sources when no authorized ID is available.",
+      oneOf: [
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["type", "id"],
+          properties: {
+            type: { enum: ["message", "asset", "external"] },
+            id: {
+              type: "string",
+              minLength: 1,
+              description:
+                "Canonical source ID supplied by trusted context or a discovery Tool.",
+            },
+          },
+        },
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["type", "collection", "id"],
+          properties: {
+            type: { const: "collection_record" },
+            collection: { type: "string", minLength: 1 },
+            id: {
+              type: "string",
+              minLength: 1,
+              description:
+                "Canonical record ID supplied by the frozen trusted context.",
+            },
+            version: { type: ["string", "number"] },
+            updatedAt: { type: "string" },
+            fragment: { type: "string" },
+          },
+        },
+      ],
     },
     ref: {
       oneOf: [
@@ -1185,7 +1212,15 @@ const consolidationInputSchema: ActionSchema = {
           type: "object",
           additionalProperties: false,
           required: ["localId"],
-          properties: { localId: { type: "string", minLength: 1 } },
+          properties: {
+            localId: {
+              type: "string",
+              minLength: 1,
+              example: "project",
+              description:
+                "Temporary ID defined by another draft in this same payload.",
+            },
+          },
         },
         {
           type: "object",
@@ -1202,15 +1237,71 @@ const consolidationInputSchema: ActionSchema = {
               type: "object",
               additionalProperties: false,
               required: ["type", "id"],
-              properties: { type: { type: "string" }, id: { type: "string" } },
+              description:
+                "Domain node visible in the frozen checkpoint context. Both type and canonical ID must come from trusted context.",
+              properties: {
+                type: { type: "string", minLength: 1 },
+                id: { type: "string", minLength: 1 },
+              },
             },
           },
         },
       ],
     },
   },
+  oneOf: [
+    {
+      properties: { outcome: { const: "changes" } },
+      anyOf: [
+        { required: ["entities"], properties: { entities: { minItems: 1 } } },
+        {
+          required: ["assertions"],
+          properties: { assertions: { minItems: 1 } },
+        },
+        {
+          required: ["occurrences"],
+          properties: { occurrences: { minItems: 1 } },
+        },
+        { required: ["intents"], properties: { intents: { minItems: 1 } } },
+        {
+          required: ["inquiries"],
+          properties: { inquiries: { minItems: 1 } },
+        },
+        {
+          required: ["procedures"],
+          properties: { procedures: { minItems: 1 } },
+        },
+        {
+          required: ["relations"],
+          properties: { relations: { minItems: 1 } },
+        },
+        {
+          required: ["lifecycle"],
+          properties: { lifecycle: { minItems: 1 } },
+        },
+      ],
+    },
+    {
+      properties: { outcome: { const: "no_changes" } },
+      allOf: [
+        { properties: { entities: { maxItems: 0 } } },
+        { properties: { assertions: { maxItems: 0 } } },
+        { properties: { occurrences: { maxItems: 0 } } },
+        { properties: { intents: { maxItems: 0 } } },
+        { properties: { inquiries: { maxItems: 0 } } },
+        { properties: { procedures: { maxItems: 0 } } },
+        { properties: { relations: { maxItems: 0 } } },
+        { properties: { lifecycle: { maxItems: 0 } } },
+      ],
+    },
+  ],
   properties: {
-    outcome: { enum: ["changes", "no_changes"] },
+    outcome: {
+      enum: ["changes", "no_changes"],
+      example: "no_changes",
+      description:
+        "Use changes when at least one draft, relation, or lifecycle change is present. Use no_changes alone when nothing durable should be written.",
+    },
     entities: {
       type: "array",
       items: {
@@ -1221,11 +1312,19 @@ const consolidationInputSchema: ActionSchema = {
           localId: { type: "string" },
           kind: { type: "string" },
           summary: { type: "string" },
-          name: { type: "string" },
-          aliases: { type: "array", items: { type: "string" } },
+          name: {
+            type: "string",
+            minLength: 1,
+            description: "Canonical display name of the entity.",
+          },
+          aliases: {
+            type: "array",
+            uniqueItems: true,
+            items: { type: "string", minLength: 1 },
+          },
           externalIds: {
             type: "object",
-            additionalProperties: { type: "string" },
+            additionalProperties: { type: "string", minLength: 1 },
           },
           spaceId: { type: "string" },
           attributes: { type: "object" },
@@ -1255,7 +1354,11 @@ const consolidationInputSchema: ActionSchema = {
           attributes: { type: "object" },
           sources: { type: "array", items: { $ref: "#/$defs/source" } },
           subject: { $ref: "#/$defs/ref" },
-          predicate: { type: "string" },
+          predicate: {
+            type: "string",
+            minLength: 1,
+            description: "Stable domain predicate relating subject and object.",
+          },
           object: {
             oneOf: [{
               type: "object",
@@ -1321,7 +1424,7 @@ const consolidationInputSchema: ActionSchema = {
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["localId", "kind", "summary"],
+        required: ["localId", "kind", "summary", "status"],
         properties: {
           localId: { type: "string" },
           kind: { type: "string" },
@@ -1341,12 +1444,17 @@ const consolidationInputSchema: ActionSchema = {
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["localId", "kind", "summary", "question"],
+        required: ["localId", "kind", "summary", "question", "status"],
         properties: {
           localId: { type: "string" },
           kind: { type: "string" },
           summary: { type: "string" },
-          question: { type: "string" },
+          question: {
+            type: "string",
+            minLength: 1,
+            description:
+              "The unresolved or answered question in explicit form.",
+          },
           spaceId: { type: "string" },
           attributes: { type: "object" },
           sources: { type: "array", items: { $ref: "#/$defs/source" } },
@@ -1370,8 +1478,18 @@ const consolidationInputSchema: ActionSchema = {
           attributes: { type: "object" },
           sources: { type: "array", items: { $ref: "#/$defs/source" } },
           trigger: { type: "string" },
-          preconditions: { type: "array", items: { type: "string" } },
-          steps: { type: "array", minItems: 1, items: { type: "string" } },
+          preconditions: {
+            type: "array",
+            uniqueItems: true,
+            items: { type: "string", minLength: 1 },
+          },
+          steps: {
+            type: "array",
+            minItems: 1,
+            uniqueItems: true,
+            items: { type: "string", minLength: 1 },
+            description: "Ordered, non-empty reusable procedure steps.",
+          },
           expectedOutcome: { type: "string" },
           applicability: { type: "string" },
         },
@@ -1398,7 +1516,13 @@ const consolidationInputSchema: ActionSchema = {
             ],
           },
           to: { $ref: "#/$defs/ref" },
-          sources: { type: "array", items: { $ref: "#/$defs/source" } },
+          sources: {
+            type: "array",
+            minItems: 1,
+            items: { $ref: "#/$defs/source" },
+            description:
+              "Optional explicit relation evidence. When present it must contain at least one authorized canonical source.",
+          },
         },
       },
     },
@@ -1426,14 +1550,47 @@ const consolidationInputSchema: ActionSchema = {
                   required: ["form", "query"],
                   properties: {
                     form: { enum: MEMORY_FORMS },
-                    kind: { type: "string" },
-                    query: { type: "string" },
+                    kind: {
+                      type: "string",
+                      minLength: 1,
+                      description:
+                        "Optional kind used to narrow visible candidates. Use a registered kind for the selected form; resolution remains state-dependent.",
+                    },
+                    subject: {
+                      $ref: "#/$defs/ref",
+                      description:
+                        "Optional subject filter accepted by the parser. Any memoryId or node reference must come from visible trusted context.",
+                    },
+                    predicate: {
+                      type: "string",
+                      minLength: 1,
+                      description:
+                        "Optional stable predicate used to narrow lifecycle candidates.",
+                    },
+                    query: {
+                      type: "string",
+                      minLength: 1,
+                      description:
+                        "Lexical query that must resolve exactly one visible memory; zero or multiple matches are returned as unresolved.",
+                    },
                   },
                 },
               },
             }],
           },
-          status: { type: "string" },
+          status: {
+            enum: [
+              "superseded",
+              "retracted",
+              "completed",
+              "cancelled",
+              "answered",
+              "obsolete",
+              "deprecated",
+            ],
+            description:
+              "Lifecycle transition of the described object. Use invalidate_memory, not lifecycle, for editorial invalidation of the memory record.",
+          },
           replacement: { $ref: "#/$defs/ref" },
           sources: {
             type: "array",
@@ -1446,18 +1603,131 @@ const consolidationInputSchema: ActionSchema = {
   },
 };
 
+type MutableActionSchema = Record<string, unknown>;
+
+function mutableSchemaObject(
+  value: unknown,
+  label: string,
+): MutableActionSchema {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError(`Invalid consolidate_memory schema node '${label}'.`);
+  }
+  return value as MutableActionSchema;
+}
+
+function memoryKindInputSchema(
+  form: MemoryForm,
+  kinds: readonly MemoryKindDefinition[],
+): ActionSchema {
+  const registered = kinds.filter((kind) => kind.form === form);
+  const catalogue = registered.map((kind) =>
+    `${kind.id} — ${kind.description}${
+      kind.schema
+        ? ` Persisted semantic data schema: ${JSON.stringify(kind.schema)}`
+        : " No additional kind-specific data schema is registered."
+    }`
+  ).join(" ");
+  return {
+    type: "string",
+    enum: registered.map((kind) => kind.id),
+    description:
+      `Registered ${form} kind. Choose by semantics; arbitrary strings are rejected. ${catalogue}`,
+    oneOf: registered.map((kind) => ({
+      const: kind.id,
+      title: kind.id,
+      description: kind.schema
+        ? `${kind.description} Persisted semantic data must also satisfy: ${
+          JSON.stringify(kind.schema)
+        }`
+        : `${kind.description} No additional kind-specific fields are registered.`,
+    })),
+  };
+}
+
+function consolidationInputSchema(
+  kinds: readonly MemoryKindDefinition[],
+): ActionSchema {
+  const schema = structuredClone(consolidationInputSchemaBase);
+  const properties = mutableSchemaObject(schema.properties, "properties");
+  const groups: Readonly<Record<MemoryForm, string>> = {
+    entity: "entities",
+    assertion: "assertions",
+    occurrence: "occurrences",
+    intent: "intents",
+    inquiry: "inquiries",
+    procedure: "procedures",
+  };
+  for (const form of MEMORY_FORMS) {
+    const group = mutableSchemaObject(properties[groups[form]], groups[form]);
+    const items = mutableSchemaObject(group.items, `${groups[form]}.items`);
+    const itemProperties = mutableSchemaObject(
+      items.properties,
+      `${groups[form]}.items.properties`,
+    );
+    itemProperties.localId = {
+      ...mutableSchemaObject(itemProperties.localId, `${form}.localId`),
+      minLength: 1,
+      example: `${form}-1`,
+      description:
+        "Unique temporary ID within this payload. Use { localId } references to connect drafts before canonical memory IDs exist.",
+    };
+    itemProperties.kind = memoryKindInputSchema(form, kinds);
+    itemProperties.summary = {
+      ...mutableSchemaObject(itemProperties.summary, `${form}.summary`),
+      minLength: 1,
+      description:
+        "Self-contained durable summary used for retrieval. Preserve uncertainty, negation, ownership, and temporal meaning.",
+    };
+    itemProperties.spaceId = {
+      ...mutableSchemaObject(itemProperties.spaceId, `${form}.spaceId`),
+      description:
+        "Optional writable memory-space ID. Omit it to use the checkpoint's trusted default writable space.",
+    };
+    itemProperties.attributes = {
+      ...mutableSchemaObject(itemProperties.attributes, `${form}.attributes`),
+      description:
+        "Optional namespaced semantic attributes. When the selected kind documents an additional persisted-data schema, the final semantic data (including these attributes) must satisfy it.",
+    };
+    itemProperties.sources = {
+      ...mutableSchemaObject(itemProperties.sources, `${form}.sources`),
+      minItems: 1,
+      description:
+        "Optional explicit evidence. IDs must be authorized for this checkpoint. If omitted, the runtime currently uses the checkpoint's trusted default evidence; use explicit sources only when canonical IDs are actually available.",
+    };
+  }
+  return schema;
+}
+
 const consolidationOutputSchema: ActionSchema = {
   type: "object",
   additionalProperties: false,
   required: ["outcome"],
   properties: {
     outcome: { enum: ["already_settled", "no_changes", "changes"] },
-    created: { type: "integer" },
-    reused: { type: "integer" },
-    lifecycleChanged: { type: "integer" },
-    unresolved: { type: "integer" },
+    created: {
+      type: "integer",
+      minimum: 0,
+      description:
+        "Total records created; createdRecords is a bounded audit list of at most 100 entries.",
+    },
+    reused: {
+      type: "integer",
+      minimum: 0,
+      description:
+        "Total records reused; reusedRecords is a bounded audit list of at most 100 entries.",
+    },
+    lifecycleChanged: { type: "integer", minimum: 0 },
+    unresolved: {
+      type: "integer",
+      minimum: 0,
+      description:
+        "Total unresolved lifecycle reconciliations; unresolvedReconciliations contains at most 100 details.",
+    },
     createdRecords: {
       type: "array",
+      maxItems: 100,
+      description:
+        "Bounded localId-to-memoryId audit list for created records; compare with created for the total.",
       items: {
         type: "object",
         additionalProperties: false,
@@ -1473,6 +1743,9 @@ const consolidationOutputSchema: ActionSchema = {
     },
     reusedRecords: {
       type: "array",
+      maxItems: 100,
+      description:
+        "Bounded localId-to-memoryId audit list for reused records; compare with reused for the total.",
       items: {
         type: "object",
         additionalProperties: false,
@@ -1486,12 +1759,19 @@ const consolidationOutputSchema: ActionSchema = {
         },
       },
     },
-    unresolvedReconciliations: { type: "array", items: { type: "object" } },
+    unresolvedReconciliations: {
+      type: "array",
+      maxItems: 100,
+      description:
+        "Bounded reconciliation details; compare with unresolved for the total.",
+      items: { type: "object" },
+    },
   },
 };
 
 export function createConsolidateMemoryAction(
   config: LongTermMemoryConfig,
+  kinds: readonly MemoryKindDefinition[] = CORE_MEMORY_KINDS,
 ): Pick<
   ActionDefinition<
     ConsolidateMemoryActionInput,
@@ -1501,8 +1781,9 @@ export function createConsolidateMemoryAction(
   >,
   "inputSchema" | "outputSchema" | "execute"
 > {
+  const kindDefinitions = Object.freeze(kinds.map(defineMemoryKind));
   return {
-    inputSchema: consolidationInputSchema,
+    inputSchema: consolidationInputSchema(kindDefinitions),
     outputSchema: consolidationOutputSchema,
     async execute(
       proposal: ConsolidateMemoryActionInput,

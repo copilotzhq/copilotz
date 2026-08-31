@@ -15,6 +15,7 @@ import {
   createConsolidateMemoryAction as createImplementation,
   type MemoryActionContext,
 } from "../../internal/implementation.ts";
+import type { MemoryKindDefinition } from "../../authoring/ontology/index.ts";
 import type { LongTermMemoryConfig } from "../../resources/config/index.ts";
 
 export const CONSOLIDATE_MEMORY_ACTION_ID =
@@ -22,6 +23,7 @@ export const CONSOLIDATE_MEMORY_ACTION_ID =
 
 export function createConsolidateMemoryAction(
   config: LongTermMemoryConfig,
+  kinds?: readonly MemoryKindDefinition[],
 ): ActionDefinition<
   ConsolidateMemoryActionInput,
   ConsolidateMemoryActionResult,
@@ -29,7 +31,7 @@ export function createConsolidateMemoryAction(
   ActionSchema,
   ActionSchema
 > {
-  const implementation = createImplementation(config);
+  const implementation = createImplementation(config, kinds);
   return defineAction<
     ConsolidateMemoryActionInput,
     ConsolidateMemoryActionResult,

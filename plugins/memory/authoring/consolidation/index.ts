@@ -858,7 +858,7 @@ export function buildMemoryConsolidationInstruction(
         id,
         form,
         description,
-        ...(schema ? { attributesSchema: schema } : {}),
+        ...(schema ? { persistedDataSchema: schema } : {}),
       })),
     ),
     "Visible previous active memories:",

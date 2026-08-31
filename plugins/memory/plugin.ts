@@ -118,7 +118,8 @@ export function createLongTermMemoryPlugin(
 ): LongTermMemoryPlugin {
   const enabled = options?.enabled !== false;
   const config = normalizedConfig(options.config);
-  const consolidateMemory = createConsolidateMemoryAction(config);
+  const kinds = Object.freeze(CORE_MEMORY_KINDS.map(defineMemoryKind));
+  const consolidateMemory = createConsolidateMemoryAction(config, kinds);
   const listMemorySpaces = createListKnowledgeSpacesAction();
   const searchMemory = createSearchMemoryAction();
   const inspectMemory = createInspectMemoryAction();
@@ -126,7 +127,6 @@ export function createLongTermMemoryPlugin(
   const setMemoryStatus = createSetMemoryStatusAction();
   const consolidateTool = createConsolidateMemoryTool(consolidateMemory);
   const context = createMemoryContextResource(enabled);
-  const kinds = Object.freeze(CORE_MEMORY_KINDS.map(defineMemoryKind));
   return definePlugin({
     id: options.id ?? DEFAULT_PLUGIN_ID,
     version: options.version ?? DEFAULT_PLUGIN_VERSION,

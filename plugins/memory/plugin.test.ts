@@ -491,7 +491,18 @@ Deno.test("a direct forged Agent-turn provenance cannot select a checkpoint", as
 Deno.test("invalid on-demand consolidation settles its own checkpoint as failed", async () => {
   const run = await fixture(
     (_input, call) =>
-      call === 1 ? tool({ outcome: "changes" }) : stop("Continue normally."),
+      call === 1
+        ? tool({
+          outcome: "changes",
+          entities: [{
+            localId: "unauthorized",
+            kind: "entity.project",
+            summary: "This draft cites evidence outside the checkpoint.",
+            name: "Unauthorized",
+            sources: [{ type: "message", id: "message-not-authorized" }],
+          }],
+        })
+        : stop("Continue normally."),
     { enabled: false },
   );
   try {

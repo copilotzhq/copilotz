@@ -9,7 +9,7 @@ export function createConsolidateMemoryTool(
   return defineTool("consolidate_memory", action, {
     name: "Consolidate Memory",
     description:
-      "Persist a provenance-aware semantic memory consolidation from the current trusted Agent turn. Use it whenever durable memory should be created, corrected, or explicitly left unchanged.",
+      "Persist a provenance-aware semantic memory consolidation from the current trusted Agent turn. The input schema documents every registered kind and its semantics. Use localId for references inside one payload, canonical memoryId values from memory context/search/inspection for existing memories, omit spaceId to use the trusted default, and never invent evidence IDs. Use outcome=no_changes when nothing durable changed.",
     history: { visibility: "requester_only" },
   });
 }

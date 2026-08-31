@@ -670,6 +670,31 @@ export function createS3BodyStore(
   const readSpillInspection = async (
     bodyId: string,
   ): Promise<SpillInspection | null> => {
+    // Deno 2.8 can omit ETag from a GET response even when the object service
+    // returns it. Read the S3 CAS identity with HEAD first; a concurrent change
+    // can only make the subsequent conditional mutation fail closed.
+    let headGuard: SpillGuard | undefined;
+    if (provider === "s3") {
+      try {
+        const response = await client.makeRequest({
+          method: "HEAD",
+          objectName: stagingMetaKey(bodyId),
+          bucketName: bucket,
+          statusCode: 200,
+          returnBody: true,
+        });
+        if (!response.bodyUsed) await response.arrayBuffer();
+        headGuard = spillGuard(response.headers);
+        if (!headGuard) {
+          throw unavailableCoordination(
+            "S3 progressive coordination requires a strong object ETag.",
+          );
+        }
+      } catch (error) {
+        if (isAbsentError(error)) return null;
+        throw error;
+      }
+    }
     try {
       const response = await client.makeRequest({
         method: "GET",
@@ -679,7 +704,7 @@ export function createS3BodyStore(
         returnBody: true,
       });
       const bytes = new Uint8Array(await response.arrayBuffer());
-      const guard = spillGuard(response.headers);
+      const guard = spillGuard(response.headers) ?? headGuard;
       if (!guard) {
         throw unavailableCoordination(
           provider === "gcs"

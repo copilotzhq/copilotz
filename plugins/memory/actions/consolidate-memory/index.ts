@@ -26,6 +26,7 @@ export function createConsolidateMemoryAction(
   ConsolidateMemoryActionInput,
   ConsolidateMemoryActionResult,
   MemoryActionContext,
+  ActionSchema,
   ActionSchema
 > {
   const implementation = createImplementation(config);
@@ -33,10 +34,12 @@ export function createConsolidateMemoryAction(
     ConsolidateMemoryActionInput,
     ConsolidateMemoryActionResult,
     MemoryActionContext,
+    ActionSchema,
     ActionSchema
   >({
     id: CONSOLIDATE_MEMORY_ACTION_ID,
     inputSchema: implementation.inputSchema,
+    outputSchema: implementation.outputSchema,
     execute: implementation.execute,
   });
 }

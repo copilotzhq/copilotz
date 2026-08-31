@@ -2,6 +2,7 @@
 
 export {
   buildMemoryConsolidationInstruction,
+  isEditoriallyVisible,
   parseConsolidateMemoryInput,
   proposalDrafts,
   renderLongTermMemory,

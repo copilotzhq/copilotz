@@ -245,6 +245,7 @@ Deno.test("derived continuity is rendered from ordinary records", () => {
       kind: "intent.objective",
       summary: "Ship the event-native memory refactor.",
       status: "active",
+      validity: "valid",
       data: {},
     }, {
       id: "question",
@@ -253,6 +254,7 @@ Deno.test("derived continuity is rendered from ordinary records", () => {
       kind: "inquiry.question",
       summary: "Will the migration preserve provenance?",
       status: "open",
+      validity: "valid",
       data: {},
     }],
     relations: [{ sourceId: "question", type: "about", targetId: "objective" }],

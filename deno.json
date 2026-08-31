@@ -1,7 +1,7 @@
 {
   "name": "@copilotz/copilotz",
   "description": "Copilotz Lib",
-  "version": "0.63.8",
+  "version": "0.63.9",
   "license": "MIT",
   "exports": {
     ".": "./index.ts",
@@ -136,7 +136,10 @@
   },
   "minimumDependencyAge": {
     "age": "P1D",
-    "exclude": ["jsr:@oxian/ominipg", "jsr:@oxian/oxian-js"]
+    "exclude": [
+      "jsr:@oxian/ominipg",
+      "jsr:@oxian/oxian-js"
+    ]
   },
   "tasks": {
     "bundle:runtime-smoke": "deno bundle --platform=browser contracts/runtime/runtime-neutral-smoke.ts --output=dist/runtime-neutral-smoke.mjs",

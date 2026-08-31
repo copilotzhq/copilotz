@@ -277,6 +277,7 @@ Deno.test("memory composes Core-native dispatch and settlement without a model s
   assertEquals(Object.keys(plugin.actions).sort(), [
     "consolidate_memory",
     "inspect_memory",
+    "invalidate_memory",
     "list_knowledge_spaces",
     "search_memory",
     "set_memory_status",
@@ -482,6 +483,240 @@ Deno.test("a direct forged Agent-turn provenance cannot select a checkpoint", as
     );
     assertEquals((await checkpoint(run)).status, "pending");
     await assertNoDeadLetters(run);
+  } finally {
+    await run.close();
+  }
+});
+
+Deno.test("invalid on-demand consolidation settles its own checkpoint as failed", async () => {
+  const run = await fixture(
+    (_input, call) =>
+      call === 1 ? tool({ outcome: "changes" }) : stop("Continue normally."),
+    { enabled: false },
+  );
+  try {
+    await startUserTurn(run);
+    await eventually(
+      run,
+      async () => (await checkpoints(run))[0]?.status === "failed",
+    );
+    const saved = await checkpoint(run);
+    assertEquals(saved.status, "failed");
+    assert(saved.error);
+    assertEquals(
+      await collection(run, "memory_record").list({ limit: 10 }),
+      [],
+    );
+    await assertNoDeadLetters(run);
+  } finally {
+    await run.close();
+  }
+});
+
+Deno.test("invalidate_memory retracts editorially without changing lifecycle", async () => {
+  const run = await fixture(() => stop("No routing needed."), {
+    enabled: false,
+  });
+  try {
+    await startUserTurn(run);
+    const spaces = collection(run, "memory_space");
+    const grants = collection(run, "memory_space_access");
+    const checkpoints = collection(run, "long_term_memory");
+    const records = collection(run, "memory_record");
+    await spaces.create({
+      id: "space-a",
+      name: "Space A",
+      scopeType: "thread",
+      scopeId: "thread-a",
+      threadId: "thread-a",
+      access: "read_write",
+      defaultWrite: true,
+      metadata: {},
+    });
+    await grants.create({
+      id: "grant-a",
+      threadId: "thread-a",
+      memorySpaceId: "space-a",
+      access: "read_write",
+      defaultWrite: true,
+      metadata: {},
+    });
+    await checkpoints.create({
+      id: "checkpoint-a",
+      threadId: "thread-a",
+      schemaVersion: "4",
+      strategy: "semantic_graph",
+      status: "ready",
+      sequence: 1,
+      agentId: "north",
+      sourceStartMessageId: "message:user",
+      sourceEndMessageId: "message:user",
+      content: [],
+      contextSnapshotContent: [],
+      contextSnapshot: null,
+      embedding: null,
+      contentHash: null,
+      tokenEstimate: null,
+      error: null,
+      metadata: {},
+    });
+    await records.create({
+      id: "occurrence-a",
+      memorySpaceId: "space-a",
+      consolidationId: "checkpoint-a",
+      createdByAgentId: "north",
+      originThreadId: "thread-a",
+      form: "occurrence",
+      kind: "occurrence.event",
+      summary: "The original event happened.",
+      status: "happened",
+      validity: { status: "valid" },
+      content: [],
+      temporal: { recordedAt: "2026-08-31T00:00:00.000Z" },
+      epistemic: null,
+      provenance: {
+        sources: [],
+        recordedBy: { type: "agent", id: "north" },
+        consolidationId: "checkpoint-a",
+      },
+      data: {},
+      embedding: null,
+      metadata: {},
+    });
+    const context = createTestDomainContext(run.engine, NAMESPACE, {
+      now: () => new Date("2026-08-31T01:00:00.000Z"),
+    });
+    const metadata = {
+      schema: "copilotz.core.tool-action.v1",
+      planId: "invalidate-plan",
+      planMessageId: "message:user",
+      planIndex: 0,
+      stageIndex: 0,
+      stageCount: 1,
+      planSize: 1,
+      toolCallId: "invalidate-call",
+      action: "invalidate_memory",
+      threadId: "thread-a",
+      triggerMessageId: "message:user",
+      agentId: "north",
+      agentParticipantId: "agent-north",
+      initiatorParticipantId: "human-a",
+      availableToolIds: [
+        "invalidate_memory",
+        "search_memory",
+        "inspect_memory",
+      ],
+      responseVisibility: { kind: "public" },
+      parentLlmActionRunId: "invalidate-llm",
+    };
+    const result = await context.actions.invalidate_memory({
+      id: "occurrence-a",
+      disposition: "retracted",
+      reason: "The source was incorrect.",
+    }, { operationKey: "invalidate-once", metadata });
+    const invalidated = result as {
+      memory: {
+        status: string;
+        validity: { status: string; sources: unknown };
+      };
+    };
+    assertEquals(invalidated.memory.status, "happened");
+    assertEquals(invalidated.memory.validity.status, "retracted");
+    assertEquals(invalidated.memory.validity.sources, [{
+      type: "message",
+      id: "message:user",
+    }]);
+    const saved = await records.get({ id: "occurrence-a" });
+    assertEquals(saved?.status, "happened");
+    assertEquals((saved?.validity as { status: string }).status, "retracted");
+    const normal = await context.actions.search_memory({}, {
+      operationKey: "search-normal",
+      metadata: { ...metadata, action: "search_memory" },
+    });
+    const historical = await context.actions.search_memory({
+      includeHistory: true,
+    }, {
+      operationKey: "search-history",
+      metadata: { ...metadata, action: "search_memory" },
+    });
+    assertEquals((normal as { total: number }).total, 0);
+    assertEquals((historical as { total: number }).total, 1);
+    const inspected = await context.actions.inspect_memory({
+      id: "occurrence-a",
+    }, {
+      operationKey: "inspect-retracted",
+      metadata: { ...metadata, action: "inspect_memory" },
+    });
+    assertEquals(
+      (inspected as { memory: { validity: { status: string } } }).memory
+        .validity.status,
+      "retracted",
+    );
+
+    // An identical retry is idempotent: it preserves the original validity
+    // payload (including changedAt) rather than producing a new write.
+    const retry = await context.actions.invalidate_memory({
+      id: "occurrence-a",
+      disposition: "retracted",
+      reason: "The source was incorrect.",
+    }, { operationKey: "invalidate-retry", metadata });
+    assertEquals(
+      (retry as { memory: { validity: unknown } }).memory.validity,
+      (invalidated as { memory: { validity: unknown } }).memory.validity,
+    );
+    await assertRejects(
+      () =>
+        context.actions.invalidate_memory({
+          id: "occurrence-a",
+          disposition: "archived",
+          reason: "A conflicting disposition.",
+        }, { operationKey: "invalidate-conflict", metadata }),
+      Error,
+      "different editorial disposition",
+    );
+
+    // A record outside the thread's read-write spaces cannot be altered.
+    // The space exists to satisfy the collection relation, but no access
+    // grant connects it to thread-a.
+    await spaces.create({
+      id: "space-other",
+      name: "Other Space",
+      scopeType: "global",
+      scopeId: "other-scope",
+      threadId: null,
+      access: "read_write",
+      defaultWrite: true,
+      metadata: {},
+    });
+    await records.create({
+      id: "occurrence-other-space",
+      memorySpaceId: "space-other",
+      consolidationId: "checkpoint-a",
+      createdByAgentId: "north",
+      originThreadId: "thread-a",
+      form: "occurrence",
+      kind: "occurrence.event",
+      summary: "An inaccessible event.",
+      status: "happened",
+      validity: { status: "valid" },
+      content: [],
+      temporal: { recordedAt: "2026-08-31T00:00:00.000Z" },
+      epistemic: null,
+      provenance: { sources: [], recordedBy: { type: "agent", id: "north" } },
+      data: {},
+      embedding: null,
+      metadata: {},
+    });
+    await assertRejects(
+      () =>
+        context.actions.invalidate_memory({
+          id: "occurrence-other-space",
+          disposition: "retracted",
+          reason: "No authority over this record.",
+        }, { operationKey: "invalidate-unauthorized", metadata }),
+      Error,
+      "not writable from this thread",
+    );
   } finally {
     await run.close();
   }

@@ -7,6 +7,6 @@ export function createSetMemoryStatusTool(
   return defineTool("set_memory_status", action, {
     name: "Set Memory Status",
     description:
-      "Retract, close, complete, cancel, answer, obsolete, deprecate, or archive one accessible memory without erasing history.",
+      "Change the lifecycle status of one accessible memory without erasing history. For editorial retraction, supersession, or archival, use invalidate_memory.",
   });
 }

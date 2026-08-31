@@ -13,4 +13,5 @@ export const memoryRecordCollection: CollectionDefinition<
   relations: definition.relations,
   search: definition.search,
   content: definition.content,
+  commands: definition.commands,
 });

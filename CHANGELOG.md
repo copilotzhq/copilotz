@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.63.9 — 2026-08-31
+
+- Semantic memory now distinguishes an object's lifecycle from its editorial
+  validity. Records carry `valid`, `retracted`, `superseded`, or `archived`
+  validity, and ordinary context, consolidation, and search exclude records that
+  are no longer editorially visible while history and inspection retain them.
+- Adds the narrow, provenance-bound `invalidate_memory` tool for retraction,
+  supersession, and archival. It preserves domain lifecycle, enforces writable
+  memory-space access, is idempotent for identical retries, and rejects
+  conflicting dispositions.
+- `consolidate_memory` publishes a discriminated public input schema and an
+  auditable output contract with canonical created/reused record IDs. Invalid
+  on-demand consolidation now settles its owned pending checkpoint as failed.
+
 ## 0.63.8 — 2026-08-29
 
 - Persistence now recognizes typed Oxian session-loss outcomes, retires the

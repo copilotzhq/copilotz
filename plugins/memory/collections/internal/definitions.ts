@@ -15,6 +15,20 @@ const MEMORY_EDGE = Object.freeze({
   includesRecord: "includes_memory_record",
 });
 
+/** Compares JSON-safe values independent of object-key serialization order. */
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${
+      Object.entries(value as Record<string, unknown>)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, entry]) => `${JSON.stringify(key)}:${canonicalJson(entry)}`)
+        .join(",")
+    }}`;
+  }
+  return JSON.stringify(value);
+}
+
 const memorySpaceSchema = {
   type: "object",
   properties: {
@@ -242,6 +256,21 @@ const memoryRecordSchema = {
     },
     kind: { type: "string" },
     summary: { type: "string" },
+    validity: {
+      type: "object",
+      additionalProperties: false,
+      required: ["status"],
+      properties: {
+        status: {
+          type: "string",
+          enum: ["valid", "retracted", "superseded", "archived"],
+        },
+        changedAt: { type: "string" },
+        reason: { type: "string" },
+        sources: { type: "array", items: { type: "object" } },
+        replacementMemoryId: { type: "string" },
+      },
+    },
     content: { type: "array" },
     temporal: { type: "object" },
     epistemic: { type: ["object", "null"] },
@@ -259,6 +288,7 @@ const memoryRecordSchema = {
     "originThreadId",
     "form",
     "status",
+    "validity",
     "kind",
     "summary",
     "temporal",
@@ -296,4 +326,43 @@ export const memoryRecordCollection: CollectionDefinitionInput<
   },
   search: { enabled: true, fields: ["summary"] },
   content: { fields: ["content"] },
+  commands: {
+    invalidate: {
+      mutate({ current, input }) {
+        const patch =
+          input && typeof input === "object" && !Array.isArray(input)
+            ? input as Record<string, unknown>
+            : {};
+        const next = patch.validity && typeof patch.validity === "object" &&
+            !Array.isArray(patch.validity)
+          ? patch.validity as Record<string, unknown>
+          : null;
+        if (
+          !next ||
+          !["retracted", "superseded", "archived"].includes(String(next.status))
+        ) {
+          throw new TypeError(
+            "Memory invalidation requires a valid editorial disposition.",
+          );
+        }
+        const previous =
+          current.validity && typeof current.validity === "object" &&
+            !Array.isArray(current.validity)
+            ? current.validity as Record<string, unknown>
+            : {};
+        if (previous.status === "valid") return { set: { validity: next } };
+        // A semantically identical retry is a true no-op: preserve the
+        // original changedAt and avoid a second write/relation mutation.
+        const same = previous.status === next.status &&
+          previous.reason === next.reason &&
+          previous.replacementMemoryId === next.replacementMemoryId &&
+          canonicalJson(previous.sources ?? []) ===
+            canonicalJson(next.sources ?? []);
+        if (same) return { set: {} };
+        throw new Error(
+          `Memory '${current.id}' already has a different editorial disposition.`,
+        );
+      },
+    },
+  },
 });

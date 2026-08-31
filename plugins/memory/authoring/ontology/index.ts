@@ -95,6 +95,28 @@ export const MEMORY_LIFECYCLES: Readonly<{
 export type MemoryLifecycleStatus =
   typeof MEMORY_LIFECYCLES[MemoryForm][number];
 
+/** Editorial validity is independent from the lifecycle of the described fact. */
+export type MemoryValidityStatus =
+  | "valid"
+  | "retracted"
+  | "superseded"
+  | "archived";
+export const MEMORY_VALIDITIES: readonly MemoryValidityStatus[] = Object.freeze(
+  [
+    "valid",
+    "retracted",
+    "superseded",
+    "archived",
+  ],
+);
+export type MemoryValidity = Readonly<{
+  status: MemoryValidityStatus;
+  changedAt?: string;
+  reason?: string;
+  sources?: readonly ContextSourceRef[];
+  replacementMemoryId?: string;
+}>;
+
 export type MemoryNodeRef = Readonly<{ type: string; id: string }>;
 
 export type ProposedMemoryRef =
@@ -140,6 +162,7 @@ export type MemoryRecord = Readonly<{
   summary: string;
   content?: readonly ContentRef[];
   status: MemoryLifecycleStatus;
+  validity: MemoryValidity;
   temporal: MemoryTemporal;
   epistemic?: MemoryEpistemic;
   provenance: MemoryProvenance;

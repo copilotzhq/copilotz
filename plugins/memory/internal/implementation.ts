@@ -52,6 +52,7 @@ import { deriveWorkflowId } from "@copilotz/copilotz/events";
 import { createThreadMessage } from "../../core-collections/actions/create-thread-message/index.ts";
 import {
   buildMemoryConsolidationInstruction,
+  isEditoriallyVisible,
   type MemoryRecordProjection,
   type MemoryRecordRelation,
   type MemorySourceMessage,
@@ -476,8 +477,11 @@ function memoryRecord(value: CollectionRecord): MemoryRecordProjection | null {
   const kind = optionalText(value.kind);
   const summary = optionalText(value.summary);
   const status = optionalText(value.status);
+  const validity = optionalText(record(value.validity).status);
   return form && MEMORY_FORMS.includes(form) && memorySpaceId && kind &&
-      summary && status
+      summary && status &&
+      (validity === "valid" || validity === "retracted" ||
+        validity === "superseded" || validity === "archived")
     ? Object.freeze({
       id: value.id,
       memorySpaceId,
@@ -485,6 +489,7 @@ function memoryRecord(value: CollectionRecord): MemoryRecordProjection | null {
       kind,
       summary,
       status,
+      validity,
       data: record(value.data),
     })
     : null;
@@ -576,6 +581,7 @@ async function candidateRecords(
     limit: 1_000,
   })).filter((item) =>
     readable.has(String(item.memorySpaceId)) &&
+    isEditoriallyVisible(memoryRecord(item)!) &&
     !terminalStatus(String(item.status))
   );
   let queryEmbedding: readonly number[] | undefined;
@@ -1155,56 +1161,334 @@ async function settleCheckpoint(
   );
 }
 
-function consolidationInputSchema(): ActionSchema {
-  const source = {
-    type: "object",
-    required: ["type", "id"],
-    properties: {
-      type: {
-        enum: [
-          "message",
-          "asset",
-          "external",
-          "collection_record",
-        ],
+const consolidationInputSchema: ActionSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["outcome"],
+  $defs: {
+    source: {
+      type: "object",
+      additionalProperties: false,
+      required: ["type", "id"],
+      properties: {
+        type: { enum: ["message", "asset", "external", "collection_record"] },
+        id: { type: "string", minLength: 1 },
+        collection: { type: "string" },
+        version: { type: ["string", "number"] },
+        updatedAt: { type: "string" },
+        fragment: { type: "string" },
       },
-      id: { type: "string" },
-      collection: { type: "string" },
-      version: { type: ["string", "number"] },
-      updatedAt: { type: "string" },
-      fragment: { type: "string" },
     },
-  };
-  const base = {
-    type: "object",
-    required: ["localId", "kind", "summary"],
-    properties: {
-      localId: { type: "string" },
-      kind: { type: "string" },
-      summary: { type: "string" },
-      spaceId: { type: "string" },
-      attributes: { type: "object" },
-      sources: { type: "array", minItems: 1, items: source },
+    ref: {
+      oneOf: [
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["localId"],
+          properties: { localId: { type: "string", minLength: 1 } },
+        },
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["memoryId"],
+          properties: { memoryId: { type: "string", minLength: 1 } },
+        },
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["node"],
+          properties: {
+            node: {
+              type: "object",
+              additionalProperties: false,
+              required: ["type", "id"],
+              properties: { type: { type: "string" }, id: { type: "string" } },
+            },
+          },
+        },
+      ],
     },
-    additionalProperties: true,
-  };
-  return {
-    type: "object",
-    required: ["outcome"],
-    properties: {
-      outcome: { enum: ["changes", "no_changes"] },
-      entities: { type: "array", items: base },
-      assertions: { type: "array", items: base },
-      occurrences: { type: "array", items: base },
-      intents: { type: "array", items: base },
-      inquiries: { type: "array", items: base },
-      procedures: { type: "array", items: base },
-      relations: { type: "array", items: { type: "object" } },
-      lifecycle: { type: "array", items: { type: "object" } },
+  },
+  properties: {
+    outcome: { enum: ["changes", "no_changes"] },
+    entities: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["localId", "kind", "summary", "name"],
+        properties: {
+          localId: { type: "string" },
+          kind: { type: "string" },
+          summary: { type: "string" },
+          name: { type: "string" },
+          aliases: { type: "array", items: { type: "string" } },
+          externalIds: {
+            type: "object",
+            additionalProperties: { type: "string" },
+          },
+          spaceId: { type: "string" },
+          attributes: { type: "object" },
+          sources: { type: "array", items: { $ref: "#/$defs/source" } },
+        },
+      },
     },
-    additionalProperties: false,
-  } as unknown as ActionSchema;
-}
+    assertions: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: [
+          "localId",
+          "kind",
+          "summary",
+          "subject",
+          "predicate",
+          "object",
+          "epistemic",
+        ],
+        properties: {
+          localId: { type: "string" },
+          kind: { type: "string" },
+          summary: { type: "string" },
+          spaceId: { type: "string" },
+          attributes: { type: "object" },
+          sources: { type: "array", items: { $ref: "#/$defs/source" } },
+          subject: { $ref: "#/$defs/ref" },
+          predicate: { type: "string" },
+          object: {
+            oneOf: [{
+              type: "object",
+              additionalProperties: false,
+              required: ["ref"],
+              properties: { ref: { $ref: "#/$defs/ref" } },
+            }, {
+              type: "object",
+              additionalProperties: false,
+              required: ["value"],
+              properties: {
+                value: { type: ["string", "number", "boolean", "null"] },
+              },
+            }],
+          },
+          epistemic: {
+            type: "object",
+            additionalProperties: false,
+            required: ["basis", "stance"],
+            properties: {
+              basis: { enum: ["observed", "reported", "inferred", "assumed"] },
+              stance: { enum: ["affirmed", "denied", "tentative", "disputed"] },
+            },
+          },
+          temporal: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              validFrom: { type: "string" },
+              validTo: { type: "string" },
+            },
+          },
+        },
+      },
+    },
+    occurrences: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["localId", "kind", "summary"],
+        properties: {
+          localId: { type: "string" },
+          kind: { type: "string" },
+          summary: { type: "string" },
+          spaceId: { type: "string" },
+          attributes: { type: "object" },
+          sources: { type: "array", items: { $ref: "#/$defs/source" } },
+          participants: { type: "array", items: { $ref: "#/$defs/ref" } },
+          temporal: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              startedAt: { type: "string" },
+              endedAt: { type: "string" },
+            },
+          },
+        },
+      },
+    },
+    intents: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["localId", "kind", "summary"],
+        properties: {
+          localId: { type: "string" },
+          kind: { type: "string" },
+          summary: { type: "string" },
+          spaceId: { type: "string" },
+          attributes: { type: "object" },
+          sources: { type: "array", items: { $ref: "#/$defs/source" } },
+          owner: { $ref: "#/$defs/ref" },
+          target: { $ref: "#/$defs/ref" },
+          status: { enum: ["proposed", "active", "completed", "cancelled"] },
+          dueAt: { type: "string" },
+        },
+      },
+    },
+    inquiries: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["localId", "kind", "summary", "question"],
+        properties: {
+          localId: { type: "string" },
+          kind: { type: "string" },
+          summary: { type: "string" },
+          question: { type: "string" },
+          spaceId: { type: "string" },
+          attributes: { type: "object" },
+          sources: { type: "array", items: { $ref: "#/$defs/source" } },
+          about: { type: "array", items: { $ref: "#/$defs/ref" } },
+          answer: { $ref: "#/$defs/ref" },
+          status: { enum: ["open", "answered", "obsolete"] },
+        },
+      },
+    },
+    procedures: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["localId", "kind", "summary", "steps"],
+        properties: {
+          localId: { type: "string" },
+          kind: { type: "string" },
+          summary: { type: "string" },
+          spaceId: { type: "string" },
+          attributes: { type: "object" },
+          sources: { type: "array", items: { $ref: "#/$defs/source" } },
+          trigger: { type: "string" },
+          preconditions: { type: "array", items: { type: "string" } },
+          steps: { type: "array", minItems: 1, items: { type: "string" } },
+          expectedOutcome: { type: "string" },
+          applicability: { type: "string" },
+        },
+      },
+    },
+    relations: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["from", "type", "to"],
+        properties: {
+          from: { $ref: "#/$defs/ref" },
+          type: {
+            enum: [
+              "about",
+              "same_as",
+              "supports",
+              "contradicts",
+              "depends_on",
+              "contributes_to",
+              "blocks",
+              "answers",
+            ],
+          },
+          to: { $ref: "#/$defs/ref" },
+          sources: { type: "array", items: { $ref: "#/$defs/source" } },
+        },
+      },
+    },
+    lifecycle: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["target", "status", "sources"],
+        properties: {
+          target: {
+            oneOf: [{
+              type: "object",
+              additionalProperties: false,
+              required: ["memoryId"],
+              properties: { memoryId: { type: "string" } },
+            }, {
+              type: "object",
+              additionalProperties: false,
+              required: ["match"],
+              properties: {
+                match: {
+                  type: "object",
+                  additionalProperties: false,
+                  required: ["form", "query"],
+                  properties: {
+                    form: { enum: MEMORY_FORMS },
+                    kind: { type: "string" },
+                    query: { type: "string" },
+                  },
+                },
+              },
+            }],
+          },
+          status: { type: "string" },
+          replacement: { $ref: "#/$defs/ref" },
+          sources: {
+            type: "array",
+            minItems: 1,
+            items: { $ref: "#/$defs/source" },
+          },
+        },
+      },
+    },
+  },
+};
+
+const consolidationOutputSchema: ActionSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["outcome"],
+  properties: {
+    outcome: { enum: ["already_settled", "no_changes", "changes"] },
+    created: { type: "integer" },
+    reused: { type: "integer" },
+    lifecycleChanged: { type: "integer" },
+    unresolved: { type: "integer" },
+    createdRecords: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["localId", "memoryId", "form", "status", "summary"],
+        properties: {
+          localId: { type: "string" },
+          memoryId: { type: "string" },
+          form: { enum: MEMORY_FORMS },
+          status: { type: "string" },
+          summary: { type: "string" },
+        },
+      },
+    },
+    reusedRecords: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["localId", "memoryId", "form", "status", "summary"],
+        properties: {
+          localId: { type: "string" },
+          memoryId: { type: "string" },
+          form: { enum: MEMORY_FORMS },
+          status: { type: "string" },
+          summary: { type: "string" },
+        },
+      },
+    },
+    unresolvedReconciliations: { type: "array", items: { type: "object" } },
+  },
+};
 
 export function createConsolidateMemoryAction(
   config: LongTermMemoryConfig,
@@ -1215,10 +1499,11 @@ export function createConsolidateMemoryAction(
     MemoryActionContext,
     ActionSchema
   >,
-  "inputSchema" | "execute"
+  "inputSchema" | "outputSchema" | "execute"
 > {
   return {
-    inputSchema: consolidationInputSchema(),
+    inputSchema: consolidationInputSchema,
+    outputSchema: consolidationOutputSchema,
     async execute(
       proposal: ConsolidateMemoryActionInput,
       context: MemoryActionContext,
@@ -1241,423 +1526,463 @@ export function createConsolidateMemoryAction(
       if (checkpoint.status !== "pending") {
         throw new Error(`Memory checkpoint '${checkpointId}' is not pending.`);
       }
-      const threadId = requiredText(checkpoint.threadId, "Memory thread id");
-      const agentId = requiredText(checkpoint.agentId, "Memory agent id");
-      const agent = context.resources.agents[agentId];
-      if (!agent) throw new Error(`Agent '${agentId}' was not found.`);
-      const thread = await loadThreadRecord(context, threadId);
-      if (!thread) {
-        throw new Error(`Memory thread '${threadId}' was not found.`);
-      }
-      const spaces = activeSpacesForCheckpoint(
-        checkpoint,
-        await threadMemorySpaces(context, threadId),
-      );
-      const allMessages = await listThreadMessageRecords(context, threadId);
-      const range = rangeMessages(allMessages, checkpoint);
-      const snapshot = frozenSnapshot(checkpoint);
-      const catalog = sourceCatalog(range, snapshot);
-      const kindDefinitions = memoryKinds(context);
-      const currentRecords = await activeMemoryRecords(
-        context,
-        spaces,
-        agentId,
-      );
-      const currentRecordIds = new Set(currentRecords.map((item) => item.id));
-      const currentRelations = await recordRelations(context, currentRecordIds);
-      const visible = currentRecords.filter((item) =>
-        !terminalStatus(item.status)
-      );
-      const parsed = parseConsolidateMemoryInput(raw, {
-        kinds: new Map(kindDefinitions.map((kind) => [kind.id, kind])),
-        writableMemorySpaceIds: new Set(
-          spaces.filter((space) => space.access === "read_write").map((space) =>
-            space.id
+      // An ordinary on-demand call owns its just-reserved checkpoint. Unlike
+      // the private processor path, no processor will settle it after this
+      // Action rejects, so settle the still-pending reservation here.
+      const onDemand = record(checkpoint.metadata).onDemand === true;
+      try {
+        const threadId = requiredText(checkpoint.threadId, "Memory thread id");
+        const agentId = requiredText(checkpoint.agentId, "Memory agent id");
+        const agent = context.resources.agents[agentId];
+        if (!agent) throw new Error(`Agent '${agentId}' was not found.`);
+        const thread = await loadThreadRecord(context, threadId);
+        if (!thread) {
+          throw new Error(`Memory thread '${threadId}' was not found.`);
+        }
+        const spaces = activeSpacesForCheckpoint(
+          checkpoint,
+          await threadMemorySpaces(context, threadId),
+        );
+        const allMessages = await listThreadMessageRecords(context, threadId);
+        const range = rangeMessages(allMessages, checkpoint);
+        const snapshot = frozenSnapshot(checkpoint);
+        const catalog = sourceCatalog(range, snapshot);
+        const kindDefinitions = memoryKinds(context);
+        const currentRecords = await activeMemoryRecords(
+          context,
+          spaces,
+          agentId,
+        );
+        const currentRecordIds = new Set(currentRecords.map((item) => item.id));
+        const currentRelations = await recordRelations(
+          context,
+          currentRecordIds,
+        );
+        const visible = currentRecords.filter((item) =>
+          isEditoriallyVisible(item) && !terminalStatus(item.status)
+        );
+        const parsed = parseConsolidateMemoryInput(raw, {
+          kinds: new Map(kindDefinitions.map((kind) => [kind.id, kind])),
+          writableMemorySpaceIds: new Set(
+            spaces.filter((space) => space.access === "read_write").map((
+              space,
+            ) => space.id),
           ),
-        ),
-        defaultWriteMemorySpaceId: spaces.find((space) =>
-          space.defaultWrite
-        )!.id,
-        allowedEvidenceSources: catalog.keys,
-        defaultEvidenceSources: catalog.evidence,
-        visibleMemoryIds: new Set(visible.map((item) => item.id)),
-        visibleNodeIds: catalog.nodes,
-      });
-      if (parsed.outcome === "no_changes") {
-        const result = Object.freeze({
-          outcome: "no_changes",
-          created: 0,
-          reused: 0,
-          lifecycleChanged: 0,
+          defaultWriteMemorySpaceId: spaces.find((space) =>
+            space.defaultWrite
+          )!.id,
+          allowedEvidenceSources: catalog.keys,
+          defaultEvidenceSources: catalog.evidence,
+          visibleMemoryIds: new Set(visible.map((item) => item.id)),
+          visibleNodeIds: catalog.nodes,
         });
-        await settleCheckpoint(context, {
+        if (parsed.outcome === "no_changes") {
+          const result = Object.freeze({
+            outcome: "no_changes",
+            created: 0,
+            reused: 0,
+            lifecycleChanged: 0,
+            createdRecords: [],
+            reusedRecords: [],
+            unresolvedReconciliations: [],
+          });
+          await settleCheckpoint(context, {
+            checkpoint,
+            agentId,
+            spaces,
+            config,
+            result,
+          });
+          return result;
+        }
+
+        const drafts = proposalDrafts(parsed);
+        const localIds = new Map(
+          drafts.map((
+            { draft },
+          ) => [
+            draft.localId,
+            stableMemoryRecordId(checkpointId, draft.localId),
+          ]),
+        );
+        const retrieved = new Map<
+          string,
+          Awaited<ReturnType<typeof candidateRecords>>
+        >();
+        for (const { form, draft } of drafts) {
+          retrieved.set(
+            draft.localId,
+            await candidateRecords(context, {
+              query: draft.summary,
+              form,
+              kind: draft.kind,
+              spaces,
+              agent,
+              threadId,
+              checkpointId,
+              limit: config.retrievalLimit,
+              embed,
+            }),
+          );
+        }
+        const persisted = new Map<string, string>();
+        const retrievedIds = new Set<string>();
+        const createdRecords = new Map<string, Record<string, unknown>>();
+        const updatedRecords = new Map<string, Record<string, unknown>>();
+        const projectedRecords = new Map(
+          currentRecords.map((item) => [item.id, item] as const),
+        );
+        const stagedRelations = new Map<string, MemoryRelationWrite>();
+        const stageUpdate = (
+          id: string,
+          patch: Readonly<Record<string, unknown>>,
+        ) => {
+          updatedRecords.set(id, {
+            ...(updatedRecords.get(id) ?? {}),
+            ...structuredClone(patch),
+          });
+        };
+        const stageRelation = (relation: MemoryRelationWrite) => {
+          const existing = stagedRelations.get(relation.id);
+          if (existing && stableJson(existing) !== stableJson(relation)) {
+            throw new Error(
+              `Memory relation ID '${relation.id}' has conflicting definitions.`,
+            );
+          }
+          stagedRelations.set(relation.id, relation);
+        };
+        let created = 0;
+        let reused = 0;
+        for (const { form, draft } of drafts) {
+          const memorySpaceId = requiredText(
+            draft.spaceId,
+            `Memory '${draft.localId}' space ID`,
+          );
+          const data = draftData(
+            form,
+            draft as MemoryDraftBase & Record<string, unknown>,
+            localIds,
+          );
+          const kindDefinition = kindDefinitions.find((kind) =>
+            kind.id === draft.kind
+          );
+          if (kindDefinition?.schema) {
+            validateMemoryKindData(
+              kindDefinition.schema,
+              data,
+              `Memory '${draft.localId}' does not satisfy kind '${draft.kind}'`,
+            );
+          }
+          const candidates = retrieved.get(draft.localId) ?? [];
+          candidates.forEach((item) => retrievedIds.add(item.record.id));
+          const exact = candidates.find((item) =>
+            item.record.memorySpaceId === memorySpaceId &&
+            stableJson(item.record.data) === stableJson(data)
+          );
+          if (exact) {
+            const rawRecord = exact.raw;
+            const pending = updatedRecords.get(exact.record.id);
+            const provenance = record(
+              pending?.provenance ?? rawRecord.provenance,
+            );
+            const existingSources = Array.isArray(provenance.sources)
+              ? provenance.sources as ContextSourceRef[]
+              : [];
+            const sources = [...existingSources, ...draft.sources].filter((
+              source,
+              index,
+              all,
+            ) =>
+              all.findIndex((candidate) =>
+                memorySourceKey(candidate) === memorySourceKey(source)
+              ) === index
+            );
+            stageUpdate(exact.record.id, {
+              provenance: { ...provenance, sources },
+            });
+            persisted.set(draft.localId, exact.record.id);
+            reused++;
+            continue;
+          }
+          const id = localIds.get(draft.localId)!;
+          let embedding: readonly number[] | null = null;
+          if (embed) {
+            const values = await embed([draft.summary], {
+              agent,
+              thread,
+              checkpointId,
+              context,
+            });
+            if (!finiteEmbedding(values[0])) {
+              throw new Error("Memory embedder returned an invalid vector.");
+            }
+            embedding = values[0];
+          }
+          const status = intentOrInquiryStatus(
+            form,
+            draft as unknown as Record<string, unknown>,
+          );
+          const temporalInput = record(
+            (draft as unknown as Record<string, unknown>).temporal,
+          );
+          const temporal = {
+            ...(optionalText(temporalInput.validFrom)
+              ? { validFrom: optionalText(temporalInput.validFrom) }
+              : {}),
+            ...(optionalText(temporalInput.validTo)
+              ? { validTo: optionalText(temporalInput.validTo) }
+              : {}),
+            recordedAt: checkpoint.createdAt,
+          };
+          const author = assertedBy(draft.sources, range);
+          const newRecord = {
+            id,
+            memorySpaceId,
+            consolidationId: checkpointId,
+            createdByAgentId: agentId,
+            originThreadId: threadId,
+            form,
+            kind: draft.kind,
+            summary: draft.summary,
+            content: [],
+            status,
+            validity: { status: "valid" },
+            temporal,
+            epistemic: form === "assertion"
+              ? structuredClone((draft as AssertionMemoryDraft).epistemic)
+              : null,
+            provenance: {
+              sources: draft.sources,
+              ...(author ? { assertedBy: author } : {}),
+              recordedBy: { type: "agent", id: agentId },
+              consolidationId: checkpointId,
+            },
+            data,
+            embedding,
+            metadata: {},
+          };
+          createdRecords.set(id, newRecord);
+          projectedRecords.set(id, {
+            id,
+            memorySpaceId,
+            form,
+            kind: draft.kind,
+            summary: draft.summary,
+            status,
+            validity: "valid",
+            data,
+          });
+          persisted.set(draft.localId, id);
+          created++;
+        }
+
+        const resolve = (ref: ProposedMemoryRef) =>
+          resolveRef(
+            ref,
+            new Map(
+              [...localIds].map((
+                [localId],
+              ) => [localId, persisted.get(localId) ?? localIds.get(localId)!]),
+            ),
+          );
+        const relations = parsed.relations ?? [];
+        for (const relation of relations) {
+          const from = resolve(relation.from);
+          const to = resolve(relation.to);
+          const id = `memory-relation:${
+            encodeURIComponent(
+              `${from.type}:${from.id}:${relation.type}:${to.type}:${to.id}`,
+            )
+          }`;
+          stageRelation({
+            id,
+            type: relation.type,
+            source: from,
+            target: to,
+            metadata: { checkpointId, sources: relation.sources ?? [] },
+          });
+        }
+        for (const { form, draft } of drafts) {
+          if (form !== "assertion") continue;
+          const data = draftData(
+            form,
+            draft as MemoryDraftBase & Record<string, unknown>,
+            localIds,
+          );
+          for (const candidate of retrieved.get(draft.localId) ?? []) {
+            if (
+              stableJson(candidate.record.data.subject) !==
+                stableJson(data.subject) ||
+              candidate.record.data.predicate !== data.predicate ||
+              stableJson(candidate.record.data.object) ===
+                stableJson(data.object)
+            ) continue;
+            const sourceId = persisted.get(draft.localId)!;
+            const id = `memory-relation:${
+              encodeURIComponent(
+                `${sourceId}:contradicts:${candidate.record.id}`,
+              )
+            }`;
+            stageRelation({
+              id,
+              type: "contradicts",
+              source: { type: memoryRecordCollection.name, id: sourceId },
+              target: {
+                type: memoryRecordCollection.name,
+                id: candidate.record.id,
+              },
+              metadata: { checkpointId },
+            });
+          }
+        }
+
+        const unresolved: unknown[] = [];
+        let lifecycleChanged = 0;
+        for (const change of parsed.lifecycle ?? []) {
+          let targets: readonly MemoryRecordProjection[] = [];
+          if ("memoryId" in change.target) {
+            const memoryId = change.target.memoryId;
+            targets = visible.filter((item) => item.id === memoryId);
+          } else {
+            const match = change.target.match;
+            targets = visible.filter((item) =>
+              item.form === match.form &&
+              (!match.kind || item.kind === match.kind) &&
+              lexicalScore(match.query, item.summary) > 0
+            );
+          }
+          if (targets.length !== 1) {
+            unresolved.push({
+              change,
+              candidateIds: targets.map((item) => item.id),
+            });
+            continue;
+          }
+          const target = targets[0];
+          if (!memoryLifecycleAllows(target.form, change.status)) {
+            unresolved.push({
+              change,
+              candidateIds: [target.id],
+              reason: "status_not_allowed_for_form",
+            });
+            continue;
+          }
+          const rawTarget = await context.collections.memoryRecord
+            .get({ id: target.id });
+          const pendingTarget = updatedRecords.get(target.id);
+          stageUpdate(target.id, {
+            status: change.status,
+            temporal: {
+              ...record(pendingTarget?.temporal ?? rawTarget?.temporal),
+              invalidatedAt: new Date().toISOString(),
+            },
+          });
+          projectedRecords.set(target.id, {
+            ...target,
+            status: change.status,
+          });
+          lifecycleChanged++;
+          if (change.replacement) {
+            const replacement = resolve(change.replacement);
+            const id = `memory-relation:${
+              encodeURIComponent(`${replacement.id}:supersedes:${target.id}`)
+            }`;
+            stageRelation({
+              id,
+              type: "supersedes",
+              source: replacement,
+              target: { type: memoryRecordCollection.name, id: target.id },
+              metadata: { checkpointId },
+            });
+          }
+        }
+        const auditRecords = drafts.map(({ form, draft }) =>
+          Object.freeze({
+            localId: draft.localId,
+            memoryId: persisted.get(draft.localId)!,
+            form,
+            status:
+              projectedRecords.get(persisted.get(draft.localId)!)?.status ??
+                defaultMemoryLifecycle(form),
+            summary: draft.summary,
+          })
+        );
+        const result = Object.freeze({
+          outcome: "changes" as const,
+          created,
+          reused,
+          lifecycleChanged,
+          unresolved: unresolved.length,
+          createdRecords: auditRecords.filter((item) =>
+            createdRecords.has(item.memoryId)
+          ).slice(0, 100),
+          reusedRecords: auditRecords.filter((item) =>
+            !createdRecords.has(item.memoryId)
+          ).slice(0, 100),
+          unresolvedReconciliations: unresolved.slice(0, 100),
+        });
+        const recordWrites: MemoryRecordWrite[] = [
+          ...[...createdRecords.values()].map((record) =>
+            Object.freeze({
+              operation: "create" as const,
+              record: record as Record<string, unknown> & { id: string },
+            })
+          ),
+          ...[...updatedRecords].map(([id, patch]) =>
+            Object.freeze({ operation: "update" as const, id, patch })
+          ),
+        ];
+        const relationWrites = [...stagedRelations.values()];
+        const projectedIds = new Set(projectedRecords.keys());
+        const projectedRelationMap = new Map(
+          currentRelations.map((relation) =>
+            [
+              `${relation.sourceId}\0${relation.type}\0${relation.targetId}`,
+              relation,
+            ] as const
+          ),
+        );
+        for (const relation of relationWrites) {
+          if (
+            relation.source.type !== memoryRecordCollection.name ||
+            relation.target.type !== memoryRecordCollection.name ||
+            !projectedIds.has(relation.source.id) ||
+            !projectedIds.has(relation.target.id)
+          ) continue;
+          projectedRelationMap.set(
+            `${relation.source.id}\0${relation.type}\0${relation.target.id}`,
+            {
+              sourceId: relation.source.id,
+              targetId: relation.target.id,
+              type: relation.type,
+            },
+          );
+        }
+        const settlement = await prepareCheckpointSettlement(context, {
           checkpoint,
           agentId,
           spaces,
           config,
           result,
+          retrievedIds: [...retrievedIds],
+          unresolved,
+          records: [...projectedRecords.values()],
+          relations: [...projectedRelationMap.values()],
+        });
+        await commitMemoryConsolidation(context, {
+          checkpointId,
+          records: recordWrites,
+          relations: relationWrites,
+          checkpointPatch: settlement.patch,
+          checkpointContent: settlement.content,
         });
         return result;
+      } catch (error) {
+        if (onDemand) {
+          await settleCheckpointError(context, checkpointId, "failed", error);
+        }
+        throw error;
       }
-
-      const drafts = proposalDrafts(parsed);
-      const localIds = new Map(
-        drafts.map((
-          { draft },
-        ) => [
-          draft.localId,
-          stableMemoryRecordId(checkpointId, draft.localId),
-        ]),
-      );
-      const retrieved = new Map<
-        string,
-        Awaited<ReturnType<typeof candidateRecords>>
-      >();
-      for (const { form, draft } of drafts) {
-        retrieved.set(
-          draft.localId,
-          await candidateRecords(context, {
-            query: draft.summary,
-            form,
-            kind: draft.kind,
-            spaces,
-            agent,
-            threadId,
-            checkpointId,
-            limit: config.retrievalLimit,
-            embed,
-          }),
-        );
-      }
-      const persisted = new Map<string, string>();
-      const retrievedIds = new Set<string>();
-      const createdRecords = new Map<string, Record<string, unknown>>();
-      const updatedRecords = new Map<string, Record<string, unknown>>();
-      const projectedRecords = new Map(
-        currentRecords.map((item) => [item.id, item] as const),
-      );
-      const stagedRelations = new Map<string, MemoryRelationWrite>();
-      const stageUpdate = (
-        id: string,
-        patch: Readonly<Record<string, unknown>>,
-      ) => {
-        updatedRecords.set(id, {
-          ...(updatedRecords.get(id) ?? {}),
-          ...structuredClone(patch),
-        });
-      };
-      const stageRelation = (relation: MemoryRelationWrite) => {
-        const existing = stagedRelations.get(relation.id);
-        if (existing && stableJson(existing) !== stableJson(relation)) {
-          throw new Error(
-            `Memory relation ID '${relation.id}' has conflicting definitions.`,
-          );
-        }
-        stagedRelations.set(relation.id, relation);
-      };
-      let created = 0;
-      let reused = 0;
-      for (const { form, draft } of drafts) {
-        const memorySpaceId = requiredText(
-          draft.spaceId,
-          `Memory '${draft.localId}' space ID`,
-        );
-        const data = draftData(
-          form,
-          draft as MemoryDraftBase & Record<string, unknown>,
-          localIds,
-        );
-        const kindDefinition = kindDefinitions.find((kind) =>
-          kind.id === draft.kind
-        );
-        if (kindDefinition?.schema) {
-          validateMemoryKindData(
-            kindDefinition.schema,
-            data,
-            `Memory '${draft.localId}' does not satisfy kind '${draft.kind}'`,
-          );
-        }
-        const candidates = retrieved.get(draft.localId) ?? [];
-        candidates.forEach((item) => retrievedIds.add(item.record.id));
-        const exact = candidates.find((item) =>
-          item.record.memorySpaceId === memorySpaceId &&
-          stableJson(item.record.data) === stableJson(data)
-        );
-        if (exact) {
-          const rawRecord = exact.raw;
-          const pending = updatedRecords.get(exact.record.id);
-          const provenance = record(
-            pending?.provenance ?? rawRecord.provenance,
-          );
-          const existingSources = Array.isArray(provenance.sources)
-            ? provenance.sources as ContextSourceRef[]
-            : [];
-          const sources = [...existingSources, ...draft.sources].filter((
-            source,
-            index,
-            all,
-          ) =>
-            all.findIndex((candidate) =>
-              memorySourceKey(candidate) === memorySourceKey(source)
-            ) === index
-          );
-          stageUpdate(exact.record.id, {
-            provenance: { ...provenance, sources },
-          });
-          persisted.set(draft.localId, exact.record.id);
-          reused++;
-          continue;
-        }
-        const id = localIds.get(draft.localId)!;
-        let embedding: readonly number[] | null = null;
-        if (embed) {
-          const values = await embed([draft.summary], {
-            agent,
-            thread,
-            checkpointId,
-            context,
-          });
-          if (!finiteEmbedding(values[0])) {
-            throw new Error("Memory embedder returned an invalid vector.");
-          }
-          embedding = values[0];
-        }
-        const status = intentOrInquiryStatus(
-          form,
-          draft as unknown as Record<string, unknown>,
-        );
-        const temporalInput = record(
-          (draft as unknown as Record<string, unknown>).temporal,
-        );
-        const temporal = {
-          ...(optionalText(temporalInput.validFrom)
-            ? { validFrom: optionalText(temporalInput.validFrom) }
-            : {}),
-          ...(optionalText(temporalInput.validTo)
-            ? { validTo: optionalText(temporalInput.validTo) }
-            : {}),
-          recordedAt: checkpoint.createdAt,
-        };
-        const author = assertedBy(draft.sources, range);
-        const newRecord = {
-          id,
-          memorySpaceId,
-          consolidationId: checkpointId,
-          createdByAgentId: agentId,
-          originThreadId: threadId,
-          form,
-          kind: draft.kind,
-          summary: draft.summary,
-          content: [],
-          status,
-          temporal,
-          epistemic: form === "assertion"
-            ? structuredClone((draft as AssertionMemoryDraft).epistemic)
-            : null,
-          provenance: {
-            sources: draft.sources,
-            ...(author ? { assertedBy: author } : {}),
-            recordedBy: { type: "agent", id: agentId },
-            consolidationId: checkpointId,
-          },
-          data,
-          embedding,
-          metadata: {},
-        };
-        createdRecords.set(id, newRecord);
-        projectedRecords.set(id, {
-          id,
-          memorySpaceId,
-          form,
-          kind: draft.kind,
-          summary: draft.summary,
-          status,
-          data,
-        });
-        persisted.set(draft.localId, id);
-        created++;
-      }
-
-      const resolve = (ref: ProposedMemoryRef) =>
-        resolveRef(
-          ref,
-          new Map(
-            [...localIds].map((
-              [localId],
-            ) => [localId, persisted.get(localId) ?? localIds.get(localId)!]),
-          ),
-        );
-      const relations = parsed.relations ?? [];
-      for (const relation of relations) {
-        const from = resolve(relation.from);
-        const to = resolve(relation.to);
-        const id = `memory-relation:${
-          encodeURIComponent(
-            `${from.type}:${from.id}:${relation.type}:${to.type}:${to.id}`,
-          )
-        }`;
-        stageRelation({
-          id,
-          type: relation.type,
-          source: from,
-          target: to,
-          metadata: { checkpointId, sources: relation.sources ?? [] },
-        });
-      }
-      for (const { form, draft } of drafts) {
-        if (form !== "assertion") continue;
-        const data = draftData(
-          form,
-          draft as MemoryDraftBase & Record<string, unknown>,
-          localIds,
-        );
-        for (const candidate of retrieved.get(draft.localId) ?? []) {
-          if (
-            stableJson(candidate.record.data.subject) !==
-              stableJson(data.subject) ||
-            candidate.record.data.predicate !== data.predicate ||
-            stableJson(candidate.record.data.object) === stableJson(data.object)
-          ) continue;
-          const sourceId = persisted.get(draft.localId)!;
-          const id = `memory-relation:${
-            encodeURIComponent(`${sourceId}:contradicts:${candidate.record.id}`)
-          }`;
-          stageRelation({
-            id,
-            type: "contradicts",
-            source: { type: memoryRecordCollection.name, id: sourceId },
-            target: {
-              type: memoryRecordCollection.name,
-              id: candidate.record.id,
-            },
-            metadata: { checkpointId },
-          });
-        }
-      }
-
-      const unresolved: unknown[] = [];
-      let lifecycleChanged = 0;
-      for (const change of parsed.lifecycle ?? []) {
-        let targets: readonly MemoryRecordProjection[] = [];
-        if ("memoryId" in change.target) {
-          const memoryId = change.target.memoryId;
-          targets = visible.filter((item) => item.id === memoryId);
-        } else {
-          const match = change.target.match;
-          targets = visible.filter((item) =>
-            item.form === match.form &&
-            (!match.kind || item.kind === match.kind) &&
-            lexicalScore(match.query, item.summary) > 0
-          );
-        }
-        if (targets.length !== 1) {
-          unresolved.push({
-            change,
-            candidateIds: targets.map((item) => item.id),
-          });
-          continue;
-        }
-        const target = targets[0];
-        if (!memoryLifecycleAllows(target.form, change.status)) {
-          unresolved.push({
-            change,
-            candidateIds: [target.id],
-            reason: "status_not_allowed_for_form",
-          });
-          continue;
-        }
-        const rawTarget = await context.collections.memoryRecord
-          .get({ id: target.id });
-        const pendingTarget = updatedRecords.get(target.id);
-        stageUpdate(target.id, {
-          status: change.status,
-          temporal: {
-            ...record(pendingTarget?.temporal ?? rawTarget?.temporal),
-            invalidatedAt: new Date().toISOString(),
-          },
-        });
-        projectedRecords.set(target.id, {
-          ...target,
-          status: change.status,
-        });
-        lifecycleChanged++;
-        if (change.replacement) {
-          const replacement = resolve(change.replacement);
-          const id = `memory-relation:${
-            encodeURIComponent(`${replacement.id}:supersedes:${target.id}`)
-          }`;
-          stageRelation({
-            id,
-            type: "supersedes",
-            source: replacement,
-            target: { type: memoryRecordCollection.name, id: target.id },
-            metadata: { checkpointId },
-          });
-        }
-      }
-      const result = Object.freeze({
-        outcome: "changes",
-        created,
-        reused,
-        lifecycleChanged,
-        unresolved: unresolved.length,
-      });
-      const recordWrites: MemoryRecordWrite[] = [
-        ...[...createdRecords.values()].map((record) =>
-          Object.freeze({
-            operation: "create" as const,
-            record: record as Record<string, unknown> & { id: string },
-          })
-        ),
-        ...[...updatedRecords].map(([id, patch]) =>
-          Object.freeze({ operation: "update" as const, id, patch })
-        ),
-      ];
-      const relationWrites = [...stagedRelations.values()];
-      const projectedIds = new Set(projectedRecords.keys());
-      const projectedRelationMap = new Map(
-        currentRelations.map((relation) =>
-          [
-            `${relation.sourceId}\0${relation.type}\0${relation.targetId}`,
-            relation,
-          ] as const
-        ),
-      );
-      for (const relation of relationWrites) {
-        if (
-          relation.source.type !== memoryRecordCollection.name ||
-          relation.target.type !== memoryRecordCollection.name ||
-          !projectedIds.has(relation.source.id) ||
-          !projectedIds.has(relation.target.id)
-        ) continue;
-        projectedRelationMap.set(
-          `${relation.source.id}\0${relation.type}\0${relation.target.id}`,
-          {
-            sourceId: relation.source.id,
-            targetId: relation.target.id,
-            type: relation.type,
-          },
-        );
-      }
-      const settlement = await prepareCheckpointSettlement(context, {
-        checkpoint,
-        agentId,
-        spaces,
-        config,
-        result,
-        retrievedIds: [...retrievedIds],
-        unresolved,
-        records: [...projectedRecords.values()],
-        relations: [...projectedRelationMap.values()],
-      });
-      await commitMemoryConsolidation(context, {
-        checkpointId,
-        records: recordWrites,
-        relations: relationWrites,
-        checkpointPatch: settlement.patch,
-        checkpointContent: settlement.content,
-      });
-      return result;
     },
   };
 }
@@ -1717,7 +2042,10 @@ export function searchMemoryAction(): Pick<
           input.kind && mapped.kind !== input.kind ||
           input.status && mapped.status !== input.status
         ) return [];
-        if (input.includeHistory !== true && terminalStatus(mapped.status)) {
+        if (
+          input.includeHistory !== true &&
+          (!isEditoriallyVisible(mapped) || terminalStatus(mapped.status))
+        ) {
           return [];
         }
         return [{
@@ -1725,6 +2053,7 @@ export function searchMemoryAction(): Pick<
           similarity: query ? lexicalScore(query, mapped.summary) : 1,
           provenance: item.provenance,
           temporal: item.temporal,
+          validity: item.validity,
         }];
       }).sort((left, right) => right.similarity - left.similarity).slice(
         0,
@@ -1784,6 +2113,183 @@ export function inspectMemoryAction(): Pick<
     },
   };
 }
+
+const invalidateMemoryInputSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["id", "disposition", "reason"],
+  properties: {
+    id: { type: "string", minLength: 1 },
+    disposition: { enum: ["retracted", "superseded", "archived"] },
+    reason: { type: "string", minLength: 1 },
+    replacementMemoryId: { type: "string", minLength: 1 },
+    sources: { type: "array", items: { type: "object" }, maxItems: 20 },
+  },
+} as const;
+
+const invalidateMemoryOutputSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["memory"],
+  properties: {
+    memory: {
+      type: "object",
+      additionalProperties: false,
+      required: ["id", "status", "previousValidity", "validity"],
+      properties: {
+        id: { type: "string" },
+        status: { type: "string" },
+        previousValidity: { type: "object" },
+        validity: { type: "object" },
+        replacementMemoryId: { type: "string" },
+      },
+    },
+  },
+} as const;
+
+function invalidationSources(
+  value: unknown,
+  triggerMessageId: string,
+): readonly ContextSourceRef[] {
+  const defaultSource: ContextSourceRef = Object.freeze({
+    type: "message",
+    id: triggerMessageId,
+  });
+  if (value === undefined) return Object.freeze([defaultSource]);
+  if (!Array.isArray(value) || !value.length) {
+    throw new TypeError("Invalidation sources must be a non-empty array.");
+  }
+  const sources = value.map((raw) => {
+    const source = record(raw);
+    if (source.type !== "message" || source.id !== triggerMessageId) {
+      throw new TypeError(
+        "Invalidation sources may only cite the trusted triggering message.",
+      );
+    }
+    return defaultSource;
+  });
+  return Object.freeze(
+    sources.filter((source, index) =>
+      sources.findIndex((candidate) =>
+        memorySourceKey(candidate) === memorySourceKey(source)
+      ) === index
+    ),
+  );
+}
+
+export function invalidateMemoryAction():
+  & Pick<
+    ActionDefinition<unknown, unknown, MemoryActionContext, ActionSchema>,
+    "inputSchema" | "execute"
+  >
+  & Readonly<{ outputSchema: typeof invalidateMemoryOutputSchema }> {
+  return {
+    inputSchema: invalidateMemoryInputSchema,
+    outputSchema: invalidateMemoryOutputSchema,
+    async execute(raw, context) {
+      const input = record(raw);
+      const id = requiredText(input.id, "Memory id");
+      const disposition = requiredText(input.disposition, "Memory disposition");
+      if (
+        disposition !== "retracted" && disposition !== "superseded" &&
+        disposition !== "archived"
+      ) {
+        throw new TypeError("Memory disposition is invalid.");
+      }
+      const reason = requiredText(input.reason, "Memory invalidation reason");
+      const provenance = coreToolActionMetadata(context.action.metadata);
+      if (!provenance) {
+        throw new Error(
+          "invalidate_memory requires trusted Core Tool provenance.",
+        );
+      }
+      const sources = invalidationSources(
+        input.sources,
+        provenance.triggerMessageId,
+      );
+      const writable = new Set(
+        (await threadMemorySpaces(context, provenance.threadId)).filter((
+          space,
+        ) => space.access === "read_write").map((space) => space.id),
+      );
+      const item = await context.collections.memoryRecord.get({ id });
+      const mapped = item ? memoryRecord(item) : null;
+      if (!mapped) throw new Error(`Memory '${id}' was not found.`);
+      if (!writable.has(mapped.memorySpaceId)) {
+        throw new Error(`Memory '${id}' is not writable from this thread.`);
+      }
+      const replacementMemoryId = disposition === "superseded"
+        ? requiredText(input.replacementMemoryId, "Replacement memory id")
+        : undefined;
+      if (replacementMemoryId === id) {
+        throw new TypeError("A memory cannot supersede itself.");
+      }
+      if (replacementMemoryId) {
+        const replacement = await context.collections.memoryRecord.get({
+          id: replacementMemoryId,
+        });
+        const mappedReplacement = replacement
+          ? memoryRecord(replacement)
+          : null;
+        if (
+          !mappedReplacement || !writable.has(mappedReplacement.memorySpaceId)
+        ) {
+          throw new Error(
+            `Replacement memory '${replacementMemoryId}' is not writable from this thread.`,
+          );
+        }
+      } else if (input.replacementMemoryId !== undefined) {
+        throw new TypeError(
+          "replacementMemoryId is only valid for disposition 'superseded'.",
+        );
+      }
+      const nextValidity = Object.freeze({
+        status: disposition,
+        changedAt: context.now().toISOString(),
+        reason,
+        sources,
+        ...(replacementMemoryId ? { replacementMemoryId } : {}),
+      });
+      const previousValidity = record(item!.validity);
+      const operationKey = `memory-invalidate:${id}:${disposition}:${
+        replacementMemoryId ?? ""
+      }`;
+      await context.transaction(async (tx) => {
+        await tx.collections.memoryRecord.commands.invalidate({
+          id,
+          validity: nextValidity,
+        }, { operationKey });
+        if (replacementMemoryId) {
+          await tx.relations.upsert({
+            id: `memory-relation:${
+              encodeURIComponent(`${replacementMemoryId}:supersedes:${id}`)
+            }`,
+            type: "supersedes",
+            source: {
+              type: memoryRecordCollection.name,
+              id: replacementMemoryId,
+            },
+            target: { type: memoryRecordCollection.name, id },
+            metadata: { sources, reason },
+          });
+        }
+      }, { operationKey });
+      const saved = await context.collections.memoryRecord.get({ id });
+      const validity = saved ? record(saved.validity) : nextValidity;
+      return {
+        memory: {
+          id,
+          status: mapped.status,
+          previousValidity,
+          validity,
+          ...(replacementMemoryId ? { replacementMemoryId } : {}),
+        },
+      };
+    },
+  };
+}
+
+export { invalidateMemoryInputSchema, invalidateMemoryOutputSchema };
 
 export function setMemoryStatusAction(): Pick<
   ActionDefinition<unknown, unknown, MemoryActionContext, ActionSchema>,
@@ -2065,7 +2571,9 @@ export function dispatchMemoryConsolidationProcessor(): Omit<
         context,
         spaces,
         agentId,
-      )).filter((item) => !terminalStatus(item.status)).slice(0, 100);
+      )).filter((item) =>
+        isEditoriallyVisible(item) && !terminalStatus(item.status)
+      ).slice(0, 100);
       const instruction = buildMemoryConsolidationInstruction({
         spaces,
         sourceMessages: await sourceMessages(context, messages),

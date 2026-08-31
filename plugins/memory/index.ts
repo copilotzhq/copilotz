@@ -16,6 +16,7 @@ export {
 } from "./collections/index.ts";
 export {
   buildMemoryConsolidationInstruction,
+  isEditoriallyVisible,
   parseConsolidateMemoryInput,
   proposalDrafts,
   renderLongTermMemory,
@@ -37,6 +38,7 @@ export {
   MEMORY_FORMS,
   MEMORY_LIFECYCLES,
   MEMORY_RELATION_TYPES,
+  MEMORY_VALIDITIES,
   memoryLifecycleAllows,
   memorySourceKey,
 } from "./authoring/ontology/index.ts";
@@ -58,6 +60,8 @@ export type {
   MemoryRelationDraft,
   MemoryRelationType,
   MemoryTemporal,
+  MemoryValidity,
+  MemoryValidityStatus,
   OccurrenceMemoryDraft,
   ProcedureMemoryDraft,
   ProposedMemoryRef,

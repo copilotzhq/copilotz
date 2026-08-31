@@ -62,8 +62,16 @@ export type MemoryRecordProjection = Readonly<{
   kind: string;
   summary: string;
   status: string;
+  validity: "valid" | "retracted" | "superseded" | "archived";
   data: Readonly<Record<string, unknown>>;
 }>;
+
+/** True when a record is editorially usable in normal context and retrieval. */
+export function isEditoriallyVisible(
+  record: Pick<MemoryRecordProjection, "validity">,
+): boolean {
+  return record.validity === "valid";
+}
 
 export type RetrievedMemoryRecord = Readonly<{
   record: MemoryRecordProjection;
@@ -892,7 +900,7 @@ export function renderLongTermMemory(
   }>,
 ): string {
   const current = input.records.filter((item) =>
-    ![
+    isEditoriallyVisible(item) && ![
       "superseded",
       "retracted",
       "cancelled",

@@ -20,6 +20,7 @@ import {
   CONSOLIDATE_MEMORY_ACTION_ID,
   createConsolidateMemoryAction,
   createInspectMemoryAction,
+  createInvalidateMemoryAction,
   createListKnowledgeSpacesAction,
   createSearchMemoryAction,
   createSetMemoryStatusAction,
@@ -38,6 +39,7 @@ import {
 import {
   createConsolidateMemoryTool,
   createInspectMemoryTool,
+  createInvalidateMemoryTool,
   createListKnowledgeSpacesTool,
   createMemoryContextResource,
   createSearchMemoryTool,
@@ -63,6 +65,7 @@ type LongTermMemoryActions = Readonly<{
   >;
   search_memory: ReturnType<typeof createSearchMemoryAction>;
   inspect_memory: ReturnType<typeof createInspectMemoryAction>;
+  invalidate_memory: ReturnType<typeof createInvalidateMemoryAction>;
   set_memory_status: ReturnType<typeof createSetMemoryStatusAction>;
 }>;
 
@@ -90,6 +93,7 @@ type LongTermMemoryResources = Readonly<{
     >;
     search_memory: ReturnType<typeof createSearchMemoryTool>;
     inspect_memory: ReturnType<typeof createInspectMemoryTool>;
+    invalidate_memory: ReturnType<typeof createInvalidateMemoryTool>;
     set_memory_status: ReturnType<typeof createSetMemoryStatusTool>;
   }>;
 }>;
@@ -118,6 +122,7 @@ export function createLongTermMemoryPlugin(
   const listMemorySpaces = createListKnowledgeSpacesAction();
   const searchMemory = createSearchMemoryAction();
   const inspectMemory = createInspectMemoryAction();
+  const invalidateMemory = createInvalidateMemoryAction();
   const setMemoryStatus = createSetMemoryStatusAction();
   const consolidateTool = createConsolidateMemoryTool(consolidateMemory);
   const context = createMemoryContextResource(enabled);
@@ -137,6 +142,7 @@ export function createLongTermMemoryPlugin(
       list_knowledge_spaces: listMemorySpaces,
       search_memory: searchMemory,
       inspect_memory: inspectMemory,
+      invalidate_memory: invalidateMemory,
       set_memory_status: setMemoryStatus,
     },
     processors: enabled
@@ -154,6 +160,7 @@ export function createLongTermMemoryPlugin(
         list_knowledge_spaces: createListKnowledgeSpacesTool(listMemorySpaces),
         search_memory: createSearchMemoryTool(searchMemory),
         inspect_memory: createInspectMemoryTool(inspectMemory),
+        invalidate_memory: createInvalidateMemoryTool(invalidateMemory),
         set_memory_status: createSetMemoryStatusTool(setMemoryStatus),
       },
     },

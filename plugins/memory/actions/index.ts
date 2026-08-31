@@ -4,3 +4,4 @@ export * from "./list-knowledge-spaces/index.ts";
 export * from "./search-memory/index.ts";
 export * from "./inspect-memory/index.ts";
 export * from "./set-memory-status/index.ts";
+export * from "./invalidate-memory/index.ts";

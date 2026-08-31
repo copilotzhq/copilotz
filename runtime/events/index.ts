@@ -30,6 +30,10 @@ export {
 export type { CoreSchemaValidation, CoreTableName } from "./schema.ts";
 export { createSqlSession } from "./session.ts";
 export type { SqlExecutor, SqlQueryResult, SqlSession } from "./session.ts";
+export type {
+  SqlNotification,
+  SqlNotificationSubscription,
+} from "./session.ts";
 export { createEventStore, serializeError } from "./store.ts";
 export type {
   CommitEventMutationOptions,

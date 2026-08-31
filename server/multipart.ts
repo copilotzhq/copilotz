@@ -5,12 +5,19 @@ import type {
   StreamOutput,
 } from "@copilotz/copilotz/streams";
 import type { EventNativeOutputStream } from "./event-native.ts";
+import {
+  createOperationReplayCursorTracker,
+  decodeOperationReplayCursor,
+  operationStreamReplayCursorKey,
+} from "../runtime/streams/index.ts";
+import type { OperationReplayCursorMutation } from "../runtime/streams/index.ts";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 const FRAME_HEADER = "x-copilotz-frame";
 const STREAM_HEADER = "x-copilotz-stream-id";
 const OFFSET_HEADER = "x-copilotz-offset";
+const CURSOR_HEADER = "x-copilotz-cursor";
 
 type FrameKind = "output" | "stream-chunk" | "stream-end" | "stream-error";
 
@@ -35,7 +42,8 @@ function part(
   boundary: string,
   kind: FrameKind,
   content: Uint8Array,
-  options: Readonly<{ streamId?: string; offset?: number }> = {},
+  options: Readonly<{ streamId?: string; offset?: number; cursor?: string }> =
+    {},
 ): Uint8Array {
   const headers = [
     `--${boundary}`,
@@ -52,6 +60,9 @@ function part(
     ...(options.offset === undefined
       ? []
       : [`${OFFSET_HEADER}: ${options.offset}`]),
+    ...(options.cursor
+      ? [`${CURSOR_HEADER}: ${safeHeader(options.cursor, "Replay cursor")}`]
+      : []),
     "",
     "",
   ].join("\r\n");
@@ -64,9 +75,20 @@ function isStream(output: ApplicationOutput): output is StreamOutput {
         ?.getReader === "function";
 }
 
+function isTerminalOperationOutput(output: ApplicationOutput): boolean {
+  return output.type === "operation.completed" ||
+    output.type === "operation.failed" ||
+    output.type === "operation.cancelled";
+}
+
 function descriptor(output: ApplicationOutput): unknown {
   if (!isStream(output)) return output;
-  const { payload: _payload, ...value } = output;
+  const {
+    payload: _payload,
+    replayKey: _replayKey,
+    streamOrdinal: _streamOrdinal,
+    ...value
+  } = output;
   return value;
 }
 
@@ -75,6 +97,11 @@ function boundedStreamError(error: unknown): Uint8Array {
     name: error instanceof Error && error.name ? error.name : "Error",
     message: "Progressive stream failed.",
   }));
+}
+
+function isReplayCapacityError(error: unknown): boolean {
+  return (error as { code?: unknown } | null)?.code ===
+    "operation_replay_capacity_exceeded";
 }
 
 /** Encodes one complete request observation without materializing raw bytes. */
@@ -97,27 +124,79 @@ export function applicationOutputsMultipartResponse(
     size: (value) => value.byteLength,
   });
   const writer = transport.writable.getWriter();
+  const initial = decodeOperationReplayCursor(source.replayCursor);
+  const cursorTracker = createOperationReplayCursorTracker(initial);
   let cancelled = false;
   const write = (value: Uint8Array) => writer.write(value);
-  const pump = async (output: StreamOutput): Promise<void> => {
+  let frameTail: Promise<void> = Promise.resolve();
+  const serializeFrame = <T>(task: () => Promise<T>): Promise<T> => {
+    const result = frameTail.then(task, task);
+    frameTail = result.then(() => undefined, () => undefined);
+    return result;
+  };
+  const writePart = (
+    build: (replayCursor: string) => Uint8Array,
+    mutations: readonly OperationReplayCursorMutation[] = [],
+  ): Promise<void> =>
+    serializeFrame(async () => {
+      const frame = build(cursorTracker.cursor(mutations));
+      await write(frame);
+      cursorTracker.commit(mutations);
+    });
+  const pump = async (
+    output: StreamOutput,
+    operationId: string | undefined,
+    initialOffset: number,
+  ): Promise<void> => {
     const reader = output.payload.getReader();
-    let offset = 0;
+    const replayKey = operationStreamReplayCursorKey(output);
+    let offset = initialOffset;
+    const streamMutation = (
+      action: "offset" | "end",
+      nextOffset: number,
+    ): OperationReplayCursorMutation =>
+      operationId && output.streamOrdinal
+        ? {
+          kind: "operation-stream",
+          action,
+          operationId,
+          streamOrdinal: output.streamOrdinal,
+          offset: nextOffset,
+        }
+        : {
+          kind: "legacy-stream",
+          replayKey,
+          offset: nextOffset,
+        };
     try {
       while (true) {
         const next = await reader.read();
         if (next.done) break;
-        await write(part(boundary, "stream-chunk", next.value, {
-          streamId: output.streamId,
-          offset,
-        }));
-        offset += next.value.byteLength;
+        const fromOffset = offset;
+        const toOffset = offset + next.value.byteLength;
+        await writePart(
+          (replayCursor) =>
+            part(boundary, "stream-chunk", next.value, {
+              streamId: output.streamId,
+              offset: fromOffset,
+              cursor: replayCursor,
+            }),
+          [streamMutation("offset", toOffset)],
+        );
+        offset = toOffset;
       }
-      await write(part(
-        boundary,
-        "stream-end",
-        encoder.encode(JSON.stringify({ offset })),
-        { streamId: output.streamId, offset },
-      ));
+      await writePart(
+        (replayCursor) =>
+          part(
+            boundary,
+            "stream-end",
+            encoder.encode(JSON.stringify({ offset })),
+            { streamId: output.streamId, offset, cursor: replayCursor },
+          ),
+        operationId && output.streamOrdinal
+          ? [streamMutation("end", offset)]
+          : [],
+      );
     } catch (error) {
       if (!cancelled) {
         console.error("[copilotz:multipart] progressive stream failed", {
@@ -127,10 +206,13 @@ export function applicationOutputsMultipartResponse(
             ? error.message.slice(0, 1_000)
             : "Unknown progressive stream failure.",
         });
-        await write(part(boundary, "stream-error", boundedStreamError(error), {
-          streamId: output.streamId,
-          offset,
-        })).catch(() => undefined);
+        await writePart((replayCursor) =>
+          part(boundary, "stream-error", boundedStreamError(error), {
+            streamId: output.streamId,
+            offset,
+            cursor: replayCursor,
+          })
+        ).catch(() => undefined);
       }
     } finally {
       reader.releaseLock();
@@ -140,19 +222,103 @@ export function applicationOutputsMultipartResponse(
     const pumps: Promise<void>[] = [];
     try {
       for await (const output of source.outputs) {
-        await write(part(
-          boundary,
-          "output",
-          encoder.encode(JSON.stringify(descriptor(output))),
-        ));
-        if (isStream(output)) pumps.push(pump(output));
+        if (isTerminalOperationOutput(output)) await Promise.all(pumps);
+        const outputRecord = output as unknown as Record<string, unknown>;
+        const operationId = typeof outputRecord.operationId === "string" &&
+            outputRecord.operationId.trim()
+          ? outputRecord.operationId.trim()
+          : source.operationId;
+        const mutations: OperationReplayCursorMutation[] = [];
+        if (
+          "durable" in output && output.durable === true &&
+          typeof output.position === "string"
+        ) {
+          if (source.compositeCursor && operationId) {
+            mutations.push({
+              kind: "event",
+              operationId,
+              position: output.position,
+            });
+          } else {
+            mutations.push({ kind: "event", position: output.position });
+            if (operationId) {
+              mutations.push({
+                kind: "event",
+                operationId,
+                position: output.position,
+              });
+            }
+          }
+        }
+        let streamOffset: number | undefined;
+        if (isStream(output)) {
+          const position = cursorTracker.streamPosition({
+            operationId,
+            replayKey: output.replayKey,
+            streamOrdinal: output.streamOrdinal,
+            streamId: output.streamId,
+          });
+          if (position.consumed) {
+            await output.payload.cancel("operation_stream_already_consumed")
+              .catch(() => undefined);
+            continue;
+          }
+          streamOffset = position.offset;
+          if (operationId && output.streamOrdinal) {
+            mutations.push({
+              kind: "operation-stream",
+              action: "register",
+              operationId,
+              streamOrdinal: output.streamOrdinal,
+              offset: streamOffset,
+            });
+          }
+        }
+        await writePart(
+          (replayCursor) =>
+            part(
+              boundary,
+              "output",
+              encoder.encode(JSON.stringify(descriptor(output))),
+              { cursor: replayCursor },
+            ),
+          mutations,
+        );
+        if (isStream(output)) {
+          pumps.push(pump(output, operationId, streamOffset ?? 0));
+        }
       }
       await Promise.all(pumps);
       await source.done;
-      await write(encoder.encode(`--${boundary}--\r\n`));
+      await serializeFrame(() => write(encoder.encode(`--${boundary}--\r\n`)));
       await writer.close();
     } catch (error) {
       cancelled = true;
+      if (isReplayCapacityError(error)) {
+        await writePart((replayCursor) =>
+          part(
+            boundary,
+            "output",
+            encoder.encode(JSON.stringify(Object.freeze({
+              type: "replay.capacity",
+              code: "operation_replay_capacity_exceeded",
+              ...(source.operationId
+                ? { operationId: source.operationId }
+                : {}),
+              ...(source.threadId ? { threadId: source.threadId } : {}),
+            }))),
+            { cursor: replayCursor },
+          )
+        ).catch(() => undefined);
+        await source.cancel("operation_replay_capacity_exceeded").catch(() =>
+          undefined
+        );
+        await Promise.allSettled(pumps);
+        await serializeFrame(() => write(encoder.encode(`--${boundary}--\r\n`)))
+          .catch(() => undefined);
+        await writer.close().catch(() => undefined);
+        return;
+      }
       await source.cancel(
         error instanceof Error ? error.message : "multipart_failed",
       ).catch(() => undefined);

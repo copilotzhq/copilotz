@@ -376,3 +376,82 @@ Deno.test("database BodyStore append is expected-offset and append-id stable", a
     await db.close();
   }
 });
+
+Deno.test("database BodyStore seal compacts parts and clears writer capabilities atomically", async () => {
+  const db = await createTestDatabase({ url: ":memory:" });
+  const schema = "copilotz_body_seal_compaction";
+  const store = createDatabaseBodyStore({
+    session: db,
+    schema,
+    protectionMs: 0,
+  });
+  try {
+    const writer = await store.reserve({
+      bodyId: "bodies/compacted",
+      mediaType: "text/plain",
+    });
+    await store.append({
+      writer,
+      expectedOffset: 0,
+      appendId: "first",
+      bytes: encoder.encode("abc"),
+    });
+    await store.append({
+      writer,
+      expectedOffset: 3,
+      appendId: "second",
+      bytes: encoder.encode("def"),
+    });
+    const head = await store.seal({
+      writer,
+      expectedByteLength: 6,
+    });
+    assertEquals(head.state, "ready");
+    assertEquals(
+      decoder.decode(
+        await readAll(await store.read({ bodyId: writer.bodyId })),
+      ),
+      "abcdef",
+    );
+
+    const body = await db.query<{
+      state: string;
+      writer_generation: string | number | null;
+      writer_token_hash: string | null;
+      lease_expires_at: string | null;
+    }>(
+      `SELECT state, writer_generation, writer_token_hash, lease_expires_at
+         FROM "${schema}"."content_bodies"
+        WHERE body_id = $1`,
+      [writer.bodyId],
+    );
+    assertEquals(body.rows[0], {
+      state: "ready",
+      writer_generation: null,
+      writer_token_hash: null,
+      lease_expires_at: null,
+    });
+
+    const parts = await db.query<{
+      start_offset: string | number;
+      append_id: string;
+      byte_length: string | number;
+    }>(
+      `SELECT start_offset, append_id, OCTET_LENGTH(bytes) AS byte_length
+         FROM "${schema}"."content_body_parts"
+        WHERE body_id = $1
+        ORDER BY start_offset`,
+      [writer.bodyId],
+    );
+    assertEquals(
+      parts.rows.map((part) => ({
+        startOffset: Number(part.start_offset),
+        appendId: part.append_id,
+        byteLength: Number(part.byte_length),
+      })),
+      [{ startOffset: 0, appendId: "sealed", byteLength: 6 }],
+    );
+  } finally {
+    await db.close();
+  }
+});

@@ -4,7 +4,11 @@ import {
   openManagedOminipgDatabase,
 } from "./ominipg.ts";
 import { createOminipgSqlSession } from "./ominipg.ts";
-import type { SqlSession } from "../events/index.ts";
+import type {
+  SqlNotification,
+  SqlNotificationSubscription,
+  SqlSession,
+} from "../events/index.ts";
 
 export type CopilotzDatabase = OminipgDatabaseLike;
 
@@ -320,6 +324,13 @@ type DatabaseGeneration = {
   startClose?: () => void;
 };
 
+type RecoverableNotificationSubscription = {
+  channel: string;
+  handler(notification: SqlNotification): void;
+  current?: SqlNotificationSubscription;
+  closed: boolean;
+};
+
 function createManagedConnector(
   input: CopilotzOminipgOptions | undefined,
 ): CopilotzDatabaseConnector {
@@ -353,6 +364,9 @@ async function openRecoverablePersistence(
   const unavailable = options.isUnavailable ?? isPersistenceUnavailable;
   const controller = new AbortController();
   const participants = new Set<CopilotzPersistenceRecoveryParticipant>();
+  const notificationSubscriptions = new Set<
+    RecoverableNotificationSubscription
+  >();
   const generations = new Set<DatabaseGeneration>();
   let state: CopilotzPersistenceState = "reconnecting";
   let current: DatabaseGeneration | undefined;
@@ -456,6 +470,20 @@ async function openRecoverablePersistence(
     lastError = undefined;
     state = "ready";
     if (previous) void closeGeneration(previous);
+    for (const subscription of notificationSubscriptions) {
+      if (subscription.closed || !database.listen) continue;
+      try {
+        const bound = await database.listen(
+          subscription.channel,
+          subscription.handler,
+        );
+        if (subscription.closed) await bound.close().catch(() => undefined);
+        else subscription.current = bound;
+      } catch {
+        // Notifications accelerate observation only. The catalog watcher has
+        // a bounded safety wake and a later database generation can rebind.
+      }
+    }
     if (!initial) await runRecoveryParticipants();
     await notify(
       lifecycle.onReady ? [lifecycle.onReady] : [],
@@ -612,6 +640,38 @@ async function openRecoverablePersistence(
     query: (sql, params) => execute((selected) => selected.query(sql, params)),
     transaction: (operation) =>
       execute((selected) => selected.transaction(operation)),
+    async listen(channel, handler) {
+      const subscription: RecoverableNotificationSubscription = {
+        channel,
+        handler,
+        closed: false,
+      };
+      notificationSubscriptions.add(subscription);
+      try {
+        subscription.current = await execute(async (selected) => {
+          if (!selected.listen) {
+            throw new Error(
+              "The selected database does not support notifications.",
+            );
+          }
+          return await selected.listen(channel, handler);
+        });
+      } catch (error) {
+        subscription.closed = true;
+        notificationSubscriptions.delete(subscription);
+        throw error;
+      }
+      return Object.freeze({
+        async close() {
+          if (subscription.closed) return;
+          subscription.closed = true;
+          notificationSubscriptions.delete(subscription);
+          const current = subscription.current;
+          subscription.current = undefined;
+          await current?.close();
+        },
+      });
+    },
     close: () => close(),
   });
 
@@ -620,7 +680,14 @@ async function openRecoverablePersistence(
     state = "closed";
     controller.abort(new Error("Copilotz persistence closed."));
     closeTask = Promise.allSettled(
-      [...generations].map((value) => closeGeneration(value)),
+      [
+        ...[...notificationSubscriptions].map(async (subscription) => {
+          subscription.closed = true;
+          notificationSubscriptions.delete(subscription);
+          await subscription.current?.close();
+        }),
+        ...[...generations].map((value) => closeGeneration(value)),
+      ],
     ).then(() => undefined);
     return closeTask;
   };

@@ -2,7 +2,8 @@
 
 import type {
   ApplicationOutput,
-  CopilotzApplication,
+  ApplicationSendHandle,
+  ApplicationSendInput,
 } from "@copilotz/copilotz/application";
 import type { ContentInput } from "@copilotz/copilotz/content";
 import type { CopilotzEvent } from "@copilotz/copilotz/events";
@@ -58,7 +59,11 @@ export interface InteractiveCliOptions {
   io: InteractiveCliIo;
   /** Application ingress used for every typed Core message. */
   application:
-    & Pick<CopilotzApplication, "send">
+    & Readonly<{
+      send(input: ApplicationSendInput): Promise<
+        Pick<ApplicationSendHandle, "eventId" | "outputs" | "done">
+      >;
+    }>
     & Readonly<{
       namespace?: string;
     }>;

@@ -107,6 +107,19 @@ export type CreateEventStoreOptions = {
   maxAttempts?: number;
   retryBaseMs?: number;
   retryCapMs?: number;
+  /** Additive operational index written in the same transaction as the Event. */
+  indexOperationEvent?: (
+    transaction: SqlExecutor,
+    input: Readonly<{
+      namespace: string;
+      operationId: string;
+      eventId: string;
+      position: string;
+      correlationId: string;
+      createdAt: string;
+      metadata?: Readonly<Record<string, unknown>>;
+    }>,
+  ) => Promise<void>;
 };
 
 export type EventStore = {
@@ -516,6 +529,7 @@ export function createEventStore(
   const defaultMaxAttempts = boundedInteger(options.maxAttempts, 3, 1);
   const retryBaseMs = boundedInteger(options.retryBaseMs, 250, 0);
   const retryCapMs = boundedInteger(options.retryCapMs, 30_000, 0);
+  const indexOperationEvent = options.indexOperationEvent;
 
   const deliveriesForEvent = async (
     executor: SqlExecutor,
@@ -540,11 +554,22 @@ export function createEventStore(
     const value = options.recoverDuplicate
       ? await options.recoverDuplicate(event, context)
       : undefined;
+    const settlementScopeId = options.draft.settlementScopeId?.trim() ||
+      event.id;
+    await indexOperationEvent?.(executor, {
+      namespace: event.namespace,
+      operationId: settlementScopeId,
+      eventId: event.id,
+      position: event.position,
+      correlationId: event.correlationId,
+      createdAt: event.createdAt,
+      metadata: event.metadata,
+    });
     return Object.freeze({
       value,
       event,
       deliveries: await deliveriesForEvent(executor, event.id),
-      settlementScopeId: options.draft.settlementScopeId?.trim() || event.id,
+      settlementScopeId,
       deduplicated: true,
     });
   };
@@ -639,6 +664,15 @@ export function createEventStore(
         ],
       );
       const event = mapEvent(inserted.rows[0]);
+      await indexOperationEvent?.(transaction, {
+        namespace: event.namespace,
+        operationId: settlementScopeId,
+        eventId: event.id,
+        position: event.position,
+        correlationId: event.correlationId,
+        createdAt: event.createdAt,
+        metadata: event.metadata,
+      });
 
       const deliveries: EventDelivery[] = [];
       for (const consumer of consumers) {

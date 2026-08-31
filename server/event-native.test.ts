@@ -21,6 +21,11 @@ import type { ChannelAdapter } from "../plugins/channels/index.ts";
 import { defineCollection } from "../runtime/collections/index.ts";
 import { provisionCopilotzSchema } from "../runtime/events/index.ts";
 import {
+  decodeOperationReplayCursor,
+  encodeOperationReplayCursor,
+  provisionOperationCatalog,
+} from "../runtime/streams/index.ts";
+import {
   definePlugin,
   defineProcessor,
   type ProcessorContext,
@@ -35,10 +40,43 @@ import {
   type EventNativeAppError,
   type EventNativeAppResponse,
   isEventNativeOutputStream,
+  mergeOperationAttachmentReplayCursors,
 } from "./event-native.ts";
 
 const SCHEMA = "copilotz_event_native_server";
 const NAMESPACE = "tenant-a";
+
+Deno.test("thread feed cursor merge does not resurrect per-operation legacy keys", () => {
+  const merged = decodeOperationReplayCursor(
+    mergeOperationAttachmentReplayCursors(
+      [{
+        operationId: "operation-a",
+        replayCursor: encodeOperationReplayCursor({
+          operationStreamPositions: {
+            "operation-a": { highWatermark: 1, offsets: {} },
+          },
+          streamOffsets: { r2: 4, "s:legacy": 9 },
+        }),
+      }, {
+        operationId: "operation-b",
+        replayCursor: encodeOperationReplayCursor({
+          operationStreamPositions: {
+            "operation-b": { highWatermark: 1, offsets: {} },
+          },
+          streamOffsets: { r1: 3, "s:legacy": 9 },
+        }),
+      }],
+      encodeOperationReplayCursor({
+        streamOffsets: { r1: 3, r2: 4, "s:legacy": 9 },
+      }),
+    ),
+  );
+  assertEquals(merged.streamOffsets, { "s:legacy": 9 });
+  assertEquals(merged.operationStreamPositions, {
+    "operation-a": { highWatermark: 1, offsets: {} },
+    "operation-b": { highWatermark: 1, offsets: {} },
+  });
+});
 
 const notes = defineCollection({
   name: "notes",
@@ -118,6 +156,7 @@ Deno.test("event-native app exposes graph, event, asset, collection, and plugin 
         "collections",
         "deliveries",
         "events",
+        "operations",
         "participants",
         "threads",
       ],
@@ -765,6 +804,11 @@ Deno.test("message history resolves canonical semantic content without operation
     assertEquals(response.pageInfo, {
       next: "history-agent-message",
       hasMore: true,
+      replayCursor: encodeOperationReplayCursor({
+        eventPosition: "9",
+        streamOffsets: {},
+      }),
+      activeOperationIds: [],
     });
     const included = object(response.included);
     const roles = array(included.content).map((value) =>
@@ -807,7 +851,14 @@ Deno.test("message history resolves canonical semantic content without operation
       array(older.data).map((message) => object(message).id),
       ["history-user-message"],
     );
-    assertEquals(older.pageInfo, { hasMore: false });
+    assertEquals(older.pageInfo, {
+      hasMore: false,
+      replayCursor: encodeOperationReplayCursor({
+        eventPosition: "9",
+        streamOffsets: {},
+      }),
+      activeOperationIds: [],
+    });
     assertEquals(array(object(older.included).content).length, 1);
   } finally {
     await application.shutdown();
@@ -836,6 +887,7 @@ Deno.test("trusted schema resolution isolates identical HTTP resource identities
   const alternateSchema = `${SCHEMA}_trusted_alternate`;
   const database = await createTestDatabase({ url: ":memory:" });
   await provisionCopilotzSchema(database, alternateSchema);
+  await provisionOperationCatalog(database, alternateSchema);
   const application = await createCopilotzApplication({
     namespace: NAMESPACE,
     databaseSchema: defaultSchema,

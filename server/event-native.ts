@@ -19,10 +19,16 @@ import {
 } from "./history.ts";
 import { eventNativeAsset } from "./assets.ts";
 import type {
+  ApplicationOperationAttachment,
   ApplicationOutput,
   ApplicationSendHandle,
+  ApplicationSendInput,
   InternalCopilotzApplication as CopilotzApplication,
 } from "../runtime/application/types.ts";
+import {
+  decodeOperationReplayCursor,
+  encodeOperationReplayCursor,
+} from "../runtime/streams/index.ts";
 import type { ConversationThread, Participant } from "@copilotz/copilotz/core";
 import type { CollectionMutationIdentity } from "../runtime/collections/index.ts";
 import type {
@@ -54,6 +60,8 @@ export type EventNativeAppResponse = Readonly<{
   pageInfo?: Readonly<{
     next?: string;
     hasMore: boolean;
+    replayCursor?: string;
+    activeOperationIds?: readonly string[];
   }>;
 }>;
 
@@ -71,6 +79,12 @@ export type EventNativeOutputStream = Readonly<{
   type: typeof EVENT_NATIVE_OUTPUT_STREAM;
   outputs: ReadableStream<ApplicationOutput>;
   done: Promise<void>;
+  operationId?: string;
+  threadId?: string;
+  replayCursor?: string;
+  /** Thread feeds track one durable Event position per operation. */
+  compositeCursor?: boolean;
+  /** Transport interruption detaches; it never durably cancels an operation. */
   cancel(reason?: string): Promise<void>;
 }>;
 
@@ -104,6 +118,142 @@ export function isEventNativeOutputStream(
         "function" &&
       typeof candidate.cancel === "function",
   );
+}
+
+function operationOutput(
+  output: ApplicationOutput,
+  operationId: string,
+  threadId?: string,
+): ApplicationOutput {
+  return Object.freeze({
+    ...output,
+    operationId,
+    ...(threadId ? { threadId } : {}),
+  });
+}
+
+/** Internal transport helper; exported for deterministic cursor regressions. */
+export function mergeOperationAttachmentReplayCursors(
+  attachments: readonly Readonly<{
+    operationId: string;
+    replayCursor: string;
+  }>[],
+  replayCursor?: string,
+): string {
+  const base = decodeOperationReplayCursor(replayCursor);
+  const operationEventPositions = { ...base.operationEventPositions };
+  const operationStreamPositions = Object.fromEntries(
+    Object.entries(base.operationStreamPositions ?? {}).map(([id, state]) => [
+      id,
+      Object.freeze({
+        highWatermark: state.highWatermark,
+        offsets: Object.freeze({ ...state.offsets }),
+      }),
+    ]),
+  );
+  const streamOffsets = { ...base.streamOffsets };
+  const removedBaseStreamOffsets = new Set<string>();
+  for (const { replayCursor: normalizedCursor, operationId } of attachments) {
+    const normalized = decodeOperationReplayCursor(normalizedCursor);
+    const eventPosition = normalized.operationEventPositions?.[operationId] ??
+      normalized.eventPosition;
+    if (eventPosition) operationEventPositions[operationId] = eventPosition;
+    delete operationStreamPositions[operationId];
+    const streamPosition = normalized.operationStreamPositions?.[operationId];
+    if (streamPosition) operationStreamPositions[operationId] = streamPosition;
+    for (const key of Object.keys(base.streamOffsets)) {
+      if (!(key in normalized.streamOffsets)) {
+        removedBaseStreamOffsets.add(key);
+      }
+    }
+    Object.assign(streamOffsets, normalized.streamOffsets);
+  }
+  for (const key of removedBaseStreamOffsets) delete streamOffsets[key];
+  return encodeOperationReplayCursor({
+    ...(base.eventPosition ? { eventPosition: base.eventPosition } : {}),
+    ...(Object.keys(operationEventPositions).length
+      ? { operationEventPositions }
+      : {}),
+    ...(Object.keys(operationStreamPositions).length
+      ? { operationStreamPositions }
+      : {}),
+    streamOffsets,
+  });
+}
+
+function mergeOperationAttachments(
+  attachments: readonly Readonly<{
+    attachment: ApplicationOperationAttachment;
+    operationId: string;
+    threadId?: string;
+  }>[],
+  replayCursor?: string,
+): EventNativeOutputStream {
+  const normalizedReplayCursor = mergeOperationAttachmentReplayCursors(
+    attachments.map(({ attachment, operationId }) => ({
+      operationId,
+      replayCursor: attachment.replayCursor,
+    })),
+    replayCursor,
+  );
+  let controller:
+    | ReadableStreamDefaultController<ApplicationOutput>
+    | undefined;
+  let detached = false;
+  const outputs = new ReadableStream<ApplicationOutput>({
+    start(value) {
+      controller = value;
+    },
+    async cancel(reason) {
+      detached = true;
+      await Promise.allSettled(
+        attachments.map(({ attachment }) => attachment.detach(String(reason))),
+      );
+    },
+  }, { highWaterMark: 256 });
+  const done = (async () => {
+    try {
+      await Promise.all(
+        attachments.map(async ({ attachment, operationId, threadId }) => {
+          for await (const output of attachment.outputs) {
+            if (detached) return;
+            controller?.enqueue(operationOutput(output, operationId, threadId));
+          }
+          await attachment.done;
+        }),
+      );
+      if (!detached) controller?.close();
+    } catch (error) {
+      if (!detached) controller?.error(error);
+      throw error;
+    }
+  })();
+  void done.catch(() => undefined);
+  return Object.freeze({
+    type: EVENT_NATIVE_OUTPUT_STREAM,
+    outputs,
+    done,
+    ...(attachments.length === 1
+      ? { operationId: attachments[0].operationId }
+      : {}),
+    ...(attachments.length === 1 && attachments[0].threadId
+      ? { threadId: attachments[0].threadId }
+      : {}),
+    replayCursor: normalizedReplayCursor,
+    ...(attachments.length > 1 ? { compositeCursor: true } : {}),
+    async cancel(reason = "operation_observation_detached") {
+      if (detached) return;
+      detached = true;
+      await Promise.allSettled(
+        attachments.map(({ attachment }) => attachment.detach(reason)),
+      );
+      try {
+        controller?.close();
+      } catch {
+        // The transport may already have cancelled the stream.
+      }
+    },
+  });
 }
 
 function appError(
@@ -239,7 +389,7 @@ function publicAgent(agent: AgentResource): Readonly<Record<string, unknown>> {
 function nextPage<T extends { id: string }>(
   values: readonly T[],
   limit: number | undefined,
-): EventNativeAppResponse["pageInfo"] {
+): NonNullable<EventNativeAppResponse["pageInfo"]> {
   return limit !== undefined && values.length === limit
     ? Object.freeze({ next: values.at(-1)?.id, hasMore: true })
     : Object.freeze({ hasMore: false });
@@ -310,17 +460,58 @@ async function messageList(
     throw appError(404, "thread_not_found", "Thread was not found.");
   }
   const limit = queryNumber(request.query, "limit");
-  const messages = await listMessages(
-    collections,
-    threadId,
-    {
-      after: queryText(request.query, "after"),
-      before: queryText(request.query, "before"),
-      limit,
-      order: queryChoice(request.query, "order", ["asc", "desc"]),
-      view: queryChoice(request.query, "view", ["active", "all"]),
-    },
-  );
+  const messageQuery = Object.freeze({
+    after: queryText(request.query, "after"),
+    before: queryText(request.query, "before"),
+    limit,
+    order: queryChoice(request.query, "order", ["asc", "desc"]),
+    view: queryChoice(request.query, "view", ["active", "all"]),
+  });
+  let eventPosition: string | undefined;
+  let messages!: Awaited<ReturnType<typeof listMessages>>;
+  let activeOperations: Awaited<
+    ReturnType<typeof application.operations.listForThread>
+  > = [];
+  // Establish a history/feed boundary without requiring a transaction across
+  // collection and operation projections. If the Thread changes inside the
+  // window, retry the canonical snapshot; on the final attempt retain the
+  // earlier watermark so the feed replays any remaining race.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const before = await application.operations.threadEventWatermark(
+      namespace,
+      threadId,
+    );
+    await application.operations.reconcile({ limit: 1_000 });
+    const beforeActive = await application.operations.listForThread({
+      namespace,
+      threadId,
+      states: ["accepted", "running"],
+      limit: 1_000,
+    });
+    messages = await listMessages(collections, threadId, messageQuery);
+    const after = await application.operations.threadEventWatermark(
+      namespace,
+      threadId,
+    );
+    await application.operations.reconcile({ limit: 1_000 });
+    const afterActive = await application.operations.listForThread({
+      namespace,
+      threadId,
+      states: ["accepted", "running"],
+      limit: 1_000,
+    });
+    activeOperations = [...new Map(
+      [...beforeActive, ...afterActive].map((operation) => [
+        operation.operationId,
+        operation,
+      ]),
+    ).values()];
+    if (before === after) {
+      eventPosition = after;
+      break;
+    }
+    eventPosition = before;
+  }
   const includeValues = queryTexts(request.query, "include") ?? [];
   const allowedIncludes = new Set<EventNativeHistoryInclude>(["content"]);
   const invalidInclude = includeValues.find((value) =>
@@ -339,11 +530,25 @@ async function messageList(
     messages,
     new Set(includeValues as readonly EventNativeHistoryInclude[]),
   );
+  const replayCursor = await application.operationCheckpoint({
+    namespace,
+    operationIds: activeOperations.map((operation) => operation.operationId),
+    cursor: encodeOperationReplayCursor({
+      ...(eventPosition ? { eventPosition } : {}),
+      streamOffsets: Object.freeze({}),
+    }),
+  });
   return {
     status: 200,
     data: messages,
     ...(included ? { included } : {}),
-    pageInfo: nextPage(messages, limit),
+    pageInfo: Object.freeze({
+      ...nextPage(messages, limit),
+      replayCursor,
+      activeOperationIds: Object.freeze(
+        activeOperations.map((operation) => operation.operationId),
+      ),
+    }),
   };
 }
 
@@ -508,6 +713,66 @@ async function handleThreads(
       throw appError(404, "thread_not_found", "Thread was not found.");
     }
     return await threadActivity(application, namespace, thread, request);
+  }
+  if (
+    path.length === 2 && path[1] === "feed" && request.method === "GET"
+  ) {
+    const thread = await getThread(collections, path[0]);
+    if (!thread) {
+      throw appError(404, "thread_not_found", "Thread was not found.");
+    }
+    await application.operations.reconcile({ limit: 1_000 });
+    const requested = queryTexts(request.query, "operationId");
+    const operations = requested?.length
+      ? await application.operations.list({
+        namespace,
+        operationIds: requested,
+        limit: requested.length,
+      })
+      : await application.operations.listForThread({
+        namespace,
+        threadId: thread.id,
+        states: ["accepted", "running"],
+        limit: 1_000,
+      });
+    if (
+      requested &&
+      (operations.length !== new Set(requested).size ||
+        !(await Promise.all(
+          requested.map((operationId) =>
+            application.operations.belongsToThread(
+              namespace,
+              operationId,
+              thread.id,
+            )
+          ),
+        )).every(Boolean))
+    ) {
+      throw appError(
+        404,
+        "operation_not_found",
+        "Operation was not found in this Thread.",
+      );
+    }
+    const replayCursor = header(request.headers, "last-event-id");
+    const attachments = await Promise.all(
+      operations.map(async (operation) =>
+        Object.freeze({
+          operationId: operation.operationId,
+          threadId: thread.id,
+          attachment: await application.attach({
+            operationId: operation.operationId,
+            namespace,
+            databaseSchema: application.config.databaseSchema,
+            ...(replayCursor ? { cursor: replayCursor } : {}),
+          }),
+        })
+      ),
+    );
+    return {
+      status: 200,
+      data: mergeOperationAttachments(attachments, replayCursor),
+    };
   }
   if (
     path.length === 2 && path[1] === "events" && request.method === "GET"
@@ -803,6 +1068,86 @@ async function handleDeliveries(
   throw appError(404, "route_not_found", "Delivery route was not found.");
 }
 
+function publicOperationStatus(
+  status: NonNullable<
+    Awaited<ReturnType<CopilotzApplication["operationStatus"]>>
+  >,
+): Readonly<Record<string, unknown>> {
+  return Object.freeze({
+    operationId: status.operationId,
+    namespace: status.namespace,
+    correlationId: status.correlationId,
+    state: status.state,
+    acceptedAt: status.acceptedAt,
+    updatedAt: status.updatedAt,
+    ...(status.completedAt ? { completedAt: status.completedAt } : {}),
+  });
+}
+
+async function handleOperations(
+  application: CopilotzApplication,
+  namespace: string,
+  request: EventNativeAppRequest,
+  path: readonly string[],
+): Promise<EventNativeAppResponse> {
+  const operationId = path[0]?.trim();
+  if (!operationId) {
+    throw appError(404, "route_not_found", "Operation route was not found.");
+  }
+  if (request.method === "GET" && path.length === 1) {
+    const status = await application.operationStatus({
+      operationId,
+      namespace,
+      databaseSchema: application.config.databaseSchema,
+    });
+    if (!status) {
+      throw appError(404, "operation_not_found", "Operation was not found.");
+    }
+    return { status: 200, data: publicOperationStatus(status) };
+  }
+  if (request.method === "GET" && path.length === 2 && path[1] === "outputs") {
+    const replayCursor = header(request.headers, "last-event-id");
+    const attachment = await application.attach({
+      operationId,
+      namespace,
+      databaseSchema: application.config.databaseSchema,
+      ...(replayCursor ? { cursor: replayCursor } : {}),
+    });
+    const status = await application.operationStatus({
+      operationId,
+      namespace,
+      databaseSchema: application.config.databaseSchema,
+    });
+    const threadId = typeof status?.metadata.threadId === "string"
+      ? status.metadata.threadId
+      : undefined;
+    return {
+      status: 200,
+      data: mergeOperationAttachments([{
+        attachment,
+        operationId,
+        ...(threadId ? { threadId } : {}),
+      }], replayCursor ?? attachment.replayCursor),
+    };
+  }
+  if (request.method === "DELETE" && path.length === 1) {
+    const reason = typeof record(request.body).reason === "string"
+      ? String(record(request.body).reason)
+      : undefined;
+    const status = await application.cancelOperation({
+      operationId,
+      namespace,
+      databaseSchema: application.config.databaseSchema,
+      ...(reason ? { reason } : {}),
+    });
+    if (!status) {
+      throw appError(404, "operation_not_found", "Operation was not found.");
+    }
+    return { status: 200, data: publicOperationStatus(status) };
+  }
+  throw appError(404, "route_not_found", "Operation route was not found.");
+}
+
 async function handleChannels(
   application: CopilotzApplication,
   namespace: string,
@@ -865,14 +1210,21 @@ async function handleChannels(
       "A rejected Channel request cannot contain accepted occurrences.",
     );
   }
-  let envelopes: ReturnType<typeof channelIngress>[];
+  let envelopes: ApplicationSendInput[];
   try {
-    envelopes = accepted.occurrences.map((occurrence) =>
-      channelIngress(channelId, occurrence, {
+    const operationMetadata = record(request.context?.operationMetadata);
+    envelopes = accepted.occurrences.map((occurrence) => {
+      const envelope = channelIngress(channelId, occurrence, {
         namespace,
         databaseSchema: application.config.databaseSchema,
-      })
-    );
+      });
+      return Object.freeze({
+        ...envelope,
+        ...(Object.keys(operationMetadata).length
+          ? { operationMetadata: structuredClone(operationMetadata) }
+          : {}),
+      });
+    });
   } catch (error) {
     abort.abort(error);
     throw error;
@@ -899,14 +1251,49 @@ async function handleChannels(
   }
   if (channel.egress === "request-observation" && handles.length > 0) {
     const handle = handles[0];
+    const respondAsync = header(request.headers, "prefer")?.split(",").some(
+      (preference) => preference.trim().toLowerCase() === "respond-async",
+    ) ?? false;
+    if (respondAsync) {
+      const status = await application.operationStatus({
+        operationId: handle.operationId,
+        namespace,
+        databaseSchema: application.config.databaseSchema,
+      });
+      await handle.detach("http_respond_async");
+      const threadId = typeof status?.metadata.threadId === "string"
+        ? status.metadata.threadId.trim()
+        : "";
+      const externalId = typeof status?.metadata.threadExternalId === "string"
+        ? status.metadata.threadExternalId.trim()
+        : typeof status?.metadata.externalThreadId === "string"
+        ? status.metadata.externalThreadId.trim()
+        : threadId;
+      return {
+        status: 202,
+        headers: { "preference-applied": "respond-async" },
+        data: Object.freeze({
+          operationId: handle.operationId,
+          status: status?.state === "accepted" ? "accepted" : "running",
+          correlationId: handle.correlationId,
+          replayCursor: handle.replayCursor,
+          acceptedAt: status?.acceptedAt ?? new Date().toISOString(),
+          ...(threadId
+            ? { thread: Object.freeze({ id: threadId, externalId }) }
+            : {}),
+        }),
+      };
+    }
     const done = handle.done.finally(() => abort.abort());
     const output: EventNativeOutputStream = Object.freeze({
       type: EVENT_NATIVE_OUTPUT_STREAM,
       outputs: handle.outputs,
       done,
+      operationId: handle.operationId,
+      replayCursor: handle.replayCursor,
       async cancel(reason = "channel_request_cancelled") {
         abort.abort(reason);
-        await handle.cancel(reason);
+        await handle.detach(reason);
       },
     });
     return { status: 200, data: output };
@@ -1037,6 +1424,7 @@ export function createEventNativeApp(
     },
     { name: "deliveries", methods: Object.freeze(["GET", "POST"]) },
     { name: "events", methods: Object.freeze(["GET"]) },
+    { name: "operations", methods: Object.freeze(["GET", "DELETE"]) },
     {
       name: "participants",
       methods: Object.freeze(["GET"]),
@@ -1096,6 +1484,8 @@ export function createEventNativeApp(
           return await handleCollections(scoped, namespace, request, path);
         case "events":
           return await handleEvents(scoped, namespace, request, path);
+        case "operations":
+          return await handleOperations(scoped, namespace, request, path);
         case "deliveries":
           return await handleDeliveries(scoped, namespace, request, path);
         default:

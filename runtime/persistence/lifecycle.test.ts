@@ -55,6 +55,7 @@ function databaseGeneration(
       operation: TransactionOperation,
       query: CopilotzDatabase["query"],
     ) => Promise<unknown>;
+    listen?: NonNullable<CopilotzDatabase["listen"]>;
     close?: () => void | Promise<void>;
   }> = {},
 ): CopilotzDatabase {
@@ -78,6 +79,7 @@ function databaseGeneration(
       }
       return await operation(Object.freeze({ query }));
     },
+    ...(options.listen ? { listen: options.listen } : {}),
     async close() {
       await options.close?.();
     },
@@ -177,6 +179,53 @@ Deno.test("persistence reconnects once, never replays the failed operation, and 
     await persistence.close();
   }
   assertEquals(closes, [1, 2]);
+});
+
+Deno.test("recoverable persistence keeps PostgreSQL listeners bound across generations", async () => {
+  const handlers = new Map<
+    number,
+    (notification: { channel: string; payload?: string }) => void
+  >();
+  const listenerCloses: number[] = [];
+  const persistence = await openCopilotzPersistence({
+    database: {
+      connect({ generation }) {
+        return databaseGeneration(generation, {
+          query(sql) {
+            return sql === "fail"
+              ? Promise.reject(connectionError())
+              : Promise.resolve([{ generation }]);
+          },
+          async listen(_channel, handler) {
+            handlers.set(generation, handler);
+            return {
+              async close() {
+                handlers.delete(generation);
+                listenerCloses.push(generation);
+              },
+            };
+          },
+        });
+      },
+    },
+    databaseRecovery: { waitMs: 100 },
+  });
+  const received: string[] = [];
+  const subscription = await persistence.database.listen!(
+    "copilotz_operations",
+    (notification) => received.push(notification.payload ?? ""),
+  );
+  try {
+    handlers.get(1)?.({ channel: "copilotz_operations", payload: "one" });
+    await assertRejects(() => persistence.database.query("fail"));
+    await persistence.recovery!.admit();
+    handlers.get(2)?.({ channel: "copilotz_operations", payload: "two" });
+    assertEquals(received, ["one", "two"]);
+  } finally {
+    await subscription.close();
+    await persistence.close();
+  }
+  assert(listenerCloses.includes(2));
 });
 
 Deno.test("persistence bounds admission while one reconnect attempt is pending", async () => {

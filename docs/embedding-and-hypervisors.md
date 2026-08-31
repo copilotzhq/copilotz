@@ -13,10 +13,10 @@ await operation.done;
 await app.close();
 ```
 
-The embedded result is exactly `{ send, observe, close }`. It owns its private
-in-process Gateway and Worker topology, and any database it created from
-configuration. Injected database, dispatcher, and Hypervisor values remain
-application-owned.
+The embedded result exposes durable operation send/attach/status/list/cancel,
+bounded maintenance, live observe, and close. It owns its private in-process
+Gateway and Worker topology, and any database it created from configuration.
+Injected database, dispatcher, and Hypervisor values remain application-owned.
 
 ## Split roles
 

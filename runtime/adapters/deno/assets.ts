@@ -641,6 +641,81 @@ function createDenoAssetFilesystem(
         await syncDirectory(parentPath(path));
       }
     },
+    async *listProgressive() {
+      const entries: { bodyId: string; lastModified?: string }[] = [];
+      const walk = async (
+        directory: string,
+        relative: string,
+      ): Promise<void> => {
+        const children: Deno.DirEntry[] = [];
+        try {
+          for await (const child of Deno.readDir(directory)) {
+            children.push(child);
+          }
+        } catch (error) {
+          if (isNotFound(error)) return;
+          throw error;
+        }
+        children.sort((left, right) => left.name.localeCompare(right.name));
+        for (const child of children) {
+          if (!relative && child.name === READY_ROOT) continue;
+          const childRelative = relative
+            ? `${relative}/${child.name}`
+            : child.name;
+          const path = `${directory}/${child.name}`;
+          if (child.isDirectory) {
+            await walk(path, childRelative);
+            continue;
+          }
+          if (!child.isFile || !childRelative.endsWith(".progressive.json")) {
+            continue;
+          }
+          const bodyId = childRelative.slice(
+            0,
+            -".progressive.json".length,
+          );
+          if (!bodyId) continue;
+          let stat: Deno.FileInfo;
+          try {
+            stat = await Deno.stat(path);
+          } catch (error) {
+            if (isNotFound(error)) continue;
+            throw error;
+          }
+          entries.push({
+            bodyId,
+            ...(stat.mtime ? { lastModified: stat.mtime.toISOString() } : {}),
+          });
+        }
+      };
+      await walk(normalizedRoot, "");
+      entries.sort((left, right) => left.bodyId.localeCompare(right.bodyId));
+      for (const entry of entries) yield Object.freeze(entry);
+    },
+    async cleanupProgressive(bodyId) {
+      const data = safePath(normalizedRoot, `${bodyId}.progressive`);
+      const metadata = safePath(normalizedRoot, `${bodyId}.progressive.json`);
+      const directory = parentPath(metadata);
+      await removeIfPresent(data);
+      if (await pathExists(directory)) {
+        const temporaryPrefix = `${metadata.slice(directory.length + 1)}.`;
+        try {
+          for await (const entry of Deno.readDir(directory)) {
+            if (
+              entry.isFile && entry.name.startsWith(temporaryPrefix) &&
+              entry.name.endsWith(".tmp")
+            ) {
+              await removeIfPresent(`${directory}/${entry.name}`);
+            }
+          }
+        } catch (error) {
+          if (!isNotFound(error)) throw error;
+        }
+      }
+      // Metadata is the visibility authority and is deliberately removed last.
+      await removeIfPresent(metadata);
+      if (await pathExists(directory)) await syncDirectory(directory);
+    },
     async *list(prefix) {
       const rootPath = stateRoot(normalizedRoot);
       let entries: Deno.DirEntry[];

@@ -117,7 +117,17 @@ Deno.test("createCopilotz returns one frozen factory-created application", async
   try {
     assertEquals(Object.getPrototypeOf(application), Object.prototype);
     assert(Object.isFrozen(application));
-    assertEquals(Object.keys(application).sort(), ["close", "observe", "send"]);
+    assertEquals(Object.keys(application).sort(), [
+      "attach",
+      "cancelOperation",
+      "close",
+      "listOperations",
+      "maintenance",
+      "observe",
+      "operationCheckpoint",
+      "operationStatus",
+      "send",
+    ]);
     for (const member of ["send", "observe", "close"] as const) {
       assertEquals(typeof application[member], "function", member);
     }

@@ -2,6 +2,13 @@
 export { createCopilotz } from "./create-copilotz.ts";
 export type { CreateCopilotzOptions } from "./create-copilotz.ts";
 export type {
+  ApplicationMaintenanceOptions,
+  ApplicationOperationAttachInput,
+  ApplicationOperationAttachment,
+  ApplicationOperationCheckpointInput,
+  ApplicationOperationListInput,
+  ApplicationOperationScope,
+  ApplicationOperationStatus,
   ApplicationOutput,
   ApplicationSendHandle,
   ApplicationSendInput,

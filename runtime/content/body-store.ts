@@ -112,6 +112,8 @@ export type SealBodyInput = Readonly<{
 export type BodyMaintenanceListInput = Readonly<{
   states: readonly BodyState[];
   idleForMs: number;
+  /** Optional storage-key prefix used to keep maintenance pages scope-local. */
+  prefix?: string;
   after?: string;
   limit: number;
 }>;
@@ -167,6 +169,8 @@ export type BodyStore = Readonly<{
   put(input: PutBodyInput): Promise<BodyHead>;
   head(input: { bodyId: string }): Promise<BodyHead | MutableBodyHead | null>;
   read(input: { bodyId: string }): Promise<ReadableStream<Uint8Array>>;
+  /** Reads one finite committed byte range without waiting for future appends. */
+  readRange?(input: ReadBodyRangeInput): Promise<Uint8Array>;
   follow(
     input: { bodyId: string; offset?: number },
   ): Promise<ReadableStream<Uint8Array>>;
@@ -229,6 +233,24 @@ export async function readBodyBytes(
   return bytes;
 }
 
+/**
+ * Reads a finite Body interval while preserving compatibility with custom
+ * stores authored before the native range capability existed.
+ */
+export async function readBodyRange(
+  store: BodyStore,
+  input: ReadBodyRangeInput,
+): Promise<Uint8Array> {
+  if (store.readRange) return await store.readRange(input);
+  const start = Math.max(0, input.offset);
+  const length = Math.max(0, input.end - start);
+  if (length === 0) return new Uint8Array();
+  return await readStreamRange(
+    await store.follow({ bodyId: input.bodyId, offset: start }),
+    length,
+  );
+}
+
 export type BodyStorageConfig =
   | Readonly<{
     type: "database";
@@ -263,6 +285,14 @@ export type BodyStorageConfig =
       /** Omit to use the conservative, Ready-GC-disabled deployment. */
       deployment?: BodyStoreDeployment;
     }>;
+  }>
+  | Readonly<{
+    /** Host-composed scope routing, including progressive promotion tiers. */
+    type: "adapter";
+    config: Readonly<{
+      adapter: BodyStoreAdapter;
+      prefix?: string;
+    }>;
   }>;
 
 export type BodyStorageOptions = Readonly<{
@@ -283,6 +313,14 @@ export type S3BodyStorageConfig = Readonly<{
   pathStyle?: boolean;
   prefix?: string;
   protectionMs?: number;
+  /**
+   * Selects the object protocol used for Ready-body coordination. The default
+   * `s3` mode is deliberately Ready-GC-disabled: ordinary S3 ETags identify
+   * bytes, so a metadata-only protection renewal need not change the ETag.
+   * `gcs` uses the XML API's generation + metageneration preconditions and
+   * therefore requires a GCS XML endpoint authenticated with HMAC keys.
+   */
+  provider?: "s3" | "gcs";
 }>;
 
 /** Host callbacks used by filesystem adapters; core never imports host APIs. */
@@ -313,6 +351,12 @@ export type BodyFilesystemAccess = Readonly<{
   openFrom(path: string, offset: number): Promise<ReadableStream<Uint8Array>>;
   delete(path: string): Promise<void>;
   list(prefix: string): AsyncIterable<BodyHead>;
+  /** Enumerates only progressive metadata; it exposes no arbitrary host paths. */
+  listProgressive?(): AsyncIterable<
+    Readonly<{ bodyId: string; lastModified?: string }>
+  >;
+  /** Idempotently removes every staging artifact for one fenced Body writer. */
+  cleanupProgressive?(bodyId: string): Promise<void>;
 }>;
 
 export type BodyStorageRuntime = Readonly<{
@@ -606,6 +650,32 @@ export function createMemoryBodyStore(
         }),
       );
     },
+    readRange(input) {
+      const start = Math.max(0, input.offset);
+      const ready = entries.get(input.bodyId);
+      if (ready) {
+        const end = Math.min(input.end, ready.bytes.byteLength);
+        return Promise.resolve(
+          end <= start ? new Uint8Array() : ready.bytes.slice(start, end),
+        );
+      }
+      const current = mutable.get(input.bodyId);
+      if (!current) {
+        throw createContentError(
+          "asset_not_found",
+          "Asset body was not found in the configured memory backend.",
+        );
+      }
+      const rangedStart = Math.max(start, current.head.discarded);
+      const end = Math.min(input.end, current.head.byteLength);
+      return Promise.resolve(
+        end <= rangedStart ? new Uint8Array() : sliceChunks(
+          current.chunks,
+          rangedStart - current.head.discarded,
+          end - current.head.discarded,
+        ),
+      );
+    },
     follow(input) {
       const offset = Math.max(0, input.offset ?? 0);
       const ready = entries.get(input.bodyId);
@@ -823,6 +893,7 @@ export function createMemoryBodyStore(
         const bodies: (BodyHead | MutableBodyHead)[] = [];
         for (const entry of entries.values()) {
           if (
+            entry.head.bodyId.startsWith(input.prefix ?? "") &&
             states.has(entry.head.state) &&
             bodyHasBeenIdle(
               entry.head.lastModified,
@@ -834,13 +905,14 @@ export function createMemoryBodyStore(
         }
         for (const entry of mutable.values()) {
           if (
+            entry.head.bodyId.startsWith(input.prefix ?? "") &&
             states.has(entry.head.state) &&
             bodyHasBeenIdle(
               new Date(entry.updatedAt).toISOString(),
               input.idleForMs,
             )
           ) {
-            bodies.push(entry.head);
+            bodies.push(withLease(entry.head, entry.leaseExpiresAt));
           }
         }
         bodies.sort((left, right) => left.bodyId.localeCompare(right.bodyId));
@@ -1206,10 +1278,14 @@ function createFilesystemProgressive(
     },
     async abort(input) {
       await requireOwner(input.writer.bodyId, input.writer.reservationId);
-      await Promise.all([
-        access.delete(stagingDataKey(input.writer.bodyId)),
-        access.delete(stagingMetaKey(input.writer.bodyId)),
-      ]);
+      if (access.cleanupProgressive) {
+        await access.cleanupProgressive(input.writer.bodyId);
+        return;
+      }
+      // Metadata is the visibility authority. Keeping it until the data delete
+      // succeeds makes an interrupted cleanup discoverable and retry-safe.
+      await access.delete(stagingDataKey(input.writer.bodyId));
+      await access.delete(stagingMetaKey(input.writer.bodyId));
     },
   };
   return Object.freeze(progressive);
@@ -1248,6 +1324,19 @@ export function createFilesystemBodyStore(
         await progressive.head(bodyId);
     },
     read: ({ bodyId }) => options.access.openReady(bodyId),
+    async readRange(input) {
+      const ready = await options.access.stat(input.bodyId);
+      if (ready) {
+        const start = Math.max(0, input.offset);
+        const end = Math.min(input.end, ready.byteLength);
+        if (end <= start) return new Uint8Array();
+        return await readStreamRange(
+          await options.access.openReadyFrom(input.bodyId, start),
+          end - start,
+        );
+      }
+      return await progressive.readRange(input);
+    },
     async follow(input) {
       const offset = Math.max(0, input.offset ?? 0);
       const ready = await options.access.stat(input.bodyId);
@@ -1303,19 +1392,37 @@ export function createFilesystemBodyStore(
         mediaType: current.mediaType,
         digest,
       });
-      await progressive.abort(input);
+      // Ready publication is the irreversible success point. Any interrupted
+      // staging cleanup stays enumerable for progressive maintenance.
+      await progressive.abort(input).catch(() => undefined);
       return head;
     },
     abort: progressive.abort,
     maintenance: {
       async list(input) {
+        if (!Number.isSafeInteger(input.idleForMs) || input.idleForMs < 0) {
+          throw new TypeError(
+            "Body maintenance idle duration must be a non-negative integer.",
+          );
+        }
         const states = new Set<BodyState>(input.states);
-        const bodies: BodyHead[] = [];
+        const bodies: (BodyHead | MutableBodyHead)[] = [];
         if (states.has("ready")) {
-          for await (const body of options.access.list("")) {
+          for await (const body of options.access.list(input.prefix ?? "")) {
             if (bodyHasBeenIdle(body.lastModified, input.idleForMs)) {
               bodies.push(body);
             }
+          }
+        }
+        if (
+          options.access.listProgressive &&
+          (states.has("open") || states.has("sealing"))
+        ) {
+          for await (const entry of options.access.listProgressive()) {
+            if (!entry.bodyId.startsWith(input.prefix ?? "")) continue;
+            if (!bodyHasBeenIdle(entry.lastModified, input.idleForMs)) continue;
+            const body = await progressive.head(entry.bodyId);
+            if (body && states.has(body.state)) bodies.push(body);
           }
         }
         bodies.sort((left, right) => left.bodyId.localeCompare(right.bodyId));
@@ -1332,12 +1439,12 @@ export function createFilesystemBodyStore(
         });
       },
       async delete(input) {
-        if (input.expectedState !== "ready") return false;
         if (!Number.isSafeInteger(input.idleForMs) || input.idleForMs < 0) {
           throw new TypeError(
             "Body maintenance idle duration must be a non-negative integer.",
           );
         }
+        if (input.expectedState !== "ready") return false;
         return await options.access.deleteReady(input);
       },
     },

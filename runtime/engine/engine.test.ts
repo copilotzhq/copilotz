@@ -21,6 +21,10 @@ import { createWorker } from "../../dependencies/oxian-worker.ts";
 import { defineCollection } from "../collections/index.ts";
 import { type ActionCaller, defineAction } from "../actions/index.ts";
 import type { ContentRef } from "../content/index.ts";
+import {
+  isStreamOutputDescriptor,
+  provisionOperationCatalog,
+} from "../streams/index.ts";
 
 const TEST_SCHEMA = "copilotz_factory_engine";
 
@@ -51,6 +55,10 @@ type Fixture = Readonly<{
   engine: CopilotzEngine;
   processorCalls: () => number;
   leakedStorage: () => boolean;
+  streamOutputs: () => readonly Readonly<{
+    streamId: string;
+    semanticId: unknown;
+  }>[];
 }>;
 
 async function createFixture(): Promise<Fixture> {
@@ -58,6 +66,12 @@ async function createFixture(): Promise<Fixture> {
   const session = createSqlSession(db);
   let calls = 0;
   let leakedStorage = false;
+  const streamOutputs: Array<
+    Readonly<{
+      streamId: string;
+      semanticId: unknown;
+    }>
+  > = [];
   const echoTool = Object.freeze({
     action: "echo",
     name: "Echo",
@@ -112,9 +126,21 @@ async function createFixture(): Promise<Fixture> {
         id: `audit:${event.id}`,
         sourceEventId: event.id,
       });
+      const retryStream = await context.streams.open({
+        id: "retry-provider-lane",
+        mediaType: "text/plain",
+        role: "assistant",
+      });
+      await retryStream.append({
+        bytes: new TextEncoder().encode(
+          calls === 1 ? "stale-partial" : "recovered-complete",
+        ),
+        appendId: `delivery-attempt-${calls}`,
+      });
       if (calls === 1) {
         throw new Error("synthetic crash after typed projections");
       }
+      await retryStream.close({ assetId: `stream:${retryStream.id}` });
     },
   });
   const registry = await createPluginRegistry({
@@ -139,6 +165,14 @@ async function createFixture(): Promise<Fixture> {
     now: () => new Date("2026-08-09T00:00:00.000Z"),
     random: () => 0,
     retryBaseMs: 0,
+    publish(output) {
+      if (isStreamOutputDescriptor(output)) {
+        streamOutputs.push(Object.freeze({
+          streamId: output.streamId,
+          semanticId: output.metadata.contentStreamSemanticId,
+        }));
+      }
+    },
   });
   return Object.freeze({
     db,
@@ -146,6 +180,7 @@ async function createFixture(): Promise<Fixture> {
     engine,
     processorCalls: () => calls,
     leakedStorage: () => leakedStorage,
+    streamOutputs: () => Object.freeze([...streamOutputs]),
   });
 }
 
@@ -170,6 +205,10 @@ Deno.test("factory engine scopes typed processor capabilities and deduplicates r
     assertEquals(
       tables.rows.map((row) => row.table_name),
       [
+        "copilotz_operation_catalog_metadata",
+        "copilotz_operation_events",
+        "copilotz_operation_streams",
+        "copilotz_operations",
         "copilotz_schema_metadata",
         "edges",
         "event_bodies",
@@ -241,6 +280,14 @@ Deno.test("factory engine scopes typed processor capabilities and deduplicates r
     assertEquals(second.delivery.status, "succeeded");
     assertEquals(fixture.processorCalls(), 2);
     assertEquals(fixture.leakedStorage(), false);
+
+    const retryStreams = fixture.streamOutputs();
+    assertEquals(retryStreams.length, 2);
+    assertEquals(retryStreams.map((stream) => stream.semanticId), [
+      "retry-provider-lane",
+      "retry-provider-lane",
+    ]);
+    assertEquals(retryStreams[0].streamId === retryStreams[1].streamId, false);
 
     const attempts = await projectActionEvents(
       fixture.engine,
@@ -368,6 +415,7 @@ Deno.test("one engine isolates lazy physical-schema repository scopes", async ()
   });
   try {
     await provisionCopilotzSchema(session, "copilotz_scope_b");
+    await provisionOperationCatalog(session, "copilotz_scope_b");
     const first = await engine.databaseScope("copilotz_scope_a");
     const second = await engine.databaseScope("copilotz_scope_b");
     await first.collections.withScope({ namespace: "tenant" }).thread
@@ -433,6 +481,7 @@ Deno.test("lazy database scopes validate with read-only SQL and reject unprovisi
   const defaultSchema = "copilotz_scope_validation_default";
   const tenantSchema = "copilotz_scope_validation_tenant";
   await provisionCopilotzSchema(db, tenantSchema);
+  await provisionOperationCatalog(db, tenantSchema);
   const observed: string[] = [];
   const session: SqlSession = {
     query(sql, params) {
@@ -449,10 +498,19 @@ Deno.test("lazy database scopes validate with read-only SQL and reject unprovisi
   try {
     observed.length = 0;
     await engine.databaseScope(tenantSchema);
-    assertEquals(observed.length, 3);
+    assertEquals(observed.length, 9);
     assertEquals(/information_schema\.columns/i.test(observed[0]), true);
     assertEquals(/copilotz_schema_metadata/i.test(observed[1]), true);
     assertEquals(/information_schema\.tables/i.test(observed[2]), true);
+    assertEquals(
+      observed.slice(3, 7).every((sql) => /to_regclass/i.test(sql)),
+      true,
+    );
+    assertEquals(/information_schema\.columns/i.test(observed[7]), true);
+    assertEquals(
+      /copilotz_operation_catalog_metadata/i.test(observed[8]),
+      true,
+    );
     assert(
       observed.every((sql) => !/\b(CREATE|ALTER|DROP|TRUNCATE)\b/i.test(sql)),
     );
@@ -464,6 +522,38 @@ Deno.test("lazy database scopes validate with read-only SQL and reject unprovisi
     );
   } finally {
     await engine.shutdown();
+    await db.close();
+  }
+});
+
+Deno.test("validation-only startup requires the additive operation catalog", async () => {
+  const db = await createTestDatabase({ url: ":memory:" });
+  const registry = await createPluginRegistry();
+  const schema = "copilotz_validation_only_operation_catalog";
+  await provisionCopilotzSchema(db, schema);
+  try {
+    const missing = await assertRejects(() =>
+      createCopilotzEngine({
+        session: db,
+        registry,
+        defaultDatabaseSchema: schema,
+        provisionDefaultDatabaseSchema: false,
+      })
+    );
+    assertEquals(
+      (missing as { code?: unknown }).code,
+      "copilotz_operation_catalog_not_provisioned",
+    );
+
+    await provisionOperationCatalog(db, schema);
+    const engine = await createCopilotzEngine({
+      session: db,
+      registry,
+      defaultDatabaseSchema: schema,
+      provisionDefaultDatabaseSchema: false,
+    });
+    await engine.shutdown();
+  } finally {
     await db.close();
   }
 });

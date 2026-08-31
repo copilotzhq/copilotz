@@ -7,6 +7,7 @@ import type {
   ContentResolver,
   DatabaseAssetRepository,
   PublishAssetInput,
+  ReadBodyRangeInput,
 } from "../content/index.ts";
 import type {
   CoordinatedMutationResult,
@@ -50,6 +51,7 @@ import type { ActionLifecycleEmitter } from "../actions/index.ts";
 import type { SecretAdapter } from "../actions/secret-adapter.ts";
 import type { ActionEventData, ActionSchema } from "../actions/types.ts";
 import type { ProtectedEventResolver } from "../actions/protected-context.ts";
+import type { OperationCatalog } from "../streams/catalog.ts";
 
 export type EphemeralEventInput = EphemeralEventDraft;
 export type RuntimeOutputPublisher = (
@@ -72,6 +74,8 @@ export type EngineContextSeed = Readonly<{
   databaseSchema: string;
   event: CopilotzEvent;
   signal: AbortSignal;
+  /** Unique dispatcher execution attempt; never exposed on ProcessorContext. */
+  executionIncarnationId?: string;
   settlementScopeId?: string;
   idempotencyKey: string;
   createMutationIdentity: EngineMutationIdentityFactory;
@@ -126,6 +130,16 @@ export type CopilotzEngineMaintenanceResult = Readonly<{
   assets: Readonly<{
     orphanedBodiesDeleted: number;
   }>;
+  operations: Readonly<{
+    reconciled: number;
+    reconciledStreams: number;
+    expiredObservationStreams: number;
+    observationRetirementBlocked: number;
+    prunedCatalogEntries: number;
+    prunedTerminalStreams: number;
+    prunedOperationEvents: number;
+    prunedOperations: number;
+  }>;
 }>;
 
 export type CopilotzEngineDatabaseScope = Readonly<{
@@ -141,7 +155,11 @@ export type CopilotzEngineDatabaseScope = Readonly<{
       namespace: string,
       input: ContentStreamFollowInput,
     ): Promise<ReadableStream<Uint8Array>>;
+    /** Finite reconnect read bounded by the durable operation catalog. */
+    readCommittedRange(input: ReadBodyRangeInput): Promise<Uint8Array | null>;
   }>;
+  /** Internal durable operational metadata. Contains no progressive bytes. */
+  operations: OperationCatalog;
   events: CopilotzEngine["events"];
   deliveries: CopilotzEngine["deliveries"];
   recover(options?: {
@@ -156,11 +174,14 @@ export type CopilotzEngineDatabaseScope = Readonly<{
     retentionMs?: number | null;
     now?: Date;
     assetOrphanAfterMs?: number;
+    operationObservationLimit?: number;
+    operationRetentionMs?: number | null;
   }): Promise<CopilotzEngineMaintenanceResult>;
 }>;
 
 export type CopilotzEngine = Readonly<{
   databaseSchema: string;
+  operations: OperationCatalog;
   databaseScope(databaseSchema: string): Promise<CopilotzEngineDatabaseScope>;
   plugins: PluginRegistry;
   execution: Readonly<{
@@ -266,6 +287,7 @@ export type CopilotzEngine = Readonly<{
     retentionMs?: number | null;
     now?: Date;
     assetOrphanAfterMs?: number;
+    operationObservationLimit?: number;
   }): Promise<CopilotzEngineMaintenanceResult>;
   shutdown(reason?: string): Promise<void>;
   bindTransient(
@@ -290,6 +312,8 @@ export type CreateProcessorContextOptions = Readonly<{
   actionLifecycle: ActionLifecycleEmitter;
   now?: () => Date;
   streamBodyStore: BodyStore;
+  streamBodyPrefix: string;
+  operationCatalog: OperationCatalog;
   protectedEventResolver?: ProtectedEventResolver;
 }>;
 

@@ -54,6 +54,7 @@ type FacadeContext = Readonly<{
   serverParams: Readonly<Record<string, string>>;
   serverResponseMode: "json" | "sse" | "multipart";
   serverActionMetadata: Readonly<Record<string, unknown>>;
+  operationMetadata: Readonly<Record<string, unknown>>;
   serverIdentity: Readonly<Record<string, string>>;
   serverSignal: AbortSignal;
   namespace?: string;
@@ -175,7 +176,8 @@ function authorizedScope(value: unknown): ServerAuthorizedScope {
   if (
     Reflect.ownKeys(input).some((key) =>
       key !== "namespace" && key !== "databaseSchema" && key !== "identity" &&
-      key !== "actionMetadata" && key !== "context"
+      key !== "actionMetadata" && key !== "operationMetadata" &&
+      key !== "context"
     )
   ) throw new TypeError("Server guard returned unsupported scope fields.");
   const plain = (candidate: unknown, label: string) => {
@@ -198,6 +200,14 @@ function authorizedScope(value: unknown): ServerAuthorizedScope {
     ...(input.actionMetadata
       ? {
         actionMetadata: plain(input.actionMetadata, "Server Action metadata")!,
+      }
+      : {}),
+    ...(input.operationMetadata
+      ? {
+        operationMetadata: plain(
+          input.operationMetadata,
+          "Server operation metadata",
+        )!,
       }
       : {}),
     ...(input.context
@@ -385,16 +395,51 @@ async function actionResponse(
       deduplicationId: context.serverIdentity.deduplicationId ??
         header(request.headers, "idempotency-key") ?? requestId,
       metadata: Object.freeze({ sourceAdapter: "server" }),
+      operationMetadata: context.operationMetadata,
       visibility: { kind: "internal" },
     },
     serverActionRequestSchema(endpoint.inputSchema),
     `server:${requestId}`,
   );
   const abort = () => {
-    void handle.cancel("server_request_aborted").catch(() => undefined);
+    void handle.detach("server_request_detached").catch(() => undefined);
   };
   if (context.serverSignal.aborted) abort();
   else context.serverSignal.addEventListener("abort", abort, { once: true });
+  const respondAsync = header(request.headers, "prefer")?.split(",").some(
+    (value) => value.trim().toLowerCase() === "respond-async",
+  ) ?? false;
+  if (respondAsync) {
+    const status = await application.operationStatus({
+      operationId: handle.operationId,
+      namespace: context.namespace,
+      databaseSchema: context.databaseSchema,
+    });
+    context.serverSignal.removeEventListener("abort", abort);
+    await handle.detach("http_respond_async");
+    const threadId = typeof status?.metadata.threadId === "string"
+      ? status.metadata.threadId.trim()
+      : "";
+    const externalId = typeof status?.metadata.threadExternalId === "string"
+      ? status.metadata.threadExternalId.trim()
+      : typeof status?.metadata.externalThreadId === "string"
+      ? status.metadata.externalThreadId.trim()
+      : threadId;
+    return {
+      status: 202,
+      headers: { "preference-applied": "respond-async" },
+      data: Object.freeze({
+        operationId: handle.operationId,
+        status: status?.state === "accepted" ? "accepted" : "running",
+        correlationId: handle.correlationId,
+        replayCursor: handle.replayCursor,
+        acceptedAt: status?.acceptedAt ?? new Date().toISOString(),
+        ...(threadId
+          ? { thread: Object.freeze({ id: threadId, externalId }) }
+          : {}),
+      }),
+    };
+  }
   if (context.serverResponseMode !== "json") {
     const done = handle.done.finally(() =>
       context.serverSignal.removeEventListener("abort", abort)
@@ -403,9 +448,11 @@ async function actionResponse(
       type: EVENT_NATIVE_OUTPUT_STREAM,
       outputs: handle.outputs,
       done,
+      operationId: handle.operationId,
+      replayCursor: handle.replayCursor,
       async cancel(reason = "server_request_cancelled") {
         context.serverSignal.removeEventListener("abort", abort);
-        await handle.cancel(reason);
+        await handle.detach(reason);
       },
     });
     return {
@@ -692,6 +739,7 @@ export function createServerFacadeFetchHandler(
         serverParams: match.params,
         serverResponseMode: responseMode(request),
         serverActionMetadata: scope.actionMetadata ?? Object.freeze({}),
+        operationMetadata: scope.operationMetadata ?? Object.freeze({}),
         serverIdentity: scope.identity ?? Object.freeze({}),
         serverSignal: request.signal,
       });

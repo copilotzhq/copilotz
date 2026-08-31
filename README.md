@@ -31,7 +31,7 @@ or hidden workflow controller.
 ## Install
 
 ```ts
-import { createCopilotz } from "jsr:@copilotz/copilotz@^0.63.9";
+import { createCopilotz } from "jsr:@copilotz/copilotz@^0.64.0";
 ```
 
 Host-only capabilities live on explicit subpaths. Importing the root does not
@@ -40,8 +40,8 @@ pull in filesystem, subprocess, terminal, MCP stdio, or provider credentials.
 ## Compose an AI application
 
 ```ts
-import { createCopilotz } from "jsr:@copilotz/copilotz@^0.63.9";
-import { corePlugin, message } from "jsr:@copilotz/copilotz@^0.63.9/core";
+import { createCopilotz } from "jsr:@copilotz/copilotz@^0.64.0";
+import { corePlugin, message } from "jsr:@copilotz/copilotz@^0.64.0/core";
 
 const openAiKey = Deno.env.get("OPENAI_API_KEY");
 if (!openAiKey) throw new Error("OPENAI_API_KEY is required");
@@ -86,13 +86,14 @@ await operation.done;
 await app.close();
 ```
 
-`send()` accepts one plugin-owned input envelope. It returns the durable ingress
-Event identity, a request-bound output stream, a settlement Promise, and
-cancellation. Normal Event outputs include deeply frozen resolved `data` while
-retaining the immutable envelope and durable `payload.dataRef`. `observe()`
-creates an independent application-wide subscription. The public application
-surface is exactly `{ send, observe, close }`; Gateway adds `fetch`, while
-Worker returns `{ ready, closed, close }`.
+`send()` accepts one plugin-owned input envelope. It returns a durable operation
+identity, its ingress Event and correlation identities, an opaque replay cursor,
+a local output attachment, and settlement controls. `detach()` stops only that
+observer; `cancel()` is an explicit durable cancellation. `attach()` can resume
+the same operation from any Gateway replica, while `operationStatus()`,
+`listOperations()`, and `cancelOperation()` provide the generic host policy
+seams. `observe()` remains an independent process-local application-wide
+subscription. Gateway adds `fetch`; Worker returns `{ ready, closed, close }`.
 
 For multi-turn evaluation, `runGoal` from `@copilotz/copilotz/goals` alternates
 settled target and lead sends without introducing another durable state machine.
@@ -116,6 +117,10 @@ See [Goal runner](./docs/goals.md).
   Core invokes. There is no second Tool execution path.
 - Progressive `stream.output` observations contain generic content metadata and
   one subscriber-owned byte follower. Semantic routing stays in plugins.
+- Operation replay stores semantic ordering in existing durable Events and
+  progressive bytes in their existing Bodies. Its catalog stores only bounded
+  discovery, lifecycle, and byte-offset metadata; it is not a second payload
+  journal.
 - Normal provisioning creates only a fresh v4 schema or validates an existing v4
   schema. Legacy databases require the explicit migration.
 

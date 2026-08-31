@@ -37,9 +37,11 @@ For transient Events, `data` is the Event payload. Event data is strict
 transport-safe JSON; progressive or binary bytes belong in Streams and Assets
 rather than Event payloads.
 
-Every `send().outputs` and `observe()` subscription receives its own lazy Body
-follower. Two subscribers never share one `ReadableStream` instance, and bytes
-remain consumable after the enclosing operation settles.
+Every `send().outputs`, `attach().outputs`, and `observe()` subscription
+receives its own Body reader. Two subscribers never share one `ReadableStream`
+instance. Reconnect uses the durable operation catalog's committed offset and
+reads the existing Body from that byte boundary; no token payload is copied into
+a second journal.
 
 ## Producing a stream
 
@@ -65,9 +67,11 @@ Opening publishes one serializable descriptor. Appends are idempotent by
 `appendId` and obey BodyStore backpressure. Abort abandons staging and errors
 followers.
 
-Closing returns `PreparedContent`; it does not create an Asset graph node. A
-semantic Action or Collection must adopt that prepared content as part of its
-own durable state transition.
+Closing returns `PreparedContent`; it does not by itself create an Asset graph
+node. A semantic Action or Collection must adopt canonical content as part of
+its own durable transition. After settlement the producer marks the sealed Body
+as canonical (with the adopted Asset ID) or as a temporary observation Body with
+an expiry. Maintenance retires expired observations by exact Body version.
 
 The lower progressive Body primitive can run without observation wiring for
 internal storage and recovery. Descriptor publication is a higher application

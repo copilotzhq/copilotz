@@ -21,6 +21,7 @@ import { createTestDatabase } from "../runtime/testing/ominipg.ts";
 import { createServerFacadeFetchHandler } from "./facade.ts";
 import { decodeCopilotzOutputs } from "./multipart.ts";
 import { base64ToBytes, bytesToBase64 } from "../runtime/content/index.ts";
+import { provisionOperationCatalog } from "../runtime/streams/index.ts";
 
 function arrayBuffer(bytes: Uint8Array): ArrayBuffer {
   return bytes.slice().buffer as ArrayBuffer;
@@ -568,6 +569,7 @@ Deno.test("Server facade preserves guard-selected schema and path-owned command 
   const tenantSchema = "server_facade_guard_tenant";
   const database = await createTestDatabase({ url: ":memory:" });
   await provisionCopilotzSchema(database, tenantSchema);
+  await provisionOperationCatalog(database, tenantSchema);
   const application = await createCopilotzApplication({
     namespace: "tenant-a",
     databaseSchema: "server_facade_guard_default",

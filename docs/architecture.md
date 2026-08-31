@@ -99,23 +99,28 @@ metadata, causation/correlation, and stream ID. Each application subscriber
 receives its own lazy byte follower. Thread, participant, routing, visibility,
 Collection, and plugin policy never enter this generic descriptor.
 
-Closing a stream returns `PreparedContent`; a semantic Collection or Action must
-adopt it. Closing alone does not create an Asset graph record.
+Closing a stream seals its Body and returns `PreparedContent`; a semantic
+Collection or Action must adopt canonical content. A short-lived operation
+catalog records only descriptor, committed offset, seal state, digest, and
+retention. It never duplicates stream bytes. Exact stream/final content may
+adopt the sealed Body directly; mismatches retain a bounded observation Body.
 
 ## Application and execution
 
-The public embedded application is exactly `{ send, observe, close }`. Gateway
-adds portable `fetch`; Worker returns `{ ready, closed, close }`. The root
-factory supports embedded, split in-process, WebSocket, and injected-dispatcher
-topologies without changing plugin contracts.
+The public embedded application owns generic durable operations: `send`,
+`attach`, status/list/cancel, bounded maintenance, live `observe`, and `close`.
+Gateway adds portable `fetch`; Worker returns `{ ready, closed, close }`. The
+root factory supports embedded, split in-process, WebSocket, and
+injected-dispatcher topologies without changing plugin contracts.
 
 `send()` subscribes before append and waits for its explicit settlement scope,
-relayed output drain, and a final settlement check. `observe()` is an
-independent application-wide subscription. Both expose resolved, deeply frozen
-`data` on normal Events while preserving the original immutable envelope and
-durable body reference. Progressive streams remain separate outputs. A transient
-persistence outage interrupts active handles but does not pretend to cancel
-durable deliveries; normal recovery resumes them after reconnection.
+relayed output drain, and a final settlement check. Disconnecting or detaching
+an observer never cancels that scope. `attach()` replays indexed Events and
+follows committed Body ranges from an opaque cursor, then tails database
+notifications with a bounded safety wakeup. `observe()` remains an independent
+live application-wide subscription. A transient persistence outage interrupts
+local handles but does not pretend to cancel durable deliveries; recovery and a
+new attachment resume them after reconnection.
 
 ## Storage and replay
 

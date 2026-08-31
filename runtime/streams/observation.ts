@@ -68,6 +68,8 @@ export function isStreamOutputDescriptor(
     "type",
     "namespace",
     "streamId",
+    "replayKey",
+    "streamOrdinal",
     "mediaType",
     "kind",
     "role",
@@ -110,7 +112,13 @@ export function isStreamOutputDescriptor(
       field(key) === undefined ||
       (typeof field(key) === "string" &&
         Boolean((field(key) as string).trim())),
-  ) && (field("disposition") === undefined ||
-    field("disposition") === "inline" ||
-    field("disposition") === "attachment");
+  ) && (field("replayKey") === undefined ||
+    (typeof field("replayKey") === "string" &&
+      /^(0|[1-9][0-9]*)$/.test(field("replayKey") as string))) &&
+    (field("streamOrdinal") === undefined ||
+      (typeof field("streamOrdinal") === "string" &&
+        /^[1-9][0-9]*$/.test(field("streamOrdinal") as string))) &&
+    (field("disposition") === undefined ||
+      field("disposition") === "inline" ||
+      field("disposition") === "attachment");
 }

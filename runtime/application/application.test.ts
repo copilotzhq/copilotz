@@ -27,7 +27,19 @@ import {
 } from "../events/index.ts";
 import type { TestDatabase } from "../testing/ominipg.ts";
 import { createTestDatabase } from "../testing/ominipg.ts";
-import type { ApplicationOutput, StreamOutput } from "../streams/index.ts";
+import {
+  type BodyStore,
+  createMemoryBodyStore,
+  digestContent,
+} from "../content/index.ts";
+import {
+  type ApplicationOutput,
+  createOperationCatalog,
+  createStreamOutputDescriptor,
+  decodeOperationReplayCursor,
+  provisionOperationCatalog,
+  type StreamOutput,
+} from "../streams/index.ts";
 
 const SCHEMA = "copilotz_application";
 const NAMESPACE = "tenant-a";
@@ -113,6 +125,25 @@ function correlatedOutputPlugin(): AnyCopilotzPlugin {
     id: "test.application.correlated-output",
     version: "1.0.0",
     processors: { correlatedOutput: processor },
+  });
+}
+
+function detachableOperationPlugin(
+  probe: { completed: number },
+): AnyCopilotzPlugin {
+  return definePlugin({
+    id: "test.application.detachable-operation",
+    version: "1.0.0",
+    processors: {
+      delayed: defineProcessor<ProcessorContext>({
+        id: "application.detachable-operation",
+        on: [{ eventType: "test.detachable-operation" }],
+        async handle() {
+          await new Promise((resolve) => setTimeout(resolve, 50));
+          probe.completed += 1;
+        },
+      }),
+    },
   });
 }
 
@@ -418,10 +449,16 @@ Deno.test("application observes streams opened from events with no thread semant
     const stream = outputs.find((output) => output.type === "stream.output");
     assertExists(stream);
     const streamOutput = stream as StreamOutput;
+    assertEquals(/^[1-9][0-9]*$/.test(streamOutput.replayKey ?? ""), true);
     assertEquals("durable" in streamOutput, false);
     assertEquals("threadId" in streamOutput, false);
     assertEquals(streamOutput.namespace, NAMESPACE);
-    assertEquals(streamOutput.streamId, "runtime-neutral-stream-a");
+    assertEquals(
+      streamOutput.streamId.startsWith(
+        "incarnation.v1:runtime-neutral-stream-a:",
+      ),
+      true,
+    );
     assertEquals(streamOutput.mediaType, "text/plain");
     assertEquals(streamOutput.kind, "text");
     assertEquals(streamOutput.role, "output");
@@ -434,6 +471,597 @@ Deno.test("application observes streams opened from events with no thread semant
     assertEquals(payload[0], 0x78);
     assertEquals(payload.at(-1), 0x78);
     assertEquals(streamOutput.metadata.source, "test-plugin");
+    assertEquals(
+      streamOutput.metadata.contentStreamSemanticId,
+      "runtime-neutral-stream-a",
+    );
+    assertEquals(
+      typeof streamOutput.metadata.contentStreamIncarnationId,
+      "string",
+    );
+  } finally {
+    await application.shutdown();
+    await closeDb(db);
+  }
+});
+
+Deno.test("application reattaches durable events and stream Bodies through a terminal lifecycle frame", async () => {
+  const db = await createTestDatabase({ url: ":memory:" });
+  const application = await createCopilotzApplication({
+    database: db,
+    namespace: NAMESPACE,
+    databaseSchema: `${SCHEMA}_operation_reattach`,
+    plugins: [correlatedOutputPlugin()],
+    engine: { retryBaseMs: 0, random: () => 0 },
+  });
+  try {
+    const sent = await application.send({
+      type: "test.correlated-output",
+      correlationId: "reattach-correlation",
+      operationMetadata: {
+        threadId: "thread-reattach",
+        initiatorUserId: "user-a",
+      },
+    });
+    await sent.done;
+    const attachment = await application.attach({
+      operationId: sent.operationId,
+    });
+    const outputs = await collect(attachment.outputs);
+    await attachment.done;
+    assertEquals(outputs.map((output) => output.type), [
+      "stream.output",
+      "test.correlated-output",
+      "operation.completed",
+    ]);
+    const stream = outputs.find((output) => output.type === "stream.output") as
+      | StreamOutput
+      | undefined;
+    assertExists(stream);
+    assertEquals(
+      await new Response(stream.payload).text(),
+      "output:reattach-correlation",
+    );
+    const status = await application.operationStatus({
+      operationId: sent.operationId,
+    });
+    assertEquals(status?.state, "completed");
+    assertEquals(status?.metadata, {
+      threadId: "thread-reattach",
+      initiatorUserId: "user-a",
+    });
+    assertEquals(
+      (await application.listOperations({
+        metadata: { initiatorUserId: "user-a" },
+      })).map((operation) => operation.operationId),
+      [sent.operationId],
+    );
+    const checkpoint = await application.operationCheckpoint({
+      operationIds: [sent.operationId],
+      cursor: sent.replayCursor,
+    });
+    assertEquals(
+      decodeOperationReplayCursor(checkpoint).operationStreamPositions?.[
+        sent.operationId
+      ],
+      { highWatermark: 1, offsets: {} },
+    );
+    const snapshotAttachment = await application.attach({
+      operationId: sent.operationId,
+      cursor: checkpoint,
+    });
+    const snapshotOutputs = await collect(snapshotAttachment.outputs);
+    await snapshotAttachment.done;
+    assertEquals(snapshotOutputs.map((output) => output.type), [
+      "operation.completed",
+    ]);
+  } finally {
+    await application.shutdown();
+    await closeDb(db);
+  }
+});
+
+Deno.test("operation checkpoints page and compact more than one thousand sealed lanes", async () => {
+  const db = await createTestDatabase({ url: ":memory:" });
+  const databaseSchema = `${SCHEMA}_deep_checkpoint`;
+  const application = await createCopilotzApplication({
+    database: db,
+    namespace: NAMESPACE,
+    databaseSchema,
+    plugins: [],
+  });
+  try {
+    const operationId = "operation-deep-checkpoint";
+    const catalog = createOperationCatalog(db, databaseSchema);
+    await db.transaction((transaction) =>
+      catalog.indexEvent(transaction, {
+        namespace: NAMESPACE,
+        operationId,
+        eventId: operationId,
+        position: "1",
+        correlationId: "deep-checkpoint",
+        createdAt: "2026-08-31T12:00:00.000Z",
+      })
+    );
+    const descriptor = createStreamOutputDescriptor({
+      id: "placeholder",
+      mediaType: "text/plain",
+      kind: "text",
+      role: "assistant",
+      metadata: {},
+    }, { namespace: NAMESPACE });
+    await db.query(
+      `INSERT INTO "${databaseSchema}"."copilotz_operation_streams" (
+         namespace, operation_id, stream_ordinal, stream_id,
+         semantic_stream_id, body_id,
+         descriptor, state, committed_offset, created_at, updated_at
+       ) SELECT $1, $2, lane, 'lane-' || lane, 'lane-' || lane, 'body-' || lane,
+                jsonb_set($3::jsonb, '{streamId}', to_jsonb('lane-' || lane)),
+                'sealed', 1, NOW(), NOW()
+           FROM generate_series(1, 1001) AS lane`,
+      [NAMESPACE, operationId, JSON.stringify(descriptor)],
+    );
+    const checkpoint = decodeOperationReplayCursor(
+      await application.operationCheckpoint({ operationIds: [operationId] }),
+    );
+    assertEquals(checkpoint.operationStreamPositions?.[operationId], {
+      highWatermark: 1_001,
+      offsets: {},
+    });
+  } finally {
+    await application.shutdown();
+    await db.close();
+  }
+});
+
+Deno.test("detaching request observation does not cancel durable operation work", async () => {
+  const db = await createTestDatabase({ url: ":memory:" });
+  const probe = { completed: 0 };
+  const application = await createCopilotzApplication({
+    database: db,
+    namespace: NAMESPACE,
+    databaseSchema: `${SCHEMA}_operation_detach`,
+    plugins: [detachableOperationPlugin(probe)],
+    engine: { retryBaseMs: 0, random: () => 0 },
+  });
+  try {
+    const sent = await application.send({ type: "test.detachable-operation" });
+    await sent.detach("test_client_disconnected");
+    await waitFor(() => probe.completed === 1);
+    const status = await application.operationStatus({
+      operationId: sent.operationId,
+    });
+    assertEquals(status?.state, "completed");
+  } finally {
+    await application.shutdown();
+    await closeDb(db);
+  }
+});
+
+Deno.test("quiet reconnect stream waits on catalog changes without polling its BodyStore", async () => {
+  const db = await createTestDatabase({ url: ":memory:" });
+  const backing = createMemoryBodyStore();
+  const calls = { head: 0, read: 0, follow: 0 };
+  const { readRange: _readRange, ...legacyBacking } = backing;
+  const store: BodyStore = Object.freeze({
+    ...legacyBacking,
+    head(input) {
+      calls.head += 1;
+      return backing.head(input);
+    },
+    read(input) {
+      calls.read += 1;
+      return backing.read(input);
+    },
+    follow(input) {
+      calls.follow += 1;
+      return backing.follow(input);
+    },
+  });
+  let appended!: () => void;
+  const didAppend = new Promise<void>((resolve) => appended = resolve);
+  let release!: () => void;
+  const released = new Promise<void>((resolve) => release = resolve);
+  const plugin = definePlugin({
+    id: "test.application.quiet-reconnect-stream",
+    version: "1.0.0",
+    processors: {
+      stream: defineProcessor<ProcessorContext>({
+        id: "application.quiet-reconnect-stream",
+        on: [{ eventType: "test.quiet-reconnect-stream" }],
+        async handle(_event, context) {
+          const writer = await context.streams.open({
+            id: "quiet-reconnect-stream",
+            mediaType: "text/plain",
+            role: "assistant",
+          });
+          await writer.append({
+            bytes: new TextEncoder().encode("a"),
+            appendId: "quiet-reconnect-stream:1",
+          });
+          appended();
+          await released;
+          await writer.close({ assetId: "quiet-reconnect-stream:asset" });
+          await writer.retain({
+            retention: "observation",
+            expiresAt: "2030-01-01T00:00:00.000Z",
+          });
+        },
+      }),
+    },
+  });
+  const application = await createCopilotzApplication({
+    database: db,
+    namespace: NAMESPACE,
+    databaseSchema: `${SCHEMA}_quiet_reconnect_stream`,
+    plugins: [plugin],
+    assets: {
+      storage: {
+        type: "custom",
+        config: {
+          store,
+          deployment: {
+            durability: "durable",
+            reach: "cluster",
+            minimumProtectionMs: 0,
+            readyGarbageCollection: true,
+          },
+        },
+      },
+    },
+    engine: { retryBaseMs: 0, random: () => 0 },
+  });
+  try {
+    const sent = await application.send({
+      type: "test.quiet-reconnect-stream",
+    });
+    await didAppend;
+    const attachment = await application.attach({
+      operationId: sent.operationId,
+      cursor: sent.replayCursor,
+    });
+    const output = await attachment.outputs.getReader().read();
+    assertEquals(output.done, false);
+    assertEquals(output.value?.type, "stream.output");
+    const stream = output.value as StreamOutput;
+    const reader = stream.payload.getReader();
+    let resolved = false;
+    const pending = reader.read().then((value) => {
+      resolved = true;
+      return value;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    assertEquals(resolved, false);
+    assertEquals(calls, { head: 1, read: 0, follow: 0 });
+    release();
+    const replayed = await pending;
+    assertEquals(new TextDecoder().decode(replayed.value), "a");
+    assertEquals(calls.follow, 0);
+    assertEquals(calls.read, 1);
+    await reader.cancel("test_complete");
+    await attachment.detach("test_complete");
+    await sent.done;
+  } finally {
+    release();
+    await application.shutdown();
+    await closeDb(db);
+  }
+});
+
+Deno.test("sealed stream defaults to expiring observation retention when its processor fails before retain", async () => {
+  const db = await createTestDatabase({ url: ":memory:" });
+  const store = createMemoryBodyStore({ protectionMs: 0 });
+  const databaseSchema = `${SCHEMA}_failed_stream_retention`;
+  const plugin = definePlugin({
+    id: "test.application.failed-stream-retention",
+    version: "1.0.0",
+    processors: {
+      stream: defineProcessor<ProcessorContext>({
+        id: "application.failed-stream-retention",
+        on: [{ eventType: "test.failed-stream-retention" }],
+        async handle(_event, context) {
+          const writer = await context.streams.open({
+            id: "unretained-stream",
+            mediaType: "text/plain",
+            role: "assistant",
+          });
+          await writer.append({
+            bytes: new TextEncoder().encode("temporary"),
+            appendId: "unretained-stream:1",
+          });
+          await writer.close({ assetId: "never-materialized" });
+          throw new Error("final materialization failed");
+        },
+      }),
+    },
+  });
+  const application = await createCopilotzApplication({
+    database: db,
+    namespace: NAMESPACE,
+    databaseSchema,
+    plugins: [plugin],
+    assets: {
+      storage: {
+        type: "custom",
+        config: {
+          store,
+          deployment: {
+            durability: "durable",
+            reach: "cluster",
+            minimumProtectionMs: 0,
+            readyGarbageCollection: true,
+          },
+        },
+      },
+    },
+    engine: {
+      now: () => new Date("2026-08-31T12:00:00.000Z"),
+      maxAttempts: 1,
+      retryBaseMs: 0,
+      random: () => 0,
+    },
+  });
+  try {
+    const sent = await application.send({
+      type: "test.failed-stream-retention",
+    });
+    await assertRejects(() => sent.done, Error, "dead-lettered");
+    const catalog = createOperationCatalog(db, databaseSchema);
+    const [cataloged] = await catalog.listStreams({
+      namespace: NAMESPACE,
+      operationId: sent.operationId,
+    });
+    assertExists(cataloged);
+    const bodyId = cataloged.bodyId;
+    assertExists(await store.head({ bodyId }));
+    const retentionDisabled = await application.maintenance({
+      now: new Date("2030-08-31T12:16:00.000Z"),
+      operationRetentionMs: null,
+      assetOrphanAfterMs: 0,
+    });
+    assertEquals(retentionDisabled.assets.orphanedBodiesDeleted, 0);
+    assertEquals(retentionDisabled.operations.expiredObservationStreams, 0);
+    assertExists(await store.head({ bodyId }));
+    const maintained = await application.maintenance({
+      now: new Date("2030-08-31T12:16:00.000Z"),
+      operationRetentionMs: 0,
+    });
+    assertEquals(maintained.operations.expiredObservationStreams, 1);
+    assertEquals(maintained.operations.prunedCatalogEntries, 1);
+    assertEquals(
+      await store.head({ bodyId }),
+      null,
+    );
+  } finally {
+    await application.shutdown();
+    await closeDb(db);
+  }
+});
+
+Deno.test("observation retirement preserves a Body already adopted by a canonical Asset", async () => {
+  const db = await createTestDatabase({ url: ":memory:" });
+  const store = createMemoryBodyStore({ protectionMs: 100 });
+  const databaseSchema = `${SCHEMA}_stream_partial_adoption`;
+  const assetId = "adopted-stream-asset";
+  const plugin = definePlugin({
+    id: "test.application.stream-partial-adoption",
+    version: "1.0.0",
+    processors: {
+      stream: defineProcessor<ProcessorContext>({
+        id: "application.stream-partial-adoption",
+        on: [{ eventType: "test.stream-partial-adoption" }],
+        async handle(_event, context) {
+          const writer = await context.streams.open({
+            id: "adopted-stream",
+            mediaType: "text/plain",
+            role: "assistant",
+          });
+          await writer.append({
+            bytes: new TextEncoder().encode("canonical"),
+            appendId: "adopted-stream:1",
+          });
+          const prepared = await writer.close({ assetId });
+          await context.content.materialize(prepared);
+          // Simulate a crash between Asset adoption and catalog canonical bind.
+          throw new Error("catalog retain was not reached");
+        },
+      }),
+    },
+  });
+  const application = await createCopilotzApplication({
+    database: db,
+    namespace: NAMESPACE,
+    databaseSchema,
+    plugins: [plugin],
+    assets: {
+      storage: {
+        type: "custom",
+        config: {
+          store,
+          deployment: {
+            durability: "durable",
+            reach: "cluster",
+            minimumProtectionMs: 0,
+            readyGarbageCollection: true,
+          },
+        },
+      },
+    },
+    engine: {
+      now: () => new Date("2026-08-31T12:00:00.000Z"),
+      maxAttempts: 1,
+      retryBaseMs: 0,
+      random: () => 0,
+    },
+  });
+  try {
+    const sent = await application.send({
+      type: "test.stream-partial-adoption",
+    });
+    await assertRejects(() => sent.done, Error, "dead-lettered");
+    const catalog = createOperationCatalog(db, databaseSchema);
+    const [cataloged] = await catalog.listStreams({
+      namespace: NAMESPACE,
+      operationId: sent.operationId,
+    });
+    assertExists(cataloged);
+    const bodyId = cataloged.bodyId;
+    assertExists(await application.content.assets.get(NAMESPACE, assetId));
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    const maintained = await application.maintenance({
+      now: new Date("2030-08-31T12:16:00.000Z"),
+      operationRetentionMs: 0,
+      assetOrphanAfterMs: 0,
+    });
+    assertEquals(maintained.operations.expiredObservationStreams, 1);
+    assertEquals(maintained.operations.observationRetirementBlocked, 0);
+    assertEquals(maintained.operations.prunedCatalogEntries, 1);
+    assertExists(await store.head({ bodyId }));
+    await application.content.assets.markDeleted(NAMESPACE, assetId);
+    assertExists(await store.head({ bodyId }));
+    const collected = await application.maintenance({
+      now: new Date("2030-08-31T12:17:00.000Z"),
+      operationRetentionMs: 0,
+      assetOrphanAfterMs: 0,
+    });
+    assertEquals(collected.assets.orphanedBodiesDeleted, 1);
+    assertEquals(await store.head({ bodyId }), null);
+  } finally {
+    await application.shutdown();
+    await closeDb(db);
+  }
+});
+
+Deno.test("maintenance reconciles physical stream crash windows before terminalizing operations", async () => {
+  const db = await createTestDatabase({ url: ":memory:" });
+  const store = createMemoryBodyStore();
+  const databaseSchema = `${SCHEMA}_stream_reconcile`;
+  const application = await createCopilotzApplication({
+    database: db,
+    namespace: NAMESPACE,
+    databaseSchema,
+    plugins: [],
+    assets: {
+      storage: {
+        type: "custom",
+        config: {
+          store,
+          deployment: {
+            durability: "durable",
+            reach: "cluster",
+            minimumProtectionMs: 0,
+            readyGarbageCollection: true,
+          },
+        },
+      },
+    },
+  });
+  try {
+    const catalog = createOperationCatalog(db, databaseSchema);
+    const operationId = "stream-reconcile-operation";
+    await db.transaction((transaction) =>
+      catalog.indexEvent(transaction, {
+        namespace: NAMESPACE,
+        operationId,
+        eventId: operationId,
+        position: "1",
+        correlationId: "stream-reconcile-correlation",
+        createdAt: "2026-08-31T12:00:00.000Z",
+      })
+    );
+    const readyBodyId =
+      `schemas/${databaseSchema}/content-streams/${NAMESPACE}/ready-crash`;
+    const missingBodyId =
+      `schemas/${databaseSchema}/content-streams/${NAMESPACE}/missing-crash`;
+    const descriptor = (streamId: string) =>
+      createStreamOutputDescriptor({
+        id: streamId,
+        mediaType: "text/plain",
+        kind: "text",
+        role: "assistant",
+        metadata: Object.freeze({}),
+      }, { namespace: NAMESPACE });
+    await catalog.openStream({
+      namespace: NAMESPACE,
+      operationId,
+      bodyId: readyBodyId,
+      descriptor: descriptor("ready-crash"),
+    });
+    await catalog.openStream({
+      namespace: NAMESPACE,
+      operationId,
+      bodyId: missingBodyId,
+      descriptor: descriptor("missing-crash"),
+    });
+    assertEquals(await catalog.mark(NAMESPACE, operationId, "failed"), false);
+    const activeOperationId = "stream-reconcile-active-operation";
+    await db.transaction((transaction) =>
+      catalog.indexEvent(transaction, {
+        namespace: NAMESPACE,
+        operationId: activeOperationId,
+        eventId: activeOperationId,
+        position: "2",
+        correlationId: "stream-reconcile-active-correlation",
+        createdAt: "2026-08-31T12:01:00.000Z",
+      })
+    );
+    await catalog.openStream({
+      namespace: NAMESPACE,
+      operationId: activeOperationId,
+      bodyId:
+        `schemas/${databaseSchema}/content-streams/${NAMESPACE}/active-reserve-race`,
+      descriptor: descriptor("active-reserve-race"),
+    });
+    const bytes = new TextEncoder().encode("sealed before catalog callback");
+    await store.put({
+      bodyId: readyBodyId,
+      bytes,
+      mediaType: "text/plain",
+      digest: await digestContent(bytes),
+    });
+
+    const maintained = await application.maintenance({
+      operationRetentionMs: null,
+    });
+    assertEquals(maintained.operations.reconciledStreams, 3);
+    const streams = await catalog.listStreams({
+      namespace: NAMESPACE,
+      operationId,
+    });
+    assertEquals(
+      streams.map((stream) => ({
+        id: stream.streamId,
+        state: stream.state,
+        retention: stream.assetRetention,
+        offset: stream.committedOffset,
+      })).sort((left, right) => left.id.localeCompare(right.id)),
+      [{
+        id: "missing-crash",
+        state: "aborted",
+        retention: undefined,
+        offset: 0,
+      }, {
+        id: "ready-crash",
+        state: "sealed",
+        retention: "observation",
+        offset: bytes.byteLength,
+      }],
+    );
+    assertEquals(
+      (await catalog.listStreams({
+        namespace: NAMESPACE,
+        operationId: activeOperationId,
+      }))[0].state,
+      "aborted",
+    );
+    assertEquals(
+      (await catalog.get(NAMESPACE, operationId))?.state,
+      "completed",
+    );
+    assertEquals(
+      (await catalog.get(NAMESPACE, activeOperationId))?.state,
+      "completed",
+    );
   } finally {
     await application.shutdown();
     await closeDb(db);
@@ -711,6 +1339,7 @@ Deno.test("opening a tenant scope recovers its expired delivery lease", async ()
   const plugin = startupRecoveryPlugin(calls);
   const session = createSqlSession(database);
   await provisionCopilotzSchema(session, tenantSchema);
+  await provisionOperationCatalog(session, tenantSchema);
   const store = createEventStore({ session, schema: tenantSchema });
   const committed = await store.append({
     type: "test.application.startup-recovery",

@@ -8,6 +8,7 @@ export {
   DEFAULT_MAX_DATABASE_ASSET_BYTES,
   readBodiesBounded,
   readBodyBytes,
+  readBodyRange,
   writerCapabilityFromHead,
 } from "./body-store.ts";
 export type {
@@ -31,6 +32,7 @@ export type {
   BodyStoreMaintenance,
   MutableBodyHead,
   PutBodyInput,
+  ReadBodyRangeInput,
   ReserveBodyInput,
   S3BodyStorageConfig,
   TrustedBodyMaintenanceScope,
@@ -42,6 +44,14 @@ export {
   createDatabaseBodyStore,
   createDatabaseBodyStoreAdapter,
 } from "./database-body-store.ts";
+export {
+  createPromotedBodyStore,
+  createPromotedBodyStoreAdapter,
+} from "./promoted-body-store.ts";
+export type {
+  PromotedBodyStoreAdapterOptions,
+  PromotedBodyStoreOptions,
+} from "./promoted-body-store.ts";
 export {
   createProgressiveBodyWriter,
   openProgressiveBodyFollower,

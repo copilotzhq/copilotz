@@ -33,11 +33,18 @@ placement and `Worker` adds the Oxian worker connection options.
 
 ## Returned role surfaces
 
-The embedded application has exactly:
+The embedded application exposes the generic operation surface:
 
 ```ts
 {
-  send, observe, close;
+  send,
+    attach,
+    operationStatus,
+    listOperations,
+    cancelOperation,
+    maintenance,
+    observe,
+    close;
 }
 ```
 
@@ -50,19 +57,29 @@ or a shutdown alias.
 
 ```ts
 type ApplicationSendHandle = Readonly<{
+  operationId: string;
   eventId: string;
   correlationId: string;
+  replayCursor: string;
   outputs: ReadableStream<ApplicationOutput>;
   done: Promise<void>;
+  detach(reason?: string): Promise<void>;
   cancel(reason?: string): Promise<void>;
 }>;
 ```
 
-`observe()` receives the same application outputs independently of any one
+`attach({ operationId, cursor })` returns another output stream and settlement
+Promise for that durable operation. Its `detach()` affects only the observer.
+Network transports must map disconnect to detach and reserve `cancelOperation()`
+for an authenticated, explicit Stop action. Opaque replay cursors combine
+durable Event positions with per-stream byte offsets.
+
+`observe()` receives live application outputs independently of any one
 operation. Normal Events retain their immutable envelope and add deeply frozen
 resolved `data`; durable Events keep their original `payload.dataRef`.
 Progressive `stream.output` values remain subscriber-owned byte streams.
-`close()` is idempotent.
+`maintenance()` performs bounded delivery, Asset, progressive Body, and
+operation-catalog maintenance. `close()` is idempotent.
 
 ## Gateway Fetch
 

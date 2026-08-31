@@ -16,6 +16,7 @@ import {
 import type {
   ApplicationSendHandle,
   ApplicationSendInput,
+  CopilotzApplication,
   CopilotzApplicationObservation,
   CreateCopilotzApplicationOptions,
   InternalCopilotzApplication,
@@ -63,6 +64,12 @@ export type InternalCopilotzGateway = Readonly<{
   transports: readonly HypervisorTransport[];
   hypervisor?: Hypervisor;
   send(input: ApplicationSendInput): Promise<ApplicationSendHandle>;
+  attach: CopilotzApplication["attach"];
+  operationStatus: CopilotzApplication["operationStatus"];
+  listOperations: CopilotzApplication["listOperations"];
+  operationCheckpoint: CopilotzApplication["operationCheckpoint"];
+  cancelOperation: CopilotzApplication["cancelOperation"];
+  maintenance: CopilotzApplication["maintenance"];
   observe(): CopilotzApplicationObservation;
   admit(): Promise<void>;
   installFetchFallback(fallback: GatewayFetchFallback): void;
@@ -199,6 +206,12 @@ export async function createCopilotzGateway(
       await persistence.recovery?.admit();
       return await application!.send(input);
     },
+    attach: (input) => application!.attach(input),
+    operationStatus: (input) => application!.operationStatus(input),
+    listOperations: (input) => application!.listOperations(input),
+    operationCheckpoint: (input) => application!.operationCheckpoint(input),
+    cancelOperation: (input) => application!.cancelOperation(input),
+    maintenance: (input) => application!.maintenance(input),
     observe: () => application!.observe(),
     admit: () => persistence.recovery?.admit() ?? Promise.resolve(),
     installFetchFallback(fallback) {

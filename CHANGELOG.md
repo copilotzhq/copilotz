@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.64.0 — 2026-08-31
+
+Adds durable, reconnectable application operations. A submitted root Event is
+now also the generic operation identity; callers can detach an HTTP observer
+without cancelling durable work, resume ordered Events and progressive Bodies
+from an opaque cursor on any replica, inspect operation state, and issue an
+explicit idempotent cancellation. The Server facade supports asynchronous
+receipts, operation output feeds, thread feeds, replay cursors, and SSE
+keepalives. Additive operational tables index discovery and offsets while
+canonical Events and Assets remain the state and payload authorities.
+
+Progressive storage is now bounded and maintainable across every built-in Body
+backend. Live process buffers are released and capped, database parts compact at
+seal, crashed filesystem/object staging is enumerable and retry-cleanable, and
+temporary observation Bodies expire through guarded maintenance. LLM frame
+writes are coalesced, and an exact media-type/length/digest match dynamically
+reuses the streamed Body for the normalized final Asset; non-equivalent output
+keeps its separate canonical Asset without duplicating a stream Asset.
+
 ## 0.63.9 — 2026-08-31
 
 - Semantic memory now distinguishes an object's lifecycle from its editorial

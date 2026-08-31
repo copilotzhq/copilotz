@@ -1,6 +1,6 @@
 import { assertEquals, assertThrows } from "@std/assert";
 
-import { createMemoryBodyStore } from "./body-store.ts";
+import { createMemoryBodyStore, readBodyRange } from "./body-store.ts";
 import { digestContent } from "./digest.ts";
 
 const encoder = new TextEncoder();
@@ -93,4 +93,26 @@ Deno.test("memory BodyStore maintenance enforces version, idle, and protection i
     true,
   );
   assertEquals(await store.head({ bodyId: current.bodyId }), null);
+});
+
+Deno.test("finite range reads remain compatible with stores lacking native range support", async () => {
+  const store = createMemoryBodyStore({ protectionMs: 0 });
+  const bytes = encoder.encode("legacy range");
+  await store.put({
+    bodyId: "bodies/legacy-range",
+    bytes,
+    mediaType: "text/plain",
+    digest: await digestContent(bytes),
+  });
+  const { readRange: _nativeRange, ...legacyStore } = store;
+  assertEquals(
+    new TextDecoder().decode(
+      await readBodyRange(legacyStore, {
+        bodyId: "bodies/legacy-range",
+        offset: 2,
+        end: 8,
+      }),
+    ),
+    "gacy r",
+  );
 });

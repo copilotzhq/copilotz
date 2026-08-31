@@ -79,6 +79,8 @@ export type ServerAuthorizedScope = Readonly<{
     deduplicationId?: string;
   }>;
   actionMetadata?: ActionInvocationMetadata;
+  /** Trusted opaque host claims used only for operation ownership/routing. */
+  operationMetadata?: Readonly<Record<string, unknown>>;
   context?: Readonly<Record<string, unknown>>;
 }>;
 

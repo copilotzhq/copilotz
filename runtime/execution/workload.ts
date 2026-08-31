@@ -236,6 +236,7 @@ export function createDeliveryWorkload(
       }
       return { metadata: statusMetadata(delivery.id, "succeeded") };
     } catch (error) {
+      if (!abort.signal.aborted) abort.abort(error);
       const failed = await store.failDelivery({
         id: delivery.id,
         owner: metadata.dispatchAttemptId,
@@ -250,6 +251,9 @@ export function createDeliveryWorkload(
         ),
       };
     } finally {
+      if (!abort.signal.aborted) {
+        abort.abort(new Error(`Delivery '${delivery.id}' execution ended.`));
+      }
       stopHeartbeat();
       dispatchSignal.removeEventListener("abort", relayAbort);
     }

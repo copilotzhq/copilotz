@@ -45,7 +45,7 @@ import type {
   PreparedContent,
   PublishAssetInput,
 } from "./types.ts";
-import type { BodyStorageRuntime, BodyStore } from "./body-store.ts";
+import type { BodyHead, BodyStorageRuntime, BodyStore } from "./body-store.ts";
 
 type AssetNodeRow = Record<string, unknown> & {
   id: string;
@@ -70,6 +70,12 @@ export type AssetBodyMaintenanceResult = Readonly<{
   orphanedBodiesDeleted: number;
 }>;
 
+export type ReadyBodyRetirementResult = Readonly<
+  | { status: "deleted" }
+  | { status: "owned"; ownerId: string; ownerType: "asset" | "protected_value" }
+  | { status: "blocked" }
+>;
+
 export type DatabaseAssetRepository =
   & AssetRepository
   & Readonly<{
@@ -83,8 +89,14 @@ export type DatabaseAssetRepository =
         now?: Date;
         orphanAfterMs?: number;
         limit?: number;
+        /** @internal Defers Bodies whose operational replay catalog is live. */
+        isBodyRetained?: (bodyId: string) => Promise<boolean>;
       }>,
     ): Promise<AssetBodyMaintenanceResult>;
+    /** @internal CAS-deletes a Ready Body only while no graph owner exists. */
+    retireUnownedReadyBody(
+      input: Readonly<{ store: BodyStore; body: BodyHead }>,
+    ): Promise<ReadyBodyRetirementResult>;
   }>;
 
 type CollectionAssetAdopter = Readonly<{
@@ -1109,6 +1121,9 @@ export function createDatabaseAssetRepository(
     ));
   };
 
+  // Rotate bounded Ready-body scans across maintenance calls. Otherwise a
+  // stable first page of graph-owned Bodies can starve later orphans forever.
+  let bodyMaintenanceAfter: string | undefined;
   const repository: DatabaseAssetRepository = {
     async publish(input: PublishAssetInput) {
       const namespace = requiredText(input.namespace, "Asset namespace");
@@ -1368,28 +1383,57 @@ export function createDatabaseAssetRepository(
           prefix: storage.prefix,
           databaseSchema: options.databaseSchema,
         });
+        const operationStreamsPrefix = `${prefix}/content-streams/`;
         const cutoff = maintenanceNow.getTime() - orphanAfterMs;
-        const candidates = await storage.writer.maintenance.list({
-          states: ["ready"],
-          idleForMs: orphanAfterMs,
-          limit,
-        });
-        for (const body of candidates.bodies) {
-          if (body.state !== "ready") continue;
-          if (!body.bodyId.startsWith(prefix)) continue;
-          const modified = body.lastModified
-            ? new Date(body.lastModified).getTime()
-            : Number.NaN;
-          if (!Number.isFinite(modified) || modified > cutoff) continue;
-          let deleted = false;
-          try {
-            deleted = await options.session.transaction(async (transaction) => {
-              await transaction.query(
-                "SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))",
-                [options.databaseSchema, "body-ownership"],
-              );
-              const owner = await transaction.query<{ id: string }>(
-                `SELECT id FROM ${tables.nodes}
+        const maxScanned = Math.min(10_000, Math.max(1_000, limit * 4));
+        const pageSize = Math.min(500, maxScanned);
+        const startedAfter = bodyMaintenanceAfter !== undefined;
+        let wrapped = false;
+        let scanned = 0;
+        while (scanned < maxScanned && orphanedBodiesDeleted < limit) {
+          const candidates = await storage.writer.maintenance.list({
+            states: ["ready"],
+            idleForMs: orphanAfterMs,
+            prefix,
+            ...(bodyMaintenanceAfter ? { after: bodyMaintenanceAfter } : {}),
+            limit: Math.min(pageSize, maxScanned - scanned),
+          });
+          if (candidates.bodies.length === 0) {
+            if (startedAfter && !wrapped) {
+              bodyMaintenanceAfter = undefined;
+              wrapped = true;
+              continue;
+            }
+            bodyMaintenanceAfter = undefined;
+            break;
+          }
+          for (const body of candidates.bodies) {
+            scanned += 1;
+            bodyMaintenanceAfter = body.bodyId;
+            if (body.state !== "ready") continue;
+            if (!body.bodyId.startsWith(prefix)) continue;
+            // Operation replay Bodies have catalog-owned retention until that
+            // row is pruned. Afterwards graph ownership and ordinary orphan GC
+            // protect/collect an adopted canonical Body normally.
+            if (
+              body.bodyId.startsWith(operationStreamsPrefix) &&
+              maintenance.isBodyRetained &&
+              await maintenance.isBodyRetained(body.bodyId)
+            ) continue;
+            const modified = body.lastModified
+              ? new Date(body.lastModified).getTime()
+              : Number.NaN;
+            if (!Number.isFinite(modified) || modified > cutoff) continue;
+            let deleted = false;
+            try {
+              deleted = await options.session.transaction(
+                async (transaction) => {
+                  await transaction.query(
+                    "SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))",
+                    [options.databaseSchema, "body-ownership"],
+                  );
+                  const owner = await transaction.query<{ id: string }>(
+                    `SELECT id FROM ${tables.nodes}
                  WHERE type IN ('asset', 'protected_value')
                    AND data ->> 'state' = 'ready'
                    AND data ->> 'bodyId' = $1
@@ -1402,37 +1446,103 @@ export function createDatabaseAssetRepository(
                        data -> 'location' ->> 'backendId' = $4)
                    )
                  LIMIT 1`,
-                [
-                  body.bodyId,
-                  storage.writer!.kind,
-                  storage.writer!.kind === "database"
-                    ? ""
-                    : storage.writer!.backendId,
-                  storage.writer!.backendId,
-                ],
+                    [
+                      body.bodyId,
+                      storage.writer!.kind,
+                      storage.writer!.kind === "database"
+                        ? ""
+                        : storage.writer!.backendId,
+                      storage.writer!.backendId,
+                    ],
+                  );
+                  if (owner.rows[0]) return false;
+                  const maintenanceStore = storage.writer!.kind === "database"
+                    ? createDatabaseBodyStore({
+                      session: transaction,
+                      schema: options.databaseSchema,
+                      backendId: storage.writer!.backendId,
+                    })
+                    : storage.writer!;
+                  return await maintenanceStore.maintenance.delete({
+                    bodyId: body.bodyId,
+                    expectedState: body.state,
+                    expectedMaintenanceVersion: body.maintenanceVersion,
+                    idleForMs: orphanAfterMs,
+                  });
+                },
               );
-              if (owner.rows[0]) return false;
-              const maintenanceStore = storage.writer!.kind === "database"
-                ? createDatabaseBodyStore({
-                  session: transaction,
-                  schema: options.databaseSchema,
-                  backendId: storage.writer!.backendId,
-                })
-                : storage.writer!;
-              return await maintenanceStore.maintenance.delete({
-                bodyId: body.bodyId,
-                expectedState: body.state,
-                expectedMaintenanceVersion: body.maintenanceVersion,
-                idleForMs: orphanAfterMs,
-              });
-            });
-          } catch {
-            // One unavailable backend object cannot block the remaining page.
+            } catch {
+              // One unavailable backend object cannot block the remaining page.
+            }
+            if (deleted) orphanedBodiesDeleted++;
+            if (orphanedBodiesDeleted >= limit) break;
           }
-          if (deleted) orphanedBodiesDeleted++;
+          if (!candidates.after) {
+            bodyMaintenanceAfter = undefined;
+            break;
+          }
         }
       }
       return Object.freeze({ orphanedBodiesDeleted });
+    },
+
+    async retireUnownedReadyBody(input) {
+      if (input.body.state !== "ready") {
+        return Object.freeze({ status: "blocked" as const });
+      }
+      return await options.session.transaction(async (transaction) => {
+        await transaction.query(
+          "SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))",
+          [options.databaseSchema, "body-ownership"],
+        );
+        const owner = await transaction.query<{
+          id: string;
+          type: "asset" | "protected_value";
+        }>(
+          `SELECT id, type FROM ${tables.nodes}
+             WHERE type IN ('asset', 'protected_value')
+               AND data ->> 'state' = 'ready'
+               AND data ->> 'bodyId' = $1
+               AND data -> 'location' ->> 'kind' = $2
+               AND (
+                 (type = 'asset' AND
+                   COALESCE(data -> 'location' ->> 'backendId', '') = $3)
+                 OR
+                 (type = 'protected_value' AND
+                   data -> 'location' ->> 'backendId' = $4)
+               )
+             LIMIT 1`,
+          [
+            input.body.bodyId,
+            input.store.kind,
+            input.store.kind === "database" ? "" : input.store.backendId,
+            input.store.backendId,
+          ],
+        );
+        if (owner.rows[0]) {
+          return Object.freeze({
+            status: "owned" as const,
+            ownerId: owner.rows[0].id,
+            ownerType: owner.rows[0].type,
+          });
+        }
+        const maintenanceStore = input.store.kind === "database"
+          ? createDatabaseBodyStore({
+            session: transaction,
+            schema: options.databaseSchema,
+            backendId: input.store.backendId,
+          })
+          : input.store;
+        const deleted = await maintenanceStore.maintenance.delete({
+          bodyId: input.body.bodyId,
+          expectedState: "ready",
+          expectedMaintenanceVersion: input.body.maintenanceVersion,
+          idleForMs: 0,
+        });
+        return Object.freeze({
+          status: deleted ? "deleted" as const : "blocked" as const,
+        });
+      });
     },
 
     async materialize(input) {

@@ -119,6 +119,12 @@ export async function createCopilotz(
       gateway.installFetchFallback(fetch);
       return Object.freeze({
         send: gateway.send,
+        attach: gateway.attach,
+        operationStatus: gateway.operationStatus,
+        listOperations: gateway.listOperations,
+        operationCheckpoint: gateway.operationCheckpoint,
+        cancelOperation: gateway.cancelOperation,
+        maintenance: gateway.maintenance,
         observe: gateway.observe,
         close: gateway.close,
         fetch,

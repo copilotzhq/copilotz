@@ -174,7 +174,7 @@ async function* decodeFrames(
 function parseOutput(payload: Uint8Array): RuntimeOutputDescriptor {
   const value = jsonRecord(JSON.parse(decoder.decode(payload)), "Event frame");
   if (isStreamOutputDescriptor(value)) {
-    return createStreamOutputDescriptor({
+    const descriptor = createStreamOutputDescriptor({
       id: value.streamId,
       mediaType: value.mediaType,
       kind: value.kind,
@@ -189,6 +189,11 @@ function parseOutput(payload: Uint8Array): RuntimeOutputDescriptor {
       namespace: value.namespace,
       ...(value.causationId ? { causationId: value.causationId } : {}),
       ...(value.correlationId ? { correlationId: value.correlationId } : {}),
+    });
+    return Object.freeze({
+      ...descriptor,
+      ...(value.replayKey ? { replayKey: value.replayKey } : {}),
+      ...(value.streamOrdinal ? { streamOrdinal: value.streamOrdinal } : {}),
     });
   }
   if (

@@ -11,6 +11,12 @@ import type {
   StreamOutput,
 } from "../runtime/streams/index.ts";
 import { applicationOutputsMultipartResponse } from "./multipart.ts";
+import {
+  createOperationReplayCursorTracker,
+  decodeOperationReplayCursor,
+  type OperationReplayCursorMutation,
+  operationStreamReplayCursorKey,
+} from "../runtime/streams/index.ts";
 
 export type EventNativeSseProjector = (
   output: ApplicationOutput,
@@ -269,7 +275,12 @@ export function projectEventNativeSseOutput(
   output: ApplicationOutput,
 ): unknown {
   if (!isStreamOutput(output)) return output;
-  const { payload: _payload, ...descriptor } = output;
+  const {
+    payload: _payload,
+    replayKey: _replayKey,
+    streamOrdinal: _streamOrdinal,
+    ...descriptor
+  } = output;
   return Object.freeze(descriptor);
 }
 
@@ -282,6 +293,12 @@ function durablePosition(output: ApplicationOutput): string | undefined {
   }
   const position = output.position.replace(/[\r\n]/g, "").trim();
   return position || undefined;
+}
+
+function isTerminalOperationOutput(output: ApplicationOutput): boolean {
+  return output.type === "operation.completed" ||
+    output.type === "operation.failed" ||
+    output.type === "operation.cancelled";
 }
 
 function sseFrame(
@@ -304,40 +321,317 @@ function cancellationReason(reason: unknown): string {
     : String(reason ?? "cancelled");
 }
 
+function isReplayCapacityError(error: unknown): boolean {
+  return (error as { code?: unknown } | null)?.code ===
+    "operation_replay_capacity_exceeded";
+}
+
+function base64(bytes: Uint8Array): string {
+  let binary = "";
+  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+  }
+  return btoa(binary);
+}
+
+function operationContext(
+  output: ApplicationOutput,
+  fallback: Readonly<{ operationId?: string; threadId?: string }> = {},
+): Readonly<{ operationId?: string; threadId?: string }> {
+  const value = output as unknown as Record<string, unknown>;
+  return Object.freeze({
+    ...(typeof value.operationId === "string" && value.operationId.trim()
+      ? { operationId: value.operationId.trim() }
+      : fallback.operationId
+      ? { operationId: fallback.operationId }
+      : {}),
+    ...(typeof value.threadId === "string" && value.threadId.trim()
+      ? { threadId: value.threadId.trim() }
+      : fallback.threadId
+      ? { threadId: fallback.threadId }
+      : {}),
+  });
+}
+
+function projectOperationContext(
+  value: unknown,
+  output: ApplicationOutput,
+  fallback: Readonly<{ operationId?: string; threadId?: string }> = {},
+): unknown {
+  const context = operationContext(output, fallback);
+  if (
+    !context.operationId || !value || typeof value !== "object" ||
+    Array.isArray(value)
+  ) {
+    return value;
+  }
+  return Object.freeze({
+    ...(value as Record<string, unknown>),
+    operationId: context.operationId,
+    ...(context.threadId ? { threadId: context.threadId } : {}),
+  });
+}
+
 function sseResponse(
   stream: EventNativeOutputStream,
   request: Request,
   options: CreateEventNativeFetchHandlerOptions,
   applicationHeaders?: HeadersInit,
 ): Response {
-  const reader = stream.outputs.getReader();
+  const initial = decodeOperationReplayCursor(stream.replayCursor);
+  const cursorTracker = createOperationReplayCursorTracker(initial);
+  const transport = new TransformStream<Uint8Array, Uint8Array>();
+  const writer = transport.writable.getWriter();
+  const write = (value: Uint8Array) => writer.write(value);
+  let frameTail: Promise<void> = Promise.resolve();
+  const serializeFrame = <T>(task: () => Promise<T>): Promise<T> => {
+    const result = frameTail.then(task, task);
+    frameTail = result.then(() => undefined, () => undefined);
+    return result;
+  };
+  const writeFrame = (
+    build: (replayCursor: string) => Uint8Array,
+    mutations: Parameters<typeof cursorTracker.commit>[0] = [],
+  ): Promise<void> =>
+    serializeFrame(async () => {
+      const frame = build(cursorTracker.cursor(mutations));
+      await write(frame);
+      cursorTracker.commit(mutations);
+    });
+  const pumps: Promise<void>[] = [];
+  const pump = async (
+    output: StreamOutput,
+    context: Readonly<{ operationId?: string; threadId?: string }>,
+    offset: number,
+  ) => {
+    const reader = output.payload.getReader();
+    const replayKey = operationStreamReplayCursorKey(output);
+    const streamMutation = (
+      action: "offset" | "end",
+      nextOffset: number,
+    ) =>
+      context.operationId && output.streamOrdinal
+        ? {
+          kind: "operation-stream" as const,
+          action,
+          operationId: context.operationId,
+          streamOrdinal: output.streamOrdinal,
+          offset: nextOffset,
+        }
+        : {
+          kind: "legacy-stream" as const,
+          replayKey,
+          offset: nextOffset,
+        };
+    try {
+      while (true) {
+        const next = await reader.read();
+        if (next.done) break;
+        const fromOffset = offset;
+        const toOffset = offset + next.value.byteLength;
+        const value = Object.freeze({
+          type: "stream.chunk",
+          ...context,
+          streamId: output.streamId,
+          fromOffset,
+          toOffset,
+          bytes: base64(next.value),
+        });
+        await writeFrame(
+          (replayCursor) => sseFrame(value, "stream.chunk", replayCursor),
+          [streamMutation("offset", toOffset)],
+        );
+        offset = toOffset;
+      }
+      const value = Object.freeze({
+        type: "stream.end",
+        ...context,
+        streamId: output.streamId,
+        offset,
+      });
+      await writeFrame(
+        (replayCursor) => sseFrame(value, "stream.end", replayCursor),
+        context.operationId && output.streamOrdinal
+          ? [streamMutation("end", offset)]
+          : [],
+      );
+    } finally {
+      reader.releaseLock();
+    }
+  };
+  const heartbeat = setInterval(() => {
+    void serializeFrame(() =>
+      write(new TextEncoder().encode(": heartbeat\n\n"))
+    ).catch(() => undefined);
+  }, 15_000);
+  const outputReader = stream.outputs.getReader();
+  void (async () => {
+    try {
+      while (true) {
+        const next = await outputReader.read();
+        if (next.done) break;
+        const output = next.value;
+        const context = operationContext(output, {
+          ...(stream.operationId ? { operationId: stream.operationId } : {}),
+          ...(stream.threadId ? { threadId: stream.threadId } : {}),
+        });
+        let streamOffset: number | undefined;
+        const registration = isStreamOutput(output) && context.operationId &&
+            output.streamOrdinal
+          ? {
+            kind: "operation-stream" as const,
+            action: "register" as const,
+            operationId: context.operationId,
+            streamOrdinal: output.streamOrdinal,
+            offset: cursorTracker.streamPosition({
+              operationId: context.operationId,
+              replayKey: output.replayKey,
+              streamOrdinal: output.streamOrdinal,
+              streamId: output.streamId,
+            }).offset,
+          }
+          : undefined;
+        if (isStreamOutput(output)) {
+          const position = cursorTracker.streamPosition({
+            operationId: context.operationId,
+            replayKey: output.replayKey,
+            streamOrdinal: output.streamOrdinal,
+            streamId: output.streamId,
+          });
+          if (position.consumed) {
+            await output.payload.cancel("operation_stream_already_consumed")
+              .catch(() => undefined);
+            continue;
+          }
+          streamOffset = position.offset;
+        }
+        // A terminal frame is an observation barrier: once a client applies
+        // it, it is allowed to close the feed. Drain every stream already
+        // published by this operation before exposing that boundary.
+        if (isTerminalOperationOutput(output)) await Promise.all(pumps);
+        const position = durablePosition(output);
+        const projected = options.projectSseOutput
+          ? await options.projectSseOutput(output, request)
+          : projectEventNativeSseOutput(output);
+        if (projected !== null && projected !== undefined) {
+          const values = Array.isArray(projected) ? projected : [projected];
+          for (let index = 0; index < values.length; index++) {
+            const raw = values[index];
+            // The cursor commits a durable output only on its final projected
+            // frame. A disconnect between an earlier projection and this frame
+            // therefore replays the Event instead of skipping its tail.
+            const value = projectOperationContext(raw, output, context);
+            const mutations: OperationReplayCursorMutation[] = [];
+            if (position && index === values.length - 1) {
+              mutations.push({
+                kind: "event" as const,
+                ...(stream.compositeCursor && context.operationId
+                  ? { operationId: context.operationId }
+                  : {}),
+                position,
+              });
+              if (!stream.compositeCursor && context.operationId) {
+                mutations.push({
+                  kind: "event",
+                  operationId: context.operationId,
+                  position,
+                });
+              }
+            }
+            if (registration && index === values.length - 1) {
+              mutations.push(registration);
+            }
+            await writeFrame(
+              (replayCursor) =>
+                sseFrame(
+                  value,
+                  options.sseEventName?.(value),
+                  replayCursor,
+                ),
+              mutations,
+            );
+          }
+        } else if (position || registration) {
+          // A filtered output has no transport frame to acknowledge. Commit it
+          // before the next visible frame; replaying it remains harmless because
+          // the projector deterministically omits it again.
+          await serializeFrame(() => {
+            const mutations: OperationReplayCursorMutation[] = [];
+            if (position) {
+              mutations.push({
+                kind: "event",
+                ...(stream.compositeCursor && context.operationId
+                  ? { operationId: context.operationId }
+                  : {}),
+                position,
+              });
+              if (!stream.compositeCursor && context.operationId) {
+                mutations.push({
+                  kind: "event",
+                  operationId: context.operationId,
+                  position,
+                });
+              }
+            }
+            if (registration) mutations.push(registration);
+            cursorTracker.commit(mutations);
+            return Promise.resolve();
+          });
+        }
+        if (isStreamOutput(output)) {
+          pumps.push(pump(output, context, streamOffset ?? 0));
+        }
+      }
+      await Promise.all(pumps);
+      await stream.done;
+      clearInterval(heartbeat);
+      await frameTail;
+      await writer.close();
+    } catch (error) {
+      clearInterval(heartbeat);
+      if (isReplayCapacityError(error)) {
+        await writeFrame(
+          (replayCursor) =>
+            sseFrame(
+              Object.freeze({
+                type: "replay.capacity",
+                code: "operation_replay_capacity_exceeded",
+                ...(stream.operationId
+                  ? { operationId: stream.operationId }
+                  : {}),
+                ...(stream.threadId ? { threadId: stream.threadId } : {}),
+              }),
+              "replay.capacity",
+              replayCursor,
+            ),
+        ).catch(() => undefined);
+        await stream.cancel("operation_replay_capacity_exceeded").catch(() =>
+          undefined
+        );
+        await Promise.allSettled(pumps);
+        await frameTail;
+        await writer.close().catch(() => undefined);
+        return;
+      }
+      await stream.cancel(cancellationReason(error)).catch(() => undefined);
+      await writer.abort(error).catch(() => undefined);
+    } finally {
+      outputReader.releaseLock();
+    }
+  })();
+  const transportReader = transport.readable.getReader();
   const body = new ReadableStream<Uint8Array>({
     async pull(controller) {
-      try {
-        const next = await reader.read();
-        if (next.done) {
-          controller.close();
-          return;
-        }
-        const projected = options.projectSseOutput
-          ? await options.projectSseOutput(next.value, request)
-          : projectEventNativeSseOutput(next.value);
-        if (projected === null || projected === undefined) return;
-        const values = Array.isArray(projected) ? projected : [projected];
-        const position = durablePosition(next.value);
-        for (const value of values) {
-          controller.enqueue(
-            sseFrame(value, options.sseEventName?.(value), position),
-          );
-        }
-      } catch (error) {
-        await stream.cancel(cancellationReason(error)).catch(() => undefined);
-        controller.error(error);
-      }
+      const next = await transportReader.read();
+      if (next.done) controller.close();
+      else controller.enqueue(next.value);
     },
     async cancel(reason) {
-      await reader.cancel(reason).catch(() => undefined);
+      clearInterval(heartbeat);
+      await transportReader.cancel(reason).catch(() => undefined);
+      await outputReader.cancel(reason).catch(() => undefined);
       await stream.cancel(cancellationReason(reason)).catch(() => undefined);
+      await writer.abort(reason).catch(() => undefined);
     },
   });
   return new Response(body, {
@@ -346,6 +640,7 @@ function sseResponse(
       const headers = responseHeaders(options, applicationHeaders);
       headers.set("cache-control", "no-cache");
       headers.set("content-type", "text/event-stream; charset=utf-8");
+      headers.set("x-accel-buffering", "no");
       return headers;
     })(),
   });

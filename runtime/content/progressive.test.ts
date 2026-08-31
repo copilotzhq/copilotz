@@ -10,11 +10,14 @@ import {
   createS3BodyStore,
   digestContent,
   isContentError,
+  maintainProgressiveBodies,
   readBodyBytes,
+  readBodyRange,
 } from "./index.ts";
 import {
   createProgressiveBodyWriter,
   openProgressiveBodyFollower,
+  progressiveBodyTesting,
 } from "./progressive.ts";
 
 const encoder = new TextEncoder();
@@ -42,9 +45,9 @@ async function readAll(
 }
 
 async function withStore(
-  create: () => Promise<
-    Readonly<{ store: BodyStore; close?: () => Promise<void> }>
-  >,
+  create: () =>
+    | Readonly<{ store: BodyStore; close?: () => Promise<void> }>
+    | Promise<Readonly<{ store: BodyStore; close?: () => Promise<void> }>>,
   run: (store: BodyStore) => Promise<void>,
 ): Promise<void> {
   const handle = await create();
@@ -85,6 +88,7 @@ type StoredObject = {
   mediaType: string;
   digest: string;
   modified: string;
+  etag: string;
 };
 
 function xmlEscape(value: string): string {
@@ -92,8 +96,10 @@ function xmlEscape(value: string): string {
     .replaceAll(">", "&gt;");
 }
 
-async function createS3Handle() {
+function createS3Handle() {
   const objects = new Map<string, StoredObject>();
+  let etagSequence = 0;
+  const nextEtag = () => `"etag-${++etagSequence}"`;
   const server = Deno.serve(
     { hostname: "127.0.0.1", port: 0 },
     async (request) => {
@@ -106,7 +112,7 @@ async function createS3Handle() {
           headers: {
             "content-length": String(existing.bytes.byteLength),
             "content-type": existing.mediaType,
-            "etag": '"etag"',
+            "etag": existing.etag,
             "last-modified": existing.modified,
             "x-amz-meta-copilotz-sha256": existing.digest.slice(
               "sha256:".length,
@@ -116,7 +122,15 @@ async function createS3Handle() {
         });
       }
       if (request.method === "PUT") {
+        if (request.headers.get("if-none-match") === "*" && existing) {
+          return new Response(null, { status: 412 });
+        }
+        const ifMatch = request.headers.get("if-match");
+        if (ifMatch && (!existing || existing.etag !== ifMatch)) {
+          return new Response(null, { status: 412 });
+        }
         const bytes = new Uint8Array(await request.arrayBuffer());
+        const etag = nextEtag();
         objects.set(path, {
           bytes,
           mediaType: request.headers.get("content-type") ??
@@ -125,11 +139,12 @@ async function createS3Handle() {
             request.headers.get("x-amz-meta-copilotz-sha256") ?? ""
           }`,
           modified: new Date().toUTCString(),
+          etag,
         });
         return new Response(null, {
           status: 200,
           headers: {
-            etag: '"etag"',
+            etag,
             "last-modified": new Date().toUTCString(),
           },
         });
@@ -144,7 +159,9 @@ async function createS3Handle() {
           ).map(([key, value]) =>
             `<Contents><Key>${
               xmlEscape(key)
-            }</Key><LastModified>${value.modified}</LastModified><ETag>\"etag\"</ETag><Size>${value.bytes.byteLength}</Size><StorageClass>STANDARD</StorageClass></Contents>`
+            }</Key><LastModified>${value.modified}</LastModified><ETag>${
+              xmlEscape(value.etag)
+            }</ETag><Size>${value.bytes.byteLength}</Size><StorageClass>STANDARD</StorageClass></Contents>`
           ).join("");
           return new Response(
             `<?xml version="1.0" encoding="UTF-8"?><ListBucketResult><Name>bucket</Name><Prefix>${
@@ -153,17 +170,37 @@ async function createS3Handle() {
             { headers: { "content-type": "application/xml" } },
           );
         }
-        return existing
-          ? new Response(
-            existing.bytes.buffer.slice(
-              existing.bytes.byteOffset,
-              existing.bytes.byteOffset + existing.bytes.byteLength,
-            ) as ArrayBuffer,
-            { headers: { "content-type": existing.mediaType } },
-          )
-          : new Response(null, { status: 404 });
+        if (!existing) return new Response(null, { status: 404 });
+        const range = request.headers.get("range")?.match(
+          /^bytes=(\d+)-(\d+)$/,
+        );
+        if (range) {
+          const start = Number(range[1]);
+          const end = Math.min(Number(range[2]) + 1, existing.bytes.byteLength);
+          return new Response(existing.bytes.slice(start, end), {
+            status: 206,
+            headers: {
+              "content-type": existing.mediaType,
+              etag: existing.etag,
+              "content-range": `bytes ${start}-${
+                end - 1
+              }/${existing.bytes.byteLength}`,
+            },
+          });
+        }
+        return new Response(existing.bytes.slice(), {
+          headers: {
+            "content-type": existing.mediaType,
+            etag: existing.etag,
+            "last-modified": existing.modified,
+          },
+        });
       }
       if (request.method === "DELETE") {
+        const ifMatch = request.headers.get("if-match");
+        if (ifMatch && (!existing || existing.etag !== ifMatch)) {
+          return new Response(null, { status: 412 });
+        }
         objects.delete(path);
         return new Response(null, { status: 204 });
       }
@@ -189,6 +226,7 @@ async function createS3Handle() {
 }
 
 async function assertContract(store: BodyStore, bodyId: string) {
+  assertEquals(typeof store.readRange, "function");
   const writer = await createProgressiveBodyWriter(store, {
     bodyId,
     mediaType: "text/plain",
@@ -197,11 +235,19 @@ async function assertContract(store: BodyStore, bodyId: string) {
   const pending = readAll(follower.body);
   await writer.write(encoder.encode("hel"));
   await writer.write(encoder.encode("lo"));
+  assertEquals(
+    decoder.decode(await readBodyRange(store, { bodyId, offset: 1, end: 4 })),
+    "ell",
+  );
   const head = await writer.finalize();
   assertEquals(decoder.decode(await pending), "hello");
   assertEquals(head.byteLength, 5);
   assertEquals(head.digest, await digestContent(encoder.encode("hello")));
   assertEquals(await readBodyBytes(store, { bodyId }), encoder.encode("hello"));
+  assertEquals(
+    decoder.decode(await readBodyRange(store, { bodyId, offset: 2, end: 5 })),
+    "llo",
+  );
 }
 
 Deno.test("progressive writer finalizes a checksummed body for followers", async () => {
@@ -222,6 +268,74 @@ Deno.test("progressive followers start from a committed offset", async () => {
   const pending = readAll(follower.body);
   await writer.finalize();
   assertEquals(decoder.decode(await pending), "cd");
+});
+
+Deno.test("progressive cache is bounded and released at terminal state", async () => {
+  const store = createMemoryBodyStore();
+  const writer = await createProgressiveBodyWriter(store, {
+    bodyId: "stream/bounded",
+    mediaType: "text/plain",
+    maxBufferedBytes: 4,
+  });
+  await writer.write(encoder.encode("abcd"));
+  await writer.write(encoder.encode("efgh"));
+  assertEquals(progressiveBodyTesting.inspect(store, writer.bodyId), {
+    state: "open",
+    byteLength: 8,
+    bufferOffset: 4,
+    bufferedBytes: 4,
+    followers: 0,
+  });
+
+  const follower = await openProgressiveBodyFollower(store, {
+    bodyId: writer.bodyId,
+  });
+  const pending = readAll(follower.body);
+  await writer.finalize();
+  assertEquals(decoder.decode(await pending), "abcdefgh");
+  assertEquals(progressiveBodyTesting.inspect(store, writer.bodyId), null);
+
+  const abandoned = await createProgressiveBodyWriter(store, {
+    bodyId: "stream/released-abandon",
+    mediaType: "text/plain",
+    maxBufferedBytes: 2,
+  });
+  await abandoned.write(encoder.encode("partial"));
+  assertEquals(
+    progressiveBodyTesting.inspect(store, abandoned.bodyId)?.bufferedBytes,
+    2,
+  );
+  await abandoned.abandon();
+  assertEquals(progressiveBodyTesting.inspect(store, abandoned.bodyId), null);
+});
+
+Deno.test("failed recovery hydration aborts its newly fenced writer", async () => {
+  const base = createMemoryBodyStore({ protectionMs: 0 });
+  const original = await base.reserve({
+    bodyId: "stream/recovery-read-failure",
+    mediaType: "text/plain",
+  });
+  await base.append({
+    writer: original,
+    expectedOffset: 0,
+    appendId: "partial",
+    bytes: encoder.encode("partial"),
+  });
+  const failing: BodyStore = Object.freeze({
+    ...base,
+    follow() {
+      throw new Error("simulated recovery read failure");
+    },
+  });
+  await assertRejects(() =>
+    createProgressiveBodyWriter(failing, {
+      bodyId: original.bodyId,
+      mediaType: original.mediaType,
+      takeover: true,
+    })
+  );
+  assertEquals(await base.head({ bodyId: original.bodyId }), null);
+  assertEquals(progressiveBodyTesting.inspect(failing, original.bodyId), null);
 });
 
 Deno.test("only one progressive writer may own a body", async () => {
@@ -310,6 +424,10 @@ Deno.test("a slow follower does not block other followers on durable stores", as
     const slowReader = slow.body.getReader();
     await writer.write(encoder.encode("abcd"));
     await writer.write(encoder.encode("efgh"));
+    assertEquals(
+      progressiveBodyTesting.inspect(store, writer.bodyId)?.bufferedBytes,
+      2,
+    );
     const fast = await openProgressiveBodyFollower(store, {
       bodyId: "stream/slow",
     });
@@ -433,6 +551,41 @@ Deno.test("S3 BodyStore recovers a prefix from object staging", async () => {
       await readBodyBytes(recovered, { bodyId: "stream/crash" }),
       encoder.encode("xyz"),
     );
+  } finally {
+    await handle.close();
+  }
+});
+
+Deno.test("S3 maintenance discovers and idempotently removes expired staging", async () => {
+  const handle = await createS3Handle();
+  try {
+    const writer = await handle.store.reserve({
+      bodyId: "stream/expired-s3",
+      mediaType: "text/plain",
+    });
+    await handle.store.append({
+      writer,
+      expectedOffset: 0,
+      appendId: "partial",
+      bytes: encoder.encode("partial"),
+    });
+
+    const recovered = handle.reopen();
+    assertEquals(await maintainProgressiveBodies(recovered), {
+      examined: 1,
+      aborted: 1,
+      sealed: 0,
+      deferred: 0,
+      errors: [],
+    });
+    assertEquals(await recovered.head({ bodyId: writer.bodyId }), null);
+    assertEquals(await maintainProgressiveBodies(recovered), {
+      examined: 0,
+      aborted: 0,
+      sealed: 0,
+      deferred: 0,
+      errors: [],
+    });
   } finally {
     await handle.close();
   }

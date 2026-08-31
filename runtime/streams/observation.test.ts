@@ -25,6 +25,18 @@ Deno.test("stream output descriptors are exact, serializable transport data", ()
     metadata: { lane: "reply", source: "processor" },
   });
   assert(isStreamOutputDescriptor(descriptor));
+  assert(isStreamOutputDescriptor({
+    ...descriptor,
+    replayKey: "17",
+    streamOrdinal: "3",
+  }));
+  assertEquals(
+    isStreamOutputDescriptor({
+      ...descriptor,
+      streamOrdinal: "0",
+    }),
+    false,
+  );
   assertEquals(
     isStreamOutputDescriptor({
       ...descriptor,

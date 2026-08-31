@@ -19,6 +19,7 @@ import {
 } from "@copilotz/copilotz/actions";
 import type {
   ContentStreamOpenInput,
+  ContentStreamRetentionInput,
   ContentStreamWriter,
 } from "@copilotz/copilotz/streams";
 import {
@@ -91,6 +92,7 @@ type OpenedStream = {
   appends: Uint8Array[];
   closed: boolean;
   aborted: boolean;
+  retentions: ContentStreamRetentionInput[];
 };
 
 type FixtureOptions = Readonly<{
@@ -100,8 +102,26 @@ type FixtureOptions = Readonly<{
   resolved?: Readonly<Record<string, ResolvedContent>>;
   signal?: AbortSignal;
   onAppend?: () => void;
-  failStreamMaterialization?: boolean;
+  failStreamRetention?: boolean;
+  preparedAssets?: boolean;
 }>;
+
+function fixtureDigest(bytes: Uint8Array): `sha256:${string}` {
+  return `sha256:${
+    [...bytes].map((value) => value.toString(16).padStart(2, "0")).join("")
+  }`;
+}
+
+function fixtureBytes(value: ContentInput): Uint8Array | undefined {
+  if (typeof value === "string") return encoder.encode(value);
+  if ("assetId" in value) return undefined;
+  if (value.type === "text") return encoder.encode(value.text);
+  if (value.type === "json") {
+    const encoded = JSON.stringify(value.value);
+    return encoded === undefined ? undefined : encoder.encode(encoded);
+  }
+  return value.bytes.slice();
+}
 
 function fixture(options: FixtureOptions) {
   const prepared: Array<{
@@ -121,6 +141,7 @@ function fixture(options: FixtureOptions) {
   ): Promise<PreparedContent> => {
     prepared.push({ operationKey: prepareOptions.operationKey, input });
     const values = Array.isArray(input) ? input : [input];
+    const assets: PreparedContent["assets"][number][] = [];
     const content = values.map((value, index): ContentRef => {
       if (typeof value === "object" && value && "assetId" in value) {
         return value as ContentRef;
@@ -134,15 +155,30 @@ function fixture(options: FixtureOptions) {
         : type === "json"
         ? "application/json"
         : "text/plain";
+      const assetId = `prepared:${prepareOptions.operationKey}:${index}`;
+      if (options.preparedAssets) {
+        const bytes = fixtureBytes(value);
+        if (bytes) {
+          assets.push(Object.freeze({
+            id: assetId,
+            namespace: "tenant-a",
+            mediaType,
+            body: bytes,
+            byteLength: bytes.byteLength,
+            digest: fixtureDigest(bytes),
+            idempotencyKey: `${prepareOptions.operationKey}:${index}`,
+          }));
+        }
+      }
       return ref(
-        `prepared:${prepareOptions.operationKey}:${index}`,
+        assetId,
         kind,
         mediaType,
       );
     });
     return Promise.resolve(Object.freeze({
       content: Object.freeze(content),
-      assets: Object.freeze([]),
+      assets: Object.freeze(assets),
     }));
   };
 
@@ -166,10 +202,6 @@ function fixture(options: FixtureOptions) {
       materialize(input: DurableContentInput) {
         materialized.push(input);
         const batch = input as PreparedContent;
-        if (
-          options.failStreamMaterialization && !Array.isArray(input) &&
-          batch.content[0]?.assetId.startsWith("stream:")
-        ) throw new Error("stream materialization failed");
         return Promise.resolve(Array.isArray(input) ? input : batch.content);
       },
       publish() {
@@ -207,6 +239,7 @@ function fixture(options: FixtureOptions) {
           appends: [],
           closed: false,
           aborted: false,
+          retentions: [],
         };
         opened.push(record);
         const writer: ContentStreamWriter = Object.freeze({
@@ -226,15 +259,49 @@ function fixture(options: FixtureOptions) {
           },
           close({ assetId }: { assetId: string }) {
             record.closed = true;
+            const bytes = new Uint8Array(record.appends.flatMap((item) => [
+              ...item,
+            ]));
+            const digest = fixtureDigest(bytes);
             return Promise.resolve(Object.freeze({
               content: Object.freeze([
                 ref(assetId, input.kind ?? "text", input.mediaType),
               ]),
-              assets: Object.freeze([]),
+              assets: options.preparedAssets
+                ? Object.freeze([Object.freeze({
+                  id: assetId,
+                  namespace: "tenant-a",
+                  mediaType: input.mediaType,
+                  body: new Uint8Array(),
+                  readyBody: Object.freeze({
+                    bodyId: `stream-body:${input.id}`,
+                    state: "ready" as const,
+                    byteLength: bytes.byteLength,
+                    mediaType: input.mediaType,
+                    digest,
+                    maintenanceVersion: 1,
+                  }),
+                  location: Object.freeze({
+                    kind: "memory" as const,
+                    backendId: "fixture",
+                    key: `stream-body:${input.id}`,
+                  }),
+                  byteLength: bytes.byteLength,
+                  digest,
+                  idempotencyKey: `stream:${input.id}`,
+                })])
+                : Object.freeze([]),
             }));
           },
           abort() {
             record.aborted = true;
+            return Promise.resolve();
+          },
+          retain(input: ContentStreamRetentionInput) {
+            if (options.failStreamRetention) {
+              throw new Error("stream retention failed");
+            }
+            record.retentions.push(Object.freeze({ ...input }));
             return Promise.resolve();
           },
           [Symbol.asyncDispose]() {
@@ -1490,11 +1557,114 @@ Deno.test("llm.call publishes frames only through Streams and materializes them"
     ),
     "hello",
   );
+  assertEquals(test.opened[0].appends.length, 1);
+  assertEquals(test.opened[1].appends.length, 1);
   assert(test.opened.every((stream) => stream.closed && !stream.aborted));
-  assertEquals(test.materialized.length, 3);
+  assertEquals(test.materialized.length, 1);
   assertEquals(test.progressCalls(), 0);
   assertEquals(output.content[0].assetId, "prepared:attempt:0:content:0");
   assert(!output.content[0].assetId.startsWith("stream:"));
+});
+
+Deno.test("llm.call reuses an exactly equivalent content stream Body", async () => {
+  const frames = new ReadableStream<LlmAdapterFrame>({
+    start(controller) {
+      controller.enqueue({
+        lane: "content",
+        mediaType: "text/plain; charset=utf-8",
+        bytes: encoder.encode("hel"),
+      });
+      controller.enqueue({
+        lane: "content",
+        mediaType: "text/plain; charset=utf-8",
+        bytes: encoder.encode("lo"),
+      });
+      controller.close();
+    },
+  });
+  const test = fixture({
+    models: { primary: model("provider", "model-a") },
+    adapters: {
+      provider: {
+        call() {
+          return invocation({
+            content: {
+              type: "text",
+              text: "hello",
+              mediaType: "text/plain; charset=utf-8",
+            },
+            attempts: [{ status: "completed" }],
+          }, frames);
+        },
+      },
+    },
+    preparedAssets: true,
+  });
+
+  const output = await callLlmAction.execute({
+    ...emptyInput,
+    stream: { id: "equivalent" },
+  }, test.context);
+
+  assertEquals(test.materialized.length, 1);
+  const batch = test.materialized[0] as PreparedContent;
+  assertEquals(batch.content[0].assetId, "prepared:attempt:0:content:0");
+  assertEquals(batch.assets[0].id, "prepared:attempt:0:content:0");
+  assertEquals(
+    batch.assets[0].readyBody?.bodyId,
+    "stream-body:equivalent:content:text_2Fplain_3B_20charset_3Dutf-8",
+  );
+  assertEquals(batch.assets[0].body.byteLength, 0);
+  assertEquals(output.content, batch.content);
+  assertEquals(test.opened[0].retentions, [{
+    assetId: "prepared:attempt:0:content:0",
+    retention: "canonical",
+  }]);
+});
+
+Deno.test("llm.call retains a non-equivalent stream as an observation Body", async () => {
+  const frames = new ReadableStream<LlmAdapterFrame>({
+    start(controller) {
+      controller.enqueue({
+        lane: "content",
+        mediaType: "text/plain; charset=utf-8",
+        bytes: encoder.encode("visible draft"),
+      });
+      controller.close();
+    },
+  });
+  const test = fixture({
+    models: { primary: model("provider", "model-a") },
+    adapters: {
+      provider: {
+        call() {
+          return invocation({
+            content: "normalized final",
+            attempts: [{ status: "completed" }],
+          }, frames);
+        },
+      },
+    },
+    preparedAssets: true,
+  });
+
+  const output = await callLlmAction.execute({
+    ...emptyInput,
+    stream: { id: "different" },
+  }, test.context);
+
+  assertEquals(test.materialized.length, 1);
+  const final = test.materialized[0] as PreparedContent;
+  assertEquals(final.content[0].assetId, "prepared:attempt:0:content:0");
+  assertEquals(output.content, final.content);
+  assertEquals(test.opened[0].retentions.length, 1);
+  assertEquals(test.opened[0].retentions[0].retention, "observation");
+  assertEquals(
+    test.opened[0].retentions[0].retention === "observation"
+      ? test.opened[0].retentions[0].expiresAt
+      : undefined,
+    "2026-08-23T00:15:00.000Z",
+  );
 });
 
 Deno.test("llm.call never falls back after publishing visible output", async () => {
@@ -2165,7 +2335,7 @@ Deno.test("llm.call does not fall back on abort", async () => {
   assertEquals(backupCalls, 0);
 });
 
-Deno.test("llm.call settles every opened writer when stream materialization fails", async () => {
+Deno.test("llm.call settles every opened writer when stream retention fails", async () => {
   let backupCalls = 0;
   const primary: LlmAdapter = {
     call() {
@@ -2204,7 +2374,7 @@ Deno.test("llm.call settles every opened writer when stream materialization fail
       backup: model("backup", "model-b"),
     },
     adapters: { primary, backup },
-    failStreamMaterialization: true,
+    failStreamRetention: true,
   });
   await assertRejects(
     async () =>
@@ -2214,12 +2384,11 @@ Deno.test("llm.call settles every opened writer when stream materialization fail
         stream: { id: "visible" },
       }, test.context),
     Error,
-    "stream materialization failed",
+    "stream retention failed",
   );
   assertEquals(backupCalls, 0);
   assertEquals(test.opened.length, 2);
-  assert(test.opened[0].closed);
-  assert(test.opened[1].aborted);
+  assert(test.opened.every((stream) => stream.closed && !stream.aborted));
   assertEquals(test.progressValues(), [{
     schema: "copilotz.llm.attempt-accounting.v1",
     attempts: [{

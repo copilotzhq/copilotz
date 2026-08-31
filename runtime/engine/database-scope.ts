@@ -1,4 +1,5 @@
 import {
+  assetBodySchemaPrefix,
   type BodyStore,
   type ContentPreparer,
   createContentResolver,
@@ -6,12 +7,17 @@ import {
   createDatabaseBodyStore,
   type DatabaseAssetRepository,
   maintainProgressiveBodies,
+  readBodyBytes,
+  type ReadBodyRangeInput,
 } from "../content/index.ts";
 import { collectionAssetAdopterFor } from "../content/database-repository.ts";
 import {
   type ContentStreamFollowInput,
   createContentStreamRuntime,
+  DEFAULT_OPERATION_REPLAY_RETENTION_MS,
+  DEFAULT_OPERATION_STREAM_RETENTION_MS,
 } from "../streams/index.ts";
+import type { OperationCatalog } from "../streams/catalog.ts";
 import {
   isRegisteredActionLifecycleEventType,
   isReservedActionLifecycleDeduplicationId,
@@ -84,6 +90,7 @@ export type DatabaseScopeRuntime = Readonly<{
   capabilities: DatabaseScopeCapabilities;
   streamBodyStore: BodyStore;
   transients: TransientProcessorSet;
+  operationCatalog: OperationCatalog;
 }>;
 
 export type CreateDatabaseScopeOptions = Readonly<{
@@ -100,6 +107,7 @@ export type CreateDatabaseScopeOptions = Readonly<{
   ): Promise<LiveEventDispatchHandle>;
   store?: EventStore;
   transients: TransientProcessorSet;
+  operationCatalog: OperationCatalog;
 }>;
 
 function isKernelCollection(value: unknown): value is CollectionDefinition {
@@ -124,6 +132,8 @@ export function createDatabaseScope(
     maxAttempts: engine.maxAttempts,
     retryBaseMs: engine.retryBaseMs,
     retryCapMs: engine.retryCapMs,
+    indexOperationEvent: (transaction, input) =>
+      options.operationCatalog.indexEvent(transaction, input),
   });
   if (store.databaseSchema !== databaseSchema) {
     throw new TypeError(
@@ -175,6 +185,10 @@ export function createDatabaseScope(
       createId: engine.createId,
     })
     : undefined;
+  const streamBodyPrefix = assetBodySchemaPrefix({
+    prefix: engine.assetStorage?.prefix,
+    databaseSchema,
+  });
   const collections = createCollectionRuntime({
     coordinator,
     session: engine.session,
@@ -388,6 +402,8 @@ export function createDatabaseScope(
   });
   const recover: CopilotzEngineDatabaseScope["recover"] = (recovery = {}) =>
     coordinator.recover({ ...recovery, databaseSchema });
+  let progressiveMaintenanceAfter: string | undefined;
+  let openStreamReconcileAfter: string | undefined;
   const maintenance: CopilotzEngineDatabaseScope["maintenance"] = async (
     maintenanceOptions = {},
   ) => {
@@ -406,16 +422,121 @@ export function createDatabaseScope(
       now: maintenanceOptions.now,
       orphanAfterMs: maintenanceOptions.assetOrphanAfterMs,
       limit: maintenanceOptions.limit,
+      isBodyRetained: (bodyId) =>
+        options.operationCatalog.hasStreamBody(bodyId),
     });
     const progressiveBodies = await maintainProgressiveBodies(streamBodyStore, {
       limit: maintenanceOptions.limit,
+      ...(progressiveMaintenanceAfter
+        ? { after: progressiveMaintenanceAfter }
+        : {}),
     });
+    progressiveMaintenanceAfter = progressiveBodies.after;
+    const openStreams = await options.operationCatalog.listOpenStreams({
+      ...(openStreamReconcileAfter
+        ? { afterReplayKey: openStreamReconcileAfter }
+        : {}),
+      limit: maintenanceOptions.limit,
+    });
+    let reconciledStreams = 0;
+    for (const stream of openStreams) {
+      openStreamReconcileAfter = stream.replayKey;
+      const head = await streamBodyStore.head({ bodyId: stream.bodyId });
+      if (!head || head.state === "aborted") {
+        const transitioned = await options.operationCatalog.abortStream({
+          namespace: stream.namespace,
+          operationId: stream.operationId,
+          streamId: stream.streamId,
+        });
+        if (transitioned) reconciledStreams += 1;
+      } else if (head?.state === "ready") {
+        const transitioned = await options.operationCatalog.sealStream({
+          namespace: stream.namespace,
+          operationId: stream.operationId,
+          streamId: stream.streamId,
+          body: head,
+          expiresAt: new Date(
+            (maintenanceOptions.now ?? new Date()).getTime() +
+              DEFAULT_OPERATION_STREAM_RETENTION_MS,
+          ).toISOString(),
+        });
+        if (transitioned) reconciledStreams += 1;
+      }
+    }
+    if (
+      openStreams.length < (maintenanceOptions.limit ?? 1_000)
+    ) openStreamReconcileAfter = undefined;
+    const reconciled = await options.operationCatalog.reconcile({
+      limit: maintenanceOptions.limit,
+    });
+    const operationRetentionMs = maintenanceOptions.operationRetentionMs ??
+      DEFAULT_OPERATION_REPLAY_RETENTION_MS;
+    const expired = maintenanceOptions.operationRetentionMs === null
+      ? Object.freeze([])
+      : await options.operationCatalog.listExpiredObservationStreams({
+        now: maintenanceOptions.now,
+        operationRetentionMs,
+        limit: maintenanceOptions.operationObservationLimit ??
+          maintenanceOptions.limit,
+      });
+    let prunedCatalogEntries = 0;
+    let observationRetirementBlocked = 0;
+    const readyGarbageCollection =
+      engine.assetStorage?.adapter?.deployment.readyGarbageCollection ?? true;
+    for (const stream of expired) {
+      const head = await streamBodyStore.head({ bodyId: stream.bodyId });
+      let graphOwned = false;
+      if (head?.state === "ready" && readyGarbageCollection) {
+        const retirement = await assets.retireUnownedReadyBody({
+          store: streamBodyStore,
+          body: head,
+        });
+        graphOwned = retirement.status === "owned";
+        if (retirement.status === "blocked") {
+          observationRetirementBlocked += 1;
+          continue;
+        }
+      }
+      if (
+        !graphOwned && await streamBodyStore.head({ bodyId: stream.bodyId })
+      ) {
+        observationRetirementBlocked += 1;
+        continue;
+      }
+      // Once replay grace has elapsed, a graph-owned Body is authoritative.
+      // A crash between Asset materialization and catalog retain must therefore
+      // retire the stale observation row instead of blocking it forever.
+      if (
+        await options.operationCatalog.pruneStream({
+          namespace: stream.namespace,
+          operationId: stream.operationId,
+          streamId: stream.streamId,
+        })
+      ) prunedCatalogEntries += 1;
+    }
+    const terminal = maintenanceOptions.operationRetentionMs === null
+      ? Object.freeze({ streams: 0, events: 0, operations: 0 })
+      : await options.operationCatalog.pruneTerminalMetadata({
+        now: maintenanceOptions.now,
+        retentionMs: operationRetentionMs,
+        limit: maintenanceOptions.limit,
+      });
     const result: CopilotzEngineMaintenanceResult = Object.freeze({
       recovered: recovery.handles.length,
       dispatchFailures: recovery.failures.length,
       compacted: Object.freeze(compacted),
       progressiveBodies,
       assets: assetMaintenance,
+      operations: Object.freeze({
+        reconciled,
+        reconciledStreams,
+        expiredObservationStreams: expired.length,
+        observationRetirementBlocked,
+        prunedCatalogEntries,
+        prunedTerminalStreams: terminal.streams,
+        prunedOperationEvents: terminal.events,
+        prunedOperations: terminal.operations,
+      }),
     });
     return result;
   };
@@ -429,10 +550,28 @@ export function createDatabaseScope(
           namespace,
           store: streamBodyStore,
           createId: engine.createId,
+          bodyPrefix: streamBodyPrefix,
         }).follow(input);
         return follower.body;
       },
+      async readCommittedRange(input: ReadBodyRangeInput) {
+        if (streamBodyStore.readRange) {
+          return await streamBodyStore.readRange(input);
+        }
+        // Compatibility fallback for third-party stores compiled before finite
+        // range reads. Never attach their polling follower: wait until Ready,
+        // then perform one bounded replay read.
+        const head = await streamBodyStore.head({ bodyId: input.bodyId });
+        if (head?.state !== "ready") return null;
+        const bytes = await readBodyBytes(streamBodyStore, {
+          bodyId: input.bodyId,
+        });
+        const start = Math.min(input.offset, bytes.byteLength);
+        const end = Math.min(input.end, bytes.byteLength);
+        return bytes.slice(start, end);
+      },
     }),
+    operations: options.operationCatalog,
     events,
     deliveries,
     recover,
@@ -446,5 +585,6 @@ export function createDatabaseScope(
     capabilities,
     streamBodyStore,
     transients: options.transients,
+    operationCatalog: options.operationCatalog,
   });
 }

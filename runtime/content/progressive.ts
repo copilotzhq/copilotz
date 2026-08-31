@@ -31,7 +31,8 @@ type LiveBody = {
   bodyId: string;
   mediaType: string;
   byteLength: number;
-  discarded: number;
+  storageDiscarded: number;
+  bufferOffset: number;
   chunks: Uint8Array[];
   state: "open" | "finalized" | "abandoned";
   writerOpen: boolean;
@@ -66,7 +67,7 @@ function minFollowerOffset(live: LiveBody): number {
   for (const follower of live.followers) {
     if (follower.offset < min) min = follower.offset;
   }
-  return Math.max(min, live.discarded);
+  return Math.max(min, live.storageDiscarded);
 }
 
 function sliceChunks(
@@ -99,14 +100,59 @@ function readCommitted(
   offset: number,
   end: number,
 ): Uint8Array {
-  const start = Math.max(offset, live.discarded);
+  const start = Math.max(offset, live.bufferOffset);
   const stop = Math.min(end, live.byteLength);
   if (stop <= start) return new Uint8Array();
   return sliceChunks(
     live.chunks,
-    start - live.discarded,
-    stop - live.discarded,
+    start - live.bufferOffset,
+    stop - live.bufferOffset,
   );
+}
+
+function trimBufferedPrefix(live: LiveBody, offset: number): void {
+  const target = Math.min(
+    live.byteLength,
+    Math.max(live.bufferOffset, offset),
+  );
+  let remaining = target - live.bufferOffset;
+  while (remaining > 0 && live.chunks.length > 0) {
+    const first = live.chunks[0];
+    if (remaining >= first.byteLength) {
+      remaining -= first.byteLength;
+      live.chunks.shift();
+      continue;
+    }
+    live.chunks[0] = first.slice(remaining);
+    remaining = 0;
+  }
+  live.bufferOffset = target;
+}
+
+function trimLiveBuffer(store: BodyStore, live: LiveBody): void {
+  if (store.kind === "memory" && live.followers.size > 0) {
+    // Preserve the existing memory-store backpressure contract. Once every
+    // follower has consumed a prefix, its duplicate process-local copy can go.
+    trimBufferedPrefix(live, minFollowerOffset(live));
+    return;
+  }
+  trimBufferedPrefix(
+    live,
+    Math.max(
+      live.storageDiscarded,
+      live.byteLength - live.maxBufferedBytes,
+    ),
+  );
+}
+
+function releaseLiveBody(
+  table: Map<string, LiveBody>,
+  live: LiveBody,
+): void {
+  live.chunks.length = 0;
+  live.bufferOffset = live.byteLength;
+  if (table.get(live.bodyId) === live) table.delete(live.bodyId);
+  notify(live);
 }
 
 export async function createProgressiveBodyWriter(
@@ -121,6 +167,13 @@ export async function createProgressiveBodyWriter(
 ): Promise<ProgressiveBodyWriter> {
   const bodyId = input.bodyId.trim();
   if (!bodyId) throw new TypeError("Progressive bodyId must be non-empty.");
+  const maxBufferedBytes = input.maxBufferedBytes ??
+    DEFAULT_MAX_BUFFERED_BYTES;
+  if (!Number.isSafeInteger(maxBufferedBytes) || maxBufferedBytes <= 0) {
+    throw new TypeError(
+      "Progressive maxBufferedBytes must be a positive integer.",
+    );
+  }
   const table = livesFor(store);
   const existing = table.get(bodyId);
   if (existing?.writerOpen) {
@@ -132,7 +185,7 @@ export async function createProgressiveBodyWriter(
     }
     existing.state = "abandoned";
     existing.writerOpen = false;
-    notify(existing);
+    releaseLiveBody(table, existing);
   }
   const takeoverHead = input.takeover ? await store.head({ bodyId }) : null;
   const expectedGeneration = takeoverHead?.state !== "ready"
@@ -143,30 +196,39 @@ export async function createProgressiveBodyWriter(
     mediaType: input.mediaType,
     ...(expectedGeneration !== undefined ? { expectedGeneration } : {}),
   });
-  const initialChunks = writer.byteLength > 0
-    ? [
-      await readStreamBytes(
-        await store.follow({
-          bodyId,
-          offset: writer.discarded,
-        }),
-      ),
-    ]
-    : [];
+  const bufferOffset = Math.max(
+    writer.discarded,
+    writer.byteLength - maxBufferedBytes,
+  );
+  let initialChunks: Uint8Array[] = [];
+  try {
+    initialChunks = writer.byteLength > bufferOffset
+      ? [
+        await readStreamPrefix(
+          await store.follow({
+            bodyId,
+            offset: bufferOffset,
+          }),
+          writer.byteLength - bufferOffset,
+        ),
+      ]
+      : [];
+  } catch (error) {
+    await store.abort({ writer }).catch(() => undefined);
+    throw error;
+  }
   const live: LiveBody = {
     bodyId,
     mediaType: input.mediaType,
     byteLength: writer.byteLength,
-    discarded: writer.discarded,
+    storageDiscarded: writer.discarded,
+    bufferOffset,
     chunks: initialChunks,
     state: "open",
     writerOpen: true,
-    maxBufferedBytes: Math.max(
-      1,
-      input.maxBufferedBytes ?? DEFAULT_MAX_BUFFERED_BYTES,
-    ),
-    followers: existing?.followers ?? new Set(),
-    waiters: existing?.waiters ?? new Set(),
+    maxBufferedBytes,
+    followers: new Set(),
+    waiters: new Set(),
   };
   table.set(bodyId, live);
   notify(live);
@@ -187,7 +249,7 @@ export async function createProgressiveBodyWriter(
     });
     live.state = "finalized";
     live.writerOpen = false;
-    notify(live);
+    releaseLiveBody(table, live);
     return head;
   };
 
@@ -231,6 +293,7 @@ export async function createProgressiveBodyWriter(
         byteLength: result.endOffset,
         protection: result.protection,
       };
+      trimLiveBuffer(store, live);
       notify(live);
       return result;
     },
@@ -249,8 +312,11 @@ export async function createProgressiveBodyWriter(
       live.state = "abandoned";
       live.writerOpen = false;
       notify(live);
-      await store.abort({ writer });
-      table.delete(bodyId);
+      try {
+        await store.abort({ writer });
+      } finally {
+        releaseLiveBody(table, live);
+      }
     },
   });
 }
@@ -269,7 +335,7 @@ export async function openProgressiveBodyFollower(
     );
   }
   if (live && live.state === "open") {
-    if (start < live.discarded) {
+    if (start < live.storageDiscarded) {
       throw createContentError(
         "asset_deleted",
         "Progressive asset prefix was discarded.",
@@ -403,7 +469,7 @@ function followLive(
   const body = new ReadableStream<Uint8Array>({
     async pull(controller) {
       while (true) {
-        if (cursor.offset < live.discarded) {
+        if (cursor.offset < live.storageDiscarded) {
           live.followers.delete(cursor);
           controller.error(
             createContentError(
@@ -418,20 +484,12 @@ function followLive(
           if (cursor.offset < live.byteLength) {
             const stored = await store.follow({
               bodyId,
-              offset: Math.max(0, cursor.offset - live.discarded),
+              offset: cursor.offset,
             });
             const rest = await readStreamBytes(stored);
             if (rest.byteLength > 0) controller.enqueue(rest);
           }
           controller.close();
-          return;
-        }
-        if (live.byteLength > cursor.offset) {
-          const end = live.byteLength;
-          const next = readCommitted(live, cursor.offset, end);
-          cursor.offset = end;
-          notify(live);
-          if (next.byteLength > 0) controller.enqueue(next);
           return;
         }
         if (live.state === "abandoned") {
@@ -444,11 +502,37 @@ function followLive(
           );
           return;
         }
+        if (live.byteLength > cursor.offset) {
+          if (cursor.offset < live.bufferOffset) {
+            const end = Math.min(
+              live.byteLength,
+              live.bufferOffset,
+              cursor.offset + live.maxBufferedBytes,
+            );
+            const next = await readStreamPrefix(
+              await store.follow({ bodyId, offset: cursor.offset }),
+              end - cursor.offset,
+            );
+            cursor.offset = end;
+            trimLiveBuffer(store, live);
+            notify(live);
+            if (next.byteLength > 0) controller.enqueue(next);
+            return;
+          }
+          const end = live.byteLength;
+          const next = readCommitted(live, cursor.offset, end);
+          cursor.offset = end;
+          trimLiveBuffer(store, live);
+          notify(live);
+          if (next.byteLength > 0) controller.enqueue(next);
+          return;
+        }
         await wait(live);
       }
     },
     cancel() {
       live.followers.delete(cursor);
+      trimLiveBuffer(store, live);
       notify(live);
     },
   }, { highWaterMark: 0 });
@@ -459,6 +543,38 @@ function followLive(
     mediaType: live.mediaType,
     body,
   });
+}
+
+async function readStreamPrefix(
+  stream: ReadableStream<Uint8Array>,
+  length: number,
+): Promise<Uint8Array> {
+  if (length <= 0) {
+    await stream.cancel().catch(() => undefined);
+    return new Uint8Array();
+  }
+  const reader = stream.getReader();
+  const bytes = new Uint8Array(length);
+  let offset = 0;
+  try {
+    while (offset < length) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const take = Math.min(value.byteLength, length - offset);
+      bytes.set(value.subarray(0, take), offset);
+      offset += take;
+    }
+  } finally {
+    reader.releaseLock();
+    await stream.cancel().catch(() => undefined);
+  }
+  if (offset !== length) {
+    throw createContentError(
+      "asset_corrupted",
+      "Progressive asset staging ended before its committed offset.",
+    );
+  }
+  return bytes;
 }
 
 async function readStreamBytes(
@@ -481,3 +597,21 @@ async function readStreamBytes(
   }
   return bytes;
 }
+
+/** @internal Deterministic cache inspection for lifecycle regression tests. */
+export const progressiveBodyTesting = Object.freeze({
+  inspect(store: BodyStore, bodyId: string) {
+    const live = lives.get(store)?.get(bodyId);
+    if (!live) return null;
+    return Object.freeze({
+      state: live.state,
+      byteLength: live.byteLength,
+      bufferOffset: live.bufferOffset,
+      bufferedBytes: live.chunks.reduce(
+        (total, chunk) => total + chunk.byteLength,
+        0,
+      ),
+      followers: live.followers.size,
+    });
+  },
+});

@@ -46,10 +46,13 @@ their authenticated durable result instead of repeating a settled effect.
 
 ```ts
 type ApplicationSendHandle = Readonly<{
+  operationId: string;
   eventId: string;
   correlationId: string;
+  replayCursor: string;
   outputs: ReadableStream<ApplicationOutput>;
   done: Promise<void>;
+  detach(reason?: string): Promise<void>;
   cancel(reason?: string): Promise<void>;
 }>;
 ```
@@ -65,9 +68,10 @@ operation settlement.
 
 ## Recovery ownership
 
-Recovery, leasing, dead-letter retry/discard, and delivery compaction are
-runtime/host authorities, not methods on the public application. The public
-surface remains `{ send, observe, close }`.
+Recovery ownership, leasing, and dead-letter retry/discard remain runtime/host
+authorities. Public `maintenance()` exposes only bounded safe maintenance, and
+the operation APIs expose status, reconnect, and explicit durable cancellation;
+they do not expose delivery mutation.
 
 Copilotz-owned persistence reconnects, revalidates every opened v4 schema, and
 recovers durable obligations. It never replays the indeterminate SQL operation
@@ -78,3 +82,33 @@ cancelled.
 Embeddings that need operational inspection use the trusted Gateway `/v3` server
 boundary or their own internal persistence tooling rather than exposing delivery
 mutation to ordinary application code.
+
+## Additive reconnect catalog provisioning
+
+Reconnect metadata is stored in additive operational tables; it does not change
+the immutable Core Event schema v4 marker. Normal engine startup provisions both
+v4 and the operation catalog. Hosts that set
+`provisionDefaultDatabaseSchema: false` must provision the catalog explicitly,
+once per physical tenant schema, before starting the new runtime:
+
+```ts
+import { provisionOperationCatalog } from "@copilotz/copilotz/streams";
+
+await provisionOperationCatalog(sqlSession, databaseSchema);
+```
+
+Tenant selection on the request path only validates these tables and never runs
+DDL. Therefore multi-schema hosts should apply the additive provisioning step as
+a deployment migration before routing traffic to a 0.64 runtime. Missing tables
+fail startup/scope opening with `copilotz_operation_catalog_not_provisioned`;
+existing v4 Events and deliveries remain unchanged.
+
+Replay cursors use a per-operation stream high-watermark plus sparse byte
+offsets for lanes that are still incomplete. Sequential completed lanes remain
+constant-size even for deep multi-agent runs. The current cursor envelope is
+bounded to 256 simultaneous sparse lanes/operations and 16 KiB before base64url
+encoding. A checkpoint/history request that exceeds that active window returns
+`409 operation_replay_capacity_exceeded`; an already-open feed emits the same
+condition as a `replay.capacity` frame, detaches the observer without cancelling
+the durable operation, and closes normally. Clients should refresh canonical
+history and retry until enough lanes have sealed for the checkpoint to compact.

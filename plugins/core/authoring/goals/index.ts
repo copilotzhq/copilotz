@@ -3,7 +3,7 @@
 import type {
   ApplicationOutput,
   ApplicationSendHandle,
-  CopilotzApplication,
+  ApplicationSendInput,
 } from "@copilotz/copilotz/application";
 import type { ContentSequence } from "@copilotz/copilotz/content";
 import type { ResolvedCopilotzEvent } from "@copilotz/copilotz/events";
@@ -107,6 +107,15 @@ export type GoalHandle = Readonly<{
   events: ReadableStream<GoalEvent>;
   done: Promise<GoalResult>;
   cancel(reason?: string): Promise<void>;
+}>;
+
+type GoalSendHandle = Pick<
+  ApplicationSendHandle,
+  "eventId" | "correlationId" | "outputs" | "done" | "cancel"
+>;
+
+type GoalApplication = Readonly<{
+  send(input: ApplicationSendInput): Promise<GoalSendHandle>;
 }>;
 
 type MessageRecord = Readonly<{
@@ -284,7 +293,7 @@ function errorMessage(
 }
 
 async function completedTurn(
-  application: CopilotzApplication,
+  application: GoalApplication,
   input: Readonly<{
     goalId: string;
     turn: number;
@@ -292,7 +301,7 @@ async function completedTurn(
     scope: GoalScope;
     content: CoreMessageInput["content"];
     onOutput?: RunGoalOptions["onOutput"];
-    setActive(handle?: ApplicationSendHandle): void;
+    setActive(handle?: GoalSendHandle): void;
   }>,
 ): Promise<GoalTurn> {
   const handle = await application.send(message({
@@ -377,7 +386,7 @@ async function completedTurn(
  * durable record; this handle intentionally has no independent persistence.
  */
 export function runGoal(
-  application: CopilotzApplication,
+  application: GoalApplication,
   options: RunGoalOptions,
 ): GoalHandle {
   if (!application || typeof application.send !== "function") {
@@ -434,7 +443,7 @@ export function runGoal(
     }
   };
 
-  let active: ApplicationSendHandle | undefined;
+  let active: GoalSendHandle | undefined;
   let cancelledReason = options.signal?.aborted
     ? errorMessage(options.signal.reason ?? "Goal aborted.", "Goal aborted.")
     : undefined;

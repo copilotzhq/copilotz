@@ -92,7 +92,17 @@ const validConfiguration = {
 Deno.test("package configuration composes plugins, resources, persistence, and engine policy", async () => {
   const application = await createCopilotz(validConfiguration);
   try {
-    assertEquals(Object.keys(application).sort(), ["close", "observe", "send"]);
+    assertEquals(Object.keys(application).sort(), [
+      "attach",
+      "cancelOperation",
+      "close",
+      "listOperations",
+      "maintenance",
+      "observe",
+      "operationCheckpoint",
+      "operationStatus",
+      "send",
+    ]);
   } finally {
     await application.close();
   }

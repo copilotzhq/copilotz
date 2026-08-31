@@ -8,6 +8,7 @@ import { actionDefinitionHasSecrets } from "../actions/protected-lifecycle.ts";
 import { createSecretAdapter } from "../actions/secret-adapter.ts";
 import { openProtectedEventBody } from "../actions/protected-event.ts";
 import {
+  assetBodySchemaPrefix,
   createBodyStorageRuntime,
   createContentPreparer,
 } from "../content/index.ts";
@@ -49,6 +50,11 @@ import type {
   CreateCopilotzEngineOptions,
   EngineContextSeed,
 } from "./types.ts";
+import {
+  createOperationCatalog,
+  provisionOperationCatalog,
+  validateOperationCatalog,
+} from "../streams/catalog.ts";
 
 type AdditionalDatabaseScope = Readonly<{
   runtime: DatabaseScopeRuntime;
@@ -91,6 +97,23 @@ export async function createCopilotzEngine(
     ...(secretAdapter ? { secretAdapter } : {}),
   });
   await prepareDefaultDatabaseSchema(options, databaseSchema);
+  if (options.provisionDefaultDatabaseSchema === false) {
+    await validateOperationCatalog(options.session, databaseSchema);
+  } else {
+    await provisionOperationCatalog(options.session, databaseSchema);
+  }
+  const operationCatalog = createOperationCatalog(
+    options.session,
+    databaseSchema,
+    {
+      beforeTerminal: ({ namespace, operationId }) =>
+        executor.settleOutputs({
+          databaseSchema,
+          namespace,
+          settlementScopeId: operationId,
+        }),
+    },
+  );
   const now = options.now ?? (() => new Date());
   const eventHub = options.eventHub ?? createCopilotzEventHub();
   const ownsEventHub = options.eventHub === undefined;
@@ -124,6 +147,8 @@ export async function createCopilotzEngine(
     maxAttempts: options.maxAttempts,
     retryBaseMs: options.retryBaseMs,
     retryCapMs: options.retryCapMs,
+    indexOperationEvent: (transaction, input) =>
+      operationCatalog.indexEvent(transaction, input),
   });
   const additionalScopes = new Map<
     string,
@@ -156,6 +181,8 @@ export async function createCopilotzEngine(
       resolver;
     const scopedEventHub = additional?.hub ?? eventHub;
     const scopedStore = additional?.runtime.store ?? store;
+    const scopedOperationCatalog = additional?.runtime.operationCatalog ??
+      operationCatalog;
     const scopedCoordinator = additional?.runtime.coordinator ??
       primaryRuntime?.coordinator;
     if (!scopedCapabilities || !scopedResolver) {
@@ -172,6 +199,11 @@ export async function createCopilotzEngine(
       resolver: scopedResolver,
       collections: scopedCapabilities.collections,
       streamBodyStore: scopedCapabilities.streamBodyStore,
+      streamBodyPrefix: assetBodySchemaPrefix({
+        prefix: engineOptions.assetStorage?.prefix,
+        databaseSchema: base.databaseSchema,
+      }),
+      operationCatalog: scopedOperationCatalog,
       eventHub: scopedEventHub,
       async publishOutput(output) {
         if (isStreamOutputDescriptor(output)) {
@@ -251,6 +283,7 @@ export async function createCopilotzEngine(
       databaseSchema: base.databaseSchema,
       event: base.event,
       signal: base.signal,
+      executionIncarnationId: base.dispatchAttemptId,
       settlementScopeId: base.settlementScopeId,
       idempotencyKey: base.idempotencyKey,
       createMutationIdentity: base.createMutationIdentity,
@@ -267,6 +300,7 @@ export async function createCopilotzEngine(
       databaseSchema: base.databaseSchema,
       event: base.event,
       signal: base.signal,
+      executionIncarnationId: base.dispatchAttemptId,
       ...(base.settlementScopeId
         ? { settlementScopeId: base.settlementScopeId }
         : {}),
@@ -439,6 +473,7 @@ export async function createCopilotzEngine(
       eventHub,
       now,
       transients,
+      operationCatalog,
       publishLive: (event, settlementScopeId) =>
         publishLive(event, { settlementScopeId }),
     });
@@ -460,6 +495,19 @@ export async function createCopilotzEngine(
           // Selecting a tenant scope is a request-path operation. It must never
           // acquire DDL locks or implicitly create tenant infrastructure.
           await validateCopilotzSchema(options.session, normalized);
+          await validateOperationCatalog(options.session, normalized);
+          const scopedOperationCatalog = createOperationCatalog(
+            options.session,
+            normalized,
+            {
+              beforeTerminal: ({ namespace, operationId }) =>
+                executor.settleOutputs({
+                  databaseSchema: normalized,
+                  namespace,
+                  settlementScopeId: operationId,
+                }),
+            },
+          );
           const scopedTransients = configuredTransients();
           transientsBySchema.set(normalized, scopedTransients);
           const runtime = createDatabaseScope({
@@ -471,6 +519,7 @@ export async function createCopilotzEngine(
             eventHub: hub,
             now,
             transients: scopedTransients,
+            operationCatalog: scopedOperationCatalog,
             publishLive: (event, settlementScopeId) =>
               publishLive(event, {
                 databaseSchema: normalized,

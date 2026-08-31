@@ -1,6 +1,8 @@
 import type { CollectionDefinition } from "../collections/index.ts";
 import { createContentStreamRuntime } from "../streams/index.ts";
 import { createStreamOutputDescriptor } from "../streams/index.ts";
+import { operationStreamBodyId } from "../streams/index.ts";
+import { DEFAULT_OPERATION_STREAM_RETENTION_MS } from "../streams/index.ts";
 import {
   type ActionTransactionContext,
   type ActionTransactionOptions,
@@ -51,11 +53,16 @@ export function createProcessorContext(
     options.base.createMutationIdentity(
       requiredText(operationKey, "Mutation operation key"),
     );
+  const catalogedStreams = new Set<string>();
 
   const streams = createContentStreamRuntime({
     namespace,
     store: options.streamBodyStore,
+    bodyPrefix: options.streamBodyPrefix,
+    incarnationId: options.base.executionIncarnationId,
+    signal: options.base.signal,
     async onOpen(output) {
+      const semanticStreamId = output.semanticId ?? output.id;
       const descriptor = createStreamOutputDescriptor(output, {
         namespace,
         causationId: options.base.event.durable
@@ -65,9 +72,86 @@ export function createProcessorContext(
         metadata: {
           ...capabilitySourceMetadata(options.base),
           contentStream: true,
+          contentStreamSemanticId: semanticStreamId,
+          ...(output.incarnationId
+            ? { contentStreamIncarnationId: output.incarnationId }
+            : {}),
         },
       });
-      await options.publishOutput?.(descriptor);
+      let replayIdentity:
+        | Readonly<{ replayKey: string; streamOrdinal: string }>
+        | undefined;
+      if (
+        options.base.settlementScopeId &&
+        await options.operationCatalog.get(
+          namespace,
+          options.base.settlementScopeId,
+        )
+      ) {
+        replayIdentity = await options.operationCatalog.openStream({
+          namespace,
+          operationId: options.base.settlementScopeId,
+          semanticStreamId,
+          bodyId: operationStreamBodyId({
+            namespace,
+            streamId: output.id,
+            bodyPrefix: options.streamBodyPrefix,
+          }),
+          descriptor,
+        });
+        catalogedStreams.add(output.id);
+      }
+      await options.publishOutput?.(Object.freeze({
+        ...descriptor,
+        ...(replayIdentity ?? {}),
+      }));
+    },
+    async onAppend(stream, result) {
+      if (
+        !options.base.settlementScopeId || !catalogedStreams.has(stream.id)
+      ) return;
+      await options.operationCatalog.commitStreamOffset({
+        namespace,
+        operationId: options.base.settlementScopeId,
+        streamId: stream.id,
+        committedOffset: result.endOffset,
+      });
+    },
+    async onSeal(stream, body) {
+      if (
+        !options.base.settlementScopeId || !catalogedStreams.has(stream.id)
+      ) return;
+      await options.operationCatalog.sealStream({
+        namespace,
+        operationId: options.base.settlementScopeId,
+        streamId: stream.id,
+        body,
+        expiresAt: new Date(
+          (options.now ?? (() => new Date()))().getTime() +
+            DEFAULT_OPERATION_STREAM_RETENTION_MS,
+        ).toISOString(),
+      });
+    },
+    async onAbort(stream) {
+      if (
+        !options.base.settlementScopeId || !catalogedStreams.has(stream.id)
+      ) return;
+      await options.operationCatalog.abortStream({
+        namespace,
+        operationId: options.base.settlementScopeId,
+        streamId: stream.id,
+      });
+    },
+    async onRetain(stream, input) {
+      if (
+        !options.base.settlementScopeId || !catalogedStreams.has(stream.id)
+      ) return;
+      await options.operationCatalog.retainStream({
+        namespace,
+        operationId: options.base.settlementScopeId,
+        streamId: stream.id,
+        ...input,
+      });
     },
   });
 

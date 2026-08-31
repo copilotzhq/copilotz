@@ -12,10 +12,24 @@ export type SqlExecutor = {
   ): Promise<SqlQueryResult<TRow>>;
 };
 
+export type SqlNotification = Readonly<{
+  channel: string;
+  payload?: string;
+}>;
+
+export type SqlNotificationSubscription = Readonly<{
+  close(): Promise<void>;
+}>;
+
 export type SqlSession = SqlExecutor & {
   transaction<T>(
     operation: (transaction: SqlExecutor) => Promise<T>,
   ): Promise<T>;
+  /** Optional PostgreSQL notification seam; absence enables bounded fallback. */
+  listen?(
+    channel: string,
+    handler: (notification: SqlNotification) => void,
+  ): Promise<SqlNotificationSubscription>;
 };
 
 type DatabaseLike = SqlExecutor & {
@@ -23,6 +37,7 @@ type DatabaseLike = SqlExecutor & {
   transaction?: <T>(
     operation: (transaction: SqlExecutor) => Promise<T>,
   ) => Promise<T>;
+  listen?: SqlSession["listen"];
 };
 
 /** Adapts an Ominipg/Copilotz database into the narrow atomic-session seam. */
@@ -32,6 +47,9 @@ export function createSqlSession(database: DatabaseLike): SqlSession {
 
   return {
     query,
+    ...(typeof database.listen === "function"
+      ? { listen: database.listen.bind(database) }
+      : {}),
     async transaction(operation) {
       if (typeof database.__copilotzTransaction === "function") {
         return await database.__copilotzTransaction(() => operation({ query }));

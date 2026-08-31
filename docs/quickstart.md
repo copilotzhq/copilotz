@@ -6,8 +6,8 @@ embedded Gateway and Worker over a private in-process transport.
 ## Compose Core and one model
 
 ```ts
-import { createCopilotz } from "jsr:@copilotz/copilotz@^0.63.8";
-import { corePlugin, message } from "jsr:@copilotz/copilotz@^0.63.8/core";
+import { createCopilotz } from "jsr:@copilotz/copilotz@^0.64.0";
+import { corePlugin, message } from "jsr:@copilotz/copilotz@^0.64.0/core";
 
 const apiKey = Deno.env.get("OPENAI_API_KEY");
 if (!apiKey) throw new Error("OPENAI_API_KEY is required.");
@@ -50,7 +50,7 @@ declaration or factory import.
 When several Models use the same account, declare the credential once:
 
 ```ts
-import { defineLlmCredential } from "jsr:@copilotz/copilotz@^0.63.8/llm";
+import { defineLlmCredential } from "jsr:@copilotz/copilotz@^0.64.0/llm";
 
 const openai = defineLlmCredential({ provider: "openai", apiKey });
 
@@ -112,7 +112,7 @@ is drained. Detached Processors remain durable but do not delay this handle.
 import {
   createToolsPlugin,
   defineTool,
-} from "jsr:@copilotz/copilotz@^0.63.8/tools";
+} from "jsr:@copilotz/copilotz@^0.64.0/tools";
 
 const lookupCustomer = defineTool({
   id: "acme.customer.lookup",

@@ -47,6 +47,7 @@ Deno.test("content stream open reports only its normalized runtime-neutral descr
 
   assertEquals(opened, {
     id: "stream-a",
+    semanticId: "stream-a",
     mediaType: "text/plain",
     kind: "text",
     role: "assistant",
@@ -74,6 +75,60 @@ Deno.test("content stream open reports only its normalized runtime-neutral descr
     false,
   );
   await writer.abort();
+});
+
+Deno.test("content stream execution incarnations use distinct physical lanes", async () => {
+  const store = createMemoryBodyStore();
+  const opened: ContentStreamOpened[] = [];
+  const first = createContentStreamRuntime({
+    namespace: "tenant-a",
+    store,
+    incarnationId: "dispatch/one",
+    onOpen(stream) {
+      opened.push(stream);
+    },
+  });
+  const second = createContentStreamRuntime({
+    namespace: "tenant-a",
+    store,
+    incarnationId: "dispatch/two",
+    onOpen(stream) {
+      opened.push(stream);
+    },
+  });
+
+  const stale = await first.open({
+    id: "run-a:content:text/plain",
+    mediaType: "text/plain",
+    role: "content",
+  });
+  await stale.append({
+    bytes: new TextEncoder().encode("partial-old"),
+    appendId: "old-1",
+  });
+  const recovered = await second.open({
+    id: "run-a:content:text/plain",
+    mediaType: "text/plain",
+    role: "content",
+  });
+  await recovered.append({
+    bytes: new TextEncoder().encode("new"),
+    appendId: "new-1",
+  });
+
+  assertEquals(opened.map((stream) => stream.semanticId), [
+    "run-a:content:text/plain",
+    "run-a:content:text/plain",
+  ]);
+  assertEquals(opened[0].id === opened[1].id, false);
+  assertEquals(opened.map((stream) => stream.incarnationId), [
+    "dispatch/one",
+    "dispatch/two",
+  ]);
+  assertEquals(stale.offset(), "partial-old".length);
+  assertEquals(recovered.offset(), "new".length);
+  await stale.abort();
+  await recovered.abort();
 });
 
 Deno.test("content stream open rejects unsafe metadata before opening a Body", async () => {
@@ -149,6 +204,7 @@ Deno.test("content stream close returns prepared content without creating an Ass
       namespace: "tenant-a",
       store: bodyStore,
       createId: () => "stream-a",
+      bodyPrefix: `schemas/${TEST_SCHEMA}`,
     });
 
     const writer = await stream.open({
@@ -170,6 +226,10 @@ Deno.test("content stream close returns prepared content without creating an Ass
     assertEquals(prepared.assets.length, 1);
     assertEquals(prepared.assets[0].id, "asset-a");
     assertEquals(prepared.assets[0].readyBody?.state, "ready");
+    assertEquals(
+      prepared.assets[0].readyBody?.bodyId,
+      `schemas/${TEST_SCHEMA}/content-streams/tenant-a/stream-a`,
+    );
 
     const assets = await session.query<{ n: number }>(
       `SELECT count(*)::int AS n

@@ -10,6 +10,8 @@ import type {
   ContentInput,
   ContentRef,
   ContentSequence,
+  PreparedAsset,
+  PreparedContent,
   ResolvedContent,
 } from "@copilotz/copilotz/content";
 import { formatAssetRef } from "@copilotz/copilotz/content";
@@ -51,6 +53,9 @@ const MAX_TOOL_CALL_BRANCHES = 64;
 const MAX_TOOL_PIPELINE_STAGES = 32;
 const MAX_TOOL_PIPELINE_JQ_FILTER_LENGTH = 16_384;
 const LLM_ATTEMPT_ACCOUNTING_SCHEMA = "copilotz.llm.attempt-accounting.v1";
+const LLM_OBSERVATION_STREAM_RETENTION_MS = 15 * 60_000;
+const LLM_STREAM_BATCH_MAX_BYTES = 16 * 1_024;
+const LLM_STREAM_BATCH_MAX_DELAY_MS = 50;
 
 export type LlmActionResources = Readonly<{
   models: Readonly<Record<string, ModelResource | undefined>>;
@@ -85,6 +90,23 @@ type StreamState = {
   writers: Map<string, Promise<OpenWriter>>;
   visible: boolean;
   discard: boolean;
+};
+
+type SettledStream = Readonly<{
+  key: string;
+  lane: string;
+  mediaType: string;
+  writer: OpenWriter;
+  prepared: PreparedContent;
+}>;
+
+type StreamFrameBatch = {
+  writer: OpenWriter;
+  chunks: Uint8Array[];
+  byteLength: number;
+  firstFrameIndex: number;
+  lastFrameIndex: number;
+  openedAt: number;
 };
 
 type ManagedInput = Readonly<{
@@ -1269,8 +1291,13 @@ async function pumpFrames(
   signal: AbortSignal,
 ): Promise<void> {
   let frameIndex = 0;
-  while (true) {
-    throwIfAborted(signal);
+  let pendingRead:
+    | Promise<ReadableStreamReadResult<LlmAdapterFrame>>
+    | undefined;
+  const batches = new Map<string, StreamFrameBatch>();
+
+  const read = () => {
+    if (pendingRead) return pendingRead;
     let removeAbortListener = () => {};
     const aborted = new Promise<never>((_resolve, reject) => {
       const onAbort = () => {
@@ -1283,10 +1310,84 @@ async function pumpFrames(
       signal.addEventListener("abort", onAbort, { once: true });
       removeAbortListener = () => signal.removeEventListener("abort", onAbort);
     });
-    const next = await Promise.race([reader.read(), aborted]).finally(
+    pendingRead = Promise.race([reader.read(), aborted]).finally(
       removeAbortListener,
     );
-    if (next.done) return;
+    return pendingRead;
+  };
+
+  const flush = async (key: string): Promise<void> => {
+    const batch = batches.get(key);
+    if (!batch) return;
+    batches.delete(key);
+    const bytes = new Uint8Array(batch.byteLength);
+    let offset = 0;
+    for (const chunk of batch.chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    try {
+      await batch.writer.append({
+        bytes,
+        appendId:
+          `${context.action.runId}:attempt:${attemptIndex}:frames:${batch.firstFrameIndex}-${batch.lastFrameIndex}`,
+      }, { signal });
+    } catch (error) {
+      throw new FrameworkInvocationError(
+        "LLM Adapter frame failed Copilotz validation or publication.",
+        error,
+      );
+    }
+  };
+
+  const flushAll = async (): Promise<void> => {
+    for (const key of [...batches.keys()]) await flush(key);
+  };
+
+  const waitForReadOrFlush = async (): Promise<
+    | Readonly<{
+      kind: "read";
+      value: ReadableStreamReadResult<LlmAdapterFrame>;
+    }>
+    | Readonly<{ kind: "flush" }>
+  > => {
+    const earliest = Math.min(
+      ...[...batches.values()].map((batch) =>
+        batch.openedAt + LLM_STREAM_BATCH_MAX_DELAY_MS
+      ),
+    );
+    let timer: number | undefined;
+    const due = new Promise<Readonly<{ kind: "flush" }>>((resolve) => {
+      timer = setTimeout(
+        () => resolve(Object.freeze({ kind: "flush" as const })),
+        Math.max(0, earliest - Date.now()),
+      ) as unknown as number;
+    });
+    try {
+      return await Promise.race([
+        read().then((value) => Object.freeze({ kind: "read" as const, value })),
+        due,
+      ]);
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
+  };
+
+  while (true) {
+    throwIfAborted(signal);
+    const outcome = batches.size > 0
+      ? await waitForReadOrFlush()
+      : Object.freeze({ kind: "read" as const, value: await read() });
+    if (outcome.kind === "flush") {
+      await flushAll();
+      continue;
+    }
+    pendingRead = undefined;
+    const next = outcome.value;
+    if (next.done) {
+      await flushAll();
+      return;
+    }
     try {
       const raw = plainRecord(next.value, "LLM Adapter frame");
       if (!(raw.bytes instanceof Uint8Array)) {
@@ -1312,11 +1413,22 @@ async function pumpFrames(
         signal,
       );
       if (writer) {
-        await writer.append({
-          bytes: frame.bytes,
-          appendId:
-            `${context.action.runId}:attempt:${attemptIndex}:frame:${frameIndex}`,
-        }, { signal });
+        const key = streamKey(frame);
+        const batch = batches.get(key) ?? {
+          writer,
+          chunks: [],
+          byteLength: 0,
+          firstFrameIndex: frameIndex,
+          lastFrameIndex: frameIndex,
+          openedAt: Date.now(),
+        };
+        batch.chunks.push(frame.bytes);
+        batch.byteLength += frame.bytes.byteLength;
+        batch.lastFrameIndex = frameIndex;
+        batches.set(key, batch);
+        if (batch.byteLength >= LLM_STREAM_BATCH_MAX_BYTES) {
+          await flush(key);
+        }
       }
       frameIndex += 1;
     } catch (error) {
@@ -1639,13 +1751,13 @@ async function abortWriters(
 
 async function settleWriters(
   state: StreamState,
-  context: LlmActionContext,
   signal: AbortSignal,
-): Promise<void> {
-  const writers = [...state.writers.values()];
+): Promise<readonly SettledStream[]> {
+  const writers = [...state.writers.entries()];
   state.writers.clear();
   let failure: unknown;
-  for (const opening of writers) {
+  const settled: SettledStream[] = [];
+  for (const [key, opening] of writers) {
     let writer: OpenWriter | undefined;
     try {
       writer = await opening;
@@ -1656,7 +1768,14 @@ async function settleWriters(
       const prepared = await writer.close({ assetId: `stream:${writer.id}` }, {
         signal,
       });
-      await context.content.materialize(prepared);
+      const [lane = "", mediaType = ""] = key.split("\u0000", 2);
+      settled.push(Object.freeze({
+        key,
+        lane,
+        mediaType,
+        writer,
+        prepared,
+      }));
     } catch (error) {
       failure ??= error;
       await writer?.abort({
@@ -1665,6 +1784,7 @@ async function settleWriters(
     }
   }
   if (failure !== undefined) throw failure;
+  return Object.freeze(settled);
 }
 
 function errorDetails(error: unknown): Readonly<{
@@ -1923,13 +2043,166 @@ function invocationOf(value: unknown): Readonly<{
   return record as ReturnType<LlmAdapter["call"]>;
 }
 
-async function materialize(
+async function prepareContent(
   input: ContentInput | readonly ContentInput[],
   operationKey: string,
   context: LlmActionContext,
-): Promise<ContentSequence> {
-  const prepared = await context.content.prepare(input, { operationKey });
-  return await context.content.materialize(prepared);
+): Promise<PreparedContent> {
+  return await context.content.prepare(input, { operationKey });
+}
+
+function singleAsset(
+  prepared: PreparedContent,
+): Readonly<{ ref: ContentRef; asset: PreparedAsset }> | undefined {
+  if (prepared.content.length !== 1 || prepared.assets.length !== 1) {
+    return undefined;
+  }
+  const ref = prepared.content[0];
+  const asset = prepared.assets[0];
+  return ref.assetId === asset.id ? Object.freeze({ ref, asset }) : undefined;
+}
+
+function matchingSettledStream(
+  lane: "content" | "reasoning",
+  prepared: PreparedContent,
+  streams: readonly SettledStream[],
+): SettledStream | undefined {
+  const final = singleAsset(prepared);
+  if (!final) return undefined;
+  const candidates = streams.filter((stream) => stream.lane === lane);
+  if (candidates.length !== 1) return undefined;
+  const candidate = candidates[0];
+  const streamed = singleAsset(candidate.prepared);
+  if (!streamed?.asset.readyBody || !streamed.asset.location) return undefined;
+  return final.asset.mediaType === streamed.asset.mediaType &&
+      final.asset.byteLength === streamed.asset.byteLength &&
+      final.asset.digest === streamed.asset.digest
+    ? candidate
+    : undefined;
+}
+
+function adoptSettledStream(
+  prepared: PreparedContent,
+  stream: SettledStream,
+): PreparedContent {
+  const final = singleAsset(prepared);
+  const streamed = singleAsset(stream.prepared);
+  if (!final || !streamed?.asset.readyBody || !streamed.asset.location) {
+    throw new Error("A settled LLM stream could not be adopted.");
+  }
+  const asset = Object.freeze({
+    ...final.asset,
+    body: new Uint8Array(),
+    readyBody: streamed.asset.readyBody,
+    location: streamed.asset.location,
+    byteLength: streamed.asset.byteLength,
+    digest: streamed.asset.digest,
+  }) satisfies PreparedAsset;
+  return Object.freeze({
+    content: prepared.content,
+    assets: Object.freeze([asset]),
+  });
+}
+
+async function retainSettledStream(
+  stream: SettledStream,
+  input: Readonly<
+    | { retention: "canonical"; assetId: string }
+    | { retention: "observation" }
+  >,
+  context: LlmActionContext,
+): Promise<void> {
+  if (input.retention === "canonical") {
+    await stream.writer.retain({
+      retention: "canonical",
+      assetId: input.assetId,
+    });
+    return;
+  }
+  await stream.writer.retain({
+    retention: "observation",
+    expiresAt: new Date(
+      context.now().getTime() + LLM_OBSERVATION_STREAM_RETENTION_MS,
+    ).toISOString(),
+  });
+}
+
+async function materializeResultContent(
+  result: LlmAdapterResult,
+  attemptIndex: number,
+  streams: readonly SettledStream[],
+  context: LlmActionContext,
+): Promise<
+  Readonly<{
+    content: ContentSequence;
+    reasoning?: ContentSequence;
+  }>
+> {
+  const contentPrepared = await prepareContent(
+    result.content,
+    `attempt:${attemptIndex}:content`,
+    context,
+  );
+  const reasoningPrepared = result.reasoning === undefined
+    ? undefined
+    : await prepareContent(
+      result.reasoning,
+      `attempt:${attemptIndex}:reasoning`,
+      context,
+    );
+  const contentStream = matchingSettledStream(
+    "content",
+    contentPrepared,
+    streams,
+  );
+  const reasoningStream = reasoningPrepared
+    ? matchingSettledStream("reasoning", reasoningPrepared, streams)
+    : undefined;
+  const adopted = new Set(
+    [contentStream, reasoningStream].filter(
+      (value): value is SettledStream => value !== undefined,
+    ).map((value) => value.key),
+  );
+
+  // Non-equivalent and non-semantic lanes remain observation-only Bodies for
+  // the reconnect retention window. Exact matches reuse the already-sealed
+  // Body under the canonical final Asset identity and materialize only once.
+  for (const stream of streams) {
+    if (!adopted.has(stream.key)) {
+      await retainSettledStream(
+        stream,
+        { retention: "observation" },
+        context,
+      );
+    }
+  }
+  const content = await context.content.materialize(
+    contentStream
+      ? adoptSettledStream(contentPrepared, contentStream)
+      : contentPrepared,
+  );
+  const reasoning = reasoningPrepared === undefined
+    ? undefined
+    : await context.content.materialize(
+      reasoningStream
+        ? adoptSettledStream(reasoningPrepared, reasoningStream)
+        : reasoningPrepared,
+    );
+  if (contentStream && content.length === 1) {
+    await retainSettledStream(
+      contentStream,
+      { retention: "canonical", assetId: content[0].assetId },
+      context,
+    );
+  }
+  if (reasoningStream && reasoning?.length === 1) {
+    await retainSettledStream(
+      reasoningStream,
+      { retention: "canonical", assetId: reasoning[0].assetId },
+      context,
+    );
+  }
+  return Object.freeze({ content, ...(reasoning ? { reasoning } : {}) });
 }
 
 function outputFor(
@@ -2091,7 +2364,7 @@ async function executeLlmCall(
 
     let resultAccounted = false;
     try {
-      await settleWriters(streams, context, attemptSignal);
+      const settledStreams = await settleWriters(streams, attemptSignal);
       appendDurableAttempts(
         attempts,
         candidate,
@@ -2100,18 +2373,12 @@ async function executeLlmCall(
         "completed",
       );
       resultAccounted = true;
-      const content = await materialize(
-        result.content,
-        `attempt:${index}:content`,
+      const { content, reasoning } = await materializeResultContent(
+        result,
+        index,
+        settledStreams,
         context,
       );
-      const reasoning = result.reasoning === undefined
-        ? undefined
-        : await materialize(
-          result.reasoning,
-          `attempt:${index}:reasoning`,
-          context,
-        );
       return outputFor(
         candidate,
         result,

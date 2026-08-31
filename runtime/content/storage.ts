@@ -9,9 +9,13 @@ import type {
   BodyStorageOptions,
   BodyStorageRuntime,
   BodyStore,
+  BodyStoreAdapter,
   BodyStoreDeployment,
 } from "./body-store.ts";
-import { createS3BodyStore } from "./s3-body-store.ts";
+import {
+  createS3BodyStore,
+  s3BodyStoreReadyGarbageCollection,
+} from "./s3-body-store.ts";
 
 function positiveInteger(
   value: number | undefined,
@@ -72,6 +76,7 @@ export function createBodyStorageRuntime(
   let prefix = "";
   let maxDatabaseBytes = DEFAULT_MAX_DATABASE_ASSET_BYTES;
   let deployment: BodyStoreDeployment | undefined;
+  let scopedAdapter: BodyStoreAdapter | undefined;
   if (config.type === "database") {
     maxDatabaseBytes = positiveInteger(
       config.config?.maxBytes,
@@ -107,16 +112,21 @@ export function createBodyStorageRuntime(
       readyGarbageCollection: true,
     };
   } else if (config.type === "s3") {
-    bodyProtectionMs(config.config.protectionMs);
+    const minimumProtectionMs = bodyProtectionMs(
+      config.config.protectionMs,
+    );
     writer = createS3BodyStore(config.config);
     prefix = config.config.prefix ?? "";
+    const readyGarbageCollection = s3BodyStoreReadyGarbageCollection(
+      config.config,
+    );
     deployment = {
       durability: "durable",
       reach: "cluster",
-      minimumProtectionMs: 0,
-      readyGarbageCollection: false,
+      minimumProtectionMs: readyGarbageCollection ? minimumProtectionMs : 0,
+      readyGarbageCollection,
     };
-  } else {
+  } else if (config.type === "custom") {
     writer = config.config.store;
     prefix = config.config.prefix ?? "";
     deployment = config.config.deployment ?? {
@@ -128,10 +138,15 @@ export function createBodyStorageRuntime(
     if (!deployment.readyGarbageCollection) {
       writer = withoutReadyGarbageCollection(writer);
     }
+  } else {
+    scopedAdapter = config.config.adapter;
+    prefix = config.config.prefix ?? "";
+    deploymentContract(scopedAdapter.deployment);
   }
-  const adapter = writer && deployment
-    ? createFixedBodyStoreAdapter(writer, deploymentContract(deployment))
-    : undefined;
+  const adapter = scopedAdapter ??
+    (writer && deployment
+      ? createFixedBodyStoreAdapter(writer, deploymentContract(deployment))
+      : undefined);
   const readers = new Map<string, BodyStore>();
   if (writer) readers.set(writer.backendId, writer);
   for (const reader of options.readers ?? []) {

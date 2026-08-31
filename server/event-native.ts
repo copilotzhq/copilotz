@@ -532,6 +532,7 @@ async function messageList(
   );
   const replayCursor = await application.operationCheckpoint({
     namespace,
+    databaseSchema: application.config.databaseSchema,
     operationIds: activeOperations.map((operation) => operation.operationId),
     cursor: encodeOperationReplayCursor({
       ...(eventPosition ? { eventPosition } : {}),

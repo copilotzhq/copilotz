@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.64.2 — 2026-08-31
+
+Fixes reconnect history while an operation is active in a tenant database
+schema. Message history now checkpoints active operations in the same trusted
+schema scope, avoiding transient `operation_not_found` responses on refresh.
+
 ## 0.64.1 — 2026-08-31
 
 Clarifies the storage-provider compatibility boundary used by the Compass/GCS

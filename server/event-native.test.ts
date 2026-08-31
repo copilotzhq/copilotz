@@ -944,6 +944,95 @@ Deno.test("trusted schema resolution isolates identical HTTP resource identities
   }
 });
 
+Deno.test("message history checkpoints active operations in its trusted database scope", async () => {
+  const defaultSchema = `${SCHEMA}_history_scope_default`;
+  const tenantSchema = `${SCHEMA}_history_scope_tenant`;
+  const database = await createTestDatabase({ url: ":memory:" });
+  await provisionCopilotzSchema(database, tenantSchema);
+  await provisionOperationCatalog(database, tenantSchema);
+  let releaseActiveOperation!: () => void;
+  const activeOperation = new Promise<void>((resolve) => {
+    releaseActiveOperation = resolve;
+  });
+  let markOperationActive!: () => void;
+  const operationActive = new Promise<void>((resolve) => {
+    markOperationActive = resolve;
+  });
+  const blocker = definePlugin({
+    id: "test.event-native-history-scope",
+    version: "1.0.0",
+    processors: {
+      hold: defineProcessor<ProcessorContext>({
+        id: "test.event-native-history-scope-hold",
+        on: [{ eventType: "message.created" }],
+        async handle() {
+          markOperationActive();
+          await activeOperation;
+        },
+      }),
+    },
+  });
+  const application = await createCopilotzApplication({
+    namespace: NAMESPACE,
+    databaseSchema: defaultSchema,
+    plugins: [coreCollectionsPlugin, blocker],
+    database,
+  });
+  const app = createEventNativeApp(application, {
+    resolveDatabaseSchema: () => tenantSchema,
+  });
+  let run: Awaited<ReturnType<typeof application.send>> | undefined;
+  let observed: Promise<readonly ApplicationOutput[]> | undefined;
+  try {
+    const created = await app.handle({
+      resource: "collections",
+      method: "POST",
+      path: ["thread"],
+      body: { id: "tenant-thread", participantIds: [] },
+      context: { databaseSchema: tenantSchema },
+    });
+    assertEquals(created.status, 201);
+
+    run = await application.send({
+      ...coreMessage({
+        thread: "tenant-thread",
+        participant: {
+          id: "tenant-user",
+          externalId: "tenant-user",
+          participantType: "human",
+        },
+        content: "Keep this tenant operation active.",
+        id: "tenant-message",
+        correlationId: "history-scope:active",
+        deduplicationId: "history-scope:active",
+      }),
+      databaseSchema: tenantSchema,
+    });
+    observed = collect(run.outputs);
+    await operationActive;
+
+    const history = await app.handle({
+      resource: "threads",
+      method: "GET",
+      path: ["tenant-thread", "messages"],
+      query: { include: "content" },
+      context: { databaseSchema: tenantSchema },
+    });
+    assertEquals(history.status, 200);
+    assertEquals(array(history.data).map((message) => object(message).id), [
+      "tenant-message",
+    ]);
+    assertEquals(history.pageInfo?.activeOperationIds, [run.operationId]);
+    assertEquals(typeof history.pageInfo?.replayCursor, "string");
+  } finally {
+    releaseActiveOperation();
+    await run?.done.catch(() => undefined);
+    await observed?.catch(() => undefined);
+    await application.shutdown();
+    await database.close();
+  }
+});
+
 Deno.test("event-native app returns request-bound channel output before delivery settlement", async () => {
   let release!: () => void;
   const settlement = new Promise<void>((resolve) => {

@@ -4,7 +4,7 @@ import { type CopilotzPlugin, definePlugin } from "@copilotz/copilotz/plugins";
 import { callLlmAction } from "./actions/call-llm/index.ts";
 
 export const LLM_PLUGIN_ID = "@copilotz/llm";
-export const LLM_PLUGIN_VERSION = "0.64.1";
+export const LLM_PLUGIN_VERSION = "0.64.2";
 
 type EmptyMap = Readonly<Record<never, never>>;
 type LlmActions = Readonly<{ callLlm: typeof callLlmAction }>;

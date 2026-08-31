@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.64.1 — 2026-08-31
+
+Clarifies the storage-provider compatibility boundary used by the Compass/GCS
+interoperability hotfix. AWS Signature Version 4 HMAC clients must select
+`provider: "s3"`; `x-goog-*` coordination requires GOOG4 signing and is not safe
+through `s3-lite`. Storage behavior is unchanged in this metadata-only patch.
+
 ## 0.64.0 — 2026-08-31
 
 Adds durable, reconnectable application operations. A submitted root Event is

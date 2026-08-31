@@ -250,7 +250,13 @@ Deno.test("Gateway and Worker preserve live output and cascading durable work", 
     ) as StreamOutput;
     assertEquals("threadId" in stream, false);
     assertEquals(stream.namespace, namespace);
-    assertEquals(stream.streamId, "topology-first-stream");
+    assert(stream.streamId.startsWith(
+      "incarnation.v1:topology-first-stream:",
+    ));
+    assertEquals(
+      stream.metadata.contentStreamSemanticId,
+      "topology-first-stream",
+    );
     assertEquals(stream.mediaType, "text/plain");
     assertEquals(stream.kind, "text");
     assertEquals(stream.role, "assistant");

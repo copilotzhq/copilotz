@@ -7,6 +7,16 @@ import type { CoreMessageInputEnvelope } from "../../../core-collections/authori
 
 const encoder = new TextEncoder();
 
+function completedTerminal(chunks: readonly string[]) {
+  return Promise.resolve(Object.freeze({
+    outcome: "completed" as const,
+    availability: "retained" as const,
+    capture: "complete" as const,
+    offset: encoder.encode(chunks.join("")).byteLength,
+    terminalAt: "2026-09-01T12:00:00.000Z",
+  }));
+}
+
 function stripCliFormatting(value: string): string {
   for (
     const sequence of [
@@ -53,6 +63,7 @@ function streamedText(
         controller.close();
       },
     }),
+    terminal: completedTerminal(chunks),
   });
 }
 
@@ -85,6 +96,7 @@ function streamedToolCalls(
         controller.close();
       },
     }),
+    terminal: completedTerminal(chunks),
   });
 }
 

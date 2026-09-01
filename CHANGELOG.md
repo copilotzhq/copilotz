@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.65.0 — 2026-09-01
+
+Breaking: progressive streams now have one retained terminal contract. Body
+stores must expose ranged reads, renewal, and terminalization; published streams
+always settle with a canonical terminal outcome, including retained failed or
+cancelled prefixes. Replay cursors use only operation-local lane ordinals, and
+malformed LLM tool-call attempts are retained as bounded, canonical failure
+evidence rather than speculative action calls.
+
 ## 0.64.3 — 2026-08-31
 
 Fixes long-running conversation history after a Thread exceeds 1,000 Messages.

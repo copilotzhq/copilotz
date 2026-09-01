@@ -7,6 +7,7 @@ import type {
 import {
   agentAskMetadata,
   agentAskResultMetadata,
+  agentFailureMetadata,
   coreToolActionMessageMetadata,
   coreToolPlanResultMetadata,
   workflowMetadata,
@@ -60,6 +61,10 @@ function toLlmMessage(
   message: ConversationMessage,
   targetParticipantId?: string,
 ): LlmMessage | null {
+  // A public failure receipt is for the human-facing timeline only. Replaying
+  // it into a later Model request would turn a transient provider failure into
+  // an instruction-bearing conversation fact.
+  if (agentFailureMetadata(message.metadata)) return null;
   const content = Object.freeze(structuredClone(message.content));
   const name = messageName(message);
   if (message.sender.participantType === "agent") {

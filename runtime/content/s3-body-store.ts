@@ -5,13 +5,18 @@ import type {
   AbortBodyInput,
   AppendBodyInput,
   AppendResult,
-  BodyHead,
+  BodyProtection,
   BodyStore,
+  IncompleteBodyHead,
   MutableBodyHead,
   PutBodyInput,
   ReadBodyRangeInput,
+  ReadyBodyHead,
+  RenewBodyInput,
   ReserveBodyInput,
   S3BodyStorageConfig,
+  TerminalBodyHead,
+  TerminateBodyInput,
   WriterCapability,
 } from "./body-store.ts";
 import {
@@ -32,7 +37,7 @@ type GcsReadyGuard = Readonly<{
 }>;
 
 type ReadyInspection = Readonly<{
-  head: BodyHead;
+  head: ReadyBodyHead;
   guard?: GcsReadyGuard;
 }>;
 
@@ -118,7 +123,7 @@ function normalizeDigest(
     : undefined;
 }
 
-function assertStored(input: PutBodyInput, head: BodyHead): void {
+function assertStored(input: PutBodyInput, head: ReadyBodyHead): void {
   if (
     head.bodyId !== input.bodyId ||
     head.byteLength !== input.bytes.byteLength ||
@@ -264,7 +269,7 @@ export function createS3BodyStore(
     }
   };
 
-  const head = async (bodyId: string): Promise<BodyHead | null> =>
+  const head = async (bodyId: string): Promise<ReadyBodyHead | null> =>
     (await inspectReady(bodyId))?.head ?? null;
 
   const putObject = async (
@@ -379,7 +384,7 @@ export function createS3BodyStore(
     input: PutBodyInput,
     requestedProtection: string,
     initial: ReadyInspection,
-  ): Promise<BodyHead | null> => {
+  ): Promise<ReadyBodyHead | null> => {
     let current = initial;
     for (let attempt = 0; attempt < 8; attempt++) {
       assertStored(input, current.head);
@@ -446,14 +451,16 @@ export function createS3BodyStore(
     writerGeneration: number,
     reservationId: string,
   ) => `${stagingPartsPrefix(bodyId)}g${writerGeneration}/r${reservationId}/`;
-  const legacyStagingPartKey = (key: string, seq: number) =>
-    `${stagingPrefix(key)}${String(seq).padStart(8, "0")}`;
-
   // Metadata is the sole mutable authority. Every transition is conditional:
   // GCS uses generation+metageneration and S3 uses a strong, changing ETag.
   // Parts are immutable and isolated by writer generation/reservation, so a
   // stale request may leave an orphan but cannot overwrite accepted bytes.
-  type SpillState = "open" | "sealing" | "aborting";
+  type SpillState =
+    | "open"
+    | "sealing"
+    | "terminating"
+    | "incomplete"
+    | "aborting";
 
   type S3SpillPart = Readonly<{
     seq: number;
@@ -474,6 +481,8 @@ export function createS3BodyStore(
     maintenanceVersion: number;
     parts: readonly S3SpillPart[];
     sealedDigest?: `sha256:${string}`;
+    terminalDigest?: `sha256:${string}`;
+    protectedUntil?: string;
   }>;
 
   type SpillGuard =
@@ -492,9 +501,13 @@ export function createS3BodyStore(
 
   type ProgressiveBodyOps = Readonly<{
     reserve(input: ReserveBodyInput): Promise<WriterCapability>;
-    head(bodyId: string): Promise<MutableBodyHead | null>;
+    head(
+      bodyId: string,
+    ): Promise<IncompleteBodyHead | MutableBodyHead | null>;
+    renew(input: RenewBodyInput): Promise<BodyProtection>;
     append(input: AppendBodyInput): Promise<AppendResult>;
     readRange(input: ReadBodyRangeInput): Promise<Uint8Array>;
+    terminate(input: TerminateBodyInput): Promise<IncompleteBodyHead>;
     abort(input: AbortBodyInput): Promise<void>;
   }>;
 
@@ -577,7 +590,7 @@ export function createS3BodyStore(
       throw invalidSpillMeta();
     }
     const parsed = value as Record<string, unknown>;
-    const state = parsed.state === undefined ? "open" : parsed.state;
+    const state = parsed.state;
     const writerGeneration = parsed.writerGeneration;
     const maintenanceVersion = parsed.maintenanceVersion;
     const byteLength = parsed.byteLength;
@@ -588,8 +601,15 @@ export function createS3BodyStore(
     const sealedDigest = parsed.sealedDigest === undefined
       ? undefined
       : normalizeDigest(String(parsed.sealedDigest));
+    const terminalDigest = parsed.terminalDigest === undefined
+      ? undefined
+      : normalizeDigest(String(parsed.terminalDigest));
+    const protectedUntil = parsed.protectedUntil === undefined
+      ? undefined
+      : String(parsed.protectedUntil);
     if (
-      (state !== "open" && state !== "sealing" && state !== "aborting") ||
+      (state !== "open" && state !== "sealing" && state !== "terminating" &&
+        state !== "incomplete" && state !== "aborting") ||
       typeof parsed.mediaType !== "string" || parsed.mediaType.length === 0 ||
       !Number.isSafeInteger(byteLength) || (byteLength as number) < 0 ||
       !Number.isSafeInteger(discarded) || (discarded as number) < 0 ||
@@ -604,7 +624,13 @@ export function createS3BodyStore(
       (maintenanceVersion as number) < 1 ||
       !Array.isArray(partsValue) || partsValue.length > 1_000_000 ||
       (parsed.sealedDigest !== undefined && !sealedDigest) ||
-      (sealedDigest !== undefined && state !== "sealing")
+      (sealedDigest !== undefined && state !== "sealing") ||
+      (parsed.terminalDigest !== undefined && !terminalDigest) ||
+      (state === "incomplete" && !terminalDigest) ||
+      (terminalDigest !== undefined && state !== "incomplete") ||
+      (state === "incomplete" &&
+        (!protectedUntil || !Number.isFinite(Date.parse(protectedUntil)))) ||
+      (state !== "incomplete" && protectedUntil !== undefined)
     ) {
       throw invalidSpillMeta();
     }
@@ -623,10 +649,7 @@ export function createS3BodyStore(
       const appendId = part.appendId;
       const offset = part.offset;
       const length = part.length;
-      const legacyKey = Number.isSafeInteger(seq)
-        ? legacyStagingPartKey(bodyId, seq as number)
-        : "";
-      const key = part.key === undefined ? legacyKey : part.key;
+      const key = part.key;
       if (
         !Number.isSafeInteger(seq) || (seq as number) < 0 ||
         (seq as number) <= previousSeq ||
@@ -635,7 +658,7 @@ export function createS3BodyStore(
         !Number.isSafeInteger(offset) || offset !== expectedOffset ||
         !Number.isSafeInteger(length) || (length as number) <= 0 ||
         typeof key !== "string" || keys.has(key) ||
-        (key !== legacyKey && !key.startsWith(stagingPartsPrefix(bodyId)))
+        !key.startsWith(stagingPartsPrefix(bodyId))
       ) {
         throw invalidSpillMeta();
       }
@@ -664,6 +687,8 @@ export function createS3BodyStore(
       maintenanceVersion: maintenanceVersion as number,
       parts: Object.freeze(parts),
       ...(sealedDigest ? { sealedDigest } : {}),
+      ...(terminalDigest ? { terminalDigest } : {}),
+      ...(protectedUntil ? { protectedUntil } : {}),
     });
   };
 
@@ -915,7 +940,22 @@ export function createS3BodyStore(
   const spillHead = (
     bodyId: string,
     meta: S3SpillMeta,
-  ): MutableBodyHead => {
+    lastModified?: string,
+  ): IncompleteBodyHead | MutableBodyHead => {
+    if (meta.state === "incomplete") {
+      if (!meta.terminalDigest) throw invalidSpillMeta();
+      return Object.freeze({
+        bodyId,
+        state: "incomplete" as const,
+        mediaType: meta.mediaType,
+        byteLength: meta.byteLength,
+        digest: meta.terminalDigest,
+        maintenanceVersion: meta.maintenanceVersion,
+        ...(meta.protectedUntil ? { protectedUntil: meta.protectedUntil } : {}),
+        etag: meta.terminalDigest.slice("sha256:".length),
+        ...(lastModified ? { lastModified } : {}),
+      });
+    }
     const common = {
       bodyId,
       mediaType: meta.mediaType,
@@ -929,10 +969,24 @@ export function createS3BodyStore(
     }
     return Object.freeze({
       ...common,
-      state: meta.state,
+      state: meta.state === "terminating" ? "terminating" as const : meta.state,
       writerGeneration: meta.writerGeneration,
       writerLeaseRemainingMs: bodyProtectionRemainingMs(meta.leaseExpiresAt),
     });
+  };
+
+  const writerSpillHead = (
+    bodyId: string,
+    meta: S3SpillMeta,
+  ): MutableBodyHead => {
+    const value = spillHead(bodyId, meta);
+    if (value.state === "incomplete") {
+      throw createContentError(
+        "asset_conflict",
+        "An incomplete body has no writer capability.",
+      );
+    }
+    return value;
   };
 
   const requireSpillInspection = async (
@@ -1102,6 +1156,12 @@ export function createS3BodyStore(
       const existing = await readSpillInspection(input.bodyId);
       const ready = await inspectReady(input.bodyId);
       if (existing) {
+        if (existing.meta.state === "incomplete") {
+          throw createContentError(
+            "asset_conflict",
+            "An incomplete body cannot be taken over.",
+          );
+        }
         if (existing.meta.state === "aborting") {
           throw createContentError(
             "asset_conflict",
@@ -1165,7 +1225,7 @@ export function createS3BodyStore(
         );
         if (committed) {
           return writerCapabilityFromHead(
-            spillHead(input.bodyId, committed.meta),
+            writerSpillHead(input.bodyId, committed.meta),
           );
         }
         const raced = await readSpillInspection(input.bodyId);
@@ -1174,7 +1234,9 @@ export function createS3BodyStore(
           raced.meta.reservationId === reservationId &&
           raced.meta.writerGeneration === candidate.writerGeneration
         ) {
-          return writerCapabilityFromHead(spillHead(input.bodyId, raced.meta));
+          return writerCapabilityFromHead(
+            writerSpillHead(input.bodyId, raced.meta),
+          );
         }
         throw createContentError(
           "asset_conflict",
@@ -1226,11 +1288,43 @@ export function createS3BodyStore(
           "Another progressive writer won the reservation race.",
         );
       }
-      return writerCapabilityFromHead(spillHead(input.bodyId, verified.meta));
+      return writerCapabilityFromHead(
+        writerSpillHead(input.bodyId, verified.meta),
+      );
     },
     async head(bodyId) {
       const current = await readSpillInspection(bodyId);
-      return current ? spillHead(bodyId, current.meta) : null;
+      return current
+        ? spillHead(bodyId, current.meta, current.lastModified)
+        : null;
+    },
+    async renew(input) {
+      const existing = await requireSpillInspection(input.writer.bodyId);
+      requireOwner(existing.meta, input.writer);
+      requireOpen(existing.meta);
+      const candidate: S3SpillMeta = Object.freeze({
+        ...existing.meta,
+        maintenanceVersion: advanceSpillCounter(
+          existing.meta.maintenanceVersion,
+        ),
+        leaseExpiresAt: bodyProtectionUntil(protectionMs),
+      });
+      const committed = await casSpillMeta(
+        input.writer.bodyId,
+        existing,
+        candidate,
+      );
+      if (!committed) {
+        throw createContentError(
+          "asset_conflict",
+          "Progressive lease renewal lost its metadata commit race.",
+        );
+      }
+      return Object.freeze({
+        remainingMs: bodyProtectionRemainingMs(
+          committed.meta.leaseExpiresAt,
+        ),
+      });
     },
     async append(input) {
       const existing = await requireSpillInspection(input.writer.bodyId);
@@ -1312,14 +1406,108 @@ export function createS3BodyStore(
       const current = await requireSpillInspection(input.bodyId);
       return await readSpillRange(current.meta, input);
     },
+    async terminate(input) {
+      const bodyId = input.writer.bodyId;
+      for (let attempt = 0; attempt < 12; attempt++) {
+        let current = await readSpillInspection(bodyId);
+        if (!current) {
+          throw createContentError(
+            "asset_conflict",
+            "Progressive writer no longer owns this body.",
+          );
+        }
+        if (current.meta.state === "incomplete") {
+          const terminal = spillHead(
+            bodyId,
+            current.meta,
+            current.lastModified,
+          );
+          if (terminal.state !== "incomplete") throw invalidSpillMeta();
+          if (
+            (input.expectedByteLength !== undefined &&
+              input.expectedByteLength !== terminal.byteLength) ||
+            (input.expectedDigest !== undefined &&
+              input.expectedDigest !== terminal.digest)
+          ) {
+            throw createContentError(
+              "asset_conflict",
+              "Incomplete body conflicts with terminate expectations.",
+            );
+          }
+          return terminal;
+        }
+        requireOwner(current.meta, input.writer);
+        if (
+          current.meta.state !== "open" &&
+          current.meta.state !== "terminating"
+        ) {
+          throw createContentError(
+            "asset_conflict",
+            "Progressive body cannot be terminated from its current state.",
+          );
+        }
+        if (
+          input.expectedByteLength !== undefined &&
+          input.expectedByteLength !== current.meta.byteLength
+        ) {
+          throw createContentError(
+            "asset_conflict",
+            "Progressive body length does not match terminate expectation.",
+          );
+        }
+        if (current.meta.state === "open") {
+          const frozen: S3SpillMeta = Object.freeze({
+            ...current.meta,
+            state: "terminating",
+            maintenanceVersion: advanceSpillCounter(
+              current.meta.maintenanceVersion,
+            ),
+            leaseExpiresAt: bodyProtectionUntil(protectionMs),
+          });
+          const committed = await casSpillMeta(bodyId, current, frozen);
+          if (!committed) continue;
+          current = committed;
+        }
+        const bytes = await readSpillRange(current.meta, {
+          bodyId,
+          offset: 0,
+          end: current.meta.byteLength,
+        });
+        const digest = await digestContent(bytes);
+        if (input.expectedDigest && input.expectedDigest !== digest) {
+          throw createContentError(
+            "asset_conflict",
+            "Progressive body digest does not match terminate expectation.",
+          );
+        }
+        const terminal: S3SpillMeta = Object.freeze({
+          ...current.meta,
+          state: "incomplete",
+          terminalDigest: digest,
+          protectedUntil: bodyProtectionUntil(protectionMs),
+          maintenanceVersion: advanceSpillCounter(
+            current.meta.maintenanceVersion,
+          ),
+          leaseExpiresAt: bodyProtectionUntil(protectionMs),
+        });
+        const committed = await casSpillMeta(bodyId, current, terminal);
+        if (!committed) continue;
+        const head = spillHead(bodyId, committed.meta, committed.lastModified);
+        if (head.state !== "incomplete") throw invalidSpillMeta();
+        return head;
+      }
+      throw unavailableCoordination(
+        "Progressive termination remained contended and can be retried safely.",
+      );
+    },
     async abort(input) {
       let current = await readSpillInspection(input.writer.bodyId);
       if (!current) return;
       requireOwner(current.meta, input.writer);
-      if (current.meta.state === "sealing") {
+      if (current.meta.state !== "open" && current.meta.state !== "aborting") {
         throw createContentError(
           "asset_conflict",
-          "A sealing progressive body is frozen and cannot be aborted.",
+          "Only open unpublished staging can be aborted.",
         );
       }
       if (current.meta.state === "open") {
@@ -1359,6 +1547,16 @@ export function createS3BodyStore(
     kind: "object",
     backendId,
     async put(input) {
+      const stagedBytes = await getObjectBytes(stagingMetaKey(input.bodyId));
+      if (
+        stagedBytes &&
+        parseSpillMeta(input.bodyId, stagedBytes).state === "incomplete"
+      ) {
+        throw createContentError(
+          "asset_conflict",
+          "An incomplete body cannot be adopted as a Ready body.",
+        );
+      }
       const protectedUntil = resolveBodyProtectionUntil(
         input.protectedUntil,
         protectionMs,
@@ -1452,14 +1650,35 @@ export function createS3BodyStore(
       return await head(bodyId) ?? await progressive.head(bodyId);
     },
     async read({ bodyId }) {
-      const response = await client.getObject(bodyId, { bucketName: bucket });
-      if (!response.body) {
+      const ready = await inspectReady(bodyId);
+      if (ready) {
+        const response = await client.getObject(bodyId, { bucketName: bucket });
+        if (!response.body) {
+          throw createContentError(
+            "asset_corrupted",
+            "Object response has no body.",
+          );
+        }
+        return response.body;
+      }
+      const staged = await progressive.head(bodyId);
+      if (staged?.state !== "incomplete") {
         throw createContentError(
-          "asset_corrupted",
-          "Object response has no body.",
+          "asset_not_found",
+          "Immutable body was not found in the configured object backend.",
         );
       }
-      return response.body;
+      const bytes = await progressive.readRange({
+        bodyId,
+        offset: 0,
+        end: staged.byteLength,
+      });
+      return new ReadableStream({
+        start(controller) {
+          controller.enqueue(bytes);
+          controller.close();
+        },
+      });
     },
     async readRange(input) {
       const ready = await inspectReady(input.bodyId);
@@ -1502,6 +1721,7 @@ export function createS3BodyStore(
       );
     },
     reserve: progressive.reserve,
+    renew: progressive.renew,
     append: progressive.append,
     async seal(input) {
       const bodyId = input.writer.bodyId;
@@ -1524,10 +1744,12 @@ export function createS3BodyStore(
           );
         }
         requireOwner(current.meta, input.writer);
-        if (current.meta.state === "aborting") {
+        if (
+          current.meta.state !== "open" && current.meta.state !== "sealing"
+        ) {
           throw createContentError(
             "asset_conflict",
-            "An aborting progressive body cannot be sealed.",
+            "Progressive body cannot be sealed from its current state.",
           );
         }
         if (
@@ -1628,6 +1850,7 @@ export function createS3BodyStore(
         "Progressive seal remained contended and can be retried safely.",
       );
     },
+    terminate: progressive.terminate,
     abort: progressive.abort,
     maintenance: {
       async list(input) {
@@ -1637,7 +1860,7 @@ export function createS3BodyStore(
           );
         }
         const states = new Set(input.states);
-        const bodies: (BodyHead | MutableBodyHead)[] = [];
+        const bodies: (TerminalBodyHead | MutableBodyHead)[] = [];
         const listedBodyIds = new Set<string>();
         const after = input.after ?? "";
         for await (
@@ -1649,6 +1872,7 @@ export function createS3BodyStore(
           if (entry.key.endsWith(".progressive/meta.json")) {
             if (
               !states.has("open") && !states.has("sealing") &&
+              !states.has("terminating") && !states.has("incomplete") &&
               !states.has("aborted")
             ) continue;
             const bodyId = entry.key.slice(
@@ -1743,6 +1967,22 @@ export function createS3BodyStore(
             (key) => deleteObject(key),
           );
           return orphans.length > 0;
+        }
+        if (input.expectedState === "incomplete") {
+          const current = await readSpillInspection(input.bodyId);
+          if (
+            current?.meta.state !== "incomplete" ||
+            current.meta.maintenanceVersion !==
+              input.expectedMaintenanceVersion ||
+            bodyProtectionRemainingMs(current.meta.protectedUntil) > 0 ||
+            !bodyHasBeenIdle(current.lastModified, input.idleForMs)
+          ) return false;
+          // The immutable metadata is the visibility authority. Exact-CAS
+          // deletion makes the body unavailable before reclaiming its parts;
+          // interrupted part cleanup remains discoverable as orphan staging.
+          if (!await deleteSpillMeta(input.bodyId, current)) return false;
+          await deleteFencedSpillParts(input.bodyId, current.meta);
+          return true;
         }
         if (input.expectedState !== "ready" || provider !== "gcs") {
           return false;

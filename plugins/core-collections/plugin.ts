@@ -22,7 +22,7 @@ import {
 import { messageInputProcessor } from "./processors/index.ts";
 import { askAction } from "../core/actions/ask/index.ts";
 
-const VERSION = "0.64.3";
+const VERSION = "0.65.0";
 
 type CoreCollectionsProcessors = Readonly<{
   messageInput: typeof messageInputProcessor;

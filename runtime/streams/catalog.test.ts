@@ -1,4 +1,4 @@
-import { assertEquals, assertExists } from "@std/assert";
+import { assertEquals, assertExists, assertRejects } from "@std/assert";
 import {
   createEventStore,
   provisionCopilotzSchema,
@@ -68,13 +68,14 @@ function notificationSession(database: SqlSession): SqlSession {
       deliver(queue);
       return value;
     },
-    async listen(_channel, handler) {
+    listen(_channel, handler) {
       handlers.add(handler);
-      return {
-        async close() {
+      return Promise.resolve({
+        close() {
           handlers.delete(handler);
+          return Promise.resolve();
         },
-      };
+      });
     },
   };
 }
@@ -106,6 +107,7 @@ Deno.test("operation catalog opens streams with exact metadata and wakes cross-c
 
     const descriptor = createStreamOutputDescriptor({
       id: "stream-a",
+      semanticId: "stream-a",
       mediaType: "text/plain",
       kind: "text",
       role: "assistant",
@@ -114,6 +116,7 @@ Deno.test("operation catalog opens streams with exact metadata and wakes cross-c
     const replayIdentity = await writer.openStream({
       namespace: "tenant-a",
       operationId,
+      semanticStreamId: descriptor.streamId,
       bodyId: "body-a",
       descriptor,
     });
@@ -136,14 +139,12 @@ Deno.test("operation catalog opens streams with exact metadata and wakes cross-c
         digest: `sha256:${"a".repeat(64)}`,
         maintenanceVersion: 1,
       },
-      expiresAt: "2026-09-01T12:00:00.000Z",
     });
     await writer.retainStream({
       namespace: "tenant-a",
       operationId,
       streamId: descriptor.streamId,
       retention: "observation",
-      expiresAt: "2026-09-01T12:00:00.000Z",
     });
 
     const streams = await observer.listStreams({
@@ -158,7 +159,7 @@ Deno.test("operation catalog opens streams with exact metadata and wakes cross-c
     assertEquals(streams[0].descriptor, descriptor);
     assertEquals(streams[0].bodyId, "body-a");
     assertEquals(streams[0].committedOffset, 5);
-    assertEquals(streams[0].assetRetention, "observation");
+    assertEquals(streams[0].retention, "observation");
     assertEquals(streams[0].assetId, undefined);
     assertExists(await observer.get("tenant-a", operationId));
     assertEquals(
@@ -169,6 +170,23 @@ Deno.test("operation catalog opens streams with exact metadata and wakes cross-c
       [],
     );
     await writer.mark("tenant-a", operationId, "completed");
+    assertEquals(
+      await writer.openStream({
+        namespace: "tenant-a",
+        operationId,
+        semanticStreamId: "stream-after-terminal",
+        bodyId: "body-after-terminal",
+        descriptor: createStreamOutputDescriptor({
+          id: "stream-after-terminal",
+          semanticId: "stream-after-terminal",
+          mediaType: "text/plain",
+          kind: "text",
+          role: "assistant",
+          metadata: {},
+        }, { namespace: "tenant-a" }),
+      }),
+      undefined,
+    );
     assertEquals(
       await observer.listExpiredObservationStreams({
         now: new Date("2030-09-01T12:00:00.000Z"),
@@ -196,9 +214,11 @@ Deno.test("operation catalog opens streams with exact metadata and wakes cross-c
     const secondIdentity = await writer.openStream({
       namespace: "tenant-a",
       operationId: "operation-b",
+      semanticStreamId: "stream-b",
       bodyId: "body-b",
       descriptor: createStreamOutputDescriptor({
         id: "stream-b",
+        semanticId: "stream-b",
         mediaType: "text/plain",
         kind: "text",
         role: "assistant",
@@ -233,6 +253,7 @@ Deno.test("a recovered execution supersedes its old physical lane without byte s
     const descriptor = (streamId: string) =>
       createStreamOutputDescriptor({
         id: streamId,
+        semanticId: streamId,
         mediaType: "text/plain",
         kind: "text",
         role: "assistant",
@@ -259,6 +280,15 @@ Deno.test("a recovered execution supersedes its old physical lane without byte s
       bodyId: "body-new",
       descriptor: descriptor("physical-new"),
     });
+    assertEquals(
+      await catalog.commitStreamOffset({
+        namespace: "tenant-a",
+        operationId: "operation-incarnation",
+        streamId: "physical-old",
+        committedOffset: 12,
+      }),
+      false,
+    );
 
     const streams = await catalog.listStreams({
       namespace: "tenant-a",
@@ -275,7 +305,7 @@ Deno.test("a recovered execution supersedes its old physical lane without byte s
         {
           id: "physical-old",
           semanticId: "logical-lane",
-          state: "aborted",
+          state: "terminating",
           offset: 11,
         },
         {
@@ -286,6 +316,34 @@ Deno.test("a recovered execution supersedes its old physical lane without byte s
         },
       ],
     );
+    assertEquals(
+      await catalog.terminateStream({
+        namespace: "tenant-a",
+        operationId: "operation-incarnation",
+        streamId: "physical-old",
+        body: {
+          bodyId: "body-old",
+          state: "incomplete",
+          byteLength: 12,
+          mediaType: "text/plain",
+          digest: `sha256:${"d".repeat(64)}`,
+          maintenanceVersion: 2,
+        },
+        outcome: "superseded",
+        capture: "truncated",
+      }),
+      true,
+    );
+    const fenced = await catalog.getStream(
+      "tenant-a",
+      "operation-incarnation",
+      "physical-old",
+    );
+    assertEquals(fenced?.state, "terminal");
+    assertEquals(fenced?.outcome, "superseded");
+    // The physical write was visible before catalog ownership was checked, so
+    // the frozen terminal prefix and replay boundary include that raced byte.
+    assertEquals(fenced?.committedOffset, 12);
     assertEquals(
       await catalog.hasOpenStreams(
         "tenant-a",
@@ -304,6 +362,121 @@ Deno.test("a recovered execution supersedes its old physical lane without byte s
     assertEquals(
       (await catalog.get("tenant-a", "operation-incarnation"))?.state,
       "accepted",
+    );
+  } finally {
+    await database.close();
+  }
+});
+
+Deno.test("operation stream terminalization is crash-resumable and retains generic failure state", async () => {
+  const database = await createTestDatabase({ url: ":memory:" });
+  try {
+    await provisionCopilotzSchema(database, SCHEMA);
+    await provisionOperationCatalog(database, SCHEMA);
+    const catalog = createOperationCatalog(database, SCHEMA);
+    const operationId = "operation-retained-failure";
+    await database.transaction((transaction) =>
+      catalog.indexEvent(transaction, {
+        namespace: "tenant-a",
+        operationId,
+        eventId: operationId,
+        position: "1",
+        correlationId: "correlation-a",
+        createdAt: "2026-08-31T12:00:00.000Z",
+      })
+    );
+    const descriptor = createStreamOutputDescriptor({
+      id: "failed-stream",
+      semanticId: "failed-stream",
+      mediaType: "text/plain",
+      kind: "text",
+      role: "assistant",
+      metadata: {},
+    }, { namespace: "tenant-a" });
+    await catalog.openStream({
+      namespace: "tenant-a",
+      operationId,
+      semanticStreamId: descriptor.streamId,
+      bodyId: "failed-body",
+      descriptor,
+    });
+    await catalog.commitStreamOffset({
+      namespace: "tenant-a",
+      operationId,
+      streamId: descriptor.streamId,
+      committedOffset: 7,
+    });
+    assertEquals(
+      await catalog.beginStreamTerminalization({
+        namespace: "tenant-a",
+        operationId,
+        streamId: descriptor.streamId,
+        outcome: "failed",
+        capture: "truncated",
+      }),
+      true,
+    );
+    assertEquals(
+      (await catalog.getStream(
+        "tenant-a",
+        operationId,
+        descriptor.streamId,
+      ))?.state,
+      "terminating",
+    );
+    assertEquals(
+      await catalog.mark("tenant-a", operationId, "completed"),
+      false,
+    );
+
+    const terminal = catalog.waitForStreamTerminal(
+      "tenant-a",
+      descriptor.streamId,
+    );
+    assertEquals(
+      await catalog.terminateStream({
+        namespace: "tenant-a",
+        operationId,
+        streamId: descriptor.streamId,
+        body: {
+          bodyId: "failed-body",
+          state: "incomplete",
+          byteLength: 7,
+          mediaType: "text/plain",
+          digest: `sha256:${"c".repeat(64)}`,
+          maintenanceVersion: 2,
+        },
+        outcome: "failed",
+        capture: "truncated",
+      }),
+      true,
+    );
+    assertEquals(await terminal, {
+      outcome: "failed",
+      availability: "retained",
+      capture: "truncated",
+      offset: 7,
+      terminalAt: (await catalog.getStream(
+        "tenant-a",
+        operationId,
+        descriptor.streamId,
+      ))!.terminalAt,
+    });
+    await assertRejects(
+      () =>
+        catalog.openStream({
+          namespace: "tenant-a",
+          operationId,
+          semanticStreamId: descriptor.streamId,
+          bodyId: "failed-body",
+          descriptor,
+        }),
+      Error,
+      "cannot reopen after terminalization began",
+    );
+    assertEquals(
+      await catalog.mark("tenant-a", operationId, "completed"),
+      true,
     );
   } finally {
     await database.close();
@@ -335,6 +508,7 @@ Deno.test("detached settlement scopes cannot create orphan reconnect rows", asyn
     );
     const descriptor = createStreamOutputDescriptor({
       id: "detached-stream",
+      semanticId: "detached-stream",
       mediaType: "text/plain",
       kind: "text",
       role: "assistant",
@@ -344,6 +518,7 @@ Deno.test("detached settlement scopes cannot create orphan reconnect rows", asyn
       await catalog.openStream({
         namespace: "tenant-a",
         operationId: "detached:event-a:consumer-a",
+        semanticStreamId: descriptor.streamId,
         bodyId: "detached-body",
         descriptor,
       }),
@@ -363,18 +538,18 @@ Deno.test("detached settlement scopes cannot create orphan reconnect rows", asyn
 
 Deno.test("operation catalog coalesces notification bursts into one catalog rescan", async () => {
   let notify!: (notification: { channel: string; payload?: string }) => void;
-  const query: SqlExecutor["query"] = async () => ({ rows: [] });
+  const query: SqlExecutor["query"] = () => Promise.resolve({ rows: [] });
   const session: SqlSession = {
     query,
     transaction: async <T>(
       operation: (transaction: SqlExecutor) => Promise<T>,
     ) => await operation(session),
-    listen: async (
+    listen: (
       _channel: string,
       handler: typeof notify,
     ) => {
       notify = handler;
-      return { close: () => Promise.resolve() };
+      return Promise.resolve({ close: () => Promise.resolve() });
     },
   };
   const catalog = createOperationCatalog(session, "public");
@@ -403,7 +578,7 @@ Deno.test("post-commit notification failure does not fail a stream catalog mutat
         return database.query<T>(sql, params);
       },
       transaction: database.transaction,
-      listen: async () => ({ close: () => Promise.resolve() }),
+      listen: () => Promise.resolve({ close: () => Promise.resolve() }),
     };
     const writer = createOperationCatalog(session, SCHEMA);
     const reader = createOperationCatalog(database, SCHEMA);
@@ -419,6 +594,7 @@ Deno.test("post-commit notification failure does not fail a stream catalog mutat
     );
     const descriptor = createStreamOutputDescriptor({
       id: "stream-notify-failure",
+      semanticId: "stream-notify-failure",
       mediaType: "text/plain",
       kind: "text",
       role: "assistant",
@@ -427,6 +603,7 @@ Deno.test("post-commit notification failure does not fail a stream catalog mutat
     await writer.openStream({
       namespace: "tenant-a",
       operationId: "operation-notify-failure",
+      semanticStreamId: descriptor.streamId,
       bodyId: "body-notify-failure",
       descriptor,
     });
@@ -531,6 +708,7 @@ Deno.test("terminal metadata pruning removes replay rows but never observation o
       );
       const descriptor = createStreamOutputDescriptor({
         id: `${operationId}:stream`,
+        semanticId: `${operationId}:stream`,
         mediaType: "text/plain",
         kind: "text",
         role: "assistant",
@@ -539,14 +717,18 @@ Deno.test("terminal metadata pruning removes replay rows but never observation o
       await catalog.openStream({
         namespace: "tenant-a",
         operationId,
+        semanticStreamId: descriptor.streamId,
         bodyId: `${operationId}:body`,
         descriptor,
       });
       if (retention === "aborted") {
-        await catalog.abortStream({
+        await catalog.markStreamUnavailable({
           namespace: "tenant-a",
           operationId,
           streamId: descriptor.streamId,
+          outcome: "abandoned",
+          availability: "purged",
+          capture: "truncated",
         });
       } else {
         await catalog.sealStream({
@@ -561,7 +743,6 @@ Deno.test("terminal metadata pruning removes replay rows but never observation o
             digest: `sha256:${"b".repeat(64)}`,
             maintenanceVersion: 1,
           },
-          expiresAt: "2031-01-01T00:00:00.000Z",
         });
         await catalog.retainStream({
           namespace: "tenant-a",
@@ -571,7 +752,6 @@ Deno.test("terminal metadata pruning removes replay rows but never observation o
             ? { retention, assetId: `${operationId}:asset` }
             : {
               retention,
-              expiresAt: "2031-01-01T00:00:00.000Z",
             }),
         });
       }

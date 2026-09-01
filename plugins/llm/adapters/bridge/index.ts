@@ -573,12 +573,30 @@ async function normalizeFailureAttempts(
 
 async function normalizedProviderFailure(error: unknown): Promise<unknown> {
   if (!(error instanceof LLMProviderError)) return error;
-  const code = boundedCode(error.providerError?.code) ??
+  // Semantic response rejection is more authoritative than an earlier
+  // transport detail retained on a multi-attempt provider error.
+  const semanticCode =
+    [...error.usageAttempts].reverse().find((attempt) =>
+        attempt.usage.statusReason === "malformed_tool_call"
+      )
+      ? "malformed_tool_call"
+      : undefined;
+  const code = semanticCode ?? boundedCode(error.providerError?.code) ??
     boundedCode(error.reason);
   return new LlmAdapterCallError(
     code ? `LLM provider call failed (${code}).` : "LLM provider call failed.",
     {
       attempts: await normalizeFailureAttempts(error),
+      ...(semanticCode
+        ? {
+          rejectedAttemptEvidence: {
+            code: semanticCode,
+            message:
+              "The model returned a tool call that does not match the declared tool contract.",
+            retryable: true,
+          },
+        }
+        : {}),
       cause: error,
       name: error.name,
     },

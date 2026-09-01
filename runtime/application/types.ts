@@ -34,6 +34,7 @@ export type CreateCopilotzApplicationOptions =
       | "defaultDatabaseSchema"
       | "assets"
       | "assetStorage"
+      | "publishLocalStream"
     >;
   }>
   & CopilotzPersistenceOptions;

@@ -1,6 +1,6 @@
 import type {
   BodyFilesystemAccess,
-  BodyHead,
+  ReadyBodyHead,
   BodyMaintenanceDeleteInput,
   PutBodyInput,
 } from "../../content/index.ts";
@@ -64,7 +64,7 @@ type ReadyBodyState = Readonly<{
   directory: string;
   dataPath: string;
   manifest: ReadyManifest;
-  head: BodyHead;
+  head: ReadyBodyHead;
 }>;
 
 async function withReadyBodyLock<T>(
@@ -420,7 +420,7 @@ function createDenoAssetFilesystem(
   const normalizedRoot = normalizeRoot(root);
   const acquireReady = async (
     input: PutBodyInput & Readonly<{ protectedUntil: string }>,
-  ): Promise<BodyHead> => {
+  ): Promise<ReadyBodyHead> => {
     const directory = await readyDirectory(normalizedRoot, input.bodyId);
     await ensureDirectory(stateRoot(normalizedRoot));
     return await withReadyBodyLock(directory, async () => {

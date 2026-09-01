@@ -658,6 +658,57 @@ Deno.test("GCS BodyStore atomically renews and deletes the exact Ready version",
   }
 });
 
+Deno.test("GCS retained termination is readable and purges the exact incomplete version", async () => {
+  const gcs = createMockGcs();
+  try {
+    const store = createGcsStore(gcs.endpoint);
+    const bodyId = "copilotz/schemas/test/assets/gcs-incomplete";
+    const bytes = new TextEncoder().encode("rejected provider bytes");
+    const writer = await store.reserve({ bodyId, mediaType: "text/plain" });
+    await store.append({
+      writer,
+      expectedOffset: 0,
+      appendId: "rejected",
+      bytes,
+    });
+    const incomplete = await store.terminate!({
+      writer,
+      expectedByteLength: bytes.byteLength,
+      expectedDigest: await digestContent(bytes),
+    });
+
+    assertEquals(incomplete.state, "incomplete");
+    assertEquals(await readBodyBytes(store, { bodyId }), bytes);
+    assertEquals(
+      await store.maintenance.delete({
+        bodyId,
+        expectedState: "incomplete",
+        expectedMaintenanceVersion: incomplete.maintenanceVersion - 1,
+        idleForMs: 0,
+      }),
+      false,
+    );
+    assertEquals(
+      await store.maintenance.delete({
+        bodyId,
+        expectedState: "incomplete",
+        expectedMaintenanceVersion: incomplete.maintenanceVersion,
+        idleForMs: 0,
+      }),
+      true,
+    );
+    assertEquals(await store.head({ bodyId }), null);
+    assertEquals(
+      [...gcs.objects.keys()].some((key) =>
+        key.startsWith(`${bodyId}.progressive/`)
+      ),
+      false,
+    );
+  } finally {
+    await gcs.shutdown();
+  }
+});
+
 Deno.test("GCS Ready renewal makes an in-flight stale delete fail closed", async () => {
   const gcs = createMockGcs();
   try {
@@ -936,7 +987,11 @@ Deno.test("GCS progressive metadata CAS fences stale takeover, append, abort, an
     );
     const takeoverHead = await store.head({ bodyId: takeoverBody });
     assertEquals(
-      takeoverHead && takeoverHead.state !== "ready"
+      takeoverHead &&
+        (takeoverHead.state === "open" ||
+          takeoverHead.state === "sealing" ||
+          takeoverHead.state === "terminating" ||
+          takeoverHead.state === "aborted")
         ? takeoverHead.reservationId
         : undefined,
       takeoverWinner.reservationId,
@@ -975,7 +1030,10 @@ Deno.test("GCS progressive metadata CAS fences stale takeover, append, abort, an
     assertEquals((staleAppendError as ContentError).code, "asset_conflict");
     const appendHead = await store.head({ bodyId: appendBody });
     assertEquals(
-      appendHead && appendHead.state !== "ready"
+      appendHead &&
+        (appendHead.state === "open" || appendHead.state === "sealing" ||
+          appendHead.state === "terminating" ||
+          appendHead.state === "aborted")
         ? appendHead.reservationId
         : undefined,
       appendWinner.reservationId,
@@ -1021,7 +1079,10 @@ Deno.test("GCS progressive metadata CAS fences stale takeover, append, abort, an
     assertEquals((staleAbortError as ContentError).code, "asset_conflict");
     const abortHead = await store.head({ bodyId: abortBody });
     assertEquals(
-      abortHead && abortHead.state !== "ready"
+      abortHead &&
+        (abortHead.state === "open" || abortHead.state === "sealing" ||
+          abortHead.state === "terminating" ||
+          abortHead.state === "aborted")
         ? abortHead.reservationId
         : undefined,
       abortWinner.reservationId,
@@ -1057,7 +1118,10 @@ Deno.test("GCS progressive metadata CAS fences stale takeover, append, abort, an
     assertEquals((staleSealError as ContentError).code, "asset_conflict");
     const sealHead = await store.head({ bodyId: sealBody });
     assertEquals(
-      sealHead && sealHead.state !== "ready"
+      sealHead &&
+        (sealHead.state === "open" || sealHead.state === "sealing" ||
+          sealHead.state === "terminating" ||
+          sealHead.state === "aborted")
         ? sealHead.reservationId
         : undefined,
       sealWinner.reservationId,

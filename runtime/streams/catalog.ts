@@ -1,16 +1,25 @@
-import type { BodyHead } from "../content/body-store.ts";
+import type {
+  IncompleteBodyHead,
+  ReadyBodyHead,
+} from "../content/body-store.ts";
 import {
   quoteEventIdentifier,
   type SqlExecutor,
   type SqlSession,
   validateEventSchemaName,
 } from "../events/index.ts";
-import type { StreamOutputDescriptor } from "./types.ts";
+import type {
+  StreamCapture,
+  StreamOutputDescriptor,
+  StreamTerminalAvailability,
+  StreamTerminalOutcome,
+  StreamTerminalStatus,
+} from "./types.ts";
 import { snapshotStreamMetadata } from "./json.ts";
+import { isStreamOutputDescriptor } from "./observation.ts";
 
-export const OPERATION_CATALOG_VERSION = 1;
+export const OPERATION_CATALOG_FINGERPRINT = "retained-terminal-streams";
 export const OPERATION_CHANGE_CHANNEL = "copilotz_operations";
-export const DEFAULT_OPERATION_STREAM_RETENTION_MS = 15 * 60_000;
 export const DEFAULT_OPERATION_REPLAY_RETENTION_MS = 24 * 60 * 60_000;
 
 export type OperationChangeSubscription = Readonly<{
@@ -40,7 +49,9 @@ export type OperationRecord = Readonly<{
   completedAt?: string;
 }>;
 
-export type OperationStreamAssetRetention = "canonical" | "observation";
+export type OperationStreamRetention = "canonical" | "observation";
+
+export type OperationStreamState = "open" | "terminating" | "terminal";
 
 export type OperationStreamRecord = Readonly<{
   operationId: string;
@@ -52,12 +63,15 @@ export type OperationStreamRecord = Readonly<{
   streamOrdinal: string;
   bodyId: string;
   descriptor: StreamOutputDescriptor;
-  state: "open" | "sealed" | "aborted";
+  state: OperationStreamState;
+  outcome?: StreamTerminalOutcome;
+  availability: StreamTerminalAvailability;
+  capture?: StreamCapture;
   committedOffset: number;
   digest?: `sha256:${string}`;
   assetId?: string;
-  assetRetention?: OperationStreamAssetRetention;
-  expiresAt?: string;
+  retention?: OperationStreamRetention;
+  terminalAt?: string;
   createdAt: string;
   updatedAt: string;
 }>;
@@ -136,7 +150,7 @@ export type OperationCatalog = Readonly<{
     input: Readonly<{
       namespace: string;
       operationId: string;
-      semanticStreamId?: string;
+      semanticStreamId: string;
       bodyId: string;
       descriptor: StreamOutputDescriptor;
     }>,
@@ -150,17 +164,46 @@ export type OperationCatalog = Readonly<{
       streamId: string;
       committedOffset: number;
     }>,
-  ): Promise<void>;
+  ): Promise<boolean>;
   sealStream(
     input: Readonly<{
       namespace: string;
       operationId: string;
       streamId: string;
-      body: BodyHead;
-      expiresAt: string;
+      body: ReadyBodyHead;
     }>,
   ): Promise<boolean>;
-  abortStream(
+  beginStreamTerminalization(
+    input: Readonly<{
+      namespace: string;
+      operationId: string;
+      streamId: string;
+      outcome: StreamTerminalOutcome;
+      capture?: StreamCapture;
+    }>,
+  ): Promise<boolean>;
+  terminateStream(
+    input: Readonly<{
+      namespace: string;
+      operationId: string;
+      streamId: string;
+      body: IncompleteBodyHead;
+      outcome: Exclude<StreamTerminalOutcome, "completed">;
+      capture?: StreamCapture;
+    }>,
+  ): Promise<boolean>;
+  markStreamUnavailable(
+    input: Readonly<{
+      namespace: string;
+      operationId: string;
+      streamId: string;
+      outcome: Exclude<StreamTerminalOutcome, "completed">;
+      availability: "purged" | "missing";
+      capture?: StreamCapture;
+    }>,
+  ): Promise<boolean>;
+  /** Removes a never-published catalog reservation and no terminal evidence. */
+  discardStream(
     input: Readonly<{
       namespace: string;
       operationId: string;
@@ -176,7 +219,7 @@ export type OperationCatalog = Readonly<{
       }>
       & (
         | Readonly<{ retention: "canonical"; assetId: string }>
-        | Readonly<{ retention: "observation"; expiresAt: string }>
+        | Readonly<{ retention: "observation" }>
       ),
   ): Promise<void>;
   listStreams(
@@ -192,6 +235,15 @@ export type OperationCatalog = Readonly<{
     operationId: string,
     streamId: string,
   ): Promise<OperationStreamRecord | null>;
+  findStream(
+    namespace: string,
+    streamId: string,
+  ): Promise<OperationStreamRecord | null>;
+  waitForStreamTerminal(
+    namespace: string,
+    streamId: string,
+    options?: Readonly<{ signal?: AbortSignal }>,
+  ): Promise<StreamTerminalStatus>;
   hasOpenStreams(namespace: string, operationId: string): Promise<boolean>;
   /** True while this catalog owns replay/retention responsibility for a Body. */
   hasStreamBody(bodyId: string): Promise<boolean>;
@@ -212,6 +264,13 @@ export type OperationCatalog = Readonly<{
     Readonly<{ streams: number; events: number; operations: number }>
   >;
   pruneStream(
+    input: Readonly<{
+      namespace: string;
+      operationId: string;
+      streamId: string;
+    }>,
+  ): Promise<boolean>;
+  markStreamPurgePending(
     input: Readonly<{
       namespace: string;
       operationId: string;
@@ -317,12 +376,15 @@ type StreamRow = Record<string, unknown> & {
   stream_ordinal: string | number | bigint;
   body_id: string;
   descriptor: unknown;
-  state: "open" | "sealed" | "aborted";
+  state: OperationStreamState;
+  outcome: StreamTerminalOutcome | null;
+  availability: StreamTerminalAvailability;
+  capture: StreamCapture | null;
   committed_offset: string | number | bigint;
   digest: string | null;
   asset_id: string | null;
-  asset_retention: OperationStreamAssetRetention | null;
-  expires_at: string | Date | null;
+  asset_retention: OperationStreamRetention | null;
+  terminal_at: string | Date | null;
   created_at: string | Date;
   updated_at: string | Date;
 };
@@ -353,6 +415,42 @@ function offset(value: number): number {
     );
   }
   return value;
+}
+
+function failedOutcome(
+  value: Exclude<StreamTerminalOutcome, "completed">,
+): Exclude<StreamTerminalOutcome, "completed"> {
+  if (
+    value !== "failed" && value !== "cancelled" &&
+    value !== "superseded" && value !== "abandoned"
+  ) {
+    throw new TypeError("Operation stream terminal outcome is invalid.");
+  }
+  return value;
+}
+
+function streamCapture(value: StreamCapture | undefined): StreamCapture {
+  if (value === undefined) return "truncated";
+  if (value !== "complete" && value !== "truncated") {
+    throw new TypeError("Operation stream capture is invalid.");
+  }
+  return value;
+}
+
+function terminalStatus(stream: OperationStreamRecord): StreamTerminalStatus {
+  if (
+    stream.state !== "terminal" || !stream.outcome || !stream.capture ||
+    !stream.terminalAt
+  ) {
+    throw new Error(`Operation stream '${stream.streamId}' is not terminal.`);
+  }
+  return Object.freeze({
+    outcome: stream.outcome,
+    availability: stream.availability,
+    capture: stream.capture,
+    offset: stream.committedOffset,
+    terminalAt: stream.terminalAt,
+  });
 }
 
 function tableNames(schemaName: string): OperationCatalogTables {
@@ -386,11 +484,29 @@ function mapStream(row: StreamRow): OperationStreamRecord {
   const descriptor = snapshotStreamMetadata(
     row.descriptor,
   ) as StreamOutputDescriptor;
+  if (!isStreamOutputDescriptor(descriptor)) {
+    throw new Error("Operation stream catalog contains an invalid descriptor.");
+  }
   const byteOffset = Number(row.committed_offset);
   if (!Number.isSafeInteger(byteOffset) || byteOffset < 0) {
     throw new Error("Operation stream catalog contains an invalid offset.");
   }
-  const expiresAt = iso(row.expires_at);
+  const terminalAt = iso(row.terminal_at);
+  if (
+    (row.state === "open" &&
+      (row.outcome !== null || row.capture !== null || terminalAt)) ||
+    (row.state === "terminating" &&
+      (!row.outcome || !row.capture || terminalAt ||
+        (row.outcome === "completed" && row.capture !== "complete"))) ||
+    (row.state === "terminal" &&
+      (!row.outcome || !row.capture || !terminalAt)) ||
+    (row.outcome === "completed" && row.capture !== "complete") ||
+    (row.asset_retention === "canonical" && row.outcome !== "completed")
+  ) {
+    throw new Error(
+      "Operation stream catalog contains invalid terminal state.",
+    );
+  }
   return Object.freeze({
     operationId: String(row.operation_id),
     namespace: String(row.namespace),
@@ -401,17 +517,20 @@ function mapStream(row: StreamRow): OperationStreamRecord {
     bodyId: String(row.body_id),
     descriptor: Object.freeze(descriptor),
     state: row.state,
+    ...(row.outcome ? { outcome: row.outcome } : {}),
+    availability: row.availability,
+    ...(row.capture ? { capture: row.capture } : {}),
     committedOffset: byteOffset,
     ...(row.digest ? { digest: String(row.digest) as `sha256:${string}` } : {}),
     ...(row.asset_id ? { assetId: String(row.asset_id) } : {}),
-    ...(row.asset_retention ? { assetRetention: row.asset_retention } : {}),
-    ...(expiresAt ? { expiresAt } : {}),
+    ...(row.asset_retention ? { retention: row.asset_retention } : {}),
+    ...(terminalAt ? { terminalAt } : {}),
     createdAt: iso(row.created_at)!,
     updatedAt: iso(row.updated_at)!,
   });
 }
 
-/** Additive operational tables; the immutable Core Event schema stays v4. */
+/** Additive operational tables; the Core Event schema is unchanged. */
 export async function provisionOperationCatalog(
   session: SqlSession,
   databaseSchema = "public",
@@ -425,7 +544,7 @@ export async function provisionOperationCatalog(
     );
     await transaction.query(`CREATE TABLE IF NOT EXISTS ${tables.metadata} (
       singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
-      version INTEGER NOT NULL
+      fingerprint TEXT NOT NULL CHECK (fingerprint = '${OPERATION_CATALOG_FINGERPRINT}')
     )`);
     await transaction.query(`CREATE TABLE IF NOT EXISTS ${tables.operations} (
       operation_id TEXT PRIMARY KEY,
@@ -433,19 +552,12 @@ export async function provisionOperationCatalog(
       root_event_id TEXT NOT NULL UNIQUE,
       correlation_id TEXT NOT NULL,
       metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+      next_stream_ordinal BIGINT NOT NULL DEFAULT 1,
       state TEXT NOT NULL CHECK (state IN ('accepted','running','completed','failed','cancelled')),
       accepted_at TIMESTAMPTZ NOT NULL,
       updated_at TIMESTAMPTZ NOT NULL,
       completed_at TIMESTAMPTZ
     )`);
-    await transaction.query(
-      `ALTER TABLE ${tables.operations}
-         ADD COLUMN IF NOT EXISTS metadata JSONB NOT NULL DEFAULT '{}'::jsonb`,
-    );
-    await transaction.query(
-      `ALTER TABLE ${tables.operations}
-         ADD COLUMN IF NOT EXISTS next_stream_ordinal BIGINT NOT NULL DEFAULT 1`,
-    );
     await transaction.query(
       `CREATE INDEX IF NOT EXISTS "copilotz_operations_namespace_updated_idx"
       ON ${tables.operations} (namespace, updated_at, operation_id)`,
@@ -469,83 +581,45 @@ export async function provisionOperationCatalog(
       namespace TEXT NOT NULL,
       operation_id TEXT NOT NULL,
       replay_key BIGSERIAL NOT NULL UNIQUE,
-      stream_ordinal BIGINT,
+      stream_ordinal BIGINT NOT NULL,
       stream_id TEXT NOT NULL,
       semantic_stream_id TEXT NOT NULL,
       body_id TEXT NOT NULL,
       descriptor JSONB NOT NULL,
-      state TEXT NOT NULL CHECK (state IN ('open','sealed','aborted')),
+      state TEXT NOT NULL CONSTRAINT copilotz_operation_streams_state_check
+        CHECK (state IN ('open','terminating','terminal')),
+      outcome TEXT CONSTRAINT copilotz_operation_streams_outcome_check
+        CHECK (outcome IN ('completed','failed','cancelled','superseded','abandoned')),
+      availability TEXT NOT NULL DEFAULT 'retained'
+        CONSTRAINT copilotz_operation_streams_availability_check
+        CHECK (availability IN ('retained','purge_pending','purged','missing')),
+      capture TEXT CONSTRAINT copilotz_operation_streams_capture_check
+        CHECK (capture IN ('complete','truncated')),
       committed_offset BIGINT NOT NULL DEFAULT 0 CHECK (committed_offset >= 0),
       digest TEXT,
       asset_id TEXT,
       asset_retention TEXT CHECK (asset_retention IN ('canonical','observation')),
-      expires_at TIMESTAMPTZ,
+      terminal_at TIMESTAMPTZ,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       PRIMARY KEY (namespace, operation_id, stream_id),
-      UNIQUE (namespace, stream_id)
+      UNIQUE (namespace, stream_id),
+      UNIQUE (namespace, operation_id, stream_ordinal),
+      CONSTRAINT copilotz_operation_streams_terminal_check CHECK (
+        (state = 'open' AND outcome IS NULL AND capture IS NULL
+          AND terminal_at IS NULL AND availability = 'retained')
+        OR
+        (state = 'terminating' AND outcome IS NOT NULL
+          AND capture IS NOT NULL AND terminal_at IS NULL
+          AND availability = 'retained'
+          AND (outcome <> 'completed' OR capture = 'complete'))
+        OR
+        (state = 'terminal' AND outcome IS NOT NULL AND capture IS NOT NULL
+          AND terminal_at IS NOT NULL
+          AND (outcome <> 'completed' OR capture = 'complete')
+          AND (asset_retention <> 'canonical' OR outcome = 'completed'))
+      )
     )`,
-    );
-    await transaction.query(
-      `ALTER TABLE ${tables.operationStreams}
-         ADD COLUMN IF NOT EXISTS replay_key BIGSERIAL`,
-    );
-    await transaction.query(
-      `ALTER TABLE ${tables.operationStreams}
-         ADD COLUMN IF NOT EXISTS stream_ordinal BIGINT`,
-    );
-    await transaction.query(
-      `ALTER TABLE ${tables.operationStreams}
-         ADD COLUMN IF NOT EXISTS semantic_stream_id TEXT`,
-    );
-    await transaction.query(
-      `UPDATE ${tables.operationStreams}
-          SET semantic_stream_id = stream_id
-        WHERE semantic_stream_id IS NULL`,
-    );
-    await transaction.query(
-      `ALTER TABLE ${tables.operationStreams}
-         ALTER COLUMN semantic_stream_id SET NOT NULL`,
-    );
-    // Preserve immutable schema-global replay keys while adding the compact
-    // operation-local ordering used by high-watermark cursors.
-    await transaction.query(
-      `WITH ranked AS (
-         SELECT namespace, operation_id, stream_id,
-                ROW_NUMBER() OVER (
-                  PARTITION BY namespace, operation_id
-                  ORDER BY replay_key, stream_id
-                ) AS ordinal
-           FROM ${tables.operationStreams}
-       )
-       UPDATE ${tables.operationStreams} AS stream
-          SET stream_ordinal = ranked.ordinal
-         FROM ranked
-        WHERE stream.namespace = ranked.namespace
-          AND stream.operation_id = ranked.operation_id
-          AND stream.stream_id = ranked.stream_id
-          AND stream.stream_ordinal IS NULL`,
-    );
-    await transaction.query(
-      `ALTER TABLE ${tables.operationStreams}
-         ALTER COLUMN stream_ordinal SET NOT NULL`,
-    );
-    await transaction.query(
-      `UPDATE ${tables.operations} AS operation
-          SET next_stream_ordinal = GREATEST(
-            operation.next_stream_ordinal,
-            COALESCE((
-              SELECT MAX(stream.stream_ordinal) + 1
-                FROM ${tables.operationStreams} AS stream
-               WHERE stream.namespace = operation.namespace
-                 AND stream.operation_id = operation.operation_id
-            ), 1)
-          )`,
-    );
-    await transaction.query(
-      `DROP INDEX IF EXISTS ${
-        quoteEventIdentifier(schema)
-      }."copilotz_operation_streams_replay_key_idx"`,
     );
     await transaction.query(
       `CREATE UNIQUE INDEX IF NOT EXISTS "copilotz_operation_streams_replay_key_idx"
@@ -564,23 +638,15 @@ export async function provisionOperationCatalog(
        ON ${tables.operationStreams} (body_id)`,
     );
     await transaction.query(
-      `CREATE INDEX IF NOT EXISTS "copilotz_operation_streams_expiry_idx"
-      ON ${tables.operationStreams} (expires_at, namespace, operation_id, stream_id)
-      WHERE asset_retention = 'observation' AND expires_at IS NOT NULL`,
+      `CREATE INDEX IF NOT EXISTS "copilotz_operation_streams_retention_idx"
+      ON ${tables.operationStreams} (
+        asset_retention, availability, namespace, operation_id, stream_id
+      ) WHERE state = 'terminal'`,
     );
-    const marker = await transaction.query<{ version: string | number }>(
-      `SELECT version FROM ${tables.metadata} WHERE singleton = TRUE LIMIT 1`,
-    );
-    const version = marker.rows[0] ? Number(marker.rows[0].version) : undefined;
-    if (version !== undefined && version !== OPERATION_CATALOG_VERSION) {
-      throw new Error(
-        `Operation catalog in schema '${schema}' has unsupported version ${version}.`,
-      );
-    }
     await transaction.query(
-      `INSERT INTO ${tables.metadata} (singleton, version) VALUES (TRUE, $1)
+      `INSERT INTO ${tables.metadata} (singleton, fingerprint) VALUES (TRUE, $1)
        ON CONFLICT (singleton) DO NOTHING`,
-      [OPERATION_CATALOG_VERSION],
+      [OPERATION_CATALOG_FINGERPRINT],
     );
   });
   return tables;
@@ -621,7 +687,10 @@ export async function validateOperationCatalog(
           (table_name = 'copilotz_operations' AND column_name = 'next_stream_ordinal')
           OR
           (table_name = 'copilotz_operation_streams'
-            AND column_name IN ('replay_key','stream_ordinal','semantic_stream_id'))
+            AND column_name IN (
+              'replay_key','stream_ordinal','semantic_stream_id','outcome',
+              'availability','capture','terminal_at'
+            ))
         )`,
     [schema],
   );
@@ -632,23 +701,26 @@ export async function validateOperationCatalog(
     !present.has("copilotz_operations.next_stream_ordinal") ||
     !present.has("copilotz_operation_streams.replay_key") ||
     !present.has("copilotz_operation_streams.stream_ordinal") ||
-    !present.has("copilotz_operation_streams.semantic_stream_id")
+    !present.has("copilotz_operation_streams.semantic_stream_id") ||
+    !present.has("copilotz_operation_streams.outcome") ||
+    !present.has("copilotz_operation_streams.availability") ||
+    !present.has("copilotz_operation_streams.capture") ||
+    !present.has("copilotz_operation_streams.terminal_at")
   ) {
     throw operationCatalogError(
       schema,
-      "requires the additive replay ordinal migration",
+      "does not match the required stream catalog schema",
       "copilotz_operation_catalog_not_provisioned",
     );
   }
-  const marker = await session.query<{ version: string | number }>(
-    `SELECT version FROM ${tables.metadata} WHERE singleton = TRUE LIMIT 1`,
+  const marker = await session.query<{ fingerprint: string }>(
+    `SELECT fingerprint FROM ${tables.metadata} WHERE singleton = TRUE LIMIT 1`,
   );
-  const version = marker.rows[0] ? Number(marker.rows[0].version) : undefined;
-  if (version !== OPERATION_CATALOG_VERSION) {
+  if (marker.rows[0]?.fingerprint !== OPERATION_CATALOG_FINGERPRINT) {
     throw operationCatalogError(
       schema,
-      `has unsupported version ${version ?? "none"}`,
-      "copilotz_operation_catalog_version_unsupported",
+      "has an unsupported schema fingerprint",
+      "copilotz_operation_catalog_schema_unsupported",
     );
   }
   return tables;
@@ -880,7 +952,9 @@ export function createOperationCatalog(
         if (state === "cancelled") {
           await transaction.query(
             `UPDATE ${tables.operationStreams}
-                SET state = 'aborted', updated_at = NOW()
+                SET state = 'terminating', outcome = 'cancelled',
+                    capture = 'truncated', availability = 'retained',
+                    updated_at = NOW()
               WHERE namespace = $1 AND operation_id = $2 AND state = 'open'`,
             [namespace, operationId],
           );
@@ -899,7 +973,8 @@ export function createOperationCatalog(
              OR NOT EXISTS (
                SELECT 1 FROM ${tables.operationStreams} AS stream
                 WHERE stream.namespace = $1
-                  AND stream.operation_id = $2 AND stream.state = 'open'
+                  AND stream.operation_id = $2
+                  AND stream.state IN ('open','terminating')
              )
            )
          RETURNING operation_id`,
@@ -938,6 +1013,9 @@ export function createOperationCatalog(
     },
     async openStream(input) {
       const descriptor = snapshotStreamMetadata(input.descriptor);
+      if (!isStreamOutputDescriptor(descriptor)) {
+        throw new TypeError("Operation stream descriptor is invalid.");
+      }
       const namespace = requiredText(input.namespace, "Operation namespace");
       const operationId = requiredText(input.operationId, "Operation id");
       const streamId = requiredText(
@@ -945,7 +1023,7 @@ export function createOperationCatalog(
         "Operation stream id",
       );
       const semanticStreamId = requiredText(
-        input.semanticStreamId ?? streamId,
+        input.semanticStreamId,
         "Operation semantic stream id",
       );
       const bodyId = requiredText(input.bodyId, "Operation stream body id");
@@ -955,6 +1033,7 @@ export function createOperationCatalog(
         }>(
           `SELECT next_stream_ordinal FROM ${tables.operations}
             WHERE namespace = $1 AND operation_id = $2
+              AND state IN ('accepted','running')
             LIMIT 1 FOR UPDATE`,
           [namespace, operationId],
         );
@@ -962,11 +1041,13 @@ export function createOperationCatalog(
         // A durable delivery retry must never append a restarted provider's
         // bytes to the previous execution. Opening the new physical lane
         // atomically closes any still-open incarnation of the same semantic
-        // lane. Its Body remains fenced by its writer generation and is later
-        // retired by progressive/operation maintenance.
+        // lane. The catalog records terminal intent before maintenance fences
+        // and freezes that published Body prefix.
         await transaction.query(
           `UPDATE ${tables.operationStreams}
-              SET state = 'aborted', updated_at = NOW()
+              SET state = 'terminating', outcome = 'superseded',
+                  capture = 'truncated', availability = 'retained',
+                  updated_at = NOW()
             WHERE namespace = $1 AND operation_id = $2
               AND semantic_stream_id = $3 AND stream_id <> $4
               AND state = 'open'`,
@@ -977,8 +1058,9 @@ export function createOperationCatalog(
           stream_ordinal: string | number | bigint;
           body_id: string;
           semantic_stream_id: string;
+          state: OperationStreamState;
         }>(
-          `SELECT replay_key, stream_ordinal, body_id, semantic_stream_id
+          `SELECT replay_key, stream_ordinal, body_id, semantic_stream_id, state
              FROM ${tables.operationStreams}
             WHERE namespace = $1 AND operation_id = $2 AND stream_id = $3
             LIMIT 1`,
@@ -993,6 +1075,11 @@ export function createOperationCatalog(
           if (existing.rows[0].semantic_stream_id !== semanticStreamId) {
             throw new Error(
               `Operation stream '${streamId}' conflicts with another semantic lane.`,
+            );
+          }
+          if (existing.rows[0].state !== "open") {
+            throw new Error(
+              `Operation stream '${streamId}' cannot reopen after terminalization began.`,
             );
           }
           await transaction.query(
@@ -1020,8 +1107,12 @@ export function createOperationCatalog(
           `INSERT INTO ${tables.operationStreams} (
              namespace, operation_id, stream_ordinal, stream_id,
              semantic_stream_id, body_id, descriptor, state,
-             committed_offset, created_at, updated_at
-           ) VALUES ($1,$2,$3::bigint,$4,$5,$6,$7::jsonb,'open',0,NOW(),NOW())
+             availability, asset_retention, committed_offset,
+             created_at, updated_at
+           ) VALUES (
+             $1,$2,$3::bigint,$4,$5,$6,$7::jsonb,'open',
+             'retained','observation',0,NOW(),NOW()
+           )
            RETURNING replay_key`,
           [
             namespace,
@@ -1044,26 +1135,36 @@ export function createOperationCatalog(
     },
     async commitStreamOffset(input) {
       const committedOffset = offset(input.committedOffset);
-      await session.query(
+      const result = await session.query<{ stream_id: string }>(
         `UPDATE ${tables.operationStreams}
            SET committed_offset = GREATEST(committed_offset, $4::bigint),
                updated_at = NOW()
          WHERE namespace = $1 AND operation_id = $2 AND stream_id = $3
-           AND state = 'open'`,
+           AND state = 'open'
+         RETURNING stream_id`,
         [input.namespace, input.operationId, input.streamId, committedOffset],
       );
-      await notifyOperationChange(session, session, input.operationId);
+      if (result.rows.length > 0) {
+        await notifyOperationChange(session, session, input.operationId);
+      }
+      return result.rows.length > 0;
     },
     async sealStream(input) {
-      const expiresAt = new Date(input.expiresAt).toISOString();
       const result = await session.query<{ stream_id: string }>(
         `UPDATE ${tables.operationStreams}
-           SET state = 'sealed', committed_offset = $4::bigint,
-               digest = $5, asset_id = NULL,
+           SET state = 'terminal', outcome = 'completed',
+               availability = 'retained', capture = 'complete',
+               committed_offset = $4::bigint, digest = $5, asset_id = NULL,
                asset_retention = 'observation',
-               expires_at = $7::timestamptz, updated_at = NOW()
+               terminal_at = COALESCE(terminal_at, NOW()), updated_at = NOW()
          WHERE namespace = $1 AND operation_id = $2 AND stream_id = $3
-           AND body_id = $6 AND state = 'open'
+           AND body_id = $6
+           AND (
+             state = 'open'
+             OR (state = 'terminating' AND outcome = 'completed')
+             OR (state = 'terminal' AND outcome = 'completed'
+               AND committed_offset = $4::bigint AND digest = $5)
+           )
          RETURNING stream_id`,
         [
           input.namespace,
@@ -1072,7 +1173,6 @@ export function createOperationCatalog(
           offset(input.body.byteLength),
           input.body.digest,
           input.body.bodyId,
-          expiresAt,
         ],
       );
       if (result.rows.length > 0) {
@@ -1080,13 +1180,115 @@ export function createOperationCatalog(
       }
       return result.rows.length > 0;
     },
-    async abortStream(input) {
+    async beginStreamTerminalization(input) {
+      const outcome = input.outcome === "completed"
+        ? "completed"
+        : failedOutcome(input.outcome);
+      const capture = outcome === "completed"
+        ? "complete"
+        : streamCapture(input.capture);
       const result = await session.query<{ stream_id: string }>(
         `UPDATE ${tables.operationStreams}
-           SET state = 'aborted', updated_at = NOW()
+           SET state = 'terminating', outcome = $4, capture = $5,
+               availability = 'retained', updated_at = NOW()
          WHERE namespace = $1 AND operation_id = $2 AND stream_id = $3
-           AND state = 'open'
+           AND (
+             state = 'open'
+             OR (state = 'terminating' AND outcome = $4 AND capture = $5)
+           )
          RETURNING stream_id`,
+        [
+          input.namespace,
+          input.operationId,
+          input.streamId,
+          outcome,
+          capture,
+        ],
+      );
+      if (result.rows.length > 0) {
+        await notifyOperationChange(session, session, input.operationId);
+      }
+      return result.rows.length > 0;
+    },
+    async terminateStream(input) {
+      const outcome = failedOutcome(input.outcome);
+      const capture = streamCapture(input.capture);
+      const result = await session.query<{ stream_id: string }>(
+        `UPDATE ${tables.operationStreams}
+           SET state = 'terminal',
+               outcome = CASE
+                 WHEN state IN ('terminating','terminal') THEN outcome ELSE $4
+               END,
+               capture = CASE
+                 WHEN state IN ('terminating','terminal') THEN capture ELSE $5
+               END,
+               availability = 'retained',
+               committed_offset = $6::bigint, digest = $7,
+               asset_id = NULL, asset_retention = 'observation',
+               terminal_at = COALESCE(terminal_at, NOW()), updated_at = NOW()
+         WHERE namespace = $1 AND operation_id = $2 AND stream_id = $3
+           AND body_id = $8
+           AND (
+             state = 'open'
+             OR (state = 'terminating' AND outcome <> 'completed')
+             OR (state = 'terminal' AND outcome <> 'completed'
+               AND committed_offset = $6::bigint AND digest = $7)
+           )
+         RETURNING stream_id`,
+        [
+          input.namespace,
+          input.operationId,
+          input.streamId,
+          outcome,
+          capture,
+          offset(input.body.byteLength),
+          input.body.digest,
+          input.body.bodyId,
+        ],
+      );
+      if (result.rows.length > 0) {
+        await notifyOperationChange(session, session, input.operationId);
+      }
+      return result.rows.length > 0;
+    },
+    async markStreamUnavailable(input) {
+      const outcome = failedOutcome(input.outcome);
+      const capture = streamCapture(input.capture);
+      const result = await session.query<{ stream_id: string }>(
+        `UPDATE ${tables.operationStreams}
+           SET state = 'terminal',
+               outcome = CASE
+                 WHEN state IN ('terminating','terminal') THEN outcome ELSE $4
+               END,
+               capture = CASE
+                 WHEN state IN ('terminating','terminal') THEN capture ELSE $5
+               END,
+               availability = $6, digest = NULL, asset_id = NULL,
+               asset_retention = 'observation',
+               terminal_at = COALESCE(terminal_at, NOW()), updated_at = NOW()
+         WHERE namespace = $1 AND operation_id = $2 AND stream_id = $3
+           AND state IN ('open','terminating')
+         RETURNING stream_id`,
+        [
+          input.namespace,
+          input.operationId,
+          input.streamId,
+          outcome,
+          capture,
+          input.availability,
+        ],
+      );
+      if (result.rows.length > 0) {
+        await notifyOperationChange(session, session, input.operationId);
+      }
+      return result.rows.length > 0;
+    },
+    async discardStream(input) {
+      const result = await session.query<{ stream_id: string }>(
+        `DELETE FROM ${tables.operationStreams}
+          WHERE namespace = $1 AND operation_id = $2 AND stream_id = $3
+            AND state = 'open' AND committed_offset = 0
+          RETURNING stream_id`,
         [input.namespace, input.operationId, input.streamId],
       );
       if (result.rows.length > 0) {
@@ -1095,25 +1297,20 @@ export function createOperationCatalog(
       return result.rows.length > 0;
     },
     async retainStream(input) {
-      const expiresAt = input.retention === "observation"
-        ? new Date(input.expiresAt).toISOString()
-        : undefined;
       const assetId = input.retention === "canonical"
         ? requiredText(input.assetId, "Operation stream asset id")
         : undefined;
       await session.query(
         `UPDATE ${tables.operationStreams}
-           SET asset_id = $4, asset_retention = $5,
-               expires_at = $6::timestamptz, updated_at = NOW()
+           SET asset_id = $4, asset_retention = $5, updated_at = NOW()
          WHERE namespace = $1 AND operation_id = $2 AND stream_id = $3
-           AND state = 'sealed'`,
+           AND state = 'terminal' AND outcome = 'completed'`,
         [
           input.namespace,
           input.operationId,
           input.streamId,
           assetId ?? null,
           input.retention,
-          expiresAt ?? null,
         ],
       );
       await notifyOperationChange(session, session, input.operationId);
@@ -1154,11 +1351,65 @@ export function createOperationCatalog(
       );
       return result.rows[0] ? mapStream(result.rows[0]) : null;
     },
+    async findStream(namespaceInput, streamIdInput) {
+      const result = await session.query<StreamRow>(
+        `SELECT * FROM ${tables.operationStreams}
+          WHERE namespace = $1 AND stream_id = $2 LIMIT 1`,
+        [
+          requiredText(namespaceInput, "Operation namespace"),
+          requiredText(streamIdInput, "Operation stream id"),
+        ],
+      );
+      return result.rows[0] ? mapStream(result.rows[0]) : null;
+    },
+    async waitForStreamTerminal(
+      namespaceInput,
+      streamIdInput,
+      waitOptions = {},
+    ) {
+      const namespace = requiredText(namespaceInput, "Operation namespace");
+      const streamId = requiredText(streamIdInput, "Operation stream id");
+      let stream = await catalog.findStream(namespace, streamId);
+      if (!stream) {
+        throw Object.assign(new Error("Operation stream was not found."), {
+          status: 404,
+          code: "operation_stream_not_found",
+        });
+      }
+      const watch = await catalog.watch(stream.operationId);
+      try {
+        while (!waitOptions.signal?.aborted) {
+          if (stream.state === "terminal") return terminalStatus(stream);
+          await watch.wait({ timeoutMs: 5_000, signal: waitOptions.signal });
+          const current = await catalog.getStream(
+            namespace,
+            stream.operationId,
+            streamId,
+          );
+          if (!current) {
+            throw Object.assign(
+              new Error("Operation stream replay metadata has expired."),
+              { status: 410, code: "operation_replay_expired" },
+            );
+          }
+          stream = current;
+        }
+        throw waitOptions.signal?.reason instanceof Error
+          ? waitOptions.signal.reason
+          : new DOMException(
+            "Operation stream wait was aborted.",
+            "AbortError",
+          );
+      } finally {
+        watch.close();
+      }
+    },
     async hasOpenStreams(namespaceInput, operationIdInput) {
       const result = await session.query<{ present: boolean }>(
         `SELECT EXISTS (
            SELECT 1 FROM ${tables.operationStreams}
-            WHERE namespace = $1 AND operation_id = $2 AND state = 'open'
+            WHERE namespace = $1 AND operation_id = $2
+              AND state IN ('open','terminating')
          ) AS present`,
         [
           requiredText(namespaceInput, "Operation namespace"),
@@ -1170,7 +1421,9 @@ export function createOperationCatalog(
     async hasStreamBody(bodyId) {
       const result = await session.query<{ retained: boolean }>(
         `SELECT EXISTS (
-           SELECT 1 FROM ${tables.operationStreams} WHERE body_id = $1
+           SELECT 1 FROM ${tables.operationStreams}
+            WHERE body_id = $1
+              AND availability IN ('retained','purge_pending')
          ) AS retained`,
         [requiredText(bodyId, "Operation stream body id")],
       );
@@ -1193,7 +1446,7 @@ export function createOperationCatalog(
            JOIN ${tables.operations} AS operation
              ON operation.namespace = stream.namespace
             AND operation.operation_id = stream.operation_id
-          WHERE stream.state = 'open'
+          WHERE stream.state IN ('open','terminating')
             ${after === undefined ? "" : "AND stream.replay_key > $1::bigint"}
           ORDER BY stream.replay_key
           LIMIT $${after === undefined ? 1 : 2}`,
@@ -1228,14 +1481,14 @@ export function createOperationCatalog(
             ON operation.namespace = stream.namespace
            AND operation.operation_id = stream.operation_id
           WHERE stream.asset_retention = 'observation'
-            AND stream.expires_at IS NOT NULL
-            AND stream.expires_at <= $1::timestamptz
+            AND stream.state = 'terminal'
+            AND stream.availability IN ('retained','purge_pending')
             AND operation.state IN ('completed','failed','cancelled')
             AND operation.completed_at IS NOT NULL
-            AND operation.completed_at <= $2::timestamptz
-          ORDER BY stream.expires_at, stream.namespace,
-                   stream.operation_id, stream.stream_id LIMIT $3`,
-        [now.toISOString(), completedCutoff, boundedLimit(input.limit)],
+            AND operation.completed_at <= $1::timestamptz
+          ORDER BY operation.completed_at, stream.namespace,
+                   stream.operation_id, stream.stream_id LIMIT $2`,
+        [completedCutoff, boundedLimit(input.limit)],
       );
       return Object.freeze(result.rows.map(mapStream));
     },
@@ -1251,7 +1504,7 @@ export function createOperationCatalog(
               SELECT 1 FROM ${tables.operationStreams} AS open_stream
                WHERE open_stream.namespace = operation.namespace
                  AND open_stream.operation_id = operation.operation_id
-                 AND open_stream.state = 'open'
+                 AND open_stream.state IN ('open','terminating')
             )
             AND NOT EXISTS (
               SELECT 1
@@ -1289,7 +1542,7 @@ export function createOperationCatalog(
                SELECT 1 FROM ${tables.operationStreams} AS open_stream
                 WHERE open_stream.namespace = operation.namespace
                   AND open_stream.operation_id = operation.operation_id
-                  AND open_stream.state = 'open'
+                  AND open_stream.state IN ('open','terminating')
              )
              AND NOT EXISTS (
                SELECT 1
@@ -1387,9 +1640,16 @@ export function createOperationCatalog(
           const removedStreams = await transaction.query<{ stream_id: string }>(
             `DELETE FROM ${tables.operationStreams}
               WHERE namespace = $1 AND operation_id = $2
-                AND (state = 'aborted' OR asset_retention = 'canonical')
+                AND state = 'terminal'
+                AND (
+                  asset_retention = 'canonical'
+                  OR (
+                    availability IN ('purged','missing')
+                    AND updated_at <= $3::timestamptz
+                  )
+                )
               RETURNING stream_id`,
-            [candidate.namespace, candidate.operation_id],
+            [candidate.namespace, candidate.operation_id, cutoff],
           );
           const remaining = await transaction.query<{ stream_id: string }>(
             `SELECT stream_id FROM ${tables.operationStreams}
@@ -1431,9 +1691,25 @@ export function createOperationCatalog(
     },
     async pruneStream(input) {
       const result = await session.query<{ stream_id: string }>(
-        `DELETE FROM ${tables.operationStreams}
+        `UPDATE ${tables.operationStreams}
+            SET availability = 'purged', digest = NULL, updated_at = NOW()
           WHERE namespace = $1 AND operation_id = $2 AND stream_id = $3
-            AND state IN ('sealed','aborted')
+            AND state = 'terminal' AND availability = 'purge_pending'
+          RETURNING stream_id`,
+        [input.namespace, input.operationId, input.streamId],
+      );
+      if (result.rows.length > 0) {
+        await notifyOperationChange(session, session, input.operationId);
+      }
+      return result.rows.length > 0;
+    },
+    async markStreamPurgePending(input) {
+      const result = await session.query<{ stream_id: string }>(
+        `UPDATE ${tables.operationStreams}
+            SET availability = 'purge_pending', updated_at = NOW()
+          WHERE namespace = $1 AND operation_id = $2 AND stream_id = $3
+            AND state = 'terminal' AND asset_retention = 'observation'
+            AND availability = 'retained'
           RETURNING stream_id`,
         [input.namespace, input.operationId, input.streamId],
       );

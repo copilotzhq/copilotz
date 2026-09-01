@@ -251,7 +251,7 @@ Deno.test("Gateway and Worker preserve live output and cascading durable work", 
     assertEquals("threadId" in stream, false);
     assertEquals(stream.namespace, namespace);
     assert(stream.streamId.startsWith(
-      "incarnation.v1:topology-first-stream:",
+      "incarnation:topology-first-stream:",
     ));
     assertEquals(
       stream.metadata.contentStreamSemanticId,
@@ -577,7 +577,7 @@ Deno.test({
       assertEquals("threadId" in stream, false);
       assertEquals(stream.namespace, namespace);
       assert(stream.streamId.startsWith(
-        "incarnation.v1:topology-first-stream:",
+        "incarnation:topology-first-stream:",
       ));
       assertEquals(
         stream.metadata.contentStreamSemanticId,

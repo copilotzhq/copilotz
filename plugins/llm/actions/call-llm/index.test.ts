@@ -18,6 +18,7 @@ import {
   createActionLifecycleEmitter,
 } from "@copilotz/copilotz/actions";
 import type {
+  ContentStreamAbortInput,
   ContentStreamOpenInput,
   ContentStreamRetentionInput,
   ContentStreamWriter,
@@ -92,6 +93,7 @@ type OpenedStream = {
   appends: Uint8Array[];
   closed: boolean;
   aborted: boolean;
+  abortInput?: ContentStreamAbortInput;
   retentions: ContentStreamRetentionInput[];
 };
 
@@ -293,8 +295,9 @@ function fixture(options: FixtureOptions) {
                 : Object.freeze([]),
             }));
           },
-          abort() {
+          abort(input?: ContentStreamAbortInput) {
             record.aborted = true;
+            record.abortInput = input;
             return Promise.resolve();
           },
           retain(input: ContentStreamRetentionInput) {
@@ -1537,13 +1540,22 @@ Deno.test("llm.call publishes frames only through Streams and materializes them"
 
   assertEquals(test.opened.length, 2);
   assertEquals(test.opened.map((stream) => stream.input.id), [
-    "visible:content:text_2Fplain",
-    "visible:reasoning:text_2Fplain",
+    "visible:provider-attempt:0:content:text%2Fplain",
+    "visible:provider-attempt:0:reasoning:text%2Fplain",
   ]);
   assertEquals(test.opened.map((stream) => stream.input.metadata), [
-    { surface: "chat", lane: "content", model: "primary", adapter: "provider" },
     {
       surface: "chat",
+      llmAttemptId: "run-a",
+      providerAttemptIndex: 0,
+      lane: "content",
+      model: "primary",
+      adapter: "provider",
+    },
+    {
+      surface: "chat",
+      llmAttemptId: "run-a",
+      providerAttemptIndex: 0,
       lane: "reasoning",
       model: "primary",
       adapter: "provider",
@@ -1564,6 +1576,61 @@ Deno.test("llm.call publishes frames only through Streams and materializes them"
   assertEquals(test.progressCalls(), 0);
   assertEquals(output.content[0].assetId, "prepared:attempt:0:content:0");
   assert(!output.content[0].assetId.startsWith("stream:"));
+});
+
+Deno.test("llm.call gives every lane and media tuple an injective stream identity", async () => {
+  const frames = new ReadableStream<LlmAdapterFrame>({
+    start(controller) {
+      for (
+        const [lane, mediaType, value] of [
+          ["tool-calls", "a\u0000content", "first"],
+          ["tool-calls\u0000a", "content", "second"],
+          ["lane/one", "text/plain", "third"],
+          ["lane_2Fone", "text/plain", "fourth"],
+        ] as const
+      ) {
+        controller.enqueue({
+          lane,
+          mediaType,
+          bytes: encoder.encode(value),
+        });
+      }
+      controller.close();
+    },
+  });
+  const test = fixture({
+    models: { primary: model("provider", "model-a") },
+    adapters: {
+      provider: {
+        call() {
+          return invocation({
+            content: "normalized answer",
+            attempts: [{ status: "completed" }],
+          }, frames);
+        },
+      },
+    },
+  });
+
+  await callLlmAction.execute({
+    ...emptyInput,
+    stream: { id: "collision" },
+  }, test.context);
+
+  assertEquals(test.opened.map((stream) => stream.input.id), [
+    "collision:provider-attempt:0:tool-calls:a%00content",
+    "collision:provider-attempt:0:tool-calls%00a:content",
+    "collision:provider-attempt:0:lane%2Fone:text%2Fplain",
+    "collision:provider-attempt:0:lane_2Fone:text%2Fplain",
+  ]);
+  assertEquals(
+    test.opened.map((stream) =>
+      decoder.decode(
+        new Uint8Array(stream.appends.flatMap((chunk) => [...chunk])),
+      )
+    ),
+    ["first", "second", "third", "fourth"],
+  );
 });
 
 Deno.test("llm.call reuses an exactly equivalent content stream Body", async () => {
@@ -1612,7 +1679,7 @@ Deno.test("llm.call reuses an exactly equivalent content stream Body", async () 
   assertEquals(batch.assets[0].id, "prepared:attempt:0:content:0");
   assertEquals(
     batch.assets[0].readyBody?.bodyId,
-    "stream-body:equivalent:content:text_2Fplain_3B_20charset_3Dutf-8",
+    "stream-body:equivalent:provider-attempt:0:content:text%2Fplain%3B%20charset%3Dutf-8",
   );
   assertEquals(batch.assets[0].body.byteLength, 0);
   assertEquals(output.content, batch.content);
@@ -1657,14 +1724,7 @@ Deno.test("llm.call retains a non-equivalent stream as an observation Body", asy
   const final = test.materialized[0] as PreparedContent;
   assertEquals(final.content[0].assetId, "prepared:attempt:0:content:0");
   assertEquals(output.content, final.content);
-  assertEquals(test.opened[0].retentions.length, 1);
-  assertEquals(test.opened[0].retentions[0].retention, "observation");
-  assertEquals(
-    test.opened[0].retentions[0].retention === "observation"
-      ? test.opened[0].retentions[0].expiresAt
-      : undefined,
-    "2026-08-23T00:15:00.000Z",
-  );
+  assertEquals(test.opened[0].retentions, [{ retention: "observation" }]);
 });
 
 Deno.test("llm.call never falls back after publishing visible output", async () => {
@@ -1819,17 +1879,23 @@ Deno.test("llm.call falls back without awaiting non-cooperative frame cancellati
 
 Deno.test("llm.call cancellation does not await non-cooperative result or frames", async () => {
   const controller = new AbortController();
-  let started!: () => void;
-  const didStart = new Promise<void>((resolve) => {
-    started = resolve;
+  let appended!: () => void;
+  const didAppend = new Promise<void>((resolve) => {
+    appended = resolve;
   });
   let cancellationRequested = false;
   const adapter: LlmAdapter = {
     call() {
-      started();
       return invocation(
         new Promise<LlmAdapterResult>(() => {}),
         new ReadableStream<LlmAdapterFrame>({
+          start(controller) {
+            controller.enqueue({
+              lane: "content",
+              mediaType: "text/plain",
+              bytes: encoder.encode("partial"),
+            });
+          },
           pull() {
             return new Promise<void>(() => {});
           },
@@ -1845,11 +1911,15 @@ Deno.test("llm.call cancellation does not await non-cooperative result or frames
     models: { primary: model("provider", "model-a") },
     adapters: { provider: adapter },
     signal: controller.signal,
+    onAppend: appended,
   });
   const executing = Promise.resolve(
-    callLlmAction.execute(emptyInput, test.context),
+    callLlmAction.execute({
+      ...emptyInput,
+      stream: { id: "cancelled" },
+    }, test.context),
   );
-  await didStart;
+  await didAppend;
   controller.abort(new DOMException("caller cancelled", "AbortError"));
 
   await within(assertRejects(
@@ -1858,6 +1928,7 @@ Deno.test("llm.call cancellation does not await non-cooperative result or frames
     "caller cancelled",
   ));
   assert(cancellationRequested);
+  assertEquals(test.opened[0]?.abortInput?.outcome, "cancelled");
 });
 
 Deno.test("llm.call observes result rejection before acquiring a locked frame reader", async () => {
@@ -1939,8 +2010,8 @@ Deno.test("llm.call rejects untrusted Adapter data before persistence", async ()
   });
   await assertRejects(
     async () => await callLlmAction.execute(emptyInput, rejected.context),
-    TypeError,
-    "id",
+    Error,
+    "malformed tool calls",
   );
   assertEquals(rejected.prepared.length, 0);
 
@@ -1963,8 +2034,8 @@ Deno.test("llm.call rejects untrusted Adapter data before persistence", async ()
   });
   await assertRejects(
     async () => await callLlmAction.execute(emptyInput, duplicate.context),
-    TypeError,
-    "duplicate id 'same'",
+    Error,
+    "malformed tool calls",
   );
 
   const blankAction: LlmAdapter = {
@@ -1982,8 +2053,8 @@ Deno.test("llm.call rejects untrusted Adapter data before persistence", async ()
   });
   await assertRejects(
     async () => await callLlmAction.execute(emptyInput, blank.context),
-    TypeError,
-    ".action",
+    Error,
+    "malformed tool calls",
   );
 });
 
@@ -2059,6 +2130,140 @@ Deno.test("llm.call drains a framework-rejected stream before fallback accountin
       },
     ],
   );
+});
+
+Deno.test("llm.call falls back after malformed speculative tool drafts without accepting a Tool", async () => {
+  let releaseResult!: () => void;
+  const resultReady = new Promise<void>((resolve) => {
+    releaseResult = resolve;
+  });
+  let backupCalls = 0;
+  const primary: LlmAdapter = {
+    call() {
+      return invocation(
+        resultReady.then(() => ({
+          content: "discarded",
+          toolCalls: [{ id: "", action: "search", input: {} }],
+          attempts: [{ status: "completed" as const }],
+        } as unknown as LlmAdapterResult)),
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue({
+              lane: "tool-calls",
+              mediaType: "application/x-ndjson",
+              bytes: encoder.encode('{"draft":true}\n'),
+            });
+            controller.close();
+          },
+        }),
+      );
+    },
+  };
+  const backup: LlmAdapter = {
+    call() {
+      backupCalls += 1;
+      return invocation(
+        {
+          content: "recovered",
+          attempts: [{ status: "completed" }],
+        },
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue({
+              lane: "content",
+              mediaType: "text/plain",
+              bytes: encoder.encode("recovered"),
+            });
+            controller.close();
+          },
+        }),
+      );
+    },
+  };
+  const test = fixture({
+    models: {
+      primary: model("primary", "primary-model"),
+      backup: model("backup", "backup-model"),
+    },
+    adapters: { primary, backup },
+  });
+
+  const executing = callLlmAction.execute({
+    ...emptyInput,
+    models: ["primary", "backup"],
+    stream: { id: "tool-draft" },
+  }, test.context);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assertEquals(test.opened.length, 1);
+  assertEquals(test.opened[0]?.input.role, "tool-calls");
+  releaseResult();
+  const output = await executing;
+
+  assertEquals(output.model, "backup");
+  assertEquals(backupCalls, 1);
+  assertEquals(output.toolCalls, undefined);
+  assertEquals(test.opened[0]?.aborted, true);
+  assertEquals(test.opened.map((stream) => stream.input.id), [
+    "tool-draft:provider-attempt:0:tool-calls:application%2Fx-ndjson",
+    "tool-draft:provider-attempt:1:content:text%2Fplain",
+  ]);
+  assertEquals(
+    test.opened.map((stream) => stream.input.metadata?.llmAttemptId),
+    [
+      "run-a",
+      "run-a",
+    ],
+  );
+  assertEquals(
+    test.prepared.some((entry) => entry.operationKey.includes("discarded")),
+    false,
+  );
+});
+
+Deno.test("llm.call carries bounded Adapter rejected-attempt evidence through Action progress", async () => {
+  const adapter: LlmAdapter = {
+    call() {
+      return invocation(Promise.reject(
+        new LlmAdapterCallError(
+          "safe adapter rejection",
+          {
+            rejectedAttemptEvidence: {
+              code: "tool_protocol_rejected",
+              message:
+                "The provider rejected the tool protocol before execution.",
+              location: "toolCalls",
+              retryable: true,
+            },
+          },
+        ),
+      ));
+    },
+  };
+  const test = fixture({
+    models: { primary: model("adapter", "model") },
+    adapters: { adapter },
+  });
+  await assertRejects(
+    async () => await callLlmAction.execute(emptyInput, test.context),
+    LlmAdapterCallError,
+    "safe adapter rejection",
+  );
+  assertEquals(test.progressValues()[0], {
+    schema: "copilotz.llm.rejected-attempt-evidence",
+    attempt: {
+      id: "run-a:attempt:0",
+      index: 0,
+      model: "primary",
+      adapter: "adapter",
+      providerModel: "model",
+    },
+    evidence: {
+      code: "tool_protocol_rejected",
+      message: "The provider rejected the tool protocol before execution.",
+      location: "toolCalls",
+      retryable: true,
+    },
+  });
 });
 
 Deno.test("llm.call drains invalid local frames before fallback accounting", async () => {
@@ -2151,9 +2356,25 @@ Deno.test("llm.call reports finalized attempts before a terminal framework failu
   await assertRejects(
     async () => await callLlmAction.execute(emptyInput, test.context),
     Error,
-    ".id",
+    "malformed tool calls",
   );
   assertEquals(test.progressValues(), [{
+    schema: "copilotz.llm.rejected-attempt-evidence",
+    attempt: {
+      id: "run-a:attempt:0",
+      index: 0,
+      model: "primary",
+      adapter: "provider",
+      providerModel: "model",
+    },
+    evidence: {
+      code: "malformed_tool_call",
+      message:
+        "The model returned a tool call that does not match the declared tool contract.",
+      location: "toolCalls[0].id",
+      retryable: true,
+    },
+  }, {
     schema: "copilotz.llm.attempt-accounting.v1",
     attempts: [{
       id: "run-a:attempt:0",
@@ -2164,10 +2385,7 @@ Deno.test("llm.call reports finalized attempts before a terminal framework failu
       providerModel: "model",
       status: "failed",
       usage: { inputTokens: 3, outputTokens: 1, totalTokens: 4 },
-      error: {
-        message:
-          "LLM Adapter result.toolCalls[0].id must be a non-empty string.",
-      },
+      error: { message: "LLM Adapter returned malformed tool calls." },
     }],
   }]);
 });
@@ -2216,7 +2434,7 @@ Deno.test("llm.call canonicalizes durable pipeline roots and bounds pipeline pla
     input: { a: 1, b: { x: true, y: false } },
   });
 
-  const rejectsPlan = async (toolCalls: unknown, message: string) => {
+  const rejectsPlan = async (toolCalls: unknown) => {
     const adapter: LlmAdapter = {
       call() {
         return invocation({
@@ -2232,8 +2450,8 @@ Deno.test("llm.call canonicalizes durable pipeline roots and bounds pipeline pla
     });
     await assertRejects(
       async () => await callLlmAction.execute(emptyInput, test.context),
-      TypeError,
-      message,
+      Error,
+      "malformed tool calls",
     );
   };
 
@@ -2243,7 +2461,6 @@ Deno.test("llm.call canonicalizes durable pipeline roots and bounds pipeline pla
       action: "search",
       input: {},
     })),
-    "parallel branches",
   );
   await rejectsPlan([{
     id: "root",
@@ -2259,7 +2476,7 @@ Deno.test("llm.call canonicalizes durable pipeline roots and bounds pipeline pla
             : { type: "jq", filter: "." },
       ),
     },
-  }], "at most 32 stages");
+  }]);
   await rejectsPlan([{
     id: "root",
     action: "search",
@@ -2271,7 +2488,7 @@ Deno.test("llm.call canonicalizes durable pipeline roots and bounds pipeline pla
         filter: "x".repeat(16_385),
       }],
     },
-  }], "at most 16384 characters");
+  }]);
 });
 
 Deno.test("llm.call observes a rejecting result on an invalid invocation", async () => {

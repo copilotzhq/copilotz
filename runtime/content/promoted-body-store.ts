@@ -1,11 +1,13 @@
 import type {
-  BodyHead,
   BodyMaintenanceListInput,
   BodyStore,
   BodyStoreAdapter,
+  IncompleteBodyHead,
   MutableBodyHead,
   PutBodyInput,
+  ReadyBodyHead,
   SealBodyInput,
+  TerminalBodyHead,
   TrustedBodyScope,
 } from "./body-store.ts";
 import { readBodyBytes, readBodyRange } from "./body-store.ts";
@@ -29,18 +31,30 @@ function conflict(message: string): Error {
 }
 
 function isReady(
-  head: BodyHead | MutableBodyHead | null,
-): head is BodyHead {
+  head: TerminalBodyHead | MutableBodyHead | null,
+): head is ReadyBodyHead {
   return head?.state === "ready";
 }
 
 function isActive(
-  head: BodyHead | MutableBodyHead | null,
-): head is MutableBodyHead & { state: "open" | "sealing" } {
-  return head?.state === "open" || head?.state === "sealing";
+  head: TerminalBodyHead | MutableBodyHead | null,
+): head is MutableBodyHead & {
+  state: "open" | "sealing" | "terminating";
+} {
+  return head?.state === "open" || head?.state === "sealing" ||
+    head?.state === "terminating";
 }
 
-function validateReadyHead(expected: BodyHead, actual: BodyHead): void {
+function isIncomplete(
+  head: TerminalBodyHead | MutableBodyHead | null,
+): head is IncompleteBodyHead {
+  return head?.state === "incomplete";
+}
+
+function validateReadyHead(
+  expected: ReadyBodyHead,
+  actual: ReadyBodyHead,
+): void {
   if (
     actual.bodyId !== expected.bodyId ||
     actual.byteLength !== expected.byteLength ||
@@ -53,7 +67,7 @@ function validateReadyHead(expected: BodyHead, actual: BodyHead): void {
   }
 }
 
-function validatePutHead(expected: PutBodyInput, actual: BodyHead): void {
+function validatePutHead(expected: PutBodyInput, actual: ReadyBodyHead): void {
   if (
     actual.bodyId !== expected.bodyId ||
     actual.byteLength !== expected.bytes.byteLength ||
@@ -66,7 +80,7 @@ function validatePutHead(expected: PutBodyInput, actual: BodyHead): void {
   }
 }
 
-function validateSealHead(input: SealBodyInput, head: BodyHead): void {
+function validateSealHead(input: SealBodyInput, head: ReadyBodyHead): void {
   if (
     head.bodyId !== input.writer.bodyId ||
     head.mediaType !== input.writer.mediaType ||
@@ -82,8 +96,8 @@ function validateSealHead(input: SealBodyInput, head: BodyHead): void {
 
 function requireReadyHead(
   bodyId: string,
-  head: BodyHead | MutableBodyHead | null,
-): BodyHead | null {
+  head: TerminalBodyHead | MutableBodyHead | null,
+): ReadyBodyHead | null {
   if (!head) return null;
   if (!isReady(head)) {
     throw conflict(
@@ -94,8 +108,8 @@ function requireReadyHead(
 }
 
 function compareBodyId(
-  left: BodyHead | MutableBodyHead,
-  right: BodyHead | MutableBodyHead,
+  left: TerminalBodyHead | MutableBodyHead,
+  right: TerminalBodyHead | MutableBodyHead,
 ): number {
   return left.bodyId.localeCompare(right.bodyId);
 }
@@ -116,9 +130,9 @@ export function createPromotedBodyStore(
   if (staging === ready) {
     throw new TypeError("Promoted BodyStore requires distinct stores.");
   }
-  const promotions = new Map<string, Promise<BodyHead>>();
+  const promotions = new Map<string, Promise<ReadyBodyHead>>();
 
-  const cleanupStagedReady = async (head: BodyHead): Promise<boolean> => {
+  const cleanupStagedReady = async (head: ReadyBodyHead): Promise<boolean> => {
     try {
       return await staging.maintenance.delete({
         bodyId: head.bodyId,
@@ -133,7 +147,7 @@ export function createPromotedBodyStore(
     }
   };
 
-  const promoteOnce = async (staged: BodyHead): Promise<BodyHead> => {
+  const promoteOnce = async (staged: ReadyBodyHead): Promise<ReadyBodyHead> => {
     const existing = requireReadyHead(
       staged.bodyId,
       await ready.head({ bodyId: staged.bodyId }),
@@ -167,7 +181,7 @@ export function createPromotedBodyStore(
       );
     }
 
-    let published: BodyHead;
+    let published: ReadyBodyHead;
     try {
       published = await ready.put({
         bodyId: staged.bodyId,
@@ -195,7 +209,7 @@ export function createPromotedBodyStore(
     return published;
   };
 
-  const promote = (staged: BodyHead): Promise<BodyHead> => {
+  const promote = (staged: ReadyBodyHead): Promise<ReadyBodyHead> => {
     const current = promotions.get(staged.bodyId);
     if (current) {
       return current.then((head) => {
@@ -218,11 +232,14 @@ export function createPromotedBodyStore(
   ): Promise<
     Readonly<{
       store: BodyStore;
-      head: BodyHead | MutableBodyHead | null;
+      head: TerminalBodyHead | MutableBodyHead | null;
     }>
   > => {
     const staged = await staging.head({ bodyId });
     if (isActive(staged)) {
+      return Object.freeze({ store: staging, head: staged });
+    }
+    if (isIncomplete(staged)) {
       return Object.freeze({ store: staging, head: staged });
     }
     if (isReady(staged)) {
@@ -236,6 +253,9 @@ export function createPromotedBodyStore(
       // Preserve active-staging precedence across the cross-store lookup race.
       const latest = await staging.head({ bodyId });
       if (isActive(latest)) {
+        return Object.freeze({ store: staging, head: latest });
+      }
+      if (isIncomplete(latest)) {
         return Object.freeze({ store: staging, head: latest });
       }
       if (isReady(latest)) {
@@ -270,6 +290,11 @@ export function createPromotedBodyStore(
           `Progressive body '${input.bodyId}' is still active in staging.`,
         );
       }
+      if (isIncomplete(staged)) {
+        throw conflict(
+          `Incomplete body '${input.bodyId}' cannot become Ready.`,
+        );
+      }
       if (isReady(staged)) await promote(staged);
       const head = await ready.put(input);
       validatePutHead(input, head);
@@ -296,6 +321,9 @@ export function createPromotedBodyStore(
         await promote(staged);
         throw conflict(`Ready body '${input.bodyId}' already exists.`);
       }
+      if (isIncomplete(staged)) {
+        throw conflict(`Incomplete body '${input.bodyId}' already exists.`);
+      }
       const canonical = requireReadyHead(
         input.bodyId,
         await ready.head({ bodyId: input.bodyId }),
@@ -316,6 +344,9 @@ export function createPromotedBodyStore(
       }
       return writer;
     },
+    renew(input) {
+      return staging.renew(input);
+    },
     append(input) {
       return staging.append(input);
     },
@@ -325,7 +356,7 @@ export function createPromotedBodyStore(
         validateSealHead(input, before);
         return await promote(before);
       }
-      let sealed: BodyHead;
+      let sealed: ReadyBodyHead;
       try {
         sealed = await staging.seal(input);
       } catch (error) {
@@ -339,6 +370,23 @@ export function createPromotedBodyStore(
       validateSealHead(input, sealed);
       return await promote(sealed);
     },
+    async terminate(input) {
+      const before = await staging.head({ bodyId: input.writer.bodyId });
+      if (isIncomplete(before)) {
+        if (
+          (input.expectedByteLength !== undefined &&
+            input.expectedByteLength !== before.byteLength) ||
+          (input.expectedDigest !== undefined &&
+            input.expectedDigest !== before.digest)
+        ) {
+          throw conflict(
+            `Incomplete body '${input.writer.bodyId}' conflicts with terminate expectations.`,
+          );
+        }
+        return before;
+      }
+      return await staging.terminate(input);
+    },
     abort(input) {
       return staging.abort(input);
     },
@@ -348,14 +396,14 @@ export function createPromotedBodyStore(
         const stagingStates = input.states.filter((state) => state !== "ready");
         const stagedPage = stagingStates.length
           ? await staging.maintenance.list({ ...input, states: stagingStates })
-          : { bodies: [] as readonly (BodyHead | MutableBodyHead)[] };
+          : { bodies: [] as readonly (TerminalBodyHead | MutableBodyHead)[] };
         const readyPage = input.states.includes("ready")
           ? await ready.maintenance.list({ ...input, states: ["ready"] })
-          : { bodies: [] as readonly (BodyHead | MutableBodyHead)[] };
+          : { bodies: [] as readonly (TerminalBodyHead | MutableBodyHead)[] };
 
         // If an impossible active/final overlap exists, active staging wins in
         // maintenance just as it does in reads. Final GC must not race a writer.
-        const merged = new Map<string, BodyHead | MutableBodyHead>();
+        const merged = new Map<string, TerminalBodyHead | MutableBodyHead>();
         for (const head of readyPage.bodies) merged.set(head.bodyId, head);
         for (const head of stagedPage.bodies) merged.set(head.bodyId, head);
         const bodies = [...merged.values()].sort(compareBodyId).slice(

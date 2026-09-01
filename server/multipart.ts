@@ -8,9 +8,12 @@ import type { EventNativeOutputStream } from "./event-native.ts";
 import {
   createOperationReplayCursorTracker,
   decodeOperationReplayCursor,
-  operationStreamReplayCursorKey,
+  streamErrorOutput,
 } from "../runtime/streams/index.ts";
-import type { OperationReplayCursorMutation } from "../runtime/streams/index.ts";
+import type {
+  OperationReplayCursorMutation,
+  StreamTerminalStatus,
+} from "../runtime/streams/index.ts";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -85,6 +88,7 @@ function descriptor(output: ApplicationOutput): unknown {
   if (!isStream(output)) return output;
   const {
     payload: _payload,
+    terminal: _terminal,
     replayKey: _replayKey,
     streamOrdinal: _streamOrdinal,
     ...value
@@ -92,10 +96,20 @@ function descriptor(output: ApplicationOutput): unknown {
   return value;
 }
 
-function boundedStreamError(error: unknown): Uint8Array {
+function boundedStreamError(
+  streamId: string,
+  offset: number,
+): Uint8Array {
   return encoder.encode(JSON.stringify({
-    name: error instanceof Error && error.name ? error.name : "Error",
-    message: "Progressive stream failed.",
+    type: "stream.error",
+    streamId,
+    offset,
+    code: "stream_unavailable",
+    outcome: "abandoned",
+    availability: "missing",
+    capture: "truncated",
+    terminalAt: new Date().toISOString(),
+    message: "Progressive stream became unavailable.",
   }));
 }
 
@@ -149,25 +163,22 @@ export function applicationOutputsMultipartResponse(
     initialOffset: number,
   ): Promise<void> => {
     const reader = output.payload.getReader();
-    const replayKey = operationStreamReplayCursorKey(output);
     let offset = initialOffset;
     const streamMutation = (
       action: "offset" | "end",
       nextOffset: number,
-    ): OperationReplayCursorMutation =>
-      operationId && output.streamOrdinal
-        ? {
-          kind: "operation-stream",
-          action,
-          operationId,
-          streamOrdinal: output.streamOrdinal,
-          offset: nextOffset,
-        }
-        : {
-          kind: "legacy-stream",
-          replayKey,
-          offset: nextOffset,
-        };
+    ): OperationReplayCursorMutation => {
+      if (!operationId || !output.streamOrdinal) {
+        throw new Error("Application stream is missing its operation lane.");
+      }
+      return {
+        kind: "operation-stream",
+        action,
+        operationId,
+        streamOrdinal: output.streamOrdinal,
+        offset: nextOffset,
+      };
+    };
     try {
       while (true) {
         const next = await reader.read();
@@ -185,18 +196,47 @@ export function applicationOutputsMultipartResponse(
         );
         offset = toOffset;
       }
-      await writePart(
-        (replayCursor) =>
-          part(
-            boundary,
-            "stream-end",
-            encoder.encode(JSON.stringify({ offset })),
-            { streamId: output.streamId, offset, cursor: replayCursor },
-          ),
-        operationId && output.streamOrdinal
-          ? [streamMutation("end", offset)]
-          : [],
-      );
+      const terminal = await output.terminal;
+      const streamError = streamErrorOutput(output.streamId, terminal);
+      const terminalOffset = terminal.offset;
+      if (streamError === null && terminalOffset !== offset) {
+        throw new Error("Completed stream Body ended at an invalid offset.");
+      }
+      if (streamError) {
+        await writePart(
+          (replayCursor) =>
+            part(
+              boundary,
+              "stream-error",
+              encoder.encode(JSON.stringify(streamError)),
+              {
+                streamId: output.streamId,
+                offset: terminalOffset,
+                cursor: replayCursor,
+              },
+            ),
+          operationId && output.streamOrdinal
+            ? [streamMutation("end", terminalOffset)]
+            : [],
+        );
+      } else {
+        await writePart(
+          (replayCursor) =>
+            part(
+              boundary,
+              "stream-end",
+              encoder.encode(JSON.stringify(terminal)),
+              {
+                streamId: output.streamId,
+                offset: terminalOffset,
+                cursor: replayCursor,
+              },
+            ),
+          operationId && output.streamOrdinal
+            ? [streamMutation("end", terminalOffset)]
+            : [],
+        );
+      }
     } catch (error) {
       if (!cancelled) {
         console.error("[copilotz:multipart] progressive stream failed", {
@@ -207,11 +247,16 @@ export function applicationOutputsMultipartResponse(
             : "Unknown progressive stream failure.",
         });
         await writePart((replayCursor) =>
-          part(boundary, "stream-error", boundedStreamError(error), {
-            streamId: output.streamId,
-            offset,
-            cursor: replayCursor,
-          })
+          part(
+            boundary,
+            "stream-error",
+            boundedStreamError(output.streamId, offset),
+            {
+              streamId: output.streamId,
+              offset,
+              cursor: replayCursor,
+            },
+          )
         ).catch(() => undefined);
       }
     } finally {
@@ -253,10 +298,8 @@ export function applicationOutputsMultipartResponse(
         let streamOffset: number | undefined;
         if (isStream(output)) {
           const position = cursorTracker.streamPosition({
-            operationId,
-            replayKey: output.replayKey,
-            streamOrdinal: output.streamOrdinal,
-            streamId: output.streamId,
+            operationId: operationId!,
+            streamOrdinal: output.streamOrdinal!,
           });
           if (position.consumed) {
             await output.payload.cancel("operation_stream_already_consumed")
@@ -443,16 +486,100 @@ function json(value: Uint8Array): Record<string, unknown> {
   return parsed as Record<string, unknown>;
 }
 
+function decodedTerminal(value: Record<string, unknown>): StreamTerminalStatus {
+  const outcome = value.outcome;
+  const availability = value.availability;
+  const capture = value.capture;
+  const offset = value.offset;
+  const terminalAt = value.terminalAt;
+  if (
+    !["completed", "failed", "cancelled", "superseded", "abandoned"].includes(
+      outcome as string,
+    ) ||
+    !["retained", "purge_pending", "purged", "missing"].includes(
+      availability as string,
+    ) ||
+    (capture !== "complete" && capture !== "truncated") ||
+    !Number.isSafeInteger(offset) || Number(offset) < 0 ||
+    typeof terminalAt !== "string" ||
+    Number.isNaN(Date.parse(terminalAt))
+  ) {
+    throw new TypeError("Multipart stream terminal frame is invalid.");
+  }
+  return Object.freeze({
+    outcome: outcome as StreamTerminalStatus["outcome"],
+    availability: availability as StreamTerminalStatus["availability"],
+    capture,
+    offset: Number(offset),
+    terminalAt: new Date(terminalAt).toISOString(),
+  });
+}
+
+function unavailableTerminal(offset: number): StreamTerminalStatus {
+  return Object.freeze({
+    outcome: "abandoned",
+    availability: "missing",
+    capture: "truncated",
+    offset: Number.isSafeInteger(offset) && offset >= 0 ? offset : 0,
+    terminalAt: new Date().toISOString(),
+  });
+}
+
+/** Drains every decoded prefix chunk before surfacing its terminal failure. */
+function terminalPayload(
+  streamId: string,
+  source: ReadableStream<Uint8Array>,
+  terminal: Promise<StreamTerminalStatus>,
+): ReadableStream<Uint8Array> {
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      reader ??= source.getReader();
+      try {
+        const next = await reader.read();
+        if (!next.done) {
+          controller.enqueue(next.value);
+          return;
+        }
+        const settled = await terminal;
+        const failure = streamErrorOutput(streamId, settled);
+        if (!failure) {
+          controller.close();
+          return;
+        }
+        controller.error(Object.assign(
+          new Error(
+            settled.availability === "missing"
+              ? "Progressive stream was truncated."
+              : "Progressive stream terminated before completion.",
+          ),
+          {
+            name: "StreamTerminalError",
+            code: failure.code,
+            terminal: settled,
+          },
+        ));
+      } catch (error) {
+        controller.error(error);
+      }
+    },
+    cancel(reason) {
+      return reader ? reader.cancel(reason) : source.cancel(reason);
+    },
+  }, { highWaterMark: 0 });
+}
+
 /** Decodes the canonical response back into application-facing output values. */
 export function decodeCopilotzOutputs(
   response: Response,
 ): ReadableStream<ApplicationOutput> {
   const boundary = multipartBoundary(response);
   if (!response.body) throw new TypeError("Multipart response has no body.");
-  const streams = new Map<
-    string,
-    WritableStreamDefaultWriter<Uint8Array>
-  >();
+  const streams = new Map<string, {
+    writer: WritableStreamDefaultWriter<Uint8Array>;
+    settle(value: StreamTerminalStatus): void;
+    offset: number;
+  }>();
   const body = response.body;
   return new ReadableStream<ApplicationOutput>({
     start(controller) {
@@ -482,10 +609,26 @@ export function decodeCopilotzOutputs(
                     size: (chunk) => chunk.byteLength,
                   },
                 );
-                streams.set(streamId, stream.writable.getWriter());
+                let settle!: (value: StreamTerminalStatus) => void;
+                let settled = false;
+                const terminal = new Promise<StreamTerminalStatus>(
+                  (resolve) => {
+                    settle = (value) => {
+                      if (settled) return;
+                      settled = true;
+                      resolve(value);
+                    };
+                  },
+                );
+                streams.set(streamId, {
+                  writer: stream.writable.getWriter(),
+                  settle,
+                  offset: 0,
+                });
                 controller.enqueue(Object.freeze({
                   ...value,
-                  payload: stream.readable,
+                  payload: terminalPayload(streamId, stream.readable, terminal),
+                  terminal,
                 }) as ApplicationOutput);
               } else {
                 controller.enqueue(Object.freeze(value) as ApplicationOutput);
@@ -493,33 +636,39 @@ export function decodeCopilotzOutputs(
               continue;
             }
             const streamId = frame.headers[STREAM_HEADER];
-            const writer = streamId ? streams.get(streamId) : undefined;
-            if (!writer) {
+            const stream = streamId ? streams.get(streamId) : undefined;
+            if (!stream) {
               throw new TypeError("Multipart stream frame is orphaned.");
             }
             if (kind === "stream-chunk") {
-              await writer.write(frame.body).catch(() => undefined);
+              await stream.writer.write(frame.body).catch(() => undefined);
+              const from = Number(frame.headers[OFFSET_HEADER]);
+              stream.offset = Number.isSafeInteger(from) && from >= 0
+                ? from + frame.body.byteLength
+                : stream.offset + frame.body.byteLength;
             } else if (kind === "stream-end") {
               streams.delete(streamId);
-              await writer.close().catch(() => undefined);
+              stream.settle(decodedTerminal(json(frame.body)));
+              await stream.writer.close().catch(() => undefined);
             } else if (kind === "stream-error") {
+              const terminal = decodedTerminal(json(frame.body));
               streams.delete(streamId);
-              await writer.abort(new Error("Progressive stream failed.")).catch(
-                () => undefined,
-              );
+              stream.settle(terminal);
+              // Close the raw queue normally. terminalPayload drains every
+              // prefix chunk and then turns the logical boundary into an error.
+              await stream.writer.close().catch(() => undefined);
             } else throw new TypeError("Multipart frame kind is invalid.");
           }
-          for (const writer of streams.values()) {
-            await writer.abort(new Error("Progressive stream was truncated."))
-              .catch(
-                () => undefined,
-              );
+          for (const stream of streams.values()) {
+            stream.settle(unavailableTerminal(stream.offset));
+            await stream.writer.close().catch(() => undefined);
           }
           streams.clear();
           controller.close();
         } catch (error) {
-          for (const writer of streams.values()) {
-            await writer.abort(error).catch(() => undefined);
+          for (const stream of streams.values()) {
+            stream.settle(unavailableTerminal(stream.offset));
+            await stream.writer.close().catch(() => undefined);
           }
           streams.clear();
           controller.error(error);
@@ -528,8 +677,9 @@ export function decodeCopilotzOutputs(
     },
     async cancel(reason) {
       await body.cancel(reason).catch(() => undefined);
-      for (const writer of streams.values()) {
-        await writer.abort(reason).catch(() => undefined);
+      for (const stream of streams.values()) {
+        stream.settle(unavailableTerminal(stream.offset));
+        await stream.writer.abort(reason).catch(() => undefined);
       }
       streams.clear();
     },

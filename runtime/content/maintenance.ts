@@ -1,8 +1,8 @@
 import type {
   ActiveMutableBodyHead,
-  BodyHead,
   BodyStore,
   MutableBodyHead,
+  TerminalBodyHead,
 } from "./body-store.ts";
 
 export type ProgressiveBodyMaintenanceError = Readonly<{
@@ -16,6 +16,8 @@ export type ProgressiveBodyMaintenanceResult = Readonly<{
   aborted: number;
   /** Expired frozen sealing bodies finalized without reopening appends. */
   sealed: number;
+  /** Expired open/terminating bodies frozen as immutable incomplete prefixes. */
+  terminated: number;
   deferred: number;
   errors: readonly ProgressiveBodyMaintenanceError[];
   /** Opaque BodyStore continuation for the next bounded maintenance pass. */
@@ -27,23 +29,27 @@ export const EMPTY_PROGRESSIVE_BODY_MAINTENANCE:
     examined: 0,
     aborted: 0,
     sealed: 0,
+    terminated: 0,
     deferred: 0,
     errors: Object.freeze([]),
   });
 
 function isActive(
-  head: BodyHead | MutableBodyHead,
+  head: TerminalBodyHead | MutableBodyHead,
 ): head is ActiveMutableBodyHead {
-  return head.state === "open" || head.state === "sealing";
+  return head.state === "open" || head.state === "sealing" ||
+    head.state === "terminating";
 }
 
 /**
  * Recovers progressive Bodies whose writer lease has expired.
  *
  * This is deliberately ignorant of the semantic owner of a Body. A live body
- * renews its lease by appending or sealing. An expired open body is fenced and
- * aborted; sealing is irrevocable, so an expired frozen body is fenced and
- * finalized. Ready-body collection stays with Asset/orphan maintenance.
+ * renews its lease independently of byte traffic. Expired open/terminating
+ * bodies are fenced and frozen as incomplete so generic recovery never erases
+ * a prefix that may already have been published. Sealing is irrevocable, so an
+ * expired frozen body is fenced and finalized. Terminal-body collection stays
+ * with retention/orphan maintenance.
  */
 export async function maintainProgressiveBodies(
   store: BodyStore,
@@ -54,7 +60,7 @@ export async function maintainProgressiveBodies(
     throw new TypeError("Progressive body maintenance limit must be 1..10000.");
   }
   const page = await store.maintenance.list({
-    states: ["open", "sealing", "aborted"],
+    states: ["open", "sealing", "terminating", "aborted"],
     idleForMs: 0,
     ...(input.after ? { after: input.after } : {}),
     limit,
@@ -62,6 +68,7 @@ export async function maintainProgressiveBodies(
   let examined = 0;
   let aborted = 0;
   let sealed = 0;
+  let terminated = 0;
   let deferred = 0;
   const errors: ProgressiveBodyMaintenanceError[] = [];
   for (const body of page.bodies) {
@@ -103,9 +110,20 @@ export async function maintainProgressiveBodies(
           expectedByteLength: body.byteLength,
         });
         sealed++;
-      } else {
+      } else if (
+        (await store.head({ bodyId: body.bodyId }))?.state === "ready"
+      ) {
+        // Seal publishes Ready before opportunistic staging cleanup. A crash
+        // in that cleanup leaves an open-looking residue whose bytes are
+        // already represented by the immutable canonical Body.
         await store.abort({ writer });
         aborted++;
+      } else {
+        await store.terminate({
+          writer,
+          expectedByteLength: body.byteLength,
+        });
+        terminated++;
       }
     } catch (error) {
       errors.push(Object.freeze({
@@ -118,6 +136,7 @@ export async function maintainProgressiveBodies(
     examined,
     aborted,
     sealed,
+    terminated,
     deferred,
     errors: Object.freeze(errors),
     ...(page.after ? { after: page.after } : {}),

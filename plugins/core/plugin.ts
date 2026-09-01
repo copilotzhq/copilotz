@@ -16,6 +16,7 @@ import {
   completeAskProcessor,
   failAskProcessor,
   messageRouterProcessor,
+  projectAgentFailureProcessor,
   projectTextResultProcessor,
   projectToolResultProcessor,
   toolPlanCoordinatorProcessor,
@@ -23,7 +24,7 @@ import {
 import { askTool } from "./resources/ask-tool/index.ts";
 
 export const CORE_PLUGIN_ID = "@copilotz/core";
-export const CORE_PLUGIN_VERSION = "0.64.3";
+export const CORE_PLUGIN_VERSION = "0.65.0";
 
 export type CoreCollections = typeof coreCollections;
 export type CoreActions = typeof coreCollectionActions;
@@ -34,6 +35,7 @@ export type CoreProcessors = Readonly<{
   messageRouter: typeof messageRouterProcessor;
   messageInput: typeof messageInputProcessor;
   projectTextResult: typeof projectTextResultProcessor;
+  projectAgentFailure: typeof projectAgentFailureProcessor;
   projectToolResult: typeof projectToolResultProcessor;
   completeAsk: typeof completeAskProcessor;
   failAsk: typeof failAskProcessor;
@@ -50,6 +52,7 @@ export const coreProcessors: CoreProcessors = Object.freeze({
   messageRouter: messageRouterProcessor,
   messageInput: messageInputProcessor,
   projectTextResult: projectTextResultProcessor,
+  projectAgentFailure: projectAgentFailureProcessor,
   projectToolResult: projectToolResultProcessor,
   completeAsk: completeAskProcessor,
   failAsk: failAskProcessor,

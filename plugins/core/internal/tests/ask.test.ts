@@ -7,6 +7,7 @@ import {
 } from "@std/assert";
 import {
   agentAskMetadata,
+  agentFailureMetadata,
   type AgentResource,
   askAction,
   askTool,
@@ -1116,6 +1117,11 @@ Deno.test("an asked-Agent llm.call failure becomes a Tool Message and resumes", 
     assertEquals(
       (failed.metadata.ask as Record<string, unknown>).askedAgentId,
       "b",
+    );
+    assertEquals(
+      messages.some((message) => agentFailureMetadata(message.metadata)),
+      false,
+      "Ask failures resume their Tool plan instead of creating a public Agent failure Message",
     );
   } finally {
     await fixture.close();

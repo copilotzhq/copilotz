@@ -205,7 +205,18 @@ Deno.test("signed WhatsApp server ingress persists no credentials and retries on
       },
     },
     adapters: { llm: { fixture: llm } },
-    engine: { retryBaseMs: 0, random: () => 0 },
+    engine: {
+      retryBaseMs: 0,
+      random: () => 0,
+      execution: {
+        scheduler: {
+          schedule(callback) {
+            return callback;
+          },
+          cancel() {},
+        },
+      },
+    },
   });
   const body = Object.freeze({
     entry: [Object.freeze({

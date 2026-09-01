@@ -7,13 +7,18 @@ import type {
   AbortBodyInput,
   AppendBodyInput,
   AppendResult,
-  BodyHead,
+  BodyProtection,
   BodyStore,
   BodyStoreAdapter,
+  IncompleteBodyHead,
   MutableBodyHead,
   PutBodyInput,
   ReadBodyRangeInput,
+  ReadyBodyHead,
+  RenewBodyInput,
   ReserveBodyInput,
+  TerminalBodyHead,
+  TerminateBodyInput,
   WriterCapability,
 } from "./body-store.ts";
 import {
@@ -27,7 +32,7 @@ import { digestContent } from "./digest.ts";
 import { base64ToBytes } from "./encoding.ts";
 import { createContentError } from "./errors.ts";
 
-function validateHead(expected: PutBodyInput, actual: BodyHead): void {
+function validateHead(expected: PutBodyInput, actual: ReadyBodyHead): void {
   if (
     actual.bodyId !== expected.bodyId ||
     actual.byteLength !== expected.bytes.byteLength ||
@@ -42,7 +47,13 @@ function validateHead(expected: PutBodyInput, actual: BodyHead): void {
 
 type BodyRow = {
   body_id: string;
-  state: "open" | "sealing" | "ready" | "aborted";
+  state:
+    | "open"
+    | "sealing"
+    | "terminating"
+    | "ready"
+    | "incomplete"
+    | "aborted";
   media_type: string;
   byte_length: string | number;
   digest: string | null;
@@ -65,8 +76,10 @@ type PartRow = {
 type ProgressiveBodyOps = Readonly<{
   reserve(input: ReserveBodyInput): Promise<WriterCapability>;
   head(bodyId: string): Promise<MutableBodyHead | null>;
+  renew(input: RenewBodyInput): Promise<BodyProtection>;
   append(input: AppendBodyInput): Promise<AppendResult>;
   readRange(input: ReadBodyRangeInput): Promise<Uint8Array>;
+  terminate(input: TerminateBodyInput): Promise<IncompleteBodyHead>;
   abort(input: AbortBodyInput): Promise<void>;
 }>;
 
@@ -109,7 +122,7 @@ function concatBytes(chunks: readonly Uint8Array[]): Uint8Array {
   return output;
 }
 
-function mapHead(row: BodyRow): BodyHead {
+function mapHead(row: BodyRow): ReadyBodyHead {
   if (row.state !== "ready" || !row.digest) {
     throw createContentError(
       "asset_corrupted",
@@ -132,9 +145,34 @@ function mapHead(row: BodyRow): BodyHead {
   });
 }
 
+function mapIncompleteHead(row: BodyRow): IncompleteBodyHead {
+  if (row.state !== "incomplete" || !row.digest) {
+    throw createContentError(
+      "asset_corrupted",
+      `Database body '${row.body_id}' is not incomplete.`,
+    );
+  }
+  return Object.freeze({
+    bodyId: row.body_id,
+    state: "incomplete" as const,
+    byteLength: asInteger(row.byte_length, "byte length"),
+    mediaType: row.media_type,
+    digest: row.digest as `sha256:${string}`,
+    maintenanceVersion: asInteger(
+      row.maintenance_version,
+      "maintenance version",
+    ),
+    ...(row.protected_until ? { protectedUntil: row.protected_until } : {}),
+    etag: row.digest.slice("sha256:".length),
+    lastModified: row.updated_at,
+  });
+}
+
 function mapSpill(row: BodyRow): MutableBodyHead {
   const state = row.state === "sealing"
     ? "sealing"
+    : row.state === "terminating"
+    ? "terminating"
     : row.state === "aborted"
     ? "aborted"
     : "open";
@@ -172,8 +210,12 @@ function mapSpill(row: BodyRow): MutableBodyHead {
   });
 }
 
-function mapAnyHead(row: BodyRow): BodyHead | MutableBodyHead {
-  return row.state === "ready" ? mapHead(row) : mapSpill(row);
+function mapAnyHead(row: BodyRow): TerminalBodyHead | MutableBodyHead {
+  return row.state === "ready"
+    ? mapHead(row)
+    : row.state === "incomplete"
+    ? mapIncompleteHead(row)
+    : mapSpill(row);
 }
 
 export function createDatabaseBodyStoreAdapter(
@@ -233,9 +275,8 @@ export function createDatabaseBodyStore(
   const deadline = () => bodyProtectionUntil(protectionMs);
   const putDeadline = (requested: string | undefined) =>
     resolveBodyProtectionUntil(requested, protectionMs);
-  const schema = quoteEventIdentifier(
-    validateEventSchemaName(options.schema.trim()),
-  );
+  const schemaName = validateEventSchemaName(options.schema.trim());
+  const schema = quoteEventIdentifier(schemaName);
   const bodies = `${schema}."content_bodies"`;
   const parts = `${schema}."content_body_parts"`;
   let ready: Promise<void> | undefined;
@@ -246,7 +287,7 @@ export function createDatabaseBodyStore(
       await session.query(
         `CREATE TABLE IF NOT EXISTS ${bodies} (
           body_id TEXT PRIMARY KEY,
-          state TEXT NOT NULL CHECK (state IN ('open', 'sealing', 'ready', 'aborted')),
+          state TEXT NOT NULL CHECK (state IN ('open', 'sealing', 'terminating', 'ready', 'incomplete', 'aborted')),
           media_type TEXT NOT NULL,
           byte_length BIGINT NOT NULL DEFAULT 0 CHECK (byte_length >= 0),
           digest TEXT,
@@ -388,10 +429,10 @@ export function createDatabaseBodyStore(
           "Progressive body media type does not match the writer.",
         );
       }
-      if (existing.state === "ready") {
+      if (existing.state === "ready" || existing.state === "incomplete") {
         throw createContentError(
           "asset_conflict",
-          "A ready body already exists for this id.",
+          "An immutable body already exists for this id.",
         );
       }
       if (
@@ -418,6 +459,7 @@ export function createDatabaseBodyStore(
                 updated_at = NOW()
           WHERE body_id = $1
             AND writer_token_hash IS NOT DISTINCT FROM $4
+            AND state IN ('open', 'sealing', 'terminating')
             AND (lease_expires_at IS NULL OR lease_expires_at <= NOW())
           RETURNING body_id, state, media_type, byte_length, digest,
                     writer_generation, writer_token_hash, lease_expires_at,
@@ -441,8 +483,37 @@ export function createDatabaseBodyStore(
     },
     async head(bodyId) {
       const row = await loadBody(bodyId);
-      if (!row || row.state === "ready") return null;
+      if (
+        !row || row.state === "ready" || row.state === "incomplete"
+      ) return null;
       return mapSpill(row);
+    },
+    async renew(input) {
+      await ensure();
+      const renewed = await session.query<BodyRow>(
+        `UPDATE ${bodies}
+            SET lease_expires_at = $3,
+                maintenance_version = maintenance_version + 1,
+                updated_at = NOW()
+          WHERE body_id = $1
+            AND state = 'open'
+            AND writer_token_hash = $2
+          RETURNING body_id, state, media_type, byte_length, digest,
+                    writer_generation, writer_token_hash, lease_expires_at,
+                    protected_until, maintenance_version, created_at,
+                    updated_at, ready_at`,
+        [input.writer.bodyId, input.writer.reservationId, deadline()],
+      );
+      if (!renewed.rows[0]) {
+        throw createContentError(
+          "asset_conflict",
+          "Progressive writer no longer owns this body.",
+        );
+      }
+      const head = mapSpill(renewed.rows[0]);
+      return Object.freeze({
+        remainingMs: Math.max(0, head.writerLeaseRemainingMs ?? 0),
+      });
     },
     async append(input) {
       await ensure();
@@ -562,7 +633,10 @@ export function createDatabaseBodyStore(
     },
     async readRange(input) {
       const row = await requireBody(input.bodyId);
-      if (row.state === "ready" || row.state === "aborted") {
+      if (
+        row.state === "ready" || row.state === "incomplete" ||
+        row.state === "aborted"
+      ) {
         throw createContentError(
           "asset_conflict",
           "Progressive body is not open.",
@@ -576,19 +650,114 @@ export function createDatabaseBodyStore(
       if (end <= start) return new Uint8Array();
       return (await readParts(input.bodyId)).subarray(start, end);
     },
+    async terminate(input) {
+      await ensure();
+      return await atomically(async (transaction) => {
+        const existing = await requireBody(
+          input.writer.bodyId,
+          transaction,
+          true,
+        );
+        if (existing.state === "incomplete") {
+          const terminal = mapIncompleteHead(existing);
+          if (
+            input.expectedByteLength !== undefined &&
+            input.expectedByteLength !== terminal.byteLength
+          ) {
+            throw createContentError(
+              "asset_conflict",
+              "Incomplete body length does not match terminate expectation.",
+            );
+          }
+          if (
+            input.expectedDigest && input.expectedDigest !== terminal.digest
+          ) {
+            throw createContentError(
+              "asset_conflict",
+              "Incomplete body digest does not match terminate expectation.",
+            );
+          }
+          return terminal;
+        }
+        requireOwner(existing, input.writer.reservationId);
+        if (existing.state !== "open" && existing.state !== "terminating") {
+          throw createContentError(
+            "asset_conflict",
+            "Progressive body cannot be terminated from its current state.",
+          );
+        }
+        const byteLength = asInteger(existing.byte_length, "byte length");
+        if (
+          input.expectedByteLength !== undefined &&
+          input.expectedByteLength !== byteLength
+        ) {
+          throw createContentError(
+            "asset_conflict",
+            "Progressive body length does not match terminate expectation.",
+          );
+        }
+        const bytes = await readParts(input.writer.bodyId, transaction);
+        if (bytes.byteLength !== byteLength) {
+          throw createContentError(
+            "asset_corrupted",
+            "Progressive body parts do not match the committed byte length.",
+          );
+        }
+        const digest = await digestContent(bytes);
+        if (input.expectedDigest && input.expectedDigest !== digest) {
+          throw createContentError(
+            "asset_conflict",
+            "Progressive body digest does not match terminate expectation.",
+          );
+        }
+        await compactParts(input.writer.bodyId, bytes, transaction);
+        const terminated = await transaction.query<BodyRow>(
+          `UPDATE ${bodies}
+              SET state = 'incomplete',
+                  digest = $2,
+                  protected_until = $4,
+                  writer_generation = NULL,
+                  writer_token_hash = NULL,
+                  lease_expires_at = NULL,
+                  maintenance_version = maintenance_version + 1,
+                  updated_at = NOW(),
+                  ready_at = NOW()
+            WHERE body_id = $1
+              AND writer_token_hash = $3
+              AND state IN ('open', 'terminating')
+            RETURNING body_id, state, media_type, byte_length, digest,
+                      writer_generation, writer_token_hash, lease_expires_at,
+                      protected_until, maintenance_version, created_at,
+                      updated_at, ready_at`,
+          [
+            input.writer.bodyId,
+            digest,
+            input.writer.reservationId,
+            deadline(),
+          ],
+        );
+        if (!terminated.rows[0]) {
+          throw createContentError(
+            "asset_conflict",
+            "Progressive body termination raced with another writer.",
+          );
+        }
+        return mapIncompleteHead(terminated.rows[0]);
+      });
+    },
     async abort(input) {
       await ensure();
       const removed = await session.query<{ body_id: string }>(
         `DELETE FROM ${bodies}
           WHERE body_id = $1
-            AND state <> 'ready'
+            AND state = 'open'
             AND writer_token_hash = $2
          RETURNING body_id`,
         [input.writer.bodyId, input.writer.reservationId],
       );
       if (removed.rows[0]) return;
       const existing = await loadBody(input.writer.bodyId);
-      if (existing && existing.state !== "ready") {
+      if (existing && existing.state === "open") {
         throw createContentError(
           "asset_conflict",
           "Progressive writer no longer owns this body.",
@@ -669,6 +838,12 @@ export function createDatabaseBodyStore(
           }
           return mapHead(renewed.rows[0]);
         }
+        if (existing.state === "incomplete") {
+          throw createContentError(
+            "asset_conflict",
+            "An incomplete body cannot be adopted as a ready body.",
+          );
+        }
         if (existing.media_type !== input.mediaType) {
           throw createContentError(
             "asset_conflict",
@@ -698,7 +873,7 @@ export function createDatabaseBodyStore(
                   updated_at = NOW(),
                   ready_at = NOW()
             WHERE body_id = $1
-              AND state <> 'ready'
+              AND state IN ('open', 'sealing')
             RETURNING body_id, state, media_type, byte_length, digest,
                       writer_generation, writer_token_hash, lease_expires_at,
                       protected_until, maintenance_version, created_at,
@@ -719,14 +894,14 @@ export function createDatabaseBodyStore(
     async head({ bodyId }) {
       const row = await loadBody(bodyId);
       if (!row) return null;
-      return row.state === "ready" ? mapHead(row) : mapSpill(row);
+      return mapAnyHead(row);
     },
     async read({ bodyId }) {
       const row = await requireBody(bodyId);
-      if (row.state !== "ready") {
+      if (row.state !== "ready" && row.state !== "incomplete") {
         throw createContentError(
           "asset_not_found",
-          "Database body is not ready.",
+          "Database body is not immutable.",
         );
       }
       const bytes = await readParts(bodyId);
@@ -755,7 +930,8 @@ export function createDatabaseBodyStore(
     },
     async follow(input) {
       const row = await requireBody(input.bodyId);
-      const bytes = row.state === "ready"
+      const terminal = row.state === "ready" || row.state === "incomplete";
+      const bytes = terminal
         ? await readBodyBytes(store, { bodyId: input.bodyId })
         : await progressive.readRange({
           bodyId: input.bodyId,
@@ -766,13 +942,14 @@ export function createDatabaseBodyStore(
       return new ReadableStream({
         start(controller) {
           controller.enqueue(
-            row.state === "ready" ? bytes.subarray(offset) : bytes,
+            terminal ? bytes.subarray(offset) : bytes,
           );
           controller.close();
         },
       });
     },
     reserve: progressive.reserve,
+    renew: progressive.renew,
     append: progressive.append,
     async seal(input) {
       await ensure();
@@ -842,6 +1019,7 @@ export function createDatabaseBodyStore(
         return mapHead(sealed.rows[0]);
       });
     },
+    terminate: progressive.terminate,
     abort: progressive.abort,
     maintenance: {
       async list(input) {

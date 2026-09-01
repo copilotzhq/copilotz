@@ -34,6 +34,7 @@ import {
   type LlmJsonObject,
   type LlmJsonValue,
   type LlmMessage,
+  type LlmRejectedAttemptEvidence,
   type LlmToolCall,
   type LlmToolPipeline,
   type LlmToolPipelineStage,
@@ -53,7 +54,8 @@ const MAX_TOOL_CALL_BRANCHES = 64;
 const MAX_TOOL_PIPELINE_STAGES = 32;
 const MAX_TOOL_PIPELINE_JQ_FILTER_LENGTH = 16_384;
 const LLM_ATTEMPT_ACCOUNTING_SCHEMA = "copilotz.llm.attempt-accounting.v1";
-const LLM_OBSERVATION_STREAM_RETENTION_MS = 15 * 60_000;
+const LLM_REJECTED_ATTEMPT_EVIDENCE_SCHEMA =
+  "copilotz.llm.rejected-attempt-evidence";
 const LLM_STREAM_BATCH_MAX_BYTES = 16 * 1_024;
 const LLM_STREAM_BATCH_MAX_DELAY_MS = 50;
 
@@ -88,6 +90,7 @@ type OpenWriter = Awaited<ReturnType<LlmActionContext["streams"]["open"]>>;
 
 type StreamState = {
   writers: Map<string, Promise<OpenWriter>>;
+  /** True only after non-speculative output can have reached a user. */
   visible: boolean;
   discard: boolean;
 };
@@ -860,39 +863,68 @@ function normalizedContent(
   );
 }
 
+class MalformedToolCallError extends Error {
+  readonly evidence: LlmRejectedAttemptEvidence;
+
+  constructor(location?: string) {
+    super("LLM Adapter returned malformed tool calls.");
+    this.name = "MalformedToolCallError";
+    this.evidence = Object.freeze({
+      code: "malformed_tool_call",
+      message:
+        "The model returned a tool call that does not match the declared tool contract.",
+      ...(location ? { location } : {}),
+      retryable: true,
+    });
+  }
+}
+
+function malformedToolCallError(error: unknown): MalformedToolCallError {
+  if (error instanceof MalformedToolCallError) return error;
+  const message = error instanceof Error ? error.message : "";
+  const match =
+    /LLM Adapter result\.(toolCalls(?:\[[0-9]+\])?(?:\.(?:id|action|input|pipeline))?)/
+      .exec(message);
+  return new MalformedToolCallError(match?.[1]);
+}
+
 function normalizedToolCalls(value: unknown): readonly LlmToolCall[] {
-  if (!Array.isArray(value)) {
-    throw new TypeError("LLM Adapter result.toolCalls must be an array.");
-  }
-  if (value.length > MAX_TOOL_CALL_BRANCHES) {
-    throw new TypeError(
-      `LLM Adapter result.toolCalls must contain at most ${MAX_TOOL_CALL_BRANCHES} parallel branches.`,
-    );
-  }
-  const ids = new Set<string>();
-  return Object.freeze(value.map((item, index) => {
-    const path = `LLM Adapter result.toolCalls[${index}]`;
-    const record = plainRecord(item, path);
-    exactKeys(record, new Set(["id", "action", "input", "pipeline"]), path);
-    const id = requiredText(record.id, `${path}.id`);
-    if (ids.has(id)) {
+  try {
+    if (!Array.isArray(value)) {
+      throw new TypeError("LLM Adapter result.toolCalls must be an array.");
+    }
+    if (value.length > MAX_TOOL_CALL_BRANCHES) {
       throw new TypeError(
-        `LLM Adapter result.toolCalls has duplicate id '${id}'.`,
+        `LLM Adapter result.toolCalls must contain at most ${MAX_TOOL_CALL_BRANCHES} parallel branches.`,
       );
     }
-    ids.add(id);
-    const action = requiredText(record.action, `${path}.action`);
-    const input = jsonObject(record.input, `${path}.input`);
-    const pipeline = record.pipeline === undefined
-      ? undefined
-      : normalizedToolPipeline(record.pipeline, path, id, action, input);
-    return Object.freeze({
-      id,
-      action,
-      input,
-      ...(pipeline ? { pipeline } : {}),
-    });
-  }));
+    const ids = new Set<string>();
+    return Object.freeze(value.map((item, index) => {
+      const path = `LLM Adapter result.toolCalls[${index}]`;
+      const record = plainRecord(item, path);
+      exactKeys(record, new Set(["id", "action", "input", "pipeline"]), path);
+      const id = requiredText(record.id, `${path}.id`);
+      if (ids.has(id)) {
+        throw new TypeError(
+          "LLM Adapter result.toolCalls contains duplicate ids.",
+        );
+      }
+      ids.add(id);
+      const action = requiredText(record.action, `${path}.action`);
+      const input = jsonObject(record.input, `${path}.input`);
+      const pipeline = record.pipeline === undefined
+        ? undefined
+        : normalizedToolPipeline(record.pipeline, path, id, action, input);
+      return Object.freeze({
+        id,
+        action,
+        input,
+        ...(pipeline ? { pipeline } : {}),
+      });
+    }));
+  } catch (error) {
+    throw malformedToolCallError(error);
+  }
 }
 
 function normalizedToolPipeline(
@@ -1236,16 +1268,21 @@ function normalizedAdapterAttempt(
 }
 
 function streamKey(frame: LlmAdapterFrame): string {
-  return `${frame.lane}\u0000${frame.mediaType}`;
+  return JSON.stringify([frame.lane, frame.mediaType]);
+}
+
+function isSpeculativeToolDraftLane(lane: string): boolean {
+  return lane === "tool-calls" || lane === "tool-call-drafts";
 }
 
 function streamSegment(value: string): string {
-  return encodeURIComponent(value).replaceAll("%", "_");
+  return encodeURIComponent(value);
 }
 
 async function writerFor(
   frame: LlmAdapterFrame,
   attempt: ResolvedModel,
+  attemptIndex: number,
   input: LlmCallInput,
   context: LlmActionContext,
   state: StreamState,
@@ -1257,14 +1294,25 @@ async function writerFor(
   const key = streamKey({ ...frame, lane, mediaType });
   let opening = state.writers.get(key);
   if (!opening) {
+    // `streams.open` itself may establish the durable publication boundary
+    // before its Promise rejects (for example, if a later live observer fails).
+    // Conservatively block Model fallback before opening non-speculative lanes.
+    if (!isSpeculativeToolDraftLane(lane)) state.visible = true;
     const base = input.stream.id?.trim() || context.action.runId;
-    const id = `${base}:${streamSegment(lane)}:${streamSegment(mediaType)}`;
+    // Provider attempts are distinct physical evidence lanes. Reusing the
+    // previous semantic id would either splice retry bytes or conflict with
+    // the retained immutable prefix after a rejected attempt terminates.
+    const id = `${base}:provider-attempt:${attemptIndex}:${
+      streamSegment(lane)
+    }:${streamSegment(mediaType)}`;
     opening = context.streams.open({
       id,
       role: lane,
       mediaType,
       metadata: {
         ...(input.stream.metadata ?? {}),
+        llmAttemptId: context.action.runId,
+        providerAttemptIndex: attemptIndex,
         lane,
         model: attempt.alias,
         adapter: attempt.adapterAlias,
@@ -1276,8 +1324,9 @@ async function writerFor(
     state.writers.set(key, opening);
   }
   const writer = await opening;
-  // Opening publishes the stream descriptor, so output is visible from here.
-  state.visible = true;
+  // Tool-call deltas are speculative protocol drafts. Core receives executable
+  // Tool calls only from a validated `llm.call.completed` result, so a malformed
+  // draft must not block an external Model fallback.
   return writer;
 }
 
@@ -1407,6 +1456,7 @@ async function pumpFrames(
       const writer = await writerFor(
         frame,
         attempt,
+        attemptIndex,
         input,
         context,
         state,
@@ -1557,6 +1607,55 @@ function rejectedAttempts(
       error,
     })
   ));
+}
+
+function normalizedRejectedAttemptEvidence(
+  value: unknown,
+): LlmRejectedAttemptEvidence | undefined {
+  try {
+    const record = plainRecord(value, "LLM rejected attempt evidence");
+    exactKeys(
+      record,
+      new Set(["code", "message", "location", "retryable"]),
+      "LLM rejected attempt evidence",
+    );
+    const code = requiredText(
+      record.code,
+      "LLM rejected attempt evidence.code",
+    );
+    const message = requiredText(
+      record.message,
+      "LLM rejected attempt evidence.message",
+    );
+    if (!/^[a-z][a-z0-9_]{0,63}$/.test(code) || message.length > 512) {
+      return undefined;
+    }
+    const location = record.location === undefined
+      ? undefined
+      : requiredText(record.location, "LLM rejected attempt evidence.location");
+    if (location && !/^[a-zA-Z0-9_.\[\]-]{1,128}$/.test(location)) {
+      return undefined;
+    }
+    if (typeof record.retryable !== "boolean") return undefined;
+    return Object.freeze({
+      code,
+      message,
+      ...(location ? { location } : {}),
+      retryable: record.retryable,
+    });
+  } catch {
+    return undefined;
+  }
+}
+
+function rejectedAttemptEvidence(
+  error: unknown,
+): LlmRejectedAttemptEvidence | undefined {
+  if (error instanceof MalformedToolCallError) return error.evidence;
+  if (error instanceof LlmAdapterCallError) {
+    return normalizedRejectedAttemptEvidence(error.rejectedAttemptEvidence);
+  }
+  return undefined;
 }
 
 function frameworkFailureFromResult(
@@ -1712,6 +1811,7 @@ async function settleInvocation(
       }
       if (externalSignal.aborted) throw signalError(externalSignal);
       if (resultOutcome.status === "fulfilled") {
+        const evidence = rejectedAttemptEvidence(error.cause);
         throw new LlmAdapterCallError(
           "LLM provider response was rejected by Copilotz.",
           {
@@ -1719,6 +1819,7 @@ async function settleInvocation(
               resultOutcome.value.attempts,
               error.cause,
             ),
+            ...(evidence ? { rejectedAttemptEvidence: evidence } : {}),
             cause: error.cause,
           },
         );
@@ -1739,13 +1840,14 @@ async function settleInvocation(
 async function abortWriters(
   state: StreamState,
   reason: unknown,
+  outcome: "failed" | "cancelled" = "failed",
 ): Promise<void> {
   const message = reason instanceof Error ? reason.message : String(reason);
   const writers = [...state.writers.values()];
   state.writers.clear();
   await Promise.all(writers.map(async (opening) => {
     const writer = await opening.catch(() => undefined);
-    await writer?.abort({ reason: message }).catch(() => undefined);
+    await writer?.abort({ reason: message, outcome }).catch(() => undefined);
   }));
 }
 
@@ -1768,7 +1870,7 @@ async function settleWriters(
       const prepared = await writer.close({ assetId: `stream:${writer.id}` }, {
         signal,
       });
-      const [lane = "", mediaType = ""] = key.split("\u0000", 2);
+      const [lane, mediaType] = JSON.parse(key) as [string, string];
       settled.push(Object.freeze({
         key,
         lane,
@@ -1892,6 +1994,25 @@ async function reportAttemptAccounting(
   await context.progress({
     schema: LLM_ATTEMPT_ACCOUNTING_SCHEMA,
     attempts: providerAttempts,
+  });
+}
+
+async function reportRejectedAttemptEvidence(
+  evidence: LlmRejectedAttemptEvidence | undefined,
+  attempt: LlmAttemptUsage | undefined,
+  context: LlmActionContext,
+): Promise<void> {
+  if (!evidence || !attempt) return;
+  await context.progress({
+    schema: LLM_REJECTED_ATTEMPT_EVIDENCE_SCHEMA,
+    attempt: {
+      id: attempt.id,
+      index: attempt.index,
+      model: attempt.model,
+      adapter: attempt.adapter,
+      providerModel: attempt.providerModel,
+    },
+    evidence,
   });
 }
 
@@ -2110,7 +2231,6 @@ async function retainSettledStream(
     | { retention: "canonical"; assetId: string }
     | { retention: "observation" }
   >,
-  context: LlmActionContext,
 ): Promise<void> {
   if (input.retention === "canonical") {
     await stream.writer.retain({
@@ -2119,12 +2239,7 @@ async function retainSettledStream(
     });
     return;
   }
-  await stream.writer.retain({
-    retention: "observation",
-    expiresAt: new Date(
-      context.now().getTime() + LLM_OBSERVATION_STREAM_RETENTION_MS,
-    ).toISOString(),
-  });
+  await stream.writer.retain({ retention: "observation" });
 }
 
 async function materializeResultContent(
@@ -2172,7 +2287,6 @@ async function materializeResultContent(
       await retainSettledStream(
         stream,
         { retention: "observation" },
-        context,
       );
     }
   }
@@ -2192,14 +2306,12 @@ async function materializeResultContent(
     await retainSettledStream(
       contentStream,
       { retention: "canonical", assetId: content[0].assetId },
-      context,
     );
   }
   if (reasoningStream && reasoning?.length === 1) {
     await retainSettledStream(
       reasoningStream,
       { retention: "canonical", assetId: reasoning[0].assetId },
-      context,
     );
   }
   return Object.freeze({ content, ...(reasoning ? { reasoning } : {}) });
@@ -2337,8 +2449,10 @@ async function executeLlmCall(
     } catch (error) {
       attemptController.abort(error);
       if (attemptInput) disposeWithoutWaiting(attemptInput.dispose, error);
-      await abortWriters(streams, error);
+      const cancelled = isAbort(error, context.signal);
+      await abortWriters(streams, error, cancelled ? "cancelled" : "failed");
       let failure = error;
+      const evidence = rejectedAttemptEvidence(error);
       let reported: readonly LlmAdapterAttempt[] = Object.freeze([]);
       try {
         reported = normalizedFailureAttempts(error);
@@ -2350,10 +2464,11 @@ async function executeLlmCall(
         candidate,
         context,
         reported,
-        isAbort(error, context.signal) ? "cancelled" : "failed",
+        cancelled ? "cancelled" : "failed",
         failure,
       );
-      const terminalFailure = isAbort(error, context.signal) ||
+      await reportRejectedAttemptEvidence(evidence, attempts.at(-1), context);
+      const terminalFailure = cancelled ||
         streams.visible ||
         index === plan.length - 1;
       if (terminalFailure) {

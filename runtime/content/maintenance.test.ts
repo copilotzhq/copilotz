@@ -13,7 +13,7 @@ import type {
 import { maintainProgressiveBodies } from "./maintenance.ts";
 import { createProgressiveBodyWriter } from "./progressive.ts";
 
-Deno.test("progressive body maintenance fences and aborts expired writers without semantic lookup", async () => {
+Deno.test("progressive body maintenance fences and terminates expired writers without semantic lookup", async () => {
   const store = createMemoryBodyStore({ protectionMs: 0 });
   const writer = await store.reserve({
     bodyId: "content-streams/tenant-a/stream-a",
@@ -30,12 +30,16 @@ Deno.test("progressive body maintenance fences and aborts expired writers withou
 
   assertEquals(result, {
     examined: 1,
-    aborted: 1,
+    aborted: 0,
     sealed: 0,
+    terminated: 1,
     deferred: 0,
     errors: [],
   });
-  assertEquals(await store.head({ bodyId: writer.bodyId }), null);
+  assertEquals(
+    (await store.head({ bodyId: writer.bodyId }))?.state,
+    "incomplete",
+  );
 });
 
 Deno.test("progressive maintenance continuation prevents live first-page starvation", async () => {
@@ -53,6 +57,7 @@ Deno.test("progressive maintenance continuation prevents live first-page starvat
     examined: 2,
     aborted: 0,
     sealed: 0,
+    terminated: 0,
     deferred: 2,
     errors: [],
     after: "b-live",
@@ -63,12 +68,16 @@ Deno.test("progressive maintenance continuation prevents live first-page starvat
   });
   assertEquals(second, {
     examined: 1,
-    aborted: 1,
+    aborted: 0,
     sealed: 0,
+    terminated: 1,
     deferred: 0,
     errors: [],
   });
-  assertEquals(await store.head({ bodyId: expired.bodyId }), null);
+  assertEquals(
+    (await store.head({ bodyId: expired.bodyId }))?.state,
+    "incomplete",
+  );
 });
 
 Deno.test("progressive maintenance resumes expired sealing instead of aborting it", async () => {
@@ -116,12 +125,60 @@ Deno.test("progressive maintenance resumes expired sealing instead of aborting i
     examined: 1,
     aborted: 0,
     sealed: 1,
+    terminated: 0,
     deferred: 0,
     errors: [],
   });
   assertEquals(aborted, false);
   assertEquals(sealedExpectedByteLength, bytes.byteLength);
   assertEquals((await base.head({ bodyId: writer.bodyId }))?.state, "ready");
+});
+
+Deno.test("progressive maintenance resumes expired terminating bodies as incomplete", async () => {
+  const base = createMemoryBodyStore({ protectionMs: 0 });
+  const writer = await base.reserve({
+    bodyId: "content-streams/tenant-a/terminating",
+    mediaType: "text/plain",
+  });
+  const bytes = new TextEncoder().encode("retained");
+  await base.append({
+    writer,
+    expectedOffset: 0,
+    appendId: "retained",
+    bytes,
+  });
+  const open = await base.head({ bodyId: writer.bodyId });
+  if (!open || open.state !== "open") {
+    throw new Error("Expected active progressive body.");
+  }
+  const terminating: ActiveMutableBodyHead = Object.freeze({
+    ...open,
+    state: "terminating",
+    writerLeaseRemainingMs: 0,
+  });
+  const store: BodyStore = Object.freeze({
+    ...base,
+    maintenance: Object.freeze({
+      ...base.maintenance,
+      list: () =>
+        Promise.resolve(Object.freeze({
+          bodies: Object.freeze([terminating]),
+        })),
+    }),
+  });
+
+  assertEquals(await maintainProgressiveBodies(store), {
+    examined: 1,
+    aborted: 0,
+    sealed: 0,
+    terminated: 1,
+    deferred: 0,
+    errors: [],
+  });
+  assertEquals(
+    (await base.head({ bodyId: writer.bodyId }))?.state,
+    "incomplete",
+  );
 });
 
 Deno.test("progressive maintenance retries fenced abort cleanup", async () => {
@@ -162,6 +219,7 @@ Deno.test("progressive maintenance retries fenced abort cleanup", async () => {
     examined: 1,
     aborted: 1,
     sealed: 0,
+    terminated: 0,
     deferred: 0,
     errors: [],
   });
@@ -196,16 +254,21 @@ Deno.test("filesystem progressive maintenance discovers crash staging after reop
     });
     assertEquals(await maintainProgressiveBodies(recovered), {
       examined: 1,
-      aborted: 1,
+      aborted: 0,
       sealed: 0,
+      terminated: 1,
       deferred: 0,
       errors: [],
     });
-    assertEquals(await recovered.head({ bodyId: writer.bodyId }), null);
+    assertEquals(
+      (await recovered.head({ bodyId: writer.bodyId }))?.state,
+      "incomplete",
+    );
     assertEquals(await maintainProgressiveBodies(recovered), {
       examined: 0,
       aborted: 0,
       sealed: 0,
+      terminated: 0,
       deferred: 0,
       errors: [],
     });
@@ -246,8 +309,9 @@ Deno.test("filesystem Ready seal survives cleanup failure and leaves retryable s
 
     assertEquals(await maintainProgressiveBodies(store), {
       examined: 1,
-      aborted: 1,
-      sealed: 0,
+      aborted: 0,
+      sealed: 1,
+      terminated: 0,
       deferred: 0,
       errors: [],
     });
@@ -257,6 +321,7 @@ Deno.test("filesystem Ready seal survives cleanup failure and leaves retryable s
       examined: 0,
       aborted: 0,
       sealed: 0,
+      terminated: 0,
       deferred: 0,
       errors: [],
     });

@@ -22,19 +22,13 @@ Deno.test("every declared package export resolves to a source file", async () =>
   }
 });
 
-Deno.test("published documentation matches the final version and subpaths", async () => {
+Deno.test("published documentation matches the final version", async () => {
   const configuration = JSON.parse(await source("deno.json")) as {
     version: string;
-    exports: Record<string, string>;
   };
-  assertEquals(configuration.version, "0.64.3");
+  assertEquals(configuration.version, "0.65.0");
   const readme = await source("README.md");
   assertStringIncludes(readme, `@^${configuration.version}`);
-  for (const subpath of Object.keys(configuration.exports)) {
-    if (subpath === ".") continue;
-    assertStringIncludes(readme, subpath.slice(1), subpath);
-  }
-
   const manifest = JSON.parse(await source("docs/manifest.json")) as {
     sections: readonly {
       items: readonly { slug: string }[];

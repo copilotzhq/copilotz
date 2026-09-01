@@ -224,6 +224,16 @@ export async function createCopilotzEngine(
         });
         await dispatched.done;
       },
+      async publishLocalStream(output) {
+        if (!options.publishLocalStream) {
+          throw new Error(
+            "Unscoped content streams require a local output authority.",
+          );
+        }
+        await options.publishLocalStream(output, {
+          databaseSchema: base.databaseSchema,
+        });
+      },
       actionLifecycle: createActionLifecycleEmitter({
         namespace: base.event.namespace,
         append: createActionLifecycleAppender({

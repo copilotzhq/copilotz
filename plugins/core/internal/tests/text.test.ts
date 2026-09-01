@@ -6,6 +6,7 @@ import {
   assertStringIncludes,
 } from "@std/assert";
 import {
+  agentFailureMetadata,
   corePlugin,
   coreProcessors,
   defineAgent,
@@ -13,6 +14,7 @@ import {
   definePromptInstructionResource,
   message as coreMessage,
   withCoreAgentTurnMetadata,
+  workflowMetadata,
 } from "@copilotz/copilotz/core";
 import type { AgentResource } from "@copilotz/copilotz/core";
 import type {
@@ -467,6 +469,87 @@ Deno.test("Core invokes llm.call with explicit application Models and Adapters",
   }
 });
 
+Deno.test("Core projects one ordinary LLM failure and never replays it into a later prompt", async () => {
+  let calls = 0;
+  const fixture = await createFixture(() => {
+    calls += 1;
+    if (calls === 1) {
+      throw Object.assign(new Error("provider response must stay private"), {
+        code: "provider_unavailable",
+      });
+    }
+    return {
+      result: {
+        content: { type: "text", text: "Recovered", role: "body" },
+        attempts: [{ status: "completed" }],
+        finishReason: "stop",
+      },
+    };
+  });
+  try {
+    const first = await startRun(fixture, "First question");
+    await waitForRun(fixture, first, 2);
+    const afterFailure = await projectMessages(
+      fixture.engine,
+      NAMESPACE,
+      "thread-a",
+    );
+    const failure = afterFailure[1];
+    assertExists(failure);
+    assertEquals(
+      await messageText(fixture, failure),
+      "I couldn't complete that response. Please try again.",
+    );
+    assertEquals(failure.recipientIds, []);
+    assertEquals(failure.sender.id, "agent-north");
+    assertEquals(agentFailureMetadata(failure.metadata), {
+      schema: "copilotz.agent-failure",
+      llmAttemptId: (await projectActionEvents(
+        fixture.engine,
+        NAMESPACE,
+        "llm.call",
+      )).find((event) => event.status === "failed")?.actionRunId,
+      source: "llm.call",
+      status: "failed",
+    });
+    assertEquals(workflowMetadata(failure.metadata), {
+      kind: "agent_failure",
+      continuation: "none",
+      llmAttemptId: (await projectActionEvents(
+        fixture.engine,
+        NAMESPACE,
+        "llm.call",
+      )).find((event) => event.status === "failed")?.actionRunId,
+      outcome: "failed",
+      sourceMessageId: "message:user",
+      agentParticipantId: "agent-north",
+      initiatorParticipantId: "user-a",
+    });
+    await fixture.engine.recover({ namespace: NAMESPACE });
+    assertEquals(
+      (await projectMessages(fixture.engine, NAMESPACE, "thread-a")).length,
+      2,
+      "derived id keeps replay of the failure projection idempotent",
+    );
+
+    const second = await continueRun(
+      fixture,
+      "message:user:retry",
+      "Second question",
+    );
+    await waitForRun(fixture, second, 4);
+    assertEquals(fixture.inputs.length, 2);
+    assertEquals(
+      inputText(fixture.inputs[1]).includes(
+        "I couldn't complete that response. Please try again.",
+      ),
+      false,
+    );
+  } finally {
+    await fixture.close();
+  }
+});
+
 Deno.test("Core renders trusted shared instructions deterministically before Agent instructions", async () => {
   const first = definePromptInstructionResource({
     id: "application.a-policy",
@@ -642,6 +725,55 @@ Deno.test("a scoped Agent turn stops only after its owner's completion Action", 
   }
 });
 
+Deno.test("Core does not project a public failure for a private Agent turn", async () => {
+  const fixture = await createFixture(() => {
+    throw new Error("private provider failure");
+  });
+  try {
+    const root = await startRun(
+      fixture,
+      "Private request",
+      { kind: "internal" },
+      {
+        id: "turn:private-failure",
+        ownerParticipantId: "agent-north",
+      },
+    );
+    await waitForSettlement(fixture, root);
+    assertEquals(
+      await projectMessages(fixture.engine, NAMESPACE, "thread-a"),
+      [],
+    );
+  } finally {
+    await fixture.close();
+  }
+});
+
+Deno.test("Core does not widen a participant-limited failure into a public Message", async () => {
+  const fixture = await createFixture(() => {
+    throw new Error("participant-limited provider failure");
+  });
+  try {
+    const root = await startRun(
+      fixture,
+      "Limited request",
+      { kind: "participants", participantIds: ["user-a", "agent-north"] },
+    );
+    await waitForSettlement(fixture, root);
+    const messages = await projectMessages(
+      fixture.engine,
+      NAMESPACE,
+      "thread-a",
+    );
+    assertEquals(
+      messages.some((message) => agentFailureMetadata(message.metadata)),
+      false,
+    );
+  } finally {
+    await fixture.close();
+  }
+});
+
 Deno.test("Core invokes and projects an Action-backed Tool plan", async () => {
   let call = 0;
   const fixture = await createFixture((input) => {
@@ -791,6 +923,61 @@ Deno.test("Core invokes and projects an Action-backed Tool plan", async () => {
       "participants",
     ]);
     assertEquals(messageEvents.at(-1)?.visibility, privateVisibility);
+  } finally {
+    await fixture.close();
+  }
+});
+
+Deno.test("Core projects a public failure after a Tool continuation with a parent LLM attempt", async () => {
+  let calls = 0;
+  const fixture = await createFixture(() => {
+    calls += 1;
+    if (calls === 1) {
+      return {
+        result: {
+          content: [],
+          toolCalls: [{
+            id: "continuation-tool",
+            action: "contract_tool",
+            input: { value: "continue" },
+          }],
+          attempts: [{ status: "completed" }],
+          finishReason: "tool_calls",
+        },
+      };
+    }
+    throw new Error("terminal continuation provider error");
+  });
+  try {
+    const root = await startRun(fixture, "Use a Tool, then fail");
+    await waitForRun(fixture, root, 4);
+    const messages = await projectMessages(
+      fixture.engine,
+      NAMESPACE,
+      "thread-a",
+    );
+    assertEquals(messages.map((message) => message.sender.participantType), [
+      "human",
+      "agent",
+      "tool",
+      "agent",
+    ]);
+    assertEquals(
+      await messageText(fixture, messages[3]),
+      "I couldn't complete that response. Please try again.",
+    );
+    const failures = await projectActionEvents(
+      fixture.engine,
+      NAMESPACE,
+      "llm.call",
+    );
+    const failure = failures.find((event) => event.status === "failed");
+    assertExists(failure);
+    assertExists(failure.metadata.parentActionRunId);
+    assertEquals(
+      agentFailureMetadata(messages[3].metadata)?.llmAttemptId,
+      failure.actionRunId,
+    );
   } finally {
     await fixture.close();
   }

@@ -17,6 +17,16 @@ import {
 } from "./event-native.ts";
 import { createEventNativeFetchHandler } from "./fetch.ts";
 
+function completedTerminal(offset: number) {
+  return Promise.resolve(Object.freeze({
+    outcome: "completed" as const,
+    availability: "retained" as const,
+    capture: "complete" as const,
+    offset,
+    terminalAt: "2026-09-01T12:00:00.000Z",
+  }));
+}
+
 Deno.test("Fetch adapter maps routes, repeated queries, JSON, bytes, and context", async () => {
   const observed: EventNativeAppRequest[] = [];
   const app: EventNativeApp = Object.freeze({
@@ -199,13 +209,15 @@ Deno.test("Fetch adapter incrementally projects request-bound outputs as SSE wit
   const media: StreamOutput = Object.freeze({
     type: "stream.output",
     namespace: "tenant-a",
+    operationId: "operation-a",
     streamId: "audio-a",
-    replayKey: "17",
+    streamOrdinal: "1",
     mediaType: "audio/pcm;rate=24000",
     kind: "audio",
     role: "assistant.audio",
     correlationId: "correlation-a",
     metadata: Object.freeze({ voice: "alloy" }),
+    terminal: completedTerminal(3),
     payload: new ReadableStream<Uint8Array>({
       start(controller) {
         controller.enqueue(new Uint8Array([1, 2, 3]));
@@ -215,6 +227,7 @@ Deno.test("Fetch adapter incrementally projects request-bound outputs as SSE wit
   });
   const stream: EventNativeOutputStream = Object.freeze({
     type: EVENT_NATIVE_OUTPUT_STREAM,
+    operationId: "operation-a",
     outputs: new ReadableStream<ApplicationOutput>({
       start(controller) {
         controller.enqueue(semantic);
@@ -239,12 +252,11 @@ Deno.test("Fetch adapter incrementally projects request-bound outputs as SSE wit
   assertEquals(response.headers.get("cache-control"), "no-cache");
   const frames = (await response.text()).trim().split("\n\n");
   assertEquals(sseData(frames[0]).type, "text.delta");
-  assertEquals(decodeOperationReplayCursor(sseId(frames[0])), {
-    streamOffsets: {},
-  });
+  assertEquals(decodeOperationReplayCursor(sseId(frames[0])), {});
   assertEquals(sseData(frames[1]), {
     type: "stream.output",
     namespace: "tenant-a",
+    operationId: "operation-a",
     streamId: "audio-a",
     mediaType: "audio/pcm;rate=24000",
     kind: "audio",
@@ -252,8 +264,10 @@ Deno.test("Fetch adapter incrementally projects request-bound outputs as SSE wit
     correlationId: "correlation-a",
     metadata: { voice: "alloy" },
   });
-  assertEquals(decodeOperationReplayCursor(sseId(frames[2])).streamOffsets, {
-    r17: 3,
+  assertEquals(decodeOperationReplayCursor(sseId(frames[2])), {
+    operationStreamPositions: {
+      "operation-a": { highWatermark: 0, offsets: { "1": 3 } },
+    },
   });
 });
 
@@ -264,12 +278,13 @@ Deno.test("Fetch adapter drains progressive streams before exposing an operation
     type: "stream.output",
     namespace: "tenant-a",
     streamId: "answer-a",
-    replayKey: "23",
+    streamOrdinal: "1",
     mediaType: "text/plain",
     kind: "text",
     role: "assistant",
     operationId: "operation-a",
     metadata: Object.freeze({}),
+    terminal: completedTerminal(4),
     payload: new ReadableStream<Uint8Array>({
       async pull(controller) {
         await released;
@@ -291,6 +306,7 @@ Deno.test("Fetch adapter drains progressive streams before exposing an operation
   }) as ApplicationOutput;
   const stream: EventNativeOutputStream = Object.freeze({
     type: EVENT_NATIVE_OUTPUT_STREAM,
+    operationId: "operation-a",
     outputs: new ReadableStream<ApplicationOutput>({
       start(controller) {
         controller.enqueue(media);
@@ -364,9 +380,7 @@ Deno.test("Fetch adapter supports versioned SSE projection and cancels request w
   const frame = await reader.read();
   const projected = new TextDecoder().decode(frame.value);
   assertEquals(sseData(projected), { type: "TOKEN", token: "Hi" });
-  assertEquals(decodeOperationReplayCursor(sseId(projected)), {
-    streamOffsets: {},
-  });
+  assertEquals(decodeOperationReplayCursor(sseId(projected)), {});
   await reader.cancel("client_disconnected");
   assertEquals(sourceCancelled, true);
   assertEquals(workCancelled, "client_disconnected");
@@ -410,7 +424,6 @@ Deno.test("Fetch adapter emits durable event position as SSE id", async () => {
   const frame = (await response.text()).trim();
   assertEquals(decodeOperationReplayCursor(sseId(frame)), {
     eventPosition: "42",
-    streamOffsets: {},
   });
   assertEquals(sseData(frame).id, "event-uuid");
   const source = await Deno.readTextFile(new URL("fetch.ts", import.meta.url));
@@ -442,11 +455,12 @@ Deno.test("SSE cursor commits a durable event only with its final projected fram
     type: "stream.output",
     namespace: "tenant-a",
     streamId: "answer-projected",
-    replayKey: "31",
+    streamOrdinal: "1",
     mediaType: "text/plain",
     kind: "text",
     role: "assistant",
     metadata: Object.freeze({}),
+    terminal: completedTerminal(1),
     payload: new ReadableStream<Uint8Array>({
       async pull(controller) {
         await projecting;
@@ -457,6 +471,7 @@ Deno.test("SSE cursor commits a durable event only with its final projected fram
   });
   const outputStream: EventNativeOutputStream = Object.freeze({
     type: EVENT_NATIVE_OUTPUT_STREAM,
+    operationId: "operation-a",
     outputs: new ReadableStream<ApplicationOutput>({
       start(controller) {
         controller.enqueue(media);
@@ -474,8 +489,11 @@ Deno.test("SSE cursor commits a durable event only with its final projected fram
   const response = await createEventNativeFetchHandler(app, {
     async projectSseOutput(output) {
       if (output !== durable) {
-        const { payload: _payload, replayKey: _replayKey, ...descriptor } =
-          output as StreamOutput;
+        const {
+          payload: _payload,
+          streamOrdinal: _streamOrdinal,
+          ...descriptor
+        } = output as StreamOutput;
         return descriptor;
       }
       projectionStarted();
@@ -507,18 +525,20 @@ Deno.test("SSE cursor commits a durable event only with its final projected fram
   );
 });
 
-Deno.test("SSE cursor never leaks an unencodable concurrent stream offset", async () => {
+Deno.test("SSE cursor tracks an operation lane independently of its stream identifier", async () => {
   const oversizedId = "a".repeat(513);
   let closeOutputs!: () => void;
-  const stream = (streamId: string): StreamOutput =>
+  const stream = (streamId: string, streamOrdinal: string): StreamOutput =>
     Object.freeze({
       type: "stream.output",
       namespace: "tenant-a",
       streamId,
+      streamOrdinal,
       mediaType: "text/plain",
       kind: "text",
       role: "assistant",
       metadata: Object.freeze({}),
+      terminal: completedTerminal(1),
       payload: new ReadableStream<Uint8Array>({
         start(controller) {
           controller.enqueue(new Uint8Array([0x78]));
@@ -528,10 +548,11 @@ Deno.test("SSE cursor never leaks an unencodable concurrent stream offset", asyn
     });
   const outputStream: EventNativeOutputStream = Object.freeze({
     type: EVENT_NATIVE_OUTPUT_STREAM,
+    operationId: "operation-a",
     outputs: new ReadableStream<ApplicationOutput>({
       start(controller) {
-        controller.enqueue(stream(oversizedId));
-        controller.enqueue(stream("lane-b"));
+        controller.enqueue(stream(oversizedId, "1"));
+        controller.enqueue(stream("lane-b", "2"));
         closeOutputs = () => controller.close();
       },
     }),
@@ -559,8 +580,10 @@ Deno.test("SSE cursor never leaks an unencodable concurrent stream offset", asyn
       );
     }
     assert(frame);
-    assertEquals(decodeOperationReplayCursor(sseId(frame)).streamOffsets, {
-      "s:lane-b": 1,
+    assertEquals(decodeOperationReplayCursor(sseId(frame)), {
+      operationStreamPositions: {
+        "operation-a": { highWatermark: 1, offsets: { "2": 1 } },
+      },
     });
   } finally {
     closeOutputs();
@@ -592,7 +615,6 @@ Deno.test("thread feed cursor preserves out-of-order positions independently per
     compositeCursor: true,
     replayCursor: encodeOperationReplayCursor({
       eventPosition: "50",
-      streamOffsets: {},
     }),
     outputs: new ReadableStream<ApplicationOutput>({
       start(controller) {
@@ -619,7 +641,6 @@ Deno.test("thread feed cursor preserves out-of-order positions independently per
   assertEquals(first, {
     eventPosition: "50",
     operationEventPositions: { "operation-a": "100" },
-    streamOffsets: {},
   });
   assertEquals(disconnected, {
     eventPosition: "50",
@@ -627,7 +648,6 @@ Deno.test("thread feed cursor preserves out-of-order positions independently per
       "operation-a": "100",
       "operation-b": "99",
     },
-    streamOffsets: {},
   });
 });
 
@@ -639,12 +659,12 @@ Deno.test("SSE reports concurrent replay capacity in-band and only detaches", as
       type: "stream.output",
       namespace: "tenant-a",
       streamId: `lane-${ordinal}`,
-      replayKey: String(ordinal),
       streamOrdinal: String(ordinal),
       mediaType: "text/plain",
       kind: "text",
       role: "assistant",
       metadata: Object.freeze({}),
+      terminal: completedTerminal(0),
       payload: new ReadableStream<Uint8Array>({
         start(controller) {
           payloads.push(controller);
@@ -663,7 +683,7 @@ Deno.test("SSE reports concurrent replay capacity in-band and only detaches", as
       },
     }),
     done: new Promise<void>(() => undefined),
-    async cancel() {
+    cancel() {
       detached = true;
       for (const controller of payloads) {
         try {
@@ -672,6 +692,7 @@ Deno.test("SSE reports concurrent replay capacity in-band and only detaches", as
           // A transport pump may already have released this lane.
         }
       }
+      return Promise.resolve();
     },
   });
   const app: EventNativeApp = Object.freeze({
@@ -704,7 +725,6 @@ Deno.test("SSE closes a fully read sparse lane into the operation high-watermark
     type: "stream.output",
     namespace: "tenant-a",
     streamId: "lane-one",
-    replayKey: "44",
     streamOrdinal: "1",
     mediaType: "text/plain",
     kind: "text",
@@ -715,6 +735,13 @@ Deno.test("SSE closes a fully read sparse lane into the operation high-watermark
         controller.close();
       },
     }),
+    terminal: Promise.resolve(Object.freeze({
+      outcome: "completed",
+      availability: "retained",
+      capture: "complete",
+      offset: 12,
+      terminalAt: "2026-09-01T12:00:00.000Z",
+    })),
   });
   const stream: EventNativeOutputStream = Object.freeze({
     type: EVENT_NATIVE_OUTPUT_STREAM,
@@ -723,7 +750,6 @@ Deno.test("SSE closes a fully read sparse lane into the operation high-watermark
       operationStreamPositions: {
         [operationId]: { highWatermark: 0, offsets: { "1": 12 } },
       },
-      streamOffsets: {},
     }),
     outputs: new ReadableStream<ApplicationOutput>({
       start(controller) {
@@ -752,6 +778,97 @@ Deno.test("SSE closes a fully read sparse lane into the operation high-watermark
   );
 });
 
+Deno.test("SSE replays a failed prefix then emits one typed lane-local terminal boundary", async () => {
+  const operationId = "operation-retained-error";
+  const failed: StreamOutput = Object.freeze({
+    type: "stream.output",
+    namespace: "tenant-a",
+    streamId: "failed-lane",
+    streamOrdinal: "1",
+    mediaType: "text/plain",
+    kind: "text",
+    role: "assistant",
+    metadata: Object.freeze({}),
+    payload: new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("bad"));
+        controller.close();
+      },
+    }),
+    terminal: Promise.resolve(Object.freeze({
+      outcome: "failed",
+      availability: "retained",
+      capture: "truncated",
+      offset: 3,
+      terminalAt: "2026-09-01T12:00:00.000Z",
+    })),
+  });
+  const completed: StreamOutput = Object.freeze({
+    ...failed,
+    streamId: "completed-lane",
+    streamOrdinal: "2",
+    payload: new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.close();
+      },
+    }),
+    terminal: Promise.resolve(Object.freeze({
+      outcome: "completed",
+      availability: "retained",
+      capture: "complete",
+      offset: 0,
+      terminalAt: "2026-09-01T12:00:01.000Z",
+    })),
+  });
+  const stream: EventNativeOutputStream = Object.freeze({
+    type: EVENT_NATIVE_OUTPUT_STREAM,
+    operationId,
+    outputs: new ReadableStream<ApplicationOutput>({
+      start(controller) {
+        controller.enqueue(failed);
+        controller.enqueue(completed);
+        controller.close();
+      },
+    }),
+    done: Promise.resolve(),
+    cancel: () => Promise.resolve(),
+  });
+  const app: EventNativeApp = Object.freeze({
+    resources: () => [],
+    handle: () => Promise.resolve({ status: 200, data: stream }),
+  });
+  const response = await createEventNativeFetchHandler(app)(
+    new Request("https://example.test/operations/retained-error/outputs"),
+  );
+  const frames = (await response.text()).trim().split("\n\n");
+  const error = frames.find((frame) => sseData(frame).type === "stream.error");
+  assert(error);
+  assertEquals(sseData(error), {
+    type: "stream.error",
+    operationId,
+    streamId: "failed-lane",
+    offset: 3,
+    code: "stream_failed",
+    outcome: "failed",
+    availability: "retained",
+    capture: "truncated",
+    terminalAt: "2026-09-01T12:00:00.000Z",
+  });
+  assertEquals(
+    frames.some((frame) =>
+      sseData(frame).type === "stream.end" &&
+      sseData(frame).streamId === "completed-lane"
+    ),
+    true,
+  );
+  assertEquals(
+    decodeOperationReplayCursor(sseId(error)).operationStreamPositions?.[
+      operationId
+    ]?.offsets["1"],
+    undefined,
+  );
+});
+
 Deno.test("direct operation SSE advances global and operation event positions together", async () => {
   const operationId = "operation-direct-resume";
   const durable: ApplicationOutput = Object.freeze({
@@ -775,7 +892,6 @@ Deno.test("direct operation SSE advances global and operation event positions to
     replayCursor: encodeOperationReplayCursor({
       eventPosition: "1",
       operationEventPositions: { [operationId]: "1" },
-      streamOffsets: {},
     }),
     outputs: new ReadableStream<ApplicationOutput>({
       start(controller) {

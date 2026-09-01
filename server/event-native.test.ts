@@ -46,7 +46,7 @@ import {
 const SCHEMA = "copilotz_event_native_server";
 const NAMESPACE = "tenant-a";
 
-Deno.test("thread feed cursor merge does not resurrect per-operation legacy keys", () => {
+Deno.test("thread feed cursor merge keeps each operation position", () => {
   const merged = decodeOperationReplayCursor(
     mergeOperationAttachmentReplayCursors(
       [{
@@ -55,7 +55,6 @@ Deno.test("thread feed cursor merge does not resurrect per-operation legacy keys
           operationStreamPositions: {
             "operation-a": { highWatermark: 1, offsets: {} },
           },
-          streamOffsets: { r2: 4, "s:legacy": 9 },
         }),
       }, {
         operationId: "operation-b",
@@ -63,15 +62,11 @@ Deno.test("thread feed cursor merge does not resurrect per-operation legacy keys
           operationStreamPositions: {
             "operation-b": { highWatermark: 1, offsets: {} },
           },
-          streamOffsets: { r1: 3, "s:legacy": 9 },
         }),
       }],
-      encodeOperationReplayCursor({
-        streamOffsets: { r1: 3, r2: 4, "s:legacy": 9 },
-      }),
+      encodeOperationReplayCursor({}),
     ),
   );
-  assertEquals(merged.streamOffsets, { "s:legacy": 9 });
   assertEquals(merged.operationStreamPositions, {
     "operation-a": { highWatermark: 1, offsets: {} },
     "operation-b": { highWatermark: 1, offsets: {} },
@@ -808,7 +803,6 @@ Deno.test("message history resolves canonical semantic content without operation
       hasMore: true,
       replayCursor: encodeOperationReplayCursor({
         eventPosition: "9",
-        streamOffsets: {},
       }),
       activeOperationIds: [],
     });
@@ -857,7 +851,6 @@ Deno.test("message history resolves canonical semantic content without operation
       hasMore: false,
       replayCursor: encodeOperationReplayCursor({
         eventPosition: "9",
-        streamOffsets: {},
       }),
       activeOperationIds: [],
     });

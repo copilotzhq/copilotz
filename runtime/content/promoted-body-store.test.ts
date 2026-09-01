@@ -6,10 +6,10 @@ import {
   readBodyBytes,
 } from "./body-store.ts";
 import type {
-  BodyHead,
   BodyMaintenanceDeleteInput,
   BodyStore,
   BodyStoreAdapter,
+  ReadyBodyHead,
   WriterCapability,
 } from "./body-store.ts";
 import { digestContent } from "./digest.ts";
@@ -41,7 +41,7 @@ async function sealText(
   store: BodyStore,
   bodyId: string,
   value: string,
-): Promise<Readonly<{ writer: WriterCapability; head: BodyHead }>> {
+): Promise<Readonly<{ writer: WriterCapability; head: ReadyBodyHead }>> {
   const { writer, bytes } = await appendText(store, bodyId, value);
   const head = await store.seal({
     writer,
@@ -106,6 +106,53 @@ Deno.test("promoted store stages progressive bytes and returns canonical Ready",
   }
   assertEquals(canonicalHead.digest, sealed.digest);
   assertEquals(await bodyText(store, "body-a"), "hello");
+});
+
+Deno.test("promoted store retains incomplete bodies in durable staging without canonical adoption", async () => {
+  const staging = createMemoryBodyStore({
+    backendId: "database:staging",
+    protectionMs: 0,
+  });
+  const ready = createMemoryBodyStore({
+    backendId: "gcs:ready",
+    protectionMs: 0,
+  });
+  const store = createPromotedBodyStore({ staging, ready });
+  const { writer, bytes } = await appendText(
+    store,
+    "body-incomplete",
+    "rejected",
+  );
+  const head = await store.terminate!({
+    writer,
+    expectedByteLength: bytes.byteLength,
+    expectedDigest: await digestContent(bytes),
+  });
+
+  assertEquals(head.state, "incomplete");
+  assertEquals(
+    (await staging.head({ bodyId: head.bodyId }))?.state,
+    "incomplete",
+  );
+  assertEquals(await ready.head({ bodyId: head.bodyId }), null);
+  assertEquals(await bodyText(store, head.bodyId), "rejected");
+  await assertRejects(() =>
+    store.put({
+      bodyId: head.bodyId,
+      bytes,
+      mediaType: head.mediaType,
+      digest: head.digest,
+    })
+  );
+  assertEquals(
+    await store.maintenance.delete({
+      bodyId: head.bodyId,
+      expectedState: "incomplete",
+      expectedMaintenanceVersion: head.maintenanceVersion,
+      idleForMs: 0,
+    }),
+    true,
+  );
 });
 
 Deno.test("seal retry promotes durable staged Ready after pre-publish crash", async () => {

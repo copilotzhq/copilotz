@@ -250,6 +250,43 @@ async function assertContract(store: BodyStore, bodyId: string) {
   );
 }
 
+async function assertTerminateContract(store: BodyStore, bodyId: string) {
+  const bytes = encoder.encode("retained prefix");
+  const writer = await createProgressiveBodyWriter(store, {
+    bodyId,
+    mediaType: "text/plain",
+  });
+  await writer.write(bytes);
+  const head = await writer.terminate();
+  assertEquals(head?.state, "incomplete");
+  assertEquals(await readBodyBytes(store, { bodyId }), bytes);
+  const follower = await openProgressiveBodyFollower(store, {
+    bodyId,
+    offset: 9,
+  });
+  assertEquals(decoder.decode(await readAll(follower.body)), "prefix");
+  await assertRejects(() => store.reserve({ bodyId, mediaType: "text/plain" }));
+  if (!head) throw new Error("Expected retained termination support.");
+  assertEquals(
+    await store.maintenance.delete({
+      bodyId,
+      expectedState: "incomplete",
+      expectedMaintenanceVersion: head.maintenanceVersion - 1,
+      idleForMs: 0,
+    }),
+    false,
+  );
+  assertEquals(
+    await store.maintenance.delete({
+      bodyId,
+      expectedState: "incomplete",
+      expectedMaintenanceVersion: head.maintenanceVersion,
+      idleForMs: 0,
+    }),
+    true,
+  );
+}
+
 Deno.test("progressive writer finalizes a checksummed body for followers", async () => {
   await assertContract(createMemoryBodyStore(), "stream/a");
 });
@@ -370,6 +407,88 @@ Deno.test("abandon discards staging and errors followers", async () => {
   assertEquals(await store.head({ bodyId: "stream/d" }), null);
 });
 
+Deno.test("terminate retains the committed prefix and closes live and replay followers", async () => {
+  const store = createMemoryBodyStore({ protectionMs: 0 });
+  const writer = await createProgressiveBodyWriter(store, {
+    bodyId: "stream/retained-failure",
+    mediaType: "text/plain",
+  });
+  const liveFollower = await openProgressiveBodyFollower(store, {
+    bodyId: writer.bodyId,
+  });
+  const liveBytes = readAll(liveFollower.body);
+  await writer.write(encoder.encode("partial response"));
+  const incomplete = await writer.terminate();
+
+  assertEquals(incomplete?.state, "incomplete");
+  assertEquals(decoder.decode(await liveBytes), "partial response");
+  const replay = await openProgressiveBodyFollower(store, {
+    bodyId: writer.bodyId,
+    offset: 8,
+  });
+  assertEquals(decoder.decode(await readAll(replay.body)), "response");
+  assertEquals(progressiveBodyTesting.inspect(store, writer.bodyId), null);
+});
+
+Deno.test("quiet progressive writers renew their lease independently of byte traffic", async () => {
+  const base = createMemoryBodyStore({ protectionMs: 80 });
+  let renewals = 0;
+  const store: BodyStore = Object.freeze({
+    ...base,
+    async renew(input) {
+      renewals++;
+      return await base.renew!(input);
+    },
+  });
+  const writer = await createProgressiveBodyWriter(store, {
+    bodyId: "stream/quiet-heartbeat",
+    mediaType: "text/plain",
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 130));
+  assertEquals(renewals >= 2, true);
+  const maintenance = await maintainProgressiveBodies(store);
+  assertEquals(maintenance.deferred, 1);
+  assertEquals(maintenance.terminated, 0);
+  await writer.finalize();
+});
+
+Deno.test("heartbeat failure blocks mutation but retained settlement can still terminate", async () => {
+  const base = createMemoryBodyStore({ protectionMs: 60 });
+  let renewals = 0;
+  const store: BodyStore = Object.freeze({
+    ...base,
+    renew() {
+      renewals++;
+      return Promise.reject(new Error("simulated heartbeat failure"));
+    },
+  });
+  const writer = await createProgressiveBodyWriter(store, {
+    bodyId: "stream/heartbeat-failure",
+    mediaType: "text/plain",
+  });
+  await new Promise((resolve) => setTimeout(resolve, 45));
+  assertEquals(renewals, 1);
+
+  const appendError = await assertRejects(() =>
+    writer.write(encoder.encode("late"))
+  );
+  assertEquals(
+    appendError instanceof Error ? appendError.message : String(appendError),
+    "simulated heartbeat failure",
+  );
+  const finalizeError = await assertRejects(() => writer.finalize());
+  assertEquals(
+    finalizeError instanceof Error
+      ? finalizeError.message
+      : String(finalizeError),
+    "simulated heartbeat failure",
+  );
+  assertEquals((await writer.terminate())?.state, "incomplete");
+  await new Promise((resolve) => setTimeout(resolve, 45));
+  assertEquals(renewals, 1);
+});
+
 Deno.test("writer backpressures when a live memory follower lags the bound", async () => {
   const store = createMemoryBodyStore();
   const writer = await createProgressiveBodyWriter(store, {
@@ -408,6 +527,21 @@ Deno.test("filesystem, database, and S3 progressive writers finalize a checksumm
   await withStore(
     createS3Handle,
     (store) => assertContract(store, "stream/s3"),
+  );
+});
+
+Deno.test("filesystem, database, and S3 stores retain immutable incomplete prefixes", async () => {
+  await withStore(
+    createFilesystemHandle,
+    (store) => assertTerminateContract(store, "stream/incomplete-fs"),
+  );
+  await withStore(
+    createDatabaseHandle,
+    (store) => assertTerminateContract(store, "stream/incomplete-db"),
+  );
+  await withStore(
+    createS3Handle,
+    (store) => assertTerminateContract(store, "stream/incomplete-s3"),
   );
 });
 
@@ -573,16 +707,21 @@ Deno.test("S3 maintenance discovers and idempotently removes expired staging", a
     const recovered = handle.reopen();
     assertEquals(await maintainProgressiveBodies(recovered), {
       examined: 1,
-      aborted: 1,
+      aborted: 0,
       sealed: 0,
+      terminated: 1,
       deferred: 0,
       errors: [],
     });
-    assertEquals(await recovered.head({ bodyId: writer.bodyId }), null);
+    assertEquals(
+      (await recovered.head({ bodyId: writer.bodyId }))?.state,
+      "incomplete",
+    );
     assertEquals(await maintainProgressiveBodies(recovered), {
       examined: 0,
       aborted: 0,
       sealed: 0,
+      terminated: 0,
       deferred: 0,
       errors: [],
     });

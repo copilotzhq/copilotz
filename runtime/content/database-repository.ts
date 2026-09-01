@@ -45,7 +45,11 @@ import type {
   PreparedContent,
   PublishAssetInput,
 } from "./types.ts";
-import type { BodyHead, BodyStorageRuntime, BodyStore } from "./body-store.ts";
+import type {
+  BodyStorageRuntime,
+  BodyStore,
+  ReadyBodyHead,
+} from "./body-store.ts";
 
 type AssetNodeRow = Record<string, unknown> & {
   id: string;
@@ -95,7 +99,7 @@ export type DatabaseAssetRepository =
     ): Promise<AssetBodyMaintenanceResult>;
     /** @internal CAS-deletes a Ready Body only while no graph owner exists. */
     retireUnownedReadyBody(
-      input: Readonly<{ store: BodyStore; body: BodyHead }>,
+      input: Readonly<{ store: BodyStore; body: ReadyBodyHead }>,
     ): Promise<ReadyBodyRetirementResult>;
   }>;
 
@@ -1378,7 +1382,7 @@ export function createDatabaseAssetRepository(
         );
       }
       let orphanedBodiesDeleted = 0;
-      if (storage.writer && adapter.deployment.readyGarbageCollection) {
+      if (storage.writer) {
         const prefix = assetBodySchemaPrefix({
           prefix: storage.prefix,
           databaseSchema: options.databaseSchema,
@@ -1392,7 +1396,12 @@ export function createDatabaseAssetRepository(
         let scanned = 0;
         while (scanned < maxScanned && orphanedBodiesDeleted < limit) {
           const candidates = await storage.writer.maintenance.list({
-            states: ["ready"],
+            states: [
+              ...(adapter.deployment.readyGarbageCollection
+                ? ["ready" as const]
+                : []),
+              "incomplete" as const,
+            ],
             idleForMs: orphanAfterMs,
             prefix,
             ...(bodyMaintenanceAfter ? { after: bodyMaintenanceAfter } : {}),
@@ -1410,8 +1419,39 @@ export function createDatabaseAssetRepository(
           for (const body of candidates.bodies) {
             scanned += 1;
             bodyMaintenanceAfter = body.bodyId;
-            if (body.state !== "ready") continue;
             if (!body.bodyId.startsWith(prefix)) continue;
+            if (body.state !== "ready" && body.state !== "incomplete") {
+              continue;
+            }
+            const modified = body.lastModified
+              ? new Date(body.lastModified).getTime()
+              : Number.NaN;
+            if (!Number.isFinite(modified) || modified > cutoff) continue;
+            if (body.state === "incomplete") {
+              // Incomplete Bodies are intentionally never graph-owned. Their
+              // only durable owner is an operational replay catalog, so the
+              // caller must supply that retention guard before orphan GC is
+              // allowed to collect unpublished terminal staging.
+              if (
+                !maintenance.isBodyRetained ||
+                await maintenance.isBodyRetained(body.bodyId)
+              ) continue;
+              try {
+                if (
+                  await storage.writer!.maintenance.delete({
+                    bodyId: body.bodyId,
+                    expectedState: "incomplete",
+                    expectedMaintenanceVersion: body.maintenanceVersion,
+                    idleForMs: orphanAfterMs,
+                  })
+                ) orphanedBodiesDeleted++;
+              } catch {
+                // One unavailable backend object cannot block the page.
+              }
+              if (orphanedBodiesDeleted >= limit) break;
+              continue;
+            }
+            if (body.state !== "ready") continue;
             // Operation replay Bodies have catalog-owned retention until that
             // row is pruned. Afterwards graph ownership and ordinary orphan GC
             // protect/collect an adopted canonical Body normally.
@@ -1420,10 +1460,6 @@ export function createDatabaseAssetRepository(
               maintenance.isBodyRetained &&
               await maintenance.isBodyRetained(body.bodyId)
             ) continue;
-            const modified = body.lastModified
-              ? new Date(body.lastModified).getTime()
-              : Number.NaN;
-            if (!Number.isFinite(modified) || modified > cutoff) continue;
             let deleted = false;
             try {
               deleted = await options.session.transaction(

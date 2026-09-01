@@ -1,8 +1,9 @@
 import type {
   AppendResult,
-  BodyHead,
   BodyStore,
+  IncompleteBodyHead,
   MutableBodyHead,
+  ReadyBodyHead,
   WriterCapability,
 } from "./body-store.ts";
 import { createContentError } from "./errors.ts";
@@ -16,7 +17,12 @@ export type ProgressiveBodyWriter = Readonly<{
     AppendResult
   >;
   write(chunk: Uint8Array): Promise<void>;
-  finalize(): Promise<BodyHead>;
+  finalize(): Promise<ReadyBodyHead>;
+  /** Freezes the committed prefix without making it Asset-adoptable. */
+  terminate(): Promise<IncompleteBodyHead>;
+  /** Stops writes and lease renewal before durable terminal intent is awaited. */
+  fence(): void;
+  /** Destructively removes unpublished staging. */
   abandon(): Promise<void>;
 }>;
 
@@ -34,7 +40,7 @@ type LiveBody = {
   storageDiscarded: number;
   bufferOffset: number;
   chunks: Uint8Array[];
-  state: "open" | "finalized" | "abandoned";
+  state: "open" | "finalized" | "terminated" | "abandoned";
   writerOpen: boolean;
   maxBufferedBytes: number;
   followers: Set<{ offset: number }>;
@@ -189,7 +195,10 @@ export async function createProgressiveBodyWriter(
   }
   const takeoverHead = input.takeover ? await store.head({ bodyId }) : null;
   const expectedGeneration = takeoverHead?.state !== "ready"
-    ? takeoverHead?.writerGeneration
+    ? takeoverHead?.state === "open" || takeoverHead?.state === "sealing" ||
+        takeoverHead?.state === "terminating"
+      ? takeoverHead.writerGeneration
+      : undefined
     : undefined;
   let writer: WriterCapability = await store.reserve({
     bodyId,
@@ -233,7 +242,34 @@ export async function createProgressiveBodyWriter(
   table.set(bodyId, live);
   notify(live);
 
-  const requireOpen = (): void => {
+  let heartbeatTimer: ReturnType<typeof setTimeout> | undefined;
+  let heartbeatError: unknown;
+  let operationTail: Promise<void> = Promise.resolve();
+
+  const runExclusive = <T>(operation: () => Promise<T>): Promise<T> => {
+    const result = operationTail.then(operation);
+    operationTail = result.then(() => undefined, () => undefined);
+    return result;
+  };
+
+  const clearHeartbeat = (): void => {
+    if (heartbeatTimer === undefined) return;
+    clearTimeout(heartbeatTimer);
+    heartbeatTimer = undefined;
+  };
+
+  const unrefTimer = (timer: ReturnType<typeof setTimeout>): void => {
+    if (typeof timer !== "number") {
+      (timer as unknown as { unref?: () => void }).unref?.();
+      return;
+    }
+    const deno = (globalThis as unknown as {
+      Deno?: { unrefTimer?: (id: number) => void };
+    }).Deno;
+    deno?.unrefTimer?.(timer);
+  };
+
+  const requireWriterOpen = (): void => {
     if (!live.writerOpen || live.state !== "open") {
       throw createContentError(
         "asset_conflict",
@@ -242,7 +278,51 @@ export async function createProgressiveBodyWriter(
     }
   };
 
-  const publish = async (): Promise<BodyHead> => {
+  const requireOpen = (): void => {
+    requireWriterOpen();
+    if (locallyFenced) {
+      throw createContentError(
+        "asset_conflict",
+        "Progressive writer is settling.",
+      );
+    }
+    if (heartbeatError !== undefined) throw heartbeatError;
+  };
+
+  let locallyFenced = false;
+  const requireFinalizable = (): void => {
+    if (locallyFenced) {
+      requireWriterOpen();
+      return;
+    }
+    requireOpen();
+  };
+  const scheduleHeartbeat = (protection = writer.protection): void => {
+    clearHeartbeat();
+    if (locallyFenced || !live.writerOpen || protection.remainingMs <= 0) {
+      return;
+    }
+    const delayMs = Math.max(1, Math.floor(protection.remainingMs / 2));
+    const timer = setTimeout(() => {
+      heartbeatTimer = undefined;
+      if (locallyFenced || !live.writerOpen || live.state !== "open") return;
+      void runExclusive(async () => {
+        if (locallyFenced || !live.writerOpen || live.state !== "open") return;
+        const renewed = await store.renew({ writer });
+        writer = { ...writer, protection: renewed };
+        scheduleHeartbeat(renewed);
+      }).catch((error) => {
+        if (locallyFenced || !live.writerOpen || live.state !== "open") return;
+        heartbeatError = error;
+        notify(live);
+      });
+    }, delayMs);
+    heartbeatTimer = timer;
+    unrefTimer(timer);
+  };
+
+  const publish = async (): Promise<ReadyBodyHead> => {
+    clearHeartbeat();
     const head = await store.seal({
       writer,
       expectedByteLength: live.byteLength,
@@ -253,29 +333,43 @@ export async function createProgressiveBodyWriter(
     return head;
   };
 
-  return Object.freeze({
-    bodyId,
-    offset: () => live.byteLength,
-    async append(input) {
+  const terminate = async (): Promise<IncompleteBodyHead> => {
+    clearHeartbeat();
+    const head = await store.terminate({
+      writer,
+      expectedByteLength: live.byteLength,
+    });
+    live.state = "terminated";
+    live.writerOpen = false;
+    releaseLiveBody(table, live);
+    return head;
+  };
+
+  scheduleHeartbeat();
+
+  const append = async (
+    input: { bytes: Uint8Array; appendId: string },
+  ): Promise<AppendResult> => {
+    requireOpen();
+    const appendId = input.appendId.trim();
+    if (!appendId) throw new TypeError("Progressive appendId is required.");
+    const chunk = input.bytes;
+    if (chunk.byteLength === 0) {
+      return Object.freeze({
+        startOffset: live.byteLength,
+        endOffset: live.byteLength,
+        protection: writer.protection,
+      });
+    }
+    while (
+      store.kind === "memory" &&
+      live.followers.size > 0 &&
+      live.byteLength - minFollowerOffset(live) >= live.maxBufferedBytes
+    ) {
       requireOpen();
-      const appendId = input.appendId.trim();
-      if (!appendId) throw new TypeError("Progressive appendId is required.");
-      const chunk = input.bytes;
-      if (chunk.byteLength === 0) {
-        return Object.freeze({
-          startOffset: live.byteLength,
-          endOffset: live.byteLength,
-          protection: writer.protection,
-        });
-      }
-      while (
-        store.kind === "memory" &&
-        live.followers.size > 0 &&
-        live.byteLength - minFollowerOffset(live) >= live.maxBufferedBytes
-      ) {
-        requireOpen();
-        await wait(live);
-      }
+      await wait(live);
+    }
+    return await runExclusive(async () => {
       requireOpen();
       const previousOffset = live.byteLength;
       const result = await store.append({
@@ -295,28 +389,68 @@ export async function createProgressiveBodyWriter(
       };
       trimLiveBuffer(store, live);
       notify(live);
+      scheduleHeartbeat(result.protection);
       return result;
+    });
+  };
+
+  return Object.freeze({
+    bodyId,
+    offset: () => live.byteLength,
+    fence() {
+      locallyFenced = true;
+      clearHeartbeat();
     },
+    append,
     async write(chunk) {
-      await this.append({
+      await append({
         bytes: chunk,
         appendId: `offset:${live.byteLength}`,
       });
     },
     async finalize() {
-      requireOpen();
-      return await publish();
+      requireFinalizable();
+      try {
+        return await runExclusive(async () => {
+          requireFinalizable();
+          return await publish();
+        });
+      } catch (error) {
+        if (live.writerOpen && !locallyFenced && heartbeatError === undefined) {
+          scheduleHeartbeat();
+        }
+        throw error;
+      }
+    },
+    async terminate() {
+      requireWriterOpen();
+      try {
+        return await runExclusive(async () => {
+          requireWriterOpen();
+          return await terminate();
+        });
+      } catch (error) {
+        if (live.writerOpen && !locallyFenced && heartbeatError === undefined) {
+          scheduleHeartbeat();
+        }
+        throw error;
+      }
     },
     async abandon() {
-      requireOpen();
-      live.state = "abandoned";
-      live.writerOpen = false;
-      notify(live);
-      try {
-        await store.abort({ writer });
-      } finally {
-        releaseLiveBody(table, live);
-      }
+      requireWriterOpen();
+      clearHeartbeat();
+      await runExclusive(async () => {
+        requireWriterOpen();
+        clearHeartbeat();
+        live.state = "abandoned";
+        live.writerOpen = false;
+        notify(live);
+        try {
+          await store.abort({ writer });
+        } finally {
+          releaseLiveBody(table, live);
+        }
+      });
     },
   });
 }
@@ -345,7 +479,7 @@ export async function openProgressiveBodyFollower(
   }
 
   const stored = await store.head({ bodyId });
-  if (stored?.state === "ready") {
+  if (stored?.state === "ready" || stored?.state === "incomplete") {
     return Object.freeze({
       bodyId,
       offset: start,
@@ -387,11 +521,11 @@ function followProgressiveStore(
     async pull(controller) {
       while (!cancelled) {
         const stored = await store.head({ bodyId });
-        if (stored?.state === "ready") {
+        if (stored?.state === "ready" || stored?.state === "incomplete") {
           const remaining = await readStreamBytes(
             await store.follow({
               bodyId,
-              offset: Math.max(0, cursor - discarded),
+              offset: cursor,
             }),
           );
           if (remaining.byteLength > 0) controller.enqueue(remaining);
@@ -412,7 +546,9 @@ function followProgressiveStore(
           );
           return;
         }
-        if (staged.state === "ready") continue;
+        if (staged.state === "ready" || staged.state === "incomplete") {
+          continue;
+        }
         discarded = staged.discarded;
         if (cursor < discarded) {
           controller.error(
@@ -439,7 +575,10 @@ function followProgressiveStore(
             return;
           } catch (error) {
             const current = await store.head({ bodyId });
-            if (current && current.state !== "ready") throw error;
+            if (
+              current && current.state !== "ready" &&
+              current.state !== "incomplete"
+            ) throw error;
             continue;
           }
         }
@@ -479,7 +618,7 @@ function followLive(
           );
           return;
         }
-        if (live.state === "finalized") {
+        if (live.state === "finalized" || live.state === "terminated") {
           live.followers.delete(cursor);
           if (cursor.offset < live.byteLength) {
             const stored = await store.follow({

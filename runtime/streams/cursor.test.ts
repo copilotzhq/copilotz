@@ -4,17 +4,18 @@ import {
   decodeOperationReplayCursor,
   encodeOperationReplayCursor,
   MAX_OPERATION_CURSOR_STREAMS,
-  operationStreamReplayCursorKey,
 } from "./cursor.ts";
 
-Deno.test("operation replay cursor round-trips opaque event and stream positions", () => {
+Deno.test("operation replay cursor round-trips canonical operation lanes", () => {
   const cursor = encodeOperationReplayCursor({
     eventPosition: "90071992547409931234",
     operationEventPositions: {
       "operation-a": "100",
       "operation-b": "99",
     },
-    streamOffsets: { "stream-a": 0, "stream-b": 42 },
+    operationStreamPositions: {
+      "operation-a": { highWatermark: 1, offsets: { "2": 42 } },
+    },
   });
   assertEquals(/^[A-Za-z0-9_-]+$/.test(cursor), true);
   assertEquals(decodeOperationReplayCursor(cursor), {
@@ -23,9 +24,11 @@ Deno.test("operation replay cursor round-trips opaque event and stream positions
       "operation-a": "100",
       "operation-b": "99",
     },
-    streamOffsets: { "stream-a": 0, "stream-b": 42 },
+    operationStreamPositions: {
+      "operation-a": { highWatermark: 1, offsets: { "2": 42 } },
+    },
   });
-  assertEquals(decodeOperationReplayCursor(undefined), { streamOffsets: {} });
+  assertEquals(decodeOperationReplayCursor(undefined), {});
 });
 
 Deno.test("operation replay cursor rejects malformed and unbounded positions", () => {
@@ -33,44 +36,53 @@ Deno.test("operation replay cursor rejects malformed and unbounded positions", (
   assertThrows(() =>
     encodeOperationReplayCursor({
       eventPosition: "-1",
-      streamOffsets: {},
     }), TypeError);
   assertThrows(() =>
     encodeOperationReplayCursor({
-      streamOffsets: Object.fromEntries(
-        Array.from(
-          { length: MAX_OPERATION_CURSOR_STREAMS + 1 },
-          (_, index) => [`stream-${index}`, index],
-        ),
-      ),
+      operationStreamPositions: {
+        operation: {
+          highWatermark: 0,
+          offsets: Object.fromEntries(
+            Array.from(
+              { length: MAX_OPERATION_CURSOR_STREAMS + 1 },
+              (_, index) => [String(index + 1), index],
+            ),
+          ),
+        },
+      },
     }), TypeError);
 });
 
-Deno.test("operation replay cursor stays header-safe for 150 compact stream keys", () => {
+Deno.test("operation replay cursor stays header-safe for 150 compact lanes", () => {
   const cursor = encodeOperationReplayCursor({
     eventPosition: "123456789",
-    streamOffsets: Object.fromEntries(
-      Array.from({ length: 150 }, (_, index) => [
-        operationStreamReplayCursorKey({
-          replayKey: String(index + 1),
-          streamId: `a-very-long-public-stream-id-${index}`,
-        }),
-        10_000_000 + index,
-      ]),
-    ),
+    operationStreamPositions: {
+      operation: {
+        highWatermark: 0,
+        offsets: Object.fromEntries(
+          Array.from(
+            { length: 150 },
+            (_, index) => [String(index + 1), 10_000_000 + index],
+          ),
+        ),
+      },
+    },
   });
 
   // This leaves ample room for cookies and the rest of the request headers on
   // common managed HTTP frontends while representing a complex active run.
   assertLess(cursor.length, 4 * 1024);
   assertEquals(
-    Object.keys(decodeOperationReplayCursor(cursor).streamOffsets).length,
+    Object.keys(
+      decodeOperationReplayCursor(cursor).operationStreamPositions?.operation
+        .offsets ?? {},
+    ).length,
     150,
   );
 });
 
 Deno.test("operation stream high-watermarks retain and then close sparse gaps", () => {
-  const tracker = createOperationReplayCursorTracker({ streamOffsets: {} });
+  const tracker = createOperationReplayCursorTracker({});
   tracker.commit([{
     kind: "operation-stream",
     action: "register",
@@ -101,7 +113,6 @@ Deno.test("operation stream high-watermarks retain and then close sparse gaps", 
     resumed.streamPosition({
       operationId: "operation-a",
       streamOrdinal: "2",
-      streamId: "lane-two",
     }).consumed,
     true,
   );
@@ -121,7 +132,7 @@ Deno.test("operation stream high-watermarks retain and then close sparse gaps", 
 });
 
 Deno.test("operation stream high-watermark stays bounded past 256 sequential lanes", () => {
-  const tracker = createOperationReplayCursorTracker({ streamOffsets: {} });
+  const tracker = createOperationReplayCursorTracker({});
   for (let ordinal = 1; ordinal <= 1_024; ordinal++) {
     tracker.commit([{
       kind: "operation-stream",
@@ -148,7 +159,7 @@ Deno.test("operation stream high-watermark stays bounded past 256 sequential lan
 });
 
 Deno.test("operation replay cursor reports concurrent lane capacity as a typed conflict", () => {
-  const tracker = createOperationReplayCursorTracker({ streamOffsets: {} });
+  const tracker = createOperationReplayCursorTracker({});
   for (let ordinal = 1; ordinal <= MAX_OPERATION_CURSOR_STREAMS; ordinal++) {
     tracker.commit([{
       kind: "operation-stream",

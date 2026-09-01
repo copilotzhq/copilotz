@@ -151,8 +151,6 @@ export function mergeOperationAttachmentReplayCursors(
       }),
     ]),
   );
-  const streamOffsets = { ...base.streamOffsets };
-  const removedBaseStreamOffsets = new Set<string>();
   for (const { replayCursor: normalizedCursor, operationId } of attachments) {
     const normalized = decodeOperationReplayCursor(normalizedCursor);
     const eventPosition = normalized.operationEventPositions?.[operationId] ??
@@ -161,14 +159,7 @@ export function mergeOperationAttachmentReplayCursors(
     delete operationStreamPositions[operationId];
     const streamPosition = normalized.operationStreamPositions?.[operationId];
     if (streamPosition) operationStreamPositions[operationId] = streamPosition;
-    for (const key of Object.keys(base.streamOffsets)) {
-      if (!(key in normalized.streamOffsets)) {
-        removedBaseStreamOffsets.add(key);
-      }
-    }
-    Object.assign(streamOffsets, normalized.streamOffsets);
   }
-  for (const key of removedBaseStreamOffsets) delete streamOffsets[key];
   return encodeOperationReplayCursor({
     ...(base.eventPosition ? { eventPosition: base.eventPosition } : {}),
     ...(Object.keys(operationEventPositions).length
@@ -177,7 +168,6 @@ export function mergeOperationAttachmentReplayCursors(
     ...(Object.keys(operationStreamPositions).length
       ? { operationStreamPositions }
       : {}),
-    streamOffsets,
   });
 }
 
@@ -540,7 +530,6 @@ async function messageList(
     operationIds: activeOperations.map((operation) => operation.operationId),
     cursor: encodeOperationReplayCursor({
       ...(eventPosition ? { eventPosition } : {}),
-      streamOffsets: Object.freeze({}),
     }),
   });
   return {

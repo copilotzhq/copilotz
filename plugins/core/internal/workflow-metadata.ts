@@ -7,6 +7,7 @@ const TOOL_PLAN_METADATA_KEY = "copilotzToolPlan";
 const TOOL_ACTION_METADATA_KEY = "copilotzToolAction";
 const TOOL_PLAN_RESULT_METADATA_KEY = "copilotzToolPlanResult";
 const AGENT_TURN_METADATA_KEY = "copilotzAgentTurn";
+const AGENT_FAILURE_METADATA_KEY = "copilotzAgentFailure";
 export const CORE_LLM_CALL_METADATA_SCHEMA = "copilotz.core.llm-call.v1";
 export const CORE_TOOL_ACTION_METADATA_SCHEMA = "copilotz.core.tool-action.v1";
 export const CORE_TOOL_PLAN_METADATA_SCHEMA = "copilotz.core.tool-plan.v1";
@@ -79,6 +80,14 @@ export type CoreLlmCallMetadata = Readonly<{
   agentTurn?: CoreAgentTurnMetadata;
   /** Optional opaque prompt-policy revision, never resolved instructions. */
   instructionRevision?: string;
+}>;
+
+/** Safe public receipt for a terminal ordinary Agent LLM failure. */
+export type AgentFailureMetadata = Readonly<{
+  schema: "copilotz.agent-failure";
+  llmAttemptId: string;
+  source: "llm.call";
+  status: "failed" | "cancelled";
 }>;
 
 /** Opaque Core hint attached to each progressive LLM output stream. */
@@ -210,12 +219,14 @@ export function coreToolResultOrigin(
 export type WorkflowMetadata = Readonly<{
   kind:
     | "agent_output"
+    | "agent_failure"
     | "tool_result"
     | "provider_attempt"
     | "realtime_message";
   continuation?: "text" | "realtime" | "none";
   realtimeStreamId?: string;
   llmAttemptId?: string;
+  outcome?: "failed" | "cancelled";
   parentLlmAttemptId?: string;
   sourceMessageId?: string;
   agentParticipantId?: string;
@@ -247,14 +258,56 @@ export function workflowMetadata(value: unknown): WorkflowMetadata | null {
   const candidate = record(outer[WORKFLOW_METADATA_KEY]);
   const kind = candidate.kind;
   if (
-    kind !== "agent_output" && kind !== "tool_result" &&
+    kind !== "agent_output" && kind !== "agent_failure" &&
+    kind !== "tool_result" &&
     kind !== "provider_attempt" && kind !== "realtime_message"
   ) return null;
   if (
     candidate.initiatorParticipantId !== undefined &&
     !optionalMetadataText(candidate.initiatorParticipantId)
   ) return null;
+  if (
+    candidate.outcome !== undefined && candidate.outcome !== "failed" &&
+    candidate.outcome !== "cancelled"
+  ) return null;
+  if (kind === "agent_failure") {
+    if (
+      !optionalMetadataText(candidate.llmAttemptId) ||
+      (candidate.outcome !== "failed" && candidate.outcome !== "cancelled")
+    ) return null;
+  } else if (candidate.outcome !== undefined) return null;
   return candidate as WorkflowMetadata;
+}
+
+/** Attaches a validated, credential-safe terminal failure receipt. */
+export function withAgentFailureMetadata(
+  metadata: Readonly<Record<string, unknown>> | undefined,
+  failure: AgentFailureMetadata,
+): Record<string, unknown> {
+  const validated = agentFailureMetadata({
+    [AGENT_FAILURE_METADATA_KEY]: failure,
+  });
+  if (!validated) throw new TypeError("Invalid Agent failure metadata.");
+  return {
+    ...structuredClone(metadata ?? {}),
+    [AGENT_FAILURE_METADATA_KEY]: structuredClone(validated),
+  };
+}
+
+/** Reads the validated safe terminal failure receipt from a Core Message. */
+export function agentFailureMetadata(
+  value: unknown,
+): AgentFailureMetadata | null {
+  const candidate = record(record(value)[AGENT_FAILURE_METADATA_KEY]);
+  if (
+    Object.keys(candidate).some((key) =>
+      !["schema", "llmAttemptId", "source", "status"].includes(key)
+    ) || candidate.schema !== "copilotz.agent-failure" ||
+    !optionalMetadataText(candidate.llmAttemptId) ||
+    candidate.source !== "llm.call" ||
+    (candidate.status !== "failed" && candidate.status !== "cancelled")
+  ) return null;
+  return candidate as AgentFailureMetadata;
 }
 
 const AGENT_TURN_KEYS = new Set([

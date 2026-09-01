@@ -128,7 +128,7 @@ export type PreparedAsset = Readonly<{
   /** Byte-backed candidates come from ingress preparation. */
   body: Uint8Array;
   /** Ready Body-backed candidates come from protected workflow settlement. */
-  readyBody?: import("./body-store.ts").BodyHead;
+  readyBody?: import("./body-store.ts").ReadyBodyHead;
   location?: AssetBodyLocation;
   byteLength: number;
   digest: `sha256:${string}`;

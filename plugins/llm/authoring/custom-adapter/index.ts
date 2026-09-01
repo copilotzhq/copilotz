@@ -11,6 +11,7 @@ import {
   type LlmAdapterRequest,
   type LlmAdapterResult,
   type LlmInvocation,
+  type LlmRejectedAttemptEvidence,
   normalizeLlmAdapter,
 } from "../../internal/contracts.ts";
 
@@ -25,6 +26,7 @@ export type {
   LlmAdapterRequest,
   LlmAdapterResult,
   LlmInvocation,
+  LlmRejectedAttemptEvidence,
 };
 
 /** Validates and freezes an application-defined executable Adapter. */

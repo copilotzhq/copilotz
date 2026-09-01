@@ -1,4 +1,4 @@
-import { assertEquals } from "@std/assert";
+import { assertEquals, assertRejects } from "@std/assert";
 import { createEphemeralEvent } from "@copilotz/copilotz/events";
 import type {
   ApplicationOutput,
@@ -20,6 +20,18 @@ async function allBytes(stream: ReadableStream<Uint8Array>): Promise<number[]> {
   return result;
 }
 
+function completedTerminal(
+  offset: number,
+): Promise<StreamOutput["terminal"] extends Promise<infer T> ? T : never> {
+  return Promise.resolve(Object.freeze({
+    outcome: "completed" as const,
+    availability: "retained" as const,
+    capture: "complete" as const,
+    offset,
+    terminalAt: "2026-09-01T12:00:00.000Z",
+  }));
+}
+
 Deno.test("multipart round-trips exact descriptors and independent raw streams", async () => {
   const event = Object.freeze({
     ...createEphemeralEvent({
@@ -30,11 +42,16 @@ Deno.test("multipart round-trips exact descriptors and independent raw streams",
     }),
     data: Object.freeze({ value: 1 }),
   });
-  const media = (streamId: string, chunks: readonly number[][]): StreamOutput =>
+  const media = (
+    streamId: string,
+    streamOrdinal: string,
+    chunks: readonly number[][],
+  ): StreamOutput =>
     Object.freeze({
       type: "stream.output",
       namespace: "tenant-a",
       streamId,
+      streamOrdinal,
       mediaType: "application/octet-stream",
       kind: "file",
       role: "assistant.file",
@@ -48,14 +65,16 @@ Deno.test("multipart round-trips exact descriptors and independent raw streams",
           controller.close();
         },
       }),
+      terminal: completedTerminal(chunks.flat().length),
     });
   const source: EventNativeOutputStream = Object.freeze({
     type: EVENT_NATIVE_OUTPUT_STREAM,
+    operationId: "operation-roundtrip",
     outputs: new ReadableStream<ApplicationOutput>({
       start(controller) {
         controller.enqueue(event);
-        controller.enqueue(media("a", [[1, 2], [3]]));
-        controller.enqueue(media("b", [[9], [8, 7]]));
+        controller.enqueue(media("a", "1", [[1, 2], [3]]));
+        controller.enqueue(media("b", "2", [[9], [8, 7]]));
         controller.close();
       },
     }),
@@ -77,12 +96,13 @@ Deno.test("multipart round-trips exact descriptors and independent raw streams",
   assertEquals(await allBytes((outputs[2] as StreamOutput).payload), [9, 8, 7]);
 });
 
-Deno.test("multipart cursor never leaks a failed concurrent stream offset", async () => {
-  const media = (streamId: string): StreamOutput =>
+Deno.test("multipart cursor tracks an operation lane independently of its stream identifier", async () => {
+  const media = (streamId: string, streamOrdinal: string): StreamOutput =>
     Object.freeze({
       type: "stream.output",
       namespace: "tenant-a",
       streamId,
+      streamOrdinal,
       mediaType: "application/octet-stream",
       kind: "file",
       role: "assistant.file",
@@ -93,13 +113,15 @@ Deno.test("multipart cursor never leaks a failed concurrent stream offset", asyn
           controller.close();
         },
       }),
+      terminal: completedTerminal(1),
     });
   const source: EventNativeOutputStream = Object.freeze({
     type: EVENT_NATIVE_OUTPUT_STREAM,
+    operationId: "operation-cursor-atomicity",
     outputs: new ReadableStream<ApplicationOutput>({
       start(controller) {
-        controller.enqueue(media("a".repeat(513)));
-        controller.enqueue(media("lane-b"));
+        controller.enqueue(media("a".repeat(513), "1"));
+        controller.enqueue(media("lane-b", "2"));
         controller.close();
       },
     }),
@@ -114,10 +136,79 @@ Deno.test("multipart cursor never leaks a failed concurrent stream offset", asyn
     /x-copilotz-stream-id: lane-b\r\nx-copilotz-offset: 0\r\nx-copilotz-cursor: ([^\r]+)\r\n/,
   );
   assertEquals(match !== null, true);
+  assertEquals(decodeOperationReplayCursor(match![1]), {
+    operationStreamPositions: {
+      "operation-cursor-atomicity": { highWatermark: 1, offsets: { "2": 1 } },
+    },
+  });
+});
+
+Deno.test("multipart keeps retained stream failure in-band and round-trips terminal status", async () => {
+  const failed: StreamOutput = Object.freeze({
+    type: "stream.output",
+    namespace: "tenant-a",
+    streamId: "failed-prefix",
+    streamOrdinal: "1",
+    mediaType: "text/plain",
+    kind: "text",
+    role: "assistant",
+    metadata: Object.freeze({}),
+    payload: new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("partial"));
+        controller.close();
+      },
+    }),
+    terminal: Promise.resolve(Object.freeze({
+      outcome: "cancelled",
+      availability: "retained",
+      capture: "truncated",
+      offset: 7,
+      terminalAt: "2026-09-01T12:00:00.000Z",
+    })),
+  });
+  const source: EventNativeOutputStream = Object.freeze({
+    type: EVENT_NATIVE_OUTPUT_STREAM,
+    operationId: "operation-failed-prefix",
+    outputs: new ReadableStream<ApplicationOutput>({
+      start(controller) {
+        controller.enqueue(failed);
+        controller.close();
+      },
+    }),
+    done: Promise.resolve(),
+    cancel: () => Promise.resolve(),
+  });
+  const decoded: ApplicationOutput[] = [];
+  for await (
+    const output of decodeCopilotzOutputs(
+      applicationOutputsMultipartResponse(source, {
+        boundary: "copilotz-retained-failure",
+      }),
+    )
+  ) decoded.push(output);
+
+  const stream = decoded[0] as StreamOutput;
+  const reader = stream.payload.getReader();
+  const prefix = await reader.read();
+  assertEquals(prefix.done, false);
   assertEquals(
-    decodeOperationReplayCursor(match![1]).streamOffsets,
-    { "s:lane-b": 1 },
+    new TextDecoder().decode(prefix.value),
+    "partial",
   );
+  await assertRejects(
+    () => reader.read(),
+    Error,
+    "terminated before completion",
+  );
+  reader.releaseLock();
+  assertEquals(await stream.terminal, {
+    outcome: "cancelled",
+    availability: "retained",
+    capture: "truncated",
+    offset: 7,
+    terminalAt: "2026-09-01T12:00:00.000Z",
+  });
 });
 
 Deno.test("multipart reports concurrent replay capacity in-band and detaches", async () => {
@@ -133,12 +224,12 @@ Deno.test("multipart reports concurrent replay capacity in-band and detaches", a
             type: "stream.output",
             namespace: "tenant-a",
             streamId: `lane-${ordinal}`,
-            replayKey: String(ordinal),
             streamOrdinal: String(ordinal),
             mediaType: "text/plain",
             kind: "text",
             role: "assistant",
             metadata: Object.freeze({}),
+            terminal: completedTerminal(0),
             payload: new ReadableStream<Uint8Array>({
               start(payloadController) {
                 payloads.push(payloadController);
@@ -150,7 +241,7 @@ Deno.test("multipart reports concurrent replay capacity in-band and detaches", a
       },
     }),
     done: new Promise<void>(() => undefined),
-    async cancel() {
+    cancel() {
       detached = true;
       for (const controller of payloads) {
         try {
@@ -159,6 +250,7 @@ Deno.test("multipart reports concurrent replay capacity in-band and detaches", a
           // The transport may already have released this lane.
         }
       }
+      return Promise.resolve();
     },
   });
   const raw = new TextDecoder().decode(
@@ -174,4 +266,48 @@ Deno.test("multipart reports concurrent replay capacity in-band and detaches", a
   );
   assertEquals(detached, true);
   assertEquals(raw.endsWith("--copilotz-capacity--\r\n"), true);
+});
+
+Deno.test("multipart truncation settles every published terminal promise", async () => {
+  const boundary = "copilotz-truncated";
+  const descriptor = JSON.stringify({
+    type: "stream.output",
+    namespace: "tenant-a",
+    streamId: "truncated-stream",
+    streamOrdinal: "1",
+    mediaType: "text/plain",
+    kind: "text",
+    role: "assistant",
+    metadata: {},
+  });
+  const raw = [
+    `--${boundary}`,
+    "content-type: application/json; charset=utf-8",
+    `content-length: ${new TextEncoder().encode(descriptor).byteLength}`,
+    "x-copilotz-frame: output",
+    "",
+    descriptor,
+    `--${boundary}--`,
+    "",
+  ].join("\r\n");
+  const response = new Response(new TextEncoder().encode(raw), {
+    headers: { "content-type": `multipart/mixed; boundary=${boundary}` },
+  });
+  const outputs: ApplicationOutput[] = [];
+  for await (const output of decodeCopilotzOutputs(response)) {
+    outputs.push(output);
+  }
+  const stream = outputs[0] as StreamOutput;
+  assertEquals(await stream.terminal, {
+    outcome: "abandoned",
+    availability: "missing",
+    capture: "truncated",
+    offset: 0,
+    terminalAt: (await stream.terminal)?.terminalAt,
+  });
+  await assertRejects(
+    () => new Response(stream.payload).arrayBuffer(),
+    Error,
+    "truncated",
+  );
 });

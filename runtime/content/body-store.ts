@@ -8,13 +8,18 @@ export type BodyStoreKind =
   | "object"
   | "database";
 
-export type BodyState = "open" | "sealing" | "ready" | "aborted";
+export type BodyState =
+  | "open"
+  | "sealing"
+  | "terminating"
+  | "ready"
+  | "incomplete"
+  | "aborted";
 
 export type BodyProtection = Readonly<{ remainingMs: number }>;
 
-export type BodyHead = Readonly<{
+type TerminalBodyHeadBase = Readonly<{
   bodyId: string;
-  state: "ready";
   byteLength: number;
   mediaType: string;
   digest: `sha256:${string}`;
@@ -23,6 +28,19 @@ export type BodyHead = Readonly<{
   etag?: string;
   lastModified?: string;
 }>;
+
+/** Immutable, canonical Body. Only this state may be adopted as an Asset. */
+export type ReadyBodyHead = TerminalBodyHeadBase & Readonly<{ state: "ready" }>;
+
+/**
+ * Immutable committed prefix of a writer that did not complete successfully.
+ * It remains readable for replay, but can never be adopted as an Asset.
+ */
+export type IncompleteBodyHead =
+  & TerminalBodyHeadBase
+  & Readonly<{ state: "incomplete" }>;
+
+export type TerminalBodyHead = ReadyBodyHead | IncompleteBodyHead;
 
 export const DEFAULT_BODY_PROTECTION_MS = 60_000;
 
@@ -35,7 +53,7 @@ export type PutBodyInput = Readonly<{
   protectedUntil?: string;
 }>;
 
-/** Mutable header for an open progressive body. */
+/** Mutable header for a progressive body before immutable settlement. */
 type MutableBodyHeadBase = Readonly<{
   bodyId: string;
   mediaType: string;
@@ -48,7 +66,7 @@ type MutableBodyHeadBase = Readonly<{
 export type ActiveMutableBodyHead =
   & MutableBodyHeadBase
   & Readonly<{
-    state: "open" | "sealing";
+    state: "open" | "sealing" | "terminating";
     writerGeneration: number;
     writerLeaseRemainingMs: number;
   }>;
@@ -103,7 +121,17 @@ export type AbortBodyInput = Readonly<{
   writer: WriterCapability;
 }>;
 
+export type RenewBodyInput = Readonly<{
+  writer: WriterCapability;
+}>;
+
 export type SealBodyInput = Readonly<{
+  writer: WriterCapability;
+  expectedByteLength?: number;
+  expectedDigest?: `sha256:${string}`;
+}>;
+
+export type TerminateBodyInput = Readonly<{
   writer: WriterCapability;
   expectedByteLength?: number;
   expectedDigest?: `sha256:${string}`;
@@ -130,7 +158,10 @@ export type BodyStoreMaintenance = Readonly<{
     input: BodyMaintenanceListInput,
   ): Promise<
     Readonly<
-      { bodies: readonly (BodyHead | MutableBodyHead)[]; after?: string }
+      {
+        bodies: readonly (TerminalBodyHead | MutableBodyHead)[];
+        after?: string;
+      }
     >
   >;
   delete(input: BodyMaintenanceDeleteInput): Promise<boolean>;
@@ -166,17 +197,24 @@ export type BodyStoreAdapter = Readonly<{
 export type BodyStore = Readonly<{
   kind: BodyStoreKind;
   backendId: string;
-  put(input: PutBodyInput): Promise<BodyHead>;
-  head(input: { bodyId: string }): Promise<BodyHead | MutableBodyHead | null>;
+  put(input: PutBodyInput): Promise<ReadyBodyHead>;
+  head(
+    input: { bodyId: string },
+  ): Promise<TerminalBodyHead | MutableBodyHead | null>;
   read(input: { bodyId: string }): Promise<ReadableStream<Uint8Array>>;
   /** Reads one finite committed byte range without waiting for future appends. */
-  readRange?(input: ReadBodyRangeInput): Promise<Uint8Array>;
+  readRange(input: ReadBodyRangeInput): Promise<Uint8Array>;
   follow(
     input: { bodyId: string; offset?: number },
   ): Promise<ReadableStream<Uint8Array>>;
   reserve(input: ReserveBodyInput): Promise<WriterCapability>;
+  /** Renews only the currently fenced progressive writer lease. */
+  renew(input: RenewBodyInput): Promise<BodyProtection>;
   append(input: AppendBodyInput): Promise<AppendResult>;
-  seal(input: SealBodyInput): Promise<BodyHead>;
+  seal(input: SealBodyInput): Promise<ReadyBodyHead>;
+  /** Freezes the committed prefix without making it Asset-adoptable. */
+  terminate(input: TerminateBodyInput): Promise<IncompleteBodyHead>;
+  /** Destructively removes unpublished progressive staging. */
   abort(input: AbortBodyInput): Promise<void>;
   maintenance: BodyStoreMaintenance;
 }>;
@@ -184,15 +222,20 @@ export type BodyStore = Readonly<{
 type ProgressiveBodyOps = Readonly<{
   reserve(input: ReserveBodyInput): Promise<WriterCapability>;
   head(bodyId: string): Promise<MutableBodyHead | null>;
+  renew(input: RenewBodyInput): Promise<BodyProtection>;
   append(input: AppendBodyInput): Promise<AppendResult>;
   readRange(input: ReadBodyRangeInput): Promise<Uint8Array>;
+  terminate(input: TerminateBodyInput): Promise<IncompleteBodyHead>;
   abort(input: AbortBodyInput): Promise<void>;
 }>;
 
 export function writerCapabilityFromHead(
   head: MutableBodyHead,
 ): WriterCapability {
-  if (head.state !== "open" && head.state !== "sealing") {
+  if (
+    head.state !== "open" && head.state !== "sealing" &&
+    head.state !== "terminating"
+  ) {
     throw createContentError(
       "asset_conflict",
       "Only an active progressive body can produce a writer capability.",
@@ -234,21 +277,13 @@ export async function readBodyBytes(
 }
 
 /**
- * Reads a finite Body interval while preserving compatibility with custom
- * stores authored before the native range capability existed.
+ * Reads one finite committed Body interval.
  */
 export async function readBodyRange(
   store: BodyStore,
   input: ReadBodyRangeInput,
 ): Promise<Uint8Array> {
-  if (store.readRange) return await store.readRange(input);
-  const start = Math.max(0, input.offset);
-  const length = Math.max(0, input.end - start);
-  if (length === 0) return new Uint8Array();
-  return await readStreamRange(
-    await store.follow({ bodyId: input.bodyId, offset: start }),
-    length,
-  );
+  return await store.readRange(input);
 }
 
 export type BodyStorageConfig =
@@ -328,7 +363,7 @@ export type BodyFilesystemAccess = Readonly<{
   /** Linearizable create-or-renew for immutable Ready bytes and metadata. */
   acquireReady(
     input: PutBodyInput & Readonly<{ protectedUntil: string }>,
-  ): Promise<BodyHead>;
+  ): Promise<ReadyBodyHead>;
   /** Atomically enforces every Ready maintenance compare-and-delete guard. */
   deleteReady(input: BodyMaintenanceDeleteInput): Promise<boolean>;
   writeExclusive(input: PutBodyInput): Promise<"created" | "exists">;
@@ -338,7 +373,7 @@ export type BodyFilesystemAccess = Readonly<{
   append(
     input: Readonly<{ bodyId: string; bytes: Uint8Array }>,
   ): Promise<number>;
-  stat(path: string): Promise<BodyHead | null>;
+  stat(path: string): Promise<ReadyBodyHead | null>;
   /** Opens bytes only when the authoritative Ready manifest is visible. */
   openReady(path: string): Promise<ReadableStream<Uint8Array>>;
   /** Opens Ready bytes at an offset after resolving the authoritative manifest. */
@@ -350,7 +385,7 @@ export type BodyFilesystemAccess = Readonly<{
   open(path: string): Promise<ReadableStream<Uint8Array>>;
   openFrom(path: string, offset: number): Promise<ReadableStream<Uint8Array>>;
   delete(path: string): Promise<void>;
-  list(prefix: string): AsyncIterable<BodyHead>;
+  list(prefix: string): AsyncIterable<ReadyBodyHead>;
   /** Enumerates only progressive metadata; it exposes no arbitrary host paths. */
   listProgressive?(): AsyncIterable<
     Readonly<{ bodyId: string; lastModified?: string }>
@@ -508,7 +543,7 @@ export function assetBodyKey(
 
 function validateHead(
   expected: PutBodyInput,
-  actual: BodyHead,
+  actual: ReadyBodyHead,
 ): void {
   if (
     actual.bodyId !== expected.bodyId ||
@@ -554,7 +589,7 @@ export function createMemoryBodyStore(
   const protectionMs = bodyProtectionMs(options.protectionMs);
   const entries = new Map<
     string,
-    { head: BodyHead; bytes: Uint8Array; updatedAt: number }
+    { head: TerminalBodyHead; bytes: Uint8Array; updatedAt: number }
   >();
   const mutable = new Map<
     string,
@@ -579,6 +614,12 @@ export function createMemoryBodyStore(
     kind: "memory",
     backendId,
     put(input) {
+      if (mutable.has(input.bodyId)) {
+        throw createContentError(
+          "asset_conflict",
+          "A progressive body already exists for this id.",
+        );
+      }
       const now = Date.now();
       const requestedProtection = resolveBodyProtectionUntil(
         input.protectedUntil,
@@ -587,6 +628,12 @@ export function createMemoryBodyStore(
       );
       const existing = entries.get(input.bodyId);
       if (existing) {
+        if (existing.head.state !== "ready") {
+          throw createContentError(
+            "asset_conflict",
+            "An incomplete body already exists for this id.",
+          );
+        }
         validateHead(input, existing.head);
         const head = Object.freeze({
           ...existing.head,
@@ -746,7 +793,7 @@ export function createMemoryBodyStore(
       if (entries.has(input.bodyId)) {
         throw createContentError(
           "asset_conflict",
-          "A ready body already exists for this id.",
+          "An immutable body already exists for this id.",
         );
       }
       const head = Object.freeze({
@@ -769,12 +816,45 @@ export function createMemoryBodyStore(
       });
       return Promise.resolve(writerCapabilityFromHead(head));
     },
+    renew(input) {
+      const entry = mutable.get(input.writer.bodyId);
+      if (
+        !entry || entry.head.reservationId !== input.writer.reservationId ||
+        entry.head.state !== "open"
+      ) {
+        throw createContentError(
+          "asset_conflict",
+          "Progressive writer no longer owns this body.",
+        );
+      }
+      const leaseExpiresAt = newLeaseExpiresAt();
+      const head = Object.freeze({
+        ...entry.head,
+        maintenanceVersion: entry.head.maintenanceVersion + 1,
+        writerLeaseRemainingMs: protectionMs,
+      });
+      mutable.set(input.writer.bodyId, {
+        ...entry,
+        head,
+        leaseExpiresAt,
+        updatedAt: Date.now(),
+      });
+      return Promise.resolve(Object.freeze({
+        remainingMs: Math.max(0, leaseExpiresAt - Date.now()),
+      }));
+    },
     append(input) {
       const entry = mutable.get(input.writer.bodyId);
       if (!entry || entry.head.reservationId !== input.writer.reservationId) {
         throw createContentError(
           "asset_conflict",
           "Progressive writer no longer owns this body.",
+        );
+      }
+      if (entry.head.state !== "open") {
+        throw createContentError(
+          "asset_conflict",
+          "Progressive body is not open.",
         );
       }
       if (entry.head.mediaType !== input.writer.mediaType) {
@@ -833,11 +913,27 @@ export function createMemoryBodyStore(
       }));
     },
     async seal(input) {
-      const entry = mutable.get(input.writer.bodyId);
+      let entry = mutable.get(input.writer.bodyId);
       if (!entry || entry.head.reservationId !== input.writer.reservationId) {
+        const terminal = entries.get(input.writer.bodyId)?.head;
+        if (
+          terminal?.state === "ready" &&
+          (input.expectedByteLength === undefined ||
+            input.expectedByteLength === terminal.byteLength) &&
+          (input.expectedDigest === undefined ||
+            input.expectedDigest === terminal.digest)
+        ) {
+          return terminal;
+        }
         throw createContentError(
           "asset_conflict",
           "Progressive writer no longer owns this body.",
+        );
+      }
+      if (entry.head.state !== "open" && entry.head.state !== "sealing") {
+        throw createContentError(
+          "asset_conflict",
+          "Progressive body cannot be sealed from its current state.",
         );
       }
       if (
@@ -849,6 +945,18 @@ export function createMemoryBodyStore(
           "Progressive body length does not match seal expectation.",
         );
       }
+      if (entry.head.state === "open") {
+        const head: ActiveMutableBodyHead = Object.freeze({
+          ...entry.head,
+          state: "sealing",
+          maintenanceVersion: entry.head.maintenanceVersion + 1,
+        });
+        entry = { ...entry, head, updatedAt: Date.now() };
+        // Freeze the committed prefix before the digest yields. Append and
+        // terminate synchronously observe `sealing` from this point onward.
+        mutable.set(input.writer.bodyId, entry);
+      }
+      const settlingVersion = entry.head.maintenanceVersion;
       const bytes = sliceChunks(entry.chunks, 0, entry.head.byteLength);
       const digest = await digestContent(bytes);
       if (input.expectedDigest && input.expectedDigest !== digest) {
@@ -857,13 +965,32 @@ export function createMemoryBodyStore(
           "Progressive body digest does not match seal expectation.",
         );
       }
+      const current = mutable.get(input.writer.bodyId);
+      if (
+        !current || current.head.state !== "sealing" ||
+        current.head.reservationId !== input.writer.reservationId ||
+        current.head.maintenanceVersion !== settlingVersion
+      ) {
+        const terminal = entries.get(input.writer.bodyId)?.head;
+        if (
+          terminal?.state === "ready" &&
+          terminal.byteLength === bytes.byteLength &&
+          terminal.digest === digest
+        ) {
+          return terminal;
+        }
+        throw createContentError(
+          "asset_conflict",
+          "Progressive writer was fenced while sealing this body.",
+        );
+      }
       const head = Object.freeze({
         bodyId: input.writer.bodyId,
         state: "ready" as const,
         byteLength: bytes.byteLength,
-        mediaType: entry.head.mediaType,
+        mediaType: current.head.mediaType,
         digest,
-        maintenanceVersion: entry.head.maintenanceVersion + 1,
+        maintenanceVersion: current.head.maintenanceVersion + 1,
         protectedUntil: bodyProtectionUntil(protectionMs),
         etag: digest.slice("sha256:".length),
         lastModified: new Date().toISOString(),
@@ -876,6 +1003,99 @@ export function createMemoryBodyStore(
       mutable.delete(input.writer.bodyId);
       return head;
     },
+    async terminate(input) {
+      let entry = mutable.get(input.writer.bodyId);
+      if (!entry || entry.head.reservationId !== input.writer.reservationId) {
+        const terminal = entries.get(input.writer.bodyId)?.head;
+        if (terminal?.state === "incomplete") {
+          if (
+            (input.expectedByteLength !== undefined &&
+              input.expectedByteLength !== terminal.byteLength) ||
+            (input.expectedDigest !== undefined &&
+              input.expectedDigest !== terminal.digest)
+          ) {
+            throw createContentError(
+              "asset_conflict",
+              "Incomplete body conflicts with terminate expectations.",
+            );
+          }
+          return terminal;
+        }
+        throw createContentError(
+          "asset_conflict",
+          "Progressive writer no longer owns this body.",
+        );
+      }
+      if (
+        entry.head.state !== "open" && entry.head.state !== "terminating"
+      ) {
+        throw createContentError(
+          "asset_conflict",
+          "Progressive body cannot be terminated from its current state.",
+        );
+      }
+      if (
+        input.expectedByteLength !== undefined &&
+        input.expectedByteLength !== entry.head.byteLength
+      ) {
+        throw createContentError(
+          "asset_conflict",
+          "Progressive body length does not match terminate expectation.",
+        );
+      }
+      if (entry.head.state === "open") {
+        const head: ActiveMutableBodyHead = Object.freeze({
+          ...entry.head,
+          state: "terminating",
+          maintenanceVersion: entry.head.maintenanceVersion + 1,
+        });
+        entry = { ...entry, head, updatedAt: Date.now() };
+        // The terminal prefix becomes immutable before digesting it.
+        mutable.set(input.writer.bodyId, entry);
+      }
+      const settlingVersion = entry.head.maintenanceVersion;
+      const bytes = sliceChunks(entry.chunks, 0, entry.head.byteLength);
+      const digest = await digestContent(bytes);
+      if (input.expectedDigest && input.expectedDigest !== digest) {
+        throw createContentError(
+          "asset_conflict",
+          "Progressive body digest does not match terminate expectation.",
+        );
+      }
+      const current = mutable.get(input.writer.bodyId);
+      if (
+        !current || current.head.state !== "terminating" ||
+        current.head.reservationId !== input.writer.reservationId ||
+        current.head.maintenanceVersion !== settlingVersion
+      ) {
+        const terminal = entries.get(input.writer.bodyId)?.head;
+        if (
+          terminal?.state === "incomplete" &&
+          terminal.byteLength === bytes.byteLength && terminal.digest === digest
+        ) {
+          return terminal;
+        }
+        throw createContentError(
+          "asset_conflict",
+          "Progressive writer was fenced while terminating this body.",
+        );
+      }
+      const now = Date.now();
+      const head: IncompleteBodyHead = Object.freeze({
+        bodyId: input.writer.bodyId,
+        state: "incomplete",
+        byteLength: bytes.byteLength,
+        mediaType: current.head.mediaType,
+        digest,
+        maintenanceVersion: current.head.maintenanceVersion + 1,
+        protectedUntil: bodyProtectionUntil(protectionMs, now),
+        etag: digest.slice("sha256:".length),
+        lastModified: new Date(now).toISOString(),
+      });
+      entries.set(input.writer.bodyId, { head, bytes, updatedAt: now });
+      mutable.delete(input.writer.bodyId);
+      return head;
+    },
     abort(input) {
       const entry = mutable.get(input.writer.bodyId);
       if (entry && entry.head.reservationId !== input.writer.reservationId) {
@@ -884,13 +1104,19 @@ export function createMemoryBodyStore(
           "Progressive writer no longer owns this body.",
         );
       }
+      if (entry && entry.head.state !== "open") {
+        throw createContentError(
+          "asset_conflict",
+          "Only open unpublished staging can be aborted.",
+        );
+      }
       mutable.delete(input.writer.bodyId);
       return Promise.resolve();
     },
     maintenance: {
       list(input) {
         const states = new Set<BodyState>(input.states);
-        const bodies: (BodyHead | MutableBodyHead)[] = [];
+        const bodies: (TerminalBodyHead | MutableBodyHead)[] = [];
         for (const entry of entries.values()) {
           if (
             entry.head.bodyId.startsWith(input.prefix ?? "") &&
@@ -1005,10 +1231,22 @@ async function readStreamRange(
   return output;
 }
 
+type FilesystemSpillHead =
+  | (ActiveMutableBodyHead & Readonly<{ leaseExpiresAt?: string }>)
+  | IncompleteBodyHead;
+
+type FilesystemProgressiveOps =
+  & ProgressiveBodyOps
+  & Readonly<{
+    headAny(bodyId: string): Promise<FilesystemSpillHead | null>;
+    beginSeal(input: SealBodyInput): Promise<ActiveMutableBodyHead>;
+    cleanupAfterSeal(input: AbortBodyInput): Promise<void>;
+  }>;
+
 function parseSpillHead(
   bodyId: string,
   bytes: Uint8Array,
-): (ActiveMutableBodyHead & Readonly<{ leaseExpiresAt?: string }>) | null {
+): FilesystemSpillHead | null {
   try {
     const parsed = JSON.parse(new TextDecoder().decode(bytes)) as Record<
       string,
@@ -1017,16 +1255,45 @@ function parseSpillHead(
     if (
       typeof parsed.mediaType !== "string" ||
       typeof parsed.byteLength !== "number" ||
-      typeof parsed.discarded !== "number"
+      typeof parsed.discarded !== "number" ||
+      (parsed.state !== "open" && parsed.state !== "sealing" &&
+        parsed.state !== "terminating" && parsed.state !== "incomplete")
     ) {
       return null;
     }
+    const state = parsed.state === "incomplete"
+      ? "incomplete"
+      : parsed.state === "sealing"
+      ? "sealing"
+      : parsed.state === "terminating"
+      ? "terminating"
+      : "open";
     const leaseExpiresAt = typeof parsed.leaseExpiresAt === "string"
       ? parsed.leaseExpiresAt
       : undefined;
+    if (state === "incomplete") {
+      if (typeof parsed.digest !== "string") return null;
+      return Object.freeze({
+        bodyId,
+        state,
+        mediaType: parsed.mediaType,
+        byteLength: parsed.byteLength,
+        digest: parsed.digest as `sha256:${string}`,
+        maintenanceVersion: typeof parsed.maintenanceVersion === "number"
+          ? parsed.maintenanceVersion
+          : 1,
+        ...(typeof parsed.protectedUntil === "string"
+          ? { protectedUntil: parsed.protectedUntil }
+          : {}),
+        etag: parsed.digest.slice("sha256:".length),
+        ...(typeof parsed.lastModified === "string"
+          ? { lastModified: parsed.lastModified }
+          : {}),
+      });
+    }
     return Object.freeze({
       bodyId,
-      state: "open",
+      state,
       mediaType: parsed.mediaType,
       byteLength: parsed.byteLength,
       discarded: parsed.discarded,
@@ -1048,16 +1315,26 @@ function parseSpillHead(
 }
 
 function encodeSpillHead(
-  head: MutableBodyHead & Readonly<{ leaseExpiresAt?: string }>,
+  head: FilesystemSpillHead,
 ): Uint8Array {
   return new TextEncoder().encode(JSON.stringify({
+    state: head.state,
     mediaType: head.mediaType,
     byteLength: head.byteLength,
-    discarded: head.discarded,
+    discarded: head.state === "incomplete" ? 0 : head.discarded,
     maintenanceVersion: head.maintenanceVersion,
-    writerGeneration: head.writerGeneration,
-    reservationId: head.reservationId,
-    leaseExpiresAt: head.leaseExpiresAt,
+    writerGeneration: head.state === "incomplete"
+      ? undefined
+      : head.writerGeneration,
+    reservationId: head.state === "incomplete" ? undefined : head.reservationId,
+    leaseExpiresAt: head.state === "incomplete"
+      ? undefined
+      : head.leaseExpiresAt,
+    digest: head.state === "incomplete" ? head.digest : undefined,
+    protectedUntil: head.state === "incomplete"
+      ? head.protectedUntil
+      : undefined,
+    lastModified: head.state === "incomplete" ? head.lastModified : undefined,
   }));
 }
 
@@ -1069,17 +1346,26 @@ function isNotFound(error: unknown): boolean {
 function createFilesystemProgressive(
   access: BodyFilesystemAccess,
   protectionMs: number,
-): ProgressiveBodyOps {
+): FilesystemProgressiveOps {
   type SpillHead =
     & ActiveMutableBodyHead
     & Readonly<{ leaseExpiresAt?: string }>;
-  const readHead = async (bodyId: string): Promise<SpillHead | null> => {
+  const readHeadAny = async (
+    bodyId: string,
+  ): Promise<FilesystemSpillHead | null> => {
     try {
       return parseSpillHead(bodyId, await access.read(stagingMetaKey(bodyId)));
     } catch (error) {
       if (isNotFound(error)) return null;
       throw error;
     }
+  };
+  const readHead = async (bodyId: string): Promise<SpillHead | null> => {
+    const head = await readHeadAny(bodyId);
+    return head?.state === "open" || head?.state === "sealing" ||
+        head?.state === "terminating"
+      ? head
+      : null;
   };
   const writeHead = (head: SpillHead) =>
     access.writeReplace({
@@ -1109,9 +1395,27 @@ function createFilesystemProgressive(
     }
     return head;
   };
-  const progressive: ProgressiveBodyOps = {
+  const cleanup = async (bodyId: string): Promise<void> => {
+    if (access.cleanupProgressive) {
+      await access.cleanupProgressive(bodyId);
+      return;
+    }
+    // Metadata is the visibility authority. Keeping it until the data delete
+    // succeeds makes an interrupted cleanup discoverable and retry-safe.
+    await access.delete(stagingDataKey(bodyId));
+    await access.delete(stagingMetaKey(bodyId));
+  };
+  const progressive: FilesystemProgressiveOps = {
+    headAny: readHeadAny,
     async reserve(input) {
-      const existing = await readHead(input.bodyId);
+      const immutable = await readHeadAny(input.bodyId);
+      if (immutable?.state === "incomplete") {
+        throw createContentError(
+          "asset_conflict",
+          "An incomplete body already exists for this id.",
+        );
+      }
+      const existing = immutable;
       if (existing) {
         if (existing.mediaType !== input.mediaType) {
           throw createContentError(
@@ -1190,6 +1494,71 @@ function createFilesystemProgressive(
       );
     },
     head: readHead,
+    async beginSeal(input) {
+      const existing = await requireOwner(
+        input.writer.bodyId,
+        input.writer.reservationId,
+      );
+      if (existing.state !== "open" && existing.state !== "sealing") {
+        throw createContentError(
+          "asset_conflict",
+          "Progressive body cannot be sealed from its current state.",
+        );
+      }
+      if (
+        input.expectedByteLength !== undefined &&
+        input.expectedByteLength !== existing.byteLength
+      ) {
+        throw createContentError(
+          "asset_conflict",
+          "Progressive body length does not match seal expectation.",
+        );
+      }
+      if (existing.state === "sealing") return existing;
+      const sealing: SpillHead = Object.freeze({
+        ...existing,
+        state: "sealing" as const,
+        maintenanceVersion: existing.maintenanceVersion + 1,
+      });
+      await writeHead(sealing);
+      return sealing;
+    },
+    async cleanupAfterSeal(input) {
+      const existing = await readHead(input.writer.bodyId);
+      if (!existing) return;
+      if (
+        existing.reservationId !== input.writer.reservationId ||
+        existing.state !== "sealing"
+      ) {
+        throw createContentError(
+          "asset_conflict",
+          "Progressive writer no longer owns sealed staging.",
+        );
+      }
+      await cleanup(input.writer.bodyId);
+    },
+    async renew(input) {
+      const existing = await requireOwner(
+        input.writer.bodyId,
+        input.writer.reservationId,
+      );
+      if (existing.state !== "open") {
+        throw createContentError(
+          "asset_conflict",
+          "Progressive body is not open.",
+        );
+      }
+      const head = Object.freeze({
+        ...existing,
+        maintenanceVersion: existing.maintenanceVersion + 1,
+        writerLeaseRemainingMs: protectionMs,
+        leaseExpiresAt: bodyProtectionUntil(protectionMs),
+      });
+      await writeHead(head);
+      return Object.freeze({
+        remainingMs: bodyProtectionRemainingMs(head.leaseExpiresAt),
+      });
+    },
     async append(input) {
       const existing = await requireOwner(
         input.writer.bodyId,
@@ -1199,6 +1568,12 @@ function createFilesystemProgressive(
         throw createContentError(
           "asset_conflict",
           "Progressive staging media type does not match the writer.",
+        );
+      }
+      if (existing.state !== "open") {
+        throw createContentError(
+          "asset_conflict",
+          "Progressive body is not open.",
         );
       }
       if (input.bytes.byteLength === 0) {
@@ -1266,29 +1641,138 @@ function createFilesystemProgressive(
       });
     },
     async readRange(input) {
-      const head = await requireHead(input.bodyId);
-      const start = Math.max(input.offset, head.discarded);
+      const head = await readHeadAny(input.bodyId);
+      if (!head) {
+        throw createContentError(
+          "asset_not_found",
+          "Progressive staging was not found.",
+        );
+      }
+      const discarded = head.state === "incomplete" ? 0 : head.discarded;
+      const start = Math.max(input.offset, discarded);
       const end = Math.min(input.end, head.byteLength);
       if (end <= start) return new Uint8Array();
       const stream = await access.openFrom(
         stagingDataKey(input.bodyId),
-        start - head.discarded,
+        start - discarded,
       );
       return await readStreamRange(stream, end - start);
     },
-    async abort(input) {
-      await requireOwner(input.writer.bodyId, input.writer.reservationId);
-      if (access.cleanupProgressive) {
-        await access.cleanupProgressive(input.writer.bodyId);
-        return;
+    async terminate(input) {
+      const terminal = await readHeadAny(input.writer.bodyId);
+      if (terminal?.state === "incomplete") {
+        if (
+          (input.expectedByteLength !== undefined &&
+            input.expectedByteLength !== terminal.byteLength) ||
+          (input.expectedDigest !== undefined &&
+            input.expectedDigest !== terminal.digest)
+        ) {
+          throw createContentError(
+            "asset_conflict",
+            "Incomplete body conflicts with terminate expectations.",
+          );
+        }
+        return terminal;
       }
-      // Metadata is the visibility authority. Keeping it until the data delete
-      // succeeds makes an interrupted cleanup discoverable and retry-safe.
-      await access.delete(stagingDataKey(input.writer.bodyId));
-      await access.delete(stagingMetaKey(input.writer.bodyId));
+      const existing = await requireOwner(
+        input.writer.bodyId,
+        input.writer.reservationId,
+      );
+      if (existing.state !== "open" && existing.state !== "terminating") {
+        throw createContentError(
+          "asset_conflict",
+          "Progressive body cannot be terminated from its current state.",
+        );
+      }
+      if (
+        input.expectedByteLength !== undefined &&
+        input.expectedByteLength !== existing.byteLength
+      ) {
+        throw createContentError(
+          "asset_conflict",
+          "Progressive body length does not match terminate expectation.",
+        );
+      }
+      const terminating: SpillHead = existing.state === "terminating"
+        ? existing
+        : Object.freeze({
+          ...existing,
+          state: "terminating" as const,
+          maintenanceVersion: existing.maintenanceVersion + 1,
+        });
+      if (existing.state !== "terminating") await writeHead(terminating);
+      const bytes = await progressive.readRange({
+        bodyId: input.writer.bodyId,
+        offset: 0,
+        end: terminating.byteLength,
+      });
+      const digest = await digestContent(bytes);
+      if (input.expectedDigest && input.expectedDigest !== digest) {
+        throw createContentError(
+          "asset_conflict",
+          "Progressive body digest does not match terminate expectation.",
+        );
+      }
+      const now = Date.now();
+      const incomplete: IncompleteBodyHead = Object.freeze({
+        bodyId: input.writer.bodyId,
+        state: "incomplete",
+        mediaType: terminating.mediaType,
+        byteLength: terminating.byteLength,
+        digest,
+        maintenanceVersion: terminating.maintenanceVersion + 1,
+        protectedUntil: bodyProtectionUntil(protectionMs, now),
+        etag: digest.slice("sha256:".length),
+        lastModified: new Date(now).toISOString(),
+      });
+      await access.writeReplace({
+        bodyId: stagingMetaKey(input.writer.bodyId),
+        bytes: encodeSpillHead(incomplete),
+      });
+      return incomplete;
+    },
+    async abort(input) {
+      const existing = await requireOwner(
+        input.writer.bodyId,
+        input.writer.reservationId,
+      );
+      if (existing.state !== "open") {
+        throw createContentError(
+          "asset_conflict",
+          "Only open unpublished staging can be aborted.",
+        );
+      }
+      await cleanup(input.writer.bodyId);
     },
   };
   return Object.freeze(progressive);
+}
+
+// Filesystem adapters advertise process reach. Serialize every mutation for a
+// body across all filesystem-store instances in this process so an append,
+// heartbeat, takeover, and settlement cannot overwrite one another's fence.
+const filesystemBodyMutationTails = new Map<string, Promise<void>>();
+
+async function withFilesystemBodyMutationLock<T>(
+  bodyId: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const previous = filesystemBodyMutationTails.get(bodyId) ?? Promise.resolve();
+  let release = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const tail = previous.catch(() => undefined).then(() => gate);
+  filesystemBodyMutationTails.set(bodyId, tail);
+  await previous.catch(() => undefined);
+  try {
+    return await operation();
+  } finally {
+    release();
+    if (filesystemBodyMutationTails.get(bodyId) === tail) {
+      filesystemBodyMutationTails.delete(bodyId);
+    }
+  }
 }
 
 export function createFilesystemBodyStore(
@@ -1304,26 +1788,53 @@ export function createFilesystemBodyStore(
   }
   const protectionMs = bodyProtectionMs(options.protectionMs);
   const progressive = createFilesystemProgressive(options.access, protectionMs);
+  const putReady = async (input: PutBodyInput): Promise<ReadyBodyHead> => {
+    if ((await progressive.headAny(input.bodyId))?.state === "incomplete") {
+      throw createContentError(
+        "asset_conflict",
+        "An incomplete body cannot be adopted as a Ready body.",
+      );
+    }
+    const protectedUntil = resolveBodyProtectionUntil(
+      input.protectedUntil,
+      protectionMs,
+    );
+    const head = await options.access.acquireReady({
+      ...input,
+      protectedUntil,
+    });
+    validateHead(input, head);
+    return head;
+  };
   const store: BodyStore = {
     kind: "filesystem",
     backendId,
-    async put(input) {
-      const protectedUntil = resolveBodyProtectionUntil(
-        input.protectedUntil,
-        protectionMs,
-      );
-      const head = await options.access.acquireReady({
-        ...input,
-        protectedUntil,
-      });
-      validateHead(input, head);
-      return head;
-    },
+    put: (input) =>
+      withFilesystemBodyMutationLock(
+        input.bodyId,
+        () => putReady(input),
+      ),
     async head({ bodyId }) {
       return await options.access.stat(bodyId) ??
-        await progressive.head(bodyId);
+        await progressive.headAny(bodyId);
     },
-    read: ({ bodyId }) => options.access.openReady(bodyId),
+    async read({ bodyId }) {
+      const ready = await options.access.stat(bodyId);
+      if (ready) return await options.access.openReady(bodyId);
+      const staged = await progressive.headAny(bodyId);
+      if (staged?.state !== "incomplete") {
+        throw createContentError(
+          "asset_not_found",
+          "Body was not found in the configured filesystem backend.",
+        );
+      }
+      if (staged.byteLength === 0) {
+        return new ReadableStream({
+          start: (controller) => controller.close(),
+        });
+      }
+      return await options.access.openFrom(stagingDataKey(bodyId), 0);
+    },
     async readRange(input) {
       const ready = await options.access.stat(input.bodyId);
       if (ready) {
@@ -1343,61 +1854,76 @@ export function createFilesystemBodyStore(
       if (ready) {
         return await options.access.openReadyFrom(input.bodyId, offset);
       }
-      const staged = await progressive.head(input.bodyId);
+      const staged = await progressive.headAny(input.bodyId);
       if (!staged) {
         throw createContentError(
           "asset_not_found",
           "Body was not found in the configured filesystem backend.",
         );
       }
+      if (offset >= staged.byteLength) {
+        return new ReadableStream({
+          start: (controller) => controller.close(),
+        });
+      }
       return await options.access.openFrom(
         stagingDataKey(input.bodyId),
-        Math.max(offset, staged.discarded) - staged.discarded,
+        staged.state === "incomplete"
+          ? offset
+          : Math.max(offset, staged.discarded) - staged.discarded,
       );
     },
-    reserve: progressive.reserve,
-    append: progressive.append,
-    async seal(input) {
-      const current = await progressive.head(input.writer.bodyId);
-      if (!current || current.reservationId !== input.writer.reservationId) {
-        throw createContentError(
-          "asset_conflict",
-          "Progressive writer no longer owns this body.",
-        );
-      }
-      if (
-        input.expectedByteLength !== undefined &&
-        input.expectedByteLength !== current.byteLength
-      ) {
-        throw createContentError(
-          "asset_conflict",
-          "Progressive body length does not match seal expectation.",
-        );
-      }
-      const bytes = await progressive.readRange({
-        bodyId: input.writer.bodyId,
-        offset: 0,
-        end: current.byteLength,
-      });
-      const digest = await digestContent(bytes);
-      if (input.expectedDigest && input.expectedDigest !== digest) {
-        throw createContentError(
-          "asset_conflict",
-          "Progressive body digest does not match seal expectation.",
-        );
-      }
-      const head = await store.put({
-        bodyId: input.writer.bodyId,
-        bytes,
-        mediaType: current.mediaType,
-        digest,
-      });
-      // Ready publication is the irreversible success point. Any interrupted
-      // staging cleanup stays enumerable for progressive maintenance.
-      await progressive.abort(input).catch(() => undefined);
-      return head;
-    },
-    abort: progressive.abort,
+    reserve: (input) =>
+      withFilesystemBodyMutationLock(
+        input.bodyId,
+        () => progressive.reserve(input),
+      ),
+    renew: (input) =>
+      withFilesystemBodyMutationLock(
+        input.writer.bodyId,
+        () => progressive.renew(input),
+      ),
+    append: (input) =>
+      withFilesystemBodyMutationLock(
+        input.writer.bodyId,
+        () => progressive.append(input),
+      ),
+    seal: (input) =>
+      withFilesystemBodyMutationLock(input.writer.bodyId, async () => {
+        const current = await progressive.beginSeal(input);
+        const bytes = await progressive.readRange({
+          bodyId: input.writer.bodyId,
+          offset: 0,
+          end: current.byteLength,
+        });
+        const digest = await digestContent(bytes);
+        if (input.expectedDigest && input.expectedDigest !== digest) {
+          throw createContentError(
+            "asset_conflict",
+            "Progressive body digest does not match seal expectation.",
+          );
+        }
+        const head = await putReady({
+          bodyId: input.writer.bodyId,
+          bytes,
+          mediaType: current.mediaType,
+          digest,
+        });
+        // Ready publication is irreversible. Cleanup is fenced separately and
+        // an interruption stays enumerable as `sealing` for maintenance.
+        await progressive.cleanupAfterSeal(input).catch(() => undefined);
+        return head;
+      }),
+    terminate: (input) =>
+      withFilesystemBodyMutationLock(
+        input.writer.bodyId,
+        () => progressive.terminate(input),
+      ),
+    abort: (input) =>
+      withFilesystemBodyMutationLock(
+        input.writer.bodyId,
+        () => progressive.abort(input),
+      ),
     maintenance: {
       async list(input) {
         if (!Number.isSafeInteger(input.idleForMs) || input.idleForMs < 0) {
@@ -1406,7 +1932,7 @@ export function createFilesystemBodyStore(
           );
         }
         const states = new Set<BodyState>(input.states);
-        const bodies: (BodyHead | MutableBodyHead)[] = [];
+        const bodies: (TerminalBodyHead | MutableBodyHead)[] = [];
         if (states.has("ready")) {
           for await (const body of options.access.list(input.prefix ?? "")) {
             if (bodyHasBeenIdle(body.lastModified, input.idleForMs)) {
@@ -1416,12 +1942,13 @@ export function createFilesystemBodyStore(
         }
         if (
           options.access.listProgressive &&
-          (states.has("open") || states.has("sealing"))
+          (states.has("open") || states.has("sealing") ||
+            states.has("terminating") || states.has("incomplete"))
         ) {
           for await (const entry of options.access.listProgressive()) {
             if (!entry.bodyId.startsWith(input.prefix ?? "")) continue;
             if (!bodyHasBeenIdle(entry.lastModified, input.idleForMs)) continue;
-            const body = await progressive.head(entry.bodyId);
+            const body = await progressive.headAny(entry.bodyId);
             if (body && states.has(body.state)) bodies.push(body);
           }
         }
@@ -1438,15 +1965,33 @@ export function createFilesystemBodyStore(
             : {}),
         });
       },
-      async delete(input) {
-        if (!Number.isSafeInteger(input.idleForMs) || input.idleForMs < 0) {
-          throw new TypeError(
-            "Body maintenance idle duration must be a non-negative integer.",
-          );
-        }
-        if (input.expectedState !== "ready") return false;
-        return await options.access.deleteReady(input);
-      },
+      delete: (input) =>
+        withFilesystemBodyMutationLock(input.bodyId, async () => {
+          if (!Number.isSafeInteger(input.idleForMs) || input.idleForMs < 0) {
+            throw new TypeError(
+              "Body maintenance idle duration must be a non-negative integer.",
+            );
+          }
+          if (input.expectedState === "ready") {
+            return await options.access.deleteReady(input);
+          }
+          if (input.expectedState !== "incomplete") return false;
+          const current = await progressive.headAny(input.bodyId);
+          if (
+            current?.state !== "incomplete" ||
+            current.maintenanceVersion !==
+              input.expectedMaintenanceVersion ||
+            bodyProtectionRemainingMs(current.protectedUntil) > 0 ||
+            !bodyHasBeenIdle(current.lastModified, input.idleForMs)
+          ) return false;
+          if (options.access.cleanupProgressive) {
+            await options.access.cleanupProgressive(input.bodyId);
+          } else {
+            await options.access.delete(stagingDataKey(input.bodyId));
+            await options.access.delete(stagingMetaKey(input.bodyId));
+          }
+          return (await progressive.headAny(input.bodyId)) === null;
+        }),
     },
   };
   return Object.freeze(store);

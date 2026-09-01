@@ -24,6 +24,7 @@ import type { ContentRef } from "../content/index.ts";
 import {
   isStreamOutputDescriptor,
   provisionOperationCatalog,
+  type StreamOutput,
 } from "../streams/index.ts";
 
 const TEST_SCHEMA = "copilotz_factory_engine";
@@ -165,6 +166,14 @@ async function createFixture(): Promise<Fixture> {
     now: () => new Date("2026-08-09T00:00:00.000Z"),
     random: () => 0,
     retryBaseMs: 0,
+    execution: {
+      scheduler: {
+        schedule(callback) {
+          return callback;
+        },
+        cancel() {},
+      },
+    },
     publish(output) {
       if (isStreamOutputDescriptor(output)) {
         streamOutputs.push(Object.freeze({
@@ -172,6 +181,12 @@ async function createFixture(): Promise<Fixture> {
           semanticId: output.metadata.contentStreamSemanticId,
         }));
       }
+    },
+    publishLocalStream(output: StreamOutput) {
+      streamOutputs.push(Object.freeze({
+        streamId: output.streamId,
+        semanticId: output.metadata.contentStreamSemanticId,
+      }));
     },
   });
   return Object.freeze({
@@ -273,6 +288,12 @@ Deno.test("factory engine scopes typed processor capabilities and deduplicates r
       "retry_wait",
     );
     assertEquals(first.status, "retry_wait");
+    await fixture.engine.execution.settleOutputs({
+      databaseSchema: TEST_SCHEMA,
+      namespace,
+      settlementScopeId: first.settlementScopeId,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
     const recovery = await fixture.engine.recover({ namespace: "tenant-a" });
     assertEquals(recovery.failures, []);
     assertEquals(recovery.handles.length, 1);

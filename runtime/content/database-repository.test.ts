@@ -31,6 +31,7 @@ import {
   createMemoryBodyStore,
   type DatabaseAssetRepository,
   digestContent,
+  maintainProgressiveBodies,
 } from "./index.ts";
 import { collectionAssetAdopterFor } from "./database-repository.ts";
 
@@ -130,7 +131,6 @@ async function waitForSettledDeliveries(fixture: Fixture) {
 Deno.test("database assets publish immutable bodies, events, and deliveries without body duplication", async () => {
   const fixture = await createFixture();
   try {
-    const adopter = collectionAssetAdopterFor(fixture.assets);
     const body = new TextEncoder().encode("durable hello");
     const first = await fixture.assets.publish({
       namespace: "tenant-a",
@@ -817,6 +817,64 @@ Deno.test("asset maintenance retries body deletion and removes old orphan upload
     );
     assertEquals(await memory.head({ bodyId: key }), null);
     assertEquals(await memory.head({ bodyId: orphanKey }), null);
+  } finally {
+    await closeFixture(fixture);
+  }
+});
+
+Deno.test("asset maintenance collects orphan incomplete bodies but preserves catalog retention", async () => {
+  const memory = createMemoryBodyStore({
+    backendId: "memory:incomplete-maintenance",
+    protectionMs: 0,
+  });
+  const fixture = await createFixture({
+    storage: {
+      storage: {
+        type: "custom",
+        config: { store: memory, prefix: "copilotz" },
+      },
+    },
+  });
+  const prefix = "copilotz/schemas/copilotz_database_assets/content-streams";
+  const orphanId = `${prefix}/prepublication`;
+  const retainedId = `${prefix}/catalog-retained`;
+  try {
+    for (const bodyId of [orphanId, retainedId]) {
+      const writer = await memory.reserve({
+        bodyId,
+        mediaType: "text/plain",
+      });
+      await memory.append({
+        writer,
+        expectedOffset: 0,
+        appendId: "partial",
+        bytes: new TextEncoder().encode("partial"),
+      });
+    }
+    const recovered = await maintainProgressiveBodies(memory);
+    assertEquals(recovered.terminated, 2);
+
+    assertEquals(
+      await fixture.assets.maintainBodies({
+        orphanAfterMs: 0,
+        isBodyRetained: (bodyId) => Promise.resolve(bodyId === retainedId),
+      }),
+      { orphanedBodiesDeleted: 1 },
+    );
+    assertEquals(await memory.head({ bodyId: orphanId }), null);
+    assertEquals(
+      (await memory.head({ bodyId: retainedId }))?.state,
+      "incomplete",
+    );
+
+    assertEquals(
+      await fixture.assets.maintainBodies({
+        orphanAfterMs: 0,
+        isBodyRetained: () => Promise.resolve(false),
+      }),
+      { orphanedBodiesDeleted: 1 },
+    );
+    assertEquals(await memory.head({ bodyId: retainedId }), null);
   } finally {
     await closeFixture(fixture);
   }

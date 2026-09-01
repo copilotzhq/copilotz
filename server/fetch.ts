@@ -15,7 +15,7 @@ import {
   createOperationReplayCursorTracker,
   decodeOperationReplayCursor,
   type OperationReplayCursorMutation,
-  operationStreamReplayCursorKey,
+  streamErrorOutput,
 } from "../runtime/streams/index.ts";
 
 export type EventNativeSseProjector = (
@@ -277,6 +277,7 @@ export function projectEventNativeSseOutput(
   if (!isStreamOutput(output)) return output;
   const {
     payload: _payload,
+    terminal: _terminal,
     replayKey: _replayKey,
     streamOrdinal: _streamOrdinal,
     ...descriptor
@@ -405,24 +406,21 @@ function sseResponse(
     offset: number,
   ) => {
     const reader = output.payload.getReader();
-    const replayKey = operationStreamReplayCursorKey(output);
     const streamMutation = (
       action: "offset" | "end",
       nextOffset: number,
-    ) =>
-      context.operationId && output.streamOrdinal
-        ? {
-          kind: "operation-stream" as const,
-          action,
-          operationId: context.operationId,
-          streamOrdinal: output.streamOrdinal,
-          offset: nextOffset,
-        }
-        : {
-          kind: "legacy-stream" as const,
-          replayKey,
-          offset: nextOffset,
-        };
+    ) => {
+      if (!context.operationId || !output.streamOrdinal) {
+        throw new Error("Application stream is missing its operation lane.");
+      }
+      return {
+        kind: "operation-stream" as const,
+        action,
+        operationId: context.operationId,
+        streamOrdinal: output.streamOrdinal,
+        offset: nextOffset,
+      };
+    };
     try {
       while (true) {
         const next = await reader.read();
@@ -443,18 +441,53 @@ function sseResponse(
         );
         offset = toOffset;
       }
+      const terminal = await output.terminal;
+      const streamError = streamErrorOutput(output.streamId, terminal);
+      const terminalOffset = terminal.offset;
+      if (
+        streamError === null && terminalOffset !== offset
+      ) {
+        throw new Error("Completed stream Body ended at an invalid offset.");
+      }
+      if (streamError) {
+        const value = Object.freeze({ ...streamError, ...context });
+        await writeFrame(
+          (replayCursor) => sseFrame(value, "stream.error", replayCursor),
+          context.operationId && output.streamOrdinal
+            ? [streamMutation("end", terminalOffset)]
+            : [],
+        );
+      } else {
+        const value = Object.freeze({
+          type: "stream.end",
+          ...context,
+          streamId: output.streamId,
+          offset: terminalOffset,
+        });
+        await writeFrame(
+          (replayCursor) => sseFrame(value, "stream.end", replayCursor),
+          context.operationId && output.streamOrdinal
+            ? [streamMutation("end", terminalOffset)]
+            : [],
+        );
+      }
+    } catch {
+      // A lane-local read failure is an in-band boundary. It must not cancel
+      // unrelated progressive lanes or advance this lane's replay cursor.
       const value = Object.freeze({
-        type: "stream.end",
+        type: "stream.error",
         ...context,
         streamId: output.streamId,
         offset,
+        code: "stream_unavailable",
+        outcome: "abandoned",
+        availability: "missing",
+        capture: "truncated",
+        terminalAt: new Date().toISOString(),
       });
       await writeFrame(
-        (replayCursor) => sseFrame(value, "stream.end", replayCursor),
-        context.operationId && output.streamOrdinal
-          ? [streamMutation("end", offset)]
-          : [],
-      );
+        (replayCursor) => sseFrame(value, "stream.error", replayCursor),
+      ).catch(() => undefined);
     } finally {
       reader.releaseLock();
     }
@@ -481,22 +514,18 @@ function sseResponse(
           ? {
             kind: "operation-stream" as const,
             action: "register" as const,
-            operationId: context.operationId,
+            operationId: context.operationId!,
             streamOrdinal: output.streamOrdinal,
             offset: cursorTracker.streamPosition({
-              operationId: context.operationId,
-              replayKey: output.replayKey,
-              streamOrdinal: output.streamOrdinal,
-              streamId: output.streamId,
+              operationId: context.operationId!,
+              streamOrdinal: output.streamOrdinal!,
             }).offset,
           }
           : undefined;
         if (isStreamOutput(output)) {
           const position = cursorTracker.streamPosition({
-            operationId: context.operationId,
-            replayKey: output.replayKey,
-            streamOrdinal: output.streamOrdinal,
-            streamId: output.streamId,
+            operationId: context.operationId!,
+            streamOrdinal: output.streamOrdinal!,
           });
           if (position.consumed) {
             await output.payload.cancel("operation_stream_already_consumed")

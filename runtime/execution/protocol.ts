@@ -176,6 +176,7 @@ function parseOutput(payload: Uint8Array): RuntimeOutputDescriptor {
   if (isStreamOutputDescriptor(value)) {
     const descriptor = createStreamOutputDescriptor({
       id: value.streamId,
+      semanticId: value.streamId,
       mediaType: value.mediaType,
       kind: value.kind,
       role: value.role,

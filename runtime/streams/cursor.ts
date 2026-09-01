@@ -1,6 +1,6 @@
 import { snapshotStreamMetadata } from "./json.ts";
 
-export const OPERATION_REPLAY_CURSOR_VERSION = 1;
+export const OPERATION_REPLAY_CURSOR_FINGERPRINT = "operation-lanes";
 export const MAX_OPERATION_CURSOR_STREAMS = 256;
 // Base64url expands this to at most ~22 KiB, leaving aggregate header room for
 // authentication cookies on managed HTTP frontends such as Cloud Run.
@@ -19,8 +19,6 @@ export type OperationReplayPosition = Readonly<{
   operationStreamPositions?: Readonly<
     Record<string, OperationStreamReplayPosition>
   >;
-  /** Legacy/non-operation stream offsets. */
-  streamOffsets: Readonly<Record<string, number>>;
 }>;
 
 export type OperationReplayCursorMutation =
@@ -28,11 +26,6 @@ export type OperationReplayCursorMutation =
     kind: "event";
     position: string;
     operationId?: string;
-  }>
-  | Readonly<{
-    kind: "legacy-stream";
-    replayKey: string;
-    offset: number;
   }>
   | Readonly<{
     kind: "operation-stream";
@@ -47,33 +40,11 @@ export type OperationReplayCursorTracker = Readonly<{
   commit(mutations: readonly OperationReplayCursorMutation[]): void;
   streamPosition(
     input: Readonly<{
-      operationId?: string;
-      replayKey?: string;
-      streamOrdinal?: string;
-      streamId: string;
+      operationId: string;
+      streamOrdinal: string;
     }>,
   ): Readonly<{ consumed: boolean; offset: number }>;
 }>;
-
-/**
- * Maps hidden catalog ordinals and legacy transport-only stream ids into
- * disjoint cursor key spaces. Catalog keys stay compact while never colliding
- * with a caller-selected stream id.
- */
-export function operationStreamReplayCursorKey(
-  input: Readonly<{ replayKey?: string; streamId: string }>,
-): string {
-  const streamId = input.streamId.trim();
-  if (!streamId) throw invalidCursor("Operation stream id is invalid.");
-  if (input.replayKey !== undefined) {
-    const replayKey = input.replayKey.trim();
-    if (!/^(0|[1-9][0-9]*)$/.test(replayKey)) {
-      throw invalidCursor("Operation stream replay key is invalid.");
-    }
-    return `r${replayKey}`;
-  }
-  return `s:${streamId}`;
-}
 
 function invalidCursor(message = "Operation replay cursor is invalid."): Error {
   return Object.assign(new TypeError(message), {
@@ -238,10 +209,9 @@ function operationStreamsJson(
 }
 
 function assertSparseCapacity(
-  legacy: Readonly<Record<string, number>>,
   operation: Readonly<Record<string, OperationStreamReplayPosition>>,
 ): void {
-  const sparse = Object.keys(legacy).length + Object.values(operation).reduce(
+  const sparse = Object.values(operation).reduce(
     (total, state) => total + Object.keys(state.offsets).length,
     0,
   );
@@ -255,13 +225,12 @@ function assertSparseCapacity(
 export function encodeOperationReplayCursor(
   position: OperationReplayPosition,
 ): string {
-  const legacy = offsets(position.streamOffsets);
   const operation = operationStreams(
     operationStreamsJson(position.operationStreamPositions),
   );
-  assertSparseCapacity(legacy, operation);
+  assertSparseCapacity(operation);
   const normalized = Object.freeze({
-    v: OPERATION_REPLAY_CURSOR_VERSION,
+    kind: OPERATION_REPLAY_CURSOR_FINGERPRINT,
     ...(eventPosition(position.eventPosition)
       ? { event: eventPosition(position.eventPosition) }
       : {}),
@@ -272,7 +241,6 @@ export function encodeOperationReplayCursor(
     ...(Object.keys(operation).length
       ? { lanes: operationStreamsJson(operation) }
       : {}),
-    streams: legacy,
   });
   const bytes = new TextEncoder().encode(JSON.stringify(normalized));
   if (bytes.byteLength > MAX_OPERATION_REPLAY_CURSOR_BYTES) {
@@ -285,7 +253,7 @@ export function decodeOperationReplayCursor(
   cursor: string | null | undefined,
 ): OperationReplayPosition {
   if (cursor === undefined || cursor === null || !cursor.trim()) {
-    return Object.freeze({ streamOffsets: Object.freeze({}) });
+    return Object.freeze({});
   }
   let decoded: unknown;
   try {
@@ -303,9 +271,9 @@ export function decodeOperationReplayCursor(
   }
   const value = snapshotStreamMetadata(decoded) as Record<string, unknown>;
   if (
-    value.v !== OPERATION_REPLAY_CURSOR_VERSION ||
+    value.kind !== OPERATION_REPLAY_CURSOR_FINGERPRINT ||
     Object.keys(value).some((key) =>
-      !["v", "event", "operations", "lanes", "streams"].includes(key)
+      !["kind", "event", "operations", "lanes"].includes(key)
     )
   ) {
     throw invalidCursor();
@@ -313,15 +281,13 @@ export function decodeOperationReplayCursor(
   const event = eventPosition(value.event);
   const operations = operationPositions(value.operations);
   const lanes = operationStreams(value.lanes);
-  const legacy = offsets(value.streams);
-  assertSparseCapacity(legacy, lanes);
+  assertSparseCapacity(lanes);
   return Object.freeze({
     ...(event ? { eventPosition: event } : {}),
     ...(Object.keys(operations).length
       ? { operationEventPositions: operations }
       : {}),
     ...(Object.keys(lanes).length ? { operationStreamPositions: lanes } : {}),
-    streamOffsets: legacy,
   });
 }
 
@@ -347,7 +313,6 @@ function mutablePosition(position: OperationReplayPosition) {
       string,
       { highWatermark: number; offsets: Record<string, number> }
     >,
-    streamOffsets: { ...position.streamOffsets },
   };
 }
 
@@ -364,7 +329,6 @@ function snapshotMutable(
     ...(Object.keys(position.operationStreamPositions).length
       ? { operationStreamPositions: position.operationStreamPositions }
       : {}),
-    streamOffsets: position.streamOffsets,
   });
 }
 
@@ -377,10 +341,6 @@ function applyMutation(
       position.operationEventPositions[mutation.operationId] =
         mutation.position;
     } else position.eventPosition = mutation.position;
-    return;
-  }
-  if (mutation.kind === "legacy-stream") {
-    position.streamOffsets[mutation.replayKey] = mutation.offset;
     return;
   }
   const operationId = mutation.operationId.trim();
@@ -444,23 +404,16 @@ export function createOperationReplayCursorTracker(
       position = candidate(mutations);
     },
     streamPosition(input) {
-      if (input.operationId && input.streamOrdinal) {
-        const ordinal = streamOrdinal(input.streamOrdinal);
-        const state = position.operationStreamPositions[input.operationId];
-        const sparse = state?.offsets[String(ordinal)];
-        if (sparse !== undefined) {
-          return Object.freeze({ consumed: false, offset: sparse });
-        }
-        if (state && ordinal <= state.highWatermark) {
-          return Object.freeze({ consumed: true, offset: 0 });
-        }
-        return Object.freeze({ consumed: false, offset: 0 });
+      const ordinal = streamOrdinal(input.streamOrdinal);
+      const state = position.operationStreamPositions[input.operationId];
+      const sparse = state?.offsets[String(ordinal)];
+      if (sparse !== undefined) {
+        return Object.freeze({ consumed: false, offset: sparse });
       }
-      const key = operationStreamReplayCursorKey(input);
-      return Object.freeze({
-        consumed: false,
-        offset: position.streamOffsets[key] ?? 0,
-      });
+      if (state && ordinal <= state.highWatermark) {
+        return Object.freeze({ consumed: true, offset: 0 });
+      }
+      return Object.freeze({ consumed: false, offset: 0 });
     },
   });
 }

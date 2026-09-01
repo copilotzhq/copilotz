@@ -7,6 +7,7 @@ import {
 Deno.test("stream output descriptors are exact, serializable transport data", () => {
   const descriptor = createStreamOutputDescriptor({
     id: "stream-a",
+    semanticId: "stream-a",
     mediaType: "text/plain",
     kind: "text",
     role: "assistant",
@@ -86,6 +87,7 @@ Deno.test("stream output descriptors are exact, serializable transport data", ()
     () =>
       createStreamOutputDescriptor({
         id: "stream-b",
+        semanticId: "stream-b",
         mediaType: "text/plain",
         kind: "text",
         role: "assistant",
@@ -109,6 +111,7 @@ Deno.test("stream output metadata rejects accessors, sparse keys, and cycles wit
   const descriptor = (metadata: Record<string, unknown>) => () =>
     createStreamOutputDescriptor({
       id: "stream-a",
+      semanticId: "stream-a",
       mediaType: "text/plain",
       kind: "text",
       role: "assistant",

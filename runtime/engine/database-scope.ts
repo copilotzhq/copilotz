@@ -15,7 +15,6 @@ import {
   type ContentStreamFollowInput,
   createContentStreamRuntime,
   DEFAULT_OPERATION_REPLAY_RETENTION_MS,
-  DEFAULT_OPERATION_STREAM_RETENTION_MS,
 } from "../streams/index.ts";
 import type { OperationCatalog } from "../streams/catalog.ts";
 import {
@@ -418,20 +417,9 @@ export function createDatabaseScope(
       now: maintenanceOptions.now,
       limit: maintenanceOptions.limit,
     });
-    const assetMaintenance = await assets.maintainBodies({
-      now: maintenanceOptions.now,
-      orphanAfterMs: maintenanceOptions.assetOrphanAfterMs,
-      limit: maintenanceOptions.limit,
-      isBodyRetained: (bodyId) =>
-        options.operationCatalog.hasStreamBody(bodyId),
-    });
-    const progressiveBodies = await maintainProgressiveBodies(streamBodyStore, {
-      limit: maintenanceOptions.limit,
-      ...(progressiveMaintenanceAfter
-        ? { after: progressiveMaintenanceAfter }
-        : {}),
-    });
-    progressiveMaintenanceAfter = progressiveBodies.after;
+    // Catalog-owned published lanes are reconciled before generic progressive
+    // maintenance can settle unknown staging. Publication changes an expired
+    // writer from disposable staging into a replay obligation.
     const openStreams = await options.operationCatalog.listOpenStreams({
       ...(openStreamReconcileAfter
         ? { afterReplayKey: openStreamReconcileAfter }
@@ -442,25 +430,133 @@ export function createDatabaseScope(
     for (const stream of openStreams) {
       openStreamReconcileAfter = stream.replayKey;
       const head = await streamBodyStore.head({ bodyId: stream.bodyId });
-      if (!head || head.state === "aborted") {
-        const transitioned = await options.operationCatalog.abortStream({
-          namespace: stream.namespace,
-          operationId: stream.operationId,
-          streamId: stream.streamId,
-        });
+      const intendedOutcome = stream.state === "terminating"
+        ? stream.outcome
+        : undefined;
+      if (!head) {
+        const transitioned = await options.operationCatalog
+          .markStreamUnavailable({
+            namespace: stream.namespace,
+            operationId: stream.operationId,
+            streamId: stream.streamId,
+            outcome: intendedOutcome === "completed"
+              ? "abandoned"
+              : intendedOutcome ?? "abandoned",
+            availability: "missing",
+            capture: stream.capture ?? "truncated",
+          });
         if (transitioned) reconciledStreams += 1;
-      } else if (head?.state === "ready") {
+        continue;
+      }
+      if (head.state === "aborted") {
+        const transitioned = await options.operationCatalog
+          .markStreamUnavailable({
+            namespace: stream.namespace,
+            operationId: stream.operationId,
+            streamId: stream.streamId,
+            outcome: intendedOutcome === "completed"
+              ? "abandoned"
+              : intendedOutcome ?? "abandoned",
+            availability: "purged",
+            capture: stream.capture ?? "truncated",
+          });
+        if (transitioned) reconciledStreams += 1;
+        continue;
+      }
+      if (head.state === "ready") {
         const transitioned = await options.operationCatalog.sealStream({
           namespace: stream.namespace,
           operationId: stream.operationId,
           streamId: stream.streamId,
           body: head,
-          expiresAt: new Date(
-            (maintenanceOptions.now ?? new Date()).getTime() +
-              DEFAULT_OPERATION_STREAM_RETENTION_MS,
-          ).toISOString(),
         });
         if (transitioned) reconciledStreams += 1;
+        else if (intendedOutcome && intendedOutcome !== "completed") {
+          const unavailable = await options.operationCatalog
+            .markStreamUnavailable({
+              namespace: stream.namespace,
+              operationId: stream.operationId,
+              streamId: stream.streamId,
+              outcome: intendedOutcome,
+              availability: "missing",
+              capture: stream.capture ?? "truncated",
+            });
+          if (unavailable) reconciledStreams += 1;
+        }
+        continue;
+      }
+      if (head.state === "incomplete") {
+        const outcome = intendedOutcome === "completed"
+          ? undefined
+          : intendedOutcome ?? "abandoned";
+        const transitioned = outcome
+          ? await options.operationCatalog.terminateStream({
+            namespace: stream.namespace,
+            operationId: stream.operationId,
+            streamId: stream.streamId,
+            body: head,
+            outcome,
+            capture: stream.capture ?? "truncated",
+          })
+          : await options.operationCatalog.markStreamUnavailable({
+            namespace: stream.namespace,
+            operationId: stream.operationId,
+            streamId: stream.streamId,
+            outcome: "abandoned",
+            availability: "missing",
+            capture: "truncated",
+          });
+        if (transitioned) reconciledStreams += 1;
+        continue;
+      }
+      if (head.writerLeaseRemainingMs > 0) continue;
+      const outcome = intendedOutcome ??
+        (head.state === "sealing" ? "completed" : "abandoned");
+      const capture = outcome === "completed"
+        ? "complete"
+        : stream.capture ?? "truncated";
+      if (
+        !await options.operationCatalog.beginStreamTerminalization({
+          namespace: stream.namespace,
+          operationId: stream.operationId,
+          streamId: stream.streamId,
+          outcome,
+          capture,
+        })
+      ) continue;
+      const writer = await streamBodyStore.reserve({
+        bodyId: head.bodyId,
+        mediaType: head.mediaType,
+        expectedGeneration: head.writerGeneration,
+      });
+      if (outcome === "completed") {
+        const ready = await streamBodyStore.seal({
+          writer,
+          expectedByteLength: head.byteLength,
+        });
+        if (
+          await options.operationCatalog.sealStream({
+            namespace: stream.namespace,
+            operationId: stream.operationId,
+            streamId: stream.streamId,
+            body: ready,
+          })
+        ) reconciledStreams += 1;
+      } else {
+        const incomplete = await streamBodyStore.terminate({
+          writer,
+          expectedByteLength: head.byteLength,
+        });
+        if (
+          await options.operationCatalog.terminateStream({
+            namespace: stream.namespace,
+            operationId: stream.operationId,
+            streamId: stream.streamId,
+            body: incomplete,
+            outcome,
+            capture,
+          })
+        ) reconciledStreams += 1;
       }
     }
     if (
@@ -468,6 +564,20 @@ export function createDatabaseScope(
     ) openStreamReconcileAfter = undefined;
     const reconciled = await options.operationCatalog.reconcile({
       limit: maintenanceOptions.limit,
+    });
+    const progressiveBodies = await maintainProgressiveBodies(streamBodyStore, {
+      limit: maintenanceOptions.limit,
+      ...(progressiveMaintenanceAfter
+        ? { after: progressiveMaintenanceAfter }
+        : {}),
+    });
+    progressiveMaintenanceAfter = progressiveBodies.after;
+    const assetMaintenance = await assets.maintainBodies({
+      now: maintenanceOptions.now,
+      orphanAfterMs: maintenanceOptions.assetOrphanAfterMs,
+      limit: maintenanceOptions.limit,
+      isBodyRetained: (bodyId) =>
+        options.operationCatalog.hasStreamBody(bodyId),
     });
     const operationRetentionMs = maintenanceOptions.operationRetentionMs ??
       DEFAULT_OPERATION_REPLAY_RETENTION_MS;
@@ -484,28 +594,40 @@ export function createDatabaseScope(
     const readyGarbageCollection =
       engine.assetStorage?.adapter?.deployment.readyGarbageCollection ?? true;
     for (const stream of expired) {
+      if (
+        stream.availability === "retained" &&
+        !await options.operationCatalog.markStreamPurgePending({
+          namespace: stream.namespace,
+          operationId: stream.operationId,
+          streamId: stream.streamId,
+        })
+      ) continue;
       const head = await streamBodyStore.head({ bodyId: stream.bodyId });
-      let graphOwned = false;
+      let retired = head === null;
       if (head?.state === "ready" && readyGarbageCollection) {
         const retirement = await assets.retireUnownedReadyBody({
           store: streamBodyStore,
           body: head,
         });
-        graphOwned = retirement.status === "owned";
-        if (retirement.status === "blocked") {
-          observationRetirementBlocked += 1;
-          continue;
-        }
+        retired = retirement.status !== "blocked";
+      } else if (head?.state === "incomplete" || head?.state === "aborted") {
+        retired = await streamBodyStore.maintenance.delete({
+          bodyId: head.bodyId,
+          expectedState: head.state,
+          expectedMaintenanceVersion: head.maintenanceVersion,
+          idleForMs: 0,
+        });
       }
-      if (
-        !graphOwned && await streamBodyStore.head({ bodyId: stream.bodyId })
-      ) {
+      if (!retired) {
         observationRetirementBlocked += 1;
+        // Purge is monotonic. A losing concurrent worker must never restore
+        // retained after another worker deleted the Body. Leaving the row
+        // purge_pending is crash-safe and makes the exact-CAS retirement
+        // retryable on the next maintenance pass.
         continue;
       }
-      // Once replay grace has elapsed, a graph-owned Body is authoritative.
-      // A crash between Asset materialization and catalog retain must therefore
-      // retire the stale observation row instead of blocking it forever.
+      // A graph-owned Ready Body remains under Asset authority. Other retained
+      // terminal Bodies were removed with exact state/version CAS above.
       if (
         await options.operationCatalog.pruneStream({
           namespace: stream.namespace,
@@ -559,10 +681,12 @@ export function createDatabaseScope(
           return await streamBodyStore.readRange(input);
         }
         // Compatibility fallback for third-party stores compiled before finite
-        // range reads. Never attach their polling follower: wait until Ready,
-        // then perform one bounded replay read.
+        // range reads. Never attach their polling follower: wait until an
+        // immutable terminal Body, then perform one bounded replay read.
         const head = await streamBodyStore.head({ bodyId: input.bodyId });
-        if (head?.state !== "ready") return null;
+        if (head?.state !== "ready" && head?.state !== "incomplete") {
+          return null;
+        }
         const bytes = await readBodyBytes(streamBodyStore, {
           bodyId: input.bodyId,
         });

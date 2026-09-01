@@ -1,4 +1,7 @@
-export { createContentStreamRuntime } from "./stream.ts";
+export {
+  ContentStreamOwnershipLostError,
+  createContentStreamRuntime,
+} from "./stream.ts";
 export type {
   ContentStreamAbortInput,
   ContentStreamAppendInput,
@@ -11,6 +14,8 @@ export type {
   ContentStreamRuntime,
   ContentStreamWriter,
   CreateContentStreamRuntimeOptions,
+  StreamCapture,
+  StreamTerminalOutcome,
 } from "./stream.ts";
 export {
   createOperationReplayCursorTracker,
@@ -18,8 +23,7 @@ export {
   encodeOperationReplayCursor,
   MAX_OPERATION_CURSOR_STREAMS,
   MAX_OPERATION_REPLAY_CURSOR_BYTES,
-  OPERATION_REPLAY_CURSOR_VERSION,
-  operationStreamReplayCursorKey,
+  OPERATION_REPLAY_CURSOR_FINGERPRINT,
 } from "./cursor.ts";
 export type {
   OperationReplayCursorMutation,
@@ -30,8 +34,7 @@ export type {
 export {
   createOperationCatalog,
   DEFAULT_OPERATION_REPLAY_RETENTION_MS,
-  DEFAULT_OPERATION_STREAM_RETENTION_MS,
-  OPERATION_CATALOG_VERSION,
+  OPERATION_CATALOG_FINGERPRINT,
   operationStreamBodyId,
   provisionOperationCatalog,
   validateOperationCatalog,
@@ -41,18 +44,23 @@ export type {
   OperationChangeSubscription,
   OperationRecord,
   OperationState,
-  OperationStreamAssetRetention,
   OperationStreamRecord,
+  OperationStreamRetention,
+  OperationStreamState,
 } from "./catalog.ts";
 export {
   createStreamOutputDescriptor,
   isStreamOutputDescriptor,
 } from "./observation.ts";
+export { streamErrorOutput } from "./terminal.ts";
 export type {
   ApplicationOutput,
   ApplicationOutputDescriptor,
   OperationLifecycleOutput,
   RuntimeOutputDescriptor,
+  StreamErrorOutput,
   StreamOutput,
   StreamOutputDescriptor,
+  StreamTerminalAvailability,
+  StreamTerminalStatus,
 } from "./types.ts";

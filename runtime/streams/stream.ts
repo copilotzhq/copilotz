@@ -4,7 +4,7 @@ import {
   openProgressiveBodyFollower,
   type ProgressiveBodyWriter,
 } from "../content/progressive.ts";
-import type { BodyHead, BodyStore } from "../content/body-store.ts";
+import type { BodyStore, ReadyBodyHead } from "../content/body-store.ts";
 import type {
   AssetBodyLocation,
   ContentKind,
@@ -18,6 +18,8 @@ import type {
   ContentStreamRetentionInput,
   ContentStreamRuntime,
   CreateContentStreamRuntimeOptions,
+  StreamCapture,
+  StreamTerminalOutcome,
 } from "./types.ts";
 import { snapshotStreamMetadata } from "./json.ts";
 export type {
@@ -32,13 +34,28 @@ export type {
   ContentStreamRuntime,
   ContentStreamWriter,
   CreateContentStreamRuntimeOptions,
+  StreamCapture,
+  StreamTerminalOutcome,
 } from "./types.ts";
+
+/** Signals that a durable catalog no longer accepts writes from this lane. */
+export class ContentStreamOwnershipLostError extends Error {
+  readonly code = "content_stream_ownership_lost";
+
+  constructor(streamId: string) {
+    super(`Content stream '${streamId}' lost durable write ownership.`);
+    this.name = "ContentStreamOwnershipLostError";
+  }
+}
 
 function cleanSegment(value: string): string {
   return encodeURIComponent(value.trim()).replaceAll("%2F", "%252F");
 }
 
-function bodyLocation(store: BodyStore, head: BodyHead): AssetBodyLocation {
+function bodyLocation(
+  store: BodyStore,
+  head: ReadyBodyHead,
+): AssetBodyLocation {
   if (store.kind === "object") {
     return {
       kind: "object",
@@ -111,7 +128,7 @@ export function createContentStreamRuntime(
   // to bytes produced by a previous provider invocation.
   const physicalId = (semanticId: string): string =>
     incarnationId
-      ? `incarnation.v1:${encodeURIComponent(semanticId)}:${
+      ? `incarnation:${encodeURIComponent(semanticId)}:${
         encodeURIComponent(incarnationId)
       }`
       : semanticId;
@@ -155,15 +172,64 @@ export function createContentStreamRuntime(
         metadata,
         ...(correlationId ? { correlationId } : {}),
       });
+      let published = false;
       try {
-        await options.onOpen?.(opened);
+        await options.onOpen?.(
+          opened,
+          Object.freeze({
+            established() {
+              published = true;
+            },
+          }),
+        );
+        if (!published) {
+          throw new Error(
+            "Content stream publication must be explicitly established.",
+          );
+        }
       } catch (error) {
-        await body.abandon().catch(() => undefined);
-        await Promise.resolve(options.onAbort?.(opened)).catch(() => undefined);
+        if (!published) {
+          await body.abandon().catch(() => undefined);
+          await Promise.resolve(options.onDiscard?.(opened)).catch(() =>
+            undefined
+          );
+        } else {
+          const termination = Object.freeze({
+            outcome: "abandoned" as const,
+            capture: "truncated" as const,
+          });
+          body.fence();
+          await Promise.resolve(options.onTerminalizing?.(opened, termination))
+            .catch(() => undefined);
+          const incomplete = await body.terminate().catch(() => undefined);
+          if (incomplete) {
+            await Promise.resolve(
+              options.onTerminate?.(opened, incomplete, termination),
+            )
+              .catch(() => undefined);
+          }
+        }
         throw error;
       }
-      let settled = false;
+      let terminalKind: "sealed" | "terminated" | undefined;
+      let terminalTask: Promise<void> | undefined;
       let sealed = false;
+      let readyBody:
+        | Awaited<ReturnType<ProgressiveBodyWriter["finalize"]>>
+        | undefined;
+      let incompleteBody:
+        | Awaited<ReturnType<ProgressiveBodyWriter["terminate"]>>
+        | undefined;
+      let physicalTerminationAttempted = false;
+      let closeIdentity:
+        | Readonly<{ assetId: string; input: ContentStreamCloseInput }>
+        | undefined;
+      let termination:
+        | Readonly<{
+          outcome: Exclude<StreamTerminalOutcome, "completed">;
+          capture: StreamCapture;
+        }>
+        | undefined;
       let removeLifetimeAbort = () => {};
 
       const contentRef = (assetId: string): ContentRef =>
@@ -186,19 +252,39 @@ export function createContentStreamRuntime(
         closeOptions: { signal?: AbortSignal } = {},
       ): Promise<PreparedContent> => {
         throwIfAborted(closeOptions.signal);
-        if (settled) {
+        if (terminalKind === "terminated") {
           throw new Error(`Content stream '${id}' is already settled.`);
         }
         const assetId = closeInput.assetId.trim();
         if (!assetId) {
           throw new TypeError("Content stream assetId is required.");
         }
-        const readyBody = await body.finalize();
+        if (closeIdentity && closeIdentity.assetId !== assetId) {
+          throw new Error(
+            `Content stream '${id}' was already closed with another Asset identity.`,
+          );
+        }
+        closeIdentity ??= Object.freeze({ assetId, input: closeInput });
+        terminalKind = "sealed";
+        terminalTask ??= (async () => {
+          body.fence();
+          await options.onTerminalizing?.(opened, {
+            outcome: "completed",
+            capture: "complete",
+          });
+          readyBody ??= await body.finalize();
+          await options.onSeal?.(opened, readyBody);
+          sealed = true;
+          removeLifetimeAbort();
+        })().catch((error) => {
+          // Physical settlement is immutable, but a failed catalog callback is
+          // retryable by invoking the same terminal operation again.
+          terminalTask = undefined;
+          throw error;
+        });
+        await terminalTask;
         throwIfAborted(closeOptions.signal);
-        await options.onSeal?.(opened, readyBody);
-        settled = true;
-        sealed = true;
-        removeLifetimeAbort();
+        const finalBody = readyBody!;
         const ref = contentRef(assetId);
         return Object.freeze({
           content: Object.freeze([ref]),
@@ -207,10 +293,10 @@ export function createContentStreamRuntime(
             namespace,
             mediaType,
             body: new Uint8Array(),
-            readyBody,
-            location: bodyLocation(options.store, readyBody),
-            byteLength: readyBody.byteLength,
-            digest: readyBody.digest,
+            readyBody: finalBody,
+            location: bodyLocation(options.store, finalBody),
+            byteLength: finalBody.byteLength,
+            digest: finalBody.digest,
             idempotencyKey:
               `${namespace}:content-stream:${id}:asset:${assetId}`,
             ...(closeInput.origin
@@ -228,15 +314,44 @@ export function createContentStreamRuntime(
       };
 
       const abort = async (
-        _input: ContentStreamAbortInput = {},
+        abortInput: ContentStreamAbortInput = {},
         abortOptions: { signal?: AbortSignal } = {},
       ): Promise<void> => {
         throwIfAborted(abortOptions.signal);
-        if (settled) return;
-        settled = true;
-        removeLifetimeAbort();
-        await body.abandon();
-        await options.onAbort?.(opened);
+        if (terminalKind === "sealed") return;
+        const normalized = Object.freeze({
+          outcome: abortInput.outcome ?? "failed",
+          capture: abortInput.capture ?? "truncated",
+        });
+        if (
+          termination &&
+          (termination.outcome !== normalized.outcome ||
+            termination.capture !== normalized.capture)
+        ) {
+          throw new Error(
+            `Content stream '${id}' is already terminating with another outcome.`,
+          );
+        }
+        termination ??= normalized;
+        terminalKind = "terminated";
+        terminalTask ??= (async () => {
+          body.fence();
+          await options.onTerminalizing?.(opened, termination!);
+          if (!physicalTerminationAttempted) {
+            incompleteBody = await body.terminate();
+            physicalTerminationAttempted = true;
+          }
+          await options.onTerminate?.(
+            opened,
+            incompleteBody!,
+            termination!,
+          );
+          removeLifetimeAbort();
+        })().catch((error) => {
+          terminalTask = undefined;
+          throw error;
+        });
+        await terminalTask;
       };
 
       const retain = async (
@@ -255,10 +370,7 @@ export function createContentStreamRuntime(
               retention: "canonical",
               assetId: retentionInput.assetId.trim(),
             })
-            : Object.freeze({
-              retention: "observation",
-              expiresAt: new Date(retentionInput.expiresAt).toISOString(),
-            });
+            : Object.freeze({ retention: "observation" });
         if (normalized.retention === "canonical" && !normalized.assetId) {
           throw new TypeError("Canonical stream retention requires assetId.");
         }
@@ -273,33 +385,59 @@ export function createContentStreamRuntime(
           appendOptions: { signal?: AbortSignal } = {},
         ) {
           throwIfAborted(appendOptions.signal);
+          if (terminalKind) {
+            throw new Error(`Content stream '${id}' is already settling.`);
+          }
           const result = await body.append(appendInput);
           const appended = Object.freeze({
             startOffset: result.startOffset,
             endOffset: result.endOffset,
           });
-          await options.onAppend?.(opened, appended);
+          try {
+            await options.onAppend?.(opened, appended);
+          } catch (error) {
+            if (error instanceof ContentStreamOwnershipLostError) {
+              // The raced append may already be visible to live followers, so
+              // freeze immediately and let terminalization publish the exact
+              // immutable Body length as the replay boundary.
+              await abort({ outcome: "superseded", capture: "truncated" })
+                .catch(() => undefined);
+            }
+            throw error;
+          }
           return appended;
         },
         close,
         abort,
         retain,
         async [Symbol.asyncDispose]() {
-          await abort({ reason: "Content stream writer disposed." });
+          await abort({
+            reason: "Content stream writer disposed.",
+            outcome: "abandoned",
+          });
         },
       });
       if (options.signal) {
         const lifetimeAbort = () => {
-          void abort({ reason: "Content stream execution ended." }).catch(
-            () => undefined,
-          );
+          // Execution signals also end after successful Processor completion.
+          // Give explicit cleanup (for example abort({outcome:'cancelled'}))
+          // one task to record the real outcome; only a leaked writer falls
+          // back to the generic abandoned terminal state.
+          setTimeout(() => {
+            void abort({
+              reason: "Content stream execution ended.",
+              outcome: "abandoned",
+            }).catch(() => undefined);
+          }, 0);
         };
         removeLifetimeAbort = () =>
           options.signal?.removeEventListener("abort", lifetimeAbort);
         if (options.signal.aborted) lifetimeAbort();
-        else {options.signal.addEventListener("abort", lifetimeAbort, {
+        else {
+          options.signal.addEventListener("abort", lifetimeAbort, {
             once: true,
-          });}
+          });
+        }
       }
       return writer;
     },

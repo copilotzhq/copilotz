@@ -455,3 +455,55 @@ Deno.test("database BodyStore seal compacts parts and clears writer capabilities
     await db.close();
   }
 });
+
+Deno.test("database retained termination compacts readable bytes and exact-CAS purges", async () => {
+  const db = await createTestDatabase({ url: ":memory:" });
+  const store = createDatabaseBodyStore({
+    session: db,
+    schema: "copilotz_body_incomplete",
+    protectionMs: 0,
+  });
+  try {
+    const bytes = encoder.encode("durable rejected prefix");
+    const writer = await store.reserve({
+      bodyId: "bodies/incomplete",
+      mediaType: "text/plain",
+    });
+    await store.append({
+      writer,
+      expectedOffset: 0,
+      appendId: "prefix",
+      bytes,
+    });
+    const head = await store.terminate!({
+      writer,
+      expectedByteLength: bytes.byteLength,
+      expectedDigest: await digestContent(bytes),
+    });
+    assertEquals(head.state, "incomplete");
+    assertEquals(
+      await readAll(await store.read({ bodyId: head.bodyId })),
+      bytes,
+    );
+    assertEquals(
+      await store.maintenance.delete({
+        bodyId: head.bodyId,
+        expectedState: "incomplete",
+        expectedMaintenanceVersion: head.maintenanceVersion - 1,
+        idleForMs: 0,
+      }),
+      false,
+    );
+    assertEquals(
+      await store.maintenance.delete({
+        bodyId: head.bodyId,
+        expectedState: "incomplete",
+        expectedMaintenanceVersion: head.maintenanceVersion,
+        idleForMs: 0,
+      }),
+      true,
+    );
+  } finally {
+    await db.close();
+  }
+});

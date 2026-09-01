@@ -9,18 +9,17 @@ import {
   type ApplicationOutput,
   type ApplicationOutputDescriptor,
   isStreamOutputDescriptor,
+  type StreamOutput,
 } from "../streams/index.ts";
 import {
   createOperationReplayCursorTracker,
   decodeOperationReplayCursor,
   encodeOperationReplayCursor,
-  operationStreamReplayCursorKey,
 } from "../streams/index.ts";
 import type {
   OperationCatalog,
   OperationChangeSubscription,
   OperationRecord,
-  OperationReplayPosition,
   OperationStreamRecord,
 } from "../streams/index.ts";
 import type {
@@ -101,50 +100,6 @@ async function listAllOperationStreams(
     afterStreamOrdinal = page.at(-1)!.streamOrdinal;
   }
   return Object.freeze(result);
-}
-
-/** Moves pre-high-watermark `r<global-key>` cursors into ordinal exceptions. */
-function normalizeLegacyOperationStreams(
-  initial: OperationReplayPosition,
-  operationId: string,
-  streams: readonly OperationStreamRecord[],
-): OperationReplayPosition {
-  const streamOffsets = { ...initial.streamOffsets };
-  const operationStreamPositions = Object.fromEntries(
-    Object.entries(initial.operationStreamPositions ?? {}).map(
-      ([id, state]) => [id, {
-        highWatermark: state.highWatermark,
-        offsets: { ...state.offsets },
-      }],
-    ),
-  );
-  const state = operationStreamPositions[operationId] ??= {
-    highWatermark: 0,
-    offsets: {},
-  };
-  for (const stream of streams) {
-    const legacyKey = operationStreamReplayCursorKey(stream);
-    const legacyOffset = streamOffsets[legacyKey];
-    if (legacyOffset === undefined) continue;
-    delete streamOffsets[legacyKey];
-    state.offsets[stream.streamOrdinal] = Math.max(
-      state.offsets[stream.streamOrdinal] ?? 0,
-      legacyOffset,
-    );
-  }
-  if (state.highWatermark === 0 && Object.keys(state.offsets).length === 0) {
-    delete operationStreamPositions[operationId];
-  }
-  return Object.freeze({
-    ...(initial.eventPosition ? { eventPosition: initial.eventPosition } : {}),
-    ...(initial.operationEventPositions
-      ? { operationEventPositions: initial.operationEventPositions }
-      : {}),
-    ...(Object.keys(operationStreamPositions).length
-      ? { operationStreamPositions }
-      : {}),
-    streamOffsets,
-  });
 }
 
 function sleep(ms: number, signal: AbortSignal): Promise<void> {
@@ -255,7 +210,7 @@ type ApplicationOutputSubscription = Readonly<{
 type ApplicationOutputHub = Readonly<{
   subscribe(filter?: ApplicationOutputFilter): ApplicationOutputSubscription;
   emit(
-    output: ApplicationOutputDescriptor,
+    output: ApplicationOutputDescriptor | StreamOutput,
     databaseSchema: string,
   ): Promise<void>;
   close(): void;
@@ -395,6 +350,10 @@ export async function createCopilotzApplication(
           id: output.streamId,
         })
       ),
+      terminal: scoped.operations.waitForStreamTerminal(
+        output.namespace,
+        output.streamId,
+      ),
     });
   });
   try {
@@ -407,6 +366,9 @@ export async function createCopilotzApplication(
       async publish(event, context) {
         await outputHub.emit(event, context?.databaseSchema ?? databaseSchema);
         await configuredPublish?.(event, context);
+      },
+      async publishLocalStream(stream, context) {
+        await outputHub.emit(stream, context.databaseSchema);
       },
     });
   } catch (error) {
@@ -579,7 +541,6 @@ export async function createCopilotzApplication(
       correlationId,
       replayCursor: encodeOperationReplayCursor({
         eventPosition: committed.event.position,
-        streamOffsets: Object.freeze({}),
       }),
       outputs: subscription.outputs,
       done,
@@ -783,18 +744,11 @@ export async function createCopilotzApplication(
           operationNamespace,
           operationId,
         );
-        checkpoint = normalizeLegacyOperationStreams(
-          checkpoint,
-          operationId,
-          streams,
-        );
         const tracker = createOperationReplayCursorTracker(checkpoint);
         for (const stream of streams) {
           const position = tracker.streamPosition({
             operationId,
-            replayKey: stream.replayKey,
             streamOrdinal: stream.streamOrdinal,
-            streamId: stream.streamId,
           });
           tracker.commit([
             {
@@ -804,7 +758,7 @@ export async function createCopilotzApplication(
               streamOrdinal: stream.streamOrdinal,
               offset: position.offset,
             },
-            ...(stream.state === "open" ? [] : [{
+            ...(stream.state !== "terminal" ? [] : [{
               kind: "operation-stream" as const,
               action: "end" as const,
               operationId,
@@ -838,42 +792,7 @@ export async function createCopilotzApplication(
     // subscribe, so this attachment's own state transition cannot create a
     // spurious BodyStore replay read.
     await statusFor(boundary);
-    const catalogStreams = await listAllOperationStreams(
-      boundary.scope.operations,
-      boundary.namespace,
-      boundary.operationId,
-    );
-    let initial = normalizeLegacyOperationStreams(
-      decodeOperationReplayCursor(input.cursor),
-      boundary.operationId,
-      catalogStreams,
-    );
-    // Aborted lanes have no replayable payload. Normalize them as consumed so
-    // stale sparse exceptions cannot survive every reconnect indefinitely.
-    const initialTracker = createOperationReplayCursorTracker(initial);
-    for (const stream of catalogStreams) {
-      if (stream.state !== "aborted") continue;
-      const position = initialTracker.streamPosition({
-        operationId: boundary.operationId,
-        replayKey: stream.replayKey,
-        streamOrdinal: stream.streamOrdinal,
-        streamId: stream.streamId,
-      });
-      initialTracker.commit([{
-        kind: "operation-stream",
-        action: "register",
-        operationId: boundary.operationId,
-        streamOrdinal: stream.streamOrdinal,
-        offset: position.offset,
-      }, {
-        kind: "operation-stream",
-        action: "end",
-        operationId: boundary.operationId,
-        streamOrdinal: stream.streamOrdinal,
-        offset: stream.committedOffset,
-      }]);
-    }
-    initial = decodeOperationReplayCursor(initialTracker.cursor());
+    const initial = decodeOperationReplayCursor(input.cursor);
     const compositeReplay = initial.operationEventPositions !== undefined;
     const changes = await boundary.scope.operations.watch(
       boundary.operationId,
@@ -921,7 +840,6 @@ export async function createCopilotzApplication(
         ...(position.operationStreamPositions
           ? { operationStreamPositions: position.operationStreamPositions }
           : {}),
-        streamOffsets: position.streamOffsets,
       });
     };
     const replayStreamPayload = (
@@ -959,20 +877,19 @@ export async function createCopilotzApplication(
                   { status: 410, code: "operation_replay_expired" },
                 );
               }
-              if (current.state === "aborted") {
-                throw Object.assign(
-                  new Error("Operation stream was aborted."),
-                  {
-                    status: 409,
-                    code: "operation_stream_aborted",
-                  },
-                );
-              }
               if (byteOffset > current.committedOffset) {
                 throw Object.assign(
                   new Error("Replay cursor is ahead of the durable stream."),
                   { status: 409, code: "replay_cursor_ahead" },
                 );
+              }
+              if (
+                current.state === "terminal" &&
+                current.availability !== "retained"
+              ) {
+                controller.close();
+                finish();
+                return;
               }
               if (byteOffset < current.committedOffset) {
                 const end = current.committedOffset;
@@ -1000,7 +917,7 @@ export async function createCopilotzApplication(
                 controller.enqueue(bytes);
                 return;
               }
-              if (current.state === "sealed") {
+              if (current.state === "terminal") {
                 controller.close();
                 finish();
                 return;
@@ -1034,17 +951,12 @@ export async function createCopilotzApplication(
                 boundary.operationId,
               );
               for (const stream of streams) {
-                if (
-                  stream.state === "aborted" ||
-                  openedStreams.has(stream.streamId)
-                ) {
+                if (openedStreams.has(stream.streamId)) {
                   continue;
                 }
                 const position = replayTracker.streamPosition({
                   operationId: boundary.operationId,
-                  replayKey: stream.replayKey,
                   streamOrdinal: stream.streamOrdinal,
-                  streamId: stream.streamId,
                 });
                 if (position.consumed) continue;
                 const fromOffset = position.offset;
@@ -1058,9 +970,12 @@ export async function createCopilotzApplication(
                 const payload = replayStreamPayload(stream, fromOffset);
                 controller.enqueue(Object.freeze({
                   ...stream.descriptor,
-                  replayKey: stream.replayKey,
                   streamOrdinal: stream.streamOrdinal,
                   payload,
+                  terminal: boundary.scope.operations.waitForStreamTerminal(
+                    boundary.namespace,
+                    stream.streamId,
+                  ),
                 }));
                 advanced = true;
               }

@@ -26,6 +26,7 @@ import type {
 import type {
   ApplicationOutputDescriptor,
   RuntimeOutputDescriptor,
+  StreamOutput,
 } from "../streams/index.ts";
 import type {
   CreateDeliveryExecutorOptions,
@@ -100,6 +101,11 @@ export type CreateCopilotzEngineOptions = Readonly<{
   execution?: CopilotzEngineExecutionOptions;
   eventHub?: CopilotzEventHub;
   publish?: RuntimeOutputPublisher;
+  /** Process-local authority for unscoped application-visible stream output. */
+  publishLocalStream?: (
+    output: StreamOutput,
+    context: Readonly<{ databaseSchema: string }>,
+  ) => void | Promise<void>;
   onDispatchFailure?: (failure: {
     deliveryId: string;
     error: unknown;
@@ -310,6 +316,7 @@ export type CreateProcessorContextOptions = Readonly<{
   collections: CollectionRuntime;
   eventHub: CopilotzEventHub;
   publishOutput?: (output: RuntimeOutputDescriptor) => Promise<void>;
+  publishLocalStream?: (output: StreamOutput) => Promise<void>;
   actionLifecycle: ActionLifecycleEmitter;
   now?: () => Date;
   streamBodyStore: BodyStore;

@@ -353,6 +353,18 @@ export type LlmAdapterFrame = Readonly<{
   bytes: Uint8Array;
 }>;
 
+/**
+ * Bounded, credential-safe evidence for a provider attempt rejected before
+ * `llm.call` can accept it. It is emitted only through Action progress, never
+ * copied into another Model request or Tool input.
+ */
+export type LlmRejectedAttemptEvidence = Readonly<{
+  code: string;
+  message: string;
+  location?: string;
+  retryable: boolean;
+}>;
+
 /** Runtime-only, credential-safe accounting for one provider attempt. */
 export type LlmAdapterAttempt = Readonly<{
   status: LlmAttemptStatus;
@@ -373,11 +385,13 @@ export type LlmAdapterAttempt = Readonly<{
  */
 export class LlmAdapterCallError extends Error {
   readonly attempts: readonly LlmAdapterAttempt[];
+  readonly rejectedAttemptEvidence?: LlmRejectedAttemptEvidence;
 
   constructor(
     message: string,
     options: Readonly<{
       attempts?: readonly LlmAdapterAttempt[];
+      rejectedAttemptEvidence?: LlmRejectedAttemptEvidence;
       cause?: unknown;
       name?: string;
     }> = {},
@@ -390,6 +404,9 @@ export class LlmAdapterCallError extends Error {
     );
     this.name = options.name?.trim() || "LlmAdapterCallError";
     this.attempts = Object.freeze([...(options.attempts ?? [])]);
+    this.rejectedAttemptEvidence = options.rejectedAttemptEvidence
+      ? Object.freeze({ ...options.rejectedAttemptEvidence })
+      : undefined;
   }
 }
 

@@ -53,7 +53,7 @@ function cursorValue(value: string | undefined): string | undefined {
 
 type CursorAnchorRow = Readonly<{
   id: string;
-  order_value?: string | Date;
+  order_value?: string;
 }>;
 
 async function resolveCursorAnchor(
@@ -68,8 +68,12 @@ async function resolveCursorAnchor(
   cursor: string,
 ): Promise<CursorAnchorRow> {
   const params = [...filterParams, cursor];
+  // Text preserves PostgreSQL's microseconds across the driver round trip;
+  // decoding timestamptz as a JavaScript Date would truncate them.
   const result = await executor.query<CursorAnchorRow>(
-    `SELECT id${order.field === "id" ? "" : `, ${order.field} AS order_value`}
+    `SELECT id${
+      order.field === "id" ? "" : `, ${order.field}::text AS order_value`
+    }
        FROM ${table}
       WHERE ${filters.join(" AND ")} AND id = $${params.length}
       LIMIT 1`,

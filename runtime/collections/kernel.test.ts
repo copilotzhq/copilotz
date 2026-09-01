@@ -790,10 +790,13 @@ Deno.test("namespace rebuild preserves durable Collection timestamp order", asyn
   }
 });
 
-Deno.test("collection cursors follow stable requested-order keysets", async () => {
+async function runCollectionCursorSuite(
+  url: string,
+  schema: string,
+): Promise<void> {
   const fixture = await createFixture(
-    ":memory:",
-    "copilotz_collection_keyset_cursors",
+    url,
+    schema,
   );
   const records = fixture.runtime.bind(timestampOrderDefinition);
   const namespace = "tenant-keyset";
@@ -844,6 +847,59 @@ Deno.test("collection cursors follow stable requested-order keysets", async () =
       "cursor-d",
     ]);
 
+    for (
+      const [id, timestamp] of [
+        ["micro-a", "2026-08-17T21:00:01.123100Z"],
+        ["micro-b", "2026-08-17T21:00:01.123456Z"],
+        ["micro-c", "2026-08-17T21:00:01.123900Z"],
+      ] as const
+    ) {
+      await settle(await records.create({ id, label: "micro" }, { namespace }));
+      await fixture.session.query(
+        `UPDATE ${fixture.store.tables.nodes}
+            SET created_at = $1::timestamptz,
+                updated_at = $1::timestamptz
+          WHERE id = $2`,
+        [timestamp, id],
+      );
+    }
+    for (const field of ["createdAt", "updatedAt"] as const) {
+      const microAscending = { field, direction: "asc" } as const;
+      const microDescending = { field, direction: "desc" } as const;
+      assertEquals(
+        await ids({
+          where: { label: "micro" },
+          order: microAscending,
+          after: "micro-b",
+        }),
+        ["micro-c"],
+      );
+      assertEquals(
+        await ids({
+          where: { label: "micro" },
+          order: microAscending,
+          before: "micro-b",
+        }),
+        ["micro-a"],
+      );
+      assertEquals(
+        await ids({
+          where: { label: "micro" },
+          order: microDescending,
+          after: "micro-b",
+        }),
+        ["micro-a"],
+      );
+      assertEquals(
+        await ids({
+          where: { label: "micro" },
+          order: microDescending,
+          before: "micro-b",
+        }),
+        ["micro-c"],
+      );
+    }
+
     await assertRejects(
       () =>
         records.list(namespace, {
@@ -862,6 +918,26 @@ Deno.test("collection cursors follow stable requested-order keysets", async () =
   } finally {
     await closeFixture(fixture);
   }
+}
+
+Deno.test("collection cursors follow stable requested-order keysets", async () => {
+  await runCollectionCursorSuite(
+    ":memory:",
+    "copilotz_collection_keyset_cursors",
+  );
+});
+
+Deno.test({
+  name: "collection cursors preserve PostgreSQL timestamp precision",
+  ignore: !POSTGRES_URL,
+  sanitizeOps: false,
+  sanitizeResources: false,
+  async fn() {
+    await runCollectionCursorSuite(
+      POSTGRES_URL!,
+      `v3_cursor_${crypto.randomUUID().replaceAll("-", "")}`,
+    );
+  },
 });
 
 Deno.test("scoped collection calls own namespace and expose property commands and queries", async () => {

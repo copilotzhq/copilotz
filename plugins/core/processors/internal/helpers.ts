@@ -10,18 +10,38 @@ import type {
   ConversationThread,
   Participant,
 } from "../../../core-collections/internal/contracts.ts";
+import {
+  compareThreadMessageRecords,
+  loadThreadMessageRecordWindow,
+  mapMessageRecord,
+  mapParticipantRecord,
+  mapThreadRecord,
+  threadMessageRecordInWindow,
+} from "../../../core-collections/internal/projections.ts";
 import type { ProcessorContext } from "@copilotz/copilotz/plugins";
 import type { ToolResource } from "@copilotz/copilotz/tools";
+import { deriveWorkflowId } from "@copilotz/copilotz/events";
 import type { AgentResource } from "../../resources/agent/index.ts";
 import type { CoreResources } from "../../internal/runtime-context.ts";
 import { resolveToolGrants } from "../../internal/capabilities/grants.ts";
-import type { MessageBranch } from "../../../core-collections/internal/contracts.ts";
-import { projectActiveMessageBranch } from "../../../core-collections/internal/projections.ts";
-import { coreToolResultOrigin } from "../../internal/workflow-metadata.ts";
+import {
+  agentAskResultMetadata,
+  coreToolPlanMetadata,
+  coreToolResultOrigin,
+} from "../../internal/workflow-metadata.ts";
 
 export type CoreToolEntry = Readonly<{
   alias: string;
   resource: ToolResource;
+}>;
+
+/** One causally complete, chronological Core history selection. */
+export type CoreThreadMessageSnapshot = Readonly<{
+  active: boolean;
+  thread: ConversationThread;
+  participantRecords: readonly CollectionRecord[];
+  records: readonly CollectionRecord[];
+  messages: readonly ConversationMessage[];
 }>;
 
 export function requiredText(value: string | undefined, name: string): string {
@@ -161,28 +181,108 @@ export function participantInput(participant: CollectionRecord) {
   } as const;
 }
 
-export async function listThreadMessages(
+/**
+ * Selects the latest bounded history through an immutable trigger. Tool plans,
+ * their result blocks, and completed Ask answers are retained as one causal
+ * unit even when the ordinary history boundary crosses that unit.
+ */
+export async function loadCoreThreadMessageSnapshot(
   context: Pick<ProcessorContext, "collections">,
   threadId: string,
-  options: Readonly<{ historyScopeId?: string }> = {},
-): Promise<readonly CollectionRecord[]> {
-  const threads = requireCollection(context, "thread");
+  trigger: CollectionRecord,
+  options: Readonly<{ historyScopeId?: string; limit?: number }> = {},
+): Promise<CoreThreadMessageSnapshot> {
   const messages = requireCollection(context, "message");
-  const thread = await threads.get({ id: threadId });
-  const records = (await messages.list({
-    where: { threadId },
-    order: { field: "createdAt", direction: "asc" },
-    limit: 1_000,
-  })).filter((record) => {
-    const scope = optionalText(record.historyScopeId);
-    const visibility = asRecord(record.visibility);
-    if (!scope) return visibility.kind !== "internal";
-    return scope === options.historyScopeId && visibility.kind === "internal";
+  const window = await loadThreadMessageRecordWindow(context, threadId, {
+    anchor: trigger,
+    limit: options.limit ?? 1_000,
+    ...(options.historyScopeId
+      ? { historyScopeId: options.historyScopeId }
+      : {}),
   });
-  return orderToolPlanResults(projectActiveMessageBranch(
+  const selected = new Map(
+    window.records.map((record) => [String(record.id), record]),
+  );
+  const inspected = new Set<string>();
+  let pending = [...window.records];
+  while (window.anchorActive && pending.length) {
+    const dependencyIds = new Set<string>();
+    await Promise.all(pending.map(async (record) => {
+      inspected.add(String(record.id));
+      const origin = coreToolResultOrigin(record.metadata);
+      const plan = coreToolPlanMetadata(record.metadata);
+      const planId = origin?.planId ?? plan?.planId;
+      const planSize = origin?.planSize ?? plan?.planSize;
+      if (origin) dependencyIds.add(origin.planMessageId);
+      if (planId && planSize) {
+        const resultIds = await Promise.all(
+          Array.from(
+            { length: planSize },
+            (_, index) =>
+              deriveWorkflowId("message", planId, String(index), "result"),
+          ),
+        );
+        for (const id of resultIds) dependencyIds.add(id);
+      }
+      const askResult = agentAskResultMetadata(record.metadata);
+      if (askResult?.status === "completed" && askResult.answerMessageId) {
+        dependencyIds.add(askResult.answerMessageId);
+      }
+    }));
+    const unseen = [...dependencyIds].filter((id) =>
+      !selected.has(id) && !inspected.has(id)
+    );
+    for (const id of unseen) inspected.add(id);
+    const loaded = await Promise.all(unseen.map((id) => messages.get({ id })));
+    pending = loaded.filter((record): record is CollectionRecord =>
+      Boolean(record && threadMessageRecordInWindow(window, record))
+    );
+    for (const record of pending) selected.set(String(record.id), record);
+  }
+
+  const records = orderToolPlanResults(
+    [...selected.values()].sort(compareThreadMessageRecords),
+  );
+  const participantRecords = new Map(
+    window.participantRecords.map((record) => [String(record.id), record]),
+  );
+  const missingSenderIds = new Set(
+    records.map((record) => String(record.senderId)).filter((id) =>
+      !participantRecords.has(id)
+    ),
+  );
+  const missingSenders = await Promise.all(
+    [...missingSenderIds].map((id) =>
+      requireCollection(context, "participant").get({ id })
+    ),
+  );
+  for (const sender of missingSenders) {
+    if (sender) participantRecords.set(String(sender.id), sender);
+  }
+  const mappedParticipants = new Map(
+    [...participantRecords].map(([id, record]) => [
+      id,
+      mapParticipantRecord(record),
+    ]),
+  );
+  const threadParticipants = stringArray(window.threadRecord.participantIds)
+    .map((id) => mappedParticipants.get(id))
+    .filter((participant): participant is Participant => Boolean(participant));
+  const thread = mapThreadRecord(window.threadRecord, threadParticipants);
+  const hydrated = records.map((record) => {
+    const sender = mappedParticipants.get(String(record.senderId));
+    if (!sender) {
+      throw new Error(`Message '${record.id}' sender was not found.`);
+    }
+    return mapMessageRecord(record, sender);
+  });
+  return Object.freeze({
+    active: window.anchorActive,
+    thread,
+    participantRecords: Object.freeze([...participantRecords.values()]),
     records,
-    thread?.activeMessageBranch as MessageBranch | undefined,
-  ));
+    messages: Object.freeze(hydrated),
+  });
 }
 
 /**

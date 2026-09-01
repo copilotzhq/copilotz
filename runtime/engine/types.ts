@@ -245,6 +245,7 @@ export type CopilotzEngine = Readonly<{
       threadId?: string;
       correlationId?: string;
       afterPosition?: string;
+      order?: "asc" | "desc";
       limit?: number;
     }): Promise<readonly DurableEvent[]>;
     settlement(

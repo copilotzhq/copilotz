@@ -25,15 +25,14 @@ import {
   type CoreProcessorContext,
 } from "../../internal/runtime-context.ts";
 import {
-  loadThreadRecord,
   mapMessageRecord,
   mapParticipantRecord,
 } from "../../../core-collections/internal/projections.ts";
+import type { ConversationThread } from "../../../core-collections/internal/contracts.ts";
 import {
   asRecord,
   collectionEventRecord,
-  listThreadMessages,
-  loadParticipant,
+  loadCoreThreadMessageSnapshot,
   participantAgentId,
   requiredText,
   stringArray,
@@ -73,7 +72,7 @@ async function resolvedAgentInstructions(
   agent: AgentResource,
   input: Readonly<{
     agentParticipant: CollectionRecord;
-    threadId: string;
+    thread: ConversationThread;
     triggerMessage: CollectionRecord;
     triggerSender: CollectionRecord;
   }>,
@@ -82,16 +81,10 @@ async function resolvedAgentInstructions(
   if (!policy || typeof policy === "string") {
     return Object.freeze({ agent });
   }
-  const thread = await loadThreadRecord(context, input.threadId);
-  if (!thread) {
-    throw new Error(
-      `Agent '${agent.id}' instruction hook could not load its Thread.`,
-    );
-  }
   const facts: AgentInstructionContext = Object.freeze({
     agent,
     participant: frozenFact(mapParticipantRecord(input.agentParticipant)),
-    thread: frozenFact(thread),
+    thread: frozenFact(input.thread),
     triggerMessage: frozenFact(mapMessageRecord(
       input.triggerMessage,
       mapParticipantRecord(input.triggerSender),
@@ -100,7 +93,7 @@ async function resolvedAgentInstructions(
   const execution: AgentInstructionExecution = Object.freeze({
     agentId: agent.id,
     agentParticipantId: String(input.agentParticipant.id),
-    threadId: input.threadId,
+    threadId: input.thread.id,
     triggerMessageId: String(input.triggerMessage.id),
     namespace: context.namespace,
     operationKey: context.operationKey,
@@ -180,10 +173,6 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
       if (!event.routing?.recipientIds?.length) return;
       if (!event.durable || !event.threadId) return;
       const record = collectionEventRecord(event);
-      const sender = await loadParticipant(context, String(record.senderId));
-      if (!sender) {
-        throw new Error(`Message '${record.id}' sender was not found.`);
-      }
       const workflow = workflowMetadata(asRecord(record.metadata));
       const toolAction = coreToolActionMessageMetadata(record.metadata);
       const branchResult = coreToolPlanResultMetadata(record.metadata);
@@ -212,20 +201,30 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
         workflow?.continuation === "realtime" ||
         workflow?.continuation === "none"
       ) return;
-      const history = await listThreadMessages(
+      const snapshot = await loadCoreThreadMessageSnapshot(
         context,
         String(record.threadId),
+        record,
         agentTurn ? { historyScopeId: agentTurn.id } : undefined,
       );
-      const triggerIndex = history.findIndex((item) => item.id === record.id);
-      if (triggerIndex < 0) {
-        throw new Error(`Trigger message '${record.id}' was not found.`);
+      // A revision can supersede an already-enqueued Message before its
+      // Processor runs. Inactive anchors are intentionally ignored.
+      if (!snapshot.active) return;
+      const participants = new Map(
+        snapshot.participantRecords.map((participant) => [
+          String(participant.id),
+          participant,
+        ]),
+      );
+      const sender = participants.get(String(record.senderId));
+      if (!sender) {
+        throw new Error(`Message '${record.id}' sender was not found.`);
       }
       const historyIds = Object.freeze(
-        history.slice(0, triggerIndex + 1).map((item) => String(item.id)),
+        snapshot.records.map((item) => String(item.id)),
       );
       for (const recipientId of new Set(stringArray(record.recipientIds))) {
-        const participant = await loadParticipant(context, recipientId);
+        const participant = participants.get(recipientId);
         if (!participant || participant.participantType !== "agent") continue;
         const agentId = participantAgentId(participant);
         const agent = coreAgent(context.resources, agentId);
@@ -236,17 +235,17 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
         );
         const resolved = await resolvedAgentInstructions(context, agent, {
           agentParticipant: participant,
-          threadId: String(record.threadId),
+          thread: snapshot.thread,
           triggerMessage: record,
           triggerSender: sender,
         });
         const request = await buildCoreLlmRequest(context, {
           agent: resolved.agent,
           participant,
-          threadId: String(record.threadId),
+          thread: snapshot.thread,
+          history: snapshot.messages,
           messageIds: historyIds,
           tools: availableTools,
-          ...(agentTurn ? { historyScopeId: agentTurn.id } : {}),
         });
         const continuationKey = workflow?.kind === "tool_result"
           ? `${requiredText(toolCursor?.planId, "Tool plan id")}:${recipientId}`

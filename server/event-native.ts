@@ -459,11 +459,13 @@ async function messageList(
   if (!thread) {
     throw appError(404, "thread_not_found", "Thread was not found.");
   }
-  const limit = queryNumber(request.query, "limit");
+  const limit = Math.min(queryNumber(request.query, "limit") ?? 100, 1_000);
   const messageQuery = Object.freeze({
     after: queryText(request.query, "after"),
     before: queryText(request.query, "before"),
-    limit,
+    // Fetch one extra semantic record so hasMore is exact rather than guessed
+    // from a full page that may also be the end of the Thread.
+    limit: limit + 1,
     order: queryChoice(request.query, "order", ["asc", "desc"]),
     view: queryChoice(request.query, "view", ["active", "all"]),
   });
@@ -512,6 +514,8 @@ async function messageList(
     }
     eventPosition = before;
   }
+  const hasMore = messages.length > limit;
+  messages = Object.freeze(messages.slice(0, limit));
   const includeValues = queryTexts(request.query, "include") ?? [];
   const allowedIncludes = new Set<EventNativeHistoryInclude>(["content"]);
   const invalidInclude = includeValues.find((value) =>
@@ -544,7 +548,9 @@ async function messageList(
     data: messages,
     ...(included ? { included } : {}),
     pageInfo: Object.freeze({
-      ...nextPage(messages, limit),
+      ...(hasMore
+        ? { next: messages.at(-1)?.id, hasMore: true }
+        : { hasMore: false }),
       replayCursor,
       activeOperationIds: Object.freeze(
         activeOperations.map((operation) => operation.operationId),
@@ -599,37 +605,45 @@ function activityGroupKey(event: DurableEvent): string {
   return correlationId ? `correlation:${correlationId}` : `event:${event.id}`;
 }
 
-function isNewerActivityEvent(
-  candidate: DurableEvent,
-  current: DurableEvent | undefined,
-): boolean {
-  if (!current) return true;
-  if (candidate.createdAt !== current.createdAt) {
-    return candidate.createdAt > current.createdAt;
-  }
-  return candidate.id > current.id;
-}
-
 async function threadActivity(
   application: CopilotzApplication,
   namespace: string,
   thread: ConversationThread,
   request: EventNativeAppRequest,
 ): Promise<EventNativeAppResponse> {
-  const limit = queryNumber(request.query, "limit") ?? 1_000;
-  const events = await application.events.list({
+  const pageSize = Math.min(
+    queryNumber(request.query, "limit") ?? 1_000,
+    1_000,
+  );
+  const latest = (await application.events.list({
     namespace,
     threadId: thread.id,
-    limit,
-  });
-  const latest = events.reduce<DurableEvent | undefined>(
-    (current, event) => isNewerActivityEvent(event, current) ? event : current,
-    undefined,
-  );
+    order: "desc",
+    limit: 1,
+  }))[0];
   const activeGroup = latest ? activityGroupKey(latest) : undefined;
-  const scopedEvents = activeGroup
-    ? events.filter((event) => activityGroupKey(event) === activeGroup)
-    : [];
+  const scopedEvents: DurableEvent[] = [];
+  if (latest && activeGroup) {
+    const correlationId = latest.correlationId.trim();
+    if (!correlationId) {
+      scopedEvents.push(latest);
+    } else {
+      let afterPosition: string | undefined;
+      while (true) {
+        const page = await application.events.list({
+          namespace,
+          threadId: thread.id,
+          correlationId,
+          ...(afterPosition ? { afterPosition } : {}),
+          limit: pageSize,
+        });
+        scopedEvents.push(...page);
+        if (page.length < pageSize) break;
+        afterPosition = page.at(-1)?.position;
+        if (!afterPosition) break;
+      }
+    }
+  }
   const deliveryEntries = (
     await Promise.all(
       scopedEvents.map(async (event) =>

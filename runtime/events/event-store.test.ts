@@ -394,6 +394,14 @@ Deno.test("A47 positions, tenant isolation, and passive events do not multiply d
       2,
     );
     assertEquals(
+      (await store.listEvents({
+        namespace: "tenant-a",
+        order: "desc",
+        limit: 1,
+      }))[0]?.id,
+      actionable.event.id,
+    );
+    assertEquals(
       (await store.listEvents({ namespace: "tenant-b" })).length,
       1,
     );

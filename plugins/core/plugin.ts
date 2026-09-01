@@ -23,7 +23,7 @@ import {
 import { askTool } from "./resources/ask-tool/index.ts";
 
 export const CORE_PLUGIN_ID = "@copilotz/core";
-export const CORE_PLUGIN_VERSION = "0.64.2";
+export const CORE_PLUGIN_VERSION = "0.64.3";
 
 export type CoreCollections = typeof coreCollections;
 export type CoreActions = typeof coreCollectionActions;

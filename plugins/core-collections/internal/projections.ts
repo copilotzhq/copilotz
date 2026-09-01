@@ -1,6 +1,9 @@
 /** Projects Core Collection records into public conversation values. @module */
 
-import type { CollectionRecord } from "@copilotz/copilotz/collections";
+import type {
+  CollectionRecord,
+  ScopedCollection,
+} from "@copilotz/copilotz/collections";
 import type { ContentSequence } from "@copilotz/copilotz/content";
 import type { ProcessorContext } from "@copilotz/copilotz/plugins";
 import type {
@@ -37,10 +40,37 @@ function contentSequence(value: unknown): ContentSequence {
 function requireScopedCollection(
   context: Pick<ProcessorContext, "collections">,
   name: string,
-) {
+): ScopedCollection {
   const bound = context.collections[name];
   if (!bound) throw new Error(`Collection '${name}' is not bound.`);
   return bound;
+}
+
+const MESSAGE_PAGE_SIZE = 1_000;
+
+export type ActiveBranchBounds = Readonly<{
+  root: CollectionRecord;
+  head: CollectionRecord;
+}>;
+
+/** One stable, authorized Message window before Core-specific transcript rules. */
+export type ThreadMessageRecordWindow = Readonly<{
+  threadRecord: CollectionRecord;
+  participantRecords: readonly CollectionRecord[];
+  records: readonly CollectionRecord[];
+  anchorActive: boolean;
+  historyScopeId?: string;
+  anchor?: CollectionRecord;
+  branch?: ActiveBranchBounds;
+}>;
+
+/** Stable chronological Message ordering used by Collection keyset reads. */
+export function compareThreadMessageRecords(
+  left: Pick<CollectionRecord, "id" | "createdAt">,
+  right: Pick<CollectionRecord, "id" | "createdAt">,
+): number {
+  const created = String(left.createdAt).localeCompare(String(right.createdAt));
+  return created || String(left.id).localeCompare(String(right.id));
 }
 
 /** Active-branch view over a thread's messages. */
@@ -178,23 +208,54 @@ export async function listThreadMessageRecords(
   threadId: string,
   options: Readonly<{ historyScopeId?: string }> = {},
 ): Promise<readonly ConversationMessage[]> {
-  const messages = requireScopedCollection(context, "message");
-  const participants = requireScopedCollection(context, "participant");
-  const thread = await loadThreadRecord(context, threadId);
-  const records = (await messages.list({
-    where: { threadId },
-    order: { field: "createdAt", direction: "asc" },
-    limit: 1_000,
-  })).filter((record) => visibleInHistoryScope(record, options.historyScopeId));
-  const hydrated: ConversationMessage[] = [];
-  for (const record of records) {
-    const sender = await participants.get({ id: String(record.senderId) });
+  const window = await loadThreadMessageRecordWindow(context, threadId, {
+    ...(options.historyScopeId
+      ? { historyScopeId: options.historyScopeId }
+      : {}),
+  });
+  const participants = new Map(
+    window.participantRecords.map((record) => [
+      record.id,
+      mapParticipantRecord(record),
+    ]),
+  );
+  return Object.freeze(window.records.map((record) => {
+    const sender = participants.get(String(record.senderId));
     if (!sender) {
       throw new Error(`Message '${record.id}' sender was not found.`);
     }
-    hydrated.push(mapMessageRecord(record, mapParticipantRecord(sender)));
-  }
-  return projectActiveMessageBranch(hydrated, thread?.activeMessageBranch);
+    return mapMessageRecord(record, sender);
+  }));
+}
+
+async function activeBranchBounds(
+  messages: ScopedCollection,
+  threadId: string,
+  thread: CollectionRecord,
+): Promise<ActiveBranchBounds | undefined> {
+  const branch = asRecord(thread.activeMessageBranch);
+  const rootId = optionalText(branch.rootMessageId);
+  const headId = optionalText(branch.headMessageId);
+  if (!rootId || !headId) return undefined;
+  const [root, head] = await Promise.all([
+    messages.get({ id: rootId }),
+    messages.get({ id: headId }),
+  ]);
+  if (
+    !root || !head || String(root.threadId) !== threadId ||
+    String(head.threadId) !== threadId ||
+    compareThreadMessageRecords(head, root) <= 0
+  ) return undefined;
+  return Object.freeze({ root, head });
+}
+
+function activeInBranch(
+  record: CollectionRecord,
+  branch: ActiveBranchBounds | undefined,
+): boolean {
+  if (!branch) return true;
+  return compareThreadMessageRecords(record, branch.root) < 0 ||
+    compareThreadMessageRecords(record, branch.head) >= 0;
 }
 
 /** Private Core reader policy; the public history query never exposes scopes. */
@@ -206,6 +267,120 @@ function visibleInHistoryScope(
   const visibility = asRecord(record.visibility);
   if (!scope) return visibility.kind !== "internal";
   return historyScopeId === scope && visibility.kind === "internal";
+}
+
+/** Whether an exact dependency belongs to a previously authorized window. */
+export function threadMessageRecordInWindow(
+  window: ThreadMessageRecordWindow,
+  record: CollectionRecord,
+): boolean {
+  return String(record.threadId) === String(window.threadRecord.id) &&
+    (!window.anchor ||
+      compareThreadMessageRecords(record, window.anchor) <= 0) &&
+    visibleInHistoryScope(record, window.historyScopeId) &&
+    activeInBranch(record, window.branch);
+}
+
+/**
+ * Loads a chronological active-history window. Selection runs newest-first so
+ * the bounded result is the latest history through the immutable anchor; only
+ * presentation is reversed to chronological order.
+ */
+export async function loadThreadMessageRecordWindow(
+  context: Pick<ProcessorContext, "collections">,
+  threadId: string,
+  options: Readonly<{
+    anchor?: CollectionRecord;
+    historyScopeId?: string;
+    limit?: number;
+  }> = {},
+): Promise<ThreadMessageRecordWindow> {
+  const messages = requireScopedCollection(context, "message");
+  const participants = requireScopedCollection(context, "participant");
+  const threads = requireScopedCollection(context, "thread");
+  const threadRecord = await threads.get({ id: threadId });
+  if (!threadRecord) throw new Error(`Thread '${threadId}' was not found.`);
+  const branch = await activeBranchBounds(messages, threadId, threadRecord);
+  const requestedLimit = options.limit;
+  if (
+    requestedLimit !== undefined &&
+    (!Number.isSafeInteger(requestedLimit) || requestedLimit <= 0)
+  ) {
+    throw new TypeError("Message window limit must be a positive integer.");
+  }
+
+  const currentAnchor = options.anchor
+    ? await messages.get({ id: options.anchor.id })
+    : undefined;
+  const anchor = currentAnchor && String(currentAnchor.threadId) === threadId
+    ? currentAnchor
+    : undefined;
+  const base = Object.freeze({
+    threadRecord,
+    participantRecords: Object.freeze([]),
+    records: Object.freeze([]),
+    anchorActive: options.anchor === undefined,
+    ...(options.historyScopeId
+      ? { historyScopeId: options.historyScopeId }
+      : {}),
+    ...(anchor ? { anchor } : {}),
+    ...(branch ? { branch } : {}),
+  }) satisfies ThreadMessageRecordWindow;
+  const anchorActive = options.anchor === undefined || Boolean(
+    anchor &&
+      String(anchor.createdAt) === String(options.anchor.createdAt) &&
+      threadMessageRecordInWindow(base, anchor),
+  );
+
+  const selected: CollectionRecord[] = [];
+  if (anchorActive && anchor) selected.push(anchor);
+  if (anchorActive) {
+    const descending = Boolean(anchor || requestedLimit !== undefined);
+    let cursor = anchor?.id;
+    while (requestedLimit === undefined || selected.length < requestedLimit) {
+      const page = await messages.list({
+        where: { threadId },
+        order: {
+          field: "createdAt",
+          direction: descending ? "desc" : "asc",
+        },
+        ...(cursor ? { after: cursor } : {}),
+        limit: MESSAGE_PAGE_SIZE,
+      });
+      if (!page.length) break;
+      for (const record of page) {
+        if (threadMessageRecordInWindow(base, record)) selected.push(record);
+        if (
+          requestedLimit !== undefined && selected.length >= requestedLimit
+        ) break;
+      }
+      const next = page.at(-1)?.id;
+      if (!next || next === cursor || page.length < MESSAGE_PAGE_SIZE) break;
+      cursor = next;
+    }
+    if (descending) selected.reverse();
+  }
+
+  const participantIds = new Set([
+    ...stringArray(threadRecord.participantIds),
+    ...selected.map((record) => String(record.senderId)),
+  ]);
+  const participantRecords = Object.freeze(
+    (await Promise.all(
+      [...participantIds].map((id) => participants.get({ id })),
+    )).filter((record): record is CollectionRecord => record !== null),
+  );
+  return Object.freeze({
+    threadRecord,
+    participantRecords,
+    records: Object.freeze(selected),
+    anchorActive,
+    ...(options.historyScopeId
+      ? { historyScopeId: options.historyScopeId }
+      : {}),
+    ...(anchor ? { anchor } : {}),
+    ...(branch ? { branch } : {}),
+  });
 }
 
 export async function loadMessageRecord(

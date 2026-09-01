@@ -1,14 +1,9 @@
 import type { ConversationMessage } from "../../../core-collections/internal/contracts.ts";
-import type { ProcessorContext } from "@copilotz/copilotz/plugins";
 import type {
   LlmJsonObject,
   LlmMessage,
   LlmToolCall,
 } from "@copilotz/copilotz/llm";
-import {
-  listThreadMessageRecords,
-  loadThreadRecord,
-} from "../../../core-collections/internal/projections.ts";
 import {
   agentAskMetadata,
   agentAskResultMetadata,
@@ -169,20 +164,15 @@ function receiptAnswer(
 }
 
 /** Compiles immutable Core Messages into participant-relative LLM history. */
-export async function buildLlmTranscript(
-  context: ProcessorContext,
+export function buildLlmTranscript(
   input: Readonly<{
     threadId: string;
+    history: readonly ConversationMessage[];
     messageIds?: readonly string[];
     participantId?: string;
-    historyScopeId?: string;
   }>,
-): Promise<readonly LlmMessage[]> {
-  const thread = await loadThreadRecord(context, input.threadId);
-  if (!thread) throw new Error(`Thread '${input.threadId}' was not found.`);
-  const history = await listThreadMessageRecords(context, input.threadId, {
-    ...(input.historyScopeId ? { historyScopeId: input.historyScopeId } : {}),
-  });
+): readonly LlmMessage[] {
+  const history = input.history;
   const selected = input.messageIds?.length
     ? (() => {
       const byId = new Map(history.map((message) => [message.id, message]));

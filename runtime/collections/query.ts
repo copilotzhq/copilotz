@@ -29,6 +29,85 @@ function jsonTextPath(field: string): string {
   return `data #>> '{${parts.join(",")}}'`;
 }
 
+type CollectionOrder = Readonly<{
+  field: "id" | "created_at" | "updated_at";
+  direction: "ASC" | "DESC";
+}>;
+
+function collectionOrder(query: CollectionQuery): CollectionOrder {
+  const field = query.order?.field === "createdAt"
+    ? "created_at"
+    : query.order?.field === "updatedAt"
+    ? "updated_at"
+    : "id";
+  return Object.freeze({
+    field,
+    direction: query.order?.direction === "desc" ? "DESC" : "ASC",
+  });
+}
+
+function cursorValue(value: string | undefined): string | undefined {
+  const normalized = value?.trim();
+  return normalized || undefined;
+}
+
+type CursorAnchorRow = Readonly<{
+  id: string;
+  order_value?: string | Date;
+}>;
+
+async function resolveCursorAnchor(
+  executor: SqlExecutor,
+  table: string,
+  filters: readonly string[],
+  filterParams: readonly unknown[],
+  order: CollectionOrder,
+  definition: CollectionDefinition,
+  namespace: string,
+  boundary: "after" | "before",
+  cursor: string,
+): Promise<CursorAnchorRow> {
+  const params = [...filterParams, cursor];
+  const result = await executor.query<CursorAnchorRow>(
+    `SELECT id${order.field === "id" ? "" : `, ${order.field} AS order_value`}
+       FROM ${table}
+      WHERE ${filters.join(" AND ")} AND id = $${params.length}
+      LIMIT 1`,
+    params,
+  );
+  const anchor = result.rows[0];
+  if (!anchor) {
+    throw new RangeError(
+      `Collection '${definition.name}' ${boundary} cursor '${cursor}' does not match the current query scope in namespace '${namespace}'.`,
+    );
+  }
+  return anchor;
+}
+
+function cursorFilter(
+  params: unknown[],
+  order: CollectionOrder,
+  boundary: "after" | "before",
+  anchor: CursorAnchorRow,
+): string {
+  const followsRequestedOrder = boundary === "after";
+  const greaterThan = (order.direction === "ASC") === followsRequestedOrder;
+  const operator = greaterThan ? ">" : "<";
+  if (order.field === "id") {
+    return `id ${operator} $${params.push(anchor.id)}`;
+  }
+  if (anchor.order_value === undefined || anchor.order_value === null) {
+    throw new Error(
+      `Collection cursor '${anchor.id}' has no '${order.field}' ordering value.`,
+    );
+  }
+  const valueIndex = params.push(anchor.order_value);
+  const idIndex = params.push(anchor.id);
+  return `(${order.field} ${operator} $${valueIndex}::timestamptz OR ` +
+    `(${order.field} = $${valueIndex}::timestamptz AND ` +
+    `id ${operator} $${idIndex}))`;
+}
+
 export async function getCollectionRecord(
   executor: SqlExecutor,
   tables: { nodes: string },
@@ -158,29 +237,41 @@ export async function queryCollectionRecords(
     if (field === "id") filters.push(`id = $${index}`);
     else filters.push(`${jsonTextPath(field)} = $${index}::text`);
   }
-  if (query.after?.trim()) {
-    const index = params.push(query.after.trim());
-    filters.push(`id > $${index}`);
-  }
   if (query.text?.trim() && definition.search?.enabled) {
     const index = params.push(`%${query.text.trim()}%`);
     filters.push(`content ILIKE $${index}`);
   }
-  const orderField = query.order?.field === "id" ||
-      query.order?.field === "createdAt" ||
-      query.order?.field === "updatedAt"
-    ? query.order.field === "id"
-      ? "id"
-      : query.order.field === "createdAt"
-      ? "created_at"
-      : "updated_at"
-    : "id";
-  const direction = query.order?.direction === "desc" ? "DESC" : "ASC";
+  const order = collectionOrder(query);
+  const scopeFilters = [...filters];
+  const scopeParams = [...params];
+  for (
+    const [boundary, cursor] of [
+      ["after", cursorValue(query.after)],
+      ["before", cursorValue(query.before)],
+    ] as const
+  ) {
+    if (!cursor) continue;
+    const anchor = await resolveCursorAnchor(
+      executor,
+      tables.nodes,
+      scopeFilters,
+      scopeParams,
+      order,
+      definition,
+      namespace,
+      boundary,
+      cursor,
+    );
+    filters.push(cursorFilter(params, order, boundary, anchor));
+  }
   const limit = boundedLimit(query.limit);
+  const orderBy = order.field === "id"
+    ? `id ${order.direction}`
+    : `${order.field} ${order.direction}, id ${order.direction}`;
   const result = await executor.query<NodeRow>(
     `SELECT * FROM ${tables.nodes}
      WHERE ${filters.join(" AND ")}
-     ORDER BY ${orderField} ${direction}, id ${direction}
+     ORDER BY ${orderBy}
      LIMIT ${limit}`,
     params,
   );

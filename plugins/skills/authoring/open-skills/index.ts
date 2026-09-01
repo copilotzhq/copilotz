@@ -19,7 +19,7 @@ import type {
   SkillManifest,
 } from "../../internal/contracts.ts";
 
-const DEFAULT_RUNTIME_IMPORT = "jsr:@copilotz/copilotz@^0.64.2/skills";
+const DEFAULT_RUNTIME_IMPORT = "jsr:@copilotz/copilotz@^0.64.3/skills";
 
 export type BuildOpenSkillsPluginOptions = Readonly<{
   /** Directory whose immediate children are Agent Skills directories. */

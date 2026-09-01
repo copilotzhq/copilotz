@@ -5,11 +5,7 @@ import type {
   ConversationThread,
   Participant,
 } from "../../../core-collections/internal/contracts.ts";
-import {
-  listThreadMessageRecords,
-  loadThreadRecord,
-  mapParticipantRecord,
-} from "../../../core-collections/internal/projections.ts";
+import { mapParticipantRecord } from "../../../core-collections/internal/projections.ts";
 import type {
   LlmJsonObject,
   LlmRequest,
@@ -263,22 +259,19 @@ export async function buildCoreLlmRequest(
   input: Readonly<{
     agent: AgentResource;
     participant: CollectionRecord;
-    threadId: string;
+    thread: ConversationThread;
+    history: readonly ConversationMessage[];
     messageIds: readonly string[];
     tools: readonly CoreToolEntry[];
-    historyScopeId?: string;
   }>,
 ): Promise<LlmRequest> {
   const participant = mapParticipantRecord(input.participant);
-  const thread = await loadThreadRecord(context, input.threadId);
-  if (!thread) throw new Error(`Thread '${input.threadId}' was not found.`);
+  const thread = input.thread;
   const human = thread.participants.find((candidate) =>
     candidate.participantType === "human"
   );
   const userMetadata = human ? visibleMetadata(human.metadata) : undefined;
-  const rawHistory = await listThreadMessageRecords(context, input.threadId, {
-    ...(input.historyScopeId ? { historyScopeId: input.historyScopeId } : {}),
-  });
+  const rawHistory = input.history;
   const contributions = await collectContextContributions(context, {
     purpose: "conversation",
     agent: input.agent,
@@ -305,11 +298,11 @@ export async function buildCoreLlmRequest(
     rawHistory,
     rendered,
   );
-  const messages = await buildLlmTranscript(context, {
-    threadId: input.threadId,
+  const messages = buildLlmTranscript({
+    threadId: thread.id,
+    history: rawHistory,
     messageIds,
     participantId: participant.id,
-    ...(input.historyScopeId ? { historyScopeId: input.historyScopeId } : {}),
   });
   const agents = Object.values(context.resources.agents ?? {}).filter(
     (value): value is AgentResource => Boolean(value),

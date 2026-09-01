@@ -10,7 +10,7 @@ import {
 } from "./processors/index.ts";
 
 export const CHANNELS_PLUGIN_ID = "@copilotz/channels";
-export const CHANNELS_PLUGIN_VERSION = "0.64.2";
+export const CHANNELS_PLUGIN_VERSION = "0.64.3";
 
 type EmptyMap = Readonly<Record<never, never>>;
 type ChannelsCollections = Readonly<{

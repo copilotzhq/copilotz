@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.64.3 — 2026-08-31
+
+Fixes long-running conversation history after a Thread exceeds 1,000 Messages.
+Collection cursors now use stable ordered keysets, Core routes from one
+trigger-anchored, branch-aware chronological snapshot, and public history pages
+the true newest records instead of truncating the oldest prefix. Thread activity
+also selects the latest Event correlation without an oldest-page cutoff.
+
 ## 0.64.2 — 2026-08-31
 
 Fixes reconnect history while an operation is active in a tenant database

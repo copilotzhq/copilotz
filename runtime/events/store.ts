@@ -144,6 +144,8 @@ export type EventStore = {
     threadId?: string;
     correlationId?: string;
     afterPosition?: string;
+    /** Result order. `afterPosition` remains an ascending position bound. */
+    order?: "asc" | "desc";
     limit?: number;
   }, executor?: SqlExecutor): Promise<readonly DurableEvent[]>;
   getDelivery(id: string): Promise<EventDelivery | null>;
@@ -940,10 +942,11 @@ export function createEventStore(
         conditions.push(`position > $${params.length}::bigint`);
       }
       params.push(boundedInteger(listOptions.limit, 1_000, 1));
+      const order = listOptions.order === "desc" ? "DESC" : "ASC";
       const result = await executor.query<EventRow>(
         `SELECT * FROM ${tables.events}
          WHERE ${conditions.join(" AND ")}
-         ORDER BY position LIMIT $${params.length}`,
+         ORDER BY position ${order} LIMIT $${params.length}`,
         params,
       );
       return result.rows.map(mapEvent);

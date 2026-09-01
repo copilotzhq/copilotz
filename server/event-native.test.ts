@@ -622,7 +622,9 @@ Deno.test("thread activity is scoped to the newest logical event correlation", a
         resource: "threads",
         method: "GET",
         path: ["activity-thread", "activity"],
-        query: { includeDeliveries: "true" },
+        // A small scan page must still select and fully traverse the newest
+        // correlation instead of mistaking the oldest Event for current work.
+        query: { includeDeliveries: "true", limit: "1" },
       })).data,
     );
     assertEquals(completed.status, "idle");
@@ -860,6 +862,20 @@ Deno.test("message history resolves canonical semantic content without operation
       activeOperationIds: [],
     });
     assertEquals(array(object(older.included).content).length, 1);
+
+    const exact = await app.handle({
+      resource: "threads",
+      method: "GET",
+      path: ["history-thread", "messages"],
+      query: { order: "desc", limit: "3" },
+    });
+    assertEquals(array(exact.data).map((message) => object(message).id), [
+      "history-tool-message",
+      "history-agent-message",
+      "history-user-message",
+    ]);
+    assertEquals(exact.pageInfo?.hasMore, false);
+    assertEquals(exact.pageInfo?.next, undefined);
   } finally {
     await application.shutdown();
   }

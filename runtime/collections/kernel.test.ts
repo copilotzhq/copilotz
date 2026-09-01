@@ -790,6 +790,80 @@ Deno.test("namespace rebuild preserves durable Collection timestamp order", asyn
   }
 });
 
+Deno.test("collection cursors follow stable requested-order keysets", async () => {
+  const fixture = await createFixture(
+    ":memory:",
+    "copilotz_collection_keyset_cursors",
+  );
+  const records = fixture.runtime.bind(timestampOrderDefinition);
+  const namespace = "tenant-keyset";
+  try {
+    for (
+      const [id, label] of [
+        ["cursor-c", "inside"],
+        ["cursor-a", "inside"],
+        ["cursor-d", "outside"],
+        ["cursor-b", "inside"],
+      ] as const
+    ) {
+      await settle(await records.create({ id, label }, { namespace }));
+    }
+
+    const ids = async (
+      query: Parameters<typeof records.list>[1],
+    ): Promise<readonly string[]> =>
+      (await records.list(namespace, query)).map((record) => record.id);
+    const ascending = { field: "createdAt", direction: "asc" } as const;
+    const descending = { field: "createdAt", direction: "desc" } as const;
+
+    // Every row deliberately shares one timestamp, so the id tie-breaker is
+    // part of both ordering and cursor comparisons.
+    assertEquals(await ids({ order: ascending }), [
+      "cursor-a",
+      "cursor-b",
+      "cursor-c",
+      "cursor-d",
+    ]);
+    assertEquals(await ids({ order: ascending, after: "cursor-b" }), [
+      "cursor-c",
+      "cursor-d",
+    ]);
+    assertEquals(await ids({ order: ascending, before: "cursor-c" }), [
+      "cursor-a",
+      "cursor-b",
+    ]);
+    assertEquals(await ids({ after: "cursor-b" }), [
+      "cursor-c",
+      "cursor-d",
+    ]);
+    assertEquals(await ids({ order: descending, after: "cursor-c" }), [
+      "cursor-b",
+      "cursor-a",
+    ]);
+    assertEquals(await ids({ order: descending, before: "cursor-c" }), [
+      "cursor-d",
+    ]);
+
+    await assertRejects(
+      () =>
+        records.list(namespace, {
+          where: { label: "inside" },
+          order: ascending,
+          after: "cursor-d",
+        }),
+      RangeError,
+      "does not match the current query scope",
+    );
+    await assertRejects(
+      () => records.list(namespace, { before: "missing-cursor" }),
+      RangeError,
+      "does not match the current query scope",
+    );
+  } finally {
+    await closeFixture(fixture);
+  }
+});
+
 Deno.test("scoped collection calls own namespace and expose property commands and queries", async () => {
   const fixture = await createFixture(
     ":memory:",

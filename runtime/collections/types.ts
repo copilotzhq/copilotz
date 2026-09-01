@@ -131,6 +131,7 @@ export type CollectionQuery = Readonly<{
   where?: Readonly<Record<string, unknown>>;
   order?: CollectionQueryOrder;
   after?: string;
+  before?: string;
   limit?: number;
   include?: readonly string[];
   text?: string;

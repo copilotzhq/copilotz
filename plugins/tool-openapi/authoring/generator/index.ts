@@ -33,12 +33,65 @@ import {
   type OpenApiToolsPlugin,
 } from "../../plugin.ts";
 
+const REMOTE_ERROR_SUMMARY_MAX_LENGTH = 512;
+const STABLE_REMOTE_ERROR_CODE = /^[A-Za-z][A-Za-z0-9_.:-]{0,127}$/;
+
+function boundedRemoteErrorText(
+  value: unknown,
+  maxLength = REMOTE_ERROR_SUMMARY_MAX_LENGTH,
+): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.replace(/\p{Cc}+/gu, " ")
+    .replace(/\s+/g, " ").trim();
+  if (!normalized) return undefined;
+  return normalized.length <= maxLength
+    ? normalized
+    : `${normalized.slice(0, maxLength - 1)}…`;
+}
+
+function remoteErrorSummary(response: unknown, fallback: string): string {
+  const envelope = response && typeof response === "object" &&
+      !Array.isArray(response)
+    ? response as Record<string, unknown>
+    : undefined;
+  const error = envelope?.error && typeof envelope.error === "object" &&
+      !Array.isArray(envelope.error)
+    ? envelope.error as Record<string, unknown>
+    : undefined;
+  const message = boundedRemoteErrorText(error?.message) ??
+    boundedRemoteErrorText(envelope?.message);
+  const code = typeof error?.code === "string" &&
+      STABLE_REMOTE_ERROR_CODE.test(error.code)
+    ? error.code
+    : typeof envelope?.code === "string" &&
+        STABLE_REMOTE_ERROR_CODE.test(envelope.code)
+    ? envelope.code
+    : undefined;
+  if (!message) return code ? `Remote error (${code})` : fallback;
+  const prefix = code ? `${code}: ` : "";
+  return `${prefix}${
+    boundedRemoteErrorText(
+      message,
+      REMOTE_ERROR_SUMMARY_MAX_LENGTH - prefix.length,
+    )
+  }`;
+}
+
 class ToolExecutionError extends Error {
   readonly response: unknown;
   readonly status: number;
 
-  constructor(response: unknown, status: number, statusText: string) {
-    super(`HTTP ${status}: ${statusText}`);
+  constructor(
+    response: unknown,
+    status: number,
+    fallback = "Request failed",
+  ) {
+    super(
+      remoteErrorSummary(
+        response,
+        `HTTP ${status}: ${fallback}`,
+      ),
+    );
     this.name = "ToolExecutionError";
     this.response = response;
     this.status = status;
@@ -630,7 +683,7 @@ async function consumeNdjsonToolResponse(
       throw new ToolExecutionError(
         terminal.error ?? terminal.value,
         response.status,
-        response.statusText || "Stream failed",
+        "Remote error",
       );
     }
     const closed: Array<
@@ -1195,7 +1248,6 @@ function createApiExecutor(
         throw new ToolExecutionError(
           responseData,
           response.status,
-          response.statusText,
         );
       }
 

@@ -289,6 +289,74 @@ Deno.test("OpenAPI NDJSON aborts every open stream on missing and error terminal
   }
 });
 
+Deno.test("OpenAPI NDJSON terminal errors project bounded envelope details", async () => {
+  const definition = api("terminal_error_details", { streamNdjson: true });
+  const originalFetch = globalThis.fetch;
+  const remoteMessage = `  execution failed\u0000\u0007 ${"x".repeat(600)}  `;
+  globalThis.fetch = () =>
+    Promise.resolve(
+      new Response(
+        `${
+          JSON.stringify({
+            type: "error",
+            error: { code: "remote.command_failed", message: remoteMessage },
+          })
+        }\n`,
+        { headers: { "content-type": "application/x-ndjson" } },
+      ),
+    );
+  try {
+    let failure: unknown;
+    try {
+      await action(
+        createOpenApiToolsPlugin({ apis: [definition] }),
+        "terminal_error_details",
+      ).execute({}, actionContext());
+    } catch (error) {
+      failure = error;
+    }
+    assert(failure instanceof Error);
+    assertEquals(failure.name, "ToolExecutionError");
+    assert(
+      failure.message.startsWith("remote.command_failed: execution failed "),
+    );
+    assertEquals(failure.message.length, 512);
+    assert(failure.message.endsWith("…"));
+    assertEquals((failure as Error & { status: number }).status, 200);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("OpenAPI failed responses keep an opaque-payload fallback message", async () => {
+  const definition = api("opaque_failure");
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = () =>
+    Promise.resolve(
+      new Response(
+        JSON.stringify({ detail: "do not expose this arbitrary payload" }),
+        {
+          status: 502,
+          statusText: "Upstream details must not be reflected",
+          headers: { "content-type": "application/json" },
+        },
+      ),
+    );
+  try {
+    await assertRejects(
+      async () =>
+        await action(
+          createOpenApiToolsPlugin({ apis: [definition] }),
+          "opaque_failure",
+        ).execute({}, actionContext()),
+      Error,
+      "HTTP 502: Request failed",
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 Deno.test("OpenAPI NDJSON close failure aborts that and every later writer", async () => {
   const definition = api("terminal_close_failure", { streamNdjson: true });
   const states = new Map<string, { closes: number; aborts: number }>();

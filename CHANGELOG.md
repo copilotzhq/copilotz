@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.65.1 — 2026-09-01
+
+Preserves bounded, sanitized error details from structured OpenAPI and NDJSON
+tool responses, including terminal errors carried by successful HTTP streams.
+Opaque response payloads continue to use a fixed safe fallback.
+
 ## 0.65.0 — 2026-09-01
 
 Breaking: progressive streams now have one retained terminal contract. Body

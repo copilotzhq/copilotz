@@ -1,8 +1,8 @@
 import type {
   BodyFilesystemAccess,
-  ReadyBodyHead,
   BodyMaintenanceDeleteInput,
   PutBodyInput,
+  ReadyBodyHead,
 } from "../../content/index.ts";
 import {
   bodyHasBeenIdle,

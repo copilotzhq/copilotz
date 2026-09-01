@@ -101,7 +101,6 @@ Deno.test("memory BodyStore maintenance enforces version, idle, and protection i
   assertEquals(await store.head({ bodyId: current.bodyId }), null);
 });
 
-
 Deno.test("memory retained termination freezes readable bytes and purges with exact CAS", async () => {
   const store = createMemoryBodyStore({ protectionMs: 0 });
   const bytes = encoder.encode("committed failure evidence");

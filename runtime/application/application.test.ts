@@ -1450,7 +1450,20 @@ Deno.test("persistence outage interrupts active send observers without cancellin
     namespace: NAMESPACE,
     databaseSchema: `${SCHEMA}_recovery`,
     plugins: [coreCollectionsPlugin, plugin],
-    engine: { retryBaseMs: 0, random: () => 0 },
+    engine: {
+      retryBaseMs: 0,
+      random: () => 0,
+      execution: {
+        // Hold timer-driven retries so the test can observe retry_wait. The
+        // persistence reconnect below must recover the due delivery itself.
+        scheduler: {
+          schedule(callback) {
+            return callback;
+          },
+          cancel() {},
+        },
+      },
+    },
   }, {
     onUnavailable: ({ generation }) => {
       lifecycle.push(`unavailable:${generation}`);
@@ -1526,12 +1539,16 @@ Deno.test("persistence outage interrupts active send observers without cancellin
     );
     assertEquals(activeSettlement.cancelled, 0);
     releaseActiveSend();
-    await waitFor(() => processorCalls === 2);
-    const delivery = await application.deliveries.get(
+    const delivery = await waitForTestDelivery(
+      application,
       NAMESPACE,
-      messageDelivery.id,
+      messageEvent.id,
+      "succeeded",
+      5_000,
     );
-    assertEquals(delivery?.status, "succeeded");
+    assertEquals(delivery.status, "succeeded");
+    assertEquals(delivery.id, messageDelivery.id);
+    assertEquals(processorCalls, 2);
     assertEquals(
       (await projectMessages(application, NAMESPACE, "recovery-thread")).length,
       1,

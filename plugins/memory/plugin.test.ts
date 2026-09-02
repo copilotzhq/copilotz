@@ -31,6 +31,9 @@ import {
 } from "../../runtime/testing/ominipg.ts";
 import { projectMessages } from "../core/internal/testing/projections.ts";
 import { createTestDomainContext } from "../core/internal/testing/context.ts";
+import AjvModule from "ajv";
+import { createInspectMemoryAction } from "./actions/inspect-memory/index.ts";
+import { createSearchMemoryAction } from "./actions/search-memory/index.ts";
 import { createLongTermMemoryPlugin } from "./plugin.ts";
 
 const NAMESPACE = "tenant-memory-native-turn";
@@ -581,18 +584,110 @@ Deno.test("invalidate_memory retracts editorially without changing lifecycle", a
       kind: "occurrence.event",
       summary: "The original event happened.",
       status: "happened",
+      validity: {
+        status: "valid",
+        sources: Array.from({ length: 55 }, (_, index) => ({
+          type: "message",
+          id: `validity-source-${index}`,
+        })),
+      },
+      content: [],
+      temporal: { recordedAt: "2026-08-31T00:00:00.000Z" },
+      epistemic: { basis: "observed", stance: "affirmed" },
+      provenance: {
+        sources: Array.from({ length: 55 }, (_, index) => ({
+          type: "message",
+          id: `provenance-source-${index}`,
+        })),
+        recordedBy: { type: "agent", id: "north" },
+        consolidationId: "internal-checkpoint-token",
+      },
+      data: { publicField: "public-value" },
+      embedding: [0.123456789, 0.987654321],
+      metadata: { storageSecret: "internal-metadata-token" },
+    });
+    for (let index = 0; index < 51; index++) {
+      await records.create({
+        id: `occurrence-related-${index}`,
+        memorySpaceId: "space-a",
+        consolidationId: "checkpoint-a",
+        createdByAgentId: "north",
+        originThreadId: "internal-origin-thread-token",
+        form: "occurrence",
+        kind: "occurrence.event",
+        summary: `Related accessible event ${index}.`,
+        status: "happened",
+        validity: { status: "valid" },
+        content: [],
+        temporal: { recordedAt: "2026-08-31T00:00:00.000Z" },
+        epistemic: null,
+        provenance: {
+          sources: [],
+          recordedBy: { type: "agent", id: "north" },
+          consolidationId: "checkpoint-a",
+        },
+        data: {},
+        embedding: null,
+        metadata: {},
+      });
+    }
+    await spaces.create({
+      id: "space-other",
+      name: "Other Space",
+      scopeType: "global",
+      scopeId: "other-scope",
+      threadId: null,
+      access: "read_write",
+      defaultWrite: true,
+      metadata: {},
+    });
+    await records.create({
+      id: "occurrence-other-space",
+      memorySpaceId: "space-other",
+      consolidationId: "checkpoint-a",
+      createdByAgentId: "north",
+      originThreadId: "thread-a",
+      form: "occurrence",
+      kind: "occurrence.event",
+      summary: "An inaccessible event.",
+      status: "happened",
       validity: { status: "valid" },
       content: [],
       temporal: { recordedAt: "2026-08-31T00:00:00.000Z" },
       epistemic: null,
-      provenance: {
-        sources: [],
-        recordedBy: { type: "agent", id: "north" },
-        consolidationId: "checkpoint-a",
-      },
+      provenance: { sources: [], recordedBy: { type: "agent", id: "north" } },
       data: {},
       embedding: null,
       metadata: {},
+    });
+    for (let index = 0; index < 51; index++) {
+      await run.engine.collections.transaction({
+        operationKey: `memory-public-relation-${index}`,
+        namespace: NAMESPACE,
+        execute: ({ relations }) =>
+          relations.upsert({
+            id: `memory-public-relation-${index}`,
+            type: "supports",
+            source: { type: "memory_record", id: "occurrence-a" },
+            target: {
+              type: "memory_record",
+              id: `occurrence-related-${index}`,
+            },
+            metadata: { storageSecret: "internal-relation-token" },
+          }),
+      });
+    }
+    await run.engine.collections.transaction({
+      operationKey: "memory-inaccessible-relation",
+      namespace: NAMESPACE,
+      execute: ({ relations }) =>
+        relations.upsert({
+          id: "memory-inaccessible-relation",
+          type: "supports",
+          source: { type: "memory_record", id: "occurrence-a" },
+          target: { type: "memory_record", id: "occurrence-other-space" },
+          metadata: { storageSecret: "internal-cross-space-token" },
+        }),
     });
     const context = createTestDomainContext(run.engine, NAMESPACE, {
       now: () => new Date("2026-08-31T01:00:00.000Z"),
@@ -640,29 +735,137 @@ Deno.test("invalidate_memory retracts editorially without changing lifecycle", a
     const saved = await records.get({ id: "occurrence-a" });
     assertEquals(saved?.status, "happened");
     assertEquals((saved?.validity as { status: string }).status, "retracted");
-    const normal = await context.actions.search_memory({}, {
+    const normal = await context.actions.search_memory({
+      form: "occurrence",
+      limit: 1,
+    }, {
       operationKey: "search-normal",
       metadata: { ...metadata, action: "search_memory" },
     });
     const historical = await context.actions.search_memory({
+      form: "occurrence",
       includeHistory: true,
+      limit: 100,
     }, {
       operationKey: "search-history",
       metadata: { ...metadata, action: "search_memory" },
     });
-    assertEquals((normal as { total: number }).total, 0);
-    assertEquals((historical as { total: number }).total, 1);
+    const normalOutput = normal as {
+      memories: Array<{ id: string }>;
+      scanned: number;
+      matched: number;
+      returned: number;
+      truncated: boolean;
+    };
+    const historicalOutput = historical as typeof normalOutput;
+    assertEquals(normalOutput.scanned, 52);
+    assertEquals(normalOutput.matched, 51);
+    assertEquals(normalOutput.returned, 1);
+    assertEquals(normalOutput.truncated, true);
+    assertEquals(
+      normalOutput.memories.some((item) => item.id === "occurrence-a"),
+      false,
+    );
+    assertEquals(historicalOutput.scanned, 52);
+    assertEquals(historicalOutput.matched, 52);
+    assertEquals(historicalOutput.returned, 52);
+    assertEquals(historicalOutput.truncated, false);
+    assertEquals(
+      historicalOutput.memories.some((item) =>
+        item.id === "occurrence-other-space"
+      ),
+      false,
+    );
     const inspected = await context.actions.inspect_memory({
       id: "occurrence-a",
     }, {
       operationKey: "inspect-retracted",
       metadata: { ...metadata, action: "inspect_memory" },
     });
+    const inspectedOutput = inspected as {
+      memory: {
+        validity: {
+          status: string;
+          sources: {
+            items: Array<{ type: string; id: string }>;
+            total: number;
+            returned: number;
+            truncated: boolean;
+          };
+        };
+        provenance: {
+          sources: {
+            items: Array<{ type: string; id: string }>;
+            total: number;
+            returned: number;
+            truncated: boolean;
+          };
+        };
+      };
+      relations: {
+        items: Array<{ other: { id: string } }>;
+        scanned: number;
+        matched: number;
+        returned: number;
+        truncated: boolean;
+      };
+    };
+    assertEquals(inspectedOutput.memory.validity.status, "retracted");
+    assertEquals(inspectedOutput.memory.provenance.sources, {
+      items: Array.from({ length: 50 }, (_, index) => ({
+        type: "message",
+        id: `provenance-source-${index}`,
+      })),
+      total: 55,
+      returned: 50,
+      truncated: true,
+    });
     assertEquals(
-      (inspected as { memory: { validity: { status: string } } }).memory
-        .validity.status,
-      "retracted",
+      inspectedOutput.relations.scanned > inspectedOutput.relations.matched,
+      true,
     );
+    assertEquals(inspectedOutput.relations.matched, 51);
+    assertEquals(inspectedOutput.relations.returned, 50);
+    assertEquals(inspectedOutput.relations.truncated, true);
+    assertEquals(
+      inspectedOutput.relations.items.some((relation) =>
+        relation.other.id === "occurrence-other-space"
+      ),
+      false,
+    );
+    const serializedSearch = JSON.stringify(historical);
+    const serializedInspect = JSON.stringify(inspected);
+    for (
+      const forbidden of [
+        "embedding",
+        "namespace",
+        "memorySpaceId",
+        "originThreadId",
+        "consolidationId",
+        "createdByAgentId",
+        "metadata",
+        "internal-checkpoint-token",
+        "internal-origin-thread-token",
+        "internal-metadata-token",
+        "internal-relation-token",
+        "internal-cross-space-token",
+        "0.123456789",
+      ]
+    ) {
+      assertEquals(serializedSearch.includes(forbidden), false, forbidden);
+      assertEquals(serializedInspect.includes(forbidden), false, forbidden);
+    }
+    const searchValidate = new AjvModule.default({
+      allErrors: true,
+      strict: false,
+    }).compile(createSearchMemoryAction().outputSchema as any);
+    const inspectValidate = new AjvModule.default({
+      allErrors: true,
+      strict: false,
+    }).compile(createInspectMemoryAction().outputSchema as any);
+    assert(searchValidate(normal), JSON.stringify(searchValidate.errors));
+    assert(searchValidate(historical), JSON.stringify(searchValidate.errors));
+    assert(inspectValidate(inspected), JSON.stringify(inspectValidate.errors));
 
     // An identical retry is idempotent: it preserves the original validity
     // payload (including changedAt) rather than producing a new write.
@@ -689,35 +892,6 @@ Deno.test("invalidate_memory retracts editorially without changing lifecycle", a
     // A record outside the thread's read-write spaces cannot be altered.
     // The space exists to satisfy the collection relation, but no access
     // grant connects it to thread-a.
-    await spaces.create({
-      id: "space-other",
-      name: "Other Space",
-      scopeType: "global",
-      scopeId: "other-scope",
-      threadId: null,
-      access: "read_write",
-      defaultWrite: true,
-      metadata: {},
-    });
-    await records.create({
-      id: "occurrence-other-space",
-      memorySpaceId: "space-other",
-      consolidationId: "checkpoint-a",
-      createdByAgentId: "north",
-      originThreadId: "thread-a",
-      form: "occurrence",
-      kind: "occurrence.event",
-      summary: "An inaccessible event.",
-      status: "happened",
-      validity: { status: "valid" },
-      content: [],
-      temporal: { recordedAt: "2026-08-31T00:00:00.000Z" },
-      epistemic: null,
-      provenance: { sources: [], recordedBy: { type: "agent", id: "north" } },
-      data: {},
-      embedding: null,
-      metadata: {},
-    });
     await assertRejects(
       () =>
         context.actions.invalidate_memory({

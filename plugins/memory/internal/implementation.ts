@@ -2288,13 +2288,393 @@ export function listSpacesAction(): Pick<
   };
 }
 
-export function searchMemoryAction(): Pick<
-  ActionDefinition<unknown, unknown, MemoryActionContext, ActionSchema>,
-  "inputSchema" | "execute"
-> {
+const PUBLIC_MEMORY_SCAN_LIMIT = 1_000;
+const PUBLIC_MEMORY_RESULT_LIMIT = 100;
+const PUBLIC_MEMORY_SOURCE_LIMIT = 50;
+const PUBLIC_MEMORY_RELATION_LIMIT = 50;
+
+const publicMemorySourceSchema = {
+  oneOf: [
+    {
+      type: "object",
+      additionalProperties: false,
+      required: ["type", "id"],
+      properties: {
+        type: { enum: ["message", "asset", "external"] },
+        id: { type: "string" },
+      },
+    },
+    {
+      type: "object",
+      additionalProperties: false,
+      required: ["type", "collection", "id"],
+      properties: {
+        type: { const: "collection_record" },
+        collection: { type: "string" },
+        id: { type: "string" },
+        version: { type: ["string", "number"] },
+        updatedAt: { type: "string" },
+        fragment: { type: "string" },
+      },
+    },
+  ],
+} as const;
+
+const publicMemorySourceListSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["items", "total", "returned", "truncated"],
+  properties: {
+    items: {
+      type: "array",
+      maxItems: PUBLIC_MEMORY_SOURCE_LIMIT,
+      items: publicMemorySourceSchema,
+    },
+    total: {
+      type: "integer",
+      minimum: 0,
+      description:
+        "Total valid public sources present in this stored source set.",
+    },
+    returned: { type: "integer", minimum: 0 },
+    truncated: { type: "boolean" },
+  },
+} as const;
+
+const publicMemoryNodeSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["type", "id"],
+  properties: {
+    type: { type: "string" },
+    id: { type: "string" },
+  },
+} as const;
+
+const publicMemoryTemporalSchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    validFrom: { type: "string" },
+    validTo: { type: "string" },
+    recordedAt: { type: "string" },
+    invalidatedAt: { type: "string" },
+  },
+} as const;
+
+const publicMemoryValiditySummarySchema = {
+  enum: ["valid", "retracted", "superseded", "archived"],
+} as const;
+
+const publicMemoryValidityDetailSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["status", "sources"],
+  properties: {
+    status: publicMemoryValiditySummarySchema,
+    changedAt: { type: "string" },
+    reason: { type: "string" },
+    replacementMemoryId: { type: "string" },
+    sources: publicMemorySourceListSchema,
+  },
+} as const;
+
+const publicMemorySummarySchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "id",
+    "form",
+    "kind",
+    "summary",
+    "status",
+    "validity",
+    "temporal",
+    "similarity",
+  ],
+  properties: {
+    id: { type: "string" },
+    form: { enum: MEMORY_FORMS },
+    kind: { type: "string" },
+    summary: { type: "string" },
+    status: { type: "string" },
+    validity: publicMemoryValiditySummarySchema,
+    temporal: publicMemoryTemporalSchema,
+    similarity: { type: "number" },
+  },
+} as const;
+
+const searchMemoryOutputSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["memories", "scanned", "matched", "returned", "truncated"],
+  properties: {
+    memories: {
+      type: "array",
+      maxItems: PUBLIC_MEMORY_RESULT_LIMIT,
+      items: publicMemorySummarySchema,
+    },
+    scanned: {
+      type: "integer",
+      minimum: 0,
+      description:
+        "Accessible validly-shaped records examined in the bounded storage scan.",
+    },
+    matched: {
+      type: "integer",
+      minimum: 0,
+      description:
+        "Records matching the filters within the bounded scan; not a claimed global total.",
+    },
+    returned: { type: "integer", minimum: 0 },
+    truncated: {
+      type: "boolean",
+      description:
+        "True when the public result budget or the underlying bounded scan may have omitted records.",
+    },
+  },
+} as const;
+
+const publicMemoryDetailSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "id",
+    "form",
+    "kind",
+    "summary",
+    "status",
+    "validity",
+    "temporal",
+    "provenance",
+    "data",
+  ],
+  properties: {
+    id: { type: "string" },
+    form: { enum: MEMORY_FORMS },
+    kind: { type: "string" },
+    summary: { type: "string" },
+    status: { type: "string" },
+    validity: publicMemoryValidityDetailSchema,
+    temporal: publicMemoryTemporalSchema,
+    epistemic: {
+      type: "object",
+      additionalProperties: false,
+      required: ["basis", "stance"],
+      properties: {
+        basis: { enum: ["observed", "reported", "inferred", "assumed"] },
+        stance: { enum: ["affirmed", "denied", "tentative", "disputed"] },
+      },
+    },
+    provenance: {
+      type: "object",
+      additionalProperties: false,
+      required: ["sources"],
+      properties: {
+        sources: publicMemorySourceListSchema,
+        assertedBy: publicMemoryNodeSchema,
+        recordedBy: publicMemoryNodeSchema,
+      },
+    },
+    data: { type: "object" },
+  },
+} as const;
+
+const inspectMemoryOutputSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["memory", "relations"],
+  properties: {
+    memory: publicMemoryDetailSchema,
+    relations: {
+      type: "object",
+      additionalProperties: false,
+      required: ["items", "scanned", "matched", "returned", "truncated"],
+      properties: {
+        items: {
+          type: "array",
+          maxItems: PUBLIC_MEMORY_RELATION_LIMIT,
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: ["type", "direction", "other"],
+            properties: {
+              type: { type: "string" },
+              direction: { enum: ["incoming", "outgoing"] },
+              other: publicMemoryNodeSchema,
+            },
+          },
+        },
+        scanned: {
+          type: "integer",
+          minimum: 0,
+          description:
+            "Graph relations examined in the bounded traversal before semantic and access filtering.",
+        },
+        matched: {
+          type: "integer",
+          minimum: 0,
+          description:
+            "Accessible relations matching the inspection; not a claimed global total.",
+        },
+        returned: { type: "integer", minimum: 0 },
+        truncated: {
+          type: "boolean",
+          description:
+            "True when the public relation budget or bounded traversal may have omitted relations.",
+        },
+      },
+    },
+  },
+} as const;
+
+function publicMemorySource(value: unknown): ContextSourceRef | null {
+  const source = record(value);
+  const type = optionalText(source.type);
+  const id = optionalText(source.id);
+  if (!type || !id) return null;
+  if (type === "message" || type === "asset" || type === "external") {
+    return Object.freeze({ type, id });
+  }
+  if (type !== "collection_record") return null;
+  const collection = optionalText(source.collection);
+  if (!collection) return null;
+  const version = typeof source.version === "string" ||
+      typeof source.version === "number"
+    ? source.version
+    : undefined;
+  return Object.freeze({
+    type,
+    collection,
+    id,
+    ...(version !== undefined ? { version } : {}),
+    ...(optionalText(source.updatedAt)
+      ? { updatedAt: optionalText(source.updatedAt)! }
+      : {}),
+    ...(optionalText(source.fragment)
+      ? { fragment: optionalText(source.fragment)! }
+      : {}),
+  });
+}
+
+function publicMemorySources(value: unknown) {
+  const sources = (Array.isArray(value) ? value : []).flatMap((item) => {
+    const source = publicMemorySource(item);
+    return source ? [source] : [];
+  });
+  const items = sources.slice(0, PUBLIC_MEMORY_SOURCE_LIMIT);
+  return Object.freeze({
+    items: Object.freeze(items),
+    total: sources.length,
+    returned: items.length,
+    truncated: items.length < sources.length,
+  });
+}
+
+function publicMemoryNode(value: unknown) {
+  const node = record(value);
+  const type = optionalText(node.type);
+  const id = optionalText(node.id);
+  return type && id ? Object.freeze({ type, id }) : undefined;
+}
+
+function publicMemoryTemporal(value: unknown) {
+  const temporal = record(value);
+  return Object.freeze({
+    ...(optionalText(temporal.validFrom)
+      ? { validFrom: optionalText(temporal.validFrom)! }
+      : {}),
+    ...(optionalText(temporal.validTo)
+      ? { validTo: optionalText(temporal.validTo)! }
+      : {}),
+    ...(optionalText(temporal.recordedAt)
+      ? { recordedAt: optionalText(temporal.recordedAt)! }
+      : {}),
+    ...(optionalText(temporal.invalidatedAt)
+      ? { invalidatedAt: optionalText(temporal.invalidatedAt)! }
+      : {}),
+  });
+}
+
+function publicMemoryEpistemic(value: unknown) {
+  const epistemic = record(value);
+  const basis = optionalText(epistemic.basis);
+  const stance = optionalText(epistemic.stance);
+  return basis && ["observed", "reported", "inferred", "assumed"].includes(
+      basis,
+    ) &&
+      stance &&
+      ["affirmed", "denied", "tentative", "disputed"].includes(stance)
+    ? Object.freeze({ basis, stance })
+    : undefined;
+}
+
+function publicMemorySummary(
+  item: CollectionRecord,
+  mapped: MemoryRecordProjection,
+  similarity: number,
+) {
+  return Object.freeze({
+    id: mapped.id,
+    form: mapped.form,
+    kind: mapped.kind,
+    summary: mapped.summary,
+    status: mapped.status,
+    validity: mapped.validity,
+    temporal: publicMemoryTemporal(item.temporal),
+    similarity,
+  });
+}
+
+function publicMemoryDetail(
+  item: CollectionRecord,
+  mapped: MemoryRecordProjection,
+) {
+  const validity = record(item.validity);
+  const provenance = record(item.provenance);
+  const assertedBy = publicMemoryNode(provenance.assertedBy);
+  const recordedBy = publicMemoryNode(provenance.recordedBy);
+  const epistemic = publicMemoryEpistemic(item.epistemic);
+  return Object.freeze({
+    id: mapped.id,
+    form: mapped.form,
+    kind: mapped.kind,
+    summary: mapped.summary,
+    status: mapped.status,
+    validity: Object.freeze({
+      status: mapped.validity,
+      ...(optionalText(validity.changedAt)
+        ? { changedAt: optionalText(validity.changedAt)! }
+        : {}),
+      ...(optionalText(validity.reason)
+        ? { reason: optionalText(validity.reason)! }
+        : {}),
+      ...(optionalText(validity.replacementMemoryId)
+        ? { replacementMemoryId: optionalText(validity.replacementMemoryId)! }
+        : {}),
+      sources: publicMemorySources(validity.sources),
+    }),
+    temporal: publicMemoryTemporal(item.temporal),
+    ...(epistemic ? { epistemic } : {}),
+    provenance: Object.freeze({
+      sources: publicMemorySources(provenance.sources),
+      ...(assertedBy ? { assertedBy } : {}),
+      ...(recordedBy ? { recordedBy } : {}),
+    }),
+    data: structuredClone(mapped.data),
+  });
+}
+
+export function searchMemoryAction():
+  & Pick<
+    ActionDefinition<unknown, unknown, MemoryActionContext, ActionSchema>,
+    "inputSchema" | "execute"
+  >
+  & Readonly<{ outputSchema: typeof searchMemoryOutputSchema }> {
   return {
     inputSchema: {
       type: "object",
+      additionalProperties: false,
       properties: {
         query: { type: "string" },
         form: { enum: MEMORY_FORMS },
@@ -2304,6 +2684,7 @@ export function searchMemoryAction(): Pick<
         limit: { type: "integer", minimum: 1, maximum: 100 },
       },
     },
+    outputSchema: searchMemoryOutputSchema,
     async execute(raw, context) {
       const input = record(raw);
       const spaces = await threadMemorySpaces(
@@ -2312,12 +2693,14 @@ export function searchMemoryAction(): Pick<
       );
       const readable = new Set(spaces.map((space) => space.id));
       const values = await context.collections.memoryRecord.list({
-        limit: 1_000,
+        limit: PUBLIC_MEMORY_SCAN_LIMIT,
       });
       const query = optionalText(input.query) ?? "";
-      const selected = values.flatMap((item) => {
+      let scanned = 0;
+      const matched = values.flatMap((item) => {
         const mapped = memoryRecord(item);
         if (!mapped || !readable.has(mapped.memorySpaceId)) return [];
+        scanned++;
         if (
           input.form && mapped.form !== input.form ||
           input.kind && mapped.kind !== input.kind ||
@@ -2329,26 +2712,32 @@ export function searchMemoryAction(): Pick<
         ) {
           return [];
         }
-        return [{
-          ...mapped,
-          similarity: query ? lexicalScore(query, mapped.summary) : 1,
-          provenance: item.provenance,
-          temporal: item.temporal,
-          validity: item.validity,
-        }];
-      }).sort((left, right) => right.similarity - left.similarity).slice(
-        0,
-        Math.min(positiveInteger(input.limit, 20), 100),
+        const similarity = query ? lexicalScore(query, mapped.summary) : 1;
+        return [publicMemorySummary(item, mapped, similarity)];
+      }).sort((left, right) => right.similarity - left.similarity);
+      const limit = Math.min(
+        positiveInteger(input.limit, 20),
+        PUBLIC_MEMORY_RESULT_LIMIT,
       );
-      return { memories: selected, total: selected.length };
+      const memories = matched.slice(0, limit);
+      return Object.freeze({
+        memories: Object.freeze(memories),
+        scanned,
+        matched: matched.length,
+        returned: memories.length,
+        truncated: values.length >= PUBLIC_MEMORY_SCAN_LIMIT ||
+          memories.length < matched.length,
+      });
     },
   };
 }
 
-export function inspectMemoryAction(): Pick<
-  ActionDefinition<unknown, unknown, MemoryActionContext, ActionSchema>,
-  "inputSchema" | "execute"
-> {
+export function inspectMemoryAction():
+  & Pick<
+    ActionDefinition<unknown, unknown, MemoryActionContext, ActionSchema>,
+    "inputSchema" | "execute"
+  >
+  & Readonly<{ outputSchema: typeof inspectMemoryOutputSchema }> {
   return {
     inputSchema: {
       type: "object",
@@ -2356,41 +2745,72 @@ export function inspectMemoryAction(): Pick<
       properties: { id: { type: "string" } },
       additionalProperties: false,
     },
+    outputSchema: inspectMemoryOutputSchema,
     async execute(raw, context) {
       const id = requiredText(record(raw).id, "Memory id");
-      const item = await context.collections.memoryRecord
-        .get({ id });
+      const item = await context.collections.memoryRecord.get({ id });
       if (!item) throw new Error(`Memory '${id}' was not found.`);
+      const mapped = memoryRecord(item);
+      if (!mapped) throw new Error(`Memory '${id}' is not inspectable.`);
       const spaces = new Set(
         (await threadMemorySpaces(
           context,
           memoryActionProvenance(context).threadId,
-        )).map((
-          space,
-        ) => space.id),
+        )).map((space) => space.id),
       );
-      if (!spaces.has(String(item.memorySpaceId))) {
+      if (!spaces.has(mapped.memorySpaceId)) {
         throw new Error(`Memory '${id}' is not accessible from this thread.`);
       }
-      const relations = await context.collections.memoryRecord.relations
-        .list({
-          id,
-          direction: "both",
-          limit: 1_000,
-        });
+      const relations = await context.collections.memoryRecord.relations.list({
+        id,
+        direction: "both",
+        limit: PUBLIC_MEMORY_SCAN_LIMIT,
+      });
+      const candidateRecords = await context.collections.memoryRecord.list({
+        limit: PUBLIC_MEMORY_SCAN_LIMIT,
+      });
       const accessibleMemoryIds = new Set(
-        (await context.collections.memoryRecord.list({
-          limit: 1_000,
-        })).filter((candidate) => spaces.has(String(candidate.memorySpaceId)))
+        candidateRecords
+          .filter((candidate) => spaces.has(String(candidate.memorySpaceId)))
           .map((candidate) => candidate.id),
       );
       const visibleRelations = relations.filter((relation) =>
+        MEMORY_RELATION_TYPES.includes(
+          relation.type as typeof MEMORY_RELATION_TYPES[number],
+        ) &&
         (relation.source.type !== memoryRecordCollection.name ||
           accessibleMemoryIds.has(relation.source.id)) &&
         (relation.target.type !== memoryRecordCollection.name ||
           accessibleMemoryIds.has(relation.target.id))
       );
-      return { memory: item, relations: visibleRelations };
+      const projectedRelations = visibleRelations.map((relation) => {
+        const outgoing = relation.source.type === memoryRecordCollection.name &&
+          relation.source.id === id;
+        const other = outgoing ? relation.target : relation.source;
+        return Object.freeze({
+          type: relation.type,
+          direction: outgoing ? "outgoing" as const : "incoming" as const,
+          other: Object.freeze({
+            type: other.type === memoryRecordCollection.name
+              ? "memory"
+              : other.type,
+            id: other.id,
+          }),
+        });
+      });
+      const items = projectedRelations.slice(0, PUBLIC_MEMORY_RELATION_LIMIT);
+      return Object.freeze({
+        memory: publicMemoryDetail(item, mapped),
+        relations: Object.freeze({
+          items: Object.freeze(items),
+          scanned: relations.length,
+          matched: visibleRelations.length,
+          returned: items.length,
+          truncated: relations.length >= PUBLIC_MEMORY_SCAN_LIMIT ||
+            candidateRecords.length >= PUBLIC_MEMORY_SCAN_LIMIT ||
+            items.length < projectedRelations.length,
+        }),
+      });
     },
   };
 }

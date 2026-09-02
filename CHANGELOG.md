@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.65.3 — 2026-09-02
+
+Publishes the semantic-memory public read boundary from this release line.
+`search_memory` returns a bounded public summary and `inspect_memory` returns a
+bounded semantic detail, both with closed output schemas. Storage internals are
+not projected; results, sources, and relations have explicit budgets and
+truncation/count semantics while preserving memory-space authorization.
+
 ## 0.65.2 — 2026-09-02
 
 Closes the public read boundary for semantic memory. `search_memory` now returns

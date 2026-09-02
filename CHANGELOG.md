@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.65.2 — 2026-09-02
+
+Closes the public read boundary for semantic memory. `search_memory` now returns
+a bounded public summary and `inspect_memory` returns a bounded semantic detail,
+both with closed output schemas. Storage internals—including embeddings,
+namespaces, memory-space/thread/consolidation identifiers, and edge metadata—
+are never projected. Results, sources, and relations have explicit budgets and
+truncation/count semantics while preserving memory-space authorization.
+
 ## 0.65.1 — 2026-09-01
 
 Preserves bounded, sanitized error details from structured OpenAPI and NDJSON

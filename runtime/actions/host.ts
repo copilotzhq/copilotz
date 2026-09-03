@@ -147,6 +147,9 @@ type ActionInvocationHost = Pick<
   | "transaction"
 >;
 
+/** Reserved stream metadata injected by the generic Action invocation host. */
+const SOURCE_ACTION_RUN_ID_METADATA_KEY = "sourceActionRunId";
+
 /** Adds invocation lifecycle state to the shared runtime context. */
 export function createActionInvocationContext(
   options: Readonly<{
@@ -163,6 +166,18 @@ export function createActionInvocationContext(
 ): ActionContext {
   const { frame, host } = options;
   let transactionIndex = 0;
+  const streams: ContentStreamRuntime = Object.freeze({
+    ...host.streams,
+    open(input, openOptions) {
+      return host.streams.open({
+        ...input,
+        metadata: {
+          ...input.metadata,
+          [SOURCE_ACTION_RUN_ID_METADATA_KEY]: frame.actionRunId,
+        },
+      }, openOptions);
+    },
+  });
   const content = Object.freeze({
     ...host.content,
     prepare(
@@ -198,6 +213,7 @@ export function createActionInvocationContext(
     identity: Object.freeze({ ...(frame.identity ?? {}) }),
     actions: options.actions,
     content,
+    streams,
     signal: frame.signal,
     progress: options.progress,
     transaction: (

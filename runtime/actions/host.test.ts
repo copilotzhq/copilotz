@@ -1,9 +1,13 @@
-import { assertEquals } from "@std/assert";
+import { assertEquals, assertExists } from "@std/assert";
 import type { CollectionRuntime } from "../collections/index.ts";
 import { createPluginRegistry, definePlugin } from "../plugins/index.ts";
 import { defineAction } from "./define.ts";
 import { createActionContext } from "./host.ts";
 import type { ActionContext, ActionEventData } from "./types.ts";
+import type {
+  ContentStreamOpenInput,
+  ContentStreamRuntime,
+} from "../streams/index.ts";
 
 Deno.test("Action transactions expose atomic relation projection", async () => {
   const projected: unknown[] = [];
@@ -157,4 +161,100 @@ Deno.test("Action transactions expose atomic relation projection", async () => {
     correlationId: "run-a",
     settlementScopeId: "scope-a",
   });
+});
+
+Deno.test("Action streams carry their exact root and nested action run IDs", async () => {
+  const opened: ContentStreamOpenInput[] = [];
+  const actionRunIds: { root?: string; nested?: string } = {};
+  const streams: ContentStreamRuntime = Object.freeze({
+    open(input) {
+      opened.push(structuredClone(input));
+      return Promise.resolve(
+        {} as Awaited<ReturnType<ContentStreamRuntime["open"]>>,
+      );
+    },
+    follow() {
+      throw new Error("Content stream following is not configured.");
+    },
+  });
+  const nested = defineAction({
+    id: "test.stream.nested",
+    async execute(_input: unknown, context: ActionContext) {
+      actionRunIds.nested = context.action.runId;
+      await context.streams.open({
+        id: "nested-stream",
+        mediaType: "text/plain",
+        role: "output",
+        metadata: { source: "nested" },
+      });
+    },
+  });
+  type RootActionContext =
+    & Omit<ActionContext, "actions">
+    & Readonly<{
+      actions: Readonly<{
+        nested: (input: unknown) => Promise<unknown>;
+      }>;
+    }>;
+  const root = defineAction<unknown, void, RootActionContext>({
+    id: "test.stream.root",
+    async execute(_input, context) {
+      actionRunIds.root = context.action.runId;
+      await context.streams.open({
+        id: "root-stream",
+        mediaType: "text/plain",
+        role: "output",
+        metadata: {
+          source: "root",
+          sourceActionRunId: "caller-controlled-value",
+        },
+      });
+      await context.actions.nested({});
+    },
+  });
+  const plugins = createPluginRegistry({
+    plugins: [definePlugin({
+      id: "test.action-stream-provenance",
+      version: "1.0.0",
+      actions: { root, nested },
+    })],
+  });
+  const unavailableContent = () => {
+    throw new Error("Content is not configured.");
+  };
+  const context = createActionContext({
+    namespace: "tenant-streams",
+    databaseSchema: "copilotz_action_streams",
+    plugins,
+    collections: {
+      withScope: () => Object.freeze({}),
+    } as unknown as CollectionRuntime,
+    actionLifecycle: {
+      append: () => Promise.resolve(undefined as never),
+      load: () => Promise.resolve(null),
+    },
+    content: () =>
+      Object.freeze({
+        resolver: { getMany: () => Promise.resolve([]) },
+        stream: streams,
+        prepare: unavailableContent,
+        materialize: unavailableContent,
+        publish: unavailableContent,
+        get: unavailableContent,
+        getMany: unavailableContent,
+        resolve: unavailableContent,
+        resolveMany: unavailableContent,
+        open: unavailableContent,
+      }),
+  });
+
+  await context.actions.root({});
+
+  assertExists(actionRunIds.root);
+  assertExists(actionRunIds.nested);
+  assertEquals(actionRunIds.root === actionRunIds.nested, false);
+  assertEquals(opened.map((input) => input.metadata), [
+    { source: "root", sourceActionRunId: actionRunIds.root },
+    { source: "nested", sourceActionRunId: actionRunIds.nested },
+  ]);
 });

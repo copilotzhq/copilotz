@@ -66,7 +66,7 @@ Deno.test("scoped streams without an operation require a local authority", async
   );
 });
 
-Deno.test("unscoped streams publish an exact local completed authority", async () => {
+Deno.test("Processor/unscoped streams do not invent Action provenance", async () => {
   const bodyStore = createMemoryBodyStore();
   let published: StreamOutput | undefined;
   const context = createProcessorContext({
@@ -109,6 +109,7 @@ Deno.test("unscoped streams publish an exact local completed authority", async (
   });
   const stream = published;
   assertExists(stream);
+  assertEquals(Object.hasOwn(stream.metadata, "sourceActionRunId"), false);
   await writer.append({
     appendId: "local-completed:1",
     bytes: new TextEncoder().encode("done"),

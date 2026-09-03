@@ -37,7 +37,9 @@ type StreamTerminalStatus = Readonly<{
 
 The descriptor deliberately has no thread, participant, routing, visibility,
 Collection, model, or provider fields. A semantic plugin may place opaque JSON
-hints in `metadata`; the runtime does not interpret them.
+hints in `metadata`; the runtime does not interpret them. Streams opened inside
+an Action also receive runtime-owned `metadata.sourceActionRunId`, allowing a
+transport to preserve causal ordering without coupling unrelated stream lanes.
 
 Every `send().outputs`, `attach().outputs`, and `observe()` subscription gets
 its own Body reader. Subscribers never share one `ReadableStream` instance.

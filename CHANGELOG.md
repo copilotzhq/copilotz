@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.65.4 — 2026-09-02
+
+Adds generic Action-run provenance to progressive streams. Transports can now
+order a durable Action result after only that Action's streams, without blocking
+it behind unrelated lanes in the same operation.
+
 ## 0.65.3 — 2026-09-02
 
 Publishes the semantic-memory public read boundary from this release line.

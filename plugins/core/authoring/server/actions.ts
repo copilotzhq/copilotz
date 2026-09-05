@@ -8,6 +8,11 @@ export const sendSchema = {
     threadId: { type: "string", minLength: 1 },
     externalThreadId: { type: "string", minLength: 1 },
     content: {},
+    participantIds: {
+      type: "array",
+      items: { type: "string", minLength: 1 },
+      uniqueItems: true,
+    },
     recipientIds: {
       type: "array",
       items: { type: "string" },
@@ -57,6 +62,7 @@ export const sendConversation = defineAction({
       threadId?: string;
       externalThreadId?: string;
       content: unknown;
+      participantIds?: string[];
       recipientIds?: string[];
     },
     context: ActionContext,
@@ -78,16 +84,24 @@ export const sendConversation = defineAction({
       }
     }
     const thread = await ownedThread(context, threadId);
-    const recipientIds: string[] = [];
-    for (const requested of input.recipientIds ?? []) {
+    // Membership selects who may collaborate; recipients select who responds now.
+    // Resolve every selection before enrolling anyone, including on old threads.
+    const members = new Set(input.participantIds ?? []);
+    const selections = new Map<string, {
+      participantId?: string;
+      agent?: { id: string; name: string };
+    }>();
+    for (
+      const requested of new Set([...members, ...input.recipientIds ?? []])
+    ) {
       const participant = await context.collections.participant.get({
         id: requested,
       });
       if (
-        participant &&
+        !members.has(requested) && participant &&
         (thread.participantIds as string[]).includes(participant.id)
       ) {
-        recipientIds.push(participant.id);
+        selections.set(requested, { participantId: participant.id });
         continue;
       }
       const agent = Object.entries(context.resources.agents ?? {}).find((
@@ -96,22 +110,37 @@ export const sendConversation = defineAction({
         alias === requested || (value as { id?: string }).id === requested ||
         participant?.participantType === "agent" &&
           (value as { id?: string }).id === participant.agentId
-      )
-        ?.[1] as { id: string; name: string } | undefined;
-      if (!agent) throw new Error("Recipient was not found.");
-      const added = await context.actions.addThreadParticipant({
-        threadId,
-        participant: {
-          externalId: agent.id,
-          participantType: "agent",
-          agentId: agent.id,
-          name: agent.name,
-        },
-      }, { operationKey: `recipient:${agent.id}` }) as {
-        participant: { id: string };
-      };
-      recipientIds.push(added.participant.id);
+      )?.[1] as { id: string; name: string } | undefined;
+      if (!agent) throw new Error("Agent or recipient was not found.");
+      selections.set(requested, { agent });
     }
+    const enrolled = new Map<string, string>();
+    for (const selection of selections.values()) {
+      const agent = selection.agent;
+      if (!agent) continue;
+      if (!enrolled.has(agent.id)) {
+        const added = await context.actions.addThreadParticipant({
+          threadId,
+          participant: {
+            externalId: agent.id,
+            participantType: "agent",
+            agentId: agent.id,
+            name: agent.name,
+          },
+        }, { operationKey: `participant:${agent.id}` }) as {
+          participant: { id: string };
+        };
+        enrolled.set(agent.id, added.participant.id);
+      }
+      selection.participantId = enrolled.get(agent.id)!;
+    }
+    const recipientIds = [
+      ...new Set(
+        (input.recipientIds ?? []).map((id) =>
+          selections.get(id)!.participantId!
+        ),
+      ),
+    ];
     const message = await context.actions.createThreadMessage({
       id: `${context.action.runId}:message`,
       threadId,

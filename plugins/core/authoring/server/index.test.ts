@@ -55,6 +55,14 @@ Deno.test("Core round trip keeps stored history, actor identity, and multipart b
         version: "1",
         resources: {
           agents: {
+            spare: {
+              id: "spare",
+              name: "Spare",
+              role: "support",
+              instructions: "Reply",
+              models: { generate: ["test"] },
+              capabilities: { tools: [] },
+            },
             support: {
               id: "support",
               name: "Support",
@@ -196,6 +204,25 @@ Deno.test("Core round trip keeps stored history, actor identity, and multipart b
       externalId: "foreign-human",
       participantType: "human",
     });
+    // Membership cannot invite a human from another thread, or partially enroll
+    // valid selections before rejecting a forged selection.
+    const before = await records.thread.get({ id: result.threadId });
+    for (const participantIds of [["foreign-human"], ["spare", "unknown"]]) {
+      const forbiddenMembership = await core.threads.send({
+        threadId: result.threadId,
+        content: "Do not enroll",
+        participantIds,
+        recipientIds: ["support"],
+      }, { idempotencyKey: `members:${participantIds.join(":")}` });
+      await assertRejects(
+        () => client.operations.result(forbiddenMembership.operationId),
+        CopilotzHttpError,
+      );
+      assertEquals(
+        (await records.thread.get({ id: result.threadId }))?.participantIds,
+        before?.participantIds,
+      );
+    }
     const rejected = await core.threads.send({
       threadId: result.threadId,
       content: "Do not deliver",

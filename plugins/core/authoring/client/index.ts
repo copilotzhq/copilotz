@@ -41,6 +41,8 @@ export type SendInput = Readonly<
     threadId?: never;
   }) & {
     content: ContentInput | readonly ContentInput[];
+    /** Agent IDs to enroll without addressing the message to them. */
+    participantIds?: readonly string[];
     recipientIds?: readonly string[];
   }
 >;

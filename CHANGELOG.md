@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.66.1 — 2026-09-05
+
+Restore independent conversation participant selection and message recipients.
+The canonical send Action enrolls selected agents before delivery, including
+missing teammates on existing threads, without broadcasting the message to them.
+Keep authenticated ownership and ask membership/capability checks intact.
+
 ## 0.66.0 — 2026-09-05
 
 Replaces all versioned HTTP implementations with one compiled `/api` facade.

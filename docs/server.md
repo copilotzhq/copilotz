@@ -118,3 +118,13 @@ Observations retain redacted values. Authorized result reads hydrate protected
 results and use `Cache-Control: no-store`; generated OpenAPI removes examples
 and defaults from secret-marked schema nodes. HTTP adds no storage format,
 database migration, output log, or execution lifecycle.
+
+### Conversation membership and recipients
+
+`core.threads.send` accepts `participantIds` for the agents enrolled in a
+conversation and `recipientIds` for the agents addressed by this message. For
+example, `participantIds: ["north", "west"]` and `recipientIds: ["north"]` allow
+North to ask West without asking both agents to answer the user message.
+Membership selections resolve only to registered agents in the authenticated
+scope. Existing authorized threads enroll missing selections before delivery;
+this neither removes existing participants nor rewrites conversation history.

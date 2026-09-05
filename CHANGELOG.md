@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.66.1 — 2026-09-05
+## 0.66.2 — 2026-09-05
 
 Restore independent conversation participant selection and message recipients.
 The canonical send Action enrolls selected agents before delivery, including

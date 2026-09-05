@@ -206,7 +206,7 @@ Deno.test("package subpaths expose cohesive factories", () => {
     "compileServerRoutes",
     "createServerFacadeFetchHandler",
     "createServerPlugin",
-    "decodeCopilotzOutputs",
+    "createHttpAdapter",
     "defineServerFacade",
   ]);
   assertEquals(typeof server.serverPlugin, "object");

@@ -1,65 +1,46 @@
+import { constrainInput } from "./input.ts";
+import { handleChannel } from "./channels.ts";
+import type { FacadeContext } from "./context.ts";
 /** Compiled Fetch facade over composed Copilotz primitives. @module */
 
-import type { ActionEventData } from "@copilotz/copilotz/actions";
-import { type ContentRef, formatAssetRef } from "../runtime/content/index.ts";
+import { authenticateHttpRequest } from "./authentication.ts";
+import { createHttpOperations } from "./operations.ts";
+import { applicationOutputsMultipartResponse } from "./multipart.ts";
+import { createHttpReads } from "./reads.ts";
+import { validateAgainstJsonSchema } from "../runtime/collections/validate.ts";
+import type {
+  HttpAdapter,
+  HttpHandlerContext,
+} from "../plugins/server/authoring/http-adapter/index.ts";
 import type { InternalCopilotzApplication } from "../runtime/application/types.ts";
-import { SERVER_INVOKE_ACTION_ID } from "../plugins/server/actions/invoke-action/index.ts";
-import { actionSchemaHasSecrets } from "../runtime/actions/secret.ts";
 import {
   type CompiledServerRoutes,
   compileServerRoutes,
 } from "../plugins/server/authoring/route-compiler/index.ts";
 import {
-  SERVER_ACTION_REQUEST_EVENT_TYPE,
-  SERVER_ACTION_REQUEST_SCHEMA,
   SERVER_RESOURCE_ALIAS,
   SERVER_RESOURCE_NAMESPACE,
-  serverActionRequestSchema,
-  type ServerAuthorizedScope,
   type ServerEndpointDescriptor,
   type ServerFacadeResource,
 } from "../plugins/server/internal/contracts.ts";
-import {
-  createEventNativeApp,
-  EVENT_NATIVE_OUTPUT_STREAM,
-  type EventNativeApp,
-  type EventNativeAppRequest,
-  type EventNativeAppResponse,
-  type EventNativeOutputStream,
-} from "./event-native.ts";
-import {
-  createEventNativeFetchHandler,
-  type CreateEventNativeFetchHandlerOptions,
-  type EventNativeFetchHandler,
-} from "./fetch.ts";
-import { eventNativeAsset } from "./assets.ts";
+import type { HttpApplication } from "./http-types.ts";
+import { admitHttpOperation } from "./admission.ts";
+import { createHttpFetchHandler, type HttpFetchHandler } from "./fetch.ts";
+import { assetUploadResponse } from "./assets.ts";
+import { actionResponse, operationResult } from "./actions.ts";
 
 export type CreateServerFacadeFetchHandlerOptions = Readonly<{
   facade?: ServerFacadeResource;
   admit?: () => void | Promise<void>;
-  /** Resolves host-authenticated, process-local request context before guard. */
-  resolveContext?: CreateEventNativeFetchHandlerOptions["resolveContext"];
   responseHeaders?: Readonly<Record<string, string>>;
   onError?: (error: unknown, request: Request) => void | Promise<void>;
 }>;
 
 export type ServerFacadeFetchHandler =
-  & EventNativeFetchHandler
+  & HttpFetchHandler
   & Readonly<{
     routes: CompiledServerRoutes;
   }>;
-
-type FacadeContext = Readonly<{
-  serverEndpointKey: string;
-  serverParams: Readonly<Record<string, string>>;
-  serverResponseMode: "json" | "sse" | "multipart";
-  serverActionMetadata: Readonly<Record<string, unknown>>;
-  operationMetadata: Readonly<Record<string, unknown>>;
-  serverIdentity: Readonly<Record<string, string>>;
-  serverSignal: AbortSignal;
-  namespace?: string;
-  databaseSchema?: string;
-}>;
 
 function appError(status: number, code: string, message: string): Error {
   return Object.assign(new Error(message), { status, code });
@@ -69,77 +50,6 @@ function record(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : {};
-}
-
-function text(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function header(
-  headers: EventNativeAppRequest["headers"],
-  name: string,
-): string | undefined {
-  const lower = name.toLowerCase();
-  for (const [key, value] of Object.entries(headers ?? {})) {
-    if (key.toLowerCase() === lower && value.trim()) return value.trim();
-  }
-  return undefined;
-}
-
-function uploadTooLarge(maxBytes: number): Error {
-  return appError(
-    413,
-    "asset_too_large",
-    `Asset upload exceeds the ${maxBytes}-byte limit.`,
-  );
-}
-
-/** Reject a declared oversized upload before Fetch consumes its request body. */
-function assertUploadContentLength(
-  request: Request,
-  endpoint: ServerEndpointDescriptor,
-  maxBytes: number,
-): void {
-  if (endpoint.kind !== "asset" || endpoint.operation !== "upload") return;
-  const contentLength = request.headers.get("content-length")?.trim();
-  if (!contentLength || !/^\d+$/.test(contentLength)) return;
-  const byteLength = Number(contentLength);
-  if (Number.isSafeInteger(byteLength) && byteLength > maxBytes) {
-    throw uploadTooLarge(maxBytes);
-  }
-}
-
-function uploadMediaType(headers: EventNativeAppRequest["headers"]): string {
-  const mediaType = header(headers, "content-type")?.split(";", 1)[0]
-    ?.trim().toLowerCase();
-  return mediaType || "application/octet-stream";
-}
-
-function uploadFilename(
-  headers: EventNativeAppRequest["headers"],
-): string | undefined {
-  const disposition = header(headers, "content-disposition");
-  if (!disposition) return undefined;
-  const extended = /(?:^|;)\s*filename\*=\s*([^;]+)/i.exec(disposition)?.[1];
-  const plain = /(?:^|;)\s*filename\s*=\s*(?:"([^"]*)"|([^;]*))/i
-    .exec(disposition);
-  let value = extended ?? plain?.[1] ?? plain?.[2];
-  if (!value) return undefined;
-  value = value.trim().replace(/^"|"$/g, "");
-  if (extended) {
-    value = value.replace(/^utf-8''/i, "");
-    try {
-      value = decodeURIComponent(value);
-    } catch {
-      return undefined;
-    }
-  }
-  const filename = [...value.replace(/[\\/]/g, "/").split("/").at(-1)!]
-    .filter((character) => {
-      const codePoint = character.codePointAt(0)!;
-      return codePoint >= 0x20 && codePoint !== 0x7f;
-    }).join("").trim().slice(0, 255);
-  return filename || undefined;
 }
 
 function facadeResource(
@@ -158,64 +68,6 @@ function facadeResource(
   return candidate as ServerFacadeResource;
 }
 
-function responseMode(request: Request): FacadeContext["serverResponseMode"] {
-  const accept = request.headers.get("accept")?.toLowerCase() ?? "";
-  if (accept.includes("multipart/mixed")) return "multipart";
-  if (accept.includes("text/event-stream")) return "sse";
-  return "json";
-}
-
-function authorizedScope(value: unknown): ServerAuthorizedScope {
-  if (value === undefined) return Object.freeze({});
-  if (
-    !value || typeof value !== "object" || Array.isArray(value) ||
-    (Object.getPrototypeOf(value) !== Object.prototype &&
-      Object.getPrototypeOf(value) !== null)
-  ) throw new TypeError("Server guard returned an invalid scope.");
-  const input = value as Record<string, unknown>;
-  if (
-    Reflect.ownKeys(input).some((key) =>
-      key !== "namespace" && key !== "databaseSchema" && key !== "identity" &&
-      key !== "actionMetadata" && key !== "operationMetadata" &&
-      key !== "context"
-    )
-  ) throw new TypeError("Server guard returned unsupported scope fields.");
-  const plain = (candidate: unknown, label: string) => {
-    if (candidate === undefined) return undefined;
-    if (
-      !candidate || typeof candidate !== "object" || Array.isArray(candidate)
-    ) {
-      throw new TypeError(`${label} must be an object.`);
-    }
-    return Object.freeze(structuredClone(candidate as Record<string, unknown>));
-  };
-  return Object.freeze({
-    ...(text(input.namespace) ? { namespace: text(input.namespace) } : {}),
-    ...(text(input.databaseSchema)
-      ? { databaseSchema: text(input.databaseSchema) }
-      : {}),
-    ...(input.identity
-      ? { identity: plain(input.identity, "Server identity")! }
-      : {}),
-    ...(input.actionMetadata
-      ? {
-        actionMetadata: plain(input.actionMetadata, "Server Action metadata")!,
-      }
-      : {}),
-    ...(input.operationMetadata
-      ? {
-        operationMetadata: plain(
-          input.operationMetadata,
-          "Server operation metadata",
-        )!,
-      }
-      : {}),
-    ...(input.context
-      ? { context: plain(input.context, "Server context")! }
-      : {}),
-  });
-}
-
 function endpointByKey(
   routes: CompiledServerRoutes,
   key: string,
@@ -226,404 +78,6 @@ function endpointByKey(
   return endpoint;
 }
 
-type ServerInvokeTerminal =
-  | Readonly<{
-    status: "completed";
-    wrapperActionRunId: string;
-    targetActionRunId: string;
-  }>
-  | Readonly<{
-    status: "failed";
-    error: Readonly<{ name: string; message: string }>;
-  }>;
-
-function actionTerminal(
-  output: unknown,
-  requestId: string,
-  targetActionId: string,
-): ServerInvokeTerminal | undefined {
-  if (!output || typeof output !== "object") return undefined;
-  const event = output as Record<string, unknown>;
-  if (event.type !== `${SERVER_INVOKE_ACTION_ID}.completed`) return undefined;
-  const data = record(event.data) as Partial<ActionEventData>;
-  if (data.status !== "completed") return undefined;
-  const input = record(data.input);
-  if (input.requestId !== requestId) return undefined;
-  const result = record(data.output);
-  if (result.status === "completed") {
-    const targetActionRunId = text(result.targetActionRunId);
-    const wrapperActionRunId = text(data.actionRunId);
-    if (
-      !targetActionRunId || !wrapperActionRunId ||
-      targetActionRunId !==
-        `${wrapperActionRunId}/action:${targetActionId}:target`
-    ) return undefined;
-    return Object.freeze({
-      status: "completed",
-      wrapperActionRunId,
-      targetActionRunId,
-    });
-  }
-  if (result.status === "failed") {
-    const error = record(result.error);
-    return Object.freeze({
-      status: "failed",
-      error: Object.freeze({
-        name: text(error.name) ?? "Error",
-        message: text(error.message) ?? "Action execution failed.",
-      }),
-    });
-  }
-  return undefined;
-}
-
-async function recoverActionTerminal(
-  application: InternalCopilotzApplication,
-  context: FacadeContext,
-  eventId: string,
-  requestId: string,
-  targetActionId: string,
-): Promise<ServerInvokeTerminal | undefined> {
-  const namespace = context.namespace ?? application.config.namespace;
-  if (!namespace) return undefined;
-  const databaseSchema = context.databaseSchema ??
-    application.config.databaseSchema;
-  const scope = databaseSchema === application.config.databaseSchema
-    ? application
-    : await application.databaseScope(databaseSchema);
-  const requestEvent = await scope.events.get(namespace, eventId);
-  if (!requestEvent) return undefined;
-
-  let afterPosition: string | undefined;
-  while (true) {
-    const events = await scope.events.list({
-      namespace,
-      correlationId: requestEvent.correlationId,
-      ...(afterPosition ? { afterPosition } : {}),
-      limit: 1_000,
-    });
-    for (const event of events) {
-      if (event.type !== `${SERVER_INVOKE_ACTION_ID}.completed`) continue;
-      const resolved = await scope.events.resolve(namespace, event.id);
-      const terminal = resolved &&
-        actionTerminal(resolved, requestId, targetActionId);
-      if (terminal) return terminal;
-    }
-    if (events.length < 1_000) return undefined;
-    const next = events.at(-1)?.position;
-    if (!next || next === afterPosition) return undefined;
-    afterPosition = next;
-  }
-}
-
-async function recoverTargetActionTerminal(
-  application: InternalCopilotzApplication,
-  context: FacadeContext,
-  requestEventId: string,
-  targetActionId: string,
-  terminal: Extract<ServerInvokeTerminal, { status: "completed" }>,
-): Promise<ActionEventData | undefined> {
-  const namespace = context.namespace ?? application.config.namespace;
-  if (!namespace) return undefined;
-  const databaseSchema = context.databaseSchema ??
-    application.config.databaseSchema;
-  const scope = databaseSchema === application.config.databaseSchema
-    ? application
-    : await application.databaseScope(databaseSchema);
-  const requestEvent = await scope.events.get(namespace, requestEventId);
-  if (!requestEvent) return undefined;
-
-  let afterPosition: string | undefined;
-  while (true) {
-    const events = await scope.events.list({
-      namespace,
-      correlationId: requestEvent.correlationId,
-      ...(afterPosition ? { afterPosition } : {}),
-      limit: 1_000,
-    });
-    for (const event of events) {
-      if (
-        event.subject?.id !== terminal.targetActionRunId ||
-        event.subject.type !== targetActionId
-      ) continue;
-      const data = await scope.events.resolveActionLifecycle(
-        namespace,
-        event.id,
-      );
-      if (
-        !data || data.actionRunId !== terminal.targetActionRunId ||
-        data.actionId !== targetActionId ||
-        data.parentActionRunId !== terminal.wrapperActionRunId
-      ) continue;
-      if (
-        data.status === "completed" || data.status === "failed" ||
-        data.status === "cancelled"
-      ) return data;
-    }
-    if (events.length < 1_000) return undefined;
-    const next = events.at(-1)?.position;
-    if (!next || next === afterPosition) return undefined;
-    afterPosition = next;
-  }
-}
-
-async function actionResponse(
-  application: InternalCopilotzApplication,
-  endpoint: ServerEndpointDescriptor,
-  request: EventNativeAppRequest,
-  context: FacadeContext,
-): Promise<EventNativeAppResponse> {
-  const requestId = header(request.headers, "idempotency-key") ??
-    crypto.randomUUID();
-  const correlationId = context.serverIdentity.correlationId ??
-    header(request.headers, "x-copilotz-correlation-id") ??
-    `server:${requestId}`;
-  const handle = await application.sendProtected(
-    {
-      type: SERVER_ACTION_REQUEST_EVENT_TYPE,
-      payload: Object.freeze({
-        schema: SERVER_ACTION_REQUEST_SCHEMA,
-        requestId,
-        actionAlias: endpoint.actionAlias!,
-        input: request.body ?? {},
-        actionMetadata: context.serverActionMetadata,
-      }),
-      namespace: context.namespace,
-      databaseSchema: context.databaseSchema,
-      correlationId,
-      causationId: context.serverIdentity.causationId,
-      deduplicationId: context.serverIdentity.deduplicationId ??
-        header(request.headers, "idempotency-key") ?? requestId,
-      metadata: Object.freeze({ sourceAdapter: "server" }),
-      operationMetadata: context.operationMetadata,
-      visibility: { kind: "internal" },
-    },
-    serverActionRequestSchema(endpoint.inputSchema),
-    `server:${requestId}`,
-  );
-  const abort = () => {
-    void handle.detach("server_request_detached").catch(() => undefined);
-  };
-  if (context.serverSignal.aborted) abort();
-  else context.serverSignal.addEventListener("abort", abort, { once: true });
-  const respondAsync = header(request.headers, "prefer")?.split(",").some(
-    (value) => value.trim().toLowerCase() === "respond-async",
-  ) ?? false;
-  if (respondAsync) {
-    const status = await application.operationStatus({
-      operationId: handle.operationId,
-      namespace: context.namespace,
-      databaseSchema: context.databaseSchema,
-    });
-    context.serverSignal.removeEventListener("abort", abort);
-    await handle.detach("http_respond_async");
-    const threadId = typeof status?.metadata.threadId === "string"
-      ? status.metadata.threadId.trim()
-      : "";
-    const externalId = typeof status?.metadata.threadExternalId === "string"
-      ? status.metadata.threadExternalId.trim()
-      : typeof status?.metadata.externalThreadId === "string"
-      ? status.metadata.externalThreadId.trim()
-      : threadId;
-    return {
-      status: 202,
-      headers: { "preference-applied": "respond-async" },
-      data: Object.freeze({
-        operationId: handle.operationId,
-        status: status?.state === "accepted" ? "accepted" : "running",
-        correlationId: handle.correlationId,
-        replayCursor: handle.replayCursor,
-        acceptedAt: status?.acceptedAt ?? new Date().toISOString(),
-        ...(threadId
-          ? { thread: Object.freeze({ id: threadId, externalId }) }
-          : {}),
-      }),
-    };
-  }
-  if (context.serverResponseMode !== "json") {
-    const done = handle.done.finally(() =>
-      context.serverSignal.removeEventListener("abort", abort)
-    );
-    const stream: EventNativeOutputStream = Object.freeze({
-      type: EVENT_NATIVE_OUTPUT_STREAM,
-      outputs: handle.outputs,
-      done,
-      operationId: handle.operationId,
-      replayCursor: handle.replayCursor,
-      async cancel(reason = "server_request_cancelled") {
-        context.serverSignal.removeEventListener("abort", abort);
-        await handle.detach(reason);
-      },
-    });
-    return {
-      status: 200,
-      ...(actionSchemaHasSecrets(endpoint.outputSchema)
-        ? { headers: { "cache-control": "no-store" } }
-        : {}),
-      data: stream,
-    };
-  }
-  let terminal: ServerInvokeTerminal | undefined;
-  const collect = (async () => {
-    for await (const output of handle.outputs) {
-      terminal ??= actionTerminal(output, requestId, endpoint.id);
-    }
-  })();
-  let settlementError: unknown;
-  try {
-    await Promise.all([handle.done, collect]);
-  } catch (error) {
-    settlementError = error;
-  } finally {
-    context.serverSignal.removeEventListener("abort", abort);
-  }
-  terminal ??= await recoverActionTerminal(
-    application,
-    context,
-    handle.eventId,
-    requestId,
-    endpoint.id,
-  );
-  if (!terminal && settlementError !== undefined) throw settlementError;
-  if (!terminal) {
-    throw appError(
-      500,
-      "action_result_missing",
-      "Action result was not observed.",
-    );
-  }
-  if (terminal.status === "failed") {
-    throw appError(500, "action_failed", terminal.error.message);
-  }
-  const target = await recoverTargetActionTerminal(
-    application,
-    context,
-    handle.eventId,
-    endpoint.id,
-    terminal,
-  );
-  if (!target) {
-    throw appError(
-      500,
-      "action_result_missing",
-      "Target Action result was not found.",
-    );
-  }
-  if (target.status === "failed" || target.status === "cancelled") {
-    throw appError(500, "action_failed", target.error.message);
-  }
-  if (target.status !== "completed") {
-    throw appError(
-      500,
-      "action_result_missing",
-      "Target Action result was not terminal.",
-    );
-  }
-  return {
-    status: 200,
-    ...(actionSchemaHasSecrets(endpoint.outputSchema)
-      ? { headers: { "cache-control": "no-store" } }
-      : {}),
-    data: target.output,
-  };
-}
-
-async function assetUploadResponse(
-  application: InternalCopilotzApplication,
-  endpoint: ServerEndpointDescriptor,
-  request: EventNativeAppRequest,
-  context: FacadeContext,
-  maxBytes: number,
-): Promise<EventNativeAppResponse> {
-  if (endpoint.operation !== "upload") {
-    throw appError(405, "method_not_allowed", "Asset method is not allowed.");
-  }
-  const rawBody = (request.context as { rawBody?: unknown } | undefined)
-    ?.rawBody;
-  if (!(rawBody instanceof Uint8Array) || rawBody.byteLength === 0) {
-    throw appError(400, "asset_body_required", "Asset upload requires a body.");
-  }
-  if (rawBody.byteLength > maxBytes) throw uploadTooLarge(maxBytes);
-  const namespace = context.namespace ?? application.config.namespace;
-  if (!namespace) {
-    throw appError(400, "namespace_required", "Tenant namespace is required.");
-  }
-  const databaseSchema = context.databaseSchema ??
-    application.config.databaseSchema;
-  const scope = databaseSchema === application.config.databaseSchema
-    ? application
-    : await application.databaseScope(databaseSchema);
-  const name = uploadFilename(request.headers);
-  const asset = await scope.content.assets.publish({
-    namespace,
-    mediaType: uploadMediaType(request.headers),
-    body: rawBody,
-    idempotencyKey: header(request.headers, "idempotency-key") ??
-      crypto.randomUUID(),
-    ...(name ? { metadata: { name } } : {}),
-  });
-  const canonicalName = typeof asset.metadata?.name === "string"
-    ? asset.metadata.name
-    : undefined;
-  const content: ContentRef = Object.freeze({
-    assetId: asset.id,
-    kind: "file",
-    role: "attachment",
-    mediaType: asset.mediaType,
-    disposition: "attachment",
-    ...(canonicalName ? { name: canonicalName } : {}),
-  });
-  return {
-    status: 201,
-    data: Object.freeze({
-      asset: eventNativeAsset(asset),
-      assetRef: formatAssetRef(namespace, asset.id),
-      content,
-    }),
-  };
-}
-
-function nativeRequest(
-  endpoint: ServerEndpointDescriptor,
-  params: Readonly<Record<string, string>>,
-  request: EventNativeAppRequest,
-): EventNativeAppRequest {
-  const context = request.context;
-  if (endpoint.kind === "collection") {
-    const operation = endpoint.operation!;
-    const path = operation === "list" || operation === "create"
-      ? [endpoint.id]
-      : operation === "get" || operation === "update" || operation === "delete"
-      ? [endpoint.id, params.id]
-      : operation.startsWith("query:")
-      ? [endpoint.id, "queries", endpoint.member!]
-      : [endpoint.id, params.id, "commands", endpoint.member!];
-    return Object.freeze({
-      ...request,
-      resource: "collections",
-      path,
-      context,
-    });
-  }
-  if (endpoint.kind === "channel") {
-    return Object.freeze({
-      ...request,
-      resource: "channels",
-      path: [endpoint.id],
-      context,
-    });
-  }
-  if (endpoint.kind === "asset") {
-    return Object.freeze({
-      ...request,
-      resource: "assets",
-      path: [params.id],
-      context,
-    });
-  }
-  return Object.freeze({ ...request, resource: "agents", path: [], context });
-}
-
 /** Creates the compiled Fetch handler for one fully composed application. */
 export function createServerFacadeFetchHandler(
   application: InternalCopilotzApplication,
@@ -631,21 +85,7 @@ export function createServerFacadeFetchHandler(
 ): ServerFacadeFetchHandler {
   const facade = facadeResource(application, options.facade);
   const routes = compileServerRoutes(application.plugins, facade);
-  const native = createEventNativeApp(application, {
-    // These values were selected by the process-local facade guard. Passing
-    // them through the event-native trust hooks preserves that authority when
-    // the request targets a non-default physical schema.
-    resolveNamespace: (request) => request.context?.namespace,
-    resolveDatabaseSchema: (request) => request.context?.databaseSchema,
-  });
-  const app: EventNativeApp = Object.freeze({
-    resources: () =>
-      routes.routes.map((route) =>
-        Object.freeze({
-          name: route.endpoint.id,
-          methods: Object.freeze([route.endpoint.method]),
-        })
-      ),
+  const app: HttpApplication = Object.freeze({
     async handle(request) {
       const context = request.context as FacadeContext | undefined;
       if (!context?.serverEndpointKey) {
@@ -662,6 +102,265 @@ export function createServerFacadeFetchHandler(
       if (endpoint.kind === "action") {
         return await actionResponse(application, endpoint, request, context);
       }
+      const read = await createHttpReads(
+        application,
+        context.serverScope,
+        context.serverConstraints,
+      );
+      const operations = await createHttpOperations(
+        application,
+        context.serverScope,
+        context.serverConstraints,
+        read,
+      );
+      if (endpoint.kind === "http") {
+        const route = Object.values(application.plugins.adapters.http ?? {})
+          .flatMap((adapter) => (adapter as HttpAdapter).routes).find((route) =>
+            route.id === endpoint.id
+          );
+        if (!route) {
+          throw appError(
+            500,
+            "route_missing",
+            "Compiled handler is unavailable.",
+          );
+        }
+        if (route.inputSchema) {
+          try {
+            validateAgainstJsonSchema(
+              route.inputSchema,
+              request.body,
+              "HTTP input",
+            );
+          } catch {
+            throw appError(
+              400,
+              "invalid_input",
+              "Request does not match the endpoint schema.",
+            );
+          }
+        }
+        const submit = async (
+          actionId: string,
+          input: unknown,
+          options: {
+            idempotencyKey?: string;
+            actionMetadata?: Readonly<Record<string, unknown>>;
+          } = {},
+        ) => {
+          const entry = Object.entries(application.plugins.actions).find((
+            [, action],
+          ) => action.id === actionId);
+          if (!entry) {
+            throw appError(404, "action_not_found", "Action was not found.");
+          }
+          const target = {
+            ...endpoint,
+            id: actionId,
+            actionAlias: entry[0],
+            inputSchema: entry[1].inputSchema,
+          };
+          return (await actionResponse(application, target, {
+            ...request,
+            body: input,
+            headers: {
+              ...request.headers,
+              ...(options.idempotencyKey
+                ? { "idempotency-key": options.idempotencyKey }
+                : {}),
+            },
+          }, {
+            ...context,
+            serverActionMetadata: {
+              ...context.serverActionMetadata,
+              ...options.actionMetadata,
+            },
+          })).data;
+        };
+        const handlerContext: HttpHandlerContext = Object.freeze({
+          request: context.serverRequest,
+          endpoint,
+          params: context.serverParams,
+          input: request.body,
+          scope: context.serverScope,
+          constraints: context.serverConstraints,
+          read,
+          async invoke(id, input, options) {
+            const receipt = await submit(id, input, {
+              ...(request.method === "GET"
+                ? { idempotencyKey: crypto.randomUUID() }
+                : {}),
+              ...options,
+            }) as {
+              operationId: string;
+            };
+            for (;;) {
+              context.serverSignal.throwIfAborted();
+              const result = await operationResult(
+                application,
+                context,
+                receipt.operationId,
+              );
+              if (result.status !== 202) return result.data;
+              await new Promise((resolve) => setTimeout(resolve, 25));
+            }
+          },
+          operations: {
+            checkpoint: operations.checkpoint,
+            async observe(selection) {
+              const stream = await operations.observe({
+                ...selection,
+                signal: context.serverSignal,
+              });
+              return applicationOutputsMultipartResponse(stream, {
+                signal: context.serverSignal,
+              });
+            },
+          },
+          content: {
+            async get(id) {
+              const runtime =
+                context.databaseSchema !== application.config.databaseSchema
+                  ? await application.databaseScope(context.databaseSchema!)
+                  : application;
+              const content = await runtime.content.assets.read(
+                context.namespace!,
+                id,
+              );
+              return new Response(content.bytes.slice(), {
+                headers: {
+                  "content-type": content.asset.mediaType,
+                  "cache-control": "no-store",
+                },
+              });
+            },
+          },
+        });
+        if (route.action) {
+          return {
+            status: 202,
+            data: await submit(
+              route.action,
+              route.input ? await route.input(handlerContext) : request.body,
+            ),
+          };
+        }
+        const result = await route.handler!(handlerContext);
+        if (result instanceof Response) {
+          return { status: result.status, data: result };
+        }
+        if (route.outputSchema) {
+          validateAgainstJsonSchema(route.outputSchema, result, "HTTP output");
+        }
+        return { status: 200, data: result };
+      }
+      if (endpoint.kind === "collection") {
+        const name = endpoint.collectionAlias!;
+        if (endpoint.operation === "get") {
+          const value = await read.get(name, context.serverParams.id);
+          if (!value) {
+            throw appError(404, "record_not_found", "Record was not found.");
+          }
+          return { status: 200, data: value };
+        }
+        if (endpoint.operation?.startsWith("query:")) {
+          return {
+            status: 200,
+            data: await read.query(
+              name,
+              endpoint.member!,
+              record(request.body),
+            ),
+          };
+        }
+        if (endpoint.operation === "list") {
+          const query = request.query?.query;
+          let requested;
+          try {
+            requested = typeof query === "string" ? JSON.parse(query) : {};
+            if (
+              !requested || typeof requested !== "object" ||
+              Array.isArray(requested)
+            ) throw new Error();
+          } catch {
+            throw appError(
+              400,
+              "invalid_query",
+              "Query must be a JSON object.",
+            );
+          }
+          const limit = requested.limit ?? 100;
+          if (!Number.isSafeInteger(limit) || limit < 1 || limit > 999) {
+            throw appError(
+              400,
+              "invalid_query",
+              "List limit must be 1 to 999.",
+            );
+          }
+          const values = await read.list(name, {
+            ...requested,
+            limit: limit + 1,
+          });
+          return {
+            status: 200,
+            data: values.slice(0, limit),
+            pageInfo: {
+              hasMore: values.length > limit,
+              next: values.length > limit ? values[limit - 1]?.id : undefined,
+            },
+          };
+        }
+        throw appError(405, "method_not_allowed", "Mutations require Actions.");
+      }
+      if (endpoint.kind === "operation") {
+        if (endpoint.operation !== "observe") {
+          await operations.get(context.serverParams.id);
+        }
+        if (endpoint.operation === "result") {
+          return await operationResult(
+            application,
+            context,
+            context.serverParams.id,
+          );
+        }
+        if (endpoint.operation === "observe") {
+          const selection = record(request.body);
+          if (
+            !Array.isArray(selection.operationIds) ||
+            selection.checkpoint !== undefined &&
+              typeof selection.checkpoint !== "string"
+          ) {
+            throw appError(
+              400,
+              "invalid_operation_selection",
+              "Invalid observation selection.",
+            );
+          }
+          return {
+            status: 200,
+            data: await operations.observe({
+              operationIds: selection.operationIds,
+              checkpoint: selection.checkpoint as string | undefined,
+              signal: context.serverSignal,
+            }),
+          };
+        }
+
+        if (endpoint.operation === "get") {
+          return {
+            status: 200,
+            data: await operations.get(context.serverParams.id),
+          };
+        }
+        return {
+          status: 200,
+          data: await application.cancelOperation({
+            operationId: context.serverParams.id,
+            namespace: context.namespace,
+            databaseSchema: context.databaseSchema,
+          }),
+        };
+      }
       if (endpoint.kind === "asset" && endpoint.operation === "upload") {
         return await assetUploadResponse(
           application,
@@ -671,17 +370,87 @@ export function createServerFacadeFetchHandler(
           facade.maxAssetUploadBytes,
         );
       }
-      return await native.handle(nativeRequest(
-        endpoint,
-        context.serverParams,
-        request,
-      ));
+      const physical =
+        context.databaseSchema === application.config.databaseSchema
+          ? application
+          : await application.databaseScope(context.databaseSchema!);
+      if (endpoint.kind === "channel") {
+        const scoped = Object.freeze({
+          ...application,
+          ...physical,
+          config: {
+            ...application.config,
+            databaseSchema: context.databaseSchema!,
+          },
+        });
+        const admitted = await admitHttpOperation(
+          application,
+          context,
+          request.headers?.["idempotency-key"] ?? "",
+        );
+        return await handleChannel(scoped, context.namespace!, {
+          ...request,
+          body: constrainInput(request.body, context.serverConstraints.input),
+          context: { ...admitted, actor: context.serverScope.actor },
+        }, [endpoint.id]);
+      }
+      if (endpoint.kind === "asset") {
+        const content = await physical.content.assets.read(
+          context.namespace!,
+          context.serverParams.id,
+        );
+        return {
+          status: 200,
+          data: new Response(content.bytes.slice(), {
+            headers: {
+              "content-type": content.asset.mediaType,
+              "cache-control": "no-store",
+            },
+          }),
+        };
+      }
+      if (endpoint.kind === "agents") {
+        return {
+          status: 200,
+          data: Object.values(application.plugins.resources.agents ?? {}).map(
+            (value) => {
+              const agent = value as {
+                id: string;
+                name: string;
+                role?: string;
+                description?: string;
+              };
+              return {
+                id: agent.id,
+                name: agent.name,
+                role: agent.role,
+                description: agent.description,
+              };
+            },
+          ),
+        };
+      }
+      throw appError(404, "route_not_found", "Route was not found.");
     },
   });
-  const fetch = createEventNativeFetchHandler(app, {
+  const fetch = createHttpFetchHandler(app, {
     basePath: facade.basePath,
+    requestBodyPolicy(request) {
+      const endpoint = routes.match(
+        request.method,
+        new URL(request.url).pathname,
+      )?.endpoint;
+      return endpoint?.kind === "asset" && endpoint.operation === "upload"
+        ? {
+          maxBytes: facade.maxAssetUploadBytes,
+          tooLarge: {
+            code: "asset_too_large",
+            message: "Asset upload exceeds the configured byte limit.",
+          },
+        }
+        : { maxBytes: 1024 * 1024 };
+    },
     responseHeaders: options.responseHeaders,
-    streamResponseMode: "negotiate",
     onError: options.onError,
     rawBody(_request, context) {
       const key = (context as FacadeContext | undefined)?.serverEndpointKey;
@@ -694,7 +463,7 @@ export function createServerFacadeFetchHandler(
           maxBytes: facade.maxAssetUploadBytes,
           tooLarge: Object.freeze({
             code: "asset_too_large",
-            message: uploadTooLarge(facade.maxAssetUploadBytes).message,
+            message: "Asset upload exceeds the configured byte limit.",
           }),
         })
         : false;
@@ -709,40 +478,7 @@ export function createServerFacadeFetchHandler(
           "Application route was not found.",
         );
       }
-      const hostContext = await options.resolveContext?.(request);
-      if (hostContext instanceof Response) return hostContext;
-      const guarded = await facade.guard?.(
-        request,
-        Object.freeze({
-          endpoint: match.endpoint,
-          defaultNamespace: application.config.namespace,
-          defaultDatabaseSchema: application.config.databaseSchema,
-          ...(hostContext ? { requestContext: hostContext } : {}),
-        }),
-      );
-      if (guarded instanceof Response) return guarded;
-      const scope = authorizedScope(guarded);
-      assertUploadContentLength(
-        request,
-        match.endpoint,
-        facade.maxAssetUploadBytes,
-      );
-      return Object.freeze({
-        ...(hostContext ?? {}),
-        ...(scope.context ?? {}),
-        namespace: scope.namespace ?? text(hostContext?.namespace) ??
-          application.config.namespace,
-        databaseSchema: scope.databaseSchema ??
-          text(hostContext?.databaseSchema) ??
-          application.config.databaseSchema,
-        serverEndpointKey: match.endpoint.key,
-        serverParams: match.params,
-        serverResponseMode: responseMode(request),
-        serverActionMetadata: scope.actionMetadata ?? Object.freeze({}),
-        operationMetadata: scope.operationMetadata ?? Object.freeze({}),
-        serverIdentity: scope.identity ?? Object.freeze({}),
-        serverSignal: request.signal,
-      });
+      return await authenticateHttpRequest(request, application, facade, match);
     },
   });
   return Object.assign(fetch, { routes }) as ServerFacadeFetchHandler;

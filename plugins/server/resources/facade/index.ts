@@ -5,7 +5,6 @@ import type {
   ServerCollectionExposure,
   ServerFacadeResource,
   ServerPatternPolicy,
-  ServerRouteOverride,
 } from "../../internal/contracts.ts";
 import { DEFAULT_SERVER_ASSET_UPLOAD_BYTES as defaultMaxAssetUploadBytes } from "../../internal/contracts.ts";
 
@@ -26,7 +25,10 @@ function routePath(value: string, label: string): string {
   }
   const parts = value.split("/").filter(Boolean);
   if (
-    parts.some((part) => part === "." || part === ".." || part.startsWith(":"))
+    parts.some((part) =>
+      part === "." || part === ".." || part.startsWith(":") ||
+      /^v[0-9]+$/.test(part)
+    )
   ) {
     throw new TypeError(`${label} cannot contain relative segments.`);
   }
@@ -99,31 +101,6 @@ function exposure(
   return Object.freeze({ ...base, operations });
 }
 
-function overrides(
-  value: unknown,
-  label: string,
-): Readonly<Record<string, ServerRouteOverride>> {
-  if (value === undefined) return Object.freeze({});
-  const input = plainRecord(value, label);
-  return Object.freeze(Object.fromEntries(
-    Object.entries(input).map(([id, candidate]) => {
-      if (!id || id.trim() !== id) {
-        throw new TypeError(`${label} has an invalid target.`);
-      }
-      if (candidate === false) return [id, false] as const;
-      const record = plainRecord(candidate, `${label}.${id}`);
-      if (
-        Reflect.ownKeys(record).some((key) => key !== "path") ||
-        typeof record.path !== "string"
-      ) throw new TypeError(`${label}.${id} must contain only path.`);
-      return [
-        id,
-        Object.freeze({ path: routePath(record.path, label) }),
-      ] as const;
-    }),
-  ));
-}
-
 function maxAssetUploadBytes(value: unknown): number {
   if (value === undefined) return defaultMaxAssetUploadBytes;
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1) {
@@ -141,29 +118,26 @@ export function defineServerFacade(
   if (
     !input || typeof input !== "object" || Array.isArray(input) ||
     Reflect.ownKeys(input).some((key) =>
-      key !== "basePath" && key !== "expose" && key !== "overrides" &&
-      key !== "guard" && key !== "maxAssetUploadBytes"
+      key !== "basePath" && key !== "expose" &&
+      key !== "authenticate" && key !== "authorize" &&
+      key !== "maxAssetUploadBytes"
     )
   ) throw new TypeError("Server facade definition is invalid.");
-  if (input.guard !== undefined && typeof input.guard !== "function") {
-    throw new TypeError("Server facade guard must be a function.");
+  for (const key of ["authenticate", "authorize"] as const) {
+    if (input[key] !== undefined && typeof input[key] !== "function") {
+      throw new TypeError(`Server ${key} must be a function.`);
+    }
   }
   const expose = input.expose === undefined
     ? {}
     : plainRecord(input.expose, "Server facade expose");
-  const overrideInput = input.overrides === undefined
-    ? {}
-    : plainRecord(input.overrides, "Server facade overrides");
   if (
     Reflect.ownKeys(expose).some((key) =>
-      key !== "actions" && key !== "collections" && key !== "channels"
-    ) ||
-    Reflect.ownKeys(overrideInput).some((key) =>
       key !== "actions" && key !== "collections" && key !== "channels"
     )
   ) throw new TypeError("Server facade categories are invalid.");
   return Object.freeze({
-    basePath: routePath(input.basePath ?? "/api/v1", "Server facade basePath"),
+    basePath: routePath(input.basePath ?? "/api", "Server facade basePath"),
     maxAssetUploadBytes: maxAssetUploadBytes(input.maxAssetUploadBytes),
     expose: Object.freeze({
       actions: exposure(expose.actions, "Server action exposure") as
@@ -178,34 +152,21 @@ export function defineServerFacade(
         | boolean
         | ServerPatternPolicy,
     }),
-    overrides: Object.freeze({
-      actions: overrides(
-        overrideInput.actions,
-        "Server action overrides",
-      ),
-      collections: overrides(
-        overrideInput.collections,
-        "Server collection overrides",
-      ),
-      channels: overrides(
-        overrideInput.channels,
-        "Server channel overrides",
-      ),
-    }),
-    ...(input.guard ? { guard: input.guard } : {}),
+    ...(input.authenticate ? { authenticate: input.authenticate } : {}),
+    ...(input.authorize ? { authorize: input.authorize } : {}),
   });
 }
 
 export type {
   DefineServerFacadeInput,
+  ServerAuthenticate,
+  ServerAuthenticationContext,
+  ServerAuthorize,
   ServerAuthorizedScope,
   ServerCollectionExposure,
+  ServerConstraints,
   ServerEndpointDescriptor,
   ServerExposureOptions,
   ServerFacadeResource,
-  ServerGuard,
-  ServerGuardContext,
-  ServerOverrideOptions,
   ServerPatternPolicy,
-  ServerRouteOverride,
 } from "../../internal/contracts.ts";

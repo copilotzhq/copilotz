@@ -142,9 +142,68 @@ export function createWebChannelAdapter(): ChannelAdapter {
   return Object.freeze({
     accept(request) {
       const body = record(request.body, "Web Channel request body");
+      if (request.method !== "POST") {
+        throw Object.assign(new Error("Method not allowed."), {
+          status: 405,
+          code: "method_not_allowed",
+        });
+      }
+      const actor = request.context?.actor as {
+        id?: string;
+        externalId?: string;
+        name?: string;
+        email?: string;
+      } | undefined;
+      if (!actor?.id) {
+        throw Object.assign(new Error("Authentication required."), {
+          status: 401,
+          code: "unauthorized",
+        });
+      }
+      if (
+        Object.keys(body).some((key) =>
+          !["externalThreadId", "content", "recipientIds"].includes(key)
+        ) || !("content" in body)
+      ) {
+        throw Object.assign(new Error("Invalid Web Channel input."), {
+          status: 400,
+          code: "invalid_input",
+        });
+      }
+      const recipients = body.recipientIds === undefined
+        ? undefined
+        : body.recipientIds;
+      if (
+        recipients !== undefined &&
+        (!Array.isArray(recipients) ||
+          recipients.some((value) =>
+            typeof value !== "string" || !value.trim()
+          ))
+      ) {
+        throw Object.assign(new Error("Recipient IDs must be strings."), {
+          status: 400,
+          code: "invalid_input",
+        });
+      }
+      const key = required(
+        request.headers["idempotency-key"],
+        "Idempotency-Key",
+      );
       const occurrence: ChannelIngressOccurrence = Object.freeze({
-        id: required(body.id, "Web Channel occurrence ID"),
-        input: cloneChannelJson(body.input, "Web Channel input"),
+        id: `${actor.id}:${key}`,
+        input: cloneChannelJson({
+          externalThreadId: `${actor.id}:${
+            required(body.externalThreadId, "Web Channel external thread ID")
+          }`,
+          sender: {
+            ...actor,
+            externalId: actor.externalId ?? actor.id,
+            participantType: "human",
+          },
+          content: body.content,
+          ...(recipients ? { recipients } : {}),
+          metadata: { clientMessageId: key },
+        }, "Web Channel input"),
       });
       return Object.freeze({
         status: 202,

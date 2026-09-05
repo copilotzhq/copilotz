@@ -1,4 +1,4 @@
-import { assert, assertEquals } from "@std/assert";
+import { assert, assertEquals, assertRejects } from "@std/assert";
 import { createCopilotz } from "../index.ts";
 import {
   createSecretAdapter,
@@ -19,7 +19,7 @@ import {
 import { createCopilotzApplication } from "../runtime/application/index.ts";
 import { createTestDatabase } from "../runtime/testing/ominipg.ts";
 import { createServerFacadeFetchHandler } from "./facade.ts";
-import { decodeCopilotzOutputs } from "./multipart.ts";
+import { CopilotzHttpError, createCopilotzClient } from "../client/index.ts";
 import { base64ToBytes, bytesToBase64 } from "../runtime/content/index.ts";
 import { provisionOperationCatalog } from "../runtime/streams/index.ts";
 
@@ -189,7 +189,18 @@ const protectedFixture = definePlugin({
   actions: { protectedEcho },
 });
 
-Deno.test("Server facade protects Action ingress and exposes plaintext only to direct JSON callers", async () => {
+function browser(
+  handler: (request: Request) => Promise<Response>,
+  headers?: HeadersInit,
+) {
+  return createCopilotzClient({
+    baseUrl: "https://test/api",
+    getRequestHeaders: () => headers ?? {},
+    fetch: ((url, init) => handler(new Request(url, init))) as typeof fetch,
+  });
+}
+
+Deno.test("Server facade protects durable secrets and restricts plaintext to authorized result reads", async () => {
   const databaseSchema = "server_facade_protected_test";
   const database = await createTestDatabase({ url: ":memory:" });
   const executionsBefore = protectedExecutions;
@@ -200,6 +211,14 @@ Deno.test("Server facade protects Action ingress and exposes plaintext only to d
     plugins: [
       protectedFixture,
       createServerPlugin({
+        authenticate(request) {
+          return { actor: { id: request.headers.get("x-user") ?? "owner" } };
+        },
+        authorize(_request, context) {
+          return {
+            operations: { metadata: { actorId: context.scope.actor!.id } },
+          };
+        },
         expose: {
           actions: { include: ["test.server.protected-echo"] },
           collections: false,
@@ -209,196 +228,204 @@ Deno.test("Server facade protects Action ingress and exposes plaintext only to d
     ],
     adapters: { secrets: { default: await facadeSecretAdapter() } },
   });
-  const fetch = createServerFacadeFetchHandler(application);
-  const request = (
-    idempotencyKey: string,
-    accept = "application/json",
-    credential = SECRET_INPUT,
-  ) =>
-    fetch(
-      new Request(
-        "https://example.test/api/v1/actions/test/server/protected-echo",
-        {
-          method: "POST",
-          headers: {
-            accept,
-            "content-type": "application/json",
-            "idempotency-key": idempotencyKey,
-          },
-          body: JSON.stringify({
-            label: "protected",
-            credential,
-          }),
-        },
-      ),
-    );
+  const handler = createServerFacadeFetchHandler(application);
+  const client = browser(handler);
   try {
-    const direct = await request("protected-direct");
-    assertEquals(direct.status, 200, await direct.clone().text());
-    assertEquals(direct.headers.get("cache-control"), "no-store");
-    assertEquals(await direct.json(), {
-      data: { ok: true, sessionToken: SECRET_OUTPUT },
-    });
-
-    const replay = await request("protected-direct");
-    assertEquals(replay.status, 200, await replay.clone().text());
-    assertEquals(await replay.json(), {
-      data: { ok: true, sessionToken: SECRET_OUTPUT },
-    });
-    assertEquals(protectedExecutions, executionsBefore + 1);
-
-    const conflictSecret = `${SECRET_INPUT}-conflict`;
-    const conflict = await request(
-      "protected-direct",
-      "application/json",
-      conflictSecret,
+    const input = { label: "protected", credential: SECRET_INPUT };
+    const first = await client.actions.submit(
+      "test.server.protected-echo",
+      input,
+      { idempotencyKey: "secret" },
     );
-    assertEquals(conflict.status, 500);
-    const conflictBody = await conflict.text();
-    assertEquals(conflictBody.includes(SECRET_INPUT), false);
-    assertEquals(conflictBody.includes(conflictSecret), false);
-    assertEquals(protectedExecutions, executionsBefore + 1);
-
-    const multipart = await request(
-      "protected-multipart",
-      "multipart/mixed",
+    assertEquals(await client.operations.result(first.operationId), {
+      ok: true,
+      sessionToken: SECRET_OUTPUT,
+    });
+    const repeated = await client.actions.submit(
+      "test.server.protected-echo",
+      input,
+      { idempotencyKey: "secret" },
     );
-    assertEquals(multipart.status, 200);
-    assertEquals(multipart.headers.get("cache-control"), "no-store");
-    const outputs = [];
-    for await (const output of decodeCopilotzOutputs(multipart)) {
-      outputs.push(output);
-    }
-    const streamed = JSON.stringify(outputs);
+    assertEquals(repeated.operationId, first.operationId);
+    assertEquals(protectedExecutions, executionsBefore + 1);
+    await assertRejects(
+      () =>
+        client.actions.submit("test.server.protected-echo", {
+          ...input,
+          credential: "changed",
+        }, { idempotencyKey: "secret" }),
+      CopilotzHttpError,
+    );
+    await assertRejects(
+      () =>
+        browser(handler, { "x-user": "outsider" }).operations.result(
+          first.operationId,
+        ),
+      CopilotzHttpError,
+    );
+    const response = await handler(
+      new Request(`https://test/api/operations/${first.operationId}/result`),
+    );
+    assertEquals(response.headers.get("cache-control"), "no-store");
+    const frames: unknown[] = [];
+    await client.operations.observe({
+      operationIds: [first.operationId],
+      onFrame(frame) {
+        frames.push(frame);
+      },
+    });
+    const streamed = JSON.stringify(frames);
     assertEquals(streamed.includes(SECRET_INPUT), false);
     assertEquals(streamed.includes(SECRET_OUTPUT), false);
     assertEquals(streamed.includes("$copilotz-secret"), true);
-
     const tables = createCoreTableNames(databaseSchema);
-    const bodies = await database.query<{ body: unknown }>(
+    const bodies = await database.query(
       `SELECT body FROM ${tables.event_bodies}`,
     );
-    const nodes = await database.query<{ type: string; data: unknown }>(
+    const nodes = await database.query(
       `SELECT type, data FROM ${tables.nodes}`,
     );
     const durable = JSON.stringify({ bodies: bodies.rows, nodes: nodes.rows });
     assertEquals(durable.includes(SECRET_INPUT), false);
     assertEquals(durable.includes(SECRET_OUTPUT), false);
-    assertEquals(
-      nodes.rows.filter((node) => node.type === "protected_value").length,
-      6,
-    );
-    assertEquals(nodes.rows.some((node) => node.type === "asset"), false);
-    const assetEvents = await database.query<{ count: number }>(
-      `SELECT count(*)::int AS count FROM ${tables.events}
-       WHERE type = 'asset.created'`,
-    );
-    assertEquals(Number(assetEvents.rows[0]?.count), 0);
   } finally {
-    await application.close("server_facade_protected_done");
+    await application.close();
     await database.close();
   }
 });
 
-Deno.test("Server facade executes Actions and Collections through one guarded route table", async () => {
-  const observed: ServerEndpointDescriptor[] = [];
-  const executionsBefore = echoExecutions;
+Deno.test("authorization predicates intersect requested collection filters before pagination", async () => {
+  const endpoints: ServerEndpointDescriptor[] = [];
   const application = await createCopilotzApplication({
     namespace: "tenant-a",
-    databaseSchema: "server_facade_test",
+    databaseSchema: "server_policy_test",
     plugins: [
       fixture,
       createServerPlugin({
+        authenticate(_request, context) {
+          endpoints.push(context.endpoint);
+          return { namespace: "tenant-a" };
+        },
+        authorize(_request, context) {
+          return context.endpoint.kind === "collection"
+            ? { collections: { serverNotes: { where: { label: "allowed" } } } }
+            : { input: { value: "allowed" } };
+        },
         expose: {
           actions: { include: ["test.server.*"] },
           collections: { include: ["serverNotes"] },
           channels: false,
         },
-        guard(_request, context) {
-          observed.push(context.endpoint);
-          return { namespace: "tenant-a" };
+      }),
+    ],
+  });
+  const handler = createServerFacadeFetchHandler(application);
+  const client = browser(handler);
+  try {
+    const notes =
+      application.collections.withScope({ namespace: "tenant-a" }).serverNotes;
+    const invalidQuery = await assertRejects(
+      () => client.collections.query("serverNotes", "byLabel", { label: 42 }),
+      CopilotzHttpError,
+    );
+    assertEquals(invalidQuery.status, 400);
+    assertEquals(invalidQuery.code, "invalid_input");
+    for (
+      const [id, label] of [
+        ["a", "hidden"],
+        ["b", "allowed"],
+        ["c", "hidden"],
+        ["d", "allowed"],
+      ]
+    ) await notes.create({ id, label });
+    const page = await client.collections.list("serverNotes", {
+      limit: 1,
+      order: "asc",
+    }) as { data: { id: string }[] };
+    assertEquals(page.data.map((value) => value.id), ["b"]);
+    const next = await client.collections.list("serverNotes", {
+      limit: 1,
+      order: "asc",
+      after: "b",
+    }) as { data: { id: string }[] };
+    assertEquals(next.data.map((value) => value.id), ["d"]);
+    const conflict = await client.collections.list("serverNotes", {
+      where: { label: "hidden" },
+    }) as { data: unknown[] };
+    assertEquals(conflict.data, []);
+    await assertRejects(
+      () => client.collections.get("serverNotes", "a"),
+      CopilotzHttpError,
+    );
+    assertEquals(
+      await client.actions.invoke("test.server.echo", {}, {
+        idempotencyKey: "enforced",
+      }),
+      { echoed: "allowed" },
+    );
+    await assertRejects(
+      () =>
+        client.actions.submit("test.server.echo", { value: "forged" }, {
+          idempotencyKey: "forged",
+        }),
+      CopilotzHttpError,
+    );
+    assert(endpoints.some((value) => value.kind === "action"));
+    assert(endpoints.some((value) => value.kind === "collection"));
+  } finally {
+    await application.close();
+  }
+});
+
+Deno.test("authentication chooses the database scope and can return an early HTTP response", async () => {
+  const database = await createTestDatabase({ url: ":memory:" });
+  const schema = "server_authenticated_tenant";
+  await provisionCopilotzSchema(database, schema);
+  await provisionOperationCatalog(database, schema);
+  const application = await createCopilotzApplication({
+    database,
+    namespace: "tenant-a",
+    databaseSchema: "server_authenticated_default",
+    plugins: [
+      fixture,
+      createServerPlugin({
+        authenticate(request, context) {
+          assertEquals(context.endpoint.kind, "collection");
+          return request.headers.has("authorization")
+            ? { namespace: "tenant-a", databaseSchema: schema }
+            : new Response(null, { status: 401 });
         },
       }),
     ],
   });
-  const fetch = createServerFacadeFetchHandler(application);
+  const handler = createServerFacadeFetchHandler(application);
   try {
-    const action = await fetch(
-      new Request(
-        "https://example.test/api/v1/actions/test/server/echo",
-        {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            "idempotency-key": "server-echo-a",
-          },
-          body: JSON.stringify({ value: "hello" }),
-        },
-      ),
+    const tenant = await application.databaseScope(schema);
+    await tenant.collections.withScope({ namespace: "tenant-a" }).serverNotes
+      .create({
+        id: "same",
+        label: "tenant",
+      });
+    await application.collections.withScope({ namespace: "tenant-a" })
+      .serverNotes
+      .create({ id: "same", label: "default" });
+    const client = browser(handler, {
+      authorization: "Bearer test",
+      "x-database-schema": "server_authenticated_default",
+    });
+    assertEquals(
+      (await client.collections.get("serverNotes", "same") as {
+        data: { label: string };
+      }).data.label,
+      "tenant",
     );
-    assertEquals(action.status, 200);
-    assertEquals(await action.json(), { data: { echoed: "hello" } });
-
-    const replayedAction = await fetch(
-      new Request(
-        "https://example.test/api/v1/actions/test/server/echo",
-        {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            "idempotency-key": "server-echo-a",
-          },
-          body: JSON.stringify({ value: "hello" }),
-        },
-      ),
+    await assertRejects(
+      () => browser(handler).collections.get("serverNotes", "same"),
+      CopilotzHttpError,
     );
-    assertEquals(replayedAction.status, 200);
-    assertEquals(await replayedAction.json(), { data: { echoed: "hello" } });
-    assertEquals(echoExecutions, executionsBefore + 1);
-
-    const created = await fetch(
-      new Request(
-        "https://example.test/api/v1/collections/serverNotes",
-        {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            "idempotency-key": "server-note-a",
-          },
-          body: JSON.stringify({ id: "note-a", label: "hello" }),
-        },
-      ),
-    );
-    const createdBody = await created.json();
-    assertEquals(created.status, 201, JSON.stringify(createdBody));
-    assertEquals(createdBody.data.label, "hello");
-
-    const queried = await fetch(
-      new Request(
-        "https://example.test/api/v1/collections/serverNotes/queries/byLabel",
-        {
-          method: "QUERY",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ label: "hello" }),
-        },
-      ),
-    );
-    assertEquals(queried.status, 200);
-    assertEquals((await queried.json()).data.length, 1);
-    assertEquals(observed.map((endpoint) => endpoint.kind), [
-      "action",
-      "action",
-      "collection",
-      "collection",
-    ]);
-
-    const openApi = await fetch(
-      new Request("https://example.test/api/v1/openapi.json"),
-    );
-    assertEquals(openApi.status, 200);
-    assertEquals((await openApi.json()).data.openapi, "3.2.0");
   } finally {
-    await application.close("server_facade_test_done");
+    await application.close();
+    await database.close();
   }
 });
 
@@ -410,7 +437,7 @@ Deno.test("Server facade publishes raw asset uploads without Action payload copi
     plugins: [
       createServerPlugin({
         maxAssetUploadBytes: 4,
-        guard(_request, context) {
+        authenticate(_request, context) {
           seen.push(context.endpoint);
           return { namespace: "tenant-a" };
         },
@@ -420,7 +447,7 @@ Deno.test("Server facade publishes raw asset uploads without Action payload copi
   const fetch = createServerFacadeFetchHandler(application);
   const upload = () =>
     fetch(
-      new Request("https://example.test/api/v1/assets", {
+      new Request("https://example.test/api/assets", {
         method: "POST",
         headers: {
           // The body is intentionally invalid JSON: asset upload treats declared
@@ -456,7 +483,7 @@ Deno.test("Server facade publishes raw asset uploads without Action payload copi
     assertEquals((await replay.json()).data.asset.id, firstBody.data.asset.id);
 
     const noBody = await fetch(
-      new Request("https://example.test/api/v1/assets", {
+      new Request("https://example.test/api/assets", {
         method: "POST",
         headers: { "idempotency-key": "server-asset-upload-empty" },
       }),
@@ -466,7 +493,7 @@ Deno.test("Server facade publishes raw asset uploads without Action payload copi
 
     let cancelledOversizedBody = false;
     const oversized = await fetch(
-      new Request("https://example.test/api/v1/assets", {
+      new Request("https://example.test/api/assets", {
         method: "POST",
         headers: { "idempotency-key": "server-asset-upload-large" },
         // No Content-Length: the Fetch boundary must enforce the cap while
@@ -496,144 +523,7 @@ Deno.test("Server facade publishes raw asset uploads without Action payload copi
   }
 });
 
-Deno.test("Server facade guard may terminate and multipart observes one Action scope", async () => {
-  let trustedContext: Readonly<Record<string, unknown>> | undefined;
-  const application = await createCopilotzApplication({
-    namespace: "tenant-a",
-    databaseSchema: "server_facade_stream_test",
-    plugins: [
-      fixture,
-      createServerPlugin({
-        guard(request, context) {
-          trustedContext = context.requestContext;
-          if (request.headers.get("authorization") !== "Bearer test") {
-            return Response.json({ error: { code: "unauthorized" } }, {
-              status: 401,
-            });
-          }
-        },
-      }),
-    ],
-  });
-  const fetch = createServerFacadeFetchHandler(application, {
-    resolveContext: () => Object.freeze({ tenantId: "tenant-a" }),
-  });
-  try {
-    const denied = await fetch(
-      new Request(
-        "https://example.test/api/v1/actions/test/server/echo",
-        {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ value: "denied" }),
-        },
-      ),
-    );
-    assertEquals(denied.status, 401);
-
-    const response = await fetch(
-      new Request(
-        "https://example.test/api/v1/actions/test/server/echo",
-        {
-          method: "POST",
-          headers: {
-            accept: "multipart/mixed",
-            authorization: "Bearer test",
-            "content-type": "application/json",
-            "idempotency-key": "server-multipart-a",
-          },
-          body: JSON.stringify({ value: "streamed" }),
-        },
-      ),
-    );
-    assertEquals(response.status, 200);
-    assertEquals(trustedContext, { tenantId: "tenant-a" });
-    const outputs = [];
-    for await (const output of decodeCopilotzOutputs(response)) {
-      outputs.push(output);
-    }
-    assert(
-      outputs.some((output) => output.type === "test.server.echo.completed"),
-    );
-    assert(
-      outputs.some((output) =>
-        output.type === "copilotz.server.internal.invoke.completed"
-      ),
-    );
-  } finally {
-    await application.close("server_facade_stream_test_done");
-  }
-});
-
-Deno.test("Server facade preserves guard-selected schema and path-owned command id", async () => {
-  const tenantSchema = "server_facade_guard_tenant";
-  const database = await createTestDatabase({ url: ":memory:" });
-  await provisionCopilotzSchema(database, tenantSchema);
-  await provisionOperationCatalog(database, tenantSchema);
-  const application = await createCopilotzApplication({
-    namespace: "tenant-a",
-    databaseSchema: "server_facade_guard_default",
-    plugins: [
-      fixture,
-      createServerPlugin({
-        expose: { actions: false, channels: false },
-        guard: () => ({
-          namespace: "tenant-a",
-          databaseSchema: tenantSchema,
-        }),
-      }),
-    ],
-    database,
-  });
-  const fetch = createServerFacadeFetchHandler(application);
-  const request = (path: string, init: RequestInit = {}) =>
-    fetch(new Request(`https://example.test/api/v1${path}`, init));
-  try {
-    for (const [id, label] of [["note-a", "A"], ["note-b", "B"]]) {
-      const response = await request("/collections/serverNotes", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ id, label }),
-      });
-      assertEquals(response.status, 201, await response.clone().text());
-    }
-    const renamed = await request(
-      "/collections/serverNotes/note-a/commands/rename",
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ id: "note-b", label: "renamed" }),
-      },
-    );
-    assertEquals(renamed.status, 200);
-    assertEquals((await renamed.json()).data.id, "note-a");
-    assertEquals(
-      (await (await request("/collections/serverNotes/note-a")).json()).data
-        .label,
-      "renamed",
-    );
-    assertEquals(
-      (await (await request("/collections/serverNotes/note-b")).json()).data
-        .label,
-      "B",
-    );
-
-    const defaultRecords = await application.collections.withScope({
-      namespace: "tenant-a",
-    }).serverNotes.list();
-    const tenant = await application.databaseScope(tenantSchema);
-    const tenantRecords = await tenant.collections.withScope({
-      namespace: "tenant-a",
-    }).serverNotes.list();
-    assertEquals(defaultRecords.length, 0);
-    assertEquals(tenantRecords.length, 2);
-  } finally {
-    await application.close("server_facade_guard_schema_done");
-    await database.close();
-  }
-});
-
-Deno.test("Gateway mounts the composed facade in Oxian-compatible Fetch while retaining v3", async () => {
+Deno.test("Gateway mounts the composed facade in Oxian-compatible Fetch and rejects retired routes", async () => {
   const database = await createTestDatabase({ url: ":memory:" });
   const workerId = `server-facade-worker-${crypto.randomUUID()}`;
   const transport = Object.freeze({
@@ -666,7 +556,7 @@ Deno.test("Gateway mounts the composed facade in Oxian-compatible Fetch while re
     await worker.ready;
     const response = await gateway.fetch(
       new Request(
-        "https://example.test/api/v1/actions/test/server/echo",
+        "https://example.test/api/actions/test/server/echo",
         {
           method: "POST",
           headers: {
@@ -677,12 +567,20 @@ Deno.test("Gateway mounts the composed facade in Oxian-compatible Fetch while re
         },
       ),
     );
-    assertEquals(response.status, 200);
-    assertEquals(await response.json(), { data: { echoed: "gateway" } });
+    assertEquals(response.status, 202);
+    const client = createCopilotzClient({
+      baseUrl: "https://example.test/api",
+      fetch: ((url, init) =>
+        gateway.fetch(new Request(url, init))) as typeof fetch,
+    });
+    assertEquals(
+      await client.operations.result((await response.json()).data.operationId),
+      { echoed: "gateway" },
+    );
     const legacy = await gateway.fetch(
       new Request("https://example.test/v3/agents"),
     );
-    assertEquals(legacy.status, 200);
+    assertEquals(legacy.status, 404);
   } finally {
     await Promise.allSettled([
       gateway.close("server_gateway_test_done"),

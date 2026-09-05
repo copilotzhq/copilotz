@@ -4,7 +4,7 @@ import type {
   ApplicationOutput,
   StreamOutput,
 } from "@copilotz/copilotz/streams";
-import type { EventNativeOutputStream } from "./event-native.ts";
+import type { HttpObservation } from "./http-types.ts";
 import {
   createOperationReplayCursorTracker,
   decodeOperationReplayCursor,
@@ -12,11 +12,12 @@ import {
 } from "../runtime/streams/index.ts";
 import type {
   OperationReplayCursorMutation,
-  StreamTerminalStatus,
 } from "../runtime/streams/index.ts";
 
+import { MAX_FRAME_BYTES } from "../client/protocol.ts";
+import { outputActionRuns } from "./output-order.ts";
+
 const encoder = new TextEncoder();
-const decoder = new TextDecoder();
 const FRAME_HEADER = "x-copilotz-frame";
 const STREAM_HEADER = "x-copilotz-stream-id";
 const OFFSET_HEADER = "x-copilotz-offset";
@@ -48,6 +49,9 @@ function part(
   options: Readonly<{ streamId?: string; offset?: number; cursor?: string }> =
     {},
 ): Uint8Array {
+  if (content.byteLength > MAX_FRAME_BYTES) {
+    throw new RangeError("Multipart frame capacity exceeded.");
+  }
   const headers = [
     `--${boundary}`,
     `content-type: ${
@@ -90,7 +94,6 @@ function descriptor(output: ApplicationOutput): unknown {
     payload: _payload,
     terminal: _terminal,
     replayKey: _replayKey,
-    streamOrdinal: _streamOrdinal,
     ...value
   } = output;
   return value;
@@ -120,10 +123,11 @@ function isReplayCapacityError(error: unknown): boolean {
 
 /** Encodes one complete request observation without materializing raw bytes. */
 export function applicationOutputsMultipartResponse(
-  source: EventNativeOutputStream,
+  source: HttpObservation,
   options: Readonly<{
     headers?: HeadersInit;
     boundary?: string;
+    signal?: AbortSignal;
   }> = {},
 ): Response {
   const boundary = safeHeader(
@@ -141,6 +145,22 @@ export function applicationOutputsMultipartResponse(
   const initial = decodeOperationReplayCursor(source.replayCursor);
   const cursorTracker = createOperationReplayCursorTracker(initial);
   let cancelled = false;
+  const readers = new Set<ReadableStreamDefaultReader<Uint8Array>>();
+  const detach = async (reason: unknown) => {
+    if (cancelled) return;
+    cancelled = true;
+    await Promise.allSettled([
+      source.cancel("observation_detached"),
+      ...[...readers].map((reader) => reader.cancel(reason)),
+      writer.abort(reason),
+    ]);
+  };
+  const abort = () => {
+    void detach(options.signal?.reason);
+  };
+  if (options.signal?.aborted) abort();
+  else options.signal?.addEventListener("abort", abort, { once: true });
+  void writer.closed.catch(detach);
   const write = (value: Uint8Array) => writer.write(value);
   let frameTail: Promise<void> = Promise.resolve();
   const serializeFrame = <T>(task: () => Promise<T>): Promise<T> => {
@@ -163,6 +183,7 @@ export function applicationOutputsMultipartResponse(
     initialOffset: number,
   ): Promise<void> => {
     const reader = output.payload.getReader();
+    readers.add(reader);
     let offset = initialOffset;
     const streamMutation = (
       action: "offset" | "end",
@@ -182,20 +203,26 @@ export function applicationOutputsMultipartResponse(
     try {
       while (true) {
         const next = await reader.read();
+        if (cancelled) return;
         if (next.done) break;
-        const fromOffset = offset;
-        const toOffset = offset + next.value.byteLength;
-        await writePart(
-          (replayCursor) =>
-            part(boundary, "stream-chunk", next.value, {
+        for (
+          let index = 0;
+          index < next.value.length;
+          index += MAX_FRAME_BYTES
+        ) {
+          const chunk = next.value.subarray(index, index + MAX_FRAME_BYTES);
+          const fromOffset = offset;
+          const toOffset = offset + chunk.length;
+          await writePart((cursor) =>
+            part(boundary, "stream-chunk", chunk, {
               streamId: output.streamId,
               offset: fromOffset,
-              cursor: replayCursor,
-            }),
-          [streamMutation("offset", toOffset)],
-        );
-        offset = toOffset;
+              cursor,
+            }), [streamMutation("offset", toOffset)]);
+          offset = toOffset;
+        }
       }
+      if (cancelled) return;
       const terminal = await output.terminal;
       const streamError = streamErrorOutput(output.streamId, terminal);
       const terminalOffset = terminal.offset;
@@ -239,13 +266,6 @@ export function applicationOutputsMultipartResponse(
       }
     } catch (error) {
       if (!cancelled) {
-        console.error("[copilotz:multipart] progressive stream failed", {
-          streamId: output.streamId,
-          name: error instanceof Error && error.name ? error.name : "Error",
-          message: error instanceof Error
-            ? error.message.slice(0, 1_000)
-            : "Unknown progressive stream failure.",
-        });
         await writePart((replayCursor) =>
           part(
             boundary,
@@ -259,15 +279,41 @@ export function applicationOutputsMultipartResponse(
           )
         ).catch(() => undefined);
       }
+      if (!cancelled) throw error;
     } finally {
+      readers.delete(reader);
       reader.releaseLock();
     }
   };
   void (async () => {
-    const pumps: Promise<void>[] = [];
+    const pumps = new Set<Promise<void>>();
+    const actionPumps = new Map<string, Set<Promise<void>>>();
+    let heartbeatPending = false;
+    const heartbeat = setInterval(() => {
+      if (heartbeatPending || cancelled) return;
+      heartbeatPending = true;
+      void writePart((cursor) =>
+        part(
+          boundary,
+          "output",
+          encoder.encode(JSON.stringify({ type: "observation.heartbeat" })),
+          { cursor },
+        )
+      )
+        .catch(detach).finally(() => {
+          heartbeatPending = false;
+        });
+    }, 15_000);
     try {
       for await (const output of source.outputs) {
         if (isTerminalOperationOutput(output)) await Promise.all(pumps);
+        else if (!isStream(output)) {
+          await Promise.all(
+            outputActionRuns(output).flatMap(
+              (id) => [...(actionPumps.get(id) ?? [])],
+            ),
+          );
+        }
         const outputRecord = output as unknown as Record<string, unknown>;
         const operationId = typeof outputRecord.operationId === "string" &&
             outputRecord.operationId.trim()
@@ -328,7 +374,23 @@ export function applicationOutputsMultipartResponse(
           mutations,
         );
         if (isStream(output)) {
-          pumps.push(pump(output, operationId, streamOffset ?? 0));
+          const pending = pump(output, operationId, streamOffset ?? 0);
+          pumps.add(pending);
+          const actionRunId = output.metadata.sourceActionRunId;
+          const ledger = typeof actionRunId === "string"
+            ? actionPumps.get(actionRunId) ?? new Set<Promise<void>>()
+            : undefined;
+          if (ledger && typeof actionRunId === "string") {
+            actionPumps.set(actionRunId, ledger);
+            ledger.add(pending);
+          }
+          void pending.then(() => {
+            pumps.delete(pending);
+            ledger?.delete(pending);
+            if (ledger?.size === 0 && typeof actionRunId === "string") {
+              actionPumps.delete(actionRunId);
+            }
+          }, detach);
         }
       }
       await Promise.all(pumps);
@@ -336,7 +398,6 @@ export function applicationOutputsMultipartResponse(
       await serializeFrame(() => write(encoder.encode(`--${boundary}--\r\n`)));
       await writer.close();
     } catch (error) {
-      cancelled = true;
       if (isReplayCapacityError(error)) {
         await writePart((replayCursor) =>
           part(
@@ -353,9 +414,13 @@ export function applicationOutputsMultipartResponse(
             { cursor: replayCursor },
           )
         ).catch(() => undefined);
-        await source.cancel("operation_replay_capacity_exceeded").catch(() =>
-          undefined
-        );
+        cancelled = true;
+        await Promise.allSettled([
+          source.cancel("operation_replay_capacity_exceeded"),
+          ...[...readers].map((reader) =>
+            reader.cancel("observation_capacity")
+          ),
+        ]);
         await Promise.allSettled(pumps);
         await serializeFrame(() => write(encoder.encode(`--${boundary}--\r\n`)))
           .catch(() => undefined);
@@ -366,322 +431,13 @@ export function applicationOutputsMultipartResponse(
         error instanceof Error ? error.message : "multipart_failed",
       ).catch(() => undefined);
       await writer.abort(error).catch(() => undefined);
+    } finally {
+      clearInterval(heartbeat);
+      options.signal?.removeEventListener("abort", abort);
     }
   })();
   const headers = new Headers(options.headers);
   headers.set("cache-control", "no-store");
   headers.set("content-type", `multipart/mixed; boundary=${boundary}`);
   return new Response(transport.readable, { status: 200, headers });
-}
-
-function multipartBoundary(response: Response): string {
-  const contentType = response.headers.get("content-type") ?? "";
-  const match = contentType.match(
-    /^multipart\/mixed\s*;[\s\S]*\bboundary=(?:"([^"]+)"|([^;\s]+))/i,
-  );
-  const boundary = match?.[1] ?? match?.[2];
-  if (!boundary) {
-    throw new TypeError("Response is not Copilotz multipart output.");
-  }
-  return safeHeader(boundary, "Multipart boundary");
-}
-
-type ParsedPart = Readonly<{
-  headers: Readonly<Record<string, string>>;
-  body: Uint8Array;
-}>;
-
-function indexOf(haystack: Uint8Array, needle: Uint8Array): number {
-  outer:
-  for (let index = 0; index <= haystack.length - needle.length; index++) {
-    for (let inner = 0; inner < needle.length; inner++) {
-      if (haystack[index + inner] !== needle[inner]) continue outer;
-    }
-    return index;
-  }
-  return -1;
-}
-
-async function* parseParts(
-  body: ReadableStream<Uint8Array>,
-  boundary: string,
-): AsyncGenerator<ParsedPart> {
-  const reader = body.getReader();
-  let buffer: Uint8Array = new Uint8Array();
-  const append = (value: Uint8Array) => {
-    buffer = bytes(buffer, value);
-  };
-  const fill = async (minimum = 1): Promise<boolean> => {
-    while (buffer.byteLength < minimum) {
-      const next = await reader.read();
-      if (next.done) return false;
-      append(next.value);
-    }
-    return true;
-  };
-  const line = async (): Promise<string | null> => {
-    const marker = encoder.encode("\r\n");
-    while (true) {
-      const at = indexOf(buffer, marker);
-      if (at >= 0) {
-        const value = decoder.decode(buffer.slice(0, at));
-        buffer = buffer.slice(at + marker.byteLength);
-        return value;
-      }
-      const next = await reader.read();
-      if (next.done) return buffer.length ? null : null;
-      append(next.value);
-    }
-  };
-  try {
-    const first = await line();
-    if (first !== `--${boundary}`) {
-      throw new TypeError(
-        "Multipart response has an invalid opening boundary.",
-      );
-    }
-    while (true) {
-      const headers: Record<string, string> = {};
-      while (true) {
-        const value = await line();
-        if (value === null) {
-          throw new TypeError("Multipart headers were truncated.");
-        }
-        if (value === "") break;
-        const separator = value.indexOf(":");
-        if (separator <= 0) throw new TypeError("Multipart header is invalid.");
-        headers[value.slice(0, separator).trim().toLowerCase()] = value.slice(
-          separator + 1,
-        ).trim();
-      }
-      const length = Number(headers["content-length"]);
-      if (!Number.isSafeInteger(length) || length < 0) {
-        throw new TypeError("Multipart content-length is invalid.");
-      }
-      if (!(await fill(length + 2))) {
-        throw new TypeError("Multipart body was truncated.");
-      }
-      const content = buffer.slice(0, length);
-      if (buffer[length] !== 13 || buffer[length + 1] !== 10) {
-        throw new TypeError("Multipart body terminator is invalid.");
-      }
-      buffer = buffer.slice(length + 2);
-      yield Object.freeze({ headers: Object.freeze(headers), body: content });
-      const marker = await line();
-      if (marker === `--${boundary}--`) return;
-      if (marker !== `--${boundary}`) {
-        throw new TypeError("Multipart response has an invalid boundary.");
-      }
-    }
-  } finally {
-    reader.releaseLock();
-  }
-}
-
-function json(value: Uint8Array): Record<string, unknown> {
-  const parsed = JSON.parse(decoder.decode(value));
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new TypeError("Multipart JSON frame must contain an object.");
-  }
-  return parsed as Record<string, unknown>;
-}
-
-function decodedTerminal(value: Record<string, unknown>): StreamTerminalStatus {
-  const outcome = value.outcome;
-  const availability = value.availability;
-  const capture = value.capture;
-  const offset = value.offset;
-  const terminalAt = value.terminalAt;
-  if (
-    !["completed", "failed", "cancelled", "superseded", "abandoned"].includes(
-      outcome as string,
-    ) ||
-    !["retained", "purge_pending", "purged", "missing"].includes(
-      availability as string,
-    ) ||
-    (capture !== "complete" && capture !== "truncated") ||
-    !Number.isSafeInteger(offset) || Number(offset) < 0 ||
-    typeof terminalAt !== "string" ||
-    Number.isNaN(Date.parse(terminalAt))
-  ) {
-    throw new TypeError("Multipart stream terminal frame is invalid.");
-  }
-  return Object.freeze({
-    outcome: outcome as StreamTerminalStatus["outcome"],
-    availability: availability as StreamTerminalStatus["availability"],
-    capture,
-    offset: Number(offset),
-    terminalAt: new Date(terminalAt).toISOString(),
-  });
-}
-
-function unavailableTerminal(offset: number): StreamTerminalStatus {
-  return Object.freeze({
-    outcome: "abandoned",
-    availability: "missing",
-    capture: "truncated",
-    offset: Number.isSafeInteger(offset) && offset >= 0 ? offset : 0,
-    terminalAt: new Date().toISOString(),
-  });
-}
-
-/** Drains every decoded prefix chunk before surfacing its terminal failure. */
-function terminalPayload(
-  streamId: string,
-  source: ReadableStream<Uint8Array>,
-  terminal: Promise<StreamTerminalStatus>,
-): ReadableStream<Uint8Array> {
-  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
-  return new ReadableStream<Uint8Array>({
-    async pull(controller) {
-      reader ??= source.getReader();
-      try {
-        const next = await reader.read();
-        if (!next.done) {
-          controller.enqueue(next.value);
-          return;
-        }
-        const settled = await terminal;
-        const failure = streamErrorOutput(streamId, settled);
-        if (!failure) {
-          controller.close();
-          return;
-        }
-        controller.error(Object.assign(
-          new Error(
-            settled.availability === "missing"
-              ? "Progressive stream was truncated."
-              : "Progressive stream terminated before completion.",
-          ),
-          {
-            name: "StreamTerminalError",
-            code: failure.code,
-            terminal: settled,
-          },
-        ));
-      } catch (error) {
-        controller.error(error);
-      }
-    },
-    cancel(reason) {
-      return reader ? reader.cancel(reason) : source.cancel(reason);
-    },
-  }, { highWaterMark: 0 });
-}
-
-/** Decodes the canonical response back into application-facing output values. */
-export function decodeCopilotzOutputs(
-  response: Response,
-): ReadableStream<ApplicationOutput> {
-  const boundary = multipartBoundary(response);
-  if (!response.body) throw new TypeError("Multipart response has no body.");
-  const streams = new Map<string, {
-    writer: WritableStreamDefaultWriter<Uint8Array>;
-    settle(value: StreamTerminalStatus): void;
-    offset: number;
-  }>();
-  const body = response.body;
-  return new ReadableStream<ApplicationOutput>({
-    start(controller) {
-      void (async () => {
-        try {
-          for await (const frame of parseParts(body, boundary)) {
-            const kind = frame.headers[FRAME_HEADER] as FrameKind | undefined;
-            if (kind === "output") {
-              const value = json(frame.body);
-              if (value.type === "stream.output") {
-                const streamId = typeof value.streamId === "string"
-                  ? value.streamId
-                  : "";
-                if (!streamId || streams.has(streamId)) {
-                  throw new TypeError(
-                    "Multipart stream descriptor is invalid.",
-                  );
-                }
-                const stream = new TransformStream<Uint8Array, Uint8Array>(
-                  undefined,
-                  {
-                    highWaterMark: 256 * 1024,
-                    size: (chunk) => chunk.byteLength,
-                  },
-                  {
-                    highWaterMark: 256 * 1024,
-                    size: (chunk) => chunk.byteLength,
-                  },
-                );
-                let settle!: (value: StreamTerminalStatus) => void;
-                let settled = false;
-                const terminal = new Promise<StreamTerminalStatus>(
-                  (resolve) => {
-                    settle = (value) => {
-                      if (settled) return;
-                      settled = true;
-                      resolve(value);
-                    };
-                  },
-                );
-                streams.set(streamId, {
-                  writer: stream.writable.getWriter(),
-                  settle,
-                  offset: 0,
-                });
-                controller.enqueue(Object.freeze({
-                  ...value,
-                  payload: terminalPayload(streamId, stream.readable, terminal),
-                  terminal,
-                }) as ApplicationOutput);
-              } else {
-                controller.enqueue(Object.freeze(value) as ApplicationOutput);
-              }
-              continue;
-            }
-            const streamId = frame.headers[STREAM_HEADER];
-            const stream = streamId ? streams.get(streamId) : undefined;
-            if (!stream) {
-              throw new TypeError("Multipart stream frame is orphaned.");
-            }
-            if (kind === "stream-chunk") {
-              await stream.writer.write(frame.body).catch(() => undefined);
-              const from = Number(frame.headers[OFFSET_HEADER]);
-              stream.offset = Number.isSafeInteger(from) && from >= 0
-                ? from + frame.body.byteLength
-                : stream.offset + frame.body.byteLength;
-            } else if (kind === "stream-end") {
-              streams.delete(streamId);
-              stream.settle(decodedTerminal(json(frame.body)));
-              await stream.writer.close().catch(() => undefined);
-            } else if (kind === "stream-error") {
-              const terminal = decodedTerminal(json(frame.body));
-              streams.delete(streamId);
-              stream.settle(terminal);
-              // Close the raw queue normally. terminalPayload drains every
-              // prefix chunk and then turns the logical boundary into an error.
-              await stream.writer.close().catch(() => undefined);
-            } else throw new TypeError("Multipart frame kind is invalid.");
-          }
-          for (const stream of streams.values()) {
-            stream.settle(unavailableTerminal(stream.offset));
-            await stream.writer.close().catch(() => undefined);
-          }
-          streams.clear();
-          controller.close();
-        } catch (error) {
-          for (const stream of streams.values()) {
-            stream.settle(unavailableTerminal(stream.offset));
-            await stream.writer.close().catch(() => undefined);
-          }
-          streams.clear();
-          controller.error(error);
-        }
-      })();
-    },
-    async cancel(reason) {
-      await body.cancel(reason).catch(() => undefined);
-      for (const stream of streams.values()) {
-        stream.settle(unavailableTerminal(stream.offset));
-        await stream.writer.abort(reason).catch(() => undefined);
-      }
-      streams.clear();
-    },
-  }, { highWaterMark: 64 });
 }

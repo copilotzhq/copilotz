@@ -19,8 +19,7 @@ export type ServerHttpMethod =
   | "POST"
   | "PUT"
   | "PATCH"
-  | "DELETE"
-  | "QUERY";
+  | "DELETE";
 
 export type ServerPatternPolicy = Readonly<{
   include?: readonly string[];
@@ -40,16 +39,10 @@ export type ServerExposureOptions = Readonly<{
   channels?: boolean | ServerPatternPolicy;
 }>;
 
-export type ServerRouteOverride = false | Readonly<{ path: string }>;
-
-export type ServerOverrideOptions = Readonly<{
-  actions?: Readonly<Record<string, ServerRouteOverride>>;
-  collections?: Readonly<Record<string, ServerRouteOverride>>;
-  channels?: Readonly<Record<string, ServerRouteOverride>>;
-}>;
-
 export type ServerEndpointKind =
   | "action"
+  | "operation"
+  | "http"
   | "collection"
   | "channel"
   | "asset"
@@ -68,9 +61,14 @@ export type ServerEndpointDescriptor = Readonly<{
   member?: string;
   inputSchema?: Readonly<Record<string, unknown>>;
   outputSchema?: Readonly<Record<string, unknown>>;
+  metadata?: Readonly<Record<string, unknown>>;
+  responseMediaType?: string;
 }>;
 
 export type ServerAuthorizedScope = Readonly<{
+  actor?: Readonly<
+    { id: string; externalId?: string; name?: string; email?: string }
+  >;
   namespace?: string;
   databaseSchema?: string;
   identity?: Readonly<{
@@ -84,22 +82,41 @@ export type ServerAuthorizedScope = Readonly<{
   context?: Readonly<Record<string, unknown>>;
 }>;
 
-export type ServerGuardContext = Readonly<{
+export type ServerAuthenticationContext = Readonly<{
+  lookup(
+    scope: Pick<ServerAuthorizedScope, "namespace" | "databaseSchema">,
+  ): Promise<import("../authoring/http-adapter/index.ts").HttpReadServices>;
   endpoint: ServerEndpointDescriptor;
+  params: Readonly<Record<string, string>>;
   defaultNamespace?: string;
   defaultDatabaseSchema: string;
-  /** Trusted process-local context resolved by the host HTTP boundary. */
-  requestContext?: Readonly<Record<string, unknown>>;
 }>;
-
-export type ServerGuard = (
+export type ServerAuthenticate = (
   request: Request,
-  context: ServerGuardContext,
+  context: ServerAuthenticationContext,
 ) =>
-  | void
   | ServerAuthorizedScope
   | Response
-  | Promise<void | ServerAuthorizedScope | Response>;
+  | Promise<ServerAuthorizedScope | Response>;
+export type ServerConstraints = Readonly<{
+  /** Host-selected conversation group for bounded HTTP admission. */
+  admission?: Readonly<{ key: string; threadId?: string }>;
+  input?: Readonly<Record<string, unknown>>;
+  actionMetadata?: ActionInvocationMetadata;
+  collections?: Readonly<
+    Record<string, import("@copilotz/copilotz/collections").CollectionFilter>
+  >;
+  operations?: Readonly<{ metadata: Readonly<Record<string, unknown>> }>;
+}>;
+export type ServerAuthorize = (
+  request: Request,
+  context:
+    & ServerAuthenticationContext
+    & Readonly<{
+      scope: ServerAuthorizedScope;
+      read: import("../authoring/http-adapter/index.ts").HttpReadServices;
+    }>,
+) => ServerConstraints | Response | Promise<ServerConstraints | Response>;
 
 export type ServerFacadeResource = Readonly<{
   basePath: string;
@@ -110,12 +127,8 @@ export type ServerFacadeResource = Readonly<{
     collections: boolean | ServerCollectionExposure;
     channels: boolean | ServerPatternPolicy;
   }>;
-  overrides: Readonly<{
-    actions: Readonly<Record<string, ServerRouteOverride>>;
-    collections: Readonly<Record<string, ServerRouteOverride>>;
-    channels: Readonly<Record<string, ServerRouteOverride>>;
-  }>;
-  guard?: ServerGuard;
+  authenticate?: ServerAuthenticate;
+  authorize?: ServerAuthorize;
 }>;
 
 export type DefineServerFacadeInput = Readonly<{
@@ -123,8 +136,8 @@ export type DefineServerFacadeInput = Readonly<{
   /** Defaults to 20 MiB. */
   maxAssetUploadBytes?: number;
   expose?: ServerExposureOptions;
-  overrides?: ServerOverrideOptions;
-  guard?: ServerGuard;
+  authenticate?: ServerAuthenticate;
+  authorize?: ServerAuthorize;
 }>;
 
 export type ServerActionRequest = Readonly<{

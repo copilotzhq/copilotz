@@ -1,6 +1,7 @@
 import { message as coreMessage } from "@copilotz/copilotz/core";
 import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
 import { createCopilotzGateway, createCopilotzWorker } from "./index.ts";
+import { createServerPlugin } from "../../plugins/server/plugin.ts";
 import { createCopilotz } from "../../create-copilotz.ts";
 import { createCopilotzPersistence } from "@copilotz/copilotz/persistence";
 import { createTestDatabase } from "../testing/ominipg.ts";
@@ -411,7 +412,10 @@ Deno.test("Gateway bounds persistence outages as retryable HTTP 503 responses", 
   const gateway = await createCopilotz({
     role: "gateway",
     namespace,
-    plugins: [coreCollectionsPlugin],
+    plugins: [
+      coreCollectionsPlugin,
+      createServerPlugin({ expose: { collections: { include: ["thread"] } } }),
+    ],
     persistence,
   });
   try {
@@ -423,7 +427,7 @@ Deno.test("Gateway bounds persistence outages as retryable HTTP 503 responses", 
     assertEquals(failure.code, "persistence_indeterminate");
 
     const response = await gateway.fetch(
-      new Request("https://example.test/v3/agents"),
+      new Request("https://example.test/api/collections/thread"),
     );
     assertEquals(response.status, 503);
     assertEquals(response.headers.get("retry-after"), "3");

@@ -48,6 +48,7 @@ export type {
   CollectionDurableEvent,
   CollectionEventBody,
   CollectionEventOperation,
+  CollectionFilter,
   CollectionGraphRelation,
   CollectionMutation,
   CollectionMutationIdentity,

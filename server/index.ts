@@ -1,12 +1,4 @@
-export type {
-  EventNativeHistoryInclude,
-  EventNativeMessageHistoryIncluded,
-  EventNativeResolvedContent,
-} from "./history.ts";
-export {
-  applicationOutputsMultipartResponse,
-  decodeCopilotzOutputs,
-} from "./multipart.ts";
+export { applicationOutputsMultipartResponse } from "./multipart.ts";
 export { createServerFacadeFetchHandler } from "./facade.ts";
 export type {
   CreateServerFacadeFetchHandlerOptions,
@@ -23,15 +15,23 @@ export type {
   CompiledServerRoute,
   CompiledServerRoutes,
   DefineServerFacadeInput,
+  ServerAuthenticate,
+  ServerAuthenticationContext,
+  ServerAuthorize,
   ServerAuthorizedScope,
   ServerCollectionExposure,
+  ServerConstraints,
   ServerEndpointDescriptor,
   ServerExposureOptions,
   ServerFacadeResource,
-  ServerGuard,
-  ServerGuardContext,
-  ServerOverrideOptions,
   ServerPatternPolicy,
   ServerRouteMatch,
-  ServerRouteOverride,
 } from "../plugins/server/index.ts";
+
+export { createHttpAdapter } from "../plugins/server/authoring/http-adapter/index.ts";
+export type {
+  HttpAdapter,
+  HttpHandlerContext,
+  HttpReadServices,
+  HttpRoute,
+} from "../plugins/server/authoring/http-adapter/index.ts";

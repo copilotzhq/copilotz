@@ -74,57 +74,48 @@ function assertSecretProjection(schema: Record<string, unknown>): void {
   assertEquals(schema.description, "A secret value.");
 }
 
-Deno.test("route compiler maps IDs, queries, commands, overrides, and OpenAPI", () => {
+Deno.test("route compiler maps IDs, read queries, and OpenAPI", () => {
   const routes = compileServerRoutes(
     createPluginRegistry({ plugins: [fixture] }),
-    defineServerFacade({
-      overrides: {
-        actions: {
-          "compass.sandbox.preview.list": { path: "/features/previews/list" },
-        },
-      },
-    }),
+    defineServerFacade(),
   );
   assertEquals(
-    routes.match("POST", "/api/v1/features/previews/list")?.endpoint.id,
+    routes.match("POST", "/api/actions/compass/sandbox/preview/list")?.endpoint
+      .id,
     "compass.sandbox.preview.list",
   );
   assertEquals(
-    routes.match("QUERY", "/api/v1/collections/notes/queries/byLabel")
+    routes.match("POST", "/api/collections/notes/queries/byLabel")
       ?.endpoint.operation,
     "query:byLabel",
   );
   assertEquals(
-    routes.match("POST", "/api/v1/collections/notes/n-1/commands/rename")
-      ?.params.id,
-    "n-1",
+    routes.match("POST", "/api/collections/notes/n-1/commands/rename"),
+    null,
   );
+  assertEquals(routes.match("POST", "/api/v1/features/previews/list"), null);
   const paths = routes.openApi.paths as Record<string, Record<string, unknown>>;
   assertEquals(
-    paths["/api/v1/collections/notes/queries/byLabel"].query !== undefined,
+    paths["/api/collections/notes/queries/byLabel"].post !== undefined,
     true,
   );
-  const created = paths["/api/v1/collections/notes"].post as Record<
-    string,
-    unknown
-  >;
-  assertEquals(Object.keys(created.responses as Record<string, unknown>), [
-    "201",
+  assertEquals(paths["/api/collections/notes"].post, undefined);
+  assertEquals(paths["/api/collections/notes/{id}"].delete, undefined);
+  const submitted = paths["/api/actions/compass/sandbox/preview/list"]
+    .post as Record<
+      string,
+      unknown
+    >;
+  assertEquals(Object.keys(submitted.responses as Record<string, unknown>), [
+    "202",
   ]);
-  const deleted = paths["/api/v1/collections/notes/{id}"].delete as Record<
-    string,
-    unknown
-  >;
-  assertEquals(Object.keys(deleted.responses as Record<string, unknown>), [
-    "204",
-  ]);
-  assertEquals(deleted.parameters, [{
-    name: "id",
-    in: "path",
+  assertEquals(submitted.parameters, [{
+    name: "Idempotency-Key",
+    in: "header",
     required: true,
-    schema: { type: "string" },
+    schema: { type: "string", minLength: 1 },
   }]);
-  const listed = paths["/api/v1/collections/notes"].get as Record<
+  const listed = paths["/api/collections/notes"].get as Record<
     string,
     unknown
   >;
@@ -152,7 +143,7 @@ Deno.test("route compiler exposes the generic binary asset upload contract", () 
     createPluginRegistry({ plugins: [fixture] }),
     defineServerFacade(),
   );
-  const upload = routes.match("POST", "/api/v1/assets");
+  const upload = routes.match("POST", "/api/assets");
   assertEquals(upload?.endpoint, {
     key: "POST:/assets",
     kind: "asset",
@@ -162,11 +153,11 @@ Deno.test("route compiler exposes the generic binary asset upload contract", () 
     operation: "upload",
   });
   assertEquals(
-    routes.match("GET", "/api/v1/assets/a-1")?.endpoint.kind,
+    routes.match("GET", "/api/assets/a-1")?.endpoint.kind,
     "asset",
   );
   const paths = routes.openApi.paths as Record<string, Record<string, unknown>>;
-  const operation = paths["/api/v1/assets"].post as Record<string, unknown>;
+  const operation = paths["/api/assets"].post as Record<string, unknown>;
   assertEquals(operation.operationId, "assets.upload");
   assertEquals(
     ((operation.requestBody as Record<string, Record<string, unknown>>).content[
@@ -179,26 +170,15 @@ Deno.test("route compiler exposes the generic binary asset upload contract", () 
   ]);
 });
 
-Deno.test("route compiler applies glob exclusion and rejects bad overrides", () => {
+Deno.test("route compiler applies glob exclusion", () => {
   const registry = createPluginRegistry({ plugins: [fixture] });
   const routes = compileServerRoutes(
     registry,
     defineServerFacade({ expose: { actions: { exclude: ["compass.*"] } } }),
   );
   assertEquals(
-    routes.match("POST", "/api/v1/actions/compass/sandbox/preview/list"),
+    routes.match("POST", "/api/actions/compass/sandbox/preview/list"),
     null,
-  );
-  assertThrows(
-    () =>
-      compileServerRoutes(
-        registry,
-        defineServerFacade({
-          overrides: { actions: { "missing.action": { path: "/missing" } } },
-        }),
-      ),
-    TypeError,
-    "was not found",
   );
 });
 
@@ -240,7 +220,7 @@ Deno.test("route compiler redacts secret disclosures from the OpenAPI projection
     defineServerFacade(),
   );
   const path = routes.openApi.paths as Record<string, Record<string, unknown>>;
-  const operation = path["/api/v1/actions/test/openapi-secrets"].post as Record<
+  const operation = path["/api/actions/test/openapi-secrets"].post as Record<
     string,
     unknown
   >;
@@ -250,15 +230,10 @@ Deno.test("route compiler redacts secret disclosures from the OpenAPI projection
       Record<string, Record<string, unknown>>
     >
   )["application/json"].schema;
-  const responseSchema = (
-    (
-      (operation.responses as Record<string, Record<string, unknown>>)["200"]
-        .content as Record<string, Record<string, Record<string, unknown>>>
-    )["application/json"].schema.properties as Record<
-      string,
-      Record<string, unknown>
-    >
-  ).data;
+  const responseSchema = operation["x-copilotz-result-schema"] as Record<
+    string,
+    unknown
+  >;
 
   const assertProjectedSchema = (value: Record<string, unknown>) => {
     const properties = value.properties as Record<
@@ -293,7 +268,7 @@ Deno.test("route compiler redacts secret disclosures from the OpenAPI projection
       .nested.properties as Record<string, Record<string, unknown>>
   ).password;
   assert(SECRET_DISCLOSURE_KEYWORDS.every((keyword) => keyword in rawPassword));
-  const route = routes.match("POST", "/api/v1/actions/test/openapi-secrets");
+  const route = routes.match("POST", "/api/actions/test/openapi-secrets");
   const routePassword = (
     (route!.endpoint.inputSchema!.properties as Record<
       string,

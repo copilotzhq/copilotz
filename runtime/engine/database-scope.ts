@@ -293,8 +293,11 @@ export function createDatabaseScope(
             eventDataRef(event.payload),
           );
           if (!samePreparedProtectedEventBody(existing, prepared.body)) {
-            throw new Error(
-              `Protected Event '${event.id}' was retried with different data.`,
+            throw Object.assign(
+              new Error(
+                `Protected Event '${event.id}' was retried with different data.`,
+              ),
+              { code: "event_deduplication_conflict" },
             );
           }
         },

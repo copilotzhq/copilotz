@@ -53,10 +53,10 @@ application, engine, database scopes, event stores, or Hypervisor.
 
 ## HTTP and WebSocket hosts
 
-`gateway.fetch` is portable Fetch. It includes trusted `/v3` event-native routes
-and, when `createServerPlugin()` is composed, the configured public primitive
-façade. Oxian applications use it directly as their handler; a Deno listener
-also accepts the same structural Fetch-capable host:
+`gateway.fetch` is portable Fetch. Composing `createServerPlugin()` installs the
+single public `/api` facade. No internal or versioned HTTP router is mounted.
+Oxian applications use it directly as their handler; a Deno listener also
+accepts the same structural Fetch-capable host:
 
 ```ts
 import { listen } from "@copilotz/copilotz/adapters/deno";

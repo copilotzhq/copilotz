@@ -1,5 +1,6 @@
 /** Compiles composed primitives into one immutable Server route table. @module */
 
+import { openApi } from "./openapi.ts";
 import type { PluginRegistry } from "@copilotz/copilotz/plugins";
 import { SERVER_INVOKE_ACTION_ID } from "../../actions/invoke-action/index.ts";
 import type {
@@ -8,7 +9,6 @@ import type {
   ServerFacadeResource,
   ServerHttpMethod,
   ServerPatternPolicy,
-  ServerRouteOverride,
 } from "../../internal/contracts.ts";
 
 export type CompiledServerRoute = Readonly<{
@@ -27,24 +27,6 @@ export type CompiledServerRoutes = Readonly<{
   openApi: Readonly<Record<string, unknown>>;
   match(method: string, pathname: string): ServerRouteMatch | null;
 }>;
-
-const CHANNEL_METHODS = Object.freeze(
-  [
-    "GET",
-    "POST",
-    "PUT",
-    "PATCH",
-    "DELETE",
-  ] as const,
-);
-
-const SECRET_DISCLOSURE_KEYWORDS = new Set([
-  "default",
-  "const",
-  "enum",
-  "examples",
-  "example",
-]);
 
 function glob(pattern: string, value: string): boolean {
   const expression = pattern.split("*").map((part) =>
@@ -95,13 +77,6 @@ function canonicalChannelPath(alias: string): string {
   return `/channels/${encodeURIComponent(alias)}`;
 }
 
-function overridePath(
-  override: ServerRouteOverride | undefined,
-  fallback: string,
-): string | null {
-  return override === false ? null : override?.path ?? fallback;
-}
-
 function endpoint(
   value: Omit<ServerEndpointDescriptor, "key">,
 ): ServerEndpointDescriptor {
@@ -130,248 +105,22 @@ function deepFreeze<T>(value: T): T {
   return Object.freeze(value);
 }
 
-function jsonEnvelope(
-  data: Readonly<Record<string, unknown>>,
-  pageInfo = false,
-): Readonly<Record<string, unknown>> {
-  return {
-    type: "object",
-    properties: {
-      data,
-      ...(pageInfo
-        ? {
-          pageInfo: {
-            type: "object",
-            properties: {
-              next: { type: "string" },
-              hasMore: { type: "boolean" },
-            },
-            required: ["hasMore"],
-          },
-        }
-        : {}),
-    },
-    required: pageInfo ? ["data", "pageInfo"] : ["data"],
-  };
-}
-
-function responseSchema(
-  route: CompiledServerRoute,
-): Readonly<Record<string, unknown>> {
-  const endpoint = route.endpoint;
-  if (endpoint.kind === "asset" && endpoint.operation === "upload") {
-    return jsonEnvelope({
-      type: "object",
-      properties: {
-        asset: { type: "object" },
-        assetRef: { type: "string" },
-        content: {
-          type: "object",
-          properties: {
-            assetId: { type: "string" },
-            kind: { const: "file" },
-            role: { const: "attachment" },
-            mediaType: { type: "string" },
-            disposition: { const: "attachment" },
-            name: { type: "string" },
-          },
-          required: ["assetId", "kind", "role", "mediaType", "disposition"],
-        },
-      },
-      required: ["asset", "assetRef", "content"],
-    });
-  }
-  if (endpoint.kind === "agents") {
-    return jsonEnvelope({ type: "array", items: {} });
-  }
-  if (endpoint.kind !== "collection") {
-    return jsonEnvelope(endpoint.outputSchema ?? {});
-  }
-  if (endpoint.operation === "list") {
-    return jsonEnvelope({
-      type: "array",
-      items: endpoint.outputSchema ?? {},
-    }, true);
-  }
-  if (endpoint.operation?.startsWith("query:")) {
-    return jsonEnvelope(
-      endpoint.outputSchema ?? {
-        type: "array",
-        items: {},
-      },
-    );
-  }
-  return jsonEnvelope(endpoint.outputSchema ?? {});
-}
-
-/** Copies an OpenAPI value while removing values disclosed by a secret schema. */
-function projectOpenApiSecrets(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(projectOpenApiSecrets);
-  if (!value || typeof value !== "object") return value;
-
-  const schema = value as Record<string, unknown>;
-  const secret = schema["x-copilotz-secret"] === true;
-  return Object.fromEntries(
-    Object.entries(schema)
-      .filter(([key]) => !secret || !SECRET_DISCLOSURE_KEYWORDS.has(key))
-      .map(([key, nested]) => [key, projectOpenApiSecrets(nested)]),
-  );
-}
-
-function operationObject(route: CompiledServerRoute): Record<string, unknown> {
-  const value = route.endpoint;
-  const operationId = value.kind === "collection"
-    ? `${value.id}.${value.operation}`
-    : value.kind === "channel"
-    ? `${value.id}.${value.method.toLowerCase()}`
-    : value.kind === "asset" && value.operation
-    ? `${value.id}.${value.operation}`
-    : value.id;
-  const requestBody = value.kind === "asset" && value.operation === "upload"
-    ? {
-      required: true,
-      content: {
-        "application/octet-stream": {
-          schema: { type: "string", format: "binary" },
-        },
-      },
-    }
-    : value.inputSchema &&
-        value.method !== "GET" && value.method !== "DELETE"
-    ? {
-      required: true,
-      content: {
-        "application/json": { schema: value.inputSchema },
-      },
-    }
-    : undefined;
-  const noContent = value.kind === "collection" &&
-    value.operation === "delete";
-  const successStatus = (value.kind === "collection" &&
-      value.operation === "create") ||
-      (value.kind === "asset" && value.operation === "upload")
-    ? "201"
-    : noContent
-    ? "204"
-    : "200";
-  const content = noContent ? undefined : {
-    "application/json": { schema: responseSchema(route) },
-    ...(value.kind === "action" || value.kind === "channel"
-      ? {
-        "text/event-stream": {
-          schema: { type: "string", contentMediaType: "text/event-stream" },
-        },
-        "multipart/mixed": {
-          schema: { type: "string", contentMediaType: "multipart/mixed" },
-        },
-      }
-      : {}),
-  };
-  const parameters = route.segments.filter((segment) => segment.startsWith(":"))
-    .map((segment) => ({
-      name: segment.slice(1),
-      in: "path",
-      required: true,
-      schema: { type: "string" },
-    }));
-  const headers = value.kind === "asset" && value.operation === "upload"
-    ? [{
-      name: "Idempotency-Key",
-      in: "header",
-      required: false,
-      schema: { type: "string" },
-    }, {
-      name: "Content-Disposition",
-      in: "header",
-      required: false,
-      schema: { type: "string" },
-    }]
-    : [];
-  return {
-    operationId,
-    tags: [value.kind],
-    ...(parameters.length || headers.length
-      ? { parameters: [...parameters, ...headers] }
-      : {}),
-    ...(requestBody ? { requestBody } : {}),
-    responses: {
-      [successStatus]: {
-        description: "Successful response",
-        ...(content ? { content } : {}),
-      },
-    },
-  };
-}
-
-function openApi(
-  basePath: string,
-  routes: readonly CompiledServerRoute[],
-): Readonly<Record<string, unknown>> {
-  const paths: Record<string, Record<string, unknown>> = {};
-  for (const route of routes) {
-    if (route.endpoint.kind === "openapi") continue;
-    const path = `${basePath}${route.endpoint.path}`.replace(
-      /:([A-Za-z0-9_]+)/g,
-      "{$1}",
-    );
-    const item = paths[path] ?? {};
-    item[route.endpoint.method.toLowerCase()] = operationObject(route);
-    paths[path] = item;
-  }
-  return deepFreeze(projectOpenApiSecrets({
-    openapi: "3.2.0",
-    info: { title: "Copilotz Server", version: "1.0.0" },
-    paths,
-  }) as Record<string, unknown>);
-}
-
-function ensureOverrideTargets(
-  overrides: Readonly<Record<string, ServerRouteOverride>>,
-  available: ReadonlySet<string>,
-  kind: string,
-): void {
-  for (const id of Object.keys(overrides)) {
-    if (!available.has(id)) {
-      throw new TypeError(
-        `Server ${kind} override target '${id}' was not found.`,
-      );
-    }
-  }
-}
-
 /** Compiles one complete registry into deterministic routes and OpenAPI. */
 export function compileServerRoutes(
   registry: PluginRegistry,
   facade: ServerFacadeResource,
 ): CompiledServerRoutes {
   const endpoints: ServerEndpointDescriptor[] = [];
-  const actionIds = new Set(
-    Object.values(registry.actions).map((action) => action.id),
-  );
-  const collectionNames = new Set(
-    Object.values(registry.collections).map((collection) => collection.name),
-  );
   const channelAliases = new Set(
     Object.keys(registry.resources.channels ?? {}),
   );
-  ensureOverrideTargets(facade.overrides.actions, actionIds, "Action");
-  ensureOverrideTargets(
-    facade.overrides.collections,
-    collectionNames,
-    "Collection",
-  );
-  ensureOverrideTargets(facade.overrides.channels, channelAliases, "Channel");
 
   for (const [alias, action] of Object.entries(registry.actions)) {
     if (
       action.id === SERVER_INVOKE_ACTION_ID ||
       !enabled(facade.expose.actions, action.id)
     ) continue;
-    const path = overridePath(
-      facade.overrides.actions[action.id],
-      canonicalActionPath(action.id),
-    );
-    if (!path) continue;
+    const path = canonicalActionPath(action.id);
     endpoints.push(endpoint({
       kind: "action",
       id: action.id,
@@ -386,11 +135,7 @@ export function compileServerRoutes(
   for (const [alias, collection] of Object.entries(registry.collections)) {
     const policy = facade.expose.collections;
     if (!enabled(policy, collection.name)) continue;
-    const base = overridePath(
-      facade.overrides.collections[collection.name],
-      canonicalCollectionPath(collection.name),
-    );
-    if (!base) continue;
+    const base = canonicalCollectionPath(collection.name);
     const add = (
       method: ServerHttpMethod,
       operation: string,
@@ -414,15 +159,12 @@ export function compileServerRoutes(
     };
     const schema = cloneSchema(collection.schema);
     add("GET", "list", "", undefined, schema);
-    add("POST", "create", "", schema, schema);
     add("GET", "get", "/:id", undefined, schema);
-    add("PATCH", "update", "/:id", schema, schema);
-    add("DELETE", "delete", "/:id");
     for (const [name, query] of Object.entries(collection.queries ?? {})) {
       const queryOutput = cloneSchema(query.outputSchema) ??
         (schema ? deepFreeze({ type: "array", items: schema }) : undefined);
       add(
-        "QUERY",
+        "POST",
         `query:${name}`,
         `/queries/${encodeURIComponent(name)}`,
         cloneSchema(query.inputSchema),
@@ -430,33 +172,107 @@ export function compileServerRoutes(
         name,
       );
     }
-    for (const [name, command] of Object.entries(collection.commands ?? {})) {
-      add(
-        "POST",
-        `command:${name}`,
-        `/:id/commands/${encodeURIComponent(name)}`,
-        cloneSchema(command.input),
-        schema,
-        name,
-      );
-    }
   }
 
   for (const alias of channelAliases) {
     if (!enabled(facade.expose.channels, alias)) continue;
-    const base = overridePath(
-      facade.overrides.channels[alias],
-      canonicalChannelPath(alias),
-    );
-    if (!base) continue;
-    for (const method of CHANNEL_METHODS) {
+    const base = canonicalChannelPath(alias);
+    const observed =
+      (registry.resources.channels[alias] as { egress?: string }).egress ===
+        "request-observation";
+    for (
+      const method of (observed
+        ? ["POST"]
+        : ["GET", "POST"]) as readonly ServerHttpMethod[]
+    ) {
       endpoints.push(endpoint({
         kind: "channel",
         id: alias,
+        ...(observed ? { operation: "submit" } : {}),
         method,
         path: base,
       }));
     }
+  }
+
+  const httpIds = new Set<string>();
+  for (const adapter of Object.values(registry.adapters.http ?? {})) {
+    for (
+      const route of (adapter as import("../http-adapter/index.ts").HttpAdapter)
+        .routes
+    ) {
+      if (httpIds.has(route.id)) {
+        throw new TypeError(`Duplicate HTTP endpoint ID: ${route.id}`);
+      }
+      httpIds.add(route.id);
+      const action = route.action
+        ? Object.entries(registry.actions).find(([, action]) =>
+          action.id === route.action
+        )
+        : undefined;
+      if (route.action && !action) {
+        throw new TypeError(`HTTP Action '${route.action}' was not composed.`);
+      }
+      endpoints.push(
+        endpoint({
+          kind: "http",
+          id: route.id,
+          method: route.method,
+          path: route.path,
+          ...(action ? { actionAlias: action[0] } : {}),
+          inputSchema: cloneSchema(
+            route.inputSchema ??
+              (route.action && !route.input
+                ? action?.[1].inputSchema
+                : undefined),
+          ),
+          metadata: cloneSchema(route.metadata),
+          responseMediaType: route.responseMediaType,
+          outputSchema: cloneSchema(
+            route.outputSchema ?? action?.[1].outputSchema,
+          ),
+        }),
+      );
+    }
+  }
+
+  for (
+    const [method, path, operation] of [
+      ["GET", "/operations/:id", "get"],
+      ["GET", "/operations/:id/result", "result"],
+      ["DELETE", "/operations/:id", "cancel"],
+      ["POST", "/operations/observe", "observe"],
+    ] as const
+  ) {
+    endpoints.push(
+      endpoint({
+        kind: "operation",
+        id: `operations.${operation}`,
+        method,
+        path,
+        operation,
+        ...(operation === "observe"
+          ? {
+            responseMediaType: "multipart/mixed",
+            inputSchema: {
+              type: "object",
+              required: ["operationIds"],
+              additionalProperties: false,
+              properties: {
+                operationIds: {
+                  type: "array",
+                  minItems: 1,
+                  maxItems: 32,
+                  uniqueItems: true,
+                  items: { type: "string", minLength: 1 },
+                },
+                checkpoint: { type: "string" },
+              },
+            },
+          }
+          : {}),
+      }),
+    );
   }
 
   endpoints.push(
@@ -483,6 +299,16 @@ export function compileServerRoutes(
   );
 
   const keys = new Set<string>();
+  endpoints.sort((left, right) => {
+    const a = pathSegments(left.path), b = pathSegments(right.path);
+    for (let i = 0; i < Math.min(a.length, b.length); i++) {
+      if (a[i] === b[i]) continue;
+      const priority = Number(a[i].startsWith(":")) -
+        Number(b[i].startsWith(":"));
+      if (priority) return priority;
+    }
+    return left.key.localeCompare(right.key);
+  });
   const routes = Object.freeze(endpoints.map((value) => {
     const segments = pathSegments(value.path);
     const collisionKey = `${value.method}:/${

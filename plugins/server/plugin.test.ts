@@ -7,7 +7,7 @@ Deno.test("Server plugin composes one Resource and durable bridge", () => {
   assertExists(serverPlugin.processors.serverActionRequest);
   assertEquals(
     (serverPlugin.resources.server.default as { basePath: string }).basePath,
-    "/api/v1",
+    "/api",
   );
   assertEquals(
     (createServerPlugin({ basePath: "/custom" }).resources.server.default as {

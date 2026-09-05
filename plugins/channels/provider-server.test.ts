@@ -6,7 +6,8 @@ import { createCopilotzApplication } from "../../runtime/application/application
 import { createTestDomainContext } from "../core/internal/testing/context.ts";
 import { createTestDatabase } from "../../runtime/testing/ominipg.ts";
 import { projectActionEvents } from "../core/internal/testing/projections.ts";
-import { createEventNativeApp } from "../../server/event-native.ts";
+import { createServerFacadeFetchHandler } from "../../server/facade.ts";
+import { createServerPlugin } from "../server/index.ts";
 import { CHANNEL_INGRESS_ACTION_ID } from "../channel-core/actions/ingress/index.ts";
 import {
   createDiscordChannelAdapter,
@@ -181,20 +182,23 @@ Deno.test("signed WhatsApp server ingress persists no credentials and retries on
     database,
     namespace: NAMESPACE,
     databaseSchema: "copilotz_channel_provider_server",
-    plugins: [createWhatsAppChannelPlugin({
-      config(context) {
-        configOperations.push(
-          `${context.operation}:${context.request ? "request" : "worker"}`,
-        );
-        return CONFIG;
-      },
-      transport,
-      defaultAgentAliases: ["support"],
-      transformDelivery(delivery, attempt) {
-        deliveryKeys.push(attempt.intent.deliveryKey);
-        return delivery;
-      },
-    })],
+    plugins: [
+      createServerPlugin(),
+      createWhatsAppChannelPlugin({
+        config(context) {
+          configOperations.push(
+            `${context.operation}:${context.request ? "request" : "worker"}`,
+          );
+          return CONFIG;
+        },
+        transport,
+        defaultAgentAliases: ["support"],
+        transformDelivery(delivery, attempt) {
+          deliveryKeys.push(attempt.intent.deliveryKey);
+          return delivery;
+        },
+      }),
+    ],
     resources: {
       agents: { support: agent },
       models: {
@@ -242,21 +246,23 @@ Deno.test("signed WhatsApp server ingress persists no credentials and retries on
   });
   const rawBody = new TextEncoder().encode(JSON.stringify(body));
   try {
-    const response = await createEventNativeApp(application).handle({
-      resource: "channels",
-      method: "POST",
-      path: ["whatsapp"],
-      headers: {
-        "x-hub-signature-256": await signature(
-          rawBody,
-          CONFIG.appSecret!,
-        ),
-      },
-      body,
-      context: { rawBody },
-    });
+    const response = await createServerFacadeFetchHandler(application)(
+      new Request("https://test/api/channels/" + "whatsapp", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...{
+            "x-hub-signature-256": await signature(
+              rawBody,
+              CONFIG.appSecret!,
+            ),
+          },
+        },
+        body: rawBody,
+      }),
+    );
     assertEquals(response.status, 200);
-    assertEquals(response.data, { status: "ok" });
+    assertEquals(await response.json(), { status: "ok" });
     await waitFor(() => attempts >= 1);
     await waitFor(async () =>
       (await application.deliveries.list({
@@ -391,7 +397,7 @@ Deno.test("Telegram host accept replaces provider file references with replayabl
     database,
     namespace: NAMESPACE,
     databaseSchema: "copilotz_channel_telegram_media_staging",
-    plugins: [plugin],
+    plugins: [plugin, createServerPlugin()],
   });
   const body = {
     update_id: "telegram-update-a",
@@ -407,17 +413,20 @@ Deno.test("Telegram host accept replaces provider file references with replayabl
     },
   };
   try {
-    const response = await createEventNativeApp(application).handle({
-      resource: "channels",
-      method: "POST",
-      path: ["telegram"],
-      headers: {
-        "x-telegram-bot-api-secret-token": config.secretToken!,
-      },
-      body,
-    });
+    const response = await createServerFacadeFetchHandler(application)(
+      new Request("https://test/api/channels/" + "telegram", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...{
+            "x-telegram-bot-api-secret-token": config.secretToken!,
+          },
+        },
+        body: JSON.stringify(body),
+      }),
+    );
     assertEquals(response.status, 200);
-    assertEquals(response.data, { status: "ok" });
+    assertEquals(await response.json(), { status: "ok" });
     assertEquals(downloads, ["telegram-file-reference-a"]);
 
     const context = createTestDomainContext(application, NAMESPACE);
@@ -518,22 +527,24 @@ Deno.test("Discord host accept removes signed attachment URLs before durable ing
     database,
     namespace: NAMESPACE,
     databaseSchema: "copilotz_channel_discord_safe_url",
-    plugins: [plugin],
+    plugins: [plugin, createServerPlugin()],
   });
   try {
-    const response = await createEventNativeApp(application).handle({
-      resource: "channels",
-      method: "POST",
-      path: ["discord"],
-      headers: {
-        "x-signature-ed25519": signing.signature,
-        "x-signature-timestamp": signing.timestamp,
-      },
-      body: interaction,
-      context: { rawBody },
-    });
+    const response = await createServerFacadeFetchHandler(application)(
+      new Request("https://test/api/channels/" + "discord", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...{
+            "x-signature-ed25519": signing.signature,
+            "x-signature-timestamp": signing.timestamp,
+          },
+        },
+        body: rawBody,
+      }),
+    );
     assertEquals(response.status, 200);
-    assertEquals(response.data, { type: 5 });
+    assertEquals(await response.json(), { type: 5 });
     assertEquals(downloads, [secretUrl]);
 
     const context = createTestDomainContext(application, NAMESPACE);
@@ -662,18 +673,21 @@ Deno.test("Zendesk host accept removes signed media URLs before durable ingress 
     database,
     namespace: NAMESPACE,
     databaseSchema: "copilotz_channel_zendesk_safe_url",
-    plugins: [plugin],
+    plugins: [plugin, createServerPlugin()],
   });
   try {
-    const response = await createEventNativeApp(application).handle({
-      resource: "channels",
-      method: "POST",
-      path: ["zendesk"],
-      headers: { "x-api-key": config.webhookSecret! },
-      body,
-    });
+    const response = await createServerFacadeFetchHandler(application)(
+      new Request("https://test/api/channels/" + "zendesk", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...{ "x-api-key": config.webhookSecret! },
+        },
+        body: JSON.stringify(body),
+      }),
+    );
     assertEquals(response.status, 200);
-    assertEquals(response.data, { status: "ok" });
+    assertEquals(await response.json(), { status: "ok" });
     assertEquals(downloads, [secretUrl]);
 
     const context = createTestDomainContext(application, NAMESPACE);

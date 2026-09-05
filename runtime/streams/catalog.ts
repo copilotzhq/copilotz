@@ -126,6 +126,7 @@ export type OperationCatalog = Readonly<{
       namespace: string;
       threadId: string;
       states?: readonly OperationState[];
+      afterPosition?: string;
       limit?: number;
     }>,
   ): Promise<readonly OperationRecord[]>;
@@ -911,10 +912,20 @@ export function createOperationCatalog(
           params.push([...new Set(input.states)])
         }::text[])`
         : "";
+      if (
+        input.afterPosition && !/^(0|[1-9][0-9]*)$/.test(input.afterPosition)
+      ) throw new TypeError("Invalid event position.");
+      const progressFilter = input.afterPosition
+        ? ` AND (operation.state IN ('accepted', 'running') OR EXISTS (
+        SELECT 1 FROM ${tables.operationEvents} AS progress WHERE progress.namespace = operation.namespace
+        AND progress.operation_id = operation.operation_id AND progress.event_position > $${
+          params.push(input.afterPosition)
+        }::bigint))`
+        : "";
       params.push(boundedLimit(input.limit));
       const result = await session.query<OperationRow>(
         `SELECT operation.* FROM ${tables.operations} AS operation
-          WHERE operation.namespace = $1${stateFilter}
+          WHERE operation.namespace = $1${stateFilter}${progressFilter}
             AND (
               operation.metadata -> 'operationMetadata' ->> 'threadId' = $2
               OR EXISTS (

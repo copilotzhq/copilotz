@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.66.0 — Unreleased
+
+Replaces all versioned HTTP implementations with one compiled `/api` facade.
+Adds browser-safe generic and Core clients, exact HTTP Adapter composition,
+policy-constrained reads, durable operation receipts and multipart observation.
+Core conversation mutations use ordinary Actions; history and reconnect reuse
+existing checkpoints and replay. Existing schemas, Events, Collections, Assets
+and identifiers remain unchanged. This is a coordinated breaking HTTP release.
+
 ## 0.65.4 — 2026-09-02
 
 Adds generic Action-run provenance to progressive streams. Transports can now

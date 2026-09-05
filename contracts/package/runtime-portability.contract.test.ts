@@ -26,7 +26,7 @@ Deno.test("published documentation matches the final version", async () => {
   const configuration = JSON.parse(await source("deno.json")) as {
     version: string;
   };
-  assertEquals(configuration.version, "0.65.4");
+  assertEquals(configuration.version, "0.66.0");
   const readme = await source("README.md");
   assertStringIncludes(readme, `@^${configuration.version}`);
   const manifest = JSON.parse(await source("docs/manifest.json")) as {

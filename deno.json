@@ -1,7 +1,7 @@
 {
   "name": "@copilotz/copilotz",
   "description": "Copilotz Lib",
-  "version": "0.65.4",
+  "version": "0.66.0",
   "license": "MIT",
   "exports": {
     ".": "./index.ts",
@@ -40,7 +40,10 @@
     "./events": "./runtime/events/index.ts",
     "./plugins": "./runtime/plugins/index.ts",
     "./migration/v4": "./migration/v4/index.ts",
-    "./server": "./server/index.ts"
+    "./server": "./server/index.ts",
+    "./client": "./client/index.ts",
+    "./core/client": "./plugins/core/authoring/client/index.ts",
+    "./core/server": "./plugins/core/authoring/server/index.ts"
   },
   "publish": {
     "include": [
@@ -57,7 +60,8 @@
       "docs/manifest.json",
       "migration/v4/**/*.ts",
       "runtime/**/*.ts",
-      "server/**/*.ts"
+      "server/**/*.ts",
+      "client/**/*.ts"
     ],
     "exclude": [
       "**/*.test.ts",
@@ -132,7 +136,10 @@
     "jq-wasm": "npm:jq-wasm@3.0.0-jq-1.8.2",
     "json-schema-to-ts": "npm:json-schema-to-ts@3.1.1",
     "yaml": "npm:yaml@2.8.0",
-    "zod": "npm:zod@3.25.76"
+    "zod": "npm:zod@3.25.76",
+    "@copilotz/copilotz/client": "./client/index.ts",
+    "@copilotz/copilotz/core/client": "./plugins/core/authoring/client/index.ts",
+    "@copilotz/copilotz/core/server": "./plugins/core/authoring/server/index.ts"
   },
   "minimumDependencyAge": {
     "age": "P1D",
@@ -156,7 +163,7 @@
     "check:surface": "deno run --allow-read --allow-run=deno scripts/check-package-surface.ts",
     "check": "deno task check:forbidden && deno task check:boundaries && deno task check:plugin-layout && deno task check:surface",
     "publish:dry-run": "deno publish --dry-run --allow-dirty",
-    "test": "deno test --allow-all contracts/package runtime plugins migration/v4 server scripts",
+    "test": "deno test --allow-all contracts/package runtime plugins migration/v4 server client scripts",
     "test:contracts": "deno test --allow-all contracts/package"
   },
   "lock": false

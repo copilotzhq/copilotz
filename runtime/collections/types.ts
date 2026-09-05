@@ -127,7 +127,17 @@ export type CollectionQueryOrder = Readonly<{
   direction?: "asc" | "desc";
 }>;
 
+export type CollectionFilter = Readonly<{
+  where?: Readonly<Record<string, unknown>>;
+  contains?: Readonly<Record<string, unknown>>;
+  containsAny?: Readonly<Record<string, readonly unknown[]>>;
+}>;
+
 export type CollectionQuery = Readonly<{
+  /** Additional conjunctive predicates applied before cursor selection. */
+  all?: readonly CollectionFilter[];
+  contains?: Readonly<Record<string, unknown>>;
+  containsAny?: Readonly<Record<string, readonly unknown[]>>;
   where?: Readonly<Record<string, unknown>>;
   order?: CollectionQueryOrder;
   after?: string;

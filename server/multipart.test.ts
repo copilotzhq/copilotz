@@ -4,21 +4,10 @@ import type {
   ApplicationOutput,
   StreamOutput,
 } from "@copilotz/copilotz/streams";
-import {
-  EVENT_NATIVE_OUTPUT_STREAM,
-  type EventNativeOutputStream,
-} from "./event-native.ts";
-import {
-  applicationOutputsMultipartResponse,
-  decodeCopilotzOutputs,
-} from "./multipart.ts";
+import { HTTP_OBSERVATION, type HttpObservation } from "./http-types.ts";
+import { applicationOutputsMultipartResponse } from "./multipart.ts";
+import { decodeObservation, ProtocolError } from "../client/protocol.ts";
 import { decodeOperationReplayCursor } from "../runtime/streams/index.ts";
-
-async function allBytes(stream: ReadableStream<Uint8Array>): Promise<number[]> {
-  const result: number[] = [];
-  for await (const chunk of stream) result.push(...chunk);
-  return result;
-}
 
 function completedTerminal(
   offset: number,
@@ -67,8 +56,8 @@ Deno.test("multipart round-trips exact descriptors and independent raw streams",
       }),
       terminal: completedTerminal(chunks.flat().length),
     });
-  const source: EventNativeOutputStream = Object.freeze({
-    type: EVENT_NATIVE_OUTPUT_STREAM,
+  const source: HttpObservation = Object.freeze({
+    type: HTTP_OBSERVATION,
     operationId: "operation-roundtrip",
     outputs: new ReadableStream<ApplicationOutput>({
       start(controller) {
@@ -84,16 +73,22 @@ Deno.test("multipart round-trips exact descriptors and independent raw streams",
   const response = applicationOutputsMultipartResponse(source, {
     boundary: "copilotz-test",
   });
-  const outputs: ApplicationOutput[] = [];
-  for await (const output of decodeCopilotzOutputs(response)) {
-    outputs.push(output);
-  }
+  const frames = await Array.fromAsync(decodeObservation(response));
+  const outputs = frames.filter((frame) => frame.kind === "output").map(
+    (frame) => frame.output,
+  );
   assertEquals(outputs.length, 3);
   assertEquals(outputs[0], event);
-  assertEquals((outputs[1] as StreamOutput).streamId, "a");
-  assertEquals((outputs[2] as StreamOutput).streamId, "b");
-  assertEquals(await allBytes((outputs[1] as StreamOutput).payload), [1, 2, 3]);
-  assertEquals(await allBytes((outputs[2] as StreamOutput).payload), [9, 8, 7]);
+  assertEquals(outputs[1].streamId, "a");
+  assertEquals(outputs[2].streamId, "b");
+  const bytes = (id: string) =>
+    frames.flatMap((frame) =>
+      frame.kind === "stream-chunk" && frame.streamId === id
+        ? [...frame.bytes]
+        : []
+    );
+  assertEquals(bytes("a"), [1, 2, 3]);
+  assertEquals(bytes("b"), [9, 8, 7]);
 });
 
 Deno.test("multipart cursor tracks an operation lane independently of its stream identifier", async () => {
@@ -115,8 +110,8 @@ Deno.test("multipart cursor tracks an operation lane independently of its stream
       }),
       terminal: completedTerminal(1),
     });
-  const source: EventNativeOutputStream = Object.freeze({
-    type: EVENT_NATIVE_OUTPUT_STREAM,
+  const source: HttpObservation = Object.freeze({
+    type: HTTP_OBSERVATION,
     operationId: "operation-cursor-atomicity",
     outputs: new ReadableStream<ApplicationOutput>({
       start(controller) {
@@ -167,8 +162,8 @@ Deno.test("multipart keeps retained stream failure in-band and round-trips termi
       terminalAt: "2026-09-01T12:00:00.000Z",
     })),
   });
-  const source: EventNativeOutputStream = Object.freeze({
-    type: EVENT_NATIVE_OUTPUT_STREAM,
+  const source: HttpObservation = Object.freeze({
+    type: HTTP_OBSERVATION,
     operationId: "operation-failed-prefix",
     outputs: new ReadableStream<ApplicationOutput>({
       start(controller) {
@@ -179,43 +174,35 @@ Deno.test("multipart keeps retained stream failure in-band and round-trips termi
     done: Promise.resolve(),
     cancel: () => Promise.resolve(),
   });
-  const decoded: ApplicationOutput[] = [];
-  for await (
-    const output of decodeCopilotzOutputs(
+  const frames = await Array.fromAsync(
+    decodeObservation(
       applicationOutputsMultipartResponse(source, {
-        boundary: "copilotz-retained-failure",
+        boundary: "retained-failure",
       }),
-    )
-  ) decoded.push(output);
-
-  const stream = decoded[0] as StreamOutput;
-  const reader = stream.payload.getReader();
-  const prefix = await reader.read();
-  assertEquals(prefix.done, false);
+    ),
+  );
+  const prefix = frames.find((frame) => frame.kind === "stream-chunk");
   assertEquals(
-    new TextDecoder().decode(prefix.value),
+    prefix?.kind === "stream-chunk" && new TextDecoder().decode(prefix.bytes),
     "partial",
   );
-  await assertRejects(
-    () => reader.read(),
-    Error,
-    "terminated before completion",
+  const terminal = frames.find((frame) => frame.kind === "stream-error");
+  assertEquals(
+    terminal?.kind === "stream-error" && terminal.terminal.outcome,
+    "cancelled",
   );
-  reader.releaseLock();
-  assertEquals(await stream.terminal, {
-    outcome: "cancelled",
-    availability: "retained",
-    capture: "truncated",
-    offset: 7,
-    terminalAt: "2026-09-01T12:00:00.000Z",
-  });
+  assertEquals(terminal?.kind === "stream-error" && terminal.offset, 7);
+  assertEquals(
+    frames.filter((frame) => frame.kind === "stream-error").length,
+    1,
+  );
 });
 
 Deno.test("multipart reports concurrent replay capacity in-band and detaches", async () => {
   const payloads: ReadableStreamDefaultController<Uint8Array>[] = [];
   let detached = false;
-  const source: EventNativeOutputStream = Object.freeze({
-    type: EVENT_NATIVE_OUTPUT_STREAM,
+  const source: HttpObservation = Object.freeze({
+    type: HTTP_OBSERVATION,
     operationId: "operation-wide",
     outputs: new ReadableStream<ApplicationOutput>({
       start(controller) {
@@ -268,7 +255,7 @@ Deno.test("multipart reports concurrent replay capacity in-band and detaches", a
   assertEquals(raw.endsWith("--copilotz-capacity--\r\n"), true);
 });
 
-Deno.test("multipart truncation settles every published terminal promise", async () => {
+Deno.test("multipart truncation rejects the observation after its last applied descriptor", async () => {
   const boundary = "copilotz-truncated";
   const descriptor = JSON.stringify({
     type: "stream.output",
@@ -285,6 +272,7 @@ Deno.test("multipart truncation settles every published terminal promise", async
     "content-type: application/json; charset=utf-8",
     `content-length: ${new TextEncoder().encode(descriptor).byteLength}`,
     "x-copilotz-frame: output",
+    "x-copilotz-cursor: checkpoint",
     "",
     descriptor,
     `--${boundary}--`,
@@ -293,21 +281,127 @@ Deno.test("multipart truncation settles every published terminal promise", async
   const response = new Response(new TextEncoder().encode(raw), {
     headers: { "content-type": `multipart/mixed; boundary=${boundary}` },
   });
-  const outputs: ApplicationOutput[] = [];
-  for await (const output of decodeCopilotzOutputs(response)) {
-    outputs.push(output);
-  }
-  const stream = outputs[0] as StreamOutput;
-  assertEquals(await stream.terminal, {
-    outcome: "abandoned",
-    availability: "missing",
-    capture: "truncated",
-    offset: 0,
-    terminalAt: (await stream.terminal)?.terminalAt,
-  });
+  const iterator = decodeObservation(response)[Symbol.asyncIterator]();
+  const descriptorFrame = await iterator.next();
+  assertEquals(descriptorFrame.value?.kind, "output");
   await assertRejects(
-    () => new Response(stream.payload).arrayBuffer(),
-    Error,
-    "truncated",
+    () => iterator.next(),
+    ProtocolError,
+    "unfinished streams",
   );
+});
+
+Deno.test("an Action result waits for its own streams while operation completion waits for all streams", async () => {
+  let release!: () => void;
+  const blocked = new Promise<void>((resolve) => release = resolve);
+  const stream = (id: string, run: string, wait = false): StreamOutput => ({
+    type: "stream.output",
+    namespace: "tenant",
+    streamId: id,
+    streamOrdinal: id === "a" ? "1" : "2",
+    mediaType: "text/plain",
+    kind: "text",
+    role: "content",
+    metadata: { sourceActionRunId: run },
+    payload: new ReadableStream({
+      async start(controller) {
+        if (wait) await blocked;
+        controller.enqueue(new TextEncoder().encode(id));
+        controller.close();
+      },
+    }),
+    terminal: completedTerminal(1),
+  });
+  const event = (
+    type: string,
+    data: Record<string, unknown>,
+  ): ApplicationOutput => ({
+    ...createEphemeralEvent({
+      type,
+      namespace: "tenant",
+      correlationId: "operation",
+      payload: data,
+    }),
+    data,
+  });
+  const response = applicationOutputsMultipartResponse({
+    type: HTTP_OBSERVATION,
+    operationId: "operation",
+    done: Promise.resolve(),
+    cancel: () => Promise.resolve(),
+    outputs: new ReadableStream({
+      start(controller) {
+        controller.enqueue(stream("a", "run-a"));
+        controller.enqueue(stream("b", "run-b", true));
+        controller.enqueue(
+          event("test.action.completed", { actionRunId: "run-a" }),
+        );
+        controller.enqueue(
+          event("operation.completed", { status: "completed" }),
+        );
+        controller.close();
+      },
+    }),
+  });
+  const order: string[] = [];
+  try {
+    for await (const frame of decodeObservation(response)) {
+      if (frame.kind === "stream-chunk") order.push(`bytes:${frame.streamId}`);
+      if (
+        frame.kind === "output" && frame.output.type === "test.action.completed"
+      ) {
+        assertEquals(order, ["bytes:a"]);
+        order.push("result:a");
+        release();
+      }
+      if (
+        frame.kind === "output" && frame.output.type === "operation.completed"
+      ) order.push("operation:end");
+    }
+    assertEquals(order, ["bytes:a", "result:a", "bytes:b", "operation:end"]);
+  } finally {
+    release();
+  }
+});
+
+Deno.test("an unread HTTP response backpressures progressive body reads and detaches on cancellation", async () => {
+  let reads = 0;
+  let cancelled = false;
+  const stream: StreamOutput = {
+    type: "stream.output",
+    namespace: "tenant",
+    streamId: "slow",
+    streamOrdinal: "1",
+    mediaType: "text/plain",
+    kind: "text",
+    role: "content",
+    metadata: {},
+    payload: new ReadableStream({
+      pull(controller) {
+        reads++;
+        controller.enqueue(new Uint8Array(256 * 1024));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    }),
+    terminal: completedTerminal(1000),
+  };
+  const response = applicationOutputsMultipartResponse({
+    type: HTTP_OBSERVATION,
+    operationId: "operation",
+    done: Promise.resolve(),
+    cancel: () => Promise.resolve(),
+    outputs: new ReadableStream({
+      start(controller) {
+        controller.enqueue(stream);
+        controller.close();
+      },
+    }),
+  });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assertEquals(reads <= 3, true);
+  await response.body!.cancel();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assertEquals(cancelled, true);
 });

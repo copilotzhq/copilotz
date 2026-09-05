@@ -1,9 +1,3 @@
-import { createEventNativeApp } from "./server/event-native.ts";
-import type { CreateEventNativeAppOptions } from "./server/event-native.ts";
-import {
-  createEventNativeFetchHandler,
-  type CreateEventNativeFetchHandlerOptions,
-} from "./server/fetch.ts";
 import { createServerFacadeFetchHandler } from "./server/facade.ts";
 import { createCopilotz as createEmbeddedCopilotz } from "./runtime/application/copilotz.ts";
 import type { CreateCopilotzOptions as RuntimeEmbeddedOptions } from "./runtime/application/copilotz.ts";
@@ -23,11 +17,6 @@ type GatewayOptions =
   & RuntimeGatewayOptions
   & Readonly<{
     role: "gateway";
-    /** Fetch projection options installed at the package composition root. */
-    http?: CreateEventNativeFetchHandlerOptions;
-    /** Trusted authorization boundary for each request's physical schema. */
-    resolveDatabaseSchema?:
-      CreateEventNativeAppOptions["resolveDatabaseSchema"];
   }>;
 
 type WorkerOptions = RuntimeWorkerOptions & Readonly<{ role: "worker" }>;
@@ -76,46 +65,16 @@ export async function createCopilotz(
   if (options.role === "gateway") {
     const {
       role: _role,
-      http,
-      resolveDatabaseSchema,
       ...gatewayOptions
     } = options;
     const gateway = await createGateway(gatewayOptions);
     try {
-      const native = createEventNativeApp(gateway.application, {
-        resolveDatabaseSchema,
-      });
-      const legacyFetch = createEventNativeFetchHandler(
-        Object.freeze({
-          resources: native.resources,
-          async handle(request) {
-            await gateway.admit();
-            return await native.handle(request);
-          },
-        }),
-        { basePath: "/v3", ...(http ?? {}) },
-      );
-      const hasServerFacade = Boolean(
-        gateway.application.plugins.resources.server?.default,
-      );
-      const facadeFetch = hasServerFacade
+      const fetch = gateway.application.plugins.resources.server?.default
         ? createServerFacadeFetchHandler(gateway.application, {
           admit: gateway.admit,
-          resolveContext: http?.resolveContext,
-          responseHeaders: http?.responseHeaders,
-          onError: http?.onError,
         })
-        : undefined;
-      const fetch = facadeFetch
-        ? async (request: Request): Promise<Response> => {
-          const pathname = new URL(request.url).pathname.replace(/\/+$/, "") ||
-            "/";
-          const basePath = facadeFetch.routes.basePath;
-          return pathname === basePath || pathname.startsWith(`${basePath}/`)
-            ? await facadeFetch(request)
-            : await legacyFetch(request);
-        }
-        : legacyFetch;
+        : (_request: Request) =>
+          Promise.resolve(new Response(null, { status: 404 }));
       gateway.installFetchFallback(fetch);
       return Object.freeze({
         send: gateway.send,

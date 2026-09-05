@@ -236,10 +236,32 @@ export async function queryCollectionRecords(
 ): Promise<readonly CollectionRecord[]> {
   const params: unknown[] = [namespace, definition.name];
   const filters = [`namespace = $1`, `type = $2`];
-  for (const [field, value] of Object.entries(query.where ?? {})) {
-    const index = params.push(value);
-    if (field === "id") filters.push(`id = $${index}`);
-    else filters.push(`${jsonTextPath(field)} = $${index}::text`);
+  for (const predicate of [query, ...(query.all ?? [])]) {
+    for (const [field, values] of Object.entries(predicate.containsAny ?? {})) {
+      const path = field.split(".").map(sqlLiteral).join(",");
+      filters.push(
+        `(${
+          values.map((value) =>
+            `(data #> '{${path}}') @> $${
+              params.push(JSON.stringify([value]))
+            }::jsonb`
+          ).join(" OR ") || "FALSE"
+        })`,
+      );
+    }
+    for (const [field, value] of Object.entries(predicate.where ?? {})) {
+      const index = params.push(value);
+      if (field === "id") filters.push(`id = $${index}`);
+      else filters.push(`${jsonTextPath(field)} = $${index}::text`);
+    }
+    for (const [field, value] of Object.entries(predicate.contains ?? {})) {
+      const path = field.split(".").map(sqlLiteral).join(",");
+      filters.push(
+        `(data #> '{${path}}') @> $${
+          params.push(JSON.stringify(value))
+        }::jsonb`,
+      );
+    }
   }
   if (query.text?.trim() && definition.search?.enabled) {
     const index = params.push(`%${query.text.trim()}%`);

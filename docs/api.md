@@ -83,16 +83,13 @@ operation-catalog maintenance. `close()` is idempotent.
 
 ## Gateway Fetch
 
-`gateway.fetch` always retains the trusted event-native `/v3` boundary. When the
-composition includes `createServerPlugin()`, it also mounts the plugin's
-compiled façade (by default at `/api/v1`). That façade discovers eligible
-Actions, Collections, and Channels, applies glob exposure and explicit route
-overrides, and generates OpenAPI 3.2 from the same immutable route table.
-
-The Server guard is the public physical-schema authorization boundary. It may
-return trusted namespace/schema/identity metadata or terminate with a
-`Response`; request content cannot select those values or its target Action. See
-[Server Façade](server.md).
+`gateway.fetch` serves the single `/api` boundary installed by
+`createServerPlugin()`. The compiler discovers exposed Actions, Collections,
+Channels and exact HTTP Adapter routes, and generates OpenAPI from that table.
+`createCoreServerPlugin()` contributes conversation reads, observation and
+ordinary mutation Actions. Authentication resolves trusted scope; authorization
+intersects constraints before reads or execution. See
+[HTTP server and browser client](server.md).
 
 The Deno listener accepts any structural Fetch-capable host:
 

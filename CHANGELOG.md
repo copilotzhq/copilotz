@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.66.0 — Unreleased
+## 0.66.0 — 2026-09-05
 
 Replaces all versioned HTTP implementations with one compiled `/api` facade.
 Adds browser-safe generic and Core clients, exact HTTP Adapter composition,

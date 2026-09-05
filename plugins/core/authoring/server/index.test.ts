@@ -79,7 +79,7 @@ Deno.test("Core round trip keeps stored history, actor identity, and multipart b
       createServerPlugin({
         authenticate(request) {
           return {
-            namespace: "tenant",
+            namespace: request.headers.get("x-tenant") ?? "tenant",
             actor: { id: request.headers.get("x-user") ?? "person" },
           };
         },
@@ -206,6 +206,97 @@ Deno.test("Core round trip keeps stored history, actor identity, and multipart b
     });
     // Membership cannot invite a human from another thread, or partially enroll
     // valid selections before rejecting a forged selection.
+    const answer = page.data[1];
+    const assetId = answer.content[0].assetId;
+    assertEquals(
+      await (await core.messages.asset(result.threadId, answer.id, assetId))
+        .text(),
+      "Hello 🌎",
+    );
+    const assetPath = `/threads/${
+      encodeURIComponent(result.threadId)
+    }/messages/${encodeURIComponent(answer.id)}/assets/${
+      encodeURIComponent(assetId)
+    }`;
+    for (
+      const headers of [{ "x-user": "outsider" }, {
+        "x-tenant": "other",
+      }] as Record<string, string>[]
+    ) {
+      assertEquals(
+        (await handler(
+          new Request(`https://test/api${assetPath}`, { headers }),
+        )).status,
+        404,
+      );
+    }
+    for (
+      const [threadId, messageId, id] of [
+        [result.threadId, answer.id, page.data[0].content[0].assetId],
+        [result.threadId, "missing", assetId],
+        ["wrong-thread", answer.id, assetId],
+      ]
+    ) {
+      await assertRejects(
+        () => core.messages.asset(threadId, messageId, id),
+        CopilotzHttpError,
+      );
+    }
+    // Reasoning and binary attachments use the same exact canonical references.
+    const binary = await client.assets.upload(new Uint8Array([0, 255, 128]), {
+      mediaType: "application/octet-stream",
+    }) as { data: { asset: { id: string }; content: Record<string, unknown> } };
+    const hidden = [
+      {
+        id: "private",
+        visibility: { kind: "participants", participantIds: ["foreign-human"] },
+      },
+      { id: "internal", visibility: { kind: "internal" } },
+      { id: "scoped", historyScopeId: "agent-private-turn" },
+    ];
+    for (const extra of hidden) {
+      await records.message.create({
+        threadId: result.threadId,
+        senderId: "person",
+        content: answer.content,
+        ...extra,
+      });
+      await assertRejects(
+        () => core.messages.asset(result.threadId, extra.id, assetId),
+        CopilotzHttpError,
+      );
+    }
+    await records.message.create({
+      id: "attachment",
+      threadId: result.threadId,
+      senderId: "person",
+      content: [binary.data.content],
+      metadata: { llmReasoning: answer.content },
+    });
+    assertEquals([
+      ...new Uint8Array(
+        await (await core.messages.asset(
+          result.threadId,
+          "attachment",
+          String(binary.data.content.assetId),
+        )).arrayBuffer(),
+      ),
+    ], [0, 255, 128]);
+    assertEquals(
+      await (await core.messages.asset(result.threadId, "attachment", assetId))
+        .text(),
+      "Hello 🌎",
+    );
+    const visible = await core.threads.messages(result.threadId, {
+      limit: 1,
+      order: "desc",
+    });
+    assertEquals(visible.data[0].id, "attachment");
+    await records.message.delete({ id: "attachment" });
+    await assertRejects(
+      () => core.messages.asset(result.threadId, "attachment", assetId),
+      CopilotzHttpError,
+    );
     const before = await records.thread.get({ id: result.threadId });
     for (const participantIds of [["foreign-human"], ["spare", "unknown"]]) {
       const forbiddenMembership = await core.threads.send({

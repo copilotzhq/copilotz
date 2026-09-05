@@ -151,6 +151,7 @@ export function createCoreServerPlugin(): CopilotzPlugin {
           const records = await context.read.query("message", "history", {
             ...input,
             threadId: context.params.id,
+            viewerParticipantIds: [context.scope.actor!.id],
             limit: limit + 1,
           });
           const messages = await Promise.all(
@@ -174,6 +175,45 @@ export function createCoreServerPlugin(): CopilotzPlugin {
               next: records.length > limit ? messages.at(-1)?.id : undefined,
             },
           });
+        },
+      },
+      {
+        id: "core.threads.message-asset",
+        method: "GET",
+        path: "/threads/:id/messages/:messageId/assets/:assetId",
+        async handler(context) {
+          await thread(context, context.params.id);
+          const [message] = await context.read.query("message", "history", {
+            threadId: context.params.id,
+            messageId: context.params.messageId,
+            // Retained revisions remain readable through the authorized all-history view.
+            view: "all",
+            viewerParticipantIds: [context.scope.actor!.id],
+          });
+          const refs = message
+            ? [
+              ...(Array.isArray(message.content) ? message.content : []),
+              ...(Array.isArray(
+                  (message.metadata as Record<string, unknown>)?.llmReasoning,
+                )
+                ? (message.metadata as Record<string, unknown>)
+                  .llmReasoning as unknown[]
+                : []),
+            ]
+            : [];
+          if (
+            !refs.some((ref) =>
+              ref && typeof ref === "object" &&
+              (ref as Record<string, unknown>).assetId ===
+                context.params.assetId
+            )
+          ) {
+            throw Object.assign(new Error("Message content was not found."), {
+              status: 404,
+              code: "message_content_not_found",
+            });
+          }
+          return await context.content.get(context.params.assetId);
         },
       },
       {

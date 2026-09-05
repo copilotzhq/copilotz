@@ -295,7 +295,7 @@ export function createCopilotzClient(options: ClientOptions): CopilotzClient {
         request(`/assets/${segment(id)}`, options),
     }),
     /** Shared request machinery for typed domain clients and application endpoints. */
-    http: Object.freeze({ json, submit, observe }),
+    http: Object.freeze({ request, json, submit, observe }),
   });
 }
 
@@ -345,6 +345,7 @@ export type CopilotzClient = Readonly<{
     get(id: string, options?: ReadOptions): Promise<Response>;
   }>;
   http: Readonly<{
+    request(path: string, init?: RequestInit): Promise<Response>;
     json(path: string, init?: RequestInit): Promise<unknown>;
     submit(
       path: string,

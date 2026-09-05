@@ -128,3 +128,19 @@ North to ask West without asking both agents to answer the user message.
 Membership selections resolve only to registered agents in the authenticated
 scope. Existing authorized threads enroll missing selections before delivery;
 this neither removes existing participants nor rewrites conversation history.
+
+### Message content access
+
+Use `core.messages.asset(threadId, messageId, assetId, { signal })` to read a
+conversation Asset. It returns the raw Fetch Response from
+`GET /api/threads/:id/messages/:messageId/assets/:assetId`. Core checks the
+authorized thread, message visibility, and the exact reference in canonical
+message content or reasoning before reading bytes in the authenticated scope.
+History filters participant-private messages before pagination. Internal and
+private history-scope messages are not exposed through this boundary.
+
+Content becomes readable as soon as the authorized message exists; it does not
+depend on an asynchronous access projection. A bare Asset identifier conveys no
+message authority. Applications retain their own policy for generic Asset reads.
+Existing Asset bytes, message records, and retained revisions are reused without
+a migration.

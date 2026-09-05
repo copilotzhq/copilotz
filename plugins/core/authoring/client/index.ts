@@ -96,6 +96,18 @@ export function createCoreClient(client: CopilotzClient): CoreClient {
         }, options),
     }),
     messages: Object.freeze({
+      asset: (
+        threadId: string,
+        messageId: string,
+        assetId: string,
+        options: ReadOptions = {},
+      ) =>
+        client.http.request(
+          `${path(threadId)}/messages/${encodeURIComponent(messageId)}/assets/${
+            encodeURIComponent(assetId)
+          }`,
+          options,
+        ),
       edit: (
         threadId: string,
         messageId: string,
@@ -143,6 +155,12 @@ export type CoreClient = Readonly<{
     delete(id: string, options: SubmitOptions): Promise<OperationReceipt>;
   }>;
   messages: Readonly<{
+    asset(
+      threadId: string,
+      messageId: string,
+      assetId: string,
+      options?: ReadOptions,
+    ): Promise<Response>;
     edit(
       threadId: string,
       messageId: string,

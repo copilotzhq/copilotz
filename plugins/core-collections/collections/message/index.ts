@@ -47,14 +47,23 @@ function compareMessageOrder(
   return createdAt || left.id.localeCompare(right.id);
 }
 
-function isPublicHistoryMessage(record: HistoryMessageRecord): boolean {
+function isPublicHistoryMessage(
+  record: HistoryMessageRecord,
+  viewerParticipantIds?: readonly string[],
+): boolean {
   const scope = typeof record.historyScopeId === "string"
     ? record.historyScopeId.trim()
     : "";
   const visibility = record.visibility && typeof record.visibility === "object"
     ? record.visibility as Record<string, unknown>
     : {};
-  return !scope && visibility.kind !== "internal";
+  return !scope && visibility.kind !== "internal" &&
+    (viewerParticipantIds === undefined || visibility.kind === undefined ||
+      visibility.kind === "public" || visibility.kind === "participants" &&
+        Array.isArray(visibility.participantIds) &&
+        visibility.participantIds.some((id) =>
+          viewerParticipantIds.includes(id)
+        ));
 }
 
 type ActiveBranchWindow = Readonly<{
@@ -209,6 +218,24 @@ export const messageCollection: CollectionDefinition = defineCollection({
             threadId,
             thread?.activeMessageBranch as MessageBranch | undefined,
           );
+        // HTTP callers supply trusted viewer identities, never client query authority.
+        const viewers = Array.isArray(input.viewerParticipantIds)
+          ? input.viewerParticipantIds.filter((id): id is string =>
+            typeof id === "string"
+          )
+          : undefined;
+        const visible = (record: HistoryMessageRecord) =>
+          isPublicHistoryMessage(record, viewers) &&
+          belongsToActiveBranch(record, branch);
+        // Exact content reads share history visibility without scanning or pagination.
+        if (typeof input.messageId === "string") {
+          const message = await read.get("message", input.messageId) as
+            | HistoryMessageRecord
+            | null;
+          return message && message.threadId === threadId && visible(message)
+            ? [message]
+            : [];
+        }
         const cursorId = after ?? before;
         if (cursorId) {
           const cursor = await read.get("message", cursorId) as
@@ -216,8 +243,7 @@ export const messageCollection: CollectionDefinition = defineCollection({
             | null;
           if (
             !cursor || cursor.threadId !== threadId ||
-            !isPublicHistoryMessage(cursor) ||
-            !belongsToActiveBranch(cursor, branch)
+            !visible(cursor)
           ) {
             throw new Error(
               `Message cursor '${cursorId}' was not found in the ${
@@ -249,8 +275,7 @@ export const messageCollection: CollectionDefinition = defineCollection({
           }) as readonly HistoryMessageRecord[];
           for (const record of page) {
             if (
-              isPublicHistoryMessage(record) &&
-              belongsToActiveBranch(record, branch)
+              visible(record)
             ) {
               selected.push(record);
               if (selected.length === selectedLimit) break;

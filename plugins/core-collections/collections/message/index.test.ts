@@ -366,3 +366,163 @@ Deno.test("history repeats visibility checks before resolving a concurrently res
   );
   assertEquals(f.assetReads, []);
 });
+
+Deno.test("history exposes only terminal status for a private result of a visible invocation", async () => {
+  await using f = await fixture([
+    {
+      id: "plan",
+      senderId: "agent",
+      visibility: { kind: "public" },
+      metadata: {
+        llmToolCalls: [{ id: "call", action: "consolidate_memory", input: {} }],
+      },
+    },
+    {
+      id: "private-result",
+      senderId: "tool",
+      visibility: {
+        kind: "tool",
+        policy: "requester_only",
+        requesterId: "agent",
+      },
+      metadata: {
+        toolStatus: "completed",
+        toolId: "consolidate_memory",
+        toolInvocation: { id: "call", input: "SECRET" },
+        copilotzWorkflow: { sourceMessageId: "plan" },
+        private: "SECRET",
+      },
+    },
+  ]);
+  const page = await f.select({
+    order: "desc",
+    limit: 1,
+    overfetch: true,
+    content: true,
+  });
+  assertEquals(page.map((r) => r.id), ["private-result", "plan"]);
+  assertEquals(page[0].content, []);
+  assertEquals(
+    (page[0].metadata as Record<string, unknown>).toolStatus,
+    "completed",
+  );
+  assertEquals(JSON.stringify(page[0]).includes("SECRET"), false);
+  assertEquals(
+    (await f.select({ after: "private-result", order: "desc", limit: 1 })).map(
+      (r) => r.id,
+    ),
+    ["plan"],
+  );
+  const exact = await f.select({ messageId: "private-result", content: true });
+  assertEquals(exact, [page[0]]);
+  const requester = await f.select({
+    messageId: "private-result",
+    viewerParticipantIds: ["agent"],
+  });
+  assertEquals(
+    (requester[0].metadata as Record<string, unknown>).private,
+    "SECRET",
+  );
+});
+
+Deno.test("history never reveals private tool statuses without an authorized matching source", async () => {
+  const result = (
+    id: string,
+    source: string,
+    call = "call",
+    requester = "agent",
+  ) => ({
+    id,
+    senderId: "tool",
+    visibility: {
+      kind: "tool",
+      policy: "requester_only",
+      requesterId: requester,
+    },
+    metadata: {
+      toolStatus: "failed",
+      toolId: "private",
+      toolInvocation: { id: call },
+      copilotzWorkflow: { sourceMessageId: source },
+      error: "SECRET",
+    },
+  });
+  await using f = await fixture([
+    {
+      id: "public-plan",
+      senderId: "agent",
+      visibility: { kind: "public" },
+      metadata: { llmToolCalls: [{ id: "call" }] },
+    },
+    {
+      id: "private-plan",
+      senderId: "agent",
+      visibility: { kind: "internal" },
+      metadata: { llmToolCalls: [{ id: "call" }] },
+    },
+    result("hidden", "private-plan"),
+    result("missing", "missing-plan"),
+    result("wrong-call", "public-plan", "other"),
+    result("wrong-owner", "public-plan", "call", "other"),
+    {
+      ...result("internal-result", "public-plan"),
+      visibility: { kind: "internal" },
+    },
+    result("malformed", "public-plan", null as unknown as string),
+  ]);
+  assertEquals(
+    (await f.select({
+      order: "desc",
+      limit: 1,
+      overfetch: true,
+      content: true,
+    })).map((r) => r.id),
+    ["public-plan"],
+  );
+  assertEquals(await f.select({ messageId: "hidden" }), []);
+});
+
+Deno.test("private terminal status recovery never resolves private assets", async () => {
+  const ref = {
+    assetId: "never-read",
+    kind: "text",
+    role: "body",
+    mediaType: "text/plain",
+  };
+  await using f = await fixture([
+    {
+      id: "plan",
+      senderId: "agent",
+      metadata: { llmToolCalls: [{ id: "call" }] },
+    },
+    {
+      id: "result",
+      content: [ref],
+      visibility: {
+        kind: "tool",
+        policy: "requester_only",
+        requesterId: "agent",
+      },
+      metadata: {
+        toolStatus: "failed",
+        llmReasoning: [ref],
+        toolInvocation: { id: "call" },
+        copilotzWorkflow: { sourceMessageId: "plan" },
+      },
+    },
+  ]);
+  for (const input of [{ limit: 2 }, { messageId: "result" }]) {
+    const rows = await f.select({ ...input, content: true });
+    const result = rows.find((row) => row.id === "result")!;
+    assertEquals(result.content, []);
+    assertEquals(
+      (result.metadata as Record<string, unknown>).toolStatus,
+      "failed",
+    );
+    assertEquals(
+      (result.metadata as Record<string, unknown>).llmReasoning,
+      undefined,
+    );
+  }
+  assertEquals(f.assetReads, []);
+});

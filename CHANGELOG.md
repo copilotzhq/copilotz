@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.71.2 — 2026-09-13
+
+- Recover terminal tool status in thread history when the invocation is visible,
+  even when its result is requester-only. Preserve private result bodies and
+  hidden invocations, and apply authorization before visible pagination.
+- Cover exact reads, pagination, invocation ownership, and private asset
+  isolation.
+
 ## 0.71.1 — 2026-09-10
 
 - Fill memory consolidation's bounded source budget before reserving a

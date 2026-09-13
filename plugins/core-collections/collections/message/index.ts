@@ -47,7 +47,59 @@ function compareMessageOrder(
 }
 
 /** Selection runs in storage, before pagination and optional content reads. */
-function publicHistoryFilter(viewers?: readonly string[]): CollectionPredicate {
+function publicHistoryFilter(
+  viewers?: readonly string[],
+  includePrivateToolStatuses = false,
+): CollectionPredicate {
+  const audience = viewers === undefined ? [] : [
+    {
+      or: [
+        { field: "visibility.kind", exists: false },
+        { field: "visibility.kind", eq: "public" },
+        {
+          and: [
+            { field: "visibility.kind", eq: "tool" },
+            {
+              or: [
+                {
+                  field: "visibility.policy",
+                  in: ["public", "public_status"],
+                },
+                { field: "visibility.requesterId", in: viewers },
+              ],
+            },
+          ],
+        },
+        {
+          and: [
+            { field: "visibility.kind", eq: "participants" },
+            { field: "visibility.participantIds", overlaps: viewers },
+          ],
+        },
+        ...(includePrivateToolStatuses
+          ? [
+            {
+              and: [
+                { field: "visibility.kind", eq: "tool" },
+                { field: "visibility.policy", eq: "requester_only" },
+                // A result without these fields cannot be tied to a visible
+                // invocation, so keep it out of the status projection scan.
+                {
+                  field: "metadata.toolStatus",
+                  in: ["completed", "failed", "cancelled"],
+                },
+                { field: "metadata.toolInvocation.id", exists: true },
+                {
+                  field: "metadata.copilotzWorkflow.sourceMessageId",
+                  exists: true,
+                },
+              ],
+            } satisfies CollectionPredicate,
+          ]
+          : []),
+      ],
+    } satisfies CollectionPredicate,
+  ];
   return {
     and: [
       {
@@ -58,34 +110,7 @@ function publicHistoryFilter(viewers?: readonly string[]): CollectionPredicate {
         ],
       },
       { field: "visibility.kind", ne: "internal" },
-      ...(viewers === undefined ? [] : [
-        {
-          or: [
-            { field: "visibility.kind", exists: false },
-            { field: "visibility.kind", eq: "public" },
-            {
-              and: [
-                { field: "visibility.kind", eq: "tool" },
-                {
-                  or: [
-                    {
-                      field: "visibility.policy",
-                      in: ["public", "public_status"],
-                    },
-                    { field: "visibility.requesterId", in: viewers },
-                  ],
-                },
-              ],
-            },
-            {
-              and: [
-                { field: "visibility.kind", eq: "participants" },
-                { field: "visibility.participantIds", overlaps: viewers },
-              ],
-            },
-          ],
-        } satisfies CollectionPredicate,
-      ]),
+      ...audience,
     ],
   };
 }
@@ -142,6 +167,91 @@ function projectHistoryRecord(
       },
     },
   };
+}
+
+function privateToolStatusCandidate(
+  record: HistoryMessageRecord,
+  viewers: readonly string[] | undefined,
+): boolean {
+  if (viewers === undefined) return false;
+  const visibility = record.visibility as Record<string, unknown> | undefined;
+  if (
+    visibility?.kind !== "tool" || visibility.policy !== "requester_only" ||
+    viewers.includes(String(visibility.requesterId))
+  ) return false;
+  return true;
+}
+
+function statusSourceId(record: HistoryMessageRecord): string | undefined {
+  const metadata = record.metadata as Record<string, unknown> | undefined;
+  const workflow = metadata?.copilotzWorkflow as
+    | Record<string, unknown>
+    | undefined;
+  return typeof workflow?.sourceMessageId === "string"
+    ? workflow.sourceMessageId
+    : undefined;
+}
+
+function invocationIds(record: HistoryMessageRecord): ReadonlySet<string> {
+  const metadata = record.metadata as Record<string, unknown> | undefined;
+  const ids = new Set<string>();
+  const toolCalls = metadata?.llmToolCalls;
+  if (Array.isArray(toolCalls)) {
+    for (const value of toolCalls) {
+      if (!value || typeof value !== "object" || Array.isArray(value)) {
+        continue;
+      }
+      const id = (value as Record<string, unknown>).id;
+      if (typeof id === "string" && id.trim()) ids.add(id);
+    }
+  }
+  const ask = metadata?.copilotzAsk;
+  const askInvocation = ask && typeof ask === "object" && !Array.isArray(ask)
+    ? (ask as Record<string, unknown>).toolInvocation
+    : undefined;
+  const askId = askInvocation && typeof askInvocation === "object" &&
+      !Array.isArray(askInvocation)
+    ? (askInvocation as Record<string, unknown>).id
+    : undefined;
+  if (typeof askId === "string" && askId.trim()) ids.add(askId);
+  const direct = metadata?.toolInvocation;
+  const directId =
+    direct && typeof direct === "object" && !Array.isArray(direct)
+      ? (direct as Record<string, unknown>).id
+      : undefined;
+  if (typeof directId === "string" && directId.trim()) ids.add(directId);
+  return ids;
+}
+
+/**
+ * Projects a private result only when its public source Message advertises the
+ * same invocation. The result itself is never used as authorization evidence.
+ */
+function projectPrivateToolStatus(
+  record: HistoryMessageRecord,
+  parent: HistoryMessageRecord,
+): HistoryMessageRecord | undefined {
+  const visibility = record.visibility as Record<string, unknown>;
+  const metadata = record.metadata as Record<string, unknown>;
+  const invocation = (metadata.toolInvocation ?? {}) as Record<string, unknown>;
+  const sourceMessageId = statusSourceId(record);
+  const projected = {
+    ...record,
+    visibility: {
+      kind: "tool",
+      policy: "public_status",
+      requesterId: visibility.requesterId,
+    },
+  };
+  // Keep the source lookup explicit so a future caller cannot accidentally
+  // treat an unrelated private result as a public status row.
+  if (
+    typeof sourceMessageId !== "string" || sourceMessageId !== parent.id ||
+    parent.senderId !== visibility.requesterId ||
+    typeof invocation.id !== "string" ||
+    !invocationIds(parent).has(invocation.id)
+  ) return undefined;
+  return projectHistoryRecord(projected, []);
 }
 
 type ActiveBranchWindow = Readonly<{
@@ -312,7 +422,7 @@ export const messageCollection: CollectionDefinition = defineCollection({
           : undefined;
         const filter: CollectionPredicate = {
           and: [
-            publicHistoryFilter(viewers),
+            publicHistoryFilter(viewers, true),
             ...(branch
               ? [
                 {
@@ -325,6 +435,50 @@ export const messageCollection: CollectionDefinition = defineCollection({
               ]
               : []),
           ],
+        };
+        // Private results may reveal only a status for an invocation the viewer
+        // already sees. Parent lookups use normal history authorization, never
+        // the widened result scan, and never resolve content bodies.
+        const visibleStatuses = async (
+          records: readonly HistoryMessageRecord[],
+        ) => {
+          const candidates = records.filter((record) =>
+            privateToolStatusCandidate(record, viewers)
+          );
+          if (!candidates.length) return records;
+          const parentIds = [
+            ...new Set(
+              candidates.map(statusSourceId).filter(
+                (id): id is string => id !== undefined,
+              ),
+            ),
+          ];
+          const parents = new Map<string, HistoryMessageRecord>();
+          for (let offset = 0; offset < parentIds.length; offset += 512) {
+            const batch = parentIds.slice(offset, offset + 512);
+            const values = await read.list("message", {
+              where: { threadId },
+              filter: {
+                and: [filter, publicHistoryFilter(viewers), {
+                  field: "id",
+                  in: batch,
+                }],
+              },
+              limit: batch.length,
+            }) as readonly HistoryMessageRecord[];
+            for (const parent of values) parents.set(parent.id, parent);
+          }
+          return records.flatMap((record) => {
+            if (!privateToolStatusCandidate(record, viewers)) return [record];
+            const sourceId = statusSourceId(record);
+            const parent = sourceId === undefined
+              ? undefined
+              : parents.get(sourceId);
+            const status = parent
+              ? projectPrivateToolStatus(record, parent)
+              : undefined;
+            return status ? [status] : [];
+          });
         };
         // Select and redact first. Only unchanged, fully visible records may be
         // re-read with content; status-only records never enter that read.
@@ -347,6 +501,7 @@ export const messageCollection: CollectionDefinition = defineCollection({
               filter: {
                 and: [
                   filter,
+                  publicHistoryFilter(viewers),
                   ...(viewers
                     ? [{
                       not: {
@@ -396,7 +551,7 @@ export const messageCollection: CollectionDefinition = defineCollection({
             filter,
             limit: 1,
           }) as readonly HistoryMessageRecord[];
-          return await finish(records);
+          return await finish(await visibleStatuses(records));
         }
         const limit = Number(input.limit ?? 100);
         if (!Number.isSafeInteger(limit) || limit <= 0) {
@@ -423,7 +578,7 @@ export const messageCollection: CollectionDefinition = defineCollection({
             ...(before ? { before } : {}),
             limit: batchLimit,
           }) as readonly HistoryMessageRecord[];
-          selected.push(...page);
+          selected.push(...await visibleStatuses(page));
           if (page.length < batchLimit) break;
           const next = page.at(-1)?.id;
           if (!next || next === scanAfter) break;

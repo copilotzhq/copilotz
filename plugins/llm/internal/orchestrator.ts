@@ -7,6 +7,7 @@ import type {
   ProviderFallbackConfig,
   ProviderFinishReason,
   ProviderName,
+  ProviderNativeReasoning,
   ProviderRegistry,
   StreamCallback,
   TokenUsageStatusReason,
@@ -528,10 +529,14 @@ export async function chat(
       extractedTags: Record<string, string[]>;
     },
     recovery?: ChatResponse["recovery"],
+    nativeReasoning?: ProviderNativeReasoning,
+    nativeReasoningFinalized?: Promise<ProviderNativeReasoning | undefined>,
   ): ChatResponse => ({
     prompt,
     answer,
     ...(reasoning ? { reasoning } : {}),
+    ...(nativeReasoning ? { nativeReasoning } : {}),
+    ...(nativeReasoningFinalized ? { nativeReasoningFinalized } : {}),
     tokens: record.usage.totalTokens ?? 0,
     finishReason,
     usage: record.usage,
@@ -729,6 +734,9 @@ export async function chat(
             reasoning,
             streamResult.finishReason,
             interpretation.parsed,
+            undefined,
+            streamResult.nativeReasoning,
+            streamResult.nativeReasoningFinalized,
           );
         }
 

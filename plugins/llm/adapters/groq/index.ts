@@ -25,6 +25,8 @@ function extractOpenAICompatibleFinishReason(
 }
 
 export const groqProvider: ProviderFactory = (config: ProviderConfig) => {
+  let reasoning = "";
+
   return {
     endpoint: providerEndpoint(
       config.baseUrl,
@@ -84,11 +86,30 @@ export const groqProvider: ProviderFactory = (config: ProviderConfig) => {
     },
 
     extractContent: (data: any): ExtractedPart[] | null => {
-      const content = data?.choices?.[0]?.delta?.content;
-      if (!content) return null;
-      return [{ text: content }];
+      const delta = data?.choices?.[0]?.delta;
+      const parts: ExtractedPart[] = [];
+      if (typeof delta?.reasoning === "string" && delta.reasoning) {
+        parts.push({ text: delta.reasoning, isReasoning: true });
+      }
+      if (typeof delta?.content === "string" && delta.content) {
+        parts.push({ text: delta.content });
+      }
+      return parts.length > 0 ? parts : null;
     },
 
+    // Groq documents parsed reasoning only as response output.  Keep its
+    // durable native snapshot, but never invent an assistant input field.
+    nativeReasoningApi: "groq.chat.completions",
+    replaysNativeReasoning: false,
+    extractNativeReasoning: (data: any): Record<string, unknown>[] | null => {
+      const choice = data?.choices?.[0];
+      const delta = choice?.delta;
+      if (typeof delta?.reasoning === "string") reasoning += delta.reasoning;
+      return choice?.finish_reason === "stop" && reasoning
+        ? [{ reasoning }]
+        : null;
+    },
+    isStreamActivity: (data: any) => Boolean(data?.choices?.[0]),
     extractFinishReason: extractOpenAICompatibleFinishReason,
   };
 };

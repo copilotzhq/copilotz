@@ -35,6 +35,8 @@ import {
   type LlmJsonValue,
   type LlmMessage,
   type LlmModelSelection,
+  type LlmNativeReasoning,
+  type LlmNativeReasoningInput,
   type LlmRejectedAttemptEvidence,
   type LlmToolCall,
   type LlmToolPipeline,
@@ -956,13 +958,86 @@ function normalizedPreparedSequence(
   }));
 }
 
+function normalizedNativeReasoning(
+  value: unknown,
+  path: string,
+): LlmNativeReasoning {
+  const record = plainRecord(value, path);
+  exactKeys(
+    record,
+    new Set([
+      "schema",
+      "adapter",
+      "api",
+      "model",
+      "blocks",
+    ]),
+    path,
+  );
+  if (record.schema !== "copilotz.llm-native-reasoning.v1") {
+    throw new TypeError(`${path}.schema is invalid.`);
+  }
+  const blocks = normalizedPreparedSequence(record.blocks, `${path}.blocks`);
+  if (
+    blocks.length === 0 ||
+    blocks.some((block) =>
+      block.kind !== "json" || block.resolve === false ||
+      !Object.hasOwn(block, "value") || !block.value ||
+      typeof block.value !== "object" || Array.isArray(block.value)
+    )
+  ) {
+    throw new TypeError(`${path}.blocks must contain prepared JSON values.`);
+  }
+  return Object.freeze({
+    schema: "copilotz.llm-native-reasoning.v1" as const,
+    adapter: requiredText(record.adapter, `${path}.adapter`),
+    api: requiredText(record.api, `${path}.api`),
+    model: requiredText(record.model, `${path}.model`),
+    blocks,
+  });
+}
+
+function normalizedNativeReasoningResult(
+  value: unknown,
+  path: string,
+): LlmNativeReasoningInput {
+  const record = plainRecord(value, path);
+  exactKeys(record, new Set(["api", "blocks"]), path);
+  const allBlocks = normalizedContent(record.blocks, `${path}.blocks`);
+  const blocks = allBlocks.filter(
+    (block): block is Extract<ContentInput, { type: "json" }> =>
+      typeof block !== "string" && "type" in block && block.type === "json",
+  );
+  if (blocks.length !== allBlocks.length || blocks.length === 0) {
+    throw new TypeError(`${path}.blocks must contain JSON objects.`);
+  }
+  if (
+    blocks.some((block) =>
+      !block.value || typeof block.value !== "object" ||
+      Array.isArray(block.value)
+    )
+  ) {
+    throw new TypeError(`${path}.blocks must contain JSON objects.`);
+  }
+  return Object.freeze({
+    api: requiredText(record.api, `${path}.api`),
+    blocks,
+  });
+}
+
 function normalizedMessage(value: unknown, index: number): LlmMessage {
   const path = `LLM request.messages[${index}]`;
   const record = plainRecord(value, path);
   const role = requiredText(record.role, `${path}.role`);
   const commonKeys = ["role", "content", "name", "metadata"];
   const allowed = role === "assistant"
-    ? new Set([...commonKeys, "toolCalls", "reasoning", "toolPlanId"])
+    ? new Set([
+      ...commonKeys,
+      "toolCalls",
+      "reasoning",
+      "nativeReasoning",
+      "toolPlanId",
+    ])
     : role === "tool"
     ? new Set([...commonKeys, "toolCallId", "toolPlanId"])
     : new Set(commonKeys);
@@ -999,6 +1074,14 @@ function normalizedMessage(value: unknown, index: number): LlmMessage {
           reasoning: normalizedPreparedSequence(
             record.reasoning,
             `${path}.reasoning`,
+          ),
+        }
+        : {}),
+      ...(record.nativeReasoning !== undefined
+        ? {
+          nativeReasoning: normalizedNativeReasoning(
+            record.nativeReasoning,
+            `${path}.nativeReasoning`,
           ),
         }
         : {}),
@@ -2060,6 +2143,7 @@ function invocationResult(value: unknown): LlmAdapterResult {
     new Set([
       "content",
       "reasoning",
+      "nativeReasoning",
       "toolCalls",
       "attempts",
       "finishReason",
@@ -2076,6 +2160,12 @@ function invocationResult(value: unknown): LlmAdapterResult {
   const reasoning = record.reasoning === undefined
     ? undefined
     : normalizedContent(record.reasoning, "LLM Adapter result.reasoning");
+  const nativeReasoning = record.nativeReasoning === undefined
+    ? undefined
+    : normalizedNativeReasoningResult(
+      record.nativeReasoning,
+      "LLM Adapter result.nativeReasoning",
+    );
   const toolCalls = record.toolCalls === undefined
     ? undefined
     : normalizedToolCalls(record.toolCalls);
@@ -2099,6 +2189,7 @@ function invocationResult(value: unknown): LlmAdapterResult {
   return Object.freeze({
     content,
     ...(reasoning ? { reasoning } : {}),
+    ...(nativeReasoning ? { nativeReasoning } : {}),
     ...(toolCalls ? { toolCalls } : {}),
     attempts,
     ...(finishReason ? { finishReason } : {}),
@@ -2168,6 +2259,7 @@ async function materializeResultContent(
   Readonly<{
     content: ContentSequence;
     reasoning?: ContentSequence;
+    nativeReasoning?: ContentSequence;
   }>
 > {
   const contentPrepared = await context.content.prepare(result.content, {
@@ -2177,6 +2269,11 @@ async function materializeResultContent(
     ? undefined
     : await context.content.prepare(result.reasoning, {
       operationKey: `attempt:${attemptIndex}:reasoning`,
+    });
+  const nativeReasoningPrepared = result.nativeReasoning === undefined
+    ? undefined
+    : await context.content.prepare(result.nativeReasoning.blocks, {
+      operationKey: `attempt:${attemptIndex}:native-reasoning`,
     });
   const contentStream = matchingSettledStream(
     "content",
@@ -2211,6 +2308,9 @@ async function materializeResultContent(
     : await context.content.materialize(
       reasoningStream?.prepared ?? reasoningPrepared,
     );
+  const nativeReasoning = nativeReasoningPrepared === undefined
+    ? undefined
+    : await context.content.materialize(nativeReasoningPrepared);
   if (contentStream && content.length === 1) {
     await retainSettledStream(
       contentStream.stream,
@@ -2223,7 +2323,11 @@ async function materializeResultContent(
       { retention: "canonical", assetId: reasoning[0].assetId },
     );
   }
-  return Object.freeze({ content, ...(reasoning ? { reasoning } : {}) });
+  return Object.freeze({
+    content,
+    ...(reasoning ? { reasoning } : {}),
+    ...(nativeReasoning ? { nativeReasoning } : {}),
+  });
 }
 
 function outputFor(
@@ -2231,6 +2335,7 @@ function outputFor(
   result: LlmAdapterResult,
   content: ContentSequence,
   reasoning: ContentSequence | undefined,
+  nativeReasoning: ContentSequence | undefined,
   attempts: readonly LlmAttemptUsage[],
 ): LlmCallOutput {
   const usage = aggregateUsage(attempts);
@@ -2241,6 +2346,17 @@ function outputFor(
     providerModel: selected.selection.model,
     content,
     ...(reasoning ? { reasoning } : {}),
+    ...(result.nativeReasoning && nativeReasoning
+      ? {
+        nativeReasoning: {
+          schema: "copilotz.llm-native-reasoning.v1" as const,
+          adapter: selected.adapterAlias,
+          api: result.nativeReasoning.api,
+          model: selected.selection.model,
+          blocks: nativeReasoning,
+        },
+      }
+      : {}),
     ...(result.toolCalls
       ? { toolCalls: Object.freeze(structuredClone(result.toolCalls)) }
       : {}),
@@ -2256,7 +2372,6 @@ async function executeLlmCall(
 ): Promise<LlmCallOutput> {
   const input = normalizedCallInput(rawInput);
   const plan = modelPlan(input.models, input.mode, context);
-  const request = projectPreparedRequest(input.request, context.namespace);
   const attempts: LlmAttemptUsage[] = [];
   const credentialMemo = new Map<
     string,
@@ -2306,6 +2421,14 @@ async function executeLlmCall(
       continue;
     }
     const candidate = prepared.candidate;
+    const request = projectPreparedRequest(
+      input.request,
+      context.namespace,
+      {
+        adapter: candidate.adapterAlias,
+        model: candidate.selection.model,
+      },
+    );
     const streams: StreamState = {
       writers: new Map(),
       visible: false,
@@ -2406,17 +2529,19 @@ async function executeLlmCall(
         "completed",
       );
       resultAccounted = true;
-      const { content, reasoning } = await materializeResultContent(
-        result,
-        index,
-        settledStreams,
-        context,
-      );
+      const { content, reasoning, nativeReasoning } =
+        await materializeResultContent(
+          result,
+          index,
+          settledStreams,
+          context,
+        );
       return outputFor(
         candidate,
         result,
         content,
         reasoning,
+        nativeReasoning,
         attempts,
       );
     } catch (error) {
@@ -2450,18 +2575,25 @@ export const callLlmAction: ActionDefinition<
   id: LLM_CALL_ACTION_ID,
   inputSchema: llmCallInputSchema,
   content: {
-    input: ["request.messages[].content", "request.messages[].reasoning"],
+    input: [
+      "request.messages[].content",
+      "request.messages[].reasoning",
+      "request.messages[].nativeReasoning.blocks",
+    ],
   },
   execute: executeLlmCall,
 });
 
 export type {
+  LlmAdapterNativeReasoning,
   LlmAttemptStatus,
   LlmAttemptUsage,
   LlmCallInput,
   LlmCallOutput,
   LlmCost,
   LlmMessage,
+  LlmNativeReasoning,
+  LlmNativeReasoningInput,
   LlmRequest,
   LlmStreamDescriptor,
   LlmToolCall,

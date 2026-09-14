@@ -24,7 +24,7 @@ import type { CoreProcessorContext } from "../runtime-context.ts";
 import { prepareLlmTranscript } from "./prepared-transcript.ts";
 
 const date = "2026-09-06T00:00:00.000Z";
-Deno.test("Core resolves final transcript content and own reasoning, leaving peer reasoning and attachment bodies unread", async () => {
+Deno.test("Core resolves own native reasoning, leaves peer state unread, and counts it in the byte limit", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   const session = createSqlSession(db);
   const assets = createMemoryAssetRepository();
@@ -36,36 +36,66 @@ Deno.test("Core resolves final transcript content and own reasoning, leaving pee
       return true;
     },
   });
-  const publish = async (id: string, text: string) => {
+  const publish = async (
+    id: string,
+    text: string,
+    kind: "text" | "json" = "text",
+    mediaType = "text/plain",
+  ) => {
     await assets.publish({
       namespace: "tenant",
       id,
-      mediaType: "text/plain",
+      mediaType,
       body: new TextEncoder().encode(text),
     });
     return {
       assetId: id,
-      kind: "text" as const,
+      kind,
       role: "body",
-      mediaType: "text/plain",
+      mediaType,
     };
   };
   try {
     const body = await publish("body", "visible");
     const reasoning = await publish("reasoning", "own previous thought");
+    const native = await publish(
+      "native",
+      JSON.stringify({ opaque: "x".repeat(80) }),
+      "json",
+      "application/json",
+    );
     const missing = { ...body, assetId: "must-not-read" };
+    const missingNative = { ...native, assetId: "native-must-not-read" };
     const records = [
       {
         id: "north-message",
         senderId: "north",
         content: [body],
-        metadata: { llmReasoning: [reasoning] },
+        metadata: {
+          llmReasoning: [reasoning],
+          llmNativeReasoning: {
+            schema: "copilotz.llm-native-reasoning.v1",
+            adapter: "adapter",
+            api: "provider.api",
+            model: "model",
+            blocks: [native],
+          },
+        },
       },
       {
         id: "east-message",
         senderId: "east",
         content: [body],
-        metadata: { llmReasoning: [missing] },
+        metadata: {
+          llmReasoning: [missing],
+          llmNativeReasoning: {
+            schema: "copilotz.llm-native-reasoning.v1",
+            adapter: "adapter",
+            api: "provider.api",
+            model: "model",
+            blocks: [missingNative],
+          },
+        },
       },
       {
         id: "private-tool",
@@ -143,15 +173,35 @@ Deno.test("Core resolves final transcript content and own reasoning, leaving pee
         ...reasoning,
         value: "own previous thought",
       }]);
+      assertEquals<unknown>(transcript[0].nativeReasoning, {
+        schema: "copilotz.llm-native-reasoning.v1",
+        adapter: "adapter",
+        api: "provider.api",
+        model: "model",
+        blocks: [{ ...native, value: { opaque: "x".repeat(80) } }],
+      });
     }
     assertEquals("reasoning" in transcript[1], false);
+    assertEquals("nativeReasoning" in transcript[1], false);
     assertEquals(transcript[2].content[1], {
       ...missing,
       disposition: "attachment",
       resolve: false,
     });
     assertEquals(readIds.includes("must-not-read"), false);
+    assertEquals(readIds.includes("native-must-not-read"), false);
     assertEquals(queries.length, 2);
+    await assertRejects(
+      () =>
+        prepareLlmTranscript(context, {
+          threadId: "thread",
+          participantId: "north",
+          history,
+        }, { byteLimit: 41 }),
+      RangeError,
+      "byte budget",
+    );
+    const queriesAfterByteLimit = queries.length;
     const empty = await prepareLlmTranscript(context, {
       threadId: "thread",
       participantId: "north",
@@ -159,7 +209,7 @@ Deno.test("Core resolves final transcript content and own reasoning, leaving pee
       messageIds: [],
     });
     assertEquals(empty, []);
-    assertEquals(queries.length, 2);
+    assertEquals(queries.length, queriesAfterByteLimit);
   } finally {
     await db.close();
   }

@@ -328,7 +328,11 @@ Actions can opt into runtime-managed input content:
 const consume = defineAction({
   id: "example.consume",
   content: {
-    input: ["request.messages[].content", "request.messages[].reasoning"],
+    input: [
+      "request.messages[].content",
+      "request.messages[].reasoning",
+      "request.messages[].nativeReasoning.blocks",
+    ],
     byteLimit: 32 * 1024 * 1024,
   },
   async execute(input, context) {
@@ -380,7 +384,11 @@ Content resolution can leave selected entries as unloaded descriptors:
 ```ts
 await messages.list(query, {
   content: {
-    fields: ["content", "metadata.llmReasoning"],
+    fields: [
+      "content",
+      "metadata.llmReasoning",
+      "metadata.llmNativeReasoning.blocks",
+    ],
     exclude: [
       { disposition: "attachment" },
       { kind: "file", disposition: null },

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.72.0 — 2026-09-13
+
+- Capture provider-native reasoning as Assets in Agent history and replay it on
+  compatible later turns across the OpenAI, Anthropic, Gemini, Groq, DeepSeek,
+  MiniMax, and Ollama adapters.
+- Replay native reasoning only for the same Agent when its adapter, API, and
+  model remain compatible. The tool protocol is unchanged.
+- Keep Groq reasoning output-only. DeepSeek ignores native reasoning input when
+  native tools are unavailable.
+
 ## 0.71.2 — 2026-09-13
 
 - Recover terminal tool status in thread history when the invocation is visible,

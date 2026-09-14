@@ -2,6 +2,7 @@ import type { ConversationMessage } from "../../../core-collections/internal/con
 import type {
   LlmJsonObject,
   LlmMessage,
+  LlmNativeReasoning,
   LlmToolCall,
 } from "@copilotz/copilotz/llm";
 import {
@@ -168,13 +169,29 @@ function toLlmMessage(
   const projected = projectMessage(message, targetParticipantId);
   if (
     projected?.role !== "assistant" ||
-    message.sender.id !== targetParticipantId ||
-    !Array.isArray(message.metadata.llmReasoning)
+    message.sender.id !== targetParticipantId
   ) return projected;
+  const metadata = record(message.metadata);
+  const native = metadata.llmNativeReasoning;
+  const nativeReasoning = native && typeof native === "object" &&
+      !Array.isArray(native) &&
+      (native as Record<string, unknown>).schema ===
+        "copilotz.llm-native-reasoning.v1" &&
+      typeof (native as Record<string, unknown>).adapter === "string" &&
+      typeof (native as Record<string, unknown>).api === "string" &&
+      typeof (native as Record<string, unknown>).model === "string" &&
+      Array.isArray((native as Record<string, unknown>).blocks)
+    ? structuredClone(native) as LlmNativeReasoning
+    : undefined;
   return {
     ...projected,
-    reasoning: message.metadata
-      .llmReasoning as import("@copilotz/copilotz/content").ContentSequence,
+    ...(Array.isArray(metadata.llmReasoning)
+      ? {
+        reasoning: metadata
+          .llmReasoning as import("@copilotz/copilotz/content").ContentSequence,
+      }
+      : {}),
+    ...(nativeReasoning ? { nativeReasoning } : {}),
   };
 }
 

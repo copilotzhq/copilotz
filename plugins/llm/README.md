@@ -21,3 +21,14 @@ The plugin contributes `llm.call`; the Action resolves a model, materializes a
 built-in or custom Adapter, streams normalized output, and records provider
 attempts. Provider-aware estimation is public and side-effect free; learned
 calibration remains private process-local execution state.
+
+When an Adapter returns provider-native reasoning state, `llm.call` stores its
+opaque JSON blocks as content Assets and stamps the producing adapter, API, and
+model. Readable `reasoning` remains ordinary Copilotz transcript content; the
+opaque blocks never enter the text protocol. Core replays opaque state only to
+the same Agent and only for that exact adapter, API format, and model. The v1
+envelope does not encode a connection ID or base URL, so a changed provider
+connection must support that same native state. The normal Copilotz text
+tool-call protocol is unchanged. Providers without compatible input replay keep
+the state out of the next request; DeepSeek ignores native state without native
+tools and Groq is output-only.

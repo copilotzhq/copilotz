@@ -1,6 +1,11 @@
 import { assert, assertEquals, assertThrows } from "@std/assert";
 import { ContextInputLimitError } from "../../internal/errors.ts";
-import { preflightLlmRequest, validateBuiltinProviderCall } from "./index.ts";
+import {
+  createProviderAdapter,
+  preflightLlmRequest,
+  validateBuiltinProviderCall,
+} from "./index.ts";
+import type { ChatMessage, ProviderFactory } from "../../internal/types.ts";
 
 Deno.test("provider bridge rejects unsupported built-in session mode", () => {
   assertThrows(() => validateBuiltinProviderCall("openai", "session", {}));
@@ -54,4 +59,101 @@ Deno.test("preflight measures prepared message bodies through the execution proj
     ContextInputLimitError,
   );
   assertEquals(failure.estimatedInputTokens, measured.estimatedInputTokens);
+});
+
+Deno.test("bridge strips native state unless adapter, API, and model all match before formatting", async () => {
+  const originalFetch = globalThis.fetch;
+  const bodies: ChatMessage[][] = [];
+  const protocol: ProviderFactory = () => ({
+    endpoint: "https://provider.example/stream",
+    headers: () => ({ "content-type": "application/json" }),
+    body(messages) {
+      bodies.push(structuredClone(messages));
+      return { stream: true };
+    },
+    extractContent(data) {
+      return typeof data.text === "string" ? [{ text: data.text }] : null;
+    },
+    nativeReasoningApi: "provider.native",
+  });
+  globalThis.fetch = () =>
+    Promise.resolve(
+      new Response(
+        [
+          'data: {"text":"answer"}',
+          "",
+          'data: {"done":true}',
+          "",
+        ].join("\n"),
+        {
+          headers: { "content-type": "text/event-stream" },
+        },
+      ),
+    );
+  const adapter = createProviderAdapter("openai", {}, protocol);
+  const state = {
+    schema: "copilotz.llm-native-reasoning.v1" as const,
+    adapter: "openai",
+    api: "provider.native",
+    model: "model",
+    blocks: [{ opaque: "state" }],
+  };
+  const invoke = async (nativeReasoning = state) => {
+    const invocation = adapter.call({
+      model: "model",
+      adapter: "openai",
+      providerModel: "model",
+      mode: "generate",
+      fallbackAvailable: false,
+      options: {},
+      request: {
+        messages: [{
+          role: "assistant",
+          content: [],
+          nativeReasoning,
+        }],
+      },
+      signal: new AbortController().signal,
+    });
+    await invocation.result;
+  };
+  try {
+    await invoke({ ...state, api: "other.api" });
+    assertEquals(bodies[0]?.[0]?.nativeReasoning, undefined);
+
+    await invoke({ ...state, adapter: "other-adapter" });
+    assertEquals(bodies[1]?.[0]?.nativeReasoning, undefined);
+
+    await invoke({ ...state, model: "other-model" });
+    assertEquals(bodies[2]?.[0]?.nativeReasoning, undefined);
+
+    await invoke();
+    assertEquals(bodies[3]?.[0]?.nativeReasoning, state);
+
+    const chatCompletionsOnly: ProviderFactory = () => ({
+      ...protocol({}),
+      replaysNativeReasoning: false,
+    });
+    const unsupported = createProviderAdapter(
+      "openai",
+      {},
+      chatCompletionsOnly,
+    );
+    const invocation = unsupported.call({
+      model: "model",
+      adapter: "openai",
+      providerModel: "model",
+      mode: "generate",
+      fallbackAvailable: false,
+      options: {},
+      request: {
+        messages: [{ role: "assistant", content: [], nativeReasoning: state }],
+      },
+      signal: new AbortController().signal,
+    });
+    await invocation.result;
+    assertEquals(bodies[4]?.[0]?.nativeReasoning, undefined);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });

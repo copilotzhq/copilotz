@@ -53,6 +53,26 @@ export function contentToTokenEstimateParts(
   });
 }
 
+/**
+ * Native provider state remains opaque to the text protocol, but it still
+ * occupies provider input context. Account for its canonical JSON at a
+ * deliberately conservative two bytes per token, plus one protocol unit per
+ * block. The estimate never edits a signed block or splits its enclosing
+ * assistant turn.
+ */
+function nativeReasoningTokenEstimateParts(
+  message: ChatMessage,
+): TokenEstimatePart[] {
+  const native = message.nativeReasoning;
+  if (!native?.blocks.length) return [];
+  const serialized = JSON.stringify(native.blocks);
+  const bytes = new TextEncoder().encode(serialized).byteLength;
+  return [
+    { type: "protocol", tokens: 4 + native.blocks.length },
+    { type: "unknown", tokens: Math.ceil(bytes / 2) },
+  ];
+}
+
 export interface ChatTokenEstimate extends TokenEstimate {
   byMessage: number[];
   modalityMask: string;
@@ -66,6 +86,7 @@ export function estimateChatMessages(
   const messageParts = messages.map((message) => [
     { type: "protocol" as const, tokens: 4 },
     ...contentToTokenEstimateParts(message.content),
+    ...nativeReasoningTokenEstimateParts(message),
   ]);
   const rawEstimates = messageParts.map((parts) =>
     estimateTokens(parts, {

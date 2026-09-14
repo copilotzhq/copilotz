@@ -36,13 +36,38 @@ function contentReferences(value: unknown): unknown {
   });
 }
 
+function nativeReasoningBlocks(value: unknown): unknown[] | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const blocks = (value as Record<string, unknown>).blocks;
+  return Array.isArray(blocks) ? blocks : undefined;
+}
+
 /** Resolved reasoning bodies are not part of the persisted message snapshot. */
 function snapshotMetadata(value: unknown): unknown {
   if (!value || typeof value !== "object" || Array.isArray(value)) return value;
-  const { llmReasoning, ...metadata } = value as Record<string, unknown>;
-  return llmReasoning === undefined
+  const { llmReasoning, llmNativeReasoning, ...metadata } = value as Record<
+    string,
+    unknown
+  >;
+  const nativeBlocks = nativeReasoningBlocks(llmNativeReasoning);
+  return llmReasoning === undefined && llmNativeReasoning === undefined
     ? metadata
-    : { ...metadata, llmReasoning: contentReferences(llmReasoning) };
+    : {
+      ...metadata,
+      ...(llmReasoning === undefined
+        ? {}
+        : { llmReasoning: contentReferences(llmReasoning) }),
+      ...(llmNativeReasoning === undefined ? {} : {
+        llmNativeReasoning: nativeBlocks
+          ? {
+            ...(llmNativeReasoning as Record<string, unknown>),
+            blocks: contentReferences(nativeBlocks),
+          }
+          : llmNativeReasoning,
+      }),
+    };
 }
 
 function optionalSnapshotFilter(
@@ -65,7 +90,9 @@ export async function prepareLlmTranscript(
   const snapshots = new Map(
     input.history.map((message) => [message.id, message]),
   );
-  const withReasoning = new Set(
+  // Only the speaking Agent may receive its opaque provider state or readable
+  // reasoning. Peer assistant turns remain ordinary user-visible history.
+  const ownAssistantSources = new Set(
     sources.filter((id, index) =>
       transcript[index].role === "assistant" &&
       snapshots.get(id)?.sender.id === input.participantId
@@ -77,7 +104,7 @@ export async function prepareLlmTranscript(
   let usedBytes = 0;
   for (const reasoning of [false, true]) {
     const ids = [...new Set(sources)].filter((id) =>
-      withReasoning.has(id) === reasoning
+      ownAssistantSources.has(id) === reasoning
     );
     for (let offset = 0; offset < ids.length; offset += 20) {
       let records: readonly CollectionRecord[];
@@ -117,7 +144,11 @@ export async function prepareLlmTranscript(
               ? {}
               : { byteLimit: Math.max(0, options.byteLimit - usedBytes) }),
             fields: reasoning
-              ? ["content", "metadata.llmReasoning"]
+              ? [
+                "content",
+                "metadata.llmReasoning",
+                "metadata.llmNativeReasoning.blocks",
+              ]
               : ["content"],
             exclude: [{ disposition: "attachment" }, {
               kind: "file",
@@ -144,6 +175,11 @@ export async function prepareLlmTranscript(
             ? bodyBytes(
               (record.metadata as Record<string, unknown>)?.llmReasoning,
             )
+            : 0) +
+          (reasoning
+            ? bodyBytes(nativeReasoningBlocks(
+              (record.metadata as Record<string, unknown>)?.llmNativeReasoning,
+            ))
             : 0),
         0,
       );
@@ -164,9 +200,18 @@ export async function prepareLlmTranscript(
     const metadata = record.metadata as ConversationMessage["metadata"];
     return {
       ...common,
-      ...(withReasoning.has(sources[index]) &&
+      ...(ownAssistantSources.has(sources[index]) &&
           Array.isArray(metadata.llmReasoning)
         ? { reasoning: metadata.llmReasoning as LlmMessage["content"] }
+        : {}),
+      ...(ownAssistantSources.has(sources[index]) &&
+          nativeReasoningBlocks(metadata.llmNativeReasoning)
+        ? {
+          nativeReasoning: metadata.llmNativeReasoning as Extract<
+            LlmMessage,
+            { role: "assistant" }
+          >["nativeReasoning"],
+        }
         : {}),
     };
   }));

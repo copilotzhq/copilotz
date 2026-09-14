@@ -351,6 +351,28 @@ Deno.test("formatMessages safely encodes protocol-looking reasoning", () => {
   assertEquals(wire.endsWith("Cards are ready."), true);
 });
 
+Deno.test("formatMessages preserves a complete native-state assistant turn without merging it", () => {
+  const nativeReasoning = {
+    schema: "copilotz.llm-native-reasoning.v1" as const,
+    adapter: "custom",
+    api: "custom.api",
+    model: "model",
+    blocks: [{ opaque: "signed-state" }],
+  };
+  const formatted = formatMessages({
+    messages: [
+      { role: "assistant", content: "first", nativeReasoning },
+      { role: "assistant", content: "second" },
+    ],
+  });
+
+  assertEquals(formatted.map((message) => message.content), [
+    "first",
+    "second",
+  ]);
+  assertEquals(formatted[0]?.nativeReasoning, nativeReasoning);
+});
+
 Deno.test("formatMessages accepts the production-shaped tool cycle with quoted result reasoning", () => {
   const formatted = formatMessages({
     messages: [
@@ -1487,6 +1509,8 @@ Deno.test("processStream returns on local stop and drains final usage metadata",
           }
           : null;
       },
+      extractNativeReasoning: (data) =>
+        data.done === true ? [{ signature: "terminal" }] : null,
     },
   );
 
@@ -1500,4 +1524,8 @@ Deno.test("processStream returns on local stop and drains final usage metadata",
   assertEquals(finalized?.usage?.inputTokens, 10);
   assertEquals(finalized?.usage?.cacheReadInputTokens, 7);
   assertEquals(finalized?.usage?.totalTokens, 13);
+  assertEquals("nativeReasoning" in (finalized ?? {}), false);
+  assertEquals(await result.nativeReasoningFinalized, [{
+    signature: "terminal",
+  }]);
 });

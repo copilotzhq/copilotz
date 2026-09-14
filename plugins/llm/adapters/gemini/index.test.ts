@@ -312,3 +312,119 @@ Deno.test("chat preserves Gemini streaming cache usage through provider normaliz
     globalThis.fetch = originalFetch;
   }
 });
+
+Deno.test("geminiProvider preserves signed parts without duplicating canonical text", async () => {
+  const config: ProviderConfig = {
+    provider: "gemini",
+    model: "gemini-3-flash-preview",
+    apiKey: "test",
+  };
+  const provider = geminiProvider(config);
+
+  assertEquals(
+    provider.extractNativeReasoning?.({
+      candidates: [{
+        content: { parts: [{ text: "1591", thoughtSignature: "sig-text" }] },
+      }],
+    }),
+    null,
+  );
+  assertEquals(
+    provider.extractNativeReasoning?.({
+      candidates: [{
+        finishReason: "STOP",
+        content: { parts: [{ text: "", thoughtSignature: "sig-final" }] },
+      }],
+    }),
+    [
+      { text: "1591", thoughtSignature: "sig-text" },
+      { text: "", thoughtSignature: "sig-final" },
+    ],
+  );
+
+  const body = await provider.body([{
+    role: "assistant",
+    content: "1591",
+    nativeReasoning: {
+      schema: "copilotz.llm-native-reasoning.v1",
+      adapter: "gemini",
+      api: "gemini.generateContent",
+      model: "gemini-3-flash-preview",
+      blocks: [
+        { text: "1591", thoughtSignature: "sig-text" },
+        { text: "", thoughtSignature: "sig-final" },
+      ],
+    },
+  }], config);
+  assertEquals(body.contents, [{
+    role: "model",
+    parts: [
+      { text: "1591", thoughtSignature: "sig-text" },
+      { text: "", thoughtSignature: "sig-final" },
+    ],
+  }]);
+});
+
+Deno.test("geminiProvider skips incompatible signed native tool parts", async () => {
+  const config: ProviderConfig = {
+    provider: "gemini",
+    model: "gemini-3-flash-preview",
+    apiKey: "test",
+  };
+  const body = await geminiProvider(config).body([{
+    role: "assistant",
+    content: "<tool_calls>unchanged</tool_calls>",
+    nativeReasoning: {
+      schema: "copilotz.llm-native-reasoning.v1",
+      adapter: "gemini",
+      api: "gemini.generateContent",
+      model: "gemini-3-flash-preview",
+      blocks: [{
+        functionCall: { name: "do_not_send", args: {} },
+        thoughtSignature: "sig-tool",
+      }],
+    },
+  }], config);
+
+  assertEquals(body.contents[0].parts, [
+    { text: "<tool_calls>unchanged</tool_calls>" },
+  ]);
+});
+
+Deno.test("geminiProvider preserves signed hidden thoughts, snake-case signatures, and repeats", async () => {
+  const config: ProviderConfig = {
+    provider: "gemini",
+    model: "gemini-3-flash-preview",
+    apiKey: "test",
+  };
+  const provider = geminiProvider(config);
+  const signedParts: Array<Record<string, string | boolean>> = [
+    { text: "hidden", thought: true, thought_signature: "snake" },
+    { text: "visible", thoughtSignature: "repeat" },
+    { text: "", thoughtSignature: "repeat" },
+    { text: "", thoughtSignature: "repeat" },
+  ];
+
+  assertEquals(
+    provider.extractNativeReasoning?.({
+      candidates: [{
+        finishReason: "STOP",
+        content: { parts: signedParts },
+      }],
+    }),
+    signedParts,
+  );
+
+  const body = await provider.body([{
+    role: "assistant",
+    content: "visible",
+    nativeReasoning: {
+      schema: "copilotz.llm-native-reasoning.v1",
+      adapter: "gemini",
+      api: "gemini.generateContent",
+      model: "gemini-3-flash-preview",
+      blocks: signedParts,
+    },
+  }], config);
+  assertEquals(body.contents[0].parts, signedParts);
+});

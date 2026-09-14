@@ -648,6 +648,12 @@ function shouldMaterializeWireContent(message: ChatMessage): boolean {
   return false;
 }
 
+function hasNativeReasoning(message: ChatMessage): boolean {
+  return Boolean(
+    message.nativeReasoning && message.nativeReasoning.blocks.length > 0,
+  );
+}
+
 function applyComposedWireContent(
   original: ChatMessage["content"],
   composed: string,
@@ -769,7 +775,9 @@ function mergeConsecutiveMessages(
       message.role !== "system" &&
       previous.role === message.role &&
       (!Array.isArray(previous.toolCalls) || previous.toolCalls.length === 0) &&
-      (!Array.isArray(message.toolCalls) || message.toolCalls.length === 0);
+      (!Array.isArray(message.toolCalls) || message.toolCalls.length === 0) &&
+      !hasNativeReasoning(previous) &&
+      !hasNativeReasoning(message);
 
     if (canMerge) {
       const sameSender = typeof previous.senderId === "string" &&
@@ -805,7 +813,11 @@ function assertWireMessageInvariants(
     if (
       index > 0 &&
       message.role !== "system" &&
-      messages[index - 1]?.role === message.role
+      messages[index - 1]?.role === message.role &&
+      // Opaque state is bound to one complete assistant turn. It cannot be
+      // merged into a neighbor merely to restore role alternation.
+      !hasNativeReasoning(messages[index - 1]!) &&
+      !hasNativeReasoning(message)
     ) {
       throw new LLMTranscriptError(
         `Invalid provider transcript: consecutive ${message.role} turns were not coalesced`,
@@ -1470,6 +1482,8 @@ export async function processStream(
     usage?: ProviderUsageUpdate;
     finishReason: ProviderFinishReason | null;
   }>;
+  nativeReasoning?: Record<string, unknown>[];
+  nativeReasoningFinalized?: Promise<Record<string, unknown>[] | undefined>;
   finishReason: ProviderFinishReason | null;
   stoppedByLocalStop: boolean;
   localStopReason?: "local_stop_sequence";
@@ -1513,6 +1527,7 @@ export async function processStream(
   };
   let usage: ProviderUsageUpdate | undefined;
   let finishReason: ProviderFinishReason | null = null;
+  let nativeReasoning: Record<string, unknown>[] | undefined;
   let releaseInBackground = false;
 
   const mergeUsage = (update: ProviderUsageUpdate | null | undefined) => {
@@ -1534,6 +1549,12 @@ export async function processStream(
     update: ProviderFinishReason | null | undefined,
   ) => {
     if (update) finishReason = update;
+  };
+
+  const observeNativeReasoning = (data: any) => {
+    const blocks = options?.extractNativeReasoning?.(data);
+    if (!blocks || blocks.length === 0) return;
+    nativeReasoning = blocks.map((block) => structuredClone(block));
   };
 
   const appendVisibleContent = (text: string) => {
@@ -1589,6 +1610,7 @@ export async function processStream(
   const parseUsageOnlyLine = (line: string) => {
     const data = parseLine(line, format);
     if (!data) return;
+    observeNativeReasoning(data);
     mergeUsage(options?.extractUsage?.(data));
     mergeFinishReason(options?.extractFinishReason?.(data));
     if (stopDebug) {
@@ -1613,6 +1635,7 @@ export async function processStream(
   ): Promise<{
     usage?: ProviderUsageUpdate;
     finishReason: ProviderFinishReason | null;
+    nativeReasoning?: Record<string, unknown>[];
   }> => {
     try {
       for (const line of pendingLines) parseUsageOnlyLine(line);
@@ -1663,13 +1686,21 @@ export async function processStream(
     return {
       ...(usage ? { usage } : {}),
       finishReason,
+      ...(nativeReasoning ? { nativeReasoning } : {}),
     };
   };
 
   const buildLocalStopResult = (pendingLines: string[] = []) => {
-    const usageFinalized = options?.continueAfterLocalStop === true
+    const finalized = options?.continueAfterLocalStop === true
       ? drainForFinalUsage(pendingLines)
       : undefined;
+    const usageFinalized = finalized?.then(({ usage, finishReason }) => ({
+      ...(usage ? { usage } : {}),
+      finishReason,
+    }));
+    const nativeReasoningFinalized = finalized?.then((result) =>
+      result.nativeReasoning
+    );
     if (usageFinalized) releaseInBackground = true;
     const content = options?.postProcess
       ? options.postProcess(fullResponse)
@@ -1680,6 +1711,12 @@ export async function processStream(
       reasoning: reasoningResponse,
       ...(usage ? { usage } : {}),
       ...(usageFinalized ? { usageFinalized } : {}),
+      ...(nativeReasoning ? { nativeReasoning } : {}),
+      ...(nativeReasoningFinalized
+        ? {
+          nativeReasoningFinalized,
+        }
+        : {}),
       finishReason,
       stoppedByLocalStop,
       localStopReason: "local_stop_sequence" as const,
@@ -1700,6 +1737,7 @@ export async function processStream(
             const line = bufferedLines[i];
             const data = parseLine(line, format);
             if (data) {
+              observeNativeReasoning(data);
               mergeUsage(options?.extractUsage?.(data));
               mergeFinishReason(options?.extractFinishReason?.(data));
               const parts = extractContent(data);
@@ -1726,6 +1764,7 @@ export async function processStream(
         const line = lines[i];
         const data = parseLine(line, format);
         if (data) {
+          observeNativeReasoning(data);
           mergeUsage(options?.extractUsage?.(data));
           mergeFinishReason(options?.extractFinishReason?.(data));
           const parts = extractContent(data);
@@ -1763,6 +1802,7 @@ export async function processStream(
     content: fullResponse,
     reasoning: reasoningResponse,
     ...(usage ? { usage } : {}),
+    ...(nativeReasoning ? { nativeReasoning } : {}),
     finishReason,
     stoppedByLocalStop,
     ...(stoppedByLocalStop

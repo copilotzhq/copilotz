@@ -93,6 +93,9 @@ export const projectTextResultProcessor: Processor<
       ...(output.reasoning
         ? { llmReasoning: structuredClone(output.reasoning) }
         : {}),
+      ...(output.nativeReasoning
+        ? { llmNativeReasoning: structuredClone(output.nativeReasoning) }
+        : {}),
     };
     const outputMetadata = planId
       ? withCoreToolPlanMetadata(semanticOutputMetadata, {

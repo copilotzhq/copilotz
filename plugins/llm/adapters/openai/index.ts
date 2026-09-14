@@ -16,6 +16,7 @@ import {
   resolveOpenAIApiMode,
 } from "../../internal/openai-api-mode.ts";
 import { readInternalPromptCacheKey } from "../../internal/internal-cache-key.ts";
+import { matchingNativeBlocks } from "../native-reasoning/index.ts";
 
 interface OpenAIResponsesExtractionState {
   reasoningDeltaReceived: boolean;
@@ -419,13 +420,33 @@ function toResponsesContent(
 
 function toResponsesInput(
   messages: ChatMessage[],
+  config: ProviderConfig,
 ): any[] {
-  return messages.map((message) => {
+  return messages.flatMap((message) => {
     const role = toResponsesRole(message.role);
-    return {
+    const responseMessage: Record<string, unknown> = {
       role,
       content: toResponsesContent(message.content, role),
     };
+    const nativeBlocks = matchingNativeBlocks(
+      message,
+      config,
+      "openai",
+      "openai.responses",
+      config.model || "gpt-4o-mini",
+    );
+    if (!nativeBlocks) return [responseMessage];
+
+    // Stateless Responses continuation expects the reasoning item verbatim.
+    // The accompanying assistant message is rebuilt from Copilotz's canonical
+    // text so the original response message content is never duplicated.
+    const reasoningItems = nativeBlocks.filter((block) =>
+      block.type === "reasoning"
+    );
+    const phase = nativeBlocks.find((block) => block.type === "message")
+      ?.phase;
+    if (typeof phase === "string") responseMessage.phase = phase;
+    return [...reasoningItems, responseMessage];
   });
 }
 
@@ -476,7 +497,7 @@ function buildResponsesBody(
   const chatGPTCodex = isChatGPTCodexTransport(config);
   const bodyConfig: Record<string, unknown> = {
     model: modelName,
-    input: toResponsesInput(messages),
+    input: toResponsesInput(messages, config),
     stream: true,
     store: false,
     top_p: config.topP,
@@ -605,6 +626,27 @@ function extractOpenAIResponsesContent(
   return parts.length > 0 ? parts : null;
 }
 
+function extractOpenAIResponsesNativeReasoning(
+  data: any,
+): Record<string, unknown>[] | null {
+  if (data?.type !== "response.completed") return null;
+  const status = data?.response?.status ?? data?.status;
+  if (status !== undefined && status !== "completed") return null;
+  const output = data?.response?.output;
+  if (!Array.isArray(output)) return null;
+
+  const reasoning = output.filter((item: any) =>
+    item && typeof item === "object" && !Array.isArray(item) &&
+    item.type === "reasoning"
+  ).map((item: Record<string, unknown>) => structuredClone(item));
+  const phase = output.find((item: any) =>
+    item && typeof item === "object" && !Array.isArray(item) &&
+    item.type === "message" && typeof item.phase === "string"
+  )?.phase;
+  if (typeof phase === "string") reasoning.push({ type: "message", phase });
+  return reasoning.length > 0 ? reasoning : null;
+}
+
 export const openaiProvider: ProviderFactory = (config: ProviderConfig) => {
   const apiMode = resolveOpenAIApiMode(config);
   const diagnosticsEnabled = isOpenAIDebugEnabled(config);
@@ -644,6 +686,12 @@ export const openaiProvider: ProviderFactory = (config: ProviderConfig) => {
         : extractOpenAIChatContent(data);
     },
 
+    ...(apiMode === "responses"
+      ? {
+        nativeReasoningApi: "openai.responses",
+        extractNativeReasoning: extractOpenAIResponsesNativeReasoning,
+      }
+      : {}),
     isStreamActivity: apiMode === "responses"
       ? isOpenAIResponsesStreamActivity
       : undefined,

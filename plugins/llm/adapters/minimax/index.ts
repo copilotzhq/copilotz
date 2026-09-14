@@ -12,6 +12,10 @@ import type {
 } from "../../internal/types.ts";
 import { withInclusiveInputTokens } from "../../internal/usage.ts";
 import { resolveProviderStopSequences } from "../../internal/utils.ts";
+import {
+  createAnthropicNativeReasoningExtractor,
+  matchingNativeBlocks,
+} from "../native-reasoning/index.ts";
 
 /**
  * MiniMax adapter targeting the Anthropic-compatible Messages API
@@ -72,6 +76,7 @@ function textOf(parts: ChatContentPart[]): string {
 
 function transformMessages(
   messages: ChatMessage[],
+  config: ProviderConfig,
 ): { messages: Record<string, unknown>[]; system?: string } {
   const systemPrompts: string[] = [];
   const out: Record<string, unknown>[] = [];
@@ -108,7 +113,19 @@ function transformMessages(
       contentBlocks = [];
     }
 
-    out.push({ role, content: contentBlocks });
+    const nativeBlocks = matchingNativeBlocks(
+      msg,
+      config,
+      "minimax",
+      "minimax.anthropic.messages",
+      config.model || DEFAULT_MODEL,
+    );
+    out.push({
+      role,
+      content: nativeBlocks
+        ? [...nativeBlocks, ...contentBlocks]
+        : contentBlocks,
+    });
   }
 
   return {
@@ -178,10 +195,10 @@ export const minimaxProvider: ProviderFactory = (config: ProviderConfig) => {
       "Authorization": `Bearer ${config.apiKey || ""}`,
     }),
 
-    transformMessages,
+    transformMessages: (messages) => transformMessages(messages, config),
 
     body: (messages: ChatMessage[], config: ProviderConfig) => {
-      const transformed = transformMessages(messages);
+      const transformed = transformMessages(messages, config);
 
       const maxCompletionTokens = config.maxCompletionTokens ??
         config.maxTokens;
@@ -241,6 +258,11 @@ export const minimaxProvider: ProviderFactory = (config: ProviderConfig) => {
 
       return parts.length > 0 ? parts : null;
     },
+
+    nativeReasoningApi: "minimax.anthropic.messages",
+    extractNativeReasoning: createAnthropicNativeReasoningExtractor(),
+    isStreamActivity: (data: any) =>
+      typeof data?.type === "string" && data.type !== "error",
 
     extractUsage: extractMiniMaxUsage,
     extractFinishReason: extractMiniMaxFinishReason,

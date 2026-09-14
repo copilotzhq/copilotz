@@ -1,6 +1,6 @@
 # Copilotz
 
-Copilotz 0.71 is a plugin-first, event-sourced runtime for durable AI
+Copilotz 0.72 is a plugin-first, event-sourced runtime for durable AI
 applications. The runtime owns generic mechanics; plugins own business meaning.
 
 ```mermaid
@@ -31,7 +31,7 @@ or hidden workflow controller.
 ## Install
 
 ```ts
-import { createCopilotz } from "jsr:@copilotz/copilotz@^0.71.2";
+import { createCopilotz } from "jsr:@copilotz/copilotz@^0.72.0";
 ```
 
 Host-only capabilities live on explicit subpaths. Importing the root does not
@@ -40,8 +40,8 @@ pull in filesystem, subprocess, terminal, MCP stdio, or provider credentials.
 ## Compose an AI application
 
 ```ts
-import { createCopilotz } from "jsr:@copilotz/copilotz@^0.71.2";
-import { corePlugin, message } from "jsr:@copilotz/copilotz@^0.71.2/core";
+import { createCopilotz } from "jsr:@copilotz/copilotz@^0.72.0";
+import { corePlugin, message } from "jsr:@copilotz/copilotz@^0.72.0/core";
 
 const openAiKey = Deno.env.get("OPENAI_API_KEY");
 if (!openAiKey) throw new Error("OPENAI_API_KEY is required");

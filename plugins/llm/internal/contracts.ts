@@ -199,6 +199,36 @@ export type LlmToolCall = Readonly<{
   pipeline?: LlmToolPipeline;
 }>;
 
+/**
+ * Provider-native reasoning state returned by an Adapter.  The block bodies
+ * are deliberately opaque to Copilotz; only the producing transport identity
+ * is interpreted when the state is replayed.
+ */
+export type LlmNativeReasoningInput = Readonly<{
+  /** Provider wire format, for example `openai.responses` or `gemini.generateContent`. */
+  api: string;
+  /** Opaque provider blocks, represented as JSON content for durable storage. */
+  blocks: ContentInput | readonly ContentInput[];
+}>;
+
+/** Durable native reasoning state after JSON content has been assetized. */
+export type LlmNativeReasoning = Readonly<{
+  schema: "copilotz.llm-native-reasoning.v1";
+  adapter: string;
+  api: string;
+  model: string;
+  blocks: ContentSequence;
+}>;
+
+/** Resolved native state passed to an LLM Adapter. */
+export type LlmAdapterNativeReasoning = Readonly<{
+  schema: "copilotz.llm-native-reasoning.v1";
+  adapter: string;
+  api: string;
+  model: string;
+  blocks: readonly LlmJsonObject[];
+}>;
+
 type LlmMessageBase = Readonly<{
   content: readonly (ContentSequence[number] | ActionContentEntry)[];
   name?: string;
@@ -213,6 +243,7 @@ export type LlmMessage =
     & Readonly<{
       role: "assistant";
       reasoning?: readonly (ContentSequence[number] | ActionContentEntry)[];
+      nativeReasoning?: LlmNativeReasoning;
       toolCalls?: readonly LlmToolCall[];
       /** Server-derived identity of the durable Tool plan that owns these calls. */
       toolPlanId?: string;
@@ -300,6 +331,7 @@ export type LlmCallOutput = Readonly<{
   providerModel: string;
   content: ContentSequence;
   reasoning?: ContentSequence;
+  nativeReasoning?: LlmNativeReasoning;
   toolCalls?: readonly LlmToolCall[];
   usage?: LlmUsage;
   attempts?: readonly LlmAttemptUsage[];
@@ -327,6 +359,7 @@ export type LlmAdapterMessage =
     & Readonly<{
       role: "assistant";
       reasoning?: string;
+      nativeReasoning?: LlmAdapterNativeReasoning;
       toolCalls?: readonly LlmToolCall[];
       toolPlanId?: string;
     }>
@@ -431,6 +464,8 @@ export class LlmAdapterCallError extends Error {
 export type LlmAdapterResult = Readonly<{
   content: ContentInput | readonly ContentInput[];
   reasoning?: ContentInput | readonly ContentInput[];
+  /** Provider-native opaque blocks; the Action stamps adapter/model provenance. */
+  nativeReasoning?: LlmNativeReasoningInput;
   toolCalls?: readonly LlmToolCall[];
   /**
    * Non-empty provider-attempt history. An accepted partial result may contain

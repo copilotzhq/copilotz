@@ -181,3 +181,38 @@ Deno.test("anthropicProvider maps PDF file data URLs to document blocks", () => 
     ],
   }]);
 });
+
+Deno.test("anthropicProvider replays only matching finalized thinking blocks", () => {
+  const config: ProviderConfig = {
+    provider: "anthropic",
+    model: "claude-sonnet-4-5",
+    apiKey: "test",
+  };
+  const body = anthropicProvider(config).body([{
+    role: "assistant",
+    content: "Answer",
+    nativeReasoning: {
+      schema: "copilotz.llm-native-reasoning.v1",
+      adapter: "anthropic",
+      api: "anthropic.messages",
+      model: "claude-sonnet-4-5",
+      blocks: [
+        { type: "thinking", thinking: "private", signature: "sig" },
+        { type: "redacted_thinking", data: "cipher" },
+      ],
+    },
+  }], config);
+
+  assertEquals(body.messages, [{
+    role: "assistant",
+    content: [
+      { type: "thinking", thinking: "private", signature: "sig" },
+      { type: "redacted_thinking", data: "cipher" },
+      { type: "text", text: "Answer" },
+    ],
+  }]);
+  assertEquals(
+    anthropicProvider(config).nativeReasoningApi,
+    "anthropic.messages",
+  );
+});

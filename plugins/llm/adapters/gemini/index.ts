@@ -10,6 +10,11 @@ import type {
   ProviderUsageUpdate,
 } from "../../internal/types.ts";
 import { resolveProviderStopSequences } from "../../internal/utils.ts";
+import {
+  cloneBlock,
+  isRecord,
+  matchingNativeBlocks,
+} from "../native-reasoning/index.ts";
 import { providerEndpoint } from "../transport/index.ts";
 
 // Gemini rejects requests with more than 5 stop sequences.
@@ -17,10 +22,84 @@ const GEMINI_MAX_STOP_SEQUENCES = 5;
 
 interface GeminiPart {
   text?: string;
+  thought?: boolean;
+  thoughtSignature?: string;
+  thought_signature?: string;
   inline_data?: {
     mime_type: string;
     data: string;
   };
+}
+
+function isSafeSignedGeminiPart(
+  block: Record<string, unknown>,
+): block is GeminiPart & Record<string, unknown> {
+  if (
+    typeof block.thoughtSignature !== "string" &&
+    typeof block.thought_signature !== "string"
+  ) return false;
+  if (block.text !== undefined && typeof block.text !== "string") return false;
+  if (block.thought !== undefined && typeof block.thought !== "boolean") {
+    return false;
+  }
+  return Object.keys(block).every((key) =>
+    key === "text" || key === "thought" || key === "thoughtSignature" ||
+    key === "thought_signature"
+  );
+}
+
+/**
+ * Reinsert signed Gemini response parts without duplicating their text in the
+ * canonical assistant wire message. Function-call and other native tool parts
+ * are intentionally rejected: Copilotz's text-tool protocol owns those.
+ */
+function mergeSignedGeminiParts(
+  canonical: GeminiPart[],
+  nativeBlocks: Record<string, unknown>[] | null,
+): GeminiPart[] {
+  if (!nativeBlocks || nativeBlocks.length === 0) return canonical;
+  const signed = nativeBlocks.filter(isSafeSignedGeminiPart);
+  if (signed.length !== nativeBlocks.length) return canonical;
+  if (
+    !canonical.every((part) => Object.keys(part).every((key) => key === "text"))
+  ) {
+    return canonical;
+  }
+
+  const canonicalText = canonical.map((part) => part.text ?? "").join("");
+  const merged: GeminiPart[] = [];
+  const pendingEmpty: GeminiPart[] = [];
+  let cursor = 0;
+
+  for (const native of signed) {
+    const text = native.text ?? "";
+    // A signed thought carries hidden provider state, not canonical visible
+    // assistant text. Keep it in stream order without trying to find it in the
+    // visible text sequence.
+    if (native.thought === true) {
+      merged.push(...pendingEmpty.splice(0));
+      merged.push(structuredClone(native));
+      continue;
+    }
+    if (!text) {
+      pendingEmpty.push(structuredClone(native));
+      continue;
+    }
+    const position = canonicalText.indexOf(text, cursor);
+    if (position === -1) return canonical;
+    if (position > cursor) {
+      merged.push({ text: canonicalText.slice(cursor, position) });
+    }
+    merged.push(...pendingEmpty.splice(0));
+    merged.push(structuredClone(native));
+    cursor = position + text.length;
+  }
+
+  if (cursor < canonicalText.length) {
+    merged.push({ text: canonicalText.slice(cursor) });
+  }
+  merged.push(...pendingEmpty);
+  return merged;
 }
 
 interface GeminiMessage {
@@ -89,8 +168,12 @@ export const geminiProvider: ProviderFactory = (config: ProviderConfig) => {
   let usageEventIndex = 0;
   let lastVisibleSnapshot = "";
   let lastReasoningSnapshot = "";
+  const signedParts: Record<string, unknown>[] = [];
 
-  const transformMessages = (messages: ChatMessage[]) => {
+  const transformMessages = (
+    messages: ChatMessage[],
+    replayConfig: ProviderConfig = config,
+  ) => {
     const systemPrompts: string[] = [];
     const geminiMessages: GeminiMessage[] = [];
 
@@ -152,8 +235,17 @@ export const geminiProvider: ProviderFactory = (config: ProviderConfig) => {
           });
         }
 
+        const nativeBlocks = matchingNativeBlocks(
+          msg,
+          replayConfig,
+          "gemini",
+          "gemini.generateContent",
+          replayConfig.model || DEFAULT_GEMINI_MODEL,
+        );
         geminiMessages.push({
-          parts,
+          parts: msg.role === "assistant"
+            ? mergeSignedGeminiParts(parts, nativeBlocks)
+            : parts,
           role: msg.role === "user" ? "user" : "model",
         });
       }
@@ -194,7 +286,7 @@ export const geminiProvider: ProviderFactory = (config: ProviderConfig) => {
     transformMessages,
 
     body: (messages: ChatMessage[], config: ProviderConfig) => {
-      const transformed = transformMessages(messages);
+      const transformed = transformMessages(messages, config);
       const modelId = config.model || DEFAULT_GEMINI_MODEL;
 
       const safetySettings = [
@@ -303,6 +395,29 @@ export const geminiProvider: ProviderFactory = (config: ProviderConfig) => {
 
       return parts.length > 0 ? parts : null;
     },
+
+    nativeReasoningApi: "gemini.generateContent",
+    extractNativeReasoning: (data: any): Record<string, unknown>[] | null => {
+      const candidate = data?.candidates?.[0];
+      const rawParts = candidate?.content?.parts;
+      if (Array.isArray(rawParts)) {
+        for (const part of rawParts) {
+          if (
+            !isRecord(part) ||
+            (typeof part.thoughtSignature !== "string" &&
+              typeof part.thought_signature !== "string")
+          ) {
+            continue;
+          }
+          signedParts.push(cloneBlock(part));
+        }
+      }
+      return candidate?.finishReason === "STOP" && signedParts.length > 0
+        ? signedParts.map(cloneBlock)
+        : null;
+    },
+    isStreamActivity: (data: any) =>
+      Array.isArray(data?.candidates) || Boolean(data?.usageMetadata),
 
     extractUsage: (data: any): ProviderUsageUpdate | null => {
       const usage = data?.usageMetadata;

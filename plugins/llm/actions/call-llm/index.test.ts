@@ -3105,6 +3105,147 @@ Deno.test("llm.call settles every opened writer when stream retention fails", as
   }]);
 });
 
+Deno.test("llm.call replays matching custom native state and assetizes accepted native output", async () => {
+  let received: LlmAdapterCallInput | undefined;
+  const adapter: LlmAdapter = {
+    call(input) {
+      received = input;
+      return invocation({
+        content: "answer",
+        nativeReasoning: {
+          api: "custom.api",
+          blocks: [{
+            type: "json",
+            role: "reasoning",
+            mediaType: "application/json",
+            value: { opaque: "next" },
+          }],
+        },
+        attempts: [{ status: "completed" }],
+      });
+    },
+  };
+  const test = fixture({
+    llmConnections: { primary: { adapter: "custom" } },
+    adapters: { custom: adapter },
+  });
+  const block = {
+    assetId: "previous-native",
+    kind: "json" as const,
+    role: "reasoning",
+    mediaType: "application/json",
+    value: { opaque: "previous" },
+  };
+  const output = await callLlmAction.execute({
+    ...baseInput,
+    models: [{ connection: "primary", model: "custom-model" }] as const,
+    request: {
+      messages: [{
+        role: "assistant",
+        content: [],
+        nativeReasoning: {
+          schema: "copilotz.llm-native-reasoning.v1",
+          adapter: "custom",
+          api: "custom.api",
+          model: "custom-model",
+          blocks: [block],
+        },
+      }],
+    },
+  }, test.context);
+
+  assertEquals(received?.request.messages[0], {
+    role: "assistant",
+    content: [],
+    nativeReasoning: {
+      schema: "copilotz.llm-native-reasoning.v1",
+      adapter: "custom",
+      api: "custom.api",
+      model: "custom-model",
+      blocks: [{ opaque: "previous" }],
+    },
+  });
+  assertEquals(test.prepared.map((entry) => entry.operationKey), [
+    "attempt:0:content",
+    "attempt:0:native-reasoning",
+  ]);
+  assertEquals(output.nativeReasoning, {
+    schema: "copilotz.llm-native-reasoning.v1",
+    adapter: "custom",
+    api: "custom.api",
+    model: "custom-model",
+    blocks: [
+      ref("prepared:attempt:0:native-reasoning:0", "json", "application/json"),
+    ],
+  });
+});
+
+Deno.test("llm.call strips foreign native state before fallback and replays it only for the matching candidate", async () => {
+  let firstRequest: LlmAdapterCallInput | undefined;
+  let fallbackRequest: LlmAdapterCallInput | undefined;
+  const first: LlmAdapter = {
+    call(input) {
+      firstRequest = input;
+      return invocation(Promise.reject(new LlmAdapterCallError("retry")));
+    },
+  };
+  const fallback: LlmAdapter = {
+    call(input) {
+      fallbackRequest = input;
+      return invocation({
+        content: "recovered",
+        attempts: [{ status: "completed" }],
+      });
+    },
+  };
+  const test = fixture({
+    llmConnections: {
+      primary: { adapter: "first" },
+      fallback: { adapter: "custom" },
+    },
+    adapters: { first, custom: fallback },
+  });
+  const block = {
+    assetId: "previous-native",
+    kind: "json" as const,
+    role: "reasoning",
+    mediaType: "application/json",
+    value: { opaque: "previous" },
+  };
+  const output = await callLlmAction.execute({
+    ...baseInput,
+    models: [
+      { connection: "primary", model: "first-model" },
+      { connection: "fallback", model: "custom-model" },
+    ] as const,
+    request: {
+      messages: [{
+        role: "assistant",
+        content: [],
+        nativeReasoning: {
+          schema: "copilotz.llm-native-reasoning.v1",
+          adapter: "custom",
+          api: "custom.api",
+          model: "custom-model",
+          blocks: [block],
+        },
+      }],
+    },
+  }, test.context);
+
+  const firstAssistant = firstRequest?.request.messages.find((message) =>
+    message.role === "assistant"
+  );
+  const fallbackAssistant = fallbackRequest?.request.messages.find((message) =>
+    message.role === "assistant"
+  );
+  assertEquals(firstAssistant?.nativeReasoning, undefined);
+  assertEquals(fallbackAssistant?.nativeReasoning?.blocks, [
+    { opaque: "previous" },
+  ]);
+  assertEquals(output.content, [ref("prepared:attempt:1:content:0")]);
+});
+
 Deno.test("misplaced credentials are rejected before any durable Action input is emitted", async () => {
   const test = fixture({ llmConnections: { primary: { adapter: "unused" } } });
   const durable: ActionEventData[] = [];

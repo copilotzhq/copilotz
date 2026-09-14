@@ -12,6 +12,10 @@ import type {
 } from "../../internal/types.ts";
 import { withInclusiveInputTokens } from "../../internal/usage.ts";
 import { resolveProviderStopSequences } from "../../internal/utils.ts";
+import {
+  createAnthropicNativeReasoningExtractor,
+  matchingNativeBlocks,
+} from "../native-reasoning/index.ts";
 import { providerEndpoint } from "../transport/index.ts";
 
 const EFFORT_BUDGET_MAP: Record<string, number> = {
@@ -67,7 +71,10 @@ function dataUrlSource(dataUrl: string): {
 }
 
 export const anthropicProvider: ProviderFactory = (config: ProviderConfig) => {
-  const transformMessages = (messages: ChatMessage[]) => {
+  const transformMessages = (
+    messages: ChatMessage[],
+    replayConfig: ProviderConfig = config,
+  ) => {
     const systemPrompts: string[] = [];
     const userMessages: any[] = [];
 
@@ -139,7 +146,19 @@ export const anthropicProvider: ProviderFactory = (config: ProviderConfig) => {
             return [] as any[];
           });
         }
-        userMessages.push({ role: msg.role, content: contentBlocks });
+        const nativeBlocks = matchingNativeBlocks(
+          msg,
+          replayConfig,
+          "anthropic",
+          "anthropic.messages",
+          replayConfig.model || "claude-3-haiku-20240307",
+        );
+        userMessages.push({
+          role: msg.role,
+          content: nativeBlocks
+            ? [...nativeBlocks, ...contentBlocks]
+            : contentBlocks,
+        });
       }
     });
 
@@ -166,7 +185,7 @@ export const anthropicProvider: ProviderFactory = (config: ProviderConfig) => {
     transformMessages,
 
     body: (messages: ChatMessage[], config: ProviderConfig) => {
-      const transformed = transformMessages(messages);
+      const transformed = transformMessages(messages, config);
       const model = config.model || "claude-3-haiku-20240307";
       const adaptiveThinking = isAdaptiveThinkingModel(model);
       const alwaysOnAdaptiveThinking = isAlwaysOnAdaptiveThinkingModel(model);
@@ -227,6 +246,11 @@ export const anthropicProvider: ProviderFactory = (config: ProviderConfig) => {
 
       return parts.length > 0 ? parts : null;
     },
+
+    nativeReasoningApi: "anthropic.messages",
+    extractNativeReasoning: createAnthropicNativeReasoningExtractor(),
+    isStreamActivity: (data: any) =>
+      typeof data?.type === "string" && data.type !== "error",
 
     extractUsage: (data: any): ProviderUsageUpdate | null => {
       const usage = data?.type === "message_start"

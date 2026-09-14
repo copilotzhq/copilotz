@@ -438,3 +438,54 @@ Deno.test("OpenAI throws on Responses stream error events", () => {
   );
   assertEquals((error as { status?: number }).status, 429);
 });
+
+Deno.test("OpenAI Responses retains terminal encrypted reasoning and replays it once", () => {
+  const config = keyedConfig({ model: "gpt-5.6-luna", openaiApi: "responses" });
+  const provider = openaiProvider(config);
+  const reasoning = {
+    id: "rs_1",
+    type: "reasoning",
+    content: [],
+    encrypted_content: "ciphertext",
+    summary: [],
+  };
+
+  assertEquals(
+    provider.extractNativeReasoning?.({ type: "response.in_progress" }),
+    null,
+  );
+  assertEquals(
+    provider.extractNativeReasoning?.({
+      type: "response.completed",
+      response: {
+        status: "completed",
+        output: [reasoning, { type: "message", phase: "final", content: [] }],
+      },
+    }),
+    [reasoning, { type: "message", phase: "final" }],
+  );
+
+  const body = provider.body([{
+    role: "assistant",
+    content: "Visible answer",
+    nativeReasoning: {
+      schema: "copilotz.llm-native-reasoning.v1",
+      adapter: "openai",
+      api: "openai.responses",
+      model: "gpt-5.6-luna",
+      blocks: [reasoning, { type: "message", phase: "final" }],
+    },
+  }], config) as Record<string, unknown>;
+  assertEquals(body.input, [
+    reasoning,
+    {
+      role: "assistant",
+      phase: "final",
+      content: [{
+        type: "output_text",
+        text: "Visible answer",
+        annotations: [],
+      }],
+    },
+  ]);
+});

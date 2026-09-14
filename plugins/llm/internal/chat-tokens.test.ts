@@ -55,3 +55,27 @@ Deno.test("chat estimates use media metadata and learned calibration", () => {
   );
   resetTokenCalibration();
 });
+
+Deno.test("chat estimates conservatively account for opaque native reasoning state", () => {
+  const withoutState = estimateChatMessages([{
+    role: "assistant" as const,
+    content: "answer",
+  }], { provider: "openai", model: "gpt-test" });
+  const withState = estimateChatMessages([{
+    role: "assistant" as const,
+    content: "answer",
+    nativeReasoning: {
+      schema: "copilotz.llm-native-reasoning.v1",
+      adapter: "openai",
+      api: "openai.responses",
+      model: "gpt-test",
+      blocks: [{ encrypted: "x".repeat(128) }],
+    },
+  }], { provider: "openai", model: "gpt-test" });
+
+  assertEquals(withState.modalityMask.includes("unknown"), true);
+  assertEquals(
+    withState.rawEstimatedTokens > withoutState.rawEstimatedTokens,
+    true,
+  );
+});

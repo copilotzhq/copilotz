@@ -3,6 +3,7 @@ import { type ContentRef, formatAssetRef } from "@copilotz/copilotz/content";
 import type {
   LlmAdapterContentPart,
   LlmAdapterMessage,
+  LlmAdapterNativeReasoning,
   LlmAdapterRequest,
   LlmMessage,
   LlmRequest,
@@ -71,6 +72,7 @@ function attachmentPart(
 function projectPreparedMessage(
   message: LlmMessage,
   namespace: string,
+  replay?: Readonly<{ adapter: string; model: string; api?: string }>,
 ): LlmAdapterMessage {
   const content = Object.freeze(
     (message.content as readonly PreparedEntry[]).map((ref) =>
@@ -85,6 +87,34 @@ function projectPreparedMessage(
       : {}),
   };
   if (message.role === "assistant") {
+    const native = message.nativeReasoning;
+    const nativeReasoning = native && replay &&
+        native.adapter === replay.adapter && native.model === replay.model &&
+        (replay.api === undefined || native.api === replay.api)
+      ? (() => {
+        const blocks = native.blocks.map((entry, index) => {
+          const ref = entry as PreparedEntry;
+          if (
+            ref.kind !== "json" || ref.resolve === false ||
+            !Object.hasOwn(ref, "value") ||
+            !ref.value || typeof ref.value !== "object" ||
+            Array.isArray(ref.value)
+          ) {
+            throw new TypeError(
+              `LLM native reasoning block ${index} must be prepared JSON.`,
+            );
+          }
+          return structuredClone(ref.value) as Record<string, unknown>;
+        });
+        return Object.freeze({
+          schema: native.schema,
+          adapter: native.adapter,
+          api: native.api,
+          model: native.model,
+          blocks: Object.freeze(blocks),
+        }) as LlmAdapterNativeReasoning;
+      })()
+      : undefined;
     return Object.freeze({
       role: message.role,
       ...common,
@@ -105,6 +135,7 @@ function projectPreparedMessage(
         ? { toolCalls: structuredClone(message.toolCalls) }
         : {}),
       ...(message.toolPlanId ? { toolPlanId: message.toolPlanId } : {}),
+      ...(nativeReasoning ? { nativeReasoning } : {}),
     });
   }
   if (message.role === "tool") {
@@ -121,12 +152,13 @@ function projectPreparedMessage(
 export function projectPreparedRequest(
   request: LlmRequest,
   namespace: string,
+  replay?: Readonly<{ adapter: string; model: string; api?: string }>,
 ): LlmAdapterRequest {
   if (!request || !Array.isArray(request.messages)) {
     throw new TypeError("LLM request.messages must be an array.");
   }
   const messages = request.messages.map((message) =>
-    projectPreparedMessage(message, namespace)
+    projectPreparedMessage(message, namespace, replay)
   );
   return Object.freeze({
     messages: Object.freeze(messages),

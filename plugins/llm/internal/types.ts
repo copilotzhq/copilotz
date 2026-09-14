@@ -13,6 +13,7 @@
  */
 import type { TokenMediaMetadata } from "../authoring/token-estimation/index.ts";
 import type { ChatTokenEstimate } from "./chat-tokens.ts";
+import type { LlmAdapterNativeReasoning } from "./contracts.ts";
 
 export type ChatContentPart =
   | { type: "text"; text: string }
@@ -67,6 +68,8 @@ export interface ChatMessage {
   reasoning?: string;
   /** Character cap when materializing {@link reasoning}. */
   reasoningMaxEstimatedTokens?: number;
+  /** Provider-native reasoning state; never materialized into Copilotz text. */
+  nativeReasoning?: LlmAdapterNativeReasoning;
 }
 
 /**
@@ -397,6 +400,8 @@ export interface ChatResponse {
   prompt: ChatMessage[];
   answer: string;
   reasoning?: string;
+  nativeReasoning?: ProviderNativeReasoning;
+  nativeReasoningFinalized?: Promise<ProviderNativeReasoning | undefined>;
   tokens: number;
   finishReason?: ProviderFinishReason | null;
   usage?: TokenUsage;
@@ -467,6 +472,12 @@ export type StreamCallback = (
 export interface ExtractedPart {
   text: string;
   isReasoning?: boolean;
+}
+
+/** Opaque provider-native reasoning state captured from one accepted attempt. */
+export interface ProviderNativeReasoning {
+  api: string;
+  blocks: Record<string, unknown>[];
 }
 
 export interface ProviderUsageUpdate {
@@ -598,6 +609,8 @@ export interface ProcessStreamOptions {
   extractUsage?: (data: any) => ProviderUsageUpdate | null;
   /** Extract provider finish reason from a parsed SSE or JSONL event. */
   extractFinishReason?: (data: any) => ProviderFinishReason | null;
+  /** Capture the complete provider-native reasoning block state after each event. */
+  extractNativeReasoning?: (data: any) => Record<string, unknown>[] | null;
   /** Observe exact text hidden inside structured protocol blocks. */
   onHiddenBlockChunk?: (
     tagName: string,
@@ -613,6 +626,16 @@ export interface ProviderAPI {
   body: (messages: ChatMessage[], config: ProviderConfig) => any | Promise<any>;
   /** Extract content/reasoning parts from a single parsed SSE or JSONL event. */
   extractContent: (data: any) => ExtractedPart[] | null;
+  /** Stable provider/API identifier for native reasoning replay state. */
+  nativeReasoningApi?: string;
+  /**
+   * Whether this API accepts a prior native reasoning snapshot as input.
+   * Omit when capture and replay are both supported; output-only APIs set
+   * this to false so their captured state is never carried into a request.
+   */
+  replaysNativeReasoning?: boolean;
+  /** Observe provider-native reasoning blocks independently of readable text. */
+  extractNativeReasoning?: (data: any) => Record<string, unknown>[] | null;
   /** Report whether a parsed stream event represents provider/model progress even without text. */
   isStreamActivity?: (data: any) => boolean;
   /** Extract usage from a single parsed SSE or JSONL event when the provider exposes it. */

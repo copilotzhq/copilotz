@@ -68,6 +68,12 @@ export function mapHistoryContent(
     });
   };
   const metadata = message.metadata as Record<string, unknown>;
+  const nativeReasoning = metadata.llmNativeReasoning;
+  const nativeBlocks = nativeReasoning && typeof nativeReasoning === "object" &&
+      !Array.isArray(nativeReasoning) &&
+      Array.isArray((nativeReasoning as Record<string, unknown>).blocks)
+    ? nativeReasoning as Record<string, unknown>
+    : undefined;
   return {
     ...message,
     content: map(message.content),
@@ -76,6 +82,12 @@ export function mapHistoryContent(
       ...(metadata.llmReasoning === undefined
         ? {}
         : { llmReasoning: map(metadata.llmReasoning) }),
+      ...(nativeBlocks === undefined ? {} : {
+        llmNativeReasoning: {
+          ...nativeBlocks,
+          blocks: map(nativeBlocks.blocks),
+        },
+      }),
     },
   };
 }

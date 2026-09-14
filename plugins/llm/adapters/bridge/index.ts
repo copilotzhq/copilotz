@@ -291,6 +291,7 @@ function toolPipelineInvocation(
 function adapterMessageToChatMessage(
   message: LlmAdapterCallInput["request"]["messages"][number],
   toolName?: string,
+  nativeReplay?: Readonly<{ adapter: string; model: string; api: string }>,
 ): ChatMessage {
   const content = message.content.map(adapterPartToChatPart);
   const common = {
@@ -305,6 +306,14 @@ function adapterMessageToChatMessage(
       role: "assistant",
       ...common,
       ...(message.reasoning ? { reasoning: message.reasoning } : {}),
+      ...(message.nativeReasoning && nativeReplay &&
+          message.nativeReasoning.adapter === nativeReplay.adapter &&
+          message.nativeReasoning.model === nativeReplay.model &&
+          message.nativeReasoning.api === nativeReplay.api
+        ? {
+          nativeReasoning: structuredClone(message.nativeReasoning),
+        }
+        : {}),
       ...(message.toolCalls
         ? {
           toolCalls: message.toolCalls.map((call) =>
@@ -360,8 +369,14 @@ function toolDefinition(definition: LlmToolDefinition): ToolDefinition {
 function createChatRequest(
   input: LlmAdapterCallInput,
   signal: AbortSignal,
+  nativeReasoningApi?: string,
 ) {
   const planTools = new Map<string, string>();
+  const nativeReplay = nativeReasoningApi === undefined ? undefined : {
+    adapter: input.adapter,
+    model: input.providerModel,
+    api: nativeReasoningApi,
+  };
   for (const message of input.request.messages) {
     if (message.role !== "assistant" || !message.toolPlanId) continue;
     for (const call of message.toolCalls ?? []) {
@@ -374,6 +389,7 @@ function createChatRequest(
       message.role === "tool" && message.toolPlanId
         ? planTools.get(`${message.toolPlanId}\u0000${message.toolCallId}`)
         : undefined,
+      nativeReplay,
     )
   );
   return {
@@ -637,6 +653,23 @@ async function normalizeResult(
       ...(finalized?.finalizedAt ? { finishedAt: finalized.finalizedAt } : {}),
     })]);
   }
+  let nativeReasoning = response.nativeReasoning;
+  if (response.nativeReasoningFinalized) {
+    try {
+      nativeReasoning = await response.nativeReasoningFinalized;
+    } catch {
+      // A terminal provider metadata refinement must not invalidate an
+      // otherwise accepted response. Keep the last captured snapshot.
+    }
+  }
+  const nativeBlocks = nativeReasoning?.blocks.length
+    ? nativeReasoning.blocks.map((block) => ({
+      type: "json" as const,
+      value: structuredClone(block),
+      role: "reasoning" as const,
+      mediaType: "application/json",
+    }))
+    : undefined;
   return Object.freeze({
     content: { type: "text" as const, text: response.answer },
     ...(response.reasoning
@@ -649,6 +682,14 @@ async function normalizeResult(
       : {}),
     ...(response.toolCalls
       ? { toolCalls: response.toolCalls.map(normalizeToolCall) }
+      : {}),
+    ...(nativeBlocks
+      ? {
+        nativeReasoning: {
+          api: nativeReasoning!.api,
+          blocks: nativeBlocks,
+        },
+      }
       : {}),
     attempts,
     ...(finishReason ? { finishReason } : {}),
@@ -814,9 +855,19 @@ export function createProviderAdapter(
           if (channel.signal.aborted) {
             throw abortError(channel.signal.reason);
           }
+          const config = providerConfig(provider, input, captured);
+          // Build the provider's API descriptor before transcript
+          // normalization. This strips opaque state from a same-provider/model
+          // turn when a selected API variant cannot replay it (for example
+          // OpenAI Chat Completions versus Responses).
+          const providerAPI = protocol(config);
+          const nativeReasoningApi =
+            providerAPI.replaysNativeReasoning === false
+              ? undefined
+              : providerAPI.nativeReasoningApi;
           const response = await chat(
             {
-              ...createChatRequest(input, channel.signal),
+              ...createChatRequest(input, channel.signal, nativeReasoningApi),
               onToolCallDelta(delta) {
                 channel.emit({
                   lane: "tool-calls",
@@ -830,7 +881,7 @@ export function createProviderAdapter(
                 });
               },
             },
-            providerConfig(provider, input, captured),
+            config,
             {},
             (chunk, options) => {
               channel.emit({

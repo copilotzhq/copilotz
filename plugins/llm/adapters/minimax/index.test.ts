@@ -311,3 +311,29 @@ Deno.test("minimaxProvider reads final output tokens from message_delta usage", 
     null,
   );
 });
+
+Deno.test("minimaxProvider replays finalized Anthropic-compatible thinking", () => {
+  const body = minimaxProvider(baseConfig).body([{
+    role: "assistant",
+    content: "Answer",
+    nativeReasoning: {
+      schema: "copilotz.llm-native-reasoning.v1",
+      adapter: "minimax",
+      api: "minimax.anthropic.messages",
+      model: "MiniMax-M3",
+      blocks: [{ type: "thinking", thinking: "private", signature: "sig" }],
+    },
+  }], baseConfig);
+
+  assertEquals(body.messages, [{
+    role: "assistant",
+    content: [
+      { type: "thinking", thinking: "private", signature: "sig" },
+      { type: "text", text: "Answer" },
+    ],
+  }]);
+  assertEquals(
+    minimaxProvider(baseConfig).nativeReasoningApi,
+    "minimax.anthropic.messages",
+  );
+});

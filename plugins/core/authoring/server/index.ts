@@ -225,6 +225,15 @@ export function createCoreServerPlugin(): CopilotzPlugin {
                 ? (message.metadata as Record<string, unknown>)
                   .llmReasoning as unknown[]
                 : []),
+              ...(Array.isArray(
+                  ((message.metadata as Record<string, unknown>)
+                    ?.llmNativeReasoning as Record<string, unknown> | undefined)
+                    ?.blocks,
+                )
+                ? ((message.metadata as Record<string, unknown>)
+                  .llmNativeReasoning as Record<string, unknown>)
+                  .blocks as unknown[]
+                : []),
             ]
             : [];
           if (

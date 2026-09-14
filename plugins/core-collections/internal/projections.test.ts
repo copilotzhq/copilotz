@@ -42,6 +42,18 @@ Deno.test("message projection preserves resolved values, binary bytes, descripto
   ] as const;
   const metadata = {
     llmReasoning: [{ ...ref, role: "reasoning", value: "reason" }] as const,
+    llmNativeReasoning: {
+      schema: "copilotz.llm-native-reasoning.v1",
+      adapter: "custom",
+      api: "custom.api",
+      model: "model",
+      blocks: [{
+        ...ref,
+        kind: "json" as const,
+        mediaType: "application/json",
+        value: { opaque: "state" },
+      }],
+    },
   };
   const message = mapMessageRecord({ ...base, content, metadata }, sender);
   // These assignments also enforce the public inferred types during deno check.
@@ -49,10 +61,12 @@ Deno.test("message projection preserves resolved values, binary bytes, descripto
   const binary: Uint8Array = message.content[1].value;
   const descriptor: false = message.content[2].resolve;
   const reasoning: string = message.metadata.llmReasoning[0].value;
+  const native = message.metadata.llmNativeReasoning.blocks[0].value;
   assertEquals(text, "hello");
   assertEquals(binary, new Uint8Array([0, 255]));
   assertEquals(descriptor, false);
   assertEquals(reasoning, "reason");
+  assertEquals(native, { opaque: "state" });
   assertEquals(message.content, content);
 });
 

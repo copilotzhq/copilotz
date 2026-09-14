@@ -3,6 +3,7 @@ import type {
   ProviderAPI,
   ProviderConfig,
   ProviderFinishReason,
+  ProviderNativeReasoning,
   ProviderUsageUpdate,
   StreamCallback,
 } from "./types.ts";
@@ -46,6 +47,8 @@ export interface StreamResult {
     usage?: ProviderUsageUpdate;
     finishReason: ProviderFinishReason | null;
   }>;
+  nativeReasoning?: ProviderNativeReasoning;
+  nativeReasoningFinalized?: Promise<ProviderNativeReasoning | undefined>;
   finishReason: ProviderFinishReason | null;
   stoppedByLocalStop: boolean;
   localStopReason?: "local_stop_sequence";
@@ -267,6 +270,7 @@ export async function runProviderStream(
         extractedBlockTags: extractTags,
         extractUsage: providerAPI.extractUsage,
         extractFinishReason: providerAPI.extractFinishReason,
+        extractNativeReasoning: providerAPI.extractNativeReasoning,
         localStopSequences,
         continueAfterLocalStop: true,
         onHiddenBlockChunk,
@@ -277,7 +281,34 @@ export async function runProviderStream(
       throw signal.reason ??
         new DOMException("LLM request aborted", "AbortError");
     }
-    return result;
+    const {
+      nativeReasoning: rawNativeReasoning,
+      nativeReasoningFinalized: rawNativeReasoningFinalized,
+      ...streamResult
+    } = result;
+    const nativeReasoning = providerAPI.nativeReasoningApi &&
+        rawNativeReasoning?.length
+      ? {
+        api: providerAPI.nativeReasoningApi,
+        blocks: rawNativeReasoning,
+      }
+      : undefined;
+    const nativeReasoningFinalized = providerAPI.nativeReasoningApi
+      ? (rawNativeReasoningFinalized ?? Promise.resolve(rawNativeReasoning))
+        .then((blocks) =>
+          blocks && blocks.length > 0
+            ? {
+              api: providerAPI.nativeReasoningApi!,
+              blocks,
+            }
+            : undefined
+        )
+      : undefined;
+    return {
+      ...streamResult,
+      ...(nativeReasoning ? { nativeReasoning } : {}),
+      ...(nativeReasoningFinalized ? { nativeReasoningFinalized } : {}),
+    };
   } catch (error) {
     const failedAtMs = Date.now();
     const receivedResponse = response;

@@ -11,6 +11,10 @@ import type {
   ProviderUsageUpdate,
 } from "../../internal/types.ts";
 import { providerEndpoint } from "../transport/index.ts";
+import {
+  matchingNativeBlocks,
+  stringField,
+} from "../native-reasoning/index.ts";
 
 function extractDeepSeekUsage(data: any): ProviderUsageUpdate | null {
   const usage = data?.usage;
@@ -51,6 +55,8 @@ function extractOpenAICompatibleFinishReason(
 }
 
 export const deepseekProvider: ProviderFactory = (config: ProviderConfig) => {
+  let reasoningContent = "";
+
   return {
     endpoint: providerEndpoint(
       config.baseUrl,
@@ -67,14 +73,32 @@ export const deepseekProvider: ProviderFactory = (config: ProviderConfig) => {
     body: (messages: ChatMessage[], config: ProviderConfig) => {
       // DeepSeek chat is text-first; flatten non-text to text
       const dsMessages = messages.map((msg) => {
+        const nativeBlocks = matchingNativeBlocks(
+          msg,
+          config,
+          "deepseek",
+          "deepseek.chat.completions",
+          config.model || "deepseek-chat",
+        );
+        const nativeReasoning = nativeBlocks?.map((block) =>
+          stringField(block, "reasoning_content")
+        ).filter((value): value is string => value !== undefined).join("");
         if (Array.isArray(msg.content)) {
           const text = (msg.content as ChatContentPart[])
             .filter((p) => p.type === "text")
             .map((p) => (p as Extract<ChatContentPart, { type: "text" }>).text)
             .join("");
-          return { role: msg.role, content: text } as any;
+          return {
+            role: msg.role,
+            content: text,
+            ...(nativeReasoning ? { reasoning_content: nativeReasoning } : {}),
+          } as any;
         }
-        return { role: msg.role, content: msg.content } as any;
+        return {
+          role: msg.role,
+          content: msg.content,
+          ...(nativeReasoning ? { reasoning_content: nativeReasoning } : {}),
+        } as any;
       });
 
       return {
@@ -95,11 +119,31 @@ export const deepseekProvider: ProviderFactory = (config: ProviderConfig) => {
     },
 
     extractContent: (data: any): ExtractedPart[] | null => {
-      const content = data?.choices?.[0]?.delta?.content;
-      if (!content) return null;
-      return [{ text: content }];
+      const delta = data?.choices?.[0]?.delta;
+      const parts: ExtractedPart[] = [];
+      if (
+        typeof delta?.reasoning_content === "string" && delta.reasoning_content
+      ) {
+        parts.push({ text: delta.reasoning_content, isReasoning: true });
+      }
+      if (typeof delta?.content === "string" && delta.content) {
+        parts.push({ text: delta.content });
+      }
+      return parts.length > 0 ? parts : null;
     },
 
+    nativeReasoningApi: "deepseek.chat.completions",
+    extractNativeReasoning: (data: any): Record<string, unknown>[] | null => {
+      const choice = data?.choices?.[0];
+      const delta = choice?.delta;
+      if (typeof delta?.reasoning_content === "string") {
+        reasoningContent += delta.reasoning_content;
+      }
+      return choice?.finish_reason === "stop" && reasoningContent
+        ? [{ reasoning_content: reasoningContent }]
+        : null;
+    },
+    isStreamActivity: (data: any) => Boolean(data?.choices?.[0]),
     extractUsage: extractDeepSeekUsage,
     extractFinishReason: extractOpenAICompatibleFinishReason,
   };

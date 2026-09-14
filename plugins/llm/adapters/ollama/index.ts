@@ -10,6 +10,10 @@ import type {
   ProviderFinishReason,
 } from "../../internal/types.ts";
 import { providerEndpoint } from "../transport/index.ts";
+import {
+  matchingNativeBlocks,
+  stringField,
+} from "../native-reasoning/index.ts";
 
 function extractOllamaFinishReason(data: any): ProviderFinishReason | null {
   if (data?.done !== true) return null;
@@ -20,6 +24,8 @@ function extractOllamaFinishReason(data: any): ProviderFinishReason | null {
 }
 
 export const ollamaProvider: ProviderFactory = (config: ProviderConfig) => {
+  let thinking = "";
+
   return {
     endpoint: providerEndpoint(
       config.baseUrl,
@@ -56,11 +62,39 @@ export const ollamaProvider: ProviderFactory = (config: ProviderConfig) => {
               if (base64) images.push(base64);
             }
           }
-          const m: any = { role: msg.role, content: text };
+          const nativeBlocks = matchingNativeBlocks(
+            msg,
+            config,
+            "ollama",
+            "ollama.chat",
+            config.model || "llama3.2",
+          );
+          const nativeThinking = nativeBlocks?.map((block) =>
+            stringField(block, "thinking")
+          ).filter((value): value is string => value !== undefined).join("");
+          const m: any = {
+            role: msg.role,
+            content: text,
+            ...(nativeThinking ? { thinking: nativeThinking } : {}),
+          };
           if (images.length > 0) m.images = images;
           return m;
         }
-        return { role: msg.role, content: msg.content } as any;
+        const nativeBlocks = matchingNativeBlocks(
+          msg,
+          config,
+          "ollama",
+          "ollama.chat",
+          config.model || "llama3.2",
+        );
+        const nativeThinking = nativeBlocks?.map((block) =>
+          stringField(block, "thinking")
+        ).filter((value): value is string => value !== undefined).join("");
+        return {
+          role: msg.role,
+          content: msg.content,
+          ...(nativeThinking ? { thinking: nativeThinking } : {}),
+        } as any;
       });
 
       return {
@@ -81,11 +115,28 @@ export const ollamaProvider: ProviderFactory = (config: ProviderConfig) => {
     },
 
     extractContent: (data: any): ExtractedPart[] | null => {
-      const content = data?.message?.content;
-      if (!content) return null;
-      return [{ text: content }];
+      const message = data?.message;
+      const parts: ExtractedPart[] = [];
+      if (typeof message?.thinking === "string" && message.thinking) {
+        parts.push({ text: message.thinking, isReasoning: true });
+      }
+      if (typeof message?.content === "string" && message.content) {
+        parts.push({ text: message.content });
+      }
+      return parts.length > 0 ? parts : null;
     },
 
+    nativeReasoningApi: "ollama.chat",
+    extractNativeReasoning: (data: any): Record<string, unknown>[] | null => {
+      if (typeof data?.message?.thinking === "string") {
+        thinking += data.message.thinking;
+      }
+      const successful = data?.done === true &&
+        (data.done_reason === undefined || data.done_reason === "stop");
+      return successful && thinking ? [{ thinking }] : null;
+    },
+    isStreamActivity: (data: any) =>
+      Boolean(data?.message) || data?.done === true,
     extractFinishReason: extractOllamaFinishReason,
 
     streamOptions: { format: "jsonl" },

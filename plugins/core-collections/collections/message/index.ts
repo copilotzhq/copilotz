@@ -353,7 +353,13 @@ export const messageCollection: CollectionDefinition = defineCollection({
     content: [],
     metadata: {},
   },
-  content: { fields: ["content", "metadata.llmReasoning"] },
+  content: {
+    fields: [
+      "content",
+      "metadata.llmReasoning",
+      "metadata.llmNativeReasoning.blocks",
+    ],
+  },
   relations: {
     thread: relation.belongsTo("thread", "threadId", "has_message"),
     sender: relation.belongsTo("participant", "senderId", "sent_by"),

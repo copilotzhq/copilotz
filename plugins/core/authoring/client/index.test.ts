@@ -69,7 +69,21 @@ Deno.test("resolved history preserves text, JSON, binary and reasoning through J
   };
   const original = {
     id: "message",
-    metadata: { llmReasoning: [{ ...ref, kind: "text", value: "Reason 🌎" }] },
+    metadata: {
+      llmReasoning: [{ ...ref, kind: "text", value: "Reason 🌎" }],
+      llmNativeReasoning: {
+        schema: "copilotz.llm-native-reasoning.v1",
+        adapter: "custom",
+        api: "custom.api",
+        model: "model",
+        blocks: [{
+          ...ref,
+          kind: "json",
+          mediaType: "application/json",
+          value: { opaque: "state" },
+        }],
+      },
+    },
     content: [
       { ...ref, kind: "text", value: "Hello 🌎" },
       { ...ref, kind: "json", value: { answer: 42, nested: [null, true] } },

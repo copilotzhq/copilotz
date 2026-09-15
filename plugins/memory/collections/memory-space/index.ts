@@ -41,3 +41,5 @@ export const memorySpaceCollection: CollectionDefinition<typeof schema> =
       ),
     },
   });
+
+export default memorySpaceCollection;

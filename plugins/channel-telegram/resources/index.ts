@@ -4,4 +4,4 @@
  * @module
  */
 
-export { createTelegramChannelResource } from "./telegram/index.ts";
+export { telegramChannelResource } from "./channels/telegram/index.ts";

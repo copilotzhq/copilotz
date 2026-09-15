@@ -32,7 +32,7 @@ function optionalRecord(
 ): Readonly<Record<string, unknown>> | undefined {
   return value === undefined
     ? undefined
-    : Object.freeze(structuredClone(scheduledRecord(value, name)));
+    : (structuredClone(scheduledRecord(value, name)));
 }
 
 function stringList(
@@ -48,7 +48,7 @@ function stringList(
   if (values.length === 0) {
     throw new TypeError(`${name} must contain at least one value.`);
   }
-  return Object.freeze(values);
+  return values;
 }
 
 export function normalizeCoreScheduledMessagePayload(
@@ -64,7 +64,7 @@ export function normalizeCoreScheduledMessagePayload(
     input.metadata,
     "Scheduled message metadata",
   );
-  return Object.freeze({
+  return ({
     type: CORE_SCHEDULED_MESSAGE_PAYLOAD_TYPE,
     ...(thread
       ? {
@@ -126,7 +126,7 @@ export function normalizeCoreScheduledMessagePayload(
       "Scheduled recipient ID",
     ),
     ...(metadata ? { metadata } : {}),
-  });
+  } as const);
 }
 
 /** Optional typed helper; an equivalent plain job object remains valid. */
@@ -141,15 +141,15 @@ export function scheduledMessageJob(
     recipientIds: message.recipients,
     ...(message.metadata ? { metadata: message.metadata } : {}),
   });
-  return Object.freeze({
+  return ({
     ...(input.id?.trim() ? { id: input.id.trim() } : {}),
     name: requireScheduledText(input.name, "Scheduled job name"),
     ...(input.status ? { status: input.status } : {}),
-    schedule: Object.freeze(structuredClone(input.schedule)),
+    schedule: structuredClone(input.schedule),
     payload,
     content: structuredClone(message.content),
     ...(input.metadata ? { metadata: structuredClone(input.metadata) } : {}),
-  });
+  } as const);
 }
 
 function occurrenceRef(record: CollectionRecord): ScheduledJobOccurrenceRef {
@@ -163,14 +163,14 @@ function occurrenceRef(record: CollectionRecord): ScheduledJobOccurrenceRef {
     ? "scheduled"
     : undefined;
   if (!mode) throw new TypeError("Scheduled occurrence mode is invalid.");
-  return Object.freeze({
+  return ({
     id: requireScheduledText(value.id, "Scheduled occurrence ID"),
     mode,
     scheduledFor: requireScheduledText(
       value.scheduledFor,
       "Scheduled occurrence time",
     ),
-  });
+  } as const);
 }
 
 export function coreScheduledMessageOccurrence(
@@ -185,7 +185,7 @@ export function coreScheduledMessageOccurrence(
   if (record.content !== undefined && !Array.isArray(record.content)) {
     throw new TypeError("Scheduled message content must be canonical refs.");
   }
-  return Object.freeze({
+  return ({
     jobId: requireScheduledText(record.id, "Scheduled job ID"),
     jobName: requireScheduledText(record.name, "Scheduled job name"),
     occurrenceId: occurrence.id,
@@ -194,16 +194,14 @@ export function coreScheduledMessageOccurrence(
     payload: normalizeCoreScheduledMessagePayload(record.payload),
     ...(Array.isArray(record.content)
       ? {
-        content: Object.freeze(
-          structuredClone(record.content),
-        ) as ContentSequence,
+        content: (structuredClone(record.content)) as ContentSequence,
       }
       : {}),
-    metadata: Object.freeze(structuredClone(
+    metadata: structuredClone(
       record.metadata && typeof record.metadata === "object" &&
         !Array.isArray(record.metadata)
         ? record.metadata as Record<string, unknown>
         : {},
-    )),
-  });
+    ),
+  } as const);
 }

@@ -4,4 +4,4 @@
  * @module
  */
 
-export { createDiscordChannelResource } from "./discord/index.ts";
+export { discordChannelResource } from "./channels/discord/index.ts";

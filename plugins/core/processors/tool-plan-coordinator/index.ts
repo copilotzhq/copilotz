@@ -111,3 +111,5 @@ export const toolPlanCoordinatorProcessor: Processor<CoreToolProcessorContext> =
       });
     },
   });
+
+export default toolPlanCoordinatorProcessor;

@@ -1,0 +1,17 @@
+{
+  "id": "@copilotz/core",
+  "version": "0.65.1",
+  "include": [
+    "actions/compact-context/index.ts",
+    "processors/message-router/index.ts",
+    "processors/project-text-result/index.ts",
+    "processors/project-agent-failure/index.ts",
+    "processors/project-tool-result/index.ts",
+    "processors/complete-ask/index.ts",
+    "processors/fail-ask/index.ts",
+    "processors/tool-plan-coordinator/index.ts",
+    "resources/tools/ask/index.ts",
+    "dependencies/llm/index.ts",
+    "dependencies/collections/index.ts"
+  ]
+}

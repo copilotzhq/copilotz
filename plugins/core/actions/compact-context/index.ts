@@ -101,3 +101,5 @@ export const compactContextAction: ActionDefinition<
     );
   },
 });
+
+export default compactContextAction;

@@ -1,0 +1,26 @@
+{
+  "id": "@copilotz/deno-tools",
+  "version": "3.0.0",
+  "aliases": {
+    "resources/tools/run-command/index.ts": "run_command",
+    "resources/tools/write-file/index.ts": "write_file",
+    "resources/tools/search-files/index.ts": "search_files",
+    "resources/tools/list-directory/index.ts": "list_directory",
+    "resources/tools/apply-patch/index.ts": "apply_patch",
+    "resources/tools/show-file-diff/index.ts": "show_file_diff",
+    "resources/tools/restore-file-version/index.ts": "restore_file_version",
+    "resources/tools/search-code/index.ts": "search_code",
+    "resources/tools/read-file/index.ts": "read_file"
+  },
+  "include": [
+    "resources/tools/run-command/index.ts",
+    "resources/tools/write-file/index.ts",
+    "resources/tools/search-files/index.ts",
+    "resources/tools/list-directory/index.ts",
+    "resources/tools/apply-patch/index.ts",
+    "resources/tools/show-file-diff/index.ts",
+    "resources/tools/restore-file-version/index.ts",
+    "resources/tools/search-code/index.ts",
+    "resources/tools/read-file/index.ts"
+  ]
+}

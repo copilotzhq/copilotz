@@ -28,7 +28,7 @@ function normalizedIds(
       `Agent '${agentId}' contains duplicate ${kind} grants.`,
     );
   }
-  return Object.freeze(ids);
+  return ids;
 }
 
 function unknown(agentId: string, kind: string, id: string): Error {
@@ -47,7 +47,7 @@ export function selectCapabilityResources<T>(
   options: SelectCapabilityResourcesOptions<T>,
 ): readonly T[] {
   const selection = options.selection;
-  if (selection === undefined) return Object.freeze([]);
+  if (selection === undefined) return ([] as const);
 
   const entries = options.resources.map((resource) => {
     const id = options.id(resource).trim();
@@ -68,7 +68,7 @@ export function selectCapabilityResources<T>(
     options.agentId,
     options.kind,
   );
-  return Object.freeze(ids.map((id) => {
+  return (ids.map((id) => {
     const resource = byId.get(id);
     if (!resource) throw unknown(options.agentId, options.kind, id);
     return resource;

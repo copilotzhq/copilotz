@@ -4,4 +4,4 @@
  * @module
  */
 
-export { createWebChannelAdapter } from "./web/index.ts";
+export { webChannelAdapter } from "./channels/web/index.ts";

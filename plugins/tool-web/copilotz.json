@@ -1,0 +1,14 @@
+{
+  "id": "@copilotz/web-tools",
+  "version": "3.0.0",
+  "aliases": {
+    "resources/tools/http-request/index.ts": "http_request",
+    "resources/tools/fetch-text/index.ts": "fetch_text",
+    "resources/tools/web-search/index.ts": "web_search"
+  },
+  "include": [
+    "resources/tools/http-request/index.ts",
+    "resources/tools/fetch-text/index.ts",
+    "resources/tools/web-search/index.ts"
+  ]
+}

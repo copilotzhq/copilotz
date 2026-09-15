@@ -25,8 +25,7 @@ export type {
   InlineSkillFile,
   SkillFileLoader,
 } from "./resources/index.ts";
-export { createSkillsPlugin } from "./plugin.ts";
-export type { CreateSkillsPluginOptions } from "./plugin.ts";
+export { skillsPlugin } from "./plugin.ts";
 export { SKILL_TOOL_IDS } from "./authoring/index.ts";
 export type { SkillToolId } from "./authoring/index.ts";
 export type {

@@ -11,7 +11,7 @@ filesystem or provider.
 
 ## How to use it
 
-Use the defaults implicitly through `createKnowledgePlugin`, or provide them
+Use the defaults implicitly through `knowledgePlugin`, or provide them
 explicitly as plugin options.
 
 ## How it works

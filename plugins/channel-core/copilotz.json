@@ -1,0 +1,18 @@
+{
+  "id": "@copilotz/channels",
+  "version": "0.65.1",
+  "aliases": {
+    "actions/ingress/index.ts": "channelIngress",
+    "actions/egress/index.ts": "channelEgress",
+    "processors/ingress/index.ts": "channelIngress",
+    "processors/egress/index.ts": "channelEgress"
+  },
+  "include": [
+    "collections/channel-binding/index.ts",
+    "actions/ingress/index.ts",
+    "actions/egress/index.ts",
+    "processors/ingress/index.ts",
+    "processors/egress/index.ts",
+    "dependencies/core/index.ts"
+  ]
+}

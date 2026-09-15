@@ -167,3 +167,5 @@ export const knowledgeDocumentCollection: CollectionDefinition<typeof schema> =
       },
     },
   });
+
+export default knowledgeDocumentCollection;

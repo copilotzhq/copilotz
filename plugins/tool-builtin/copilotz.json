@@ -1,0 +1,23 @@
+{
+  "id": "@copilotz/built-in-tools",
+  "version": "3.0.0",
+  "aliases": {
+    "resources/tools/update-my-memory/index.ts": "update_my_memory",
+    "resources/tools/get-current-time/index.ts": "get_current_time",
+    "resources/tools/end-thread/index.ts": "end_thread",
+    "resources/tools/save-asset/index.ts": "save_asset",
+    "resources/tools/update-user-memory/index.ts": "update_user_memory",
+    "resources/tools/fetch-asset/index.ts": "fetch_asset",
+    "resources/tools/create-thread/index.ts": "create_thread"
+  },
+  "include": [
+    "resources/tools/update-my-memory/index.ts",
+    "resources/tools/wait/index.ts",
+    "resources/tools/get-current-time/index.ts",
+    "resources/tools/end-thread/index.ts",
+    "resources/tools/save-asset/index.ts",
+    "resources/tools/update-user-memory/index.ts",
+    "resources/tools/fetch-asset/index.ts",
+    "resources/tools/create-thread/index.ts"
+  ]
+}

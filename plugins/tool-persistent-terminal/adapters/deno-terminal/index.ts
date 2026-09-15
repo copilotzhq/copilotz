@@ -393,10 +393,10 @@ export function createPersistentTerminalService(
         ).trim();
         session.output = session.output.slice(lineEnd + 1);
         const exitCode = Number.parseInt(exitText, 10);
-        return Object.freeze({
+        return ({
           output,
           exitCode: Number.isNaN(exitCode) ? null : exitCode,
-        });
+        } as const);
       }
       if (session.closed) {
         throw new Error("Terminal session ended unexpectedly.");
@@ -444,36 +444,34 @@ export function createPersistentTerminalService(
     if (input.action === "list") {
       const activeSessions = [...sessions.entries()].filter(([, session]) =>
         session.namespace === context.namespace && !session.closed
-      ).map(([sessionKey, session]) =>
-        Object.freeze({
-          sessionKey,
-          scope: session.scope,
-          namespace: session.namespace,
-          project: session.project,
-          agentId: session.agentId,
-          workspaceRoot: session.workspaceRoot,
-          startedAt: session.startedAt,
-        })
-      );
-      return Object.freeze({
+      ).map(([sessionKey, session]) => ({
+        sessionKey,
+        scope: session.scope,
+        namespace: session.namespace,
+        project: session.project,
+        agentId: session.agentId,
+        workspaceRoot: session.workspaceRoot,
+        startedAt: session.startedAt,
+      } as const));
+      return ({
         success: true,
-        activeSessions: Object.freeze(activeSessions),
+        activeSessions: activeSessions,
         count: activeSessions.length,
-      });
+      } as const);
     }
 
     if (input.action === "close") {
       await closeSession(key);
-      return Object.freeze({
+      return ({
         success: true,
         message: "Terminal session closed.",
         sessionKey: key,
-      });
+      } as const);
     }
 
     if (input.action === "info") {
       const session = sessions.get(key);
-      return Object.freeze({
+      return ({
         success: true,
         sessionKey: key,
         exists: Boolean(session && !session.closed),
@@ -483,7 +481,7 @@ export function createPersistentTerminalService(
         agentId: scopedAgentId(context.agentId, scope),
         workspaceRoot,
         startedAt: session?.startedAt ?? null,
-      });
+      } as const);
     }
 
     if (input.action === "upload_asset") {
@@ -511,7 +509,7 @@ export function createPersistentTerminalService(
       }
       await Deno.mkdir(dirname(target), { recursive: true });
       await Deno.writeFile(target, asset.bytes);
-      return Object.freeze({
+      return ({
         success: true,
         action: input.action,
         path: normalizeTerminalFilePath(input.path),
@@ -519,7 +517,7 @@ export function createPersistentTerminalService(
         mimeType: asset.mediaType,
         size: asset.bytes.byteLength,
         workspaceRoot,
-      });
+      } as const);
     }
 
     if (input.action === "export_file") {
@@ -545,14 +543,14 @@ export function createPersistentTerminalService(
         name: normalizedPath,
         operationKey: "export:" + key + ":" + normalizedPath,
       });
-      return Object.freeze({
+      return ({
         success: true,
         action: input.action,
         path: normalizedPath,
         ...published,
         size: published.byteLength,
         workspaceRoot,
-      });
+      } as const);
     }
 
     if (input.action === "restart") {
@@ -564,12 +562,12 @@ export function createPersistentTerminalService(
         context,
         project,
       );
-      return Object.freeze({
+      return ({
         success: true,
         sessionKey: key,
         workspaceRoot: session.workspaceRoot,
         message: "Terminal session restarted.",
-      });
+      } as const);
     }
 
     if (input.action !== "run" || !input.command?.trim()) {
@@ -613,12 +611,12 @@ export function createPersistentTerminalService(
     }
   };
 
-  return Object.freeze({
+  return ({
     execute,
     async shutdown(_reason = "persistent_terminal_shutdown") {
       if (closed) return;
       closed = true;
       await Promise.allSettled([...sessions.keys()].map(closeSession));
     },
-  });
+  } as const);
 }

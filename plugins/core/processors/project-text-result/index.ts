@@ -63,9 +63,9 @@ export const projectTextResultProcessor: Processor<
     if (!participant || participant.participantType !== "agent") {
       throw new Error(`LLM call '${actionRunId}' has no agent participant.`);
     }
-    const rawToolCalls = Object.freeze(
-      structuredClone(output.toolCalls ?? []) as readonly LlmToolCall[],
-    );
+    const rawToolCalls = structuredClone(
+      output.toolCalls ?? [],
+    ) as readonly LlmToolCall[];
     const toolCalls = rawToolCalls.length
       ? validateCoreToolPlan(context, {
         agentId: metadata.agentId,
@@ -82,11 +82,11 @@ export const projectTextResultProcessor: Processor<
       ? await deriveWorkflowId("tool-plan", actionRunId)
       : undefined;
     const outputAsk = metadata.ask
-      ? Object.freeze({
+      ? ({
         ...metadata.ask,
         phase: toolCalls.length ? "progress" as const : "answer" as const,
         answerAttemptId: actionRunId,
-      })
+      } as const)
       : null;
     const semanticOutputMetadata = {
       llmToolCalls: toolCalls,
@@ -139,7 +139,7 @@ export const projectTextResultProcessor: Processor<
     }) as CollectionRecord;
     if (!toolCalls.length || !planId) return;
 
-    const plan: CoreToolPlanBase = Object.freeze({
+    const plan: CoreToolPlanBase = {
       planId,
       planMessageId: String(outputMessage.id),
       planSize: toolCalls.length,
@@ -156,7 +156,9 @@ export const projectTextResultProcessor: Processor<
       stageHistoryVisibility: snapshotToolStageHistory(context, toolCalls),
       stageActionIds: snapshotToolStageActionIds(context, toolCalls),
       ...(metadata.ask ? { ask: metadata.ask } : {}),
-    });
+    } as const;
     await createDurableToolPlan(context, plan, toolCalls);
   },
 });
+
+export default projectTextResultProcessor;

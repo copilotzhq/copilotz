@@ -1,3 +1,5 @@
+import type { ActionContext } from "@copilotz/copilotz/actions";
+import type { ActionDefinition } from "@copilotz/copilotz/actions";
 /**
  * Defines the bounded Apply Patch Action.
  *
@@ -16,7 +18,16 @@ interface ApplyPatchParams {
   operations: PatchOperation[];
 }
 
-export const applyPatchAction = defineAction({
+export const applyPatchAction: ActionDefinition<
+  ApplyPatchParams,
+  {
+    relativePath: string;
+    snapshotId: string | null;
+    applied: number;
+    summary: string;
+  },
+  ActionContext
+> = defineAction({
   id: "copilotz.tools.deno.apply_patch",
   inputSchema: {
     type: "object",

@@ -3,14 +3,17 @@ import { coreCollectionsPlugin } from "./plugin.ts";
 
 Deno.test("Core Collections composes the storage-only boundary", () => {
   assertEquals(coreCollectionsPlugin.id, "@copilotz/core-collections");
-  assertEquals(Object.keys(coreCollectionsPlugin.collections), [
-    "participant",
-    "thread",
-    "message",
-    "toolPlan",
-    "toolPlanStageResult",
-    "space",
-    "spaceAttachment",
-  ]);
+  assertEquals(
+    Object.keys(coreCollectionsPlugin.collections).sort(),
+    [
+      "participant",
+      "thread",
+      "message",
+      "toolPlan",
+      "toolPlanStageResult",
+      "space",
+      "spaceAttachment",
+    ].sort(),
+  );
   assertEquals(Object.keys(coreCollectionsPlugin.processors), ["messageInput"]);
 });

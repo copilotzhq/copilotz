@@ -1,3 +1,4 @@
+import type { ActionDefinition } from "@copilotz/copilotz/actions";
 /** @module Admin overview Action primitive. */
 import { defineAction } from "@copilotz/copilotz/actions";
 import type { CollectionRecord } from "@copilotz/copilotz/collections";
@@ -23,7 +24,7 @@ import type {
 } from "../../internal/contracts.ts";
 
 function usageTotals(records: readonly CollectionRecord[]): AdminUsageTotals {
-  return Object.freeze(records.reduce((totals, value) => ({
+  return (records.reduce((totals, value) => ({
     totalCalls: totals.totalCalls + 1,
     inputTokens: totals.inputTokens + finite(value.inputTokens),
     outputTokens: totals.outputTokens + finite(value.outputTokens),
@@ -58,7 +59,11 @@ function createdInRange(
 }
 
 /** Returns aggregate thread, message, participant, and usage totals. */
-export const adminOverviewAction = defineAction<
+export const adminOverviewAction: ActionDefinition<
+  AdminRequest,
+  AdminResponse,
+  AdminActionContext
+> = defineAction<
   AdminRequest,
   AdminResponse,
   AdminActionContext,
@@ -113,3 +118,5 @@ export const adminOverviewAction = defineAction<
     };
   },
 });
+
+export default adminOverviewAction;

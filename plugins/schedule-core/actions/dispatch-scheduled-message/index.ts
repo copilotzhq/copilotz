@@ -65,7 +65,7 @@ async function byExternalId(
 }
 
 function existingParticipant(record: CollectionRecord): ParticipantPlan {
-  return Object.freeze({ existing: record });
+  return ({ existing: record } as const);
 }
 
 function participantPlanKey(plan: ParticipantPlan): string {
@@ -90,7 +90,7 @@ async function resolveSender(
     }
     return existingParticipant(existing);
   }
-  return Object.freeze({
+  return ({
     create: {
       ...(descriptor?.id ? { id: descriptor.id } : {}),
       externalId,
@@ -103,7 +103,7 @@ async function resolveSender(
       },
     },
     operationKey: `sender:${item.jobId}`,
-  });
+  } as const);
 }
 
 async function resolveAgentParticipant(
@@ -120,7 +120,7 @@ async function resolveAgentParticipant(
     }
     return existingParticipant(existing);
   }
-  return Object.freeze({
+  return ({
     create: {
       externalId,
       participantType: "agent",
@@ -128,7 +128,7 @@ async function resolveAgentParticipant(
       name: agent.name,
     },
     operationKey: `agent:${agent.id}`,
-  });
+  } as const);
 }
 
 async function resolveRecipient(
@@ -160,16 +160,16 @@ async function findThread(
 function uniqueParticipantPlans(
   plans: readonly ParticipantPlan[],
 ): readonly ParticipantPlan[] {
-  return Object.freeze([
+  return ([
     ...new Map(plans.map((plan) => [participantPlanKey(plan), plan])).values(),
-  ]);
+  ] as const);
 }
 
 async function stageParticipant(
   plan: ParticipantPlan,
   collections: ActionTransactionContext["collections"],
 ): Promise<CollectionMutationRef> {
-  if ("existing" in plan) return Object.freeze({ id: plan.existing.id });
+  if ("existing" in plan) return ({ id: plan.existing.id } as const);
   return await collections.participant.create(plan.create, {
     operationKey: plan.operationKey,
   });
@@ -216,7 +216,7 @@ async function dispatchScheduledMessage(
       ...new Set([senderRef.id, ...recipientRefs.map((value) => value.id)]),
     ];
     const threadRef = existingThread
-      ? Object.freeze({ id: existingThread.id })
+      ? ({ id: existingThread.id } as const)
       : await transaction.collections.thread.create({
         ...(descriptor?.id ? { id: descriptor.id } : {}),
         externalId: descriptor?.externalId?.trim() ||
@@ -259,10 +259,10 @@ async function dispatchScheduledMessage(
       visibility: { kind: "public" },
       identity: { metadata },
     });
-    return Object.freeze({
+    return ({
       messageId: messageRef.id,
       threadId: threadRef.id,
-    });
+    } as const);
   }, { operationKey: `dispatch:${item.occurrenceId}` });
   const message = await context.collections.message.get({
     id: result.messageId,
@@ -270,7 +270,7 @@ async function dispatchScheduledMessage(
   if (!message) {
     throw new Error(`Scheduled message '${result.messageId}' was not created.`);
   }
-  return Object.freeze({ messageId: message.id, threadId: result.threadId });
+  return ({ messageId: message.id, threadId: result.threadId } as const);
 }
 
 export const dispatchScheduledMessageAction: ActionDefinition<
@@ -283,3 +283,5 @@ export const dispatchScheduledMessageAction: ActionDefinition<
   id: "copilotz.core-schedules.dispatch-message",
   execute: dispatchScheduledMessage,
 });
+
+export default dispatchScheduledMessageAction;

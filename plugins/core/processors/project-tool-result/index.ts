@@ -36,3 +36,5 @@ export const projectToolResultProcessor: Processor<
     );
   },
 });
+
+export default projectToolResultProcessor;

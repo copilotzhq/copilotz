@@ -1,3 +1,5 @@
+import type { ActionContext } from "@copilotz/copilotz/actions";
+import type { ActionDefinition } from "@copilotz/copilotz/actions";
 /**
  * Defines the bounded Search Files Action.
  *
@@ -18,7 +20,18 @@ interface SearchFilesParams {
   includeAll?: boolean;
 }
 
-export const searchFilesAction = defineAction({
+export const searchFilesAction: ActionDefinition<
+  SearchFilesParams,
+  {
+    suggestion?: string | undefined;
+    directory: string;
+    pattern: string;
+    results: { name: string; relativePath: string }[];
+    count: number;
+    truncated: boolean;
+  },
+  ActionContext
+> = defineAction({
   id: "copilotz.tools.deno.search_files",
   inputSchema: {
     type: "object",

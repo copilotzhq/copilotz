@@ -62,7 +62,7 @@ function facadeResource(
   ];
   if (!candidate || typeof candidate !== "object") {
     throw new TypeError(
-      "Server facade requires createServerPlugin() in the application composition.",
+      "Server facade requires serverPlugin in the application composition.",
     );
   }
   return candidate as ServerFacadeResource;

@@ -4,5 +4,6 @@
  * @module
  */
 
-export { createFinanceToolsPlugin } from "./plugin.ts";
-export type { CreateFinanceToolsPluginOptions } from "./plugin.ts";
+export { financeToolsPlugin } from "./plugin.ts";
+
+export * from "./resources/index.ts";

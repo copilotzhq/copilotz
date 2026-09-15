@@ -83,13 +83,12 @@ operation-catalog maintenance. `close()` is idempotent.
 
 ## Gateway Fetch
 
-`gateway.fetch` serves the single `/api` boundary installed by
-`createServerPlugin()`. The compiler discovers exposed Actions, Collections,
-Channels and exact HTTP Adapter routes, and generates OpenAPI from that table.
-`createCoreServerPlugin()` contributes conversation reads, observation and
-ordinary mutation Actions. Authentication resolves trusted scope; authorization
-intersects constraints before reads or execution. See
-[HTTP server and browser client](server.md).
+`gateway.fetch` serves the single `/api` boundary installed by `serverPlugin`.
+The compiler discovers exposed Actions, Collections, Channels and exact HTTP
+Adapter routes, and generates OpenAPI from that table. `coreServerPlugin`
+contributes conversation reads, observation and ordinary mutation Actions.
+Authentication resolves trusted scope; authorization intersects constraints
+before reads or execution. See [HTTP server and browser client](server.md).
 
 The Deno listener accepts any structural Fetch-capable host:
 

@@ -79,10 +79,7 @@ Small or generated applications can define a portable skill without any host
 adapter:
 
 ```ts
-import {
-  createSkillsPlugin,
-  defineInlineSkill,
-} from "@copilotz/copilotz/skills";
+import { defineInlineSkill, skillsPlugin } from "@copilotz/copilotz/skills";
 
 const triage = defineInlineSkill({
   directoryName: "support-triage",
@@ -98,10 +95,12 @@ Classify urgency before choosing a tool.`,
   },
 });
 
-export default createSkillsPlugin({
+import { definePlugin } from "@copilotz/copilotz/plugins";
+export default definePlugin({
   id: "@acme/support-skills",
   version: "0.1.0",
-  skills: [triage],
+  plugins: [skillsPlugin],
+  resources: { skills: { triage } },
 });
 ```
 

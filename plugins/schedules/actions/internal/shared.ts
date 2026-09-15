@@ -26,13 +26,13 @@ export function occurrence(
   scheduledFor: Date,
   mode: "scheduled" | "manual",
 ): ScheduledJobOccurrenceRef {
-  return Object.freeze({
+  return ({
     id: mode === "manual"
       ? `${jobId}:manual:${scheduledFor.getTime()}`
       : `${jobId}:${scheduledFor.getTime()}`,
     mode,
     scheduledFor: scheduledFor.toISOString(),
-  });
+  } as const);
 }
 
 export function scheduledJobCollection(context: ActionContext) {

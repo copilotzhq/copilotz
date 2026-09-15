@@ -12,9 +12,9 @@ source-directory naming conventions.
 
 ## How to use it
 
-Call `defineServerFacade(...)`, normally through `createServerPlugin(...)`.
-Omitting exposure and guard options enables every eligible primitive in the
-application's default scope.
+Call `defineServerFacade(...)`, normally through `serverPlugin(...)`. Omitting
+exposure and guard options enables every eligible primitive in the application's
+default scope.
 
 ## How it works
 

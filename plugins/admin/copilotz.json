@@ -1,0 +1,20 @@
+{
+  "id": "@copilotz/admin",
+  "version": "3.0.0",
+  "aliases": {
+    "actions/overview/index.ts": "adminOverview",
+    "actions/activity/index.ts": "adminActivity",
+    "actions/threads/index.ts": "adminThreads",
+    "actions/participants/index.ts": "adminParticipants",
+    "actions/usage/index.ts": "adminUsage",
+    "actions/agents/index.ts": "adminAgents"
+  },
+  "include": [
+    "actions/overview/index.ts",
+    "actions/activity/index.ts",
+    "actions/threads/index.ts",
+    "actions/participants/index.ts",
+    "actions/usage/index.ts",
+    "actions/agents/index.ts"
+  ]
+}

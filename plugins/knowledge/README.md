@@ -12,11 +12,21 @@ model-facing search without making the runtime own RAG semantics.
 
 ## How to use it
 
-Compose `createKnowledgePlugin` with an embedding provider and optionally
-customize source loading, extraction, chunking, and generated tool aliases.
+```ts
+import { knowledgePlugin } from "@copilotz/copilotz/knowledge";
+// Include knowledgePlugin in the final createCopilotz({ plugins: [...] }) call.
+```
+
+Set `resources.knowledge.config.embedding` and optional `chunking`. Supply
+`adapters.embedding`, with optional `adapters.knowledge.loader` and `extractor`.
 
 ## How it works
 
-The plugin stores documents and chunks in Collections, starts indexing from a
-durable processor, resolves embeddings through a resource boundary, and
-generates matching Actions and Tool Resources.
+`copilotz.json` declares this root. `plugin.generated.ts` contains its static
+composition and `plugin.ts` exposes its public name. Regenerate with
+`deno task build:plugins`. Actions and Processors read final context
+configuration at invocation; there is no plugin factory or runtime directory
+discovery.
+
+See [convention-first authoring](../../docs/convention-authoring.md) for the
+shared file structure, compiler, configuration locations, and migration guide.

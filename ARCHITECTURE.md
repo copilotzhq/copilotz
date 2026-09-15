@@ -13,6 +13,11 @@ runtime; those inputs cause state changes or actions to execute, which in turn
 produce events. Events become the common language through which the rest of the
 system observes what has happened and decides what should happen next.
 
+Authoring uses static plugin declarations and a build-host compiler. The same
+conventions apply to built-in plugins and application packages. `createCopilotz`
+composes the final root, including Resources and Adapters, before starting the
+application. See [convention-first authoring](docs/convention-authoring.md).
+
 The runtime is extended through **plugins**. A plugin is a package of
 capabilities that contributes some combination of five primitives:
 

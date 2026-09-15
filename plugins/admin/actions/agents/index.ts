@@ -1,3 +1,4 @@
+import type { ActionDefinition } from "@copilotz/copilotz/actions";
 /** @module Admin agents Action primitive. */
 import { defineAction } from "@copilotz/copilotz/actions";
 import type { AgentResource } from "@copilotz/copilotz/core";
@@ -19,7 +20,11 @@ function publicAgent(agent: AgentResource): Record<string, unknown> {
 }
 
 /** Lists public Agent Resource fields without private instructions. */
-export const adminAgentsAction = defineAction<
+export const adminAgentsAction: ActionDefinition<
+  AdminRequest,
+  AdminResponse,
+  AdminActionContext
+> = defineAction<
   AdminRequest,
   AdminResponse,
   AdminActionContext,
@@ -39,3 +44,5 @@ export const adminAgentsAction = defineAction<
     };
   },
 });
+
+export default adminAgentsAction;

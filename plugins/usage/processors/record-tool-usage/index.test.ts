@@ -1,10 +1,10 @@
 import { assertEquals } from "@std/assert";
-import { createToolUsageProcessor } from "./index.ts";
+import { toolUsageProcessor } from "./index.ts";
 import { toolUsageRecord } from "../internal/accounting.ts";
 
 Deno.test("Tool Usage Processor retains its canonical id", () => {
   assertEquals(
-    createToolUsageProcessor({}).id,
+    toolUsageProcessor.id,
     "copilotz.usage.record-tool-action",
   );
 });

@@ -11,7 +11,7 @@ controls.
 
 ## How to use it
 
-Compose it through `createProcessToolsPlugin()` using the `run_command` alias.
+Compose it through `denoToolsPlugin` using the `run_command` alias.
 
 ## How it works
 

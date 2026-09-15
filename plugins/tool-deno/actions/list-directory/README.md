@@ -10,8 +10,7 @@ It gives agents a predictable file-tree view while excluding noisy directories.
 
 ## How to use it
 
-Compose it through `createWorkspaceToolsPlugin()` using the `list_directory`
-alias.
+Compose it through `denoToolsPlugin` using the `list_directory` alias.
 
 ## How it works
 

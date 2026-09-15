@@ -1,5 +1,7 @@
+import { defineServerFacade as fixtureServerFacade } from "@copilotz/copilotz/server";
+import { definePlugin as defineFixturePlugin } from "@copilotz/copilotz/plugins";
 import { assertEquals, assertExists } from "@std/assert";
-import { createServerPlugin, serverPlugin } from "./plugin.ts";
+import { serverPlugin } from "./plugin.ts";
 
 Deno.test("Server plugin composes one Resource and durable bridge", () => {
   assertEquals(serverPlugin.id, "copilotz.server");
@@ -10,7 +12,12 @@ Deno.test("Server plugin composes one Resource and durable bridge", () => {
     "/api",
   );
   assertEquals(
-    (createServerPlugin({ basePath: "/custom" }).resources.server.default as {
+    (defineFixturePlugin({
+      ...serverPlugin,
+      resources: {
+        server: { default: fixtureServerFacade({ basePath: "/custom" }) },
+      },
+    }).resources.server.default as {
       basePath: string;
     }).basePath,
     "/custom",

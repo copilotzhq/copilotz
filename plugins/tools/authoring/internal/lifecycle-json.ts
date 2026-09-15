@@ -83,10 +83,10 @@ export function cloneLosslessJson<T>(value: T, label: string): T {
   assertLosslessJson(value, label);
   const clone = (candidate: unknown): unknown => {
     if (Array.isArray(candidate)) {
-      return Object.freeze(candidate.map(clone));
+      return (candidate.map(clone));
     }
     if (candidate && typeof candidate === "object") {
-      return Object.freeze(Object.fromEntries(
+      return (Object.fromEntries(
         Object.entries(candidate).map(([key, child]) => [key, clone(child)]),
       ));
     }

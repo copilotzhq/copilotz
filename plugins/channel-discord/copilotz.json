@@ -1,0 +1,9 @@
+{
+  "id": "@copilotz/channel-discord",
+  "version": "4.0.0",
+  "include": [
+    "resources/channels/discord/index.ts",
+    "adapters/channels/discord/index.ts",
+    "dependencies/channels/index.ts"
+  ]
+}

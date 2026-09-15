@@ -79,6 +79,8 @@ export async function handleChannel(
   try {
     accepted = acceptedChannels(
       await adapter.accept(channelRequest, {
+        resources: application.plugins.resources,
+        adapters: application.plugins.adapters,
         namespace,
         channelId,
         channel,

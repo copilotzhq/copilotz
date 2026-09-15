@@ -178,3 +178,5 @@ export const spacesAction: ActionDefinition<SpaceInput, SpaceResult> =
       },
     },
   );
+
+export default spacesAction;

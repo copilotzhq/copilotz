@@ -1,0 +1,15 @@
+{
+  "id": "@copilotz/schedules",
+  "version": "0.65.1",
+  "aliases": {
+    "processors/run-now-input/index.ts": "runScheduledJobNowInput",
+    "processors/tick-input/index.ts": "tickScheduledJobsInput"
+  },
+  "include": [
+    "collections/scheduled-job/index.ts",
+    "actions/run-scheduled-job-now/index.ts",
+    "actions/tick-scheduled-jobs/index.ts",
+    "processors/run-now-input/index.ts",
+    "processors/tick-input/index.ts"
+  ]
+}

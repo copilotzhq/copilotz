@@ -1,3 +1,4 @@
+import { definePlugin as defineFixturePlugin } from "@copilotz/copilotz/plugins";
 import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
 
 import type { AgentResource } from "@copilotz/copilotz/core";
@@ -7,8 +8,8 @@ import {
   type TestDatabase,
 } from "../../runtime/testing/ominipg.ts";
 import { corePlugin, message } from "../core/index.ts";
-import { createUsageWorkflowPlugin } from "../usage/index.ts";
-import { createAdminPlugin } from "./plugin.ts";
+import { usagePlugin } from "../usage/index.ts";
+import { adminPlugin } from "./plugin.ts";
 import { createTestDomainContext } from "../core/internal/testing/context.ts";
 
 const SCHEMA = "copilotz_admin_plugin";
@@ -44,8 +45,12 @@ Deno.test("admin plugin projects Collection state without raw storage access", a
     databaseSchema: SCHEMA,
     plugins: [
       corePlugin,
-      createUsageWorkflowPlugin({ enabled: false }),
-      createAdminPlugin(),
+      defineFixturePlugin({
+        ...usagePlugin,
+        resources: { usage: { config: { enabled: false } } },
+        adapters: { usage: { hooks: { enabled: false } } },
+      }),
+      adminPlugin,
     ],
     resources: { agents: { [supportAgent.id]: supportAgent } },
   });

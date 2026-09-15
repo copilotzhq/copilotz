@@ -1,9 +1,11 @@
+import { defineServerFacade as fixtureServerFacade } from "@copilotz/copilotz/server";
+import { definePlugin as defineFixturePlugin } from "@copilotz/copilotz/plugins";
 import { assertEquals, assertRejects } from "@std/assert";
 import { defineAction } from "@copilotz/copilotz/actions";
 import { definePlugin } from "@copilotz/copilotz/plugins";
 import { createCopilotzApplication } from "../runtime/application/index.ts";
 import { createTestDatabase } from "../runtime/testing/ominipg.ts";
-import { createServerPlugin } from "../plugins/server/index.ts";
+import { serverPlugin } from "../plugins/server/index.ts";
 import { createServerFacadeFetchHandler } from "./facade.ts";
 import { CopilotzHttpError, createCopilotzClient } from "../client/index.ts";
 
@@ -29,7 +31,16 @@ Deno.test("real facade and browser client share durable Action submission and re
     databaseSchema: "http_client_contract",
     plugins: [
       definePlugin({ id: "test.echo", version: "1", actions: { echo } }),
-      createServerPlugin({ expose: { collections: false, channels: false } }),
+      defineFixturePlugin({
+        ...serverPlugin,
+        resources: {
+          server: {
+            default: fixtureServerFacade({
+              expose: { collections: false, channels: false },
+            }),
+          },
+        },
+      }),
     ],
   });
   const handler = createServerFacadeFetchHandler(application);

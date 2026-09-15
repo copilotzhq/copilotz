@@ -7,25 +7,25 @@ import { createTestDomainContext } from "../core/internal/testing/context.ts";
 import { createTestDatabase } from "../../runtime/testing/ominipg.ts";
 import { projectActionEvents } from "../core/internal/testing/projections.ts";
 import { createServerFacadeFetchHandler } from "../../server/facade.ts";
-import { createServerPlugin } from "../server/index.ts";
+import { serverPlugin } from "../server/index.ts";
 import { CHANNEL_INGRESS_ACTION_ID } from "../channel-core/actions/ingress/index.ts";
 import {
-  createDiscordChannelAdapter,
-  createDiscordChannelResource,
+  discordChannelAdapter,
+  discordChannelResource,
 } from "../channel-discord/index.ts";
 import type {
   DiscordConfig,
   DiscordTransport,
 } from "../channel-discord/index.ts";
-import { createWhatsAppChannelPlugin } from "../channel-whatsapp/index.ts";
+import { whatsappChannelPlugin } from "../channel-whatsapp/index.ts";
 import type {
   WhatsAppConfig,
   WhatsAppMediaInput,
   WhatsAppTransport,
 } from "../channel-whatsapp/index.ts";
 import {
-  createZendeskChannelAdapter,
-  createZendeskChannelResource,
+  zendeskChannelAdapter,
+  zendeskChannelResource,
 } from "../channel-zendesk/index.ts";
 import type {
   ZendeskConfig,
@@ -33,8 +33,8 @@ import type {
 } from "../channel-zendesk/index.ts";
 import { channelsPlugin } from "../channel-core/plugin.ts";
 import {
-  createTelegramChannelAdapter,
-  createTelegramChannelResource,
+  telegramChannelAdapter,
+  telegramChannelResource,
 } from "../channel-telegram/index.ts";
 import type {
   TelegramConfig,
@@ -183,34 +183,45 @@ Deno.test("signed WhatsApp server ingress persists no credentials and retries on
       });
     },
   });
+  const providerOptions:
+    import("../channel-whatsapp/index.ts").WhatsAppChannelOptions = {
+      config(context) {
+        configOperations.push(
+          `${context.operation}:${context.request ? "request" : "worker"}`,
+        );
+        return CONFIG;
+      },
+      transport,
+
+      transformDelivery(delivery, attempt) {
+        deliveryKeys.push(attempt.intent.deliveryKey);
+        return delivery;
+      },
+    };
   const application = await createCopilotzApplication({
     database,
     namespace: NAMESPACE,
     databaseSchema: "copilotz_channel_provider_server",
     plugins: [
-      createServerPlugin(),
-      createWhatsAppChannelPlugin({
-        config(context) {
-          configOperations.push(
-            `${context.operation}:${context.request ? "request" : "worker"}`,
-          );
-          return CONFIG;
-        },
-        transport,
-        defaultAgentAliases: ["support"],
-        transformDelivery(delivery, attempt) {
-          deliveryKeys.push(attempt.intent.deliveryKey);
-          return delivery;
-        },
-      }),
+      serverPlugin,
+      whatsappChannelPlugin,
     ],
     resources: {
+      channels: {
+        whatsapp: {
+          ...whatsappChannelPlugin.resources.channels.whatsapp,
+          defaultAgentAliases: ["support"],
+        },
+      },
       agents: { support: agent },
       llmConnections: {
         fixtureModel: { adapter: "fixture" },
       },
     },
-    adapters: { llm: { fixture: llm } },
+    adapters: {
+      channelProviders: { whatsapp: providerOptions },
+      llm: { fixture: llm },
+    },
     engine: {
       retryBaseMs: 0,
       random: () => 0,
@@ -382,24 +393,29 @@ Deno.test("Telegram host accept replaces provider file references with replayabl
     botToken: "telegram-bot-secret",
     secretToken: "telegram-webhook-secret",
   });
-  const adapter = withToolRecipient(createTelegramChannelAdapter({
-    config,
-    transport,
-  }));
+  const providerOptions:
+    import("../channel-telegram/index.ts").TelegramChannelOptions = {
+      config,
+      transport,
+    };
+  const adapter = withToolRecipient(telegramChannelAdapter);
   const plugin = definePlugin({
     id: "test.channel-telegram-media-staging",
     version: "1.0.0",
     plugins: [channelsPlugin] as const,
     resources: {
-      channels: { telegram: createTelegramChannelResource() },
+      channels: { telegram: telegramChannelResource },
     },
-    adapters: { channels: { telegram: adapter } },
+    adapters: {
+      channelProviders: { telegram: providerOptions },
+      channels: { telegram: adapter },
+    },
   });
   const application = await createCopilotzApplication({
     database,
     namespace: NAMESPACE,
     databaseSchema: "copilotz_channel_telegram_media_staging",
-    plugins: [plugin, createServerPlugin()],
+    plugins: [plugin, serverPlugin],
   });
   const body = {
     update_id: "telegram-update-a",
@@ -512,24 +528,29 @@ Deno.test("Discord host accept removes signed attachment URLs before durable ing
     publicKey: signing.publicKey,
     botToken: "discord-bot-secret",
   });
-  const adapter = withToolRecipient(createDiscordChannelAdapter({
-    config,
-    transport,
-  }));
+  const providerOptions:
+    import("../channel-discord/index.ts").DiscordChannelOptions = {
+      config,
+      transport,
+    };
+  const adapter = withToolRecipient(discordChannelAdapter);
   const plugin = definePlugin({
     id: "test.channel-discord-safe-url",
     version: "1.0.0",
     plugins: [channelsPlugin] as const,
     resources: {
-      channels: { discord: createDiscordChannelResource() },
+      channels: { discord: discordChannelResource },
     },
-    adapters: { channels: { discord: adapter } },
+    adapters: {
+      channelProviders: { discord: providerOptions },
+      channels: { discord: adapter },
+    },
   });
   const application = await createCopilotzApplication({
     database,
     namespace: NAMESPACE,
     databaseSchema: "copilotz_channel_discord_safe_url",
-    plugins: [plugin, createServerPlugin()],
+    plugins: [plugin, serverPlugin],
   });
   try {
     const response = await createServerFacadeFetchHandler(application)(
@@ -658,24 +679,29 @@ Deno.test("Zendesk host accept removes signed media URLs before durable ingress 
       },
     }],
   };
-  const adapter = withToolRecipient(createZendeskChannelAdapter({
-    config,
-    transport,
-  }));
+  const providerOptions:
+    import("../channel-zendesk/index.ts").ZendeskChannelOptions = {
+      config,
+      transport,
+    };
+  const adapter = withToolRecipient(zendeskChannelAdapter);
   const plugin = definePlugin({
     id: "test.channel-zendesk-safe-url",
     version: "1.0.0",
     plugins: [channelsPlugin] as const,
     resources: {
-      channels: { zendesk: createZendeskChannelResource() },
+      channels: { zendesk: zendeskChannelResource },
     },
-    adapters: { channels: { zendesk: adapter } },
+    adapters: {
+      channelProviders: { zendesk: providerOptions },
+      channels: { zendesk: adapter },
+    },
   });
   const application = await createCopilotzApplication({
     database,
     namespace: NAMESPACE,
     databaseSchema: "copilotz_channel_zendesk_safe_url",
-    plugins: [plugin, createServerPlugin()],
+    plugins: [plugin, serverPlugin],
   });
   try {
     const response = await createServerFacadeFetchHandler(application)(

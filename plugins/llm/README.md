@@ -11,24 +11,18 @@ credentials, streaming, and recovery behind one Action boundary.
 
 ## How to use it
 
-Compose `llmPlugin`, declare LLM connection Resources, then invoke `callLlm`
-directly or through the Core agent workflow. Pure preflight estimates are
-available from `@copilotz/copilotz/llm/tokens`.
+```ts
+import { llmPlugin } from "@copilotz/copilotz/llm";
+// Include llmPlugin in the final createCopilotz({ plugins: [...] }) call.
+```
 
 ## How it works
 
-The plugin contributes `llm.call`; the Action resolves a model, materializes a
-built-in or custom Adapter, streams normalized output, and records provider
-attempts. Provider-aware estimation is public and side-effect free; learned
-calibration remains private process-local execution state.
+`copilotz.json` declares this root. `plugin.generated.ts` contains its static
+composition and `plugin.ts` exposes its public name. Regenerate with
+`deno task build:plugins`. Actions and Processors read final context
+configuration at invocation; there is no plugin factory or runtime directory
+discovery.
 
-When an Adapter returns provider-native reasoning state, `llm.call` stores its
-opaque JSON blocks as content Assets and stamps the producing adapter, API, and
-model. Readable `reasoning` remains ordinary Copilotz transcript content; the
-opaque blocks never enter the text protocol. Core replays opaque state only to
-the same Agent and only for that exact adapter, API format, and model. The v1
-envelope does not encode a connection ID or base URL, so a changed provider
-connection must support that same native state. The normal Copilotz text
-tool-call protocol is unchanged. Providers without compatible input replay keep
-the state out of the next request; DeepSeek ignores native state without native
-tools and Groq is output-only.
+See [convention-first authoring](../../docs/convention-authoring.md) for the
+shared file structure, compiler, configuration locations, and migration guide.

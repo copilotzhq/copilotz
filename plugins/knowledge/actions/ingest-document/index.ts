@@ -123,12 +123,12 @@ export const ingestKnowledgeDocumentAction: ActionDefinition<
     if (assetId) {
       const asset = await context.content.get(assetId);
       if (!asset) throw new Error(`Asset '${assetId}' was not found.`);
-      const ref: ContentRef = Object.freeze({
+      const ref: ContentRef = {
         assetId,
         kind: kind(asset.mediaType),
         role: "document.source",
         mediaType: asset.mediaType,
-      });
+      } as const;
       sourceInput = {
         kind: "content",
         content: ref,
@@ -219,14 +219,14 @@ export const ingestKnowledgeDocumentAction: ActionDefinition<
       metadata,
     }, { operationKey: `${context.operationKey}:document` });
     const createdTitle = String(created.title);
-    return Object.freeze({
+    return ({
       status: "pending",
       message: `Document "${createdTitle}" accepted for ingestion.`,
       documentId: created.id,
       source: source ?? `asset:${assetId}`,
       title: createdTitle,
       namespace: context.namespace,
-    });
+    } as const);
   },
 });
 

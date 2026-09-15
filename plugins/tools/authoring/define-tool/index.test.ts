@@ -1,7 +1,7 @@
 import { assert, assertEquals, assertThrows } from "@std/assert";
 import { type ActionSchema, defineAction } from "@copilotz/copilotz/actions";
 import { defineTool, type ToolResource } from "./index.ts";
-import { createToolsPlugin } from "../tools-plugin/index.ts";
+import { createPluginRegistry, definePlugin } from "@copilotz/copilotz/plugins";
 
 const inputSchema = {
   type: "object",
@@ -92,16 +92,9 @@ Deno.test("defineTool preserves its alias and snapshots optional Action schemas"
     "history",
     "metadata",
   ]);
-  assert(Object.isFrozen(tool));
-  assert(Object.isFrozen(tool.inputSchema));
-  assert(Object.isFrozen(tool.inputSchema?.properties));
-  assert(Object.isFrozen(tool.outputSchema));
-  assert(Object.isFrozen(tool.outputSchema?.properties));
-  assert(Object.isFrozen(tool.history));
-  assert(Object.isFrozen(tool.metadata));
 });
 
-Deno.test("object-form defineTool infers an Action and createToolsPlugin keeps Resources data-only", async () => {
+Deno.test("object-form defineTool infers an Action and composition keeps Resources data-only", async () => {
   const lookup = defineTool({
     id: "tool.lookup",
     name: "Lookup",
@@ -114,7 +107,11 @@ Deno.test("object-form defineTool infers an Action and createToolsPlugin keeps R
       return { result: input.query.toUpperCase() };
     },
   });
-  const plugin = createToolsPlugin({ tools: { lookup } });
+  const plugin = definePlugin({
+    id: "test",
+    version: "1",
+    resources: { tools: { lookup } },
+  });
   const action = plugin.actions.lookup;
   const tool = plugin.resources.tools.lookup as ToolResource<"lookup">;
 
@@ -166,9 +163,6 @@ Deno.test("defineTool isolates schema and metadata mutations deeply", () => {
   assertEquals(tool.inputSchema?.properties?.query, { type: "string" });
   assertEquals(tool.outputSchema?.properties?.answer, { type: "string" });
   assertEquals(tool.metadata, { provider: { id: "original" } });
-  assert(Object.isFrozen(tool.inputSchema?.properties?.query));
-  assert(Object.isFrozen(tool.outputSchema?.properties?.answer));
-  assert(Object.isFrozen((tool.metadata as { provider: object }).provider));
 });
 
 Deno.test("defineTool rejects non-data schema and metadata graphs", () => {
@@ -278,4 +272,54 @@ Deno.test("defineTool validates aliases and presentation without adding a host",
     TypeError,
     "invalid visibility",
   );
+});
+
+Deno.test("root Tool declarations register native Actions", () => {
+  const tool = defineTool({
+    id: "root.lookup",
+    name: "Lookup",
+    description: "Lookup",
+    execute: () => 42,
+  });
+  const registry = createPluginRegistry({
+    resources: { tools: { lookup: tool } },
+  });
+  assertEquals(registry.resources.tools.lookup.action, "lookup");
+  assertEquals(Object.keys(registry.actions), ["lookup"]);
+});
+
+Deno.test("tool action types remain distinct under their resource aliases", async () => {
+  const plugin = definePlugin({
+    id: "typed",
+    version: "1",
+    resources: {
+      tools: {
+        count: defineTool({
+          id: "typed.count",
+          name: "Count",
+          description: "Count",
+          execute(input: number) {
+            return input + 1;
+          },
+        }),
+        label: defineTool({
+          id: "typed.label",
+          name: "Label",
+          description: "Label",
+          execute(input: string) {
+            return input.toUpperCase();
+          },
+        }),
+      },
+    },
+  });
+  const count: number = await plugin.actions.count.execute(1, {} as never);
+  const label: string = await plugin.actions.label.execute("one", {} as never);
+  assertEquals([count, label], [2, "ONE"]);
+  if (false) {
+    // @ts-expect-error each alias preserves its own input, not an intersection of all tool signatures
+    plugin.actions.count.execute("wrong", {} as never);
+    // @ts-expect-error undeclared action aliases do not become a string index signature
+    plugin.actions.missing;
+  }
 });

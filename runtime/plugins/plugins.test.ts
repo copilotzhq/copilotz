@@ -67,11 +67,6 @@ Deno.test("plugin definitions use direct identity and five keyed primitive maps"
   assertStrictEquals(plugin.processors.indexDocument, indexDocument);
   assertStrictEquals(plugin.resources.models.default, model);
   assertStrictEquals(plugin.adapters.llm.openai, adapter);
-  assert(Object.isFrozen(plugin));
-  assert(Object.isFrozen(plugin.resources));
-  assert(Object.isFrozen(plugin.resources.models));
-  assert(!Object.isFrozen(model));
-  assert(!Object.isFrozen(adapter));
   assertEquals("manifest" in plugin, false);
   assertEquals("context" in plugin, false);
 });

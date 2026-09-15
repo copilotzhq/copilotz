@@ -1,3 +1,8 @@
+import {
+  type ContributionActions,
+  resolveContributions,
+  type ResolvedNamespaces,
+} from "./contribution.ts";
 import type { ActionMap, AnyActionDefinition } from "../actions/types.ts";
 import { isActionDefinition } from "../actions/define.ts";
 import type { CollectionDefinition } from "../collections/definition.ts";
@@ -174,6 +179,21 @@ export type DefinePluginInput<
   adapters?: TAdapters;
 }>;
 
+/** The resolved public type of a static plugin declaration. */
+export type DefinedPlugin<T extends DefinePluginInput> = ReturnType<
+  typeof definePlugin<
+    T["id"],
+    T["version"],
+    T extends { plugins: infer P extends readonly AnyCopilotzPlugin[] } ? P
+      : readonly [],
+    T extends { collections: infer C extends CollectionMap } ? C : EmptyMap,
+    T extends { actions: infer A extends ActionMap } ? A : EmptyMap,
+    T extends { processors: infer P extends ProcessorMap } ? P : EmptyMap,
+    T extends { resources: infer R extends PluginResources } ? R : EmptyMap,
+    T extends { adapters: infer A extends PluginAdapters } ? A : EmptyMap
+  >
+>;
+
 const ALIAS_PATTERN = /^[a-z][a-zA-Z0-9_]*$/;
 const UNSAFE_ALIASES = new Set(["__proto__", "constructor", "prototype"]);
 const PLUGIN_KEYS = new Set([
@@ -186,7 +206,7 @@ const PLUGIN_KEYS = new Set([
   "resources",
   "adapters",
 ]);
-const definedPlugins = new WeakSet<object>();
+const pluginMarker = Symbol.for("copilotz.plugin");
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -230,12 +250,12 @@ function isCollectionDefinition(value: unknown): value is CollectionDefinition {
     isRecord(value.schema);
 }
 
-function freezeDefinitionMap<T extends object>(
+function validateDefinitions<T extends object>(
   value: Readonly<Record<string, T>> | undefined,
   label: string,
   valid: (candidate: unknown) => candidate is T,
 ): Readonly<Record<string, T>> {
-  if (value === undefined) return Object.freeze({});
+  if (value === undefined) return ({});
   if (!isRecord(value)) {
     throw new TypeError(`${label} must be an alias map.`);
   }
@@ -248,15 +268,15 @@ function freezeDefinitionMap<T extends object>(
     }
     return [alias, definition] as const;
   });
-  return Object.freeze(Object.fromEntries(entries));
+  return (Object.fromEntries(entries));
 }
 
-/** Shallow-freezes namespace containers while preserving every value identity. */
-export function freezePluginNamespaces<T extends PluginNamespaceMap>(
+/** Copies and validates namespace containers, preserving value identity. */
+export function validateNamespaces<T extends PluginNamespaceMap>(
   value: T | undefined,
   label: string,
 ): T {
-  if (value === undefined) return Object.freeze({}) as T;
+  if (value === undefined) return ({}) as T;
   if (!isRecord(value)) {
     throw new TypeError(`${label} must be a namespace map.`);
   }
@@ -276,13 +296,14 @@ export function freezePluginNamespaces<T extends PluginNamespaceMap>(
         entry,
       ] as const
     );
-    return [namespace, Object.freeze(Object.fromEntries(entries))] as const;
+    return [namespace, Object.fromEntries(entries)] as const;
   });
-  return Object.freeze(Object.fromEntries(namespaces)) as T;
+  return (Object.fromEntries(namespaces)) as T;
 }
 
 export function isCopilotzPlugin(value: unknown): value is AnyCopilotzPlugin {
-  return isRecord(value) && definedPlugins.has(value);
+  return isRecord(value) && pluginMarker in value &&
+    value[pluginMarker] === true;
 }
 
 /**
@@ -314,10 +335,10 @@ export function definePlugin<
   TVersion,
   TPlugins,
   TCollections,
-  TActions,
+  TActions & ContributionActions<TResources> & ContributionActions<TAdapters>,
   TProcessors,
-  TResources,
-  TAdapters
+  ResolvedNamespaces<TResources>,
+  ResolvedNamespaces<TAdapters>
 > {
   if (!isRecord(input)) {
     throw new TypeError("Plugin definition must be an object.");
@@ -331,7 +352,7 @@ export function definePlugin<
   if (unknown) {
     throw new TypeError(`Plugin '${id}' cannot declare '${unknown}'.`);
   }
-  const plugins = input.plugins ?? (Object.freeze([]) as unknown as TPlugins);
+  const plugins = input.plugins ?? ([] as unknown as TPlugins);
   if (!Array.isArray(plugins)) {
     throw new TypeError(`Plugin '${id}' dependencies must be an array.`);
   }
@@ -343,43 +364,47 @@ export function definePlugin<
     }
   }
 
+  const resolved = resolveContributions(input);
   const plugin: CopilotzPlugin<
     TId,
     TVersion,
     TPlugins,
     TCollections,
-    TActions,
+    TActions & ContributionActions<TResources> & ContributionActions<TAdapters>,
     TProcessors,
-    TResources,
-    TAdapters
-  > = Object.freeze({
+    ResolvedNamespaces<TResources>,
+    ResolvedNamespaces<TAdapters>
+  > = {
     id,
     version,
-    plugins: Object.freeze([...plugins]) as unknown as TPlugins,
-    collections: freezeDefinitionMap(
-      input.collections,
+    plugins: [...plugins] as unknown as TPlugins,
+    collections: validateDefinitions(
+      resolved.collections,
       `Plugin '${id}' collections`,
       isCollectionDefinition,
     ) as TCollections,
-    actions: freezeDefinitionMap(
-      input.actions,
+    actions: validateDefinitions(
+      resolved.actions,
       `Plugin '${id}' actions`,
       isActionDefinition,
-    ) as TActions,
-    processors: freezeDefinitionMap(
-      input.processors,
+    ) as
+      & TActions
+      & ContributionActions<TResources>
+      & ContributionActions<TAdapters>,
+    processors: validateDefinitions(
+      resolved.processors,
       `Plugin '${id}' processors`,
       isProcessor,
     ) as TProcessors,
-    resources: freezePluginNamespaces(
-      input.resources,
+    resources: validateNamespaces(
+      resolved.resources as ResolvedNamespaces<TResources>,
       `Plugin '${id}' resources`,
     ),
-    adapters: freezePluginNamespaces(
-      input.adapters,
+    adapters: validateNamespaces(
+      resolved.adapters as ResolvedNamespaces<TAdapters>,
       `Plugin '${id}' adapters`,
     ),
-  });
-  definedPlugins.add(plugin);
+  };
+  Object.defineProperty(plugin, pluginMarker, { value: true });
   return plugin;
 }

@@ -1,10 +1,12 @@
+import { defineServerFacade as fixtureServerFacade } from "@copilotz/copilotz/server";
+import { definePlugin as defineFixturePlugin } from "@copilotz/copilotz/plugins";
 import { assertEquals, assertRejects } from "@std/assert";
 import { createCopilotzApplication } from "../runtime/application/index.ts";
 import {
   type ChannelAdapter,
   channelsPlugin,
-  createWebChannelAdapter,
-  createWebChannelResource,
+  webChannelAdapter,
+  webChannelResource,
 } from "../plugins/channels/index.ts";
 import {
   definePlugin,
@@ -14,13 +16,22 @@ import {
 import { corePlugin } from "../plugins/core/plugin.ts";
 import type { AgentResource } from "@copilotz/copilotz/core";
 import type { LlmAdapter, LlmAdapterResult } from "@copilotz/copilotz/llm";
-import { createServerPlugin } from "../plugins/server/index.ts";
+import { serverPlugin } from "../plugins/server/index.ts";
 import { createServerFacadeFetchHandler } from "./facade.ts";
 import { createCopilotzClient } from "../client/index.ts";
 const NAMESPACE = "tenant-a";
 const SCHEMA = "channel_http_contract";
 const server = () =>
-  createServerPlugin({ authenticate: () => ({ actor: { id: "user-a" } }) });
+  defineFixturePlugin({
+    ...serverPlugin,
+    resources: {
+      server: {
+        default: fixtureServerFacade({
+          authenticate: () => ({ actor: { id: "user-a" } }),
+        }),
+      },
+    },
+  });
 function client(
   application: Awaited<ReturnType<typeof createCopilotzApplication>>,
 ) {
@@ -49,7 +60,7 @@ Deno.test("Channel receipts precede settlement and detaching observers does not 
     },
   });
   let acceptSignal: AbortSignal | undefined;
-  const web = createWebChannelAdapter();
+  const web = webChannelAdapter;
   const observedWeb: ChannelAdapter = Object.freeze({
     ...web,
     accept(request, context) {
@@ -61,7 +72,7 @@ Deno.test("Channel receipts precede settlement and detaching observers does not 
     id: "test.request-bound-channel-provider",
     version: "1.0.0",
     plugins: [channelsPlugin] as const,
-    resources: { channels: { web: createWebChannelResource() } },
+    resources: { channels: { web: webChannelResource } },
     adapters: {
       channels: {
         web: observedWeb,
@@ -172,10 +183,10 @@ Deno.test("Channel receipt observation includes delayed Core model output before
     plugins: [channelsPlugin] as const,
     resources: {
       channels: {
-        web: createWebChannelResource({ defaultAgentAliases: ["support"] }),
+        web: { ...webChannelResource, defaultAgentAliases: ["support"] },
       },
     },
-    adapters: { channels: { web: createWebChannelAdapter() } },
+    adapters: { channels: { web: webChannelAdapter } },
   });
   const application = await createCopilotzApplication({
     namespace: NAMESPACE,
@@ -242,7 +253,7 @@ Deno.test("Channel host validates every occurrence before persistence and cleans
     plugins: [channelsPlugin] as const,
     resources: {
       channels: {
-        multiple: createWebChannelResource(),
+        multiple: webChannelResource,
         invalid: Object.freeze({ egress: "external" as const }),
       },
     },

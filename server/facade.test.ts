@@ -1,3 +1,5 @@
+import { defineServerFacade as fixtureServerFacade } from "@copilotz/copilotz/server";
+import { definePlugin as defineFixturePlugin } from "@copilotz/copilotz/plugins";
 import { assert, assertEquals, assertRejects } from "@std/assert";
 import { createCopilotz } from "../index.ts";
 import {
@@ -13,8 +15,8 @@ import {
   provisionCopilotzSchema,
 } from "../runtime/events/index.ts";
 import {
-  createServerPlugin,
   type ServerEndpointDescriptor,
+  serverPlugin,
 } from "../plugins/server/index.ts";
 import { createCopilotzApplication } from "../runtime/application/index.ts";
 import { createTestDatabase } from "../runtime/testing/ominipg.ts";
@@ -210,19 +212,30 @@ Deno.test("Server facade protects durable secrets and restricts plaintext to aut
     databaseSchema,
     plugins: [
       protectedFixture,
-      createServerPlugin({
-        authenticate(request) {
-          return { actor: { id: request.headers.get("x-user") ?? "owner" } };
-        },
-        authorize(_request, context) {
-          return {
-            operations: { metadata: { actorId: context.scope.actor!.id } },
-          };
-        },
-        expose: {
-          actions: { include: ["test.server.protected-echo"] },
-          collections: false,
-          channels: false,
+      defineFixturePlugin({
+        ...serverPlugin,
+        resources: {
+          server: {
+            default: fixtureServerFacade({
+              authenticate(request) {
+                return {
+                  actor: { id: request.headers.get("x-user") ?? "owner" },
+                };
+              },
+              authorize(_request, context) {
+                return {
+                  operations: {
+                    metadata: { actorId: context.scope.actor!.id },
+                  },
+                };
+              },
+              expose: {
+                actions: { include: ["test.server.protected-echo"] },
+                collections: false,
+                channels: false,
+              },
+            }),
+          },
         },
       }),
     ],
@@ -301,26 +314,33 @@ Deno.test("authorization predicates intersect requested collection filters befor
     databaseSchema: "server_policy_test",
     plugins: [
       fixture,
-      createServerPlugin({
-        authenticate(_request, context) {
-          endpoints.push(context.endpoint);
-          return { namespace: "tenant-a" };
-        },
-        authorize(_request, context) {
-          return context.endpoint.kind === "collection"
-            ? {
-              collections: {
-                serverNotes: {
-                  filter: { field: "label", eqIgnoreCase: "allowed" },
-                },
+      defineFixturePlugin({
+        ...serverPlugin,
+        resources: {
+          server: {
+            default: fixtureServerFacade({
+              authenticate(_request, context) {
+                endpoints.push(context.endpoint);
+                return { namespace: "tenant-a" };
               },
-            }
-            : { input: { value: "allowed" } };
-        },
-        expose: {
-          actions: { include: ["test.server.*"] },
-          collections: { include: ["serverNotes"] },
-          channels: false,
+              authorize(_request, context) {
+                return context.endpoint.kind === "collection"
+                  ? {
+                    collections: {
+                      serverNotes: {
+                        filter: { field: "label", eqIgnoreCase: "allowed" },
+                      },
+                    },
+                  }
+                  : { input: { value: "allowed" } };
+              },
+              expose: {
+                actions: { include: ["test.server.*"] },
+                collections: { include: ["serverNotes"] },
+                channels: false,
+              },
+            }),
+          },
         },
       }),
     ],
@@ -412,12 +432,19 @@ Deno.test("authentication chooses the database scope and can return an early HTT
     databaseSchema: "server_authenticated_default",
     plugins: [
       fixture,
-      createServerPlugin({
-        authenticate(request, context) {
-          assertEquals(context.endpoint.kind, "collection");
-          return request.headers.has("authorization")
-            ? { namespace: "tenant-a", databaseSchema: schema }
-            : new Response(null, { status: 401 });
+      defineFixturePlugin({
+        ...serverPlugin,
+        resources: {
+          server: {
+            default: fixtureServerFacade({
+              authenticate(request, context) {
+                assertEquals(context.endpoint.kind, "collection");
+                return request.headers.has("authorization")
+                  ? { namespace: "tenant-a", databaseSchema: schema }
+                  : new Response(null, { status: 401 });
+              },
+            }),
+          },
         },
       }),
     ],
@@ -459,11 +486,18 @@ Deno.test("Server facade publishes raw asset uploads without Action payload copi
     namespace: "tenant-a",
     databaseSchema: "server_facade_asset_upload",
     plugins: [
-      createServerPlugin({
-        maxAssetUploadBytes: 4,
-        authenticate(_request, context) {
-          seen.push(context.endpoint);
-          return { namespace: "tenant-a" };
+      defineFixturePlugin({
+        ...serverPlugin,
+        resources: {
+          server: {
+            default: fixtureServerFacade({
+              maxAssetUploadBytes: 4,
+              authenticate(_request, context) {
+                seen.push(context.endpoint);
+                return { namespace: "tenant-a" };
+              },
+            }),
+          },
         },
       }),
     ],
@@ -554,7 +588,7 @@ Deno.test("Gateway mounts the composed facade in Oxian-compatible Fetch and reje
     type: "in-process" as const,
     config: Object.freeze({ topic: `server.facade.${crypto.randomUUID()}` }),
   });
-  const plugins = [fixture, createServerPlugin()] as const;
+  const plugins = [fixture, serverPlugin] as const;
   const gateway = await createCopilotz({
     role: "gateway",
     database,

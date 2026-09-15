@@ -12,8 +12,8 @@ plugins still need independent physical owners.
 
 ## How to use it
 
-Import `defineTool` and `createToolsPlugin` from `/tools`. Import concrete Tool
-families from their dedicated subpaths.
+Import `defineTool` from `/tools` and register declarations in
+`resources.tools`. Import concrete Tool families from their dedicated subpaths.
 
 ## How it works
 

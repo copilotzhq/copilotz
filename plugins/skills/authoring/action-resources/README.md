@@ -1,19 +1,20 @@
-# Skill Action and Tool Generator
+# Skill tools
 
 ## What it is
 
-A compiler for the progressive-disclosure Skill Actions and Tool Resources.
+Static Tool declarations.
 
 ## Why it exists
 
-The generated Actions share configuration and must remain paired with their
-data-only Tool presentations.
+Applications can choose individual capabilities without a plugin factory.
 
 ## How to use it
 
-`createSkillsPlugin` invokes it after validating the selected Skill Tool IDs.
+Import `listSkillsTool, loadSkillTool, readSkillResourceTool` and register
+selected declarations in `resources.tools`.
 
 ## How it works
 
-It generates bounded list, load, and file-read Actions plus matching Tool
-Resources under stable aliases.
+Each declaration contributes a native Action and a data-only Tool Resource
+through the synchronous composition protocol. Configuration is read from the
+final context.

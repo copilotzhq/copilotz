@@ -58,13 +58,13 @@ export async function loadCoreThreadMetadata(
       .map((id) => requireCollection(context, "participant").get({ id })),
   ))
     .filter((item): item is CollectionRecord => Boolean(item));
-  return Object.freeze({
+  return ({
     thread: mapThreadRecord(
       thread,
       participantRecords.map(mapParticipantRecord),
     ),
-    participantRecords: Object.freeze(participantRecords),
-  });
+    participantRecords: participantRecords,
+  } as const);
 }
 
 export function requiredText(value: string | undefined, name: string): string {
@@ -88,12 +88,10 @@ export function optionalText(value: unknown): string | undefined {
 }
 
 export function stringArray(value: unknown): readonly string[] {
-  if (!Array.isArray(value)) return Object.freeze([]);
-  return Object.freeze(
-    value.filter((item): item is string =>
-      typeof item === "string" && Boolean(item.trim())
-    ),
-  );
+  if (!Array.isArray(value)) return ([] as const);
+  return (value.filter((item): item is string =>
+    typeof item === "string" && Boolean(item.trim())
+  ));
 }
 
 export function requireCollection<T extends CollectionRecord>(
@@ -115,7 +113,7 @@ export function collectionEventRecord(
 }
 
 export function mapParticipant(record: CollectionRecord): Participant {
-  return Object.freeze({
+  return ({
     id: String(record.id),
     namespace: String(record.namespace),
     externalId: String(record.externalId ?? record.id),
@@ -130,14 +128,14 @@ export function mapParticipant(record: CollectionRecord): Participant {
     metadata: asRecord(record.metadata),
     createdAt: String(record.createdAt),
     updatedAt: String(record.updatedAt),
-  });
+  } as const);
 }
 
 export function mapMessage(
   record: CollectionRecord,
   sender: Participant,
 ): ConversationMessage {
-  return Object.freeze({
+  return ({
     id: String(record.id),
     namespace: String(record.namespace),
     threadId: String(record.threadId),
@@ -151,14 +149,14 @@ export function mapMessage(
       : {}),
     createdAt: String(record.createdAt),
     updatedAt: String(record.updatedAt),
-  });
+  } as const);
 }
 
 export function mapThread(
   record: CollectionRecord,
   participants: readonly Participant[],
 ): ConversationThread {
-  return Object.freeze({
+  return ({
     id: String(record.id),
     namespace: String(record.namespace),
     ...(optionalText(record.externalId)
@@ -177,7 +175,7 @@ export function mapThread(
       : {}),
     createdAt: String(record.createdAt),
     updatedAt: String(record.updatedAt),
-  });
+  } as const);
 }
 
 export function participantAgentId(participant: CollectionRecord): string {
@@ -263,7 +261,7 @@ export async function loadCoreThreadMessageSnapshot(
         currentTrigger,
       ),
   );
-  const records = Object.freeze(active ? window.records : []);
+  const records = active ? window.records : [];
   const participantRecords = new Map(
     window.participantRecords.map((record) => [String(record.id), record]),
   );
@@ -295,20 +293,20 @@ export async function loadCoreThreadMessageSnapshot(
     if (!sender) {
       throw new Error(`Message '${record.id}' sender was not found.`);
     }
-    return Object.freeze({
+    return ({
       ...mapMessageRecord(record, sender),
       ...(record.visibility === undefined
         ? {}
         : { visibility: structuredClone(asRecord(record.visibility)) }),
-    });
+    } as const);
   });
-  return Object.freeze({
+  return ({
     active,
     thread,
-    participantRecords: Object.freeze([...participantRecords.values()]),
+    participantRecords: [...participantRecords.values()] as const,
     records,
-    messages: Object.freeze(hydrated),
-  });
+    messages: hydrated,
+  } as const);
 }
 
 /** Resolves one Agent's least-authority Tool Resources in stable grant order. */
@@ -322,7 +320,7 @@ export function toolsForAgent(
 ): readonly CoreToolEntry[] {
   const entries = Object.entries(context.resources.tools ?? {}).flatMap(
     ([alias, resource]): readonly CoreToolEntry[] => {
-      if (!resource) return Object.freeze([]);
+      if (!resource) return ([] as const);
       if (resource.action !== alias) {
         throw new TypeError(
           `Tool Resource '${alias}' must reference Action alias '${alias}'.`,
@@ -342,7 +340,7 @@ export function toolsForAgent(
           `Tool Resource '${alias}' has no composed Action '${alias}'.`,
         );
       }
-      return Object.freeze([Object.freeze({ alias, resource })]);
+      return ([{ alias, resource } as const] as const);
     },
   );
   return resolveToolGrants(agent, entries, {

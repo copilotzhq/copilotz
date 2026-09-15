@@ -12,11 +12,21 @@ subprocess capabilities.
 
 ## How to use it
 
-Compose `createWebToolsPlugin()` and optionally select Tool aliases with its
-`include` option.
+```ts
+import { webToolsPlugin } from "@copilotz/copilotz/tools/web";
+// Include webToolsPlugin in the final createCopilotz({ plugins: [...] }) call.
+```
+
+Select individual exported Tool declarations in `resources.tools`; only selected
+Tools contribute Actions.
 
 ## How it works
 
-The plugin registers three durable Actions and matching data-only Tool
-Resources. Each Action enforces request, response, timeout, and cancellation
-bounds.
+`copilotz.json` declares this root. `plugin.generated.ts` contains its static
+composition and `plugin.ts` exposes its public name. Regenerate with
+`deno task build:plugins`. Actions and Processors read final context
+configuration at invocation; there is no plugin factory or runtime directory
+discovery.
+
+See [convention-first authoring](../../docs/convention-authoring.md) for the
+shared file structure, compiler, configuration locations, and migration guide.

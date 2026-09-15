@@ -32,8 +32,8 @@ function messageName(message: ConversationMessage): string | undefined {
 }
 
 function embeddedToolCalls(value: unknown): readonly LlmToolCall[] {
-  if (!Array.isArray(value)) return Object.freeze([]);
-  return Object.freeze(value.map((candidate, index) => {
+  if (!Array.isArray(value)) return ([] as const);
+  return (value.map((candidate, index) => {
     const call = record(candidate);
     const id = optionalText(call.id);
     const action = optionalText(call.action);
@@ -43,11 +43,11 @@ function embeddedToolCalls(value: unknown): readonly LlmToolCall[] {
         `Assistant message tool call ${index} is missing its id or Action alias.`,
       );
     }
-    return Object.freeze({
+    return ({
       id,
       action,
       input: structuredClone(input) as LlmJsonObject,
-    });
+    } as const);
   }));
 }
 
@@ -73,7 +73,7 @@ function projectMessage(
   // it into a later Model request would turn a transient provider failure into
   // an instruction-bearing conversation fact.
   if (agentFailureMetadata(message.metadata)) return null;
-  const content = Object.freeze(structuredClone(message.content));
+  const content = structuredClone(message.content);
   const name = messageName(message);
   if (message.sender.participantType === "agent") {
     const ask = agentAskMetadata(message.metadata);
@@ -81,64 +81,64 @@ function projectMessage(
       const mode = ask.mode ?? "public";
       if (ask.phase === "question") {
         if (targetParticipantId === ask.askedParticipantId) {
-          return Object.freeze({
+          return ({
             role: "user",
             content,
             ...(name ? { name } : {}),
-          });
+          } as const);
         }
         return targetParticipantId === ask.askingParticipantId ||
             mode === "private"
           ? null
-          : Object.freeze({ role: "user", content, ...(name ? { name } : {}) });
+          : ({ role: "user", content, ...(name ? { name } : {}) } as const);
       }
       if (ask.phase === "progress") {
         if (targetParticipantId === ask.askedParticipantId) {
           const toolCalls = embeddedToolCalls(message.metadata.llmToolCalls);
           const planId = toolPlanId(message);
-          return Object.freeze({
+          return ({
             role: "assistant",
             content,
             ...(name ? { name } : {}),
             ...(toolCalls.length ? { toolCalls } : {}),
             ...(planId && toolCalls.length ? { toolPlanId: planId } : {}),
-          });
+          } as const);
         }
         return mode === "public" && content.length
-          ? Object.freeze({ role: "user", content, ...(name ? { name } : {}) })
+          ? ({ role: "user", content, ...(name ? { name } : {}) } as const)
           : null;
       }
       if (targetParticipantId === ask.askingParticipantId) {
-        return Object.freeze({
+        return ({
           role: "user",
           content,
           ...(name ? { name } : {}),
-        });
+        } as const);
       }
       if (targetParticipantId === ask.askedParticipantId) {
-        return Object.freeze({
+        return ({
           role: "assistant",
           content,
           ...(name ? { name } : {}),
-        });
+        } as const);
       }
       return mode === "private"
         ? null
-        : Object.freeze({ role: "user", content, ...(name ? { name } : {}) });
+        : ({ role: "user", content, ...(name ? { name } : {}) } as const);
     }
     if (targetParticipantId && message.sender.id === targetParticipantId) {
       const toolCalls = embeddedToolCalls(message.metadata.llmToolCalls);
       const planId = toolPlanId(message);
-      return Object.freeze({
+      return ({
         role: "assistant",
         content,
         ...(name ? { name } : {}),
         ...(toolCalls.length ? { toolCalls } : {}),
         ...(planId && toolCalls.length ? { toolPlanId: planId } : {}),
-      });
+      } as const);
     }
     if (embeddedToolCalls(message.metadata.llmToolCalls).length) return null;
-    return Object.freeze({ role: "user", content, ...(name ? { name } : {}) });
+    return ({ role: "user", content, ...(name ? { name } : {}) } as const);
   }
   if (message.sender.participantType === "tool") {
     const requesterId = optionalText(message.metadata.requesterId) ??
@@ -146,20 +146,20 @@ function projectMessage(
     const id = toolCallId(message);
     const planId = toolPlanId(message);
     if (id && requesterId === targetParticipantId) {
-      return Object.freeze({
+      return ({
         role: "tool",
         content,
         toolCallId: id,
         ...(planId ? { toolPlanId: planId } : {}),
         ...(name ? { name } : {}),
-      });
+      } as const);
     }
     const historyVisibility = optionalText(
       message.metadata.historyVisibility,
     ) ?? "public_status";
     if (historyVisibility !== "public") return null;
   }
-  return Object.freeze({ role: "user", content, ...(name ? { name } : {}) });
+  return ({ role: "user", content, ...(name ? { name } : {}) } as const);
 }
 
 function toLlmMessage(
@@ -213,11 +213,11 @@ function receiptAnswer(
     ask.askingParticipantId !== targetParticipantId
   ) return null;
   const name = messageName(answer);
-  return Object.freeze({
+  return ({
     role: "user",
-    content: Object.freeze(structuredClone(answer.content)),
+    content: structuredClone(answer.content),
     ...(name ? { name } : {}),
-  });
+  } as const);
 }
 
 /** Compiles immutable Core Messages into participant-relative LLM history. */
@@ -272,5 +272,5 @@ export function buildLlmTranscript(
       onSelectedSource?.(answer.id);
     }
   }
-  return Object.freeze(output);
+  return output;
 }

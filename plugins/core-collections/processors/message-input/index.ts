@@ -107,12 +107,10 @@ async function resolveParticipantRecord(
 function recordStringArray(
   value: unknown,
 ): readonly string[] {
-  if (!Array.isArray(value)) return Object.freeze([]);
-  return Object.freeze(
-    value.filter((item): item is string =>
-      typeof item === "string" && Boolean(item.trim())
-    ).map((item) => item.trim()),
-  );
+  if (!Array.isArray(value)) return ([] as const);
+  return (value.filter((item): item is string =>
+    typeof item === "string" && Boolean(item.trim())
+  ).map((item) => item.trim()));
 }
 
 async function defaultRecipientIds(
@@ -121,21 +119,19 @@ async function defaultRecipientIds(
   senderInput: unknown,
 ): Promise<readonly string[]> {
   const thread = await context.collections.thread.get({ id: threadId });
-  if (!thread) return Object.freeze([]);
+  if (!thread) return ([] as const);
   const sender = await resolveParticipantRecord(context, senderInput);
   const senderId = optionalText(sender?.id);
   const participantIds = recordStringArray(thread.participantIds);
   const participants = await Promise.all(
     participantIds.map((id) => context.collections.participant.get({ id })),
   );
-  return Object.freeze(
-    participants
-      .filter((item): item is CollectionRecord => item !== null)
-      .filter((item) =>
-        item.participantType === "agent" && optionalText(item.id) !== senderId
-      )
-      .map((item) => String(item.id)),
-  );
+  return (participants
+    .filter((item): item is CollectionRecord => item !== null)
+    .filter((item) =>
+      item.participantType === "agent" && optionalText(item.id) !== senderId
+    )
+    .map((item) => String(item.id)));
 }
 
 async function recipientIds(
@@ -151,7 +147,7 @@ async function recipientIds(
   const resolved = await Promise.all(
     ids.map((id) => resolveParticipantId(context, id)),
   );
-  return Object.freeze([...new Set(resolved)]);
+  return ([...new Set(resolved)] as const);
 }
 
 function participant(value: unknown): Record<string, unknown> {
@@ -167,12 +163,10 @@ function participant(value: unknown): Record<string, unknown> {
 }
 
 function stringArray(value: unknown): readonly string[] {
-  if (!Array.isArray(value)) return Object.freeze([]);
-  return Object.freeze(
-    value.filter((item): item is string =>
-      typeof item === "string" && Boolean(item.trim())
-    ).map((item) => item.trim()),
-  );
+  if (!Array.isArray(value)) return ([] as const);
+  return (value.filter((item): item is string =>
+    typeof item === "string" && Boolean(item.trim())
+  ).map((item) => item.trim()));
 }
 
 export const messageInputProcessor: Processor<CoreProcessorContext> =
@@ -209,3 +203,5 @@ export const messageInputProcessor: Processor<CoreProcessorContext> =
       });
     },
   });
+
+export default messageInputProcessor;

@@ -1,6 +1,6 @@
 /** Public semantic Server plugin and authoring surface. @module */
 
-export { createServerPlugin, serverPlugin } from "./plugin.ts";
+export { serverPlugin } from "./plugin.ts";
 export * from "./authoring/index.ts";
 export * from "./resources/index.ts";
 export {

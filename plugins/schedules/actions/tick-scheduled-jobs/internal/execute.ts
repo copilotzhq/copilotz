@@ -54,18 +54,16 @@ async function dueCandidates(
     after = page[page.length - 1]?.id;
     if (!after) break;
   }
-  return Object.freeze(
-    records
-      .map((record: CollectionRecord) => normalizeScheduledJobRecord(record))
-      .filter((job) =>
-        job.nextRunAtMs !== null && job.nextRunAtMs <= checkedAt.getTime()
-      )
-      .sort((left, right) =>
-        (left.nextRunAtMs ?? 0) - (right.nextRunAtMs ?? 0) ||
-        left.id.localeCompare(right.id)
-      )
-      .slice(0, limit),
-  );
+  return (records
+    .map((record: CollectionRecord) => normalizeScheduledJobRecord(record))
+    .filter((job) =>
+      job.nextRunAtMs !== null && job.nextRunAtMs <= checkedAt.getTime()
+    )
+    .sort((left, right) =>
+      (left.nextRunAtMs ?? 0) - (right.nextRunAtMs ?? 0) ||
+      left.id.localeCompare(right.id)
+    )
+    .slice(0, limit));
 }
 
 export async function executeTickScheduledJobs(
@@ -95,14 +93,16 @@ export async function executeTickScheduledJobs(
       }, {
         operationKey: `scheduled_job.due:${item.id}`,
       });
-      jobs.push(Object.freeze({
-        jobId: candidate.id,
-        name: candidate.name,
-        occurrenceId: item.id,
-        status: "claimed",
-      }));
+      jobs.push(
+        {
+          jobId: candidate.id,
+          name: candidate.name,
+          occurrenceId: item.id,
+          status: "claimed",
+        } as const,
+      );
     } catch (error) {
-      jobs.push(Object.freeze(
+      jobs.push(
         isNotDue(error)
           ? {
             jobId: candidate.id,
@@ -117,14 +117,14 @@ export async function executeTickScheduledJobs(
             status: "failed" as const,
             error: error instanceof Error ? error.message : String(error),
           },
-      ));
+      );
     }
   }
-  return Object.freeze({
+  return ({
     checkedAt: checkedAt.toISOString(),
     claimed: jobs.filter((item) => item.status === "claimed").length,
     skipped: jobs.filter((item) => item.status === "skipped").length,
     failed: jobs.filter((item) => item.status === "failed").length,
-    jobs: Object.freeze(jobs),
-  });
+    jobs: jobs,
+  } as const);
 }

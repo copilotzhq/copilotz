@@ -188,3 +188,5 @@ export const toolPlanCollection: CollectionDefinition = defineCollection({
     },
   },
 });
+
+export default toolPlanCollection;

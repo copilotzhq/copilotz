@@ -1,4 +1,6 @@
-import { assert, assertEquals, assertRejects } from "@std/assert";
+import { definePlugin } from "@copilotz/copilotz/plugins";
+import { readFileTool, runCommandTool } from "./resources/index.ts";
+import { assertEquals, assertRejects } from "@std/assert";
 import type { ActionContext } from "@copilotz/copilotz/actions";
 /**
  * Verifies selectable Deno Tool plugin composition and cancellation.
@@ -7,45 +9,21 @@ import type { ActionContext } from "@copilotz/copilotz/actions";
  */
 
 import { runCommandAction } from "./actions/run-command/index.ts";
-import {
-  createProcessToolsPlugin,
-  createWorkspaceToolsPlugin,
-  PROCESS_TOOL_IDS,
-  WORKSPACE_TOOL_IDS,
-} from "./plugin.ts";
-import * as denoTools from "./index.ts";
 
-Deno.test("Deno Tool plugins expose workspace and process actions by stable ID", () => {
-  const workspace = createWorkspaceToolsPlugin();
-  const process = createProcessToolsPlugin();
-  const workspaceTools = workspace.resources.tools ?? {};
-  const processTools = process.resources.tools ?? {};
-  assertEquals(Object.keys(workspaceTools), [...WORKSPACE_TOOL_IDS]);
-  assertEquals(Object.keys(processTools), [...PROCESS_TOOL_IDS]);
-  assertEquals(workspace.id, "@copilotz/workspace-tools");
-  assertEquals(process.id, "@copilotz/process-tools");
-  assert(Object.values(workspaceTools).every((tool) => Object.isFrozen(tool)));
-  assertEquals(Object.keys(workspace.actions), [...WORKSPACE_TOOL_IDS]);
-  assertEquals(Object.keys(process.actions), [...PROCESS_TOOL_IDS]);
-  for (const [alias, tool] of Object.entries(workspaceTools)) {
-    assertEquals((tool as { action: string }).action, alias);
-    assert(!("execute" in (tool as object)));
-  }
-  assertEquals(
-    Object.keys(
-      createWorkspaceToolsPlugin({ include: ["read_file"] }).resources
-        .tools ?? {},
-    ),
-    ["read_file"],
-  );
-  for (
-    const removed of [
-      "createDenoProcessToolsPlugin",
-      "createDenoWorkspaceToolsPlugin",
-      "DENO_PROCESS_TOOL_IDS",
-      "DENO_WORKSPACE_TOOL_IDS",
-    ]
-  ) assertEquals(removed in denoTools, false, removed);
+Deno.test("Deno tool selection keeps process execution explicit", () => {
+  const workspace = definePlugin({
+    id: "test.workspace",
+    version: "1",
+    resources: { tools: { read_file: readFileTool } },
+  });
+  const process = definePlugin({
+    id: "test.process",
+    version: "1",
+    resources: { tools: { run_command: runCommandTool } },
+  });
+  assertEquals(Object.keys(workspace.actions), ["read_file"]);
+  assertEquals(Object.keys(process.actions), ["run_command"]);
+  assertEquals("run_command" in workspace.actions, false);
 });
 
 Deno.test("run_command surfaces Action cancellation and terminates its child", async () => {

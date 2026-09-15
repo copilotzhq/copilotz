@@ -1,10 +1,10 @@
 import { assert, assertEquals } from "@std/assert";
 import AjvModule from "ajv";
-import { createInspectMemoryTool } from "../../resources/inspect-memory-tool/index.ts";
-import { createInspectMemoryAction } from "./index.ts";
+import { inspectMemoryTool } from "../../resources/tools/inspect-memory/index.ts";
+import { inspectMemoryAction } from "./index.ts";
 
 Deno.test("inspect action publishes a closed output schema through its Tool", () => {
-  const action = createInspectMemoryAction();
+  const action = inspectMemoryAction;
   assertEquals(action.id, "copilotz.memory.inspect");
   assert(action.outputSchema);
   assert(
@@ -18,7 +18,7 @@ Deno.test("inspect action publishes a closed output schema through its Tool", ()
     false,
   );
   assertEquals(
-    createInspectMemoryTool(action).outputSchema,
+    inspectMemoryTool.outputSchema,
     action.outputSchema,
   );
 });

@@ -79,7 +79,7 @@ function metadata(
   if (entries.some(([, item]) => typeof item !== "string")) {
     throw new TypeError("Skill metadata values must be strings.");
   }
-  return Object.freeze(Object.fromEntries(entries) as Record<string, string>);
+  return (Object.fromEntries(entries) as Record<string, string>);
 }
 
 export function validateSkillManifest(
@@ -119,14 +119,14 @@ export function validateSkillManifest(
   const skillMetadata = metadata(input.metadata);
   const allowedTools = optionalString(input["allowed-tools"], "allowed-tools");
 
-  return Object.freeze({
+  return ({
     name,
     description,
     ...(license ? { license } : {}),
     ...(compatibility ? { compatibility } : {}),
     ...(skillMetadata ? { metadata: skillMetadata } : {}),
     ...(allowedTools ? { allowedTools } : {}),
-  });
+  } as const);
 }
 
 function frontmatter(raw: string): Readonly<{ yaml: string; body: string }> {
@@ -143,10 +143,10 @@ function frontmatter(raw: string): Readonly<{ yaml: string; body: string }> {
       "SKILL.md frontmatter is missing its closing delimiter.",
     );
   }
-  return Object.freeze({
+  return ({
     yaml: lines.slice(1, closing).join("\n"),
     body: lines.slice(closing + 1).join("\n").trim(),
-  });
+  } as const);
 }
 
 /** Strictly parses and validates an Agent Skills `SKILL.md` file. */
@@ -169,8 +169,8 @@ export function parseSkillMarkdown(
       cause,
     });
   }
-  return Object.freeze({
+  return ({
     manifest: validateSkillManifest(parsed, options),
     body: document.body,
-  });
+  } as const);
 }

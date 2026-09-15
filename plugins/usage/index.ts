@@ -5,10 +5,9 @@
  */
 
 export { usageCollection } from "./collections/index.ts";
-export { createUsageWorkflowPlugin } from "./plugin.ts";
+export { usagePlugin } from "./plugin.ts";
 export { METRIC_DESCRIPTORS } from "./internal/contracts.ts";
 export type {
-  CreateUsageWorkflowPluginOptions,
   MetricDescriptor,
   UsageCost,
   UsageEvent,

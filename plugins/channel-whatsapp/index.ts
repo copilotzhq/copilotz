@@ -1,8 +1,8 @@
 /** Exposes the public WhatsApp Channel plugin surface. @module */
 export {
-  createWhatsAppChannelAdapter,
   createWhatsAppGraphTransport,
   verifyWhatsAppSignature,
+  whatsappChannelAdapter,
   whatsappHeader,
 } from "./adapters/index.ts";
 export {
@@ -13,16 +13,14 @@ export {
   resolveWhatsAppMediaCarouselAction,
   splitWhatsAppText,
 } from "./authoring/index.ts";
-export { createWhatsAppChannelPlugin } from "./plugin.ts";
-export { createWhatsAppChannelResource } from "./resources/index.ts";
+export { whatsappChannelPlugin } from "./plugin.ts";
+export { whatsappChannelResource } from "./resources/index.ts";
 export type {
-  CreateWhatsAppChannelAdapterOptions,
-  CreateWhatsAppChannelPluginOptions,
-  CreateWhatsAppChannelResourceOptions,
   TransformWhatsAppDelivery,
   WhatsAppActionPayload,
   WhatsAppCarouselImageInput,
   WhatsAppCarouselQuickReplyInput,
+  WhatsAppChannelOptions,
   WhatsAppConfig,
   WhatsAppConfigContext,
   WhatsAppConfigResolver,

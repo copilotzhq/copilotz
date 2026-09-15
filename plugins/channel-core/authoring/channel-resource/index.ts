@@ -44,7 +44,7 @@ function dataObject(
     }
     snapshot[key] = descriptor.value;
   }
-  return Object.freeze(snapshot);
+  return snapshot;
 }
 
 function requiredText(value: unknown, label: string): string {
@@ -80,7 +80,7 @@ function aliasArray(value: unknown): readonly string[] {
     }
     aliases.push(requiredText(descriptor.value, "Default Agent alias"));
   }
-  return Object.freeze([...new Set(aliases)]);
+  return ([...new Set(aliases)] as const);
 }
 
 /** Freezes data-only Channel policy; its map alias remains external. */
@@ -104,13 +104,13 @@ export function defineChannelResource(input: ChannelResource): ChannelResource {
   if (metadata && Array.isArray(metadata)) {
     throw new TypeError("Channel Resource metadata must be a JSON object.");
   }
-  return Object.freeze({
+  return ({
     egress: snapshot.egress,
     ...(aliases?.length
-      ? { defaultAgentAliases: Object.freeze([...new Set(aliases)]) }
+      ? { defaultAgentAliases: [...new Set(aliases)] as const }
       : {}),
     ...(metadata ? { metadata } : {}),
-  });
+  } as const);
 }
 
 export function isChannelResource(value: unknown): value is ChannelResource {

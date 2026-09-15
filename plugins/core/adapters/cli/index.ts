@@ -217,11 +217,11 @@ export function createInteractiveCli(options: InteractiveCliOptions): Readonly<{
   const printLine = (line: string): void => io.write(line + "\n");
   const cwd = (): string => options.cwd ?? io.cwd?.() ?? ".";
   const inspect = async (): Promise<CliInspection> =>
-    await options.inspect?.() ?? Object.freeze({
-      agents: Object.freeze([]),
-      tools: Object.freeze([]),
-      skills: Object.freeze([]),
-    });
+    await options.inspect?.() ?? ({
+      agents: [] as const,
+      tools: [] as const,
+      skills: [] as const,
+    } as const);
 
   const stop = (): void => {
     stopped = true;
@@ -737,12 +737,12 @@ export function createInteractiveCli(options: InteractiveCliOptions): Readonly<{
     }
   };
 
-  return Object.freeze({ stop, run });
+  return ({ stop, run } as const);
 }
 
 export function startInteractiveCli(
   options: InteractiveCliOptions,
 ): InteractiveCliHandle {
   const cli = createInteractiveCli(options);
-  return Object.freeze({ stop: cli.stop, closed: cli.run() });
+  return ({ stop: cli.stop, closed: cli.run() } as const);
 }

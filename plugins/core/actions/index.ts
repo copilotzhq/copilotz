@@ -1,3 +1,3 @@
 /** Exposes Core semantic Actions. @module */
 
-export * from "./ask/index.ts";
+export * from "../../core-collections/actions/ask/index.ts";

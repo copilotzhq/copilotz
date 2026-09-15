@@ -4,7 +4,4 @@
  * @module
  */
 
-export {
-  createWebChannelResource,
-  type CreateWebChannelResourceOptions,
-} from "./web/index.ts";
+export { webChannelResource } from "./channels/web/index.ts";

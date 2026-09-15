@@ -9,20 +9,21 @@ import { createCopilotzEngine } from "../../../runtime/engine/index.ts";
 import { createTestDatabase } from "../../../runtime/testing/ominipg.ts";
 import { createTestDomainContext } from "../../core/internal/testing/context.ts";
 import { materializeBuiltinModel } from "../../llm/adapters/builtin/index.ts";
-import { createLongTermMemoryPlugin } from "../plugin.ts";
+import { memoryPlugin } from "../plugin.ts";
 import {
   checkpointAccessible,
   ensureWritableMemorySpace,
   threadMemorySpaces,
 } from "./access.ts";
 import { activeMemoryRecords, candidateRecords } from "./retrieval.ts";
-import { createMemoryContextResource } from "../resources/prompt-context/index.ts";
+import { memoryContextResource } from "../resources/promptContext/memory/index.ts";
 import type { MemoryProcessorContext } from "./contracts.ts";
 
 Deno.test("Space memory is read-only, isolated and revocable across all consumers", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   const registry = await createPluginRegistry({
-    plugins: [createLongTermMemoryPlugin({ enabled: false })],
+    plugins: [memoryPlugin],
+    resources: { memory: { config: { enabled: false } } },
   });
   const engine = await createCopilotzEngine({
     session: db,
@@ -46,9 +47,16 @@ Deno.test("Space memory is read-only, isolated and revocable across all consumer
     }) as { memories: { id: string }[] };
     return result.memories.map((m) => m.id).sort();
   };
-  const resource = createMemoryContextResource(true);
+  const resource = memoryContextResource;
   const prompt = () =>
     resource.contribute({
+      context: {
+        ...context,
+        resources: {
+          ...context.resources,
+          memory: { config: { enabled: true } },
+        },
+      },
       collections: c,
       thread: { id: "a" },
       agent: { id: "reader" },

@@ -33,11 +33,11 @@ import {
 import { projectMessages } from "../core/internal/testing/projections.ts";
 import { createTestDomainContext } from "../core/internal/testing/context.ts";
 import AjvModule from "ajv";
-import { createConsolidateMemoryAction } from "./actions/consolidate-memory/index.ts";
-import { createInspectMemoryAction } from "./actions/inspect-memory/index.ts";
-import { createSearchMemoryAction } from "./actions/search-memory/index.ts";
-import { createLongTermMemoryPlugin } from "./plugin.ts";
-import type { LongTermMemoryConfig } from "./resources/config/index.ts";
+import { consolidateMemoryAction } from "./actions/consolidate-memory/index.ts";
+import { inspectMemoryAction } from "./actions/inspect-memory/index.ts";
+import { searchMemoryAction } from "./actions/search-memory/index.ts";
+import { memoryPlugin } from "./plugin.ts";
+import type { LongTermMemoryConfig } from "./resources/memory/config/index.ts";
 
 const NAMESPACE = "tenant-memory-native-turn";
 const SCHEMA = "copilotz_memory_native_turn";
@@ -127,18 +127,19 @@ async function fixture(
 ): Promise<Fixture> {
   const db = await createTestDatabase({ url: ":memory:" });
   const inputs: LlmAdapterCallInput[] = [];
-  const memory = createLongTermMemoryPlugin({
-    enabled: options.enabled,
-    config: {
-      triggerEstimatedTokens: 1,
-      retainRecentEstimatedTokens: 0,
-      ...options.memoryConfig,
-    },
-  });
+  const memory = memoryPlugin;
   const app = definePlugin({
     id: "test.memory-native-agent-turn",
     version: "1.0.0",
     resources: {
+      memory: {
+        config: {
+          enabled: options.enabled,
+          triggerEstimatedTokens: 1,
+          retainRecentEstimatedTokens: 0,
+          ...options.memoryConfig,
+        },
+      },
       agents: {
         north: defineAgent({
           id: "north",
@@ -311,20 +312,13 @@ async function assertNoDeadLetters(fixture: Fixture) {
 
 function assertConsolidationLifecycleOutput(value: unknown) {
   const validate = new AjvModule.default({ strict: false }).compile(
-    createConsolidateMemoryAction({
-      triggerEstimatedTokens: 1,
-      retainRecentEstimatedTokens: 0,
-      maxContentEstimatedTokens: 1,
-      retrievalLimit: 1,
-    }).outputSchema as any,
+    consolidateMemoryAction.outputSchema as any,
   );
   assert(validate(value), JSON.stringify(validate.errors));
 }
 
 Deno.test("memory composes Core-native dispatch and settlement without a model selector", () => {
-  const plugin = createLongTermMemoryPlugin({
-    config: { triggerEstimatedTokens: 1 },
-  });
+  const plugin = memoryPlugin;
   assertEquals(plugin.plugins, [corePlugin]);
   assertEquals(Object.keys(plugin.actions).sort(), [
     "consolidate_memory",
@@ -1392,11 +1386,11 @@ Deno.test("invalidate_memory retracts editorially without changing lifecycle", a
     const searchValidate = new AjvModule.default({
       allErrors: true,
       strict: false,
-    }).compile(createSearchMemoryAction().outputSchema as any);
+    }).compile(searchMemoryAction.outputSchema as any);
     const inspectValidate = new AjvModule.default({
       allErrors: true,
       strict: false,
-    }).compile(createInspectMemoryAction().outputSchema as any);
+    }).compile(inspectMemoryAction.outputSchema as any);
     assert(searchValidate(normal), JSON.stringify(searchValidate.errors));
     assert(searchValidate(historical), JSON.stringify(searchValidate.errors));
     assert(inspectValidate(inspected), JSON.stringify(inspectValidate.errors));

@@ -48,24 +48,24 @@ export function message(input: CoreMessageInput): CoreMessageInputEnvelope {
     visibility,
     ...payload
   } = input;
-  return Object.freeze({
+  return ({
     type: CORE_MESSAGE_INPUT_EVENT,
-    payload: Object.freeze({
+    payload: {
       ...payload,
       content: encodeContent(content),
       ...(metadata ? { metadata: structuredClone(metadata) } : {}),
       ...(visibility ? { visibility } : {}),
-    }),
+    } as const,
     ...(correlationId ? { correlationId } : {}),
     ...(deduplicationId ? { deduplicationId } : {}),
     ...(visibility ? { visibility } : {}),
-  });
+  } as const);
 }
 
 export type CoreInputHelpers = Readonly<{
   message: typeof message;
 }>;
 
-export const core: CoreInputHelpers = Object.freeze({
+export const core: CoreInputHelpers = {
   message,
-});
+} as const;

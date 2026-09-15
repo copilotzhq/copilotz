@@ -12,18 +12,18 @@ domain storage primitives.
 
 ## How to use it
 
-Install `corePlugin`, compose Agents and LLM connections, then send typed
-`message(...)` inputs.
+```ts
+import { corePlugin } from "@copilotz/copilotz/core";
+// Include corePlugin in the final createCopilotz({ plugins: [...] }) call.
+```
 
 ## How it works
 
-Core combines Core Collections with LLM lifecycle processing, projects provider
-results into canonical Messages, and coordinates Tool/Ask futures through
-durable plans.
+`copilotz.json` declares this root. `plugin.generated.ts` contains its static
+composition and `plugin.ts` exposes its public name. Regenerate with
+`deno task build:plugins`. Actions and Processors read final context
+configuration at invocation; there is no plugin factory or runtime directory
+discovery.
 
-New Agent invocations select the latest authorized conversation state in a
-consistent read snapshot. User, Tool and Ask triggers follow the same path;
-replayed Actions reuse their captured request. Certified compaction supplies the
-lower boundary, and over-budget input fails explicitly if compaction cannot
-advance. Transcript order remains chronological and Tool identifiers include
-their plan identity; execution fan-in remains unchanged.
+See [convention-first authoring](../../docs/convention-authoring.md) for the
+shared file structure, compiler, configuration locations, and migration guide.

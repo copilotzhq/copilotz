@@ -1,0 +1,10 @@
+{
+  "id": "@copilotz/persistent-terminal-tools",
+  "version": "3.0.0",
+  "aliases": {
+    "resources/tools/persistent-terminal/index.ts": "persistent_terminal"
+  },
+  "include": [
+    "resources/tools/persistent-terminal/index.ts"
+  ]
+}

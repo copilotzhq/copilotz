@@ -12,10 +12,18 @@ threads.
 
 ## How to use it
 
-Compose `channelsPlugin`, then add a provider plugin and channel
-resource/adapter under the same alias.
+```ts
+import { channelsPlugin } from "@copilotz/copilotz/channels";
+// Include channelsPlugin in the final createCopilotz({ plugins: [...] }) call.
+```
 
 ## How it works
 
-Ingress records a binding and message atomically; egress prepares a durable
-intent and a detached processor performs provider I/O.
+`copilotz.json` declares this root. `plugin.generated.ts` contains its static
+composition and `plugin.ts` exposes its public name. Regenerate with
+`deno task build:plugins`. Actions and Processors read final context
+configuration at invocation; there is no plugin factory or runtime directory
+discovery.
+
+See [convention-first authoring](../../docs/convention-authoring.md) for the
+shared file structure, compiler, configuration locations, and migration guide.

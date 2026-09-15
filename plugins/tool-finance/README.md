@@ -12,11 +12,21 @@ queries while keeping provider implementation private and replaceable.
 
 ## How to use it
 
-Create it with `createFinanceToolsPlugin({ getProvider })` and compose the
-result into an application.
+```ts
+import { financeToolsPlugin } from "@copilotz/copilotz/tools/finance";
+// Include financeToolsPlugin in the final createCopilotz({ plugins: [...] }) call.
+```
+
+Register provider objects in `adapters.financeProviders[name]`. The default
+provider remains Yahoo when no override is supplied.
 
 ## How it works
 
-The plugin composes the Finance Action with its immutable Tool Resource. The
-Action selects the configured provider and the Resource presents its schemas to
-LLM agents.
+`copilotz.json` declares this root. `plugin.generated.ts` contains its static
+composition and `plugin.ts` exposes its public name. Regenerate with
+`deno task build:plugins`. Actions and Processors read final context
+configuration at invocation; there is no plugin factory or runtime directory
+discovery.
+
+See [convention-first authoring](../../docs/convention-authoring.md) for the
+shared file structure, compiler, configuration locations, and migration guide.

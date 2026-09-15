@@ -10,7 +10,7 @@ It provides controlled creation and replacement with a restorable snapshot.
 
 ## How to use it
 
-Compose it through `createWorkspaceToolsPlugin()` using the `write_file` alias.
+Compose it through `denoToolsPlugin` using the `write_file` alias.
 
 ## How it works
 

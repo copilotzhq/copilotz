@@ -12,10 +12,21 @@ runtime to semantic LLM or Tool events.
 
 ## How to use it
 
-Import `createUsageWorkflowPlugin` from `@copilotz/copilotz/usage` and compose
-the returned plugin. Cost and record policies remain optional callbacks.
+```ts
+import { usagePlugin } from "@copilotz/copilotz/usage";
+// Include usagePlugin in the final createCopilotz({ plugins: [...] }) call.
+```
+
+Set `resources.usage.config.enabled`; put `resolveCost` and `onRecord` in
+`adapters.usage.hooks`. Disabling usage suppresses persistence and hooks.
 
 ## How it works
 
-The plugin composes one Usage Collection and two lifecycle Processors. The
-Processors normalize attribution and persist idempotent per-operation rows.
+`copilotz.json` declares this root. `plugin.generated.ts` contains its static
+composition and `plugin.ts` exposes its public name. Regenerate with
+`deno task build:plugins`. Actions and Processors read final context
+configuration at invocation; there is no plugin factory or runtime directory
+discovery.
+
+See [convention-first authoring](../../docs/convention-authoring.md) for the
+shared file structure, compiler, configuration locations, and migration guide.

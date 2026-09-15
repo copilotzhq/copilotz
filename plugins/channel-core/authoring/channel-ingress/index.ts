@@ -90,7 +90,7 @@ function dataObject(
     }
     snapshot[key] = descriptor.value;
   }
-  return Object.freeze(snapshot);
+  return snapshot;
 }
 
 /**
@@ -135,7 +135,7 @@ export function cloneChannelJson(
       ) {
         throw new TypeError(`${label} must be a dense JSON array.`);
       }
-      return Object.freeze(value.map((_item, index) => {
+      return (value.map((_item, index) => {
         const descriptor = descriptors[String(index)];
         if (!descriptor?.enumerable || !("value" in descriptor)) {
           throw new TypeError(`${label}[${index}] must be a data property.`);
@@ -176,7 +176,7 @@ export function cloneChannelJson(
         ancestors,
       );
     }
-    return Object.freeze(result);
+    return result;
   } finally {
     ancestors.delete(value);
   }
@@ -235,22 +235,22 @@ export function channelIngress(
   const metadata = optionsSnapshot.metadata === undefined
     ? undefined
     : jsonObject(optionsSnapshot.metadata, "Channel Event metadata");
-  return Object.freeze({
+  return ({
     type: CHANNEL_INGRESS_INPUT_EVENT,
-    payload: Object.freeze({
+    payload: {
       channelId,
       id,
       input: cloneChannelJson(
         occurrenceSnapshot.input,
         "Channel occurrence input",
       ),
-    }),
+    } as const,
     ...(namespace ? { namespace } : {}),
     ...(databaseSchema ? { databaseSchema } : {}),
     correlationId,
     ...(causationId ? { causationId } : {}),
     deduplicationId,
     ...(metadata ? { metadata } : {}),
-    visibility: Object.freeze({ kind: "internal" as const }),
-  });
+    visibility: { kind: "internal" as const } as const,
+  } as const);
 }

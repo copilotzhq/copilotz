@@ -42,7 +42,7 @@ export function createInteractiveCliIo(): InteractiveCliIo {
       return [hits.length ? [...hits] : [...COMMANDS], line];
     },
   });
-  return Object.freeze({
+  return ({
     question: (prompt: string) => readline.question(prompt),
     write: (value: string) => {
       stdout.write(value);
@@ -52,7 +52,7 @@ export function createInteractiveCliIo(): InteractiveCliIo {
       stdout.write("\x1bc");
     },
     cwd,
-  });
+  } as const);
 }
 
 /** Starts the portable CLI state machine with Node-compatible terminal I/O. */

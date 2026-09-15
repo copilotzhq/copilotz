@@ -60,7 +60,7 @@ function emptyStream(): ReadableStream<Uint8Array> {
  * prompt the Gateway to place those rows, while recovery covers a lost frame.
  */
 function createDeferredDeliveryDispatcher(): DeliveryDispatcher {
-  return Object.freeze({
+  return ({
     dispatch(input: ExecutionWorkInput): Promise<ExecutionWorkHandle> {
       if (input.workload !== COPILOTZ_DELIVERY_WORKLOAD) {
         throw new Error(
@@ -70,7 +70,7 @@ function createDeferredDeliveryDispatcher(): DeliveryDispatcher {
       const now = Date.now();
       const operationId = crypto.randomUUID();
       const streamId = crypto.randomUUID();
-      const terminal = Object.freeze({
+      const terminal = {
         operationId,
         workload: input.workload,
         ...(input.target ? { target: input.target } : {}),
@@ -80,20 +80,24 @@ function createDeferredDeliveryDispatcher(): DeliveryDispatcher {
         deliveryCount: 0,
         openedAtMs: now,
         updatedAtMs: now,
-      });
-      return Promise.resolve(Object.freeze({
-        operationId,
-        streamId,
-        metadata: Promise.resolve(Object.freeze({
-          schema: "copilotz.delivery.deferred.v1",
-        })),
-        output: emptyStream(),
-        started: Promise.resolve(),
-        completed: Promise.resolve(terminal),
-        cancel: () => Promise.resolve(terminal),
-      }));
+      } as const;
+      return Promise.resolve(
+        {
+          operationId,
+          streamId,
+          metadata: Promise.resolve(
+            {
+              schema: "copilotz.delivery.deferred.v1",
+            } as const,
+          ),
+          output: emptyStream(),
+          started: Promise.resolve(),
+          completed: Promise.resolve(terminal),
+          cancel: () => Promise.resolve(terminal),
+        } as const,
+      );
     },
-  });
+  } as const);
 }
 
 /** Creates an outbound Copilotz execution role without a private Hypervisor. */
@@ -109,6 +113,9 @@ export async function createCopilotzWorker(
       namespace: options.namespace,
       databaseSchema: options.databaseSchema,
       plugins: options.plugins,
+      collections: options.collections,
+      actions: options.actions,
+      processors: options.processors,
       resources: options.resources,
       adapters: options.adapters,
       assets: options.assets,
@@ -196,7 +203,7 @@ export async function createCopilotzWorker(
   });
   closed.catch(() => undefined);
 
-  return Object.freeze({
+  return ({
     role: "worker",
     ready: worker.ready,
     closed,
@@ -206,5 +213,5 @@ export async function createCopilotzWorker(
       await worker.stop(reason);
       await closed;
     },
-  });
+  } as const);
 }

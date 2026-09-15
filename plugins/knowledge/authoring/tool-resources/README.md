@@ -1,21 +1,21 @@
-# Knowledge tool authoring
+# Knowledge tools
 
 ## What it is
 
-A composite helper that produces Knowledge Actions and their matching Tool
-Resources.
+Static Tool declarations.
 
 ## Why it exists
 
-It keeps generated, model-facing aliases in one implementation owner rather than
-duplicating them across primitive folders.
+Applications can choose individual capabilities without a plugin factory.
 
 ## How to use it
 
-Configure `tools` in `createKnowledgePlugin`, or call
-`createKnowledgeActionResources` with embedding and alias options.
+Import
+`ingestKnowledgeDocumentTool, searchKnowledgeTool, deleteKnowledgeDocumentTool`
+and register selected declarations in `resources.tools`.
 
 ## How it works
 
-The helper validates distinct aliases and returns frozen Action and Tool maps
-sharing the exact same Action definitions.
+Each declaration contributes a native Action and a data-only Tool Resource
+through the synchronous composition protocol. Configuration is read from the
+final context.

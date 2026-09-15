@@ -91,32 +91,32 @@ export async function projectedSourceMessages(
   const projected = prepared.flatMap((message, index) => {
     const id = sourceIds[index];
     if (!id) return [];
-    return [Object.freeze({
-      id,
-      senderType: message.role,
-      senderId: message.name ?? message.role,
-      text: preparedSourceText(message.content),
-      ...((message.role === "assistant" || message.role === "tool") &&
-          message.toolPlanId
-        ? { toolPlanId: message.toolPlanId }
-        : {}),
-      ...(message.role === "tool" ? { toolCallId: message.toolCallId } : {}),
-      ...(message.role === "assistant" && message.reasoning
-        ? { reasoning: preparedSourceText(message.reasoning) }
-        : {}),
-      ...(message.role === "assistant" && message.toolCalls
-        ? { toolCalls: structuredClone(message.toolCalls) }
-        : {}),
-    })];
+    return [
+      {
+        id,
+        senderType: message.role,
+        senderId: message.name ?? message.role,
+        text: preparedSourceText(message.content),
+        ...((message.role === "assistant" || message.role === "tool") &&
+            message.toolPlanId
+          ? { toolPlanId: message.toolPlanId }
+          : {}),
+        ...(message.role === "tool" ? { toolCallId: message.toolCallId } : {}),
+        ...(message.role === "assistant" && message.reasoning
+          ? { reasoning: preparedSourceText(message.reasoning) }
+          : {}),
+        ...(message.role === "assistant" && message.toolCalls
+          ? { toolCalls: structuredClone(message.toolCalls) }
+          : {}),
+      } as const,
+    ];
   });
   // Transcript preparation can reposition an Ask receipt next to its answer.
   // Checkpoints always cover a contiguous raw-history prefix instead.
-  return Object.freeze(
-    projected.sort((left, right) =>
-      (positions.get(left.id) ?? Number.MAX_SAFE_INTEGER) -
-      (positions.get(right.id) ?? Number.MAX_SAFE_INTEGER)
-    ),
-  );
+  return (projected.sort((left, right) =>
+    (positions.get(left.id) ?? Number.MAX_SAFE_INTEGER) -
+    (positions.get(right.id) ?? Number.MAX_SAFE_INTEGER)
+  ));
 }
 
 export function rangeMessages(
@@ -134,7 +134,7 @@ export function rangeMessages(
       "Reserved memory message range is unavailable.",
     );
   }
-  return Object.freeze(all.slice(start, end + 1));
+  return (all.slice(start, end + 1));
 }
 
 export async function sourceRangeFingerprint(

@@ -1,3 +1,5 @@
+import type { ActionContext } from "@copilotz/copilotz/actions";
+import type { ActionDefinition } from "@copilotz/copilotz/actions";
 /**
  * Defines the bounded List Directory Action.
  *
@@ -17,7 +19,20 @@ interface ListDirectoryParams {
 import { defineAction } from "@copilotz/copilotz/actions";
 import { listWorkspaceDirectory } from "../internal/fs-utils.ts";
 
-export const listDirectoryAction = defineAction({
+export const listDirectoryAction: ActionDefinition<
+  ListDirectoryParams,
+  {
+    path: string;
+    entries: {
+      size?: number | undefined;
+      name: string;
+      relativePath: string;
+      type: "file" | "directory";
+    }[];
+    count: number;
+  },
+  ActionContext
+> = defineAction({
   id: "copilotz.tools.deno.list_directory",
   inputSchema: {
     type: "object",

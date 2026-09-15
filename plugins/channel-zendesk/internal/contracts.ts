@@ -70,20 +70,12 @@ export type TransformZendeskDelivery = (
   attempt: ChannelDeliveryAttempt,
 ) => ZendeskDelivery | null | Promise<ZendeskDelivery | null>;
 
-export type CreateZendeskChannelResourceOptions = Readonly<{
-  defaultAgentAliases?: readonly string[];
-  metadata?: ChannelJsonObject;
-}>;
-export type CreateZendeskChannelAdapterOptions = Readonly<{
+export type ZendeskChannelOptions = Readonly<{
   config: ZendeskConfig | ZendeskConfigResolver;
   transport?: ZendeskTransport;
   fetch?: typeof fetch;
   transformDelivery?: TransformZendeskDelivery;
 }>;
-export type CreateZendeskChannelPluginOptions =
-  & CreateZendeskChannelResourceOptions
-  & CreateZendeskChannelAdapterOptions
-  & Readonly<{ channelId?: string; pluginId?: string; version?: string }>;
 
 export type ZendeskWebhookPayload = Readonly<{
   events?: readonly Readonly<{

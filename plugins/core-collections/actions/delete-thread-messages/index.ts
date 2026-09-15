@@ -42,6 +42,8 @@ export const deleteThreadMessagesAction: ActionDefinition<
         await tx.collections.message.delete({ id: message.id }, { threadId });
       }
     });
-    return Object.freeze({ threadId, deleted: true as const });
+    return ({ threadId, deleted: true as const } as const);
   },
 });
+
+export default deleteThreadMessagesAction;

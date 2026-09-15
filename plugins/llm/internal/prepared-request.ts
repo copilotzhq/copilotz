@@ -59,14 +59,14 @@ function attachmentPart(
     mediaType: ref.mediaType,
     assetRef: formatAssetRef(namespace, ref.assetId),
   });
-  return Object.freeze({
+  return ({
     type: "text",
     text:
       `Copilotz attachment ${descriptor}. Use an asset tool to retrieve or inspect this attachment; its body is not included in this LLM request.`,
     role: ref.role,
     mediaType: "text/plain; charset=utf-8",
     ...(ref.name ? { name: ref.name } : {}),
-  }) as LlmAdapterContentPart;
+  } as const) as LlmAdapterContentPart;
 }
 
 function projectPreparedMessage(
@@ -74,10 +74,8 @@ function projectPreparedMessage(
   namespace: string,
   replay?: Readonly<{ adapter: string; model: string; api?: string }>,
 ): LlmAdapterMessage {
-  const content = Object.freeze(
-    (message.content as readonly PreparedEntry[]).map((ref) =>
-      ref.resolve === false ? attachmentPart(ref, namespace) : preparedPart(ref)
-    ),
+  const content = (message.content as readonly PreparedEntry[]).map((ref) =>
+    ref.resolve === false ? attachmentPart(ref, namespace) : preparedPart(ref)
   );
   const common = {
     content,
@@ -106,16 +104,16 @@ function projectPreparedMessage(
           }
           return structuredClone(ref.value) as Record<string, unknown>;
         });
-        return Object.freeze({
+        return ({
           schema: native.schema,
           adapter: native.adapter,
           api: native.api,
           model: native.model,
-          blocks: Object.freeze(blocks),
-        }) as LlmAdapterNativeReasoning;
+          blocks: blocks,
+        } as const) as LlmAdapterNativeReasoning;
       })()
       : undefined;
-    return Object.freeze({
+    return ({
       role: message.role,
       ...common,
       ...(message.reasoning?.length
@@ -136,17 +134,17 @@ function projectPreparedMessage(
         : {}),
       ...(message.toolPlanId ? { toolPlanId: message.toolPlanId } : {}),
       ...(nativeReasoning ? { nativeReasoning } : {}),
-    });
+    } as const);
   }
   if (message.role === "tool") {
-    return Object.freeze({
+    return ({
       role: message.role,
       ...common,
       toolCallId: message.toolCallId,
       ...(message.toolPlanId ? { toolPlanId: message.toolPlanId } : {}),
-    });
+    } as const);
   }
-  return Object.freeze({ role: message.role, ...common });
+  return ({ role: message.role, ...common } as const);
 }
 
 export function projectPreparedRequest(
@@ -160,13 +158,11 @@ export function projectPreparedRequest(
   const messages = request.messages.map((message) =>
     projectPreparedMessage(message, namespace, replay)
   );
-  return Object.freeze({
-    messages: Object.freeze(messages),
-    ...(request.tools
-      ? { tools: Object.freeze(structuredClone(request.tools)) }
-      : {}),
+  return ({
+    messages: messages,
+    ...(request.tools ? { tools: structuredClone(request.tools) } : {}),
     ...(request.instructions !== undefined
       ? { instructions: request.instructions }
       : {}),
-  });
+  } as const);
 }

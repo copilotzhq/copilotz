@@ -1,3 +1,4 @@
+import type { ActionDefinition } from "@copilotz/copilotz/actions";
 /** @module Admin participants Action primitive. */
 import { defineAction } from "@copilotz/copilotz/actions";
 import {
@@ -17,7 +18,11 @@ import {
 import type { AdminRequest, AdminResponse } from "../../internal/contracts.ts";
 
 /** Lists conversation participants and their derived activity. */
-export const adminParticipantsAction = defineAction<
+export const adminParticipantsAction: ActionDefinition<
+  AdminRequest,
+  AdminResponse,
+  AdminActionContext
+> = defineAction<
   AdminRequest,
   AdminResponse,
   AdminActionContext,
@@ -87,3 +92,5 @@ export const adminParticipantsAction = defineAction<
     return { status: 200, data, pageInfo: pageInfo(selected, limit) };
   },
 });
+
+export default adminParticipantsAction;

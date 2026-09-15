@@ -1,12 +1,13 @@
+import { definePlugin as defineFixturePlugin } from "@copilotz/copilotz/plugins";
 import { assert, assertEquals, assertRejects, assertThrows } from "@std/assert";
 
 import { createPluginRegistry } from "@copilotz/copilotz/plugins";
 import {
-  createSkillsPlugin,
   defineInlineSkill,
   defineSkill,
   parseSkillMarkdown,
   SKILL_TOOL_IDS,
+  skillsPlugin,
 } from "./index.ts";
 
 const markdown = `---
@@ -98,8 +99,7 @@ Deno.test("skill resources expose eager metadata and lazy bounded file reads", a
   });
   assertEquals(skill.name, "portable-skill");
   assertEquals(reads, 0);
-  assert(Object.isFrozen(skill));
-  assert(Object.isFrozen(skill.files));
+
   assertEquals((await skill.read("references/guide.md")).body, "# Guide");
   assertEquals(reads, 1);
   const controller = new AbortController();
@@ -135,16 +135,28 @@ Deno.test("skills plugins own disclosure tools and preserve stable-ID overrides"
     directoryName: "portable-skill",
     files: { "references/guide.md": "# Replacement guide" },
   });
-  const base = createSkillsPlugin({
+  const base = defineFixturePlugin({
+    ...skillsPlugin,
     id: "@acme/base-skills",
     version: "1.0.0",
-    skills: [first],
-    tools: false,
+    actions: {},
+    resources: {
+      tools: {},
+      skills: Object.fromEntries([first].map((skill) => [skill.name, skill])),
+      skillConfig: { default: { maximumTextBytes: undefined } },
+    },
   });
-  const overriding = createSkillsPlugin({
+  const overriding = defineFixturePlugin({
+    ...skillsPlugin,
     id: "@acme/overriding-skills",
     version: "1.0.0",
-    skills: [replacement],
+    resources: {
+      ...skillsPlugin.resources,
+      skills: Object.fromEntries(
+        [replacement].map((skill) => [skill.name, skill]),
+      ),
+      skillConfig: { default: { maximumTextBytes: undefined } },
+    },
   });
   assertEquals(Object.keys(base.resources.tools ?? {}), []);
   assertEquals(Object.keys(base.actions), []);

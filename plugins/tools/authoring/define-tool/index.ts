@@ -1,3 +1,7 @@
+import {
+  type CompositionContribution,
+  contribution,
+} from "@copilotz/copilotz/plugins";
 /**
  * Defines Tool Resources and compound Action-plus-presentation declarations.
  *
@@ -64,14 +68,16 @@ export type ToolPresentation = Readonly<{
   metadata?: Readonly<Record<string, unknown>>;
 }>;
 
-/** An executable Tool definition awaiting an alias from `createToolsPlugin`. */
+/** An executable Tool definition resolved through ordinary plugin composition. */
 export type ToolDefinition<
   TAction extends AnyActionDefinition = AnyActionDefinition,
   TPresentation extends ToolPresentation = ToolPresentation,
-> = Readonly<{
-  action: TAction;
-  presentation: TPresentation;
-}>;
+> =
+  & CompositionContribution<ToolResource, Record<string, TAction>>
+  & Readonly<{
+    action: TAction;
+    presentation: TPresentation;
+  }>;
 
 export type DefineToolObject<
   TInput = unknown,
@@ -171,7 +177,7 @@ function history(value: unknown): ToolHistory | undefined {
       `Tool history has invalid visibility '${String(value.visibility)}'.`,
     );
   }
-  return Object.freeze({
+  return ({
     ...(value.visibility !== undefined
       ? { visibility: value.visibility as ToolHistoryVisibility }
       : {}),
@@ -220,7 +226,7 @@ function defineToolResource<
   assertKnownKeys(presentation, PRESENTATION_KEYS, "Tool presentation");
   const normalizedHistory = history(presentation.history);
   const normalizedMetadata = metadata(presentation.metadata);
-  return Object.freeze({
+  return ({
     action: normalizedAlias,
     name: requiredText(presentation.name, "name"),
     description: requiredText(presentation.description, "description"),
@@ -242,7 +248,7 @@ export function defineTool<
 ): DefinedToolResource<TAlias, TAction, TPresentation>;
 /**
  * Defines one Tool's native Action and presentation before it is assigned an
- * alias by `createToolsPlugin`. The executable stays in the Action; the later
+ * alias by ordinary plugin composition. The executable stays in the Action; the later
  * Tool Resource is strictly data-only.
  */
 export function defineTool<
@@ -297,17 +303,24 @@ export function defineTool(
       : { outputSchema: definition.outputSchema }),
     execute: definition.execute,
   });
-  return Object.freeze({
+  const toolPresentation: ToolPresentation = {
+    name: requiredText(definition.name, "name"),
+    description: requiredText(definition.description, "description"),
+    ...(definition.history === undefined
+      ? {}
+      : { history: history(definition.history) }),
+    ...(definition.metadata === undefined
+      ? {}
+      : { metadata: metadata(definition.metadata) }),
+  };
+  return ({
+    [contribution]({ alias }: { namespace: string; alias: string }) {
+      return {
+        value: defineToolResource(alias, action, toolPresentation),
+        actions: { [alias]: action },
+      };
+    },
     action,
-    presentation: Object.freeze({
-      name: requiredText(definition.name, "name"),
-      description: requiredText(definition.description, "description"),
-      ...(definition.history === undefined
-        ? {}
-        : { history: history(definition.history) }),
-      ...(definition.metadata === undefined
-        ? {}
-        : { metadata: metadata(definition.metadata) }),
-    }),
+    presentation: toolPresentation,
   });
 }

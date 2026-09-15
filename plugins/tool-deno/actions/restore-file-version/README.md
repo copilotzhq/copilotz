@@ -10,8 +10,7 @@ It gives agents a controlled recovery path after an edit.
 
 ## How to use it
 
-Compose it through `createWorkspaceToolsPlugin()` using the
-`restore_file_version` alias.
+Compose it through `denoToolsPlugin` using the `restore_file_version` alias.
 
 ## How it works
 

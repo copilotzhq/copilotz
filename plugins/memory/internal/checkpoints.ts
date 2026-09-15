@@ -11,7 +11,7 @@ function serializedActionError(
   if (Object.keys(error).length !== 2) return undefined;
   const name = optionalText(error.name);
   const message = optionalText(error.message);
-  return name && message ? Object.freeze({ name, message }) : undefined;
+  return name && message ? ({ name, message } as const) : undefined;
 }
 
 function checkpointSequence(value: CollectionRecord | null): number {
@@ -30,14 +30,12 @@ export async function checkpoints(
     order: { field: "sequence", direction: "desc" },
     limit: 1_000,
   });
-  return Object.freeze(
-    values.filter((item) =>
-      item.threadId === threadId && item.agentId === agentId &&
-      (!status || item.status === status)
-    ).sort((left, right) =>
-      checkpointSequence(right) - checkpointSequence(left)
-    ),
-  );
+  return (values.filter((item) =>
+    item.threadId === threadId && item.agentId === agentId &&
+    (!status || item.status === status)
+  ).sort((left, right) =>
+    checkpointSequence(right) - checkpointSequence(left)
+  ));
 }
 
 /** Reserve one checkpoint; only the caller may supply certified history coverage. */

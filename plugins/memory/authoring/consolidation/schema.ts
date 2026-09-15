@@ -446,7 +446,7 @@ const properties: Readonly<Record<string, ActionSchema>> = {
 };
 
 export function consolidationInputSchema(
-  kinds: readonly MemoryKindDefinition[],
+  kinds: readonly MemoryKindDefinition[] = [],
 ): ActionSchema {
   const drafts: Record<string, ActionSchema> = {};
   for (const form of MEMORY_FORMS) {
@@ -462,31 +462,38 @@ export function consolidationInputSchema(
           ...commonDraft,
           ...definition.properties,
           localId: { ...commonDraft.localId, example: `${form}-1` },
-          kind: {
-            type: "string",
-            enum: registered.map((kind) => kind.id),
-            description:
-              `Registered ${form} kind. Choose by semantics; arbitrary strings are rejected. ${
-                registered.map((kind) =>
-                  `${kind.id} — ${kind.description}${
-                    kind.schema
-                      ? ` Persisted semantic data schema: ${
-                        JSON.stringify(kind.schema)
-                      }`
-                      : " No additional kind-specific data schema is registered."
+          kind: registered.length
+            ? {
+              type: "string",
+              enum: registered.map((kind) => kind.id),
+              description:
+                `Registered ${form} kind. Choose by semantics; arbitrary strings are rejected. ${
+                  registered.map((kind) =>
+                    `${kind.id} — ${kind.description}${
+                      kind.schema
+                        ? ` Persisted semantic data schema: ${
+                          JSON.stringify(kind.schema)
+                        }`
+                        : " No additional kind-specific data schema is registered."
+                    }`
+                  ).join(" ")
+                }`,
+              oneOf: registered.map((kind) => ({
+                const: kind.id,
+                title: kind.id,
+                description: kind.schema
+                  ? `${kind.description} Persisted semantic data must also satisfy: ${
+                    JSON.stringify(kind.schema)
                   }`
-                ).join(" ")
-              }`,
-            oneOf: registered.map((kind) => ({
-              const: kind.id,
-              title: kind.id,
-              description: kind.schema
-                ? `${kind.description} Persisted semantic data must also satisfy: ${
-                  JSON.stringify(kind.schema)
-                }`
-                : `${kind.description} No additional kind-specific fields are registered.`,
-            })),
-          },
+                  : `${kind.description} No additional kind-specific fields are registered.`,
+              })),
+            }
+            : {
+              type: "string",
+              minLength: 1,
+              description:
+                `Registered ${form} kind from resources.memory.kinds; the Action validates it against the final context.`,
+            },
         },
       },
     };

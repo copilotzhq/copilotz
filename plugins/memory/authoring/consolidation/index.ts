@@ -115,17 +115,17 @@ function optionalText(value: unknown): string | undefined {
 }
 
 function uniqueStrings(value: unknown, label: string): readonly string[] {
-  if (value === undefined) return Object.freeze([]);
+  if (value === undefined) return ([] as const);
   if (!Array.isArray(value)) throw new TypeError(`${label} must be an array.`);
   const entries = value.map((item) => requiredText(item, label));
-  return Object.freeze([...new Set(entries)]);
+  return ([...new Set(entries)] as const);
 }
 
 function parseSource(value: unknown): ContextSourceRef {
   const input = record(value);
   const type = requiredText(input.type, "Memory source type");
   if (type === "collection_record") {
-    return Object.freeze({
+    return ({
       type,
       collection: requiredText(input.collection, "Memory source collection"),
       id: requiredText(input.id, "Memory source id"),
@@ -138,7 +138,7 @@ function parseSource(value: unknown): ContextSourceRef {
       ...(optionalText(input.fragment)
         ? { fragment: optionalText(input.fragment) }
         : {}),
-    });
+    } as const);
   }
   if (
     type !== "message" && type !== "asset" &&
@@ -146,7 +146,7 @@ function parseSource(value: unknown): ContextSourceRef {
   ) {
     throw new TypeError(`Unsupported memory source type '${type}'.`);
   }
-  return Object.freeze({
+  return ({
     type,
     id: requiredText(input.id, "Memory source id"),
   } as ContextSourceRef);
@@ -158,7 +158,7 @@ function parseSources(
   label: string,
 ): readonly ContextSourceRef[] {
   if (value === undefined && options.defaultEvidenceSources?.length) {
-    return Object.freeze(structuredClone(options.defaultEvidenceSources));
+    return (structuredClone(options.defaultEvidenceSources));
   }
   if (!Array.isArray(value) || !value.length) {
     throw new TypeError(`${label} requires at least one evidence source.`);
@@ -169,13 +169,11 @@ function parseSources(
       throw new TypeError(`${label} cites an unauthorized evidence source.`);
     }
   }
-  return Object.freeze(
-    result.filter((source, index) =>
-      result.findIndex((candidate) =>
-        memorySourceKey(candidate) === memorySourceKey(source)
-      ) === index
-    ),
-  );
+  return (result.filter((source, index) =>
+    result.findIndex((candidate) =>
+      memorySourceKey(candidate) === memorySourceKey(source)
+    ) === index
+  ));
 }
 
 function parseRef(
@@ -190,7 +188,7 @@ function parseRef(
     if (!localIds.has(localId)) {
       throw new TypeError(`${label} references unknown localId '${localId}'.`);
     }
-    return Object.freeze({ localId });
+    return ({ localId } as const);
   }
   const memoryId = optionalText(input.memoryId);
   if (memoryId) {
@@ -199,20 +197,20 @@ function parseRef(
         `${label} references memory '${memoryId}' that was not visible.`,
       );
     }
-    return Object.freeze({ memoryId });
+    return ({ memoryId } as const);
   }
   const node = record(input.node);
   if (Object.keys(node).length) {
-    const parsed = Object.freeze({
+    const parsed = {
       type: requiredText(node.type, `${label} node type`),
       id: requiredText(node.id, `${label} node id`),
-    });
+    } as const;
     if (!options.visibleNodeIds.has(`${parsed.type}:${parsed.id}`)) {
       throw new TypeError(
         `${label} references a domain node that was not visible.`,
       );
     }
-    return Object.freeze({ node: parsed });
+    return ({ node: parsed } as const);
   }
   throw new TypeError(`${label} requires localId, memoryId, or node.`);
 }
@@ -253,7 +251,7 @@ function parseBase(
     sources: parseSources(source.sources, options, `${form} '${localId}'`),
     ...(source.attributes
       ? {
-        attributes: Object.freeze(structuredClone(record(source.attributes))),
+        attributes: structuredClone(record(source.attributes)),
       }
       : {}),
     source,
@@ -270,7 +268,7 @@ function parseTemporal(
       optionalText(item) ? [[key, optionalText(item)!]] : []
     ),
   );
-  return Object.keys(result).length ? Object.freeze(result) : undefined;
+  return Object.keys(result).length ? result : undefined;
 }
 
 /** Structural shape is validated once; this pass normalizes values and enforces authority. */
@@ -312,21 +310,19 @@ function normalizeDraft(
   }
   for (const field of ["participants", "about"]) {
     if (field in source) {
-      output[field] = Object.freeze(
-        (source[field] as readonly unknown[]).map((ref) =>
-          parseRef(ref, localIds, options, `${form} ${field}`)
-        ),
+      output[field] = (source[field] as readonly unknown[]).map((ref) =>
+        parseRef(ref, localIds, options, `${form} ${field}`)
       );
     }
   }
   if (form === "assertion") {
     const object = record(source.object);
     output.object = "ref" in object
-      ? Object.freeze({
+      ? ({
         ref: parseRef(object.ref, localIds, options, "Assertion object"),
-      })
-      : Object.freeze({ value: object.value });
-    output.epistemic = Object.freeze({ ...record(source.epistemic) });
+      } as const)
+      : ({ value: object.value } as const);
+    output.epistemic = { ...record(source.epistemic) } as const;
   }
   if (source.temporal !== undefined) {
     const temporal = parseTemporal(source.temporal);
@@ -336,19 +332,17 @@ function normalizeDraft(
   if (source.externalIds !== undefined) {
     const entries = Object.entries(record(source.externalIds));
     if (entries.length) {
-      output.externalIds = Object.freeze(
-        Object.fromEntries(
-          entries.map((
-            [key, value],
-          ) => [
-            requiredText(key, "Entity external id key"),
-            requiredText(value, "Entity external id value"),
-          ]),
-        ),
+      output.externalIds = Object.fromEntries(
+        entries.map((
+          [key, value],
+        ) => [
+          requiredText(key, "Entity external id key"),
+          requiredText(value, "Entity external id value"),
+        ]),
       );
     } else delete output.externalIds;
   }
-  return Object.freeze(output) as
+  return output as
     & MemoryDraftBase
     & Readonly<Record<string, unknown>>;
 }
@@ -383,37 +377,33 @@ export function parseConsolidateMemoryInput(
   for (const form of MEMORY_FORMS) {
     const values = input[groups[form]];
     if (values?.length) {
-      output[groups[form]] = Object.freeze(
-        values.map((draft) => normalizeDraft(draft, form, localIds, options)),
+      output[groups[form]] = values.map((draft) =>
+        normalizeDraft(draft, form, localIds, options)
       );
     }
   }
   if (input.relations?.length) {
-    output.relations = Object.freeze(
-      input.relations.map((relation) =>
-        Object.freeze({
-          from: parseRef(
-            relation.from,
-            localIds,
-            options,
-            "Memory relation source",
-          ),
-          type: relation.type,
-          to: parseRef(
-            relation.to,
-            localIds,
-            options,
-            "Memory relation target",
-          ),
-          ...(relation.sources === undefined ? {} : {
-            sources: parseSources(relation.sources, options, "Memory relation"),
-          }),
-        })
+    output.relations = input.relations.map((relation) => ({
+      from: parseRef(
+        relation.from,
+        localIds,
+        options,
+        "Memory relation source",
       ),
-    );
+      type: relation.type,
+      to: parseRef(
+        relation.to,
+        localIds,
+        options,
+        "Memory relation target",
+      ),
+      ...(relation.sources === undefined ? {} : {
+        sources: parseSources(relation.sources, options, "Memory relation"),
+      }),
+    } as const));
   }
   if (input.lifecycle?.length) {
-    output.lifecycle = Object.freeze(input.lifecycle.map((change) => {
+    output.lifecycle = input.lifecycle.map((change) => {
       let target: MemoryLifecycleDraft["target"];
       if ("memoryId" in change.target) {
         const memoryId = requiredText(
@@ -425,11 +415,11 @@ export function parseConsolidateMemoryInput(
             `Lifecycle target '${memoryId}' was not visible.`,
           );
         }
-        target = Object.freeze({ memoryId });
+        target = { memoryId } as const;
       } else {
         const match = change.target.match;
-        target = Object.freeze({
-          match: Object.freeze({
+        target = {
+          match: {
             form: match.form,
             query: requiredText(match.query, "Lifecycle match query"),
             ...(optionalText(match.kind)
@@ -448,10 +438,10 @@ export function parseConsolidateMemoryInput(
                 ),
               }
               : {}),
-          }),
-        });
+          } as const,
+        } as const;
       }
-      return Object.freeze({
+      return ({
         target,
         status: change.status,
         ...(change.replacement
@@ -465,10 +455,10 @@ export function parseConsolidateMemoryInput(
           }
           : {}),
         sources: parseSources(change.sources, options, "Lifecycle change"),
-      });
-    }));
+      } as const);
+    });
   }
-  return Object.freeze(output) as ConsolidateMemoryInput;
+  return output as ConsolidateMemoryInput;
 }
 
 function sourceMessageTokens(message: MemorySourceMessage): number {
@@ -558,8 +548,8 @@ export function selectLongTermMemoryRange(
     0,
   );
   retainedMessageCount = retainedMessages.length;
-  return Object.freeze({
-    messages: Object.freeze(messages),
+  return ({
+    messages: messages,
     estimatedTokens: messages.reduce(
       (total, message) => total + sourceMessageTokens(message),
       0,
@@ -569,7 +559,7 @@ export function selectLongTermMemoryRange(
     sourceLimitReached,
     sourceStartMessageId: messages[0].id,
     sourceEndMessageId: messages.at(-1)!.id,
-  });
+  } as const);
 }
 
 export function buildMemoryConsolidationInstruction(
@@ -767,7 +757,7 @@ export function proposalDrafts(
     | InquiryMemoryDraft
     | ProcedureMemoryDraft;
 }>[] {
-  return Object.freeze([
+  return ([
     ...(input.entities ?? []).map((draft) => ({
       form: "entity" as const,
       draft,
@@ -792,5 +782,5 @@ export function proposalDrafts(
       form: "procedure" as const,
       draft,
     })),
-  ]);
+  ] as const);
 }

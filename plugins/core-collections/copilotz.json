@@ -1,0 +1,21 @@
+{
+  "id": "@copilotz/core-collections",
+  "version": "0.65.1",
+  "include": [
+    "collections/space/index.ts",
+    "collections/space-attachment/index.ts",
+    "collections/participant/index.ts",
+    "collections/thread/index.ts",
+    "collections/message/index.ts",
+    "collections/tool-plan/index.ts",
+    "collections/tool-plan-stage-result/index.ts",
+    "actions/spaces/index.ts",
+    "actions/create-thread/index.ts",
+    "actions/add-thread-participant/index.ts",
+    "actions/delete-thread-messages/index.ts",
+    "actions/revise-message/index.ts",
+    "actions/create-thread-message/index.ts",
+    "actions/ask/index.ts",
+    "processors/message-input/index.ts"
+  ]
+}

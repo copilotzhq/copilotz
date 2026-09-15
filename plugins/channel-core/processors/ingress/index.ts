@@ -67,3 +67,5 @@ export const channelIngressProcessor: Processor<ChannelProcessorContext> =
       );
     },
   });
+
+export default channelIngressProcessor;

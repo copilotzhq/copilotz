@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.74.0 — Unreleased
+
+- Add the build-host-only `copilotz build` command: deterministic convention
+  discovery, native composition validation, generated TypeScript and bundled
+  ESM.
+- Convert all 24 library plugin roots to static declarations using the same
+  conventions. Remove plugin factories and compatibility wrappers.
+- Resolve synchronous contributions through the generic composition protocol;
+  object-form tools register native Actions directly from `resources.tools`.
+- Compose root resources, adapters, Actions, Collections and Processors before
+  startup. Plugins read configuration and capabilities from the final context.
+- Remove redundant freezing and factory layers from plugin authoring. Keep build
+  tooling out of browser and Cloudflare runtime graphs.
+- Document conventions, context configuration and breaking migration steps.
+
 ## 0.73.0 — 2026-09-15
 
 - Add Core Spaces with owner/member Participants, custom-record attachments,

@@ -1,3 +1,5 @@
+import type { ActionContext } from "@copilotz/copilotz/actions";
+import type { ActionDefinition } from "@copilotz/copilotz/actions";
 /**
  * Defines the bounded Restore File Version Action.
  *
@@ -12,7 +14,11 @@ interface RestoreFileVersionParams {
   snapshotId?: string;
 }
 
-export const restoreFileVersionAction = defineAction({
+export const restoreFileVersionAction: ActionDefinition<
+  RestoreFileVersionParams,
+  { relativePath: string; restoredFromSnapshotId: string },
+  ActionContext
+> = defineAction({
   id: "copilotz.tools.deno.restore_file_version",
   inputSchema: {
     type: "object",

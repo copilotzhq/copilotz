@@ -4,8 +4,10 @@ import type {
 } from "../engine/index.ts";
 import type {
   AnyCopilotzPlugin,
+  CollectionMap,
   PluginAdapters,
   PluginResources,
+  ProcessorMap,
 } from "../plugins/index.ts";
 import type { CopilotzPersistenceOptions } from "@copilotz/copilotz/persistence";
 import type { BodyStorageOptions } from "../content/index.ts";
@@ -24,6 +26,9 @@ export type CreateCopilotzApplicationOptions =
     namespace?: string;
     databaseSchema?: string;
     plugins?: readonly AnyCopilotzPlugin[];
+    collections?: CollectionMap;
+    actions?: import("../actions/types.ts").ActionMap;
+    processors?: ProcessorMap;
     resources?: PluginResources;
     adapters?: PluginAdapters;
     /** Canonical asset body policy shared by every database scope. */
@@ -45,7 +50,13 @@ export type CreateCopilotzApplicationOptions =
 /** Plain application semantics that can be shared by Gateway and Worker roles. */
 export type CopilotzComposition = Pick<
   CreateCopilotzApplicationOptions,
-  "plugins" | "resources" | "adapters" | "assets"
+  | "plugins"
+  | "collections"
+  | "actions"
+  | "processors"
+  | "resources"
+  | "adapters"
+  | "assets"
 >;
 
 export type CopilotzApplicationConfig = Readonly<{

@@ -7,10 +7,9 @@ import type { ingestKnowledgeDocumentAction } from "./ingest-document/index.ts";
 import type { deleteKnowledgeDocumentAction } from "./delete-document/index.ts";
 
 export {
-  createIndexKnowledgeDocumentAction,
-  type CreateIndexKnowledgeDocumentActionOptions,
   INDEX_KNOWLEDGE_DOCUMENT_ACTION_ID,
   type IndexKnowledgeDocumentAction,
+  indexKnowledgeDocumentAction,
   type IndexKnowledgeDocumentInput,
 } from "./index-document/index.ts";
 export {
@@ -20,9 +19,9 @@ export {
   type IngestKnowledgeDocumentResult,
 } from "./ingest-document/index.ts";
 export {
-  createSearchKnowledgeAction,
   SEARCH_KNOWLEDGE_ACTION_ID,
   type SearchKnowledgeAction,
+  searchKnowledgeAction,
   type SearchKnowledgeActionInput,
   type SearchKnowledgeActionResult,
 } from "./search-knowledge/index.ts";

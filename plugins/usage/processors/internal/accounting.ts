@@ -2,8 +2,8 @@ import type { ScopedCollection } from "@copilotz/copilotz/collections";
 import type { ProcessorContext } from "@copilotz/copilotz/plugins";
 import type { CopilotzEvent } from "@copilotz/copilotz/events";
 import type {
-  CreateUsageWorkflowPluginOptions,
   UsageCost,
+  UsageOptions,
   UsageRecord,
 } from "../../internal/contracts.ts";
 
@@ -131,21 +131,21 @@ export type LlmAttribution = Readonly<{
 export function llmAttribution(value: unknown): LlmAttribution {
   const metadata = record(value);
   if (metadata.schema !== "copilotz.core.llm-call.v1") {
-    return Object.freeze({
+    return ({
       threadId: null,
       messageId: null,
       agentId: null,
-    });
+    } as const);
   }
   const initiatorParticipantId = optionalText(
     metadata.initiatorParticipantId,
   );
-  return Object.freeze({
+  return ({
     threadId: optionalText(metadata.threadId) ?? null,
     messageId: optionalText(metadata.triggerMessageId) ?? null,
     agentId: optionalText(metadata.agentId) ?? null,
     ...(initiatorParticipantId ? { initiatorParticipantId } : {}),
-  });
+  } as const);
 }
 
 function costFields(cost: UsageCost | null | undefined) {
@@ -207,7 +207,7 @@ function usageData(value: UsageRecord): Record<string, unknown> {
 async function applyUsageOptions(
   input: UsageRecord,
   source: unknown,
-  options: CreateUsageWorkflowPluginOptions,
+  options: UsageOptions,
 ): Promise<UsageRecord | null> {
   const defaultCost = normalizedCost(input.cost);
   const cost = options.resolveCost
@@ -228,7 +228,7 @@ async function applyUsageOptions(
   };
   if (options.onRecord) {
     const transformed = await options.onRecord(
-      Object.freeze(structuredClone(resolved)),
+      structuredClone(resolved),
     );
     if (!transformed) return null;
     if (transformed.id !== input.id) {
@@ -241,14 +241,14 @@ async function applyUsageOptions(
       cost: normalizedCost(transformed.cost),
     };
   }
-  return Object.freeze(resolved);
+  return resolved;
 }
 
 export async function persistUsage(
   input: UsageRecord,
   source: unknown,
   context: ProcessorContext,
-  options: CreateUsageWorkflowPluginOptions,
+  options: UsageOptions,
 ): Promise<void> {
   const resolved = await applyUsageOptions(input, source, options);
   if (!resolved) return;
@@ -264,7 +264,7 @@ export function llmAttemptUsageRecords(
   initiatedById: string | null,
   attemptsValue: unknown,
 ): readonly UsageRecord[] {
-  if (!Array.isArray(attemptsValue)) return Object.freeze([]);
+  if (!Array.isArray(attemptsValue)) return ([] as const);
   const actionRunId = optionalText(lifecycle.actionRunId) ??
     (event.durable ? event.id : event.correlationId);
   const records: UsageRecord[] = [];
@@ -318,7 +318,7 @@ export function llmAttemptUsageRecords(
       raw: { source: "llm.call.attempt" },
     });
   }
-  return Object.freeze(records);
+  return records;
 }
 
 export function toolUsageRecord(

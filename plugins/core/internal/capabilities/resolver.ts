@@ -17,11 +17,9 @@ import type {
 function definedValues<T>(
   values: Readonly<Record<string, T | undefined>> | undefined,
 ): readonly T[] {
-  return Object.freeze(
-    Object.values(values ?? {}).filter((value): value is T =>
-      value !== undefined
-    ),
-  );
+  return (Object.values(values ?? {}).filter((value): value is T =>
+    value !== undefined
+  ));
 }
 
 function agentContext(
@@ -45,11 +43,11 @@ function descriptor<T extends object>(
   resource: T,
   grant: CapabilityGrantSource,
 ): ResolvedCapabilityResource<T> {
-  return Object.freeze({
+  return ({
     id,
     resource,
     grant,
-  });
+  } as const);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -59,37 +57,33 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function toolEntries(
   options: CreateAgentCapabilityResolverOptions,
 ): readonly AliasedToolResource[] {
-  return Object.freeze(
-    Object.entries(options.registry.resources.tools ?? {})
-      .filter((entry): entry is [string, ToolResource] =>
-        entry[1] !== undefined
-      )
-      .map(([alias, resource]) => {
-        if (
-          !isRecord(resource) || resource.action !== alias ||
-          typeof resource.name !== "string" || !resource.name.trim() ||
-          typeof resource.description !== "string" ||
-          !resource.description.trim()
-        ) {
-          throw new TypeError(
-            `Tool Resource '${alias}' must present the same Action alias.`,
-          );
-        }
-        if (!options.registry.actions[alias]) {
-          throw new Error(
-            `Tool Resource '${alias}' has no composed Action '${alias}'.`,
-          );
-        }
-        return Object.freeze({ alias, resource });
-      }),
-  );
+  return (Object.entries(options.registry.resources.tools ?? {})
+    .filter((entry): entry is [string, ToolResource] => entry[1] !== undefined)
+    .map(([alias, resource]) => {
+      if (
+        !isRecord(resource) || resource.action !== alias ||
+        typeof resource.name !== "string" || !resource.name.trim() ||
+        typeof resource.description !== "string" ||
+        !resource.description.trim()
+      ) {
+        throw new TypeError(
+          `Tool Resource '${alias}' must present the same Action alias.`,
+        );
+      }
+      if (!options.registry.actions[alias]) {
+        throw new Error(
+          `Tool Resource '${alias}' has no composed Action '${alias}'.`,
+        );
+      }
+      return ({ alias, resource } as const);
+    }));
 }
 
 /** Creates canonical application/adapter introspection over effective grants. */
 export function createAgentCapabilityResolver(
   options: CreateAgentCapabilityResolverOptions,
 ): AgentCapabilityResolver {
-  return Object.freeze({
+  return ({
     resolve(input) {
       return Promise.resolve().then(() => {
         const id = input.agent.trim();
@@ -109,31 +103,31 @@ export function createAgentCapabilityResolver(
           agents: availableAgents,
           skills: availableSkills,
         });
-        return Object.freeze({
+        return ({
           agent,
-          tools: Object.freeze(tools.map((tool) =>
+          tools: tools.map((tool) =>
             descriptor(
               tool.alias,
               tool.resource,
               explicitToolKeys.has(tool.alias) ? "explicit" : "derived",
             )
-          )),
-          agents: Object.freeze(agents.map((candidate) =>
+          ),
+          agents: agents.map((candidate) =>
             descriptor(
               candidate.id,
               candidate,
               "explicit",
             )
-          )),
-          skills: Object.freeze(skills.map((skill) =>
+          ),
+          skills: skills.map((skill) =>
             descriptor(
               skill.name,
               skill,
               "explicit",
             )
-          )),
-        });
+          ),
+        } as const);
       });
     },
-  });
+  } as const);
 }

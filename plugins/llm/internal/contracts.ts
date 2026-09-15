@@ -453,9 +453,9 @@ export class LlmAdapterCallError extends Error {
       },
     );
     this.name = options.name?.trim() || "LlmAdapterCallError";
-    this.attempts = Object.freeze([...(options.attempts ?? [])]);
+    this.attempts = [...(options.attempts ?? [])] as const;
     this.rejectedAttemptEvidence = options.rejectedAttemptEvidence
-      ? Object.freeze({ ...options.rejectedAttemptEvidence })
+      ? ({ ...options.rejectedAttemptEvidence } as const)
       : undefined;
   }
 }
@@ -509,7 +509,7 @@ export function normalizeLlmAdapter<const TAdapter extends LlmAdapter>(
   ) {
     throw new TypeError("Custom LLM Adapter requires call(input).");
   }
-  return Object.freeze({ call: descriptor.value }) as TAdapter;
+  return ({ call: descriptor.value } as const) as TAdapter;
 }
 
 function requiredText(value: unknown, field: string): string {
@@ -585,7 +585,7 @@ function canonicalJson(
           throw new TypeError(`${path} must not contain tagged array fields.`);
         }
       }
-      return Object.freeze(Array.from({ length: value.length }, (_, index) => {
+      return (Array.from({ length: value.length }, (_, index) => {
         const descriptor = Object.getOwnPropertyDescriptor(
           value,
           String(index),
@@ -604,7 +604,7 @@ function canonicalJson(
         ] as const
       )
       .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0);
-    return Object.freeze(Object.fromEntries(entries));
+    return (Object.fromEntries(entries));
   } finally {
     active.delete(value);
   }
@@ -639,7 +639,7 @@ function headerRecord(
   path: string,
 ): Readonly<Record<string, string>> | undefined {
   if (value === undefined) return undefined;
-  return Object.freeze(Object.fromEntries(
+  return (Object.fromEntries(
     plainDataEntries(value, path).map(([key, entry]) => {
       if (!key.trim() || typeof entry !== "string") {
         throw new TypeError(
@@ -662,7 +662,7 @@ export function normalizeLlmConnection(
     const extra = Object.keys(record).find((key) => key !== "adapter");
     if (extra) throw new TypeError(`Unknown LLM connection field '${extra}'.`);
     const adapter = requiredText(record.adapter, "adapter");
-    return Object.freeze({ adapter });
+    return ({ adapter } as const);
   }
   const extra = Object.keys(record).find((key) =>
     !new Set(["provider", "baseUrl", "auth", "runtimeDiagnostics"]).has(key)
@@ -734,27 +734,25 @@ export function normalizeLlmConnection(
         "LLM connection runtimeDiagnostics.credentialSource is invalid.",
       );
     }
-    runtimeDiagnostics = Object.freeze({
+    runtimeDiagnostics = {
       ...(diagnostics.enabled === undefined
         ? {}
         : { enabled: diagnostics.enabled as boolean }),
       ...(diagnostics.credentialSource === undefined ? {} : {
         credentialSource: diagnostics.credentialSource as LlmCredentialSource,
       }),
-    });
+    } as const;
   }
 
-  return Object.freeze({
+  return ({
     provider,
     ...(baseUrl === undefined ? {} : { baseUrl }),
-    auth: dynamic
-      ? Object.freeze({ resolve: auth.resolve as LlmAuthResolver })
-      : Object.freeze({
-        ...(apiKey === undefined ? {} : { apiKey }),
-        ...(extraHeaders === undefined ? {} : { extraHeaders }),
-      }),
+    auth: dynamic ? ({ resolve: auth.resolve as LlmAuthResolver } as const) : ({
+      ...(apiKey === undefined ? {} : { apiKey }),
+      ...(extraHeaders === undefined ? {} : { extraHeaders }),
+    } as const),
     ...(runtimeDiagnostics === undefined ? {} : { runtimeDiagnostics }),
-  }) as LlmConnectionResource;
+  } as const) as LlmConnectionResource;
 }
 
 /** Validates one durable connection/model selection and freezes its JSON options. */
@@ -797,11 +795,11 @@ export function normalizeLlmModelSelection<
       );
     }
   }
-  return Object.freeze({
+  return ({
     connection,
     model,
     ...(options ? { options: options as TOptions } : {}),
-  });
+  } as const);
 }
 
 export function normalizeLlmModelSelections(
@@ -820,5 +818,5 @@ export function normalizeLlmModelSelections(
   if (new Set(identities).size !== identities.length) {
     throw new TypeError(`${path} must not contain duplicate selections.`);
   }
-  return Object.freeze(selections) as LlmModelSelections;
+  return [selections[0]!, ...selections.slice(1)];
 }

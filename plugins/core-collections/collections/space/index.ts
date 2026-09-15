@@ -83,3 +83,5 @@ export const spaceCollection: CollectionDefinition = defineCollection({
     },
   },
 });
+
+export default spaceCollection;

@@ -12,14 +12,17 @@ import type {
 import type { ProcessorContext } from "@copilotz/copilotz/plugins";
 
 import type { MemoryKindDefinition } from "../ontology/index.ts";
-import type { LongTermMemoryConfig } from "../../resources/config/index.ts";
+import type { LongTermMemoryConfig } from "../../resources/memory/config/index.ts";
 
 export type MemoryResources =
   & RuntimeContextNamespaces
   & Readonly<{
     agents: Readonly<Record<string, AgentResource | undefined>>;
-    memoryKinds: Readonly<
-      Record<string, MemoryKindDefinition | undefined>
+    memory: Readonly<
+      {
+        config?: Partial<LongTermMemoryConfig> & { enabled?: boolean };
+        kinds?: readonly MemoryKindDefinition[];
+      }
     >;
   }>;
 
@@ -46,15 +49,3 @@ export type MemoryEmbed = (
   texts: readonly string[],
   input: MemoryEmbeddingInput,
 ) => Promise<readonly (readonly number[])[]>;
-
-type LongTermMemoryPluginOptionsBase = Readonly<{
-  id?: string;
-  version?: string;
-  config?: Partial<LongTermMemoryConfig>;
-  embed?: MemoryEmbed;
-}>;
-
-/** Memory uses the target Agent's ordinary model selection and tool lifecycle. */
-export type CreateLongTermMemoryPluginOptions =
-  & LongTermMemoryPluginOptionsBase
-  & Readonly<{ enabled?: boolean }>;

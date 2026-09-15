@@ -70,11 +70,11 @@ export function sourceCatalog(
       nodes.add(`${item.source.collection}:${item.source.id}`);
     }
   }
-  return Object.freeze({
-    evidence: Object.freeze(evidence),
+  return ({
+    evidence: evidence,
     keys: new Set(evidence.map(memorySourceKey)),
     nodes,
-  });
+  } as const);
 }
 
 export function assertedBy(
@@ -160,7 +160,7 @@ export function draftData(
     if (Array.isArray(copy.about)) copy.about = copy.about.map(mapRef);
     if (copy.answer) copy.answer = mapRef(copy.answer);
   }
-  return Object.freeze(copy);
+  return copy;
 }
 
 export function intentOrInquiryStatus(
@@ -177,18 +177,16 @@ export async function recordRelations(
   context: MemoryProcessorContext,
   ids: ReadonlySet<string>,
 ) {
-  return Object.freeze(
-    (await context.collections.memoryRecord.relations.list({
-      types: MEMORY_RELATION_TYPES,
-      limit: 1_000,
-    }))
-      .filter((relation) =>
-        ids.has(relation.source.id) && ids.has(relation.target.id)
-      )
-      .map((relation): MemoryRecordRelation => ({
-        sourceId: relation.source.id,
-        targetId: relation.target.id,
-        type: relation.type,
-      })),
-  );
+  return ((await context.collections.memoryRecord.relations.list({
+    types: MEMORY_RELATION_TYPES,
+    limit: 1_000,
+  }))
+    .filter((relation) =>
+      ids.has(relation.source.id) && ids.has(relation.target.id)
+    )
+    .map((relation): MemoryRecordRelation => ({
+      sourceId: relation.source.id,
+      targetId: relation.target.id,
+      type: relation.type,
+    })));
 }

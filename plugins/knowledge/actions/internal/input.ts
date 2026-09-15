@@ -32,5 +32,5 @@ export function finiteVector(value: unknown, name: string): readonly number[] {
   ) {
     throw new TypeError(`${name} must be a non-empty finite vector.`);
   }
-  return Object.freeze(value.map(Number));
+  return (value.map(Number));
 }

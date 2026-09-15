@@ -1,3 +1,4 @@
+import type { ActionDefinition } from "@copilotz/copilotz/actions";
 /**
  * Defines the DuckDuckGo-backed Web Search Action and parsing helpers.
  *
@@ -314,7 +315,18 @@ function shouldRetry(error: unknown): boolean {
   return false;
 }
 
-export const webSearchAction = defineAction({
+export const webSearchAction: ActionDefinition<
+  WebSearchParams,
+  {
+    success: boolean;
+    provider: string;
+    blocked: boolean;
+    query: string;
+    results: SearchHit[];
+    count: number;
+  },
+  ActionContext
+> = defineAction({
   id: "copilotz.tools.web.web_search",
   inputSchema: {
     type: "object",

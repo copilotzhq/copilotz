@@ -97,7 +97,7 @@ export function createHttpAdapter(input: HttpAdapter): HttpAdapter {
   const freeze = <T>(value: T): T => {
     if (value && typeof value === "object") {
       Object.values(value).forEach(freeze);
-      Object.freeze(value);
+      value;
     }
     return value;
   };
@@ -123,7 +123,7 @@ export function createHttpAdapter(input: HttpAdapter): HttpAdapter {
       );
     }
     ids.add(route.id);
-    return Object.freeze({
+    return ({
       ...route,
       ...(route.metadata
         ? { metadata: freeze(structuredClone(route.metadata)) }
@@ -134,7 +134,7 @@ export function createHttpAdapter(input: HttpAdapter): HttpAdapter {
       ...(route.outputSchema
         ? { outputSchema: freeze(structuredClone(route.outputSchema)) }
         : {}),
-    });
+    } as const);
   });
-  return Object.freeze({ routes: Object.freeze(routes) });
+  return ({ routes: routes } as const);
 }

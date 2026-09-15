@@ -196,19 +196,3 @@ export type KnowledgeTextExtractor = (
     signal: AbortSignal;
   }>,
 ) => Promise<string>;
-
-export type CreateKnowledgePluginOptions = Readonly<{
-  id?: string;
-  version?: string;
-  embedding: KnowledgeEmbeddingConfig;
-  chunking?: KnowledgeChunkingConfig;
-  sourceLoader?: KnowledgeSourceLoader;
-  extractText?: KnowledgeTextExtractor;
-  tools?:
-    | false
-    | Readonly<{
-      ingestId?: string;
-      searchId?: string;
-      deleteId?: string;
-    }>;
-}>;

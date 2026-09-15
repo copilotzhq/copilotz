@@ -30,8 +30,8 @@ export async function executeRunScheduledJobNow(
   }, {
     operationKey: `scheduled_job.run_now:${item.id}`,
   });
-  return Object.freeze({
+  return ({
     job: normalizeScheduledJobRecord(record),
     occurrence: item,
-  });
+  } as const);
 }

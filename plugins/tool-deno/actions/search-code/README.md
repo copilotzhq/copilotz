@@ -10,7 +10,7 @@ It lets agents locate relevant code without reading full trees or files.
 
 ## How to use it
 
-Compose it through `createWorkspaceToolsPlugin()` using the `search_code` alias.
+Compose it through `denoToolsPlugin` using the `search_code` alias.
 
 ## How it works
 

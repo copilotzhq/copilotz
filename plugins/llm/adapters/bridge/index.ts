@@ -162,19 +162,17 @@ function captureJson(
   active.add(value);
   try {
     if (Array.isArray(value)) {
-      return Object.freeze(value.map((entry) => captureJson(entry, active)));
+      return (value.map((entry) => captureJson(entry, active)));
     }
     const prototype = Object.getPrototypeOf(value);
     if (prototype !== Object.prototype && prototype !== null) {
       throw new TypeError("LLM Adapter options must be plain JSON objects.");
     }
-    return Object.freeze(
-      Object.fromEntries(
-        Object.entries(value).map((
-          [key, entry],
-        ) => [key, captureJson(entry, active)]),
-      ),
-    );
+    return (Object.fromEntries(
+      Object.entries(value).map((
+        [key, entry],
+      ) => [key, captureJson(entry, active)]),
+    ));
   } finally {
     active.delete(value);
   }
@@ -439,12 +437,12 @@ export function preflightLlmRequest(
     config: resolved,
   });
   assertEstimatedInputLimit(formatted.estimate, resolved);
-  return Object.freeze({
+  return ({
     estimatedInputTokens: formatted.estimate.estimatedTokens,
     ...(typeof resolved.limitEstimatedInputTokens === "number"
       ? { limitEstimatedInputTokens: resolved.limitEstimatedInputTokens }
       : {}),
-  });
+  } as const);
 }
 
 function plainJsonObject(value: unknown, field: string): LlmJsonObject {
@@ -460,12 +458,12 @@ function normalizeToolCall(call: ToolInvocation): LlmToolCall {
   if (root.type !== "tool") {
     throw new TypeError("LLM tool pipeline must begin with a tool stage.");
   }
-  return Object.freeze({
+  return ({
     id: requiredText(call.id, "tool call id"),
     action: root.action,
     input: root.input,
     pipeline,
-  });
+  } as const);
 }
 
 function normalizeToolPipeline(call: ToolInvocation): LlmToolPipeline {
@@ -480,10 +478,10 @@ function normalizeToolPipeline(call: ToolInvocation): LlmToolPipeline {
   };
   const stages = source.stages.map((stage, index): LlmToolPipelineStage => {
     if (stage.type === "jq") {
-      return Object.freeze({
+      return ({
         type: "jq" as const,
         filter: requiredText(stage.filter, "LLM jq stage filter"),
-      });
+      } as const);
     }
     let parsed: unknown;
     try {
@@ -494,7 +492,7 @@ function normalizeToolPipeline(call: ToolInvocation): LlmToolPipeline {
         { cause: error },
       );
     }
-    return Object.freeze({
+    return ({
       type: "tool" as const,
       id: requiredText(stage.id, `LLM tool pipeline stage ${index} id`),
       action: requiredText(
@@ -502,7 +500,7 @@ function normalizeToolPipeline(call: ToolInvocation): LlmToolPipeline {
         `LLM tool pipeline stage ${index} action`,
       ),
       input: plainJsonObject(parsed, `LLM tool pipeline stage ${index} input`),
-    });
+    } as const);
   });
   const first = stages[0];
   if (!first || first.type !== "tool") {
@@ -514,13 +512,13 @@ function normalizeToolPipeline(call: ToolInvocation): LlmToolPipeline {
       "LLM tool pipeline root stage id must match its tool call id.",
     );
   }
-  return Object.freeze({
+  return ({
     id: requiredText(source.id, "LLM tool pipeline id"),
-    stages: Object.freeze(stages) as unknown as readonly [
+    stages: stages as unknown as readonly [
       typeof first,
       ...LlmToolPipelineStage[],
     ],
-  });
+  } as const);
 }
 
 function normalizeUsage(
@@ -528,7 +526,7 @@ function normalizeUsage(
   cost?: ChatResponse["cost"],
 ): LlmUsage | undefined {
   if (!usage && !cost) return undefined;
-  return Object.freeze({
+  return ({
     ...(usage?.inputTokens !== undefined
       ? { inputTokens: usage.inputTokens }
       : {}),
@@ -555,7 +553,7 @@ function normalizeUsage(
         },
       }
       : {}),
-  });
+  } as const);
 }
 
 function boundedCode(value: unknown): string | undefined {
@@ -570,12 +568,12 @@ function sanitizedAttemptError(
   const code = boundedCode(attempt.error?.details?.code) ??
     boundedCode(attempt.error?.reason) ??
     boundedCode(attempt.usage.statusReason);
-  return Object.freeze({
+  return ({
     ...(code ? { code } : {}),
     message: code
       ? `Provider attempt did not complete (${code}).`
       : "Provider attempt did not complete.",
-  });
+  } as const);
 }
 
 function normalizeInternalAttempt(
@@ -588,14 +586,14 @@ function normalizeInternalAttempt(
     finalized?.usage ?? attempt.usage,
     finalized?.cost ?? attempt.cost,
   );
-  return Object.freeze({
+  return ({
     status,
     ...(usage ? { usage } : {}),
     ...(finishReason ? { finishReason } : {}),
     ...(status === "failed" ? { error: sanitizedAttemptError(attempt) } : {}),
     ...(attempt.startedAt ? { startedAt: attempt.startedAt } : {}),
     ...(attempt.finishedAt ? { finishedAt: attempt.finishedAt } : {}),
-  });
+  } as const);
 }
 
 async function finalizedAttempt(
@@ -632,7 +630,7 @@ async function normalizeResult(
         finishReason = finalized.finishReason;
       }
     }
-    attempts = Object.freeze(normalized);
+    attempts = normalized;
   } else {
     let finalized: Awaited<ChatResponse["usageFinalized"]>;
     try {
@@ -646,12 +644,16 @@ async function normalizeResult(
       finalized?.cost ?? response.cost,
     );
     finishReason = finalized?.finishReason ?? finishReason;
-    attempts = Object.freeze([Object.freeze({
-      status: "completed" as const,
-      ...(usage ? { usage } : {}),
-      ...(finishReason ? { finishReason } : {}),
-      ...(finalized?.finalizedAt ? { finishedAt: finalized.finalizedAt } : {}),
-    })]);
+    attempts = [
+      {
+        status: "completed" as const,
+        ...(usage ? { usage } : {}),
+        ...(finishReason ? { finishReason } : {}),
+        ...(finalized?.finalizedAt
+          ? { finishedAt: finalized.finalizedAt }
+          : {}),
+      } as const,
+    ] as const;
   }
   let nativeReasoning = response.nativeReasoning;
   if (response.nativeReasoningFinalized) {
@@ -670,7 +672,7 @@ async function normalizeResult(
       mediaType: "application/json",
     }))
     : undefined;
-  return Object.freeze({
+  return ({
     content: { type: "text" as const, text: response.answer },
     ...(response.reasoning
       ? {
@@ -693,19 +695,17 @@ async function normalizeResult(
       : {}),
     attempts,
     ...(finishReason ? { finishReason } : {}),
-  });
+  } as const);
 }
 
 async function normalizeFailureAttempts(
   error: LLMProviderError,
 ): Promise<readonly LlmAdapterAttempt[]> {
-  return Object.freeze(
-    await Promise.all(
-      error.usageAttempts.map(async (attempt) =>
-        normalizeInternalAttempt(attempt, await finalizedAttempt(attempt))
-      ),
+  return (await Promise.all(
+    error.usageAttempts.map(async (attempt) =>
+      normalizeInternalAttempt(attempt, await finalizedAttempt(attempt))
     ),
-  );
+  ));
 }
 
 async function normalizedProviderFailure(error: unknown): Promise<unknown> {
@@ -768,7 +768,7 @@ function frameChannel(sourceSignal: AbortSignal): FrameChannel {
     },
   });
 
-  return Object.freeze({
+  return ({
     frames,
     signal: abort.signal,
     emit(frame) {
@@ -787,7 +787,7 @@ function frameChannel(sourceSignal: AbortSignal): FrameChannel {
     dispose() {
       sourceSignal.removeEventListener("abort", forwardAbort);
     },
-  });
+  } as const);
 }
 
 function providerConfig(
@@ -823,20 +823,20 @@ export function createProviderAdapter(
     ? captureJson(configuration.options) as LlmJsonObject
     : undefined;
   runtimeOptions(options);
-  const captured = Object.freeze({
+  const captured = {
     apiKey: configuration.apiKey,
     baseUrl: configuration.baseUrl,
     extraHeaders: cloneStringRecord(configuration.extraHeaders),
     runtimeDiagnostics: configuration.runtimeDiagnostics
-      ? Object.freeze({ ...configuration.runtimeDiagnostics })
+      ? ({ ...configuration.runtimeDiagnostics } as const)
       : undefined,
     executionIdentity: configuration.executionIdentity
-      ? Object.freeze({ ...configuration.executionIdentity })
+      ? ({ ...configuration.executionIdentity } as const)
       : undefined,
     options,
-  });
+  } as const;
 
-  return Object.freeze({
+  return ({
     call(input) {
       const channel = frameChannel(input.signal);
       const encoder = new TextEncoder();
@@ -908,7 +908,7 @@ export function createProviderAdapter(
           channel.dispose();
         }
       })();
-      return Object.freeze({ frames: channel.frames, result });
+      return ({ frames: channel.frames, result } as const);
     },
-  });
+  } as const);
 }

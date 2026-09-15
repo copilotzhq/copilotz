@@ -1,2 +1,2 @@
 /** Exposes the Resource owned by WhatsApp Channel. @module */
-export { createWhatsAppChannelResource } from "./whatsapp/index.ts";
+export { whatsappChannelResource } from "./channels/whatsapp/index.ts";

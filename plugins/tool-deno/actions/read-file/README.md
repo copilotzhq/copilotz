@@ -10,7 +10,7 @@ It prevents accidental oversized file responses while retaining precise reads.
 
 ## How to use it
 
-Compose it through `createWorkspaceToolsPlugin()` using the `read_file` alias.
+Compose it through `denoToolsPlugin` using the `read_file` alias.
 
 ## How it works
 

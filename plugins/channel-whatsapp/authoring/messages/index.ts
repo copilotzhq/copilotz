@@ -64,7 +64,7 @@ export function normalizeWhatsAppReplyButtons(
     seenIds.add(id);
     buttons.push({ type: "reply", reply: { id, title } });
   }
-  return Object.freeze(buttons);
+  return buttons;
 }
 
 export function normalizeWhatsAppActionPayload(
@@ -139,7 +139,7 @@ function carouselButtons(
     if (!text || !payload) return null;
     result.push({ type: "quick_reply", text, payload });
   }
-  return Object.freeze(result);
+  return result;
 }
 
 export async function resolveWhatsAppMediaCarouselAction(
@@ -180,7 +180,7 @@ export async function resolveWhatsAppMediaCarouselAction(
       image = { id: uploaded.id };
     }
     const body = normalizeCarouselBody(card.body);
-    cards.push(Object.freeze({ ...(body ? { body } : {}), image, buttons }));
+    cards.push({ ...(body ? { body } : {}), image, buttons } as const);
   }
   const count = cards[0]?.buttons.length;
   if (!count || cards.some((card) => card.buttons.length !== count)) {
@@ -191,12 +191,12 @@ export async function resolveWhatsAppMediaCarouselAction(
   );
   if (new Set(replyIds).size !== replyIds.length) return null;
   const fallbackText = action.fallbackText?.trim();
-  return Object.freeze({
+  return ({
     type: "media_carousel",
     message,
     ...(fallbackText ? { fallbackText } : {}),
-    cards: Object.freeze(cards),
-  });
+    cards: cards,
+  } as const);
 }
 
 export function buildWhatsAppMediaCarouselMessage(
@@ -255,5 +255,5 @@ export function splitWhatsAppText(
     remaining = remaining.slice(take).trimStart();
   }
   if (remaining) result.push(remaining);
-  return Object.freeze(result);
+  return result;
 }

@@ -26,6 +26,7 @@ export type ContextSourceRef =
   }>;
 
 export type ContextContributionInput = Readonly<{
+  context: ProcessorContext;
   purpose: ContextPurpose;
   agent: AgentResource;
   participant: Participant;

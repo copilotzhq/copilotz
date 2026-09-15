@@ -13,7 +13,7 @@ callbacks inside the published Tool Resource.
 ## How to use it
 
 Call the positional form for a hand-authored Action, or the object form before
-passing the returned declaration to `createToolsPlugin`.
+registering the declaration directly in `resources.tools`.
 
 ## How it works
 

@@ -14,8 +14,7 @@ constraints without duplicating server policy.
 
 ## How to use it
 
-Compose the adapter under the HTTP Adapter namespace beside
-`createServerPlugin`.
+Compose the adapter under the HTTP Adapter namespace beside `serverPlugin`.
 
 ## How it works
 

@@ -242,8 +242,7 @@ Deno.test("runGoal alternates settled sends and relays canonical Message content
     const final = result.transcript.at(-1);
     assertExists(final);
     assertEquals(final.content.length, 2);
-    assertEquals(Object.isFrozen(final.content), true);
-    assertEquals(Object.isFrozen(final.content[0]), true);
+
     const attachment = final.content[1];
     assertExists(attachment);
     assertEquals("bytes" in attachment, false);

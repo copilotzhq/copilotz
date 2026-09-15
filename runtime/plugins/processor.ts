@@ -77,7 +77,7 @@ function requireClause(
       `Processor '${id}' on[${index}] requires eventType.`,
     );
   }
-  return Object.freeze({
+  return ({
     eventType,
     ...(clause.namespace === undefined ? {} : { namespace: clause.namespace }),
     ...(clause.threadId === undefined ? {} : { threadId: clause.threadId }),
@@ -88,7 +88,7 @@ function requireClause(
       : { visibility: clause.visibility }),
     ...(clause.metadata === undefined ? {} : { metadata: clause.metadata }),
     ...(clause.data === undefined ? {} : { data: clause.data }),
-  }) as ProcessorMatchClause;
+  } as const) as ProcessorMatchClause;
 }
 
 /** Defines one independent event subscription. */
@@ -102,8 +102,8 @@ export function defineProcessor<
   if (!Array.isArray(processor.on) || processor.on.length === 0) {
     throw new TypeError(`Processor '${id}' requires at least one matcher.`);
   }
-  const on = Object.freeze(
-    processor.on.map((clause, index) => requireClause(id, clause, index)),
+  const on = processor.on.map((clause, index) =>
+    requireClause(id, clause, index)
   );
   const settlement = processor.settlement ?? "inherit";
   if (settlement !== "inherit" && settlement !== "detached") {
@@ -112,12 +112,12 @@ export function defineProcessor<
   if (typeof processor.handle !== "function") {
     throw new TypeError(`Processor '${id}' requires a handle function.`);
   }
-  return Object.freeze({
+  return ({
     ...processor,
     id,
     on,
     settlement,
-  });
+  } as const);
 }
 
 export function processorConsumerId(processorId: string): string {
@@ -149,8 +149,8 @@ export function withProcessorEventData<TData>(
   event: CopilotzEvent,
   data: TData,
 ): ProcessorEvent<TData> {
-  return Object.freeze({
+  return ({
     ...event,
     data: snapshotEventData(data, "Resolved Event data"),
-  }) as ProcessorEvent<TData>;
+  } as const) as ProcessorEvent<TData>;
 }

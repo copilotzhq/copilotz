@@ -37,12 +37,10 @@ function optionalText(value: unknown): string | undefined {
 }
 
 function stringArray(value: unknown): readonly string[] {
-  if (!Array.isArray(value)) return Object.freeze([]);
-  return Object.freeze(
-    value.filter((item): item is string =>
-      typeof item === "string" && Boolean(item.trim())
-    ),
-  );
+  if (!Array.isArray(value)) return ([] as const);
+  return (value.filter((item): item is string =>
+    typeof item === "string" && Boolean(item.trim())
+  ));
 }
 
 function participantType(value: unknown): ParticipantType {
@@ -137,7 +135,7 @@ export async function ensureParticipantInTransaction(
   threadId?: string,
   eventMetadata?: Readonly<Record<string, unknown>>,
 ): Promise<CollectionMutationRef> {
-  if (existing) return Object.freeze({ id: existing.id });
+  if (existing) return ({ id: existing.id } as const);
   const collection = collections.participant;
   if (!collection) throw new Error("Collection 'participant' is not bound.");
   const fields = senderFields(input);
@@ -294,3 +292,5 @@ export const createThreadMessageAction: ActionDefinition<
   inputSchema: createInputSchema,
   execute: executeCreateThreadMessage,
 });
+
+export default createThreadMessageAction;

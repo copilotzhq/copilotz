@@ -25,10 +25,8 @@ export type ConnectMcpRuntime = (
   signal?: AbortSignal,
 ) => Promise<McpRuntimeConnection>;
 
-export type CreateMcpToolsPluginOptions = Readonly<{
+export type PrepareMcpToolsOptions = Readonly<{
   servers: readonly MCPServer[];
   connect: ConnectMcpRuntime;
   signal?: AbortSignal;
-  id?: string;
-  version?: string;
 }>;

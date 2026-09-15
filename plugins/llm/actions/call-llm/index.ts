@@ -223,11 +223,9 @@ function canonicalJson(
         Object.keys(value).length !== value.length ||
         Object.keys(value).some((key, index) => key !== String(index))
       ) throw new TypeError(`${path} must be a dense JSON array.`);
-      return Object.freeze(
-        value.map((child, index) =>
-          canonicalJson(child, `${path}[${index}]`, active)
-        ),
-      );
+      return (value.map((child, index) =>
+        canonicalJson(child, `${path}[${index}]`, active)
+      ));
     }
     const record = plainRecord(value, path);
     const result: Record<string, unknown> = {};
@@ -238,7 +236,7 @@ function canonicalJson(
       }
       result[key] = canonicalJson(descriptor.value, `${path}.${key}`, active);
     }
-    return Object.freeze(result);
+    return result;
   } finally {
     active.delete(value);
   }
@@ -342,7 +340,7 @@ function managedInput(body: ReadableStream<Uint8Array>): ManagedInput {
     },
     cancel: dispose,
   });
-  return Object.freeze({ stream, dispose });
+  return ({ stream, dispose } as const);
 }
 
 function adapterFor(
@@ -387,27 +385,27 @@ function modelPlan(
             : { extraHeaders: auth.extraHeaders }),
         },
         mode,
-        selection.options ?? Object.freeze({}),
+        selection.options ?? ({} as const),
       );
-      return Object.freeze({
+      return ({
         alias: selection.connection,
         selection,
         connection: resource,
         adapterAlias: resource.provider,
-      });
+      } as const);
     }
-    return Object.freeze({
+    return ({
       alias: selection.connection,
       selection,
       connection: resource,
       adapterAlias: resource.adapter,
       adapter: adapterFor(resource.adapter, adapters),
-    });
+    } as const);
   });
-  return Object.freeze(plan);
+  return plan;
 }
 function connectionContext(context: LlmActionContext): LlmConnectionContext {
-  return Object.freeze({
+  return ({
     namespace: context.namespace,
     operationKey: context.operationKey,
     identity: context.identity,
@@ -415,7 +413,7 @@ function connectionContext(context: LlmActionContext): LlmConnectionContext {
     collections: context.collections,
     signal: context.signal,
     now: context.now,
-  });
+  } as const);
 }
 
 function resolvedAuth(value: unknown): LlmAuthResolution {
@@ -446,12 +444,12 @@ function resolvedAuth(value: unknown): LlmAuthResolution {
       );
     }
     return apiKey !== undefined
-      ? Object.freeze({
+      ? ({
         available: true,
         apiKey,
         ...(extraHeaders === undefined ? {} : { extraHeaders }),
-      })
-      : Object.freeze({ available: true, extraHeaders: extraHeaders! });
+      } as const)
+      : ({ available: true, extraHeaders: extraHeaders! } as const);
   }
   if (
     record.available !== false || record.apiKey !== undefined ||
@@ -461,12 +459,12 @@ function resolvedAuth(value: unknown): LlmAuthResolution {
       "An unavailable LLM credential resolution may only include reason.",
     );
   }
-  return Object.freeze({
+  return ({
     available: false,
     ...(record.reason === undefined ? {} : {
       reason: requiredText(record.reason, "LLM credential resolution.reason"),
     }),
-  });
+  } as const);
 }
 
 function stringHeaders(
@@ -474,18 +472,16 @@ function stringHeaders(
   path: string,
 ): Readonly<Record<string, string>> {
   const record = plainRecord(value, path);
-  return Object.freeze(
-    Object.fromEntries(
-      Object.entries(record).map(([key, entry]) => {
-        if (!key.trim() || typeof entry !== "string") {
-          throw new TypeError(
-            `${path} requires non-empty names and string values.`,
-          );
-        }
-        return [key, entry];
-      }),
-    ),
-  );
+  return (Object.fromEntries(
+    Object.entries(record).map(([key, entry]) => {
+      if (!key.trim() || typeof entry !== "string") {
+        throw new TypeError(
+          `${path} requires non-empty names and string values.`,
+        );
+      }
+      return [key, entry];
+    }),
+  ));
 }
 
 type TrustedApplicationSessionMetadata = Readonly<{
@@ -507,7 +503,7 @@ function trustedApplicationSessionMetadata(
   const threadId = typeof value.threadId === "string" ? value.threadId : "";
   const agentId = typeof value.agentId === "string" ? value.agentId : "";
   return threadId.trim() && agentId.trim()
-    ? Object.freeze({ threadId, agentId })
+    ? ({ threadId, agentId } as const)
     : undefined;
 }
 
@@ -541,7 +537,7 @@ async function attemptModel(
   connectionMemo: Map<string, Promise<LlmAuthResolution | undefined>>,
 ): Promise<ConnectionAttemptModel> {
   if (candidate.connection.provider === undefined) {
-    return Object.freeze({ kind: "ready", candidate });
+    return ({ kind: "ready", candidate } as const);
   }
   const auth = candidate.connection.auth;
   let resolution: LlmAuthResolution | undefined;
@@ -555,7 +551,7 @@ async function attemptModel(
             await raceSignal(
               Promise.resolve(auth.resolve!(
                 connectionContext(context),
-                Object.freeze({ connection: alias }),
+                { connection: alias } as const,
               )),
               context.signal,
             ),
@@ -569,8 +565,8 @@ async function attemptModel(
       connectionMemo.set(alias, resolving);
     }
     resolution = await resolving;
-    if (resolution === undefined) return Object.freeze({ kind: "failed" });
-    if (!resolution.available) return Object.freeze({ kind: "unavailable" });
+    if (resolution === undefined) return ({ kind: "failed" } as const);
+    if (!resolution.available) return ({ kind: "unavailable" } as const);
   }
   const authFields = typeof auth.resolve === "function"
     ? (() => {
@@ -589,7 +585,7 @@ async function attemptModel(
         ? {}
         : { extraHeaders: auth.extraHeaders }),
     };
-  if (!authFields) return Object.freeze({ kind: "unavailable" });
+  if (!authFields) return ({ kind: "unavailable" } as const);
   const resource = {
     provider: candidate.connection.provider,
     model: candidate.selection.model,
@@ -614,17 +610,17 @@ async function attemptModel(
         ),
       }
       : undefined;
-  return Object.freeze({
+  return ({
     kind: "ready",
-    candidate: Object.freeze({
+    candidate: {
       ...candidate,
       adapter: materializeBuiltinModel(
         { ...resource, ...(executionIdentity ? { executionIdentity } : {}) },
         input.mode,
-        candidate.selection.options ?? Object.freeze({}),
+        candidate.selection.options ?? ({} as const),
       ),
-    }),
-  });
+    } as const,
+  } as const);
 }
 
 const CONTENT_REF_KEYS = new Set([
@@ -694,12 +690,12 @@ function contentCommon(
       new Set(["type", "id"]),
       `${path}.origin`,
     );
-    origin = Object.freeze({
+    origin = {
       type: requiredText(value.type, `${path}.origin.type`),
       id: requiredText(value.id, `${path}.origin.id`),
-    });
+    } as const;
   }
-  return Object.freeze({
+  return ({
     ...(role ? { role } : {}),
     ...(mediaType ? { mediaType } : {}),
     ...(name ? { name } : {}),
@@ -708,7 +704,7 @@ function contentCommon(
     ...(disposition ? { disposition } : {}),
     ...(metadata ? { metadata } : {}),
     ...(origin ? { origin } : {}),
-  });
+  } as const);
 }
 
 function normalizedContentInput(value: unknown, path: string): ContentInput {
@@ -730,7 +726,7 @@ function normalizedContentInput(value: unknown, path: string): ContentInput {
     const metadata = record.metadata === undefined
       ? undefined
       : jsonObject(record.metadata, `${path}.metadata`);
-    return Object.freeze({
+    return ({
       assetId: requiredText(record.assetId, `${path}.assetId`),
       kind,
       role: requiredText(record.role, `${path}.role`),
@@ -740,7 +736,7 @@ function normalizedContentInput(value: unknown, path: string): ContentInput {
       ...(language ? { language } : {}),
       ...(record.disposition ? { disposition: record.disposition } : {}),
       ...(metadata ? { metadata } : {}),
-    }) as ContentRef;
+    } as const) as ContentRef;
   }
   exactKeys(record, CONTENT_INPUT_KEYS, path);
   const type = requiredText(record.type, `${path}.type`);
@@ -750,28 +746,28 @@ function normalizedContentInput(value: unknown, path: string): ContentInput {
     if (typeof record.text !== "string") {
       throw new TypeError(`${path}.text must be a string.`);
     }
-    return Object.freeze({
+    return ({
       type,
       text: record.text,
       ...common,
-    }) as ContentInput;
+    } as const) as ContentInput;
   }
   if (type === "json") {
-    return Object.freeze({
+    return ({
       type,
       value: canonicalJson(record.value, `${path}.value`),
       ...common,
-    }) as ContentInput;
+    } as const) as ContentInput;
   }
   if (!(record.bytes instanceof Uint8Array)) {
     throw new TypeError(`${path}.bytes must be Uint8Array.`);
   }
-  return Object.freeze({
+  return ({
     type,
     bytes: record.bytes.slice(),
     mediaType: requiredText(record.mediaType, `${path}.mediaType`),
     ...common,
-  }) as ContentInput;
+  } as const) as ContentInput;
 }
 
 function normalizedContent(
@@ -779,11 +775,9 @@ function normalizedContent(
   path: string,
 ): readonly ContentInput[] {
   const values = Array.isArray(value) ? value : [value];
-  return Object.freeze(
-    values.map((item, index) =>
-      normalizedContentInput(item, `${path}[${index}]`)
-    ),
-  );
+  return (values.map((item, index) =>
+    normalizedContentInput(item, `${path}[${index}]`)
+  ));
 }
 
 class MalformedToolCallError extends Error {
@@ -792,13 +786,13 @@ class MalformedToolCallError extends Error {
   constructor(location?: string) {
     super("LLM Adapter returned malformed tool calls.");
     this.name = "MalformedToolCallError";
-    this.evidence = Object.freeze({
+    this.evidence = {
       code: "malformed_tool_call",
       message:
         "The model returned a tool call that does not match the declared tool contract.",
       ...(location ? { location } : {}),
       retryable: true,
-    });
+    } as const;
   }
 }
 
@@ -822,7 +816,7 @@ function normalizedToolCalls(value: unknown): readonly LlmToolCall[] {
       );
     }
     const ids = new Set<string>();
-    return Object.freeze(value.map((item, index) => {
+    return (value.map((item, index) => {
       const path = `LLM Adapter result.toolCalls[${index}]`;
       const record = plainRecord(item, path);
       exactKeys(record, new Set(["id", "action", "input", "pipeline"]), path);
@@ -838,12 +832,12 @@ function normalizedToolCalls(value: unknown): readonly LlmToolCall[] {
       const pipeline = record.pipeline === undefined
         ? undefined
         : normalizedToolPipeline(record.pipeline, path, id, action, input);
-      return Object.freeze({
+      return ({
         id,
         action,
         input,
         ...(pipeline ? { pipeline } : {}),
-      });
+      } as const);
     }));
   } catch (error) {
     throw malformedToolCallError(error);
@@ -868,36 +862,34 @@ function normalizedToolPipeline(
       `${path}.pipeline.stages must contain at most ${MAX_TOOL_PIPELINE_STAGES} stages.`,
     );
   }
-  const stages = Object.freeze(
-    record.stages.map((item, index): LlmToolPipelineStage => {
-      const stagePath = `${path}.pipeline.stages[${index}]`;
-      const stage = plainRecord(item, stagePath);
-      const type = requiredText(stage.type, `${stagePath}.type`);
-      if (type === "jq") {
-        exactKeys(stage, new Set(["type", "filter"]), stagePath);
-        const filter = requiredText(stage.filter, `${stagePath}.filter`);
-        if (filter.length > MAX_TOOL_PIPELINE_JQ_FILTER_LENGTH) {
-          throw new TypeError(
-            `${stagePath}.filter must contain at most ${MAX_TOOL_PIPELINE_JQ_FILTER_LENGTH} characters.`,
-          );
-        }
-        return Object.freeze({
-          type: "jq" as const,
-          filter,
-        });
+  const stages = record.stages.map((item, index): LlmToolPipelineStage => {
+    const stagePath = `${path}.pipeline.stages[${index}]`;
+    const stage = plainRecord(item, stagePath);
+    const type = requiredText(stage.type, `${stagePath}.type`);
+    if (type === "jq") {
+      exactKeys(stage, new Set(["type", "filter"]), stagePath);
+      const filter = requiredText(stage.filter, `${stagePath}.filter`);
+      if (filter.length > MAX_TOOL_PIPELINE_JQ_FILTER_LENGTH) {
+        throw new TypeError(
+          `${stagePath}.filter must contain at most ${MAX_TOOL_PIPELINE_JQ_FILTER_LENGTH} characters.`,
+        );
       }
-      if (type !== "tool") {
-        throw new TypeError(`${stagePath}.type must be 'tool' or 'jq'.`);
-      }
-      exactKeys(stage, new Set(["type", "id", "action", "input"]), stagePath);
-      return Object.freeze({
-        type: "tool" as const,
-        id: requiredText(stage.id, `${stagePath}.id`),
-        action: requiredText(stage.action, `${stagePath}.action`),
-        input: jsonObject(stage.input, `${stagePath}.input`),
-      });
-    }),
-  );
+      return ({
+        type: "jq" as const,
+        filter,
+      } as const);
+    }
+    if (type !== "tool") {
+      throw new TypeError(`${stagePath}.type must be 'tool' or 'jq'.`);
+    }
+    exactKeys(stage, new Set(["type", "id", "action", "input"]), stagePath);
+    return ({
+      type: "tool" as const,
+      id: requiredText(stage.id, `${stagePath}.id`),
+      action: requiredText(stage.action, `${stagePath}.action`),
+      input: jsonObject(stage.input, `${stagePath}.input`),
+    } as const);
+  });
   const first = stages[0];
   if (first.type !== "tool") {
     throw new TypeError(`${path}.pipeline must begin with a tool stage.`);
@@ -910,13 +902,13 @@ function normalizedToolPipeline(
       `${path}.pipeline first tool stage must match the root id, action, and input.`,
     );
   }
-  return Object.freeze({
+  return ({
     id,
     stages: stages as unknown as readonly [
       typeof first,
       ...LlmToolPipelineStage[],
     ],
-  });
+  } as const);
 }
 
 function normalizedPreparedSequence(
@@ -926,7 +918,7 @@ function normalizedPreparedSequence(
   if (!Array.isArray(value)) {
     throw new TypeError(`${path} must be a content sequence.`);
   }
-  return Object.freeze(value.map((value, index) => {
+  return (value.map((value, index) => {
     const item = plainRecord(value, `${path}[${index}]`);
     const { value: body, resolve, ...reference } = item;
     const ref = normalizedContentInput(reference, `${path}[${index}]`);
@@ -988,13 +980,13 @@ function normalizedNativeReasoning(
   ) {
     throw new TypeError(`${path}.blocks must contain prepared JSON values.`);
   }
-  return Object.freeze({
+  return ({
     schema: "copilotz.llm-native-reasoning.v1" as const,
     adapter: requiredText(record.adapter, `${path}.adapter`),
     api: requiredText(record.api, `${path}.api`),
     model: requiredText(record.model, `${path}.model`),
     blocks,
-  });
+  } as const);
 }
 
 function normalizedNativeReasoningResult(
@@ -1019,10 +1011,10 @@ function normalizedNativeReasoningResult(
   ) {
     throw new TypeError(`${path}.blocks must contain JSON objects.`);
   }
-  return Object.freeze({
+  return ({
     api: requiredText(record.api, `${path}.api`),
     blocks,
-  });
+  } as const);
 }
 
 function normalizedMessage(value: unknown, index: number): LlmMessage {
@@ -1062,7 +1054,7 @@ function normalizedMessage(value: unknown, index: number): LlmMessage {
     const toolCalls = record.toolCalls === undefined
       ? undefined
       : normalizedToolCalls(record.toolCalls);
-    return Object.freeze({
+    return ({
       role,
       ...common,
       ...(toolCalls ? { toolCalls } : {}),
@@ -1085,19 +1077,19 @@ function normalizedMessage(value: unknown, index: number): LlmMessage {
           ),
         }
         : {}),
-    });
+    } as const);
   }
   if (role === "tool") {
-    return Object.freeze({
+    return ({
       role,
       ...common,
       toolCallId: requiredText(record.toolCallId, `${path}.toolCallId`),
       ...(record.toolPlanId === undefined ? {} : {
         toolPlanId: requiredText(record.toolPlanId, `${path}.toolPlanId`),
       }),
-    });
+    } as const);
   }
-  return Object.freeze({ role, ...common }) as LlmMessage;
+  return ({ role, ...common } as const) as LlmMessage;
 }
 
 function normalizedRequest(value: unknown): LlmCallInput["request"] {
@@ -1107,15 +1099,15 @@ function normalizedRequest(value: unknown): LlmCallInput["request"] {
   if (!Array.isArray(record.messages)) {
     throw new TypeError("LLM request.messages must be an array.");
   }
-  const messages = Object.freeze(
-    record.messages.map((message, index) => normalizedMessage(message, index)),
+  const messages = record.messages.map((message, index) =>
+    normalizedMessage(message, index)
   );
   let tools: LlmCallInput["request"]["tools"];
   if (record.tools !== undefined) {
     if (!Array.isArray(record.tools)) {
       throw new TypeError("LLM request.tools must be an array.");
     }
-    tools = Object.freeze(record.tools.map((tool, index) => {
+    tools = record.tools.map((tool, index) => {
       const toolPath = `LLM request.tools[${index}]`;
       const item = plainRecord(tool, toolPath);
       exactKeys(
@@ -1123,7 +1115,7 @@ function normalizedRequest(value: unknown): LlmCallInput["request"] {
         new Set(["name", "description", "inputSchema"]),
         toolPath,
       );
-      return Object.freeze({
+      return ({
         name: requiredText(item.name, `${toolPath}.name`),
         description: requiredText(item.description, `${toolPath}.description`),
         ...(item.inputSchema !== undefined
@@ -1134,20 +1126,20 @@ function normalizedRequest(value: unknown): LlmCallInput["request"] {
             ),
           }
           : {}),
-      });
-    }));
+      } as const);
+    });
   }
   if (
     record.instructions !== undefined &&
     typeof record.instructions !== "string"
   ) throw new TypeError("LLM request.instructions must be a string.");
-  return Object.freeze({
+  return ({
     messages,
     ...(tools ? { tools } : {}),
     ...(record.instructions !== undefined
       ? { instructions: record.instructions }
       : {}),
-  });
+  } as const);
 }
 
 function normalizedCallInput(value: unknown): LlmCallInput {
@@ -1180,22 +1172,22 @@ function normalizedCallInput(value: unknown): LlmCallInput {
     const metadata = item.metadata === undefined
       ? undefined
       : jsonObject(item.metadata, "LLM stream descriptor.metadata");
-    stream = Object.freeze({
+    stream = {
       ...(id ? { id } : {}),
       ...(metadata ? { metadata } : {}),
-    });
+    } as const;
   }
   const inputStreamId = optionalText(
     record.inputStreamId,
     "LLM input stream ID",
   );
-  return Object.freeze({
+  return ({
     models,
     mode,
     request,
     ...(stream ? { stream } : {}),
     ...(inputStreamId ? { inputStreamId } : {}),
-  });
+  } as const);
 }
 
 function normalizedUsage(value: unknown, path: string): LlmUsage {
@@ -1228,12 +1220,12 @@ function normalizedUsage(value: unknown, path: string): LlmUsage {
     if (typeof item.amount !== "number" || !Number.isFinite(item.amount)) {
       throw new TypeError(`${path}.cost.amount must be finite.`);
     }
-    cost = Object.freeze({
+    cost = {
       amount: item.amount,
       currency: requiredText(item.currency, `${path}.cost.currency`),
-    });
+    } as const;
   }
-  return Object.freeze({
+  return ({
     ...(token("inputTokens") !== undefined
       ? { inputTokens: token("inputTokens") }
       : {}),
@@ -1253,7 +1245,7 @@ function normalizedUsage(value: unknown, path: string): LlmUsage {
       ? { totalTokens: token("totalTokens") }
       : {}),
     ...(cost ? { cost } : {}),
-  });
+  } as const);
 }
 
 function normalizedAdapterAttempt(
@@ -1280,14 +1272,14 @@ function normalizedAdapterAttempt(
   if (record.error !== undefined) {
     const item = plainRecord(record.error, `${path}.error`);
     exactKeys(item, new Set(["code", "message"]), `${path}.error`);
-    error = Object.freeze({
+    error = {
       ...(optionalText(item.code, `${path}.error.code`)
         ? { code: optionalText(item.code, `${path}.error.code`) }
         : {}),
       message: requiredText(item.message, `${path}.error.message`),
-    });
+    } as const;
   }
-  return Object.freeze({
+  return ({
     status: record.status as LlmAdapterAttempt["status"],
     ...(record.usage
       ? { usage: normalizedUsage(record.usage, `${path}.usage`) }
@@ -1304,7 +1296,7 @@ function normalizedAdapterAttempt(
     ...(optionalText(record.finishedAt, `${path}.finishedAt`)
       ? { finishedAt: optionalText(record.finishedAt, `${path}.finishedAt`) }
       : {}),
-  });
+  } as const);
 }
 
 function streamKey(frame: LlmAdapterFrame): string {
@@ -1452,13 +1444,13 @@ async function pumpFrames(
     let timer: number | undefined;
     const due = new Promise<Readonly<{ kind: "flush" }>>((resolve) => {
       timer = setTimeout(
-        () => resolve(Object.freeze({ kind: "flush" as const })),
+        () => resolve({ kind: "flush" as const } as const),
         Math.max(0, earliest - Date.now()),
       ) as unknown as number;
     });
     try {
       return await Promise.race([
-        read().then((value) => Object.freeze({ kind: "read" as const, value })),
+        read().then((value) => ({ kind: "read" as const, value } as const)),
         due,
       ]);
     } finally {
@@ -1470,7 +1462,7 @@ async function pumpFrames(
     throwIfAborted(signal);
     const outcome = batches.size > 0
       ? await waitForReadOrFlush()
-      : Object.freeze({ kind: "read" as const, value: await read() });
+      : ({ kind: "read" as const, value: await read() } as const);
     if (outcome.kind === "flush") {
       await flushAll();
       continue;
@@ -1491,11 +1483,11 @@ async function pumpFrames(
         new Set(["lane", "mediaType", "bytes"]),
         "LLM Adapter frame",
       );
-      const frame = Object.freeze({
+      const frame = {
         lane: requiredText(raw.lane, "LLM frame lane"),
         mediaType: requiredText(raw.mediaType, "LLM frame media type"),
         bytes: raw.bytes.slice(),
-      });
+      } as const;
       if (frame.bytes.byteLength === 0 || state.discard) continue;
       const writer = await writerFor(
         frame,
@@ -1618,24 +1610,24 @@ function failureAttemptsFromResult(
   try {
     const result = plainRecord(value, "LLM Adapter result");
     if (!Array.isArray(result.attempts) || result.attempts.length === 0) {
-      return Object.freeze([]);
+      return ([] as const);
     }
     const error = errorDetails(failure);
-    return Object.freeze(result.attempts.map((attempt, index) => {
+    return (result.attempts.map((attempt, index) => {
       const normalized = normalizedAdapterAttempt(
         attempt,
         `LLM Adapter result.attempts[${index}]`,
       );
-      return Object.freeze({
+      return ({
         ...normalized,
         status: "failed" as const,
         error,
-      });
+      } as const);
     }));
   } catch {
     // Invalid accounting is never trusted merely because another result field
     // was invalid. The terminal Action error remains the source of failure.
-    return Object.freeze([]);
+    return ([] as const);
   }
 }
 
@@ -1644,13 +1636,11 @@ function rejectedAttempts(
   failure: unknown,
 ): readonly LlmAdapterAttempt[] {
   const error = errorDetails(failure);
-  return Object.freeze(attempts.map((attempt) =>
-    Object.freeze({
-      ...attempt,
-      status: "failed" as const,
-      error,
-    })
-  ));
+  return (attempts.map((attempt) => ({
+    ...attempt,
+    status: "failed" as const,
+    error,
+  } as const)));
 }
 
 function normalizedRejectedAttemptEvidence(
@@ -1681,12 +1671,12 @@ function normalizedRejectedAttemptEvidence(
       return undefined;
     }
     if (typeof record.retryable !== "boolean") return undefined;
-    return Object.freeze({
+    return ({
       code,
       message,
       ...(location ? { location } : {}),
       retryable: record.retryable,
-    });
+    } as const);
   } catch {
     return undefined;
   }
@@ -1778,7 +1768,7 @@ async function settleInvocation(
       disposeWithoutWaiting(disposeInput, signalError(externalSignal));
       throw signalError(externalSignal);
     }
-    let attempts: readonly LlmAdapterAttempt[] = Object.freeze([]);
+    let attempts: readonly LlmAdapterAttempt[] = [] as const;
     if (resultOutcome.status === "fulfilled") {
       attempts = rejectedAttempts(resultOutcome.value.attempts, error);
     } else {
@@ -1915,13 +1905,15 @@ async function settleWriters(
         signal,
       });
       const [lane, mediaType] = JSON.parse(key) as [string, string];
-      settled.push(Object.freeze({
-        key,
-        lane,
-        mediaType,
-        writer,
-        prepared,
-      }));
+      settled.push(
+        {
+          key,
+          lane,
+          mediaType,
+          writer,
+          prepared,
+        } as const,
+      );
     } catch (error) {
       failure ??= error;
       await writer?.abort({
@@ -1930,7 +1922,7 @@ async function settleWriters(
     }
   }
   if (failure !== undefined) throw failure;
-  return Object.freeze(settled);
+  return settled;
 }
 
 function errorDetails(error: unknown): Readonly<{
@@ -1946,10 +1938,10 @@ function errorDetails(error: unknown): Readonly<{
   const code = typeof record?.code === "string" && record.code.trim()
     ? record.code.trim()
     : undefined;
-  return Object.freeze({
+  return ({
     ...(code ? { code } : {}),
     message: message.slice(0, 2_000),
-  });
+  } as const);
 }
 
 function durableAttempt(
@@ -1962,7 +1954,7 @@ function durableAttempt(
 ): LlmAttemptUsage {
   const error = attempt.error ??
     (fallbackError === undefined ? undefined : errorDetails(fallbackError));
-  return Object.freeze({
+  return ({
     id: `${context.action.runId}:attempt:${index}`,
     index,
     providerRequest,
@@ -1979,7 +1971,7 @@ function durableAttempt(
     ...(error ? { error: structuredClone(error) } : {}),
     ...(attempt.startedAt ? { startedAt: attempt.startedAt } : {}),
     ...(attempt.finishedAt ? { finishedAt: attempt.finishedAt } : {}),
-  });
+  } as const);
 }
 
 function normalizedFailureAttempts(
@@ -1990,14 +1982,12 @@ function normalizedFailureAttempts(
     : isRecord(error) && Array.isArray(error.attempts)
     ? error.attempts
     : undefined;
-  if (!source) return Object.freeze([]);
-  const attempts = Object.freeze(
-    source.map((attempt, index) =>
-      normalizedAdapterAttempt(
-        attempt,
-        `LLM Adapter error.attempts[${index}]`,
-      )
-    ),
+  if (!source) return ([] as const);
+  const attempts = source.map((attempt, index) =>
+    normalizedAdapterAttempt(
+      attempt,
+      `LLM Adapter error.attempts[${index}]`,
+    )
   );
   if (attempts.some((attempt) => attempt.status === "completed")) {
     throw new TypeError(
@@ -2017,7 +2007,7 @@ function appendDurableAttempts(
 ): void {
   const values = attempts.length > 0
     ? attempts
-    : [Object.freeze({ status: fallbackStatus })];
+    : [{ status: fallbackStatus } as const];
   const providerRequest = attempts.length > 0;
   for (const [localIndex, attempt] of values.entries()) {
     target.push(durableAttempt(
@@ -2127,13 +2117,13 @@ function aggregateUsage(
   const costAmount = costs.reduce((sum, item) => sum + item.amount, 0);
   const cost = costs.length > 0 && currencies.size === 1 &&
       Number.isFinite(costAmount)
-    ? Object.freeze({ amount: costAmount, currency: costs[0].currency })
+    ? ({ amount: costAmount, currency: costs[0].currency } as const)
     : undefined;
-  return Object.freeze({
+  return ({
     ...sums,
     ...(hasTotalTokens ? { totalTokens } : {}),
     ...(cost ? { cost } : {}),
-  });
+  } as const);
 }
 
 function invocationResult(value: unknown): LlmAdapterResult {
@@ -2174,26 +2164,24 @@ function invocationResult(value: unknown): LlmAdapterResult {
       "LLM Adapter result.attempts must be a non-empty array.",
     );
   }
-  const attempts = Object.freeze(
-    record.attempts.map((attempt, index) =>
-      normalizedAdapterAttempt(
-        attempt,
-        `LLM Adapter result.attempts[${index}]`,
-      )
-    ),
+  const attempts = record.attempts.map((attempt, index) =>
+    normalizedAdapterAttempt(
+      attempt,
+      `LLM Adapter result.attempts[${index}]`,
+    )
   );
   const finishReason = optionalText(
     record.finishReason,
     "LLM Adapter result.finishReason",
   );
-  return Object.freeze({
+  return ({
     content,
     ...(reasoning ? { reasoning } : {}),
     ...(nativeReasoning ? { nativeReasoning } : {}),
     ...(toolCalls ? { toolCalls } : {}),
     attempts,
     ...(finishReason ? { finishReason } : {}),
-  });
+  } as const);
 }
 
 function invocationOf(value: unknown): Readonly<{
@@ -2323,11 +2311,11 @@ async function materializeResultContent(
       { retention: "canonical", assetId: reasoning[0].assetId },
     );
   }
-  return Object.freeze({
+  return ({
     content,
     ...(reasoning ? { reasoning } : {}),
     ...(nativeReasoning ? { nativeReasoning } : {}),
-  });
+  } as const);
 }
 
 function outputFor(
@@ -2339,7 +2327,7 @@ function outputFor(
   attempts: readonly LlmAttemptUsage[],
 ): LlmCallOutput {
   const usage = aggregateUsage(attempts);
-  return Object.freeze({
+  return ({
     adapter: selected.adapterAlias,
     connection: selected.alias,
     model: selected.selection.model,
@@ -2358,12 +2346,12 @@ function outputFor(
       }
       : {}),
     ...(result.toolCalls
-      ? { toolCalls: Object.freeze(structuredClone(result.toolCalls)) }
+      ? { toolCalls: structuredClone(result.toolCalls) }
       : {}),
     ...(usage ? { usage } : {}),
-    attempts: Object.freeze(attempts),
+    attempts: attempts,
     ...(result.finishReason ? { finishReason: result.finishReason } : {}),
-  });
+  } as const);
 }
 
 async function executeLlmCall(
@@ -2411,7 +2399,7 @@ async function executeLlmCall(
         attempts,
         plan[index],
         context,
-        Object.freeze([]),
+        [] as const,
         "failed",
         failure,
       );
@@ -2464,7 +2452,7 @@ async function executeLlmCall(
         providerModel: candidate.selection.model,
         mode: input.mode,
         fallbackAvailable: index < plan.length - 1,
-        options: candidate.selection.options ?? Object.freeze({}),
+        options: candidate.selection.options ?? ({} as const),
         request,
         signal: attemptSignal,
         ...(attemptInput ? { input: attemptInput.stream } : {}),
@@ -2494,7 +2482,7 @@ async function executeLlmCall(
       await abortWriters(streams, error, cancelled ? "cancelled" : "failed");
       let failure = error;
       const evidence = rejectedAttemptEvidence(error);
-      let reported: readonly LlmAdapterAttempt[] = Object.freeze([]);
+      let reported: readonly LlmAdapterAttempt[] = [] as const;
       try {
         reported = normalizedFailureAttempts(error);
       } catch (validationError) {
@@ -2604,3 +2592,5 @@ export type {
   LlmToolPipelineToolStage,
   LlmUsage,
 } from "../../internal/contracts.ts";
+
+export default callLlmAction;

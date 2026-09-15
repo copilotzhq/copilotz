@@ -3,11 +3,11 @@
  * @module
  */
 
-export { createCreateThreadToolResource } from "./create-thread/index.ts";
-export { createEndThreadToolResource } from "./end-thread/index.ts";
-export { createFetchAssetToolResource } from "./fetch-asset/index.ts";
-export { createGetCurrentTimeToolResource } from "./get-current-time/index.ts";
-export { createSaveAssetToolResource } from "./save-asset/index.ts";
-export { createUpdateMyMemoryToolResource } from "./update-my-memory/index.ts";
-export { createUpdateUserMemoryToolResource } from "./update-user-memory/index.ts";
-export { createWaitToolResource } from "./wait/index.ts";
+export { createThreadToolResource } from "./tools/create-thread/index.ts";
+export { endThreadToolResource } from "./tools/end-thread/index.ts";
+export { fetchAssetToolResource } from "./tools/fetch-asset/index.ts";
+export { getCurrentTimeToolResource } from "./tools/get-current-time/index.ts";
+export { saveAssetToolResource } from "./tools/save-asset/index.ts";
+export { updateMyMemoryToolResource } from "./tools/update-my-memory/index.ts";
+export { updateUserMemoryToolResource } from "./tools/update-user-memory/index.ts";
+export { waitToolResource } from "./tools/wait/index.ts";

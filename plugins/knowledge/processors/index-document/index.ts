@@ -43,3 +43,5 @@ export const indexKnowledgeDocumentProcessor: Processor<
     }
   },
 });
+
+export default indexKnowledgeDocumentProcessor;

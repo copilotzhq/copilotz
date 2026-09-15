@@ -11,8 +11,8 @@ and embedding workflow.
 
 ## How to use it
 
-Compose it through `createKnowledgePlugin`, or create it with the embedding,
-chunking, loader, and extractor options.
+Compose it through `knowledgePlugin`, or create it with the embedding, chunking,
+loader, and extractor options.
 
 ## How it works
 

@@ -53,6 +53,8 @@ export type ChannelAcceptResult = Readonly<{
 }>;
 
 export type ChannelAcceptContext = Readonly<{
+  resources?: Readonly<Record<string, Readonly<Record<string, unknown>>>>;
+  adapters?: Readonly<Record<string, Readonly<Record<string, unknown>>>>;
   namespace: string;
   channelId: string;
   channel: ChannelResource;
@@ -106,6 +108,8 @@ export type ChannelReceivedMessage = Readonly<{
 }>;
 
 export type ChannelReceiveContext = Readonly<{
+  resources?: Readonly<Record<string, Readonly<Record<string, unknown>>>>;
+  adapters?: Readonly<Record<string, Readonly<Record<string, unknown>>>>;
   namespace: string;
   channelId: string;
   channel: ChannelResource;
@@ -157,6 +161,8 @@ export type ChannelDeliveryAttempt = Readonly<{
 }>;
 
 export type ChannelDeliveryContext = Readonly<{
+  resources?: Readonly<Record<string, Readonly<Record<string, unknown>>>>;
+  adapters?: Readonly<Record<string, Readonly<Record<string, unknown>>>>;
   namespace: string;
   channelId: string;
   channel: ChannelResource;

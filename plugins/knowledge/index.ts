@@ -11,17 +11,16 @@ export {
 } from "./collections/index.ts";
 export type { KnowledgeEventType } from "./collections/index.ts";
 export {
-  createIndexKnowledgeDocumentAction,
-  createSearchKnowledgeAction,
   DELETE_KNOWLEDGE_DOCUMENT_ACTION_ID,
   deleteKnowledgeDocumentAction,
   INDEX_KNOWLEDGE_DOCUMENT_ACTION_ID,
+  indexKnowledgeDocumentAction,
   INGEST_KNOWLEDGE_DOCUMENT_ACTION_ID,
   ingestKnowledgeDocumentAction,
   SEARCH_KNOWLEDGE_ACTION_ID,
+  searchKnowledgeAction,
 } from "./actions/index.ts";
 export type {
-  CreateIndexKnowledgeDocumentActionOptions,
   DeleteKnowledgeDocumentInput,
   DeleteKnowledgeDocumentResult,
   IndexKnowledgeDocumentAction,
@@ -35,7 +34,7 @@ export type {
   SearchKnowledgeActionInput,
   SearchKnowledgeActionResult,
 } from "./actions/index.ts";
-export { createKnowledgePlugin } from "./plugin.ts";
+export { knowledgePlugin } from "./plugin.ts";
 export type { KnowledgePlugin } from "./plugin.ts";
 export {
   defineKnowledgeEmbeddingProvider,
@@ -45,16 +44,11 @@ export {
 export {
   createDefaultKnowledgeSourceLoader,
   createDefaultKnowledgeTextExtractor,
-  createKnowledgeActionResources,
 } from "./authoring/index.ts";
-export type {
-  KnowledgeActionResourcesContribution,
-  KnowledgeToolAliases,
-} from "./authoring/index.ts";
+export type {} from "./authoring/index.ts";
 export type {
   CompleteKnowledgeDocumentInput,
   CreateKnowledgeDocumentInput,
-  CreateKnowledgePluginOptions,
   FailKnowledgeDocumentInput,
   KnowledgeChunk,
   KnowledgeChunkingConfig,
@@ -74,3 +68,5 @@ export type {
   LoadedKnowledgeSource,
   MarkKnowledgeDocumentDuplicateInput,
 } from "./internal/types.ts";
+
+export * from "./authoring/tool-resources/index.ts";

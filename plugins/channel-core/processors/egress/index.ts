@@ -116,14 +116,14 @@ export const channelEgressProcessor: Processor<ChannelProcessorContext> =
           );
         }
         const result = await adapter.deliver(
-          Object.freeze({
+          {
             intent,
-            content: Object.freeze(
-              await context.content.resolveMany(intent.content),
-            ),
-          }),
+            content: await context.content.resolveMany(intent.content),
+          } as const,
           {
             namespace: context.namespace,
+            resources: context.resources,
+            adapters: context.adapters,
             channelId: intent.channelId,
             channel: resource,
             signal: context.signal,
@@ -134,3 +134,5 @@ export const channelEgressProcessor: Processor<ChannelProcessorContext> =
       }
     },
   });
+
+export default channelEgressProcessor;

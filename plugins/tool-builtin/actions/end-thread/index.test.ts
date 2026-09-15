@@ -1,7 +1,7 @@
 import { assertEquals } from "@std/assert";
-import { createEndThreadAction } from "./index.ts";
+import { endThreadAction } from "./index.ts";
 Deno.test("end-thread Action owns its id", () =>
   assertEquals(
-    createEndThreadAction().id,
+    endThreadAction.id,
     "copilotz.tools.builtin.end_thread",
   ));

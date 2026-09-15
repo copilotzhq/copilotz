@@ -1,4 +1,4 @@
-import { assert, assertEquals, assertThrows } from "@std/assert";
+import { assert, assertEquals } from "@std/assert";
 import { defineAction } from "@copilotz/copilotz/actions";
 import { defineCollection } from "@copilotz/copilotz/collections";
 import { createPluginRegistry, definePlugin } from "@copilotz/copilotz/plugins";
@@ -133,9 +133,6 @@ Deno.test("route compiler maps IDs, read queries, and OpenAPI", () => {
     >).type,
     "array",
   );
-  assertEquals(Object.isFrozen(routes.openApi), true);
-  assertEquals(Object.isFrozen(paths), true);
-  assertEquals(Object.isFrozen(listSchema), true);
 });
 
 Deno.test("route compiler exposes the generic binary asset upload contract", () => {

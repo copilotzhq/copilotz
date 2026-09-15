@@ -44,7 +44,7 @@ async function revise(
   const existing = await context.collections.message.get({ id });
   const priorRevision = asRecord(previous.revision);
   const existingRevision = asRecord(existing?.revision);
-  const revision = Object.freeze({
+  const revision = {
     rootMessageId: typeof priorRevision.rootMessageId === "string"
       ? priorRevision.rootMessageId
       : previous.id,
@@ -53,7 +53,7 @@ async function revise(
     revisedAt: typeof existingRevision.revisedAt === "string"
       ? existingRevision.revisedAt
       : new Date().toISOString(),
-  });
+  } as const;
   const recipientIds = Array.isArray(previous.recipientIds)
     ? previous.recipientIds.filter((value): value is string =>
       typeof value === "string"
@@ -94,12 +94,12 @@ async function revise(
         },
       },
     }, { threadId });
-    return Object.freeze({
+    return ({
       messageId: createdRef.id,
       rootMessageId: revision.rootMessageId,
       previousRevisionMessageId: previous.id,
       revisionIndex: revision.revisionIndex,
-    });
+    } as const);
   });
   const message = await context.collections.message.get({
     id: created.messageId,
@@ -107,12 +107,12 @@ async function revise(
   if (!message) {
     throw new Error(`Message revision '${created.messageId}' was not created.`);
   }
-  return Object.freeze({
+  return ({
     message,
     rootMessageId: created.rootMessageId,
     previousRevisionMessageId: created.previousRevisionMessageId,
     revisionIndex: created.revisionIndex,
-  });
+  } as const);
 }
 
 const reviseInput = {
@@ -140,3 +140,5 @@ export const reviseMessageAction: ActionDefinition<
   inputSchema: reviseInput,
   execute: revise,
 });
+
+export default reviseMessageAction;

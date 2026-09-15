@@ -142,7 +142,7 @@ function dataObject(
     }
     snapshot[key] = descriptor.value;
   }
-  return Object.freeze(snapshot);
+  return snapshot;
 }
 
 function dataArray(value: unknown, label: string): readonly unknown[] {
@@ -160,7 +160,7 @@ function dataArray(value: unknown, label: string): readonly unknown[] {
         Number(key) >= value.length)
     )
   ) throw new TypeError(`${label} must be a dense data array.`);
-  return Object.freeze(Array.from({ length: value.length }, (_, index) => {
+  return (Array.from({ length: value.length }, (_, index) => {
     const descriptor = descriptors[String(index)];
     if (!descriptor?.enumerable || !("value" in descriptor)) {
       throw new TypeError(`${label}[${index}] must be a data property.`);
@@ -212,7 +212,7 @@ function participant(
   const metadata = snapshot.metadata === undefined
     ? undefined
     : jsonObject(snapshot.metadata, `${label} metadata`);
-  return Object.freeze({
+  return ({
     ...(optionalText(snapshot.id, `${label} ID`)
       ? { id: optionalText(snapshot.id, `${label} ID`) }
       : {}),
@@ -228,7 +228,7 @@ function participant(
       ? { agentId: optionalText(snapshot.agentId, `${label} Agent ID`) }
       : {}),
     ...(metadata ? { metadata } : {}),
-  });
+  } as const);
 }
 
 function thread(value: unknown): ChannelThreadInput {
@@ -238,15 +238,13 @@ function thread(value: unknown): ChannelThreadInput {
     : jsonObject(snapshot.metadata, "Channel thread metadata");
   const participants = snapshot.participants === undefined
     ? undefined
-    : Object.freeze(
-      dataArray(snapshot.participants, "Channel thread participants").map(
-        (item, index): ChannelParticipantRef =>
-          typeof item === "string"
-            ? requiredText(item, `Channel thread participant[${index}]`)
-            : participant(item, `Channel thread participant[${index}]`),
-      ),
-    );
-  return Object.freeze({
+    : (dataArray(snapshot.participants, "Channel thread participants").map(
+      (item, index): ChannelParticipantRef =>
+        typeof item === "string"
+          ? requiredText(item, `Channel thread participant[${index}]`)
+          : participant(item, `Channel thread participant[${index}]`),
+    ));
+  return ({
     ...(optionalText(snapshot.name, "Channel thread name")
       ? { name: optionalText(snapshot.name, "Channel thread name") }
       : {}),
@@ -263,7 +261,7 @@ function thread(value: unknown): ChannelThreadInput {
       : {}),
     ...(metadata ? { metadata } : {}),
     ...(participants ? { participants } : {}),
-  });
+  } as const);
 }
 
 function visibility(value: unknown): ChannelMessageVisibility {
@@ -292,25 +290,25 @@ function receivedMessage(value: unknown): ChannelReceivedMessage {
   if (content === undefined) {
     throw new TypeError("Received Channel message requires content.");
   }
-  return Object.freeze({
+  return ({
     externalThreadId: requiredText(
       snapshot.externalThreadId,
       "External Channel thread ID",
     ),
     sender: participant(snapshot.sender, "Channel sender"),
-    ...(recipients ? { recipients: Object.freeze(recipients) } : {}),
+    ...(recipients ? { recipients: recipients } : {}),
     content: content as ChannelReceivedMessage["content"],
     ...(snapshot.thread === undefined
       ? {}
       : { thread: thread(snapshot.thread) }),
     route: snapshot.route === undefined
-      ? Object.freeze({})
+      ? ({} as const)
       : jsonObject(snapshot.route, "Channel route"),
     metadata: snapshot.metadata === undefined
-      ? Object.freeze({})
+      ? ({} as const)
       : jsonObject(snapshot.metadata, "Channel metadata"),
     visibility: visibility(snapshot.visibility),
-  });
+  } as const);
 }
 
 function ingressInput(value: unknown): ChannelIngressInput {
@@ -319,11 +317,11 @@ function ingressInput(value: unknown): ChannelIngressInput {
     INGRESS_KEYS,
     "Channel ingress Action input",
   );
-  return Object.freeze({
+  return ({
     channelId: requiredText(snapshot.channelId, "Channel alias"),
     id: requiredText(snapshot.id, "Channel occurrence ID"),
     input: cloneChannelJson(snapshot.input, "Channel occurrence input"),
-  });
+  } as const);
 }
 
 async function byExternalId(
@@ -366,10 +364,10 @@ function scopedParticipant(
   fields: ChannelParticipantInput,
 ): ChannelParticipantInput {
   if (fields.participantType === "agent") return fields;
-  return Object.freeze({
+  return ({
     ...fields,
     externalId: scopedExternalId(channelId, fields.externalId),
-  });
+  } as const);
 }
 
 async function participantPlan(
@@ -387,16 +385,16 @@ async function participantPlan(
     );
   if (existing) {
     compatibleParticipant(existing, fields);
-    return Object.freeze({ id: existing.id, fields, existing });
+    return ({ id: existing.id, fields, existing } as const);
   }
-  return Object.freeze({
+  return ({
     id: fields.id ?? await deriveWorkflowId(
       "channel-participant",
       identityTuple(channelId, fields.externalId),
     ),
     fields,
     existing: null,
-  });
+  } as const);
 }
 
 function agentParticipant(
@@ -405,18 +403,18 @@ function agentParticipant(
 ): ChannelParticipantInput {
   const agent = context.resources.agents?.[alias];
   if (!agent) throw new Error(`Unknown Agent Resource alias '${alias}'.`);
-  return Object.freeze({
+  return ({
     externalId: requiredText(agent.id, `Agent Resource '${alias}' ID`),
     participantType: "agent",
     agentId: requiredText(agent.id, `Agent Resource '${alias}' ID`),
     name: requiredText(agent.name, `Agent Resource '${alias}' name`),
-  });
+  } as const);
 }
 
 function existingParticipantPlan(record: CollectionRecord): ParticipantPlan {
-  return Object.freeze({
+  return ({
     id: record.id,
-    fields: Object.freeze({
+    fields: {
       id: record.id,
       externalId: requiredText(
         record.externalId ?? record.id,
@@ -426,9 +424,9 @@ function existingParticipantPlan(record: CollectionRecord): ParticipantPlan {
       ...(optionalText(record.agentId, "Participant Agent ID")
         ? { agentId: optionalText(record.agentId, "Participant Agent ID") }
         : {}),
-    }),
+    } as const,
     existing: record,
-  });
+  } as const);
 }
 
 async function recipientPlan(
@@ -475,19 +473,17 @@ async function existingThreadAgents(
       context.collections.participant.get({ id: String(id) })
     ),
   );
-  return Object.freeze(
-    records.filter((item): item is CollectionRecord =>
-      item?.participantType === "agent"
-    ).map(existingParticipantPlan),
-  );
+  return (records.filter((item): item is CollectionRecord =>
+    item?.participantType === "agent"
+  ).map(existingParticipantPlan));
 }
 
 function uniquePlans(
   plans: readonly ParticipantPlan[],
 ): readonly ParticipantPlan[] {
-  return Object.freeze([
+  return ([
     ...new Map(plans.map((plan) => [plan.id, plan])).values(),
-  ]);
+  ] as const);
 }
 
 async function stageParticipant(
@@ -495,7 +491,7 @@ async function stageParticipant(
   collections: ActionTransactionContext["collections"],
   metadata: ChannelJsonObject,
 ): Promise<CollectionMutationRef> {
-  if (plan.existing) return Object.freeze({ id: plan.existing.id });
+  if (plan.existing) return ({ id: plan.existing.id } as const);
   return await collections.participant.create({
     id: plan.id,
     externalId: plan.fields.externalId,
@@ -552,6 +548,8 @@ async function executeChannelIngress(
   const adapter = channelAdapter(context, input.channelId);
   const received = receivedMessage(
     await adapter.receive(input.input, {
+      resources: context.resources,
+      adapters: context.adapters,
       namespace: context.namespace,
       channelId: input.channelId,
       channel: resource,
@@ -586,10 +584,10 @@ async function executeChannelIngress(
     received.metadata ?? {},
     "Channel metadata",
   );
-  const bindingMetadata = Object.freeze({
+  const bindingMetadata = ({
     resource: structuredClone(resource.metadata ?? {}),
     provider: structuredClone(providerMetadata),
-  }) as ChannelJsonObject;
+  } as const) as ChannelJsonObject;
   const maxGraphAttempts = 4;
   for (let attempt = 1; attempt <= maxGraphAttempts; attempt += 1) {
     context.signal.throwIfAborted();
@@ -668,17 +666,17 @@ async function executeChannelIngress(
           ? [sender, ...recipients]
           : [sender, ...recipients, ...declaredParticipants],
       );
-      const eventMetadata = Object.freeze({
-        channel: Object.freeze({
+      const eventMetadata = ({
+        channel: {
           channelId: input.channelId,
           bindingId,
           externalThreadId: received.externalThreadId,
           occurrenceId: input.id,
-        }),
+        } as const,
         ...(Object.keys(providerMetadata).length
           ? { provider: structuredClone(providerMetadata) }
           : {}),
-      }) as ChannelJsonObject;
+      } as const) as ChannelJsonObject;
       const threadMetadata = setChannelContext(
         existingThread?.metadata,
         input.channelId,
@@ -691,15 +689,14 @@ async function executeChannelIngress(
       await context.transaction(async (transaction) => {
         const stagedParticipants = await Promise.all(
           uniquePlans([...threadParticipants, ...recipients]).map(
-            async (plan) =>
-              Object.freeze({
-                id: plan.id,
-                ref: await stageParticipant(
-                  plan,
-                  transaction.collections,
-                  eventMetadata,
-                ),
-              }),
+            async (plan) => ({
+              id: plan.id,
+              ref: await stageParticipant(
+                plan,
+                transaction.collections,
+                eventMetadata,
+              ),
+            } as const),
           ),
         );
         const participantRefs = new Map(
@@ -712,7 +709,7 @@ async function executeChannelIngress(
           if (!ref) throw new Error("Channel recipient was not staged.");
           return ref;
         });
-        const participantIds = Object.freeze([
+        const participantIds = [
           ...new Set(
             threadParticipants.map((plan) => {
               const ref = participantRefs.get(plan.id);
@@ -722,7 +719,7 @@ async function executeChannelIngress(
               return ref.id;
             }),
           ),
-        ]);
+        ] as const;
         if (existingThread) {
           const set: Record<string, unknown> = { metadata: threadMetadata };
           if (received.thread?.name) set.name = received.thread.name;
@@ -808,7 +805,7 @@ async function executeChannelIngress(
         const messageVisibility = relativeVisibility === "participants"
           ? {
             kind: "participants" as const,
-            participantIds: Object.freeze([...participantIds]),
+            participantIds: [...participantIds] as const,
           }
           : { kind: relativeVisibility } as const;
         await transaction.collections.message.create({
@@ -835,12 +832,12 @@ async function executeChannelIngress(
           metadata: structuredClone(eventMetadata),
         },
       });
-      return Object.freeze({
+      return ({
         channelId: input.channelId,
         bindingId,
         threadId,
         messageId,
-      });
+      } as const);
     } catch (error) {
       if (attempt >= maxGraphAttempts || !retryableGraphConflict(error)) {
         throw error;
@@ -872,3 +869,5 @@ export const channelIngressAction: ActionDefinition<
   inputSchema: ingressSchema,
   execute: executeChannelIngress,
 });
+
+export default channelIngressAction;

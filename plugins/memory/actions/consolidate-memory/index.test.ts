@@ -1,3 +1,4 @@
+import { consolidationInputSchema } from "../../authoring/consolidation/schema.ts";
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 import { Ajv } from "../../../../dependencies/ajv.ts";
 import {
@@ -5,15 +6,10 @@ import {
   memorySourceKey,
 } from "../../authoring/ontology/index.ts";
 import { parseConsolidateMemoryInput } from "../../authoring/consolidation/index.ts";
-import { createConsolidateMemoryTool } from "../../resources/consolidate-memory-tool/index.ts";
-import { createConsolidateMemoryAction } from "./index.ts";
+import { consolidateMemoryTool } from "../../resources/tools/consolidate-memory/index.ts";
+import { consolidateMemoryAction } from "./index.ts";
 Deno.test("consolidate action publishes stable and auditable contracts", () => {
-  const action = createConsolidateMemoryAction({
-    triggerEstimatedTokens: 1,
-    retainRecentEstimatedTokens: 0,
-    maxContentEstimatedTokens: 1,
-    retrievalLimit: 1,
-  });
+  const action = consolidateMemoryAction;
   assertEquals(action.id, "copilotz.memory.consolidation.commit");
   assertEquals(
     (action.inputSchema as { $defs?: unknown }).$defs !== undefined,
@@ -34,7 +30,7 @@ function object(value: unknown): SchemaObject {
 }
 
 function groupKindSchema(
-  action: ReturnType<typeof createConsolidateMemoryAction>,
+  action: typeof consolidateMemoryAction,
   group: string,
 ) {
   const root = object(action.inputSchema);
@@ -45,12 +41,10 @@ function groupKindSchema(
 }
 
 Deno.test("consolidate schema publishes every registered kind with its semantics", () => {
-  const action = createConsolidateMemoryAction({
-    triggerEstimatedTokens: 1,
-    retainRecentEstimatedTokens: 0,
-    maxContentEstimatedTokens: 1,
-    retrievalLimit: 1,
-  });
+  const action = {
+    ...consolidateMemoryAction,
+    inputSchema: consolidationInputSchema(CORE_MEMORY_KINDS),
+  };
   const groups = {
     entity: "entities",
     assertion: "assertions",
@@ -78,12 +72,7 @@ Deno.test("consolidate schema publishes every registered kind with its semantics
 });
 
 Deno.test("consolidate schema is executable and matches required parser fields", () => {
-  const action = createConsolidateMemoryAction({
-    triggerEstimatedTokens: 1,
-    retainRecentEstimatedTokens: 0,
-    maxContentEstimatedTokens: 1,
-    retrievalLimit: 1,
-  });
+  const action = consolidateMemoryAction;
   // deno-lint-ignore no-explicit-any
   const validate = new (Ajv as any)({ strict: false }).compile(
     action.inputSchema,
@@ -162,7 +151,7 @@ Deno.test("consolidate schema is executable and matches required parser fields",
         status: "active",
       }],
     }),
-    false,
+    true, // The Action validates kind registration from the final context.
   );
   assertEquals(
     validate({
@@ -191,21 +180,19 @@ Deno.test("consolidate schema is executable and matches required parser fields",
 });
 
 Deno.test("registered kind data schemas are exposed as model-facing documentation", () => {
-  const action = createConsolidateMemoryAction({
-    triggerEstimatedTokens: 1,
-    retainRecentEstimatedTokens: 0,
-    maxContentEstimatedTokens: 1,
-    retrievalLimit: 1,
-  }, [{
-    id: "entity.repository",
-    form: "entity",
-    description: "A source-code repository.",
-    schema: {
-      type: "object",
-      required: ["name"],
-      properties: { name: { type: "string" } },
-    },
-  }]);
+  const action = {
+    ...consolidateMemoryAction,
+    inputSchema: consolidationInputSchema([{
+      id: "entity.repository",
+      form: "entity",
+      description: "A source-code repository.",
+      schema: {
+        type: "object",
+        required: ["name"],
+        properties: { name: { type: "string" } },
+      },
+    }]),
+  };
   const schema = groupKindSchema(action, "entities");
   assertEquals(schema.enum, ["entity.repository"]);
   const variant = object((schema.oneOf as unknown[])[0]);
@@ -217,12 +204,7 @@ Deno.test("registered kind data schemas are exposed as model-facing documentatio
 });
 
 Deno.test("one complete corpus is accepted by both public schema and parser", () => {
-  const action = createConsolidateMemoryAction({
-    triggerEstimatedTokens: 1,
-    retainRecentEstimatedTokens: 0,
-    maxContentEstimatedTokens: 1,
-    retrievalLimit: 1,
-  });
+  const action = consolidateMemoryAction;
   // deno-lint-ignore no-explicit-any
   const validate = new (Ajv as any)({ strict: false }).compile(
     action.inputSchema,
@@ -331,12 +313,7 @@ Deno.test("one complete corpus is accepted by both public schema and parser", ()
 });
 
 Deno.test("consolidate output schema publishes the runtime audit bounds", () => {
-  const action = createConsolidateMemoryAction({
-    triggerEstimatedTokens: 1,
-    retainRecentEstimatedTokens: 0,
-    maxContentEstimatedTokens: 1,
-    retrievalLimit: 1,
-  });
+  const action = consolidateMemoryAction;
   const properties = object(object(action.outputSchema).properties);
   for (
     const name of [
@@ -384,13 +361,8 @@ Deno.test("consolidate output schema publishes the runtime audit bounds", () => 
 });
 
 Deno.test("consolidate Tool preserves the enriched Action schema losslessly", () => {
-  const action = createConsolidateMemoryAction({
-    triggerEstimatedTokens: 1,
-    retainRecentEstimatedTokens: 0,
-    maxContentEstimatedTokens: 1,
-    retrievalLimit: 1,
-  });
-  const tool = createConsolidateMemoryTool(action);
+  const action = consolidateMemoryAction;
+  const tool = consolidateMemoryTool;
 
   assertEquals(tool.inputSchema, action.inputSchema);
   assert(tool.inputSchema !== action.inputSchema);
@@ -398,10 +370,11 @@ Deno.test("consolidate Tool preserves the enriched Action schema losslessly", ()
     { ...action, inputSchema: tool.inputSchema },
     "assertions",
   );
-  assert((kindSchema.enum as unknown[]).includes("assertion.observation"));
+  assertEquals(kindSchema.type, "string");
+  assertEquals(kindSchema.enum, undefined);
   assertStringIncludes(
     String(kindSchema.description),
-    "An observed durable condition.",
+    "final context",
   );
   assertStringIncludes(tool.description, "never invent evidence IDs");
 });

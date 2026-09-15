@@ -260,7 +260,7 @@ function publicMemorySource(value: unknown): ContextSourceRef | null {
   const id = optionalText(source.id);
   if (!type || !id) return null;
   if (type === "message" || type === "asset" || type === "external") {
-    return Object.freeze({ type, id });
+    return ({ type, id } as const);
   }
   if (type !== "collection_record") return null;
   const collection = optionalText(source.collection);
@@ -269,7 +269,7 @@ function publicMemorySource(value: unknown): ContextSourceRef | null {
       typeof source.version === "number"
     ? source.version
     : undefined;
-  return Object.freeze({
+  return ({
     type,
     collection,
     id,
@@ -280,7 +280,7 @@ function publicMemorySource(value: unknown): ContextSourceRef | null {
     ...(optionalText(source.fragment)
       ? { fragment: optionalText(source.fragment)! }
       : {}),
-  });
+  } as const);
 }
 
 function publicMemorySources(value: unknown) {
@@ -289,24 +289,24 @@ function publicMemorySources(value: unknown) {
     return source ? [source] : [];
   });
   const items = sources.slice(0, PUBLIC_MEMORY_SOURCE_LIMIT);
-  return Object.freeze({
-    items: Object.freeze(items),
+  return ({
+    items: items,
     total: sources.length,
     returned: items.length,
     truncated: items.length < sources.length,
-  });
+  } as const);
 }
 
 function publicMemoryNode(value: unknown) {
   const node = record(value);
   const type = optionalText(node.type);
   const id = optionalText(node.id);
-  return type && id ? Object.freeze({ type, id }) : undefined;
+  return type && id ? ({ type, id } as const) : undefined;
 }
 
 function publicMemoryTemporal(value: unknown) {
   const temporal = record(value);
-  return Object.freeze({
+  return ({
     ...(optionalText(temporal.validFrom)
       ? { validFrom: optionalText(temporal.validFrom)! }
       : {}),
@@ -319,7 +319,7 @@ function publicMemoryTemporal(value: unknown) {
     ...(optionalText(temporal.invalidatedAt)
       ? { invalidatedAt: optionalText(temporal.invalidatedAt)! }
       : {}),
-  });
+  } as const);
 }
 
 function publicMemoryEpistemic(value: unknown) {
@@ -331,7 +331,7 @@ function publicMemoryEpistemic(value: unknown) {
     ) &&
       stance &&
       ["affirmed", "denied", "tentative", "disputed"].includes(stance)
-    ? Object.freeze({ basis, stance })
+    ? ({ basis, stance } as const)
     : undefined;
 }
 
@@ -340,7 +340,7 @@ export function publicMemorySummary(
   mapped: MemoryRecordProjection,
   similarity: number,
 ) {
-  return Object.freeze({
+  return ({
     id: mapped.id,
     form: mapped.form,
     kind: mapped.kind,
@@ -349,7 +349,7 @@ export function publicMemorySummary(
     validity: mapped.validity,
     temporal: publicMemoryTemporal(item.temporal),
     similarity,
-  });
+  } as const);
 }
 
 export function publicMemoryDetail(
@@ -361,13 +361,13 @@ export function publicMemoryDetail(
   const assertedBy = publicMemoryNode(provenance.assertedBy);
   const recordedBy = publicMemoryNode(provenance.recordedBy);
   const epistemic = publicMemoryEpistemic(item.epistemic);
-  return Object.freeze({
+  return ({
     id: mapped.id,
     form: mapped.form,
     kind: mapped.kind,
     summary: mapped.summary,
     status: mapped.status,
-    validity: Object.freeze({
+    validity: {
       status: mapped.validity,
       ...(optionalText(validity.changedAt)
         ? { changedAt: optionalText(validity.changedAt)! }
@@ -379,14 +379,14 @@ export function publicMemoryDetail(
         ? { replacementMemoryId: optionalText(validity.replacementMemoryId)! }
         : {}),
       sources: publicMemorySources(validity.sources),
-    }),
+    } as const,
     temporal: publicMemoryTemporal(item.temporal),
     ...(epistemic ? { epistemic } : {}),
-    provenance: Object.freeze({
+    provenance: {
       sources: publicMemorySources(provenance.sources),
       ...(assertedBy ? { assertedBy } : {}),
       ...(recordedBy ? { recordedBy } : {}),
-    }),
+    } as const,
     data: structuredClone(mapped.data),
-  });
+  } as const);
 }

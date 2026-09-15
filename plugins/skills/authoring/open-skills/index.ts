@@ -81,12 +81,12 @@ async function descriptor(
     "SHA-256",
     body.slice().buffer as ArrayBuffer,
   );
-  return Object.freeze({
+  return ({
     path,
     mediaType: skillFileMediaType(path),
     size: body.byteLength,
     digest: `sha256:${hex(digest)}`,
-  });
+  } as const);
 }
 
 async function collectFiles(
@@ -109,13 +109,15 @@ async function collectFiles(
       result.push(...await collectFiles(absolute, path));
     } else if (entry.isFile) {
       const body = await Deno.readFile(absolute);
-      result.push(Object.freeze({
-        descriptor: await descriptor(path, body),
-        body,
-      }));
+      result.push(
+        {
+          descriptor: await descriptor(path, body),
+          body,
+        } as const,
+      );
     }
   }
-  return Object.freeze(result);
+  return result;
 }
 
 async function collectSkills(root: string): Promise<readonly PackedSkill[]> {
@@ -140,14 +142,14 @@ async function collectSkills(root: string): Promise<readonly PackedSkill[]> {
     const parsed = parseSkillMarkdown(new TextDecoder().decode(markdown.body), {
       directoryName: entry.name,
     });
-    skills.push(Object.freeze({ manifest: parsed.manifest, files }));
+    skills.push({ manifest: parsed.manifest, files } as const);
   }
   if (!skills.length) {
     throw new TypeError(
       "Open Skill root does not contain any skill directories.",
     );
   }
-  return Object.freeze(skills);
+  return skills;
 }
 
 function base64(bytes: Uint8Array): string {
@@ -182,9 +184,9 @@ function skillChunk(skill: PackedSkill): string {
   return Uint8Array.from(binary, (character) => character.charCodeAt(0));
 };
 
-const files: Readonly<Record<string, () => string | Uint8Array>> = Object.freeze({
+const files: Readonly<Record<string, () => string | Uint8Array>> = {
 ${entries}
-});
+};
 
 export function read(path: string): string | Uint8Array {
   const load = files[path];
@@ -213,18 +215,20 @@ function pluginModule(
   }),`;
   }).join("\n");
   return `import {
-  createSkillsPlugin,
+  skillsPlugin,
   defineSkill,
 } from ${JSON.stringify(options.runtimeImport)};
 
-export const skills = Object.freeze([
+export const skills = [
 ${definitions}
-]);
+];
 
-export default createSkillsPlugin({
+import {definePlugin} from "@copilotz/copilotz/plugins";
+export default definePlugin({
   id: ${JSON.stringify(options.id)},
   version: ${JSON.stringify(options.version)},
-  skills,
+  plugins: [skillsPlugin],
+  resources: {skills: Object.fromEntries(skills.map(skill => [skill.name,skill]))},
 });
 `;
 }
@@ -273,10 +277,10 @@ export async function buildOpenSkillsPlugin(
     }),
   );
   generatedFiles.unshift(modulePath);
-  return Object.freeze({
+  return ({
     output,
     pluginModule: modulePath,
-    skillNames: Object.freeze(skills.map((skill) => skill.manifest.name)),
-    generatedFiles: Object.freeze(generatedFiles),
-  });
+    skillNames: skills.map((skill) => skill.manifest.name),
+    generatedFiles: generatedFiles,
+  } as const);
 }

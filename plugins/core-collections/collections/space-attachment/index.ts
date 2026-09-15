@@ -64,3 +64,5 @@ export const spaceAttachmentCollection: CollectionDefinition = defineCollection(
     },
   },
 );
+
+export default spaceAttachmentCollection;

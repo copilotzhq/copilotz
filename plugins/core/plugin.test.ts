@@ -19,32 +19,43 @@ const CORE_ACTION_IDS = [
 
 Deno.test("core plugin is direct static plugin composition", () => {
   assertEquals(corePlugin.id, "@copilotz/core");
+  const registry = createPluginRegistry({ plugins: [corePlugin] });
   assertEquals(
-    Object.values(corePlugin.collections).map((definition) => definition.name),
-    [...CORE_COLLECTION_NAMES],
+    Object.values(registry.collections).map((definition) => definition.name)
+      .sort(),
+    [...CORE_COLLECTION_NAMES].sort(),
   );
   assertEquals(
-    Object.values(corePlugin.actions).map((definition) => definition.id),
-    [...CORE_ACTION_IDS, "copilotz.core.context.compact"],
+    Object.values(registry.actions).filter((a) => a.id !== "llm.call").map((
+      definition,
+    ) => definition.id).sort(),
+    [...CORE_ACTION_IDS, "copilotz.core.context.compact"].sort(),
   );
-  assertEquals(Object.keys(corePlugin.processors), [
-    "messageRouter",
-    "messageInput",
-    "projectTextResult",
-    "projectAgentFailure",
-    "projectToolResult",
-    "completeAsk",
-    "failAsk",
-    "toolPlanCoordinator",
+  assertEquals(
+    Object.keys(registry.processors).sort(),
+    [
+      "messageRouter",
+      "messageInput",
+      "projectTextResult",
+      "projectAgentFailure",
+      "projectToolResult",
+      "completeAsk",
+      "failAsk",
+      "toolPlanCoordinator",
+    ].sort(),
+  );
+  assertEquals(corePlugin.plugins.map((p) => p.id), [
+    coreCollectionsPlugin.id,
+    llmPlugin.id,
   ]);
-  assertEquals(corePlugin.plugins, [llmPlugin]);
   assertEquals(corePlugin.adapters, {});
   assertStrictEquals(corePlugin.resources.tools.ask.action, "ask");
   assertEquals("manifest" in corePlugin, false);
   assertEquals("features" in corePlugin, false);
   assertEquals(
-    Object.values(coreCollectionsPlugin.actions).map((action) => action.id),
-    CORE_ACTION_IDS,
+    Object.values(coreCollectionsPlugin.actions).map((action) => action.id)
+      .sort(),
+    [...CORE_ACTION_IDS].sort(),
   );
 });
 
@@ -71,9 +82,8 @@ Deno.test("core production modules consume public Copilotz subpaths", async () =
   const files = [
     "plugin.ts",
     "internal/runtime-context.ts",
-    "actions/ask/index.ts",
+    "../core-collections/actions/ask/index.ts",
     "processors/internal/helpers.ts",
-    "processors/index.ts",
     "processors/message-router/index.ts",
     "processors/project-text-result/index.ts",
     "processors/project-agent-failure/index.ts",
@@ -81,7 +91,7 @@ Deno.test("core production modules consume public Copilotz subpaths", async () =
     "processors/complete-ask/index.ts",
     "processors/fail-ask/index.ts",
     "processors/tool-plan-coordinator/index.ts",
-    "resources/ask-tool/index.ts",
+    "resources/tools/ask/index.ts",
     "../core-collections/actions/create-thread-message/index.ts",
     "../core-collections/actions/create-thread/index.ts",
     "../core-collections/actions/revise-message/index.ts",

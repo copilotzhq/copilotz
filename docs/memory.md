@@ -4,12 +4,18 @@ Long-term memory is an optional plugin, not a runtime service. It owns its
 Collections, native Actions, Tool Resources, and durable Processors.
 
 ```ts
-import { createLongTermMemoryPlugin } from "@copilotz/copilotz/memory";
+import { createCopilotz } from "@copilotz/copilotz";
+import { memoryPlugin } from "@copilotz/copilotz/memory";
 
-const memoryPlugin = createLongTermMemoryPlugin({
-  config: {
-    triggerEstimatedTokens: 8_000,
-    retainRecentEstimatedTokens: 2_000,
+const application = await createCopilotz({
+  plugins: [memoryPlugin],
+  resources: {
+    memory: {
+      config: {
+        triggerEstimatedTokens: 8_000,
+        retainRecentEstimatedTokens: 2_000,
+      },
+    },
   },
 });
 ```

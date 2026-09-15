@@ -1,19 +1,12 @@
 import { assertEquals } from "@std/assert";
-import { createDiscordChannelPlugin } from "./index.ts";
+import { discordChannelPlugin } from "./index.ts";
 
 Deno.test("Discord Channel plugin aligns Resource and Adapter aliases", () => {
-  const plugin = createDiscordChannelPlugin({
-    channelId: "discord-custom",
-    config: {
-      applicationId: "application",
-      publicKey: "public",
-      botToken: "secret",
-    },
-  });
+  const plugin = discordChannelPlugin;
   assertEquals(Object.keys(plugin.resources.channels ?? {}), [
-    "discord-custom",
+    "discord",
   ]);
   assertEquals(Object.keys(plugin.adapters.channels ?? {}), [
-    "discord-custom",
+    "discord",
   ]);
 });

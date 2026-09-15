@@ -1,0 +1,13 @@
+{
+  "id": "copilotz.server",
+  "version": "1.0.0",
+  "aliases": {
+    "actions/invoke-action/index.ts": "serverInvoke",
+    "processors/action-request/index.ts": "serverActionRequest"
+  },
+  "include": [
+    "actions/invoke-action/index.ts",
+    "processors/action-request/index.ts",
+    "resources/server/default/index.ts"
+  ]
+}

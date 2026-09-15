@@ -11,8 +11,8 @@ responses, Tool arguments, or other canonical domain content.
 
 ## How to use it
 
-Compose `createUsageWorkflowPlugin()` and query the `usage` Collection through
-the ordinary scoped Collections API.
+Compose `usagePlugin` and query the `usage` Collection through the ordinary
+scoped Collections API.
 
 ## How it works
 

@@ -1441,7 +1441,7 @@ export function createCanonicalToolCallDraftTracker(options: {
     for (const draft of drafts) discard(draft);
   };
 
-  return Object.freeze({ observe, complete, discardAll });
+  return ({ observe, complete, discardAll } as const);
 }
 
 /**

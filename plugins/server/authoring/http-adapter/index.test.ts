@@ -65,7 +65,7 @@ Deno.test("compiled routes preserve frozen endpoint policy and prefer exact path
   const match = routes.match("GET", "/api/items/discovery")!;
   assertEquals(match.endpoint.id, "discovery");
   assertEquals(match.endpoint.metadata, { authentication: { mode: "public" } });
-  assertEquals(Object.isFrozen(match.endpoint.metadata?.authentication), true);
+
   assertEquals(routes.match("GET", "/api/items/other")?.params, {
     id: "other",
   });

@@ -104,5 +104,5 @@ export function resolveToolGrants<T extends AliasedToolResource>(
     }
   }
 
-  return Object.freeze(selected);
+  return selected;
 }

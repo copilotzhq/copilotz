@@ -16,7 +16,6 @@ Deno.test("defineServerFacade snapshots exposure and defaults", () => {
     include: ["compass.*"],
     exclude: [],
   });
-  assertEquals(Object.isFrozen(value), true);
 });
 
 Deno.test("defineServerFacade rejects malformed policy", () => {

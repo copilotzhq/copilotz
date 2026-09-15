@@ -1,3 +1,4 @@
+import { knowledgeConfig } from "../../internal/config.ts";
 /** Owns the search-knowledge Knowledge Action. @module */
 import {
   type ActionContext,
@@ -8,7 +9,6 @@ import { embedKnowledgeTexts } from "../../resources/embedding/index.ts";
 import type {
   KnowledgeChunk,
   KnowledgeDocument,
-  KnowledgeEmbeddingConfig,
   KnowledgeSearchInput,
   KnowledgeSearchResult,
 } from "../../internal/types.ts";
@@ -67,7 +67,7 @@ function searchScope(
 ): Omit<KnowledgeSearchInput, "namespace" | "embedding">["scope"] {
   if (value === undefined) return undefined;
   const input = record(value, "Knowledge search scope");
-  return Object.freeze({
+  return ({
     ...(optional(input.threadId, "Scope thread ID")
       ? { threadId: optional(input.threadId, "Scope thread ID") }
       : {}),
@@ -80,7 +80,7 @@ function searchScope(
     ...(stringList(input.documentIds).length
       ? { documentIds: stringList(input.documentIds) }
       : {}),
-  });
+  } as const);
 }
 
 function boundedNumber(
@@ -127,7 +127,7 @@ async function listAllChunks(
     after = page.at(-1)?.id;
     if (!after) break;
   }
-  return Object.freeze(collected);
+  return collected;
 }
 
 async function searchDocuments(
@@ -137,7 +137,7 @@ async function searchDocuments(
   const data = record(input);
   const embedding = finiteVector(data.embedding, "Knowledge query embedding");
   const scope = searchScope(data.scope);
-  if (scope?.documentIds?.length === 0) return Object.freeze([]);
+  if (scope?.documentIds?.length === 0) return ([] as const);
   const limit = boundedInteger(
     data.limit,
     100,
@@ -170,14 +170,14 @@ async function searchDocuments(
       finiteVector(chunk.embedding, "Chunk embedding"),
     );
     if (score < threshold) continue;
-    results.push(Object.freeze({ chunk, document, similarity: score }));
+    results.push({ chunk, document, similarity: score } as const);
   }
   results.sort((left, right) =>
     right.similarity - left.similarity ||
     left.chunk.documentId.localeCompare(right.chunk.documentId) ||
     left.chunk.chunkIndex - right.chunk.chunkIndex
   );
-  return Object.freeze(results.slice(0, limit));
+  return (results.slice(0, limit));
 }
 
 const searchKnowledgeInputSchema = {
@@ -237,91 +237,85 @@ const searchKnowledgeOutputSchema = {
 } as const;
 
 /** Creates one provider-configured action for searching indexed documents. */
-export function createSearchKnowledgeAction(
-  embedding: KnowledgeEmbeddingConfig,
-): ActionDefinition<
+
+export const searchKnowledgeAction: ActionDefinition<
   SearchKnowledgeActionInput,
   SearchKnowledgeActionResult,
   KnowledgeActionContext,
   typeof searchKnowledgeInputSchema,
   typeof searchKnowledgeOutputSchema
-> {
-  return defineAction<
-    SearchKnowledgeActionInput,
-    SearchKnowledgeActionResult,
-    KnowledgeActionContext,
-    typeof searchKnowledgeInputSchema,
-    typeof searchKnowledgeOutputSchema
-  >({
-    id: SEARCH_KNOWLEDGE_ACTION_ID,
-    inputSchema: searchKnowledgeInputSchema,
-    outputSchema: searchKnowledgeOutputSchema,
-    async execute(raw, context: KnowledgeActionContext) {
-      const input = record(raw);
-      const query = requireText(input.query, "Knowledge query");
-      const explicitScope = searchScope(input.scope);
-      const actionMetadata = record(context.action.metadata, "Action metadata");
-      const threadId = optional(actionMetadata.threadId, "Action thread ID");
-      const agentId = optional(actionMetadata.agentId, "Action agent ID");
-      const response = await embedKnowledgeTexts(
-        { embeddings: context.adapters.embedding ?? Object.freeze({}) },
-        embedding,
-        [query],
-        {
-          signal: context.signal,
-          idempotencyKey: `${context.operationKey}:knowledge-query`,
-        },
-      );
-      const results = await searchDocuments({
-        embedding: response.embeddings[0],
-        scope: {
-          ...explicitScope,
-          ...(threadId ? { threadId } : {}),
-          ...(agentId ? { agentId } : {}),
-        },
-        limit: boundedInteger(
-          input.limit,
-          5,
-          "Knowledge result limit",
-          1,
-          20,
-        ),
-        threshold: boundedNumber(
-          input.threshold,
-          0.5,
-          "Knowledge similarity threshold",
-          -1,
-          1,
-        ),
-      }, context);
-      if (results.length === 0) {
-        return Object.freeze({
-          results: Object.freeze([]),
-          message: "No relevant documents found for the query.",
-          query,
-          namespace: context.namespace,
-        });
-      }
-      return Object.freeze({
-        results: Object.freeze(results.map((result) =>
-          Object.freeze({
-            content: result.chunk.content,
-            score: Math.round(result.similarity * 100) / 100,
-            source: result.document.title || result.document.sourceUri ||
-              "Unknown",
-            namespace: result.document.namespace,
-            documentId: result.document.id,
-            chunkIndex: result.chunk.chunkIndex,
-          })
-        )),
+> = defineAction<
+  SearchKnowledgeActionInput,
+  SearchKnowledgeActionResult,
+  KnowledgeActionContext,
+  typeof searchKnowledgeInputSchema,
+  typeof searchKnowledgeOutputSchema
+>({
+  id: SEARCH_KNOWLEDGE_ACTION_ID,
+  inputSchema: searchKnowledgeInputSchema,
+  outputSchema: searchKnowledgeOutputSchema,
+  async execute(raw, context: KnowledgeActionContext) {
+    const { embedding } = knowledgeConfig(context);
+    const input = record(raw);
+    const query = requireText(input.query, "Knowledge query");
+    const explicitScope = searchScope(input.scope);
+    const actionMetadata = record(context.action.metadata, "Action metadata");
+    const threadId = optional(actionMetadata.threadId, "Action thread ID");
+    const agentId = optional(actionMetadata.agentId, "Action agent ID");
+    const response = await embedKnowledgeTexts(
+      { embeddings: context.adapters.embedding ?? ({} as const) },
+      embedding,
+      [query],
+      {
+        signal: context.signal,
+        idempotencyKey: `${context.operationKey}:knowledge-query`,
+      },
+    );
+    const results = await searchDocuments({
+      embedding: response.embeddings[0],
+      scope: {
+        ...explicitScope,
+        ...(threadId ? { threadId } : {}),
+        ...(agentId ? { agentId } : {}),
+      },
+      limit: boundedInteger(
+        input.limit,
+        5,
+        "Knowledge result limit",
+        1,
+        20,
+      ),
+      threshold: boundedNumber(
+        input.threshold,
+        0.5,
+        "Knowledge similarity threshold",
+        -1,
+        1,
+      ),
+    }, context);
+    if (results.length === 0) {
+      return ({
+        results: [] as const,
+        message: "No relevant documents found for the query.",
         query,
         namespace: context.namespace,
-        totalResults: results.length,
-      });
-    },
-  });
-}
+      } as const);
+    }
+    return ({
+      results: results.map((result) => ({
+        content: result.chunk.content,
+        score: Math.round(result.similarity * 100) / 100,
+        source: result.document.title || result.document.sourceUri ||
+          "Unknown",
+        namespace: result.document.namespace,
+        documentId: result.document.id,
+        chunkIndex: result.chunk.chunkIndex,
+      } as const)),
+      query,
+      namespace: context.namespace,
+      totalResults: results.length,
+    } as const);
+  },
+});
 
-export type SearchKnowledgeAction = ReturnType<
-  typeof createSearchKnowledgeAction
->;
+export type SearchKnowledgeAction = typeof searchKnowledgeAction;

@@ -79,5 +79,5 @@ export async function listDocumentChunks(
     after = page.at(-1)?.id;
     if (!after) break;
   }
-  return Object.freeze(collected);
+  return collected;
 }

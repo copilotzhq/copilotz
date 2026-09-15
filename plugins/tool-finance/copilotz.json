@@ -1,0 +1,10 @@
+{
+  "id": "@copilotz/finance-tools",
+  "version": "3.0.0",
+  "aliases": {
+    "resources/tools/finance/index.ts": "finance"
+  },
+  "include": [
+    "resources/tools/finance/index.ts"
+  ]
+}

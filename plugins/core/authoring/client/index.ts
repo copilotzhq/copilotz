@@ -60,8 +60,8 @@ export function createCoreClient(client: CopilotzClient): CoreClient {
   const path = (id: string) => `/threads/${encodeURIComponent(id)}`;
   const query = (input: unknown) =>
     `?query=${encodeURIComponent(JSON.stringify(input ?? {}))}`;
-  return Object.freeze({
-    threads: Object.freeze({
+  return ({
+    threads: {
       list: (input: ThreadQuery = {}, options: ReadOptions = {}) =>
         client.http.json(`/threads${query(input)}`, options) as Promise<
           Page<ConversationThread>
@@ -109,8 +109,8 @@ export function createCoreClient(client: CopilotzClient): CoreClient {
         client.actions.submit("copilotz.core.conversation.delete", {
           threadId: id,
         }, options),
-    }),
-    messages: Object.freeze({
+    } as const,
+    messages: {
       asset: (
         threadId: string,
         messageId: string,
@@ -134,10 +134,10 @@ export function createCoreClient(client: CopilotzClient): CoreClient {
           threadId,
           messageId,
         }, options),
-    }),
+    } as const,
     operations: client.operations,
     assets: client.assets,
-  });
+  } as const);
 }
 export type ThreadPatch = Readonly<{
   name?: string;

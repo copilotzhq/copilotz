@@ -54,11 +54,11 @@ function invalidationSources(
   value: unknown,
   triggerMessageId: string,
 ): readonly ContextSourceRef[] {
-  const defaultSource: ContextSourceRef = Object.freeze({
+  const defaultSource: ContextSourceRef = {
     type: "message",
     id: triggerMessageId,
-  });
-  if (value === undefined) return Object.freeze([defaultSource]);
+  } as const;
+  if (value === undefined) return ([defaultSource] as const);
   if (!Array.isArray(value) || !value.length) {
     throw new TypeError("Invalidation sources must be a non-empty array.");
   }
@@ -71,134 +71,130 @@ function invalidationSources(
     }
     return defaultSource;
   });
-  return Object.freeze(
-    sources.filter((source, index) =>
-      sources.findIndex((candidate) =>
-        memorySourceKey(candidate) === memorySourceKey(source)
-      ) === index
-    ),
-  );
+  return (sources.filter((source, index) =>
+    sources.findIndex((candidate) =>
+      memorySourceKey(candidate) === memorySourceKey(source)
+    ) === index
+  ));
 }
 
-export function createInvalidateMemoryAction(): ActionDefinition<
+export const invalidateMemoryAction: ActionDefinition<
   unknown,
   unknown,
   MemoryActionContext,
   ActionSchema,
   typeof invalidateMemoryOutputSchema
-> {
-  return defineAction<
-    unknown,
-    unknown,
-    MemoryActionContext,
-    ActionSchema,
-    typeof invalidateMemoryOutputSchema
-  >({
-    id: "copilotz.memory.invalidate",
-    inputSchema: invalidateMemoryInputSchema,
-    outputSchema: invalidateMemoryOutputSchema,
-    async execute(
-      raw: unknown,
-      context: MemoryActionContext,
+> = defineAction<
+  unknown,
+  unknown,
+  MemoryActionContext,
+  ActionSchema,
+  typeof invalidateMemoryOutputSchema
+>({
+  id: "copilotz.memory.invalidate",
+  inputSchema: invalidateMemoryInputSchema,
+  outputSchema: invalidateMemoryOutputSchema,
+  async execute(
+    raw: unknown,
+    context: MemoryActionContext,
+  ) {
+    const input = record(raw);
+    const id = requiredText(input.id, "Memory id");
+    const disposition = requiredText(input.disposition, "Memory disposition");
+    if (
+      disposition !== "retracted" && disposition !== "superseded" &&
+      disposition !== "archived"
     ) {
-      const input = record(raw);
-      const id = requiredText(input.id, "Memory id");
-      const disposition = requiredText(input.disposition, "Memory disposition");
-      if (
-        disposition !== "retracted" && disposition !== "superseded" &&
-        disposition !== "archived"
-      ) {
-        throw new TypeError("Memory disposition is invalid.");
-      }
-      const reason = requiredText(input.reason, "Memory invalidation reason");
-      const provenance = coreToolActionMetadata(context.action.metadata);
-      if (!provenance) {
-        throw new Error(
-          "invalidate_memory requires trusted Core Tool provenance.",
-        );
-      }
-      const sources = invalidationSources(
-        input.sources,
-        provenance.triggerMessageId,
+      throw new TypeError("Memory disposition is invalid.");
+    }
+    const reason = requiredText(input.reason, "Memory invalidation reason");
+    const provenance = coreToolActionMetadata(context.action.metadata);
+    if (!provenance) {
+      throw new Error(
+        "invalidate_memory requires trusted Core Tool provenance.",
       );
-      const writable = new Set(
-        (await threadMemorySpaces(context, provenance.threadId)).filter((
-          space,
-        ) => space.access === "read_write").map((space) => space.id),
-      );
-      const item = await context.collections.memoryRecord.get({ id });
-      const mapped = item ? memoryRecord(item) : null;
-      if (!mapped) throw new Error(`Memory '${id}' was not found.`);
-      if (!writable.has(mapped.memorySpaceId)) {
-        throw new Error(`Memory '${id}' is not writable from this thread.`);
-      }
-      const replacementMemoryId = disposition === "superseded"
-        ? requiredText(input.replacementMemoryId, "Replacement memory id")
-        : undefined;
-      if (replacementMemoryId === id) {
-        throw new TypeError("A memory cannot supersede itself.");
-      }
-      if (replacementMemoryId) {
-        const replacement = await context.collections.memoryRecord.get({
-          id: replacementMemoryId,
-        });
-        const mappedReplacement = replacement
-          ? memoryRecord(replacement)
-          : null;
-        if (
-          !mappedReplacement || !writable.has(mappedReplacement.memorySpaceId)
-        ) {
-          throw new Error(
-            `Replacement memory '${replacementMemoryId}' is not writable from this thread.`,
-          );
-        }
-      } else if (input.replacementMemoryId !== undefined) {
-        throw new TypeError(
-          "replacementMemoryId is only valid for disposition 'superseded'.",
-        );
-      }
-      const nextValidity = Object.freeze({
-        status: disposition,
-        changedAt: context.now().toISOString(),
-        reason,
-        sources,
-        ...(replacementMemoryId ? { replacementMemoryId } : {}),
+    }
+    const sources = invalidationSources(
+      input.sources,
+      provenance.triggerMessageId,
+    );
+    const writable = new Set(
+      (await threadMemorySpaces(context, provenance.threadId)).filter((
+        space,
+      ) => space.access === "read_write").map((space) => space.id),
+    );
+    const item = await context.collections.memoryRecord.get({ id });
+    const mapped = item ? memoryRecord(item) : null;
+    if (!mapped) throw new Error(`Memory '${id}' was not found.`);
+    if (!writable.has(mapped.memorySpaceId)) {
+      throw new Error(`Memory '${id}' is not writable from this thread.`);
+    }
+    const replacementMemoryId = disposition === "superseded"
+      ? requiredText(input.replacementMemoryId, "Replacement memory id")
+      : undefined;
+    if (replacementMemoryId === id) {
+      throw new TypeError("A memory cannot supersede itself.");
+    }
+    if (replacementMemoryId) {
+      const replacement = await context.collections.memoryRecord.get({
+        id: replacementMemoryId,
       });
-      const previousValidity = record(item!.validity);
-      const operationKey = `memory-invalidate:${id}:${disposition}:${
-        replacementMemoryId ?? ""
-      }`;
-      await context.transaction(async (tx) => {
-        await tx.collections.memoryRecord.commands.invalidate({
-          id,
-          validity: nextValidity,
-        }, { operationKey });
-        if (replacementMemoryId) {
-          await tx.relations.upsert({
-            id: `memory-relation:${
-              encodeURIComponent(`${replacementMemoryId}:supersedes:${id}`)
-            }`,
-            type: "supersedes",
-            source: {
-              type: memoryRecordCollection.name,
-              id: replacementMemoryId,
-            },
-            target: { type: memoryRecordCollection.name, id },
-            metadata: { sources, reason },
-          });
-        }
+      const mappedReplacement = replacement ? memoryRecord(replacement) : null;
+      if (
+        !mappedReplacement || !writable.has(mappedReplacement.memorySpaceId)
+      ) {
+        throw new Error(
+          `Replacement memory '${replacementMemoryId}' is not writable from this thread.`,
+        );
+      }
+    } else if (input.replacementMemoryId !== undefined) {
+      throw new TypeError(
+        "replacementMemoryId is only valid for disposition 'superseded'.",
+      );
+    }
+    const nextValidity = {
+      status: disposition,
+      changedAt: context.now().toISOString(),
+      reason,
+      sources,
+      ...(replacementMemoryId ? { replacementMemoryId } : {}),
+    } as const;
+    const previousValidity = record(item!.validity);
+    const operationKey = `memory-invalidate:${id}:${disposition}:${
+      replacementMemoryId ?? ""
+    }`;
+    await context.transaction(async (tx) => {
+      await tx.collections.memoryRecord.commands.invalidate({
+        id,
+        validity: nextValidity,
       }, { operationKey });
-      const saved = await context.collections.memoryRecord.get({ id });
-      const validity = saved ? record(saved.validity) : nextValidity;
-      return {
-        memory: {
-          id,
-          status: mapped.status,
-          previousValidity,
-          validity,
-          ...(replacementMemoryId ? { replacementMemoryId } : {}),
-        },
-      };
-    },
-  });
-}
+      if (replacementMemoryId) {
+        await tx.relations.upsert({
+          id: `memory-relation:${
+            encodeURIComponent(`${replacementMemoryId}:supersedes:${id}`)
+          }`,
+          type: "supersedes",
+          source: {
+            type: memoryRecordCollection.name,
+            id: replacementMemoryId,
+          },
+          target: { type: memoryRecordCollection.name, id },
+          metadata: { sources, reason },
+        });
+      }
+    }, { operationKey });
+    const saved = await context.collections.memoryRecord.get({ id });
+    const validity = saved ? record(saved.validity) : nextValidity;
+    return {
+      memory: {
+        id,
+        status: mapped.status,
+        previousValidity,
+        validity,
+        ...(replacementMemoryId ? { replacementMemoryId } : {}),
+      },
+    };
+  },
+});
+
+export default invalidateMemoryAction;

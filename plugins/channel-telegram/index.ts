@@ -5,16 +5,14 @@
  */
 
 export {
-  createTelegramChannelAdapter,
   createTelegramTransport,
+  telegramChannelAdapter,
 } from "./adapters/index.ts";
-export { createTelegramChannelPlugin } from "./plugin.ts";
-export { createTelegramChannelResource } from "./resources/index.ts";
+export { telegramChannelPlugin } from "./plugin.ts";
+export { telegramChannelResource } from "./resources/index.ts";
 export type {
-  CreateTelegramChannelAdapterOptions,
-  CreateTelegramChannelPluginOptions,
-  CreateTelegramChannelResourceOptions,
   TelegramActionPayload,
+  TelegramChannelOptions,
   TelegramConfig,
   TelegramConfigContext,
   TelegramConfigResolver,

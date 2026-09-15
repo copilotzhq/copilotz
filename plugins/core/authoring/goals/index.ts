@@ -149,7 +149,7 @@ function frozenClone<T>(value: T): T {
     ) return;
     seen.add(candidate);
     for (const child of Object.values(candidate)) freeze(child);
-    Object.freeze(candidate);
+    candidate;
   };
   freeze(clone);
   return clone;
@@ -188,17 +188,17 @@ function messageRecord(output: ApplicationOutput): ObservedMessage | null {
     ? candidate.content as ContentSequence
     : null;
   if (!id || !threadId || !senderId || !content) return null;
-  return Object.freeze({
+  return ({
     event: output,
-    record: Object.freeze({
+    record: {
       id,
       threadId,
       senderId,
-      recipientIds: Object.freeze([...recipientIds]),
+      recipientIds: [...recipientIds] as const,
       content: frozenClone(content),
       metadata: frozenClone(record(candidate.metadata)),
-    }),
-  });
+    } as const,
+  } as const);
 }
 
 function positionAfter(left: string, right: string): boolean {
@@ -276,10 +276,10 @@ function decision(value: unknown): GoalDecision {
     );
   }
   const reason = requiredOptionalText(candidate.reason);
-  return Object.freeze({
+  return ({
     status: candidate.status,
     ...(reason ? { reason } : {}),
-  });
+  } as const);
 }
 
 function errorMessage(
@@ -325,11 +325,11 @@ async function completedTurn(
       if (observed) messages.push(observed);
       await input.onOutput?.(
         output,
-        Object.freeze({
+        {
           id: input.goalId,
           turn: input.turn,
           phase: input.phase,
-        }),
+        } as const,
       );
     }
     await handle.done;
@@ -369,7 +369,7 @@ async function completedTurn(
       `Goal ${input.phase} turn ${input.turn} settled without a final Agent Message.`,
     );
   }
-  return Object.freeze({
+  return ({
     turn: input.turn,
     phase: input.phase,
     correlationId: handle.correlationId,
@@ -378,7 +378,7 @@ async function completedTurn(
     threadId: final.record.threadId,
     senderId: final.record.senderId,
     content: final.record.content,
-  });
+  } as const);
 }
 
 /**
@@ -477,20 +477,24 @@ export function runGoal(
         targetTurns += 1;
         transcript.push(targetReply);
         finalMessageId = targetReply.outputMessageId;
-        emit(Object.freeze({
-          type: "goal.turn.completed",
-          payload: Object.freeze({ goalId: id, turn: targetReply }),
-        }));
+        emit(
+          {
+            type: "goal.turn.completed",
+            payload: { goalId: id, turn: targetReply } as const,
+          } as const,
+        );
 
         if (cancelledReason) break;
         const outcome = options.decide
           ? decision(
-            await options.decide(Object.freeze({
-              id,
-              turn,
-              targetReply,
-              transcript: Object.freeze([...transcript]),
-            })),
+            await options.decide(
+              {
+                id,
+                turn,
+                targetReply,
+                transcript: [...transcript] as const,
+              } as const,
+            ),
           )
           : "continue";
         if (cancelledReason) break;
@@ -521,10 +525,12 @@ export function runGoal(
         });
         leadTurns += 1;
         transcript.push(leadReply);
-        emit(Object.freeze({
-          type: "goal.turn.completed",
-          payload: Object.freeze({ goalId: id, turn: leadReply }),
-        }));
+        emit(
+          {
+            type: "goal.turn.completed",
+            payload: { goalId: id, turn: leadReply } as const,
+          } as const,
+        );
         nextContent = leadReply.content;
       }
       if (cancelledReason) {
@@ -541,20 +547,20 @@ export function runGoal(
       }
     }
 
-    const result: GoalResult = Object.freeze({
+    const result: GoalResult = {
       id,
       status,
       ...(reason ? { reason } : {}),
       turns: targetTurns,
       ...(finalMessageId ? { finalMessageId } : {}),
-      transcript: Object.freeze([...transcript]),
-      metrics: Object.freeze({
+      transcript: [...transcript] as const,
+      metrics: {
         durationMs: Number((performance.now() - startedAt).toFixed(1)),
         targetTurns,
         leadTurns,
-      }),
-    });
-    emit(Object.freeze({ type: "goal.finished", payload: result }));
+      } as const,
+    } as const;
+    emit({ type: "goal.finished", payload: result } as const);
     closeEvents();
     return result;
   })();
@@ -580,5 +586,5 @@ export function runGoal(
     options.signal?.removeEventListener("abort", abort);
   }).catch(() => undefined);
 
-  return Object.freeze({ id, events, done, cancel: cancelGoal });
+  return ({ id, events, done, cancel: cancelGoal } as const);
 }

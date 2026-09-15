@@ -1,0 +1,9 @@
+{
+  "id": "@copilotz/channel-whatsapp",
+  "version": "4.0.0",
+  "include": [
+    "resources/channels/whatsapp/index.ts",
+    "adapters/channels/whatsapp/index.ts",
+    "dependencies/channels/index.ts"
+  ]
+}

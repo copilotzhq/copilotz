@@ -12,7 +12,7 @@ implementation owner instead of a directory for every generated endpoint.
 
 ## How to use it
 
-Use `defineApi` to declare an API and `createOpenApiToolsPlugin` to generate the
+Use `defineApi` to declare an API and `compileOpenApiTools` to generate the
 corresponding plugin at composition time.
 
 ## How it works

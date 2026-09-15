@@ -139,7 +139,7 @@ function stages(call: LlmToolCall): readonly LlmToolPipelineStage[] {
       ) throw new TypeError("Tool pipeline input must be an object.");
     } else text(stage.filter, "Tool pipeline jq filter");
   }
-  return Object.freeze(structuredClone(value));
+  return (structuredClone(value));
 }
 function calls(value: unknown): readonly LlmToolCall[] {
   if (!Array.isArray(value) || !value.length) {
@@ -152,7 +152,7 @@ function calls(value: unknown): readonly LlmToolCall[] {
     if (
       !call.input || typeof call.input !== "object" || Array.isArray(call.input)
     ) throw new TypeError(`Tool plan call '${id}' input must be an object.`);
-    const copy = Object.freeze({
+    const copy = {
       id,
       action,
       input: structuredClone(call.input) as LlmJsonObject,
@@ -161,14 +161,14 @@ function calls(value: unknown): readonly LlmToolCall[] {
           pipeline: structuredClone(call.pipeline) as LlmToolCall["pipeline"],
         }
         : {}),
-    });
+    } as const;
     stages(copy);
     return copy;
   });
   if (new Set(result.map((call) => call.id)).size !== result.length) {
     throw new TypeError("Tool plan call IDs must be unique.");
   }
-  return Object.freeze(result);
+  return result;
 }
 function available(
   context: CoreToolProcessorContext,
@@ -212,51 +212,41 @@ export function snapshotToolStageHistory(
   context: CoreToolProcessorContext,
   planCalls: readonly LlmToolCall[],
 ): readonly (readonly (string | null)[])[] {
-  return Object.freeze(
-    planCalls.map((call) =>
-      Object.freeze(
-        stages(call).map((stage) =>
-          stage.type === "tool"
-            ? context.resources.tools[stage.action]?.history?.visibility ?? null
-            : null
-        ),
-      )
-    ),
-  );
+  return (planCalls.map((
+    call,
+  ) => (stages(call).map((stage) =>
+    stage.type === "tool"
+      ? context.resources.tools[stage.action]?.history?.visibility ?? null
+      : null
+  ))));
 }
 export function snapshotToolStageActionIds(
   context: CoreToolProcessorContext,
   planCalls: readonly LlmToolCall[],
 ): readonly (readonly (string | null)[])[] {
-  return Object.freeze(
-    planCalls.map((call) =>
-      Object.freeze(
-        stages(call).map((stage) => {
-          if (stage.type !== "tool") return null;
-          const actionId = actionCallerDefinitionId(
-            context.actions[stage.action],
-          );
-          if (!actionId) {
-            throw new Error(
-              `Tool Action '${stage.action}' has no registered definition identity.`,
-            );
-          }
-          return actionId;
-        }),
-      )
-    ),
-  );
+  return (planCalls.map((call) => (stages(call).map((stage) => {
+    if (stage.type !== "tool") return null;
+    const actionId = actionCallerDefinitionId(
+      context.actions[stage.action],
+    );
+    if (!actionId) {
+      throw new Error(
+        `Tool Action '${stage.action}' has no registered definition identity.`,
+      );
+    }
+    return actionId;
+  }))));
 }
 export function snapshotRootTools(
   context: CoreToolProcessorContext,
   planCalls: readonly LlmToolCall[],
 ): readonly Readonly<{ alias: string; name: string }>[] {
-  return Object.freeze(planCalls.map((call) => {
+  return (planCalls.map((call) => {
     const tool = context.resources.tools[call.action];
     if (!tool) {
       throw new Error(`Tool Resource '${call.action}' is unavailable.`);
     }
-    return Object.freeze({ alias: call.action, name: tool.name });
+    return ({ alias: call.action, name: tool.name } as const);
   }));
 }
 function stageAt(call: LlmToolCall, index: number) {
@@ -337,7 +327,7 @@ async function loadPlan(
       )
     ) throw new Error("Tool-plan immutable stage snapshot is invalid.");
   }
-  return Object.freeze({ message, calls: result });
+  return ({ message, calls: result } as const);
 }
 function baseFrom(recordValue: CollectionRecord): CoreToolPlanBase {
   const base = record(record(recordValue.state).base);
@@ -543,7 +533,7 @@ function currentStageGranted(
   try {
     const entries = Object.entries(context.resources.tools ?? {}).flatMap((
       [toolAlias, resource],
-    ) => resource ? [Object.freeze({ alias: toolAlias, resource })] : []);
+    ) => resource ? [{ alias: toolAlias, resource } as const] : []);
     return resolveToolGrants(agent, entries, {
       agents: Object.values(context.resources.agents ?? {}).filter((
         value,

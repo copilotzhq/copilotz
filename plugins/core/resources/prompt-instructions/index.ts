@@ -87,11 +87,11 @@ export function definePromptInstructionResource(
       `Prompt instruction resource '${id}' must have type 'prompt_instruction'.`,
     );
   }
-  return Object.freeze({
+  return ({
     id,
     type: "prompt_instruction" as const,
     instructions: requiredInstructions(ownDataValue(resource, "instructions")),
-  });
+  } as const);
 }
 
 /** Returns whether a value is a valid-shaped trusted prompt instruction. */

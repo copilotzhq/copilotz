@@ -35,6 +35,10 @@ Deno.test("memory context selects the newest ready checkpoint visible to this th
       updatedAt: "2026-01-01T00:00:00.000Z",
     },
     collections: {
+      memorySpace: {
+        get: ({ id }: { id: string }) =>
+          Promise.resolve({ id, scopeType: "custom" }),
+      },
       memorySpaceAccess: {
         list: () => Promise.resolve([{ memorySpaceId: "shared" }]),
       },

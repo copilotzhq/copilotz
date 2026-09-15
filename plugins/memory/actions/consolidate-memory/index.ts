@@ -165,7 +165,7 @@ export function createConsolidateMemoryAction(
   ActionSchema,
   ActionSchema
 > {
-  const kindDefinitions = Object.freeze(kinds.map(defineMemoryKind));
+  const kindDefinitions = kinds.map(defineMemoryKind);
   return defineAction({
     id: CONSOLIDATE_MEMORY_ACTION_ID,
     inputSchema: consolidationInputSchema(kindDefinitions),
@@ -185,9 +185,9 @@ export function createConsolidateMemoryAction(
           outcome === "changes" || outcome === "no_changes" ||
           outcome === "already_settled"
         ) {
-          return Object.freeze({ ...structuredClone(prior), outcome });
+          return { ...structuredClone(prior), outcome };
         }
-        return Object.freeze({ outcome: "already_settled" });
+        return { outcome: "already_settled" };
       }
       if (checkpoint.status !== "pending") {
         throw new Error(`Memory checkpoint '${checkpointId}' is not pending.`);
@@ -216,7 +216,6 @@ export function createConsolidateMemoryAction(
         const currentRecords = await activeMemoryRecords(
           context,
           spaces,
-          agentId,
         );
         const currentRecordIds = new Set(currentRecords.map((item) => item.id));
         const currentRelations = await recordRelations(
@@ -242,8 +241,8 @@ export function createConsolidateMemoryAction(
           visibleNodeIds: catalog.nodes,
         });
         if (parsed.outcome === "no_changes") {
-          const result = Object.freeze({
-            outcome: "no_changes",
+          const result = {
+            outcome: "no_changes" as const,
             continuity: parsed.continuity,
             created: 0,
             reused: 0,
@@ -251,7 +250,7 @@ export function createConsolidateMemoryAction(
             createdRecords: [],
             reusedRecords: [],
             unresolvedReconciliations: [],
-          });
+          };
           await settleCheckpoint(context, {
             checkpoint,
             agentId,
@@ -525,6 +524,13 @@ export function createConsolidateMemoryAction(
             continue;
           }
           const target = targets[0];
+          if (
+            !spaces.some((space) =>
+              space.id === target.memorySpaceId && space.access === "read_write"
+            )
+          ) {
+            throw new Error("Cannot change a read-only peer memory record.");
+          }
           if (!memoryLifecycleAllows(target.form, change.status)) {
             unresolved.push({
               change,
@@ -562,18 +568,15 @@ export function createConsolidateMemoryAction(
             });
           }
         }
-        const auditRecords = drafts.map(({ form, draft }) =>
-          Object.freeze({
-            localId: draft.localId,
-            memoryId: persisted.get(draft.localId)!,
-            form,
-            status:
-              projectedRecords.get(persisted.get(draft.localId)!)?.status ??
-                defaultMemoryLifecycle(form),
-            summary: draft.summary,
-          })
-        );
-        const result = Object.freeze({
+        const auditRecords = drafts.map(({ form, draft }) => ({
+          localId: draft.localId,
+          memoryId: persisted.get(draft.localId)!,
+          form,
+          status: projectedRecords.get(persisted.get(draft.localId)!)?.status ??
+            defaultMemoryLifecycle(form),
+          summary: draft.summary,
+        }));
+        const result = {
           outcome: "changes" as const,
           continuity: parsed.continuity,
           created,
@@ -587,17 +590,17 @@ export function createConsolidateMemoryAction(
             !createdRecords.has(item.memoryId)
           ).slice(0, 100),
           unresolvedReconciliations: unresolved.slice(0, 100),
-        });
+        };
         const recordWrites: MemoryRecordWrite[] = [
-          ...[...createdRecords.values()].map((record) =>
-            Object.freeze({
-              operation: "create" as const,
-              record: record as Record<string, unknown> & { id: string },
-            })
-          ),
-          ...[...updatedRecords].map(([id, patch]) =>
-            Object.freeze({ operation: "update" as const, id, patch })
-          ),
+          ...[...createdRecords.values()].map((record) => ({
+            operation: "create" as const,
+            record: record as Record<string, unknown> & { id: string },
+          })),
+          ...[...updatedRecords].map(([id, patch]) => ({
+            operation: "update" as const,
+            id,
+            patch,
+          })),
         ];
         const relationWrites = [...stagedRelations.values()];
         const projectedIds = new Set(projectedRecords.keys());
@@ -649,7 +652,7 @@ export function createConsolidateMemoryAction(
           await settleCheckpointError(context, checkpointId, "failed", error);
           // Invalid source material cannot be repaired by this frozen task.
           // A terminal result closes its Core turn without another model call.
-          return Object.freeze({ outcome: "invalidated" as const });
+          return { outcome: "invalidated" as const };
         }
         if (onDemand) {
           await settleCheckpointError(context, checkpointId, "failed", error);

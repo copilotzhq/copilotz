@@ -54,6 +54,7 @@ export function createSearchMemoryAction(): ActionDefinition<
       );
       const readable = new Set(spaces.map((space) => space.id));
       const values = await context.collections.memoryRecord.list({
+        filter: { field: "memorySpaceId", in: [...readable] },
         limit: PUBLIC_MEMORY_SCAN_LIMIT,
       });
       const query = optionalText(input.query) ?? "";
@@ -79,14 +80,14 @@ export function createSearchMemoryAction(): ActionDefinition<
         PUBLIC_MEMORY_RESULT_LIMIT,
       );
       const memories = matched.slice(0, limit);
-      return Object.freeze({
-        memories: Object.freeze(memories),
+      return {
+        memories: memories,
         scanned,
         matched: matched.length,
         returned: memories.length,
         truncated: values.length >= PUBLIC_MEMORY_SCAN_LIMIT ||
           memories.length < matched.length,
-      });
+      };
     },
   });
 }

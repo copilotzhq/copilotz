@@ -9,16 +9,18 @@ export { toolPlanStageResultCollection } from "./tool-plan-stage-result/index.ts
 export type { MessageBranch, MessageRevision } from "../internal/contracts.ts";
 export { projectActiveMessageBranch } from "../internal/projections.ts";
 
-export const CORE_COLLECTION_NAMES: readonly [
+export const CORE_COLLECTION_NAMES = [
   "participant",
   "thread",
   "message",
   "toolPlan",
   "toolPlanStageResult",
-] = Object.freeze([
-  "participant",
-  "thread",
-  "message",
-  "toolPlan",
-  "toolPlanStageResult",
-]);
+  "space",
+  "spaceAttachment",
+] as const;
+
+export { spaceCollection } from "./space/index.ts";
+export {
+  spaceAttachmentCollection,
+  spaceAttachmentId,
+} from "./space-attachment/index.ts";

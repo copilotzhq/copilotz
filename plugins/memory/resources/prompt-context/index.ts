@@ -1,6 +1,7 @@
 /** Contributes settled memory and coordinates foreground compaction. @module */
 import type { ContentRef } from "@copilotz/copilotz/content";
 import {
+  type ContextContribution,
   type ContextResource,
   loadThreadRecord,
 } from "@copilotz/copilotz/core";
@@ -11,8 +12,16 @@ import {
 } from "../config/index.ts";
 import type { MemoryProcessorContext } from "../../internal/contracts.ts";
 import { optionalText, record } from "../../internal/input.ts";
+import { activeMemoryRecords } from "../../internal/retrieval.ts";
+import {
+  isEditoriallyVisible,
+  renderLongTermMemory,
+} from "../../authoring/consolidation/index.ts";
 import { checkpoints } from "../../internal/checkpoints.ts";
-import { checkpointAccessible } from "../../internal/access.ts";
+import {
+  checkpointAccessible,
+  threadMemorySpaces,
+} from "../../internal/access.ts";
 import { certifiedHistoryBoundary } from "../../internal/source.ts";
 import { reserveMemoryCheckpoint } from "../../internal/reservation.ts";
 
@@ -24,10 +33,10 @@ export function createMemoryContextResource(
   enabled: boolean,
   config: LongTermMemoryConfig = DEFAULT_LONG_TERM_MEMORY_CONFIG,
 ): ContextResource & Readonly<{ historyAfterMessageId?: string }> {
-  return Object.freeze({
+  return {
     id: MEMORY_RESOURCE_ID,
     type: "context",
-    purposes: Object.freeze(["conversation"] as const),
+    purposes: ["conversation"] as const,
     async compact(input) {
       if (!enabled || input.historyScopeId) return false;
       const context = input.context as unknown as MemoryProcessorContext;
@@ -102,13 +111,28 @@ export function createMemoryContextResource(
       const checkpointCollection = input.collections.longTermMemory;
       const accessCollection = input.collections.memorySpaceAccess;
       if (!checkpointCollection || !accessCollection) return null;
-      const grants = await accessCollection.list({
-        where: { threadId: input.thread.id },
-        limit: 1_000,
-      });
-      const spaces = grants.map((grant) => ({
-        id: String(grant.memorySpaceId),
-      }));
+      const spaces = await threadMemorySpaces({
+        collections: input.collections,
+      }, input.thread.id);
+      const peers = spaces.filter((space) =>
+        space.access === "read" && space.scopeType === "thread"
+      );
+      const records = peers.length
+        ? (await activeMemoryRecords({ collections: input.collections }, peers))
+          .filter(isEditoriallyVisible)
+        : [];
+      const shared: ContextContribution[] = records.length
+        ? [{
+          id: `${MEMORY_RESOURCE_ID}:peers`,
+          title: "SHARED SPACE MEMORY (READ ONLY)",
+          role: "context",
+          content: renderLongTermMemory({
+            records,
+            relations: [],
+            maxContentEstimatedTokens: config.maxContentEstimatedTokens,
+          }),
+        }]
+        : [];
       const checkpoint = (await checkpoints(
         { collections: input.collections } as Pick<
           MemoryProcessorContext,
@@ -121,7 +145,7 @@ export function createMemoryContextResource(
       if (
         !checkpoint || !Array.isArray(checkpoint.content) ||
         !checkpoint.content.length
-      ) return null;
+      ) return shared.length ? shared : null;
       const boundary = certifiedHistoryBoundary(checkpoint, {
         agentId: input.agent.id,
         participantId: input.participant.id,
@@ -133,9 +157,9 @@ export function createMemoryContextResource(
       // remains useful semantic context, but cannot trim raw history.
       const coverage = record(record(checkpoint.metadata).coverage);
       if (coverage.schema === "copilotz.memory.coverage.v1" && !boundary) {
-        return null;
+        return shared.length ? shared : null;
       }
-      return Object.freeze({
+      const own = {
         id: checkpoint.id,
         title: "YOUR PERSISTENT MEMORY",
         role: "context" as const,
@@ -148,7 +172,8 @@ export function createMemoryContextResource(
           },
         capturedAt: checkpoint.updatedAt,
         ...(boundary ? { historyAfterMessageId: boundary } : {}),
-      });
+      };
+      return shared.length ? [own, ...shared] : own;
     },
-  });
+  };
 }

@@ -8,6 +8,7 @@ import {
 } from "./index.ts";
 
 const CORE_ACTION_IDS = [
+  "copilotz.core.spaces",
   "copilotz.core.thread.create",
   "copilotz.core.thread.addParticipant",
   "copilotz.core.thread.deleteMessages",

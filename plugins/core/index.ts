@@ -88,3 +88,18 @@ export * from "./internal/workflow-metadata.ts";
 export * from "./actions/index.ts";
 export * from "./authoring/index.ts";
 export * from "./resources/index.ts";
+
+export {
+  SPACES_ACTION_ID,
+  spacesAction,
+} from "../core-collections/actions/spaces/index.ts";
+export {
+  spaceAttachmentCollection,
+  spaceAttachmentId,
+  spaceCollection,
+} from "../core-collections/collections/index.ts";
+
+export type {
+  SpaceInput,
+  SpaceResult,
+} from "../core-collections/actions/spaces/index.ts";

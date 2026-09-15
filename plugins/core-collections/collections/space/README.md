@@ -1,0 +1,24 @@
+# Space
+
+## What it is
+
+A durable Core hub with an owner Participant, members and active/archived
+status.
+
+## Why it exists
+
+Applications need shared context without adding product semantics to the
+runtime.
+
+## How to use it
+
+Use `actions.spaces` to create a Space and change membership or lifecycle.
+`collections.space.queries.active()` discovers active Spaces. The owner is
+included in membership and cannot be removed. Application guards authorize every
+operation and all direct collection reads/writes.
+
+## How it works
+
+Ordinary collection relations connect the owner and members. Attachments touch a
+revision in the same transaction to conflict with concurrent archive/removal.
+Archiving retains attachments; restoring reactivates remaining attachments.

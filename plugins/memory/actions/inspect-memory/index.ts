@@ -57,6 +57,7 @@ export function createInspectMemoryAction(): ActionDefinition<
         limit: PUBLIC_MEMORY_SCAN_LIMIT,
       });
       const candidateRecords = await context.collections.memoryRecord.list({
+        filter: { field: "memorySpaceId", in: [...spaces] },
         limit: PUBLIC_MEMORY_SCAN_LIMIT,
       });
       const accessibleMemoryIds = new Set(
@@ -77,30 +78,30 @@ export function createInspectMemoryAction(): ActionDefinition<
         const outgoing = relation.source.type === memoryRecordCollection.name &&
           relation.source.id === id;
         const other = outgoing ? relation.target : relation.source;
-        return Object.freeze({
+        return {
           type: relation.type,
           direction: outgoing ? "outgoing" as const : "incoming" as const,
-          other: Object.freeze({
+          other: {
             type: other.type === memoryRecordCollection.name
               ? "memory"
               : other.type,
             id: other.id,
-          }),
-        });
+          },
+        };
       });
       const items = projectedRelations.slice(0, PUBLIC_MEMORY_RELATION_LIMIT);
-      return Object.freeze({
+      return {
         memory: publicMemoryDetail(item, mapped),
-        relations: Object.freeze({
-          items: Object.freeze(items),
+        relations: {
+          items: items,
           scanned: relations.length,
           matched: visibleRelations.length,
           returned: items.length,
           truncated: relations.length >= PUBLIC_MEMORY_SCAN_LIMIT ||
             candidateRecords.length >= PUBLIC_MEMORY_SCAN_LIMIT ||
             items.length < projectedRelations.length,
-        }),
-      });
+        },
+      };
     },
   });
 }

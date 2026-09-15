@@ -9,6 +9,8 @@ Deno.test("Core Collections composes the storage-only boundary", () => {
     "message",
     "toolPlan",
     "toolPlanStageResult",
+    "space",
+    "spaceAttachment",
   ]);
   assertEquals(Object.keys(coreCollectionsPlugin.processors), ["messageInput"]);
 });

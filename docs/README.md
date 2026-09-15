@@ -1,6 +1,6 @@
 # Copilotz Documentation
 
-These guides describe the executable 0.70 public surface. Historical design
+These guides describe the executable 0.73 public surface. Historical design
 plans and removed migration APIs are intentionally not published.
 
 ## Start here
@@ -23,6 +23,7 @@ plans and removed migration APIs are intentionally not published.
 
 - [Agent capabilities](agent-capabilities.md)
 - [Multi-agent ask](multi-agent-ask.md)
+- [Shared Spaces](spaces.md)
 - [Semantic memory](memory.md)
 - [Skills](skills.md)
 

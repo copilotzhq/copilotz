@@ -1440,3 +1440,97 @@ Deno.test("invalidate_memory retracts editorially without changing lifecycle", a
     await run.close();
   }
 });
+
+Deno.test("consolidation cannot change the lifecycle of a readable Space peer", async () => {
+  const run = await fixture(() => stop("No routing needed."), {
+    enabled: false,
+  });
+  try {
+    await startUserTurn(run);
+    const context = createTestDomainContext(run.engine, NAMESPACE);
+    const c = context.collections;
+    await c.thread.create({ id: "peer-thread" });
+    await context.actions.spaces({
+      operation: "create",
+      spaceId: "shared",
+      ownerId: "human-a",
+    });
+    for (const recordId of ["thread-a", "peer-thread"]) {
+      await context.actions.spaces({
+        operation: "attach",
+        spaceId: "shared",
+        collection: "thread",
+        recordId,
+      });
+    }
+    await c.memorySpace.create({
+      id: "memory-space:thread:peer-thread",
+      scopeType: "thread",
+      scopeId: "peer-thread",
+      threadId: "peer-thread",
+    });
+    await c.longTermMemory.create({
+      id: "peer-checkpoint",
+      threadId: "peer-thread",
+      schemaVersion: "4",
+      strategy: "semantic_graph",
+      status: "ready",
+      sequence: 1,
+      agentId: "other-agent",
+      sourceStartMessageId: "peer-message",
+      sourceEndMessageId: "peer-message",
+    });
+    const peer = await c.memoryRecord.create({
+      id: "peer-record",
+      memorySpaceId: "memory-space:thread:peer-thread",
+      consolidationId: "peer-checkpoint",
+      createdByAgentId: "other-agent",
+      originThreadId: "peer-thread",
+      form: "assertion",
+      kind: "assertion.state",
+      summary: "Peer owns this fact",
+      status: "current",
+      validity: { status: "valid" },
+      temporal: {},
+      provenance: {},
+      data: {},
+    });
+    await assertRejects(
+      () =>
+        context.actions.consolidate_memory({
+          outcome: "changes",
+          continuity: "Keep the peer's fact intact.",
+          lifecycle: [{
+            target: { memoryId: "peer-record" },
+            status: "retracted",
+            sources: [{ type: "message", id: "message:user" }],
+          }],
+        }, {
+          metadata: {
+            schema: "copilotz.core.tool-action.v1",
+            planId: "peer-write-plan",
+            planMessageId: "message:user",
+            planIndex: 0,
+            stageIndex: 0,
+            stageCount: 1,
+            planSize: 1,
+            toolCallId: "peer-write-call",
+            action: "consolidate_memory",
+            threadId: "thread-a",
+            triggerMessageId: "message:user",
+            agentId: "north",
+            agentParticipantId: "agent-north",
+            initiatorParticipantId: "human-a",
+            availableToolIds: ["consolidate_memory"],
+            responseVisibility: { kind: "public" },
+            parentLlmActionRunId: "peer-write-llm",
+          },
+        }),
+      Error,
+      "read-only peer",
+    );
+    assertEquals(await c.memoryRecord.get({ id: "peer-record" }), peer);
+  } finally {
+    await run.close();
+  }
+});

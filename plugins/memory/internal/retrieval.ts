@@ -1,6 +1,9 @@
 /** Semantic-memory record projection and candidate retrieval. @module */
 import { type AgentResource, loadThreadRecord } from "@copilotz/copilotz/core";
-import type { CollectionRecord } from "@copilotz/copilotz/collections";
+import type {
+  CollectionRecord,
+  SnapshotCollections,
+} from "@copilotz/copilotz/collections";
 
 import {
   isEditoriallyVisible,
@@ -25,7 +28,7 @@ export function memoryRecord(
       summary && status &&
       (validity === "valid" || validity === "retracted" ||
         validity === "superseded" || validity === "archived")
-    ? Object.freeze({
+    ? ({
       id: value.id,
       memorySpaceId,
       form,
@@ -39,20 +42,19 @@ export function memoryRecord(
 }
 
 export async function activeMemoryRecords(
-  context: MemoryProcessorContext,
+  context: { collections: SnapshotCollections },
   spaces: readonly MemorySpaceDescriptor[],
-  agentId: string,
 ) {
   const readable = new Set(spaces.map((space) => space.id));
   const values = await context.collections.memoryRecord.list({
-    where: { createdByAgentId: agentId },
+    filter: { field: "memorySpaceId", in: [...readable] },
     limit: 1_000,
   });
-  return Object.freeze(values.flatMap((value) => {
+  return values.flatMap((value) => {
     if (!readable.has(String(value.memorySpaceId))) return [];
     const mapped = memoryRecord(value);
     return mapped ? [mapped] : [];
-  }));
+  });
 }
 
 export function terminalStatus(status: string): boolean {
@@ -119,8 +121,8 @@ export async function candidateRecords(
     where: {
       form: input.form,
       kind: input.kind,
-      createdByAgentId: input.agent.id,
     },
+    filter: { field: "memorySpaceId", in: [...readable] },
     limit: 1_000,
   })).filter((item) =>
     readable.has(String(item.memorySpaceId)) &&
@@ -137,22 +139,20 @@ export async function candidateRecords(
     });
     if (finiteEmbedding(values[0])) queryEmbedding = values[0];
   }
-  return Object.freeze(
-    candidates.flatMap((item) => {
-      const mapped = memoryRecord(item);
-      if (!mapped) return [];
-      const embedding = finiteEmbedding(item.embedding)
-        ? item.embedding
-        : undefined;
-      return [{
-        raw: item,
-        record: mapped,
-        score: queryEmbedding && embedding
-          ? cosine(queryEmbedding, embedding)
-          : lexicalScore(input.query, mapped.summary),
-      }];
-    }).sort((left, right) =>
-      right.score - left.score || left.record.id.localeCompare(right.record.id)
-    ).slice(0, input.limit),
-  );
+  return candidates.flatMap((item) => {
+    const mapped = memoryRecord(item);
+    if (!mapped) return [];
+    const embedding = finiteEmbedding(item.embedding)
+      ? item.embedding
+      : undefined;
+    return [{
+      raw: item,
+      record: mapped,
+      score: queryEmbedding && embedding
+        ? cosine(queryEmbedding, embedding)
+        : lexicalScore(input.query, mapped.summary),
+    }];
+  }).sort((left, right) =>
+    right.score - left.score || left.record.id.localeCompare(right.record.id)
+  ).slice(0, input.limit);
 }

@@ -1,6 +1,9 @@
 /** Memory-space access checks and trusted caller provenance. @module */
-import type { CollectionRecord } from "@copilotz/copilotz/collections";
-import type { Participant } from "@copilotz/copilotz/core";
+import type {
+  CollectionRecord,
+  SnapshotCollections,
+} from "@copilotz/copilotz/collections";
+import { type Participant, spaceAttachmentId } from "@copilotz/copilotz/core";
 import type { MemorySpaceDescriptor } from "../authoring/consolidation/index.ts";
 import type {
   MemoryActionContext,
@@ -12,50 +15,84 @@ export function participantAgentId(participant: Participant): string {
   return participant.agentId ?? participant.externalId;
 }
 
+/** Resolves explicit grants and current Space peers using the same read capabilities. */
 export async function threadMemorySpaces(
-  context: MemoryProcessorContext,
+  context: { collections: SnapshotCollections },
   threadId: string,
 ): Promise<readonly MemorySpaceDescriptor[]> {
-  const grants = await context.collections.memorySpaceAccess
-    .list({ where: { threadId }, limit: 1_000 });
-  const spaces: MemorySpaceDescriptor[] = [];
-  for (const grant of grants) {
-    const memorySpaceId = optionalText(grant.memorySpaceId);
-    if (!memorySpaceId) continue;
-    const space = await context.collections.memorySpace.get({
-      id: memorySpaceId,
+  const { collections } = context;
+  const spaces = new Map<string, MemorySpaceDescriptor>();
+  let after: string | undefined;
+  do {
+    const grants = await collections.memorySpaceAccess.list({
+      where: { threadId },
+      order: { field: "id" },
+      after,
+      limit: 200,
     });
-    if (!space) continue;
-    const access = grant.access === "read_write" ? "read_write" : "read";
-    spaces.push(Object.freeze({
-      id: memorySpaceId,
-      name: optionalText(space.name) ?? `memory:${memorySpaceId}`,
-      description: optionalText(space.description) ?? null,
-      scopeType: optionalText(space.scopeType) ?? "custom",
-      access,
-      defaultWrite: access === "read_write" && grant.defaultWrite === true,
-    }));
-  }
-  const ordered = spaces.sort((left, right) =>
-    Number(right.defaultWrite) - Number(left.defaultWrite) ||
-    left.id.localeCompare(right.id)
-  );
-  const firstWritable = ordered.find((space) => space.access === "read_write");
-  if (firstWritable && !ordered.some((space) => space.defaultWrite)) {
-    ordered[ordered.indexOf(firstWritable)] = Object.freeze({
-      ...firstWritable,
-      defaultWrite: true,
-    });
-  }
-  let usedDefault = false;
-  return Object.freeze(ordered.map((space) => {
-    if (!space.defaultWrite) return space;
-    if (!usedDefault) {
-      usedDefault = true;
-      return space;
+    for (const grant of grants) {
+      const id = optionalText(grant.memorySpaceId);
+      if (!id) continue;
+      const space = await collections.memorySpace.get({ id });
+      if (!space) continue;
+      const access = grant.access === "read_write" ? "read_write" : "read";
+      const previous = spaces.get(id);
+      if (previous?.access === "read_write") continue;
+      spaces.set(id, {
+        id,
+        name: optionalText(space.name) ?? `memory:${id}`,
+        description: optionalText(space.description) ?? null,
+        scopeType: optionalText(space.scopeType) ?? "custom",
+        access,
+        defaultWrite: access === "read_write" && grant.defaultWrite === true,
+      });
     }
-    return Object.freeze({ ...space, defaultWrite: false });
-  }));
+    after = grants.length === 200 ? grants[grants.length - 1].id : undefined;
+  } while (after);
+
+  const attachment = await collections.spaceAttachment?.get({
+    id: spaceAttachmentId("thread", threadId),
+  });
+  const space = attachment &&
+    await collections.space?.get({ id: String(attachment.spaceId) });
+  if (space?.status === "active") {
+    do {
+      const peers = await collections.spaceAttachment.list({
+        where: { spaceId: space.id, collection: "thread" },
+        order: { field: "id" },
+        after,
+        limit: 200,
+      });
+      for (const peer of peers) {
+        if (
+          peer.recordId === threadId ||
+          !await collections.thread.get({ id: String(peer.recordId) })
+        ) continue;
+        // Only the peer's producer scope is shared, never its consumer grants.
+        const id = `memory-space:thread:${peer.recordId}`;
+        const producer = await collections.memorySpace.get({ id });
+        if (
+          !producer || producer.scopeType !== "thread" ||
+          producer.scopeId !== peer.recordId || spaces.has(id)
+        ) continue;
+        spaces.set(id, {
+          id,
+          name: optionalText(producer.name) ?? `memory:${id}`,
+          description: optionalText(producer.description) ?? null,
+          scopeType: "thread",
+          access: "read",
+          defaultWrite: false,
+        });
+      }
+      after = peers.length === 200 ? peers[peers.length - 1].id : undefined;
+    } while (after);
+  }
+  const ordered = [...spaces.values()].sort((a, b) =>
+    Number(b.defaultWrite) - Number(a.defaultWrite) || a.id.localeCompare(b.id)
+  );
+  const defaultSpace = ordered.find((s) => s.defaultWrite) ??
+    ordered.find((s) => s.access === "read_write");
+  return ordered.map((s) => ({ ...s, defaultWrite: s === defaultSpace }));
 }
 
 export async function ensureWritableMemorySpace(
@@ -107,7 +144,7 @@ export function memoryActionProvenance(context: MemoryActionContext): Readonly<{
   threadId: string;
   agentId: string;
 }> {
-  return Object.freeze({
+  return {
     threadId: requiredText(
       context.action.metadata.threadId,
       "Memory Action thread id",
@@ -116,5 +153,5 @@ export function memoryActionProvenance(context: MemoryActionContext): Readonly<{
       context.action.metadata.agentId,
       "Memory Action agent id",
     ),
-  });
+  };
 }

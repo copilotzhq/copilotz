@@ -97,6 +97,11 @@
           "title": "Skills",
           "slug": "skills",
           "description": "Portable Agent Skills resources and build-time directory packing."
+        },
+        {
+          "title": "Shared Spaces",
+          "slug": "spaces",
+          "description": "Core ownership, attachments, lifecycle and read-only peer memory."
         }
       ]
     },

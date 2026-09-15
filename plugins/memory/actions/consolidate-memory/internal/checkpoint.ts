@@ -159,15 +159,15 @@ export function activeSpacesForCheckpoint(
       : [],
   );
   const defaultId = optionalText(checkpoint.defaultWriteMemorySpaceId);
-  const active = spaces.filter((space) => readable.has(space.id)).map((space) =>
-    Object.freeze({
-      ...space,
-      access: writable.has(space.id) && space.access === "read_write"
-        ? "read_write" as const
-        : "read" as const,
-      defaultWrite: space.id === defaultId && writable.has(space.id),
-    })
-  );
+  const active = spaces.filter((space) => readable.has(space.id)).map((
+    space,
+  ) => ({
+    ...space,
+    access: writable.has(space.id) && space.access === "read_write"
+      ? "read_write" as const
+      : "read" as const,
+    defaultWrite: space.id === defaultId && writable.has(space.id),
+  }));
   if (
     !active.some((space) => space.defaultWrite && space.access === "read_write")
   ) {
@@ -175,7 +175,7 @@ export function activeSpacesForCheckpoint(
       "Memory checkpoint has no accessible default writable space.",
     );
   }
-  return Object.freeze(active);
+  return active;
 }
 
 export async function prepareCheckpointSettlement(
@@ -196,7 +196,6 @@ export async function prepareCheckpointSettlement(
   const records = input.records ?? await activeMemoryRecords(
     context,
     input.spaces,
-    input.agentId,
   );
   const ids = new Set(records.map((item) => item.id));
   const relations = input.relations ?? await recordRelations(context, ids);
@@ -217,9 +216,9 @@ export async function prepareCheckpointSettlement(
   }, {
     operationKey: `checkpoint:${input.checkpoint.id}:content`,
   });
-  return Object.freeze({
+  return {
     content: prepared,
-    patch: Object.freeze({
+    patch: {
       status: "ready",
       contentHash: prepared.assets[0]?.digest ?? null,
       tokenEstimate: estimateTextTokens(text),
@@ -246,8 +245,8 @@ export async function prepareCheckpointSettlement(
         retrievedMemoryIds: input.retrievedIds ?? [],
         unresolvedReconciliations: input.unresolved ?? [],
       },
-    }),
-  });
+    },
+  };
 }
 
 export async function settleCheckpoint(

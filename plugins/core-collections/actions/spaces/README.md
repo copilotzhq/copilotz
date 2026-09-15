@@ -1,0 +1,35 @@
+# Spaces Action
+
+## What it is
+
+One native Core Action for creating Spaces, membership, attachments and
+lifecycle.
+
+## Why it exists
+
+Keeps public mutations transactional and discoverable without action factories
+or Space-specific runtime behavior.
+
+## How to use it
+
+Call `actions.spaces({ operation, spaceId, ... })`:
+
+- `create`: existing `ownerId`, optional `name`.
+- `addMember` / `removeMember`: existing `participantId`.
+- `attach` / `detach`: `collection` alias and `recordId`.
+- `archive` / `restore` / `remove`: only `spaceId`.
+
+Application/server guards must authorize the operation, both Spaces on a move,
+and the target record. The Action does not authenticate callers. Use ordinary
+Action idempotency keys when retrying. Surface transaction conflicts and retry
+with fresh state; do not silently overwrite another writer's intent.
+
+## How it works
+
+The owning Participant is always a member. Attach accepts active destinations; a
+second attach moves the record atomically. A failed move leaves its original
+attachment. Detach names the expected Space and does nothing if already detached
+or moved elsewhere. Archive disables active discovery and derived memory access.
+Restore retains the remaining relationships. Remove deletes attachments and the
+Space, preserving records and their memory. Transactional revision changes fence
+attachment changes against concurrent lifecycle changes.

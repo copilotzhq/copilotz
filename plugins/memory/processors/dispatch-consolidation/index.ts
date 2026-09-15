@@ -85,7 +85,6 @@ export function createDispatchMemoryConsolidationProcessor(): Processor<
       const previous = (await activeMemoryRecords(
         context,
         spaces,
-        agentId,
       )).filter((item) =>
         isEditoriallyVisible(item) && !terminalStatus(item.status)
       ).slice(0, 100);

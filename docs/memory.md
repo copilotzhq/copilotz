@@ -19,6 +19,12 @@ instructions, Context, Skills, and explicitly granted Tool catalog. Add
 `consolidate_memory` to the `capabilities.tools` of every Agent that may write
 semantic memory.
 
+## Shared work context
+
+[Core Spaces](spaces.md) add read-only access to peer Thread producer scopes.
+Space-derived access is resolved consistently for search, consolidation and
+prompt context, and revoked by detach, move, archive or removal.
+
 ## Durable model
 
 Memory records use one ontology with the forms `entity`, `assertion`,

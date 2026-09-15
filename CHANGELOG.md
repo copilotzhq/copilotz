@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.73.0 — 2026-09-15
+
+- Add Core Spaces with owner/member Participants, custom-record attachments,
+  atomic moves, archive/restore and non-destructive removal.
+- Resolve read-only peer Thread memory consistently across search, consolidation
+  and prompt context. Revoke derived access on detach, move, archive and
+  removal; preserve producer scopes, write targets and provenance.
+- Reject consolidation lifecycle changes to peer memory and exclude inaccessible
+  checkpoints from prompt context.
+- Document the application authorization boundary and cover persistence,
+  concurrent attachment collisions, paginated cleanup and live peer recall.
+
 ## 0.72.0 — 2026-09-13
 
 - Capture provider-native reasoning as Assets in Agent history and replay it on

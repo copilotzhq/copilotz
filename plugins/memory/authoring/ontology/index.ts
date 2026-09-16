@@ -14,16 +14,14 @@ export const MEMORY_FORMS: readonly [
   "intent",
   "inquiry",
   "procedure",
-] = Object.freeze(
-  [
-    "entity",
-    "assertion",
-    "occurrence",
-    "intent",
-    "inquiry",
-    "procedure",
-  ] as const,
-);
+] = [
+  "entity",
+  "assertion",
+  "occurrence",
+  "intent",
+  "inquiry",
+  "procedure",
+] as const;
 
 export type MemoryForm = typeof MEMORY_FORMS[number];
 
@@ -38,20 +36,18 @@ export const MEMORY_RELATION_TYPES: readonly [
   "contributes_to",
   "blocks",
   "answers",
-] = Object.freeze(
-  [
-    "about",
-    "derived_from",
-    "same_as",
-    "supports",
-    "contradicts",
-    "supersedes",
-    "depends_on",
-    "contributes_to",
-    "blocks",
-    "answers",
-  ] as const,
-);
+] = [
+  "about",
+  "derived_from",
+  "same_as",
+  "supports",
+  "contradicts",
+  "supersedes",
+  "depends_on",
+  "contributes_to",
+  "blocks",
+  "answers",
+] as const;
 
 export type MemoryRelationType = typeof MEMORY_RELATION_TYPES[number];
 
@@ -68,29 +64,25 @@ export const MEMORY_LIFECYCLES: Readonly<{
   ];
   inquiry: readonly ["open", "answered", "obsolete"];
   procedure: readonly ["active", "deprecated"];
-}> = Object.freeze({
-  entity: Object.freeze(["active", "merged", "archived"] as const),
-  assertion: Object.freeze(
-    [
-      "current",
-      "superseded",
-      "retracted",
-      "disputed",
-    ] as const,
-  ),
-  occurrence: Object.freeze(["scheduled", "happened", "cancelled"] as const),
-  intent: Object.freeze(
-    [
-      "proposed",
-      "active",
-      "completed",
-      "cancelled",
-      "superseded",
-    ] as const,
-  ),
-  inquiry: Object.freeze(["open", "answered", "obsolete"] as const),
-  procedure: Object.freeze(["active", "deprecated"] as const),
-});
+}> = {
+  entity: ["active", "merged", "archived"] as const,
+  assertion: [
+    "current",
+    "superseded",
+    "retracted",
+    "disputed",
+  ] as const,
+  occurrence: ["scheduled", "happened", "cancelled"] as const,
+  intent: [
+    "proposed",
+    "active",
+    "completed",
+    "cancelled",
+    "superseded",
+  ] as const,
+  inquiry: ["open", "answered", "obsolete"] as const,
+  procedure: ["active", "deprecated"] as const,
+} as const;
 
 export type MemoryLifecycleStatus =
   typeof MEMORY_LIFECYCLES[MemoryForm][number];
@@ -101,14 +93,12 @@ export type MemoryValidityStatus =
   | "retracted"
   | "superseded"
   | "archived";
-export const MEMORY_VALIDITIES: readonly MemoryValidityStatus[] = Object.freeze(
-  [
-    "valid",
-    "retracted",
-    "superseded",
-    "archived",
-  ],
-);
+export const MEMORY_VALIDITIES: readonly MemoryValidityStatus[] = [
+  "valid",
+  "retracted",
+  "superseded",
+  "archived",
+] as const;
 export type MemoryValidity = Readonly<{
   status: MemoryValidityStatus;
   changedAt?: string;
@@ -329,11 +319,10 @@ const CORE_KIND_INPUT = [
   ],
 ] as const satisfies readonly (readonly [string, MemoryForm, string])[];
 
-export const CORE_MEMORY_KINDS: readonly MemoryKindDefinition[] = Object.freeze(
-  CORE_KIND_INPUT.map(([id, form, description]) =>
-    Object.freeze({ id, form, description })
-  ),
-);
+export const CORE_MEMORY_KINDS: readonly MemoryKindDefinition[] =
+  CORE_KIND_INPUT.map((
+    [id, form, description],
+  ) => ({ id, form, description } as const));
 
 function requiredText(value: unknown, label: string): string {
   const normalized = typeof value === "string" ? value.trim() : "";
@@ -348,14 +337,12 @@ export function defineMemoryKind(
   if (!MEMORY_FORMS.includes(input.form)) {
     throw new TypeError(`Memory kind '${id}' has an invalid form.`);
   }
-  return Object.freeze({
+  return ({
     id,
     form: input.form,
     description: requiredText(input.description, "Memory kind description"),
-    ...(input.schema
-      ? { schema: Object.freeze(structuredClone(input.schema)) }
-      : {}),
-  });
+    ...(input.schema ? { schema: structuredClone(input.schema) } : {}),
+  } as const);
 }
 
 export function memoryLifecycleAllows(

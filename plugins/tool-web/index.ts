@@ -4,5 +4,7 @@
  * @module
  */
 
-export { createWebToolsPlugin, WEB_TOOL_IDS } from "./plugin.ts";
-export type { CreateWebToolsPluginOptions, WebToolId } from "./plugin.ts";
+export { WEB_TOOL_IDS, webToolsPlugin } from "./plugin.ts";
+export type { WebToolId } from "./plugin.ts";
+
+export * from "./resources/index.ts";

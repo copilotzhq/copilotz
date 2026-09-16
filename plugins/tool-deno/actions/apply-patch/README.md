@@ -10,7 +10,7 @@ It provides controlled edits with snapshots that can later be restored.
 
 ## How to use it
 
-Compose it through `createWorkspaceToolsPlugin()` using the `apply_patch` alias.
+Compose it through `denoToolsPlugin` using the `apply_patch` alias.
 
 ## How it works
 

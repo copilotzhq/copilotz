@@ -1,0 +1,9 @@
+{
+  "id": "@copilotz/core-usage",
+  "version": "3.0.0",
+  "include": [
+    "collections/usage/index.ts",
+    "processors/record-llm-usage/index.ts",
+    "processors/record-tool-usage/index.ts"
+  ]
+}

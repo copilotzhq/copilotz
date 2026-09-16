@@ -1,0 +1,9 @@
+{
+  "id": "@copilotz/channel-web",
+  "version": "4.0.0",
+  "include": [
+    "resources/channels/web/index.ts",
+    "adapters/channels/web/index.ts",
+    "dependencies/channels/index.ts"
+  ]
+}

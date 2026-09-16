@@ -1,0 +1,9 @@
+{
+  "id": "@copilotz/channel-telegram",
+  "version": "4.0.0",
+  "include": [
+    "resources/channels/telegram/index.ts",
+    "adapters/channels/telegram/index.ts",
+    "dependencies/channels/index.ts"
+  ]
+}

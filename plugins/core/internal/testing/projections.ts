@@ -74,13 +74,11 @@ export async function projectThreads(
   namespace: string,
 ): Promise<readonly ConversationThread[]> {
   const context = createTestDomainContext(host, namespace);
-  return Object.freeze(
-    (await Promise.all(
-      (await context.collections.thread.list()).map((record) =>
-        projectTestThread(context, record)
-      ),
-    )).filter((thread): thread is ConversationThread => thread !== null),
-  );
+  return ((await Promise.all(
+    (await context.collections.thread.list()).map((record) =>
+      projectTestThread(context, record)
+    ),
+  )).filter((thread): thread is ConversationThread => thread !== null));
 }
 
 export async function projectParticipants(
@@ -88,9 +86,9 @@ export async function projectParticipants(
   namespace: string,
 ): Promise<readonly Participant[]> {
   const context = createTestDomainContext(host, namespace);
-  return Object.freeze(
-    (await context.collections.participant.list()).map(mapParticipantRecord),
-  );
+  return ((await context.collections.participant.list()).map(
+    mapParticipantRecord,
+  ));
 }
 
 export async function projectParticipantById(
@@ -129,7 +127,7 @@ export async function projectActionEvents(
     },
   }, { namespace, afterPosition: "0" });
   unbind();
-  return Object.freeze(projected);
+  return projected;
 }
 
 function isActionEventData(value: unknown): value is ActionEventData {

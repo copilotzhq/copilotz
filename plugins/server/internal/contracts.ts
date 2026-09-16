@@ -156,24 +156,24 @@ export type ServerInvokeRequest = Readonly<{
 export function serverActionRequestSchema(
   inputSchema: ActionSchema | undefined,
 ): ActionSchema {
-  return Object.freeze({
+  return ({
     type: "object",
-    properties: Object.freeze({
-      schema: Object.freeze({ const: SERVER_ACTION_REQUEST_SCHEMA }),
-      requestId: Object.freeze({ type: "string", minLength: 1 }),
-      actionAlias: Object.freeze({ type: "string", minLength: 1 }),
-      input: inputSchema ?? Object.freeze({}),
-      actionMetadata: Object.freeze({ type: "object" }),
-    }),
-    required: Object.freeze([
+    properties: {
+      schema: { const: SERVER_ACTION_REQUEST_SCHEMA } as const,
+      requestId: { type: "string", minLength: 1 } as const,
+      actionAlias: { type: "string", minLength: 1 } as const,
+      input: inputSchema ?? ({} as const),
+      actionMetadata: { type: "object" } as const,
+    } as const,
+    required: [
       "schema",
       "requestId",
       "actionAlias",
       "input",
       "actionMetadata",
-    ]),
+    ] as const,
     additionalProperties: false,
-  });
+  } as const);
 }
 
 export function parseServerActionRequest(value: unknown): ServerActionRequest {
@@ -192,13 +192,13 @@ export function parseServerActionRequest(value: unknown): ServerActionRequest {
       key !== "input" && key !== "actionMetadata"
     )
   ) throw new TypeError("Server Action request is invalid.");
-  return Object.freeze({
+  return ({
     schema: SERVER_ACTION_REQUEST_SCHEMA,
     requestId: input.requestId.trim(),
     actionAlias: input.actionAlias.trim(),
     input: structuredClone(input.input),
-    actionMetadata: Object.freeze(structuredClone(
+    actionMetadata: structuredClone(
       input.actionMetadata as Record<string, unknown>,
-    )),
-  });
+    ),
+  } as const);
 }

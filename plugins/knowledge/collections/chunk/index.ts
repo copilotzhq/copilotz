@@ -54,3 +54,5 @@ export const knowledgeChunkCollection: CollectionDefinition<typeof schema> =
     },
     search: { enabled: true, fields: ["content"] },
   });
+
+export default knowledgeChunkCollection;

@@ -125,13 +125,13 @@ export function defineAction<
       "Action content cannot yet be combined with secret schemas.",
     );
   }
-  return Object.freeze({
+  return ({
     id,
     ...(content ? { content } : {}),
     ...(inputSchema ? { inputSchema } : {}),
     ...(outputSchema ? { outputSchema } : {}),
     execute: definition.execute,
-  }) as ActionDefinition<
+  } as const) as ActionDefinition<
     TInput,
     Awaited<TOutput>,
     TContext,

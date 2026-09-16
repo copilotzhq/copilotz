@@ -1,8 +1,6 @@
+import { definePlugin as defineFixturePlugin } from "@copilotz/copilotz/plugins";
 import { assert, assertEquals } from "@std/assert";
-import {
-  createUsageWorkflowPlugin,
-  type CreateUsageWorkflowPluginOptions,
-} from "./index.ts";
+import { type UsageOptions, usagePlugin } from "./index.ts";
 import { createCopilotzApplication } from "../../runtime/application/application.ts";
 import { createTestDomainContext } from "../core/internal/testing/context.ts";
 import {
@@ -317,13 +315,17 @@ type Fixture = Readonly<{
 }>;
 
 async function createFixture(
-  options: CreateUsageWorkflowPluginOptions = {},
+  options: UsageOptions = {},
 ): Promise<Fixture> {
   const db = await createTestDatabase({ url: ":memory:" });
   const registry = await createPluginRegistry({
     plugins: [
       usageCorePlugin,
-      createUsageWorkflowPlugin(options),
+      defineFixturePlugin({
+        ...usagePlugin,
+        resources: { usage: { config: options } },
+        adapters: { usage: { hooks: options } },
+      }),
       usageActionDriverPlugin,
     ],
   });
@@ -358,8 +360,8 @@ async function closeFixture(fixture: Fixture): Promise<void> {
   await fixture.db.close();
 }
 
-Deno.test("usage workflow is a factory-created plugin and can disable metering", () => {
-  const enabled = createUsageWorkflowPlugin();
+Deno.test("usage workflow has static processors and accepts context configuration", () => {
+  const enabled = usagePlugin;
   assertEquals(Object.keys(enabled.collections), ["usage"]);
   assertEquals(Object.keys(enabled.processors), [
     "recordLlmUsage",
@@ -375,15 +377,25 @@ Deno.test("usage workflow is a factory-created plugin and can disable metering",
     ],
   );
 
-  const disabled = createUsageWorkflowPlugin({ enabled: false });
+  const disabled = defineFixturePlugin({
+    ...usagePlugin,
+    resources: { usage: { config: { enabled: false } } },
+    adapters: { usage: { hooks: { enabled: false } } },
+  });
   assertEquals(Object.keys(disabled.collections), ["usage"]);
-  assertEquals(Object.keys(disabled.processors), []);
+  assertEquals(disabled.resources.usage.config.enabled, false);
 });
 
 Deno.test("package-root composes an explicitly supplied usage plugin", async () => {
   const application = await createCopilotzApplication({
     namespace: "usage-root",
-    plugins: [createUsageWorkflowPlugin({ enabled: false })],
+    plugins: [
+      defineFixturePlugin({
+        ...usagePlugin,
+        resources: { usage: { config: { enabled: false } } },
+        adapters: { usage: { hooks: { enabled: false } } },
+      }),
+    ],
   });
   try {
     assert(application.plugins.collections.usage);

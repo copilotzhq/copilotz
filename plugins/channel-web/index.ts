@@ -4,12 +4,6 @@
  * @module
  */
 
-export { createWebChannelAdapter } from "./adapters/index.ts";
-export {
-  createWebChannelPlugin,
-  type CreateWebChannelPluginOptions,
-} from "./plugin.ts";
-export {
-  createWebChannelResource,
-  type CreateWebChannelResourceOptions,
-} from "./resources/index.ts";
+export { webChannelAdapter } from "./adapters/index.ts";
+export { webChannelPlugin } from "./plugin.ts";
+export { webChannelResource } from "./resources/index.ts";

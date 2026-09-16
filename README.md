@@ -1,7 +1,7 @@
 # Copilotz
 
-Copilotz 0.72 is a plugin-first, event-sourced runtime for durable AI
-applications. The runtime owns generic mechanics; plugins own business meaning.
+Copilotz is a plugin-first, event-sourced runtime for durable AI applications.
+The runtime owns generic mechanics; plugins own business meaning.
 
 ```mermaid
 flowchart LR
@@ -28,10 +28,17 @@ Goals are a small Core authoring loop over ordinary application sends. The
 generic runtime contains no provider catalog, Tool executor, conversation DTO,
 or hidden workflow controller.
 
+## Convention-first authoring
+
+Use static plugins, configure capabilities through the final context, and run
+`copilotz build` on the development or CI host. See the
+[authoring guide](docs/convention-authoring.md) for discovery, file structure,
+validation, ESM generation, and migration from removed plugin factories.
+
 ## Install
 
 ```ts
-import { createCopilotz } from "jsr:@copilotz/copilotz@^0.73.0";
+import { createCopilotz } from "jsr:@copilotz/copilotz@^0.74.0";
 ```
 
 Host-only capabilities live on explicit subpaths. Importing the root does not
@@ -40,8 +47,8 @@ pull in filesystem, subprocess, terminal, MCP stdio, or provider credentials.
 ## Compose an AI application
 
 ```ts
-import { createCopilotz } from "jsr:@copilotz/copilotz@^0.73.0";
-import { corePlugin, message } from "jsr:@copilotz/copilotz@^0.73.0/core";
+import { createCopilotz } from "jsr:@copilotz/copilotz@^0.74.0";
+import { corePlugin, message } from "jsr:@copilotz/copilotz@^0.74.0/core";
 
 const openAiKey = Deno.env.get("OPENAI_API_KEY");
 if (!openAiKey) throw new Error("OPENAI_API_KEY is required");

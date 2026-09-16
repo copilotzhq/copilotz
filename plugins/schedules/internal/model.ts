@@ -41,11 +41,11 @@ export function normalizeScheduledJobSchedule(
   if (!value || value.type !== "cron") {
     throw new TypeError("Scheduled jobs currently require a cron schedule.");
   }
-  return Object.freeze({
+  return ({
     type: "cron",
     expression: requireScheduledText(value.expression, "Cron expression"),
     ...(value.timezone?.trim() ? { timezone: value.timezone.trim() } : {}),
-  });
+  } as const);
 }
 
 export function getNextScheduledRunAt(
@@ -84,11 +84,11 @@ function normalizeOccurrence(value: unknown): ScheduledJobOccurrenceRef | null {
   if (Number.isNaN(scheduledFor.getTime())) {
     throw new TypeError("Scheduled occurrence time is invalid.");
   }
-  return Object.freeze({
+  return ({
     id: requireScheduledText(occurrence.id, "Scheduled occurrence ID"),
     mode,
     scheduledFor: scheduledFor.toISOString(),
-  });
+  } as const);
 }
 
 export function normalizeScheduledJobRecord<
@@ -101,19 +101,17 @@ export function normalizeScheduledJobRecord<
   if (value.content !== undefined && !Array.isArray(value.content)) {
     throw new TypeError("Scheduled job content must be canonical refs.");
   }
-  return Object.freeze({
+  return ({
     ...value,
     name: requireScheduledText(value.name, "Scheduled job name"),
     status: normalizeScheduledJobStatus(value.status),
     schedule: normalizeScheduledJobSchedule(
       value.schedule as ScheduledJobSchedule,
     ),
-    payload: Object.freeze(structuredClone(payload)),
+    payload: structuredClone(payload),
     ...(Array.isArray(value.content)
       ? {
-        content: Object.freeze(
-          structuredClone(value.content),
-        ) as ContentSequence,
+        content: (structuredClone(value.content)) as ContentSequence,
       }
       : {}),
     nextRunAt: typeof value.nextRunAt === "string" ? value.nextRunAt : null,
@@ -121,11 +119,11 @@ export function normalizeScheduledJobRecord<
       ? value.nextRunAtMs
       : null,
     lastOccurrence: normalizeOccurrence(value.lastOccurrence),
-    metadata: Object.freeze(structuredClone(
+    metadata: structuredClone(
       value.metadata && typeof value.metadata === "object" &&
         !Array.isArray(value.metadata)
         ? value.metadata as Record<string, unknown>
         : {},
-    )),
-  }) as ScheduledJob<TPayload>;
+    ),
+  } as const) as ScheduledJob<TPayload>;
 }

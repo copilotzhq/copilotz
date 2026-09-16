@@ -1,3 +1,4 @@
+import type { ActionDefinition } from "@copilotz/copilotz/actions";
 /**
  * Defines the bounded HTTP Request Action.
  *
@@ -38,7 +39,20 @@ function truncateResponseBody(text: string, maxChars: number): {
   };
 }
 
-export const httpRequestAction = defineAction({
+export const httpRequestAction: ActionDefinition<
+  HttpRequestParams,
+  {
+    success: boolean;
+    status: number;
+    statusText: string;
+    headers: { [k: string]: string };
+    body: unknown;
+    bodyLength: number;
+    bodyTruncated: boolean;
+    responseTime: number;
+  },
+  ActionContext
+> = defineAction({
   id: "copilotz.tools.web.http_request",
   inputSchema: {
     type: "object",

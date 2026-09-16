@@ -1,15 +1,12 @@
 import { assertEquals } from "@std/assert";
-import { createWhatsAppChannelPlugin } from "./index.ts";
+import { whatsappChannelPlugin } from "./index.ts";
 
 Deno.test("WhatsApp Channel plugin aligns Resource and Adapter aliases", () => {
-  const plugin = createWhatsAppChannelPlugin({
-    channelId: "whatsapp-custom",
-    config: { accessToken: "secret", phoneId: "phone" },
-  });
+  const plugin = whatsappChannelPlugin;
   assertEquals(Object.keys(plugin.resources.channels ?? {}), [
-    "whatsapp-custom",
+    "whatsapp",
   ]);
   assertEquals(Object.keys(plugin.adapters.channels ?? {}), [
-    "whatsapp-custom",
+    "whatsapp",
   ]);
 });

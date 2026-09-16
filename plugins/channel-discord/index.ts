@@ -5,17 +5,15 @@
  */
 
 export {
-  createDiscordChannelAdapter,
   createDiscordTransport,
+  discordChannelAdapter,
   verifyDiscordSignature,
 } from "./adapters/index.ts";
-export { createDiscordChannelPlugin } from "./plugin.ts";
-export { createDiscordChannelResource } from "./resources/index.ts";
+export { discordChannelPlugin } from "./plugin.ts";
+export { discordChannelResource } from "./resources/index.ts";
 export type {
-  CreateDiscordChannelAdapterOptions,
-  CreateDiscordChannelPluginOptions,
-  CreateDiscordChannelResourceOptions,
   DiscordActionPayload,
+  DiscordChannelOptions,
   DiscordConfig,
   DiscordConfigContext,
   DiscordConfigResolver,

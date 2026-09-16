@@ -1,3 +1,6 @@
+import type { DiffHunk } from "../internal/fs-utils.ts";
+import type { ActionContext } from "@copilotz/copilotz/actions";
+import type { ActionDefinition } from "@copilotz/copilotz/actions";
 /**
  * Defines the bounded Show File Diff Action.
  *
@@ -12,7 +15,19 @@ interface ShowFileDiffParams {
   snapshotId?: string;
 }
 
-export const showFileDiffAction = defineAction({
+export const showFileDiffAction: ActionDefinition<
+  ShowFileDiffParams,
+  {
+    relativePath: string;
+    snapshotId: string;
+    changed: boolean;
+    truncated: boolean;
+    beforeLabel: string;
+    afterLabel: string;
+    hunks: DiffHunk[];
+  },
+  ActionContext
+> = defineAction({
   id: "copilotz.tools.deno.show_file_diff",
   inputSchema: {
     type: "object",

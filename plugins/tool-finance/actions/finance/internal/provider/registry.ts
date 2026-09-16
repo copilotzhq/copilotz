@@ -19,8 +19,8 @@ export function createFinanceProviderRegistry(
       provider,
     ]),
   );
-  const names = (): readonly string[] => Object.freeze([...providers.keys()]);
-  return Object.freeze({
+  const names = (): readonly string[] => ([...providers.keys()] as const);
+  return ({
     get(name = "yahoo") {
       const provider = providers.get(name.toLowerCase());
       if (!provider) {
@@ -37,7 +37,7 @@ export function createFinanceProviderRegistry(
       providers.set(name.toLowerCase(), provider);
     },
     names,
-  });
+  } as const);
 }
 
 const defaultRegistry = createFinanceProviderRegistry();

@@ -3,11 +3,11 @@ import * as channelPublic from "./index.ts";
 import { channelIngress } from "../channel-core/authoring/channel-ingress/index.ts";
 import { channelsPlugin } from "../channel-core/plugin.ts";
 import { defineChannelResource } from "../channel-core/authoring/channel-resource/index.ts";
-import { createDiscordChannelPlugin } from "../channel-discord/index.ts";
-import { createTelegramChannelPlugin } from "../channel-telegram/index.ts";
-import { createWebChannelPlugin } from "../channel-web/index.ts";
-import { createWhatsAppChannelPlugin } from "../channel-whatsapp/index.ts";
-import { createZendeskChannelPlugin } from "../channel-zendesk/index.ts";
+import { discordChannelPlugin } from "../channel-discord/index.ts";
+import { telegramChannelPlugin } from "../channel-telegram/index.ts";
+import { webChannelPlugin } from "../channel-web/index.ts";
+import { whatsappChannelPlugin } from "../channel-whatsapp/index.ts";
+import { zendeskChannelPlugin } from "../channel-zendesk/index.ts";
 
 Deno.test("Channel Resource snapshots exact data without invoking accessors", () => {
   let reads = 0;
@@ -129,24 +129,24 @@ Deno.test("Channel public exports and provider composition expose only the Resou
       "channelIngressAction",
       "channelIngressProcessor",
       "channelsPlugin",
-      "createDiscordChannelAdapter",
-      "createDiscordChannelPlugin",
-      "createDiscordChannelResource",
+      "discordChannelAdapter",
+      "discordChannelPlugin",
+      "discordChannelResource",
       "createDiscordTransport",
-      "createTelegramChannelAdapter",
-      "createTelegramChannelPlugin",
-      "createTelegramChannelResource",
+      "telegramChannelAdapter",
+      "telegramChannelPlugin",
+      "telegramChannelResource",
       "createTelegramTransport",
-      "createWebChannelAdapter",
-      "createWebChannelPlugin",
-      "createWebChannelResource",
-      "createWhatsAppChannelAdapter",
-      "createWhatsAppChannelPlugin",
-      "createWhatsAppChannelResource",
+      "webChannelAdapter",
+      "webChannelPlugin",
+      "webChannelResource",
+      "whatsappChannelAdapter",
+      "whatsappChannelPlugin",
+      "whatsappChannelResource",
       "createWhatsAppGraphTransport",
-      "createZendeskChannelAdapter",
-      "createZendeskChannelPlugin",
-      "createZendeskChannelResource",
+      "zendeskChannelAdapter",
+      "zendeskChannelPlugin",
+      "zendeskChannelResource",
       "createZendeskTransport",
       "defineChannelResource",
       "isChannelResource",
@@ -160,34 +160,18 @@ Deno.test("Channel public exports and provider composition expose only the Resou
     ].sort(),
   );
   const providers = [
-    createWebChannelPlugin({ channelId: "web-custom" }),
-    createTelegramChannelPlugin({
-      channelId: "telegram-custom",
-      config: { botToken: "private" },
-    }),
-    createWhatsAppChannelPlugin({
-      channelId: "whatsapp-custom",
-      config: { accessToken: "private", phoneId: "phone" },
-    }),
-    createDiscordChannelPlugin({
-      channelId: "discord-custom",
-      config: {
-        applicationId: "application",
-        publicKey: "public",
-        botToken: "private",
-      },
-    }),
-    createZendeskChannelPlugin({
-      channelId: "zendesk-custom",
-      config: { appId: "app", apiKey: "key", apiSecret: "private" },
-    }),
+    webChannelPlugin,
+    telegramChannelPlugin,
+    whatsappChannelPlugin,
+    discordChannelPlugin,
+    zendeskChannelPlugin,
   ];
   for (const plugin of providers) {
     const resourceAliases = Object.keys(plugin.resources.channels ?? {});
     const adapterAliases = Object.keys(plugin.adapters.channels ?? {});
     assertEquals(resourceAliases, adapterAliases);
     assertEquals(plugin.plugins.includes(channelsPlugin), true);
-    const resource = plugin.resources.channels?.[resourceAliases[0]] as
+    const resource = Object.values(plugin.resources.channels)[0] as
       | Record<string, unknown>
       | undefined;
     assertEquals(

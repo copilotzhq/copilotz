@@ -43,3 +43,5 @@ export const completeAskProcessor: Processor<CoreToolProcessorContext> =
       });
     },
   });
+
+export default completeAskProcessor;

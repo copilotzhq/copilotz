@@ -66,7 +66,7 @@ Deno.test("defineAction preserves optional schemas and execute typing", () => {
   assertEquals(input.query, "hello");
   assertEquals(output.count, 5);
   assertEquals(typeof callers.search, "function");
-  assert(Object.isFrozen(search));
+
   assertEquals(isActionDefinition(search), true);
 });
 

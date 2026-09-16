@@ -10,7 +10,7 @@ import {
   type Processor,
   type ProcessorContext,
 } from "@copilotz/copilotz/plugins";
-import type { CreateUsageWorkflowPluginOptions } from "../../internal/contracts.ts";
+import type { UsageOptions } from "../../internal/contracts.ts";
 import {
   optionalText,
   participantExternalId,
@@ -19,34 +19,42 @@ import {
   toolUsageRecord,
 } from "../internal/accounting.ts";
 
-export function createToolUsageProcessor(
-  options: CreateUsageWorkflowPluginOptions,
-): Processor<ProcessorContext> {
-  return defineProcessor<ProcessorContext>({
-    id: "copilotz.usage.record-tool-action",
-    on: ["completed", "failed", "cancelled"].map((status) => ({
-      eventType: "*" as const,
-      data: {
-        status,
-        metadata: { schema: "copilotz.core.tool-action.v1" },
-      },
-    })),
-    async handle(event, context) {
-      const lifecycle = parseActionLifecycleEvent(event, {
-        statuses: ["completed", "failed", "cancelled"],
-      });
-      if (!lifecycle) return;
-      const metadata = record(lifecycle.metadata);
-      const initiatedById = await participantExternalId(
-        context,
-        optionalText(metadata.initiatorParticipantId),
-      );
-      await persistUsage(
-        toolUsageRecord(lifecycle, event, initiatedById),
-        lifecycle,
-        context,
-        options,
-      );
+export const toolUsageProcessor: Processor<ProcessorContext> = defineProcessor<
+  ProcessorContext
+>({
+  id: "copilotz.usage.record-tool-action",
+  on: ["completed", "failed", "cancelled"].map((status) => ({
+    eventType: "*" as const,
+    data: {
+      status,
+      metadata: { schema: "copilotz.core.tool-action.v1" },
     },
-  });
-}
+  })),
+  async handle(event, context) {
+    const config = context.resources.usage?.config as
+      | Pick<UsageOptions, "enabled">
+      | undefined;
+    if (config?.enabled === false) return;
+    const options = (context.adapters.usage?.hooks ?? {}) as Omit<
+      UsageOptions,
+      "enabled"
+    >;
+    const lifecycle = parseActionLifecycleEvent(event, {
+      statuses: ["completed", "failed", "cancelled"],
+    });
+    if (!lifecycle) return;
+    const metadata = record(lifecycle.metadata);
+    const initiatedById = await participantExternalId(
+      context,
+      optionalText(metadata.initiatorParticipantId),
+    );
+    await persistUsage(
+      toolUsageRecord(lifecycle, event, initiatedById),
+      lifecycle,
+      context,
+      options,
+    );
+  },
+});
+
+export default toolUsageProcessor;

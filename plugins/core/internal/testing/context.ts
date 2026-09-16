@@ -74,43 +74,42 @@ export function createTestDomainContext(
     plugins: host.plugins,
     collections: host.collections,
     now: options.now,
-    content: (scopedNamespace) =>
-      Object.freeze({
-        resolver: host.content.resolver,
-        stream: Object.freeze({
-          open() {
-            throw new Error("Test content streams are not configured.");
-          },
-          follow() {
-            throw new Error("Test content streams are not configured.");
-          },
+    content: (scopedNamespace) => ({
+      resolver: host.content.resolver,
+      stream: {
+        open() {
+          throw new Error("Test content streams are not configured.");
+        },
+        follow() {
+          throw new Error("Test content streams are not configured.");
+        },
+      } as const,
+      prepare: (input, prepareOptions) =>
+        host.content.preparer.prepare(input, {
+          namespace: scopedNamespace,
+          idempotencyKey:
+            `test-action:${scopedNamespace}:${prepareOptions.operationKey}`,
+          origin: prepareOptions.origin,
         }),
-        prepare: (input, prepareOptions) =>
-          host.content.preparer.prepare(input, {
-            namespace: scopedNamespace,
-            idempotencyKey:
-              `test-action:${scopedNamespace}:${prepareOptions.operationKey}`,
-            origin: prepareOptions.origin,
-          }),
-        materialize: (input, options) =>
-          materialize(host, scopedNamespace, input, options?.origin),
-        publish: (input, publishOptions) =>
-          host.content.assets.publish({
-            ...input,
-            namespace: scopedNamespace,
-            idempotencyKey:
-              `test-action:${scopedNamespace}:${publishOptions.operationKey}`,
-          }),
-        get: (assetId) => host.content.assets.get(scopedNamespace, assetId),
-        getMany: (assetIds) =>
-          host.content.assets.getMany(scopedNamespace, assetIds),
-        resolve: (ref) =>
-          host.content.resolver.get(ref, { namespace: scopedNamespace }),
-        resolveMany: (refs) =>
-          host.content.resolver.getMany(refs, { namespace: scopedNamespace }),
-        open: (ref) =>
-          host.content.resolver.open(ref, { namespace: scopedNamespace }),
-      }),
+      materialize: (input, options) =>
+        materialize(host, scopedNamespace, input, options?.origin),
+      publish: (input, publishOptions) =>
+        host.content.assets.publish({
+          ...input,
+          namespace: scopedNamespace,
+          idempotencyKey:
+            `test-action:${scopedNamespace}:${publishOptions.operationKey}`,
+        }),
+      get: (assetId) => host.content.assets.get(scopedNamespace, assetId),
+      getMany: (assetIds) =>
+        host.content.assets.getMany(scopedNamespace, assetIds),
+      resolve: (ref) =>
+        host.content.resolver.get(ref, { namespace: scopedNamespace }),
+      resolveMany: (refs) =>
+        host.content.resolver.getMany(refs, { namespace: scopedNamespace }),
+      open: (ref) =>
+        host.content.resolver.open(ref, { namespace: scopedNamespace }),
+    } as const),
     actionLifecycle: {
       append({ draft, data }) {
         const id = draft.deduplicationId?.trim();
@@ -170,9 +169,7 @@ export async function projectTestMessages(
   context: ActionHostContext,
   records: readonly CollectionRecord[],
 ): Promise<readonly ConversationMessage[]> {
-  return Object.freeze(
-    (await Promise.all(
-      records.map((record) => projectTestMessage(context, record)),
-    )).filter((message): message is ConversationMessage => message !== null),
-  );
+  return ((await Promise.all(
+    records.map((record) => projectTestMessage(context, record)),
+  )).filter((message): message is ConversationMessage => message !== null));
 }

@@ -41,7 +41,7 @@ export type ChatGptConnectionOptions = Readonly<{
   now?: () => number;
 }>;
 
-const unavailable = Object.freeze({ available: false as const });
+const unavailable = { available: false as const } as const;
 const skewMs = 60_000;
 const refreshTimeoutMs = 30_000;
 
@@ -57,7 +57,7 @@ function account(value: ChatGptAccount | null): ChatGptAccount | null {
     !Number.isFinite(value.expiresAt) ||
     (value.refreshToken !== undefined && !nonempty(value.refreshToken))
   ) throw new Error("Invalid ChatGPT account snapshot.");
-  return Object.freeze({ ...value });
+  return ({ ...value } as const);
 }
 
 function fresh(
@@ -72,11 +72,11 @@ function credentials(
   now: number,
 ): LlmAuthResolution {
   return value !== null && fresh(value, now)
-    ? Object.freeze({
+    ? ({
       available: true,
       apiKey: value.accessToken,
-      extraHeaders: Object.freeze({ "ChatGPT-Account-ID": value.accountId }),
-    })
+      extraHeaders: { "ChatGPT-Account-ID": value.accountId } as const,
+    } as const)
     : unavailable;
 }
 
@@ -162,23 +162,23 @@ export function createChatGptConnection(
       await options.save(
         context,
         previous,
-        Object.freeze({
+        {
           accessToken: data.access_token,
           ...(refreshToken === undefined ? {} : { refreshToken }),
           expiresAt,
-        }),
+        } as const,
       ),
     );
   }
 
-  return Object.freeze({
+  return ({
     provider: "openai" as const,
     baseUrl: "https://chatgpt.com/backend-api/codex",
-    runtimeDiagnostics: Object.freeze({
+    runtimeDiagnostics: {
       enabled: true,
       credentialSource: "connected_account" as const,
-    }),
-    auth: Object.freeze({
+    } as const,
+    auth: {
       async resolve(
         context: LlmConnectionContext,
         execution: LlmConnectionExecution,
@@ -205,10 +205,10 @@ export function createChatGptConnection(
               () => controller.abort(),
               refreshTimeoutMs,
             );
-            const sharedContext = Object.freeze({
+            const sharedContext = {
               ...context,
               signal: controller.signal,
-            });
+            } as const;
             pending = wait(refresh(sharedContext, previous), controller.signal)
               .catch(() => null)
               .finally(() => {
@@ -229,6 +229,6 @@ export function createChatGptConnection(
           return unavailable;
         }
       },
-    }),
-  });
+    } as const,
+  } as const);
 }

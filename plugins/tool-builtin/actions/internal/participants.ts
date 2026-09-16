@@ -40,7 +40,7 @@ export function participantInput(
   participant: CollectionRecord,
 ): ParticipantInput {
   const metadata = record(participant.metadata);
-  return Object.freeze({
+  return ({
     id: participant.id,
     externalId: String(participant.externalId ?? participant.id),
     participantType: participant
@@ -55,5 +55,5 @@ export function participantInput(
       ? { agentId: participant.agentId }
       : {}),
     metadata: structuredClone(metadata),
-  });
+  } as const);
 }

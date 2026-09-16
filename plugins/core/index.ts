@@ -41,9 +41,15 @@ export {
   REVISE_MESSAGE_ACTION_ID,
   reviseMessageAction,
 } from "../core-collections/actions/index.ts";
-export { ASK_ACTION_ID, askAction } from "./actions/ask/index.ts";
-export type { AskInput, AskOutput } from "./actions/ask/index.ts";
-export { askTool } from "./resources/ask-tool/index.ts";
+export {
+  ASK_ACTION_ID,
+  askAction,
+} from "../core-collections/actions/ask/index.ts";
+export type {
+  AskInput,
+  AskOutput,
+} from "../core-collections/actions/ask/index.ts";
+export { askTool } from "./resources/tools/ask/index.ts";
 export {
   core,
   CORE_MESSAGE_INPUT_EVENT,

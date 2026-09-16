@@ -39,3 +39,5 @@ export const toolPlanStageResultCollection: CollectionDefinition =
     content: { fields: ["content"] },
     indexes: ["planId", ["planId", "branchIndex", "stageIndex"]],
   });
+
+export default toolPlanStageResultCollection;

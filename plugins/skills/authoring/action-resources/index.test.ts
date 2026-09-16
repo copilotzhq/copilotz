@@ -1,8 +1,12 @@
 import { assertEquals } from "@std/assert";
-import { createSkillActionResources } from "./index.ts";
-
-Deno.test("Skill generator can omit every optional Tool", () => {
-  const contribution = createSkillActionResources({ include: [] });
-  assertEquals(Object.keys(contribution.actions), []);
-  assertEquals(Object.keys(contribution.tools), []);
+import { definePlugin } from "@copilotz/copilotz/plugins";
+import { listSkillsTool } from "./index.ts";
+Deno.test("Skills tools can be selected individually", () => {
+  const plugin = definePlugin({
+    id: "test",
+    version: "1",
+    resources: { tools: { catalog: listSkillsTool } },
+  });
+  assertEquals(Object.keys(plugin.actions), ["catalog"]);
+  assertEquals(plugin.resources.tools.catalog.action, "catalog");
 });

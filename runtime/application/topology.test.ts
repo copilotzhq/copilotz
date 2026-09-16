@@ -1,7 +1,11 @@
+import type { ActionCallers } from "@copilotz/copilotz/actions";
+import { defineTool } from "@copilotz/copilotz/tools";
+import { defineServerFacade as fixtureServerFacade } from "@copilotz/copilotz/server";
+import { definePlugin as defineFixturePlugin } from "@copilotz/copilotz/plugins";
 import { message as coreMessage } from "@copilotz/copilotz/core";
 import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
 import { createCopilotzGateway, createCopilotzWorker } from "./index.ts";
-import { createServerPlugin } from "../../plugins/server/plugin.ts";
+import { serverPlugin } from "../../plugins/server/plugin.ts";
 import { createCopilotz } from "../../create-copilotz.ts";
 import { createCopilotzPersistence } from "@copilotz/copilotz/persistence";
 import { createTestDatabase } from "../testing/ominipg.ts";
@@ -426,7 +430,16 @@ Deno.test("Gateway bounds persistence outages as retryable HTTP 503 responses", 
     namespace,
     plugins: [
       coreCollectionsPlugin,
-      createServerPlugin({ expose: { collections: { include: ["thread"] } } }),
+      defineFixturePlugin({
+        ...serverPlugin,
+        resources: {
+          server: {
+            default: fixtureServerFacade({
+              expose: { collections: { include: ["thread"] } },
+            }),
+          },
+        },
+      }),
     ],
     persistence,
   });
@@ -613,4 +626,60 @@ Deno.test({
       await database.close();
     }
   },
+});
+
+Deno.test("createCopilotz expands root tools before startup and emits native lifecycle events", async () => {
+  const database = await createTestDatabase({ url: ":memory:" });
+  const observed: unknown[] = [];
+  let completed = 0;
+  const lookup = defineTool({
+    id: "root.lookup",
+    name: "Lookup",
+    description: "Root contribution probe",
+    execute(_input: unknown, context) {
+      return context.resources.policy.config;
+    },
+  });
+  const app = await createCopilotz({
+    database,
+    namespace,
+    resources: { tools: { lookup }, policy: { config: { limit: 7 } } },
+    processors: {
+      completed: defineProcessor({
+        id: "root.completed",
+        on: [{ eventType: "root.lookup.completed" }],
+        handle() {
+          completed += 1;
+        },
+      }),
+      probe: defineProcessor<
+        ProcessorContext<
+          ProcessorContext["resources"],
+          ProcessorContext["adapters"],
+          ActionCallers<{ lookup: typeof lookup.action }>
+        >
+      >({
+        id: "root.probe",
+        on: [{ eventType: "probe.requested" }],
+        async handle(_event, context) {
+          assertEquals(
+            (context.resources.tools.lookup as { action: string }).action,
+            "lookup",
+          );
+          observed.push(
+            await context.actions.lookup({}, { operationKey: "lookup" }),
+          );
+        },
+      }),
+    },
+  });
+  try {
+    const sent = await app.send({ type: "probe.requested" });
+    await sent.done;
+    assertEquals(observed, [{ limit: 7 }]);
+    assertEquals(completed, 1);
+  } finally {
+    await app.close();
+    await database.close();
+  }
 });

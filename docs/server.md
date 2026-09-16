@@ -1,32 +1,26 @@
 # HTTP server and browser client
 
-`createServerPlugin()` installs one compiled Fetch boundary at `/api`. Compose
-it in the Gateway and Worker alongside the same Actions, Collections, Channels,
-and application HTTP Adapters. The host serves `gateway.fetch`; the plugin does
-not start a listener. Gateway and Worker share persistence and Asset storage.
+`serverPlugin` installs one compiled Fetch boundary at `/api`. Compose it in the
+Gateway and Worker alongside the same Actions, Collections, Channels, and
+application HTTP Adapters. The host serves `gateway.fetch`; the plugin does not
+start a listener. Gateway and Worker share persistence and Asset storage.
 
 ```ts
 import { createCopilotz } from "@copilotz/copilotz";
-import { createServerPlugin } from "@copilotz/copilotz/server";
-import { createCoreServerPlugin } from "@copilotz/copilotz/core/server";
+import { defineServerFacade, serverPlugin } from "@copilotz/copilotz/server";
+import { corePlugin } from "@copilotz/copilotz/core";
+import { coreServerPlugin } from "@copilotz/copilotz/core/server";
 
-const gateway = await createCopilotz({
-  role: "gateway",
-  ...infrastructure,
-  plugins: [
-    ...applicationPlugins,
-    createCoreServerPlugin(),
-    createServerPlugin({
-      basePath: "/api",
-      authenticate,
-      authorize,
-      expose: {
-        actions: { include: publicActionIds },
-        collections: { include: publicCollectionNames },
-        channels: { include: ["web", "whatsapp"] },
-      },
-    }),
-  ],
+const application = await createCopilotz({
+  plugins: [corePlugin, coreServerPlugin, serverPlugin],
+  resources: {
+    server: {
+      default: defineServerFacade({
+        authenticate: authenticateRequest,
+        authorize: authorizeRequest,
+      }),
+    },
+  },
 });
 ```
 

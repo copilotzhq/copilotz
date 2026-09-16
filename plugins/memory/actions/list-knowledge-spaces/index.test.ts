@@ -1,7 +1,7 @@
 import { assertEquals } from "@std/assert";
-import { createListKnowledgeSpacesAction } from "./index.ts";
+import { listKnowledgeSpacesAction } from "./index.ts";
 Deno.test("space listing action is named", () =>
   assertEquals(
-    createListKnowledgeSpacesAction().id,
+    listKnowledgeSpacesAction.id,
     "copilotz.memory.spaces.list",
   ));

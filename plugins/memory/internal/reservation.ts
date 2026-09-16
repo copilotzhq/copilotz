@@ -12,7 +12,7 @@ import {
   type MemorySourceMessage,
   selectLongTermMemoryRange,
 } from "../authoring/consolidation/index.ts";
-import type { LongTermMemoryConfig } from "../resources/config/index.ts";
+import type { LongTermMemoryConfig } from "../resources/memory/config/index.ts";
 import type { MemoryProcessorContext } from "./contracts.ts";
 import { optionalText } from "./input.ts";
 import {
@@ -44,11 +44,11 @@ export async function reserveMemoryCheckpoint(
   if (!ownerParticipantId) return null;
   const owner = await loadParticipantRecord(context, ownerParticipantId);
   if (!owner || owner.participantType !== "agent") return null;
-  const message = Object.freeze({
+  const message = {
     ...messageRecord,
     threadId: String(messageRecord.threadId),
     sender: owner,
-  });
+  } as const;
   const agentId = participantAgentId(owner);
   if (!context.resources.agents[agentId]) return null;
   const pending = await checkpoints(

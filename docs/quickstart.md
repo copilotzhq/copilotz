@@ -6,8 +6,8 @@ embedded Gateway and Worker over a private in-process transport.
 ## Compose Core and one model
 
 ```ts
-import { createCopilotz } from "jsr:@copilotz/copilotz@^0.65.4";
-import { corePlugin, message } from "jsr:@copilotz/copilotz@^0.65.4/core";
+import { createCopilotz } from "jsr:@copilotz/copilotz@^0.74.0";
+import { corePlugin, message } from "jsr:@copilotz/copilotz@^0.74.0/core";
 
 const apiKey = Deno.env.get("OPENAI_API_KEY");
 if (!apiKey) throw new Error("OPENAI_API_KEY is required.");
@@ -38,10 +38,10 @@ const app = await createCopilotz({
 });
 ```
 
-Resources are immutable process-local definitions. The connection owns provider,
-endpoint, and authentication. Agents and direct `llm.call` inputs own model IDs
-and JSON options. Keys, resolved headers, and provider clients never enter
-persisted Action inputs or lifecycle outputs.
+Resources are process-local definitions. The connection owns provider, endpoint,
+and authentication. Agents and direct `llm.call` inputs own model IDs and JSON
+options. Keys, resolved headers, and provider clients never enter persisted
+Action inputs or lifecycle outputs.
 
 One connection supports multiple models and reasoning levels:
 
@@ -114,10 +114,7 @@ is drained. Detached Processors remain durable but do not delay this handle.
 ## Add a native Tool
 
 ```ts
-import {
-  createToolsPlugin,
-  defineTool,
-} from "jsr:@copilotz/copilotz@^0.65.4/tools";
+import { defineTool } from "jsr:@copilotz/copilotz@^0.74.0/tools";
 
 const lookupCustomer = defineTool({
   id: "acme.customer.lookup",
@@ -133,10 +130,11 @@ const lookupCustomer = defineTool({
   },
 });
 
-const customerPlugin = createToolsPlugin({
+import { definePlugin } from "@copilotz/copilotz/plugins";
+const customerPlugin = definePlugin({
   id: "@acme/customer-support",
   version: "1.0.0",
-  tools: { lookup_customer: lookupCustomer },
+  resources: { tools: { lookup_customer: lookupCustomer } },
 });
 ```
 
@@ -150,7 +148,7 @@ capabilities: {
 
 Installing a Tool does not grant it. The Tool Resource describes one existing
 Action alias; Core invokes that Action directly, so there is one lifecycle.
-`defineTool({ execute })` plus `createToolsPlugin` is intentionally a compiler
-convenience: it creates the native Action and its data-only Tool Resource. Use
-an Action, rather than a Resource hook, for work that needs retries, durable
-provenance, or external side effects.
+`defineTool({ execute })` is a synchronous Composition Contribution: it creates
+the native Action and its data-only Tool Resource. Use an Action, rather than a
+Resource hook, for work that needs retries, durable provenance, or external side
+effects.

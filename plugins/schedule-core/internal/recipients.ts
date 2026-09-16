@@ -103,7 +103,7 @@ export async function resolveScheduledRecipientSelection(
     if (!caller || caller.participantType !== "agent") {
       throw new TypeError("The scheduled job caller is not an Agent.");
     }
-    return Object.freeze([String(caller.id)]);
+    return ([String(caller.id)] as const);
   }
 
   if (selection === "all") {
@@ -129,14 +129,14 @@ export async function resolveScheduledRecipientSelection(
     if (agentIds.length === 0) {
       throw new TypeError("The scheduled thread has no Agent participants.");
     }
-    return Object.freeze([...new Set(agentIds)]);
+    return ([...new Set(agentIds)] as const);
   }
 
-  return Object.freeze([
+  return ([
     ...new Set(
       await Promise.all(
         selection.map((reference) => canonicalRecipient(reference, context)),
       ),
     ),
-  ]);
+  ] as const);
 }

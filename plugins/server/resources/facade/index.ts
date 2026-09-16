@@ -45,21 +45,21 @@ function patterns(
     throw new TypeError(`${label} contains unsupported fields.`);
   }
   const list = (candidate: unknown, name: string): readonly string[] => {
-    if (candidate === undefined) return Object.freeze([]);
+    if (candidate === undefined) return ([] as const);
     if (!Array.isArray(candidate)) {
       throw new TypeError(`${label}.${name} must be an array.`);
     }
-    return Object.freeze(candidate.map((entry, index) => {
+    return (candidate.map((entry, index) => {
       if (typeof entry !== "string" || !entry || entry.trim() !== entry) {
         throw new TypeError(`${label}.${name}[${index}] is invalid.`);
       }
       return entry;
     }));
   };
-  return Object.freeze({
+  return ({
     include: patternsOrDefault(input.include, "include", list, ["*"]),
     exclude: patternsOrDefault(input.exclude, "exclude", list, []),
-  });
+  } as const);
 }
 
 function patternsOrDefault(
@@ -68,7 +68,7 @@ function patternsOrDefault(
   read: (value: unknown, name: string) => readonly string[],
   fallback: readonly string[],
 ): readonly string[] {
-  return value === undefined ? Object.freeze([...fallback]) : read(value, name);
+  return value === undefined ? ([...fallback] as const) : read(value, name);
 }
 
 function exposure(
@@ -98,7 +98,7 @@ function exposure(
     : input.operations === false
     ? false
     : patterns(input.operations, `${label}.operations`);
-  return Object.freeze({ ...base, operations });
+  return ({ ...base, operations } as const);
 }
 
 function maxAssetUploadBytes(value: unknown): number {
@@ -136,10 +136,10 @@ export function defineServerFacade(
       key !== "actions" && key !== "collections" && key !== "channels"
     )
   ) throw new TypeError("Server facade categories are invalid.");
-  return Object.freeze({
+  return ({
     basePath: routePath(input.basePath ?? "/api", "Server facade basePath"),
     maxAssetUploadBytes: maxAssetUploadBytes(input.maxAssetUploadBytes),
-    expose: Object.freeze({
+    expose: {
       actions: exposure(expose.actions, "Server action exposure") as
         | boolean
         | ServerPatternPolicy,
@@ -151,10 +151,10 @@ export function defineServerFacade(
       channels: exposure(expose.channels, "Server channel exposure") as
         | boolean
         | ServerPatternPolicy,
-    }),
+    } as const,
     ...(input.authenticate ? { authenticate: input.authenticate } : {}),
     ...(input.authorize ? { authorize: input.authorize } : {}),
-  });
+  } as const);
 }
 
 export type {

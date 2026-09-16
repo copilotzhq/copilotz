@@ -12,7 +12,7 @@ and participate in causal settlement and observation.
 
 ## How to use it
 
-Compose `createServerPlugin`; the Fetch facade emits its request Event.
+Compose `serverPlugin`; the Fetch facade emits its request Event.
 
 ## How it works
 

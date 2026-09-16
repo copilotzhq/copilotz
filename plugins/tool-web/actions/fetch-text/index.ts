@@ -1,3 +1,4 @@
+import type { ActionDefinition } from "@copilotz/copilotz/actions";
 /**
  * Defines the bounded Fetch Text Action and its text-shaping helpers.
  *
@@ -148,7 +149,20 @@ export function shapeFetchedText(
   };
 }
 
-export const fetchTextAction = defineAction({
+export const fetchTextAction: ActionDefinition<
+  FetchTextParams,
+  {
+    contentType: string;
+    status: number;
+    extraction?: Record<string, unknown> | undefined;
+    url: string;
+    content: string;
+    length: number;
+    originalLength: number;
+    truncated: boolean;
+  },
+  ActionContext
+> = defineAction({
   id: "copilotz.tools.web.fetch_text",
   inputSchema: {
     type: "object",

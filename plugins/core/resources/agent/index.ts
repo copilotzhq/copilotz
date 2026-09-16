@@ -174,10 +174,10 @@ function models(value: unknown, agentId: string): AgentModels {
   assertKnownKeys(value, MODEL_KEYS, `Agent '${agentId}' models`);
   const generate = modelSelection(value.generate, agentId, "generate");
   const session = modelSelection(value.session, agentId, "session");
-  return Object.freeze({
+  return ({
     ...(generate ? { generate } : {}),
     ...(session ? { session } : {}),
-  });
+  } as const);
 }
 
 function selection(
@@ -208,7 +208,7 @@ function selection(
       `Agent '${agentId}' contains duplicate ${capability} capability aliases.`,
     );
   }
-  return Object.freeze(aliases);
+  return aliases;
 }
 
 function capabilities(
@@ -223,11 +223,11 @@ function capabilities(
   const tools = selection(value.tools, agentId, "tools");
   const agents = selection(value.agents, agentId, "agents");
   const skills = selection(value.skills, agentId, "skills");
-  return Object.freeze({
+  return ({
     ...(tools ? { tools } : {}),
     ...(agents ? { agents } : {}),
     ...(skills ? { skills } : {}),
-  });
+  } as const);
 }
 
 function metadata(
@@ -277,7 +277,7 @@ function immutableJsonValue(
       ) {
         throw new TypeError(`${label} must contain only JSON values.`);
       }
-      return Object.freeze(Array.from({ length: value.length }, (_, index) => {
+      return (Array.from({ length: value.length }, (_, index) => {
         const descriptor = Object.getOwnPropertyDescriptor(
           value,
           String(index),
@@ -311,7 +311,7 @@ function immutableJsonValue(
         immutableJsonValue(descriptor.value, `${label}.${key}`, ancestors),
       ]);
     }
-    return Object.freeze(Object.fromEntries(entries));
+    return (Object.fromEntries(entries));
   } finally {
     ancestors.delete(value);
   }
@@ -364,7 +364,7 @@ function instructions(
   );
   const resolve = resolveDescriptor
     .value as AgentInstructionResolver["resolve"];
-  return Object.freeze({ ...(base !== undefined ? { base } : {}), resolve });
+  return ({ ...(base !== undefined ? { base } : {}), resolve } as const);
 }
 
 function defineAgentValue<const TResource extends AgentResource>(
@@ -379,7 +379,7 @@ function defineAgentValue<const TResource extends AgentResource>(
   const normalizedInstructions = instructions(resource.instructions, id);
   const normalizedCapabilities = capabilities(resource.capabilities, id);
   const normalizedMetadata = metadata(resource.metadata, id);
-  const result: AgentResource = Object.freeze({
+  const result: AgentResource = {
     id,
     name: requiredText(resource.name, `Agent '${id}' name`),
     role: requiredText(resource.role, `Agent '${id}' role`),
@@ -405,6 +405,6 @@ function defineAgentValue<const TResource extends AgentResource>(
     models: models(resource.models, id),
     ...(normalizedCapabilities ? { capabilities: normalizedCapabilities } : {}),
     ...(normalizedMetadata ? { metadata: normalizedMetadata } : {}),
-  });
+  } as const;
   return result;
 }

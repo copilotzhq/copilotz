@@ -11,8 +11,7 @@ checkpoints still need explicit failed and cancelled terminal states.
 
 ## how to use it
 
-It is composed automatically by `createLongTermMemoryPlugin` when Memory is
-enabled.
+It is composed automatically by `memoryPlugin` when Memory is enabled.
 
 ## how it works
 

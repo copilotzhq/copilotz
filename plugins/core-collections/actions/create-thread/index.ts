@@ -76,3 +76,5 @@ export const createThreadAction: ActionDefinition<
     return created;
   },
 });
+
+export default createThreadAction;

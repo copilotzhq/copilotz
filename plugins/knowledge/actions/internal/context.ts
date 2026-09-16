@@ -4,7 +4,11 @@ import type {
   ActionContext,
   RuntimeActionCallers,
 } from "@copilotz/copilotz/actions";
-import type { KnowledgeEmbeddingProviderResource } from "../../internal/types.ts";
+import type {
+  KnowledgeEmbeddingProviderResource,
+  KnowledgeSourceLoader,
+  KnowledgeTextExtractor,
+} from "../../internal/types.ts";
 export type KnowledgeActionContext =
   & Omit<ActionContext, "actions" | "adapters">
   & Readonly<{
@@ -17,6 +21,9 @@ export type KnowledgeActionContext =
         ) => Promise<unknown>);
     }>;
     adapters: Readonly<{
+      knowledge?: Readonly<
+        { loader?: KnowledgeSourceLoader; extractor?: KnowledgeTextExtractor }
+      >;
       embedding: Readonly<
         Record<string, KnowledgeEmbeddingProviderResource | undefined>
       >;

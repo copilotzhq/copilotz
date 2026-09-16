@@ -13,16 +13,13 @@ export type KnowledgeEventType =
   | "document.deleted"
   | "chunk.created"
   | "chunk.deleted";
-export const KNOWLEDGE_EVENT_TYPES: readonly KnowledgeEventType[] = Object
-  .freeze(
-    [
-      "document.created",
-      "document.processing",
-      "document.indexed",
-      "document.duplicate",
-      "document.failed",
-      "document.deleted",
-      "chunk.created",
-      "chunk.deleted",
-    ] as const,
-  );
+export const KNOWLEDGE_EVENT_TYPES: readonly KnowledgeEventType[] = [
+  "document.created",
+  "document.processing",
+  "document.indexed",
+  "document.duplicate",
+  "document.failed",
+  "document.deleted",
+  "chunk.created",
+  "chunk.deleted",
+] as const;

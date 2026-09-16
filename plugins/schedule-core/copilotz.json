@@ -1,0 +1,16 @@
+{
+  "id": "@copilotz/core-schedules",
+  "version": "0.65.1",
+  "aliases": {
+    "actions/scheduled-jobs/index.ts": "scheduled_jobs",
+    "resources/tools/scheduled-jobs/index.ts": "scheduled_jobs"
+  },
+  "include": [
+    "actions/dispatch-scheduled-message/index.ts",
+    "actions/scheduled-jobs/index.ts",
+    "processors/dispatch-scheduled-message/index.ts",
+    "resources/tools/scheduled-jobs/index.ts",
+    "dependencies/core/index.ts",
+    "dependencies/schedules/index.ts"
+  ]
+}

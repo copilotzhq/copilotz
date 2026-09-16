@@ -1,10 +1,5 @@
-import {
-  assert,
-  assertEquals,
-  assertExists,
-  assertRejects,
-  assertThrows,
-} from "@std/assert";
+import { definePlugin as defineFixturePlugin } from "@copilotz/copilotz/plugins";
+import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
 import {
   type CopilotzEngine,
   createCopilotzEngine,
@@ -23,7 +18,7 @@ import {
   type ProcessorContext,
   type ProcessorEvent,
 } from "@copilotz/copilotz/plugins";
-import { BUILT_IN_CORE_TOOL_IDS, createBuiltInToolsPlugin } from "./plugin.ts";
+import { BUILT_IN_CORE_TOOL_IDS, builtInToolsPlugin } from "./plugin.ts";
 import {
   type AgentResource,
   coreCollectionsPlugin,
@@ -35,10 +30,7 @@ import {
   createTestDatabase,
   type TestDatabase,
 } from "../../runtime/testing/ominipg.ts";
-import {
-  createSkillsPlugin,
-  defineInlineSkill,
-} from "@copilotz/copilotz/skills";
+import { defineInlineSkill, skillsPlugin } from "@copilotz/copilotz/skills";
 
 const TEST_SCHEMA = "copilotz_core_tools";
 
@@ -82,7 +74,7 @@ type Fixture = Readonly<{
 }>;
 
 async function createFixture(
-  builtIns = createBuiltInToolsPlugin(),
+  builtIns = builtInToolsPlugin,
 ): Promise<Fixture> {
   const db = await createTestDatabase({ url: ":memory:" });
   let active: RunAction<unknown> | undefined;
@@ -115,10 +107,17 @@ async function createFixture(
     plugins: [
       coreCollectionsPlugin,
       builtIns,
-      createSkillsPlugin({
+      defineFixturePlugin({
+        ...skillsPlugin,
         id: "test.core-tools.skills",
         version: "1.0.0",
-        skills: [skill],
+        resources: {
+          ...skillsPlugin.resources,
+          skills: Object.fromEntries(
+            [skill].map((skill) => [skill.name, skill]),
+          ),
+          skillConfig: { default: { maximumTextBytes: undefined } },
+        },
       }),
       app,
     ],
@@ -229,7 +228,7 @@ async function invoke(
 }
 
 Deno.test("built-in tools exclude optional plugin-owned skill tools", () => {
-  const plugin = createBuiltInToolsPlugin();
+  const plugin = builtInToolsPlugin;
   const tools = plugin.resources.tools as
     | Readonly<Record<string, ToolResource>>
     | undefined;
@@ -241,19 +240,28 @@ Deno.test("built-in tools exclude optional plugin-owned skill tools", () => {
   assertEquals(Object.keys(plugin.actions), [...BUILT_IN_CORE_TOOL_IDS]);
   assert(Object.values(tools ?? {}).every((value) => !("execute" in value)));
   assert(!Object.hasOwn(tools ?? {}, "load_skill"));
-  assertThrows(
-    () =>
-      createBuiltInToolsPlugin({
-        include: ["wait", "wait"],
-      }),
-    TypeError,
-    "duplicate IDs",
-  );
 });
 
 Deno.test("built-in tools compose beside Core without owning Core state", async () => {
-  const builtIns = createBuiltInToolsPlugin({
-    include: ["get_current_time"],
+  const builtIns = defineFixturePlugin({
+    ...builtInToolsPlugin,
+    actions: Object.fromEntries(
+      (["get_current_time"] as const).map((
+        id,
+      ) => [id, builtInToolsPlugin.actions[id]]),
+    ),
+    resources: {
+      tools: Object.fromEntries(
+        ["get_current_time"].map(
+          (id) => [
+            id,
+            builtInToolsPlugin.resources
+              .tools[id as keyof typeof builtInToolsPlugin.resources.tools],
+          ],
+        ),
+      ),
+    },
+    adapters: { clock: { default: { now: undefined, sleep: undefined } } },
   });
   assertEquals(builtIns.plugins, []);
   const registry = await createPluginRegistry({
@@ -269,13 +277,22 @@ Deno.test("built-in tools compose beside Core without owning Core state", async 
 
 Deno.test("asset, skill, clock, and wait tools use typed capabilities", async () => {
   const waits: number[] = [];
-  const fixture = await createFixture(createBuiltInToolsPlugin({
-    now: () => new Date("2026-08-06T12:34:56.000Z"),
-    sleep(milliseconds) {
-      waits.push(milliseconds);
-      return Promise.resolve();
-    },
-  }));
+  const fixture = await createFixture(
+    defineFixturePlugin({
+      ...builtInToolsPlugin,
+      adapters: {
+        clock: {
+          default: {
+            now: () => new Date("2026-08-06T12:34:56.000Z"),
+            sleep: (milliseconds: number) => {
+              waits.push(milliseconds);
+              return Promise.resolve();
+            },
+          },
+        },
+      },
+    }),
+  );
   try {
     const result = await fixture.run(async (processor, sourceEvent) => {
       const largeBody = new TextEncoder().encode(
@@ -361,9 +378,19 @@ Deno.test("asset, skill, clock, and wait tools use typed capabilities", async ()
 });
 
 Deno.test("memory and thread tools mutate domain state idempotently", async () => {
-  const fixture = await createFixture(createBuiltInToolsPlugin({
-    now: () => new Date("2026-08-06T12:00:00.000Z"),
-  }));
+  const fixture = await createFixture(
+    defineFixturePlugin({
+      ...builtInToolsPlugin,
+      adapters: {
+        clock: {
+          default: {
+            now: () => new Date("2026-08-06T12:00:00.000Z"),
+            sleep: undefined,
+          },
+        },
+      },
+    }),
+  );
   const childDeclaration = {
     id: "thread:separate-research",
     externalId: "separate-research",

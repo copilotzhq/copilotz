@@ -1,3 +1,8 @@
+import { knowledgeConfig } from "../../internal/config.ts";
+import {
+  defaultKnowledgeSourceLoader,
+  defaultKnowledgeTextExtractor,
+} from "../../authoring/source/index.ts";
 /** Owns the index-document Knowledge Action. @module */
 import {
   digestContent,
@@ -8,11 +13,8 @@ import { chunkText } from "../internal/chunker.ts";
 import { embedKnowledgeTexts } from "../../resources/embedding/index.ts";
 import type {
   CompleteKnowledgeDocumentInput,
-  KnowledgeChunkingConfig,
   KnowledgeDocument,
-  KnowledgeEmbeddingConfig,
   KnowledgeSourceLoader,
-  KnowledgeTextExtractor,
   LoadedKnowledgeSource,
   MarkKnowledgeDocumentDuplicateInput,
 } from "../../internal/types.ts";
@@ -32,13 +34,6 @@ export const INDEX_KNOWLEDGE_DOCUMENT_ACTION_ID =
   "copilotz.knowledge.indexDocument";
 
 export type IndexKnowledgeDocumentInput = Readonly<{ id: string }>;
-
-export type CreateIndexKnowledgeDocumentActionOptions = Readonly<{
-  embedding: KnowledgeEmbeddingConfig;
-  chunking: Required<KnowledgeChunkingConfig>;
-  loader: KnowledgeSourceLoader;
-  extractor: KnowledgeTextExtractor;
-}>;
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -80,7 +75,7 @@ function completeIndexInput(input: unknown): CompleteIndexInput {
   const chunks = Array.isArray(data.chunks)
     ? data.chunks.map((candidate) => {
       const chunk = record(candidate, "Knowledge chunk");
-      return Object.freeze({
+      return ({
         content: requireText(chunk.content, "Chunk content"),
         embedding: finiteVector(chunk.embedding, "Chunk embedding"),
         chunkIndex: nonNegativeInteger(chunk.chunkIndex, "Chunk index"),
@@ -90,7 +85,7 @@ function completeIndexInput(input: unknown): CompleteIndexInput {
         metadata: chunk.metadata === undefined
           ? {}
           : structuredClone(record(chunk.metadata, "Chunk metadata")),
-      });
+      } as const);
     })
     : [];
   if (chunks.length === 0) {
@@ -110,7 +105,7 @@ function completeIndexInput(input: unknown): CompleteIndexInput {
       );
     }
   });
-  return Object.freeze({
+  return ({
     id: requireText(data.id, "Document ID"),
     title: optional(data.title, "Document title"),
     mediaType: requireText(data.mediaType, "Document media type"),
@@ -119,13 +114,13 @@ function completeIndexInput(input: unknown): CompleteIndexInput {
       "Document content hash",
     ) as `sha256:${string}`,
     source: data.source as DurableContentInput,
-    chunks: Object.freeze(chunks),
-  });
+    chunks: chunks,
+  } as const);
 }
 
 function duplicateInput(input: unknown): MarkDuplicateInput {
   const data = record(input);
-  return Object.freeze({
+  return ({
     id: requireText(data.id, "Document ID"),
     duplicateOfDocumentId: requireText(
       data.duplicateOfDocumentId,
@@ -137,19 +132,19 @@ function duplicateInput(input: unknown): MarkDuplicateInput {
       data.contentHash,
       "Document content hash",
     ) as `sha256:${string}`,
-  });
+  } as const);
 }
 
 function failIndexInput(input: unknown): FailIndexInput {
   const data = record(input);
   const error = record(data.error, "Knowledge failure");
-  return Object.freeze({
+  return ({
     id: requireText(data.id, "Document ID"),
-    error: Object.freeze({
+    error: {
       code: requireText(error.code, "Knowledge failure code"),
       message: requireText(error.message, "Knowledge failure message"),
-    }),
-  });
+    } as const,
+  } as const);
 }
 
 async function beginIndex(
@@ -279,13 +274,13 @@ async function loadSource(
       throw new Error(`Document '${document.id}' has multiple source assets.`);
     }
     const [resolved] = await context.content.resolveMany(document.source);
-    return Object.freeze({
+    return ({
       bytes: resolved.bytes,
       mediaType: resolved.asset.mediaType,
       sourceType: document.sourceType,
       sourceUri: document.sourceUri,
       title: document.title,
-    });
+    } as const);
   }
   return await loader({
     document,
@@ -343,144 +338,147 @@ const indexKnowledgeDocumentInputSchema = {
 } as const;
 
 /** Defines one durable action for indexing a queued Knowledge document. */
-export function createIndexKnowledgeDocumentAction(
-  options: CreateIndexKnowledgeDocumentActionOptions,
-): ActionDefinition<
+
+export const indexKnowledgeDocumentAction: ActionDefinition<
   IndexKnowledgeDocumentInput,
   KnowledgeDocument,
   KnowledgeActionContext,
   typeof indexKnowledgeDocumentInputSchema,
   undefined
-> {
-  return defineAction<
-    IndexKnowledgeDocumentInput,
-    KnowledgeDocument,
-    KnowledgeActionContext,
-    typeof indexKnowledgeDocumentInputSchema
-  >({
-    id: INDEX_KNOWLEDGE_DOCUMENT_ACTION_ID,
-    inputSchema: indexKnowledgeDocumentInputSchema,
-    async execute(input, context: KnowledgeActionContext) {
-      const id = requireText(record(input).id, "Document ID");
-      let document = await context.collections.document.get({ id }) as
-        | KnowledgeDocument
-        | null;
-      if (!document) throw new Error(`Knowledge document '${id}' vanished.`);
-      let settled = false;
-      try {
-        document = await beginIndex({ id }, context);
-        const loaded = await loadSource(document, context, options.loader);
-        actionSignal(context).throwIfAborted();
-        const text = (await options.extractor({
-          bytes: loaded.bytes,
-          mediaType: loaded.mediaType,
-          signal: actionSignal(context),
-        })).trim();
-        if (!text) throw new Error("Document has no text to index.");
-        const hash = await digestContent(loaded.bytes);
-        const canonical = document.forceReindex
-          ? null
-          : (await context.collections.document.queries.byContentHash({
-            contentHash: hash,
-          }))[0] as KnowledgeDocument | undefined;
-        if (canonical && canonical.id !== document.id) {
-          document = await markDuplicate({
-            id,
-            duplicateOfDocumentId: canonical.id,
-            source: canonical.source,
-            mediaType: canonical.mediaType ?? loaded.mediaType,
-            contentHash: hash,
-          }, context);
-          settled = true;
-          await announce(context, document, {
-            status: "duplicate",
-            message: `Document "${document.title}" already indexed (hash: ${
-              hash.slice(7, 15)
-            }...).`,
-            metadata: { duplicateOfDocumentId: canonical.id },
-          }).catch(() => undefined);
-          return document;
-        }
-
-        const chunks = chunkText(text, options.chunking);
-        if (chunks.length === 0) {
-          throw new Error("Document has no content to index.");
-        }
-        const vectors: (readonly number[])[] = [];
-        const batchSize = options.embedding.batchSize!;
-        let model = options.embedding.model;
-        let dimensions = options.embedding.dimensions;
-        for (let offset = 0; offset < chunks.length; offset += batchSize) {
-          actionSignal(context).throwIfAborted();
-          const batch = chunks.slice(offset, offset + batchSize);
-          const response = await embedKnowledgeTexts(
-            { embeddings: context.adapters.embedding ?? Object.freeze({}) },
-            options.embedding,
-            batch.map((item) => item.content),
-            {
-              signal: actionSignal(context),
-              idempotencyKey:
-                `${context.operationKey}:knowledge-embed:${offset}`,
-            },
-          );
-          vectors.push(...response.embeddings);
-          model = response.model;
-          dimensions = response.dimensions;
-        }
-        const source = document.source.length
-          ? document.source
-          : await context.content.prepare({
-            type: "file",
-            bytes: loaded.bytes,
-            mediaType: loaded.mediaType,
-            role: "document.source",
-            ...(loaded.title ? { name: loaded.title } : {}),
-          }, { operationKey: `index:${id}:source` });
-        document = await completeIndex({
-          id,
-          title: loaded.title ?? document.title,
-          mediaType: loaded.mediaType,
+> = defineAction<
+  IndexKnowledgeDocumentInput,
+  KnowledgeDocument,
+  KnowledgeActionContext,
+  typeof indexKnowledgeDocumentInputSchema
+>({
+  id: INDEX_KNOWLEDGE_DOCUMENT_ACTION_ID,
+  inputSchema: indexKnowledgeDocumentInputSchema,
+  async execute(input, context: KnowledgeActionContext) {
+    const options = {
+      ...knowledgeConfig(context),
+      loader: context.adapters.knowledge?.loader ??
+        defaultKnowledgeSourceLoader,
+      extractor: context.adapters.knowledge?.extractor ??
+        defaultKnowledgeTextExtractor,
+    };
+    const id = requireText(record(input).id, "Document ID");
+    let document = await context.collections.document.get({ id }) as
+      | KnowledgeDocument
+      | null;
+    if (!document) throw new Error(`Knowledge document '${id}' vanished.`);
+    let settled = false;
+    try {
+      document = await beginIndex({ id }, context);
+      const loaded = await loadSource(document, context, options.loader);
+      actionSignal(context).throwIfAborted();
+      const text = (await options.extractor({
+        bytes: loaded.bytes,
+        mediaType: loaded.mediaType,
+        signal: actionSignal(context),
+      })).trim();
+      if (!text) throw new Error("Document has no text to index.");
+      const hash = await digestContent(loaded.bytes);
+      const canonical = document.forceReindex
+        ? null
+        : (await context.collections.document.queries.byContentHash({
           contentHash: hash,
-          source,
-          chunks: chunks.map((chunk, index) => ({
-            content: chunk.content,
-            embedding: vectors[index],
-            chunkIndex: chunk.metadata.chunkIndex,
-            tokenCount: chunk.metadata.tokenCount,
-            startPosition: chunk.metadata.startPosition,
-            endPosition: chunk.metadata.endPosition,
-            metadata: {
-              ...(model ? { embeddingModel: model } : {}),
-              ...(dimensions ? { embeddingDimensions: dimensions } : {}),
-            },
-          })),
+        }))[0] as KnowledgeDocument | undefined;
+      if (canonical && canonical.id !== document.id) {
+        document = await markDuplicate({
+          id,
+          duplicateOfDocumentId: canonical.id,
+          source: canonical.source,
+          mediaType: canonical.mediaType ?? loaded.mediaType,
+          contentHash: hash,
         }, context);
         settled = true;
         await announce(context, document, {
-          status: "indexed",
-          message:
-            `Successfully indexed "${document.title}" (${document.chunkCount} chunks).`,
-          metadata: { chunks: document.chunkCount },
+          status: "duplicate",
+          message: `Document "${document.title}" already indexed (hash: ${
+            hash.slice(7, 15)
+          }...).`,
+          metadata: { duplicateOfDocumentId: canonical.id },
         }).catch(() => undefined);
         return document;
-      } catch (error) {
-        if (!settled) {
-          const failed = await failIndex({
-            id,
-            error: { code: errorCode(error), message: errorMessage(error) },
-          }, context).catch(() => undefined);
-          document = failed ?? document;
-          await announce(context, document, {
-            status: "failed",
-            message: `Failed to ingest document: ${errorMessage(error)}`,
-          }).catch(() => undefined);
-        }
-        throw error;
       }
-    },
-  });
-}
 
-export type IndexKnowledgeDocumentAction = ReturnType<
-  typeof createIndexKnowledgeDocumentAction
->;
+      const chunks = chunkText(text, options.chunking);
+      if (chunks.length === 0) {
+        throw new Error("Document has no content to index.");
+      }
+      const vectors: (readonly number[])[] = [];
+      const batchSize = options.embedding.batchSize!;
+      let model = options.embedding.model;
+      let dimensions = options.embedding.dimensions;
+      for (let offset = 0; offset < chunks.length; offset += batchSize) {
+        actionSignal(context).throwIfAborted();
+        const batch = chunks.slice(offset, offset + batchSize);
+        const response = await embedKnowledgeTexts(
+          { embeddings: context.adapters.embedding ?? ({} as const) },
+          options.embedding,
+          batch.map((item) => item.content),
+          {
+            signal: actionSignal(context),
+            idempotencyKey: `${context.operationKey}:knowledge-embed:${offset}`,
+          },
+        );
+        vectors.push(...response.embeddings);
+        model = response.model;
+        dimensions = response.dimensions;
+      }
+      const source = document.source.length
+        ? document.source
+        : await context.content.prepare({
+          type: "file",
+          bytes: loaded.bytes,
+          mediaType: loaded.mediaType,
+          role: "document.source",
+          ...(loaded.title ? { name: loaded.title } : {}),
+        }, { operationKey: `index:${id}:source` });
+      document = await completeIndex({
+        id,
+        title: loaded.title ?? document.title,
+        mediaType: loaded.mediaType,
+        contentHash: hash,
+        source,
+        chunks: chunks.map((chunk, index) => ({
+          content: chunk.content,
+          embedding: vectors[index],
+          chunkIndex: chunk.metadata.chunkIndex,
+          tokenCount: chunk.metadata.tokenCount,
+          startPosition: chunk.metadata.startPosition,
+          endPosition: chunk.metadata.endPosition,
+          metadata: {
+            ...(model ? { embeddingModel: model } : {}),
+            ...(dimensions ? { embeddingDimensions: dimensions } : {}),
+          },
+        })),
+      }, context);
+      settled = true;
+      await announce(context, document, {
+        status: "indexed",
+        message:
+          `Successfully indexed "${document.title}" (${document.chunkCount} chunks).`,
+        metadata: { chunks: document.chunkCount },
+      }).catch(() => undefined);
+      return document;
+    } catch (error) {
+      if (!settled) {
+        const failed = await failIndex({
+          id,
+          error: { code: errorCode(error), message: errorMessage(error) },
+        }, context).catch(() => undefined);
+        document = failed ?? document;
+        await announce(context, document, {
+          status: "failed",
+          message: `Failed to ingest document: ${errorMessage(error)}`,
+        }).catch(() => undefined);
+      }
+      throw error;
+    }
+  },
+});
+
+export type IndexKnowledgeDocumentAction = typeof indexKnowledgeDocumentAction;
+
+export default indexKnowledgeDocumentAction;

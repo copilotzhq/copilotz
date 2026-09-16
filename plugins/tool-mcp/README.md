@@ -12,12 +12,22 @@ Actions and Resources must be generated before application composition.
 
 ## How to use it
 
-Call `createMcpToolsPlugin` with MCP server declarations and a connector. For
-Deno subprocess servers, import `connectMcp` from `/tools/mcp/stdio`.
+```ts
+import { mcpToolsPlugin } from "@copilotz/copilotz/tools/mcp";
+// Include mcpToolsPlugin in the final createCopilotz({ plugins: [...] }) call.
+```
+
+Run `await prepareMcpTools({ servers, connect })` before composition and
+register the declarations in `resources.tools`. Runtime connectors belong in
+`adapters.mcp[serverId]`; execution never performs discovery.
 
 ## How it works
 
-The generator discovers allowed Tools, validates stable aliases and schemas,
-then hands one immutable entry set to the root plugin composer. Each Action
-opens a scoped connection, executes one MCP call, and promotes returned media to
-canonical content Assets.
+`copilotz.json` declares this root. `plugin.generated.ts` contains its static
+composition and `plugin.ts` exposes its public name. Regenerate with
+`deno task build:plugins`. Actions and Processors read final context
+configuration at invocation; there is no plugin factory or runtime directory
+discovery.
+
+See [convention-first authoring](../../docs/convention-authoring.md) for the
+shared file structure, compiler, configuration locations, and migration guide.

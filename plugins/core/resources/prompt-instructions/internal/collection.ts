@@ -39,5 +39,5 @@ export function collectPromptInstructions(
       );
     }
   }
-  return Object.freeze(values);
+  return values;
 }

@@ -85,3 +85,5 @@ export const longTermMemoryCollection: CollectionDefinition<typeof schema> =
       },
     },
   });
+
+export default longTermMemoryCollection;

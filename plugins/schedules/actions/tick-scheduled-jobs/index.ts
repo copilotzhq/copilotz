@@ -25,3 +25,5 @@ export const tickScheduledJobsAction: ActionDefinition<
   id: "copilotz.schedules.tick",
   execute: executeTickScheduledJobs,
 });
+
+export default tickScheduledJobsAction;

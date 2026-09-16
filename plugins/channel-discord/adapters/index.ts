@@ -5,7 +5,7 @@
  */
 
 export {
-  createDiscordChannelAdapter,
   createDiscordTransport,
+  discordChannelAdapter,
   verifyDiscordSignature,
-} from "./discord/index.ts";
+} from "./channels/discord/index.ts";

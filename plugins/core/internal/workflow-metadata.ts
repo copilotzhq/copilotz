@@ -528,28 +528,28 @@ export function coreLlmStreamMetadata(
       "Core LLM stream metadata requires an agent ID and name.",
     );
   }
-  const metadata: CoreLlmStreamMetadata = Object.freeze({
+  const metadata: CoreLlmStreamMetadata = {
     schema: CORE_LLM_STREAM_METADATA_SCHEMA,
-    agent: Object.freeze({ id: agentId, name: agentName }),
+    agent: { id: agentId, name: agentName } as const,
     ...(ask
       ? {
-        ask: Object.freeze({
+        ask: {
           askId: ask.askId,
           phase: ask.phase,
           questionMessageId: ask.questionMessageId,
-          askingAgent: Object.freeze({
+          askingAgent: {
             id: ask.askingAgentId,
             name: ask.askingAgentName ?? ask.askingAgentId,
-          }),
-          askedAgent: Object.freeze({
+          } as const,
+          askedAgent: {
             id: ask.askedAgentId,
             name: ask.askedAgentName ?? ask.askedAgentId,
-          }),
-        }),
+          } as const,
+        } as const,
       }
       : {}),
-  });
-  return Object.freeze({ copilotzCore: metadata });
+  } as const;
+  return ({ copilotzCore: metadata } as const);
 }
 
 const CORE_LLM_CALL_KEYS = new Set([
@@ -635,20 +635,20 @@ export function defineCoreLlmCallMetadata(
   const copy = structuredClone(value);
   const validated = coreLlmCallMetadata(copy);
   if (!validated) throw new TypeError("Invalid Core LLM call metadata.");
-  return Object.freeze({
+  return ({
     ...validated,
-    availableToolIds: Object.freeze([...validated.availableToolIds]),
+    availableToolIds: [...validated.availableToolIds] as const,
     responseVisibility: freezeCoreEventVisibility(
       validated.responseVisibility,
     ),
-    ...(validated.ask ? { ask: Object.freeze(validated.ask) } : {}),
+    ...(validated.ask ? { ask: validated.ask } : {}),
     ...(validated.agentTurn
-      ? { agentTurn: Object.freeze(structuredClone(validated.agentTurn)) }
+      ? { agentTurn: structuredClone(validated.agentTurn) }
       : {}),
     ...(validated.llmSession
-      ? { llmSession: Object.freeze({ ...validated.llmSession }) }
+      ? { llmSession: { ...validated.llmSession } as const }
       : {}),
-  });
+  } as const);
 }
 
 function coreEventVisibility(value: unknown): value is EventVisibility {
@@ -672,11 +672,11 @@ function coreEventVisibility(value: unknown): value is EventVisibility {
 
 function freezeCoreEventVisibility(value: EventVisibility): EventVisibility {
   return value.kind === "participants"
-    ? Object.freeze({
+    ? ({
       kind: "participants",
-      participantIds: Object.freeze([...value.participantIds]),
-    })
-    : Object.freeze({ ...value });
+      participantIds: [...value.participantIds] as const,
+    } as const)
+    : ({ ...value } as const);
 }
 
 function validStringArray(value: unknown): value is readonly string[] {
@@ -789,17 +789,17 @@ export function defineCoreToolActionMetadata(
   const copy = structuredClone(value);
   const validated = coreToolActionMetadata(copy);
   if (!validated) throw new TypeError("Invalid Core Tool Action metadata.");
-  return Object.freeze({
+  return ({
     ...validated,
-    availableToolIds: Object.freeze([...validated.availableToolIds]),
+    availableToolIds: [...validated.availableToolIds] as const,
     responseVisibility: freezeCoreEventVisibility(
       validated.responseVisibility,
     ),
-    ...(validated.ask ? { ask: Object.freeze(validated.ask) } : {}),
+    ...(validated.ask ? { ask: validated.ask } : {}),
     ...(validated.agentTurn
-      ? { agentTurn: Object.freeze(structuredClone(validated.agentTurn)) }
+      ? { agentTurn: structuredClone(validated.agentTurn) }
       : {}),
-  });
+  } as const);
 }
 
 /** Drops recursive ask state before retaining a plan cursor in an ask. */
@@ -807,7 +807,7 @@ export function coreToolActionOriginFrom(
   metadata: CoreToolActionMetadata,
 ): CoreToolActionOrigin {
   const { ask: _ask, ...origin } = metadata;
-  return Object.freeze(structuredClone(origin));
+  return (structuredClone(origin));
 }
 
 /** Embeds one Tool plan cursor in a Core Message without changing its shape. */

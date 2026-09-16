@@ -104,3 +104,5 @@ export const threadCollection: CollectionDefinition = defineCollection({
     },
   },
 });
+
+export default threadCollection;

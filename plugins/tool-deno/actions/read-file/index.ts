@@ -1,3 +1,5 @@
+import type { ActionContext } from "@copilotz/copilotz/actions";
+import type { ActionDefinition } from "@copilotz/copilotz/actions";
 /**
  * Defines the bounded Read File Action.
  *
@@ -22,7 +24,21 @@ const AUTO_TRUNCATE_LINES = 300;
 const MAX_FILE_SIZE_BYTES = 1_000_000; // 1MB — refuse to read without a range
 const MAX_OUTPUT_BYTES = 100_000; // 100KB — truncate output and warn
 
-export const readFileAction = defineAction({
+export const readFileAction: ActionDefinition<
+  ReadFileParams,
+  {
+    sizeWarning?: string | undefined;
+    autoTruncated?: boolean | undefined;
+    hint?: string | undefined;
+    relativePath: string;
+    content: string;
+    totalLines: number;
+    startLine: number;
+    endLine: number;
+    truncated: boolean;
+  },
+  ActionContext
+> = defineAction({
   id: "copilotz.tools.deno.read_file",
   inputSchema: {
     type: "object",

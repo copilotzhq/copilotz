@@ -1,3 +1,4 @@
+import type { ActionDefinition } from "@copilotz/copilotz/actions";
 /** @module Admin threads Action primitive. */
 import { defineAction } from "@copilotz/copilotz/actions";
 import {
@@ -29,7 +30,11 @@ function metadataText(
 }
 
 /** Lists projected conversation threads with bounded pagination. */
-export const adminThreadsAction = defineAction<
+export const adminThreadsAction: ActionDefinition<
+  AdminRequest,
+  AdminResponse,
+  AdminActionContext
+> = defineAction<
   AdminRequest,
   AdminResponse,
   AdminActionContext,
@@ -98,3 +103,5 @@ export const adminThreadsAction = defineAction<
     return { status: 200, data, pageInfo: pageInfo(selected, limit) };
   },
 });
+
+export default adminThreadsAction;

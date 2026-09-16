@@ -11,11 +11,18 @@ routing and higher-level agent semantics.
 
 ## How to use it
 
-Install `coreCollectionsPlugin` when a host needs Core Threads, Participants,
-Messages, Tool-plan records, and their domain Actions without semantic routing.
+```ts
+import { coreCollectionsPlugin } from "@copilotz/copilotz/core";
+// Include coreCollectionsPlugin in the final createCopilotz({ plugins: [...] }) call.
+```
 
 ## How it works
 
-Native Actions mutate five Collections transactionally. The Message input
-Processor turns the public input envelope into the same idempotent domain write
-used by semantic Core.
+`copilotz.json` declares this root. `plugin.generated.ts` contains its static
+composition and `plugin.ts` exposes its public name. Regenerate with
+`deno task build:plugins`. Actions and Processors read final context
+configuration at invocation; there is no plugin factory or runtime directory
+discovery.
+
+See [convention-first authoring](../../docs/convention-authoring.md) for the
+shared file structure, compiler, configuration locations, and migration guide.

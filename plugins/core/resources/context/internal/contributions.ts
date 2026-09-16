@@ -54,6 +54,7 @@ export async function collectContextContributions(
     if (!resource.purposes.includes(input.purpose)) continue;
     const value = await resource.contribute({
       ...input,
+      context,
       collections: context.collections,
       signal: context.signal,
       idempotencyKey:
@@ -80,24 +81,26 @@ export async function collectContextContributions(
       if (contribution.role === "evidence" && !contribution.source) {
         throw new TypeError(`Evidence contribution '${id}' requires a source.`);
       }
-      collected.push(Object.freeze({
-        ...structuredClone(contribution),
-        id: requiredText(contribution.id, "Context contribution id"),
-        resourceId: resource.id,
-        title: requiredText(contribution.title, "Context contribution title"),
-        ...(typeof (contribution as Record<string, unknown>)
-                .historyAfterMessageId === "string" &&
-            (contribution as Record<string, unknown>).historyAfterMessageId
-          ? {
-            historyAfterMessageId: String(
-              (contribution as Record<string, unknown>).historyAfterMessageId,
-            ),
-          }
-          : {}),
-      }));
+      collected.push(
+        {
+          ...structuredClone(contribution),
+          id: requiredText(contribution.id, "Context contribution id"),
+          resourceId: resource.id,
+          title: requiredText(contribution.title, "Context contribution title"),
+          ...(typeof (contribution as Record<string, unknown>)
+                  .historyAfterMessageId === "string" &&
+              (contribution as Record<string, unknown>).historyAfterMessageId
+            ? {
+              historyAfterMessageId: String(
+                (contribution as Record<string, unknown>).historyAfterMessageId,
+              ),
+            }
+            : {}),
+        } as const,
+      );
     }
   }
-  return Object.freeze(collected);
+  return collected;
 }
 
 /** Prepare a complete contribution batch before prompt rendering. */
@@ -115,11 +118,10 @@ export async function prepareContextContributions(
     context.content,
   );
   context.signal.throwIfAborted();
-  return Object.freeze(
-    contributions.map((entry, index) =>
-      Object.freeze({ ...entry, content: values[index] })
-    ),
-  );
+  return (contributions.map((
+    entry,
+    index,
+  ) => ({ ...entry, content: values[index] } as const)));
 }
 
 /** Pure prompt projection: all content is prepared before reaching the renderer. */

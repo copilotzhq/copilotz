@@ -1,4 +1,3 @@
-import { assert } from "@std/assert";
 import { defineKnowledgeEmbeddingProvider } from "./index.ts";
 
 Deno.test("embedding resource freezes a valid provider", () => {
@@ -9,5 +8,4 @@ Deno.test("embedding resource freezes a valid provider", () => {
       return { embeddings: [[1]], model: "fixture", dimensions: 1 };
     },
   });
-  assert(Object.isFrozen(provider));
 });

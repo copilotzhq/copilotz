@@ -227,7 +227,6 @@ Deno.test("application factory composes plugins and supplies the default tenant 
     engine: { retryBaseMs: 0, random: () => 0 },
   });
   try {
-    assert(Object.isFrozen(application));
     assertEquals(application.config, {
       namespace: NAMESPACE,
       databaseSchema: SCHEMA,
@@ -1498,6 +1497,7 @@ Deno.test("application Adapters overlay plugin Adapters", async () => {
   });
   try {
     assertEquals(application.config.pluginIds, [
+      "@copilotz/core-collections",
       "@copilotz/llm",
       "@copilotz/core",
     ]);

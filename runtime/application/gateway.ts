@@ -78,12 +78,12 @@ export type InternalCopilotzGateway = Readonly<{
 }>;
 
 function uniqueTransport(): HypervisorTransport {
-  return Object.freeze({
+  return ({
     type: "in-process" as const,
-    config: Object.freeze({
+    config: {
       topic: `copilotz.gateway.${crypto.randomUUID()}`,
-    }),
-  });
+    } as const,
+  } as const);
 }
 
 async function settleAll(
@@ -120,8 +120,8 @@ export async function createCopilotzGateway(
 
   const persistence = await openCopilotzPersistence(options);
   const transports = options.dispatcher
-    ? Object.freeze([])
-    : Object.freeze([...(options.transports ?? [uniqueTransport()])]);
+    ? ([] as const)
+    : ([...(options.transports ?? [uniqueTransport()])] as const);
   let fetchFallback: GatewayFetchFallback = (_request) =>
     Promise.resolve(
       new Response("Copilotz Gateway is initializing.", { status: 503 }),
@@ -143,6 +143,9 @@ export async function createCopilotzGateway(
       namespace: options.namespace,
       databaseSchema: options.databaseSchema,
       plugins: options.plugins,
+      collections: options.collections,
+      actions: options.actions,
+      processors: options.processors,
       resources: options.resources,
       adapters: options.adapters,
       assets: options.assets,
@@ -199,7 +202,7 @@ export async function createCopilotzGateway(
     return shutdownTask;
   };
 
-  return Object.freeze({
+  return ({
     application,
     transports,
     ...(hypervisor ? { hypervisor } : {}),
@@ -220,5 +223,5 @@ export async function createCopilotzGateway(
     },
     close: shutdown,
     shutdown,
-  });
+  } as const);
 }

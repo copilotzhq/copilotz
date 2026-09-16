@@ -1,4 +1,10 @@
 import {
+  deleteKnowledgeDocumentTool,
+  ingestKnowledgeDocumentTool,
+  searchKnowledgeTool,
+} from "@copilotz/copilotz/knowledge";
+import { definePlugin as defineFixturePlugin } from "@copilotz/copilotz/plugins";
+import {
   assert,
   assertEquals,
   assertExists,
@@ -21,10 +27,7 @@ import {
 } from "@copilotz/copilotz/plugins";
 import { coreCollectionsPlugin } from "../core/plugin.ts";
 import type { ToolResource } from "@copilotz/copilotz/tools";
-import {
-  createKnowledgePlugin,
-  defineKnowledgeEmbeddingProvider,
-} from "./index.ts";
+import { defineKnowledgeEmbeddingProvider, knowledgePlugin } from "./index.ts";
 import {
   deleteKnowledgeDocumentAction,
   type KnowledgeActionCallers,
@@ -133,10 +136,27 @@ function embeddingProvider(
 }
 
 Deno.test("knowledge plugin exposes keyed Collections, Actions, Processors, and Tool Resources", () => {
-  const plugin = createKnowledgePlugin({
-    embedding: { provider: "fixture.embedding" },
+  const plugin = defineFixturePlugin({
+    ...knowledgePlugin,
+    actions: {
+      indexKnowledgeDocument: knowledgePlugin.actions.indexKnowledgeDocument,
+    },
+    resources: {
+      knowledge: {
+        config: {
+          embedding: { provider: "fixture.embedding" },
+          chunking: undefined,
+        },
+      },
+      tools: {
+        "ingest_document": ingestKnowledgeDocumentTool,
+        "search_knowledge": searchKnowledgeTool,
+        "delete_document": deleteKnowledgeDocumentTool,
+      },
+    },
+    adapters: { knowledge: { loader: undefined, extractor: undefined } },
   });
-  assertEquals(Object.keys(plugin.collections), ["document", "chunk"]);
+  assertEquals(Object.keys(plugin.collections), ["chunk", "document"]);
   assertEquals(Object.keys(plugin.actions), [
     "indexKnowledgeDocument",
     "ingest_document",
@@ -160,19 +180,34 @@ Deno.test("knowledge plugin exposes keyed Collections, Actions, Processors, and 
   ]);
   for (const [alias, resource] of Object.entries(plugin.resources.tools)) {
     assertEquals(resource.action, alias);
-    assertEquals(plugin.actions[alias]?.inputSchema, resource.inputSchema);
+    assertEquals<unknown>(
+      plugin.actions[alias as keyof typeof plugin.actions]?.inputSchema,
+      resource.inputSchema,
+    );
   }
   assertEquals("features" in plugin, false);
 });
 
 Deno.test("knowledge configured Tool aliases populate both plugin maps", () => {
-  const plugin = createKnowledgePlugin({
-    embedding: { provider: "fixture.embedding" },
-    tools: {
-      ingestId: "add_source",
-      searchId: "find_source",
-      deleteId: "remove_source",
+  const plugin = defineFixturePlugin({
+    ...knowledgePlugin,
+    actions: {
+      indexKnowledgeDocument: knowledgePlugin.actions.indexKnowledgeDocument,
     },
+    resources: {
+      knowledge: {
+        config: {
+          embedding: { provider: "fixture.embedding" },
+          chunking: undefined,
+        },
+      },
+      tools: {
+        "add_source": ingestKnowledgeDocumentTool,
+        "find_source": searchKnowledgeTool,
+        "remove_source": deleteKnowledgeDocumentTool,
+      },
+    },
+    adapters: { knowledge: { loader: undefined, extractor: undefined } },
   });
   assertEquals(Object.keys(plugin.actions), [
     "indexKnowledgeDocument",
@@ -187,7 +222,7 @@ Deno.test("knowledge configured Tool aliases populate both plugin maps", () => {
   ]);
   for (const [alias, resource] of Object.entries(plugin.resources.tools)) {
     assertEquals(resource.action, alias);
-    assertExists(plugin.actions[alias]);
+    assertExists(plugin.actions[alias as keyof typeof plugin.actions]);
   }
 });
 
@@ -215,8 +250,26 @@ Deno.test("package root composes the explicit Knowledge plugin", async () => {
     namespace: "knowledge-root",
     plugins: [
       coreCollectionsPlugin,
-      createKnowledgePlugin({
-        embedding: { provider: "fixture.embedding" },
+      defineFixturePlugin({
+        ...knowledgePlugin,
+        actions: {
+          indexKnowledgeDocument:
+            knowledgePlugin.actions.indexKnowledgeDocument,
+        },
+        resources: {
+          knowledge: {
+            config: {
+              embedding: { provider: "fixture.embedding" },
+              chunking: undefined,
+            },
+          },
+          tools: {
+            "ingest_document": ingestKnowledgeDocumentTool,
+            "search_knowledge": searchKnowledgeTool,
+            "delete_document": deleteKnowledgeDocumentTool,
+          },
+        },
+        adapters: { knowledge: { loader: undefined, extractor: undefined } },
       }),
     ],
     adapters: {
@@ -251,13 +304,30 @@ Deno.test("knowledge indexing keeps one canonical source asset and atomic search
     databaseSchema: "copilotz_v3_knowledge",
     plugins: [
       coreCollectionsPlugin,
-      createKnowledgePlugin({
-        embedding: {
-          provider: "fixture.embedding",
-          dimensions: 2,
-          batchSize: 2,
+      defineFixturePlugin({
+        ...knowledgePlugin,
+        actions: {
+          indexKnowledgeDocument:
+            knowledgePlugin.actions.indexKnowledgeDocument,
         },
-        chunking: { chunkSize: 512, chunkOverlap: 0 },
+        resources: {
+          knowledge: {
+            config: {
+              embedding: {
+                provider: "fixture.embedding",
+                dimensions: 2,
+                batchSize: 2,
+              },
+              chunking: { chunkSize: 512, chunkOverlap: 0 },
+            },
+          },
+          tools: {
+            "ingest_document": ingestKnowledgeDocumentTool,
+            "search_knowledge": searchKnowledgeTool,
+            "delete_document": deleteKnowledgeDocumentTool,
+          },
+        },
+        adapters: { knowledge: { loader: undefined, extractor: undefined } },
       }),
     ],
     adapters: {
@@ -514,11 +584,37 @@ Deno.test("knowledge source failure settles once as document and Action failure"
     databaseSchema: "copilotz_v3_knowledge_failure",
     plugins: [
       coreCollectionsPlugin,
-      createKnowledgePlugin({
-        embedding: { provider: "fixture.embedding", dimensions: 2 },
-        sourceLoader(input) {
-          sourceKeys.push(input.idempotencyKey);
-          return Promise.reject(new Error("fixture source unavailable"));
+      defineFixturePlugin({
+        ...knowledgePlugin,
+        actions: {
+          indexKnowledgeDocument:
+            knowledgePlugin.actions.indexKnowledgeDocument,
+        },
+        resources: {
+          knowledge: {
+            config: {
+              embedding: { provider: "fixture.embedding", dimensions: 2 },
+              chunking: undefined,
+            },
+          },
+          tools: {
+            "ingest_document": ingestKnowledgeDocumentTool,
+            "search_knowledge": searchKnowledgeTool,
+            "delete_document": deleteKnowledgeDocumentTool,
+          },
+        },
+        adapters: {
+          knowledge: {
+            loader: (
+              input: Parameters<
+                import("@copilotz/copilotz/knowledge").KnowledgeSourceLoader
+              >[0],
+            ) => {
+              sourceKeys.push(input.idempotencyKey);
+              return Promise.reject(new Error("fixture source unavailable"));
+            },
+            extractor: undefined,
+          },
         },
       }),
     ],
@@ -641,9 +737,26 @@ Deno.test("knowledge Tool Actions execute through durable callers", async () => 
     databaseSchema: "copilotz_v3_knowledge_tools",
     plugins: [
       coreCollectionsPlugin,
-      createKnowledgePlugin({
-        embedding: { provider: "fixture.embedding", dimensions: 2 },
-        chunking: { chunkSize: 512, chunkOverlap: 0 },
+      defineFixturePlugin({
+        ...knowledgePlugin,
+        actions: {
+          indexKnowledgeDocument:
+            knowledgePlugin.actions.indexKnowledgeDocument,
+        },
+        resources: {
+          knowledge: {
+            config: {
+              embedding: { provider: "fixture.embedding", dimensions: 2 },
+              chunking: { chunkSize: 512, chunkOverlap: 0 },
+            },
+          },
+          tools: {
+            "ingest_document": ingestKnowledgeDocumentTool,
+            "search_knowledge": searchKnowledgeTool,
+            "delete_document": deleteKnowledgeDocumentTool,
+          },
+        },
+        adapters: { knowledge: { loader: undefined, extractor: undefined } },
       }),
       driverPlugin,
     ],
@@ -912,9 +1025,21 @@ Deno.test("knowledge source deletion searches every page without crossing scope"
 });
 
 Deno.test("knowledge can disable every model-facing Action and Tool Resource", () => {
-  const plugin = createKnowledgePlugin({
-    embedding: { provider: "fixture.embedding" },
-    tools: false,
+  const plugin = defineFixturePlugin({
+    ...knowledgePlugin,
+    actions: {
+      indexKnowledgeDocument: knowledgePlugin.actions.indexKnowledgeDocument,
+    },
+    resources: {
+      knowledge: {
+        config: {
+          embedding: { provider: "fixture.embedding" },
+          chunking: undefined,
+        },
+      },
+      tools: {},
+    },
+    adapters: { knowledge: { loader: undefined, extractor: undefined } },
   });
   assertEquals(Object.keys(plugin.actions), ["indexKnowledgeDocument"]);
   assertEquals(plugin.resources.tools, {});

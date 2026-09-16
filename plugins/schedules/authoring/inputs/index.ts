@@ -45,14 +45,14 @@ function envelope<TType extends string, TPayload extends object>(
     deduplicationId,
     ...payload
   } = input;
-  return Object.freeze({
+  return ({
     type,
-    payload: Object.freeze(payload) as TPayload,
+    payload: payload as TPayload,
     ...(namespace ? { namespace } : {}),
     ...(correlationId ? { correlationId } : {}),
     ...(causationId ? { causationId } : {}),
     ...(deduplicationId ? { deduplicationId } : {}),
-  });
+  } as const);
 }
 
 /** Typed clock input. Runtime treats the result as an opaque envelope. */

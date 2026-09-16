@@ -71,6 +71,8 @@ export const addThreadParticipantAction: ActionDefinition<
     if (!participantRecord) {
       throw new Error(`Participant '${ensured.id}' was not created.`);
     }
-    return Object.freeze({ thread, participant: participantRecord });
+    return ({ thread, participant: participantRecord } as const);
   },
 });
+
+export default addThreadParticipantAction;

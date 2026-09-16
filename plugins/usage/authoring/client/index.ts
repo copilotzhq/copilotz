@@ -40,12 +40,10 @@ export function createUsageClient(
     }
     return payload as T;
   }
-  return Object.freeze(
-    {
-      analytics: ({ filters, groupBy, interval, signal }) =>
-        get("", { ...filters, groupBy, interval }, signal),
-      attempts: ({ filters, after, limit, signal }) =>
-        get("/attempts", { ...filters, after, limit }, signal),
-    } satisfies UsageDataSource,
-  );
+  return ({
+    analytics: ({ filters, groupBy, interval, signal }) =>
+      get("", { ...filters, groupBy, interval }, signal),
+    attempts: ({ filters, after, limit, signal }) =>
+      get("/attempts", { ...filters, after, limit }, signal),
+  } satisfies UsageDataSource);
 }

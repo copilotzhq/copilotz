@@ -1,4 +1,4 @@
 import { assertEquals } from "@std/assert";
-import { createSetMemoryStatusAction } from "./index.ts";
+import { setMemoryStatusAction } from "./index.ts";
 Deno.test("status action is named", () =>
-  assertEquals(createSetMemoryStatusAction().id, "copilotz.memory.status.set"));
+  assertEquals(setMemoryStatusAction.id, "copilotz.memory.status.set"));

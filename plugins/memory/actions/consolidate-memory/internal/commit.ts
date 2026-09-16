@@ -68,21 +68,15 @@ export async function commitMemoryConsolidation(
       ...checkpointPatch,
     }, { operationKey: `memory-checkpoint:ready:${input.checkpointId}` });
 
-    return Object.freeze({
+    return ({
       checkpointId: input.checkpointId,
-      createdRecordIds: Object.freeze(
-        input.records.flatMap((write) =>
-          write.operation === "create" ? [write.record.id] : []
-        ),
+      createdRecordIds: input.records.flatMap((write) =>
+        write.operation === "create" ? [write.record.id] : []
       ),
-      updatedRecordIds: Object.freeze(
-        input.records.flatMap((write) =>
-          write.operation === "update" ? [write.id] : []
-        ),
+      updatedRecordIds: input.records.flatMap((write) =>
+        write.operation === "update" ? [write.id] : []
       ),
-      relationIds: Object.freeze(
-        input.relations.map((relation) => relation.id),
-      ),
-    });
+      relationIds: input.relations.map((relation) => relation.id),
+    } as const);
   }, { operationKey: `memory:${input.checkpointId}:commit` });
 }

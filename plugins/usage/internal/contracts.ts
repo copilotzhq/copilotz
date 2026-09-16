@@ -172,9 +172,3 @@ export interface UsageOptions {
   /** Optional final veto/transform before the ledger row is written. */
   onRecord?: UsageOnRecord;
 }
-
-/** Composition options for the concrete Usage workflow plugin. */
-export interface CreateUsageWorkflowPluginOptions extends UsageOptions {
-  id?: string;
-  version?: string;
-}

@@ -1,3 +1,6 @@
+import type { SearchCodeResult } from "../internal/fs-utils.ts";
+import type { ActionContext } from "@copilotz/copilotz/actions";
+import type { ActionDefinition } from "@copilotz/copilotz/actions";
 /**
  * Defines the bounded Search Code Action.
  *
@@ -23,7 +26,17 @@ interface SearchCodeParams {
   includeMatch?: boolean;
 }
 
-export const searchCodeAction = defineAction({
+export const searchCodeAction: ActionDefinition<
+  SearchCodeParams,
+  {
+    directory: string;
+    query: string;
+    results: SearchCodeResult[];
+    truncated: boolean;
+    suggestion?: string;
+  },
+  ActionContext
+> = defineAction({
   id: "copilotz.tools.deno.search_code",
   inputSchema: {
     type: "object",

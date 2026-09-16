@@ -20,16 +20,15 @@ import { minimaxProvider } from "../minimax/index.ts";
 import { ollamaProvider } from "../ollama/index.ts";
 import { openaiProvider } from "../openai/index.ts";
 
-const PROVIDERS: Readonly<Record<LlmBuiltinProvider, ProviderFactory>> = Object
-  .freeze({
-    openai: openaiProvider,
-    anthropic: anthropicProvider,
-    gemini: geminiProvider,
-    groq: groqProvider,
-    deepseek: deepseekProvider,
-    minimax: minimaxProvider,
-    ollama: ollamaProvider,
-  });
+const PROVIDERS: Readonly<Record<LlmBuiltinProvider, ProviderFactory>> = {
+  openai: openaiProvider,
+  anthropic: anthropicProvider,
+  gemini: geminiProvider,
+  groq: groqProvider,
+  deepseek: deepseekProvider,
+  minimax: minimaxProvider,
+  ollama: ollamaProvider,
+} as const;
 
 /** Materializes one resolved built-in provider configuration without exposing it. */
 export function materializeBuiltinModel(

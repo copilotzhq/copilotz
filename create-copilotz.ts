@@ -55,11 +55,11 @@ export async function createCopilotz(
   if (options.role === "worker") {
     const { role: _role, ...workerOptions } = options;
     const worker = await createWorker(workerOptions);
-    return Object.freeze({
+    return ({
       ready: worker.ready.then(() => undefined),
       closed: worker.closed.then(() => undefined),
       close: (reason?: string) => worker.stop(reason),
-    });
+    } as const);
   }
 
   if (options.role === "gateway") {
@@ -76,7 +76,7 @@ export async function createCopilotz(
         : (_request: Request) =>
           Promise.resolve(new Response(null, { status: 404 }));
       gateway.installFetchFallback(fetch);
-      return Object.freeze({
+      return ({
         send: gateway.send,
         attach: gateway.attach,
         operationStatus: gateway.operationStatus,
@@ -87,7 +87,7 @@ export async function createCopilotz(
         observe: gateway.observe,
         close: gateway.close,
         fetch,
-      });
+      } as const);
     } catch (error) {
       await gateway.close("copilotz_gateway_initialization_failed").catch(() =>
         undefined

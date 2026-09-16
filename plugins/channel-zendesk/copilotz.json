@@ -1,0 +1,9 @@
+{
+  "id": "@copilotz/channel-zendesk",
+  "version": "4.0.0",
+  "include": [
+    "resources/channels/zendesk/index.ts",
+    "adapters/channels/zendesk/index.ts",
+    "dependencies/channels/index.ts"
+  ]
+}

@@ -10,7 +10,7 @@ It decouples the fast ingestion action from asynchronous indexing work.
 
 ## How to use it
 
-It is installed automatically by `createKnowledgePlugin`.
+It is installed automatically by `knowledgePlugin`.
 
 ## How it works
 

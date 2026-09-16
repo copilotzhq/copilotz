@@ -102,13 +102,13 @@ export function createDefaultKnowledgeSourceLoader(
     }
     const mediaType = response.headers.get("content-type")?.split(";")[0]
       ?.trim() || "text/plain";
-    return Object.freeze({
+    return ({
       bytes,
       mediaType,
       sourceType: "url",
       sourceUri: uri,
       title: inferredUrlTitle(uri),
-    });
+    } as const);
   };
 }
 
@@ -134,3 +134,8 @@ export function createDefaultKnowledgeTextExtractor(): KnowledgeTextExtractor {
     );
   };
 }
+
+export const defaultKnowledgeSourceLoader =
+  createDefaultKnowledgeSourceLoader();
+export const defaultKnowledgeTextExtractor =
+  createDefaultKnowledgeTextExtractor();

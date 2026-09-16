@@ -6,6 +6,7 @@
 export {
   BUILT_IN_CORE_TOOL_IDS,
   type BuiltInCoreToolId,
-  createBuiltInToolsPlugin,
-  type CreateBuiltInToolsPluginOptions,
+  builtInToolsPlugin,
 } from "./plugin.ts";
+
+export * from "./resources/index.ts";

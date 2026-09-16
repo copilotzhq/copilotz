@@ -1,17 +1,19 @@
+import { definePlugin } from "@copilotz/copilotz/plugins";
+import { fetchTextTool } from "./resources/index.ts";
 /**
  * Verifies Web Tool composition and runtime-neutral boundaries.
  *
  * @module
  */
 
-import { assert, assertEquals, assertRejects, assertThrows } from "@std/assert";
+import { assert, assertEquals, assertRejects } from "@std/assert";
 import type { ActionContext } from "@copilotz/copilotz/actions";
 
 import type { ToolResource } from "../tools/authoring/define-tool/index.ts";
-import { createWebToolsPlugin, WEB_TOOL_IDS } from "./plugin.ts";
+import { WEB_TOOL_IDS, webToolsPlugin } from "./plugin.ts";
 
 Deno.test("Web tools compose as stable plugin resources", () => {
-  const plugin = createWebToolsPlugin();
+  const plugin = webToolsPlugin;
   const tools = plugin.resources.tools as
     | Readonly<Record<string, ToolResource>>
     | undefined;
@@ -21,30 +23,19 @@ Deno.test("Web tools compose as stable plugin resources", () => {
     [...WEB_TOOL_IDS],
   );
   assert(
-    Object.values(tools ?? {}).every((value) =>
-      !("execute" in value) && Object.isFrozen(value)
-    ),
+    Object.values(tools ?? {}).every((value) => !("execute" in value)),
   );
   assertEquals(Object.keys(plugin.actions), [...WEB_TOOL_IDS]);
 });
 
-Deno.test("Web tool selection is explicit and validated", () => {
-  assertEquals(
-    Object.keys(
-      createWebToolsPlugin({ include: ["fetch_text"] }).resources.tools ?? {},
-    ),
-    ["fetch_text"],
-  );
-  assertThrows(
-    () => createWebToolsPlugin({ include: ["fetch_text", "fetch_text"] }),
-    TypeError,
-    "duplicate IDs",
-  );
-  assertThrows(
-    () => createWebToolsPlugin({ include: ["missing" as "fetch_text"] }),
-    TypeError,
-    "Unknown Web tool",
-  );
+Deno.test("Web tool selection registers only explicit declarations", () => {
+  const plugin = definePlugin({
+    id: "test.web",
+    version: "1",
+    resources: { tools: { fetch: fetchTextTool } },
+  });
+  assertEquals(Object.keys(plugin.actions), ["fetch"]);
+  assertEquals(plugin.resources.tools.fetch.action, "fetch");
 });
 
 Deno.test("Web tool plugin excludes filesystem, process, and class APIs", async () => {
@@ -65,7 +56,7 @@ Deno.test("Web tool plugin excludes filesystem, process, and class APIs", async 
 });
 
 Deno.test("Web Actions preserve caller cancellation as AbortError", async () => {
-  const plugin = createWebToolsPlugin();
+  const plugin = webToolsPlugin;
   const originalFetch = globalThis.fetch;
   globalThis.fetch = (_input, init) =>
     new Promise((_resolve, reject) => {

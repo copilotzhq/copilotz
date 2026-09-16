@@ -25,3 +25,5 @@ export const scheduledJobsTickInputProcessor: Processor<
     });
   },
 });
+
+export default scheduledJobsTickInputProcessor;

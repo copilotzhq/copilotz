@@ -25,3 +25,5 @@ export const runScheduledJobNowAction: ActionDefinition<
   id: "copilotz.schedules.run-now",
   execute: executeRunScheduledJobNow,
 });
+
+export default runScheduledJobNowAction;

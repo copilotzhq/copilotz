@@ -189,7 +189,7 @@ export async function prepareLlmTranscript(
       for (const record of records) resolved.set(record.id, record);
     }
   }
-  return Object.freeze(transcript.map((message, index) => {
+  return (transcript.map((message, index) => {
     const record = resolved.get(sources[index]);
     if (!record) throw new Error("Message history is no longer available.");
     const common = {

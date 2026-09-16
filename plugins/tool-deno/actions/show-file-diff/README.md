@@ -10,8 +10,7 @@ It lets agents inspect pending changes before deciding whether to restore them.
 
 ## How to use it
 
-Compose it through `createWorkspaceToolsPlugin()` using the `show_file_diff`
-alias.
+Compose it through `denoToolsPlugin` using the `show_file_diff` alias.
 
 ## How it works
 

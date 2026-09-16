@@ -1,10 +1,12 @@
+import { defineServerFacade as fixtureServerFacade } from "@copilotz/copilotz/server";
+import { definePlugin as defineFixturePlugin } from "@copilotz/copilotz/plugins";
 import { assertEquals } from "@std/assert";
 import { definePlugin } from "@copilotz/copilotz/plugins";
 import { createCopilotzApplication } from "../../../../runtime/application/index.ts";
 import { createTestDatabase } from "../../../../runtime/testing/ominipg.ts";
 import { createServerFacadeFetchHandler } from "../../../../server/facade.ts";
-import { createServerPlugin } from "../../../server/index.ts";
-import { createUsageWorkflowPlugin } from "../../plugin.ts";
+import { serverPlugin } from "../../../server/index.ts";
+import { usagePlugin } from "../../plugin.ts";
 import { createUsageClient } from "../client/index.ts";
 import { createUsageHttpAdapter } from "./index.ts";
 
@@ -18,25 +20,36 @@ Deno.test("Usage HTTP analytics keeps known zero distinct from unknown and inter
     namespace: "tenant-a",
     databaseSchema: "usage_http_analytics",
     plugins: [
-      createUsageWorkflowPlugin({ enabled: false }),
+      defineFixturePlugin({
+        ...usagePlugin,
+        resources: { usage: { config: { enabled: false } } },
+        adapters: { usage: { hooks: { enabled: false } } },
+      }),
       definePlugin({
         id: "test.usage.http",
         version: "1",
         adapters: { http: { usage: createUsageHttpAdapter() } },
       }),
-      createServerPlugin({
-        authenticate(request) {
-          if (!request.headers.get("authorization")) {
-            return Response.json({ error: { code: "unauthorized" } }, {
-              status: 401,
-            });
-          }
-          return { namespace: "tenant-a", actor: { id: "reader" } };
-        },
-        authorize() {
-          return {
-            collections: { usage: { where: { threadId: "thread-a" } } },
-          };
+      defineFixturePlugin({
+        ...serverPlugin,
+        resources: {
+          server: {
+            default: fixtureServerFacade({
+              authenticate(request) {
+                if (!request.headers.get("authorization")) {
+                  return Response.json({ error: { code: "unauthorized" } }, {
+                    status: 401,
+                  });
+                }
+                return { namespace: "tenant-a", actor: { id: "reader" } };
+              },
+              authorize() {
+                return {
+                  collections: { usage: { where: { threadId: "thread-a" } } },
+                };
+              },
+            }),
+          },
         },
       }),
     ],

@@ -1,9 +1,11 @@
+import { defineServerFacade as fixtureServerFacade } from "@copilotz/copilotz/server";
+import { definePlugin as defineFixturePlugin } from "@copilotz/copilotz/plugins";
 import { assertEquals, assertRejects } from "@std/assert";
 import { defineAction } from "@copilotz/copilotz/actions";
 import { definePlugin } from "@copilotz/copilotz/plugins";
 import { createCopilotzApplication } from "../runtime/application/index.ts";
 import { createTestDatabase } from "../runtime/testing/ominipg.ts";
-import { createServerPlugin } from "../plugins/server/index.ts";
+import { serverPlugin } from "../plugins/server/index.ts";
 import { createServerFacadeFetchHandler } from "./facade.ts";
 import { CopilotzHttpError, createCopilotzClient } from "../client/index.ts";
 
@@ -29,10 +31,17 @@ Deno.test("HTTP admission rejects a 33rd active operation but recovers identical
           }),
         },
       }),
-      createServerPlugin({
-        authenticate: () => ({ actor: { id: "owner" } }),
-        authorize: () => ({ admission: { key: "conversation" } }),
-        expose: { collections: false, channels: false },
+      defineFixturePlugin({
+        ...serverPlugin,
+        resources: {
+          server: {
+            default: fixtureServerFacade({
+              authenticate: () => ({ actor: { id: "owner" } }),
+              authorize: () => ({ admission: { key: "conversation" } }),
+              expose: { collections: false, channels: false },
+            }),
+          },
+        },
       }),
     ],
   });

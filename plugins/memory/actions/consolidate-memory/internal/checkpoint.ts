@@ -14,7 +14,7 @@ import {
   type MemorySpaceDescriptor,
   renderLongTermMemory,
 } from "../../../authoring/consolidation/index.ts";
-import type { LongTermMemoryConfig } from "../../../resources/config/index.ts";
+import type { LongTermMemoryConfig } from "../../../resources/memory/config/index.ts";
 import type {
   MemoryActionContext,
   MemoryProcessorContext,

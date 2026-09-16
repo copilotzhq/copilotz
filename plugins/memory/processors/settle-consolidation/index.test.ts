@@ -1,8 +1,8 @@
 import { assertEquals } from "@std/assert";
-import { createSettleMemoryConsolidationProcessor } from "./index.ts";
+import { settleMemoryConsolidationProcessor } from "./index.ts";
 
 Deno.test("consolidation settlement is detached and Memory-owned", () => {
-  const processor = createSettleMemoryConsolidationProcessor();
+  const processor = settleMemoryConsolidationProcessor;
   assertEquals(processor.id, "copilotz.memory.settle-consolidation");
   assertEquals(processor.settlement, "detached");
 });

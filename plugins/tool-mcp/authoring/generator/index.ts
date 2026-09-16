@@ -15,9 +15,10 @@ import {
   type ContentInput,
   type ContentRef,
 } from "@copilotz/copilotz/content";
-import type { CopilotzPlugin } from "@copilotz/copilotz/plugins";
+
 import {
   defineTool,
+  type ToolDefinition,
   type ToolResource,
 } from "../../../tools/authoring/define-tool/index.ts";
 import {
@@ -30,18 +31,19 @@ import {
   cloneLosslessJson,
 } from "../../../tools/authoring/internal/lifecycle-json.ts";
 import type { MCPServer } from "../../../tools/authoring/integration-resources/index.ts";
-import { composeMcpToolsPlugin } from "../../plugin.ts";
+
 import type {
-  CreateMcpToolsPluginOptions,
+  ConnectMcpRuntime,
   McpRuntimeConnection,
   McpToolDescriptor,
+  PrepareMcpToolsOptions,
 } from "../../internal/contracts.ts";
 
 export type {
   ConnectMcpRuntime,
-  CreateMcpToolsPluginOptions,
   McpRuntimeConnection,
   McpToolDescriptor,
+  PrepareMcpToolsOptions,
 } from "../../internal/contracts.ts";
 
 type GeneratedMcpTool = Readonly<{
@@ -53,7 +55,7 @@ type GeneratedMcpTool = Readonly<{
 function record(value: unknown): Readonly<Record<string, unknown>> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as Readonly<Record<string, unknown>>
-    : Object.freeze({});
+    : ({} as const);
 }
 
 function requiredText(value: unknown, name: string): string {
@@ -65,7 +67,7 @@ function requiredText(value: unknown, name: string): string {
 
 function inputSchema(value: unknown): ActionSchema {
   if (value === undefined) {
-    return Object.freeze({ type: "object", additionalProperties: true });
+    return ({ type: "object", additionalProperties: true } as const);
   }
   const cloned = cloneLosslessJson(value, "MCP Tool input schema");
   if (!cloned || typeof cloned !== "object" || Array.isArray(cloned)) {
@@ -97,13 +99,13 @@ async function lowerMcpResult(
   const bodies: ContentInput[] = [];
   const slots = new WeakMap<object, number>();
   const slot = (index: number): object => {
-    const value = Object.freeze({});
+    const value = {} as const;
     slots.set(value, index);
     return value;
   };
   const normalize = (candidate: unknown): unknown => {
     if (Array.isArray(candidate)) {
-      return Object.freeze(candidate.map(normalize));
+      return (candidate.map(normalize));
     }
     if (!candidate || typeof candidate !== "object") return candidate;
     const source = candidate as Record<string, unknown>;
@@ -114,21 +116,23 @@ async function lowerMcpResult(
       const mediaType = requiredText(source.mimeType, "MCP media MIME type");
       const name = optionalText(source.name);
       const index = bodies.length;
-      bodies.push(Object.freeze({
-        type: source.type,
-        bytes: base64ToBytes(source.data),
-        mediaType,
-        role: "tool.output",
-        disposition: "attachment",
-        ...(name ? { name } : {}),
-      }));
+      bodies.push(
+        {
+          type: source.type,
+          bytes: base64ToBytes(source.data),
+          mediaType,
+          role: "tool.output",
+          disposition: "attachment",
+          ...(name ? { name } : {}),
+        } as const,
+      );
       const entries = Object.entries(source)
         .filter(([key]) => key !== "data")
         .map(([key, child]) => [key, normalize(child)] as const);
-      return Object.freeze({
+      return ({
         ...Object.fromEntries(entries),
         asset: slot(index),
-      });
+      } as const);
     }
     if (source.type === "resource") {
       const embedded = source.resource;
@@ -142,33 +146,35 @@ async function lowerMcpResult(
           "application/octet-stream";
         const name = optionalText(resource.name);
         const index = bodies.length;
-        bodies.push(Object.freeze({
-          type: contentKind(mediaType),
-          bytes: base64ToBytes(resource.blob as string),
-          mediaType,
-          role: "tool.output",
-          disposition: "attachment",
-          ...(name ? { name } : {}),
-        }));
+        bodies.push(
+          {
+            type: contentKind(mediaType),
+            bytes: base64ToBytes(resource.blob as string),
+            mediaType,
+            role: "tool.output",
+            disposition: "attachment",
+            ...(name ? { name } : {}),
+          } as const,
+        );
         const resourceEntries = Object.entries(resource)
           .filter(([key]) => key !== "blob")
           .map(([key, child]) => [key, normalize(child)] as const);
         const outerEntries = Object.entries(source)
           .filter(([key]) => key !== "resource")
           .map(([key, child]) => [key, normalize(child)] as const);
-        return Object.freeze({
+        return ({
           ...Object.fromEntries(outerEntries),
-          resource: Object.freeze({
+          resource: {
             ...Object.fromEntries(resourceEntries),
             asset: slot(index),
-          }),
-        });
+          } as const,
+        } as const);
       }
     }
     const entries = Object.entries(source).map(([key, child]) =>
       [key, normalize(child)] as const
     );
-    return Object.freeze(Object.fromEntries(entries));
+    return (Object.fromEntries(entries));
   };
   const template = normalize(value);
   if (bodies.length === 0) return template;
@@ -187,9 +193,9 @@ async function lowerMcpResult(
       const index = slots.get(candidate);
       if (index !== undefined) return refs[index] as ContentRef;
       if (Array.isArray(candidate)) {
-        return Object.freeze(candidate.map(substitute));
+        return (candidate.map(substitute));
       }
-      return Object.freeze(Object.fromEntries(
+      return (Object.fromEntries(
         Object.entries(candidate).map(([key, child]) => [
           key,
           substitute(child),
@@ -212,7 +218,7 @@ function allowedToolNames(server: MCPServer): ReadonlySet<string> | undefined {
 }
 
 async function withConnection<T>(
-  connect: CreateMcpToolsPluginOptions["connect"],
+  connect: PrepareMcpToolsOptions["connect"],
   server: MCPServer,
   signal: AbortSignal | undefined,
   operation: (connection: McpRuntimeConnection) => Promise<T>,
@@ -232,7 +238,6 @@ async function withConnection<T>(
 function entryFrom(
   server: MCPServer,
   descriptor: McpToolDescriptor,
-  connect: CreateMcpToolsPluginOptions["connect"],
 ): GeneratedMcpTool {
   const serverId = requiredText(server.id, "MCP server id");
   const serverName = requiredText(server.name, "MCP server name");
@@ -244,9 +249,18 @@ function entryFrom(
     }`,
     inputSchema: inputSchema(descriptor.inputSchema),
     async execute(args: unknown, context: ActionContext): Promise<unknown> {
+      const capability = context.adapters.mcp?.[serverId] as {
+        connect: ConnectMcpRuntime;
+        server?: MCPServer;
+      } | undefined;
+      if (!capability?.connect) {
+        throw new TypeError(
+          `MCP connector is required in adapters.mcp.${serverId}.`,
+        );
+      }
       const result = await withConnection(
-        connect,
-        server,
+        capability.connect,
+        capability.server ?? { id: serverId, name: serverName },
         context.signal,
         (connection) =>
           connection.callTool(toolName, record(args), context.signal),
@@ -265,12 +279,12 @@ function entryFrom(
     ...(history ? { history } : {}),
     metadata: { serverId, mcpTool: toolName },
   });
-  return Object.freeze({ alias, action, tool });
+  return ({ alias, action, tool } as const);
 }
 
 async function entriesForServer(
   server: MCPServer,
-  options: CreateMcpToolsPluginOptions,
+  options: PrepareMcpToolsOptions,
 ): Promise<readonly GeneratedMcpTool[]> {
   const descriptors = await withConnection(
     options.connect,
@@ -279,17 +293,15 @@ async function entriesForServer(
     (connection) => connection.listTools(options.signal),
   );
   const allowed = allowedToolNames(server);
-  return Object.freeze(
-    descriptors
-      .filter((descriptor) => !allowed || allowed.has(descriptor.name))
-      .map((descriptor) => entryFrom(server, descriptor, options.connect)),
-  );
+  return (descriptors
+    .filter((descriptor) => !allowed || allowed.has(descriptor.name))
+    .map((descriptor) => entryFrom(server, descriptor)));
 }
 
 /** Discovers all MCP Tools before registry composition. */
-export async function createMcpToolsPlugin(
-  options: CreateMcpToolsPluginOptions,
-): Promise<CopilotzPlugin> {
+export async function prepareMcpTools(
+  options: PrepareMcpToolsOptions,
+): Promise<Readonly<Record<string, ToolDefinition>>> {
   if (typeof options?.connect !== "function") {
     throw new TypeError("An MCP runtime connector is required.");
   }
@@ -311,5 +323,18 @@ export async function createMcpToolsPlugin(
       entries.push(entry);
     }
   }
-  return composeMcpToolsPlugin(options, entries);
+  return Object.fromEntries(
+    entries.map(
+      (entry) => [
+        entry.alias,
+        defineTool({
+          ...entry.action,
+          name: entry.tool.name,
+          description: entry.tool.description,
+          history: entry.tool.history,
+          metadata: entry.tool.metadata,
+        }),
+      ],
+    ),
+  );
 }

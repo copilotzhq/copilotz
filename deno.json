@@ -1,7 +1,7 @@
 {
   "name": "@copilotz/copilotz",
   "description": "Copilotz Lib",
-  "version": "0.73.0",
+  "version": "0.74.0",
   "license": "MIT",
   "exports": {
     ".": "./index.ts",
@@ -45,7 +45,8 @@
     "./client": "./client/index.ts",
     "./core/client": "./plugins/core/authoring/client/index.ts",
     "./core/server": "./plugins/core/authoring/server/index.ts",
-    "./usage/client": "./plugins/usage/authoring/client/index.ts"
+    "./usage/client": "./plugins/usage/authoring/client/index.ts",
+    "./build": "./build/index.ts"
   },
   "publish": {
     "include": [
@@ -63,7 +64,9 @@
       "migration/v4/**/*.ts",
       "runtime/**/*.ts",
       "server/**/*.ts",
-      "client/**/*.ts"
+      "client/**/*.ts",
+      "build/**/*.ts",
+      "plugins/**/copilotz.json"
     ],
     "exclude": [
       "**/*.test.ts",
@@ -143,7 +146,9 @@
     "@copilotz/copilotz/client": "./client/index.ts",
     "@copilotz/copilotz/core/client": "./plugins/core/authoring/client/index.ts",
     "@copilotz/copilotz/core/server": "./plugins/core/authoring/server/index.ts",
-    "@copilotz/copilotz/usage/client": "./plugins/usage/authoring/client/index.ts"
+    "@copilotz/copilotz/usage/client": "./plugins/usage/authoring/client/index.ts",
+    "@copilotz/copilotz/build": "./build/index.ts",
+    "typescript": "npm:typescript@5.8.2"
   },
   "minimumDependencyAge": {
     "age": "P1D",
@@ -163,12 +168,20 @@
     "smoke:cloudflare-build": "npx --yes wrangler@4.120.0 deploy --dry-run --config contracts/runtime/wrangler.jsonc --outdir dist/cloudflare-smoke",
     "check:forbidden": "deno run --allow-read scripts/check-forbidden-symbols.ts",
     "check:boundaries": "deno run --allow-read scripts/check-plugin-boundaries.ts",
-    "check:plugin-layout": "deno run --allow-read scripts/check-plugin-layout.ts",
+    "check:plugin-layout": "deno run --allow-read --allow-env scripts/check-plugin-layout.ts",
     "check:surface": "deno run --allow-read --allow-run=deno scripts/check-package-surface.ts",
-    "check": "deno task check:forbidden && deno task check:boundaries && deno task check:plugin-layout && deno task check:surface",
+    "check": "deno task check:forbidden && deno task check:boundaries && deno task check:plugin-layout && deno task check:surface && deno task check:generated",
     "publish:dry-run": "deno publish --dry-run --allow-dirty",
-    "test": "deno test --allow-all contracts/package runtime plugins migration/v4 server client scripts",
-    "test:contracts": "deno test --allow-all contracts/package"
+    "test": "deno test --allow-all contracts/package runtime plugins migration/v4 server client scripts build",
+    "test:contracts": "deno test --allow-all contracts/package",
+    "build:plugins": "deno run -A scripts/build-plugins.ts",
+    "check:generated": "deno run -A scripts/build-plugins.ts --check",
+    "smoke:authoring": "deno run -A build/index.ts build contracts/authoring && deno run -A contracts/authoring/run.ts"
   },
-  "lock": false
+  "lock": false,
+  "fmt": {
+    "exclude": [
+      "**/plugin.generated.ts"
+    ]
+  }
 }

@@ -25,20 +25,18 @@ function optionalText(value: unknown): string | undefined {
 }
 
 function stringArray(value: unknown): readonly string[] {
-  if (!Array.isArray(value)) return Object.freeze([]);
-  return Object.freeze(
-    value.filter((item): item is string =>
-      typeof item === "string" && Boolean(item.trim())
-    ),
-  );
+  if (!Array.isArray(value)) return ([] as const);
+  return (value.filter((item): item is string =>
+    typeof item === "string" && Boolean(item.trim())
+  ));
 }
 
 function contentSequence(value: unknown): ContentSequence {
-  if (!Array.isArray(value)) return Object.freeze([]);
+  if (!Array.isArray(value)) return ([] as const);
   if (!value.every(isContentRef)) {
     throw new TypeError("Message content contains invalid reference metadata.");
   }
-  return Object.freeze(value);
+  return value;
 }
 
 function requireScopedCollection(
@@ -94,15 +92,15 @@ export function projectActiveMessageBranch<T extends { id: string }>(
     message.id === branch.headMessageId
   );
   if (rootIndex < 0 || headIndex <= rootIndex) return messages;
-  return Object.freeze([
+  return ([
     ...messages.slice(0, rootIndex),
     messages[headIndex],
     ...messages.slice(headIndex + 1),
-  ]);
+  ] as const);
 }
 
 export function mapParticipantRecord(record: CollectionRecord): Participant {
-  return Object.freeze({
+  return ({
     id: String(record.id),
     namespace: String(record.namespace),
     externalId: String(record.externalId ?? record.id),
@@ -117,7 +115,7 @@ export function mapParticipantRecord(record: CollectionRecord): Participant {
     metadata: asRecord(record.metadata),
     createdAt: String(record.createdAt),
     updatedAt: String(record.updatedAt),
-  });
+  } as const);
 }
 
 /** Preserve prepared content and reasoning types through the same message projection. */
@@ -140,7 +138,7 @@ export function mapMessageRecord(
   record: CollectionRecord,
   sender: Participant,
 ): ConversationMessage {
-  return Object.freeze({
+  return ({
     id: String(record.id),
     namespace: String(record.namespace),
     threadId: String(record.threadId),
@@ -153,14 +151,14 @@ export function mapMessageRecord(
       : {}),
     createdAt: String(record.createdAt),
     updatedAt: String(record.updatedAt),
-  });
+  } as const);
 }
 
 export function mapThreadRecord(
   record: CollectionRecord,
   participants: readonly Participant[],
 ): ConversationThread {
-  return Object.freeze({
+  return ({
     id: String(record.id),
     namespace: String(record.namespace),
     ...(optionalText(record.externalId)
@@ -194,7 +192,7 @@ export function mapThreadRecord(
       : {}),
     createdAt: String(record.createdAt),
     updatedAt: String(record.updatedAt),
-  });
+  } as const);
 }
 
 export async function loadParticipantRecord(
@@ -243,7 +241,7 @@ export async function listThreadMessageRecords(
       mapParticipantRecord(record),
     ]),
   );
-  return Object.freeze(window.records.map((record) => {
+  return (window.records.map((record) => {
     const sender = participants.get(String(record.senderId));
     if (!sender) {
       throw new Error(`Message '${record.id}' sender was not found.`);
@@ -270,7 +268,7 @@ async function activeBranchBounds(
     String(head.threadId) !== threadId ||
     compareThreadMessageRecords(head, root) <= 0
   ) return undefined;
-  return Object.freeze({ root, head });
+  return ({ root, head } as const);
 }
 
 function activeInBranch(
@@ -485,23 +483,23 @@ export async function loadThreadMessageRecordWindow(
   const anchor = currentAnchor && String(currentAnchor.threadId) === threadId
     ? currentAnchor
     : undefined;
-  const base = Object.freeze({
+  const base = ({
     threadRecord,
-    participantRecords: Object.freeze([]),
-    records: Object.freeze([]),
+    participantRecords: [] as const,
+    records: [] as const,
     anchorActive: options.anchor === undefined,
     ...(options.historyScopeId
       ? { historyScopeId: options.historyScopeId }
       : {}),
     ...(options.internalOnly ? { internalOnly: true } : {}),
     ...(options.viewerIds?.length
-      ? { viewerIds: Object.freeze([...options.viewerIds]) }
+      ? { viewerIds: [...options.viewerIds] as const }
       : {}),
     ...(anchor ? { anchor } : {}),
     ...(after ? { after } : {}),
     ...(from ? { from } : {}),
     ...(branch ? { branch } : {}),
-  }) satisfies ThreadMessageRecordWindow;
+  } as const) satisfies ThreadMessageRecordWindow;
   let anchorActive = options.anchor === undefined || Boolean(
     anchor &&
       String(anchor.createdAt) === String(options.anchor.createdAt) &&
@@ -555,28 +553,26 @@ export async function loadThreadMessageRecordWindow(
     ...stringArray(threadRecord.participantIds),
     ...selected.map((record) => String(record.senderId)),
   ]);
-  const participantRecords = Object.freeze(
-    (await Promise.all(
-      [...participantIds].map((id) => participants.get({ id })),
-    )).filter((record): record is CollectionRecord => record !== null),
-  );
-  return Object.freeze({
+  const participantRecords = (await Promise.all(
+    [...participantIds].map((id) => participants.get({ id })),
+  )).filter((record): record is CollectionRecord => record !== null);
+  return ({
     threadRecord,
     participantRecords,
-    records: Object.freeze(selected),
+    records: selected,
     anchorActive,
     ...(options.historyScopeId
       ? { historyScopeId: options.historyScopeId }
       : {}),
     ...(options.internalOnly ? { internalOnly: true } : {}),
     ...(options.viewerIds?.length
-      ? { viewerIds: Object.freeze([...options.viewerIds]) }
+      ? { viewerIds: [...options.viewerIds] as const }
       : {}),
     ...(anchor ? { anchor } : {}),
     ...(after ? { after } : {}),
     ...(from ? { from } : {}),
     ...(branch ? { branch } : {}),
-  });
+  } as const);
 }
 
 export async function loadMessageRecord(

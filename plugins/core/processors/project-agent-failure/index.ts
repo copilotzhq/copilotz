@@ -90,3 +90,5 @@ export const projectAgentFailureProcessor: Processor<CoreToolProcessorContext> =
       });
     },
   });
+
+export default projectAgentFailureProcessor;

@@ -32,9 +32,7 @@ export function queryTexts(
     ? raw.split(",")
     : [];
   const normalized = values.map((value) => value.trim()).filter(Boolean);
-  return normalized.length
-    ? Object.freeze([...new Set(normalized)])
-    : undefined;
+  return normalized.length ? ([...new Set(normalized)] as const) : undefined;
 }
 
 export function queryLimit(
@@ -108,7 +106,7 @@ export async function allThreads(
       String(right.lastEventAt ?? right.updatedAt),
     )
   );
-  return Object.freeze(values);
+  return values;
 }
 
 export async function allParticipants(
@@ -130,7 +128,7 @@ export async function allCollectionRecords(
   where?: Readonly<Record<string, unknown>>,
 ): Promise<readonly CollectionRecord[]> {
   const collection = context.collections[name];
-  if (!collection) return Object.freeze([]);
+  if (!collection) return ([] as const);
   const result: CollectionRecord[] = [];
   let after: string | undefined;
   do {
@@ -142,7 +140,7 @@ export async function allCollectionRecords(
     result.push(...page);
     after = page.length === 1_000 ? page.at(-1)?.id : undefined;
   } while (after);
-  return Object.freeze(result);
+  return result;
 }
 
 function resolvedText(value: ResolvedContent): string {
@@ -180,6 +178,6 @@ export function pageInfo<T extends { id: string }>(
   limit: number,
 ): Readonly<{ next?: string; hasMore: boolean }> {
   return values.length === limit
-    ? Object.freeze({ next: values.at(-1)?.id, hasMore: true })
-    : Object.freeze({ hasMore: false });
+    ? ({ next: values.at(-1)?.id, hasMore: true } as const)
+    : ({ hasMore: false } as const);
 }

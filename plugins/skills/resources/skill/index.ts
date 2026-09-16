@@ -140,12 +140,12 @@ function descriptor(value: SkillFileDescriptor): SkillFileDescriptor {
   ) {
     throw new TypeError(`Skill file '${path}' has an invalid digest.`);
   }
-  return Object.freeze({
+  return ({
     path,
     mediaType: value.mediaType.trim(),
     ...(value.size !== undefined ? { size: value.size } : {}),
     ...(value.digest ? { digest: value.digest.trim() } : {}),
-  });
+  } as const);
 }
 
 function isReadableStream(value: unknown): value is ReadableStream<Uint8Array> {
@@ -170,7 +170,7 @@ export function defineSkill(input: DefineSkillInput): Skill {
   if (!Array.isArray(input.files)) {
     throw new TypeError(`Skill '${manifest.name}' files must be an array.`);
   }
-  const files = Object.freeze(input.files.map(descriptor));
+  const files = input.files.map(descriptor);
   const paths = files.map((file) => file.path);
   if (new Set(paths).size !== paths.length) {
     throw new TypeError(
@@ -197,10 +197,10 @@ export function defineSkill(input: DefineSkillInput): Skill {
     }
     const body = fileBody(await input.read(path, options), path);
     abort(options.signal);
-    return Object.freeze({ ...file, body });
+    return ({ ...file, body } as const);
   };
 
-  return Object.freeze({ ...manifest, files, read });
+  return ({ ...manifest, files, read } as const);
 }
 
 function byteSize(value: SkillFileBody): number | undefined {
@@ -225,25 +225,25 @@ function inlineFile(
     if (typeof configured.load !== "function") {
       throw new TypeError(`Skill file '${path}' requires a loader.`);
     }
-    return Object.freeze({
-      descriptor: Object.freeze({
+    return ({
+      descriptor: {
         path,
         mediaType: configured.mediaType ?? skillFileMediaType(path),
         ...(configured.size !== undefined ? { size: configured.size } : {}),
         ...(configured.digest ? { digest: configured.digest } : {}),
-      }),
+      } as const,
       load: configured.load,
-    });
+    } as const);
   }
   const body = value as SkillFileBody;
-  return Object.freeze({
-    descriptor: Object.freeze({
+  return ({
+    descriptor: {
       path,
       mediaType: skillFileMediaType(path),
       ...(byteSize(body) !== undefined ? { size: byteSize(body) } : {}),
-    }),
+    } as const,
     load: () => body,
-  });
+  } as const);
 }
 
 /** Defines a small portable skill directly from standard Markdown and files. */

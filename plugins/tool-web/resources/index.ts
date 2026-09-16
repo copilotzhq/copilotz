@@ -4,6 +4,6 @@
  * @module
  */
 
-export { fetchTextTool } from "./fetch-text-tool/index.ts";
-export { httpRequestTool } from "./http-request-tool/index.ts";
-export { webSearchTool } from "./web-search-tool/index.ts";
+export { fetchTextTool } from "./tools/fetch-text/index.ts";
+export { httpRequestTool } from "./tools/http-request/index.ts";
+export { webSearchTool } from "./tools/web-search/index.ts";

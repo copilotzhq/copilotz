@@ -18,12 +18,12 @@ function askFailure(
 ) {
   const cause = optionalText(error.message) ??
     (cancelled ? "The asked agent was cancelled." : "The asked agent failed.");
-  return Object.freeze({
+  return ({
     name: cancelled ? "AgentAskCancelled" : "AgentAskFailed",
     message: cancelled
       ? `Ask to agent '${ask.askedAgentId}' was cancelled: ${cause}`
       : `Asked agent '${ask.askedAgentId}' failed: ${cause}`,
-  });
+  } as const);
 }
 
 export const failAskProcessor: Processor<CoreToolProcessorContext> =
@@ -63,3 +63,5 @@ export const failAskProcessor: Processor<CoreToolProcessorContext> =
       });
     },
   });
+
+export default failAskProcessor;

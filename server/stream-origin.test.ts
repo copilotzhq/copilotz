@@ -1,10 +1,12 @@
+import { defineServerFacade as fixtureServerFacade } from "@copilotz/copilotz/server";
+import { definePlugin as defineFixturePlugin } from "@copilotz/copilotz/plugins";
 import { assert, assertEquals } from "@std/assert";
 import { type ActionContext, defineAction } from "../runtime/actions/index.ts";
 import { definePlugin } from "../runtime/plugins/index.ts";
 import { createCopilotzApplication } from "../runtime/application/index.ts";
 import { createTestDatabase } from "../runtime/testing/ominipg.ts";
 import { encodeOperationReplayCursor } from "../runtime/streams/cursor.ts";
-import { createServerPlugin } from "../plugins/server/plugin.ts";
+import { serverPlugin } from "../plugins/server/plugin.ts";
 import { createServerFacadeFetchHandler } from "./facade.ts";
 import {
   createCopilotzClient,
@@ -45,16 +47,23 @@ Deno.test("replay retains a stream's source Action context when invocation prece
           }),
         },
       }),
-      createServerPlugin({
-        authenticate: () => ({
-          actor: { id: "owner" },
-          actionMetadata: {
-            copilotzToolAction: {
-              planMessageId: "plan",
-              toolCallId: "reused-provider-id",
-            },
+      defineFixturePlugin({
+        ...serverPlugin,
+        resources: {
+          server: {
+            default: fixtureServerFacade({
+              authenticate: () => ({
+                actor: { id: "owner" },
+                actionMetadata: {
+                  copilotzToolAction: {
+                    planMessageId: "plan",
+                    toolCallId: "reused-provider-id",
+                  },
+                },
+              }),
+            }),
           },
-        }),
+        },
       }),
     ],
   });

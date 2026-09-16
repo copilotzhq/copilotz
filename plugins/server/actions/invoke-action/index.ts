@@ -1,3 +1,4 @@
+import type { ActionDefinition } from "@copilotz/copilotz/actions";
 /** Owns the durable Server-to-Action invocation bridge. @module */
 
 import {
@@ -26,10 +27,10 @@ export type ServerInvokeActionOutput =
 function safeError(
   error: unknown,
 ): Readonly<{ name: string; message: string }> {
-  return Object.freeze({
+  return ({
     name: error instanceof Error && error.name.trim() ? error.name : "Error",
     message: "Action execution failed.",
-  });
+  } as const);
 }
 
 type ServerInvokeActionContext = ActionContext<
@@ -38,7 +39,11 @@ type ServerInvokeActionContext = ActionContext<
   RuntimeActionCallers
 >;
 
-export const serverInvokeAction = defineAction({
+export const serverInvokeAction: ActionDefinition<
+  ServerInvokeRequest,
+  ServerInvokeActionOutput,
+  ServerInvokeActionContext
+> = defineAction({
   id: SERVER_INVOKE_ACTION_ID,
   inputSchema: {
     type: "object",
@@ -91,13 +96,13 @@ export const serverInvokeAction = defineAction({
     ) throw new TypeError("Server Action request authority is inconsistent.");
     const target = context.actions[input.actionAlias];
     if (typeof target !== "function" || input.actionAlias === "serverInvoke") {
-      return Object.freeze({
+      return ({
         status: "failed" as const,
-        error: Object.freeze({
+        error: {
           name: "ActionUnavailableError",
           message: `Action alias '${input.actionAlias}' is unavailable.`,
-        }),
-      });
+        } as const,
+      } as const);
     }
     const targetActionId = actionCallerDefinitionId(target);
     if (!targetActionId) {
@@ -110,25 +115,27 @@ export const serverInvokeAction = defineAction({
         operationKey: "target",
         identity: context.identity,
         signal: context.signal,
-        metadata: Object.freeze({
+        metadata: {
           ...structuredClone(request.actionMetadata),
-          copilotzServer: Object.freeze({
+          copilotzServer: {
             schema: SERVER_ACTION_METADATA_SCHEMA,
             requestId: input.requestId,
             actionAlias: input.actionAlias,
-          }),
-        }),
+          } as const,
+        } as const,
       });
-      return Object.freeze({
+      return ({
         status: "completed" as const,
         targetActionRunId,
-      });
+      } as const);
     } catch (error) {
       if (context.signal.aborted) throw error;
-      return Object.freeze({
+      return ({
         status: "failed" as const,
         error: safeError(error),
-      });
+      } as const);
     }
   },
 });
+
+export default serverInvokeAction;

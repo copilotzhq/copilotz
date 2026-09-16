@@ -57,12 +57,10 @@ function operationEnabled(
 }
 
 function pathSegments(path: string): readonly string[] {
-  return Object.freeze(
-    path.split("/").filter(Boolean).map((segment) => {
-      if (segment.startsWith(":")) return segment;
-      return decodeURIComponent(segment);
-    }),
-  );
+  return (path.split("/").filter(Boolean).map((segment) => {
+    if (segment.startsWith(":")) return segment;
+    return decodeURIComponent(segment);
+  }));
 }
 
 function canonicalActionPath(id: string): string {
@@ -80,10 +78,10 @@ function canonicalChannelPath(alias: string): string {
 function endpoint(
   value: Omit<ServerEndpointDescriptor, "key">,
 ): ServerEndpointDescriptor {
-  return Object.freeze({
+  return ({
     ...value,
     key: `${value.method}:${value.path}`,
-  });
+  } as const);
 }
 
 function cloneSchema(
@@ -102,7 +100,7 @@ function deepFreeze<T>(value: T): T {
   for (const nested of Object.values(value as Record<string, unknown>)) {
     deepFreeze(nested);
   }
-  return Object.freeze(value);
+  return value;
 }
 
 /** Compiles one complete registry into deterministic routes and OpenAPI. */
@@ -309,7 +307,7 @@ export function compileServerRoutes(
     }
     return left.key.localeCompare(right.key);
   });
-  const routes = Object.freeze(endpoints.map((value) => {
+  const routes = endpoints.map((value) => {
     const segments = pathSegments(value.path);
     const collisionKey = `${value.method}:/${
       segments.map((segment) => segment.startsWith(":") ? ":" : segment).join(
@@ -322,10 +320,10 @@ export function compileServerRoutes(
       );
     }
     keys.add(collisionKey);
-    return Object.freeze({ endpoint: value, segments });
-  }));
+    return ({ endpoint: value, segments } as const);
+  });
   const document = openApi(facade.basePath, routes);
-  return Object.freeze({
+  return ({
     basePath: facade.basePath,
     routes,
     openApi: document,
@@ -355,13 +353,13 @@ export function compileServerRoutes(
           }
         }
         if (matches) {
-          return Object.freeze({
+          return ({
             endpoint: route.endpoint,
-            params: Object.freeze(params),
-          });
+            params: params,
+          } as const);
         }
       }
       return null;
     },
-  });
+  } as const);
 }

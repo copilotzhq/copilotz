@@ -1,3 +1,4 @@
+import { definePlugin as defineFixturePlugin } from "@copilotz/copilotz/plugins";
 import { assert, assertEquals, assertRejects } from "@std/assert";
 import type {
   ActionContext,
@@ -7,14 +8,9 @@ import type { ContentInput, ContentRef } from "@copilotz/copilotz/content";
 import type { ToolResource } from "../tools/authoring/define-tool/index.ts";
 
 import {
-  createPersistentTerminalToolsPlugin,
   type PersistentTerminalService,
+  persistentTerminalToolsPlugin,
 } from "./index.ts";
-
-function actionFrom(service: PersistentTerminalService): ActionDefinition {
-  const plugin = createPersistentTerminalToolsPlugin({ terminal: service });
-  return plugin.actions.persistent_terminal as ActionDefinition;
-}
 
 type ContentTracker = {
   prepares: number;
@@ -28,9 +24,11 @@ function fixtureContext(
     materializes: 0,
     materializedCounts: [],
   },
+  terminal?: PersistentTerminalService,
 ): ActionContext {
   let prepareIndex = 0;
   return {
+    adapters: { terminal: { default: terminal } },
     namespace: "tenant-a",
     signal: new AbortController().signal,
     action: {
@@ -121,17 +119,20 @@ Deno.test("persistent terminal tool delegates through an explicitly owned servic
       return Promise.resolve();
     },
   });
-  const plugin = createPersistentTerminalToolsPlugin({ terminal: service });
+  const plugin = defineFixturePlugin({
+    ...persistentTerminalToolsPlugin,
+    adapters: { terminal: { default: service } },
+  });
   const tools = plugin.resources.tools;
   const tool = tools?.persistent_terminal as ToolResource;
   const action = plugin.actions.persistent_terminal as ActionDefinition;
 
   assertEquals(Object.keys(tools ?? {}), ["persistent_terminal"]);
-  assert(Object.isFrozen(tool));
+
   assertEquals(tool.action, "persistent_terminal");
   assert(!("execute" in tool));
   assertEquals(
-    await action.execute({ action: "run" }, fixtureContext(tracker)),
+    await action.execute({ action: "run" }, fixtureContext(tracker, service)),
     {
       read: "asset://tenant-a/asset-a",
       published: "asset://tenant-a/asset-b",
@@ -170,9 +171,9 @@ Deno.test("persistent terminal stages all publishes and remaps spread refs atomi
     shutdown: () => Promise.resolve(),
   });
   assertEquals(
-    await actionFrom(service).execute(
+    await persistentTerminalToolsPlugin.actions.persistent_terminal.execute(
       { action: "export_file" },
-      fixtureContext(tracker),
+      fixtureContext(tracker, service),
     ),
     {
       first: {
@@ -213,9 +214,9 @@ Deno.test("persistent terminal stages all publishes and remaps spread refs atomi
   });
   await assertRejects(
     async () =>
-      await actionFrom(invalid).execute(
+      await persistentTerminalToolsPlugin.actions.persistent_terminal.execute(
         { action: "export_file" },
-        fixtureContext(invalidTracker),
+        fixtureContext(invalidTracker, invalid),
       ),
     TypeError,
   );
@@ -233,7 +234,9 @@ Deno.test("persistent terminal canonical asset bridge enforces tenant scope", as
   });
   await assertRejects(
     async () =>
-      await actionFrom(service).execute({ action: "run" }, fixtureContext()),
+      await persistentTerminalToolsPlugin.actions.persistent_terminal.execute({
+        action: "run",
+      }, fixtureContext(undefined, service)),
     Error,
     "active namespace",
   );
@@ -253,16 +256,22 @@ Deno.test("persistent terminal rejects non-JSON custom service results", async (
     execute: () => Promise.resolve(result),
     shutdown: () => Promise.resolve(),
   });
-  const action = actionFrom(service);
-  assertEquals(await action.execute({ action: "info" }, fixtureContext()), {
-    ok: true,
-    asset: {
-      assetId: "asset-a",
-      kind: "text",
-      role: "tool.output",
-      mediaType: "text/plain",
+  const action = persistentTerminalToolsPlugin.actions.persistent_terminal;
+  assertEquals(
+    await action.execute(
+      { action: "info" },
+      fixtureContext(undefined, service),
+    ),
+    {
+      ok: true,
+      asset: {
+        assetId: "asset-a",
+        kind: "text",
+        role: "tool.output",
+        mediaType: "text/plain",
+      },
     },
-  });
+  );
   const cycle: Record<string, unknown> = {};
   cycle.self = cycle;
   const inherited = Object.assign(Object.create({ inherited: true }), {
@@ -286,7 +295,11 @@ Deno.test("persistent terminal rejects non-JSON custom service results", async (
   ) {
     result = candidate;
     await assertRejects(
-      async () => await action.execute({ action: "info" }, fixtureContext()),
+      async () =>
+        await action.execute(
+          { action: "info" },
+          fixtureContext(undefined, service),
+        ),
       TypeError,
     );
   }

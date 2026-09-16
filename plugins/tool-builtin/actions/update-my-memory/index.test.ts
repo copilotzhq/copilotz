@@ -1,7 +1,7 @@
 import { assertEquals } from "@std/assert";
-import { createUpdateMyMemoryAction } from "./index.ts";
+import { updateMyMemoryAction } from "./index.ts";
 Deno.test("update-my-memory Action owns its id", () =>
   assertEquals(
-    createUpdateMyMemoryAction().id,
+    updateMyMemoryAction.id,
     "copilotz.tools.builtin.update_my_memory",
   ));

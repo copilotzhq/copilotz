@@ -50,7 +50,6 @@ export type {
   ProposedMemoryRef,
 } from "./ontology/index.ts";
 export type {
-  CreateLongTermMemoryPluginOptions,
   MemoryAdapters,
   MemoryEmbed,
   MemoryEmbeddingInput,

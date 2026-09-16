@@ -46,12 +46,12 @@ export async function createCopilotz(
   const persistence = await openCopilotzPersistence(options, lifecycle);
   const workerId = options.worker?.id?.trim() ||
     `copilotz-embedded-${crypto.randomUUID()}`;
-  const transport: HypervisorTransport = Object.freeze({
+  const transport: HypervisorTransport = {
     type: "in-process",
-    config: Object.freeze({
+    config: {
       topic: `copilotz.embedded.${crypto.randomUUID()}`,
-    }),
-  });
+    } as const,
+  } as const;
   const engine = options.engine ?? {};
   const { publish: _publish, ...workerEngine } = engine;
   let gateway: Awaited<ReturnType<typeof createCopilotzGateway>> | undefined;
@@ -61,6 +61,9 @@ export async function createCopilotz(
       namespace: options.namespace,
       databaseSchema: options.databaseSchema,
       plugins: options.plugins,
+      collections: options.collections,
+      actions: options.actions,
+      processors: options.processors,
       resources: options.resources,
       adapters: options.adapters,
       assets: options.assets,
@@ -74,6 +77,9 @@ export async function createCopilotz(
       namespace: options.namespace,
       databaseSchema: options.databaseSchema,
       plugins: options.plugins,
+      collections: options.collections,
+      actions: options.actions,
+      processors: options.processors,
       resources: options.resources,
       adapters: options.adapters,
       assets: options.assets,
@@ -123,7 +129,7 @@ export async function createCopilotz(
     return shutdownTask;
   };
 
-  return Object.freeze({
+  return ({
     async send(input: Parameters<CopilotzApplication["send"]>[0]) {
       return await gateway!.send(input);
     },
@@ -135,5 +141,5 @@ export async function createCopilotz(
     maintenance: (input) => gateway!.maintenance(input),
     observe: () => gateway!.observe(),
     close: shutdown,
-  });
+  } as const);
 }

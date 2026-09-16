@@ -110,13 +110,13 @@ Deno.test("retired runtime and v1 server modules are deleted", async () => {
   }
 });
 
-Deno.test("createCopilotz returns one frozen factory-created application", async () => {
+Deno.test("createCopilotz returns one application", async () => {
   const application = await createCopilotz({
     namespace: "architecture-contract",
   });
   try {
     assertEquals(Object.getPrototypeOf(application), Object.prototype);
-    assert(Object.isFrozen(application));
+
     assertEquals(Object.keys(application).sort(), [
       "attach",
       "cancelOperation",

@@ -11,8 +11,9 @@ Collections and Events.
 
 ## How to use it
 
-Compose createCoreServerPlugin() with Core and createServerPlugin({
-authenticate, authorize }).
+Compose `coreServerPlugin` with `corePlugin` and `serverPlugin`. Supply
+authentication, authorization, and exposure policy through
+`resources.server.default`, using `defineServerFacade`.
 
 ## How it works
 

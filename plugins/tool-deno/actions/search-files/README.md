@@ -10,8 +10,7 @@ It gives agents a focused alternative to broad directory listing.
 
 ## How to use it
 
-Compose it through `createWorkspaceToolsPlugin()` using the `search_files`
-alias.
+Compose it through `denoToolsPlugin` using the `search_files` alias.
 
 ## How it works
 

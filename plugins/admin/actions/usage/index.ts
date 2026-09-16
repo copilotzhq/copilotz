@@ -1,3 +1,4 @@
+import type { ActionDefinition } from "@copilotz/copilotz/actions";
 /** @module Admin projection delegates measurement semantics to Usage queries. */
 import { defineAction } from "@copilotz/copilotz/actions";
 import {
@@ -7,7 +8,11 @@ import {
   readOnly,
 } from "../internal/request.ts";
 import type { AdminRequest, AdminResponse } from "../../internal/contracts.ts";
-export const adminUsageAction = defineAction<
+export const adminUsageAction: ActionDefinition<
+  AdminRequest,
+  AdminResponse,
+  AdminActionContext
+> = defineAction<
   AdminRequest,
   AdminResponse,
   AdminActionContext,
@@ -28,3 +33,5 @@ export const adminUsageAction = defineAction<
     return { status: 200, data: values[0] };
   },
 });
+
+export default adminUsageAction;

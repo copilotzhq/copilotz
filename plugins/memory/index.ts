@@ -7,7 +7,7 @@
 export {
   DEFAULT_LONG_TERM_MEMORY_CONFIG,
   type LongTermMemoryConfig,
-} from "./resources/config/index.ts";
+} from "./resources/memory/config/index.ts";
 export {
   longTermMemoryCollection,
   memoryRecordCollection,
@@ -66,10 +66,7 @@ export type {
   ProcedureMemoryDraft,
   ProposedMemoryRef,
 } from "./authoring/ontology/index.ts";
-export {
-  CONSOLIDATE_MEMORY_ACTION_ID,
-  createLongTermMemoryPlugin,
-} from "./plugin.ts";
+export { CONSOLIDATE_MEMORY_ACTION_ID, memoryPlugin } from "./plugin.ts";
 export type { LongTermMemoryPlugin } from "./plugin.ts";
 export type {
   ConsolidateMemoryActionInput,
@@ -81,7 +78,6 @@ export type {
   MemoryProcessorContext,
 } from "./internal/contracts.ts";
 export type {
-  CreateLongTermMemoryPluginOptions,
   MemoryAdapters,
   MemoryEmbed,
   MemoryEmbeddingInput,

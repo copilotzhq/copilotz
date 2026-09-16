@@ -174,3 +174,5 @@ export const memoryRecordCollection: CollectionDefinition<typeof schema> =
       },
     },
   });
+
+export default memoryRecordCollection;

@@ -1,16 +1,14 @@
 /** Exposes the public Zendesk Channel plugin surface. @module */
 export {
-  createZendeskChannelAdapter,
   createZendeskTransport,
+  zendeskChannelAdapter,
 } from "./adapters/index.ts";
-export { createZendeskChannelPlugin } from "./plugin.ts";
-export { createZendeskChannelResource } from "./resources/index.ts";
+export { zendeskChannelPlugin } from "./plugin.ts";
+export { zendeskChannelResource } from "./resources/index.ts";
 export type {
-  CreateZendeskChannelAdapterOptions,
-  CreateZendeskChannelPluginOptions,
-  CreateZendeskChannelResourceOptions,
   TransformZendeskDelivery,
   ZendeskActionPayload,
+  ZendeskChannelOptions,
   ZendeskConfig,
   ZendeskConfigContext,
   ZendeskConfigResolver,

@@ -1,3 +1,5 @@
+import type { ActionContext } from "@copilotz/copilotz/actions";
+import type { ActionDefinition } from "@copilotz/copilotz/actions";
 /**
  * Defines the bounded Write File Action.
  *
@@ -20,7 +22,17 @@ import {
   writeWorkspaceFile,
 } from "../internal/fs-utils.ts";
 
-export const writeFileAction = defineAction({
+export const writeFileAction: ActionDefinition<
+  WriteFileParams,
+  {
+    warning?: string | undefined;
+    relativePath: string;
+    snapshotId: string | null;
+    created: boolean;
+    appended: boolean;
+  },
+  ActionContext
+> = defineAction({
   id: "copilotz.tools.deno.write_file",
   inputSchema: {
     type: "object",

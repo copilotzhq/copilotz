@@ -1,0 +1,43 @@
+{
+  "id": "@copilotz/core-long-term-memory",
+  "version": "4.0.0",
+  "aliases": {
+    "actions/consolidate-memory/index.ts": "consolidate_memory",
+    "actions/list-knowledge-spaces/index.ts": "list_knowledge_spaces",
+    "actions/search-memory/index.ts": "search_memory",
+    "actions/inspect-memory/index.ts": "inspect_memory",
+    "actions/invalidate-memory/index.ts": "invalidate_memory",
+    "actions/set-memory-status/index.ts": "set_memory_status",
+    "resources/tools/consolidate-memory/index.ts": "consolidate_memory",
+    "resources/tools/list-knowledge-spaces/index.ts": "list_knowledge_spaces",
+    "resources/tools/search-memory/index.ts": "search_memory",
+    "resources/tools/inspect-memory/index.ts": "inspect_memory",
+    "resources/tools/invalidate-memory/index.ts": "invalidate_memory",
+    "resources/tools/set-memory-status/index.ts": "set_memory_status"
+  },
+  "include": [
+    "collections/memory-space/index.ts",
+    "collections/memory-space-access/index.ts",
+    "collections/long-term-memory/index.ts",
+    "collections/memory-record/index.ts",
+    "actions/consolidate-memory/index.ts",
+    "actions/list-knowledge-spaces/index.ts",
+    "actions/search-memory/index.ts",
+    "actions/inspect-memory/index.ts",
+    "actions/invalidate-memory/index.ts",
+    "actions/set-memory-status/index.ts",
+    "processors/reserve-memory/index.ts",
+    "processors/dispatch-consolidation/index.ts",
+    "processors/settle-consolidation/index.ts",
+    "resources/memory/config/index.ts",
+    "resources/memory/kinds/index.ts",
+    "resources/promptContext/memory/index.ts",
+    "resources/tools/consolidate-memory/index.ts",
+    "resources/tools/list-knowledge-spaces/index.ts",
+    "resources/tools/search-memory/index.ts",
+    "resources/tools/inspect-memory/index.ts",
+    "resources/tools/invalidate-memory/index.ts",
+    "resources/tools/set-memory-status/index.ts",
+    "dependencies/core/index.ts"
+  ]
+}

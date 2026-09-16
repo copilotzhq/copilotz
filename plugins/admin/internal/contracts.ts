@@ -1,8 +1,4 @@
 /** @module Public contracts for the semantic Admin plugin. */
-export type CreateAdminPluginOptions = Readonly<{
-  id?: string;
-  version?: string;
-}>;
 
 export type AdminRequest = Readonly<{
   resource: string;

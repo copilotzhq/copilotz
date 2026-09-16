@@ -4,4 +4,4 @@
  * @module
  */
 
-export { financeToolResource } from "./finance-tool/index.ts";
+export { financeToolResource } from "./tools/finance/index.ts";

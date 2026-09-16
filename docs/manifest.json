@@ -14,6 +14,11 @@
           "description": "Compose plugins, Resources, Adapters, and typed ingress."
         },
         {
+          "title": "Convention-first authoring",
+          "slug": "convention-authoring",
+          "description": "Static declarations, build-time discovery, ESM generation, and final-context configuration."
+        },
+        {
           "title": "Architecture",
           "slug": "architecture",
           "description": "Plugin ownership, durable lifecycle, content, streams, and execution."
@@ -64,7 +69,7 @@
           "description": "Embedded, split, remote, and injected-dispatcher placement."
         },
         {
-          "title": "Server Façade",
+          "title": "Server Fa\u00e7ade",
           "slug": "server",
           "description": "Automatic primitive routes, guards, OpenAPI, and lossless multipart outputs."
         },

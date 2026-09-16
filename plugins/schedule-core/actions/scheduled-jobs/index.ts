@@ -120,13 +120,13 @@ function schedule(value: unknown): ScheduledJobSchedule {
       "Scheduled jobs currently support cron schedules only.",
     );
   }
-  return Object.freeze({
+  return ({
     type: "cron",
     expression: requiredText(input.expression, "Cron expression"),
     ...(optionalText(input.timezone, "Cron timezone")
       ? { timezone: optionalText(input.timezone, "Cron timezone") }
       : {}),
-  });
+  } as const);
 }
 
 function stringList(
@@ -135,7 +135,7 @@ function stringList(
 ): readonly string[] | undefined {
   if (value === undefined) return undefined;
   if (!Array.isArray(value)) throw new TypeError(`${name} must be an array.`);
-  return Object.freeze(value.map((item) => requiredText(item, name)));
+  return (value.map((item) => requiredText(item, name)));
 }
 
 function recipients(
@@ -149,7 +149,7 @@ function recipients(
       "Scheduled recipients must contain at least one value.",
     );
   }
-  return Object.freeze([...new Set(values)]);
+  return ([...new Set(values)] as const);
 }
 
 function thread(value: unknown): CoreScheduledMessageThread | undefined {
@@ -158,7 +158,7 @@ function thread(value: unknown): CoreScheduledMessageThread | undefined {
   const metadata = input.metadata === undefined
     ? undefined
     : structuredClone(record(input.metadata, "Scheduled thread metadata"));
-  return Object.freeze({
+  return ({
     ...(optionalText(input.id, "Scheduled thread ID")
       ? { id: optionalText(input.id, "Scheduled thread ID") }
       : {}),
@@ -174,13 +174,13 @@ function thread(value: unknown): CoreScheduledMessageThread | undefined {
       ? { status: optionalText(input.status, "Scheduled thread status") }
       : {}),
     ...(metadata ? { metadata } : {}),
-  });
+  } as const);
 }
 
 function sender(value: unknown): CoreScheduledMessageSender | undefined {
   if (value === undefined) return undefined;
   const input = record(value, "Scheduled sender");
-  return Object.freeze({
+  return ({
     ...(optionalText(input.id, "Scheduled sender ID")
       ? { id: optionalText(input.id, "Scheduled sender ID") }
       : {}),
@@ -199,7 +199,7 @@ function sender(value: unknown): CoreScheduledMessageSender | undefined {
         record(input.metadata, "Scheduled sender metadata"),
       ),
     }),
-  });
+  } as const);
 }
 
 function message(
@@ -212,7 +212,7 @@ function message(
   }
   const targetThread = thread(input.thread) ??
     (options.defaultThreadId ? { id: options.defaultThreadId } : undefined);
-  return Object.freeze({
+  return ({
     ...(input.content === undefined ? {} : {
       content: structuredClone(input.content) as
         | ContentInput
@@ -228,7 +228,7 @@ function message(
         record(input.metadata, "Scheduled run metadata"),
       ),
     }),
-  });
+  } as const);
 }
 
 async function prepareMessageContent(
@@ -237,13 +237,13 @@ async function prepareMessageContent(
   operationKey: string,
 ): Promise<PreparedMessage> {
   const { content, ...message } = input;
-  if (content === undefined) return Object.freeze(message);
-  return Object.freeze({
+  if (content === undefined) return message;
+  return ({
     ...message,
     content: await context.content.prepare(content, {
       operationKey: `${operationKey}:content`,
     }),
-  });
+  } as const);
 }
 
 async function resolveMessageRecipients(
@@ -253,7 +253,7 @@ async function resolveMessageRecipients(
 ): Promise<ResolvedMessage> {
   const { recipients: selection, ...rest } = message;
   const selected = selection ?? (defaultToCaller ? "caller" : undefined);
-  return Object.freeze({
+  return ({
     ...rest,
     ...(selected
       ? {
@@ -264,7 +264,7 @@ async function resolveMessageRecipients(
         ),
       }
       : {}),
-  });
+  } as const);
 }
 
 function positiveLimit(value: unknown): number | undefined {
@@ -283,7 +283,7 @@ function coreJob(
   if (!value) return null;
   try {
     const payload = normalizeCoreScheduledMessagePayload(value.payload);
-    return Object.freeze({ ...value, payload });
+    return ({ ...value, payload } as const);
   } catch {
     if (id) throw new Error(`Core scheduled message '${id}' was not found.`);
     return null;
@@ -426,11 +426,11 @@ export const scheduledJobsAction: ActionDefinition<
           "A scheduled message requires content and recipients.",
         );
       }
-      const scheduledMessage: CoreScheduledMessageInput = Object.freeze({
+      const scheduledMessage: CoreScheduledMessageInput = {
         ...messageFields,
         recipients: recipientIds,
         content,
-      });
+      } as const;
       const job = await createScheduledJob(
         scheduledMessageJob({
           ...(optionalText(input.jobId, "Scheduled job ID")
@@ -553,3 +553,5 @@ export const scheduledJobsAction: ActionDefinition<
     };
   },
 });
+
+export default scheduledJobsAction;

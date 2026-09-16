@@ -12,12 +12,18 @@ the explicit bridge that turns typed due occurrences into Core Messages.
 
 ## How to use it
 
-Install `coreSchedulesPlugin` or import the public helpers from
-`@copilotz/copilotz/schedules/core`. The plugin composes Core and Schedules as
-dependencies.
+```ts
+import { coreSchedulesPlugin } from "@copilotz/copilotz/schedules/core";
+// Include coreSchedulesPlugin in the final createCopilotz({ plugins: [...] }) call.
+```
 
 ## How it works
 
-The due-event Processor invokes a transactional dispatch Action. A separate
-Action and Tool Resource let Agents create, inspect, update, pause, resume,
-cancel, and manually run Core scheduled-message jobs.
+`copilotz.json` declares this root. `plugin.generated.ts` contains its static
+composition and `plugin.ts` exposes its public name. Regenerate with
+`deno task build:plugins`. Actions and Processors read final context
+configuration at invocation; there is no plugin factory or runtime directory
+discovery.
+
+See [convention-first authoring](../../docs/convention-authoring.md) for the
+shared file structure, compiler, configuration locations, and migration guide.

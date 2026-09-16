@@ -99,7 +99,7 @@ async function listAllOperationStreams(
     if (page.length < OPERATION_STREAM_PAGE_SIZE) break;
     afterStreamOrdinal = page.at(-1)!.streamOrdinal;
   }
-  return Object.freeze(result);
+  return result;
 }
 
 function sleep(ms: number, signal: AbortSignal): Promise<void> {
@@ -244,10 +244,10 @@ function createApplicationOutputHub(
     subscriptions.clear();
   };
 
-  return Object.freeze({
+  return ({
     subscribe(filter = {}) {
       const subscription: SubscriptionState = {
-        filter: Object.freeze({ ...filter }),
+        filter: { ...filter } as const,
         closed: false,
       };
       const outputs = new ReadableStream<ApplicationOutput>({
@@ -276,11 +276,11 @@ function createApplicationOutputHub(
           // A consumer may have already cancelled its observation stream.
         }
       };
-      return Object.freeze({
+      return ({
         outputs,
         close: () => finish(),
         error: finish,
-      });
+      } as const);
     },
     async emit(output, databaseSchema) {
       if (closed) return;
@@ -315,7 +315,7 @@ function createApplicationOutputHub(
       }
     },
     close,
-  });
+  } as const);
 }
 
 /**
@@ -335,6 +335,9 @@ export async function createCopilotzApplication(
   ) ?? "public";
   const registry = createPluginRegistry({
     plugins: options.plugins,
+    collections: options.collections,
+    actions: options.actions,
+    processors: options.processors,
     resources: options.resources,
     adapters: options.adapters,
   });
@@ -343,7 +346,7 @@ export async function createCopilotzApplication(
   let engine: CopilotzEngine;
   const outputHub = createApplicationOutputHub(async (output, schema) => {
     const scoped = await openRecoveredScope(schema);
-    return Object.freeze({
+    return ({
       ...output,
       payload: lazyStreamFollower(() =>
         scoped.streams.follow(output.namespace, {
@@ -354,7 +357,7 @@ export async function createCopilotzApplication(
         output.namespace,
         output.streamId,
       ),
-    });
+    } as const);
   });
   try {
     engine = await createCopilotzEngine({
@@ -543,7 +546,7 @@ export async function createCopilotzApplication(
     // persistence interruption from becoming an unhandled rejected promise;
     // the original `done` promise remains observable to callers.
     void done.catch(() => undefined);
-    const sendHandle: ApplicationSendHandle = Object.freeze({
+    const sendHandle: ApplicationSendHandle = {
       operationId: committed.event.id,
       eventId: committed.event.id,
       correlationId,
@@ -572,8 +575,8 @@ export async function createCopilotzApplication(
         );
         await done.catch(() => undefined);
       },
-    });
-    activeSends.set(sendHandle, Object.freeze({ subscription, abort }));
+    } as const;
+    activeSends.set(sendHandle, { subscription, abort } as const);
     return sendHandle;
   };
   const send = (input: ApplicationSendInput) => sendWithProtection(input);
@@ -585,12 +588,12 @@ export async function createCopilotzApplication(
     const operationDatabaseSchema = input.databaseSchema?.trim() ||
       databaseSchema;
     const scope = await openRecoveredScope(operationDatabaseSchema);
-    return Object.freeze({
+    return ({
       operationId,
       namespace: operationNamespace,
       databaseSchema: operationDatabaseSchema,
       scope,
-    });
+    } as const);
   };
 
   const projectOperationStatus = (
@@ -601,16 +604,16 @@ export async function createCopilotzApplication(
         !Array.isArray(candidate)
       ? structuredClone(candidate as Record<string, unknown>)
       : {};
-    return Object.freeze({
+    return ({
       operationId: record.operationId,
       namespace: record.namespace,
       correlationId: record.correlationId,
       state: record.state,
-      metadata: Object.freeze(metadata),
+      metadata: metadata,
       acceptedAt: record.acceptedAt,
       updatedAt: record.updatedAt,
       ...(record.completedAt ? { completedAt: record.completedAt } : {}),
-    });
+    } as const);
   };
 
   const statusFor = async (
@@ -685,7 +688,7 @@ export async function createCopilotzApplication(
         : undefined,
       limit: input.limit,
     });
-    return Object.freeze(records.map(projectOperationStatus));
+    return (records.map(projectOperationStatus));
   };
 
   const cancelOperation = async (
@@ -976,15 +979,17 @@ export async function createCopilotzApplication(
                 }
                 openedStreams.add(stream.streamId);
                 const payload = replayStreamPayload(stream, fromOffset);
-                controller.enqueue(Object.freeze({
-                  ...stream.descriptor,
-                  streamOrdinal: stream.streamOrdinal,
-                  payload,
-                  terminal: boundary.scope.operations.waitForStreamTerminal(
-                    boundary.namespace,
-                    stream.streamId,
-                  ),
-                }));
+                controller.enqueue(
+                  {
+                    ...stream.descriptor,
+                    streamOrdinal: stream.streamOrdinal,
+                    payload,
+                    terminal: boundary.scope.operations.waitForStreamTerminal(
+                      boundary.namespace,
+                      stream.streamId,
+                    ),
+                  } as const,
+                );
                 advanced = true;
               }
               while (true) {
@@ -1017,23 +1022,24 @@ export async function createCopilotzApplication(
                     | "completed"
                     | "failed"
                     | "cancelled";
-                  controller.enqueue(Object.freeze({
+                  const terminalOutput = {
                     durable: false,
                     type: `operation.${state}` as const,
                     namespace: status.namespace,
                     operationId: status.operationId,
                     correlationId: status.correlationId,
                     state,
-                    payload: Object.freeze({ status: state }),
-                    data: Object.freeze({ status: state }),
-                    routing: Object.freeze({}),
-                    visibility: Object.freeze({ kind: "public" as const }),
-                    metadata: Object.freeze({
+                    payload: { status: state } as const,
+                    data: { status: state } as const,
+                    routing: {} as const,
+                    visibility: { kind: "public" as const } as const,
+                    metadata: {
                       operationId: status.operationId,
                       status: state,
-                    }),
+                    } as const,
                     createdAt: status.completedAt ?? status.updatedAt,
-                  }));
+                  } as const;
+                  controller.enqueue(terminalOutput);
                   break;
                 }
                 continue;
@@ -1067,7 +1073,7 @@ export async function createCopilotzApplication(
         resolveDone();
       },
     }, { highWaterMark: 256 });
-    return Object.freeze({
+    return ({
       operationId: boundary.operationId,
       replayCursor: replayCursor(),
       outputs,
@@ -1083,7 +1089,7 @@ export async function createCopilotzApplication(
         resolveDone();
         await done;
       },
-    });
+    } as const);
   };
 
   const pluginIds = registry.plugins.map((plugin) => plugin.id);
@@ -1094,12 +1100,12 @@ export async function createCopilotzApplication(
   } = engine;
   const application: InternalCopilotzApplication = {
     ...publicEngine,
-    config: Object.freeze({
+    config: {
       ...(namespace ? { namespace } : {}),
       databaseSchema,
-      pluginIds: Object.freeze(pluginIds),
+      pluginIds: pluginIds,
       databaseOwnership: persistence.ownership,
-    }),
+    } as const,
     events: engine.events,
     engine,
     execution: engine.execution,
@@ -1152,5 +1158,5 @@ export async function createCopilotzApplication(
     persistence,
     application,
   );
-  return Object.freeze(application);
+  return application;
 }

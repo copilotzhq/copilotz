@@ -5,6 +5,6 @@
  */
 
 export {
-  createTelegramChannelAdapter,
   createTelegramTransport,
-} from "./telegram/index.ts";
+  telegramChannelAdapter,
+} from "./channels/telegram/index.ts";

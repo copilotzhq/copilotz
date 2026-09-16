@@ -39,7 +39,7 @@ export async function runRuntimeNeutralSmoke(): Promise<
   const assetText = await new Response(body).text();
 
   const providerEndpoint = "https://runtime-smoke.invalid/v1/chat";
-  const adapter: LlmAdapter = Object.freeze({
+  const adapter: LlmAdapter = {
     call: () => ({
       frames: new ReadableStream({
         start(controller) {
@@ -51,7 +51,7 @@ export async function runRuntimeNeutralSmoke(): Promise<
         attempts: [{ status: "completed" as const }],
       }),
     }),
-  });
+  } as const;
   const connection = defineLlmConnection({
     adapter: "runtimeSmoke",
   });
@@ -75,11 +75,11 @@ export async function runRuntimeNeutralSmoke(): Promise<
     );
   }
 
-  return Object.freeze({
+  return ({
     assetId: published.id,
     assetText,
     pluginId: plugin.id,
     providerEndpoint,
     webStreams: true,
-  });
+  } as const);
 }

@@ -131,11 +131,7 @@ export type TransformWhatsAppDelivery = (
   attempt: ChannelDeliveryAttempt,
 ) => WhatsAppDelivery | null | Promise<WhatsAppDelivery | null>;
 
-export type CreateWhatsAppChannelResourceOptions = Readonly<{
-  defaultAgentAliases?: readonly string[];
-  metadata?: ChannelJsonObject;
-}>;
-export type CreateWhatsAppChannelAdapterOptions = Readonly<{
+export type WhatsAppChannelOptions = Readonly<{
   config: WhatsAppConfig | WhatsAppConfigResolver;
   transport?: WhatsAppTransport;
   fetch?: typeof fetch;
@@ -148,10 +144,6 @@ export type CreateWhatsAppChannelAdapterOptions = Readonly<{
     }>,
   ) => string;
 }>;
-export type CreateWhatsAppChannelPluginOptions =
-  & CreateWhatsAppChannelResourceOptions
-  & CreateWhatsAppChannelAdapterOptions
-  & Readonly<{ channelId?: string; pluginId?: string; version?: string }>;
 
 export type WhatsAppInteractiveReply = Readonly<{
   id?: string;

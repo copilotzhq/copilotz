@@ -1,3 +1,4 @@
+import { definePlugin as defineFixturePlugin } from "@copilotz/copilotz/plugins";
 import { assertEquals, assertRejects } from "@std/assert";
 
 import { createPluginRegistry, definePlugin } from "@copilotz/copilotz/plugins";
@@ -6,10 +7,7 @@ import type {
   AgentCapabilitySelection,
   AgentResource,
 } from "../../resources/agent/index.ts";
-import {
-  createSkillsPlugin,
-  defineInlineSkill,
-} from "@copilotz/copilotz/skills";
+import { defineInlineSkill, skillsPlugin } from "@copilotz/copilotz/skills";
 import { corePlugin } from "@copilotz/copilotz/core";
 import { defineTool } from "@copilotz/copilotz/tools";
 import { createAgentCapabilityResolver } from "./resolver.ts";
@@ -68,10 +66,17 @@ async function registry() {
   return await createPluginRegistry({
     plugins: [
       corePlugin,
-      createSkillsPlugin({
+      defineFixturePlugin({
+        ...skillsPlugin,
         id: "test.capabilities.skills",
         version: "1.0.0",
-        skills: [guide],
+        resources: {
+          ...skillsPlugin.resources,
+          skills: Object.fromEntries(
+            [guide].map((skill) => [skill.name, skill]),
+          ),
+          skillConfig: { default: { maximumTextBytes: undefined } },
+        },
       }),
       application,
     ],

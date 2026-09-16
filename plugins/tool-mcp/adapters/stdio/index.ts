@@ -47,12 +47,12 @@ function stdioTransport(server: MCPServer): StdioTransport {
       ),
     )
     : undefined;
-  return Object.freeze({
+  return ({
     type: "stdio",
     command: value.command.trim(),
-    ...(args?.length ? { args: Object.freeze(args) } : {}),
-    ...(env && Object.keys(env).length ? { env: Object.freeze(env) } : {}),
-  });
+    ...(args?.length ? { args: args } : {}),
+    ...(env && Object.keys(env).length ? { env: env } : {}),
+  } as const);
 }
 
 function abortError(signal: AbortSignal): Error {
@@ -149,14 +149,14 @@ export const connectMcp: ConnectMcpRuntime = async (
       cause,
     });
   }
-  return Object.freeze({
+  return ({
     async listTools(operationSignal) {
       const response = await abortable(
         client.listTools(),
         operationSignal,
         close,
       );
-      return Object.freeze([...(response.tools ?? [])]);
+      return ([...(response.tools ?? [])] as const);
     },
     callTool(name, args, operationSignal) {
       return abortable(
@@ -166,5 +166,5 @@ export const connectMcp: ConnectMcpRuntime = async (
       );
     },
     close,
-  });
+  } as const);
 };

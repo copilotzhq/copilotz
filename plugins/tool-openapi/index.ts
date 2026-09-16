@@ -5,3 +5,5 @@
  */
 
 export * from "./authoring/index.ts";
+
+export { openApiToolsPlugin } from "./plugin.ts";

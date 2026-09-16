@@ -1,3 +1,7 @@
+import type {
+  ContributionActions,
+  ResolvedNamespaces,
+} from "./contribution.ts";
 import type { ActionMap } from "../actions/types.ts";
 import type { CollectionDefinition } from "../collections/definition.ts";
 import type {
@@ -15,7 +19,7 @@ import {
   type AnyProcessor,
   type CollectionMap,
   type ComposePlugins,
-  freezePluginNamespaces,
+  definePlugin,
   isCopilotzPlugin,
   type OverlayPluginNamespaces,
   type PluginAdapters,
@@ -45,13 +49,25 @@ export type RegistryComposition<
   TPlugins extends readonly AnyCopilotzPlugin[],
   TResources extends PluginResources,
   TAdapters extends PluginAdapters,
+  TActions extends ActionMap = EmptyMap,
+  TCollections extends CollectionMap = EmptyMap,
+  TProcessors extends ProcessorMap = EmptyMap,
 > = ComposePlugins<TPlugins> extends
   infer TPluginsComposition extends PluginComposition ? PluginComposition<
-    TPluginsComposition["collections"],
-    TPluginsComposition["actions"],
-    TPluginsComposition["processors"],
-    OverlayPluginNamespaces<TPluginsComposition["resources"], TResources>,
-    OverlayPluginNamespaces<TPluginsComposition["adapters"], TAdapters>
+    TPluginsComposition["collections"] & TCollections,
+    & TPluginsComposition["actions"]
+    & TActions
+    & ContributionActions<TResources>
+    & ContributionActions<TAdapters>,
+    TPluginsComposition["processors"] & TProcessors,
+    OverlayPluginNamespaces<
+      TPluginsComposition["resources"],
+      ResolvedNamespaces<TResources>
+    >,
+    OverlayPluginNamespaces<
+      TPluginsComposition["adapters"],
+      ResolvedNamespaces<TAdapters>
+    >
   >
   : never;
 
@@ -104,16 +120,22 @@ export type CreatePluginRegistryOptions<
   TPlugins extends readonly AnyCopilotzPlugin[] = readonly [],
   TResources extends PluginResources = EmptyMap,
   TAdapters extends PluginAdapters = EmptyMap,
+  TActions extends ActionMap = EmptyMap,
+  TCollections extends CollectionMap = EmptyMap,
+  TProcessors extends ProcessorMap = EmptyMap,
 > = Readonly<{
   plugins?: TPlugins;
+  collections?: TCollections;
+  actions?: TActions;
+  processors?: TProcessors;
   resources?: TResources;
   adapters?: TAdapters;
 }>;
 
-function frozenRecord<T>(
+function recordFromMap<T>(
   values: ReadonlyMap<string, T>,
 ): Readonly<Record<string, T>> {
-  return Object.freeze(Object.fromEntries(values));
+  return (Object.fromEntries(values));
 }
 
 function mergeNamespaces(
@@ -129,13 +151,13 @@ function mergeNamespaces(
   }
 }
 
-function frozenNamespaces(
+function namespacesFromMap(
   source: ReadonlyMap<string, ReadonlyMap<string, unknown>>,
 ): PluginNamespaceMap {
-  return Object.freeze(Object.fromEntries(
+  return (Object.fromEntries(
     [...source.entries()].map(([namespace, values]) => [
       namespace,
-      frozenRecord(values),
+      recordFromMap(values),
     ]),
   ));
 }
@@ -149,9 +171,28 @@ export function createPluginRegistry<
   const TPlugins extends readonly AnyCopilotzPlugin[] = readonly [],
   const TResources extends PluginResources = EmptyMap,
   const TAdapters extends PluginAdapters = EmptyMap,
+  const TActions extends ActionMap = EmptyMap,
+  const TCollections extends CollectionMap = EmptyMap,
+  const TProcessors extends ProcessorMap = EmptyMap,
 >(
-  options: CreatePluginRegistryOptions<TPlugins, TResources, TAdapters> = {},
-): PluginRegistry<RegistryComposition<TPlugins, TResources, TAdapters>> {
+  options: CreatePluginRegistryOptions<
+    TPlugins,
+    TResources,
+    TAdapters,
+    TActions,
+    TCollections,
+    TProcessors
+  > = {},
+): PluginRegistry<
+  RegistryComposition<
+    TPlugins,
+    TResources,
+    TAdapters,
+    TActions,
+    TCollections,
+    TProcessors
+  >
+> {
   const collections = new Map<string, CollectionDefinition>();
   const actions = new Map<string, ActionMap[string]>();
   const processors = new Map<string, AnyProcessor>();
@@ -247,57 +288,58 @@ export function createPluginRegistry<
     mergeNamespaces(adapterNamespaces, plugin.adapters);
   };
 
-  for (const plugin of options.plugins ?? []) register(plugin);
+  const rootPlugin = definePlugin({
+    id: "@copilotz/application",
+    version: "1",
+    plugins: options.plugins as readonly AnyCopilotzPlugin[],
+    collections: options.collections,
+    actions: options.actions,
+    processors: options.processors,
+    resources: options.resources as PluginResources,
+    adapters: options.adapters as PluginAdapters,
+  });
+  register(rootPlugin);
 
-  mergeNamespaces(
-    resourceNamespaces,
-    freezePluginNamespaces(options.resources, "Application resources"),
-  );
-  mergeNamespaces(
-    adapterNamespaces,
-    freezePluginNamespaces(options.adapters, "Application adapters"),
-  );
-
-  const frozenProcessors = frozenRecord(processors);
+  const registeredProcessors = recordFromMap(processors);
   const processorById = new Map(
-    Object.values(frozenProcessors).map((
+    Object.values(registeredProcessors).map((
       processor,
     ) => [processor.id, processor]),
   );
   const matchDurable = (
     draft: DurableEventDraft,
     data?: unknown,
-  ): readonly AnyProcessor[] =>
-    Object.freeze(
-      Object.values(frozenProcessors).filter((processor) =>
-        matchProcessor(processor as Processor, draft, data)
-      ),
-    );
+  ): readonly AnyProcessor[] => (Object.values(registeredProcessors).filter((
+    processor,
+  ) => matchProcessor(processor as Processor, draft, data)));
 
   const registry: PluginRegistry = {
-    plugins: Object.freeze([...plugins]),
-    collections: frozenRecord(collections),
-    actions: frozenRecord(actions),
-    processors: frozenProcessors,
-    resources: frozenNamespaces(resourceNamespaces),
-    adapters: frozenNamespaces(adapterNamespaces),
+    plugins: plugins.filter((plugin) => plugin !== rootPlugin),
+    collections: recordFromMap(collections),
+    actions: recordFromMap(actions),
+    processors: registeredProcessors,
+    resources: namespacesFromMap(resourceNamespaces),
+    adapters: namespacesFromMap(adapterNamespaces),
     matchDurable,
     durableConsumers(draft, data) {
-      return Object.freeze(
-        matchDurable(draft, data).map((processor) =>
-          Object.freeze({
-            consumerId: processorConsumerId(processor.id),
-            settlement: processor.settlement ?? "inherit",
-          })
-        ),
-      );
+      return (matchDurable(draft, data).map((processor) => ({
+        consumerId: processorConsumerId(processor.id),
+        settlement: processor.settlement ?? "inherit",
+      })));
     },
     processorForConsumer(consumerId) {
       const id = processorIdFromConsumer(consumerId);
       return id ? processorById.get(id) : undefined;
     },
   };
-  return Object.freeze(registry) as PluginRegistry<
-    RegistryComposition<TPlugins, TResources, TAdapters>
+  return registry as PluginRegistry<
+    RegistryComposition<
+      TPlugins,
+      TResources,
+      TAdapters,
+      TActions,
+      TCollections,
+      TProcessors
+    >
   >;
 }

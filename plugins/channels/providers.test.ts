@@ -1,8 +1,8 @@
 import type { ResolvedContent } from "@copilotz/copilotz/content";
 import { assert, assertEquals, assertExists } from "@std/assert";
 import {
-  createDiscordChannelAdapter,
-  createDiscordChannelResource,
+  discordChannelAdapter,
+  discordChannelResource,
 } from "../channel-discord/index.ts";
 import type {
   DiscordConfig,
@@ -10,8 +10,8 @@ import type {
   DiscordTransport,
 } from "../channel-discord/index.ts";
 import {
-  createTelegramChannelAdapter,
-  createTelegramChannelResource,
+  telegramChannelAdapter,
+  telegramChannelResource,
 } from "../channel-telegram/index.ts";
 import type {
   TelegramConfig,
@@ -26,8 +26,8 @@ import {
   splitWhatsAppText,
 } from "../channel-whatsapp/index.ts";
 import {
-  createWhatsAppChannelAdapter,
-  createWhatsAppChannelResource,
+  whatsappChannelAdapter,
+  whatsappChannelResource,
 } from "../channel-whatsapp/index.ts";
 import { verifyWhatsAppSignature } from "../channel-whatsapp/index.ts";
 import type {
@@ -36,8 +36,8 @@ import type {
   WhatsAppTransport,
 } from "../channel-whatsapp/index.ts";
 import {
-  createZendeskChannelAdapter,
-  createZendeskChannelResource,
+  zendeskChannelAdapter,
+  zendeskChannelResource,
 } from "../channel-zendesk/index.ts";
 import type {
   ZendeskConfig,
@@ -70,8 +70,10 @@ function request(
 function acceptContext(
   channelId: string,
   channel: ChannelResource,
+  options: unknown,
 ): ChannelAcceptContext {
   return Object.freeze({
+    adapters: { channelProviders: { [channelId]: options } },
     namespace: NAMESPACE,
     channelId,
     channel,
@@ -83,8 +85,10 @@ function acceptContext(
 function deliveryContext(
   channelId: string,
   channel: ChannelResource,
+  options: unknown,
 ): ChannelDeliveryContext {
   return Object.freeze({
+    adapters: { channelProviders: { [channelId]: options } },
     namespace: NAMESPACE,
     channelId,
     channel,
@@ -220,15 +224,20 @@ Deno.test("Telegram Adapter fails webhook auth closed and lowers callbacks witho
     botToken: "telegram-bot-secret",
     secretToken: "telegram-webhook-secret",
   });
-  const resource = createTelegramChannelResource();
-  const adapter = createTelegramChannelAdapter({ config, transport });
+  const resource = telegramChannelResource;
+  const providerOptions:
+    import("../channel-telegram/index.ts").TelegramChannelOptions = {
+      config,
+      transport,
+    };
+  const adapter = telegramChannelAdapter;
   const denied = await adapter.accept(
     request({
       method: "POST",
       headers: { "x-telegram-bot-api-secret-token": "wrong" },
       body: {},
     }),
-    acceptContext("telegram", resource),
+    acceptContext("telegram", resource, providerOptions),
   );
   assertEquals(denied.status, 403);
   assertEquals(denied.occurrences, []);
@@ -248,7 +257,7 @@ Deno.test("Telegram Adapter fails webhook auth closed and lowers callbacks witho
         },
       },
     }),
-    acceptContext("telegram", resource),
+    acceptContext("telegram", resource, providerOptions),
   );
   assertEquals(accepted.occurrences.length, 1);
   assertEquals(
@@ -258,7 +267,7 @@ Deno.test("Telegram Adapter fails webhook auth closed and lowers callbacks witho
   const received = await adapter.receive(
     accepted.occurrences[0].input,
     Object.freeze({
-      ...acceptContext("telegram", resource),
+      ...acceptContext("telegram", resource, providerOptions),
       occurrenceId: accepted.occurrences[0].id,
     }),
   );
@@ -291,11 +300,13 @@ Deno.test("Telegram Adapter emits native text, media, and reply-button payloads"
       }));
     },
   });
-  const resource = createTelegramChannelResource();
-  const adapter = createTelegramChannelAdapter({
-    config: { botToken: "telegram-bot-secret" },
-    transport,
-  });
+  const resource = telegramChannelResource;
+  const providerOptions:
+    import("../channel-telegram/index.ts").TelegramChannelOptions = {
+      config: { botToken: "telegram-bot-secret" },
+      transport,
+    };
+  const adapter = telegramChannelAdapter;
   const receipt = await adapter.deliver!(
     attempt(
       "telegram",
@@ -318,7 +329,7 @@ Deno.test("Telegram Adapter emits native text, media, and reply-button payloads"
         }),
       }),
     ),
-    deliveryContext("telegram", resource),
+    deliveryContext("telegram", resource, providerOptions),
   );
   assertEquals(calls.map((item) => item.method), [
     "sendMessage",
@@ -357,11 +368,13 @@ Deno.test("Discord Adapter answers ping, rejects invalid signatures, and uses Bo
       return Promise.resolve(Object.freeze({ id: "discord-media" }));
     },
   });
-  const resource = createDiscordChannelResource();
-  const adapter = createDiscordChannelAdapter({
-    config: signing.config,
-    transport,
-  });
+  const resource = discordChannelResource;
+  const providerOptions:
+    import("../channel-discord/index.ts").DiscordChannelOptions = {
+      config: signing.config,
+      transport,
+    };
+  const adapter = discordChannelAdapter;
   const body = Object.freeze({ type: 1 });
   const rawBody = new TextEncoder().encode(JSON.stringify(body));
   const ping = await adapter.accept(
@@ -371,7 +384,7 @@ Deno.test("Discord Adapter answers ping, rejects invalid signatures, and uses Bo
       body,
       rawBody,
     }),
-    acceptContext("discord", resource),
+    acceptContext("discord", resource, providerOptions),
   );
   assertEquals(ping, { status: 200, response: { type: 1 }, occurrences: [] });
   const denied = await adapter.accept(
@@ -384,7 +397,7 @@ Deno.test("Discord Adapter answers ping, rejects invalid signatures, and uses Bo
       body,
       rawBody,
     }),
-    acceptContext("discord", resource),
+    acceptContext("discord", resource, providerOptions),
   );
   assertEquals(denied.status, 401);
   assertEquals(denied.occurrences, []);
@@ -411,7 +424,7 @@ Deno.test("Discord Adapter answers ping, rejects invalid signatures, and uses Bo
         }),
       }),
     ),
-    deliveryContext("discord", resource),
+    deliveryContext("discord", resource, providerOptions),
   );
   assertEquals(sends[0], { content: "Discord reply" });
   assertEquals(sends[1].components, [{
@@ -455,8 +468,13 @@ Deno.test("WhatsApp Adapter verifies GET/HMAC handshakes and emits native text, 
       }));
     },
   });
-  const resource = createWhatsAppChannelResource();
-  const adapter = createWhatsAppChannelAdapter({ config, transport });
+  const resource = whatsappChannelResource;
+  const providerOptions:
+    import("../channel-whatsapp/index.ts").WhatsAppChannelOptions = {
+      config,
+      transport,
+    };
+  const adapter = whatsappChannelAdapter;
   const verified = await adapter.accept(
     request({
       method: "GET",
@@ -467,7 +485,7 @@ Deno.test("WhatsApp Adapter verifies GET/HMAC handshakes and emits native text, 
       },
       body: null,
     }),
-    acceptContext("whatsapp", resource),
+    acceptContext("whatsapp", resource, providerOptions),
   );
   assertEquals(verified, {
     status: 200,
@@ -484,7 +502,7 @@ Deno.test("WhatsApp Adapter verifies GET/HMAC handshakes and emits native text, 
       },
       body: null,
     }),
-    acceptContext("whatsapp", resource),
+    acceptContext("whatsapp", resource, providerOptions),
   );
   assertEquals(rejectedVerification.status, 403);
 
@@ -506,7 +524,7 @@ Deno.test("WhatsApp Adapter verifies GET/HMAC handshakes and emits native text, 
       body: {},
       rawBody,
     }),
-    acceptContext("whatsapp", resource),
+    acceptContext("whatsapp", resource, providerOptions),
   );
   assertEquals(denied.status, 403);
   assertEquals(denied.occurrences, []);
@@ -537,7 +555,7 @@ Deno.test("WhatsApp Adapter verifies GET/HMAC handshakes and emits native text, 
         }),
       }),
     ),
-    deliveryContext("whatsapp", resource),
+    deliveryContext("whatsapp", resource, providerOptions),
   );
   assertEquals(sends.map((body) => body.type), [
     "text",
@@ -683,15 +701,20 @@ Deno.test("Zendesk Adapter fails auth closed, normalizes media, and emits native
       return Promise.resolve(Object.freeze({ id: `zendesk-${sends.length}` }));
     },
   });
-  const resource = createZendeskChannelResource();
-  const adapter = createZendeskChannelAdapter({ config, transport });
+  const resource = zendeskChannelResource;
+  const providerOptions:
+    import("../channel-zendesk/index.ts").ZendeskChannelOptions = {
+      config,
+      transport,
+    };
+  const adapter = zendeskChannelAdapter;
   const denied = await adapter.accept(
     request({
       method: "POST",
       headers: { "x-api-key": "wrong" },
       body: { events: [] },
     }),
-    acceptContext("zendesk", resource),
+    acceptContext("zendesk", resource, providerOptions),
   );
   assertEquals(denied.status, 403);
   assertEquals(denied.occurrences, []);
@@ -709,7 +732,7 @@ Deno.test("Zendesk Adapter fails auth closed, normalizes media, and emits native
       }),
     }),
     Object.freeze({
-      ...acceptContext("zendesk", resource),
+      ...acceptContext("zendesk", resource, providerOptions),
       occurrenceId: "zendesk:zendesk-message-a",
     }),
   );
@@ -746,7 +769,7 @@ Deno.test("Zendesk Adapter fails auth closed, normalizes media, and emits native
         }),
       }),
     ),
-    deliveryContext("zendesk", resource),
+    deliveryContext("zendesk", resource, providerOptions),
   );
   assertEquals(
     sends.map((body) => (body.content as Record<string, unknown>).type),

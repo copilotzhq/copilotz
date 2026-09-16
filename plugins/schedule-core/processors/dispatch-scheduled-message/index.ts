@@ -44,3 +44,5 @@ export const dispatchScheduledMessageProcessor: Processor<
     });
   },
 });
+
+export default dispatchScheduledMessageProcessor;

@@ -2,7 +2,7 @@
 
 import { assertEquals, assertRejects } from "@std/assert";
 import type { ActionContext } from "@copilotz/copilotz/actions";
-import { createFinanceAction } from "./index.ts";
+import { financeAction } from "./index.ts";
 import { createFinanceProviderRegistry } from "./internal/provider/registry.ts";
 import type { FinanceDataProvider } from "./internal/provider/types.ts";
 
@@ -24,13 +24,19 @@ function provider(): FinanceDataProvider {
 
 Deno.test("Finance Action runs a registered provider and keeps its JSON result", async () => {
   const registry = createFinanceProviderRegistry({ contract: provider() });
-  const action = createFinanceAction({ getProvider: registry.get });
+  const action = financeAction;
   assertEquals(
-    await action.execute({
-      action: "search_assets",
-      query: "contract",
-      provider: "contract",
-    }, { signal: new AbortController().signal } as ActionContext),
+    await action.execute(
+      {
+        action: "search_assets",
+        query: "contract",
+        provider: "contract",
+      },
+      {
+        adapters: { financeProviders: { contract: registry.get("contract") } },
+        signal: new AbortController().signal,
+      } as unknown as ActionContext,
+    ),
     {
       query: "contract",
       total_results: 1,
@@ -53,10 +59,13 @@ Deno.test("Finance Action preserves cancellation and rejects unsafe results", as
         { once: true },
       );
     });
-  const action = createFinanceAction({ getProvider: () => cancelling });
+  const action = financeAction;
   const execution = action.execute(
     { action: "search_assets", query: "cancel" },
-    { signal: controller.signal } as ActionContext,
+    {
+      adapters: { financeProviders: { yahoo: cancelling } },
+      signal: controller.signal,
+    } as unknown as ActionContext,
   );
   controller.abort();
   assertEquals(
@@ -70,9 +79,12 @@ Deno.test("Finance Action preserves cancellation and rejects unsafe results", as
   await assertRejects(
     () =>
       Promise.resolve(
-        createFinanceAction({ getProvider: () => unsafe }).execute(
+        financeAction.execute(
           { action: "search_assets", query: "unsafe" },
-          { signal: new AbortController().signal } as ActionContext,
+          {
+            adapters: { financeProviders: { yahoo: unsafe } },
+            signal: new AbortController().signal,
+          } as unknown as ActionContext,
         ),
       ),
     Error,

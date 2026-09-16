@@ -27,3 +27,5 @@ export const scheduledJobRunNowInputProcessor: Processor<
     );
   },
 });
+
+export default scheduledJobRunNowInputProcessor;

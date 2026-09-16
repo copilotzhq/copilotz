@@ -1,0 +1,14 @@
+{
+  "id": "@copilotz/skills",
+  "version": "0.57.0",
+  "aliases": {
+    "resources/tools/list-skills/index.ts": "list_skills",
+    "resources/tools/load-skill/index.ts": "load_skill",
+    "resources/tools/read-skill-resource/index.ts": "read_skill_resource"
+  },
+  "include": [
+    "resources/tools/list-skills/index.ts",
+    "resources/tools/load-skill/index.ts",
+    "resources/tools/read-skill-resource/index.ts"
+  ]
+}

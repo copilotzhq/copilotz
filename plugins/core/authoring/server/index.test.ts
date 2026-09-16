@@ -1,15 +1,17 @@
+import { defineServerFacade as fixtureServerFacade } from "@copilotz/copilotz/server";
+import { definePlugin as defineFixturePlugin } from "@copilotz/copilotz/plugins";
 import { assertEquals, assertRejects } from "@std/assert";
 import { definePlugin } from "@copilotz/copilotz/plugins";
 import { createCopilotzApplication } from "../../../../runtime/application/index.ts";
 import { createTestDatabase } from "../../../../runtime/testing/ominipg.ts";
-import { createServerPlugin } from "../../../server/index.ts";
+import { serverPlugin } from "../../../server/index.ts";
 import { createServerFacadeFetchHandler } from "../../../../server/facade.ts";
 import {
   CopilotzHttpError,
   createCopilotzClient,
 } from "../../../../client/index.ts";
 import { createCoreClient } from "../client/index.ts";
-import { createCoreServerPlugin } from "./index.ts";
+import { coreServerPlugin } from "./index.ts";
 import { corePlugin } from "../../plugin.ts";
 import type { LlmAdapter } from "../../../llm/index.ts";
 
@@ -49,7 +51,7 @@ Deno.test("Core round trip keeps stored history, actor identity, and multipart b
     engine: { retryBaseMs: 0, random: () => 0 },
     plugins: [
       corePlugin,
-      createCoreServerPlugin(),
+      coreServerPlugin,
       definePlugin({
         id: "test.model",
         version: "1",
@@ -76,17 +78,26 @@ Deno.test("Core round trip keeps stored history, actor identity, and multipart b
         },
         adapters: { llm: { test: adapter } },
       }),
-      createServerPlugin({
-        authenticate(request) {
-          return {
-            namespace: request.headers.get("x-tenant") ?? "tenant",
-            actor: { id: request.headers.get("x-user") ?? "person" },
-          };
-        },
-        authorize(_request, context) {
-          return {
-            operations: { metadata: { actorId: context.scope.actor!.id } },
-          };
+      defineFixturePlugin({
+        ...serverPlugin,
+        resources: {
+          server: {
+            default: fixtureServerFacade({
+              authenticate(request) {
+                return {
+                  namespace: request.headers.get("x-tenant") ?? "tenant",
+                  actor: { id: request.headers.get("x-user") ?? "person" },
+                };
+              },
+              authorize(_request, context) {
+                return {
+                  operations: {
+                    metadata: { actorId: context.scope.actor!.id },
+                  },
+                };
+              },
+            }),
+          },
         },
       }),
     ],

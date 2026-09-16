@@ -71,16 +71,16 @@ Deno.test("package root exposes only the application factory", () => {
       "createDeliveryExecutor",
       "createManagedOminipgSession",
       "createOminipgSqlSession",
-      "createBuiltInToolsPlugin",
-      "createFinanceToolsPlugin",
-      "createPersistentTerminalToolsPlugin",
-      "createWebToolsPlugin",
-      "createAdminPlugin",
-      "createKnowledgePlugin",
-      "createLongTermMemoryPlugin",
+      "builtInToolsPlugin",
+      "financeToolsPlugin",
+      "persistentTerminalToolsPlugin",
+      "webToolsPlugin",
+      "adminPlugin",
+      "knowledgePlugin",
+      "memoryPlugin",
       "corePlugin",
       "createGoalRuntime",
-      "createUsageWorkflowPlugin",
+      "usagePlugin",
       "schedulesPlugin",
       "coreSchedulesPlugin",
       "defineLlmProviderResource",
@@ -109,33 +109,30 @@ Deno.test("package subpaths expose cohesive factories", () => {
       "buildOpenSkillsPlugin",
     ]
   ) assertEquals(moved in denoAdapters, false, moved);
-  assertFunctions(builtinTools, ["createBuiltInToolsPlugin"]);
-  assertFunctions(denoTools, [
-    "createProcessToolsPlugin",
-    "createWorkspaceToolsPlugin",
-  ]);
-  assertFunctions(financeTools, ["createFinanceToolsPlugin"]);
-  assertFunctions(mcpTools, ["createMcpToolsPlugin"]);
+  assertEquals(typeof builtinTools.builtInToolsPlugin, "object");
+  assertEquals(typeof denoTools.denoToolsPlugin, "object");
+  assertEquals(typeof financeTools.financeToolsPlugin, "object");
+  assertFunctions(mcpTools, ["prepareMcpTools"]);
   assertFunctions(stdioMcpTools, ["connectMcp"]);
-  assertFunctions(openApiTools, ["createOpenApiToolsPlugin"]);
+  assertFunctions(openApiTools, ["compileOpenApiTools"]);
   assertFunctions(openApiTools, ["defineApi"]);
-  assertFunctions(tools, ["createToolsPlugin", "defineTool"]);
-  assertFunctions(persistentTerminalTools, [
-    "createPersistentTerminalToolsPlugin",
-  ]);
+  assertFunctions(tools, ["defineTool"]);
+  assertEquals(
+    typeof persistentTerminalTools.persistentTerminalToolsPlugin,
+    "object",
+  );
   assertFunctions(denoPersistentTerminal, [
     "createPersistentTerminalService",
   ]);
-  assertFunctions(webTools, ["createWebToolsPlugin"]);
+  assertEquals(typeof webTools.webToolsPlugin, "object");
   assertFunctions(skills, [
-    "createSkillsPlugin",
     "defineInlineSkill",
     "defineSkill",
   ]);
   assertFunctions(denoSkills, ["buildOpenSkillsPlugin"]);
-  assertFunctions(admin, ["createAdminPlugin"]);
-  assertFunctions(knowledge, ["createKnowledgePlugin"]);
-  assertFunctions(memory, ["createLongTermMemoryPlugin"]);
+  assertEquals(typeof admin.adminPlugin, "object");
+  assertEquals(typeof knowledge.knowledgePlugin, "object");
+  assertEquals(typeof memory.memoryPlugin, "object");
   assertFunctions(core, [
     "message",
     "createAgentCapabilityResolver",
@@ -183,7 +180,7 @@ Deno.test("package subpaths expose cohesive factories", () => {
       "createGoalRuntime",
     ]
   ) assertEquals(removed in goals, false, removed);
-  assertFunctions(usage, ["createUsageWorkflowPlugin"]);
+  assertEquals(typeof usage.usagePlugin, "object");
   assertEquals(typeof usage.usageCollection, "object");
   assertFunctions(schedules, [
     "createScheduledJob",
@@ -215,7 +212,6 @@ Deno.test("package subpaths expose cohesive factories", () => {
   assertFunctions(server, [
     "compileServerRoutes",
     "createServerFacadeFetchHandler",
-    "createServerPlugin",
     "createHttpAdapter",
     "defineServerFacade",
   ]);

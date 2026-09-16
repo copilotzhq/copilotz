@@ -63,20 +63,12 @@ export type TransformDiscordDelivery = (
   attempt: ChannelDeliveryAttempt,
 ) => DiscordDelivery | null | Promise<DiscordDelivery | null>;
 
-export type CreateDiscordChannelResourceOptions = Readonly<{
-  defaultAgentAliases?: readonly string[];
-  metadata?: ChannelJsonObject;
-}>;
-export type CreateDiscordChannelAdapterOptions = Readonly<{
+export type DiscordChannelOptions = Readonly<{
   config: DiscordConfig | DiscordConfigResolver;
   transport?: DiscordTransport;
   fetch?: typeof fetch;
   transformDelivery?: TransformDiscordDelivery;
 }>;
-export type CreateDiscordChannelPluginOptions =
-  & CreateDiscordChannelResourceOptions
-  & CreateDiscordChannelAdapterOptions
-  & Readonly<{ channelId?: string; pluginId?: string; version?: string }>;
 
 export type DiscordUser = Readonly<{
   id: string;

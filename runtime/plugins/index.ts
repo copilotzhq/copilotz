@@ -38,6 +38,7 @@ export type {
   ComposePlugins,
   CompositionOfPlugin,
   CopilotzPlugin,
+  DefinedPlugin,
   DefinePluginInput,
   PluginAdapters,
   PluginNamespaceMap,
@@ -48,3 +49,10 @@ export type {
 } from "./types.ts";
 export { isNonRetryableError, markNonRetryable } from "../failure.ts";
 export type { NonRetryableError } from "../failure.ts";
+
+export { contribution } from "./contribution.ts";
+export type {
+  CompositionContribution,
+  ContributionResult,
+  ResolvedNamespaces,
+} from "./contribution.ts";

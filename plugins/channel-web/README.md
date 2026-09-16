@@ -11,10 +11,21 @@ durable Channel ingress.
 
 ## How to use it
 
-Compose `createWebChannelPlugin()` and send request bodies through the Channel
-server boundary.
+```ts
+import { webChannelPlugin } from "@copilotz/copilotz/channels";
+// Include webChannelPlugin in the final createCopilotz({ plugins: [...] }) call.
+```
+
+Web uses request observation. Override `resources.channels.web` for policy, or
+bind the exported Web Resource and Adapter under your own alias.
 
 ## How it works
 
-The data-only Resource declares request-observation egress, while the Adapter
-normalizes participants, routing, visibility, and inline media.
+`copilotz.json` declares this root. `plugin.generated.ts` contains its static
+composition and `plugin.ts` exposes its public name. Regenerate with
+`deno task build:plugins`. Actions and Processors read final context
+configuration at invocation; there is no plugin factory or runtime directory
+discovery.
+
+See [convention-first authoring](../../docs/convention-authoring.md) for the
+shared file structure, compiler, configuration locations, and migration guide.

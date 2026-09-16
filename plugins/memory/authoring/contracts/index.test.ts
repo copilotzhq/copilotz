@@ -1,6 +1,6 @@
 import { assertEquals } from "@std/assert";
-import type { CreateLongTermMemoryPluginOptions } from "./index.ts";
-Deno.test("memory contracts accept disabled configuration", () => {
-  const value: CreateLongTermMemoryPluginOptions = { enabled: false };
+import type { MemoryConfig } from "../../resources/memory/config/index.ts";
+Deno.test("memory configuration supports disabling automatic maintenance", () => {
+  const value: Partial<MemoryConfig> = { enabled: false };
   assertEquals(value.enabled, false);
 });

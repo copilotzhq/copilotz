@@ -57,10 +57,10 @@ function modelsFor(agent: AgentResource): Readonly<{
   mode: "generate" | "session";
 }> {
   if (agent.models.generate) {
-    return Object.freeze({ models: agent.models.generate, mode: "generate" });
+    return ({ models: agent.models.generate, mode: "generate" } as const);
   }
   if (agent.models.session) {
-    return Object.freeze({ models: agent.models.session, mode: "session" });
+    return ({ models: agent.models.session, mode: "session" } as const);
   }
   throw new Error(`Agent '${agent.id}' requires a generate or session model.`);
 }
@@ -77,7 +77,7 @@ function freezeFact(value: unknown, seen: WeakSet<object>): unknown {
     const descriptor = Object.getOwnPropertyDescriptor(value, key);
     if (descriptor && "value" in descriptor) freezeFact(descriptor.value, seen);
   }
-  return Object.freeze(value);
+  return value;
 }
 
 async function resolvedAgentInstructions(
@@ -92,9 +92,9 @@ async function resolvedAgentInstructions(
 ): Promise<Readonly<{ agent: AgentResource; instructionRevision?: string }>> {
   const policy = agent.instructions;
   if (!policy || typeof policy === "string") {
-    return Object.freeze({ agent });
+    return ({ agent } as const);
   }
-  const facts: AgentInstructionContext = Object.freeze({
+  const facts: AgentInstructionContext = {
     agent,
     participant: frozenFact(mapParticipantRecord(input.agentParticipant)),
     thread: frozenFact(input.thread),
@@ -102,8 +102,8 @@ async function resolvedAgentInstructions(
       input.triggerMessage,
       mapParticipantRecord(input.triggerSender),
     )),
-  });
-  const execution: AgentInstructionExecution = Object.freeze({
+  } as const;
+  const execution: AgentInstructionExecution = {
     agentId: agent.id,
     agentParticipantId: String(input.agentParticipant.id),
     threadId: input.thread.id,
@@ -116,18 +116,18 @@ async function resolvedAgentInstructions(
     ...(context.identity.causationId
       ? { causationId: context.identity.causationId }
       : {}),
-  });
+  } as const;
   const output = await policy.resolve(facts, execution);
   const resolved = instructionResolution(output, agent.id);
   const { instructions: _instructions, ...staticAgent } = agent;
   const selected = resolved.instructions ?? policy.base;
-  return Object.freeze({
-    agent: Object.freeze({
+  return ({
+    agent: {
       ...staticAgent,
       ...(selected !== undefined ? { instructions: selected } : {}),
-    }),
+    } as const,
     ...(resolved.revision ? { instructionRevision: resolved.revision } : {}),
-  });
+  } as const);
 }
 
 function stableText(value: unknown, label: string): string {
@@ -143,9 +143,9 @@ function instructionResolution(
   value: unknown,
   agentId: string,
 ): Readonly<{ instructions?: string; revision?: string }> {
-  if (value === null || value === undefined) return Object.freeze({});
+  if (value === null || value === undefined) return ({} as const);
   if (typeof value === "string") {
-    return Object.freeze({ instructions: stableText(value, agentId) });
+    return ({ instructions: stableText(value, agentId) } as const);
   }
   if (
     !value || typeof value !== "object" || Array.isArray(value) ||
@@ -168,14 +168,14 @@ function instructionResolution(
       `Agent '${agentId}' resolver returned invalid instructions.`,
     );
   }
-  return Object.freeze({
+  return ({
     ...(typeof record.instructions === "string"
       ? { instructions: stableText(record.instructions, agentId) }
       : {}),
     ...(record.revision === undefined
       ? {}
       : { revision: stableText(record.revision, agentId) }),
-  });
+  } as const);
 }
 
 export const messageRouterProcessor: Processor<CoreProcessorContext> =
@@ -311,9 +311,7 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
                 );
               }
               const availableTools = toolsForAgent(context, agent);
-              const availableToolIds = Object.freeze(
-                availableTools.map((tool) => tool.alias),
-              );
+              const availableToolIds = availableTools.map((tool) => tool.alias);
               const resolved = await resolvedAgentInstructions(context, agent, {
                 agentParticipant: participant,
                 thread: snapshot.thread,
@@ -378,9 +376,7 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
                   thread: snapshot.thread,
                   ...(agentTurn ? { historyScopeId: agentTurn.id } : {}),
                   history: snapshot.messages,
-                  messageIds: Object.freeze(
-                    snapshot.records.map((item) => String(item.id)),
-                  ),
+                  messageIds: snapshot.records.map((item) => String(item.id)),
                   tools: availableTools,
                   contributions: captured.contributions,
                   ...(hasCompaction && limit
@@ -506,3 +502,5 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
       }
     },
   });
+
+export default messageRouterProcessor;

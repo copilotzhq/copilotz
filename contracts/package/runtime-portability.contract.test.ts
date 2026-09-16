@@ -118,7 +118,7 @@ Deno.test("optional skills implementation stays off the root runtime graph", asy
   const skills = await source("plugins/skills/index.ts");
   assert(!/runtime\/skills/.test(root));
   assertStringIncludes(skills, "parseSkillMarkdown");
-  assertStringIncludes(skills, "createSkillsPlugin");
+  assertStringIncludes(skills, "skillsPlugin");
 });
 
 Deno.test("agent capability resolution remains factory-first and host-neutral", async () => {

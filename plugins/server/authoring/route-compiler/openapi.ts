@@ -15,7 +15,7 @@ function deepFreeze<T>(value: T): T {
   for (const nested of Object.values(value as Record<string, unknown>)) {
     deepFreeze(nested);
   }
-  return Object.freeze(value);
+  return value;
 }
 
 function jsonEnvelope(

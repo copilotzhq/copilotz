@@ -32,10 +32,10 @@ type HistoryMessageRecord =
 type MessageOrderKey = Readonly<{ createdAt: string; id: string }>;
 
 function messageOrderKey(record: HistoryMessageRecord): MessageOrderKey {
-  return Object.freeze({
+  return ({
     createdAt: String(record.createdAt ?? ""),
     id: record.id,
-  });
+  } as const);
 }
 
 function compareMessageOrder(
@@ -280,11 +280,11 @@ async function activeBranchWindow(
   const rootKey = messageOrderKey(root);
   const headKey = messageOrderKey(head);
   if (compareMessageOrder(rootKey, headKey) >= 0) return undefined;
-  return Object.freeze({
+  return ({
     root: rootKey,
     head: headKey,
     headMessageId: head.id,
-  });
+  } as const);
 }
 
 /** Builds revision fields for a new `message.created` row. */
@@ -292,12 +292,12 @@ export function messageRevisionFrom(
   previous: MessageRecord,
   revisedAt: string,
 ): MessageRevision {
-  return Object.freeze({
+  return ({
     rootMessageId: previous.revision?.rootMessageId ?? previous.id,
     previousRevisionMessageId: previous.id,
     revisionIndex: (previous.revision?.revisionIndex ?? 0) + 1,
     revisedAt,
-  });
+  } as const);
 }
 
 export const messageCollection: CollectionDefinition = defineCollection({
@@ -590,8 +590,10 @@ export const messageCollection: CollectionDefinition = defineCollection({
           if (!next || next === scanAfter) break;
           scanAfter = next;
         }
-        return Object.freeze(await finish(selected, limit));
+        return (await finish(selected, limit));
       },
     },
   },
 });
+
+export default messageCollection;

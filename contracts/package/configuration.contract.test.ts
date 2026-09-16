@@ -10,7 +10,6 @@ type RemovedConfigurationKeys = Extract<
   | "dbInstance"
   | "agents"
   | "tools"
-  | "processors"
   | "queueTTL"
   | "queueId"
   | "ackMode"

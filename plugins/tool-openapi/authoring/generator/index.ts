@@ -27,11 +27,16 @@ import {
   generatedActionAlias,
   generatedActionIdSegment,
 } from "../../../tools/authoring/internal/generated.ts";
-import {
-  composeOpenApiToolsPlugin,
-  type OpenApiGeneratedTool,
-  type OpenApiToolsPlugin,
-} from "../../plugin.ts";
+import type { AnyActionDefinition } from "@copilotz/copilotz/actions";
+import type { ToolDefinition, ToolResource } from "@copilotz/copilotz/tools";
+type OpenApiGeneratedTool = {
+  alias: string;
+  action: AnyActionDefinition;
+  tool: ToolResource;
+};
+export type OpenApiRuntime =
+  & Pick<API, "auth" | "headers" | "prepareRequest" | "baseUrl">
+  & { fetch?: typeof fetch; tokenCache?: Map<string, CachedToken> };
 
 const REMOTE_ERROR_SUMMARY_MAX_LENGTH = 512;
 const STABLE_REMOTE_ERROR_CODE = /^[A-Za-z][A-Za-z0-9_.:-]{0,127}$/;
@@ -216,7 +221,7 @@ function responseAssetSource(
         `Asset-producing API response field '${field}' is not a valid data URL.`,
       );
     }
-    return Object.freeze({ field, ...parsed });
+    return ({ field, ...parsed } as const);
   }
 
   const mediaType = responseField(
@@ -225,11 +230,11 @@ function responseAssetSource(
     "media type",
   );
   try {
-    return Object.freeze({
+    return ({
       field,
       mediaType,
       bytes: base64ToBytes(raw),
-    });
+    } as const);
   } catch {
     throw new TypeError(
       `Asset-producing API response field '${field}' is not valid base64.`,
@@ -328,14 +333,16 @@ async function promoteResponseAssets(
     const nameValue = mapping.nameField
       ? responseField(response, mapping.nameField, "name")
       : undefined;
-    candidates.push(Object.freeze({
-      mappingIndex: index,
-      sourceField: source.field,
-      outputField,
-      mediaType: source.mediaType,
-      bytes: source.bytes,
-      ...(nameValue ? { name: attachmentName(nameValue) } : {}),
-    }));
+    candidates.push(
+      {
+        mappingIndex: index,
+        sourceField: source.field,
+        outputField,
+        mediaType: source.mediaType,
+        bytes: source.bytes,
+        ...(nameValue ? { name: attachmentName(nameValue) } : {}),
+      } as const,
+    );
     delete output[source.field];
   }
 
@@ -349,17 +356,17 @@ async function promoteResponseAssets(
         ? `openapi:${actionAlias}:response-asset`
         : `openapi:${actionAlias}:response-asset:${candidate.mappingIndex}:${candidate.outputField}`,
     });
-    const ref: ContentRef = Object.freeze({
+    const ref: ContentRef = {
       assetId: asset.id,
       kind: attachmentKind(candidate.mediaType),
       role: "attachment",
       mediaType: candidate.mediaType,
       disposition: "attachment",
       ...(candidate.name ? { name: candidate.name } : {}),
-    });
+    } as const;
     output[candidate.outputField] = ref;
   }
-  return Object.freeze(output);
+  return output;
 }
 
 /**
@@ -709,10 +716,10 @@ async function consumeNdjsonToolResponse(
         );
       }
     }
-    const combined = Object.freeze({
-      content: Object.freeze(closed.map(({ prepared }) => prepared.content[0])),
-      assets: Object.freeze(closed.flatMap(({ prepared }) => prepared.assets)),
-    });
+    const combined = {
+      content: closed.map(({ prepared }) => prepared.content[0]),
+      assets: closed.flatMap(({ prepared }) => prepared.assets),
+    } as const;
     const materialized = closed.length > 0
       ? await context.content.materialize(combined)
       : [];
@@ -734,11 +741,11 @@ async function consumeNdjsonToolResponse(
     if (Object.keys(streams).length === 0) return terminal.value;
     const value = terminal.value;
     return value && typeof value === "object" && !Array.isArray(value)
-      ? Object.freeze({
+      ? ({
         ...(value as Record<string, unknown>),
-        streams: Object.freeze(streams),
-      })
-      : Object.freeze({ value, streams: Object.freeze(streams) });
+        streams: streams,
+      } as const)
+      : ({ value, streams: streams } as const);
   } catch (error) {
     await Promise.allSettled(
       [...channels.values()]
@@ -833,6 +840,7 @@ async function callAuthEndpoint(
   authConfig: DynamicAuth,
   baseUrl: string,
   signal: AbortSignal,
+  fetcher: typeof fetch,
 ): Promise<CachedToken> {
   const authUrl = authConfig.authEndpoint.url.startsWith("http")
     ? authConfig.authEndpoint.url
@@ -852,7 +860,7 @@ async function callAuthEndpoint(
     );
   }
 
-  const response = await fetch(authUrl, { method, headers, body, signal });
+  const response = await fetcher(authUrl, { method, headers, body, signal });
 
   if (!response.ok) {
     throw new Error(
@@ -908,6 +916,7 @@ async function getDynamicToken(
   baseUrl: string,
   tokenCache: Map<string, CachedToken>,
   signal: AbortSignal,
+  fetcher: typeof fetch,
 ): Promise<string> {
   const cacheKey = "dynamic";
   const cached = tokenCache.get(cacheKey);
@@ -930,7 +939,7 @@ async function getDynamicToken(
           ? authConfig.refreshConfig.refreshEndpoint
           : baseUrl + authConfig.refreshConfig.refreshEndpoint;
 
-      const refreshResponse = await fetch(refreshUrl, {
+      const refreshResponse = await fetcher(refreshUrl, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -963,7 +972,7 @@ async function getDynamicToken(
   }
 
   // Get new token
-  const newToken = await callAuthEndpoint(authConfig, baseUrl, signal);
+  const newToken = await callAuthEndpoint(authConfig, baseUrl, signal, fetcher);
 
   if (authConfig.cache?.enabled !== false) {
     tokenCache.set(cacheKey, newToken);
@@ -982,6 +991,7 @@ async function applyAuthentication(
   baseUrl?: string,
   tokenCache?: Map<string, CachedToken>,
   signal?: AbortSignal,
+  fetcher: typeof fetch = fetch,
 ) {
   if (!auth) return;
   const normalizedAuth: AuthConfig = auth;
@@ -1030,6 +1040,7 @@ async function applyAuthentication(
         baseUrl,
         tokenCache,
         signal,
+        fetcher,
       );
 
       if (normalizedAuth.tokenExtraction.type === "bearer") {
@@ -1050,23 +1061,29 @@ async function applyAuthentication(
  * Creates a tool execution function for an API operation
  */
 function createApiExecutor(
-  apiConfig: API,
+  declaration: API,
   path: string,
   method: string,
   toolKey: string,
-  baseUrl: string,
+  declaredBaseUrl: string,
   parameterMetadata: {
     pathParams: Set<string>;
     queryParams: Set<string>;
     bodyParams: Set<string>;
     isObjectBody: boolean;
   },
-  tokenCache: Map<string, CachedToken>,
 ) {
   return async (
     args: unknown,
     context: ActionContext,
   ) => {
+    const capability = context.adapters?.openapi?.[declaration.id] as
+      | OpenApiRuntime
+      | undefined;
+    const apiConfig = { ...declaration, ...capability };
+    const fetcher = capability?.fetch ?? fetch;
+    const tokenCache = capability?.tokenCache ?? new Map<string, CachedToken>();
+    const baseUrl = capability?.baseUrl ?? declaredBaseUrl;
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
     let removeAbortListener: (() => void) | undefined;
     let abortReason: "timeout" | "cancelled" | undefined;
@@ -1117,6 +1134,7 @@ function createApiExecutor(
         baseUrl,
         tokenCache,
         context.signal,
+        fetcher,
       );
 
       const requestMethod = method.toUpperCase();
@@ -1223,7 +1241,7 @@ function createApiExecutor(
       if (context.signal.aborted) abort();
 
       // Make the request
-      const response = await fetch(url, requestOptions);
+      const response = await fetcher(url, requestOptions);
 
       // Parse response
       const contentType = response.headers.get("content-type") || "";
@@ -1289,7 +1307,6 @@ function createApiExecutor(
 
 function generateApiEntries(apiConfig: API): readonly OpenApiGeneratedTool[] {
   const entries: OpenApiGeneratedTool[] = [];
-  const tokenCache = new Map<string, CachedToken>();
   const schema = dereferenceOpenApiLocalRefs(
     normalizeOpenApiSchema(apiConfig.openApiSchema),
   );
@@ -1347,7 +1364,6 @@ function generateApiEntries(apiConfig: API): readonly OpenApiGeneratedTool[] {
           actionAlias,
           baseUrl,
           parameterMetadata,
-          tokenCache,
         ),
       });
       const tool = defineTool(actionAlias, action, {
@@ -1367,11 +1383,11 @@ function generateApiEntries(apiConfig: API): readonly OpenApiGeneratedTool[] {
         },
       });
 
-      entries.push(Object.freeze({ alias: actionAlias, action, tool }));
+      entries.push({ alias: actionAlias, action, tool } as const);
     });
   });
 
-  return Object.freeze(entries);
+  return entries;
 }
 
 export type DefinedApi<TApi extends API = API> = TApi;
@@ -1444,7 +1460,7 @@ export function defineApi<const TApi extends API>(
   if (typeof config.name !== "string" || !config.name.trim()) {
     throw new TypeError("API name is required.");
   }
-  return Object.freeze({
+  return ({
     ...config,
     ...(config.openApiSchema && typeof config.openApiSchema === "object"
       ? {
@@ -1481,25 +1497,22 @@ export function defineApi<const TApi extends API>(
         toolPolicies: snapshotApiJson(config.toolPolicies, "API Tool policies"),
       }
       : {}),
-  }) as DefinedApi<TApi>;
+  } as const) as DefinedApi<TApi>;
 }
 
 export type OpenApiDefinitions = Readonly<Record<string, API>>;
 
-export type CreateOpenApiToolsPluginOptions = Readonly<{
+export type CompileOpenApiToolsOptions = Readonly<{
   /** Array form retains one generated Tool per operation. */
   apis: readonly API[] | OpenApiDefinitions;
-  id?: string;
-  version?: string;
 }>;
 
 /** Concrete plugin shape produced by OpenAPI discovery. */
-export type { OpenApiToolsPlugin } from "../../plugin.ts";
 
 /** Discovers every OpenAPI operation before runtime composition. */
-export function createOpenApiToolsPlugin(
-  options: CreateOpenApiToolsPluginOptions,
-): OpenApiToolsPlugin {
+export function compileOpenApiTools(
+  options: CompileOpenApiToolsOptions,
+): Readonly<Record<string, ToolDefinition>> {
   if (!options || !options.apis || typeof options.apis !== "object") {
     throw new TypeError("OpenAPI Tool plugin requires APIs.");
   }
@@ -1531,9 +1544,18 @@ export function createOpenApiToolsPlugin(
       entries.push(entry);
     }
   }
-  return composeOpenApiToolsPlugin({
-    id: options.id ?? "@copilotz/openapi-tools",
-    version: options.version ?? "3.0.0",
-    entries,
-  });
+  return Object.fromEntries(
+    entries.map(
+      (entry) => [
+        entry.alias,
+        defineTool({
+          ...entry.action,
+          name: entry.tool.name,
+          description: entry.tool.description,
+          history: entry.tool.history,
+          metadata: entry.tool.metadata,
+        }),
+      ],
+    ),
+  );
 }

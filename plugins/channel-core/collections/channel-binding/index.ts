@@ -68,3 +68,5 @@ export const channelBindingCollection: CollectionDefinition<
     },
   },
 });
+
+export default channelBindingCollection;

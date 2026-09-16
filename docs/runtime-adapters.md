@@ -72,31 +72,33 @@ tool execution has a durable lifecycle, retries, and possible external effects,
 so it is never a Resource policy hook.
 
 ```ts
-import { createToolsPlugin, defineTool } from "@copilotz/copilotz/tools";
+import { defineTool } from "@copilotz/copilotz/tools";
 
-const tools = createToolsPlugin({
-  tools: {
-    echo: defineTool({
-      id: "example.echo",
-      name: "Echo",
-      description: "Returns the supplied message.",
-      execute: ({ message }: { message: string }) => ({ message }),
-    }),
+import { definePlugin } from "@copilotz/copilotz/plugins";
+const tools = definePlugin({
+  id: "example.tools",
+  version: "1",
+  resources: {
+    tools: {
+      echo: defineTool({
+        id: "example.echo",
+        name: "Echo",
+        description: "Returns the supplied message.",
+        execute: ({ message }: { message: string }) => ({ message }),
+      }),
+    },
   },
 });
 ```
 
-`createOpenApiToolsPlugin` accepts either `apis: [defineApi(...)]` or an API
+`compileOpenApiTools` accepts either `apis: [defineApi(...)]` or an API
 declaration map such as `apis: { booking: defineApi(...) }`. Both forms generate
 every schema operation using its operation ID-derived Tool alias.
 
-`defineApi` itself is an immutable process-local API Resource definition. Its
-typed transport policies, such as request preparation and response-asset
-mapping, stay on that definition; the OpenAPI compiler is still required to
-materialize each operation's Action and Tool Resource. Its process-local API
-Resource may carry transport policy and credentials, just as a built-in LLM LLM
-connection does. A genuinely custom transport implementation belongs to an
-Adapter rather than a Resource hook.
+`defineApi` names a source declaration. Explicit compilation returns Tool
+contributions for `resources.tools`. Runtime auth, headers, request hooks,
+transport, and optional cache are supplied through `adapters.openapi[apiId]`.
+The compiler does not need runtime credentials.
 
 OpenAPI live NDJSON channels are append-only, media-stable, and materialized in
 one combined content commit. MCP result lowering accepts lossless JSON and

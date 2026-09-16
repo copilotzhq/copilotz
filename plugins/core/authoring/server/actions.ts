@@ -1,3 +1,4 @@
+import type { ActionDefinition } from "@copilotz/copilotz/actions";
 /** Conversation mutations use ordinary durable Actions and existing Collections. */
 import { type ActionContext, defineAction } from "@copilotz/copilotz/actions";
 
@@ -54,7 +55,17 @@ async function ownedThread(context: ActionContext, id: string) {
   return thread;
 }
 
-export const sendConversation = defineAction({
+export const sendConversation: ActionDefinition<
+  {
+    threadId?: string;
+    externalThreadId?: string;
+    content: unknown;
+    participantIds?: string[];
+    recipientIds?: string[];
+  },
+  { threadId: string; message: unknown },
+  ActionContext
+> = defineAction({
   id: "copilotz.core.conversation.send",
   inputSchema: sendSchema,
   async execute(
@@ -157,7 +168,18 @@ export const sendConversation = defineAction({
   },
 });
 
-export const updateConversation = defineAction({
+export const updateConversation: ActionDefinition<
+  { threadId: string; patch: Record<string, unknown> },
+  Readonly<
+    Record<string, unknown> & {
+      id: string;
+      namespace: string;
+      createdAt: string;
+      updatedAt: string;
+    }
+  >,
+  ActionContext
+> = defineAction({
   id: "copilotz.core.conversation.update",
   inputSchema: {
     type: "object",
@@ -206,7 +228,11 @@ export const updateConversation = defineAction({
   },
 });
 
-export const deleteConversation = defineAction({
+export const deleteConversation: ActionDefinition<
+  { threadId: string },
+  { threadId: string; deleted: boolean },
+  ActionContext
+> = defineAction({
   id: "copilotz.core.conversation.delete",
   inputSchema: {
     type: "object",
@@ -248,7 +274,11 @@ export const deleteConversation = defineAction({
   },
 });
 
-export const editConversationMessage = defineAction({
+export const editConversationMessage: ActionDefinition<
+  { threadId: string; messageId: string; content: unknown },
+  unknown,
+  ActionContext
+> = defineAction({
   id: "copilotz.core.conversation.edit-message",
   inputSchema: {
     type: "object",

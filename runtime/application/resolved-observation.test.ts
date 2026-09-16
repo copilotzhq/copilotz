@@ -54,7 +54,7 @@ function messageCreated(
   return output as ResolvedCopilotzEvent<MessageCreatedData>;
 }
 
-Deno.test("send and observe expose the resolved immutable message.created body", async () => {
+Deno.test("send and observe expose the resolved message.created snapshot", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   const processorEvents: ProcessorEvent[] = [];
   const application = await createCopilotzApplication({
@@ -110,9 +110,7 @@ Deno.test("send and observe expose the resolved immutable message.created body",
     );
     assertEquals(sent.data.operation, "create");
     assertEquals(sent.data.record.content, ["hello"]);
-    assertEquals(Object.isFrozen(sent), true);
-    assertEquals(Object.isFrozen(sent.data), true);
-    assertEquals(Object.isFrozen(sent.data.record), true);
+
     assertStrictEquals(observed, sent);
     assertEquals(observed.data, sent.data);
     assertEquals(processor.payload, sent.payload);

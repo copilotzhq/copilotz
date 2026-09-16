@@ -70,22 +70,12 @@ export type TransformTelegramDelivery = (
   attempt: ChannelDeliveryAttempt,
 ) => TelegramDelivery | null | Promise<TelegramDelivery | null>;
 
-export type CreateTelegramChannelResourceOptions = Readonly<{
-  defaultAgentAliases?: readonly string[];
-  metadata?: ChannelJsonObject;
-}>;
-
-export type CreateTelegramChannelAdapterOptions = Readonly<{
+export type TelegramChannelOptions = Readonly<{
   config: TelegramConfig | TelegramConfigResolver;
   transport?: TelegramTransport;
   fetch?: typeof fetch;
   transformDelivery?: TransformTelegramDelivery;
 }>;
-
-export type CreateTelegramChannelPluginOptions =
-  & CreateTelegramChannelResourceOptions
-  & CreateTelegramChannelAdapterOptions
-  & Readonly<{ channelId?: string; pluginId?: string; version?: string }>;
 
 export type TelegramUser = Readonly<{
   id: string | number;

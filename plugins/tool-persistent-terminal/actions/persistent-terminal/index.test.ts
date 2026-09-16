@@ -1,15 +1,10 @@
 import { assertEquals } from "@std/assert";
-import { createPersistentTerminalAction } from "./index.ts";
+import { persistentTerminalAction } from "./index.ts";
 
-Deno.test("Persistent Terminal Action uses the configured alias", () => {
-  const action = createPersistentTerminalAction({
-    terminal: {
-      execute: async () => ({}),
-      shutdown: async () => {},
-    },
-  }, "terminal_test");
+Deno.test("Persistent Terminal Action has stable native identity", () => {
+  const action = persistentTerminalAction;
   assertEquals(
     action.id,
-    "copilotz.tools.persistent-terminal.terminal_test",
+    "copilotz.tools.persistent-terminal.persistent_terminal",
   );
 });

@@ -155,3 +155,5 @@ export const scheduledJobCollection: CollectionDefinition<
     },
   },
 });
+
+export default scheduledJobCollection;

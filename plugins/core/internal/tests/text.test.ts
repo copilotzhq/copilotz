@@ -54,7 +54,7 @@ import {
 import type { ConversationMessage } from "@copilotz/copilotz/core";
 import { createCopilotzApplication } from "../../../../runtime/application/application.ts";
 import { createTestDomainContext } from "../testing/context.ts";
-import { createUsageWorkflowPlugin } from "../../../usage/plugin.ts";
+import { usagePlugin } from "../../../usage/plugin.ts";
 
 const TEST_SCHEMA = "copilotz_core_llm_call";
 const NAMESPACE = "tenant-a";
@@ -1171,7 +1171,7 @@ Deno.test("public lifecycle forgery cannot project Core or Usage effects", async
     database: db,
     namespace: NAMESPACE,
     databaseSchema: `${TEST_SCHEMA}_lifecycle_authority`,
-    plugins: [corePlugin, createUsageWorkflowPlugin(), app],
+    plugins: [corePlugin, usagePlugin, app],
     engine: { retryBaseMs: 0, random: () => 0 },
   });
   try {

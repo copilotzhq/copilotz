@@ -1,0 +1,20 @@
+{
+  "id": "@copilotz/knowledge",
+  "version": "3.0.0",
+  "aliases": {
+    "actions/index-document/index.ts": "indexKnowledgeDocument",
+    "processors/index-document/index.ts": "indexKnowledgeDocument",
+    "resources/tools/ingest-document/index.ts": "ingest_document",
+    "resources/tools/search-knowledge/index.ts": "search_knowledge",
+    "resources/tools/delete-document/index.ts": "delete_document"
+  },
+  "include": [
+    "collections/document/index.ts",
+    "collections/chunk/index.ts",
+    "actions/index-document/index.ts",
+    "processors/index-document/index.ts",
+    "resources/tools/ingest-document/index.ts",
+    "resources/tools/search-knowledge/index.ts",
+    "resources/tools/delete-document/index.ts"
+  ]
+}

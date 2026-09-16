@@ -1,3 +1,4 @@
+import type { ActionDefinition } from "@copilotz/copilotz/actions";
 /** @module Admin activity Action primitive. */
 import { defineAction } from "@copilotz/copilotz/actions";
 import type { CollectionRecord } from "@copilotz/copilotz/collections";
@@ -83,7 +84,11 @@ function createdInRange(
 }
 
 /** Returns bucketed message and usage activity. */
-export const adminActivityAction = defineAction<
+export const adminActivityAction: ActionDefinition<
+  AdminRequest,
+  AdminResponse,
+  AdminActionContext
+> = defineAction<
   AdminRequest,
   AdminResponse,
   AdminActionContext,
@@ -138,3 +143,5 @@ export const adminActivityAction = defineAction<
     };
   },
 });
+
+export default adminActivityAction;

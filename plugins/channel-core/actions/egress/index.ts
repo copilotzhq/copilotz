@@ -65,9 +65,9 @@ function input(value: unknown): ChannelEgressActionInput {
       "Channel egress Action input.messageId must be an enumerable data property.",
     );
   }
-  return Object.freeze({
+  return ({
     messageId: text(descriptor.value, "Channel egress message ID"),
-  });
+  } as const);
 }
 
 function object(value: unknown, label: string): ChannelJsonObject {
@@ -95,7 +95,7 @@ function dataArray(value: unknown, label: string): readonly unknown[] {
   ) {
     throw new TypeError(`${label} must be a dense data array.`);
   }
-  return Object.freeze(Array.from({ length: value.length }, (_, index) => {
+  return (Array.from({ length: value.length }, (_, index) => {
     const descriptor = descriptors[String(index)];
     if (!descriptor?.enumerable || !("value" in descriptor)) {
       throw new TypeError(`${label}[${index}] must be a data property.`);
@@ -105,25 +105,23 @@ function dataArray(value: unknown, label: string): readonly unknown[] {
 }
 
 function contentSequence(value: unknown): ContentSequence {
-  return Object.freeze(
-    dataArray(value, "Channel delivery content").map((value, index) => {
-      const cloned = cloneChannelJson(
-        value,
-        `Channel delivery content[${index}]`,
+  return (dataArray(value, "Channel delivery content").map((value, index) => {
+    const cloned = cloneChannelJson(
+      value,
+      `Channel delivery content[${index}]`,
+    );
+    if (!cloned || typeof cloned !== "object" || Array.isArray(cloned)) {
+      throw new TypeError(
+        `Channel delivery content[${index}] must be a ref.`,
       );
-      if (!cloned || typeof cloned !== "object" || Array.isArray(cloned)) {
-        throw new TypeError(
-          `Channel delivery content[${index}] must be a ref.`,
-        );
-      }
-      const ref = cloned as unknown as ContentRef;
-      text(ref.assetId, `Channel delivery content[${index}] Asset ID`);
-      text(ref.kind, `Channel delivery content[${index}] kind`);
-      text(ref.role, `Channel delivery content[${index}] role`);
-      text(ref.mediaType, `Channel delivery content[${index}] media type`);
-      return Object.freeze(ref);
-    }),
-  );
+    }
+    const ref = cloned as unknown as ContentRef;
+    text(ref.assetId, `Channel delivery content[${index}] Asset ID`);
+    text(ref.kind, `Channel delivery content[${index}] kind`);
+    text(ref.role, `Channel delivery content[${index}] role`);
+    text(ref.mediaType, `Channel delivery content[${index}] media type`);
+    return ref;
+  }));
 }
 
 function channel(
@@ -154,7 +152,7 @@ async function execute(
     id: text(message.senderId, "Message sender ID"),
   });
   if (!sender || sender.participantType !== "agent") {
-    return Object.freeze({ intents: Object.freeze([]) });
+    return ({ intents: [] as const } as const);
   }
   const threadId = text(message.threadId, "Message thread ID");
   const bindings = await context.collections.channelBinding.queries.byThreadId({
@@ -170,44 +168,48 @@ async function execute(
       "channel-delivery",
       identityTuple(binding.id, messageId),
     );
-    intents.push(Object.freeze({
-      deliveryKey,
-      bindingId: binding.id,
-      channelId,
-      externalThreadId: text(
-        binding.externalThreadId,
-        "Binding external thread ID",
-      ),
-      threadId,
-      messageId,
-      route: object(binding.route, "Channel delivery route"),
-      sender: Object.freeze({
-        id: sender.id,
-        externalId: text(
-          sender.externalId ?? sender.id,
-          "Channel delivery sender external ID",
+    intents.push(
+      {
+        deliveryKey,
+        bindingId: binding.id,
+        channelId,
+        externalThreadId: text(
+          binding.externalThreadId,
+          "Binding external thread ID",
         ),
-        participantType: "agent",
-        ...(optionalText(sender.name, "Channel delivery sender name")
-          ? { name: optionalText(sender.name, "Channel delivery sender name") }
-          : {}),
-        ...(optionalText(sender.agentId, "Channel delivery sender Agent ID")
-          ? {
-            agentId: optionalText(
-              sender.agentId,
-              "Channel delivery sender Agent ID",
-            ),
-          }
-          : {}),
-      }),
-      content,
-      metadata: object({
-        binding: binding.metadata,
-        message: message.metadata ?? {},
-      }, "Channel delivery metadata"),
-    }));
+        threadId,
+        messageId,
+        route: object(binding.route, "Channel delivery route"),
+        sender: {
+          id: sender.id,
+          externalId: text(
+            sender.externalId ?? sender.id,
+            "Channel delivery sender external ID",
+          ),
+          participantType: "agent",
+          ...(optionalText(sender.name, "Channel delivery sender name")
+            ? {
+              name: optionalText(sender.name, "Channel delivery sender name"),
+            }
+            : {}),
+          ...(optionalText(sender.agentId, "Channel delivery sender Agent ID")
+            ? {
+              agentId: optionalText(
+                sender.agentId,
+                "Channel delivery sender Agent ID",
+              ),
+            }
+            : {}),
+        } as const,
+        content,
+        metadata: object({
+          binding: binding.metadata,
+          message: message.metadata ?? {},
+        }, "Channel delivery metadata"),
+      } as const,
+    );
   }
-  return Object.freeze({ intents: Object.freeze(intents) });
+  return ({ intents: intents } as const);
 }
 
 export const channelEgressAction: ActionDefinition<
@@ -221,3 +223,5 @@ export const channelEgressAction: ActionDefinition<
   inputSchema: egressSchema,
   execute,
 });
+
+export default channelEgressAction;

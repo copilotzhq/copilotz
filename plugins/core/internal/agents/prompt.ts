@@ -219,20 +219,18 @@ function systemPrompt(
 function llmTools(
   tools: readonly CoreToolEntry[],
 ): readonly LlmToolDefinition[] {
-  return Object.freeze(tools.map((tool) =>
-    Object.freeze({
-      name: tool.alias,
-      description: tool.resource.description,
-      ...(tool.resource.inputSchema &&
-          typeof tool.resource.inputSchema === "object"
-        ? {
-          inputSchema: structuredClone(
-            tool.resource.inputSchema,
-          ) as LlmJsonObject,
-        }
-        : {}),
-    })
-  ));
+  return (tools.map((tool) => ({
+    name: tool.alias,
+    description: tool.resource.description,
+    ...(tool.resource.inputSchema &&
+        typeof tool.resource.inputSchema === "object"
+      ? {
+        inputSchema: structuredClone(
+          tool.resource.inputSchema,
+        ) as LlmJsonObject,
+      }
+      : {}),
+  } as const)));
 }
 
 /** Builds the provider-neutral LLM request interpreted by the LLM plugin. */
@@ -266,15 +264,11 @@ export async function buildCoreLlmRequest(
       ...(input.historyScopeId ? { historyScopeId: input.historyScopeId } : {}),
     });
   const prepared = await prepareContextContributions(context, contributions);
-  const rendered: readonly RenderedContext[] = Object.freeze(
-    prepared.map((contribution) =>
-      Object.freeze({
-        title: contribution.title,
-        role: contribution.role,
-        text: renderContextContent(contribution.content),
-      })
-    ),
-  );
+  const rendered: readonly RenderedContext[] = prepared.map((contribution) => ({
+    title: contribution.title,
+    role: contribution.role,
+    text: renderContextContent(contribution.content),
+  } as const));
   const promptInstructions = collectPromptInstructions(
     context.resources.promptInstructions,
   );
@@ -293,7 +287,7 @@ export async function buildCoreLlmRequest(
       (value): value is NonNullable<typeof value> => Boolean(value),
     ),
   );
-  return Object.freeze({
+  return ({
     messages,
     tools: llmTools(input.tools),
     instructions: systemPrompt({
@@ -308,5 +302,5 @@ export async function buildCoreLlmRequest(
       promptInstructions,
       context: rendered,
     }),
-  });
+  } as const);
 }

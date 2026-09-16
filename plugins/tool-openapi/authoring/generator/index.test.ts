@@ -16,14 +16,26 @@ import type {
   ContentStreamOpenInput,
 } from "@copilotz/copilotz/streams";
 import type { API } from "../../../tools/authoring/integration-resources/index.ts";
-import { createOpenApiToolsPlugin, defineApi } from "./index.ts";
+import {
+  compileOpenApiTools,
+  type CompileOpenApiToolsOptions,
+  defineApi,
+} from "./index.ts";
+import { definePlugin } from "@copilotz/copilotz/plugins";
+function compileFixture(options: CompileOpenApiToolsOptions) {
+  return definePlugin({
+    id: "test.openapi",
+    version: "1",
+    resources: { tools: compileOpenApiTools(options) },
+  });
+}
 
 type Executable = Readonly<{
   execute(input: unknown, context: ActionContext): unknown | Promise<unknown>;
 }>;
 
 function action(
-  plugin: ReturnType<typeof createOpenApiToolsPlugin>,
+  plugin: ReturnType<typeof compileFixture>,
   alias: string,
 ): Executable {
   const value = plugin.actions[alias];
@@ -101,7 +113,7 @@ Deno.test("OpenAPI factory injects native Action context into request preparatio
   const originalFetch = globalThis.fetch;
   globalThis.fetch = () => Promise.resolve(Response.json({ ok: true }));
   try {
-    const plugin = createOpenApiToolsPlugin({ apis: [definition] });
+    const plugin = compileFixture({ apis: [definition] });
     await action(plugin, "scoped_lookup").execute({}, context);
     assertEquals(observed?.apiId, "fixture-api");
     assertEquals(observed?.actionAlias, "scoped_lookup");
@@ -132,7 +144,7 @@ Deno.test("OpenAPI request preparation receives each execution's runtime databas
   const originalFetch = globalThis.fetch;
   globalThis.fetch = () => Promise.resolve(Response.json({ ok: true }));
   try {
-    const plugin = createOpenApiToolsPlugin({ apis: [definition] });
+    const plugin = compileFixture({ apis: [definition] });
     await action(plugin, "schema_scoped_lookup").execute(
       {},
       actionContext({ databaseSchema: "tenant_a" }),
@@ -210,7 +222,7 @@ Deno.test("OpenAPI NDJSON uses live Content Streams and materializes them before
     );
   try {
     const result = await action(
-      createOpenApiToolsPlugin({ apis: [definition] }),
+      compileFixture({ apis: [definition] }),
       "terminal",
     ).execute({}, context);
     assertEquals(result, {
@@ -278,7 +290,7 @@ Deno.test("OpenAPI NDJSON aborts every open stream on missing and error terminal
         );
       await assertRejects(async () =>
         await action(
-          createOpenApiToolsPlugin({ apis: [definition] }),
+          compileFixture({ apis: [definition] }),
           "terminal_failure",
         ).execute({}, context)
       );
@@ -309,7 +321,7 @@ Deno.test("OpenAPI NDJSON terminal errors project bounded envelope details", asy
     let failure: unknown;
     try {
       await action(
-        createOpenApiToolsPlugin({ apis: [definition] }),
+        compileFixture({ apis: [definition] }),
         "terminal_error_details",
       ).execute({}, actionContext());
     } catch (error) {
@@ -346,7 +358,7 @@ Deno.test("OpenAPI failed responses keep an opaque-payload fallback message", as
     await assertRejects(
       async () =>
         await action(
-          createOpenApiToolsPlugin({ apis: [definition] }),
+          compileFixture({ apis: [definition] }),
           "opaque_failure",
         ).execute({}, actionContext()),
       Error,
@@ -416,7 +428,7 @@ Deno.test("OpenAPI NDJSON close failure aborts that and every later writer", asy
     await assertRejects(
       async () =>
         await action(
-          createOpenApiToolsPlugin({ apis: [definition] }),
+          compileFixture({ apis: [definition] }),
           "terminal_close_failure",
         ).execute({}, context),
       Error,
@@ -508,7 +520,7 @@ Deno.test("OpenAPI NDJSON materializes all closed channels in one batch", async 
     );
   try {
     const result = await action(
-      createOpenApiToolsPlugin({ apis: [definition] }),
+      compileFixture({ apis: [definition] }),
       "terminal_combined",
     ).execute({}, context);
     assertEquals(materializeCalls, 1);
@@ -578,7 +590,7 @@ Deno.test("OpenAPI NDJSON settles all writers before one failing materialization
     await assertRejects(
       () =>
         action(
-          createOpenApiToolsPlugin({ apis: [definition] }),
+          compileFixture({ apis: [definition] }),
           "terminal_materialize_failure",
         ).execute({}, context) as Promise<unknown>,
       Error,
@@ -633,7 +645,7 @@ Deno.test("OpenAPI NDJSON requires exactly one ref from every closed channel", a
     await assertRejects(
       () =>
         action(
-          createOpenApiToolsPlugin({ apis: [definition] }),
+          compileFixture({ apis: [definition] }),
           "terminal_invalid_close",
         ).execute({}, context) as Promise<unknown>,
       TypeError,
@@ -715,7 +727,7 @@ Deno.test("OpenAPI NDJSON rejects non-append and inconsistent channel declaratio
       await assertRejects(
         () =>
           action(
-            createOpenApiToolsPlugin({ apis: [definition] }),
+            compileFixture({ apis: [definition] }),
             "terminal_invalid_output",
           ).execute({}, context) as Promise<unknown>,
         TypeError,
@@ -765,7 +777,7 @@ Deno.test("OpenAPI response assets publish canonical content and return a Conten
     }));
   try {
     const result = await action(
-      createOpenApiToolsPlugin({ apis: [definition] }),
+      compileFixture({ apis: [definition] }),
       "asset_export",
     ).execute({}, context);
     assertEquals(published, "name,value\nalpha,1\n");
@@ -846,7 +858,7 @@ Deno.test("OpenAPI response assets promote explicit data URLs as one ref per fie
     }));
   try {
     const result = await action(
-      createOpenApiToolsPlugin({ apis: [definition] }),
+      compileFixture({ apis: [definition] }),
       "available_seats",
     ).execute({}, context);
     assertEquals(published, [
@@ -913,7 +925,7 @@ Deno.test("OpenAPI response assets validate every configured field before public
     await assertRejects(
       () =>
         action(
-          createOpenApiToolsPlugin({ apis: [definition] }),
+          compileFixture({ apis: [definition] }),
           "available_seats",
         ).execute({}, context) as Promise<unknown>,
       TypeError,
@@ -926,13 +938,13 @@ Deno.test("OpenAPI response assets validate every configured field before public
 });
 
 Deno.test("OpenAPI aliases are deterministic and collisions fail composition", () => {
-  const normalized = createOpenApiToolsPlugin({
+  const normalized = compileFixture({
     apis: [api("GET /records")],
   });
   assertEquals(Object.keys(normalized.actions), ["api_GET_records"]);
   assertThrows(
     () =>
-      createOpenApiToolsPlugin({
+      compileFixture({
         apis: [
           api("same", { id: "one" }),
           api("same", { id: "two" }),
@@ -960,8 +972,8 @@ Deno.test("OpenAPI alias maps are declaration maps and retain every operation al
       },
     },
   });
-  const arrayPlugin = createOpenApiToolsPlugin({ apis: [definition] });
-  const mapPlugin = createOpenApiToolsPlugin({
+  const arrayPlugin = compileFixture({ apis: [definition] });
+  const mapPlugin = compileFixture({
     apis: { fixture: definition },
   });
   assertEquals(Object.keys(mapPlugin.actions), [
@@ -995,25 +1007,25 @@ Deno.test("defineApi snapshots mutable JSON and OpenAPI maps reject unsafe decla
     headers: { "X-Original": "yes" },
   });
   schema.paths["/status"].get.operationId = "mutated_status";
-  const plugin = createOpenApiToolsPlugin({ apis: { fixture: api } });
+  const plugin = compileFixture({ apis: { fixture: api } });
   assertEquals(Object.keys(plugin.actions), ["original_status"]);
 
   assertThrows(
-    () => createOpenApiToolsPlugin({ apis: { "not-valid": api } }),
+    () => compileFixture({ apis: { "not-valid": api } }),
     TypeError,
     "invalid alias",
   );
   const unsafe = Object.create(null) as Record<string, typeof api>;
   unsafe.__proto__ = api;
   assertThrows(
-    () => createOpenApiToolsPlugin({ apis: unsafe }),
+    () => compileFixture({ apis: unsafe }),
     TypeError,
     "invalid alias",
   );
   const customPrototype = Object.create({ inherited: api });
   customPrototype.fixture = api;
   assertThrows(
-    () => createOpenApiToolsPlugin({ apis: customPrototype }),
+    () => compileFixture({ apis: customPrototype }),
     TypeError,
     "plain alias map",
   );
@@ -1034,7 +1046,7 @@ Deno.test("OpenAPI Action cancellation remains AbortError", async () => {
     });
   try {
     const execution = action(
-      createOpenApiToolsPlugin({ apis: [api("cancel_request")] }),
+      compileFixture({ apis: [api("cancel_request")] }),
       "cancel_request",
     ).execute({}, context);
     controller.abort();
@@ -1057,10 +1069,10 @@ Deno.test("OpenAPI dynamic-auth caches are isolated per generated API instance",
         cache: { enabled: true, duration: 3_600 },
       },
     });
-  const first = createOpenApiToolsPlugin({
+  const first = compileFixture({
     apis: [dynamicApi("https://auth-a.test/token")],
   });
-  const second = createOpenApiToolsPlugin({
+  const second = compileFixture({
     apis: [dynamicApi("https://auth-b.test/token")],
   });
   const authCalls: string[] = [];
@@ -1115,7 +1127,7 @@ Deno.test("OpenAPI dynamic authentication honors Action cancellation", async () 
     });
   try {
     const execution = action(
-      createOpenApiToolsPlugin({ apis: [definition] }),
+      compileFixture({ apis: [definition] }),
       "auth_cancel",
     ).execute({}, actionContext({ signal: controller.signal }));
     controller.abort(cancellation);

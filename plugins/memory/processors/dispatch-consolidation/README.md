@@ -12,8 +12,7 @@ as ordinary conversation turns without exposing maintenance in public history.
 
 ## how to use it
 
-It is composed automatically by `createLongTermMemoryPlugin` when Memory is
-enabled.
+It is composed automatically by `memoryPlugin` when Memory is enabled.
 
 ## how it works
 

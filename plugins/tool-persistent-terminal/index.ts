@@ -4,9 +4,8 @@
  * @module
  */
 
-export { createPersistentTerminalToolsPlugin } from "./plugin.ts";
+export { persistentTerminalToolsPlugin } from "./plugin.ts";
 export type {
-  CreatePersistentTerminalToolsPluginOptions,
   PersistentTerminalAction,
   PersistentTerminalAsset,
   PersistentTerminalInput,
@@ -15,3 +14,5 @@ export type {
   PersistentTerminalService,
   PersistentTerminalServiceContext,
 } from "./actions/index.ts";
+
+export * from "./resources/index.ts";

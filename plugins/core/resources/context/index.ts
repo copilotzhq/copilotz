@@ -25,13 +25,13 @@ export function defineContextResource(
   if (typeof resource.contribute !== "function") {
     throw new TypeError(`Context resource '${id}' requires contribute().`);
   }
-  return Object.freeze({
+  return ({
     id,
     type: "context",
-    purposes: Object.freeze([...new Set(resource.purposes)]),
+    purposes: [...new Set(resource.purposes)] as const,
     contribute: resource.contribute,
     ...(resource.compact ? { compact: resource.compact } : {}),
-  });
+  } as const);
 }
 
 export function isContextResource(value: unknown): value is ContextResource {

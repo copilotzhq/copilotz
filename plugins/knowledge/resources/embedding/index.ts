@@ -19,7 +19,7 @@ export function defineKnowledgeEmbeddingProvider(
   if (resource.type !== "embedding" || typeof resource.embed !== "function") {
     throw new TypeError(`Embedding provider '${id}' is invalid.`);
   }
-  return Object.freeze({ id, type: "embedding", embed: resource.embed });
+  return ({ id, type: "embedding", embed: resource.embed } as const);
 }
 
 export function isKnowledgeEmbeddingProvider(
@@ -49,7 +49,7 @@ function finiteVector(
       `Embedding ${index} has ${value.length} dimensions; expected ${expectedDimensions}.`,
     );
   }
-  return Object.freeze([...value]);
+  return ([...value] as const);
 }
 
 /** Resolves and invokes the configured embedding resource inside the worker. */
@@ -67,7 +67,7 @@ export async function embedKnowledgeTexts(
     throw new Error(`Embedding provider resource '${id}' was not found.`);
   }
   const response = await candidate.embed({
-    texts: Object.freeze([...texts]),
+    texts: [...texts] as const,
     ...(config.model?.trim() ? { model: config.model.trim() } : {}),
     ...(config.dimensions === undefined
       ? {}
@@ -88,15 +88,13 @@ export async function embedKnowledgeTexts(
   if (!Number.isSafeInteger(dimensions) || dimensions < 1) {
     throw new Error(`Embedding provider '${id}' returned invalid dimensions.`);
   }
-  const embeddings = Object.freeze(
-    response.embeddings.map((vector, index) =>
-      finiteVector(vector, dimensions, index)
-    ),
+  const embeddings = response.embeddings.map((vector, index) =>
+    finiteVector(vector, dimensions, index)
   );
-  return Object.freeze({
+  return ({
     embeddings,
     model: required(response.model, "Embedding response model"),
     dimensions,
-    ...(response.usage ? { usage: Object.freeze({ ...response.usage }) } : {}),
-  });
+    ...(response.usage ? { usage: { ...response.usage } as const } : {}),
+  } as const);
 }

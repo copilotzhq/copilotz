@@ -11,8 +11,8 @@ from the Tool presentation.
 
 ## How to use it
 
-Compose it through `createFinanceToolsPlugin`, or call `createFinanceAction`
-when an application needs the Action independently.
+Compose it through `financeToolsPlugin`, or call `financeAction` when an
+application needs the Action independently.
 
 ## How it works
 

@@ -6,7 +6,6 @@ export type {
 } from "./facade.ts";
 export {
   compileServerRoutes,
-  createServerPlugin,
   DEFAULT_SERVER_ASSET_UPLOAD_BYTES,
   defineServerFacade,
   serverPlugin,

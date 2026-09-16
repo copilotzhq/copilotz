@@ -182,9 +182,7 @@ export async function listScheduledJobs<
     limit: input.limit,
     ...(input.status ? { where: { status: input.status } } : {}),
   });
-  return Object.freeze(
-    values.map((value) => normalizeScheduledJobRecord<TPayload>(value)),
-  );
+  return (values.map((value) => normalizeScheduledJobRecord<TPayload>(value)));
 }
 /**
  * Authors and queries Scheduled Jobs through their Collection contract.

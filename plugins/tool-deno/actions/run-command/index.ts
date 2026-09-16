@@ -1,3 +1,4 @@
+import type { ActionDefinition } from "@copilotz/copilotz/actions";
 /**
  * Defines the bounded Run Command Action.
  *
@@ -13,7 +14,19 @@ interface RunCommandParams {
   timeout?: number;
 }
 
-export const runCommandAction = defineAction({
+export const runCommandAction: ActionDefinition<
+  RunCommandParams,
+  {
+    command: string;
+    args: string[];
+    cwd: string;
+    stdout: string;
+    stderr: string;
+    exitCode: number;
+    success: boolean;
+  },
+  ActionContext
+> = defineAction({
   id: "copilotz.tools.deno.run_command",
   inputSchema: {
     type: "object",

@@ -12,8 +12,8 @@ need ordinary Copilotz lifecycle, validation, and content behavior.
 
 ## How to use it
 
-Pass server declarations and a `connect` implementation to
-`createMcpToolsPlugin` before creating the application.
+Pass server declarations and a `connect` implementation to `prepareMcpTools`
+before creating the application.
 
 ## How it works
 

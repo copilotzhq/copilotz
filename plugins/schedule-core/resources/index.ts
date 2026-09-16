@@ -4,4 +4,4 @@
  * @module
  */
 
-export { scheduledJobsToolResource } from "./scheduled-jobs-tool/index.ts";
+export { scheduledJobsToolResource } from "./tools/scheduled-jobs/index.ts";

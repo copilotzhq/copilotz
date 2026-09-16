@@ -3,7 +3,7 @@
 import {
   isPromptInstructionResource,
   type PromptInstructionResource,
-} from "../../resources/prompt-instructions/index.ts";
+} from "../../authoring/define-prompt-instructions/index.ts";
 
 function compareCodePoints(left: string, right: string): number {
   const leftPoints = Array.from(left);

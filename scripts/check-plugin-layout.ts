@@ -9,6 +9,7 @@ export const CONCRETE_PLUGIN_ROOTS = [
   "channel-whatsapp",
   "channel-zendesk",
   "core",
+  "core-http",
   "knowledge",
   "llm",
   "memory",

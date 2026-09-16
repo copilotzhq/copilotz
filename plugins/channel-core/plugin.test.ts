@@ -1,4 +1,4 @@
-import { coreEvent } from "../core/authoring/events/index.ts";
+import { coreEvent } from "../core/shared/events/index.ts";
 import { assertEquals, assertExists, assertNotEquals } from "@std/assert";
 import type { ActionCaller } from "@copilotz/copilotz/actions";
 import { createCopilotzApplication } from "../../runtime/application/application.ts";
@@ -123,7 +123,7 @@ Deno.test("Channel occurrence becomes one atomic binding graph and external egre
     assertExists(thread);
     const threadMetadata = thread.metadata as Record<string, unknown>;
     const system = threadMetadata.system as Record<string, unknown>;
-    assertEquals(system.runtime, {});
+    assertEquals(system.runtime, undefined);
     assertEquals((system.channels as Record<string, unknown>).fixture, {
       bindingId: binding.id,
       externalThreadId: "external-thread-1",

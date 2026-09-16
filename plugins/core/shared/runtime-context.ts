@@ -12,8 +12,8 @@ import type {
 } from "@copilotz/copilotz/llm";
 /** Defines the composed runtime contexts used by Core primitives. @module */
 
-import type { AgentResource } from "../resources/agent/index.ts";
-import type { PromptInstructionResource } from "../resources/prompt-instructions/index.ts";
+import type { AgentResource } from "../authoring/define-agent/index.ts";
+import type { PromptInstructionResource } from "../authoring/define-prompt-instructions/index.ts";
 import type { ToolResource } from "@copilotz/copilotz/core";
 import type { Skill } from "@copilotz/copilotz/skills";
 import type { createThreadMessageAction } from "../actions/create-thread-message/index.ts";
@@ -77,13 +77,4 @@ export function coreAgent(
   return Object.values(resources.agents ?? {}).find((agent) =>
     agent?.id === normalized
   );
-}
-
-export function requireCoreAgent(
-  resources: CoreResources,
-  id: string,
-): AgentResource {
-  const agent = coreAgent(resources, id);
-  if (!agent) throw new Error(`Unknown agent resource '${id}'.`);
-  return agent;
 }

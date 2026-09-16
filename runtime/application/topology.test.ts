@@ -1,5 +1,5 @@
 import { storageFixture } from "../../plugins/core/shared/testing/storage-plugin.ts";
-import { coreEvent } from "../../plugins/core/authoring/events/index.ts";
+import { coreEvent } from "../../plugins/core/shared/events/index.ts";
 import type { ActionCallers } from "@copilotz/copilotz/actions";
 import { defineTool } from "@copilotz/copilotz/core";
 import { defineServerFacade as fixtureServerFacade } from "@copilotz/copilotz/server";

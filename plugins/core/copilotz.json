@@ -25,7 +25,10 @@
     "collections/tool-plan/index.ts",
     "collections/space/index.ts",
     "collections/thread/index.ts",
-    "processors/message-input/index.ts"
+    "processors/message-input/index.ts",
+    "resources/capabilities/default/index.ts",
+    "actions/run-goal/index.ts",
+    "resources/goals/default/index.ts"
   ],
   "plugins": [
     {

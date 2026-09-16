@@ -1,3 +1,9 @@
+import {
+  snapshotRootTools,
+  snapshotToolStageActionIds,
+  snapshotToolStageHistory,
+  validateCoreToolPlan,
+} from "./tool-plan.ts";
 /** Projects terminal LLM output into Messages or durable Tool plans. @module */
 
 import type { CollectionRecord } from "@copilotz/copilotz/collections";
@@ -18,10 +24,6 @@ import type { CoreToolProcessorContext } from "../../shared/runtime-context.ts";
 import {
   type CoreToolPlanBase,
   createDurableToolPlan,
-  snapshotRootTools,
-  snapshotToolStageActionIds,
-  snapshotToolStageHistory,
-  validateCoreToolPlan,
 } from "../../shared/tool-plan.ts";
 import { asRecord, loadParticipant } from "../../shared/helpers.ts";
 

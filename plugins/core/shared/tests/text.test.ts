@@ -1,5 +1,5 @@
 import type { EventVisibility } from "@copilotz/copilotz/core";
-import { coreEvent } from "../../authoring/events/index.ts";
+import { coreEvent } from "../events/index.ts";
 import type { LlmCallInput } from "@copilotz/copilotz/llm";
 import {
   assert,

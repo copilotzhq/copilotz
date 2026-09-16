@@ -1,4 +1,5 @@
-import { coreEvent } from "../../authoring/events/index.ts";
+import { collectContextContributions } from "../../shared/contributions.ts";
+import { coreEvent } from "../../shared/events/index.ts";
 /** Routes canonical Messages into agent LLM calls. @module */
 import {
   ContextInputLimitError,
@@ -20,16 +21,13 @@ import {
 import { defineProcessor, type Processor } from "@copilotz/copilotz/plugins";
 import type { CollectionRecord } from "@copilotz/copilotz/collections";
 import { buildCoreLlmRequest } from "./agents/prompt.ts";
-import {
-  collectContextContributions,
-  isContextResource,
-} from "../../resources/context/index.ts";
+import { isContextResource } from "../../authoring/define-context/index.ts";
 import type {
   AgentInstructionContext,
   AgentInstructionExecution,
   AgentModelSelection,
   AgentResource,
-} from "../../resources/agent/index.ts";
+} from "../../authoring/define-agent/index.ts";
 import {
   coreAgent,
   type CoreProcessorContext,

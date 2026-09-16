@@ -1,9 +1,8 @@
-import type { EventVisibility } from "../authoring/events/index.ts";
+import type { EventVisibility } from "./events/index.ts";
 import {
   actionCallerDefinitionId,
   isActionInputValidationError,
   isSettledActionError,
-  parseActionLifecycleEvent,
 } from "@copilotz/copilotz/actions";
 import type { CollectionRecord } from "@copilotz/copilotz/collections";
 import {
@@ -17,9 +16,9 @@ import type {
   LlmToolCall,
   LlmToolPipelineStage,
 } from "@copilotz/copilotz/llm";
-import type { Processor } from "@copilotz/copilotz/plugins";
+
 import { coreAgent, type CoreToolProcessorContext } from "./runtime-context.ts";
-import { toolsForAgent } from "./helpers.ts";
+
 import { resolveToolGrants } from "./capabilities/grants.ts";
 import { createThreadMessage } from "../actions/create-thread-message/index.ts";
 import {
@@ -30,7 +29,6 @@ import {
   CORE_TOOL_ACTION_METADATA_SCHEMA,
   type CoreAgentTurnMetadata,
   type CoreToolActionMetadata,
-  coreToolActionMetadata,
   type CoreToolActionOrigin,
   coreToolPlanMetadata,
   defineCoreToolActionMetadata,
@@ -44,7 +42,7 @@ import { evaluateCoreJq, mergePipelineArguments } from "./jq.ts";
 
 const TERMINAL_SCHEMA = "copilotz.core.tool-plan-stage-result.v1";
 type TerminalStatus = "completed" | "failed" | "cancelled";
-type ToolTerminal = Readonly<
+export type ToolTerminal = Readonly<
   {
     actionRunId?: string;
     sourceAction?: Readonly<{ stageIndex: number; actionRunId: string }>;
@@ -109,7 +107,7 @@ function sameJson(a: unknown, b: unknown): boolean {
       key === rightKeys[index] && sameJson(left[key], right[key])
     );
 }
-function stages(call: LlmToolCall): readonly LlmToolPipelineStage[] {
+export function stages(call: LlmToolCall): readonly LlmToolPipelineStage[] {
   const value = call.pipeline?.stages ??
     [{
       type: "tool" as const,
@@ -139,7 +137,7 @@ function stages(call: LlmToolCall): readonly LlmToolPipelineStage[] {
   }
   return (structuredClone(value));
 }
-function calls(value: unknown): readonly LlmToolCall[] {
+export function calls(value: unknown): readonly LlmToolCall[] {
   if (!Array.isArray(value) || !value.length) {
     throw new TypeError("Core Tool plan must contain at least one branch.");
   }
@@ -167,85 +165,6 @@ function calls(value: unknown): readonly LlmToolCall[] {
     throw new TypeError("Tool plan call IDs must be unique.");
   }
   return result;
-}
-function available(
-  context: CoreToolProcessorContext,
-  base: Pick<CoreToolPlanBase, "agentId" | "availableToolIds">,
-  planCalls: readonly LlmToolCall[],
-) {
-  const agent = coreAgent(context.resources, base.agentId);
-  if (!agent) throw new Error(`Unknown agent '${base.agentId}'.`);
-  const tools = toolsForAgent(context, agent);
-  const ids = tools.map((tool) => tool.alias);
-  if (
-    ids.length !== base.availableToolIds.length ||
-    ids.some((id, i) => id !== base.availableToolIds[i])
-  ) throw new Error("Tool grants changed while plan was running.");
-  const granted = new Set(ids);
-  for (const call of planCalls) {
-    for (const stage of stages(call)) {
-      if (
-        stage.type === "tool" &&
-        (!granted.has(stage.action) ||
-          typeof context.actions[stage.action] !== "function")
-      ) throw new Error(`Tool Action '${stage.action}' is unavailable.`);
-    }
-  }
-}
-export function validateCoreToolPlan(
-  context: CoreToolProcessorContext,
-  input: Readonly<
-    {
-      agentId: string;
-      availableToolIds: readonly string[];
-      calls: readonly LlmToolCall[];
-    }
-  >,
-): readonly LlmToolCall[] {
-  const result = calls(input.calls);
-  available(context, input, result);
-  return result;
-}
-export function snapshotToolStageHistory(
-  context: CoreToolProcessorContext,
-  planCalls: readonly LlmToolCall[],
-): readonly (readonly (string | null)[])[] {
-  return (planCalls.map((
-    call,
-  ) => (stages(call).map((stage) =>
-    stage.type === "tool"
-      ? context.resources.tools[stage.action]?.history?.visibility ?? null
-      : null
-  ))));
-}
-export function snapshotToolStageActionIds(
-  context: CoreToolProcessorContext,
-  planCalls: readonly LlmToolCall[],
-): readonly (readonly (string | null)[])[] {
-  return (planCalls.map((call) => (stages(call).map((stage) => {
-    if (stage.type !== "tool") return null;
-    const actionId = actionCallerDefinitionId(
-      context.actions[stage.action],
-    );
-    if (!actionId) {
-      throw new Error(
-        `Tool Action '${stage.action}' has no registered definition identity.`,
-      );
-    }
-    return actionId;
-  }))));
-}
-export function snapshotRootTools(
-  context: CoreToolProcessorContext,
-  planCalls: readonly LlmToolCall[],
-): readonly Readonly<{ alias: string; name: string }>[] {
-  return (planCalls.map((call) => {
-    const tool = context.resources.tools[call.action];
-    if (!tool) {
-      throw new Error(`Tool Resource '${call.action}' is unavailable.`);
-    }
-    return ({ alias: call.action, name: tool.name } as const);
-  }));
 }
 function stageAt(call: LlmToolCall, index: number) {
   const stage = stages(call)[index];
@@ -1268,54 +1187,4 @@ export async function resumeDeferredToolPlan(
       },
     },
   );
-}
-export function coreToolTerminal(
-  event: Parameters<Processor<CoreToolProcessorContext>["handle"]>[0],
-):
-  | Readonly<
-    {
-      metadata: CoreToolActionMetadata;
-      terminal: ToolTerminal;
-      actionId: string;
-      causationId?: string;
-    }
-  >
-  | null {
-  const lifecycle = parseActionLifecycleEvent(event, {
-    statuses: ["completed", "failed", "cancelled"],
-    requireRoot: true,
-  });
-  if (!lifecycle) return null;
-  const metadata = coreToolActionMetadata(lifecycle.metadata);
-  if (
-    !metadata ||
-    (lifecycle.status !== "completed" && lifecycle.status !== "failed" &&
-      lifecycle.status !== "cancelled")
-  ) return null;
-  return {
-    metadata,
-    actionId: lifecycle.actionId,
-    ...(event.causationId ? { causationId: event.causationId } : {}),
-    terminal: lifecycle.status === "completed"
-      ? {
-        actionRunId: text(lifecycle.actionRunId, "Tool Action run ID"),
-        sourceAction: {
-          stageIndex: metadata.stageIndex,
-          actionRunId: lifecycle.actionRunId,
-        },
-        status: "completed",
-        input: lifecycle.input,
-        output: lifecycle.output,
-      }
-      : {
-        actionRunId: text(lifecycle.actionRunId, "Tool Action run ID"),
-        sourceAction: {
-          stageIndex: metadata.stageIndex,
-          actionRunId: lifecycle.actionRunId,
-        },
-        status: lifecycle.status,
-        input: lifecycle.input,
-        error: record(lifecycle.error),
-      },
-  };
 }

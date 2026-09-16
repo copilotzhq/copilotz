@@ -29,7 +29,8 @@ messages, Agent Resources, prompt policy, and the conversation loop. LLM owns
 `llm.call`, LLM connections, Adapter contracts, and built-in provider drivers.
 Tools, Channels, Memory, Knowledge, Skills, Schedules, Usage, and Admin own
 their respective Collections, Actions, Processors, Resources, and Adapters.
-Goals are a Core authoring loop over ordinary application sends.
+Goals use a Core Action, context-resolved policy Resources, and an explicit
+conversation Adapter.
 
 Runtime production code never imports a concrete plugin.
 

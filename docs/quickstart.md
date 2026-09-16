@@ -83,7 +83,7 @@ Custom providers use `createLlmAdapter({ call })` and a connection
 Core messages target an existing thread and participant graph. Channel or
 onboarding workflows may create that graph as part of their atomic ingress; a
 trusted Gateway host can also bootstrap Collections through its
-`/api/collections/*` routes. The Goal runner consumes existing target and lead
+`/api/collections/*` routes. The Goal Action consumes existing target and lead
 threads rather than provisioning them.
 
 ```ts

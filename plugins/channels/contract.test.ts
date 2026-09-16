@@ -1,4 +1,4 @@
-import { coreEvent } from "../core/authoring/events/index.ts";
+import { coreEvent } from "../core/shared/events/index.ts";
 import { assertEquals, assertThrows } from "@std/assert";
 import * as channelPublic from "./index.ts";
 import { channelIngress } from "../channel-core/authoring/channel-ingress/index.ts";

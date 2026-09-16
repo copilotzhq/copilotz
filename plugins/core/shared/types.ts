@@ -1,6 +1,6 @@
 /** Defines Context Resource and contribution contracts. @module */
 
-import type { AgentResource } from "../resources/agent/index.ts";
+import type { AgentResource } from "../authoring/define-agent/index.ts";
 import type {
   ConversationMessage,
   ConversationThread,

@@ -6,11 +6,11 @@ import { defineAction } from "@copilotz/copilotz/actions";
 import type {
   AgentCapabilitySelection,
   AgentResource,
-} from "../../resources/agent/index.ts";
+} from "../../authoring/define-agent/index.ts";
 import { defineInlineSkill, skillsPlugin } from "@copilotz/copilotz/skills";
 import { corePlugin } from "@copilotz/copilotz/core";
 import { defineTool } from "@copilotz/copilotz/core";
-import { createAgentCapabilityResolver } from "../../authoring/capabilities/resolver.ts";
+import { agentCapabilities } from "../../resources/capabilities/default/index.ts";
 import { selectCapabilityResources } from "./selection.ts";
 
 const clockAction = defineAction({
@@ -100,10 +100,8 @@ Deno.test("capability selections are least-authority explicit aliases", () => {
 
 Deno.test("resolver derives ask and skill mechanisms from higher-level grants", async () => {
   const resources = await registry();
-  const resolver = createAgentCapabilityResolver({
-    registry: resources,
-  });
-  const resolved = await resolver.resolve({ agent: "coordinator" });
+  const resolver = agentCapabilities;
+  const resolved = await resolver.resolve({ agent: "coordinator" }, resources);
 
   assertEquals(resolved.agents.map((entry) => entry.id), ["researcher"]);
   assertEquals(resolved.skills.map((entry) => entry.id), ["contract-guide"]);
@@ -120,7 +118,7 @@ Deno.test("resolver derives ask and skill mechanisms from higher-level grants", 
   assertEquals(resolved.tools[0].resource.action, "clock");
   assertEquals("origin" in resolved.tools[0], false);
 
-  const restricted = await resolver.resolve({ agent: "researcher" });
+  const restricted = await resolver.resolve({ agent: "researcher" }, resources);
   assertEquals(restricted.tools, []);
   assertEquals(restricted.agents, []);
   assertEquals(restricted.skills, []);
@@ -143,11 +141,9 @@ Deno.test("resolver rejects unknown grants instead of silently broadening access
   const combined = await createPluginRegistry({
     plugins: [...resources.plugins, overriding],
   });
-  const resolver = createAgentCapabilityResolver({
-    registry: combined,
-  });
+  const resolver = agentCapabilities;
   await assertRejects(
-    () => resolver.resolve({ agent: invalid.id }),
+    async () => await resolver.resolve({ agent: invalid.id }, combined),
     Error,
     "grants unknown tool 'missing'",
   );

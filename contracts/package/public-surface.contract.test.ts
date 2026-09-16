@@ -86,7 +86,7 @@ Deno.test("package root exposes only the application factory", () => {
       "defineAgent",
       "defineLlmConnection",
       "llmPlugin",
-      "createAgentCapabilityResolver",
+      "agentCapabilities",
       "defineContextResource",
       "requireAgent",
       "workflowMetadata",
@@ -94,7 +94,7 @@ Deno.test("package root exposes only the application factory", () => {
   ) assertEquals(removed in copilotz, false, removed);
 });
 
-Deno.test("package subpaths expose cohesive factories", () => {
+Deno.test("package subpaths expose cohesive owner APIs", () => {
   assertEquals(Object.keys(application), []);
   assertEquals("createCopilotzApplication" in application, false);
   assertFunctions(persistence, ["createCopilotzPersistence"]);
@@ -134,7 +134,6 @@ Deno.test("package subpaths expose cohesive factories", () => {
   assertEquals(typeof memory.memoryPlugin, "object");
   assertFunctions(core, [
     "message",
-    "createAgentCapabilityResolver",
     "defineAgent",
     "defineContextResource",
     "normalizeThreadMetadata",
@@ -167,7 +166,10 @@ Deno.test("package subpaths expose cohesive factories", () => {
   ) assertEquals(removed in llm, false, removed);
   assertEquals(typeof llm.callLlmAction, "object");
   assertEquals(typeof llm.llmPlugin, "object");
-  assertFunctions(goals, ["runGoal"]);
+  assertEquals(typeof goals.runGoalAction, "object");
+  assertEquals("runGoal" in goals, false);
+  assertEquals(typeof core.agentCapabilities.resolve, "function");
+  assertEquals("createAgentCapabilityResolver" in core, false);
   for (
     const removed of [
       "createGoalsPlugin",

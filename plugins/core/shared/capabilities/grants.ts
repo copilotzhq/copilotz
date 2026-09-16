@@ -1,4 +1,4 @@
-import type { AgentResource } from "../../resources/agent/index.ts";
+import type { AgentResource } from "../../authoring/define-agent/index.ts";
 import type { Skill } from "@copilotz/copilotz/skills";
 import type { ToolResource } from "@copilotz/copilotz/core";
 import { selectCapabilityResources } from "./selection.ts";

@@ -1,5 +1,9 @@
+import {
+  prepareContextContributions,
+  renderContextContent,
+} from "./contributions.ts";
 import type { CollectionRecord } from "@copilotz/copilotz/collections";
-import type { AgentResource } from "../../../resources/agent/index.ts";
+import type { AgentResource } from "../../../authoring/define-agent/index.ts";
 import type {
   ConversationMessage,
   ConversationThread,
@@ -16,13 +20,11 @@ import type { CoreToolEntry } from "../../../shared/helpers.ts";
 import {
   resolveAgentGrants,
   resolveSkillGrants,
-} from "../../../authoring/capabilities/index.ts";
+} from "../../../shared/capabilities/grants.ts";
 import {
   collectContextContributions,
   type CollectedContextContribution,
-  prepareContextContributions,
-  renderContextContent,
-} from "../../../resources/context/index.ts";
+} from "../../../shared/contributions.ts";
 import { collectPromptInstructions } from "../collection.ts";
 import { getPublicThreadMetadata } from "../../../shared/thread-metadata.ts";
 import { prepareLlmTranscript } from "../../../shared/agents/prepared-transcript.ts";

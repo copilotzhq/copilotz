@@ -11,7 +11,7 @@ import {
   participantAgentId,
 } from "../../shared/helpers.ts";
 import { mapParticipantRecord } from "../../shared/projections.ts";
-import { isContextResource } from "../../resources/context/index.ts";
+import { isContextResource } from "../../authoring/define-context/index.ts";
 
 const inputSchema = {
   type: "object",

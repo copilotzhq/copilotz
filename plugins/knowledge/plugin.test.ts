@@ -1,5 +1,5 @@
 import { storageFixture } from "../core/shared/testing/storage-plugin.ts";
-import { coreEvent } from "../core/authoring/events/index.ts";
+import { coreEvent } from "../core/shared/events/index.ts";
 import {
   deleteKnowledgeDocumentTool,
   ingestKnowledgeDocumentTool,

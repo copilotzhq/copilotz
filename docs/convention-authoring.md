@@ -83,7 +83,7 @@ bundling.
 Generated modules contain ordinary static imports and `definePlugin`. They do
 not contain filesystem discovery or the TypeScript compiler. Keep compilation
 and native adapter imports out of deployment runtime entry points. In this
-repository, `deno task build:plugins` regenerates all 23 concrete roots and
+repository, `deno task build:plugins` regenerates all 24 concrete roots and
 `deno task check:generated` verifies them.
 
 ## Define a tool once

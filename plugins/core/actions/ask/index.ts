@@ -6,7 +6,7 @@ import {
 } from "@copilotz/copilotz/actions";
 import type { CollectionRecord } from "@copilotz/copilotz/collections";
 import { deriveWorkflowId } from "@copilotz/copilotz/events";
-import type { AgentResource } from "../../resources/agent/index.ts";
+import type { AgentResource } from "../../authoring/define-agent/index.ts";
 import {
   type CoreActionContext,
   coreAgent,

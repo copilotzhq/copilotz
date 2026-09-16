@@ -1,10 +1,12 @@
+import { asRecord } from "./validation.ts";
+export { asRecord, requiredText } from "./validation.ts";
 /** Shares Message, participant, and Tool projection helpers across Core Processors. @module */
 
 import type {
   CollectionRecord,
   ScopedCollection,
 } from "@copilotz/copilotz/collections";
-import type { ContentSequence } from "@copilotz/copilotz/content";
+
 import type {
   ConversationMessage,
   ConversationThread,
@@ -19,7 +21,7 @@ import {
 } from "./projections.ts";
 import type { ProcessorContext } from "@copilotz/copilotz/plugins";
 import type { ToolResource } from "@copilotz/copilotz/core";
-import type { AgentResource } from "../resources/agent/index.ts";
+import type { AgentResource } from "../authoring/define-agent/index.ts";
 import type { CoreResources } from "./runtime-context.ts";
 import { resolveToolGrants } from "./capabilities/grants.ts";
 
@@ -67,22 +69,6 @@ export async function loadCoreThreadMetadata(
   } as const);
 }
 
-export function requiredText(value: string | undefined, name: string): string {
-  const normalized = value?.trim();
-  if (!normalized) throw new TypeError(`${name} must be non-empty.`);
-  return normalized;
-}
-
-export function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-export function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : {};
-}
-
 export function optionalText(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
@@ -112,94 +98,9 @@ export function collectionEventRecord(
   return record as CollectionRecord;
 }
 
-export function mapParticipant(record: CollectionRecord): Participant {
-  return ({
-    id: String(record.id),
-    namespace: String(record.namespace),
-    externalId: String(record.externalId ?? record.id),
-    participantType: record.participantType as Participant["participantType"],
-    ...(optionalText(record.name) ? { name: optionalText(record.name) } : {}),
-    ...(optionalText(record.email)
-      ? { email: optionalText(record.email) }
-      : {}),
-    ...(optionalText(record.agentId)
-      ? { agentId: optionalText(record.agentId) }
-      : {}),
-    metadata: asRecord(record.metadata),
-    createdAt: String(record.createdAt),
-    updatedAt: String(record.updatedAt),
-  } as const);
-}
-
-export function mapMessage(
-  record: CollectionRecord,
-  sender: Participant,
-): ConversationMessage {
-  return ({
-    id: String(record.id),
-    namespace: String(record.namespace),
-    threadId: String(record.threadId),
-    sender,
-    recipientIds: stringArray(record.recipientIds),
-    content:
-      (Array.isArray(record.content) ? record.content : []) as ContentSequence,
-    metadata: asRecord(record.metadata),
-    ...(record.revision && typeof record.revision === "object"
-      ? { revision: record.revision as ConversationMessage["revision"] }
-      : {}),
-    createdAt: String(record.createdAt),
-    updatedAt: String(record.updatedAt),
-  } as const);
-}
-
-export function mapThread(
-  record: CollectionRecord,
-  participants: readonly Participant[],
-): ConversationThread {
-  return ({
-    id: String(record.id),
-    namespace: String(record.namespace),
-    ...(optionalText(record.externalId)
-      ? { externalId: optionalText(record.externalId) }
-      : {}),
-    ...(optionalText(record.name) ? { name: optionalText(record.name) } : {}),
-    status: String(record.status ?? "active"),
-    metadata: asRecord(record.metadata),
-    participants,
-    ...(record.activeMessageBranch &&
-        typeof record.activeMessageBranch === "object"
-      ? {
-        activeMessageBranch: record
-          .activeMessageBranch as ConversationThread["activeMessageBranch"],
-      }
-      : {}),
-    createdAt: String(record.createdAt),
-    updatedAt: String(record.updatedAt),
-  } as const);
-}
-
 export function participantAgentId(participant: CollectionRecord): string {
   return optionalText(participant.agentId) ??
     String(participant.externalId ?? participant.id);
-}
-
-export function participantInput(participant: CollectionRecord) {
-  return {
-    id: String(participant.id),
-    externalId: String(participant.externalId ?? participant.id),
-    participantType: participant
-      .participantType as Participant["participantType"],
-    ...(optionalText(participant.name)
-      ? { name: optionalText(participant.name) }
-      : {}),
-    ...(optionalText(participant.email)
-      ? { email: optionalText(participant.email) }
-      : {}),
-    ...(optionalText(participant.agentId)
-      ? { agentId: optionalText(participant.agentId) }
-      : {}),
-    metadata: structuredClone(asRecord(participant.metadata)),
-  } as const;
 }
 
 /**

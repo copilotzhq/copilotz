@@ -1,4 +1,4 @@
-import { coreEvent } from "../../../core/authoring/events/index.ts";
+import { coreEvent } from "../../../core/shared/events/index.ts";
 import { memoryConfig } from "../../resources/memory/config/index.ts";
 /** Reserves eligible durable conversation history for consolidation. @module */
 import { defineProcessor, type Processor } from "@copilotz/copilotz/plugins";

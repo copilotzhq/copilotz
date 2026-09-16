@@ -2,7 +2,7 @@ import {
   listThreadOperations,
   operationBelongsToThread,
   threadEventWatermark,
-} from "@copilotz/copilotz/core";
+} from "@copilotz/copilotz/core/server";
 /** One bounded observation coordinator for operation selections and conversations. */
 import { createStreamOriginResolver } from "./stream-origin.ts";
 import type { StreamOutput } from "../runtime/streams/types.ts";

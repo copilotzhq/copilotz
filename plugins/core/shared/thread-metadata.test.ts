@@ -1,149 +1,30 @@
 import { assertEquals } from "@std/assert";
 import {
   addThreadTag,
-  getMemoryThreadMetadata,
   getPublicThreadMetadata,
-  getRuntimeThreadMetadata,
   getSerializableThreadMetadata,
   getThreadTags,
   normalizeThreadMetadata,
   removeThreadTag,
-  setChannelContext,
-  setMemoryThreadMetadata,
-  setRuntimeThreadMetadata,
   setThreadTags,
 } from "./thread-metadata.ts";
-
-Deno.test("thread metadata separates public and system fields", () => {
-  const legacy = {
-    topic: "support",
-    participantTargets: { user: "agent-1" },
-    public: {
-      locale: "en-US",
-    },
-    system: {
-      channels: {
-        zendesk: { conversationId: "conv-1" },
-      },
-      routing: {
-        egress: "zendesk",
-      },
-    },
+Deno.test("current thread metadata keeps system namespaces private without promoting flat keys", () => {
+  const input = {
+    topic: "legacy",
+    userExternalId: "legacy-user",
+    public: { locale: "en" },
+    system: { channels: { web: { id: "a" } }, memory: { secret: "hidden" } },
   };
-
-  const normalized = normalizeThreadMetadata(legacy);
-
-  assertEquals(normalized.public, {
-    topic: "support",
-    locale: "en-US",
-  });
-  assertEquals(normalized.system?.runtime, {});
-  assertEquals(normalized.system?.memory, {
-    identity: {},
-  });
-  assertEquals(normalized.system?.channels, {
-    zendesk: { conversationId: "conv-1" },
-  });
-});
-
-Deno.test("public metadata excludes runtime and channel routing state", () => {
-  const metadata = setChannelContext(
-    setMemoryThreadMetadata(
-      setRuntimeThreadMetadata(
-        { project: "alpha" },
-        { agentTurnCount: 2 },
-      ),
-      { identity: { userExternalId: "user-1" } },
-    ),
-    "whatsapp",
-    { recipientPhone: "+5511999999999" },
+  const value = normalizeThreadMetadata(input);
+  assertEquals(value, { public: { locale: "en" }, system: input.system });
+  assertEquals(getPublicThreadMetadata(input), { locale: "en" });
+  value.system!.memory = {};
+  assertEquals(input.system.memory, { secret: "hidden" });
+  assertEquals(
+    getSerializableThreadMetadata({ userExternalId: "legacy-user" }),
+    null,
   );
-
-  assertEquals(getPublicThreadMetadata(metadata), {
-    project: "alpha",
-  });
-  assertEquals(getRuntimeThreadMetadata(metadata), {
-    agentTurnCount: 2,
-  });
-  assertEquals(getMemoryThreadMetadata(metadata), {
-    identity: {
-      userExternalId: "user-1",
-    },
-  });
-  assertEquals(getSerializableThreadMetadata(metadata), {
-    public: { project: "alpha" },
-    system: {
-      runtime: {
-        agentTurnCount: 2,
-      },
-      memory: {
-        identity: {
-          userExternalId: "user-1",
-        },
-      },
-      channels: {
-        whatsapp: { recipientPhone: "+5511999999999" },
-      },
-    },
-  });
 });
-
-Deno.test("deprecated participant targets and system routing metadata are dropped", () => {
-  const normalized = normalizeThreadMetadata({
-    participantTargets: { user: "agent-1" },
-    system: {
-      runtime: {
-        participantTargets: { user: "agent-2" },
-        agentTurnCount: 1,
-      },
-      routing: { staleTarget: "agent-3" },
-    },
-  });
-
-  assertEquals(normalized, {
-    public: {},
-    system: {
-      runtime: { agentTurnCount: 1 },
-      memory: { identity: {} },
-      channels: {},
-    },
-  });
-});
-
-Deno.test("legacy userExternalId normalizes into memory metadata", () => {
-  const metadata = setChannelContext(
-    setRuntimeThreadMetadata(
-      { project: "alpha" },
-      { agentTurnCount: 2 },
-    ),
-    "whatsapp",
-    { recipientPhone: "+5511999999999" },
-  );
-
-  const legacy = {
-    ...metadata,
-    system: {
-      ...(metadata.system ?? {}),
-      runtime: {
-        ...(metadata.system?.runtime ?? {}),
-        userExternalId: "legacy-user",
-      },
-    },
-  };
-
-  assertEquals(getPublicThreadMetadata(legacy), {
-    project: "alpha",
-  });
-  assertEquals(getRuntimeThreadMetadata(legacy), {
-    agentTurnCount: 2,
-  });
-  assertEquals(getMemoryThreadMetadata(legacy), {
-    identity: {
-      userExternalId: "legacy-user",
-    },
-  });
-});
-
 Deno.test("thread tags normalize from public metadata", () => {
   const metadata = {
     public: {
@@ -183,7 +64,7 @@ Deno.test("setThreadTags updates public tags without replacing public metadata",
     project: "alpha",
     tags: [{ id: "tag_new", name: "New" }],
   });
-  assertEquals(getRuntimeThreadMetadata(metadata), {
+  assertEquals(metadata.system?.runtime, {
     agentTurnCount: 2,
   });
 });

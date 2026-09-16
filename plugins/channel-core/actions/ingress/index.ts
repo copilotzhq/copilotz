@@ -1,3 +1,4 @@
+import { setChannelContext } from "./thread-context.ts";
 /**
  * Turns one authenticated channel occurrence into Core graph records.
  *
@@ -15,7 +16,7 @@ import type {
   CollectionRecord,
   ScopedCollections,
 } from "@copilotz/copilotz/collections";
-import { type AgentResource, setChannelContext } from "@copilotz/copilotz/core";
+import type { AgentResource } from "@copilotz/copilotz/core";
 import { deriveWorkflowId } from "@copilotz/copilotz/events";
 import { cloneChannelJson } from "../../authoring/channel-ingress/index.ts";
 import { defineChannelResource } from "../../authoring/channel-resource/index.ts";

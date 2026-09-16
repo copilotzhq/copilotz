@@ -1,4 +1,4 @@
-import { coreEvent } from "../../authoring/events/index.ts";
+import { coreEvent } from "../events/index.ts";
 import { createCollectionKernel as createCollectionRuntime } from "../../../../runtime/collections/kernel.ts";
 import { assertEquals, assertRejects } from "@std/assert";
 import type { CollectionRecord } from "@copilotz/copilotz/collections";

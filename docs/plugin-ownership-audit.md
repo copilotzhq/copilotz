@@ -1,47 +1,62 @@
-# Plugin ownership and layout audit
+# Plugin ownership and layout
 
-## Completed structure
+## Ownership rules
 
-- Core owns its collections, Actions, Processors and Tool authoring. The
-  `core-collections` and `tools` roots and their export shims are removed.
-- Optional Tool providers stay independent. OpenAPI and MCP contracts live with
-  their owning providers.
-- All 23 concrete roots compose through generated declarations. Manifest
-  `plugins: [{from, export}]` replaces dependency forwarding directories.
-- Plugin `internal` and `dependencies` directories are removed. The build
-  rejects those conventions and excludes `shared` from discovery.
-- A single-primitive helper sits in that primitive's module. `shared` is
-  reserved for real reuse across different primitives. Public authoring APIs
-  stay under `authoring`.
+- `authoring` contains declaration/composition helpers, including Core’s Agent,
+  Context, Prompt Instruction and Tool declarations.
+- An Action, Processor, Collection, Resource or Adapter owns its implementation.
+  Helpers used by only that primitive stay beside it.
+- `shared` contains cohesive execution contracts/algorithms genuinely reused by
+  distinct primitive owners. Public export status does not decide placement.
+- Tests, re-export barrels and authoring generators do not count as primitive
+  consumers. Transitive execution consumers do count, including worker
+  entrypoints.
 
-## Ownership evidence
+## Core corrections
 
-The initial inventory contained 119 production helper/dependency files. After
-Core consolidation and provider-contract separation, import-symbol resolution
-was used to follow direct and transitive consumers, including worker URL
-imports. Tests, test support and re-export-only barrels do not count as
-primitive owners. 141 helper, test and support files were relocated. The final
-inventory contains 71 production `shared` modules, each with at least two
-distinct primitive owners.
+Core HTTP is an optional generated plugin with four conversation mutation
+Actions and one HTTP Adapter. Its operation queries stay with the Adapter. Core
+alone installs no HTTP routes. The browser conversation client and CLI are
+Adapters; the client/server history codec is shared. Agent capability resolution
+is a static context-resolved Resource. Goal execution is an Action with a policy
+Resource and explicit conversation Adapter.
 
-Representative decisions:
+Message Router owns contribution preparation/rendering. Project Text Result owns
+initial tool-plan validation and snapshots; Project Tool Result owns terminal
+parsing. Common tool-plan execution and its JQ worker remain shared across
+processors. Generation identifiers belong to Tool authoring. Duplicated unused
+projection functions and dead validation helpers were removed.
 
-| Module family                                          | Location and reason                                                           |
-| ------------------------------------------------------ | ----------------------------------------------------------------------------- |
-| Core action validation, history and Tool-plan helpers  | Core `shared`; reused by Actions and Processors.                              |
-| Core Agent instruction rendering                       | Message Router module; one Processor owns it.                                 |
-| Core capability resolver and public types              | Core `authoring/capabilities`; explicit public authoring API.                 |
-| LLM request execution, HTTP and provider orchestration | Bridge Adapter module.                                                        |
-| Channel provider transport and contracts               | Respective provider Adapter module where it is the sole consumer.             |
-| Memory input, access, retrieval and source policy      | Memory `shared`; multiple Actions, Processors and Resources use them.         |
-| Memory proposal and commit helpers                     | Consolidate Memory Action module.                                             |
-| Knowledge chunker                                      | Index Document Action module.                                                 |
-| Finance clients and providers                          | Finance Action module.                                                        |
-| Tool serialization and generated alias helpers         | Core shared authoring support with public exports used by optional providers. |
+Core’s thread metadata accepts only the current public/system envelope. System
+namespaces are opaque to Core; Channel ingress owns its channel updates. No
+legacy key conversion or unused Memory-specific metadata contract remains.
 
-Generic runtime tests use a test-only storage primitive fixture. It is excluded
-from publishing and does not reintroduce a production compatibility plugin.
+## Reviewed shared contracts
 
-No plugin factory wrappers, runtime discovery, or new dependency registries are
-introduced. Production freezing wrappers and their redundant recursive walks
-have been removed; required snapshot copies remain.
+- Record projections/validation/schema: multiple Core Actions, Collections and
+  Processors, plus explicit public consumers.
+- Agent grants, transcript preparation and runtime context: conversation/tool
+  processors, compact-context and Memory consumers.
+- Tool-plan execution, stages and JQ: result projection, coordinator and Ask
+  completion/failure paths.
+- Workflow metadata: writers and readers share one wire contract; a writer with
+  one callsite is not independently treated as a reusable algorithm.
+- Context contribution collection/types: Message Router and compaction policy;
+  rendering is local to Message Router.
+- Event policy and history codec: multiple execution and transport consumers.
+- Thread metadata: generic public/system isolation for conversation and channel
+  consumers; optional public tag utilities stay with that contract.
+
+## Verification limits
+
+The previous audit counted authoring modules as primitive owners and measured
+reuse per file. Its claim that all 71 shared files proved compliant was invalid.
+The corrected review considers cohesive functions/contracts and their consumers.
+The focused Core check catches hidden authoring instances, missing default
+Resource/Adapter instances, audited single-owner helpers in the wrong location,
+and reintroduced legacy/foreign metadata policy. It complements semantic review;
+it does not claim to prove arbitrary helper ownership automatically.
+
+Generated-source, package-surface and behavior checks remain independent gates.
+No plugin `internal`/`dependencies` folders, compatibility wrappers or
+production `Object.freeze` calls are introduced.

@@ -3,7 +3,7 @@
 import type { CollectionRecord } from "@copilotz/copilotz/collections";
 import { defineProcessor, type Processor } from "@copilotz/copilotz/plugins";
 import type { CoreProcessorContext } from "../../shared/runtime-context.ts";
-import { CORE_MESSAGE_INPUT_EVENT } from "../../authoring/message-input/index.ts";
+import { CORE_MESSAGE_INPUT_EVENT } from "./input/index.ts";
 
 function record(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)

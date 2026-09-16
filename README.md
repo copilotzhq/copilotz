@@ -103,9 +103,10 @@ the same operation from any Gateway replica, while `operationStatus()`,
 seams. `observe()` remains an independent process-local application-wide
 subscription. Gateway adds `fetch`; Worker returns `{ ready, closed, close }`.
 
-For multi-turn evaluation, `runGoal` from `@copilotz/copilotz/goals` alternates
-settled target and lead sends without introducing another durable state machine.
-See [Goal runner](./docs/goals.md).
+For multi-turn evaluation, Core’s `runGoal` Action alternates settled target and
+lead sends through a context-supplied conversation Adapter. Policy lives in a
+Resource; progress and cancellation use the Action lifecycle. See
+[Goal Action](./docs/goals.md).
 
 ## Core guarantees
 

@@ -1,4 +1,4 @@
-import type { AgentCapabilitySelection } from "../../resources/agent/index.ts";
+import type { AgentCapabilitySelection } from "../../authoring/define-agent/index.ts";
 
 export type CapabilitySelectionMode = "none" | "explicit";
 

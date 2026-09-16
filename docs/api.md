@@ -85,7 +85,7 @@ operation-catalog maintenance. `close()` is idempotent.
 
 `gateway.fetch` serves the single `/api` boundary installed by `serverPlugin`.
 The compiler discovers exposed Actions, Collections, Channels and exact HTTP
-Adapter routes, and generates OpenAPI from that table. `coreServerPlugin`
+Adapter routes, and generates OpenAPI from that table. `coreHttpPlugin`
 contributes conversation reads, observation and ordinary mutation Actions.
 Authentication resolves trusted scope; authorization intersects constraints
 before reads or execution. See [HTTP server and browser client](server.md).

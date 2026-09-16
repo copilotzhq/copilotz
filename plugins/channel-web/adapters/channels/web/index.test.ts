@@ -59,7 +59,7 @@ Deno.test("Web Channel Adapter rejects non-array declared thread participants", 
 
 Deno.test("Core message wire content passes through Web ingress and the shared decoder", async () => {
   const { message } = await import(
-    "../../../../core/authoring/message-input/index.ts"
+    "../../../../core/processors/message-input/input/index.ts"
   );
   const input = message({
     thread: "thread",

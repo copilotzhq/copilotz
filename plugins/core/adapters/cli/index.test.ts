@@ -2,7 +2,7 @@ import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 import { type InteractiveCliIo, startInteractiveCli } from "./index.ts";
 import type { ApplicationOutput } from "@copilotz/copilotz/application";
 import { createEphemeralEvent } from "@copilotz/copilotz/events";
-import type { CoreMessageInputEnvelope } from "../../authoring/message-input/index.ts";
+import type { CoreMessageInputEnvelope } from "../../processors/message-input/input/index.ts";
 const encoder = new TextEncoder();
 function completedTerminal(chunks: readonly string[]) {
   return Promise.resolve(Object.freeze({

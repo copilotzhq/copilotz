@@ -9,10 +9,10 @@ start a listener. Gateway and Worker share persistence and Asset storage.
 import { createCopilotz } from "@copilotz/copilotz";
 import { defineServerFacade, serverPlugin } from "@copilotz/copilotz/server";
 import { corePlugin } from "@copilotz/copilotz/core";
-import { coreServerPlugin } from "@copilotz/copilotz/core/server";
+import { coreHttpPlugin } from "@copilotz/copilotz/core/server";
 
 const application = await createCopilotz({
-  plugins: [corePlugin, coreServerPlugin, serverPlugin],
+  plugins: [corePlugin, coreHttpPlugin, serverPlugin],
   resources: {
     server: {
       default: defineServerFacade({

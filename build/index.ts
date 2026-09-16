@@ -32,6 +32,20 @@ const aliasFrom = (name: string) =>
   name.replace(/-([a-z])/g, (_, c: string) => c.toUpperCase());
 const aliasPattern = /^[a-z][a-zA-Z0-9_]*$/;
 
+async function configArguments(root: string): Promise<string[]> {
+  for (let directory = resolve(root);;) {
+    for (const name of ["deno.json", "deno.jsonc"]) {
+      const path = join(directory, name);
+      if (await Deno.stat(path).then(() => true).catch(() => false)) {
+        return ["--config", path];
+      }
+    }
+    const parent = dirname(directory);
+    if (parent === directory) return [];
+    directory = parent;
+  }
+}
+
 async function files(directory: string, prefix = ""): Promise<string[]> {
   const result: string[] = [];
   for await (const entry of Deno.readDir(directory)) {
@@ -263,8 +277,9 @@ export async function build(
   const output = resolve(options.output ?? join(root, "dist/plugin.js"));
   if (!relative(root, output)) throw new Error("Output must be a file.");
   await Deno.mkdir(dirname(output), { recursive: true });
+  const config = await configArguments(root);
   const check = await new Deno.Command(Deno.execPath(), {
-    args: ["check", entry],
+    args: ["check", ...config, entry],
     stdout: "inherit",
     stderr: "inherit",
   }).output();
@@ -273,6 +288,7 @@ export async function build(
     args: [
       "run",
       "--allow-read",
+      ...config,
       new URL("./validate.ts", import.meta.url).href,
       entry,
     ],
@@ -286,6 +302,7 @@ export async function build(
   const bundle = await new Deno.Command(Deno.execPath(), {
     args: [
       "bundle",
+      ...config,
       "--format=esm",
       "--platform=" + (options.platform ?? "browser"),
       "--output=" + temporary,

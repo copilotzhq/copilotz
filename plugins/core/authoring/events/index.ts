@@ -34,21 +34,3 @@ export function coreEvent(
     visibility: core?.visibility ?? { kind: "public" },
   };
 }
-export type CoreContentRole =
-  | "body"
-  | "attachment"
-  | "reasoning"
-  | "tool.arguments"
-  | "tool.output"
-  | "tool.projected_output"
-  | "tool.error_detail"
-  | "transcript"
-  | "recording"
-  | "document.source"
-  | "provider.trace";
-export type CoreEphemeralEventType =
-  | "text.delta"
-  | "reasoning.delta"
-  | "audio.delta"
-  | "tool_call.delta"
-  | "tool_output.delta";

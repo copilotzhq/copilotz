@@ -97,7 +97,7 @@ export type ContentRole = string;
 export interface ContentRef {
   assetId: AssetId;
   kind: ContentKind;
-  role: ContentRole | string;
+  role: ContentRole;
   mediaType: string;
   name?: string;
   alt?: string;
@@ -160,7 +160,7 @@ export type ContentInput =
   | {
     type: "text";
     text: string;
-    role?: ContentRole | string;
+    role?: ContentRole;
     mediaType?: string;
     name?: string;
     language?: string;
@@ -170,7 +170,7 @@ export type ContentInput =
   | {
     type: "json";
     value: unknown;
-    role?: ContentRole | string;
+    role?: ContentRole;
     mediaType?: string;
     name?: string;
     metadata?: Record<string, unknown>;
@@ -180,7 +180,7 @@ export type ContentInput =
     type: "image" | "audio" | "video" | "file";
     bytes: Uint8Array;
     mediaType: string;
-    role?: ContentRole | string;
+    role?: ContentRole;
     name?: string;
     alt?: string;
     language?: string;

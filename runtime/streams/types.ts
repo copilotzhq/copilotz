@@ -23,7 +23,7 @@ export type StreamOutputDescriptor = Readonly<{
   streamOrdinal?: string;
   mediaType: string;
   kind: ContentKind;
-  role: ContentRole | string;
+  role: ContentRole;
   name?: string;
   alt?: string;
   language?: string;
@@ -108,7 +108,7 @@ export type ContentStreamOpenInput = Readonly<{
   id?: string;
   mediaType: string;
   kind?: ContentKind;
-  role: ContentRole | string;
+  role: ContentRole;
   name?: string;
   alt?: string;
   language?: string;

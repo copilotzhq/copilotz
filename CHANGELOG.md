@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.75.0 — Unreleased
+
+- Remove frontend conversation-tag fields and metadata mutation support.
+- Keep scheduled messages within their owning Space. Moving or detaching a
+  target conversation pauses affected jobs; queued delivery checks ownership
+  under the same transaction fence as attachment changes.
+- Skip stale queued occurrences after a job is retargeted, and expose explicit
+  sent/skipped dispatch outcomes.
+
 ## 0.74.1 — Unreleased
 
 - Forward the consumer's Deno configuration to the published build command's

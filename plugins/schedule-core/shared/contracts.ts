@@ -68,7 +68,14 @@ export type CoreScheduledMessageJob = CreateScheduledJobInput<
   CoreScheduledMessagePayload
 >;
 
-export type DispatchScheduledMessageResult = Readonly<{
-  messageId: string;
-  threadId: string;
-}>;
+export type DispatchScheduledMessageResult =
+  | Readonly<{
+    status: "sent";
+    messageId: string;
+    threadId: string;
+  }>
+  | Readonly<{
+    status: "skipped";
+    reason: "space_ownership";
+    jobId: string;
+  }>;

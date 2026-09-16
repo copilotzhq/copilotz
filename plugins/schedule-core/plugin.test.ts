@@ -2,6 +2,7 @@ import { assertEquals, assertExists, assertRejects } from "@std/assert";
 import type { ActionCaller } from "@copilotz/copilotz/actions";
 import type { LlmAdapter, LlmAdapterCallInput } from "@copilotz/copilotz/llm";
 import type { ToolResource } from "@copilotz/copilotz/core";
+import { spaceAttachmentId } from "@copilotz/copilotz/core";
 import { createCopilotzApplication } from "../../runtime/application/index.ts";
 import {
   createPluginRegistry,
@@ -25,6 +26,11 @@ import {
   scheduledJobsAction,
   scheduledMessageJob,
 } from "./index.ts";
+import { dispatchScheduledMessageAction } from "./actions/dispatch-scheduled-message/index.ts";
+import type { spacesAction as coreSpacesAction } from "../core/actions/spaces/index.ts";
+type SpaceMoveDriverContext = Omit<ProcessorContext, "actions"> & {
+  actions: { spaces: ActionCaller<typeof coreSpacesAction> };
+};
 const BASE = new Date("2026-01-01T00:00:00.000Z");
 const NAMESPACE = "tenant-core-schedules";
 type ScheduledJobsDriverContext =
@@ -171,6 +177,260 @@ Deno.test("Core Schedules composes its dependencies and turns only typed due pay
     "scheduled_jobs",
   );
 });
+
+for (
+  const scenario of [
+    "moved",
+    "retargeted",
+    "raced",
+    "event_move",
+    "event_detach",
+  ] as const
+) {
+  Deno.test(`Space-owned queued delivery is gated when ${scenario}`, async () => {
+    const db = await createTestDatabase({ url: ":memory:" });
+    const application = await createCopilotzApplication({
+      database: db,
+      namespace: "tenant-space-schedules",
+      databaseSchema: "copilotz_v3_core_schedule_space_move",
+      plugins: [
+        scenario.startsWith("event_") ? coreSchedulesPlugin : definePlugin({
+          ...coreSchedulesPlugin,
+          processors: {
+            dispatchScheduledMessage:
+              coreSchedulesPlugin.processors.dispatchScheduledMessage,
+          },
+        }),
+        definePlugin({
+          id: "fixture.space-move",
+          version: "1",
+          processors: {
+            move: defineProcessor<SpaceMoveDriverContext>({
+              id: "fixture.move-space",
+              on: [{ eventType: "fixture.move-space" }],
+              async handle(_event, processor) {
+                await processor.actions.spaces({
+                  operation: scenario === "event_detach" ? "detach" : "attach",
+                  spaceId: scenario === "event_detach" ? "space-a" : "space-b",
+                  collection: "thread",
+                  recordId: "space-thread",
+                });
+              },
+            }),
+          },
+        }),
+      ],
+      engine: { now: () => BASE, retryBaseMs: 0 },
+    });
+    try {
+      const context = createTestDomainContext(
+        application,
+        "tenant-space-schedules",
+        {
+          now: () => BASE,
+        },
+      );
+      await context.collections.participant.create({
+        id: "space-owner",
+        externalId: "space-owner",
+        participantType: "human",
+      });
+      await context.collections.thread.create({
+        id: "space-thread",
+        externalId: "space-thread",
+        participantIds: ["space-owner"],
+      });
+      await context.actions.spaces({
+        operation: "create",
+        spaceId: "space-a",
+        ownerId: "space-owner",
+      });
+      await context.actions.spaces({
+        operation: "create",
+        spaceId: "space-b",
+        ownerId: "space-owner",
+      });
+      await context.actions.spaces({
+        operation: "attach",
+        spaceId: "space-a",
+        collection: "thread",
+        recordId: "space-thread",
+      });
+      const prepared = await application.content.preparer.prepare(
+        "Space-owned scheduled content",
+        {
+          namespace: "tenant-space-schedules",
+          idempotencyKey: "space-job-content",
+        },
+      );
+      await createScheduledJob(
+        scheduledMessageJob({
+          id: "space-job",
+          name: "Space job",
+          schedule: { type: "cron", expression: "* * * * *" },
+          message: {
+            thread: { id: "space-thread" },
+            recipients: ["space-owner"],
+            content: prepared,
+          },
+        }),
+        context,
+      );
+      await context.collections.spaceAttachment.create({
+        id: spaceAttachmentId("scheduled_job", "space-job"),
+        collection: "scheduled_job",
+        recordId: "space-job",
+        spaceId: "space-a",
+      });
+
+      const move = () =>
+        context.actions.spaces({
+          operation: "attach",
+          spaceId: "space-b",
+          collection: "thread",
+          recordId: "space-thread",
+        });
+      if (scenario.startsWith("event_")) {
+        const sent = await application.send({
+          type: "fixture.move-space",
+          namespace: "tenant-space-schedules",
+          payload: {},
+          deduplicationId: scenario,
+        });
+        await sent.done;
+        assertEquals(
+          (await context.collections.scheduledJob.get({ id: "space-job" }))
+            ?.status,
+          "paused",
+        );
+      } else if (scenario !== "raced") await move();
+      const job = await context.collections.scheduledJob.get({
+        id: "space-job",
+      });
+      assertExists(job);
+      if (scenario === "retargeted") {
+        await context.collections.thread.create({
+          id: "new-target",
+          externalId: "new-target",
+          participantIds: ["space-owner"],
+        });
+        await context.actions.spaces({
+          operation: "attach",
+          spaceId: "space-a",
+          collection: "thread",
+          recordId: "new-target",
+        });
+        await context.collections.scheduledJob.update({
+          id: "space-job",
+          set: {
+            payload: {
+              ...job.payload as Record<string, unknown>,
+              thread: { id: "new-target" },
+            },
+          },
+        });
+      }
+      const occurrence = {
+        jobId: "space-job",
+        jobName: "Space job",
+        occurrenceId: "space-job:1767225660000",
+        mode: "scheduled",
+        scheduledFor: "2026-01-01T00:01:00.000Z",
+        payload: job.payload as never,
+        content: job.content as never,
+        metadata: {},
+      };
+      if (scenario === "raced") {
+        let moved = false;
+        let releaseMove!: () => void;
+        const ready = new Promise<void>((resolve) => {
+          releaseMove = resolve;
+        });
+        const movement = (async () => {
+          await ready;
+          await move();
+        })();
+        const conflict = await assertRejects(async () =>
+          await dispatchScheduledMessageAction.execute(occurrence as never, {
+            ...context,
+            resources: { agents: {} },
+            collections: {
+              ...context.collections,
+              participant: {
+                ...context.collections.participant,
+                get: async (input: { id: string }) => {
+                  if (input.id === "space-owner" && !moved) {
+                    moved = true;
+                    releaseMove();
+                    await movement;
+                  }
+                  return await context.collections.participant.get(input);
+                },
+              },
+            },
+          } as never)
+        );
+        assertEquals(
+          String(conflict),
+          "Error: Collection 'space' 'space-a' changed while its mutation was prepared.",
+        );
+        assertEquals(moved, true);
+        assertEquals(
+          (await projectMessages(
+            application,
+            "tenant-space-schedules",
+            "space-thread",
+          )).length,
+          0,
+        );
+      }
+      const result = await context.actions.dispatchScheduledMessage(
+        occurrence as never,
+        { operationKey: "space-job-dispatch" },
+      );
+      assertEquals(result, {
+        status: "skipped",
+        reason: "space_ownership",
+        jobId: "space-job",
+      });
+      const current = await context.collections.scheduledJob.get({
+        id: "space-job",
+      });
+      assertEquals(
+        current?.status,
+        scenario === "retargeted" ? "active" : "paused",
+      );
+      if (scenario !== "retargeted") {
+        assertEquals(current?.nextRunAt, null);
+        assertEquals(current?.nextRunAtMs, null);
+        assertEquals(
+          (current?.metadata as Record<string, unknown>).scheduledPause,
+          {
+            reason: scenario.startsWith("event_")
+              ? "target_thread_left_space"
+              : "target_thread_space_unavailable",
+            threadId: "space-thread",
+            fromSpaceId: "space-a",
+            at: BASE.toISOString(),
+          },
+        );
+      }
+      assertEquals(
+        (await projectMessages(
+          application,
+          "tenant-space-schedules",
+          "space-thread",
+        ))
+          .length,
+        0,
+      );
+    } finally {
+      await application.shutdown();
+      await close(db);
+    }
+  });
+}
+
 Deno.test("scheduled payload metadata cannot suppress Agent LLM routing", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   const calls: LlmAdapterCallInput[] = [];

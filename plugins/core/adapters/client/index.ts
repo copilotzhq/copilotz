@@ -142,7 +142,6 @@ export function createCoreClient(client: CopilotzClient): CoreClient {
 export type ThreadPatch = Readonly<{
   name?: string;
   description?: string;
-  tags?: readonly { id: string; name: string; color?: string }[];
   status?: "active" | "archived" | "closed";
 }>;
 export type EditMessageInput = {

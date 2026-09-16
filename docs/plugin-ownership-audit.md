@@ -45,7 +45,7 @@ legacy key conversion or unused Memory-specific metadata contract remains.
   rendering is local to Message Router.
 - Event policy and history codec: multiple execution and transport consumers.
 - Thread metadata: generic public/system isolation for conversation and channel
-  consumers; optional public tag utilities stay with that contract.
+  consumers.
 
 ## Verification limits
 

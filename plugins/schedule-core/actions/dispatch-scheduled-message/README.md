@@ -17,3 +17,9 @@ The Schedule Core due-event Processor invokes this Action automatically.
 
 It resolves or creates participants and a thread, creates the Message in one
 transaction, and returns the durable Message and Thread identifiers.
+
+Space-owned jobs must still be active and target a conversation in their owning
+Space. The check shares a transaction fence with attachment moves. A mismatched
+target pauses the job; stale queued occurrences are skipped without sending.
+Editing a job to a valid new target discards its old occurrence without pausing
+the new configuration. The result distinguishes `sent` from `skipped`.

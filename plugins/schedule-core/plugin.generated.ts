@@ -3,7 +3,8 @@ import { definePlugin, type DefinedPlugin } from "@copilotz/copilotz/plugins";
 import entry0 from "./actions/dispatch-scheduled-message/index.ts";
 import entry1 from "./actions/scheduled-jobs/index.ts";
 import entry2 from "./processors/dispatch-scheduled-message/index.ts";
-import entry3 from "./resources/tools/scheduled-jobs/index.ts";
+import entry3 from "./processors/pause-space-jobs/index.ts";
+import entry4 from "./resources/tools/scheduled-jobs/index.ts";
 import { corePlugin as dependency0 } from "../core/plugin.ts";
 import { schedulesPlugin as dependency1 } from "../schedules/plugin.ts";
 const definition = {
@@ -16,10 +17,11 @@ const definition = {
   },
   processors: {
     "dispatchScheduledMessage": entry2,
+    "pauseSpaceJobs": entry3,
   },
   resources: {
     "tools": {
-      "scheduled_jobs": entry3,
+      "scheduled_jobs": entry4,
     },
   },
 } as const;

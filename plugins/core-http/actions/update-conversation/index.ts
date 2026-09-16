@@ -31,19 +31,6 @@ export const updateConversation: ActionDefinition<
         properties: {
           name: { type: "string" },
           description: { type: "string" },
-          tags: {
-            type: "array",
-            items: {
-              type: "object",
-              required: ["id", "name"],
-              properties: {
-                id: { type: "string" },
-                name: { type: "string" },
-                color: { type: "string" },
-              },
-              additionalProperties: false,
-            },
-          },
           status: { enum: ["active", "archived", "closed"] },
         },
       },
@@ -54,16 +41,11 @@ export const updateConversation: ActionDefinition<
     threadId: string;
     patch: Record<string, unknown>;
   }, context: ActionContext) {
-    const thread = await ownedThread(context, input.threadId);
-    const { tags, ...set } = input.patch;
-    if (tags) {
-      const metadata = thread.metadata as Record<string, unknown>;
-      set.metadata = {
-        ...metadata,
-        public: { ...(metadata.public as object ?? {}), tags },
-      };
-    }
-    return await context.collections.thread.update({ id: input.threadId, set });
+    await ownedThread(context, input.threadId);
+    return await context.collections.thread.update({
+      id: input.threadId,
+      set: input.patch,
+    });
   },
 });
 

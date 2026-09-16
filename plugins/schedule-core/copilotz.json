@@ -9,6 +9,7 @@
     "actions/dispatch-scheduled-message/index.ts",
     "actions/scheduled-jobs/index.ts",
     "processors/dispatch-scheduled-message/index.ts",
+    "processors/pause-space-jobs/index.ts",
     "resources/tools/scheduled-jobs/index.ts"
   ],
   "plugins": [

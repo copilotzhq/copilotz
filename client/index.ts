@@ -219,20 +219,20 @@ export function createCopilotzClient(options: ClientOptions): CopilotzClient {
   };
   const actionPath = (id: string) =>
     `/actions/${id.split(".").map(segment).join("/")}`;
-  return Object.freeze({
-    actions: Object.freeze({
+  return ({
+    actions: {
       submit: (id: string, input: unknown, options: SubmitOptions) =>
         submit(actionPath(id), input, options),
       async invoke(id: string, input: unknown, options: SubmitOptions) {
         const receipt = await submit(actionPath(id), input, options);
         return await result(receipt.operationId, options.signal);
       },
-    }),
-    channels: Object.freeze({
+    } as const,
+    channels: {
       submit: (alias: string, input: unknown, options: SubmitOptions) =>
         submit(`/channels/${segment(alias)}`, input, options),
-    }),
-    operations: Object.freeze({
+    } as const,
+    operations: {
       get: (id: string) => json(`/operations/${segment(id)}`),
       result,
       cancel: (id: string) =>
@@ -247,8 +247,8 @@ export function createCopilotzClient(options: ClientOptions): CopilotzClient {
           operationIds: options.operationIds,
         }, options);
       },
-    }),
-    collections: Object.freeze({
+    } as const,
+    collections: {
       get: (name: string, id: string) =>
         json(`/collections/${segment(name)}/${segment(id)}`),
       list: (name: string, query: unknown = {}) =>
@@ -262,8 +262,8 @@ export function createCopilotzClient(options: ClientOptions): CopilotzClient {
           method: "POST",
           ...body(input),
         }),
-    }),
-    assets: Object.freeze({
+    } as const,
+    assets: {
       upload: (
         input: BodyInit,
         options: {
@@ -293,10 +293,10 @@ export function createCopilotzClient(options: ClientOptions): CopilotzClient {
         }),
       get: (id: string, options: ReadOptions = {}) =>
         request(`/assets/${segment(id)}`, options),
-    }),
+    } as const,
     /** Shared request machinery for typed domain clients and application endpoints. */
-    http: Object.freeze({ request, json, submit, observe }),
-  });
+    http: { request, json, submit, observe } as const,
+  } as const);
 }
 
 export type CopilotzClient = Readonly<{

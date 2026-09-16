@@ -54,7 +54,7 @@ Deno.test("execution history keeps duplicate results singular while independent 
       taskInput: { task: "research", nested: { revision: 1 } },
       result: { status: "completed" },
     });
-    assert(Object.isFrozen(first.event.payload));
+
     assertEquals(independent.map((result) => result.deduplicated), [
       false,
       false,

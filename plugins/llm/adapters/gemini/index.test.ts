@@ -1,12 +1,12 @@
 import { assertEquals, assertStringIncludes } from "@std/assert";
 
-import { chat } from "../../internal/orchestrator.ts";
-import { processStream } from "../../internal/utils.ts";
+import { chat } from "../bridge/orchestrator.ts";
+import { processStream } from "../../shared/utils.ts";
 import type {
   ChatMessage,
   ProviderConfig,
   ProviderRegistry,
-} from "../../internal/types.ts";
+} from "../../shared/types.ts";
 import { geminiProvider } from "./index.ts";
 
 const messages: ChatMessage[] = [

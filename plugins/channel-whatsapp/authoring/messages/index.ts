@@ -13,7 +13,7 @@ import type {
   WhatsAppResolvedCarouselCard,
   WhatsAppResolvedMediaCarouselAction,
   WhatsAppUploadedMedia,
-} from "../../internal/contracts.ts";
+} from "../../shared/contracts.ts";
 
 const MAX_REPLY_BUTTONS = 3;
 const MAX_REPLY_BUTTON_TITLE_LENGTH = 20;

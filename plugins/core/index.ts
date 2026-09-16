@@ -1,71 +1,22 @@
 /** Exposes Core's public semantic and conversation surface. @module */
 
-export { agentInstructionBase, defineAgent } from "./resources/agent/index.ts";
-export type {
-  AgentCapabilities,
-  AgentCapabilitySelection,
-  AgentInstructionContext,
-  AgentInstructionExecution,
-  AgentInstructionResolution,
-  AgentInstructionResolver,
-  AgentModels,
-  AgentModelSelection,
-  AgentResource,
-} from "./resources/agent/index.ts";
-export type {
-  ReasoningHistoryInclude,
-  ReasoningHistoryOptions,
-} from "./internal/reasoning.ts";
 export {
   CORE_PLUGIN_ID,
   CORE_PLUGIN_VERSION,
   coreActions,
   coreCollections,
-  coreCollectionsPlugin,
   corePlugin,
   coreProcessors,
 } from "./plugin.ts";
-export {
-  ADD_THREAD_PARTICIPANT_ACTION_ID,
-  addThreadParticipantAction,
-  CREATE_THREAD_ACTION_ID,
-  createThreadAction,
-  DELETE_THREAD_MESSAGES_ACTION_ID,
-  deleteThreadMessagesAction,
-} from "../core-collections/actions/index.ts";
-export {
-  CREATE_THREAD_MESSAGE_ACTION_ID,
-  createThreadMessageAction,
-} from "../core-collections/actions/index.ts";
-export {
-  REVISE_MESSAGE_ACTION_ID,
-  reviseMessageAction,
-} from "../core-collections/actions/index.ts";
-export {
-  ASK_ACTION_ID,
-  askAction,
-} from "../core-collections/actions/ask/index.ts";
-export type {
-  AskInput,
-  AskOutput,
-} from "../core-collections/actions/ask/index.ts";
-export { askTool } from "./resources/tools/ask/index.ts";
-export {
-  core,
-  CORE_MESSAGE_INPUT_EVENT,
-  message,
-} from "../core-collections/authoring/index.ts";
-export type {
-  CoreMessageInput,
-  CoreMessageInputEnvelope,
-} from "../core-collections/authoring/index.ts";
+export { ASK_ACTION_ID, askAction } from "./actions/ask/index.ts";
+export type { AskInput, AskOutput } from "./actions/ask/index.ts";
 export {
   CORE_COLLECTION_NAMES,
   messageCollection,
   messageRevisionFrom,
   participantCollection,
   threadCollection,
-} from "../core-collections/collections/index.ts";
+} from "./collections/index.ts";
 export type {
   ConversationMessage,
   ConversationThread,
@@ -74,8 +25,8 @@ export type {
   Participant,
   ParticipantInput,
   ParticipantType,
-} from "../core-collections/internal/contracts.ts";
-export type { MessageRecord } from "../core-collections/collections/index.ts";
+} from "./shared/contracts.ts";
+export type { MessageRecord } from "./collections/index.ts";
 export {
   listThreadMessageRecords,
   loadMessageRecord,
@@ -85,27 +36,34 @@ export {
   mapParticipantRecord,
   mapThreadRecord,
   projectActiveMessageBranch,
-} from "../core-collections/internal/projections.ts";
-export * from "./internal/capabilities/index.ts";
-export * from "./resources/context/index.ts";
-export * from "./resources/prompt-instructions/index.ts";
-export * from "./internal/thread-metadata.ts";
-export * from "./internal/workflow-metadata.ts";
+} from "./shared/projections.ts";
+export * from "./shared/thread-metadata.ts";
+export * from "./shared/workflow-metadata.ts";
 export * from "./actions/index.ts";
 export * from "./authoring/index.ts";
 export * from "./resources/index.ts";
 
 export {
-  SPACES_ACTION_ID,
-  spacesAction,
-} from "../core-collections/actions/spaces/index.ts";
-export {
   spaceAttachmentCollection,
   spaceAttachmentId,
   spaceCollection,
-} from "../core-collections/collections/index.ts";
+} from "./collections/index.ts";
 
-export type {
-  SpaceInput,
-  SpaceResult,
-} from "../core-collections/actions/spaces/index.ts";
+export * from "./authoring/define-tool/generated.ts";
+export * from "./shared/tools/lifecycle-json.ts";
+export type { CoreResources } from "./shared/runtime-context.ts";
+export { loadCoreThreadMessageSnapshot } from "./shared/helpers.ts";
+export { buildLlmTranscript } from "./shared/agents/transcript.ts";
+export { prepareLlmTranscript } from "./shared/agents/prepared-transcript.ts";
+
+export * from "./shared/events/index.ts";
+export * from "./processors/message-input/input/index.ts";
+export * from "./shared/capabilities/grants.ts";
+export * from "./shared/capabilities/selection.ts";
+
+export {
+  collectContextContributions,
+  type CollectedContextContribution,
+} from "./shared/contributions.ts";
+
+export * from "./actions/run-goal/index.ts";

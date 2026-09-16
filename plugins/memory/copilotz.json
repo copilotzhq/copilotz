@@ -37,7 +37,12 @@
     "resources/tools/search-memory/index.ts",
     "resources/tools/inspect-memory/index.ts",
     "resources/tools/invalidate-memory/index.ts",
-    "resources/tools/set-memory-status/index.ts",
-    "dependencies/core/index.ts"
+    "resources/tools/set-memory-status/index.ts"
+  ],
+  "plugins": [
+    {
+      "from": "../core/plugin.ts",
+      "export": "corePlugin"
+    }
   ]
 }

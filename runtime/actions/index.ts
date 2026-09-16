@@ -85,3 +85,12 @@ export type {
   SerializedActionError,
 } from "./types.ts";
 export type { ParseActionLifecycleEventOptions } from "./event.ts";
+
+export type {
+  VectorMatch,
+  VectorProfile,
+  VectorReader,
+  VectorSearch,
+  VectorTransaction,
+  VectorWrite,
+} from "../vectors/index.ts";

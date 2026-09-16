@@ -1,0 +1,252 @@
+import { collectContextContributions } from "../../shared/contributions.ts";
+import {
+  prepareContextContributions,
+  renderContextContent,
+} from "../../processors/message-router/agents/contributions.ts";
+import { assertEquals, assertRejects, assertThrows } from "@std/assert";
+import type { AgentResource } from "../define-agent/index.ts";
+import type {
+  ConversationThread,
+  Participant,
+} from "../../shared/contracts.ts";
+import type { ProcessorContext } from "@copilotz/copilotz/plugins";
+import { defineContextResource } from "./index.ts";
+
+const agent: AgentResource = {
+  id: "north",
+  name: "North",
+  role: "assistant",
+  models: {},
+};
+
+const participant = {
+  id: "participant-north",
+  namespace: "tenant-a",
+  externalId: "north",
+  participantType: "agent",
+  agentId: "north",
+  metadata: {},
+  createdAt: "2026-08-14T00:00:00.000Z",
+  updatedAt: "2026-08-14T00:00:00.000Z",
+} as const satisfies Participant;
+
+const thread = {
+  id: "thread-a",
+  namespace: "tenant-a",
+  status: "active",
+  metadata: {},
+  participants: [participant],
+  createdAt: "2026-08-14T00:00:00.000Z",
+  updatedAt: "2026-08-14T00:00:00.000Z",
+} as const satisfies ConversationThread;
+
+function context(
+  resources: readonly ReturnType<typeof defineContextResource>[],
+): ProcessorContext {
+  return {
+    namespace: "tenant-a",
+    operationKey: "delivery-a",
+    identity: { deduplicationId: "delivery-a" },
+    resources: {
+      promptContext: Object.fromEntries(
+        resources.map((resource) => [resource.id, resource]),
+      ),
+    },
+    adapters: {},
+    actions: {},
+    collections: { workspace: {} },
+    signal: new AbortController().signal,
+    content: {
+      resolveMany: (refs: readonly { assetId: string }[]) =>
+        Promise.resolve(refs.map((ref) => ({
+          text: "resolved asset text",
+          bytes: new Uint8Array(),
+          ref,
+        }))),
+    },
+    now: () => new Date("2026-08-14T00:00:00.000Z"),
+    transaction: () => Promise.reject(new Error("Not used by this fixture.")),
+  } as unknown as ProcessorContext;
+}
+
+Deno.test("context resources are purpose-scoped, ordered, and receive stable capabilities", async () => {
+  const observed: unknown[] = [];
+  const conversation = defineContextResource({
+    id: "app.conversation",
+    type: "context",
+    purposes: ["conversation"],
+    contribute: () => ({
+      id: "conversation",
+      title: "Conversation state",
+      role: "context",
+      content: "conversation only",
+    }),
+  });
+  const workspace = defineContextResource({
+    id: "app.workspace",
+    type: "context",
+    purposes: ["conversation"],
+    contribute(input) {
+      observed.push(input);
+      return [{
+        id: "document",
+        title: "Shared document",
+        role: "evidence",
+        content: { type: "text", text: "version seven" },
+        source: {
+          type: "collection_record",
+          collection: "sharedDocument",
+          id: "doc-a",
+          version: 7,
+        },
+      }, {
+        id: "board",
+        title: "Kanban board",
+        role: "context",
+        content: { type: "json", value: { cards: 2 } },
+      }];
+    },
+  });
+  const processor = context([conversation, workspace]);
+  const values = await collectContextContributions(processor, {
+    purpose: "conversation",
+    agent,
+    participant,
+    thread,
+    sourceRange: {
+      startMessageId: "message-a",
+      endMessageId: "message-b",
+      messages: [],
+    },
+  });
+
+  assertEquals(values.map((value) => value.id), [
+    "conversation",
+    "document",
+    "board",
+  ]);
+  const input = observed[0] as Record<string, unknown>;
+  assertEquals(
+    input.idempotencyKey,
+    "delivery-a:context:app.workspace:conversation",
+  );
+  assertEquals(input.collections, processor.collections);
+  assertEquals(
+    (input.sourceRange as Record<string, unknown>).endMessageId,
+    "message-b",
+  );
+});
+
+Deno.test("context contribution contracts reject ambiguity and unproven evidence", async () => {
+  assertThrows(
+    () =>
+      defineContextResource({
+        id: "invalid",
+        type: "context",
+        purposes: [],
+        contribute: () => null,
+      }),
+    TypeError,
+    "purpose",
+  );
+  const duplicate = defineContextResource({
+    id: "duplicate",
+    type: "context",
+    purposes: ["conversation"],
+    contribute: () => [{
+      id: "same",
+      title: "A",
+      role: "context",
+      content: "a",
+    }, {
+      id: "same",
+      title: "B",
+      role: "context",
+      content: "b",
+    }],
+  });
+  await assertRejects(
+    () =>
+      collectContextContributions(context([duplicate]), {
+        purpose: "conversation",
+        agent,
+        participant,
+        thread,
+      }),
+    TypeError,
+    "Duplicate",
+  );
+  const missingSource = defineContextResource({
+    id: "missing-source",
+    type: "context",
+    purposes: ["conversation"],
+    contribute: () => ({
+      id: "evidence",
+      title: "Unsupported evidence",
+      role: "evidence",
+      content: "value",
+    }),
+  });
+  await assertRejects(
+    () =>
+      collectContextContributions(context([missingSource]), {
+        purpose: "conversation",
+        agent,
+        participant,
+        thread,
+      }),
+    TypeError,
+    "requires a source",
+  );
+});
+
+Deno.test("context preparation resolves references before pure rendering", async () => {
+  const prepared = await prepareContextContributions(context([]), [
+    {
+      id: "text",
+      resourceId: "test",
+      title: "Text",
+      role: "context",
+      content: "plain",
+    },
+    {
+      id: "json",
+      resourceId: "test",
+      title: "JSON",
+      role: "context",
+      content: { type: "json", value: { state: "active" } },
+    },
+    {
+      id: "ref",
+      resourceId: "test",
+      title: "Reference",
+      role: "context",
+      content: {
+        assetId: "asset-a",
+        kind: "text",
+        role: "context",
+        mediaType: "text/plain",
+      },
+    },
+  ]);
+  assertEquals(prepared.map((entry) => renderContextContent(entry.content)), [
+    "plain",
+    '{\n  "state": "active"\n}',
+    "resolved asset text",
+  ]);
+});
+
+Deno.test("context modules remain factory-first and runtime-neutral", async () => {
+  for (
+    const module of [
+      "index.ts",
+      "../../shared/types.ts",
+      "../../shared/contributions.ts",
+    ]
+  ) {
+    const source = await Deno.readTextFile(new URL(module, import.meta.url));
+    assertEquals(/\bclass\s+\w+/.test(source), false, module);
+    assertEquals(/\bDeno\b|\bBun\b|\bprocess\b/.test(source), false, module);
+    assertEquals(/from\s+["']node:/.test(source), false, module);
+  }
+});

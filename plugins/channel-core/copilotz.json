@@ -12,7 +12,12 @@
     "actions/ingress/index.ts",
     "actions/egress/index.ts",
     "processors/ingress/index.ts",
-    "processors/egress/index.ts",
-    "dependencies/core/index.ts"
+    "processors/egress/index.ts"
+  ],
+  "plugins": [
+    {
+      "from": "../core/plugin.ts",
+      "export": "corePlugin"
+    }
   ]
 }

@@ -1,6 +1,6 @@
 /** Provider-wire to LLM Adapter bridge. @module */
 
-import { projectPreparedRequest } from "../../internal/prepared-request.ts";
+import { projectPreparedRequest } from "../../shared/prepared-request.ts";
 
 import { bytesToBase64, toDataUrl } from "@copilotz/copilotz/content";
 
@@ -22,14 +22,14 @@ import {
   type LlmToolPipeline,
   type LlmToolPipelineStage,
   type LlmUsage,
-} from "../../internal/contracts.ts";
-import { LLMProviderError } from "../../internal/errors.ts";
-import { toLLMConfig } from "../../internal/config.ts";
-import { chat } from "../../internal/orchestrator.ts";
+} from "../../shared/contracts.ts";
+import { LLMProviderError } from "../../shared/errors.ts";
+import { toLLMConfig } from "./config.ts";
+import { chat } from "./orchestrator.ts";
 import {
   assertEstimatedInputLimit,
   formatMessagesDetailed,
-} from "../../internal/utils.ts";
+} from "../../shared/utils.ts";
 import type {
   ChatContentPart,
   ChatMessage,
@@ -41,7 +41,7 @@ import type {
   TokenUsage,
   ToolDefinition,
   ToolInvocation,
-} from "../../internal/types.ts";
+} from "../../shared/types.ts";
 
 /**
  * Runtime-only provider configuration copied from one process-local built-in

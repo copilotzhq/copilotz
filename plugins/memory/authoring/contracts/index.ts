@@ -1,3 +1,4 @@
+import type { VectorProfile } from "@copilotz/copilotz/actions";
 /**
  * Public configuration and runtime contracts for semantic memory.
  *
@@ -22,6 +23,7 @@ export type MemoryResources =
       {
         config?: Partial<LongTermMemoryConfig> & { enabled?: boolean };
         kinds?: readonly MemoryKindDefinition[];
+        embeddingProfile?: VectorProfile;
       }
     >;
   }>;

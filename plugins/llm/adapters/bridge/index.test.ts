@@ -1,11 +1,11 @@
 import { assert, assertEquals, assertThrows } from "@std/assert";
-import { ContextInputLimitError } from "../../internal/errors.ts";
+import { ContextInputLimitError } from "../../shared/errors.ts";
 import {
   createProviderAdapter,
   preflightLlmRequest,
   validateBuiltinProviderCall,
 } from "./index.ts";
-import type { ChatMessage, ProviderFactory } from "../../internal/types.ts";
+import type { ChatMessage, ProviderFactory } from "../../shared/types.ts";
 
 Deno.test("provider bridge rejects unsupported built-in session mode", () => {
   assertThrows(() => validateBuiltinProviderCall("openai", "session", {}));

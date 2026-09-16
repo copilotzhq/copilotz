@@ -9,8 +9,16 @@
     "actions/dispatch-scheduled-message/index.ts",
     "actions/scheduled-jobs/index.ts",
     "processors/dispatch-scheduled-message/index.ts",
-    "resources/tools/scheduled-jobs/index.ts",
-    "dependencies/core/index.ts",
-    "dependencies/schedules/index.ts"
+    "resources/tools/scheduled-jobs/index.ts"
+  ],
+  "plugins": [
+    {
+      "from": "../core/plugin.ts",
+      "export": "corePlugin"
+    },
+    {
+      "from": "../schedules/plugin.ts",
+      "export": "schedulesPlugin"
+    }
   ]
 }

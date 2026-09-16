@@ -1,4 +1,4 @@
-import { channelProviderOptions } from "../../../../channel-core/internal/provider-options.ts";
+import { channelProviderOptions } from "@copilotz/copilotz/channels/core";
 /**
  * Defines the Telegram Channel Adapter.
  *
@@ -17,14 +17,14 @@ import {
   requestHeader,
   requiredProviderText,
   timingSafeTextEqual,
-} from "../../../../channel-core/internal/helpers.ts";
+} from "@copilotz/copilotz/channels/core";
 import { cloneChannelJson } from "../../../../channel-core/authoring/channel-ingress/index.ts";
 import type {
   ChannelAdapter,
   ChannelDeliveryAttempt,
   ChannelJsonObject,
-} from "../../../../channel-core/internal/contracts.ts";
-import { createTelegramTransport } from "./internal/transport.ts";
+} from "@copilotz/copilotz/channels/core";
+import { createTelegramTransport } from "./transport.ts";
 import type {
   TelegramActionPayload,
   TelegramChannelOptions,
@@ -35,7 +35,7 @@ import type {
   TelegramTransport,
   TelegramUpdate,
   TelegramUser,
-} from "../../../internal/contracts.ts";
+} from "./contracts.ts";
 
 function configContext(
   operation: TelegramConfigContext["operation"],
@@ -449,6 +449,6 @@ async function deliverContent(
   return undefined;
 }
 
-export { createTelegramTransport } from "./internal/transport.ts";
+export { createTelegramTransport } from "./transport.ts";
 
 export default telegramChannelAdapter;

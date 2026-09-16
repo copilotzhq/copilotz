@@ -37,24 +37,24 @@ function jsonRecord(value: unknown): Record<string, unknown> {
 
 function mapEdge(row: EdgeRow): CollectionGraphRelation {
   const data = jsonRecord(row.data);
-  return Object.freeze({
+  return ({
     id: row.id,
     namespace: row.namespace,
     type: row.type,
-    source: Object.freeze({
+    source: {
       type: typeof data.sourceType === "string" ? data.sourceType : "node",
       id: row.source_node_id,
-    }),
-    target: Object.freeze({
+    } as const,
+    target: {
       type: typeof data.targetType === "string" ? data.targetType : "node",
       id: row.target_node_id,
-    }),
-    metadata: Object.freeze(jsonRecord(data.metadata)),
+    } as const,
+    metadata: jsonRecord(data.metadata),
     weight: Number(row.weight ?? 1),
     createdAt: row.created_at instanceof Date
       ? row.created_at.toISOString()
       : new Date(row.created_at).toISOString(),
-  });
+  } as const);
 }
 
 export async function loadGraphRelation(
@@ -80,14 +80,14 @@ export function normalizeGraphRelation(
 ): CollectionGraphRelation {
   const namespace = requiredText(namespaceInput, "Namespace");
   const id = requiredText(input.id, "Relation ID");
-  const source = Object.freeze({
+  const source = {
     type: requiredText(input.source.type, "Relation source type"),
     id: requiredText(input.source.id, "Relation source ID"),
-  });
-  const target = Object.freeze({
+  } as const;
+  const target = {
     type: requiredText(input.target.type, "Relation target type"),
     id: requiredText(input.target.id, "Relation target ID"),
-  });
+  } as const;
   if (source.id === target.id) {
     throw new TypeError("A relation cannot connect a node to itself.");
   }
@@ -95,16 +95,16 @@ export function normalizeGraphRelation(
   if (!Number.isFinite(weight)) {
     throw new TypeError("Relation weight must be finite.");
   }
-  return Object.freeze({
+  return ({
     id,
     namespace,
     type: relationType(input.type),
     source,
     target,
-    metadata: Object.freeze(jsonRecord(input.metadata)),
+    metadata: jsonRecord(input.metadata),
     weight,
     createdAt: new Date(createdAt).toISOString(),
-  });
+  } as const);
 }
 
 /** Folds one relation intent over its immutable expected projection. */
@@ -123,10 +123,10 @@ export function mergeGraphRelation(
   ) {
     throw new Error(`Relation ID '${intent.id}' conflicts with an edge.`);
   }
-  return Object.freeze({
+  return ({
     ...intent,
     createdAt: existing.createdAt,
-  });
+  } as const);
 }
 
 /** Applies one durable relation body to the graph projection. */

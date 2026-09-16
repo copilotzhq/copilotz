@@ -1,0 +1,10 @@
+{
+  "id": "copilotz.core.http",
+  "version": "0.75.0",
+  "plugins": [
+    {
+      "from": "../core/plugin.ts",
+      "export": "corePlugin"
+    }
+  ]
+}

@@ -3,16 +3,14 @@
  *
  * @module
  */
-
 import type {
   ChannelIngressEnvelope,
   ChannelIngressEnvelopeOptions,
   ChannelIngressOccurrence,
   ChannelJsonObject,
   ChannelJsonValue,
-} from "../../internal/contracts.ts";
-import { CHANNEL_INGRESS_INPUT_EVENT } from "../../internal/contracts.ts";
-
+} from "../../shared/contracts.ts";
+import { CHANNEL_INGRESS_INPUT_EVENT } from "../../shared/contracts.ts";
 const CREDENTIAL_KEYS = new Set([
   "authorization",
   "accesstoken",
@@ -26,7 +24,6 @@ const CREDENTIAL_KEYS = new Set([
   "webhookverifytoken",
   "interactiontoken",
 ]);
-
 const OCCURRENCE_KEYS = new Set(["id", "input"]);
 const ENVELOPE_OPTION_KEYS = new Set([
   "namespace",
@@ -36,7 +33,6 @@ const ENVELOPE_OPTION_KEYS = new Set([
   "deduplicationId",
   "metadata",
 ]);
-
 function occurrenceIdentity(channelId: string, occurrenceId: string): string {
   return `channel:${
     JSON.stringify([
@@ -46,22 +42,22 @@ function occurrenceIdentity(channelId: string, occurrenceId: string): string {
     ])
   }`;
 }
-
 function credentialKey(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]/g, "");
 }
-
 function requiredText(value: unknown, label: string): string {
   const normalized = typeof value === "string" ? value.trim() : "";
-  if (!normalized) throw new TypeError(`${label} must be non-empty.`);
+  if (!normalized) {
+    throw new TypeError(`${label} must be non-empty.`);
+  }
   return normalized;
 }
-
 function optionalText(value: unknown, label: string): string | undefined {
-  if (value === undefined) return undefined;
+  if (value === undefined) {
+    return undefined;
+  }
   return requiredText(value, label);
 }
-
 function dataObject(
   value: unknown,
   allowed: ReadonlySet<string>,
@@ -92,7 +88,6 @@ function dataObject(
   }
   return snapshot;
 }
-
 /**
  * Copies one strict JSON value while rejecting credentials, accessors, custom
  * prototypes, sparse arrays, cycles, undefined, and non-finite numbers.
@@ -105,7 +100,9 @@ export function cloneChannelJson(
   if (
     value === null || typeof value === "string" ||
     typeof value === "boolean"
-  ) return value;
+  ) {
+    return value;
+  }
   if (typeof value === "number") {
     if (!Number.isFinite(value)) {
       throw new TypeError(`${label} must contain finite numbers.`);
@@ -181,7 +178,6 @@ export function cloneChannelJson(
     ancestors.delete(value);
   }
 }
-
 function jsonObject(value: unknown, label: string): ChannelJsonObject {
   const cloned = cloneChannelJson(value, label);
   if (!cloned || typeof cloned !== "object" || Array.isArray(cloned)) {
@@ -189,7 +185,6 @@ function jsonObject(value: unknown, label: string): ChannelJsonObject {
   }
   return cloned as ChannelJsonObject;
 }
-
 /**
  * Encodes an authenticated provider occurrence. No content preparation or
  * Asset materialization occurs before this Event is accepted durably.
@@ -220,18 +215,16 @@ export function channelIngress(
     optionsSnapshot.databaseSchema,
     "Channel database schema",
   );
-  const correlationId = optionalText(
-    optionsSnapshot.correlationId,
-    "Channel correlation ID",
-  ) ?? identity;
+  const correlationId =
+    optionalText(optionsSnapshot.correlationId, "Channel correlation ID") ??
+      identity;
   const causationId = optionalText(
     optionsSnapshot.causationId,
     "Channel causation ID",
   );
-  const deduplicationId = optionalText(
-    optionsSnapshot.deduplicationId,
-    "Channel deduplication ID",
-  ) ?? identity;
+  const deduplicationId =
+    optionalText(optionsSnapshot.deduplicationId, "Channel deduplication ID") ??
+      identity;
   const metadata = optionsSnapshot.metadata === undefined
     ? undefined
     : jsonObject(optionsSnapshot.metadata, "Channel Event metadata");
@@ -250,7 +243,11 @@ export function channelIngress(
     correlationId,
     ...(causationId ? { causationId } : {}),
     deduplicationId,
-    ...(metadata ? { metadata } : {}),
-    visibility: { kind: "internal" as const } as const,
+    metadata: {
+      ...metadata,
+      core: {
+        visibility: { kind: "internal" as const } as const,
+      },
+    },
   } as const);
 }

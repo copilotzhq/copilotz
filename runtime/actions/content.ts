@@ -61,10 +61,10 @@ export function actionContentDeclaration(
   if (!Number.isSafeInteger(byteLimit) || Number(byteLimit) < 0) {
     throw new TypeError("Invalid Action content byte limit.");
   }
-  return Object.freeze({
-    input: Object.freeze([...paths] as string[]),
+  return ({
+    input: [...paths] as string[],
     byteLimit: Number(byteLimit),
-  });
+  } as const);
 }
 
 /** Returns only declared sequences; arbitrary payload objects are never interpreted. */

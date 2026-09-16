@@ -124,7 +124,7 @@ function parseMetadata(
       `Unsupported live dispatch schema '${String(value.schema)}'.`,
     );
   }
-  return Object.freeze({
+  return ({
     schema: "copilotz.live.dispatch.v1",
     databaseSchema: requiredText(
       value.databaseSchema,
@@ -149,7 +149,7 @@ function parseMetadata(
       value.idempotencyKey,
       "Live idempotency key",
     ),
-  });
+  } as const);
 }
 
 async function readBytes(
@@ -190,7 +190,7 @@ function parseEvent(bytes: Uint8Array): CopilotzEvent {
   ) {
     throw new TypeError("Live dispatch body contains an invalid event.");
   }
-  return Object.freeze(value) as CopilotzEvent;
+  return value as CopilotzEvent;
 }
 
 function encodedEvent(event: CopilotzEvent): Uint8Array {
@@ -239,18 +239,18 @@ function mutationIdentity(
   return (operationKey, metadata = {}) => {
     const key = requiredText(operationKey, "Live mutation operation key");
     const causationId = sourceEventId(event);
-    return Object.freeze({
+    return ({
       ...(causationId ? { causationId } : {}),
       correlationId: event.correlationId,
       deduplicationId: `live:${dispatchAttemptId}:${processorId}:${key}`,
       ...(settlementScopeId ? { settlementScopeId } : {}),
-      metadata: Object.freeze({
+      metadata: {
         ...structuredClone(metadata),
         ...(causationId ? { sourceEventId: causationId } : {}),
         sourceLiveDispatchId: dispatchAttemptId,
         sourceConsumerId: `processor:${processorId}`,
-      }),
-    });
+      } as const,
+    } as const);
   };
 }
 
@@ -272,7 +272,7 @@ async function invokeOne(
       `Live processor '${processorId}' is unavailable or no longer matches.`,
     );
   }
-  const base: LiveProcessorContextBase = Object.freeze({
+  const base: LiveProcessorContextBase = {
     databaseSchema: options.databaseSchema,
     event: options.event,
     signal: options.signal,
@@ -288,7 +288,7 @@ async function invokeOne(
       dispatchAttemptId,
       options.settlementScopeId,
     ),
-  });
+  } as const;
   const context = await options.createContext(base);
   options.signal.throwIfAborted();
   await processor.handle(
@@ -378,7 +378,7 @@ export function createLiveEventDispatcher(
     "Live default database schema",
   );
 
-  return Object.freeze({
+  return ({
     workload,
     async dispatch(event, databaseSchemaInput, settlementScopeId) {
       const databaseSchema = requiredText(
@@ -387,17 +387,17 @@ export function createLiveEventDispatcher(
       );
       const processors = options.transients?.match(event) ?? [];
       if (!processors.length) {
-        return Object.freeze({
+        return ({
           event,
-          processorIds: Object.freeze([]),
+          processorIds: [] as const,
           done: Promise.resolve(),
           cancel: () => Promise.resolve(),
-        });
+        } as const);
       }
       const placements = await Promise.allSettled(
         processors.map((processor) => {
           const dispatchAttemptId = createId();
-          const metadata: LiveDispatchMetadata = Object.freeze({
+          const metadata: LiveDispatchMetadata = {
             schema: "copilotz.live.dispatch.v1",
             databaseSchema,
             processorId: processor.id,
@@ -407,7 +407,7 @@ export function createLiveEventDispatcher(
             ...(settlementScopeId ? { settlementScopeId } : {}),
             dispatchAttemptId,
             idempotencyKey: `live:${dispatchAttemptId}:${processor.id}`,
-          });
+          } as const;
           return options.executor.dispatchWork({
             workload,
             metadata,
@@ -483,9 +483,9 @@ export function createLiveEventDispatcher(
         }
       })();
       done.catch(() => undefined);
-      return Object.freeze({
+      return ({
         event,
-        processorIds: Object.freeze(processors.map((item) => item.id)),
+        processorIds: processors.map((item) => item.id),
         done,
         async cancel(reason = "live_event_cancelled") {
           await Promise.all(
@@ -493,7 +493,7 @@ export function createLiveEventDispatcher(
           );
           await done.catch(() => undefined);
         },
-      });
+      } as const);
     },
-  });
+  } as const);
 }

@@ -6,13 +6,13 @@ import {
 } from "@copilotz/copilotz/actions";
 import { memoryLifecycleAllows } from "../../authoring/ontology/index.ts";
 
-import type { MemoryActionContext } from "../../internal/contracts.ts";
-import { record, requiredText } from "../../internal/input.ts";
+import type { MemoryActionContext } from "../../shared/contracts.ts";
+import { record, requiredText } from "../../shared/input.ts";
 import {
   memoryActionProvenance,
   threadMemorySpaces,
-} from "../../internal/access.ts";
-import { memoryRecord, terminalStatus } from "../../internal/retrieval.ts";
+} from "../../shared/access.ts";
+import { memoryRecord, terminalStatus } from "../../shared/retrieval.ts";
 
 export const setMemoryStatusAction: ActionDefinition<
   unknown,

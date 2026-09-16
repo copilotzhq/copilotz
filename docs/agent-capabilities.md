@@ -64,14 +64,12 @@ the composed registry. Each selected Resource names the same alias in the
 composed Action map, and Core invokes that Action directly. There is no second
 Tool catalog or execution registry.
 
-Core's optional resolver consumes the composed plugin registry inside a trusted
-host or plugin boundary:
+Core’s default capability Resource resolves grants from the current context:
 
 ```ts
-import { createAgentCapabilityResolver } from "@copilotz/copilotz/core";
+import { agentCapabilities } from "@copilotz/copilotz/core";
 
-const capabilities = createAgentCapabilityResolver({ registry });
-const view = await capabilities.resolve({ agent: "support" });
+const view = agentCapabilities.resolve({ agent: "support" }, context);
 
 view.tools; // alias, data-only Resource, and explicit/derived grant
 view.agents;

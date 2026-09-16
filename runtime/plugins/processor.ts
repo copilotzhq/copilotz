@@ -6,9 +6,7 @@ import type {
 } from "../actions/types.ts";
 import type {
   CopilotzEvent,
-  EventRouting,
   EventSubject,
-  EventVisibility,
   ResolvedCopilotzEvent,
 } from "../events/types.ts";
 import { snapshotEventData } from "../events/types.ts";
@@ -28,10 +26,7 @@ export type ProcessorContext<
 export type ProcessorMatchClause = Readonly<{
   eventType: string;
   namespace?: string;
-  threadId?: string;
   subject?: Partial<EventSubject>;
-  routing?: Partial<EventRouting>;
-  visibility?: Partial<EventVisibility> | EventVisibility;
   metadata?: Readonly<Record<string, unknown>>;
   data?: unknown;
 }>;
@@ -80,12 +75,7 @@ function requireClause(
   return ({
     eventType,
     ...(clause.namespace === undefined ? {} : { namespace: clause.namespace }),
-    ...(clause.threadId === undefined ? {} : { threadId: clause.threadId }),
     ...(clause.subject === undefined ? {} : { subject: clause.subject }),
-    ...(clause.routing === undefined ? {} : { routing: clause.routing }),
-    ...(clause.visibility === undefined
-      ? {}
-      : { visibility: clause.visibility }),
     ...(clause.metadata === undefined ? {} : { metadata: clause.metadata }),
     ...(clause.data === undefined ? {} : { data: clause.data }),
   } as const) as ProcessorMatchClause;

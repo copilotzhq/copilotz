@@ -74,7 +74,8 @@ This map describes the current implementation.
   `plugins/skills/`
 - Schedules: `plugins/schedules/` and `plugins/schedule-core/`; Usage ledger,
   aggregate analytics, HTTP adapter, and browser-safe client: `plugins/usage/`
-- Minimal Goal authoring loop: `plugins/core/authoring/goals/`
+- Goal Action: `plugins/core/actions/run-goal/`; default policy:
+  `plugins/core/resources/goals/default/`
 - Channel family barrel: `plugins/channels/`; concrete Channel plugins and
   transports: `plugins/channel-*/`
 - Semantic memory plugin: `plugins/memory/`

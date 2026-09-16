@@ -1,7 +1,7 @@
 import type { ActionSchema } from "./types.ts";
 
 const SECRET_MARKER = "x-copilotz-secret";
-const REDACTED_SECRET_VALUE = Object.freeze({ "$copilotz-secret": true });
+const REDACTED_SECRET_VALUE = { "$copilotz-secret": true } as const;
 
 type JsonPrimitive = null | boolean | number | string;
 type JsonValue = JsonPrimitive | readonly JsonValue[] | JsonObject;
@@ -242,11 +242,9 @@ function cloneJsonValue(
       ) {
         invalidValue(`${path} is a sparse array`);
       }
-      return Object.freeze(
-        value.map((item, index) =>
-          cloneJsonValue(item, `${path}[${index}]`, ancestors)
-        ),
-      );
+      return (value.map((item, index) =>
+        cloneJsonValue(item, `${path}[${index}]`, ancestors)
+      ));
     }
 
     const prototype = Object.getPrototypeOf(value);
@@ -264,7 +262,7 @@ function cloneJsonValue(
         cloneJsonValue(descriptor.value, `${path}.${key}`, ancestors),
       ] as const;
     });
-    return Object.freeze(Object.fromEntries(entries));
+    return (Object.fromEntries(entries));
   } finally {
     ancestors.delete(value);
   }
@@ -467,14 +465,12 @@ function replacePointers(
 ): JsonValue {
   if (pointers.has(pointer)) return REDACTED_SECRET_VALUE;
   if (Array.isArray(value)) {
-    return Object.freeze(
-      value.map((child, index) =>
-        replacePointers(child, pointers, appendPointer(pointer, String(index)))
-      ),
-    );
+    return (value.map((child, index) =>
+      replacePointers(child, pointers, appendPointer(pointer, String(index)))
+    ));
   }
   if (value && typeof value === "object") {
-    return Object.freeze(Object.fromEntries(
+    return (Object.fromEntries(
       Object.entries(value).map(([key, child]) =>
         [
           key,
@@ -492,12 +488,12 @@ export function splitSecretActionValue(
   value: unknown,
 ): SplitSecretActionValue {
   const snapshot = cloneJsonValue(value, "value");
-  if (!schema) return Object.freeze({ publicValue: snapshot, secret: false });
+  if (!schema) return ({ publicValue: snapshot, secret: false } as const);
   const pointers = secretPointers(schema, snapshot);
-  return Object.freeze({
+  return ({
     publicValue: replacePointers(snapshot, new Set(pointers)),
     secret: pointers.length > 0,
-  });
+  } as const);
 }
 
 function sameJsonValue(left: JsonValue, right: JsonValue): boolean {

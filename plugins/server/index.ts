@@ -9,4 +9,4 @@ export {
   SERVER_ACTION_REQUEST_SCHEMA,
   type ServerEndpointDescriptor,
   type ServerHttpMethod,
-} from "./internal/contracts.ts";
+} from "./shared/contracts.ts";

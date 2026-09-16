@@ -6,7 +6,7 @@ import type { ActionDefinition } from "@copilotz/copilotz/actions";
  */
 
 import { defineAction } from "@copilotz/copilotz/actions";
-import { record } from "../internal/input.ts";
+import { record } from "../../shared/input.ts";
 
 export const getCurrentTimeAction: ActionDefinition<
   unknown,

@@ -6,19 +6,19 @@ import {
 } from "@copilotz/copilotz/actions";
 import { MEMORY_RELATION_TYPES } from "../../authoring/ontology/index.ts";
 import { memoryRecordCollection } from "../../collections/memory-record/index.ts";
-import type { MemoryActionContext } from "../../internal/contracts.ts";
+import type { MemoryActionContext } from "../../shared/contracts.ts";
 import {
   memoryActionProvenance,
   threadMemorySpaces,
-} from "../../internal/access.ts";
-import { memoryRecord } from "../../internal/retrieval.ts";
-import { record, requiredText } from "../../internal/input.ts";
+} from "../../shared/access.ts";
+import { memoryRecord } from "../../shared/retrieval.ts";
+import { record, requiredText } from "../../shared/input.ts";
 import {
   inspectMemoryOutputSchema,
   PUBLIC_MEMORY_RELATION_LIMIT,
   PUBLIC_MEMORY_SCAN_LIMIT,
   publicMemoryDetail,
-} from "../internal/public-projection.ts";
+} from "../../shared/public-projection.ts";
 
 export const inspectMemoryAction: ActionDefinition<
   unknown,

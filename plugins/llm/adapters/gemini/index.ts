@@ -8,8 +8,8 @@ import type {
   ProviderFactory,
   ProviderFinishReason,
   ProviderUsageUpdate,
-} from "../../internal/types.ts";
-import { resolveProviderStopSequences } from "../../internal/utils.ts";
+} from "../../shared/types.ts";
+import { resolveProviderStopSequences } from "../../shared/utils.ts";
 import {
   cloneBlock,
   isRecord,

@@ -1,3 +1,9 @@
-/** Exposes Core semantic Actions. @module */
+/** Exposes Core storage Actions. @module */
 
-export * from "../../core-collections/actions/ask/index.ts";
+export * from "./add-thread-participant/index.ts";
+export * from "./create-thread/index.ts";
+export * from "./create-thread-message/index.ts";
+export * from "./delete-thread-messages/index.ts";
+export * from "./revise-message/index.ts";
+
+export * from "./spaces/index.ts";

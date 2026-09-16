@@ -144,10 +144,11 @@ Deno.test("static processor uses frozen event body and captures input in a child
             operationKey,
             options.identity?.metadata as Record<string, unknown> | undefined,
           ),
-          execute: async ({ collections, relations }) =>
+          execute: async ({ collections, relations, vectors }) =>
             await execute(Object.freeze({
               collections,
               relations,
+              vectors,
             })),
         });
         return result.value;

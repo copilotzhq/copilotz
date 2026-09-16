@@ -1,11 +1,11 @@
-import type { ToolDefinition } from "@copilotz/copilotz/tools";
+import type { ToolDefinition } from "@copilotz/copilotz/core";
 /**
  * Defines the data-only List Directory Tool Resource.
  *
  * @module
  */
 
-import { defineTool } from "@copilotz/copilotz/tools";
+import { defineTool } from "@copilotz/copilotz/core";
 import { listDirectoryAction } from "../../../actions/list-directory/index.ts";
 
 export const listDirectoryTool: ToolDefinition<typeof listDirectoryAction> =

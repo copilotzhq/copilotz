@@ -6,7 +6,7 @@ import type {
   ChannelAdapter,
   ChannelIngressOccurrence,
   ChannelRequest,
-} from "../plugins/channel-core/internal/contracts.ts";
+} from "../plugins/channel-core/shared/contracts.ts";
 import type {
   ApplicationSendHandle,
   ApplicationSendInput,
@@ -66,14 +66,14 @@ export async function handleChannel(
     );
   }
   const rawBody = request.context?.rawBody;
-  const channelRequest: ChannelRequest = Object.freeze({
+  const channelRequest: ChannelRequest = {
     method: request.method,
-    headers: Object.freeze({ ...(request.headers ?? {}) }),
+    headers: { ...(request.headers ?? {}) } as const,
     ...(request.query ? { query: request.query } : {}),
     body: request.body,
     ...(rawBody instanceof Uint8Array ? { rawBody: rawBody.slice() } : {}),
     ...(request.context ? { context: request.context } : {}),
-  });
+  } as const;
   const abort = new AbortController();
   let accepted: ChannelAcceptResult;
   try {
@@ -108,12 +108,12 @@ export async function handleChannel(
         namespace,
         databaseSchema: application.config.databaseSchema,
       });
-      return Object.freeze({
+      return ({
         ...envelope,
         ...(Object.keys(operationMetadata).length
           ? { operationMetadata: structuredClone(operationMetadata) }
           : {}),
-      });
+      } as const);
     });
   } catch (error) {
     abort.abort(error);
@@ -169,16 +169,14 @@ export async function handleChannel(
       : threadId;
     return {
       status: 202,
-      data: Object.freeze({
+      data: {
         operationId: handle.operationId,
         status: status?.state === "accepted" ? "accepted" : "running",
         correlationId: handle.correlationId,
         checkpoint: handle.replayCursor,
         acceptedAt: status?.acceptedAt ?? new Date().toISOString(),
-        ...(threadId
-          ? { thread: Object.freeze({ id: threadId, externalId }) }
-          : {}),
-      }),
+        ...(threadId ? { thread: { id: threadId, externalId } as const } : {}),
+      } as const,
     };
   }
   for (const handle of handles) void handle.done.catch(() => undefined);
@@ -242,7 +240,7 @@ function acceptedChannels(value: unknown): ChannelAcceptResult {
     throw new TypeError("Channel accept occurrences must be a dense array.");
   }
   const descriptors = Object.getOwnPropertyDescriptors(occurrences);
-  const normalized = Object.freeze(Array.from(
+  const normalized = Array.from(
     { length: occurrences.length },
     (_, index) => {
       const descriptor = descriptors[String(index)];
@@ -257,16 +255,16 @@ function acceptedChannels(value: unknown): ChannelAcceptResult {
       }
       return occurrence as ChannelIngressOccurrence;
     },
-  ));
+  );
   const status = snapshot.status;
   if (
     status !== undefined &&
     (!Number.isSafeInteger(status) || Number(status) < 100 ||
       Number(status) > 599)
   ) throw new TypeError("Channel accept status must be an HTTP status.");
-  return Object.freeze({
+  return ({
     occurrences: normalized,
     ...(status !== undefined ? { status: Number(status) } : {}),
     ...(snapshot.response !== undefined ? { response: snapshot.response } : {}),
-  });
+  } as const);
 }

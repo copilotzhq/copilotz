@@ -1,6 +1,6 @@
 import { assertEquals } from "@std/assert";
 import { toolUsageProcessor } from "./index.ts";
-import { toolUsageRecord } from "../internal/accounting.ts";
+import { toolUsageRecord } from "../../shared/accounting.ts";
 
 Deno.test("Tool Usage Processor retains its canonical id", () => {
   assertEquals(

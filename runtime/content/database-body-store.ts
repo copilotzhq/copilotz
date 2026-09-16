@@ -129,7 +129,7 @@ function mapHead(row: BodyRow): ReadyBodyHead {
       `Database body '${row.body_id}' is not ready.`,
     );
   }
-  return Object.freeze({
+  return ({
     bodyId: row.body_id,
     state: "ready" as const,
     byteLength: asInteger(row.byte_length, "byte length"),
@@ -142,7 +142,7 @@ function mapHead(row: BodyRow): ReadyBodyHead {
     ...(row.protected_until ? { protectedUntil: row.protected_until } : {}),
     etag: row.digest.slice("sha256:".length),
     lastModified: row.updated_at,
-  });
+  } as const);
 }
 
 function mapIncompleteHead(row: BodyRow): IncompleteBodyHead {
@@ -152,7 +152,7 @@ function mapIncompleteHead(row: BodyRow): IncompleteBodyHead {
       `Database body '${row.body_id}' is not incomplete.`,
     );
   }
-  return Object.freeze({
+  return ({
     bodyId: row.body_id,
     state: "incomplete" as const,
     byteLength: asInteger(row.byte_length, "byte length"),
@@ -165,7 +165,7 @@ function mapIncompleteHead(row: BodyRow): IncompleteBodyHead {
     ...(row.protected_until ? { protectedUntil: row.protected_until } : {}),
     etag: row.digest.slice("sha256:".length),
     lastModified: row.updated_at,
-  });
+  } as const);
 }
 
 function mapSpill(row: BodyRow): MutableBodyHead {
@@ -182,7 +182,7 @@ function mapSpill(row: BodyRow): MutableBodyHead {
     "maintenance version",
   );
   if (state === "aborted") {
-    return Object.freeze({
+    return ({
       bodyId: row.body_id,
       state,
       mediaType: row.media_type,
@@ -190,9 +190,9 @@ function mapSpill(row: BodyRow): MutableBodyHead {
       discarded: 0,
       maintenanceVersion,
       reservationId: row.writer_token_hash ?? "",
-    });
+    } as const);
   }
-  return Object.freeze({
+  return ({
     bodyId: row.body_id,
     state,
     mediaType: row.media_type,
@@ -207,7 +207,7 @@ function mapSpill(row: BodyRow): MutableBodyHead {
     writerLeaseRemainingMs: row.lease_expires_at
       ? Math.max(0, Date.parse(row.lease_expires_at) - Date.now())
       : 0,
-  });
+  } as const);
 }
 
 function mapAnyHead(row: BodyRow): TerminalBodyHead | MutableBodyHead {
@@ -244,20 +244,20 @@ export function createDatabaseBodyStoreAdapter(
     stores.set(schema, created);
     return created;
   };
-  return Object.freeze({
-    deployment: Object.freeze({
+  return ({
+    deployment: {
       durability: "durable" as const,
       reach: "cluster" as const,
       minimumProtectionMs: protectionMs,
       readyGarbageCollection: true,
-    }),
+    } as const,
     forScope(scope) {
       return storeFor(scope.databaseSchema);
     },
     maintenanceForScope(scope) {
       return storeFor(scope.databaseSchema).maintenance;
     },
-  });
+  } as const);
 }
 
 /** SQL BodyStore using the final content_bodies/content_body_parts layout. */
@@ -511,9 +511,9 @@ export function createDatabaseBodyStore(
         );
       }
       const head = mapSpill(renewed.rows[0]);
-      return Object.freeze({
+      return ({
         remainingMs: Math.max(0, head.writerLeaseRemainingMs ?? 0),
-      });
+      } as const);
     },
     async append(input) {
       await ensure();
@@ -537,18 +537,18 @@ export function createDatabaseBodyStore(
           );
         }
         if (input.bytes.byteLength === 0) {
-          return Object.freeze({
+          return ({
             startOffset: input.expectedOffset,
             endOffset: asInteger(existing.byte_length, "byte length"),
-            protection: Object.freeze({
+            protection: {
               remainingMs: existing.lease_expires_at
                 ? Math.max(
                   0,
                   Date.parse(existing.lease_expires_at) - Date.now(),
                 )
                 : 0,
-            }),
-          });
+            } as const,
+          } as const);
         }
         const start = asInteger(existing.byte_length, "byte length");
         const duplicate = await transaction.query<PartRow>(
@@ -571,18 +571,18 @@ export function createDatabaseBodyStore(
               "Progressive append id was reused with different bytes.",
             );
           }
-          return Object.freeze({
+          return ({
             startOffset: input.expectedOffset,
             endOffset: asInteger(existing.byte_length, "byte length"),
-            protection: Object.freeze({
+            protection: {
               remainingMs: existing.lease_expires_at
                 ? Math.max(
                   0,
                   Date.parse(existing.lease_expires_at) - Date.now(),
                 )
                 : 0,
-            }),
-          });
+            } as const,
+          } as const);
         }
         if (input.expectedOffset !== start) {
           throw createContentError(
@@ -622,13 +622,13 @@ export function createDatabaseBodyStore(
           );
         }
         const head = mapSpill(updated.rows[0]);
-        return Object.freeze({
+        return ({
           startOffset: input.expectedOffset,
           endOffset: head.byteLength,
-          protection: Object.freeze({
+          protection: {
             remainingMs: Math.max(0, head.writerLeaseRemainingMs ?? 0),
-          }),
-        });
+          } as const,
+        } as const);
       });
     },
     async readRange(input) {
@@ -1031,7 +1031,7 @@ export function createDatabaseBodyStore(
         }
         const states = input.states.length > 0 ? [...input.states] : [];
         if (states.length === 0) {
-          return Object.freeze({ bodies: Object.freeze([]) });
+          return ({ bodies: [] as const } as const);
         }
         const after = input.after ?? "";
         const result = await session.query<BodyRow>(
@@ -1050,12 +1050,12 @@ export function createDatabaseBodyStore(
           [states, after, input.idleForMs, input.limit, input.prefix ?? ""],
         );
         const page = result.rows.map(mapAnyHead);
-        return Object.freeze({
-          bodies: Object.freeze(page),
+        return ({
+          bodies: page,
           ...(page.length === input.limit
             ? { after: page[page.length - 1].bodyId }
             : {}),
-        });
+        } as const);
       },
       async delete(input) {
         await ensure();
@@ -1085,5 +1085,5 @@ export function createDatabaseBodyStore(
       },
     },
   };
-  return Object.freeze(store);
+  return store;
 }

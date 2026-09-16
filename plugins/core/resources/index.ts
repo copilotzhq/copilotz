@@ -1,6 +1,3 @@
-/** Exposes Core Agent, Context, Prompt Instruction, and Tool Resources. @module */
-
-export * from "./agent/index.ts";
 export * from "./tools/ask/index.ts";
-export * from "./context/index.ts";
-export * from "./prompt-instructions/index.ts";
+export * from "./capabilities/default/index.ts";
+export * from "./goals/default/index.ts";

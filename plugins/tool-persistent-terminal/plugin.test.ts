@@ -5,7 +5,7 @@ import type {
   ActionDefinition,
 } from "@copilotz/copilotz/actions";
 import type { ContentInput, ContentRef } from "@copilotz/copilotz/content";
-import type { ToolResource } from "../tools/authoring/define-tool/index.ts";
+import type { ToolResource } from "../core/authoring/define-tool/index.ts";
 
 import {
   type PersistentTerminalService,

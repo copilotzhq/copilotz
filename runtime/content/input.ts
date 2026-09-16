@@ -13,7 +13,7 @@ export type ContentBodyCandidate = Readonly<{
   body: Uint8Array;
   mediaType: string;
   kind: ContentKind;
-  role: ContentRole | string;
+  role: ContentRole;
   index: number;
   idempotencyKey?: string;
   origin?: AssetOrigin;
@@ -94,7 +94,7 @@ export async function materializeContentInput(
     bytes: Uint8Array,
     mediaType: string,
     kind: ContentKind,
-    role: ContentRole | string | undefined,
+    role: ContentRole | undefined,
     index: number,
     fields: ContentBodyCandidate["fields"],
     origin?: AssetOrigin,

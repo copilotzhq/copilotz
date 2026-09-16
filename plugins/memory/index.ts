@@ -76,7 +76,7 @@ export type {
   MemoryActionCallers,
   MemoryActionContext,
   MemoryProcessorContext,
-} from "./internal/contracts.ts";
+} from "./shared/contracts.ts";
 export type {
   MemoryAdapters,
   MemoryEmbed,

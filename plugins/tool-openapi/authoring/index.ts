@@ -5,3 +5,5 @@
  */
 
 export * from "./generator/index.ts";
+
+export * from "./contracts/index.ts";

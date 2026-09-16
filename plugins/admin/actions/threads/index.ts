@@ -10,14 +10,14 @@ import {
   queryText,
   queryTexts,
   record,
-} from "../internal/projections.ts";
+} from "../../shared/projections.ts";
 import {
   type AdminActionContext,
   adminRequestSchema,
   asRequest,
   readOnly,
-} from "../internal/request.ts";
-import type { AdminRequest, AdminResponse } from "../../internal/contracts.ts";
+} from "../../shared/request.ts";
+import type { AdminRequest, AdminResponse } from "../../shared/contracts.ts";
 
 function metadataText(
   value: Record<string, unknown>,

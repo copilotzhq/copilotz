@@ -9,8 +9,8 @@ import {
   type ActionDefinition,
   defineAction,
 } from "@copilotz/copilotz/actions";
-import { getProvider } from "./internal/provider/registry.ts";
-import type { FinanceDataProvider } from "./internal/provider/types.ts";
+import { getProvider } from "./provider/registry.ts";
+import type { FinanceDataProvider } from "./provider/types.ts";
 import type {
   GetAnalystRatingsInput,
   GetCalendarEventsInput,
@@ -21,9 +21,9 @@ import type {
   GetOwnershipInput,
   ScreenSecuritiesInput,
   SearchAssetsInput,
-} from "./internal/provider/types.ts";
-import { FinanceError } from "./internal/client/errors.ts";
-import { cloneLosslessJson } from "../../../tools/authoring/internal/lifecycle-json.ts";
+} from "./provider/types.ts";
+import { FinanceError } from "./client/errors.ts";
+import { cloneLosslessJson } from "@copilotz/copilotz/core";
 
 export type FinanceActionInput =
   & Record<string, unknown>

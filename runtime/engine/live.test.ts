@@ -1,17 +1,17 @@
+import { storageFixture } from "../../plugins/core/shared/testing/storage-plugin.ts";
 import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
 import {
   createPluginRegistry,
   definePlugin,
   defineProcessor,
 } from "../plugins/index.ts";
-import { createTestDomainContext } from "../../plugins/core/internal/testing/context.ts";
+import { createTestDomainContext } from "../../plugins/core/shared/testing/context.ts";
 import { createSqlSession } from "../events/index.ts";
-import { coreCollectionsPlugin } from "../../plugins/core/plugin.ts";
+import {} from "../../plugins/core/plugin.ts";
 import { createCopilotzEngine } from "./index.ts";
 import type { ProcessorContext } from "../plugins/index.ts";
 import { createTestDatabase } from "../testing/ominipg.ts";
 import { defineCollection } from "../collections/index.ts";
-
 const auditCollection = defineCollection({
   name: "live_audit",
   schema: {
@@ -27,18 +27,18 @@ const auditCollection = defineCollection({
     required: ["id", "namespace", "sourceType"],
   } as const,
 });
-
 async function waitUntil(
   predicate: () => boolean | Promise<boolean>,
-  timeoutMs = 2_000,
+  timeoutMs = 2000,
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!await predicate()) {
-    if (Date.now() >= deadline) throw new Error("Condition timed out.");
+    if (Date.now() >= deadline) {
+      throw new Error("Condition timed out.");
+    }
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
 }
-
 Deno.test("live processors mutate causally without delivery rows or capacity-one deadlock", async () => {
   let liveCalls = 0;
   let durableCalls = 0;
@@ -64,7 +64,7 @@ Deno.test("live processors mutate causally without delivery rows or capacity-one
   });
   const registry = await createPluginRegistry({
     plugins: [
-      coreCollectionsPlugin,
+      storageFixture,
       definePlugin({
         id: "test.live",
         version: "1.0.0",
@@ -82,18 +82,16 @@ Deno.test("live processors mutate causally without delivery rows or capacity-one
     execution: { capacity: 1 },
   });
   try {
-    await createTestDomainContext(engine, "tenant-live").actions.createThread(
-      {
-        id: "thread-a",
-        participants: [
-          {
-            id: "user-a",
-            externalId: "user-a",
-            participantType: "human",
-          },
-        ],
-      },
-    );
+    await createTestDomainContext(engine, "tenant-live").actions.createThread({
+      id: "thread-a",
+      participants: [
+        {
+          id: "user-a",
+          externalId: "user-a",
+          participantType: "human",
+        },
+      ],
+    });
     await createTestDomainContext(engine, "tenant-live").actions
       .createThreadMessage({
         id: "message-a",
@@ -112,15 +110,18 @@ Deno.test("live processors mutate causally without delivery rows or capacity-one
       });
     const resultEvent = (await engine.events.list({
       namespace: "tenant-live",
-      threadId: "thread-a",
       limit: 100,
+      metadata: {
+        core: {
+          threadId: "thread-a",
+        },
+      },
     })).find((event) => event.subject?.id === "message-a");
     assertExists(resultEvent);
     assertEquals(liveCalls, 1);
     assertEquals(leakedDelivery, false);
     await waitUntil(() => durableCalls === 1);
     assertEquals(durableCalls, 1);
-
     const audit = await engine.collections.withScope({
       namespace: "tenant-live",
     }).live_audit.get({ id: `audit:${resultEvent.id}` });
@@ -136,16 +137,12 @@ Deno.test("live processors mutate causally without delivery rows or capacity-one
     );
     assertExists(auditEvent);
     assertEquals(auditEvent.causationId, resultEvent.id);
-    assertEquals(
-      typeof auditEvent.metadata.sourceLiveDispatchId,
-      "string",
-    );
+    assertEquals(typeof auditEvent.metadata.sourceLiveDispatchId, "string");
   } finally {
     await engine.shutdown();
     await db.close();
   }
 });
-
 Deno.test("live subscription failures remain independent and ephemeral", async () => {
   const calls: string[] = [];
   const good = defineProcessor<ProcessorContext>({
@@ -198,10 +195,7 @@ Deno.test("live subscription failures remain independent and ephemeral", async (
     assertEquals(event.value?.durable, false);
     assertEquals(event.value?.type, "cursor.changed");
     await observed.cancel();
-    assertEquals(
-      await engine.events.list({ namespace: "tenant-live" }),
-      [],
-    );
+    assertEquals(await engine.events.list({ namespace: "tenant-live" }), []);
     assertEquals(
       await engine.deliveries.list({ namespace: "tenant-live" }),
       [],
@@ -211,19 +205,20 @@ Deno.test("live subscription failures remain independent and ephemeral", async (
     await db.close();
   }
 });
-
 Deno.test("transient catch-up replays committed events without delivery rows", async () => {
   const seen: string[] = [];
   const observer = defineProcessor({
     id: "test.transient-catch-up",
     on: [{ eventType: "thread.created" }],
     handle(event) {
-      if (event.durable) seen.push(event.id);
+      if (event.durable) {
+        seen.push(event.id);
+      }
     },
   });
   const registry = await createPluginRegistry({
     plugins: [
-      coreCollectionsPlugin,
+      storageFixture,
       definePlugin({
         id: "test.transient-catch-up",
         version: "1.0.0",
@@ -237,16 +232,14 @@ Deno.test("transient catch-up replays committed events without delivery rows", a
     defaultDatabaseSchema: "copilotz_transient_catchup",
   });
   try {
-    await createTestDomainContext(engine, "tenant-live").actions.createThread(
-      {
-        id: "thread-a",
-        participants: [{
-          id: "user-a",
-          externalId: "user-a",
-          participantType: "human",
-        }],
-      },
-    );
+    await createTestDomainContext(engine, "tenant-live").actions.createThread({
+      id: "thread-a",
+      participants: [{
+        id: "user-a",
+        externalId: "user-a",
+        participantType: "human",
+      }],
+    });
     const firstEvent = (await engine.events.list({
       namespace: "tenant-live",
       limit: 100,
@@ -258,16 +251,14 @@ Deno.test("transient catch-up replays committed events without delivery rows", a
       afterPosition: "0",
     });
     assertEquals(seen, [firstEvent.id]);
-    await createTestDomainContext(engine, "tenant-live").actions.createThread(
-      {
-        id: "thread-b",
-        participants: [{
-          id: "user-b",
-          externalId: "user-b",
-          participantType: "human",
-        }],
-      },
-    );
+    await createTestDomainContext(engine, "tenant-live").actions.createThread({
+      id: "thread-b",
+      participants: [{
+        id: "user-b",
+        externalId: "user-b",
+        participantType: "human",
+      }],
+    });
     const secondEvent = (await engine.events.list({
       namespace: "tenant-live",
       limit: 100,
@@ -285,7 +276,6 @@ Deno.test("transient catch-up replays committed events without delivery rows", a
     await db.close();
   }
 });
-
 Deno.test("live execution modules remain factory-first and runtime-neutral", async () => {
   const source = await Deno.readTextFile(
     new URL("../execution/live.ts", import.meta.url),

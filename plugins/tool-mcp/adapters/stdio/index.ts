@@ -1,11 +1,11 @@
 /** Implements the official MCP SDK stdio connector Adapter. @module */
 
-import type { MCPServer } from "../../../tools/authoring/integration-resources/index.ts";
+import type { MCPServer } from "../../authoring/contracts/index.ts";
 import type {
   ConnectMcpRuntime,
   McpRuntimeConnection,
   McpToolDescriptor,
-} from "../../internal/contracts.ts";
+} from "../../shared/contracts.ts";
 
 type StdioTransport = Readonly<{
   type: "stdio";

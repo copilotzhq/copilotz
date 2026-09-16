@@ -1,14 +1,3 @@
-/** Visibility policy carried by every semantic or ephemeral event. */
-export type EventVisibility =
-  | { kind: "public" }
-  | { kind: "participants"; participantIds: readonly string[] }
-  | {
-    kind: "tool";
-    policy: "requester_only" | "public_status" | "public";
-    requesterId: string;
-  }
-  | { kind: "internal" };
-
 /** Stable domain record described by an event. */
 export type EventSubject = {
   type: string;
@@ -22,12 +11,6 @@ export type EventBodyRef = Readonly<{
   mediaType: "application/json";
 }>;
 
-/** Conversational routing only; guaranteed work lives in delivery records. */
-export type EventRouting = {
-  senderId?: string;
-  recipientIds?: readonly string[];
-};
-
 /** Immutable semantic fact stored in the database. */
 export type DurableEvent<TPayload = unknown> = Readonly<{
   durable: true;
@@ -37,12 +20,9 @@ export type DurableEvent<TPayload = unknown> = Readonly<{
   schemaVersion: number;
   type: string;
   namespace: string;
-  threadId?: string;
   subject?: EventSubject;
   payload: TPayload;
   delta?: unknown;
-  routing: EventRouting;
-  visibility: EventVisibility;
   metadata: Readonly<Record<string, unknown>>;
   causationId?: string;
   correlationId: string;
@@ -53,18 +33,9 @@ export type DurableEvent<TPayload = unknown> = Readonly<{
 /** Process-lifetime frame or delta that is never inserted into the database. */
 export type EphemeralEvent<TPayload = unknown> = Readonly<{
   durable: false;
-  type:
-    | "text.delta"
-    | "reasoning.delta"
-    | "audio.delta"
-    | "tool_call.delta"
-    | "tool_output.delta"
-    | (string & Record<never, never>);
+  type: string;
   namespace: string;
-  threadId?: string;
   payload: TPayload;
-  routing: EventRouting;
-  visibility: EventVisibility;
   metadata: Readonly<Record<string, unknown>>;
   causationId?: string;
   correlationId: string;
@@ -76,10 +47,7 @@ export type EphemeralEvent<TPayload = unknown> = Readonly<{
 export type EphemeralEventDraft<TPayload = unknown> = Readonly<{
   type: EphemeralEvent["type"];
   namespace: string;
-  threadId?: string;
   payload: TPayload;
-  routing?: EventRouting;
-  visibility?: EventVisibility;
   metadata?: Record<string, unknown>;
   causationId?: string;
   correlationId: string;
@@ -102,12 +70,9 @@ export type ResolvedCopilotzEvent<TData = unknown> = CopilotzEvent & {
 export type DurableEventDraft<TPayload = unknown> = {
   type: string;
   namespace: string;
-  threadId?: string;
   subject?: EventSubject;
   payload: TPayload;
   delta?: unknown;
-  routing?: EventRouting;
-  visibility?: EventVisibility;
   metadata?: Record<string, unknown>;
   causationId?: string;
   correlationId?: string;
@@ -215,7 +180,7 @@ export function snapshotEventData<T>(value: T, label = "Event data"): T {
           }
           result.push(snapshot(descriptor.value));
         }
-        return Object.freeze(result);
+        return result;
       }
       const prototype = Object.getPrototypeOf(candidate);
       if (prototype !== Object.prototype && prototype !== null) {
@@ -230,7 +195,7 @@ export function snapshotEventData<T>(value: T, label = "Event data"): T {
         }
         entries.push([key, snapshot(descriptor.value)]);
       }
-      return Object.freeze(Object.fromEntries(entries));
+      return (Object.fromEntries(entries));
     } finally {
       ancestors.delete(candidate);
     }
@@ -261,21 +226,11 @@ export function createEphemeralEvent<TPayload>(
   ) {
     throw new TypeError("Ephemeral event sequence must be non-negative.");
   }
-  const visibility = snapshotEventData<EventVisibility>(
-    draft.visibility ?? { kind: "public" },
-    "Ephemeral Event visibility",
-  );
-  return Object.freeze({
+  return ({
     durable: false,
     type: type as EphemeralEvent["type"],
     namespace,
-    ...(draft.threadId?.trim() ? { threadId: draft.threadId.trim() } : {}),
     payload: snapshotEventData(draft.payload, "Ephemeral Event payload"),
-    routing: snapshotEventData(
-      draft.routing ?? {},
-      "Ephemeral Event routing",
-    ),
-    visibility,
     metadata: snapshotEventData(
       draft.metadata ?? {},
       "Ephemeral Event metadata",
@@ -287,5 +242,5 @@ export function createEphemeralEvent<TPayload>(
     ...(draft.streamId?.trim() ? { streamId: draft.streamId.trim() } : {}),
     ...(draft.sequence !== undefined ? { sequence: draft.sequence } : {}),
     createdAt,
-  });
+  } as const);
 }

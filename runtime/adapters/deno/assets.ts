@@ -240,12 +240,12 @@ function parseManifest(value: string): ReadyBodyManifest {
   }
   dataPath(".", parsed.dataId);
   if (parsed.state === "deleting") {
-    return Object.freeze({
+    return ({
       protocol: READY_PROTOCOL,
       state: "deleting",
       bodyId: parsed.bodyId,
       dataId: parsed.dataId,
-    });
+    } as const);
   }
   if (
     !Number.isSafeInteger(parsed.byteLength) ||
@@ -267,7 +267,7 @@ function parseManifest(value: string): ReadyBodyManifest {
       "Filesystem Ready Body manifest has invalid canonical metadata.",
     );
   }
-  return Object.freeze({
+  return ({
     protocol: READY_PROTOCOL,
     state: "ready",
     bodyId: parsed.bodyId,
@@ -283,7 +283,7 @@ function parseManifest(value: string): ReadyBodyManifest {
     ...(typeof parsed.lastModified === "string"
       ? { lastModified: parsed.lastModified }
       : {}),
-  });
+  } as const);
 }
 
 async function readManifest(
@@ -381,7 +381,7 @@ async function recoverReadyBody(
     );
   }
   await cleanupReadyDirectory(directory, manifest.dataId);
-  const head = Object.freeze({
+  const head = {
     bodyId: manifest.bodyId,
     state: "ready" as const,
     byteLength: manifest.byteLength,
@@ -393,8 +393,8 @@ async function recoverReadyBody(
       : {}),
     ...(manifest.etag ? { etag: manifest.etag } : {}),
     ...(manifest.lastModified ? { lastModified: manifest.lastModified } : {}),
-  });
-  return Object.freeze({ directory, dataPath: path, manifest, head });
+  } as const;
+  return ({ directory, dataPath: path, manifest, head } as const);
 }
 
 async function writeReadyData(
@@ -441,7 +441,7 @@ function createDenoAssetFilesystem(
           );
         }
         const now = new Date().toISOString();
-        const renewed: ReadyManifest = Object.freeze({
+        const renewed: ReadyManifest = {
           ...existing.manifest,
           maintenanceVersion: existing.head.maintenanceVersion + 1,
           protectedUntil: latestBodyProtectionUntil(
@@ -449,7 +449,7 @@ function createDenoAssetFilesystem(
             input.protectedUntil,
           ),
           lastModified: now,
-        });
+        } as const;
         await publishManifest(
           directory,
           renewed,
@@ -467,7 +467,7 @@ function createDenoAssetFilesystem(
       await ensureDirectory(directory);
       const dataId = crypto.randomUUID();
       const now = new Date().toISOString();
-      const created: ReadyManifest = Object.freeze({
+      const created: ReadyManifest = {
         protocol: READY_PROTOCOL,
         state: "ready",
         bodyId: input.bodyId,
@@ -479,7 +479,7 @@ function createDenoAssetFilesystem(
         protectedUntil: input.protectedUntil,
         etag: input.digest.slice("sha256:".length),
         lastModified: now,
-      });
+      } as const;
       await writeReadyData(directory, dataId, input.bytes);
       await options.fault?.("create:data-synced", input.bodyId);
       await publishManifest(
@@ -548,12 +548,12 @@ function createDenoAssetFilesystem(
         ) {
           return false;
         }
-        const tombstone: DeleteManifest = Object.freeze({
+        const tombstone: DeleteManifest = {
           protocol: READY_PROTOCOL,
           state: "deleting",
           bodyId: input.bodyId,
           dataId: ready.manifest.dataId,
-        });
+        } as const;
         await publishManifest(
           directory,
           tombstone,
@@ -690,7 +690,7 @@ function createDenoAssetFilesystem(
       };
       await walk(normalizedRoot, "");
       entries.sort((left, right) => left.bodyId.localeCompare(right.bodyId));
-      for (const entry of entries) yield Object.freeze(entry);
+      for (const entry of entries) yield entry;
     },
     async cleanupProgressive(bodyId) {
       const data = safePath(normalizedRoot, `${bodyId}.progressive`);
@@ -740,7 +740,7 @@ function createDenoAssetFilesystem(
       }
     },
   };
-  return Object.freeze(access);
+  return access;
 }
 
 /** Deno host capability for declarative filesystem asset storage. */
@@ -749,11 +749,11 @@ export function denoAssetFilesystem(root: string): BodyFilesystemAccess {
 }
 
 /** @internal Deterministic process-stop injection used only by protocol tests. */
-export const denoAssetFilesystemTesting = Object.freeze({
+export const denoAssetFilesystemTesting = {
   create(
     root: string,
     fault: NonNullable<DenoAssetFilesystemOptions["fault"]>,
   ): BodyFilesystemAccess {
     return createDenoAssetFilesystem(root, { fault });
   },
-});
+} as const;

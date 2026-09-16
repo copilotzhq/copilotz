@@ -11,7 +11,6 @@ import type {
 } from "../plugins/index.ts";
 import type { CopilotzPersistenceOptions } from "@copilotz/copilotz/persistence";
 import type { BodyStorageOptions } from "../content/index.ts";
-import type { EventVisibility } from "../events/index.ts";
 import type { ApplicationOutput } from "../streams/index.ts";
 import type { ActionSchema } from "../actions/index.ts";
 import type { CopilotzEngineMaintenanceResult } from "../engine/index.ts";
@@ -80,7 +79,6 @@ export type CopilotzInputEnvelope<
   metadata?: Record<string, unknown>;
   /** Trusted opaque ownership/routing claims for host-side operation policy. */
   operationMetadata?: Record<string, unknown>;
-  visibility?: EventVisibility;
 }>;
 
 export type ApplicationSendInput = CopilotzInputEnvelope;

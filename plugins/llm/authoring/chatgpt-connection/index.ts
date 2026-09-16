@@ -4,7 +4,7 @@ import type {
   LlmConnectionContext,
   LlmConnectionExecution,
   LlmConnectionResource,
-} from "../../internal/contracts.ts";
+} from "../../shared/contracts.ts";
 
 export type ChatGptTokens = Readonly<{
   accessToken: string;

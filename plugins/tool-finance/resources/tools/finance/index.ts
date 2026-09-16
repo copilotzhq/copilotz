@@ -1,4 +1,4 @@
-import type { ToolDefinition } from "@copilotz/copilotz/tools";
+import type { ToolDefinition } from "@copilotz/copilotz/core";
 import { financeAction } from "../../../actions/finance/index.ts";
 /**
  * Defines the data-only Finance Tool Resource for an existing Finance Action.
@@ -6,7 +6,7 @@ import { financeAction } from "../../../actions/finance/index.ts";
  * @module
  */
 
-import { defineTool } from "@copilotz/copilotz/tools";
+import { defineTool } from "@copilotz/copilotz/core";
 import {
   FINANCE_TOOL_DESCRIPTION,
   FINANCE_TOOL_NAME,

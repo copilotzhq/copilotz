@@ -1,6 +1,6 @@
 import { invalidateMemoryAction } from "../../../actions/invalidate-memory/index.ts";
 /** Tool resource exposing editorial invalidation for semantic memory. @module */
-import { defineTool, type ToolResource } from "@copilotz/copilotz/tools";
+import { defineTool, type ToolResource } from "@copilotz/copilotz/core";
 
 export const invalidateMemoryTool: ToolResource<"invalidate_memory"> =
   defineTool("invalidate_memory", invalidateMemoryAction, {

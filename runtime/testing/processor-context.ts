@@ -17,7 +17,7 @@ function unavailable(): never {
 export function createTestProcessorContext(
   seed: TestProcessorContextSeed,
 ): ProcessorContext {
-  const content: ProcessorContext["content"] = Object.freeze({
+  const content: ProcessorContext["content"] = {
     prepare: unavailable,
     materialize: unavailable,
     publish: unavailable,
@@ -26,12 +26,12 @@ export function createTestProcessorContext(
     resolve: unavailable,
     resolveMany: unavailable,
     open: unavailable,
-  });
-  return Object.freeze({
+  } as const;
+  return ({
     namespace: seed.event.namespace,
     databaseSchema: seed.databaseSchema ?? "public",
     operationKey: seed.idempotencyKey,
-    identity: Object.freeze({
+    identity: {
       ...(seed.event.durable
         ? { causationId: seed.event.id }
         : seed.event.causationId
@@ -42,19 +42,20 @@ export function createTestProcessorContext(
       ...(seed.settlementScopeId
         ? { settlementScopeId: seed.settlementScopeId }
         : {}),
-    }),
-    resources: Object.freeze({}),
-    adapters: Object.freeze({}),
-    actions: Object.freeze({}),
-    collections: Object.freeze({}),
+    } as const,
+    resources: {} as const,
+    adapters: {} as const,
+    actions: {} as const,
+    collections: {} as const,
+    vectors: { search: unavailable },
     content,
-    streams: Object.freeze({
+    streams: {
       open: unavailable,
       follow: unavailable,
-    }),
+    } as const,
     signal: seed.signal,
     now: () => new Date(),
     transaction: unavailable,
     readSnapshot: unavailable,
-  });
+  } as const);
 }

@@ -10,18 +10,18 @@ import {
   inDateRange,
   optionalDate,
   queryText,
-} from "../internal/projections.ts";
+} from "../../shared/projections.ts";
 import {
   type AdminActionContext,
   adminRequestSchema,
   asRequest,
   readOnly,
-} from "../internal/request.ts";
+} from "../../shared/request.ts";
 import type {
   AdminRequest,
   AdminResponse,
   AdminUsageTotals,
-} from "../../internal/contracts.ts";
+} from "../../shared/contracts.ts";
 
 function usageTotals(records: readonly CollectionRecord[]): AdminUsageTotals {
   return (records.reduce((totals, value) => ({

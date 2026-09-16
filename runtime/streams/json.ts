@@ -2,14 +2,6 @@ type JsonValue = null | boolean | number | string | JsonValue[] | {
   readonly [key: string]: JsonValue;
 };
 
-export function deepFreeze<T>(value: T): T {
-  if (value && typeof value === "object" && !Object.isFrozen(value)) {
-    for (const nested of Object.values(value)) deepFreeze(nested);
-    Object.freeze(value);
-  }
-  return value;
-}
-
 function snapshotJson(
   value: unknown,
   ancestors = new Set<object>(),
@@ -57,7 +49,7 @@ function snapshotJson(
         }
         result.push(snapshotJson(descriptor.value, ancestors));
       }
-      return deepFreeze(result);
+      return result;
     }
     if (Object.getPrototypeOf(value) !== Object.prototype) {
       throw new TypeError("Stream output metadata objects must be plain.");
@@ -77,7 +69,7 @@ function snapshotJson(
         writable: false,
       });
     }
-    return deepFreeze(result);
+    return result;
   } finally {
     ancestors.delete(value);
   }

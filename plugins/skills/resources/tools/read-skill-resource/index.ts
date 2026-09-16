@@ -1,6 +1,6 @@
-import type { ToolDefinition } from "@copilotz/copilotz/tools";
+import type { ToolDefinition } from "@copilotz/copilotz/core";
 import type { ActionDefinition } from "@copilotz/copilotz/actions";
-import { defineTool } from "@copilotz/copilotz/tools";
+import { defineTool } from "@copilotz/copilotz/core";
 import type { ActionSchema } from "@copilotz/copilotz/actions";
 import {
   maximumTextBytes,
@@ -8,7 +8,7 @@ import {
   requiredText,
   type SkillActionContext,
   skillByName,
-} from "../../../internal/tool-context.ts";
+} from "../../../shared/tool-context.ts";
 import { normalizeSkillPath, readSkillFileText } from "../../skill/index.ts";
 export const readSkillResourceTool: ToolDefinition<
   ActionDefinition<unknown, unknown, SkillActionContext>

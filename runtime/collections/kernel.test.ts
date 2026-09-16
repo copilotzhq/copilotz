@@ -88,7 +88,6 @@ const jobDefinition = defineCollection({
         required: ["claimedBy"],
       },
       mutate({ current, input }) {
-        assert(Object.isFrozen(current));
         const claimedBy = String(
           (input as { claimedBy?: unknown } | undefined)?.claimedBy ?? "",
         );

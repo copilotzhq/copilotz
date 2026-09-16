@@ -85,7 +85,7 @@ operation-catalog maintenance. `close()` is idempotent.
 
 `gateway.fetch` serves the single `/api` boundary installed by `serverPlugin`.
 The compiler discovers exposed Actions, Collections, Channels and exact HTTP
-Adapter routes, and generates OpenAPI from that table. `coreServerPlugin`
+Adapter routes, and generates OpenAPI from that table. `coreHttpPlugin`
 contributes conversation reads, observation and ordinary mutation Actions.
 Authentication resolves trusted scope; authorization intersects constraints
 before reads or execution. See [HTTP server and browser client](server.md).
@@ -166,6 +166,6 @@ Host-specific entrypoints are `/adapters/deno`, `/core/cli`, `/core/cli/node`,
 `/tools/persistent-terminal/deno`. There are no generic `/adapters`,
 `/adapters/node`, `/domain`, or `/attachments` subpaths.
 
-The sole database upgrade is `/migration/v4#migrateToV4`, restricted to the
-exact Copilotz 0.47/0.48 legacy graph profile. See
-[the migration guide](migration-v4.md).
+This release requires a fresh v5 schema. There is no migration or compatibility
+entry point. Optional pgvector storage is explicitly provisioned through
+`provisionVectorStorage` from `/persistence`.

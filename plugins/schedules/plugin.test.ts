@@ -7,7 +7,7 @@ import {
   defineProcessor,
   type ProcessorContext,
 } from "../../runtime/plugins/index.ts";
-import { createTestDomainContext } from "../core/internal/testing/context.ts";
+import { createTestDomainContext } from "../core/shared/testing/context.ts";
 import {
   createTestDatabase,
   type TestDatabase,

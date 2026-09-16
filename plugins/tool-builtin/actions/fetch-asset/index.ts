@@ -10,8 +10,8 @@ import {
   assetIdFromInput,
   assetKind,
   formatAssetRef,
-} from "../internal/assets.ts";
-import { record } from "../internal/input.ts";
+} from "../../shared/assets.ts";
+import { record } from "../../shared/input.ts";
 
 export const fetchAssetAction: ActionDefinition<
   unknown,

@@ -11,20 +11,20 @@ import type {
   SkillFileDescriptor,
   SkillManifest,
   SkillReadOptions,
-} from "../../internal/contracts.ts";
+} from "../../shared/contracts.ts";
 import {
   parseSkillMarkdown,
   validateSkillManifest,
-} from "./internal/parser.ts";
+} from "../../shared/parser.ts";
 
 export {
   parseSkillMarkdown,
   validateSkillManifest,
-} from "./internal/parser.ts";
+} from "../../shared/parser.ts";
 export type {
   ParsedSkillMarkdown,
   ParseSkillMarkdownOptions,
-} from "./internal/parser.ts";
+} from "../../shared/parser.ts";
 
 export type SkillFileLoader = (
   options?: SkillReadOptions,

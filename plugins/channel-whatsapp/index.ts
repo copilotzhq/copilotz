@@ -37,4 +37,4 @@ export type {
   WhatsAppUploadedMedia,
   WhatsAppWebhookMessage,
   WhatsAppWebhookPayload,
-} from "./internal/contracts.ts";
+} from "./shared/contracts.ts";

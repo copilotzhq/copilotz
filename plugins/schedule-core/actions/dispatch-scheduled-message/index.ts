@@ -3,7 +3,6 @@
  *
  * @module
  */
-
 import {
   type ActionContext,
   type ActionDefinition,
@@ -15,44 +14,43 @@ import type {
   CollectionMutationRef,
   CollectionRecord,
 } from "@copilotz/copilotz/collections";
-import type { CoreResources } from "../../../core/internal/runtime-context.ts";
+import type { CoreResources } from "@copilotz/copilotz/core";
 import type {
   CoreScheduledMessageOccurrence,
   DispatchScheduledMessageResult,
-} from "../../internal/contracts.ts";
+} from "../../shared/contracts.ts";
 import {
   type CoreScheduledAgent,
   resolveConfiguredScheduledAgent,
-} from "../../internal/recipients.ts";
-
+} from "../../shared/recipients.ts";
 type ParticipantPlan =
-  | Readonly<{ existing: CollectionRecord }>
+  | Readonly<{
+    existing: CollectionRecord;
+  }>
   | Readonly<{
     create: Readonly<Record<string, unknown>>;
     operationKey: string;
   }>;
-
 type CoreSchedulesActionContext =
   & Omit<ActionContext, "resources">
   & Readonly<{
     resources:
       & RuntimeContextNamespaces
-      & Readonly<{ agents: CoreResources["agents"] }>;
+      & Readonly<{
+        agents: CoreResources["agents"];
+      }>;
   }>;
-
 function required(value: unknown, name: string): string {
   if (typeof value !== "string" || !value.trim()) {
     throw new TypeError(`${name} must be non-empty.`);
   }
   return value.trim();
 }
-
 function stringArray(value: unknown): readonly string[] {
   return Array.isArray(value)
     ? value.filter((item): item is string => typeof item === "string")
     : [];
 }
-
 async function byExternalId(
   context: CoreSchedulesActionContext,
   collection: "participant" | "thread",
@@ -63,16 +61,15 @@ async function byExternalId(
   });
   return values[0] ?? null;
 }
-
 function existingParticipant(record: CollectionRecord): ParticipantPlan {
   return ({ existing: record } as const);
 }
-
 function participantPlanKey(plan: ParticipantPlan): string {
-  if ("existing" in plan) return `existing:${plan.existing.id}`;
+  if ("existing" in plan) {
+    return `existing:${plan.existing.id}`;
+  }
   return `create:${String(plan.create.id ?? plan.create.externalId)}`;
 }
-
 async function resolveSender(
   item: CoreScheduledMessageOccurrence,
   context: CoreSchedulesActionContext,
@@ -105,7 +102,6 @@ async function resolveSender(
     operationKey: `sender:${item.jobId}`,
   } as const);
 }
-
 async function resolveAgentParticipant(
   agent: CoreScheduledAgent,
   context: CoreSchedulesActionContext,
@@ -130,7 +126,6 @@ async function resolveAgentParticipant(
     operationKey: `agent:${agent.id}`,
   } as const);
 }
-
 async function resolveRecipient(
   reference: string,
   context: CoreSchedulesActionContext,
@@ -138,13 +133,16 @@ async function resolveRecipient(
   const id = required(reference, "Scheduled recipient");
   const existing = await context.collections.participant.get({ id }) ??
     await byExternalId(context, "participant", id);
-  if (existing) return existingParticipant(existing);
+  if (existing) {
+    return existingParticipant(existing);
+  }
   const agents = context.resources.agents ?? {};
   const agent = resolveConfiguredScheduledAgent(id, agents);
-  if (agent) return await resolveAgentParticipant(agent, context);
+  if (agent) {
+    return await resolveAgentParticipant(agent, context);
+  }
   throw new Error(`Scheduled recipient '${id}' was not found.`);
 }
-
 async function findThread(
   item: CoreScheduledMessageOccurrence,
   context: CoreSchedulesActionContext,
@@ -156,7 +154,6 @@ async function findThread(
     ? await byExternalId(context, "thread", descriptor.externalId)
     : await byExternalId(context, "thread", `scheduled-job:${item.jobId}`);
 }
-
 function uniqueParticipantPlans(
   plans: readonly ParticipantPlan[],
 ): readonly ParticipantPlan[] {
@@ -164,17 +161,17 @@ function uniqueParticipantPlans(
     ...new Map(plans.map((plan) => [participantPlanKey(plan), plan])).values(),
   ] as const);
 }
-
 async function stageParticipant(
   plan: ParticipantPlan,
   collections: ActionTransactionContext["collections"],
 ): Promise<CollectionMutationRef> {
-  if ("existing" in plan) return ({ id: plan.existing.id } as const);
+  if ("existing" in plan) {
+    return ({ id: plan.existing.id } as const);
+  }
   return await collections.participant.create(plan.create, {
     operationKey: plan.operationKey,
   });
 }
-
 async function dispatchScheduledMessage(
   item: CoreScheduledMessageOccurrence,
   context: CoreSchedulesActionContext,
@@ -231,13 +228,19 @@ async function dispatchScheduledMessage(
     if (existingThread) {
       const existingIds = new Set(stringArray(existingThread.participantIds));
       for (const participantId of participantIds) {
-        if (existingIds.has(participantId)) continue;
+        if (existingIds.has(participantId)) {
+          continue;
+        }
         await transaction.collections.thread.commands.addParticipant({
           id: threadRef.id,
           participantId,
         }, {
           operationKey: `thread-participant:${participantId}`,
-          threadId: threadRef.id,
+          metadata: {
+            core: {
+              threadId: threadRef.id,
+            },
+          },
         });
         existingIds.add(participantId);
       }
@@ -251,13 +254,17 @@ async function dispatchScheduledMessage(
       metadata,
     }, {
       operationKey: "message",
-      threadId: threadRef.id,
-      routing: {
-        senderId: senderRef.id,
-        recipientIds: recipientRefs.map((value) => value.id),
-      },
-      visibility: { kind: "public" },
       identity: { metadata },
+      metadata: {
+        core: {
+          threadId: threadRef.id,
+          routing: {
+            senderId: senderRef.id,
+            recipientIds: recipientRefs.map((value) => value.id),
+          },
+          visibility: { kind: "public" },
+        },
+      },
     });
     return ({
       messageId: messageRef.id,
@@ -272,7 +279,6 @@ async function dispatchScheduledMessage(
   }
   return ({ messageId: message.id, threadId: result.threadId } as const);
 }
-
 export const dispatchScheduledMessageAction: ActionDefinition<
   CoreScheduledMessageOccurrence,
   DispatchScheduledMessageResult,
@@ -283,5 +289,4 @@ export const dispatchScheduledMessageAction: ActionDefinition<
   id: "copilotz.core-schedules.dispatch-message",
   execute: dispatchScheduledMessage,
 });
-
 export default dispatchScheduledMessageAction;

@@ -5,12 +5,12 @@ import {
   defineAction,
 } from "@copilotz/copilotz/actions";
 
-import type { MemoryActionContext } from "../../internal/contracts.ts";
-import { positiveInteger, record } from "../../internal/input.ts";
+import type { MemoryActionContext } from "../../shared/contracts.ts";
+import { positiveInteger, record } from "../../shared/input.ts";
 import {
   memoryActionProvenance,
   threadMemorySpaces,
-} from "../../internal/access.ts";
+} from "../../shared/access.ts";
 
 export const listKnowledgeSpacesAction: ActionDefinition<
   unknown,

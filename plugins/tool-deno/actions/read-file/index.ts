@@ -18,7 +18,7 @@ import { defineAction } from "@copilotz/copilotz/actions";
 import {
   readWorkspaceFile,
   resolveWorkspacePath,
-} from "../internal/fs-utils.ts";
+} from "../../shared/fs-utils.ts";
 
 const AUTO_TRUNCATE_LINES = 300;
 const MAX_FILE_SIZE_BYTES = 1_000_000; // 1MB — refuse to read without a range

@@ -1,3 +1,12 @@
+import {
+  projectVector,
+  searchVectors,
+  validateVector,
+  vectorProfileKey,
+  type VectorReader,
+  type VectorTransaction,
+  type VectorWrite,
+} from "../vectors/index.ts";
 import { reconcileCollectionContent } from "./content-reconciliation.ts";
 import { assertJsonValue } from "../json.ts";
 import {
@@ -355,6 +364,7 @@ export type CollectionTransactionOptions<T> = Readonly<{
     context: Readonly<{
       collections: CollectionTransactionCollections;
       relations: CollectionTransactionRelations;
+      vectors: VectorTransaction;
     }>,
   ): Promise<T>;
 }>;
@@ -370,6 +380,7 @@ export type CollectionTransactionResult<T> = Readonly<{
 }>;
 
 export type CollectionKernel = Readonly<{
+  vectors(namespace: string): VectorReader;
   bind<
     TSelect extends CollectionRecord = CollectionRecord,
     TInsert extends object = Record<string, unknown>,
@@ -411,15 +422,15 @@ type CollectionMutationPlan = Readonly<{
   expected?: CollectionRecord | null;
 }>;
 
-const emptyAssetManifest = Object.freeze([]) as readonly AssetManifestEntry[];
+const emptyAssetManifest = ([] as const) as readonly AssetManifestEntry[];
 
 function withAssetManifest<T extends CollectionEventBody<CollectionRecord>>(
   body: T,
   assets: readonly AssetManifestEntry[],
 ): T {
-  return deepFreeze({
+  return ({
     ...body,
-    assets: Object.freeze([...assets].map((entry) => structuredClone(entry))),
+    assets: [...assets].map((entry) => structuredClone(entry)),
   }) as T;
 }
 
@@ -435,17 +446,6 @@ function asRecord(value: unknown): Record<string, unknown> {
     : {};
 }
 
-function deepFreeze<T>(value: T): T {
-  if (ArrayBuffer.isView(value)) return value;
-  if (value && typeof value === "object" && !Object.isFrozen(value)) {
-    for (const child of Object.values(value as Record<string, unknown>)) {
-      deepFreeze(child);
-    }
-    Object.freeze(value);
-  }
-  return value;
-}
-
 function assertLosslessJson(value: unknown, label: string): void {
   assertJsonValue(value, { label, rejectNegativeZero: true });
 }
@@ -453,33 +453,33 @@ function assertLosslessJson(value: unknown, label: string): void {
 async function canonicalIntentValue(
   value: unknown,
   preparedContentPaths: ReadonlySet<string> = new Set(),
-  path: readonly string[] = Object.freeze([]),
+  path: readonly string[] = ([] as const),
   ancestors = new WeakSet<object>(),
 ): Promise<unknown> {
-  if (value === null) return Object.freeze(["null"]);
-  if (typeof value === "string") return Object.freeze(["string", value]);
+  if (value === null) return (["null"] as const);
+  if (typeof value === "string") return (["string", value] as const);
   if (typeof value === "boolean") {
-    return Object.freeze(["boolean", value]);
+    return (["boolean", value] as const);
   }
   if (typeof value === "number") {
     if (!Number.isFinite(value)) {
       throw new TypeError("Collection mutation intent numbers must be finite.");
     }
-    return Object.freeze([
+    return ([
       "number",
       Object.is(value, -0) ? "-0" : String(value),
-    ]);
+    ] as const);
   }
   if (value === undefined) {
     throw new TypeError("Collection mutation intent cannot contain undefined.");
   }
   if (value instanceof ArrayBuffer) {
     const bytes = new Uint8Array(value);
-    return Object.freeze([
+    return ([
       "bytes",
       await digestContent(bytes),
       bytes.byteLength,
-    ]);
+    ] as const);
   }
   if (ArrayBuffer.isView(value)) {
     const bytes = new Uint8Array(
@@ -487,11 +487,11 @@ async function canonicalIntentValue(
       value.byteOffset,
       value.byteLength,
     );
-    return Object.freeze([
+    return ([
       "bytes",
       await digestContent(bytes),
       bytes.byteLength,
-    ]);
+    ] as const);
   }
   if (typeof value !== "object") {
     throw new TypeError("Collection mutation intent must be JSON-safe.");
@@ -513,12 +513,12 @@ async function canonicalIntentValue(
           await canonicalIntentValue(
             value[index],
             preparedContentPaths,
-            Object.freeze([...path, String(index)]),
+            [...path, String(index)] as const,
             ancestors,
           ),
         );
       }
-      return Object.freeze(["array", Object.freeze(items)]);
+      return (["array", items] as const);
     }
     const prototype = Object.getPrototypeOf(value);
     if (prototype !== Object.prototype && prototype !== null) {
@@ -566,13 +566,13 @@ async function canonicalIntentValue(
       const identities = new Map<string, readonly unknown[]>();
       for (const asset of assets) {
         const identity = asset.idempotencyKey?.trim()
-          ? Object.freeze(["key", asset.idempotencyKey.trim()])
-          : Object.freeze([
+          ? (["key", asset.idempotencyKey.trim()] as const)
+          : ([
             "digest",
             asset.digest,
             asset.mediaType,
             asset.byteLength,
-          ]);
+          ] as const);
         identities.set(asset.id, identity);
       }
       const refs: unknown[] = [];
@@ -582,12 +582,10 @@ async function canonicalIntentValue(
           await canonicalIntentValue(
             {
               ...ref,
-              ...(stableId
-                ? { assetId: Object.freeze(["prepared", stableId]) }
-                : {}),
+              ...(stableId ? { assetId: ["prepared", stableId] as const } : {}),
             },
             new Set(),
-            Object.freeze([]),
+            [] as const,
             ancestors,
           ),
         );
@@ -608,7 +606,7 @@ async function canonicalIntentValue(
               ...fields,
             },
             new Set(),
-            Object.freeze([]),
+            [] as const,
             ancestors,
           ),
         );
@@ -616,25 +614,27 @@ async function canonicalIntentValue(
       normalizedAssets.sort((left, right) =>
         JSON.stringify(left).localeCompare(JSON.stringify(right))
       );
-      return Object.freeze([
+      return ([
         "prepared-content",
-        Object.freeze(refs),
-        Object.freeze(normalizedAssets),
-      ]);
+        refs,
+        normalizedAssets,
+      ] as const);
     }
     const entries: unknown[] = [];
     for (const key of Object.keys(source).sort()) {
-      entries.push(Object.freeze([
-        key,
-        await canonicalIntentValue(
-          source[key],
-          preparedContentPaths,
-          Object.freeze([...path, key]),
-          ancestors,
-        ),
-      ]));
+      entries.push(
+        [
+          key,
+          await canonicalIntentValue(
+            source[key],
+            preparedContentPaths,
+            [...path, key] as const,
+            ancestors,
+          ),
+        ] as const,
+      );
     }
-    return Object.freeze(["object", Object.freeze(entries)]);
+    return (["object", entries] as const);
   } finally {
     ancestors.delete(value);
   }
@@ -690,16 +690,13 @@ function applyStaticDefaults(
 }
 
 function canonicalEvent(event: DurableEvent): CollectionDurableEvent {
-  return Object.freeze({
+  return ({
     id: event.id,
     position: event.position,
     schemaVersion: event.schemaVersion,
     eventType: event.type,
     namespace: event.namespace,
-    ...(event.threadId ? { threadId: event.threadId } : {}),
     ...(event.subject ? { subject: event.subject } : {}),
-    routing: event.routing,
-    visibility: event.visibility,
     metadata: event.metadata,
     ...(event.causationId ? { causationId: event.causationId } : {}),
     correlationId: event.correlationId,
@@ -708,7 +705,7 @@ function canonicalEvent(event: DurableEvent): CollectionDurableEvent {
       : {}),
     dataRef: eventDataRef(event.payload),
     createdAt: event.createdAt,
-  });
+  } as const);
 }
 
 function noopError(record: CollectionRecord): Error {
@@ -733,14 +730,14 @@ function mutationResult<TSelect extends object>(
   dispatch: CollectionMutation<TSelect>["dispatch"],
   deduplicated: boolean,
 ): CollectionMutation<TSelect> {
-  return Object.freeze({
-    record: deepFreeze(structuredClone(record)) as TSelect,
+  return ({
+    record: (structuredClone(record)) as TSelect,
     event: canonicalEvent(event),
     settlementScopeId,
     deliveries,
     dispatch,
     deduplicated,
-  });
+  } as const);
 }
 
 /** Binds canonical collection commands to the existing event coordinator. */
@@ -860,8 +857,8 @@ export function createCollectionKernel(
       promise.then(() => undefined, () => undefined),
     );
     scope.planning.push(promise.then(
-      () => Object.freeze({ ok: true as const }),
-      (error) => Object.freeze({ ok: false as const, error }),
+      () => ({ ok: true as const } as const),
+      (error) => ({ ok: false as const, error } as const),
     ));
     return promise;
   };
@@ -914,11 +911,7 @@ export function createCollectionKernel(
     const inherited = writeOptions.identity;
     return {
       namespace,
-      ...(writeOptions.threadId ? { threadId: writeOptions.threadId } : {}),
-      ...(writeOptions.routing ? { routing: writeOptions.routing } : {}),
-      ...(writeOptions.visibility
-        ? { visibility: writeOptions.visibility }
-        : {}),
+      metadata: writeOptions.metadata,
       identity: {
         settlementScopeId: inherited?.settlementScopeId ??
           scope.settlementScopeId,
@@ -1024,11 +1017,11 @@ export function createCollectionKernel(
             `Asset materialization '${manifest.assetId}' has no adoption plan.`,
           );
         }
-        const staged = Object.freeze({
+        const staged = {
           manifest,
           candidate: adoption.candidate,
           plan,
-        });
+        } as const;
         const byId = scope.assets.get(manifest.assetId);
         if (byId) {
           assertStagedCandidate(byId, adoption.candidate, "id");
@@ -1074,11 +1067,11 @@ export function createCollectionKernel(
         )
         : [];
       if (fields.length === 0) {
-        return Object.freeze({
+        return ({
           write,
-          content: Object.freeze([]),
+          content: [] as const,
           ...(expected !== undefined ? { expected } : {}),
-        });
+        } as const);
       }
       if (!options.assets) {
         throw new Error(
@@ -1099,7 +1092,7 @@ export function createCollectionKernel(
           )
           ? {
             content: value as ContentSequence,
-            assets: Object.freeze([]) as readonly PreparedAsset[],
+            assets: ([] as const) as readonly PreparedAsset[],
             sequenceOnly: true,
           }
           : value && typeof value === "object" && !Array.isArray(value) &&
@@ -1118,16 +1111,14 @@ export function createCollectionKernel(
           );
           // Content identity survives retries without coupling it to an Action or
           // generating a new Asset each time the collection plan is rebuilt.
-          const candidates = source.assets.map((asset) =>
-            Object.freeze({
-              ...asset,
-              idempotencyKey: JSON.stringify([
-                "collection-content",
-                asset.mediaType,
-                asset.digest,
-              ]),
-            })
-          );
+          const candidates = source.assets.map((asset) => ({
+            ...asset,
+            idempotencyKey: JSON.stringify([
+              "collection-content",
+              asset.mediaType,
+              asset.digest,
+            ]),
+          } as const));
           value = { content: source.content, assets: candidates };
           preparedValue = {
             content: source.content,
@@ -1164,10 +1155,10 @@ export function createCollectionKernel(
               remappedCandidates.get(ref.assetId);
             if (staged) {
               assertStagedRef(staged, ref);
-              rebuilt[index] = Object.freeze({
+              rebuilt[index] = {
                 ...structuredClone(ref),
                 assetId: staged.manifest.assetId,
-              });
+              } as const;
               return;
             }
             pendingRefs.push(ref);
@@ -1189,12 +1180,10 @@ export function createCollectionKernel(
           if (pendingRefs.length > 0) {
             const pending = await options.assets.prepareMaterialization({
               namespace,
-              content: preparedValue.sequenceOnly
-                ? Object.freeze(pendingRefs)
-                : Object.freeze({
-                  content: Object.freeze(pendingRefs),
-                  assets: Object.freeze(pendingAssets),
-                }),
+              content: preparedValue.sequenceOnly ? pendingRefs : ({
+                content: pendingRefs,
+                assets: pendingAssets,
+              } as const),
               origin: { type: name, id: write.record.id },
             });
             if (pending.content.length !== pendingIndexes.length) {
@@ -1216,7 +1205,7 @@ export function createCollectionKernel(
               );
             }
           }
-          setPath(record, field, Object.freeze(rebuilt));
+          setPath(record, field, rebuilt);
           changed = true;
           continue;
         }
@@ -1232,13 +1221,13 @@ export function createCollectionKernel(
         changed = true;
       }
       if (!changed && assets.length === write.body.assets.length) {
-        return Object.freeze({
+        return ({
           write,
-          content: Object.freeze(content),
+          content: content,
           ...(expected !== undefined ? { expected } : {}),
-        });
+        } as const);
       }
-      let frozen = deepFreeze(record) as CollectionRecord;
+      let frozen = record as CollectionRecord;
       if (write.body.operation === "update" && expected) {
         const comparable = {
           ...frozen,
@@ -1251,7 +1240,7 @@ export function createCollectionKernel(
       }
       let preparedWrite: PreparedWrite;
       if (write.body.operation === "create") {
-        preparedWrite = Object.freeze({
+        preparedWrite = {
           record: frozen,
           body: withAssetManifest(
             {
@@ -1262,9 +1251,9 @@ export function createCollectionKernel(
             },
             assets,
           ),
-        });
+        } as const;
       } else if (write.body.operation === "delete") {
-        preparedWrite = Object.freeze({
+        preparedWrite = {
           record: frozen,
           body: withAssetManifest(
             {
@@ -1276,7 +1265,7 @@ export function createCollectionKernel(
             },
             assets,
           ),
-        });
+        } as const;
       } else {
         const sameRecord = expected === frozen;
         const set = sameRecord
@@ -1289,24 +1278,24 @@ export function createCollectionKernel(
             }
           }
         }
-        preparedWrite = Object.freeze({
+        preparedWrite = {
           record: frozen,
           body: withAssetManifest({
             operation: "update",
             intent: write.body.intent,
             id: write.body.id,
             set,
-            unset: sameRecord ? Object.freeze([]) : write.body.unset,
+            unset: sameRecord ? ([] as const) : write.body.unset,
             record: frozen,
             assets: emptyAssetManifest,
           }, assets),
-        });
+        } as const;
       }
-      return Object.freeze({
+      return ({
         write: preparedWrite,
-        content: Object.freeze(content),
+        content: content,
         ...(expected !== undefined ? { expected } : {}),
-      });
+      } as const);
     };
 
     const commit = async (
@@ -1350,17 +1339,13 @@ export function createCollectionKernel(
         for (const item of pending) {
           reports.push(await options.coordinator.flushCommitted(item));
         }
-        return Object.freeze({
+        return ({
           ...result,
-          dispatch: Object.freeze({
-            handles: Object.freeze(
-              reports.flatMap((report) => [...report.handles]),
-            ),
-            failures: Object.freeze(
-              reports.flatMap((report) => [...report.failures]),
-            ),
-          }),
-        });
+          dispatch: {
+            handles: reports.flatMap((report) => [...report.handles]),
+            failures: reports.flatMap((report) => [...report.failures]),
+          } as const,
+        } as const);
       }
       const scoped = scopedWriteOptions(
         writeOptions,
@@ -1390,14 +1375,14 @@ export function createCollectionKernel(
             mediaType: "application/json",
           },
         },
-        metadata: structuredClone(identity?.metadata ?? {}),
+        metadata: structuredClone({
+          ...identity?.metadata,
+          ...scoped.metadata,
+        }),
         causationId: identity?.causationId,
         correlationId: identity?.correlationId,
         deduplicationId: identity?.deduplicationId,
         settlementScopeId: identity?.settlementScopeId,
-        ...(scoped.threadId ? { threadId: scoped.threadId } : {}),
-        ...(scoped.routing ? { routing: scoped.routing } : {}),
-        ...(scoped.visibility ? { visibility: scoped.visibility } : {}),
       };
       const result = await options.coordinator.commitMutation({
         draft,
@@ -1525,7 +1510,7 @@ export function createCollectionKernel(
           `Collection transaction identity '${deduplicationId}' was reused with another intent.`,
         );
       }
-      return Object.freeze({
+      return ({
         id,
         eventType,
         operation,
@@ -1535,12 +1520,12 @@ export function createCollectionKernel(
           operation,
           id,
         ),
-        plan: Object.freeze({
-          write: Object.freeze({ body, record: body.record }),
-          content: Object.freeze([]),
-        }),
+        plan: {
+          write: { body, record: body.record } as const,
+          content: [] as const,
+        } as const,
         matchData: body,
-      });
+      } as const);
     };
 
     const commitOperation = (
@@ -1590,29 +1575,31 @@ export function createCollectionKernel(
           deadlines.push(deadline);
         }
       }
-      scope.plans.push(Object.freeze({
-        id: planned.id,
-        order: Object.freeze([...order]),
-        ...(deadlines.length
-          ? { protectionDeadline: Math.min(...deadlines) }
-          : {}),
-        commit: (transaction, pending, replacements) => {
-          const plan = reconcileCollectionContent(
-            planned.plan,
-            definition.content?.fields ?? [],
-            replacements,
-          );
-          return commitOperation({
-            ...planned,
-            plan,
-            matchData: planned.matchData === undefined
-              ? undefined
-              : plan.write.body,
-          }, { transaction, pending }) as Promise<
-            CollectionWrite<CollectionRecord>
-          >;
-        },
-      }));
+      scope.plans.push(
+        {
+          id: planned.id,
+          order: [...order] as const,
+          ...(deadlines.length
+            ? { protectionDeadline: Math.min(...deadlines) }
+            : {}),
+          commit: (transaction, pending, replacements) => {
+            const plan = reconcileCollectionContent(
+              planned.plan,
+              definition.content?.fields ?? [],
+              replacements,
+            );
+            return commitOperation({
+              ...planned,
+              plan,
+              matchData: planned.matchData === undefined
+                ? undefined
+                : plan.write.body,
+            }, { transaction, pending }) as Promise<
+              CollectionWrite<CollectionRecord>
+            >;
+          },
+        } as const,
+      );
       scope.records.set(
         recordKey(planned.id),
         planned.plan.write.body.operation === "delete"
@@ -1631,7 +1618,7 @@ export function createCollectionKernel(
           }
         }
       }
-      return Object.freeze({ id: planned.id });
+      return ({ id: planned.id } as const);
     };
 
     const loadPlanRecord = async (
@@ -1649,7 +1636,7 @@ export function createCollectionKernel(
         id,
       );
       const snapshot = record
-        ? deepFreeze(structuredClone(record)) as CollectionRecord
+        ? (structuredClone(record)) as CollectionRecord
         : null;
       scope?.records.set(key, snapshot);
       return snapshot;
@@ -1664,10 +1651,10 @@ export function createCollectionKernel(
       const timestamp = now().toISOString();
       const seeded = applyStaticDefaults(definition, asRecord(input));
       const id = requireText(String(seeded.id ?? createId()), `${name} id`);
-      const intent = suppliedIntent ?? Object.freeze({
+      const intent = suppliedIntent ?? ({
         operation: "create" as const,
         input: await canonicalIntent({ ...seeded, id }),
-      });
+      } as const);
       let record = stamp(seeded, {
         namespace,
         id,
@@ -1689,7 +1676,7 @@ export function createCollectionKernel(
           },
         );
       }
-      const frozen = deepFreeze(structuredClone(record)) as CollectionRecord;
+      const frozen = (structuredClone(record)) as CollectionRecord;
       const body = withAssetManifest({
         operation: "create" as const,
         intent,
@@ -1701,7 +1688,7 @@ export function createCollectionKernel(
         namespace,
         null,
       );
-      return Object.freeze({
+      return ({
         id,
         eventType: `${name}.created`,
         operation: "create",
@@ -1713,7 +1700,7 @@ export function createCollectionKernel(
         ),
         plan,
         matchData: plan.write.body,
-      });
+      } as const);
     };
 
     const create = async (
@@ -1722,7 +1709,7 @@ export function createCollectionKernel(
     ): Promise<CollectionMutation<TSelect>> => {
       assertStandaloneWrite();
       const snapshot = structuredClone(input) as TInsert;
-      const optionsSnapshot = deepFreeze(structuredClone(writeOptions));
+      const optionsSnapshot = structuredClone(writeOptions);
       const rawId = (snapshot as Record<string, unknown>).id;
       const deduplicationId = optionsSnapshot.identity?.deduplicationId?.trim();
       const id = typeof rawId === "string" && rawId.trim()
@@ -1740,10 +1727,10 @@ export function createCollectionKernel(
       const value = id
         ? { ...snapshot as Record<string, unknown>, id } as TInsert
         : snapshot;
-      const intent: CollectionMutationIntent = Object.freeze({
+      const intent: CollectionMutationIntent = {
         operation: "create",
         input: await canonicalIntent(value),
-      });
+      } as const;
       const subjectId = id ?? requireText(
         String((value as Record<string, unknown>).id ?? createId()),
         `${name} id`,
@@ -1808,22 +1795,22 @@ export function createCollectionKernel(
             operation: "update",
             intent,
             id: current.id,
-            set: Object.freeze({}),
-            unset: Object.freeze([]),
+            set: {} as const,
+            unset: [] as const,
             record: current,
             assets: emptyAssetManifest,
           },
           record: current,
         };
       }
-      const frozen = deepFreeze(structuredClone(next)) as CollectionRecord;
+      const frozen = (structuredClone(next)) as CollectionRecord;
       return {
         body: {
           operation: "update",
           intent,
           id: current.id,
           set: { ...(patch.set ?? {}) } as Partial<CollectionRecord>,
-          unset: Object.freeze([...(patch.unset ?? [])]),
+          unset: [...(patch.unset ?? [])] as const,
           record: frozen,
           assets: emptyAssetManifest,
         },
@@ -1840,12 +1827,12 @@ export function createCollectionKernel(
     ): Promise<PlannedCollectionOperation> => {
       const namespace = requireText(writeOptions.namespace, "Namespace");
       const id = requireText(idInput, `${name} id`);
-      const intent = suppliedIntent ?? Object.freeze({
+      const intent = suppliedIntent ?? ({
         operation: "update" as const,
         id,
         set: await canonicalIntent(patch.set ?? {}),
-        unset: Object.freeze([...(patch.unset ?? [])]),
-      });
+        unset: [...(patch.unset ?? [])] as const,
+      } as const);
       const preview = await loadPlanRecord(id, namespace);
       if (!preview) throw new Error(`Unknown ${name} '${id}'.`);
       const plan = await prepareDeclaredContent(
@@ -1854,7 +1841,7 @@ export function createCollectionKernel(
         preview,
         emitNoChange,
       );
-      return Object.freeze({
+      return ({
         id,
         eventType: `${name}.updated`,
         operation: "update",
@@ -1866,7 +1853,7 @@ export function createCollectionKernel(
         ),
         plan,
         matchData: plan.write.body,
-      });
+      } as const);
     };
 
     const update = async (
@@ -1877,13 +1864,13 @@ export function createCollectionKernel(
       assertStandaloneWrite();
       const id = requireText(idInput, `${name} id`);
       const patchSnapshot = structuredClone(patch);
-      const optionsSnapshot = deepFreeze(structuredClone(writeOptions));
-      const intent: CollectionMutationIntent = Object.freeze({
+      const optionsSnapshot = structuredClone(writeOptions);
+      const intent: CollectionMutationIntent = {
         operation: "update",
         id,
         set: await canonicalIntent(patchSnapshot.set ?? {}),
-        unset: Object.freeze([...(patchSnapshot.unset ?? [])]),
-      });
+        unset: [...(patchSnapshot.unset ?? [])] as const,
+      } as const;
       const keyed = Boolean(
         optionsSnapshot.identity?.deduplicationId?.trim(),
       );
@@ -1905,10 +1892,10 @@ export function createCollectionKernel(
         );
       } catch (error) {
         if (isNoopError(error)) {
-          return Object.freeze({
+          return ({
             record: error.record as TSelect,
             noop: true as const,
-          });
+          } as const);
         }
         throw error;
       }
@@ -1921,10 +1908,10 @@ export function createCollectionKernel(
     ): Promise<PlannedCollectionOperation> => {
       const namespace = requireText(writeOptions.namespace, "Namespace");
       const id = requireText(idInput, `${name} id`);
-      const intent = suppliedIntent ?? Object.freeze({
+      const intent = suppliedIntent ?? ({
         operation: "delete" as const,
         id,
-      });
+      } as const);
       const preview = await loadPlanRecord(id, namespace);
       if (!preview) throw new Error(`Unknown ${name} '${id}'.`);
       definition.beforeDelete?.(structuredClone(preview), { namespace });
@@ -1942,7 +1929,7 @@ export function createCollectionKernel(
         namespace,
         preview,
       );
-      return Object.freeze({
+      return ({
         id,
         eventType: `${name}.deleted`,
         operation: "delete",
@@ -1954,7 +1941,7 @@ export function createCollectionKernel(
         ),
         plan,
         matchData: plan.write.body,
-      });
+      } as const);
     };
 
     const remove = async (
@@ -1963,11 +1950,11 @@ export function createCollectionKernel(
     ): Promise<CollectionMutation<TSelect>> => {
       assertStandaloneWrite();
       const id = requireText(idInput, `${name} id`);
-      const optionsSnapshot = deepFreeze(structuredClone(writeOptions));
-      const intent: CollectionMutationIntent = Object.freeze({
+      const optionsSnapshot = structuredClone(writeOptions);
+      const intent: CollectionMutationIntent = {
         operation: "delete",
         id,
-      });
+      } as const;
       return await commitOperation(
         await replayOperation(
           `${name}.deleted`,
@@ -2003,15 +1990,15 @@ export function createCollectionKernel(
       }
       const namespace = requireText(writeOptions.namespace, "Namespace");
       const id = requireText(idInput, `${name} id`);
-      const intent = suppliedIntent ?? Object.freeze({
+      const intent = suppliedIntent ?? ({
         operation: "command" as const,
         id,
         name: command,
         input: await canonicalIntent(input),
-      });
+      } as const);
       const applyCommand = (current: CollectionRecord): PreparedWrite => {
         const patch = definitionCommand.mutate({
-          current: deepFreeze(structuredClone(current)),
+          current: structuredClone(current),
           input,
         });
         if (!patch && !emitNoChange) throw noopError(current);
@@ -2031,7 +2018,7 @@ export function createCollectionKernel(
         preview,
         emitNoChange,
       );
-      return Object.freeze({
+      return ({
         id,
         eventType: definitionCommand.event ?? `${name}.updated`,
         operation: `mutate:${command}`,
@@ -2043,7 +2030,7 @@ export function createCollectionKernel(
         ),
         plan,
         matchData: plan.write.body,
-      });
+      } as const);
     };
 
     const mutate = async (
@@ -2060,7 +2047,7 @@ export function createCollectionKernel(
         throw new Error(`Unknown ${name} command '${command}'.`);
       }
       const value = structuredClone(input);
-      const optionsSnapshot = deepFreeze(structuredClone(writeOptions));
+      const optionsSnapshot = structuredClone(writeOptions);
       if (
         commandDefinition.input && typeof commandDefinition.input === "object"
       ) {
@@ -2070,12 +2057,12 @@ export function createCollectionKernel(
           `${name}.${command} input`,
         );
       }
-      const intent: CollectionMutationIntent = Object.freeze({
+      const intent: CollectionMutationIntent = {
         operation: "command",
         id,
         name: command,
         input: await canonicalIntent(value),
-      });
+      } as const;
       const keyed = Boolean(
         optionsSnapshot.identity?.deduplicationId?.trim(),
       );
@@ -2099,10 +2086,10 @@ export function createCollectionKernel(
         );
       } catch (error) {
         if (isNoopError(error)) {
-          return Object.freeze({
+          return ({
             record: error.record as TSelect,
             noop: true as const,
-          });
+          } as const);
         }
         throw error;
       }
@@ -2144,7 +2131,7 @@ export function createCollectionKernel(
           scope: CollectionScope = { namespace },
           readOptions?: Pick<ScopedCollectionReadOptions, "signal">,
         ) => {
-          scope = Object.freeze({ ...scope, namespace });
+          scope = { ...scope, namespace } as const;
           const queryInput = asRecord(input);
           if (spec.inputSchema) {
             validateAgainstJsonSchema(
@@ -2168,7 +2155,7 @@ export function createCollectionKernel(
                 ? AbortSignal.any([readOptions.signal, input.signal])
                 : readOptions?.signal ?? input?.signal,
             });
-            const read = Object.freeze({
+            const read = {
               get: (
                 name: string,
                 id: string,
@@ -2184,7 +2171,7 @@ export function createCollectionKernel(
                 query: CollectionAggregateQuery,
                 options?: Pick<ScopedCollectionReadOptions, "signal">,
               ) => target(name).aggregate(scope, query, controls(options)),
-            });
+            } as const;
             output = await spec.select({
               input: queryInput,
               read,
@@ -2212,7 +2199,7 @@ export function createCollectionKernel(
       TSelect
     >;
 
-    const collection = Object.freeze({
+    const collection = ({
       definition,
       create,
       update,
@@ -2225,17 +2212,17 @@ export function createCollectionKernel(
       search: (namespace: string, queryInput: CollectionQuery) =>
         list(namespace, { ...queryInput, text: queryInput.text ?? "" }),
       ...namedQueries,
-    }) as BoundCollection<TSelect, TInsert>;
+    } as const) as BoundCollection<TSelect, TInsert>;
     transactionBindings.set(
       name,
-      Object.freeze({
+      {
         definition,
         async create(input, writeOptions, order) {
           const id = requireText(String(input.id), `${name} id`);
-          const intent: CollectionMutationIntent = Object.freeze({
+          const intent: CollectionMutationIntent = {
             operation: "create",
             input: await canonicalIntent(input),
-          });
+          } as const;
           return stageOperation(
             await replayOperation(
               `${name}.created`,
@@ -2248,12 +2235,12 @@ export function createCollectionKernel(
           );
         },
         async update(id, patch, writeOptions, order) {
-          const intent: CollectionMutationIntent = Object.freeze({
+          const intent: CollectionMutationIntent = {
             operation: "update",
             id,
             set: await canonicalIntent(patch.set ?? {}),
-            unset: Object.freeze([...(patch.unset ?? [])]),
-          });
+            unset: [...(patch.unset ?? [])] as const,
+          } as const;
           return stageOperation(
             await replayOperation(
               `${name}.updated`,
@@ -2272,10 +2259,10 @@ export function createCollectionKernel(
           );
         },
         async delete(id, writeOptions, order) {
-          const intent: CollectionMutationIntent = Object.freeze({
+          const intent: CollectionMutationIntent = {
             operation: "delete",
             id,
-          });
+          } as const;
           return stageOperation(
             await replayOperation(
               `${name}.deleted`,
@@ -2302,12 +2289,12 @@ export function createCollectionKernel(
               `${name}.${command} input`,
             );
           }
-          const intent: CollectionMutationIntent = Object.freeze({
+          const intent: CollectionMutationIntent = {
             operation: "command",
             id,
             name: command,
             input: await canonicalIntent(input),
-          });
+          } as const;
           const eventType = commandDefinition.event ?? `${name}.updated`;
           return stageOperation(
             await replayOperation(
@@ -2327,7 +2314,7 @@ export function createCollectionKernel(
             order,
           );
         },
-      }),
+      } as const,
     );
     bound.set(definition.name, collection as BoundCollection);
     operations.set(
@@ -2353,7 +2340,7 @@ export function createCollectionKernel(
     }
     const execute = input.execute;
     const transactionIdentity = input.identity
-      ? deepFreeze(structuredClone(input.identity))
+      ? (structuredClone(input.identity))
       : undefined;
     if (transactionIdentity?.metadata) {
       assertLosslessJson(
@@ -2369,8 +2356,8 @@ export function createCollectionKernel(
     }
     const operationKey = requireText(input.operationKey, "Operation key");
     const namespace = requireText(input.namespace, "Namespace");
-    const operationPath = Object.freeze([operationKey]);
-    const orderPath: readonly number[] = Object.freeze([]);
+    const operationPath = [operationKey] as const;
+    const orderPath: readonly number[] = [] as const;
     const settlementScopeId = transactionIdentity?.settlementScopeId?.trim() ||
       await deriveWorkflowId(
         "scope",
@@ -2410,17 +2397,15 @@ export function createCollectionKernel(
       const explicitDeduplicationId = inputOptions?.identity
         ?.deduplicationId?.trim();
       if (explicitDeduplicationId) {
-        return Object.freeze(["deduplication", explicitDeduplicationId]);
+        return (["deduplication", explicitDeduplicationId] as const);
       }
       const explicitKey = inputOptions?.operationKey?.trim();
-      return explicitKey
-        ? Object.freeze(["key", operationPath, explicitKey])
-        : Object.freeze([
-          "target",
-          operationPath,
-          target,
-          occurrence,
-        ]);
+      return explicitKey ? (["key", operationPath, explicitKey] as const) : ([
+        "target",
+        operationPath,
+        target,
+        occurrence,
+      ] as const);
     };
 
     const implicitId = async (
@@ -2453,14 +2438,8 @@ export function createCollectionKernel(
       if (identity?.metadata) {
         assertLosslessJson(identity.metadata, "Collection mutation metadata");
       }
-      if (rest.routing) {
-        assertLosslessJson(rest.routing, "Collection mutation routing");
-      }
-      if (rest.visibility) {
-        assertLosslessJson(
-          rest.visibility,
-          "Collection mutation visibility",
-        );
+      if (rest.metadata) {
+        assertLosslessJson(rest.metadata, "Collection mutation metadata");
       }
       const deduplicationId = identity?.deduplicationId ??
         await deriveWorkflowId(
@@ -2473,7 +2452,7 @@ export function createCollectionKernel(
             id,
           ]),
         );
-      return deepFreeze({
+      return ({
         namespace,
         ...structuredClone(rest),
         identity: {
@@ -2494,10 +2473,10 @@ export function createCollectionKernel(
       if (scope.state !== "open") {
         throw new Error("Transaction mutation planning is already closed.");
       }
-      return Object.freeze([
+      return ([
         ...scope.orderPath,
         ++scope.orderSequence,
-      ]);
+      ] as const);
     };
 
     const allocateIdentity = (target: string): number => {
@@ -2525,13 +2504,13 @@ export function createCollectionKernel(
       }
     };
 
-    const collections = Object.freeze(Object.fromEntries(
+    const collections = (Object.fromEntries(
       [...transactionBindings].map(([name, binding]) => {
         const planningKey = (id: string): string =>
           binding.definition.content?.fields.length
             ? JSON.stringify(["content"])
             : JSON.stringify(["record", name, id]);
-        const commands = Object.freeze(Object.fromEntries(
+        const commands = Object.fromEntries(
           Object.keys(binding.definition.commands ?? {}).map((command) => [
             command,
             (
@@ -2542,11 +2521,9 @@ export function createCollectionKernel(
             ) => {
               const order = allocateOrder();
               return registerMutation(order, () => {
-                const commandSnapshot = deepFreeze(
-                  structuredClone(commandInput),
-                );
+                const commandSnapshot = structuredClone(commandInput);
                 const optionsSnapshot = commandOptions
-                  ? deepFreeze(structuredClone(commandOptions))
+                  ? (structuredClone(commandOptions))
                   : undefined;
                 const id = requireText(commandSnapshot.id, `${name} id`);
                 const { id: _id, ...value } = commandSnapshot;
@@ -2588,14 +2565,14 @@ export function createCollectionKernel(
               });
             },
           ]),
-        ));
-        const collection: TransactionCollection = Object.freeze({
+        );
+        const collection: TransactionCollection = {
           create: (value, createOptions) => {
             const order = allocateOrder();
             return registerMutation(order, () => {
-              const valueSnapshot = deepFreeze(structuredClone(value));
+              const valueSnapshot = structuredClone(value);
               const optionsSnapshot = createOptions
-                ? deepFreeze(structuredClone(createOptions))
+                ? (structuredClone(createOptions))
                 : undefined;
               const rawId = (valueSnapshot as Record<string, unknown>).id;
               const explicitId = typeof rawId === "string" && rawId.trim()
@@ -2648,9 +2625,9 @@ export function createCollectionKernel(
           update: (value, updateOptions) => {
             const order = allocateOrder();
             return registerMutation(order, () => {
-              const valueSnapshot = deepFreeze(structuredClone(value));
+              const valueSnapshot = structuredClone(value);
               const optionsSnapshot = updateOptions
-                ? deepFreeze(structuredClone(updateOptions))
+                ? (structuredClone(updateOptions))
                 : undefined;
               const id = requireText(valueSnapshot.id, `${name} id`);
               return {
@@ -2693,9 +2670,9 @@ export function createCollectionKernel(
           delete: (value, deleteOptions) => {
             const order = allocateOrder();
             return registerMutation(order, () => {
-              const valueSnapshot = deepFreeze(structuredClone(value));
+              const valueSnapshot = structuredClone(value);
               const optionsSnapshot = deleteOptions
-                ? deepFreeze(structuredClone(deleteOptions))
+                ? (structuredClone(deleteOptions))
                 : undefined;
               const id = requireText(valueSnapshot.id, `${name} id`);
               const target = JSON.stringify(["record", name, "delete", id]);
@@ -2719,19 +2696,19 @@ export function createCollectionKernel(
             });
           },
           commands,
-        });
+        } as const;
         return [name, collection];
       }),
     )) as CollectionTransactionCollections;
 
-    const relations: CollectionTransactionRelations = Object.freeze({
+    const relations: CollectionTransactionRelations = {
       upsert(relationInput, relationOptions) {
         const order = allocateOrder();
         return registerMutation(order, () => {
-          const relationSnapshot = deepFreeze(structuredClone(relationInput));
+          const relationSnapshot = structuredClone(relationInput);
           assertLosslessJson(relationSnapshot, "Relation mutation input");
           const optionsSnapshot = relationOptions
-            ? deepFreeze(structuredClone(relationOptions))
+            ? (structuredClone(relationOptions))
             : undefined;
           const explicitId = typeof relationSnapshot.id === "string" &&
               relationSnapshot.id.trim()
@@ -2764,14 +2741,14 @@ export function createCollectionKernel(
                 { ...relationSnapshot, id: relationId },
                 now().toISOString(),
               );
-              const intent: GraphRelationIntent = deepFreeze({
+              const intent: GraphRelationIntent = {
                 id: normalized.id,
                 type: normalized.type,
                 source: structuredClone(normalized.source),
                 target: structuredClone(normalized.target),
                 metadata: structuredClone(normalized.metadata),
                 weight: normalized.weight,
-              });
+              };
               const writeOptions = await callOptions(
                 "relation",
                 "upsert",
@@ -2841,31 +2818,150 @@ export function createCollectionKernel(
                 expected = existing;
                 const relation = mergeGraphRelation(
                   existing,
-                  Object.freeze({
+                  {
                     ...normalized,
                     ...(existing ? { createdAt: existing.createdAt } : {}),
-                  }),
+                  } as const,
                 );
-                body = deepFreeze({
+                body = {
                   operation: "upsert" as const,
                   intent,
                   relation,
-                });
+                };
               }
               assertJsonValue(body, {
                 label: "relation.upserted Event Body",
                 rejectNegativeZero: true,
               });
               scope.relations.set(relationId, body.relation);
-              scope.plans.push(Object.freeze({
-                id: relationId,
-                order: Object.freeze([...order]),
+              scope.plans.push(
+                {
+                  id: relationId,
+                  order: [...order] as const,
+                  async commit(transaction, pending) {
+                    const result = await options.coordinator.commitMutation({
+                      draft: {
+                        type: "relation.upserted",
+                        namespace,
+                        subject: { type: "relation", id: relationId },
+                        payload: {
+                          dataRef: {
+                            eventBodyId: bodyId,
+                            schemaVersion: 1,
+                            mediaType: "application/json",
+                          },
+                        },
+                        metadata: structuredClone({
+                          ...identity.metadata,
+                          ...writeOptions.metadata,
+                        }),
+                        causationId: identity.causationId,
+                        correlationId: identity.correlationId,
+                        deduplicationId,
+                        settlementScopeId: identity.settlementScopeId,
+                      },
+                      transaction,
+                      dispatch: false,
+                      matchData: body,
+                      mutate: async (context) => {
+                        if (expected !== undefined) {
+                          const current = await loadGraphRelation(
+                            context.transaction,
+                            context.tables,
+                            namespace,
+                            relationId,
+                            true,
+                          );
+                          if (!sameValue(current, expected)) {
+                            throw new Error(
+                              `Relation '${relationId}' changed while its mutation was prepared.`,
+                            );
+                          }
+                        }
+                        await writeEventBody(context, {
+                          namespace,
+                          id: bodyId,
+                          json: body,
+                        });
+                        return await projectGraphRelation(
+                          context,
+                          body.relation,
+                        );
+                      },
+                      recoverDuplicate: async (event, context) => {
+                        const existing = await readEventBody<
+                          GraphRelationEventBody
+                        >(
+                          context,
+                          namespace,
+                          eventDataRef(event.payload),
+                        );
+                        if (!sameValue(existing.intent, body.intent)) {
+                          throw new Error(
+                            "Deduplicated relation event was reused with another intent.",
+                          );
+                        }
+                        return existing.relation;
+                      },
+                    });
+                    pending.push(result as CoordinatedMutationResult<unknown>);
+                    return undefined;
+                  },
+                } as const,
+              );
+              return ({ id: relationId } as const);
+            },
+          };
+        });
+      },
+    } as const;
+
+    const vectors: VectorTransaction = {
+      upsert(input) {
+        const order = allocateOrder();
+        return registerMutation(order, () => {
+          validateVector(input.profile, input.values);
+          const body = structuredClone(input);
+          const target = JSON.stringify([
+            "vector",
+            body.ownerType,
+            body.ownerId,
+            body.field,
+            vectorProfileKey(body.profile),
+          ]);
+          const occurrence = allocateIdentity(target);
+          return {
+            key: target,
+            operation: async () => {
+              const id = await deriveWorkflowId(
+                "vector",
+                JSON.stringify([
+                  namespace,
+                  body.ownerType,
+                  body.ownerId,
+                  body.field,
+                  vectorProfileKey(body.profile),
+                ]),
+              );
+              const identity = (await callOptions(
+                "vector",
+                "upsert",
+                id,
+                target,
+                occurrence,
+                undefined,
+              )).identity!;
+              const bodyId =
+                `event-body:${namespace}:${identity.deduplicationId}`;
+              scope.plans.push({
+                id,
+                order,
                 async commit(transaction, pending) {
                   const result = await options.coordinator.commitMutation({
                     draft: {
-                      type: "relation.upserted",
+                      type: "vector.upserted",
                       namespace,
-                      subject: { type: "relation", id: relationId },
+                      subject: { type: "vector", id },
                       payload: {
                         dataRef: {
                           eventBodyId: bodyId,
@@ -2873,74 +2969,45 @@ export function createCollectionKernel(
                           mediaType: "application/json",
                         },
                       },
-                      metadata: structuredClone(identity.metadata ?? {}),
-                      causationId: identity.causationId,
-                      correlationId: identity.correlationId,
-                      deduplicationId,
-                      settlementScopeId: identity.settlementScopeId,
-                      ...(writeOptions.threadId
-                        ? { threadId: writeOptions.threadId }
-                        : {}),
-                      ...(writeOptions.routing
-                        ? { routing: writeOptions.routing }
-                        : {}),
-                      ...(writeOptions.visibility
-                        ? { visibility: writeOptions.visibility }
-                        : {}),
+                      ...identity,
                     },
                     transaction,
                     dispatch: false,
-                    matchData: body,
-                    mutate: async (context) => {
-                      if (expected !== undefined) {
-                        const current = await loadGraphRelation(
-                          context.transaction,
-                          context.tables,
-                          namespace,
-                          relationId,
-                          true,
-                        );
-                        if (!sameValue(current, expected)) {
-                          throw new Error(
-                            `Relation '${relationId}' changed while its mutation was prepared.`,
-                          );
-                        }
-                      }
+                    async mutate(context) {
                       await writeEventBody(context, {
                         namespace,
                         id: bodyId,
                         json: body,
                       });
-                      return await projectGraphRelation(context, body.relation);
+                      await projectVector(
+                        transaction,
+                        options.eventStore.databaseSchema,
+                        namespace,
+                        body,
+                      );
                     },
-                    recoverDuplicate: async (event, context) => {
-                      const existing = await readEventBody<
-                        GraphRelationEventBody
-                      >(
+                    async recoverDuplicate(event, context) {
+                      const previous = await readEventBody<VectorWrite>(
                         context,
                         namespace,
                         eventDataRef(event.payload),
                       );
-                      if (!sameValue(existing.intent, body.intent)) {
+                      if (!sameValue(previous, body)) {
                         throw new Error(
-                          "Deduplicated relation event was reused with another intent.",
+                          "Vector transaction identity was reused with another vector.",
                         );
                       }
-                      return existing.relation;
                     },
                   });
-                  pending.push(result as CoordinatedMutationResult<unknown>);
-                  return undefined;
+                  pending.push(result);
                 },
-              }));
-              return Object.freeze({ id: relationId });
+              });
             },
           };
         });
       },
-    });
-
-    const run = () => execute({ collections, relations });
+    };
+    const run = () => execute({ collections, relations, vectors });
 
     const value = await finishPlanning(scope, run);
     const pending: CoordinatedMutationResult<unknown>[] = [];
@@ -2978,29 +3045,27 @@ export function createCollectionKernel(
     for (const committed of pending) {
       reports.push(await options.coordinator.flushCommitted(committed));
     }
-    return Object.freeze({
+    return ({
       value,
       operationKey,
       namespace,
       settlementScopeId,
       correlationId,
-      writes: Object.freeze(writes.slice()),
-      dispatch: Object.freeze({
-        handles: Object.freeze(reports.flatMap((item) => [...item.handles])),
-        failures: Object.freeze(reports.flatMap((item) => [...item.failures])),
-      }),
-    });
+      writes: writes.slice(),
+      dispatch: {
+        handles: reports.flatMap((item) => [...item.handles]),
+        failures: reports.flatMap((item) => [...item.failures]),
+      } as const,
+    } as const);
   };
 
   const withScope = (scope: CollectionScope): ScopedCollections => {
     requireText(scope.namespace, "Namespace");
-    return Object.freeze(
-      Object.fromEntries(
-        [...operations].map((
-          [name, collection],
-        ) => [name, bindCollectionScope(collection, scope)]),
-      ),
-    );
+    return (Object.fromEntries(
+      [...operations].map((
+        [name, collection],
+      ) => [name, bindCollectionScope(collection, scope)]),
+    ));
   };
 
   const readSnapshot = async <T>(
@@ -3025,12 +3090,12 @@ export function createCollectionKernel(
             new Error("Read snapshot access has already closed."),
           );
         const scoped = withScope({ namespace: scope.namespace });
-        const collections = Object.freeze(Object.fromEntries(
+        const collections = (Object.fromEntries(
           Object.entries(scoped).map((
             [name, collection],
           ) => [
             name,
-            Object.freeze({
+            {
               definition: collection.definition,
               get: (...args: unknown[]) => {
                 if (snapshot.state !== "open") return closed();
@@ -3056,27 +3121,27 @@ export function createCollectionKernel(
                   ...args,
                 );
               },
-              queries: Object.freeze(Object.fromEntries(
+              queries: Object.fromEntries(
                 Object.entries(collection.queries).map((
                   [query, call],
                 ) => [query, (...args: unknown[]) => {
                   if (snapshot.state !== "open") return closed();
                   return (call as (...input: unknown[]) => unknown)(...args);
                 }]),
-              )),
-              relations: Object.freeze({
+              ),
+              relations: {
                 list: (...args: unknown[]) => {
                   if (snapshot.state !== "open") return closed();
                   return (collection.relations.list as (
                     ...input: unknown[]
                   ) => unknown)(...args);
                 },
-              }),
-            }),
+              } as const,
+            } as const,
           ]),
         )) as unknown as SnapshotCollections;
         try {
-          return await execute(Object.freeze({ collections }));
+          return await execute({ collections } as const);
         } finally {
           snapshot.state = "closed";
         }
@@ -3084,7 +3149,16 @@ export function createCollectionKernel(
     });
   };
 
-  const runtime: CollectionKernel = Object.freeze({
+  const runtime: CollectionKernel = {
+    vectors: (namespace: string) => ({
+      search: (input) =>
+        searchVectors(
+          options.session,
+          options.eventStore.databaseSchema,
+          namespace,
+          input,
+        ),
+    }),
     bind,
     get: <
       TSelect extends CollectionRecord = CollectionRecord,
@@ -3118,7 +3192,7 @@ export function createCollectionKernel(
         )
       );
     },
-  });
+  } as const;
   return runtime;
 }
 
@@ -3153,16 +3227,17 @@ export function createCollectionRuntime(
   options: CreateCollectionRuntimeOptions,
 ): CollectionRuntime {
   const kernel = createCollectionKernel(options);
-  return Object.freeze({
+  return ({
     bind(definition: CollectionDefinition) {
       kernel.bind(definition);
       return kernel.operations(definition.name)!;
     },
     get: (name: string) => kernel.operations(name),
+    vectors: kernel.vectors,
     withScope: kernel.withScope,
     readSnapshot: kernel.readSnapshot,
     transaction: kernel.transaction,
     verify: kernel.verify,
     rebuild: kernel.rebuild,
-  }) as CollectionRuntime;
+  } as const) as CollectionRuntime;
 }

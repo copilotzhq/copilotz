@@ -1,3 +1,5 @@
+import { storageFixture } from "../core/shared/testing/storage-plugin.ts";
+import { coreEvent } from "../core/shared/events/index.ts";
 import {
   deleteKnowledgeDocumentTool,
   ingestKnowledgeDocumentTool,
@@ -11,9 +13,8 @@ import {
   assertRejects,
   assertStringIncludes,
 } from "@std/assert";
-import { createTestDomainContext } from "../core/internal/testing/context.ts";
-import { projectMessages } from "../core/internal/testing/projections.ts";
-
+import { createTestDomainContext } from "../core/shared/testing/context.ts";
+import { projectMessages } from "../core/shared/testing/projections.ts";
 import type { ActionCallOptions } from "@copilotz/copilotz/actions";
 import { createCopilotzApplication } from "../../runtime/application/index.ts";
 import {
@@ -25,24 +26,21 @@ import {
   defineProcessor,
   type ProcessorContext,
 } from "@copilotz/copilotz/plugins";
-import { coreCollectionsPlugin } from "../core/plugin.ts";
-import type { ToolResource } from "@copilotz/copilotz/tools";
+import {} from "../core/plugin.ts";
+import type { ToolResource } from "@copilotz/copilotz/core";
 import { defineKnowledgeEmbeddingProvider, knowledgePlugin } from "./index.ts";
 import {
   deleteKnowledgeDocumentAction,
   type KnowledgeActionCallers,
   type KnowledgeActionContext,
 } from "./actions/index.ts";
-import type { KnowledgeChunk, KnowledgeDocument } from "./internal/types.ts";
-
+import type { KnowledgeChunk, KnowledgeDocument } from "./shared/types.ts";
 const NAMESPACE = "tenant-knowledge";
-
 function record(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : {};
 }
-
 type KnowledgeToolActionCallers = Readonly<{
   ingest_document(
     input: unknown,
@@ -57,17 +55,15 @@ type KnowledgeToolActionCallers = Readonly<{
     options?: ActionCallOptions,
   ): Promise<unknown>;
 }>;
-
 type KnowledgeToolProcessorContext =
   & Omit<ProcessorContext, "actions">
-  & Readonly<{ actions: KnowledgeToolActionCallers }>;
-
+  & Readonly<{
+    actions: KnowledgeToolActionCallers;
+  }>;
 async function close(db: TestDatabase): Promise<void> {
   await db.close();
 }
-
 type TestApplication = Awaited<ReturnType<typeof createCopilotzApplication>>;
-
 async function knowledgeHarness(
   application: TestApplication,
   databaseSchema: string,
@@ -90,7 +86,6 @@ async function knowledgeHarness(
     },
   });
 }
-
 async function waitForDocumentStatus(
   application: TestApplication,
   documentId: string,
@@ -103,11 +98,10 @@ async function waitForDocumentStatus(
     namespace: NAMESPACE,
     types: [eventType],
     subject: { type: "document", id: documentId },
-    timeoutMs: 5_000,
+    timeoutMs: 5000,
     pollIntervalMs: 10,
   });
 }
-
 function embeddingProvider(
   calls: Array<{
     texts: readonly string[];
@@ -134,7 +128,6 @@ function embeddingProvider(
     },
   });
 }
-
 Deno.test("knowledge plugin exposes keyed Collections, Actions, Processors, and Tool Resources", () => {
   const plugin = defineFixturePlugin({
     ...knowledgePlugin,
@@ -163,15 +156,12 @@ Deno.test("knowledge plugin exposes keyed Collections, Actions, Processors, and 
     "search_knowledge",
     "delete_document",
   ]);
-  assertEquals(
-    Object.values(plugin.actions).map((action) => action.id),
-    [
-      "copilotz.knowledge.indexDocument",
-      "copilotz.knowledge.ingestDocument",
-      "copilotz.knowledge.searchDocuments",
-      "copilotz.knowledge.deleteDocument",
-    ],
-  );
+  assertEquals(Object.values(plugin.actions).map((action) => action.id), [
+    "copilotz.knowledge.indexDocument",
+    "copilotz.knowledge.ingestDocument",
+    "copilotz.knowledge.searchDocuments",
+    "copilotz.knowledge.deleteDocument",
+  ]);
   assertEquals(Object.keys(plugin.processors), ["indexKnowledgeDocument"]);
   assertEquals(Object.keys(plugin.resources.tools), [
     "ingest_document",
@@ -187,7 +177,6 @@ Deno.test("knowledge plugin exposes keyed Collections, Actions, Processors, and 
   }
   assertEquals("features" in plugin, false);
 });
-
 Deno.test("knowledge configured Tool aliases populate both plugin maps", () => {
   const plugin = defineFixturePlugin({
     ...knowledgePlugin,
@@ -225,7 +214,6 @@ Deno.test("knowledge configured Tool aliases populate both plugin maps", () => {
     assertExists(plugin.actions[alias as keyof typeof plugin.actions]);
   }
 });
-
 async function createThread(
   application: Awaited<ReturnType<typeof createCopilotzApplication>>,
 ): Promise<void> {
@@ -244,12 +232,11 @@ async function createThread(
       }],
     }, { identity: { deduplicationId: "thread-a:create" } });
 }
-
 Deno.test("package root composes the explicit Knowledge plugin", async () => {
   const application = await createCopilotzApplication({
     namespace: "knowledge-root",
     plugins: [
-      coreCollectionsPlugin,
+      storageFixture,
       defineFixturePlugin({
         ...knowledgePlugin,
         actions: {
@@ -290,7 +277,6 @@ Deno.test("package root composes the explicit Knowledge plugin", async () => {
     await application.shutdown();
   }
 });
-
 Deno.test("knowledge indexing keeps one canonical source asset and atomic searchable projections", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   const calls: Array<{
@@ -303,7 +289,7 @@ Deno.test("knowledge indexing keeps one canonical source asset and atomic search
     namespace: NAMESPACE,
     databaseSchema: "copilotz_v3_knowledge",
     plugins: [
-      coreCollectionsPlugin,
+      storageFixture,
       defineFixturePlugin({
         ...knowledgePlugin,
         actions: {
@@ -366,7 +352,6 @@ Deno.test("knowledge indexing keeps one canonical source asset and atomic search
     }) as KnowledgeDocument;
     assertEquals(created.status, "pending");
     await waitForDocumentStatus(application, "document-a", "indexed");
-
     const document = await knowledge.documents.get({ id: "document-a" }) as
       | KnowledgeDocument
       | null;
@@ -381,7 +366,6 @@ Deno.test("knowledge indexing keeps one canonical source asset and atomic search
     );
     assertEquals(resolved.text, source);
     assertEquals(resolved.asset.digest, document.contentHash);
-
     const chunks = await knowledge.chunks.list({
       where: { documentId: document.id },
     }) as readonly KnowledgeChunk[];
@@ -403,11 +387,10 @@ Deno.test("knowledge indexing keeps one canonical source asset and atomic search
       })).results,
       [],
     );
-
     await application.events.waitFor({
       namespace: NAMESPACE,
       types: ["copilotz.knowledge.indexDocument.completed"],
-      timeoutMs: 5_000,
+      timeoutMs: 5000,
       pollIntervalMs: 10,
     });
     const events = await application.events.list({ namespace: NAMESPACE });
@@ -447,7 +430,7 @@ Deno.test("knowledge indexing keeps one canonical source asset and atomic search
       namespace: NAMESPACE,
       eventId: createdEvent.id,
     });
-    const deliveryDeadline = Date.now() + 5_000;
+    const deliveryDeadline = Date.now() + 5000;
     while (
       deliveries.some((item) => item.status !== "succeeded") &&
       Date.now() < deliveryDeadline
@@ -467,7 +450,6 @@ Deno.test("knowledge indexing keeps one canonical source asset and atomic search
     assert(
       calls.some((call) => call.idempotencyKey.includes("knowledge-query")),
     );
-
     const messages = await projectMessages(application, NAMESPACE, "thread-a");
     assertEquals(messages.length, 1);
     assertEquals(messages[0].sender.participantType, "job");
@@ -477,7 +459,6 @@ Deno.test("knowledge indexing keeps one canonical source asset and atomic search
       { namespace: NAMESPACE },
     );
     assertStringIncludes(announcement[0].text!, "Successfully indexed");
-
     await knowledge.documents.create({
       id: "document-b",
       title: "Duplicate semantics",
@@ -508,12 +489,13 @@ Deno.test("knowledge indexing keeps one canonical source asset and atomic search
     assertEquals(duplicateDocument.duplicateOfDocumentId, "document-a");
     assertEquals(duplicateDocument.chunkCount, 0);
     assertEquals(duplicateDocument.source, document.source);
-
     const deleted = await knowledge.actions.delete_document({
       documentId: document.id,
     }, { operationKey: "document-a:delete" });
     assertEquals(deleted.success, true);
-    if (!deleted.success) throw new Error(deleted.message);
+    if (!deleted.success) {
+      throw new Error(deleted.message);
+    }
     assertEquals(deleted.documentId, "document-a");
     assertEquals(await knowledge.documents.get({ id: document.id }), null);
     assertEquals(
@@ -532,7 +514,6 @@ Deno.test("knowledge indexing keeps one canonical source asset and atomic search
       ),
       true,
     );
-
     await assertRejects(
       async () =>
         await knowledge.documents.create({
@@ -574,7 +555,6 @@ Deno.test("knowledge indexing keeps one canonical source asset and atomic search
     await close(db);
   }
 });
-
 Deno.test("knowledge source failure settles once as document and Action failure", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   const sourceKeys: string[] = [];
@@ -583,7 +563,7 @@ Deno.test("knowledge source failure settles once as document and Action failure"
     namespace: NAMESPACE,
     databaseSchema: "copilotz_v3_knowledge_failure",
     plugins: [
-      coreCollectionsPlugin,
+      storageFixture,
       defineFixturePlugin({
         ...knowledgePlugin,
         actions: {
@@ -653,7 +633,7 @@ Deno.test("knowledge source failure settles once as document and Action failure"
     await application.events.waitFor({
       namespace: NAMESPACE,
       types: ["copilotz.knowledge.indexDocument.failed"],
-      timeoutMs: 5_000,
+      timeoutMs: 5000,
       pollIntervalMs: 10,
     });
     assertEquals(sourceKeys.length, 1);
@@ -686,7 +666,6 @@ Deno.test("knowledge source failure settles once as document and Action failure"
     await close(db);
   }
 });
-
 Deno.test("knowledge Tool Actions execute through durable callers", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   const outputs = new Map<string, unknown>();
@@ -694,7 +673,9 @@ Deno.test("knowledge Tool Actions execute through durable callers", async () => 
     id: "fixture.knowledge-tools",
     on: [{ eventType: "fixture.knowledge_tool.requested" }],
     async handle(event, processor) {
-      if (!event.durable || !event.threadId) return;
+      if (!event.durable || !coreEvent(event).threadId) {
+        return;
+      }
       const payload = event.payload as {
         toolId: string;
         arguments: Record<string, unknown>;
@@ -708,7 +689,7 @@ Deno.test("knowledge Tool Actions execute through durable callers", async () => 
       const options: ActionCallOptions = {
         operationKey: `${processor.operationKey}:${payload.toolId}`,
         metadata: {
-          threadId: event.threadId,
+          threadId: coreEvent(event).threadId,
           agentId: "support",
           initiatorParticipantId: "agent-a",
         },
@@ -736,7 +717,7 @@ Deno.test("knowledge Tool Actions execute through durable callers", async () => 
     namespace: NAMESPACE,
     databaseSchema: "copilotz_v3_knowledge_tools",
     plugins: [
-      coreCollectionsPlugin,
+      storageFixture,
       defineFixturePlugin({
         ...knowledgePlugin,
         actions: {
@@ -772,9 +753,13 @@ Deno.test("knowledge Tool Actions execute through durable callers", async () => 
     const result = await application.events.append({
       type: "fixture.knowledge_tool.requested",
       namespace: NAMESPACE,
-      threadId: "thread-a",
       payload: { toolId, arguments: args },
       correlationId: crypto.randomUUID(),
+      metadata: {
+        core: {
+          threadId: "thread-a",
+        },
+      },
     });
     assertEquals(result.dispatch.handles.length, 1);
     assertEquals(
@@ -810,7 +795,7 @@ Deno.test("knowledge Tool Actions execute through durable callers", async () => 
       namespace: NAMESPACE,
       types: ["document.indexed"],
       subject: { type: "document", id: documentId },
-      timeoutMs: 5_000,
+      timeoutMs: 5000,
       pollIntervalMs: 10,
     });
     const document = await knowledge.documents.get({ id: documentId }) as
@@ -862,7 +847,6 @@ Deno.test("knowledge Tool Actions execute through durable callers", async () => 
     assertEquals(deletion.success, true);
     assertEquals(deletion.documentId, documentId);
     assertEquals(await knowledge.documents.get({ id: documentId }), null);
-
     const repeatedSourceUri = "https://example.test/shared-source";
     for (
       const [id, agentId] of [
@@ -912,7 +896,6 @@ Deno.test("knowledge Tool Actions execute through durable callers", async () => 
     await close(db);
   }
 });
-
 Deno.test("knowledge source deletion searches every page without crossing scope", async () => {
   const sourceUri = "https://example.test/paginated-source";
   const document = (
@@ -943,7 +926,7 @@ Deno.test("knowledge source deletion searches every page without crossing scope"
     });
   const documents = Object.freeze([
     ...Array.from(
-      { length: 1_000 },
+      { length: 1000 },
       (_, index) =>
         document(
           `document:${String(index).padStart(4, "0")}`,
@@ -967,7 +950,12 @@ Deno.test("knowledge source deletion searches every page without crossing scope"
     collections: {
       document: {
         get: () => Promise.resolve(null),
-        list(query: Readonly<{ after?: string; limit?: number }>) {
+        list(
+          query: Readonly<{
+            after?: string;
+            limit?: number;
+          }>,
+        ) {
           cursors.push(query.after);
           limits.push(query.limit ?? 0);
           const after = query.after ?? "";
@@ -986,10 +974,18 @@ Deno.test("knowledge source deletion searches every page without crossing scope"
         transaction: Readonly<{
           collections: Readonly<{
             chunk: Readonly<{
-              delete(input: Readonly<{ id: string }>): Promise<unknown>;
+              delete(
+                input: Readonly<{
+                  id: string;
+                }>,
+              ): Promise<unknown>;
             }>;
             document: Readonly<{
-              delete(input: Readonly<{ id: string }>): Promise<unknown>;
+              delete(
+                input: Readonly<{
+                  id: string;
+                }>,
+              ): Promise<unknown>;
             }>;
           }>;
           relations: Readonly<Record<string, never>>;
@@ -1010,20 +1006,19 @@ Deno.test("knowledge source deletion searches every page without crossing scope"
       });
     },
   } as unknown as KnowledgeActionContext;
-
   const result = await deleteKnowledgeDocumentAction.execute(
     { sourceUri },
     context,
   );
-
   assertEquals(result.success, true);
-  if (!result.success) throw new Error(result.message);
+  if (!result.success) {
+    throw new Error(result.message);
+  }
   assertEquals(result.documentId, "document:z-authorized");
   assertEquals(deleted, ["document:z-authorized"]);
   assertEquals(cursors, [undefined, "document:0999"]);
-  assertEquals(limits, [1_000, 1_000]);
+  assertEquals(limits, [1000, 1000]);
 });
-
 Deno.test("knowledge can disable every model-facing Action and Tool Resource", () => {
   const plugin = defineFixturePlugin({
     ...knowledgePlugin,
@@ -1044,7 +1039,6 @@ Deno.test("knowledge can disable every model-facing Action and Tool Resource", (
   assertEquals(Object.keys(plugin.actions), ["indexKnowledgeDocument"]);
   assertEquals(plugin.resources.tools, {});
 });
-
 Deno.test("knowledge modules remain factory-first and runtime-neutral", async () => {
   for (
     const module of [
@@ -1054,7 +1048,7 @@ Deno.test("knowledge modules remain factory-first and runtime-neutral", async ()
       "plugin.ts",
       "resources/index.ts",
       "authoring/index.ts",
-      "internal/types.ts",
+      "shared/types.ts",
     ]
   ) {
     const source = await Deno.readTextFile(new URL(module, import.meta.url));

@@ -6,7 +6,7 @@ export {
   KNOWLEDGE_DOCUMENT_COLLECTION,
   KNOWLEDGE_EVENT_TYPES,
   KNOWLEDGE_HAS_CHUNK_EDGE,
-} from "./internal/contracts.ts";
-export type { KnowledgeEventType } from "./internal/contracts.ts";
+} from "../shared/contracts.ts";
+export type { KnowledgeEventType } from "../shared/contracts.ts";
 export { knowledgeDocumentCollection } from "./document/index.ts";
 export { knowledgeChunkCollection } from "./chunk/index.ts";

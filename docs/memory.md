@@ -105,13 +105,44 @@ The plugin contributes native aliases:
 Installing Memory does not grant those tools. Select exact aliases in the
 Agent's `capabilities.tools` list.
 
-Custom kinds use `defineMemoryKind` and compose under `resources.memoryKinds`.
-Optional embedding is an application-owned `memoryEmbedding` Adapter or the
-`embed` option captured by the plugin factory.
+Custom kinds use `defineMemoryKind` and compose under `resources.memory.kinds`.
 
-## Migration
+## Vector retrieval
 
-There is no standalone memory migration in 0.62. The sole deployed-data
-migration is [`/migration/v4`](migration-v4.md); it archives retired legacy
-memory/workflow records and emits final source facts for retained v4
-Collections. Fresh Mobizap/Compass deployments start on an empty v4 schema.
+Supply an embedding function as `adapters.memoryEmbedding.default` and declare
+`resources.memory.embeddingProfile` with `model`, `revision`, `dimensions`, and
+`metric` (`cosine`, `l2`, or `innerProduct`). The profile must describe the
+vectors actually returned by the adapter. No plugin factory captures
+configuration.
+
+The host explicitly provisions optional vector storage after the base schema:
+
+```ts
+import { provisionVectorStorage } from "@copilotz/copilotz/persistence";
+await provisionVectorStorage(session, databaseSchema);
+```
+
+PostgreSQL must have pgvector installed. For PGlite, open persistence with
+`pgliteExtensions: ["vector"]`. Applications without vectors require neither the
+extension nor the vector table.
+
+Consolidation writes Memory records and their vector projections in the same
+transaction. `searchMemory` and consolidation candidate retrieval both use SQL
+distance ordering. Namespace, readable Memory spaces, editorial validity,
+status, form and kind filters apply before LIMIT. Different profiles never mix.
+Changing the source summary makes its old vector ineligible until it is
+recomputed.
+
+Vectors live in a typed pgvector column, outside `nodes.data`. Durable vector
+facts in Event bodies support current-format projection replay; deleting an
+owner cascades its vector projection. An Asset reference is optional. No HNSW
+index is created: exact distance search is the initial implementation.
+
+Without an embedder, Memory uses its explicit bounded lexical path. Configured
+embedding failures are errors, not silent lexical fallbacks.
+
+## Fresh schema
+
+This release requires a fresh v5 schema. It includes no data migration,
+backfill, legacy JSON-vector reader, or dual writes. Existing application
+deployments are outside this library milestone.

@@ -1,5 +1,5 @@
-import type { ToolDefinition } from "@copilotz/copilotz/tools";
-import { defineTool } from "@copilotz/copilotz/tools";
+import type { ToolDefinition } from "@copilotz/copilotz/core";
+import { defineTool } from "@copilotz/copilotz/core";
 import { deleteKnowledgeDocumentAction } from "../../../actions/delete-document/index.ts";
 export const deleteKnowledgeDocumentTool: ToolDefinition<
   typeof deleteKnowledgeDocumentAction

@@ -10,7 +10,7 @@ import {
   type Processor,
   type ProcessorContext,
 } from "@copilotz/copilotz/plugins";
-import type { UsageOptions } from "../../internal/contracts.ts";
+import type { UsageOptions } from "../../shared/contracts.ts";
 import {
   LLM_ATTEMPT_ACCOUNTING_SCHEMA,
   llmAttemptUsageRecords,
@@ -18,7 +18,7 @@ import {
   participantExternalId,
   persistUsage,
   record,
-} from "../internal/accounting.ts";
+} from "../../shared/accounting.ts";
 
 export const llmUsageProcessor: Processor<ProcessorContext> = defineProcessor<
   ProcessorContext

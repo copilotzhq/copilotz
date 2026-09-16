@@ -1,13 +1,14 @@
-import { coreCollectionsPlugin } from "@copilotz/copilotz/core";
+import { storageFixture } from "../../plugins/core/shared/testing/storage-plugin.ts";
+import {} from "@copilotz/copilotz/core";
 import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
 import {
   createSqlSession,
   provisionCopilotzSchema,
   type SqlSession,
 } from "../events/index.ts";
-import { createTestDomainContext } from "../../plugins/core/internal/testing/context.ts";
+import { createTestDomainContext } from "../../plugins/core/shared/testing/context.ts";
 import { waitForTestDelivery } from "../../runtime/testing/deliveries.ts";
-import { projectActionEvents } from "../../plugins/core/internal/testing/projections.ts";
+import { projectActionEvents } from "../../plugins/core/shared/testing/projections.ts";
 import {
   createPluginRegistry,
   definePlugin,
@@ -26,9 +27,7 @@ import {
   provisionOperationCatalog,
   type StreamOutput,
 } from "../streams/index.ts";
-
 const TEST_SCHEMA = "copilotz_factory_engine";
-
 const auditCollection = defineCollection({
   name: "engine_audit",
   schema: {
@@ -44,12 +43,10 @@ const auditCollection = defineCollection({
     required: ["id", "namespace", "sourceEventId"],
   } as const,
 });
-
 const engineEchoAction = defineAction({
   id: "test.engine.echo.run",
   execute: (input: unknown) => structuredClone(input),
 });
-
 type Fixture = Readonly<{
   db: TestDatabase;
   session: SqlSession;
@@ -61,7 +58,6 @@ type Fixture = Readonly<{
     semanticId: unknown;
   }>[];
 }>;
-
 async function createFixture(): Promise<Fixture> {
   const db = await createTestDatabase({ url: ":memory:" });
   const session = createSqlSession(db);
@@ -87,9 +83,18 @@ async function createFixture(): Promise<Fixture> {
     }>;
   const processor = defineProcessor<FixtureProcessorContext>({
     id: "engine.message.to-attempt",
-    on: [{ eventType: "message.created", routing: { senderId: "user-a" } }],
+    on: [{
+      eventType: "message.created",
+      metadata: {
+        core: {
+          routing: { senderId: "user-a" },
+        },
+      },
+    }],
     async handle(event, context) {
-      if (!event.durable) throw new Error("Durable delivery received a frame.");
+      if (!event.durable) {
+        throw new Error("Durable delivery received a frame.");
+      }
       calls += 1;
       leakedStorage = leakedStorage || "eventStore" in context ||
         "session" in context || "coordinator" in context ||
@@ -100,7 +105,6 @@ async function createFixture(): Promise<Fixture> {
         (context.resources.tools?.echo as typeof echoTool | undefined)?.action,
         "echo",
       );
-
       const message = await context.collections.message.get({
         id: event.subject!.id,
       });
@@ -109,10 +113,10 @@ async function createFixture(): Promise<Fixture> {
         Array.isArray(message.content) ? message.content : [],
       );
       assertEquals(resolved[0].text, "Hello engine");
-      const prepared = await context.content.prepare(
-        { type: "text", text: `input:${resolved[0].text}` },
-        { operationKey: "logical-input" },
-      );
+      const prepared = await context.content.prepare({
+        type: "text",
+        text: `input:${resolved[0].text}`,
+      }, { operationKey: "logical-input" });
       const attemptId = `attempt:${message.id}`;
       const content = await context.content.materialize(prepared);
       await context.actions.echo({
@@ -146,7 +150,7 @@ async function createFixture(): Promise<Fixture> {
   });
   const registry = await createPluginRegistry({
     plugins: [
-      coreCollectionsPlugin,
+      storageFixture,
       definePlugin({
         id: "test.engine",
         version: "1.0.0",
@@ -198,12 +202,10 @@ async function createFixture(): Promise<Fixture> {
     streamOutputs: () => Object.freeze([...streamOutputs]),
   });
 }
-
 async function closeFixture(fixture: Fixture): Promise<void> {
   await fixture.engine.shutdown();
   await fixture.db.close();
 }
-
 Deno.test("factory engine scopes typed processor capabilities and deduplicates retry projections", async () => {
   const fixture = await createFixture();
   try {
@@ -211,28 +213,25 @@ Deno.test("factory engine scopes typed processor capabilities and deduplicates r
     assert(!("eventStore" in fixture.engine));
     assert(!("session" in fixture.engine));
     assert(!("coordinator" in fixture.engine));
-
-    const tables = await fixture.session.query<{ table_name: string }>(
+    const tables = await fixture.session.query<{
+      table_name: string;
+    }>(
       `SELECT table_name FROM information_schema.tables
        WHERE table_schema = $1 ORDER BY table_name`,
       [TEST_SCHEMA],
     );
-    assertEquals(
-      tables.rows.map((row) => row.table_name),
-      [
-        "copilotz_operation_catalog_metadata",
-        "copilotz_operation_events",
-        "copilotz_operation_streams",
-        "copilotz_operations",
-        "copilotz_schema_metadata",
-        "edges",
-        "event_bodies",
-        "event_deliveries",
-        "events",
-        "nodes",
-      ],
-    );
-
+    assertEquals(tables.rows.map((row) => row.table_name), [
+      "copilotz_operation_catalog_metadata",
+      "copilotz_operation_events",
+      "copilotz_operation_streams",
+      "copilotz_operations",
+      "copilotz_schema_metadata",
+      "edges",
+      "event_bodies",
+      "event_deliveries",
+      "events",
+      "nodes",
+    ]);
     const namespace = "tenant-a";
     const participants = fixture.engine.collections.get("participant");
     const threads = fixture.engine.collections.get("thread");
@@ -274,8 +273,12 @@ Deno.test("factory engine scopes typed processor capabilities and deduplicates r
       });
     const messageEvent = (await fixture.engine.events.list({
       namespace,
-      threadId: "thread-a",
       limit: 100,
+      metadata: {
+        core: {
+          threadId: "thread-a",
+        },
+      },
     })).find((event) => event.subject?.id === "message-a");
     assertExists(messageEvent);
     const first = await waitForTestDelivery(
@@ -298,7 +301,6 @@ Deno.test("factory engine scopes typed processor capabilities and deduplicates r
     assertEquals(second.delivery.status, "succeeded");
     assertEquals(fixture.processorCalls(), 2);
     assertEquals(fixture.leakedStorage(), false);
-
     const retryStreams = fixture.streamOutputs();
     assertEquals(retryStreams.length, 2);
     assertEquals(retryStreams.map((stream) => stream.semanticId), [
@@ -306,7 +308,6 @@ Deno.test("factory engine scopes typed processor capabilities and deduplicates r
       "retry-provider-lane",
     ]);
     assertEquals(retryStreams[0].streamId === retryStreams[1].streamId, false);
-
     const attempts = await projectActionEvents(
       fixture.engine,
       "tenant-a",
@@ -326,7 +327,6 @@ Deno.test("factory engine scopes typed processor capabilities and deduplicates r
       })).text,
       "input:Hello engine",
     );
-
     const audits = await fixture.engine.collections.withScope({
       namespace: "tenant-a",
     }).engine_audit.list();
@@ -354,7 +354,6 @@ Deno.test("factory engine scopes typed processor capabilities and deduplicates r
     await closeFixture(fixture);
   }
 });
-
 Deno.test("engine shutdown releases only its worker and leaves injected infrastructure usable", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   const session = createSqlSession(db);
@@ -378,7 +377,6 @@ Deno.test("engine shutdown releases only its worker and leaves injected infrastr
     await engine.shutdown();
     assertEquals(hypervisor.snapshot().inProcessWorkers, 0);
     await session.query("SELECT 1");
-
     applicationWorker = createWorker({
       id: "application-probe",
       transport,
@@ -400,7 +398,6 @@ Deno.test("engine shutdown releases only its worker and leaves injected infrastr
     await db.close();
   }
 });
-
 Deno.test("one engine isolates lazy physical-schema repository scopes", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   const session = createSqlSession(db);
@@ -408,7 +405,9 @@ Deno.test("one engine isolates lazy physical-schema repository scopes", async ()
     id: "engine.scope.audit",
     on: [{ eventType: "thread.created" }],
     async handle(event, context) {
-      if (!event.durable) throw new Error("Expected a durable event.");
+      if (!event.durable) {
+        throw new Error("Expected a durable event.");
+      }
       await context.collections.engineAudit.create({
         id: `audit:${event.subject?.id}`,
         sourceEventId: event.id,
@@ -417,7 +416,7 @@ Deno.test("one engine isolates lazy physical-schema repository scopes", async ()
   });
   const registry = await createPluginRegistry({
     plugins: [
-      coreCollectionsPlugin,
+      storageFixture,
       definePlugin({
         id: "test.engine.scopes",
         version: "1.0.0",
@@ -454,14 +453,8 @@ Deno.test("one engine isolates lazy physical-schema repository scopes", async ()
         event.type === "thread.created" && event.subject?.id === "same-thread"
       );
       assertExists(created);
-      await waitForTestDelivery(
-        scope,
-        "tenant",
-        created.id,
-        "succeeded",
-      );
+      await waitForTestDelivery(scope, "tenant", created.id, "succeeded");
     }
-
     assertEquals(
       (await first.collections.withScope({ namespace: "tenant" }).thread
         .get({ id: "same-thread" }))?.status,
@@ -474,16 +467,12 @@ Deno.test("one engine isolates lazy physical-schema repository scopes", async ()
     );
     assertEquals(
       (await first.collections.withScope({ namespace: "tenant" }).engine_audit
-        .list()).map(
-          (row) => row.id,
-        ),
+        .list()).map((row) => row.id),
       ["audit:same-thread"],
     );
     assertEquals(
       (await second.collections.withScope({ namespace: "tenant" }).engine_audit
-        .list()).map(
-          (row) => row.id,
-        ),
+        .list()).map((row) => row.id),
       ["audit:same-thread"],
     );
     assertEquals(engine.execution.ownership, "private_hypervisor");
@@ -492,7 +481,6 @@ Deno.test("one engine isolates lazy physical-schema repository scopes", async ()
     await db.close();
   }
 });
-
 Deno.test("lazy database scopes validate with read-only SQL and reject unprovisioned schemas", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   const registry = await createPluginRegistry();
@@ -516,23 +504,21 @@ Deno.test("lazy database scopes validate with read-only SQL and reject unprovisi
   try {
     observed.length = 0;
     await engine.databaseScope(tenantSchema);
-    assertEquals(observed.length, 9);
+    assertEquals(observed.length, 8);
     assertEquals(/information_schema\.columns/i.test(observed[0]), true);
     assertEquals(/copilotz_schema_metadata/i.test(observed[1]), true);
-    assertEquals(/information_schema\.tables/i.test(observed[2]), true);
     assertEquals(
-      observed.slice(3, 7).every((sql) => /to_regclass/i.test(sql)),
+      observed.slice(2, 6).every((sql) => /to_regclass/i.test(sql)),
       true,
     );
-    assertEquals(/information_schema\.columns/i.test(observed[7]), true);
+    assertEquals(/information_schema\.columns/i.test(observed[6]), true);
     assertEquals(
-      /copilotz_operation_catalog_metadata/i.test(observed[8]),
+      /copilotz_operation_catalog_metadata/i.test(observed[7]),
       true,
     );
     assert(
       observed.every((sql) => !/\b(CREATE|ALTER|DROP|TRUNCATE)\b/i.test(sql)),
     );
-
     await assertRejects(
       () => engine.databaseScope("copilotz_scope_validation_missing"),
       Error,
@@ -543,7 +529,6 @@ Deno.test("lazy database scopes validate with read-only SQL and reject unprovisi
     await db.close();
   }
 });
-
 Deno.test("validation-only startup requires the additive operation catalog", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   const registry = await createPluginRegistry();
@@ -559,10 +544,11 @@ Deno.test("validation-only startup requires the additive operation catalog", asy
       })
     );
     assertEquals(
-      (missing as { code?: unknown }).code,
+      (missing as {
+        code?: unknown;
+      }).code,
       "copilotz_operation_catalog_not_provisioned",
     );
-
     await provisionOperationCatalog(db, schema);
     const engine = await createCopilotzEngine({
       session: db,
@@ -575,7 +561,6 @@ Deno.test("validation-only startup requires the additive operation catalog", asy
     await db.close();
   }
 });
-
 Deno.test("A55 engine assembly is factory-first and runtime-neutral", async () => {
   for (const module of ["context.ts", "engine.ts", "index.ts", "types.ts"]) {
     const source = await Deno.readTextFile(new URL(module, import.meta.url));
@@ -584,9 +569,7 @@ Deno.test("A55 engine assembly is factory-first and runtime-neutral", async () =
     assert(!/\bclass\s+\w+/.test(source), module);
     assert(!/runtime\/cli|server\//.test(source), module);
     assert(
-      !/unsafeGraph|producedEvents|queueId|runGeneration/.test(
-        source,
-      ),
+      !/unsafeGraph|producedEvents|queueId|runGeneration/.test(source),
       module,
     );
   }

@@ -5,12 +5,12 @@ export type PublicAsset = Omit<AssetRecord, "location">;
 
 export function publicAsset(asset: AssetRecord): PublicAsset {
   const { location: _location, ...safe } = asset;
-  return Object.freeze(structuredClone(safe));
+  return (structuredClone(safe));
 }
 
 import { type ContentRef, formatAssetRef } from "../runtime/content/index.ts";
 import type { InternalCopilotzApplication } from "../runtime/application/types.ts";
-import type { ServerEndpointDescriptor } from "../plugins/server/internal/contracts.ts";
+import type { ServerEndpointDescriptor } from "../plugins/server/shared/contracts.ts";
 import type { HttpRequest, HttpResponse } from "./http-types.ts";
 import type { FacadeContext } from "./context.ts";
 function appError(status: number, code: string, message: string): Error {
@@ -121,20 +121,20 @@ export async function assetUploadResponse(
   const canonicalName = typeof asset.metadata?.name === "string"
     ? asset.metadata.name
     : undefined;
-  const content: ContentRef = Object.freeze({
+  const content: ContentRef = {
     assetId: asset.id,
     kind: "file",
     role: "attachment",
     mediaType: asset.mediaType,
     disposition: "attachment",
     ...(canonicalName ? { name: canonicalName } : {}),
-  });
+  } as const;
   return {
     status: 201,
-    data: Object.freeze({
+    data: {
       asset: publicAsset(asset),
       assetRef: formatAssetRef(namespace, asset.id),
       content,
-    }),
+    } as const,
   };
 }

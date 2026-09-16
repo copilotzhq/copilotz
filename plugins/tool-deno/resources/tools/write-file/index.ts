@@ -1,11 +1,11 @@
-import type { ToolDefinition } from "@copilotz/copilotz/tools";
+import type { ToolDefinition } from "@copilotz/copilotz/core";
 /**
  * Defines the data-only Write File Tool Resource.
  *
  * @module
  */
 
-import { defineTool } from "@copilotz/copilotz/tools";
+import { defineTool } from "@copilotz/copilotz/core";
 import { writeFileAction } from "../../../actions/write-file/index.ts";
 
 export const writeFileTool: ToolDefinition<typeof writeFileAction> = defineTool(

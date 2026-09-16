@@ -12,8 +12,8 @@ import {
 import type {
   ScheduledJobRunNowInput,
   ScheduledJobRunNowResult,
-} from "../../internal/contracts.ts";
-import { executeRunScheduledJobNow } from "./internal/execute.ts";
+} from "../../shared/contracts.ts";
+import { executeRunScheduledJobNow } from "./execute.ts";
 
 export const runScheduledJobNowAction: ActionDefinition<
   ScheduledJobRunNowInput,

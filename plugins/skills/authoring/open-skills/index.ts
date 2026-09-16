@@ -17,7 +17,7 @@ import {
 import type {
   SkillFileDescriptor,
   SkillManifest,
-} from "../../internal/contracts.ts";
+} from "../../shared/contracts.ts";
 
 const DEFAULT_RUNTIME_IMPORT = "jsr:@copilotz/copilotz@^0.65.1/skills";
 

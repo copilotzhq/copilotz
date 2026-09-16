@@ -116,10 +116,10 @@ export function createDeliveryExecutor(
       !Object.prototype.hasOwnProperty.call(localWorkloadWorkers, name)
     ),
   );
-  const hostedWorkloads = Object.freeze({
+  const hostedWorkloads = {
     ...primaryAdditional,
     [workload]: handler,
-  });
+  } as const;
 
   let dispatcher: DeliveryDispatcher;
   let ownership: DeliveryExecutorOwnership;
@@ -132,12 +132,12 @@ export function createDeliveryExecutor(
   let localCapacity: number | undefined;
   const transport: DeliveryInProcessTransport | undefined = options.dispatcher
     ? undefined
-    : options.transport ?? Object.freeze({
+    : options.transport ?? ({
       type: "in-process" as const,
-      config: Object.freeze({
+      config: {
         topic: `copilotz.execution.${crypto.randomUUID()}`,
-      }),
-    });
+      } as const,
+    } as const);
 
   const startWorker = (
     config: Readonly<{
@@ -210,14 +210,14 @@ export function createDeliveryExecutor(
   ).then(() => undefined);
   void ready.catch(() => {});
 
-  const retryScheduler = options.scheduler ?? Object.freeze({
+  const retryScheduler = options.scheduler ?? ({
     schedule(callback: () => void, delayMs: number): unknown {
       return setTimeout(callback, delayMs);
     },
     cancel(handle: unknown): void {
       clearTimeout(handle as ReturnType<typeof setTimeout>);
     },
-  });
+  } as const);
 
   let closed = false;
   const active = new Map<string, DeliveryExecutionHandle>();
@@ -397,7 +397,7 @@ export function createDeliveryExecutor(
       scheduled.set(key, delivery);
       schedulePump();
     }, Math.max(0, dueAtMs - Date.now()));
-    retryTimers.set(key, Object.freeze({ handle, dueAtMs }));
+    retryTimers.set(key, { handle, dueAtMs } as const);
   };
 
   const cancelRecoveryTimer = (databaseSchema: string): void => {
@@ -438,15 +438,15 @@ export function createDeliveryExecutor(
         );
       }
       scheduleRetry(current);
-      return Object.freeze({
+      return ({
         event,
         delivery: current,
         operationStatus: terminal.status,
-      });
+      } as const);
     })();
     trackOutputScope(delivery, event, done);
 
-    return Object.freeze({
+    return ({
       deliveryId: delivery.id,
       eventId: event.id,
       operationId: work.operationId,
@@ -457,7 +457,7 @@ export function createDeliveryExecutor(
         await work.cancel(reason);
         await done;
       },
-    });
+    } as const);
   };
 
   type DispatchOptions = Readonly<{
@@ -494,7 +494,7 @@ export function createDeliveryExecutor(
       if (!attemptId.trim()) {
         throw new TypeError("Delivery dispatch attempt IDs must be non-empty.");
       }
-      const metadata: DeliveryDispatchMetadata = Object.freeze({
+      const metadata: DeliveryDispatchMetadata = {
         schema: "copilotz.delivery.dispatch.v1",
         databaseSchema: delivery.databaseSchema,
         deliveryId: delivery.id,
@@ -503,7 +503,7 @@ export function createDeliveryExecutor(
         namespace: event.namespace,
         dispatchAttemptId: attemptId,
         idempotencyKey: delivery.id,
-      });
+      } as const;
       const placementNowMs = Date.now();
       const reportPlacement = options.onDiagnostic !== undefined &&
         shouldReportPlacementAttempt(key, placementNowMs);
@@ -661,10 +661,10 @@ export function createDeliveryExecutor(
           });
         }
       });
-      return Object.freeze({
-        handles: Object.freeze(handles),
-        failures: Object.freeze(failures),
-      });
+      return ({
+        handles: handles,
+        failures: failures,
+      } as const);
     } finally {
       if (continuous) refreshRecoverySchedule(databaseSchema);
     }
@@ -691,11 +691,11 @@ export function createDeliveryExecutor(
         // dispatchRecoverable rearms the schema in its own finally block.
         void dispatchRecoverable({ databaseSchema }).catch(() => undefined);
       }, Math.max(0, dueAtMs - Date.now()));
-      recoveryTimers.set(databaseSchema, Object.freeze({ handle, dueAtMs }));
+      recoveryTimers.set(databaseSchema, { handle, dueAtMs } as const);
     }).catch(() => undefined);
   }
 
-  return Object.freeze({
+  return ({
     ownership,
     workload,
     workloads: hostedWorkloads,
@@ -794,5 +794,5 @@ export function createDeliveryExecutor(
       );
       await privateHypervisor?.shutdown(reason);
     },
-  });
+  } as const);
 }

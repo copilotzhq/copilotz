@@ -1,14 +1,14 @@
 /** Completes a deferred Ask branch from its canonical answer Message. @module */
 
 import { defineProcessor, type Processor } from "@copilotz/copilotz/plugins";
-import type { CoreToolProcessorContext } from "../../internal/runtime-context.ts";
-import { agentAskMetadata } from "../../internal/workflow-metadata.ts";
-import { resumeDeferredToolPlan } from "../../internal/tool-plan.ts";
+import type { CoreToolProcessorContext } from "../../shared/runtime-context.ts";
+import { agentAskMetadata } from "../../shared/workflow-metadata.ts";
+import { resumeDeferredToolPlan } from "../../shared/tool-plan.ts";
 import {
   asRecord,
   collectionEventRecord,
   requireCollection,
-} from "../internal/helpers.ts";
+} from "../../shared/helpers.ts";
 
 export const completeAskProcessor: Processor<CoreToolProcessorContext> =
   defineProcessor<CoreToolProcessorContext>({

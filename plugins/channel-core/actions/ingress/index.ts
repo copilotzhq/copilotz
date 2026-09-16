@@ -1,9 +1,9 @@
+import { setChannelContext } from "./thread-context.ts";
 /**
  * Turns one authenticated channel occurrence into Core graph records.
  *
  * @module
  */
-
 import {
   type ActionContext,
   type ActionDefinition,
@@ -16,7 +16,7 @@ import type {
   CollectionRecord,
   ScopedCollections,
 } from "@copilotz/copilotz/collections";
-import { type AgentResource, setChannelContext } from "@copilotz/copilotz/core";
+import type { AgentResource } from "@copilotz/copilotz/core";
 import { deriveWorkflowId } from "@copilotz/copilotz/events";
 import { cloneChannelJson } from "../../authoring/channel-ingress/index.ts";
 import { defineChannelResource } from "../../authoring/channel-resource/index.ts";
@@ -33,10 +33,8 @@ import type {
   ChannelReceivedMessage,
   ChannelResource,
   ChannelThreadInput,
-} from "../../internal/contracts.ts";
-
+} from "../../shared/contracts.ts";
 export const CHANNEL_INGRESS_ACTION_ID = "copilotz.channels.ingress";
-
 const INGRESS_KEYS = new Set(["channelId", "id", "input"]);
 const RECEIVED_KEYS = new Set([
   "externalThreadId",
@@ -70,50 +68,45 @@ const PARTICIPANT_TYPES = new Set<ChannelParticipantType>([
   "tool",
   "job",
 ]);
-
 function identityTuple(...parts: readonly string[]): string {
   return JSON.stringify(["copilotz.channels.v1", ...parts]);
 }
-
 function scopedExternalId(channelId: string, externalId: string): string {
   return `channel:${identityTuple(channelId, externalId)}`;
 }
-
 export type ChannelActionResources =
   & RuntimeContextNamespaces
   & Readonly<{
     channels: Readonly<Record<string, ChannelResource | undefined>>;
     agents: Readonly<Record<string, AgentResource | undefined>>;
   }>;
-
 export type ChannelActionAdapters =
   & RuntimeContextNamespaces
   & Readonly<{
     channels: Readonly<Record<string, ChannelAdapter | undefined>>;
   }>;
-
 export type ChannelActionContext = ActionContext<
   ChannelActionResources,
   ChannelActionAdapters
 >;
-
 type ParticipantPlan = Readonly<{
   id: string;
   fields: ChannelParticipantInput;
   existing: CollectionRecord | null;
 }>;
-
 function requiredText(value: unknown, label: string): string {
   const normalized = typeof value === "string" ? value.trim() : "";
-  if (!normalized) throw new TypeError(`${label} must be non-empty.`);
+  if (!normalized) {
+    throw new TypeError(`${label} must be non-empty.`);
+  }
   return normalized;
 }
-
 function optionalText(value: unknown, label: string): string | undefined {
-  if (value === undefined) return undefined;
+  if (value === undefined) {
+    return undefined;
+  }
   return requiredText(value, label);
 }
-
 function dataObject(
   value: unknown,
   allowed: ReadonlySet<string>,
@@ -144,7 +137,6 @@ function dataObject(
   }
   return snapshot;
 }
-
 function dataArray(value: unknown, label: string): readonly unknown[] {
   if (
     !Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype
@@ -159,7 +151,9 @@ function dataArray(value: unknown, label: string): readonly unknown[] {
       (typeof key !== "string" || !/^(0|[1-9][0-9]*)$/.test(key) ||
         Number(key) >= value.length)
     )
-  ) throw new TypeError(`${label} must be a dense data array.`);
+  ) {
+    throw new TypeError(`${label} must be a dense data array.`);
+  }
   return (Array.from({ length: value.length }, (_, index) => {
     const descriptor = descriptors[String(index)];
     if (!descriptor?.enumerable || !("value" in descriptor)) {
@@ -168,7 +162,6 @@ function dataArray(value: unknown, label: string): readonly unknown[] {
     return descriptor.value;
   }));
 }
-
 function jsonObject(value: unknown, label: string): ChannelJsonObject {
   const cloned = cloneChannelJson(value, label);
   if (!cloned || typeof cloned !== "object" || Array.isArray(cloned)) {
@@ -176,7 +169,6 @@ function jsonObject(value: unknown, label: string): ChannelJsonObject {
   }
   return cloned as ChannelJsonObject;
 }
-
 function channelResource(
   context: ChannelActionContext,
   channelId: string,
@@ -187,7 +179,6 @@ function channelResource(
   }
   return defineChannelResource(value);
 }
-
 function channelAdapter(
   context: ChannelActionContext,
   channelId: string,
@@ -198,17 +189,15 @@ function channelAdapter(
   }
   return value;
 }
-
-function participant(
-  value: unknown,
-  label: string,
-): ChannelParticipantInput {
+function participant(value: unknown, label: string): ChannelParticipantInput {
   const snapshot = dataObject(value, PARTICIPANT_KEYS, label);
   const participantType = snapshot.participantType;
   if (
     typeof participantType !== "string" ||
     !PARTICIPANT_TYPES.has(participantType as ChannelParticipantType)
-  ) throw new TypeError(`${label} has an invalid participantType.`);
+  ) {
+    throw new TypeError(`${label} has an invalid participantType.`);
+  }
   const metadata = snapshot.metadata === undefined
     ? undefined
     : jsonObject(snapshot.metadata, `${label} metadata`);
@@ -230,7 +219,6 @@ function participant(
     ...(metadata ? { metadata } : {}),
   } as const);
 }
-
 function thread(value: unknown): ChannelThreadInput {
   const snapshot = dataObject(value, THREAD_KEYS, "Channel thread");
   const metadata = snapshot.metadata === undefined
@@ -238,11 +226,13 @@ function thread(value: unknown): ChannelThreadInput {
     : jsonObject(snapshot.metadata, "Channel thread metadata");
   const participants = snapshot.participants === undefined
     ? undefined
-    : (dataArray(snapshot.participants, "Channel thread participants").map(
-      (item, index): ChannelParticipantRef =>
-        typeof item === "string"
-          ? requiredText(item, `Channel thread participant[${index}]`)
-          : participant(item, `Channel thread participant[${index}]`),
+    : (dataArray(snapshot.participants, "Channel thread participants").map((
+      item,
+      index,
+    ): ChannelParticipantRef =>
+      typeof item === "string"
+        ? requiredText(item, `Channel thread participant[${index}]`)
+        : participant(item, `Channel thread participant[${index}]`)
     ));
   return ({
     ...(optionalText(snapshot.name, "Channel thread name")
@@ -263,9 +253,10 @@ function thread(value: unknown): ChannelThreadInput {
     ...(participants ? { participants } : {}),
   } as const);
 }
-
 function visibility(value: unknown): ChannelMessageVisibility {
-  if (value === undefined) return "participants";
+  if (value === undefined) {
+    return "participants";
+  }
   if (value === "public" || value === "participants" || value === "internal") {
     return value;
   }
@@ -273,16 +264,17 @@ function visibility(value: unknown): ChannelMessageVisibility {
     "Channel visibility must be public, participants, or internal.",
   );
 }
-
 function receivedMessage(value: unknown): ChannelReceivedMessage {
   const snapshot = dataObject(value, RECEIVED_KEYS, "Received Channel message");
   const recipients = snapshot.recipients === undefined
     ? undefined
-    : dataArray(snapshot.recipients, "Channel recipients").map(
-      (item, index): ChannelParticipantRef =>
-        typeof item === "string"
-          ? requiredText(item, `Channel recipient[${index}]`)
-          : participant(item, `Channel recipient[${index}]`),
+    : dataArray(snapshot.recipients, "Channel recipients").map((
+      item,
+      index,
+    ): ChannelParticipantRef =>
+      typeof item === "string"
+        ? requiredText(item, `Channel recipient[${index}]`)
+        : participant(item, `Channel recipient[${index}]`)
     );
   const content = Array.isArray(snapshot.content)
     ? dataArray(snapshot.content, "Channel content")
@@ -310,7 +302,6 @@ function receivedMessage(value: unknown): ChannelReceivedMessage {
     visibility: visibility(snapshot.visibility),
   } as const);
 }
-
 function ingressInput(value: unknown): ChannelIngressInput {
   const snapshot = dataObject(
     value,
@@ -323,7 +314,6 @@ function ingressInput(value: unknown): ChannelIngressInput {
     input: cloneChannelJson(snapshot.input, "Channel occurrence input"),
   } as const);
 }
-
 async function byExternalId(
   collections: ScopedCollections,
   collection: "participant" | "thread",
@@ -334,7 +324,6 @@ async function byExternalId(
   ] ??
     null;
 }
-
 function compatibleParticipant(
   candidate: CollectionRecord,
   fields: ChannelParticipantInput,
@@ -358,18 +347,18 @@ function compatibleParticipant(
   }
   return candidate;
 }
-
 function scopedParticipant(
   channelId: string,
   fields: ChannelParticipantInput,
 ): ChannelParticipantInput {
-  if (fields.participantType === "agent") return fields;
+  if (fields.participantType === "agent") {
+    return fields;
+  }
   return ({
     ...fields,
     externalId: scopedExternalId(channelId, fields.externalId),
   } as const);
 }
-
 async function participantPlan(
   context: ChannelActionContext,
   channelId: string,
@@ -378,31 +367,29 @@ async function participantPlan(
   const fields = scopedParticipant(channelId, input);
   const existing = fields.id
     ? await context.collections.participant.get({ id: fields.id })
-    : await byExternalId(
-      context.collections,
-      "participant",
-      fields.externalId,
-    );
+    : await byExternalId(context.collections, "participant", fields.externalId);
   if (existing) {
     compatibleParticipant(existing, fields);
     return ({ id: existing.id, fields, existing } as const);
   }
   return ({
-    id: fields.id ?? await deriveWorkflowId(
-      "channel-participant",
-      identityTuple(channelId, fields.externalId),
-    ),
+    id: fields.id ??
+      await deriveWorkflowId(
+        "channel-participant",
+        identityTuple(channelId, fields.externalId),
+      ),
     fields,
     existing: null,
   } as const);
 }
-
 function agentParticipant(
   context: ChannelActionContext,
   alias: string,
 ): ChannelParticipantInput {
   const agent = context.resources.agents?.[alias];
-  if (!agent) throw new Error(`Unknown Agent Resource alias '${alias}'.`);
+  if (!agent) {
+    throw new Error(`Unknown Agent Resource alias '${alias}'.`);
+  }
   return ({
     externalId: requiredText(agent.id, `Agent Resource '${alias}' ID`),
     participantType: "agent",
@@ -410,7 +397,6 @@ function agentParticipant(
     name: requiredText(agent.name, `Agent Resource '${alias}' name`),
   } as const);
 }
-
 function existingParticipantPlan(record: CollectionRecord): ParticipantPlan {
   return ({
     id: record.id,
@@ -428,7 +414,6 @@ function existingParticipantPlan(record: CollectionRecord): ParticipantPlan {
     existing: record,
   } as const);
 }
-
 async function recipientPlan(
   context: ChannelActionContext,
   channelId: string,
@@ -457,17 +442,22 @@ async function recipientPlan(
       "participant",
       alias,
     );
-    if (global?.participantType === "agent") existing = global;
+    if (global?.participantType === "agent") {
+      existing = global;
+    }
   }
-  if (!existing) throw new Error(`Channel recipient '${alias}' was not found.`);
+  if (!existing) {
+    throw new Error(`Channel recipient '${alias}' was not found.`);
+  }
   return existingParticipantPlan(existing);
 }
-
 async function existingThreadAgents(
   context: ChannelActionContext,
   threadRecord: CollectionRecord | null,
 ): Promise<readonly ParticipantPlan[]> {
-  if (!threadRecord || !Array.isArray(threadRecord.participantIds)) return [];
+  if (!threadRecord || !Array.isArray(threadRecord.participantIds)) {
+    return [];
+  }
   const records = await Promise.all(
     threadRecord.participantIds.map((id) =>
       context.collections.participant.get({ id: String(id) })
@@ -477,7 +467,6 @@ async function existingThreadAgents(
     item?.participantType === "agent"
   ).map(existingParticipantPlan));
 }
-
 function uniquePlans(
   plans: readonly ParticipantPlan[],
 ): readonly ParticipantPlan[] {
@@ -485,13 +474,14 @@ function uniquePlans(
     ...new Map(plans.map((plan) => [plan.id, plan])).values(),
   ] as const);
 }
-
 async function stageParticipant(
   plan: ParticipantPlan,
   collections: ActionTransactionContext["collections"],
   metadata: ChannelJsonObject,
 ): Promise<CollectionMutationRef> {
-  if (plan.existing) return ({ id: plan.existing.id } as const);
+  if (plan.existing) {
+    return ({ id: plan.existing.id } as const);
+  }
   return await collections.participant.create({
     id: plan.id,
     externalId: plan.fields.externalId,
@@ -502,19 +492,23 @@ async function stageParticipant(
     metadata: structuredClone(plan.fields.metadata ?? {}),
   }, {
     operationKey: `participant:${plan.id}`,
-    visibility: { kind: "internal" },
     identity: { metadata: structuredClone(metadata) },
+    metadata: {
+      core: {
+        visibility: { kind: "internal" },
+      },
+    },
   });
 }
-
 function bindingRecord(value: CollectionRecord): ChannelBindingRecord {
   return value as ChannelBindingRecord;
 }
-
 function retryableGraphConflict(error: unknown): boolean {
   let candidate: unknown = error;
   for (let depth = 0; depth < 5 && candidate; depth += 1) {
-    if (typeof candidate !== "object") break;
+    if (typeof candidate !== "object") {
+      break;
+    }
     const value = candidate as Record<string, unknown>;
     const code = typeof value.code === "string" ? value.code : "";
     if (code === "23505" || code === "40001" || code === "40P01") {
@@ -533,12 +527,13 @@ function retryableGraphConflict(error: unknown): boolean {
       /duplicate key value violates unique constraint/i.test(message) ||
       /could not serialize access/i.test(message) ||
       /deadlock detected/i.test(message)
-    ) return true;
+    ) {
+      return true;
+    }
     candidate = value.cause;
   }
   return false;
 }
-
 async function executeChannelIngress(
   rawInput: ChannelIngressInput,
   context: ChannelActionContext,
@@ -688,50 +683,60 @@ async function executeChannelIngress(
       );
       await context.transaction(async (transaction) => {
         const stagedParticipants = await Promise.all(
-          uniquePlans([...threadParticipants, ...recipients]).map(
-            async (plan) => ({
-              id: plan.id,
-              ref: await stageParticipant(
-                plan,
-                transaction.collections,
-                eventMetadata,
-              ),
-            } as const),
-          ),
+          uniquePlans([...threadParticipants, ...recipients]).map(async (
+            plan,
+          ) => ({
+            id: plan.id,
+            ref: await stageParticipant(
+              plan,
+              transaction.collections,
+              eventMetadata,
+            ),
+          } as const)),
         );
         const participantRefs = new Map(
           stagedParticipants.map((entry) => [entry.id, entry.ref]),
         );
         const senderRef = participantRefs.get(sender.id);
-        if (!senderRef) throw new Error("Channel sender was not staged.");
+        if (!senderRef) {
+          throw new Error("Channel sender was not staged.");
+        }
         const recipientRefs = recipients.map((plan) => {
           const ref = participantRefs.get(plan.id);
-          if (!ref) throw new Error("Channel recipient was not staged.");
+          if (!ref) {
+            throw new Error("Channel recipient was not staged.");
+          }
           return ref;
         });
         const participantIds = [
-          ...new Set(
-            threadParticipants.map((plan) => {
-              const ref = participantRefs.get(plan.id);
-              if (!ref) {
-                throw new Error("Channel thread participant was not staged.");
-              }
-              return ref.id;
-            }),
-          ),
+          ...new Set(threadParticipants.map((plan) => {
+            const ref = participantRefs.get(plan.id);
+            if (!ref) {
+              throw new Error("Channel thread participant was not staged.");
+            }
+            return ref.id;
+          })),
         ] as const;
         if (existingThread) {
           const set: Record<string, unknown> = { metadata: threadMetadata };
-          if (received.thread?.name) set.name = received.thread.name;
+          if (received.thread?.name) {
+            set.name = received.thread.name;
+          }
           if (received.thread?.description) {
             set.description = received.thread.description;
           }
-          if (received.thread?.status) set.status = received.thread.status;
+          if (received.thread?.status) {
+            set.status = received.thread.status;
+          }
           await transaction.collections.thread.update({ id: threadId, set }, {
             operationKey: "thread:update",
-            threadId,
-            visibility: { kind: "internal" },
             identity: { metadata: structuredClone(eventMetadata) },
+            metadata: {
+              core: {
+                threadId,
+                visibility: { kind: "internal" },
+              },
+            },
           });
           const existingIds = new Set(
             Array.isArray(existingThread.participantIds)
@@ -739,15 +744,21 @@ async function executeChannelIngress(
               : [],
           );
           for (const participantId of participantIds) {
-            if (existingIds.has(participantId)) continue;
+            if (existingIds.has(participantId)) {
+              continue;
+            }
             await transaction.collections.thread.commands.addParticipant({
               id: threadId,
               participantId,
             }, {
               operationKey: `thread:participant:${participantId}`,
-              threadId,
-              visibility: { kind: "internal" },
               identity: { metadata: structuredClone(eventMetadata) },
+              metadata: {
+                core: {
+                  threadId,
+                  visibility: { kind: "internal" },
+                },
+              },
             });
             existingIds.add(participantId);
           }
@@ -766,9 +777,13 @@ async function executeChannelIngress(
             participantIds,
           }, {
             operationKey: "thread:create",
-            threadId,
-            visibility: { kind: "internal" },
             identity: { metadata: structuredClone(eventMetadata) },
+            metadata: {
+              core: {
+                threadId,
+                visibility: { kind: "internal" },
+              },
+            },
           });
         }
         if (binding) {
@@ -781,9 +796,13 @@ async function executeChannelIngress(
             },
           }, {
             operationKey: "binding:update",
-            threadId,
-            visibility: { kind: "internal" },
             identity: { metadata: structuredClone(eventMetadata) },
+            metadata: {
+              core: {
+                threadId,
+                visibility: { kind: "internal" },
+              },
+            },
           });
         } else {
           await transaction.collections.channelBinding.create({
@@ -796,9 +815,13 @@ async function executeChannelIngress(
             metadata: bindingMetadata,
           }, {
             operationKey: "binding:create",
-            threadId,
-            visibility: { kind: "internal" },
             identity: { metadata: structuredClone(eventMetadata) },
+            metadata: {
+              core: {
+                threadId,
+                visibility: { kind: "internal" },
+              },
+            },
           });
         }
         const relativeVisibility = received.visibility ?? "public";
@@ -817,13 +840,17 @@ async function executeChannelIngress(
           metadata: eventMetadata,
         }, {
           operationKey: "message:create",
-          threadId,
-          routing: {
-            senderId: senderRef.id,
-            recipientIds: recipientRefs.map((ref) => ref.id),
-          },
-          visibility: messageVisibility,
           identity: { metadata: structuredClone(eventMetadata) },
+          metadata: {
+            core: {
+              threadId,
+              routing: {
+                senderId: senderRef.id,
+                recipientIds: recipientRefs.map((ref) => ref.id),
+              },
+              visibility: messageVisibility,
+            },
+          },
         });
       }, {
         operationKey: `ingress:${input.id}:commit`,
@@ -846,7 +873,6 @@ async function executeChannelIngress(
   }
   throw new Error("Channel graph planning exhausted its retry budget.");
 }
-
 const ingressSchema = {
   type: "object",
   additionalProperties: false,
@@ -857,7 +883,6 @@ const ingressSchema = {
   },
   required: ["channelId", "id", "input"],
 } as const;
-
 export const channelIngressAction: ActionDefinition<
   ChannelIngressInput,
   ChannelIngressActionOutput,
@@ -869,5 +894,4 @@ export const channelIngressAction: ActionDefinition<
   inputSchema: ingressSchema,
   execute: executeChannelIngress,
 });
-
 export default channelIngressAction;

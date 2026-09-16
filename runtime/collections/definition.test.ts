@@ -1,7 +1,7 @@
 import { assert, assertEquals, assertThrows } from "@std/assert";
 import { defineCollection } from "./definition.ts";
 
-Deno.test("defineCollection snapshots and freezes named-query schemas", () => {
+Deno.test("defineCollection snapshots named-query schemas", () => {
   const inputSchema = {
     type: "object",
     additionalProperties: false,
@@ -31,10 +31,6 @@ Deno.test("defineCollection snapshots and freezes named-query schemas", () => {
   const query = definition.queries?.byExternalId;
 
   assert(query);
-  assert(Object.isFrozen(query.inputSchema));
-  assert(Object.isFrozen(query.inputSchema?.properties));
-  assert(Object.isFrozen(query.outputSchema));
-  assert(Object.isFrozen(query.outputSchema?.items));
 
   (inputSchema as unknown as { required: string[] }).required[0] = "mutated";
   (outputSchema as unknown as { items: { required: string[] } }).items.required[
@@ -45,9 +41,8 @@ Deno.test("defineCollection snapshots and freezes named-query schemas", () => {
     (query.outputSchema?.items as { required?: readonly string[] }).required,
     ["id"],
   );
-  assertThrows(() => {
-    (query.inputSchema as { type: string }).type = "array";
-  }, TypeError);
+  (query.inputSchema as { type: string }).type = "array";
+  assertEquals(inputSchema.type, "object");
 });
 
 Deno.test("defineCollection rejects invalid named-query schemas", () => {

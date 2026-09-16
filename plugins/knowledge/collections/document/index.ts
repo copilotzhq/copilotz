@@ -9,7 +9,7 @@ import {
   KNOWLEDGE_CHUNK_COLLECTION,
   KNOWLEDGE_DOCUMENT_COLLECTION,
   KNOWLEDGE_HAS_CHUNK_EDGE,
-} from "../internal/contracts.ts";
+} from "../../shared/contracts.ts";
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)

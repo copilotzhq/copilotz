@@ -1,3 +1,4 @@
+import { storageFixture } from "../../plugins/core/shared/testing/storage-plugin.ts";
 /** @module Verifies the supported downstream application embedding boundary. */
 import { message as coreMessage } from "@copilotz/copilotz/core";
 import { assertEquals, assertExists } from "@std/assert";
@@ -8,17 +9,15 @@ import {
   type ProcessorContext,
 } from "@copilotz/copilotz/plugins";
 import { defineLlmConnection, type LlmAdapter } from "@copilotz/copilotz/llm";
-import { createTestDomainContext } from "../../plugins/core/internal/testing/context.ts";
-import { projectMessages } from "../../plugins/core/internal/testing/projections.ts";
+import { createTestDomainContext } from "../../plugins/core/shared/testing/context.ts";
+import { projectMessages } from "../../plugins/core/shared/testing/projections.ts";
 import { createTestDatabase } from "../../runtime/testing/ominipg.ts";
 import { loadMessageRecord } from "@copilotz/copilotz/core";
-import { coreCollectionsPlugin } from "../../plugins/core/plugin.ts";
+import {} from "../../plugins/core/plugin.ts";
 import { createCopilotzApplication } from "../../runtime/application/application.ts";
 import { createHypervisor } from "../../dependencies/oxian-hypervisor.ts";
 import { createWorker } from "../../dependencies/oxian-worker.ts";
-
 const NAMESPACE = "downstream-embedding";
-
 function migratedApplicationPlugin() {
   const adapter: LlmAdapter = Object.freeze({
     call: () => ({
@@ -40,10 +39,16 @@ function migratedApplicationPlugin() {
     id: "downstream.reply",
     on: [{
       eventType: "message.created",
-      routing: { senderId: "downstream-user" },
+      metadata: {
+        core: {
+          routing: { senderId: "downstream-user" },
+        },
+      },
     }],
     async handle(event, context) {
-      if (!event.durable) throw new TypeError("Durable delivery required.");
+      if (!event.durable) {
+        throw new TypeError("Durable delivery required.");
+      }
       assertExists(event.subject);
       const source = await loadMessageRecord(context, event.subject.id);
       assertExists(source);
@@ -77,7 +82,6 @@ function migratedApplicationPlugin() {
     processors: { reply: processor },
   });
 }
-
 Deno.test("downstream app embeds Copilotz with app-owned database, Hypervisor, and plugin", async () => {
   const database = await createTestDatabase({ url: ":memory:" });
   const transport = {
@@ -92,7 +96,7 @@ Deno.test("downstream app embeds Copilotz with app-owned database, Hypervisor, a
   const authoring = await createCopilotzApplication({
     database,
     namespace: NAMESPACE,
-    plugins: [coreCollectionsPlugin, plugin],
+    plugins: [storageFixture, plugin],
   });
   await createTestDomainContext(authoring, NAMESPACE).actions.createThread({
     id: "downstream-thread",
@@ -112,12 +116,11 @@ Deno.test("downstream app embeds Copilotz with app-owned database, Hypervisor, a
     ],
   });
   await authoring.shutdown();
-
   const application = await createCopilotz({
     role: "gateway",
     database,
     namespace: NAMESPACE,
-    plugins: [coreCollectionsPlugin, plugin],
+    plugins: [storageFixture, plugin],
     dispatcher: hypervisor,
     target: { workerId },
     engine: {
@@ -129,7 +132,7 @@ Deno.test("downstream app embeds Copilotz with app-owned database, Hypervisor, a
     role: "worker",
     database,
     namespace: NAMESPACE,
-    plugins: [coreCollectionsPlugin, plugin],
+    plugins: [storageFixture, plugin],
     id: workerId,
     transport,
     capacity: 8,
@@ -160,7 +163,7 @@ Deno.test("downstream app embeds Copilotz with app-owned database, Hypervisor, a
     const inspector = await createCopilotzApplication({
       database,
       namespace: NAMESPACE,
-      plugins: [coreCollectionsPlugin, plugin],
+      plugins: [storageFixture, plugin],
     });
     assertEquals(
       (await projectMessages(inspector, NAMESPACE, "downstream-thread"))
@@ -174,7 +177,6 @@ Deno.test("downstream app embeds Copilotz with app-owned database, Hypervisor, a
       worker.close(),
     ]);
   }
-
   let probeWorker: ReturnType<typeof createWorker> | undefined;
   try {
     assertEquals(hypervisor.snapshot().inProcessWorkers, 0);

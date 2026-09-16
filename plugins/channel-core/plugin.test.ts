@@ -1,7 +1,8 @@
+import { coreEvent } from "../core/shared/events/index.ts";
 import { assertEquals, assertExists, assertNotEquals } from "@std/assert";
 import type { ActionCaller } from "@copilotz/copilotz/actions";
 import { createCopilotzApplication } from "../../runtime/application/application.ts";
-import { createTestDomainContext } from "../core/internal/testing/context.ts";
+import { createTestDomainContext } from "../core/shared/testing/context.ts";
 import { createTestDatabase } from "../../runtime/testing/ominipg.ts";
 import { deriveWorkflowId } from "../../runtime/events/workflow-id.ts";
 import { channelIngress } from "./authoring/channel-ingress/index.ts";
@@ -13,10 +14,8 @@ import type {
   ChannelAdapter,
   ChannelDeliveryAttempt,
   ChannelJsonValue,
-} from "./internal/contracts.ts";
-
+} from "./shared/contracts.ts";
 const NAMESPACE = "channel-workflow";
-
 Deno.test("Channel occurrence becomes one atomic binding graph and external egress reuses a stable intent", async () => {
   const database = await createTestDatabase({ url: ":memory:" });
   const delivered = Promise.withResolvers<ChannelDeliveryAttempt>();
@@ -98,12 +97,11 @@ Deno.test("Channel occurrence becomes one atomic binding graph and external egre
     await handle.done;
     assertEquals(receivedInput, occurrence);
     assertEquals(
-      (await application.events.list({ namespace: NAMESPACE })).filter(
-        (event) => event.type.startsWith(`${channelEgressAction.id}.`),
-      ).length,
+      (await application.events.list({ namespace: NAMESPACE })).filter((
+        event,
+      ) => event.type.startsWith(`${channelEgressAction.id}.`)).length,
       0,
     );
-
     const context = createTestDomainContext(application, NAMESPACE);
     const [binding] = await context.collections.channelBinding.queries
       .byChannelThread({
@@ -119,25 +117,21 @@ Deno.test("Channel occurrence becomes one atomic binding graph and external egre
     });
     assertEquals("correlationId" in binding, false);
     assertEquals("egressChannelId" in binding, false);
-
     const thread = await context.collections.thread.get({
       id: String(binding.threadId),
     });
     assertExists(thread);
     const threadMetadata = thread.metadata as Record<string, unknown>;
     const system = threadMetadata.system as Record<string, unknown>;
-    assertEquals(system.runtime, {});
-    assertEquals(
-      (system.channels as Record<string, unknown>).fixture,
-      {
-        bindingId: binding.id,
-        externalThreadId: "external-thread-1",
-        metadata: {
-          system: { runtime: { injected: true } },
-          label: "provider-thread",
-        },
+    assertEquals(system.runtime, undefined);
+    assertEquals((system.channels as Record<string, unknown>).fixture, {
+      bindingId: binding.id,
+      externalThreadId: "external-thread-1",
+      metadata: {
+        system: { runtime: { injected: true } },
+        label: "provider-thread",
       },
-    );
+    });
     const messages = await context.collections.message.queries.byThreadId({
       threadId: thread.id,
     });
@@ -149,7 +143,7 @@ Deno.test("Channel occurrence becomes one atomic binding graph and external egre
       event.type === "message.created" && event.subject?.id === messages[0].id
     );
     assertExists(inboundCreated);
-    assertEquals(inboundCreated.visibility, {
+    assertEquals(coreEvent(inboundCreated).visibility, {
       kind: "participants",
       participantIds: [
         String(messages[0].senderId),
@@ -161,7 +155,6 @@ Deno.test("Channel occurrence becomes one atomic binding graph and external egre
     );
     assertEquals(inbound[0].text, "hello");
     assertEquals(inbound[1].bytes, new Uint8Array([1, 2, 3]));
-
     const agent = await context.collections.participant.create({
       id: "fixture-agent-participant",
       externalId: "fixture-agent",
@@ -172,7 +165,14 @@ Deno.test("Channel occurrence becomes one atomic binding graph and external egre
     await context.collections.thread.commands.addParticipant({
       id: thread.id,
       participantId: agent.id,
-    }, { operationKey: "fixture-agent-thread", threadId: thread.id });
+    }, {
+      operationKey: "fixture-agent-thread",
+      metadata: {
+        core: {
+          threadId: thread.id,
+        },
+      },
+    });
     const prepared = await context.content.prepare("outbound", {
       operationKey: "fixture-outbound-content",
     });
@@ -185,17 +185,18 @@ Deno.test("Channel occurrence becomes one atomic binding graph and external egre
       metadata: {},
     }, {
       operationKey: "fixture-agent-message",
-      threadId: thread.id,
-      routing: { senderId: agent.id, recipientIds: [] },
-      visibility: { kind: "public" },
+      metadata: {
+        core: {
+          threadId: thread.id,
+          routing: { senderId: agent.id, recipientIds: [] },
+          visibility: { kind: "public" },
+        },
+      },
     });
     const attempt = await Promise.race([
       delivered.promise,
       new Promise<never>((_resolve, reject) =>
-        setTimeout(
-          () => reject(new Error("Channel delivery timed out.")),
-          2_000,
-        )
+        setTimeout(() => reject(new Error("Channel delivery timed out.")), 2000)
       ),
     ]);
     assertEquals(attempt.intent.channelId, "fixture");
@@ -217,7 +218,6 @@ Deno.test("Channel occurrence becomes one atomic binding graph and external egre
     await database.close();
   }
 });
-
 Deno.test("declared thread participants are durable members, not message recipients", async () => {
   const database = await createTestDatabase({ url: ":memory:" });
   const north = Object.freeze({
@@ -278,7 +278,6 @@ Deno.test("declared thread participants are durable members, not message recipie
       input: {},
     }));
     await handle.done;
-
     const context = createTestDomainContext(application, NAMESPACE);
     const [binding] = await context.collections.channelBinding.queries
       .byChannelThread({
@@ -295,11 +294,13 @@ Deno.test("declared thread participants are durable members, not message recipie
         context.collections.participant.get({ id })
       ),
     );
-    assertEquals(
-      members.map((member) => member?.name).sort(),
-      ["East", "North", "South", "User", "West"],
-    );
-
+    assertEquals(members.map((member) => member?.name).sort(), [
+      "East",
+      "North",
+      "South",
+      "User",
+      "West",
+    ]);
     const [message] = await context.collections.message.queries.byThreadId({
       threadId: thread.id,
     });
@@ -317,7 +318,7 @@ Deno.test("declared thread participants are durable members, not message recipie
         event.type === "message.created" && event.subject?.id === message.id
       );
     assertExists(created);
-    assertEquals(created.routing, {
+    assertEquals(coreEvent(created).routing, {
       senderId: String(message.senderId),
       recipientIds: [northRecipient.id],
     });
@@ -326,7 +327,6 @@ Deno.test("declared thread participants are durable members, not message recipie
     await database.close();
   }
 });
-
 Deno.test("concurrent same-thread occurrences re-plan graph writes without repeating receive", async () => {
   const database = await createTestDatabase({ url: ":memory:" });
   const gate = Promise.withResolvers<void>();
@@ -337,8 +337,12 @@ Deno.test("concurrent same-thread occurrences re-plan graph writes without repea
     },
     async receive(input, context) {
       receives += 1;
-      if (receives === 2) gate.resolve();
-      if (receives <= 2) await gate.promise;
+      if (receives === 2) {
+        gate.resolve();
+      }
+      if (receives <= 2) {
+        await gate.promise;
+      }
       const data = input as Record<string, ChannelJsonValue>;
       const index = Number(data.index);
       return Object.freeze({
@@ -419,7 +423,7 @@ Deno.test("concurrent same-thread occurrences re-plan graph writes without repea
         event.type === "message.created" && event.subject?.id === message.id
       );
       assertExists(created);
-      assertEquals(created.visibility, {
+      assertEquals(coreEvent(created).visibility, {
         kind: "participants",
         participantIds: [
           String(message.senderId),
@@ -441,7 +445,6 @@ Deno.test("concurrent same-thread occurrences re-plan graph writes without repea
         'channel:["copilotz.channels.v1","fixture","sink"]',
       ].sort(),
     );
-
     const other = await invoke({
       channelId: "other",
       id: "three",
@@ -464,7 +467,6 @@ Deno.test("concurrent same-thread occurrences re-plan graph writes without repea
         'channel:["copilotz.channels.v1","other","sink"]',
       ].sort(),
     );
-
     const collisionOneEnvelope = channelIngress("a:b", {
       id: "c",
       input: { index: 4 },
@@ -481,7 +483,6 @@ Deno.test("concurrent same-thread occurrences re-plan graph writes without repea
       collisionOneEnvelope.deduplicationId,
       collisionTwoEnvelope.deduplicationId,
     );
-
     const collisionOne = await invoke({
       channelId: "a:b",
       id: "c",

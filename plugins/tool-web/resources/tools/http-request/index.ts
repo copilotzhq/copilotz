@@ -1,11 +1,11 @@
-import type { ToolDefinition } from "@copilotz/copilotz/tools";
+import type { ToolDefinition } from "@copilotz/copilotz/core";
 /**
  * Defines the data-only Tool Resource for HTTP requests.
  *
  * @module
  */
 
-import { defineTool } from "@copilotz/copilotz/tools";
+import { defineTool } from "@copilotz/copilotz/core";
 import { httpRequestAction } from "../../../actions/http-request/index.ts";
 
 export const httpRequestTool: ToolDefinition<typeof httpRequestAction> =

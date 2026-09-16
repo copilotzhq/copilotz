@@ -1,15 +1,15 @@
 /** Owns the delete-document Knowledge Action. @module */
-import type { KnowledgeDocument } from "../../internal/types.ts";
+import type { KnowledgeDocument } from "../../shared/types.ts";
 import {
   type ActionDefinition,
   defineAction,
 } from "@copilotz/copilotz/actions";
-import type { KnowledgeActionContext } from "../internal/context.ts";
-import { optional, record } from "../internal/input.ts";
+import type { KnowledgeActionContext } from "../../shared/context.ts";
+import { optional, record } from "../../shared/input.ts";
 import {
   documentMatchesScope,
   listDocumentChunks,
-} from "../internal/records.ts";
+} from "../../shared/records.ts";
 export const DELETE_KNOWLEDGE_DOCUMENT_ACTION_ID =
   "copilotz.knowledge.deleteDocument";
 

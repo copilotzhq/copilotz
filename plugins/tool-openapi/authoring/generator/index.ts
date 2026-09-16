@@ -11,7 +11,7 @@ import type {
   APIPrepareRequestInput,
   APIResponseAssetMapping,
   APIResponseAssetMappings,
-} from "../../../tools/authoring/integration-resources/index.ts";
+} from "../contracts/index.ts";
 import {
   assetIdFromRef,
   base64ToBytes,
@@ -20,15 +20,15 @@ import {
 } from "@copilotz/copilotz/content";
 import { type ActionContext, defineAction } from "@copilotz/copilotz/actions";
 import { parse as parseYaml } from "../../../../dependencies/yaml.ts";
-import { defineTool } from "../../../tools/authoring/define-tool/index.ts";
-import { cloneLosslessJson } from "../../../tools/authoring/internal/lifecycle-json.ts";
+import { defineTool } from "../../../core/authoring/define-tool/index.ts";
+import { cloneLosslessJson } from "@copilotz/copilotz/core";
 import {
   assertGeneratedEntryUnique,
   generatedActionAlias,
   generatedActionIdSegment,
-} from "../../../tools/authoring/internal/generated.ts";
+} from "@copilotz/copilotz/core";
 import type { AnyActionDefinition } from "@copilotz/copilotz/actions";
-import type { ToolDefinition, ToolResource } from "@copilotz/copilotz/tools";
+import type { ToolDefinition, ToolResource } from "@copilotz/copilotz/core";
 type OpenApiGeneratedTool = {
   alias: string;
   action: AnyActionDefinition;

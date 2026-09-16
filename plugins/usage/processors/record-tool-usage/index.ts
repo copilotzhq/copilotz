@@ -10,14 +10,14 @@ import {
   type Processor,
   type ProcessorContext,
 } from "@copilotz/copilotz/plugins";
-import type { UsageOptions } from "../../internal/contracts.ts";
+import type { UsageOptions } from "../../shared/contracts.ts";
 import {
   optionalText,
   participantExternalId,
   persistUsage,
   record,
   toolUsageRecord,
-} from "../internal/accounting.ts";
+} from "../../shared/accounting.ts";
 
 export const toolUsageProcessor: Processor<ProcessorContext> = defineProcessor<
   ProcessorContext

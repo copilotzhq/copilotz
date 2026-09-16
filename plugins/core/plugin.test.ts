@@ -1,14 +1,11 @@
 import { assert, assertEquals, assertStrictEquals } from "@std/assert";
 import { createPluginRegistry } from "@copilotz/copilotz/plugins";
 import { llmPlugin } from "@copilotz/copilotz/llm";
-import {
-  CORE_COLLECTION_NAMES,
-  coreCollectionsPlugin,
-  corePlugin,
-} from "./index.ts";
+import { CORE_COLLECTION_NAMES, corePlugin } from "./index.ts";
 
 const CORE_ACTION_IDS = [
   "copilotz.core.spaces",
+  "copilotz.core.goal.run",
   "copilotz.core.thread.create",
   "copilotz.core.thread.addParticipant",
   "copilotz.core.thread.deleteMessages",
@@ -45,7 +42,6 @@ Deno.test("core plugin is direct static plugin composition", () => {
     ].sort(),
   );
   assertEquals(corePlugin.plugins.map((p) => p.id), [
-    coreCollectionsPlugin.id,
     llmPlugin.id,
   ]);
   assertEquals(corePlugin.adapters, {});
@@ -53,9 +49,9 @@ Deno.test("core plugin is direct static plugin composition", () => {
   assertEquals("manifest" in corePlugin, false);
   assertEquals("features" in corePlugin, false);
   assertEquals(
-    Object.values(coreCollectionsPlugin.actions).map((action) => action.id)
+    Object.values(corePlugin.actions).map((action) => action.id)
       .sort(),
-    [...CORE_ACTION_IDS].sort(),
+    [...CORE_ACTION_IDS, "copilotz.core.context.compact"].sort(),
   );
 });
 
@@ -81,9 +77,9 @@ Deno.test("application owns every LLM connection and custom LLM Adapter", () => 
 Deno.test("core production modules consume public Copilotz subpaths", async () => {
   const files = [
     "plugin.ts",
-    "internal/runtime-context.ts",
-    "../core-collections/actions/ask/index.ts",
-    "processors/internal/helpers.ts",
+    "shared/runtime-context.ts",
+    "./actions/ask/index.ts",
+    "shared/helpers.ts",
     "processors/message-router/index.ts",
     "processors/project-text-result/index.ts",
     "processors/project-agent-failure/index.ts",
@@ -92,16 +88,16 @@ Deno.test("core production modules consume public Copilotz subpaths", async () =
     "processors/fail-ask/index.ts",
     "processors/tool-plan-coordinator/index.ts",
     "resources/tools/ask/index.ts",
-    "../core-collections/actions/create-thread-message/index.ts",
-    "../core-collections/actions/create-thread/index.ts",
-    "../core-collections/actions/revise-message/index.ts",
-    "../core-collections/processors/message-input/index.ts",
-    "../core-collections/collections/participant/index.ts",
-    "../core-collections/collections/thread/index.ts",
-    "../core-collections/collections/message/index.ts",
-    "internal/agents/prompt.ts",
-    "internal/agents/transcript.ts",
-    "internal/tool-plan.ts",
+    "./actions/create-thread-message/index.ts",
+    "./actions/create-thread/index.ts",
+    "./actions/revise-message/index.ts",
+    "./processors/message-input/index.ts",
+    "./collections/participant/index.ts",
+    "./collections/thread/index.ts",
+    "./collections/message/index.ts",
+    "processors/message-router/agents/prompt.ts",
+    "shared/agents/transcript.ts",
+    "shared/tool-plan.ts",
   ];
   for (const file of files) {
     const source = await Deno.readTextFile(new URL(file, import.meta.url));
@@ -110,7 +106,7 @@ Deno.test("core production modules consume public Copilotz subpaths", async () =
   }
   const action = await Deno.readTextFile(
     new URL(
-      "../core-collections/actions/create-thread-message/index.ts",
+      "./actions/create-thread-message/index.ts",
       import.meta.url,
     ),
   );

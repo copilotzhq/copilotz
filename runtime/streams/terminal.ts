@@ -23,7 +23,7 @@ export function streamErrorOutput(
     : terminal.outcome === "superseded"
     ? "stream_superseded" as const
     : "stream_abandoned" as const;
-  return Object.freeze({
+  return ({
     type: "stream.error",
     streamId,
     offset: terminal.offset,
@@ -32,5 +32,5 @@ export function streamErrorOutput(
     availability: terminal.availability,
     capture: terminal.capture,
     terminalAt: terminal.terminalAt,
-  });
+  } as const);
 }

@@ -1,4 +1,4 @@
-/** Compatibility family barrel for the Channel core and provider plugins. @module */
+/** Public family API for the Channel core and provider plugins. @module */
 
 export * from "../channel-core/index.ts";
 export {

@@ -13,7 +13,7 @@ import {
   parseServerActionRequest,
   SERVER_ACTION_METADATA_SCHEMA,
   type ServerInvokeRequest,
-} from "../../internal/contracts.ts";
+} from "../../shared/contracts.ts";
 
 export const SERVER_INVOKE_ACTION_ID = "copilotz.server.internal.invoke";
 

@@ -10,17 +10,28 @@ import type { CollectionEventBody } from "@copilotz/copilotz/collections";
 import type { ProcessorEvent } from "@copilotz/copilotz/plugins";
 import type { ScheduledJobOccurrenceRef } from "../../../schedules/index.ts";
 import {
-  requireScheduledText,
-  scheduledRecord,
-} from "../../../schedules/internal/model.ts";
-import {
   CORE_SCHEDULED_MESSAGE_PAYLOAD_TYPE,
   type CoreScheduledMessageJob,
   type CoreScheduledMessageJobInput,
   type CoreScheduledMessageOccurrence,
   type CoreScheduledMessagePayload,
-} from "../../internal/contracts.ts";
+} from "../../shared/contracts.ts";
 
+function requireScheduledText(value: unknown, name: string): string {
+  if (typeof value !== "string" || !value.trim()) {
+    throw new TypeError(`${name} must be non-empty.`);
+  }
+  return value.trim();
+}
+function scheduledRecord(
+  value: unknown,
+  name: string,
+): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError(`${name} must be an object.`);
+  }
+  return value as Record<string, unknown>;
+}
 function optionalText(value: unknown, name: string): string | undefined {
   if (value === undefined || value === null) return undefined;
   return requireScheduledText(value, name);

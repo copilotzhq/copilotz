@@ -129,7 +129,7 @@ export function createProcessorContext(
             resolve(status);
           };
         });
-        const outputWithAuthority: StreamOutput = Object.freeze({
+        const outputWithAuthority: StreamOutput = {
           ...descriptor,
           payload: lazyBodyFollower(async () => {
             const follower = await openProgressiveBodyFollower(
@@ -145,12 +145,12 @@ export function createProcessorContext(
             return follower.body;
           }),
           terminal,
-        });
+        } as const;
         localStreams.set(
           output.id,
-          Object.freeze({
+          {
             settle: resolveTerminal,
-          }),
+          } as const,
         );
         publication.established();
         await options.publishLocalStream(outputWithAuthority);
@@ -175,10 +175,12 @@ export function createProcessorContext(
       catalogedStreams.add(output.id);
       // The catalog is itself a durable reconnect publication boundary.
       publication.established();
-      await options.publishOutput?.(Object.freeze({
-        ...descriptor,
-        ...(replayIdentity ?? {}),
-      }));
+      await options.publishOutput?.(
+        {
+          ...descriptor,
+          ...(replayIdentity ?? {}),
+        } as const,
+      );
       publication.established();
     },
     async onAppend(stream, result) {
@@ -225,13 +227,15 @@ export function createProcessorContext(
     async onSeal(stream, body) {
       const local = localStreams.get(stream.id);
       if (local) {
-        local.settle(Object.freeze({
-          outcome: "completed",
-          availability: "retained",
-          capture: "complete",
-          offset: body.byteLength,
-          terminalAt: (options.now?.() ?? new Date()).toISOString(),
-        }));
+        local.settle(
+          {
+            outcome: "completed",
+            availability: "retained",
+            capture: "complete",
+            offset: body.byteLength,
+            terminalAt: (options.now?.() ?? new Date()).toISOString(),
+          } as const,
+        );
         localStreams.delete(stream.id);
         return;
       }
@@ -250,13 +254,15 @@ export function createProcessorContext(
     async onTerminate(stream, body, input) {
       const local = localStreams.get(stream.id);
       if (local) {
-        local.settle(Object.freeze({
-          outcome: input.outcome,
-          availability: "retained",
-          capture: input.capture,
-          offset: body.byteLength,
-          terminalAt: (options.now?.() ?? new Date()).toISOString(),
-        }));
+        local.settle(
+          {
+            outcome: input.outcome,
+            availability: "retained",
+            capture: input.capture,
+            offset: body.byteLength,
+            terminalAt: (options.now?.() ?? new Date()).toISOString(),
+          } as const,
+        );
         localStreams.delete(stream.id);
         return;
       }
@@ -297,7 +303,7 @@ export function createProcessorContext(
     },
   });
 
-  const content: ProcessorContext["content"] = Object.freeze({
+  const content: ProcessorContext["content"] = {
     authorize: (ref) =>
       options.resolver.authorize(ref, {
         namespace,
@@ -335,13 +341,13 @@ export function createProcessorContext(
     resolve: (ref) => options.resolver.get(ref, { namespace }),
     resolveMany: (refs) => options.resolver.getMany(refs, { namespace }),
     open: (ref) => options.resolver.open(ref, { namespace }),
-  });
+  } as const;
 
   const collectionsByName = options.collections.withScope({
     namespace,
     createMutationIdentity: options.base.createMutationIdentity,
   });
-  const collections = Object.freeze(Object.fromEntries(
+  const collections = Object.fromEntries(
     Object.entries(options.registry.collections).map(([alias, definition]) => {
       const collection = collectionsByName[
         (definition as CollectionDefinition).name
@@ -353,7 +359,7 @@ export function createProcessorContext(
       }
       return [alias, collection];
     }),
-  ));
+  );
 
   const processorOperationKey = requiredText(
     options.base.idempotencyKey,
@@ -390,8 +396,8 @@ export function createProcessorContext(
           ...transactionOptions.identity?.metadata,
         },
       },
-      execute: async ({ collections: byName, relations }) => {
-        const transactionCollections = Object.freeze(Object.fromEntries(
+      execute: async ({ collections: byName, relations, vectors }) => {
+        const transactionCollections = (Object.fromEntries(
           Object.entries(options.registry.collections).map(
             ([alias, definition]) => {
               const collection = byName[definition.name];
@@ -404,10 +410,13 @@ export function createProcessorContext(
             },
           ),
         )) as ActionTransactionContext<typeof collections>["collections"];
-        return await execute(Object.freeze({
-          collections: transactionCollections,
-          relations,
-        }));
+        return await execute(
+          {
+            collections: transactionCollections,
+            relations,
+            vectors,
+          } as const,
+        );
       },
     });
     return result.value;
@@ -417,7 +426,7 @@ export function createProcessorContext(
     return await options.collections.readSnapshot(
       { namespace },
       async ({ collections: byName }) => {
-        const snapshotCollections = Object.freeze(Object.fromEntries(
+        const snapshotCollections = Object.fromEntries(
           Object.entries(options.registry.collections).map(
             ([alias, definition]) => {
               const collection = byName[definition.name];
@@ -429,15 +438,15 @@ export function createProcessorContext(
               return [alias, collection];
             },
           ),
-        ));
+        );
         return await execute(
-          Object.freeze({ collections: snapshotCollections }),
+          { collections: snapshotCollections } as const,
         );
       },
     );
   };
 
-  const contextIdentity = Object.freeze({
+  const contextIdentity = {
     ...(options.base.event.durable
       ? { causationId: options.base.event.id }
       : options.base.event.causationId
@@ -448,7 +457,7 @@ export function createProcessorContext(
     ...(options.base.settlementScopeId
       ? { settlementScopeId: options.base.settlementScopeId }
       : {}),
-  });
+  } as const;
   let rootActionIndex = 0;
   const actions = createActionCallers(options.registry.actions, {
     actionLifecycle: options.actionLifecycle,
@@ -488,11 +497,12 @@ export function createProcessorContext(
     content,
     streams,
     collections,
+    vectors: options.collections.vectors(namespace),
     signal: options.base.signal,
     now: options.now ?? (() => new Date()),
     transaction,
     readSnapshot,
   }, options.protectedEventResolver);
-  const context: ProcessorContext = Object.freeze(contextValue);
+  const context: ProcessorContext = contextValue;
   return context;
 }

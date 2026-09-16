@@ -1,19 +1,16 @@
+import { storageFixture } from "../../plugins/core/shared/testing/storage-plugin.ts";
 import { assert, assertEquals, assertRejects } from "@std/assert";
-
 import {
   CORE_PLUGIN_VERSION,
   coreCollections,
-  coreCollectionsPlugin,
 } from "../../plugins/core/plugin.ts";
 import { createSqlSession } from "../events/index.ts";
 import { createPluginRegistry, definePlugin } from "../plugins/index.ts";
 import { createTestDatabase } from "../testing/ominipg.ts";
 import { createCopilotzEngine } from "./index.ts";
-import { createTestDomainContext } from "../../plugins/core/internal/testing/context.ts";
-import { projectThreadById } from "../../plugins/core/internal/testing/projections.ts";
-
+import { createTestDomainContext } from "../../plugins/core/shared/testing/context.ts";
+import { projectThreadById } from "../../plugins/core/shared/testing/projections.ts";
 const NAMESPACE = "tenant-collection-ingress-slice-2";
-
 Deno.test("engine conversation factories and attachment ingress are gone", async () => {
   await assertRejects(
     () => Deno.stat(new URL("./core-records.ts", import.meta.url)),
@@ -24,13 +21,12 @@ Deno.test("engine conversation factories and attachment ingress are gone", async
     Deno.errors.NotFound,
   );
 });
-
 Deno.test("createThreadMessage Action ensures a new sender", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   const engine = await createCopilotzEngine({
     session: createSqlSession(db),
     registry: await createPluginRegistry({
-      plugins: [coreCollectionsPlugin],
+      plugins: [storageFixture],
     }),
     defaultDatabaseSchema: "copilotz_collection_ingress_slice2",
     retryBaseMs: 0,
@@ -63,20 +59,21 @@ Deno.test("createThreadMessage Action ensures a new sender", async () => {
     };
     const [createdEvent] = (await engine.events.list({
       namespace: NAMESPACE,
-      threadId: "thread-a",
       limit: 100,
+      metadata: {
+        core: {
+          threadId: "thread-a",
+        },
+      },
     })).filter((event) => event.subject?.id === "message-job");
     assertEquals(createdEvent.type, "message.created");
     assertEquals(created.id, "message-job");
-    assert(Object.isFrozen(createdEvent));
-    assert(Object.isFrozen(createdEvent.payload));
 
     const sender = await domain.collections.participant.queries.byExternalId({
       externalId: "copilotz.knowledge",
     });
     assertEquals(sender?.[0]?.participantType, "job");
     assertEquals(created.senderId, sender?.[0]?.id);
-
     const thread = await projectThreadById(engine, NAMESPACE, "thread-a");
     const participantIds = (thread?.participants ?? []).map((item) => item.id);
     assertEquals(participantIds.includes("human-a"), true);
@@ -86,7 +83,6 @@ Deno.test("createThreadMessage Action ensures a new sender", async () => {
     await db.close();
   }
 });
-
 Deno.test("createThreadMessage fails when its Action is not bound", async () => {
   const collectionsOnly = definePlugin({
     id: "test.core-collections-without-thread-message",
@@ -104,10 +100,7 @@ Deno.test("createThreadMessage fails when its Action is not bound", async () => 
     random: () => 0,
   });
   try {
-    const domain = createTestDomainContext(
-      engine,
-      NAMESPACE,
-    );
+    const domain = createTestDomainContext(engine, NAMESPACE);
     await domain.collections.participant.create({
       id: "human-a",
       externalId: "human-a",
@@ -117,20 +110,17 @@ Deno.test("createThreadMessage fails when its Action is not bound", async () => 
       id: "thread-a",
       participantIds: ["human-a"],
     });
-    await assertRejects(
-      async () =>
-        await domain.actions.createThreadMessage({
-          id: "message-unbound",
-          threadId: "thread-a",
-          sender: {
-            id: "human-a",
-            externalId: "human-a",
-            participantType: "human",
-          },
-          content: "unbound",
-        }),
-      Error,
-    );
+    await assertRejects(async () =>
+      await domain.actions.createThreadMessage({
+        id: "message-unbound",
+        threadId: "thread-a",
+        sender: {
+          id: "human-a",
+          externalId: "human-a",
+          participantType: "human",
+        },
+        content: "unbound",
+      }), Error);
   } finally {
     await engine.shutdown();
     await db.close();

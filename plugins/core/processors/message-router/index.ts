@@ -1,5 +1,6 @@
+import { collectContextContributions } from "../../shared/contributions.ts";
+import { coreEvent } from "../../shared/events/index.ts";
 /** Routes canonical Messages into agent LLM calls. @module */
-
 import {
   ContextInputLimitError,
   isContextInputLimitError,
@@ -16,29 +17,26 @@ import {
   coreToolPlanResultMetadata,
   defineCoreLlmCallMetadata,
   workflowMetadata,
-} from "../../internal/workflow-metadata.ts";
+} from "../../shared/workflow-metadata.ts";
 import { defineProcessor, type Processor } from "@copilotz/copilotz/plugins";
 import type { CollectionRecord } from "@copilotz/copilotz/collections";
-import { buildCoreLlmRequest } from "../../internal/agents/prompt.ts";
-import {
-  collectContextContributions,
-  isContextResource,
-} from "../../resources/context/index.ts";
+import { buildCoreLlmRequest } from "./agents/prompt.ts";
+import { isContextResource } from "../../authoring/define-context/index.ts";
 import type {
   AgentInstructionContext,
   AgentInstructionExecution,
   AgentModelSelection,
   AgentResource,
-} from "../../resources/agent/index.ts";
+} from "../../authoring/define-agent/index.ts";
 import {
   coreAgent,
   type CoreProcessorContext,
-} from "../../internal/runtime-context.ts";
+} from "../../shared/runtime-context.ts";
 import {
   mapMessageRecord,
   mapParticipantRecord,
-} from "../../../core-collections/internal/projections.ts";
-import type { ConversationThread } from "../../../core-collections/internal/contracts.ts";
+} from "../../shared/projections.ts";
+import type { ConversationThread } from "../../shared/contracts.ts";
 import {
   asRecord,
   collectionEventRecord,
@@ -48,10 +46,9 @@ import {
   requiredText,
   stringArray,
   toolsForAgent,
-} from "../internal/helpers.ts";
-
-class SupersededMessageError extends Error {}
-
+} from "../../shared/helpers.ts";
+class SupersededMessageError extends Error {
+}
 function modelsFor(agent: AgentResource): Readonly<{
   models: AgentModelSelection;
   mode: "generate" | "session";
@@ -64,22 +61,23 @@ function modelsFor(agent: AgentResource): Readonly<{
   }
   throw new Error(`Agent '${agent.id}' requires a generate or session model.`);
 }
-
 /** Clones durable facts so a process-local instruction hook cannot mutate them. */
 function frozenFact<T>(value: T): T {
   return freezeFact(structuredClone(value), new WeakSet<object>()) as T;
 }
-
 function freezeFact(value: unknown, seen: WeakSet<object>): unknown {
-  if (!value || typeof value !== "object" || seen.has(value)) return value;
+  if (!value || typeof value !== "object" || seen.has(value)) {
+    return value;
+  }
   seen.add(value);
   for (const key of Reflect.ownKeys(value)) {
     const descriptor = Object.getOwnPropertyDescriptor(value, key);
-    if (descriptor && "value" in descriptor) freezeFact(descriptor.value, seen);
+    if (descriptor && "value" in descriptor) {
+      freezeFact(descriptor.value, seen);
+    }
   }
   return value;
 }
-
 async function resolvedAgentInstructions(
   context: CoreProcessorContext,
   agent: AgentResource,
@@ -89,7 +87,12 @@ async function resolvedAgentInstructions(
     triggerMessage: CollectionRecord;
     triggerSender: CollectionRecord;
   }>,
-): Promise<Readonly<{ agent: AgentResource; instructionRevision?: string }>> {
+): Promise<
+  Readonly<{
+    agent: AgentResource;
+    instructionRevision?: string;
+  }>
+> {
   const policy = agent.instructions;
   if (!policy || typeof policy === "string") {
     return ({ agent } as const);
@@ -98,10 +101,12 @@ async function resolvedAgentInstructions(
     agent,
     participant: frozenFact(mapParticipantRecord(input.agentParticipant)),
     thread: frozenFact(input.thread),
-    triggerMessage: frozenFact(mapMessageRecord(
-      input.triggerMessage,
-      mapParticipantRecord(input.triggerSender),
-    )),
+    triggerMessage: frozenFact(
+      mapMessageRecord(
+        input.triggerMessage,
+        mapParticipantRecord(input.triggerSender),
+      ),
+    ),
   } as const;
   const execution: AgentInstructionExecution = {
     agentId: agent.id,
@@ -129,21 +134,19 @@ async function resolvedAgentInstructions(
     ...(resolved.revision ? { instructionRevision: resolved.revision } : {}),
   } as const);
 }
-
 function stableText(value: unknown, label: string): string {
   if (typeof value !== "string" || !value.trim() || value.trim() !== value) {
-    throw new TypeError(
-      `Agent '${label}' resolver returned invalid text.`,
-    );
+    throw new TypeError(`Agent '${label}' resolver returned invalid text.`);
   }
   return value;
 }
-
-function instructionResolution(
-  value: unknown,
-  agentId: string,
-): Readonly<{ instructions?: string; revision?: string }> {
-  if (value === null || value === undefined) return ({} as const);
+function instructionResolution(value: unknown, agentId: string): Readonly<{
+  instructions?: string;
+  revision?: string;
+}> {
+  if (value === null || value === undefined) {
+    return ({} as const);
+  }
   if (typeof value === "string") {
     return ({ instructions: stableText(value, agentId) } as const);
   }
@@ -177,14 +180,17 @@ function instructionResolution(
       : { revision: stableText(record.revision, agentId) }),
   } as const);
 }
-
 export const messageRouterProcessor: Processor<CoreProcessorContext> =
   defineProcessor<CoreProcessorContext>({
     id: "copilotz.core.message-to-llm-call",
     on: [{ eventType: "message.created" }],
     async handle(event, context) {
-      if (!event.routing?.recipientIds?.length) return;
-      if (!event.durable || !event.threadId) return;
+      if (!coreEvent(event).routing?.recipientIds?.length) {
+        return;
+      }
+      if (!event.durable || !coreEvent(event).threadId) {
+        return;
+      }
       const record = collectionEventRecord(event);
       const workflow = workflowMetadata(asRecord(record.metadata));
       const toolAction = coreToolActionMessageMetadata(record.metadata);
@@ -193,11 +199,9 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
       const directTurn = coreAgentTurnMetadata(record.metadata);
       const agentTurn = directTurn ?? toolCursor?.agentTurn;
       if (
-        agentTurn && (
-          event.visibility?.kind !== "internal" ||
+        agentTurn && (coreEvent(event).visibility?.kind !== "internal" ||
           asRecord(record.visibility).kind !== "internal" ||
-          record.historyScopeId !== agentTurn.id
-        )
+          record.historyScopeId !== agentTurn.id)
       ) {
         throw new Error(
           "Core Agent turn requires a matching internal Message.",
@@ -209,11 +213,15 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
         toolAction?.ask ?? branchResult?.ask;
       // Ask output has a directional recipient for durable conversation shape,
       // but only its deferred Tool-plan barrier may resume the requester.
-      if (ask && (ask.phase === "progress" || ask.phase === "answer")) return;
+      if (ask && (ask.phase === "progress" || ask.phase === "answer")) {
+        return;
+      }
       if (
         workflow?.continuation === "realtime" ||
         workflow?.continuation === "none"
-      ) return;
+      ) {
+        return;
+      }
       for (const recipientId of new Set(stringArray(record.recipientIds))) {
         const continuationKey = workflow?.kind === "tool_result"
           ? `${requiredText(toolCursor?.planId, "Tool plan id")}:${recipientId}`
@@ -288,15 +296,15 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
                   "Message recipient is no longer in the thread.",
                 );
               }
-              const participants = new Map(snapshot.participantRecords.map(
-                (candidate) => [String(candidate.id), candidate],
-              ));
+              const participants = new Map(
+                snapshot.participantRecords.map((
+                  candidate,
+                ) => [String(candidate.id), candidate]),
+              );
               const sender = participants.get(String(record.senderId));
               const participant = participants.get(recipientId);
               if (!sender) {
-                throw new Error(
-                  `Message '${record.id}' sender was not found.`,
-                );
+                throw new Error(`Message '${record.id}' sender was not found.`);
               }
               if (!participant || participant.participantType !== "agent") {
                 throw new SupersededMessageError(
@@ -328,11 +336,10 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
                     isContextResource(resource) && resource.compact
                   );
               const limits = selection.models.map((model) =>
-                preflightLlmRequest(
-                  { messages: [] },
-                  { ...model.options, model: model.model },
-                  context.namespace,
-                ).limitEstimatedInputTokens
+                preflightLlmRequest({ messages: [] }, {
+                  ...model.options,
+                  model: model.model,
+                }, context.namespace).limitEstimatedInputTokens
               ).filter((limit): limit is number =>
                 typeof limit === "number" && Number.isFinite(limit) && limit > 0
               );
@@ -387,7 +394,9 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
                 if (
                   !isContentByteLimitError(error) || !hasCompaction ||
                   !limit
-                ) throw error;
+                ) {
+                  throw error;
+                }
                 await compact(
                   new ContextInputLimitError(
                     Math.max(limit + 1, Math.ceil(error.bytes / 8)),
@@ -427,7 +436,7 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
                   String(sender.id),
                 availableToolIds,
                 responseVisibility: structuredClone(
-                  toolCursor?.responseVisibility ?? event.visibility,
+                  toolCursor?.responseVisibility ?? coreEvent(event).visibility,
                 ),
                 ...(toolCursor?.parentLlmActionRunId ??
                     workflow?.parentLlmAttemptId ?? ask?.callingAttemptId
@@ -465,7 +474,9 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
                   }, context.namespace);
                 }
               } catch (error) {
-                if (!isContextInputLimitError(error)) throw error;
+                if (!isContextInputLimitError(error)) {
+                  throw error;
+                }
                 if (hasCompaction) {
                   await compact(error);
                   continue;
@@ -496,11 +507,14 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
             signal: context.signal,
           });
         } catch (error) {
-          if (error instanceof SupersededMessageError) continue;
-          if (!isSettledActionError(error)) throw error;
+          if (error instanceof SupersededMessageError) {
+            continue;
+          }
+          if (!isSettledActionError(error)) {
+            throw error;
+          }
         }
       }
     },
   });
-
 export default messageRouterProcessor;

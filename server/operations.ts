@@ -1,3 +1,8 @@
+import {
+  listThreadOperations,
+  operationBelongsToThread,
+  threadEventWatermark,
+} from "@copilotz/copilotz/core/server";
 /** One bounded observation coordinator for operation selections and conversations. */
 import { createStreamOriginResolver } from "./stream-origin.ts";
 import type { StreamOutput } from "../runtime/streams/types.ts";
@@ -15,7 +20,7 @@ import type { HttpReadServices } from "../plugins/server/authoring/http-adapter/
 import type {
   ServerAuthorizedScope,
   ServerConstraints,
-} from "../plugins/server/internal/contracts.ts";
+} from "../plugins/server/shared/contracts.ts";
 import { HTTP_OBSERVATION, type HttpObservation } from "./http-types.ts";
 
 function failure(code: string, status: number, message: string) {
@@ -57,7 +62,7 @@ export async function createHttpOperations(
   };
   const discover = async (threadId: string, afterPosition?: string) => {
     await thread(threadId);
-    const operations = await runtime.operations.listForThread({
+    const operations = await listThreadOperations(runtime.operations, {
       namespace,
       threadId,
       afterPosition,
@@ -74,7 +79,7 @@ export async function createHttpOperations(
     for (const operation of operations) await get(operation.operationId);
     return operations.map((operation) => operation.operationId);
   };
-  return Object.freeze({
+  return ({
     get,
     async checkpoint(
       threadId: string,
@@ -132,7 +137,7 @@ export async function createHttpOperations(
         return tracker.cursor();
       }
       const position =
-        await runtime.operations.threadEventWatermark(namespace, threadId) ??
+        await threadEventWatermark(runtime.operations, namespace, threadId) ??
           "0";
       return encodeOperationReplayCursor({ eventPosition: position });
     },
@@ -149,7 +154,8 @@ export async function createHttpOperations(
       const checkpoint = selection.checkpoint ??
         (selection.threadId
           ? encodeOperationReplayCursor({
-            eventPosition: await runtime.operations.threadEventWatermark(
+            eventPosition: await threadEventWatermark(
+              runtime.operations,
               namespace,
               selection.threadId,
             ) ?? "0",
@@ -165,9 +171,8 @@ export async function createHttpOperations(
         : [...selection.operationIds ?? []];
       if (
         (!selection.threadId && !ids.length) || ids.length > 32 ||
-        new Set(ids).size !== ids.length || ids.some((id) =>
-          typeof id !== "string" || !id
-        )
+        new Set(ids).size !== ids.length ||
+        ids.some((id) => typeof id !== "string" || !id)
       ) {
         throw failure(
           "invalid_operation_selection",
@@ -179,7 +184,8 @@ export async function createHttpOperations(
         await get(id);
         if (
           selection.threadId
-            ? !await runtime.operations.belongsToThread(
+            ? !await operationBelongsToThread(
+              runtime.operations,
               namespace,
               id,
               selection.threadId,
@@ -339,7 +345,7 @@ export async function createHttpOperations(
         }
       })();
       void done.catch(() => undefined);
-      return Object.freeze({
+      return ({
         type: HTTP_OBSERVATION,
         ...(bootstrap ? { bootstrap } : {}),
         outputs: transport.readable,
@@ -348,7 +354,7 @@ export async function createHttpOperations(
         compositeCursor: true,
         threadId: selection.threadId,
         cancel: detach,
-      });
+      } as const);
     },
-  });
+  } as const);
 }

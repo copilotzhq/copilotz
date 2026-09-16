@@ -8,12 +8,12 @@ import { parseActionLifecycleEvent } from "@copilotz/copilotz/actions";
 
 import { defineProcessor, type Processor } from "@copilotz/copilotz/plugins";
 import { deriveWorkflowId } from "@copilotz/copilotz/events";
-import { createThreadMessage } from "../../../core-collections/actions/create-thread-message/index.ts";
+import { createThreadMessage } from "../../../core/actions/create-thread-message/index.ts";
 
-import type { MemoryProcessorContext } from "../../internal/contracts.ts";
-import { record } from "../../internal/input.ts";
-import { settleCheckpointError } from "../../internal/checkpoints.ts";
-import { memoryTaskMetadata, memoryTaskOwnsTurn } from "../internal/task.ts";
+import type { MemoryProcessorContext } from "../../shared/contracts.ts";
+import { record } from "../../shared/input.ts";
+import { settleCheckpointError } from "../../shared/checkpoints.ts";
+import { memoryTaskMetadata, memoryTaskOwnsTurn } from "../../shared/task.ts";
 
 export const settleMemoryConsolidationProcessor: Processor<
   MemoryProcessorContext

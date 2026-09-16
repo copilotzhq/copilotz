@@ -51,7 +51,7 @@ import type {
   ChannelJsonObject,
   ChannelRequest,
   ChannelResource,
-} from "../channel-core/internal/contracts.ts";
+} from "../channel-core/shared/contracts.ts";
 
 const NAMESPACE = "channel-provider-contract";
 

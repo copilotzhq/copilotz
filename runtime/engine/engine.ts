@@ -91,12 +91,12 @@ export async function createCopilotzEngine(
       "Actions with x-copilotz-secret schemas require adapters.secrets.default.",
     );
   }
-  const engineOptions: CreateCopilotzEngineOptions = Object.freeze({
+  const engineOptions: CreateCopilotzEngineOptions = {
     ...options,
     assetStorage: options.assetStorage ??
       createBodyStorageRuntime(options.assets),
     ...(secretAdapter ? { secretAdapter } : {}),
-  });
+  } as const;
   await prepareDefaultDatabaseSchema(options, databaseSchema);
   if (options.provisionDefaultDatabaseSchema === false) {
     await validateOperationCatalog(options.session, databaseSchema);
@@ -335,14 +335,14 @@ export async function createCopilotzEngine(
   }
   const executor: DeliveryExecutor = createDeliveryExecutor({
     ...(options.execution ?? {}),
-    workloads: Object.freeze({
+    workloads: {
       ...configuredWorkloads,
       [COPILOTZ_LIVE_WORKLOAD]: createLiveProcessorWorkload({
         registry: options.registry,
         transients,
         createContext: createLiveContext,
       }),
-    }),
+    } as const,
     localWorkloadWorkers: configuredLocalWorkers,
     resolveStore: async (requestedDatabaseSchema) =>
       requestedDatabaseSchema === databaseSchema
@@ -472,19 +472,17 @@ export async function createCopilotzEngine(
       publishOptions.signal?.removeEventListener("abort", relay);
     });
     done.catch(() => undefined);
-    return Object.freeze({
+    return ({
       event,
-      processorIds: Object.freeze(
-        scopedTransients.match(event, eventData).map((processor) =>
-          processor.id
-        ),
+      processorIds: scopedTransients.match(event, eventData).map((processor) =>
+        processor.id
       ),
       done,
       async cancel(reason = "live_event_cancelled") {
         abort.abort(new Error(reason));
         await done.catch(() => undefined);
       },
-    });
+    } as const);
   };
   try {
     const scope = createDatabaseScope({
@@ -551,7 +549,7 @@ export async function createCopilotzEngine(
                 settlementScopeId,
               }),
           });
-          return Object.freeze({ runtime, hub });
+          return ({ runtime, hub } as const);
         } catch (error) {
           transientsBySchema.delete(normalized);
           hub.close(error);
@@ -576,14 +574,14 @@ export async function createCopilotzEngine(
           .public;
       },
       plugins: options.registry,
-      execution: Object.freeze({
+      execution: {
         ownership: executor.ownership,
         workload: executor.workload,
         liveWorkload: liveDispatcher.workload,
         workloads: executor.workloads,
         dispatchWork: (input) => executor.dispatchWork(input),
         settleOutputs: (scope) => executor.settleOutputs(scope),
-      }),
+      } as const,
       async recoverAll(recovery = {}) {
         const scoped = await Promise.allSettled([...additionalScopes.values()]);
         const unavailableScopes = scoped.flatMap((result) =>
@@ -603,12 +601,10 @@ export async function createCopilotzEngine(
               : []
           ),
         ]);
-        return Object.freeze({
-          handles: Object.freeze(results.flatMap((result) => result.handles)),
-          failures: Object.freeze(
-            results.flatMap((result) => result.failures),
-          ),
-        });
+        return ({
+          handles: results.flatMap((result) => result.handles),
+          failures: results.flatMap((result) => result.failures),
+        } as const);
       },
       async bindTransient(processor: Processor, bindOptions = {}) {
         if (bindOptions.afterPosition === undefined) {
@@ -621,7 +617,7 @@ export async function createCopilotzEngine(
         let catchingUp = true;
         const handled = new Set<string>();
         let serial = Promise.resolve();
-        const catchupProcessor: Processor = Object.freeze({
+        const catchupProcessor: Processor = {
           id: processor.id,
           on: processor.on,
           settlement: processor.settlement,
@@ -635,7 +631,7 @@ export async function createCopilotzEngine(
             serial = next.catch(() => undefined);
             return next;
           },
-        });
+        } as const;
         const unbind = transients.add(catchupProcessor);
         const solo = createTransientProcessorSet([catchupProcessor]);
         const signal = bindOptions.signal ?? new AbortController().signal;
@@ -689,7 +685,7 @@ export async function createCopilotzEngine(
         if (ownsEventHub) eventHub.close();
       },
     };
-    return Object.freeze(engine);
+    return engine;
   } catch (error) {
     await executor.shutdown("copilotz_engine_initialization_failed").catch(
       () => undefined,

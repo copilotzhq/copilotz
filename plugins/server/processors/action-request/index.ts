@@ -11,7 +11,7 @@ import {
   parseServerActionRequest,
   SERVER_ACTION_REQUEST_EVENT_TYPE,
   type ServerInvokeRequest,
-} from "../../internal/contracts.ts";
+} from "../../shared/contracts.ts";
 
 type ServerProcessorContext = ProcessorContext<
   import("@copilotz/copilotz/actions").RuntimeContextNamespaces,

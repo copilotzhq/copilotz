@@ -1,3 +1,4 @@
+import { projectVector, type VectorWrite } from "../vectors/index.ts";
 import type { DurableEvent } from "../events/index.ts";
 import type { CollectionDefinition } from "./definition.ts";
 import { eventDataRef, readEventBody } from "../events/body-store.ts";
@@ -84,7 +85,7 @@ async function loadNamespaceEvents(
     }
     afterPosition = nextPosition;
   }
-  return Object.freeze(events);
+  return events;
 }
 
 async function readCollectionBodies(
@@ -110,7 +111,7 @@ async function readCollectionBodies(
     assertCollectionEventBody(body, event, definition);
     bodies.push(body);
   }
-  return Object.freeze(bodies);
+  return bodies;
 }
 
 async function loadStoredProjections(
@@ -141,7 +142,7 @@ async function loadStoredProjections(
     }
     after = next;
   }
-  return Object.freeze(stored);
+  return stored;
 }
 
 export function foldCollectionBodies(
@@ -237,7 +238,7 @@ function isCollectionEventBody(
 function assetManifestFromEvent(
   body: Extract<AssetEventBody, { operation: "create" }>,
 ): AssetManifestEntry {
-  return Object.freeze({
+  return ({
     assetId: body.asset.id,
     bodyId: body.bodyId,
     mediaType: body.asset.mediaType,
@@ -253,7 +254,7 @@ function assetManifestFromEvent(
       : {}),
     createdAt: body.asset.createdAt,
     ...(body.asset.readyAt ? { readyAt: body.asset.readyAt } : {}),
-  });
+  } as const);
 }
 
 async function projectAssetLifecycle(
@@ -422,6 +423,11 @@ export async function rebuildNamespaceProjections(
     let rawBody = runtime ? await bodyFor(event) : undefined;
     if (rawBody !== undefined) {
       await runtime?.projectBody(context, namespace, rawBody, event);
+    }
+    if (event.type === "vector.upserted" && event.subject?.type === "vector") {
+      const body = await bodyFor(event) as VectorWrite;
+      await projectVector(executor, store.databaseSchema, namespace, body);
+      return;
     }
     if (isRelationLifecycleEvent(event)) {
       rawBody ??= await bodyFor(event);

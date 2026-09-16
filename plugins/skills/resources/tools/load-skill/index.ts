@@ -1,15 +1,15 @@
-import type { ToolDefinition } from "@copilotz/copilotz/tools";
+import type { ToolDefinition } from "@copilotz/copilotz/core";
 import type { ActionDefinition } from "@copilotz/copilotz/actions";
-import { defineTool } from "@copilotz/copilotz/tools";
+import { defineTool } from "@copilotz/copilotz/core";
 import type { ActionSchema } from "@copilotz/copilotz/actions";
 import {
   maximumTextBytes,
   record,
   type SkillActionContext,
   skillByName,
-} from "../../../internal/tool-context.ts";
+} from "../../../shared/tool-context.ts";
 import { readSkillFileText } from "../../skill/index.ts";
-import { parseSkillMarkdown } from "../../skill/internal/parser.ts";
+import { parseSkillMarkdown } from "../../../shared/parser.ts";
 export const loadSkillTool: ToolDefinition<
   ActionDefinition<unknown, unknown, SkillActionContext>
 > = defineTool<

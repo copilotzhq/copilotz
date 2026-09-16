@@ -3,7 +3,12 @@
   "version": "4.0.0",
   "include": [
     "resources/channels/zendesk/index.ts",
-    "adapters/channels/zendesk/index.ts",
-    "dependencies/channels/index.ts"
+    "adapters/channels/zendesk/index.ts"
+  ],
+  "plugins": [
+    {
+      "from": "../channel-core/plugin.ts",
+      "export": "channelsPlugin"
+    }
   ]
 }

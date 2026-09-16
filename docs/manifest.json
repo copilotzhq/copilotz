@@ -112,13 +112,7 @@
     },
     {
       "title": "Migration",
-      "items": [
-        {
-          "title": "0.47/0.48 Legacy Graph to v4",
-          "slug": "migration-v4",
-          "description": "Exact-profile archive, source synthesis, replay, verification, and restart."
-        }
-      ]
+      "items": []
     }
   ]
 }

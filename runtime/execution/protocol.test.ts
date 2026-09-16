@@ -133,11 +133,6 @@ Deno.test("Copilotz work framing relays semantic events, metadata, and bytes", a
         lane: "protocol",
       },
     });
-    assertEquals(Object.isFrozen(outputs.at(1)), true);
-    assertEquals(
-      Object.isFrozen((outputs.at(1) as { metadata: object }).metadata),
-      true,
-    );
   } finally {
     await worker.stop("protocol test complete");
     await worker.closed;

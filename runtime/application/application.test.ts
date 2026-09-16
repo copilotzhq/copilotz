@@ -1,3 +1,4 @@
+import { storageFixture } from "../../plugins/core/shared/testing/storage-plugin.ts";
 import { message as coreMessage } from "@copilotz/copilotz/core";
 import type { LlmAdapter } from "@copilotz/copilotz/llm";
 import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
@@ -8,17 +9,14 @@ import {
   defineProcessor,
   type ProcessorContext,
 } from "../plugins/index.ts";
-import { createTestDomainContext } from "../../plugins/core/internal/testing/context.ts";
+import { createTestDomainContext } from "../../plugins/core/shared/testing/context.ts";
 import { waitForTestDelivery } from "../../runtime/testing/deliveries.ts";
-import { projectMessages } from "../../plugins/core/internal/testing/projections.ts";
+import { projectMessages } from "../../plugins/core/shared/testing/projections.ts";
 import { createCopilotzApplication } from "./application.ts";
 import type { CopilotzDatabase } from "@copilotz/copilotz/persistence";
 import { isCopilotzPersistenceError } from "@copilotz/copilotz/persistence";
 import { loadMessageRecord } from "@copilotz/copilotz/core";
-import {
-  coreCollectionsPlugin,
-  corePlugin,
-} from "../../plugins/core/plugin.ts";
+import { corePlugin } from "../../plugins/core/plugin.ts";
 import {
   createCoreTableNames,
   createEventStore,
@@ -41,26 +39,30 @@ import {
   provisionOperationCatalog,
   type StreamOutput,
 } from "../streams/index.ts";
-
 const SCHEMA = "copilotz_application";
 const NAMESPACE = "tenant-a";
 const LARGE_STREAM_BYTES = 1024 * 1024 + 1;
-
 function replyPlugin(): AnyCopilotzPlugin {
   const processor = defineProcessor<ProcessorContext>({
     id: "application.reply",
-    on: [{ eventType: "message.created", routing: { senderId: "user-a" } }],
+    on: [{
+      eventType: "message.created",
+      metadata: {
+        core: {
+          routing: { senderId: "user-a" },
+        },
+      },
+    }],
     async handle(event, context) {
-      if (!event.durable || !event.subject) return;
-      const incoming = await loadMessageRecord(
-        context,
-        event.subject.id,
-      );
+      if (!event.durable || !event.subject) {
+        return;
+      }
+      const incoming = await loadMessageRecord(context, event.subject.id);
       assertExists(incoming);
-      const content = await context.content.prepare(
-        { type: "text", text: "application reply" },
-        { operationKey: "reply-content" },
-      );
+      const content = await context.content.prepare({
+        type: "text",
+        text: "application reply",
+      }, { operationKey: "reply-content" });
       await context.collections.message.create({
         id: `reply:${incoming.id}`,
         threadId: incoming.threadId,
@@ -76,7 +78,6 @@ function replyPlugin(): AnyCopilotzPlugin {
     processors: { reply: processor },
   });
 }
-
 function runtimeNeutralStreamPlugin(): AnyCopilotzPlugin {
   const processor = defineProcessor<ProcessorContext>({
     id: "application.runtime-neutral-stream",
@@ -102,7 +103,6 @@ function runtimeNeutralStreamPlugin(): AnyCopilotzPlugin {
     processors: { runtimeNeutralStream: processor },
   });
 }
-
 function correlatedOutputPlugin(): AnyCopilotzPlugin {
   const processor = defineProcessor<ProcessorContext>({
     id: "application.correlated-output",
@@ -128,10 +128,9 @@ function correlatedOutputPlugin(): AnyCopilotzPlugin {
     processors: { correlatedOutput: processor },
   });
 }
-
-function detachableOperationPlugin(
-  probe: { completed: number },
-): AnyCopilotzPlugin {
+function detachableOperationPlugin(probe: {
+  completed: number;
+}): AnyCopilotzPlugin {
   return definePlugin({
     id: "test.application.detachable-operation",
     version: "1.0.0",
@@ -147,8 +146,9 @@ function detachableOperationPlugin(
     },
   });
 }
-
-function startupRecoveryPlugin(calls: { count: number }): AnyCopilotzPlugin {
+function startupRecoveryPlugin(calls: {
+  count: number;
+}): AnyCopilotzPlugin {
   return definePlugin({
     id: "test.application.startup-recovery",
     version: "1.0.0",
@@ -163,21 +163,24 @@ function startupRecoveryPlugin(calls: { count: number }): AnyCopilotzPlugin {
     },
   });
 }
-
 const lifecycleProbeAction = defineAction({
   id: "test.application.lifecycle-probe",
-  execute(input: Readonly<{ value: string }>) {
+  execute(
+    input: Readonly<{
+      value: string;
+    }>,
+  ) {
     return Object.freeze({ echoed: input.value });
   },
 });
-
 type LifecycleProbeContext = ProcessorContext<
   ProcessorContext["resources"],
   ProcessorContext["adapters"],
-  ActionCallers<{ lifecycleProbe: typeof lifecycleProbeAction }>,
+  ActionCallers<{
+    lifecycleProbe: typeof lifecycleProbeAction;
+  }>,
   ProcessorContext["collections"]
 >;
-
 function lifecycleProbePlugin(): AnyCopilotzPlugin {
   return definePlugin({
     id: "test.application.lifecycle-probe",
@@ -198,59 +201,57 @@ function lifecycleProbePlugin(): AnyCopilotzPlugin {
     },
   });
 }
-
 async function collect<T>(stream: AsyncIterable<T>): Promise<T[]> {
   const values: T[] = [];
-  for await (const value of stream) values.push(value);
+  for await (const value of stream) {
+    values.push(value);
+  }
   return values;
 }
-
 async function closeDb(db: TestDatabase): Promise<void> {
   await db.close();
 }
-
 async function waitFor(predicate: () => boolean): Promise<void> {
   for (let attempt = 0; attempt < 200; attempt += 1) {
-    if (predicate()) return;
+    if (predicate()) {
+      return;
+    }
     await new Promise((resolve) => setTimeout(resolve, 1));
   }
   throw new Error("Condition was not reached before the test deadline.");
 }
-
 Deno.test("application factory composes plugins and supplies the default tenant scope", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   const application = await createCopilotzApplication({
     database: db,
     namespace: NAMESPACE,
     databaseSchema: SCHEMA,
-    plugins: [coreCollectionsPlugin, replyPlugin()],
+    plugins: [storageFixture, replyPlugin()],
     engine: { retryBaseMs: 0, random: () => 0 },
   });
   try {
     assertEquals(application.config, {
       namespace: NAMESPACE,
       databaseSchema: SCHEMA,
-      pluginIds: ["@copilotz/core-collections", "test.application.reply"],
+      pluginIds: ["test.storage", "test.application.reply"],
       databaseOwnership: "injected",
     });
-    await createTestDomainContext(application, NAMESPACE).actions.createThread(
-      {
-        id: "thread-a",
-        participants: [
-          {
-            id: "user-a",
-            externalId: "user-a",
-            participantType: "human",
-          },
-          {
-            id: "agent-a",
-            externalId: "support",
-            participantType: "agent",
-            agentId: "support",
-          },
-        ],
-      },
-    );
+    await createTestDomainContext(application, NAMESPACE).actions.createThread({
+      id: "thread-a",
+      participants: [
+        {
+          id: "user-a",
+          externalId: "user-a",
+          participantType: "human",
+        },
+        {
+          id: "agent-a",
+          externalId: "support",
+          participantType: "agent",
+          agentId: "support",
+        },
+      ],
+    });
     const run = await application.send(coreMessage({
       thread: "thread-a",
       participant: "user-a",
@@ -282,7 +283,6 @@ Deno.test("application factory composes plugins and supplies the default tenant 
         value: "application reply",
       })),
     );
-
     await application.shutdown();
     await db.query("SELECT 1");
   } finally {
@@ -290,35 +290,32 @@ Deno.test("application factory composes plugins and supplies the default tenant 
     await closeDb(db);
   }
 });
-
 Deno.test("application send publishes one session output stream", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   const application = await createCopilotzApplication({
     database: db,
     namespace: NAMESPACE,
     databaseSchema: SCHEMA,
-    plugins: [coreCollectionsPlugin, replyPlugin()],
+    plugins: [storageFixture, replyPlugin()],
     engine: { retryBaseMs: 0, random: () => 0 },
   });
   try {
-    await createTestDomainContext(application, NAMESPACE).actions.createThread(
-      {
-        id: "thread-a",
-        participants: [
-          {
-            id: "user-a",
-            externalId: "user-a",
-            participantType: "human",
-          },
-          {
-            id: "agent-a",
-            externalId: "support",
-            participantType: "agent",
-            agentId: "support",
-          },
-        ],
-      },
-    );
+    await createTestDomainContext(application, NAMESPACE).actions.createThread({
+      id: "thread-a",
+      participants: [
+        {
+          id: "user-a",
+          externalId: "user-a",
+          participantType: "human",
+        },
+        {
+          id: "agent-a",
+          externalId: "support",
+          participantType: "agent",
+          agentId: "support",
+        },
+      ],
+    });
     const observed = (async () => {
       const outputs = [];
       for await (const output of application.observe()) {
@@ -331,7 +328,6 @@ Deno.test("application send publishes one session output stream", async () => {
       }
       return outputs;
     })();
-
     const sent = await application.send(coreMessage({
       thread: "thread-a",
       participant: "user-a",
@@ -339,7 +335,6 @@ Deno.test("application send publishes one session output stream", async () => {
       content: "hello",
     }));
     await sent.done;
-
     const outputs = await observed;
     assertEquals(
       outputs.filter((output) => output.type === "message.created").length,
@@ -351,14 +346,12 @@ Deno.test("application send publishes one session output stream", async () => {
       ),
       true,
     );
-
     await application.close();
   } finally {
     await application.shutdown();
     await closeDb(db);
   }
 });
-
 Deno.test("public ingress reserves registered Action lifecycle identities", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   const databaseSchema = `${SCHEMA}_action_lifecycle_authority`;
@@ -375,7 +368,6 @@ Deno.test("public ingress reserves registered Action lifecycle identities", asyn
       deduplicationId: "lifecycle-probe:trigger",
     });
     await trigger.done;
-
     const genuine = (await application.events.list({
       namespace: NAMESPACE,
       correlationId: trigger.correlationId,
@@ -386,7 +378,6 @@ Deno.test("public ingress reserves registered Action lifecycle identities", asyn
     assertEquals(genuine.length, 1);
     const terminal = genuine[0];
     assertExists(terminal.subject);
-
     await assertRejects(
       () =>
         application.send({
@@ -438,7 +429,6 @@ Deno.test("public ingress reserves registered Action lifecycle identities", asyn
     await closeDb(db);
   }
 });
-
 Deno.test("application observes streams opened from events with no thread semantics", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   const application = await createCopilotzApplication({
@@ -465,9 +455,7 @@ Deno.test("application observes streams opened from events with no thread semant
     assertEquals("threadId" in streamOutput, false);
     assertEquals(streamOutput.namespace, NAMESPACE);
     assertEquals(
-      streamOutput.streamId.startsWith(
-        "incarnation:runtime-neutral-stream-a:",
-      ),
+      streamOutput.streamId.startsWith("incarnation:runtime-neutral-stream-a:"),
       true,
     );
     assertEquals(streamOutput.mediaType, "text/plain");
@@ -495,7 +483,6 @@ Deno.test("application observes streams opened from events with no thread semant
     await closeDb(db);
   }
 });
-
 Deno.test("application reattaches durable events and stream Bodies through a terminal lifecycle frame", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   const application = await createCopilotzApplication({
@@ -552,9 +539,8 @@ Deno.test("application reattaches durable events and stream Bodies through a ter
       cursor: sent.replayCursor,
     });
     assertEquals(
-      decodeOperationReplayCursor(checkpoint).operationStreamPositions?.[
-        sent.operationId
-      ],
+      decodeOperationReplayCursor(checkpoint).operationStreamPositions
+        ?.[sent.operationId],
       { highWatermark: 1, offsets: {} },
     );
     const snapshotAttachment = await application.attach({
@@ -571,7 +557,6 @@ Deno.test("application reattaches durable events and stream Bodies through a ter
     await closeDb(db);
   }
 });
-
 Deno.test("operation checkpoints page and compact more than one thousand sealed lanes", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   const databaseSchema = `${SCHEMA}_deep_checkpoint`;
@@ -620,7 +605,7 @@ Deno.test("operation checkpoints page and compact more than one thousand sealed 
       await application.operationCheckpoint({ operationIds: [operationId] }),
     );
     assertEquals(checkpoint.operationStreamPositions?.[operationId], {
-      highWatermark: 1_001,
+      highWatermark: 1001,
       offsets: {},
     });
   } finally {
@@ -628,7 +613,6 @@ Deno.test("operation checkpoints page and compact more than one thousand sealed 
     await db.close();
   }
 });
-
 Deno.test("operation attachment replays a retained failed prefix with generic terminal state", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   const plugin = definePlugin({
@@ -680,13 +664,11 @@ Deno.test("operation attachment replays a retained failed prefix with generic te
       availability: "retained",
       capture: "complete",
       offset: "rejected bytes".length,
-      terminalAt: (await createOperationCatalog(
-        db,
-        `${SCHEMA}_retained_failed_prefix`,
-      ).findStream(NAMESPACE, stream.streamId))!.terminalAt,
+      terminalAt:
+        (await createOperationCatalog(db, `${SCHEMA}_retained_failed_prefix`)
+          .findStream(NAMESPACE, stream.streamId))!.terminalAt,
     });
     assertEquals(outputs.at(-1)?.type, "operation.completed");
-
     const catalog = createOperationCatalog(
       db,
       `${SCHEMA}_retained_failed_prefix`,
@@ -717,7 +699,6 @@ Deno.test("operation attachment replays a retained failed prefix with generic te
     await closeDb(db);
   }
 });
-
 Deno.test("detaching request observation does not cancel durable operation work", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   const probe = { completed: 0 };
@@ -741,7 +722,6 @@ Deno.test("detaching request observation does not cancel durable operation work"
     await closeDb(db);
   }
 });
-
 Deno.test("quiet reconnect stream waits on catalog changes without polling its BodyStore", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   const backing = createMemoryBodyStore();
@@ -853,7 +833,6 @@ Deno.test("quiet reconnect stream waits on catalog changes without polling its B
     await closeDb(db);
   }
 });
-
 Deno.test("sealed stream defaults to expiring observation retention when its processor fails before retain", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   const store = createMemoryBodyStore({ protectionMs: 0 });
@@ -934,16 +913,12 @@ Deno.test("sealed stream defaults to expiring observation retention when its pro
     });
     assertEquals(maintained.operations.expiredObservationStreams, 1);
     assertEquals(maintained.operations.prunedCatalogEntries, 1);
-    assertEquals(
-      await store.head({ bodyId }),
-      null,
-    );
+    assertEquals(await store.head({ bodyId }), null);
   } finally {
     await application.shutdown();
     await closeDb(db);
   }
 });
-
 Deno.test("observation retirement preserves a Body already adopted by a canonical Asset", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   const store = createMemoryBodyStore({ protectionMs: 100 });
@@ -1037,7 +1012,6 @@ Deno.test("observation retirement preserves a Body already adopted by a canonica
     await closeDb(db);
   }
 });
-
 Deno.test("concurrent observation retirement cannot resurrect a deleted Body", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   const baseStore = createMemoryBodyStore({ protectionMs: 0 });
@@ -1111,24 +1085,18 @@ Deno.test("concurrent observation retirement cannot resurrect a deleted Body", a
     const [stream] = await createOperationCatalog(db, databaseSchema)
       .listStreams({ namespace: NAMESPACE, operationId: sent.operationId });
     assertExists(stream);
-
     const catalog = createOperationCatalog(db, databaseSchema);
     await application.maintenance({
       now: new Date("2030-09-01T12:00:00.000Z"),
       operationRetentionMs: 0,
     });
-
     assertEquals(deleteCalls, 1);
     assertEquals(await store.head({ bodyId: stream.bodyId }), null);
     assertEquals(
-      (await catalog.getStream(
-        NAMESPACE,
-        sent.operationId,
-        stream.streamId,
-      ))?.availability,
+      (await catalog.getStream(NAMESPACE, sent.operationId, stream.streamId))
+        ?.availability,
       "purge_pending",
     );
-
     // The next pass observes the missing physical Body and monotonically
     // completes the logical tombstone without another destructive call.
     await application.maintenance({
@@ -1149,7 +1117,6 @@ Deno.test("concurrent observation retirement cannot resurrect a deleted Body", a
     await closeDb(db);
   }
 });
-
 Deno.test("maintenance reconciles physical stream crash windows before terminalizing operations", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   const store = createMemoryBodyStore({ protectionMs: 0 });
@@ -1261,7 +1228,6 @@ Deno.test("maintenance reconciles physical stream crash windows before terminali
       mediaType: "text/plain",
       digest: await digestContent(bytes),
     });
-
     const maintained = await application.maintenance({
       operationRetentionMs: null,
     });
@@ -1332,7 +1298,6 @@ Deno.test("maintenance reconciles physical stream crash windows before terminali
     await closeDb(db);
   }
 });
-
 Deno.test("application isolates simultaneous causal outputs and preserves the final queued frame", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   const databaseSchema = `${SCHEMA}_correlated_outputs`;
@@ -1356,7 +1321,6 @@ Deno.test("application isolates simultaneous causal outputs and preserves the fi
         correlationId: "correlation-second",
       }),
     ]);
-
     // Deliberately do not consume either request stream until its causal scope
     // settles. Closing the direct sink must preserve every already-queued event,
     // including the final remote stream frame.
@@ -1399,7 +1363,6 @@ Deno.test("application isolates simultaneous causal outputs and preserves the fi
       await new Response(secondStream.payload).text(),
       "output:correlation-second",
     );
-
     const collectGlobal = async (
       reader: ReadableStreamDefaultReader<ApplicationOutput>,
     ) => {
@@ -1430,7 +1393,6 @@ Deno.test("application isolates simultaneous causal outputs and preserves the fi
       await new Response(globalSecondStream.payload).text(),
     );
     await Promise.all([globalFirst.cancel(), globalSecond.cancel()]);
-
     const direct = application.observe().getReader();
     await application.events.emit({
       type: "test.outside-send",
@@ -1447,40 +1409,40 @@ Deno.test("application isolates simultaneous causal outputs and preserves the fi
     await closeDb(db);
   }
 });
-
 Deno.test("internal application owns a configured Ominipg database", async () => {
   const application = await createCopilotzApplication({
     namespace: NAMESPACE,
     databaseSchema: "public",
-    plugins: [coreCollectionsPlugin],
+    plugins: [storageFixture],
     database: { url: ":memory:" },
   });
   try {
     assertEquals(application.config.databaseOwnership, "application");
-    const created = await createTestDomainContext(
-      application,
-      NAMESPACE,
-    ).actions.createThread({
-      id: "owned-database-thread",
-      participants: [],
-    });
-    assertEquals((created as { id: string }).id, "owned-database-thread");
+    const created = await createTestDomainContext(application, NAMESPACE)
+      .actions.createThread({
+        id: "owned-database-thread",
+        participants: [],
+      });
+    assertEquals(
+      (created as {
+        id: string;
+      }).id,
+      "owned-database-thread",
+    );
   } finally {
     await application.shutdown();
     await application.shutdown();
   }
 });
-
 Deno.test("internal application owns its default private database", async () => {
   const application = await createCopilotzApplication({
     namespace: NAMESPACE,
-    plugins: [coreCollectionsPlugin],
+    plugins: [storageFixture],
   });
   assertEquals(application.config.databaseOwnership, "application");
   await application.shutdown();
   await application.shutdown();
 });
-
 Deno.test("application Adapters overlay plugin Adapters", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   const replacement: LlmAdapter = Object.freeze({
@@ -1497,21 +1459,16 @@ Deno.test("application Adapters overlay plugin Adapters", async () => {
   });
   try {
     assertEquals(application.config.pluginIds, [
-      "@copilotz/core-collections",
       "@copilotz/llm",
       "@copilotz/core",
     ]);
-    assertEquals(
-      application.plugins.adapters.llm.openai,
-      replacement,
-    );
+    assertEquals(application.plugins.adapters.llm.openai, replacement);
     assertEquals(application.plugins.resources.agents?.missing, undefined);
   } finally {
     await application.shutdown();
     await closeDb(db);
   }
 });
-
 Deno.test("application never closes an injected database", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   let closes = 0;
@@ -1527,7 +1484,7 @@ Deno.test("application never closes an injected database", async () => {
     database: injected,
     namespace: NAMESPACE,
     databaseSchema: `${SCHEMA}_owned`,
-    plugins: [coreCollectionsPlugin],
+    plugins: [storageFixture],
   });
   await Promise.all([application.shutdown(), application.shutdown()]);
   assertEquals(closes, 0);
@@ -1536,7 +1493,6 @@ Deno.test("application never closes an injected database", async () => {
   await injected.close();
   assertEquals(closes, 1);
 });
-
 Deno.test("recovery owner startup reclaims an expired delivery lease left by a crashed runtime", async () => {
   const database = await createTestDatabase({ url: ":memory:" });
   const schema = `${SCHEMA}_startup_recovery`;
@@ -1574,7 +1530,6 @@ Deno.test("recovery owner startup reclaims an expired delivery lease left by a c
        WHERE id = $1`,
       [delivery.id],
     );
-
     recovered = await createCopilotzApplication({
       database,
       namespace: NAMESPACE,
@@ -1596,7 +1551,6 @@ Deno.test("recovery owner startup reclaims an expired delivery lease left by a c
     await database.close();
   }
 });
-
 Deno.test("opening a tenant scope recovers its expired delivery lease", async () => {
   const database = await createTestDatabase({ url: ":memory:" });
   const schema = `${SCHEMA}_tenant_startup_recovery`;
@@ -1647,7 +1601,6 @@ Deno.test("opening a tenant scope recovers its expired delivery lease", async ()
     await database.close();
   }
 });
-
 Deno.test("persistence outage interrupts active send observers without cancelling durable work", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   let generation = 0;
@@ -1668,7 +1621,9 @@ Deno.test("persistence outage interrupts active send observers without cancellin
     on: [{ eventType: "message.created" }],
     handle() {
       processorCalls += 1;
-      if (processorCalls === 1) throw new Error("retry this delivery");
+      if (processorCalls === 1) {
+        throw new Error("retry this delivery");
+      }
     },
   });
   const plugin = definePlugin({
@@ -1715,7 +1670,7 @@ Deno.test("persistence outage interrupts active send observers without cancellin
     databaseRecovery: { waitMs: 100 },
     namespace: NAMESPACE,
     databaseSchema: `${SCHEMA}_recovery`,
-    plugins: [coreCollectionsPlugin, plugin],
+    plugins: [storageFixture, plugin],
     engine: {
       retryBaseMs: 0,
       random: () => 0,
@@ -1742,16 +1697,14 @@ Deno.test("persistence outage interrupts active send observers without cancellin
     },
   });
   try {
-    await createTestDomainContext(application, NAMESPACE).actions.createThread(
-      {
-        id: "recovery-thread",
-        participants: [{
-          id: "recovery-user",
-          externalId: "recovery-user",
-          participantType: "human",
-        }],
-      },
-    );
+    await createTestDomainContext(application, NAMESPACE).actions.createThread({
+      id: "recovery-thread",
+      participants: [{
+        id: "recovery-user",
+        externalId: "recovery-user",
+        participantType: "human",
+      }],
+    });
     await createTestDomainContext(application, NAMESPACE).actions
       .createThreadMessage({
         id: "recovery-message",
@@ -1765,8 +1718,12 @@ Deno.test("persistence outage interrupts active send observers without cancellin
       }, { identity: { deduplicationId: "recovery-message:create" } });
     const messageEvent = (await application.events.list({
       namespace: NAMESPACE,
-      threadId: "recovery-thread",
       limit: 100,
+      metadata: {
+        core: {
+          threadId: "recovery-thread",
+        },
+      },
     })).find((event) => event.subject?.id === "recovery-message");
     assertExists(messageEvent);
     const messageDelivery = await waitForTestDelivery(
@@ -1774,11 +1731,10 @@ Deno.test("persistence outage interrupts active send observers without cancellin
       NAMESPACE,
       messageEvent.id,
       "retry_wait",
-      5_000,
+      5000,
     );
     assertEquals(messageDelivery.status, "retry_wait");
     assertEquals(processorCalls, 1);
-
     const activeSend = await application.send({
       type: "application.persistence-active-send",
       namespace: NAMESPACE,
@@ -1797,7 +1753,6 @@ Deno.test("persistence outage interrupts active send observers without cancellin
     const doneError = await assertRejects(() => activeSend.done);
     assert(isCopilotzPersistenceError(doneError));
     assertEquals(doneError.code, "persistence_indeterminate");
-
     await waitFor(() => lifecycle.includes("ready:2"));
     const activeSettlement = await application.events.settlement(
       NAMESPACE,
@@ -1810,7 +1765,7 @@ Deno.test("persistence outage interrupts active send observers without cancellin
       NAMESPACE,
       messageEvent.id,
       "succeeded",
-      5_000,
+      5000,
     );
     assertEquals(delivery.status, "succeeded");
     assertEquals(delivery.id, messageDelivery.id);
@@ -1832,7 +1787,6 @@ Deno.test("persistence outage interrupts active send observers without cancellin
   }
   assertEquals(closedGenerations, [1, 2]);
 });
-
 Deno.test("application shutdown interrupts local sends without cancelling their durable scope", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   let waitForAbort = true;
@@ -1843,7 +1797,9 @@ Deno.test("application shutdown interrupts local sends without cancelling their 
     on: [{ eventType: "test.application.shutdown-interrupt" }],
     async handle(_event, context) {
       processorStarted();
-      if (!waitForAbort) return;
+      if (!waitForAbort) {
+        return;
+      }
       await new Promise<void>((resolve) =>
         context.signal.addEventListener("abort", () => resolve(), {
           once: true,
@@ -1872,9 +1828,7 @@ Deno.test("application shutdown interrupts local sends without cancelling their 
     });
     const reader = send.outputs.getReader();
     await started;
-
     await application.shutdown("test_application_shutdown");
-
     await assertRejects(
       () => reader.read(),
       Error,
@@ -1887,7 +1841,6 @@ Deno.test("application shutdown interrupts local sends without cancelling their 
     );
     assertEquals(settlement.cancelled, 0);
     assertEquals(settlement.unsettled > 0, true);
-
     waitForAbort = false;
     recovered = await createCopilotzApplication({
       database: db,
@@ -1901,17 +1854,11 @@ Deno.test("application shutdown interrupts local sends without cancelling their 
       engine: { retryBaseMs: 0, random: () => 0 },
     });
     await recovered.recoverAll({ limit: 100 });
-    await waitForTestDelivery(
-      recovered,
-      NAMESPACE,
-      send.eventId,
-      "succeeded",
-    );
+    await waitForTestDelivery(recovered, NAMESPACE, send.eventId, "succeeded");
     assertEquals(
       (await recovered.events.settlement(NAMESPACE, send.eventId)).cancelled,
       0,
     );
-
     let explicitCancelStarted = () => {};
     const explicitCancelStartedPromise = new Promise<void>((resolve) =>
       explicitCancelStarted = resolve
@@ -1940,7 +1887,6 @@ Deno.test("application shutdown interrupts local sends without cancelling their 
     await db.close();
   }
 });
-
 Deno.test("application composition remains factory-first and runtime-neutral", async () => {
   for (
     const module of [

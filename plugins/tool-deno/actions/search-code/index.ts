@@ -1,4 +1,4 @@
-import type { SearchCodeResult } from "../internal/fs-utils.ts";
+import type { SearchCodeResult } from "../../shared/fs-utils.ts";
 import type { ActionContext } from "@copilotz/copilotz/actions";
 import type { ActionDefinition } from "@copilotz/copilotz/actions";
 /**
@@ -8,7 +8,7 @@ import type { ActionDefinition } from "@copilotz/copilotz/actions";
  */
 
 import { defineAction } from "@copilotz/copilotz/actions";
-import { searchWorkspaceCode } from "../internal/fs-utils.ts";
+import { searchWorkspaceCode } from "../../shared/fs-utils.ts";
 
 interface SearchCodeParams {
   query: string;

@@ -5,4 +5,4 @@ export type {
   AdminRequest,
   AdminResponse,
   AdminUsageTotals,
-} from "./internal/contracts.ts";
+} from "./shared/contracts.ts";

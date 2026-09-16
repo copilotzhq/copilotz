@@ -52,12 +52,12 @@ export function protectedEventBody(value: unknown): ProtectedEventBody | null {
       key !== "protected"
     )
   ) throw new TypeError("Protected Event body is invalid.");
-  return Object.freeze({
+  return ({
     schema: PROTECTED_EVENT_BODY_SCHEMA,
     ownerId: requiredText(input.ownerId, "Protected Event owner id"),
     data: durableActionValue(input.data),
     protected: protectedValueRef(input.protected),
-  });
+  } as const);
 }
 
 export function publicProtectedEventData(value: unknown): unknown {
@@ -68,7 +68,7 @@ export function protectedEventRefs(
   value: unknown,
 ): readonly ProtectedValueRef[] {
   const body = protectedEventBody(value);
-  return body ? Object.freeze([body.protected]) : Object.freeze([]);
+  return body ? ([body.protected] as const) : ([] as const);
 }
 
 export async function prepareProtectedEventBody(
@@ -88,11 +88,11 @@ export async function prepareProtectedEventBody(
 > {
   const split = splitSecretActionValue(input.schema, input.data);
   if (!split.secret) {
-    return Object.freeze({
+    return ({
       body: split.publicValue,
       publicData: split.publicValue,
-      prepared: Object.freeze([]),
-    });
+      prepared: [] as const,
+    } as const);
   }
   if (!input.protectedValues) {
     throw new Error("Protected Event ingress requires a Secret Adapter.");
@@ -103,16 +103,16 @@ export async function prepareProtectedEventBody(
     ownerId,
     slot: "data",
   }, input.data);
-  return Object.freeze({
-    body: Object.freeze({
+  return ({
+    body: {
       schema: PROTECTED_EVENT_BODY_SCHEMA,
       ownerId,
       data: split.publicValue,
       protected: prepared.ref,
-    }),
+    } as const,
     publicData: split.publicValue,
-    prepared: Object.freeze([prepared]),
-  });
+    prepared: [prepared] as const,
+  } as const);
 }
 
 export async function hydrateProtectedEventBody(

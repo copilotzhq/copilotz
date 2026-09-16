@@ -7,20 +7,20 @@ import {
   loadThreadRecord,
 } from "@copilotz/copilotz/core";
 
-import type { MemoryProcessorContext } from "../../../internal/contracts.ts";
-import { optionalText, record } from "../../../internal/input.ts";
-import { activeMemoryRecords } from "../../../internal/retrieval.ts";
+import type { MemoryProcessorContext } from "../../../shared/contracts.ts";
+import { optionalText, record } from "../../../shared/input.ts";
+import { activeMemoryRecords } from "../../../shared/retrieval.ts";
 import {
   isEditoriallyVisible,
   renderLongTermMemory,
 } from "../../../authoring/consolidation/index.ts";
-import { checkpoints } from "../../../internal/checkpoints.ts";
+import { checkpoints } from "../../../shared/checkpoints.ts";
 import {
   checkpointAccessible,
   threadMemorySpaces,
-} from "../../../internal/access.ts";
-import { certifiedHistoryBoundary } from "../../../internal/source.ts";
-import { reserveMemoryCheckpoint } from "../../../internal/reservation.ts";
+} from "../../../shared/access.ts";
+import { certifiedHistoryBoundary } from "../../../shared/source.ts";
+import { reserveMemoryCheckpoint } from "../../../shared/reservation.ts";
 
 export const MEMORY_RESOURCE_ID = "copilotz.long_term";
 

@@ -29,10 +29,10 @@ export type EventDispatchReport = Readonly<{
   failures: readonly DeliveryDispatchFailure[];
 }>;
 
-const EMPTY_DISPATCH: EventDispatchReport = Object.freeze({
-  handles: Object.freeze([]),
-  failures: Object.freeze([]),
-});
+const EMPTY_DISPATCH: EventDispatchReport = {
+  handles: [] as const,
+  failures: [] as const,
+} as const;
 
 export type CoordinatedMutationResult<T> =
   & CommitEventMutationResult<T>
@@ -107,10 +107,10 @@ export function createEventCoordinator(
       for (const delivery of actionable) {
         options.executor.scheduleDelivery(delivery);
       }
-      return Object.freeze({
-        handles: Object.freeze([]),
-        failures: Object.freeze([]),
-      });
+      return ({
+        handles: [] as const,
+        failures: [] as const,
+      } as const);
     }
     const settled = await Promise.allSettled(
       actionable.map((delivery) => options.executor.dispatchDelivery(delivery)),
@@ -122,17 +122,17 @@ export function createEventCoordinator(
         handles.push(item.value);
         return;
       }
-      const failure = Object.freeze({
+      const failure = {
         deliveryId: actionable[index].id,
         error: item.reason,
-      });
+      } as const;
       failures.push(failure);
       reportFailure(failure);
     });
-    return Object.freeze({
-      handles: Object.freeze(handles),
-      failures: Object.freeze(failures),
-    });
+    return ({
+      handles: handles,
+      failures: failures,
+    } as const);
   };
 
   const commitMutation = async <T>(
@@ -156,10 +156,10 @@ export function createEventCoordinator(
     });
 
     if (!enableDispatch) {
-      return Object.freeze({
+      return ({
         ...committed,
         dispatch: EMPTY_DISPATCH,
-      });
+      } as const);
     }
     let publishError: unknown;
     if (!committed.deduplicated) {
@@ -172,11 +172,11 @@ export function createEventCoordinator(
       }
     }
     const dispatched = await dispatch(committed);
-    return Object.freeze({
+    return ({
       ...committed,
       dispatch: dispatched,
       ...(publishError === undefined ? {} : { publishError }),
-    });
+    } as const);
   };
 
   const flushCommitted = async (
@@ -194,7 +194,7 @@ export function createEventCoordinator(
     return await dispatch(result);
   };
 
-  return Object.freeze({
+  return ({
     commitMutation,
     flushCommitted,
     append(draft, appendOptions = {}) {
@@ -213,5 +213,5 @@ export function createEventCoordinator(
           options.store.databaseSchema,
       });
     },
-  });
+  } as const);
 }

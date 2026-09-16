@@ -1,6 +1,6 @@
 import { assertEquals } from "@std/assert";
 
-import type { ProviderConfig } from "../../internal/types.ts";
+import type { ProviderConfig } from "../../shared/types.ts";
 import { anthropicProvider } from "../anthropic/index.ts";
 import { deepseekProvider } from "../deepseek/index.ts";
 import { geminiProvider } from "../gemini/index.ts";

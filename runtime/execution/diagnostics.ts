@@ -7,7 +7,7 @@ export function reportDeliveryDiagnostic(
 ): void {
   if (!sink) return;
   try {
-    const result = sink(Object.freeze(diagnostic));
+    const result = sink(diagnostic);
     if (result && typeof (result as Promise<void>).then === "function") {
       void Promise.resolve(result).catch(() => undefined);
     }

@@ -11,9 +11,9 @@ import {
   type ActionDefinition,
   defineAction,
 } from "@copilotz/copilotz/actions";
-import type { KnowledgeDocumentSourceInput } from "../../internal/types.ts";
+import type { KnowledgeDocumentSourceInput } from "../../shared/types.ts";
 
-import { optional, record } from "../internal/input.ts";
+import { optional, record } from "../../shared/input.ts";
 export const INGEST_KNOWLEDGE_DOCUMENT_ACTION_ID =
   "copilotz.knowledge.ingestDocument";
 

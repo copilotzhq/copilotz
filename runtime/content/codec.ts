@@ -111,7 +111,7 @@ function part(value: unknown): ContentInput {
 export function decodeContent(
   input: unknown,
 ): ContentInput | readonly ContentInput[] {
-  return Array.isArray(input) ? Object.freeze(input.map(part)) : part(input);
+  return Array.isArray(input) ? (input.map(part)) : part(input);
 }
 
 /** Encode media once for durable JSON ingress; preserves sequence ordering and metadata. */
@@ -129,13 +129,11 @@ export function encodeContent(
     const decoded = part(value);
     if (typeof decoded === "object" && "bytes" in decoded) {
       const { bytes, ...rest } = decoded;
-      return Object.freeze({ ...rest, dataBase64: bytesToBase64(bytes) });
+      return ({ ...rest, dataBase64: bytesToBase64(bytes) } as const);
     }
     return decoded;
   };
-  return Array.isArray(input)
-    ? Object.freeze(input.map(encode))
-    : encode(input);
+  return Array.isArray(input) ? (input.map(encode)) : encode(input);
 }
 
 export { isContentRef } from "./schema.ts";

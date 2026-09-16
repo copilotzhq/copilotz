@@ -8,14 +8,14 @@ import {
   pageInfo,
   queryLimit,
   queryText,
-} from "../internal/projections.ts";
+} from "../../shared/projections.ts";
 import {
   type AdminActionContext,
   adminRequestSchema,
   asRequest,
   readOnly,
-} from "../internal/request.ts";
-import type { AdminRequest, AdminResponse } from "../../internal/contracts.ts";
+} from "../../shared/request.ts";
+import type { AdminRequest, AdminResponse } from "../../shared/contracts.ts";
 
 /** Lists conversation participants and their derived activity. */
 export const adminParticipantsAction: ActionDefinition<

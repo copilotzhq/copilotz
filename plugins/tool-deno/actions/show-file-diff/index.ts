@@ -1,4 +1,4 @@
-import type { DiffHunk } from "../internal/fs-utils.ts";
+import type { DiffHunk } from "../../shared/fs-utils.ts";
 import type { ActionContext } from "@copilotz/copilotz/actions";
 import type { ActionDefinition } from "@copilotz/copilotz/actions";
 /**
@@ -8,7 +8,7 @@ import type { ActionDefinition } from "@copilotz/copilotz/actions";
  */
 
 import { defineAction } from "@copilotz/copilotz/actions";
-import { getWorkspaceFileDiff } from "../internal/fs-utils.ts";
+import { getWorkspaceFileDiff } from "../../shared/fs-utils.ts";
 
 interface ShowFileDiffParams {
   path: string;

@@ -2,7 +2,6 @@ import type { CopilotzEvent } from "./types.ts";
 
 export type CopilotzEventFilter = Readonly<{
   namespace?: string;
-  threadId?: string;
   correlationId?: string;
   causationId?: string;
   types?: readonly string[];
@@ -36,8 +35,8 @@ function record(value: unknown): Readonly<Record<string, unknown>> | null {
 
 function contains(actual: unknown, expected: unknown): boolean {
   if (Array.isArray(expected)) {
-    return Array.isArray(actual) && expected.length === actual.length &&
-      expected.every((item, index) => contains(actual[index], item));
+    return Array.isArray(actual) &&
+      expected.every((item) => actual.some((value) => contains(value, item)));
   }
   const expectedRecord = record(expected);
   if (expectedRecord) {
@@ -59,9 +58,6 @@ export function matchesCopilotzEvent(
   filter: CopilotzEventFilter = {},
 ): boolean {
   if (filter.namespace !== undefined && event.namespace !== filter.namespace) {
-    return false;
-  }
-  if (filter.threadId !== undefined && event.threadId !== filter.threadId) {
     return false;
   }
   if (
@@ -110,13 +106,13 @@ export function createCopilotzEventHub(): CopilotzEventHub {
   >();
   const filters = new Map<number, CopilotzEventFilter>();
 
-  return Object.freeze({
+  return ({
     publish(event) {
       if (closed) return Promise.resolve();
       for (const [id, controller] of subscribers) {
         if (!matchesCopilotzEvent(event, filters.get(id))) continue;
         try {
-          controller.enqueue(event);
+          controller.enqueue(structuredClone(event));
         } catch {
           subscribers.delete(id);
           filters.delete(id);
@@ -134,7 +130,7 @@ export function createCopilotzEventHub(): CopilotzEventHub {
             return;
           }
           subscribers.set(id, controller);
-          filters.set(id, Object.freeze({ ...filter }));
+          filters.set(id, structuredClone(filter));
         },
         cancel() {
           subscribers.delete(id);
@@ -157,7 +153,7 @@ export function createCopilotzEventHub(): CopilotzEventHub {
       subscribers.clear();
       filters.clear();
     },
-  });
+  } as const);
 }
 
 function positiveDuration(

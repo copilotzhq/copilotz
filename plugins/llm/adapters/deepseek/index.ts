@@ -9,7 +9,7 @@ import type {
   ProviderFactory,
   ProviderFinishReason,
   ProviderUsageUpdate,
-} from "../../internal/types.ts";
+} from "../../shared/types.ts";
 import { providerEndpoint } from "../transport/index.ts";
 import {
   matchingNativeBlocks,

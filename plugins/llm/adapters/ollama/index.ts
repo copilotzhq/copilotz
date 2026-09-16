@@ -8,7 +8,7 @@ import type {
   ProviderConfig,
   ProviderFactory,
   ProviderFinishReason,
-} from "../../internal/types.ts";
+} from "../../shared/types.ts";
 import { providerEndpoint } from "../transport/index.ts";
 import {
   matchingNativeBlocks,

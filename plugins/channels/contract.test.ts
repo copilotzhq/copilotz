@@ -1,3 +1,4 @@
+import { coreEvent } from "../core/shared/events/index.ts";
 import { assertEquals, assertThrows } from "@std/assert";
 import * as channelPublic from "./index.ts";
 import { channelIngress } from "../channel-core/authoring/channel-ingress/index.ts";
@@ -8,7 +9,6 @@ import { telegramChannelPlugin } from "../channel-telegram/index.ts";
 import { webChannelPlugin } from "../channel-web/index.ts";
 import { whatsappChannelPlugin } from "../channel-whatsapp/index.ts";
 import { zendeskChannelPlugin } from "../channel-zendesk/index.ts";
-
 Deno.test("Channel Resource snapshots exact data without invoking accessors", () => {
   let reads = 0;
   const accessor = Object.defineProperty({}, "egress", {
@@ -20,27 +20,19 @@ Deno.test("Channel Resource snapshots exact data without invoking accessors", ()
   });
   assertThrows(() => defineChannelResource(accessor as never), TypeError);
   assertEquals(reads, 0);
-
-  assertThrows(
-    () =>
-      defineChannelResource({
-        egress: "external",
-        legacyId: "telegram",
-      } as never),
-    TypeError,
-  );
+  assertThrows(() =>
+    defineChannelResource({
+      egress: "external",
+      legacyId: "telegram",
+    } as never), TypeError);
   const sparse = new Array<string>(2);
   sparse[1] = "agent";
-  assertThrows(
-    () =>
-      defineChannelResource({
-        egress: "external",
-        defaultAgentAliases: sparse,
-      }),
-    TypeError,
-  );
+  assertThrows(() =>
+    defineChannelResource({
+      egress: "external",
+      defaultAgentAliases: sparse,
+    }), TypeError);
 });
-
 Deno.test("channelIngress rejects occurrence and option accessors and extras", () => {
   let occurrenceReads = 0;
   const occurrence = Object.defineProperties({}, {
@@ -53,32 +45,21 @@ Deno.test("channelIngress rejects occurrence and option accessors and extras", (
       },
     },
   });
-  assertThrows(
-    () => channelIngress("web", occurrence as never),
-    TypeError,
-  );
+  assertThrows(() => channelIngress("web", occurrence as never), TypeError);
   assertEquals(occurrenceReads, 0);
-
-  assertThrows(
-    () =>
-      channelIngress("web", {
-        id: "one",
-        input: {},
-        route: {},
-      } as never),
-    TypeError,
-  );
-  assertThrows(
-    () =>
-      channelIngress("web", { id: "one", input: {} }, {
-        get correlationId() {
-          throw new Error("must not execute");
-        },
-      } as never),
-    TypeError,
-  );
+  assertThrows(() =>
+    channelIngress("web", {
+      id: "one",
+      input: {},
+      route: {},
+    } as never), TypeError);
+  assertThrows(() =>
+    channelIngress("web", { id: "one", input: {} }, {
+      get correlationId() {
+        throw new Error("must not execute");
+      },
+    } as never), TypeError);
 });
-
 Deno.test("Channel public data snapshots are isolated from caller mutation", () => {
   const aliases = ["primary"];
   const resourceMetadata = { tier: "gold" };
@@ -91,14 +72,11 @@ Deno.test("Channel public data snapshots are isolated from caller mutation", () 
   resourceMetadata.tier = "changed";
   assertEquals(resource.defaultAgentAliases, ["primary"]);
   assertEquals(resource.metadata, { tier: "gold" });
-
   const providerInput = { nested: { text: "original" } };
   const optionsMetadata = { host: "gateway" };
-  const envelope = channelIngress(
-    "web",
-    { id: "one", input: providerInput },
-    { metadata: optionsMetadata },
-  );
+  const envelope = channelIngress("web", { id: "one", input: providerInput }, {
+    metadata: optionsMetadata,
+  });
   providerInput.nested.text = "changed";
   optionsMetadata.host = "changed";
   assertEquals(envelope.payload, {
@@ -106,14 +84,22 @@ Deno.test("Channel public data snapshots are isolated from caller mutation", () 
     id: "one",
     input: { nested: { text: "original" } },
   });
-  assertEquals(envelope.metadata, { host: "gateway" });
-  assertEquals(envelope.visibility, { kind: "internal" });
+  assertEquals(envelope.metadata, {
+    host: "gateway",
+    core: { visibility: { kind: "internal" } },
+  });
+  assertEquals(coreEvent(envelope).visibility, { kind: "internal" });
 });
-
 Deno.test("Channel public exports and provider composition expose only the Resource/Adapter split", () => {
   assertEquals(
     Object.keys(channelPublic).sort(),
     [
+      "channelProviderOptions",
+      "outboundText",
+      "providerRecord",
+      "requestHeader",
+      "requiredProviderText",
+      "timingSafeTextEqual",
       "CHANNELS_PLUGIN_ID",
       "CHANNELS_PLUGIN_VERSION",
       "CHANNEL_BINDING_COLLECTION",

@@ -10,7 +10,7 @@ export {
 } from "./actions/index.ts";
 export { scheduledJobCollection } from "./collections/index.ts";
 export * from "./authoring/index.ts";
-export { getNextScheduledRunAt } from "./internal/model.ts";
+export { getNextScheduledRunAt } from "./shared/model.ts";
 export {
   SCHEDULES_PLUGIN_ID,
   SCHEDULES_PLUGIN_VERSION,
@@ -28,4 +28,4 @@ export type {
   ScheduledJobTickInput,
   ScheduledJobTickItem,
   ScheduledJobTickResult,
-} from "./internal/contracts.ts";
+} from "./shared/contracts.ts";

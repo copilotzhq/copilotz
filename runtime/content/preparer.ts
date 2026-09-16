@@ -42,7 +42,7 @@ export function createContentPreparer(
   const createId = options.createId ?? defaultCreateId;
   const digest = options.digest ?? digestContent;
 
-  return Object.freeze({
+  return ({
     async prepare(input, normalizeOptions) {
       const namespace = normalizeOptions.namespace.trim();
       const assets: PreparedAsset[] = [];
@@ -53,21 +53,23 @@ export function createContentPreparer(
           async materialize(candidate) {
             const body = candidate.body.slice();
             const id = createId();
-            assets.push(Object.freeze(withoutUndefined({
-              id,
-              namespace,
-              mediaType: candidate.mediaType,
-              body,
-              byteLength: body.byteLength,
-              digest: await digest(body),
-              idempotencyKey: candidate.idempotencyKey,
-              origin: candidate.origin
-                ? structuredClone(candidate.origin)
-                : undefined,
-              metadata: candidate.fields.metadata
-                ? structuredClone(candidate.fields.metadata)
-                : undefined,
-            })) as PreparedAsset);
+            assets.push(
+              (withoutUndefined({
+                id,
+                namespace,
+                mediaType: candidate.mediaType,
+                body,
+                byteLength: body.byteLength,
+                digest: await digest(body),
+                idempotencyKey: candidate.idempotencyKey,
+                origin: candidate.origin
+                  ? structuredClone(candidate.origin)
+                  : undefined,
+                metadata: candidate.fields.metadata
+                  ? structuredClone(candidate.fields.metadata)
+                  : undefined,
+              })) as PreparedAsset,
+            );
             return withoutUndefined({
               assetId: id,
               kind: candidate.kind,
@@ -81,10 +83,10 @@ export function createContentPreparer(
           },
         },
       );
-      return Object.freeze({
-        content: Object.freeze(content.map(cloneContentRef)),
-        assets: Object.freeze(assets),
-      });
+      return ({
+        content: content.map(cloneContentRef),
+        assets: assets,
+      } as const);
     },
-  });
+  } as const);
 }

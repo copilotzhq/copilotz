@@ -26,14 +26,14 @@ function boundedPositive(
 }
 
 function createDefaultScheduler(): DeliveryWorkloadScheduler {
-  return Object.freeze({
+  return ({
     schedule(callback, delayMs) {
       return setTimeout(callback, delayMs);
     },
     cancel(handle) {
       clearTimeout(handle as ReturnType<typeof setTimeout>);
     },
-  });
+  } as const);
 }
 
 function requiredMetadataString(
@@ -54,7 +54,7 @@ export function parseDeliveryDispatchMetadata(
   if (schema !== "copilotz.delivery.dispatch.v1") {
     throw new TypeError(`Unsupported delivery dispatch schema '${schema}'.`);
   }
-  return Object.freeze({
+  return ({
     schema,
     databaseSchema: requiredMetadataString(metadata, "databaseSchema"),
     deliveryId: requiredMetadataString(metadata, "deliveryId"),
@@ -63,18 +63,18 @@ export function parseDeliveryDispatchMetadata(
     namespace: requiredMetadataString(metadata, "namespace"),
     dispatchAttemptId: requiredMetadataString(metadata, "dispatchAttemptId"),
     idempotencyKey: requiredMetadataString(metadata, "idempotencyKey"),
-  });
+  } as const);
 }
 
 function statusMetadata(
   deliveryId: string,
   status: string,
 ): Readonly<Record<string, string>> {
-  return Object.freeze({
+  return ({
     schema: "copilotz.delivery.result.v1",
     deliveryId,
     status,
-  });
+  } as const);
 }
 
 function deliveryMismatch(
@@ -219,21 +219,21 @@ export function createDeliveryWorkload(
               "A delivery mutation operation key is required.",
             );
           }
-          return Object.freeze({
+          return ({
             causationId: event.id,
             correlationId: event.correlationId,
             deduplicationId: `delivery:${delivery.id}:${key}`,
             settlementScopeId: delivery.settlementScopeId,
-            metadata: Object.freeze({
+            metadata: {
               ...structuredClone(mutationMetadata),
               sourceEventId: event.id,
               sourceDeliveryId: delivery.id,
               sourceConsumerId: delivery.consumerId,
-            }),
-          });
+            } as const,
+          } as const);
         };
 
-      const base: DeliveryContextBase = Object.freeze({
+      const base: DeliveryContextBase = {
         databaseSchema: metadata.databaseSchema,
         event,
         delivery,
@@ -242,7 +242,7 @@ export function createDeliveryWorkload(
         idempotencyKey: delivery.id,
         dispatchAttemptId: metadata.dispatchAttemptId,
         createMutationIdentity,
-      });
+      } as const;
       const context = await options.createContext(base);
       abort.signal.throwIfAborted();
       const processorEvent = await resolveProcessorEvent(store, event);

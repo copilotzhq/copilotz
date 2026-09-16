@@ -85,7 +85,7 @@ function metadataFrame(metadata: JsonRecord): Uint8Array {
 }
 
 function outputFrames(bytes: Uint8Array): readonly Uint8Array[] {
-  if (bytes.byteLength === 0) return Object.freeze([]);
+  if (bytes.byteLength === 0) return ([] as const);
   const frames: Uint8Array[] = [];
   for (
     let offset = 0;
@@ -102,7 +102,7 @@ function outputFrames(bytes: Uint8Array): readonly Uint8Array[] {
       ),
     );
   }
-  return Object.freeze(frames);
+  return frames;
 }
 
 function concat(
@@ -161,10 +161,10 @@ async function* decodeFrames(
       }
       const total = FRAME_HEADER_BYTES + length;
       if (buffered.byteLength < total) break;
-      yield Object.freeze({
+      yield ({
         kind,
         payload: buffered.slice(FRAME_HEADER_BYTES, total),
-      });
+      } as const);
       buffered = buffered.slice(total);
     }
   }
@@ -193,11 +193,11 @@ function parseOutput(payload: Uint8Array): RuntimeOutputDescriptor {
       ...(value.causationId ? { causationId: value.causationId } : {}),
       ...(value.correlationId ? { correlationId: value.correlationId } : {}),
     });
-    return Object.freeze({
+    return ({
       ...descriptor,
       ...(value.replayKey ? { replayKey: value.replayKey } : {}),
       ...(value.streamOrdinal ? { streamOrdinal: value.streamOrdinal } : {}),
-    });
+    } as const);
   }
   if (
     typeof value.durable !== "boolean" ||
@@ -207,8 +207,6 @@ function parseOutput(payload: Uint8Array): RuntimeOutputDescriptor {
     typeof value.createdAt !== "string" ||
     Number.isNaN(new Date(value.createdAt).getTime()) ||
     !Object.hasOwn(value, "payload") ||
-    !value.routing || typeof value.routing !== "object" ||
-    !value.visibility || typeof value.visibility !== "object" ||
     !value.metadata || typeof value.metadata !== "object"
   ) {
     throw new TypeError("Copilotz work output contains an invalid event.");
@@ -224,13 +222,11 @@ function parseOutput(payload: Uint8Array): RuntimeOutputDescriptor {
       "Copilotz work output contains an invalid durable event.",
     );
   }
-  return Object.freeze(value) as unknown as CopilotzEvent;
+  return value as unknown as CopilotzEvent;
 }
 
 function parseMetadata(payload: Uint8Array): JsonRecord {
-  return Object.freeze(
-    jsonRecord(JSON.parse(decoder.decode(payload)), "Metadata frame"),
-  );
+  return (jsonRecord(JSON.parse(decoder.decode(payload)), "Metadata frame"));
 }
 
 function workSourceKey(metadata: JsonRecord): string | undefined {
@@ -292,7 +288,7 @@ function createOutputChannel(
     pending = next.catch(() => undefined);
     return next;
   };
-  return Object.freeze({
+  return ({
     write: (bytes) => enqueue(() => writer.write(bytes)),
     async close() {
       if (closed) return;
@@ -306,16 +302,16 @@ function createOutputChannel(
       closed = true;
       await writer.abort(error).catch(() => undefined);
     },
-  });
+  } as const);
 }
 
 function normalizeResult(result: WorkerWorkResult): Readonly<{
   metadata?: JsonRecord;
   body?: Uint8Array | ReadableStream<Uint8Array>;
 }> {
-  if (result === undefined) return Object.freeze({});
+  if (result === undefined) return ({} as const);
   if (result instanceof Uint8Array || result instanceof ReadableStream) {
-    return Object.freeze({ body: result });
+    return ({ body: result } as const);
   }
   const value = jsonRecord(result, "Worker result");
   const metadata = value.metadata === undefined
@@ -330,10 +326,10 @@ function normalizeResult(result: WorkerWorkResult): Readonly<{
       "Worker result body must be bytes or a ReadableStream.",
     );
   }
-  return Object.freeze({
+  return ({
     ...(metadata ? { metadata } : {}),
     ...(body ? { body } : {}),
-  });
+  } as const);
 }
 
 async function writeBody(
@@ -400,15 +396,17 @@ export function createCopilotzWorkOutputRelay(): CopilotzWorkOutputRelay {
       const key = workSourceKey(context.metadata);
       add(key, channel);
 
-      await context.sendMetadata(Object.freeze({
-        schema: COPILOTZ_WORK_OUTPUT_SCHEMA,
-        framing: COPILOTZ_WORK_FRAME_SCHEMA,
-        workload,
-      }));
+      await context.sendMetadata(
+        {
+          schema: COPILOTZ_WORK_OUTPUT_SCHEMA,
+          framing: COPILOTZ_WORK_FRAME_SCHEMA,
+          workload,
+        } as const,
+      );
 
       void (async () => {
         let metadataWritten = false;
-        const bridgedContext: WorkerWorkContext = Object.freeze({
+        const bridgedContext: WorkerWorkContext = {
           ...context,
           async sendMetadata(metadata) {
             if (metadataWritten) {
@@ -417,7 +415,7 @@ export function createCopilotzWorkOutputRelay(): CopilotzWorkOutputRelay {
             metadataWritten = true;
             await channel.write(metadataFrame(metadata));
           },
-        });
+        } as const;
         try {
           context.signal.throwIfAborted();
           const result = normalizeResult(await handler(bridgedContext));
@@ -447,7 +445,7 @@ export function createCopilotzWorkOutputRelay(): CopilotzWorkOutputRelay {
     };
   };
 
-  return Object.freeze({
+  return ({
     async publish(output) {
       const key = eventSourceKey(output);
       if (!key) return;
@@ -457,14 +455,14 @@ export function createCopilotzWorkOutputRelay(): CopilotzWorkOutputRelay {
       );
     },
     wrap(workloads) {
-      return Object.freeze(Object.fromEntries(
+      return (Object.fromEntries(
         Object.entries(workloads).map(([name, handler]) => [
           name,
           wrapOne(name, handler),
         ]),
       ));
     },
-  });
+  } as const);
 }
 
 function isBridgeMetadata(
@@ -486,7 +484,7 @@ function deferred<T>(): Readonly<{
     resolve = res;
     reject = rej;
   });
-  return Object.freeze({ promise, resolve, reject });
+  return ({ promise, resolve, reject } as const);
 }
 
 /** Decodes Copilotz frames while preserving the ordinary Oxian WorkHandle. */
@@ -559,7 +557,7 @@ export function relayCopilotzWorkHandle(
   })();
   pump.catch(() => undefined);
 
-  return Object.freeze({
+  return ({
     operationId: work.operationId,
     streamId: work.streamId,
     metadata: resultMetadata.promise,
@@ -575,5 +573,5 @@ export function relayCopilotzWorkHandle(
       await writer.abort(reason).catch(() => undefined);
       return await work.cancel(reason);
     },
-  });
+  } as const);
 }

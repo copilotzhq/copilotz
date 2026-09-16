@@ -25,14 +25,14 @@ export type ProgressiveBodyMaintenanceResult = Readonly<{
 }>;
 
 export const EMPTY_PROGRESSIVE_BODY_MAINTENANCE:
-  ProgressiveBodyMaintenanceResult = Object.freeze({
+  ProgressiveBodyMaintenanceResult = {
     examined: 0,
     aborted: 0,
     sealed: 0,
     terminated: 0,
     deferred: 0,
-    errors: Object.freeze([]),
-  });
+    errors: [] as const,
+  } as const;
 
 function isActive(
   head: TerminalBodyHead | MutableBodyHead,
@@ -84,10 +84,12 @@ export async function maintainProgressiveBodies(
         if (deleted) aborted++;
         else deferred++;
       } catch (error) {
-        errors.push(Object.freeze({
-          bodyId: body.bodyId,
-          message: error instanceof Error ? error.message : String(error),
-        }));
+        errors.push(
+          {
+            bodyId: body.bodyId,
+            message: error instanceof Error ? error.message : String(error),
+          } as const,
+        );
       }
       continue;
     }
@@ -126,19 +128,21 @@ export async function maintainProgressiveBodies(
         terminated++;
       }
     } catch (error) {
-      errors.push(Object.freeze({
-        bodyId: body.bodyId,
-        message: error instanceof Error ? error.message : String(error),
-      }));
+      errors.push(
+        {
+          bodyId: body.bodyId,
+          message: error instanceof Error ? error.message : String(error),
+        } as const,
+      );
     }
   }
-  return Object.freeze({
+  return ({
     examined,
     aborted,
     sealed,
     terminated,
     deferred,
-    errors: Object.freeze(errors),
+    errors: errors,
     ...(page.after ? { after: page.after } : {}),
-  });
+  } as const);
 }

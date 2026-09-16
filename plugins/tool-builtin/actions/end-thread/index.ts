@@ -4,16 +4,14 @@ import type { ActionDefinition } from "@copilotz/copilotz/actions";
  *
  * @module
  */
-
 import { defineAction } from "@copilotz/copilotz/actions";
-import { record, requiredText } from "../internal/input.ts";
-import { metadataText } from "../internal/participants.ts";
-
-export const endThreadAction: ActionDefinition<
-  unknown,
-  { threadId: string; summary: string; status: string },
-  ActionContext
-> = defineAction({
+import { record, requiredText } from "../../shared/input.ts";
+import { metadataText } from "../../shared/participants.ts";
+export const endThreadAction: ActionDefinition<unknown, {
+  threadId: string;
+  summary: string;
+  status: string;
+}, ActionContext> = defineAction({
   id: "copilotz.tools.builtin.end_thread",
   inputSchema: {
     type: "object",
@@ -27,7 +25,9 @@ export const endThreadAction: ActionDefinition<
       "Thread ID",
     );
     const thread = await context.collections.thread.get({ id: threadId });
-    if (!thread) throw new Error("The active thread was not found.");
+    if (!thread) {
+      throw new Error("The active thread was not found.");
+    }
     await context.collections.thread.update({
       id: thread.id,
       set: {
@@ -36,7 +36,11 @@ export const endThreadAction: ActionDefinition<
       },
     }, {
       operationKey: `end_thread:${context.action.runId}`,
-      threadId: thread.id,
+      metadata: {
+        core: {
+          threadId: thread.id,
+        },
+      },
     });
     return { threadId: thread.id, summary, status: "archived" };
   },

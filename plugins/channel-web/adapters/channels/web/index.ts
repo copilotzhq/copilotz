@@ -14,7 +14,7 @@ import type {
   ChannelParticipantInput,
   ChannelParticipantRef,
   ChannelThreadInput,
-} from "../../../../channel-core/internal/contracts.ts";
+} from "@copilotz/copilotz/channels/core";
 
 const VISIBILITIES = new Set<ChannelMessageVisibility>([
   "public",

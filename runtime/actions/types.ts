@@ -1,3 +1,4 @@
+import type { VectorReader, VectorTransaction } from "../vectors/index.ts";
 import type { ActionContentDeclaration } from "./content.ts";
 import type { ExtendedJSONSchema } from "../../dependencies/json-schema-to-ts.ts";
 import type { CoordinatedMutationResult } from "../events/coordinator.ts";
@@ -143,6 +144,7 @@ export type ActionTransactionContext<
 > = Readonly<{
   collections: RuntimeTransactionCollections<TCollections>;
   relations: CollectionTransactionRelations;
+  vectors: VectorTransaction;
 }>;
 
 /**
@@ -166,6 +168,7 @@ export interface RuntimeContext<
   readonly adapters: TAdapters;
   readonly actions: TActions;
   readonly collections: TCollections;
+  readonly vectors: VectorReader;
   readonly content: RuntimeContent;
   readonly streams: RuntimeStreams;
   readonly signal: AbortSignal;

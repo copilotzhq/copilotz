@@ -31,3 +31,6 @@ export type {
   ManagedOminipgDatabase,
   OminipgDatabaseLike,
 } from "./ominipg.ts";
+
+export { provisionVectorStorage } from "../vectors/index.ts";
+export type { VectorProfile } from "../vectors/index.ts";

@@ -122,11 +122,11 @@ export async function writeEventBody(
       `Event body '${input.id}' already exists with different content.`,
     );
   }
-  return Object.freeze({
+  return ({
     eventBodyId: input.id,
     schemaVersion: EVENT_BODY_SCHEMA_VERSION,
     mediaType: "application/json",
-  });
+  } as const);
 }
 
 export async function readEventBody<T>(
@@ -154,11 +154,11 @@ export async function readEventBody<T>(
 export function createEventBodyStore(
   context: EventBodyStoreContext,
 ): EventBodyStore {
-  return Object.freeze({
+  return ({
     write: (input) => writeEventBody(context, input),
     read: <T>(namespace: string, dataRef: EventBodyRef) =>
       readEventBody<T>(context, namespace, dataRef),
-  });
+  } as const);
 }
 
 export function eventDataRef(payload: unknown): EventBodyRef {
@@ -180,9 +180,9 @@ export function eventDataRef(payload: unknown): EventBodyRef {
       "Collection event payload has an invalid dataRef.mediaType.",
     );
   }
-  return Object.freeze({
+  return ({
     eventBodyId: ref.eventBodyId,
     schemaVersion,
     mediaType: "application/json",
-  });
+  } as const);
 }

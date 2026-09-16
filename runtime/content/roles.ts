@@ -37,8 +37,8 @@ function asPrepared(value: DurableContentInput): PreparedContent {
 }
 
 export function contentSequence(value: unknown): ContentSequence {
-  if (!Array.isArray(value)) return Object.freeze([]);
-  return Object.freeze(value) as ContentSequence;
+  if (!Array.isArray(value)) return ([] as const);
+  return value as ContentSequence;
 }
 
 /** Combines independently prepared fields into one transaction batch. */
@@ -77,10 +77,10 @@ export function composeRoleContent(
       if (!existing) assets.set(asset.id, asset);
     }
   }
-  return Object.freeze({
-    content: Object.freeze(content),
-    assets: Object.freeze([...assets.values()]),
-  });
+  return ({
+    content: content,
+    assets: [...assets.values()] as const,
+  } as const);
 }
 
 export function replaceContentRoles(
@@ -88,8 +88,8 @@ export function replaceContentRoles(
   replacement: ContentSequence,
   roles: ReadonlySet<string>,
 ): ContentSequence {
-  return Object.freeze([
+  return ([
     ...current.filter((ref) => !roles.has(ref.role)).map(cloneContentRef),
     ...replacement.map(cloneContentRef),
-  ]);
+  ] as const);
 }

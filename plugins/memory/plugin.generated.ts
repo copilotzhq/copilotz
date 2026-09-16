@@ -10,22 +10,23 @@ import entry6 from "./collections/long-term-memory/index.ts";
 import entry7 from "./collections/memory-record/index.ts";
 import entry8 from "./collections/memory-space-access/index.ts";
 import entry9 from "./collections/memory-space/index.ts";
-import entry10 from "./dependencies/core/index.ts";
-import entry11 from "./processors/dispatch-consolidation/index.ts";
-import entry12 from "./processors/reserve-memory/index.ts";
-import entry13 from "./processors/settle-consolidation/index.ts";
-import entry14 from "./resources/memory/config/index.ts";
-import entry15 from "./resources/memory/kinds/index.ts";
-import entry16 from "./resources/promptContext/memory/index.ts";
-import entry17 from "./resources/tools/consolidate-memory/index.ts";
-import entry18 from "./resources/tools/inspect-memory/index.ts";
-import entry19 from "./resources/tools/invalidate-memory/index.ts";
-import entry20 from "./resources/tools/list-knowledge-spaces/index.ts";
-import entry21 from "./resources/tools/search-memory/index.ts";
-import entry22 from "./resources/tools/set-memory-status/index.ts";
+import entry10 from "./processors/dispatch-consolidation/index.ts";
+import entry11 from "./processors/reserve-memory/index.ts";
+import entry12 from "./processors/settle-consolidation/index.ts";
+import entry13 from "./resources/memory/config/index.ts";
+import entry14 from "./resources/memory/kinds/index.ts";
+import entry15 from "./resources/promptContext/memory/index.ts";
+import entry16 from "./resources/tools/consolidate-memory/index.ts";
+import entry17 from "./resources/tools/inspect-memory/index.ts";
+import entry18 from "./resources/tools/invalidate-memory/index.ts";
+import entry19 from "./resources/tools/list-knowledge-spaces/index.ts";
+import entry20 from "./resources/tools/search-memory/index.ts";
+import entry21 from "./resources/tools/set-memory-status/index.ts";
+import { corePlugin as dependency0 } from "../core/plugin.ts";
 const definition = {
   id: "@copilotz/core-long-term-memory",
   version: "4.0.0",
+  plugins: [dependency0],
   collections: {
     "longTermMemory": entry6,
     "memoryRecord": entry7,
@@ -41,28 +42,27 @@ const definition = {
     "set_memory_status": entry5,
   },
   processors: {
-    "dispatchConsolidation": entry11,
-    "reserveMemory": entry12,
-    "settleConsolidation": entry13,
+    "dispatchConsolidation": entry10,
+    "reserveMemory": entry11,
+    "settleConsolidation": entry12,
   },
   resources: {
     "memory": {
-      "config": entry14,
-      "kinds": entry15,
+      "config": entry13,
+      "kinds": entry14,
     },
     "promptContext": {
-      "memory": entry16,
+      "memory": entry15,
     },
     "tools": {
-      "consolidate_memory": entry17,
-      "inspect_memory": entry18,
-      "invalidate_memory": entry19,
-      "list_knowledge_spaces": entry20,
-      "search_memory": entry21,
-      "set_memory_status": entry22,
+      "consolidate_memory": entry16,
+      "inspect_memory": entry17,
+      "invalidate_memory": entry18,
+      "list_knowledge_spaces": entry19,
+      "search_memory": entry20,
+      "set_memory_status": entry21,
     },
   },
-  plugins: [entry10],
 } as const;
 const plugin: DefinedPlugin<typeof definition> = definePlugin(definition);
 export default plugin;

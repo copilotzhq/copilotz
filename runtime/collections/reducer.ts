@@ -38,11 +38,11 @@ function record(value: unknown): Record<string, unknown> {
 
 export function mapNode(row: NodeRow): CollectionRecord {
   const data = record(row.data);
-  return Object.freeze({
+  return ({
     ...data,
     id: row.id,
     namespace: row.namespace,
-  }) as CollectionRecord;
+  } as const) as CollectionRecord;
 }
 
 export function searchContent(

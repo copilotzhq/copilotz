@@ -20,7 +20,7 @@ import {
   listSnapshots,
   readWorkspaceFile,
   writeWorkspaceFile,
-} from "../internal/fs-utils.ts";
+} from "../../shared/fs-utils.ts";
 
 export const writeFileAction: ActionDefinition<
   WriteFileParams,

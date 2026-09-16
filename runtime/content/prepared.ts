@@ -25,19 +25,17 @@ export function mergePreparedContent(
       }
     }
   }
-  return Object.freeze({
-    content: Object.freeze(
-      present.flatMap((batch) =>
-        batch.content.map((ref) =>
-          cloneContentRef({
-            ...ref,
-            assetId: remap.get(ref.assetId) ?? ref.assetId,
-          })
-        )
-      ),
+  return ({
+    content: present.flatMap((batch) =>
+      batch.content.map((ref) =>
+        cloneContentRef({
+          ...ref,
+          assetId: remap.get(ref.assetId) ?? ref.assetId,
+        })
+      )
     ),
-    assets: Object.freeze(assets),
-  });
+    assets: assets,
+  } as const);
 }
 
 /** Reuse a sealed body's storage only when it exactly matches the target content. */
@@ -59,13 +57,15 @@ export function adoptPreparedBody(
     final.mediaType !== ready.mediaType ||
     final.byteLength !== ready.byteLength || final.digest !== ready.digest
   ) return undefined;
-  return Object.freeze({
+  return ({
     content: target.content,
-    assets: Object.freeze([Object.freeze({
-      ...final,
-      body: new Uint8Array(),
-      readyBody: ready.readyBody,
-      location: ready.location,
-    })]),
-  });
+    assets: [
+      {
+        ...final,
+        body: new Uint8Array(),
+        readyBody: ready.readyBody,
+        location: ready.location,
+      } as const,
+    ] as const,
+  } as const);
 }

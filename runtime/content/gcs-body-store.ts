@@ -288,9 +288,9 @@ export function createGcsBodyStore(
         !Number.isFinite(Date.parse(protectedUntil))) ||
       meta.contentEncoding !== undefined
     ) malformed();
-    return Object.freeze({
+    return ({
       generation,
-      head: Object.freeze({
+      head: {
         bodyId,
         state: "ready" as const,
         byteLength: size,
@@ -303,8 +303,8 @@ export function createGcsBodyStore(
             Number.isFinite(Date.parse(meta.updated))
           ? { lastModified: new Date(meta.updated).toISOString() }
           : {}),
-      }),
-    });
+      } as const,
+    } as const);
   };
   const validate = (input: PutBodyInput, head: ReadyBodyHead) => {
     if (
@@ -487,16 +487,16 @@ export function createGcsBodyStore(
     abort(_input: AbortBodyInput): Promise<void> {
       unsupported();
     },
-    maintenance: Object.freeze({
+    maintenance: {
       list() {
-        return Promise.resolve(Object.freeze({ bodies: [] }));
+        return Promise.resolve({ bodies: [] } as const);
       },
       delete() {
         return Promise.resolve(false);
       },
-    }),
+    } as const,
   };
-  return Object.freeze(store);
+  return store;
 }
 
 /** Cluster-reachable immutable Ready tier. GC stays disabled until full CAS maintenance is added. */

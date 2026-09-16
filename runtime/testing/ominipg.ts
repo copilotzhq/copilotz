@@ -16,7 +16,7 @@ export async function createTestDatabase(
   options: CopilotzOminipgOptions = {},
 ): Promise<TestDatabase> {
   const managed = await openManagedOminipgDatabase(options);
-  return Object.freeze({
+  return ({
     session: managed.session,
     query: managed.session.query,
     transaction: managed.session.transaction,
@@ -25,5 +25,5 @@ export async function createTestDatabase(
       : {}),
     ...(managed.session.listen ? { listen: managed.session.listen } : {}),
     close: managed.close,
-  });
+  } as const);
 }

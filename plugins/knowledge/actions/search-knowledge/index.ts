@@ -1,4 +1,4 @@
-import { knowledgeConfig } from "../../internal/config.ts";
+import { knowledgeConfig } from "../../shared/config.ts";
 /** Owns the search-knowledge Knowledge Action. @module */
 import {
   type ActionContext,
@@ -11,16 +11,16 @@ import type {
   KnowledgeDocument,
   KnowledgeSearchInput,
   KnowledgeSearchResult,
-} from "../../internal/types.ts";
+} from "../../shared/types.ts";
 
-import type { KnowledgeActionContext } from "../internal/context.ts";
+import type { KnowledgeActionContext } from "../../shared/context.ts";
 import {
   finiteVector,
   optional,
   record,
   requireText,
-} from "../internal/input.ts";
-import { documentMatchesScope, stringList } from "../internal/records.ts";
+} from "../../shared/input.ts";
+import { documentMatchesScope, stringList } from "../../shared/records.ts";
 export const SEARCH_KNOWLEDGE_ACTION_ID = "copilotz.knowledge.searchDocuments";
 
 export type SearchKnowledgeActionInput = Readonly<{

@@ -1,6 +1,6 @@
 import { consolidateMemoryAction } from "../../../actions/consolidate-memory/index.ts";
 /** Tool resource exposing semantic-memory consolidation to an LLM. @module */
-import { defineTool, type ToolResource } from "@copilotz/copilotz/tools";
+import { defineTool, type ToolResource } from "@copilotz/copilotz/core";
 import { CONSOLIDATE_MEMORY_ACTION_ID } from "../../../actions/consolidate-memory/index.ts";
 
 export const consolidateMemoryTool: ToolResource<"consolidate_memory"> =

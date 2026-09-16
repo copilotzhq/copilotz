@@ -1,11 +1,11 @@
-import type { ToolDefinition } from "@copilotz/copilotz/tools";
+import type { ToolDefinition } from "@copilotz/copilotz/core";
 /**
  * Defines the data-only Tool Resource for fetching text.
  *
  * @module
  */
 
-import { defineTool } from "@copilotz/copilotz/tools";
+import { defineTool } from "@copilotz/copilotz/core";
 import { fetchTextAction } from "../../../actions/fetch-text/index.ts";
 
 export const fetchTextTool: ToolDefinition<typeof fetchTextAction> = defineTool(

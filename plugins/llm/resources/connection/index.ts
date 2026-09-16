@@ -9,7 +9,7 @@ import {
   type LlmJsonValue,
   type LlmMode,
   normalizeLlmConnection,
-} from "../../internal/contracts.ts";
+} from "../../shared/contracts.ts";
 
 export type {
   LlmAuthResolution,
@@ -28,9 +28,9 @@ export function defineLlmConnection(
   return normalizeLlmConnection(connection);
 }
 
-export { normalizeLlmModelSelections } from "../../internal/contracts.ts";
+export { normalizeLlmModelSelections } from "../../shared/contracts.ts";
 export type {
   LlmAuthResolver,
   LlmModelSelection,
   LlmModelSelections,
-} from "../../internal/contracts.ts";
+} from "../../shared/contracts.ts";

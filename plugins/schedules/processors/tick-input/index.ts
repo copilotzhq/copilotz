@@ -6,8 +6,8 @@
 
 import { defineProcessor, type Processor } from "@copilotz/copilotz/plugins";
 import { SCHEDULED_JOBS_TICK_INPUT_EVENT } from "../../authoring/inputs/index.ts";
-import type { ScheduledJobTickInput } from "../../internal/contracts.ts";
-import type { SchedulesProcessorContext } from "../internal/context.ts";
+import type { ScheduledJobTickInput } from "../../shared/contracts.ts";
+import type { SchedulesProcessorContext } from "../../shared/context.ts";
 
 export const scheduledJobsTickInputProcessor: Processor<
   SchedulesProcessorContext

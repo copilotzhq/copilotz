@@ -355,11 +355,11 @@ export async function createProgressiveBodyWriter(
     if (!appendId) throw new TypeError("Progressive appendId is required.");
     const chunk = input.bytes;
     if (chunk.byteLength === 0) {
-      return Object.freeze({
+      return ({
         startOffset: live.byteLength,
         endOffset: live.byteLength,
         protection: writer.protection,
-      });
+      } as const);
     }
     while (
       store.kind === "memory" &&
@@ -394,7 +394,7 @@ export async function createProgressiveBodyWriter(
     });
   };
 
-  return Object.freeze({
+  return ({
     bodyId,
     offset: () => live.byteLength,
     fence() {
@@ -452,7 +452,7 @@ export async function createProgressiveBodyWriter(
         }
       });
     },
-  });
+  } as const);
 }
 
 export async function openProgressiveBodyFollower(
@@ -480,12 +480,12 @@ export async function openProgressiveBodyFollower(
 
   const stored = await store.head({ bodyId });
   if (stored?.state === "ready" || stored?.state === "incomplete") {
-    return Object.freeze({
+    return ({
       bodyId,
       offset: start,
       mediaType: stored.mediaType,
       body: await store.follow({ bodyId, offset: start }),
-    });
+    } as const);
   }
 
   const staged = stored;
@@ -589,12 +589,12 @@ function followProgressiveStore(
       cancelled = true;
     },
   }, { highWaterMark: 0 });
-  return Object.freeze({
+  return ({
     bodyId,
     offset: start,
     mediaType: initial.mediaType,
     body,
-  });
+  } as const);
 }
 
 function followLive(
@@ -676,12 +676,12 @@ function followLive(
     },
   }, { highWaterMark: 0 });
 
-  return Object.freeze({
+  return ({
     bodyId,
     offset: start,
     mediaType: live.mediaType,
     body,
-  });
+  } as const);
 }
 
 async function readStreamPrefix(
@@ -738,11 +738,11 @@ async function readStreamBytes(
 }
 
 /** @internal Deterministic cache inspection for lifecycle regression tests. */
-export const progressiveBodyTesting = Object.freeze({
+export const progressiveBodyTesting = {
   inspect(store: BodyStore, bodyId: string) {
     const live = lives.get(store)?.get(bodyId);
     if (!live) return null;
-    return Object.freeze({
+    return ({
       state: live.state,
       byteLength: live.byteLength,
       bufferOffset: live.bufferOffset,
@@ -751,6 +751,6 @@ export const progressiveBodyTesting = Object.freeze({
         0,
       ),
       followers: live.followers.size,
-    });
+    } as const);
   },
-});
+} as const;

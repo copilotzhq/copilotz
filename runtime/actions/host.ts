@@ -1,3 +1,4 @@
+import type { VectorReader } from "../vectors/index.ts";
 import type {
   CollectionDefinition,
   CollectionRuntime,
@@ -73,6 +74,7 @@ export type ActionHostContext = Readonly<{
   adapters: PluginRegistry["adapters"];
   actions: ActionCallers;
   collections: ScopedCollections;
+  vectors: VectorReader;
   content: ActionContentHandle;
   streams: ContentStreamRuntime;
   signal: AbortSignal;
@@ -111,14 +113,14 @@ function scopedCollections(bindings: ActionContextBindings): ScopedCollections {
       return [alias, collection];
     }),
   );
-  return Object.freeze(aliases) as ScopedCollections;
+  return aliases as ScopedCollections;
 }
 
 function scopedTransactionCollections(
   plugins: PluginRegistry,
   byName: CollectionTransactionCollections,
 ): ActionTransactionContext["collections"] {
-  return Object.freeze(Object.fromEntries(
+  return (Object.fromEntries(
     Object.entries(plugins.collections).map(([alias, definition]) => {
       const collection = byName[(definition as CollectionDefinition).name];
       if (!collection) {
@@ -144,6 +146,7 @@ type ActionInvocationHost = Pick<
   | "resources"
   | "adapters"
   | "collections"
+  | "vectors"
   | "content"
   | "streams"
   | "signal"
@@ -166,7 +169,7 @@ export function createActionInvocationContext(
 ): ActionContext {
   const { frame, host } = options;
   let transactionIndex = 0;
-  const streams: ContentStreamRuntime = Object.freeze({
+  const streams: ContentStreamRuntime = {
     ...host.streams,
     open(input, openOptions) {
       return host.streams.open({
@@ -177,8 +180,8 @@ export function createActionInvocationContext(
         },
       }, openOptions);
     },
-  });
-  const content = Object.freeze({
+  } as const;
+  const content = {
     ...host.content,
     prepare(
       input: Parameters<typeof host.content.prepare>[0],
@@ -198,19 +201,19 @@ export function createActionInvocationContext(
         operationKey: `${frame.operationKey}/${publishOptions.operationKey}`,
       });
     },
-  });
-  return Object.freeze(withProtectedEventResolver({
+  } as const;
+  return (withProtectedEventResolver({
     ...host,
-    action: Object.freeze({
+    action: {
       id: frame.actionId,
       runId: frame.actionRunId,
       metadata: frame.metadata,
       ...(frame.parentActionRunId
         ? { parentRunId: frame.parentActionRunId }
         : {}),
-    }),
+    } as const,
     operationKey: frame.operationKey,
-    identity: Object.freeze({ ...(frame.identity ?? {}) }),
+    identity: { ...(frame.identity ?? {}) } as const,
     actions: options.actions,
     content,
     streams,
@@ -270,15 +273,18 @@ export function createActionContext(
       operationKey,
       namespace,
       ...(options.identity ? { identity: options.identity } : {}),
-      execute: async ({ collections: byName, relations }) => {
+      execute: async ({ collections: byName, relations, vectors }) => {
         throwIfAborted(options.signal);
-        return await execute(Object.freeze({
-          collections: scopedTransactionCollections(
-            bindings.plugins,
-            byName,
-          ),
-          relations,
-        }));
+        return await execute(
+          {
+            collections: scopedTransactionCollections(
+              bindings.plugins,
+              byName,
+            ),
+            relations,
+            vectors,
+          } as const,
+        );
       },
     });
     throwIfAborted(options.signal);
@@ -288,7 +294,7 @@ export function createActionContext(
     await bindings.collections.readSnapshot(
       { namespace },
       async ({ collections: byName }) => {
-        const snapshotCollections = Object.freeze(Object.fromEntries(
+        const snapshotCollections = Object.fromEntries(
           Object.entries(bindings.plugins.collections).map(
             ([alias, definition]) => {
               const collection =
@@ -301,9 +307,9 @@ export function createActionContext(
               return [alias, collection];
             },
           ),
-        ));
+        );
         return await execute(
-          Object.freeze({ collections: snapshotCollections }) as never,
+          ({ collections: snapshotCollections } as const) as never,
         );
       },
     );
@@ -331,19 +337,20 @@ export function createActionContext(
     },
   });
 
-  const host: ActionHostContext = Object.freeze({
+  const host: ActionHostContext = {
     namespace,
     databaseSchema,
     resources: bindings.plugins.resources,
     adapters: bindings.plugins.adapters,
     actions,
     collections,
+    vectors: bindings.collections.vectors(namespace),
     content,
     streams: content.stream,
     signal,
     now: bindings.now ?? (() => new Date()),
     transaction: transact,
     readSnapshot,
-  });
+  } as const;
   return host;
 }

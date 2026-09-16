@@ -1,3 +1,4 @@
+import { storageFixture } from "../../plugins/core/shared/testing/storage-plugin.ts";
 import { assertEquals, assertExists } from "@std/assert";
 import {
   type ActionCaller,
@@ -12,10 +13,10 @@ import {
   defineProcessor,
   type ProcessorContext,
 } from "../plugins/index.ts";
-import { createTestDomainContext } from "../../plugins/core/internal/testing/context.ts";
+import { createTestDomainContext } from "../../plugins/core/shared/testing/context.ts";
 import { waitForTestDelivery } from "../testing/deliveries.ts";
 import { createTestDatabase } from "../testing/ominipg.ts";
-import { coreCollectionsPlugin } from "@copilotz/copilotz/core";
+import {} from "@copilotz/copilotz/core";
 import { createCopilotzEngine } from "./index.ts";
 
 const EXECUTOR_FIELDS = Object.freeze([
@@ -105,7 +106,7 @@ Deno.test("Actions and Processors receive one runtime-neutral composed context",
   const engine = await createCopilotzEngine({
     session: db,
     registry: await createPluginRegistry({
-      plugins: [coreCollectionsPlugin, plugin],
+      plugins: [storageFixture, plugin],
     }),
     defaultDatabaseSchema: databaseSchema,
   });

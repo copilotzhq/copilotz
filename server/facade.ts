@@ -22,7 +22,7 @@ import {
   SERVER_RESOURCE_NAMESPACE,
   type ServerEndpointDescriptor,
   type ServerFacadeResource,
-} from "../plugins/server/internal/contracts.ts";
+} from "../plugins/server/shared/contracts.ts";
 import type { HttpApplication } from "./http-types.ts";
 import { admitHttpOperation } from "./admission.ts";
 import { createHttpFetchHandler, type HttpFetchHandler } from "./fetch.ts";
@@ -85,7 +85,7 @@ export function createServerFacadeFetchHandler(
 ): ServerFacadeFetchHandler {
   const facade = facadeResource(application, options.facade);
   const routes = compileServerRoutes(application.plugins, facade);
-  const app: HttpApplication = Object.freeze({
+  const app: HttpApplication = {
     async handle(request) {
       const context = request.context as FacadeContext | undefined;
       if (!context?.serverEndpointKey) {
@@ -177,7 +177,7 @@ export function createServerFacadeFetchHandler(
             },
           })).data;
         };
-        const handlerContext: HttpHandlerContext = Object.freeze({
+        const handlerContext: HttpHandlerContext = {
           request: context.serverRequest,
           endpoint,
           params: context.serverParams,
@@ -235,7 +235,7 @@ export function createServerFacadeFetchHandler(
               });
             },
           },
-        });
+        } as const;
         if (route.action) {
           return {
             status: 202,
@@ -375,14 +375,14 @@ export function createServerFacadeFetchHandler(
           ? application
           : await application.databaseScope(context.databaseSchema!);
       if (endpoint.kind === "channel") {
-        const scoped = Object.freeze({
+        const scoped = {
           ...application,
           ...physical,
           config: {
             ...application.config,
             databaseSchema: context.databaseSchema!,
           },
-        });
+        } as const;
         const admitted = await admitHttpOperation(
           application,
           context,
@@ -432,7 +432,7 @@ export function createServerFacadeFetchHandler(
       }
       throw appError(404, "route_not_found", "Route was not found.");
     },
-  });
+  } as const;
   const fetch = createHttpFetchHandler(app, {
     basePath: facade.basePath,
     requestBodyPolicy(request) {
@@ -459,13 +459,13 @@ export function createServerFacadeFetchHandler(
         route.endpoint.operation === "upload"
       );
       return upload
-        ? Object.freeze({
+        ? ({
           maxBytes: facade.maxAssetUploadBytes,
-          tooLarge: Object.freeze({
+          tooLarge: {
             code: "asset_too_large",
             message: "Asset upload exceeds the configured byte limit.",
-          }),
-        })
+          } as const,
+        } as const)
         : false;
     },
     async resolveContext(request) {

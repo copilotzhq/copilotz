@@ -15,7 +15,7 @@ import type {
   ContentStreamAppendInput,
   ContentStreamOpenInput,
 } from "@copilotz/copilotz/streams";
-import type { API } from "../../../tools/authoring/integration-resources/index.ts";
+import type { API } from "../contracts/index.ts";
 import {
   compileOpenApiTools,
   type CompileOpenApiToolsOptions,

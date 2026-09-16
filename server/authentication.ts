@@ -3,7 +3,7 @@ import type { InternalCopilotzApplication } from "../runtime/application/types.t
 import type {
   ServerAuthorizedScope,
   ServerFacadeResource,
-} from "../plugins/server/internal/contracts.ts";
+} from "../plugins/server/shared/contracts.ts";
 import type { ServerRouteMatch } from "../plugins/server/authoring/route-compiler/index.ts";
 import type { FacadeContext } from "./context.ts";
 import { createHttpReads } from "./reads.ts";
@@ -14,7 +14,7 @@ function text(value: unknown): string | undefined {
 }
 
 function authorizedScope(value: unknown): ServerAuthorizedScope {
-  if (value === undefined) return Object.freeze({});
+  if (value === undefined) return ({} as const);
   if (
     !value || typeof value !== "object" || Array.isArray(value) ||
     (Object.getPrototypeOf(value) !== Object.prototype &&
@@ -51,9 +51,9 @@ function authorizedScope(value: unknown): ServerAuthorizedScope {
     ) {
       throw new TypeError(`${label} must be an object.`);
     }
-    return Object.freeze(structuredClone(candidate as Record<string, unknown>));
+    return (structuredClone(candidate as Record<string, unknown>));
   };
-  return Object.freeze({
+  return ({
     ...(input.actor
       ? {
         actor: plain(
@@ -85,7 +85,7 @@ function authorizedScope(value: unknown): ServerAuthorizedScope {
     ...(input.context
       ? { context: plain(input.context, "Server context")! }
       : {}),
-  });
+  } as const);
 }
 
 export async function authenticateHttpRequest(
@@ -94,14 +94,14 @@ export async function authenticateHttpRequest(
   facade: ServerFacadeResource,
   match: ServerRouteMatch,
 ): Promise<FacadeContext | Response> {
-  const authenticationContext = Object.freeze({
+  const authenticationContext = {
     lookup: (scope: ServerAuthorizedScope) =>
       createHttpReads(application, scope),
     endpoint: match.endpoint,
     params: match.params,
     defaultNamespace: application.config.namespace,
     defaultDatabaseSchema: application.config.databaseSchema,
-  });
+  } as const;
   const authenticationRequest = request.clone();
   let authenticated;
   try {
@@ -116,12 +116,12 @@ export async function authenticateHttpRequest(
   }
   if (authenticated instanceof Response) return authenticated;
   const selected = authorizedScope(authenticated);
-  const scope = Object.freeze({
+  const scope = {
     ...selected,
     namespace: selected.namespace ?? application.config.namespace,
     databaseSchema: selected.databaseSchema ??
       application.config.databaseSchema,
-  });
+  } as const;
   const read = await createHttpReads(application, scope);
   const policyRequest = request.clone();
   let authorized;
@@ -137,13 +137,13 @@ export async function authenticateHttpRequest(
     }
   }
   if (authorized instanceof Response) return authorized;
-  const constraints = Object.freeze(structuredClone(authorized ?? {}));
+  const constraints = structuredClone(authorized ?? {});
   assertUploadContentLength(
     request,
     match.endpoint,
     facade.maxAssetUploadBytes,
   );
-  return Object.freeze({
+  return ({
     ...(scope.context ?? {}),
     serverScope: scope,
     serverConstraints: constraints,
@@ -161,7 +161,7 @@ export async function authenticateHttpRequest(
       ...scope.operationMetadata,
       ...(scope.actor ? { actorId: scope.actor.id } : {}),
     },
-    serverIdentity: scope.identity ?? Object.freeze({}),
+    serverIdentity: scope.identity ?? ({} as const),
     serverSignal: request.signal,
-  });
+  } as const);
 }

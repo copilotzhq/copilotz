@@ -8,8 +8,8 @@ import {
   type CollectionDefinition,
   defineCollection,
 } from "@copilotz/copilotz/collections";
-import { getNextScheduledRunAt } from "../../internal/model.ts";
-import type { ScheduledJobSchedule } from "../../internal/contracts.ts";
+import { getNextScheduledRunAt } from "../../shared/model.ts";
+import type { ScheduledJobSchedule } from "../../shared/contracts.ts";
 
 function record(value: unknown, name: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {

@@ -1,5 +1,4 @@
 import { assert, assertEquals, assertRejects } from "@std/assert";
-
 import { createTestDatabase } from "../testing/ominipg.ts";
 import {
   createCoreSchemaStatements,
@@ -7,13 +6,10 @@ import {
   createSqlSession,
   quoteEventIdentifier,
 } from "./index.ts";
-
 const POSTGRES_URL = Deno.env.get("COPILOTZ_TEST_POSTGRES_URL")?.trim();
-
 function schemaName(): string {
   return `v3_pg_${crypto.randomUUID().replaceAll("-", "")}`;
 }
-
 Deno.test({
   name:
     "PostgreSQL keeps the six-table baseline and atomic event/delivery semantics",
@@ -28,24 +24,22 @@ Deno.test({
       for (const statement of createCoreSchemaStatements(schema)) {
         await session.query(statement);
       }
-      const tables = await session.query<{ table_name: string }>(
+      const tables = await session.query<{
+        table_name: string;
+      }>(
         `SELECT table_name FROM information_schema.tables
          WHERE table_schema = $1 AND table_type = 'BASE TABLE'
          ORDER BY table_name`,
         [schema],
       );
-      assertEquals(
-        tables.rows.map((row) => row.table_name),
-        [
-          "copilotz_schema_metadata",
-          "edges",
-          "event_bodies",
-          "event_deliveries",
-          "events",
-          "nodes",
-        ],
-      );
-
+      assertEquals(tables.rows.map((row) => row.table_name), [
+        "copilotz_schema_metadata",
+        "edges",
+        "event_bodies",
+        "event_deliveries",
+        "events",
+        "nodes",
+      ]);
       const store = createEventStore({
         session,
         schema,
@@ -62,29 +56,27 @@ Deno.test({
             { consumerId: "postgres.consumer", settlement: "inherit" },
           ],
           mutate: async ({ transaction, tables }) => {
-            await transaction.query(
-              `INSERT INTO ${tables.nodes}
+            await transaction.query(`INSERT INTO ${tables.nodes}
                  (id, namespace, type, name, data)
-               VALUES ('rollback', 'tenant-a', 'fixture', 'Rollback', '{}')`,
-            );
+               VALUES ('rollback', 'tenant-a', 'fixture', 'Rollback', '{}')`);
             throw new Error("synthetic rollback");
           },
         })
       );
-      assertEquals(
-        await store.listEvents({ namespace: "tenant-a" }),
-        [],
-      );
-
+      assertEquals(await store.listEvents({ namespace: "tenant-a" }), []);
       const committed = await store.commitMutation({
         draft: {
           type: "widget.created",
           namespace: "tenant-a",
-          threadId: "thread-a",
           subject: { type: "widget", id: "widget-a" },
           payload: { label: "PostgreSQL" },
           correlationId: "postgres-correlation-a",
           deduplicationId: "postgres-widget-a",
+          metadata: {
+            core: {
+              threadId: "thread-a",
+            },
+          },
         },
         consumers: [
           { consumerId: "widget.index", settlement: "inherit" },
@@ -92,13 +84,11 @@ Deno.test({
           { consumerId: "widget.index", settlement: "inherit" },
         ],
         mutate: async ({ transaction, tables }) => {
-          await transaction.query(
-            `INSERT INTO ${tables.nodes}
+          await transaction.query(`INSERT INTO ${tables.nodes}
                (id, namespace, type, name, data)
              VALUES
                ('thread-a', 'tenant-a', 'thread', 'Thread', '{}'),
-               ('widget-a', 'tenant-a', 'widget', 'Widget', '{}')`,
-          );
+               ('widget-a', 'tenant-a', 'widget', 'Widget', '{}')`);
           return { id: "widget-a" };
         },
       });
@@ -107,7 +97,6 @@ Deno.test({
         (await store.getEvent(committed.event.id))?.position,
         committed.event.position,
       );
-
       const delivery = committed.deliveries[0];
       const claims = await Promise.all([
         store.claimDelivery({ id: delivery.id, owner: "owner-a" }),
@@ -115,10 +104,7 @@ Deno.test({
       ]);
       assertEquals(claims.filter(Boolean).length, 1);
       const claimed = claims.find((value) => value !== null)!;
-      assert(
-        await store.succeedDelivery(delivery.id, claimed.leaseOwner!),
-      );
-
+      assert(await store.succeedDelivery(delivery.id, claimed.leaseOwner!));
       await assertRejects(() =>
         session.query(
           `UPDATE ${store.tables.events} SET type = 'widget.changed'
@@ -130,7 +116,6 @@ Deno.test({
         (await store.getEvent(committed.event.id))?.type,
         "widget.created",
       );
-
       const old = "2020-01-01T00:00:00.000Z";
       const parent = await store.append({
         type: "old.parent",
@@ -146,14 +131,14 @@ Deno.test({
         createdAt: old,
       });
       const firstCompaction = await store.compactDeliveries({
-        retentionMs: 7 * 24 * 60 * 60 * 1_000,
+        retentionMs: 7 * 24 * 60 * 60 * 1000,
         now: new Date("2021-01-01T00:00:00.000Z"),
         limit: 1,
       });
       assertEquals(firstCompaction.deliveries, 0);
       assertEquals(await store.getEvent(parent.event.id) !== null, true);
       const secondCompaction = await store.compactDeliveries({
-        retentionMs: 7 * 24 * 60 * 60 * 1_000,
+        retentionMs: 7 * 24 * 60 * 60 * 1000,
         now: new Date("2021-01-01T00:00:00.000Z"),
         limit: 1,
       });

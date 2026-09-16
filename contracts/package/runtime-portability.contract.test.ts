@@ -121,13 +121,13 @@ Deno.test("optional skills implementation stays off the root runtime graph", asy
   assertStringIncludes(skills, "skillsPlugin");
 });
 
-Deno.test("agent capability resolution remains factory-first and host-neutral", async () => {
+Deno.test("agent capability Resource stays context-resolved and host-neutral", async () => {
   for (
     const module of [
-      "plugins/core/internal/capabilities/grants.ts",
-      "plugins/core/internal/capabilities/resolver.ts",
-      "plugins/core/internal/capabilities/selection.ts",
-      "plugins/core/internal/capabilities/types.ts",
+      "plugins/core/shared/capabilities/grants.ts",
+      "plugins/core/resources/capabilities/default/index.ts",
+      "plugins/core/shared/capabilities/selection.ts",
+      "plugins/core/resources/capabilities/default/types.ts",
     ]
   ) {
     const value = await source(module);

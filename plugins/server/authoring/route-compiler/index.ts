@@ -9,7 +9,7 @@ import type {
   ServerFacadeResource,
   ServerHttpMethod,
   ServerPatternPolicy,
-} from "../../internal/contracts.ts";
+} from "../../shared/contracts.ts";
 
 export type CompiledServerRoute = Readonly<{
   endpoint: ServerEndpointDescriptor;
@@ -90,17 +90,7 @@ function cloneSchema(
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return undefined;
   }
-  return deepFreeze(structuredClone(value as Record<string, unknown>));
-}
-
-function deepFreeze<T>(value: T): T {
-  if (!value || typeof value !== "object" || Object.isFrozen(value)) {
-    return value;
-  }
-  for (const nested of Object.values(value as Record<string, unknown>)) {
-    deepFreeze(nested);
-  }
-  return value;
+  return (structuredClone(value as Record<string, unknown>));
 }
 
 /** Compiles one complete registry into deterministic routes and OpenAPI. */
@@ -160,7 +150,7 @@ export function compileServerRoutes(
     add("GET", "get", "/:id", undefined, schema);
     for (const [name, query] of Object.entries(collection.queries ?? {})) {
       const queryOutput = cloneSchema(query.outputSchema) ??
-        (schema ? deepFreeze({ type: "array", items: schema }) : undefined);
+        (schema ? ({ type: "array", items: schema }) : undefined);
       add(
         "POST",
         `query:${name}`,

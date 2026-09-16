@@ -63,7 +63,7 @@ export function createSecretAdapter<const TAdapter extends SecretAdapter>(
   }
   const seal = dataMethod(adapter, "seal") as SecretAdapter["seal"];
   const open = dataMethod(adapter, "open") as SecretAdapter["open"];
-  return Object.freeze({ seal, open }) as TAdapter;
+  return ({ seal, open } as const) as TAdapter;
 }
 
 export function secretEnvelope(

@@ -272,13 +272,9 @@ export async function aggregateCollectionRecords(
     );
   }
   const metrics = new Set(entries.map(([alias]) => alias));
-  return Object.freeze(
-    result.rows.map((row) =>
-      Object.freeze(Object.fromEntries(
-        Object.entries(row).map((
-          [key, value],
-        ) => [key, metrics.has(key) ? metricValue(value) : groupValue(value)]),
-      ))
-    ),
-  );
+  return (result.rows.map((row) => (Object.fromEntries(
+    Object.entries(row).map((
+      [key, value],
+    ) => [key, metrics.has(key) ? metricValue(value) : groupValue(value)]),
+  ))));
 }

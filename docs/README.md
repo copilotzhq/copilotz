@@ -9,7 +9,7 @@ plans and removed migration APIs are intentionally not published.
 2. [Architecture](architecture.md)
 3. [API and package reference](api.md)
 4. [Plugins and processors](plugins-and-processors.md)
-5. [Goal runner](goals.md)
+5. [Goal Action](goals.md)
 
 ## Runtime mechanics
 
@@ -28,8 +28,6 @@ plans and removed migration APIs are intentionally not published.
 - [Skills](skills.md)
 
 ## Database upgrade
-
-- [Migrate the exact 0.47/0.48 legacy graph to v4](migration-v4.md)
 
 `../ARCHITECTURE.md` is the first-principles architecture authority. The
 package's actual public entrypoints are the `exports` in `../deno.json`.

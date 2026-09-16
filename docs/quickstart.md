@@ -6,8 +6,8 @@ embedded Gateway and Worker over a private in-process transport.
 ## Compose Core and one model
 
 ```ts
-import { createCopilotz } from "jsr:@copilotz/copilotz@^0.74.0";
-import { corePlugin, message } from "jsr:@copilotz/copilotz@^0.74.0/core";
+import { createCopilotz } from "jsr:@copilotz/copilotz@^0.74.1";
+import { corePlugin, message } from "jsr:@copilotz/copilotz@^0.74.1/core";
 
 const apiKey = Deno.env.get("OPENAI_API_KEY");
 if (!apiKey) throw new Error("OPENAI_API_KEY is required.");
@@ -114,7 +114,7 @@ is drained. Detached Processors remain durable but do not delay this handle.
 ## Add a native Tool
 
 ```ts
-import { defineTool } from "jsr:@copilotz/copilotz@^0.74.0/tools";
+import { defineTool } from "jsr:@copilotz/copilotz@^0.74.1/tools";
 
 const lookupCustomer = defineTool({
   id: "acme.customer.lookup",

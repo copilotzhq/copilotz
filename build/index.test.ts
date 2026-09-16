@@ -107,6 +107,28 @@ Deno.test("manifest dependencies generate direct imports and shared modules are 
     assertEquals(plugin.plugins.map((p: { id: string }) => p.id), ["base"]);
   });
 });
+
+Deno.test("build forwards a consumer's Deno configuration to its child commands", async () => {
+  const plugins = new URL("../runtime/plugins/index.ts", import.meta.url).href;
+  await fixture({
+    "deno.json": JSON.stringify({
+      imports: {
+        "fixture-dependency": "./shared/base.ts",
+        "@copilotz/copilotz/plugins": plugins,
+      },
+    }),
+    "copilotz.json": JSON.stringify({
+      id: "configured-consumer",
+      version: "1",
+      plugins: [{ from: "fixture-dependency", export: "default" }],
+    }),
+    "shared/base.ts":
+      'import {definePlugin} from "@copilotz/copilotz/plugins"; export default definePlugin({id:"base",version:"1"});',
+  }, async (root) => {
+    await build(root);
+    assert(await Deno.stat(root + "/dist/plugin.js"));
+  });
+});
 Deno.test("build rejects removed folder conventions and duplicate plugin imports", async () => {
   await fixture(
     { "dependencies/old/index.ts": "export default {}" },

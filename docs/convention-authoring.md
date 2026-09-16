@@ -212,20 +212,24 @@ and create `deno.json` with these package imports (use the released version):
 ```json
 {
   "imports": {
-    "@copilotz/copilotz": "jsr:@copilotz/copilotz@0.74.0",
-    "@copilotz/copilotz/core": "jsr:@copilotz/copilotz@0.74.0/core",
-    "@copilotz/copilotz/actions": "jsr:@copilotz/copilotz@0.74.0/actions",
-    "@copilotz/copilotz/plugins": "jsr:@copilotz/copilotz@0.74.0/plugins",
-    "@copilotz/copilotz/llm": "jsr:@copilotz/copilotz@0.74.0/llm"
+    "@copilotz/copilotz": "jsr:@copilotz/copilotz@0.74.1",
+    "@copilotz/copilotz/core": "jsr:@copilotz/copilotz@0.74.1/core",
+    "@copilotz/copilotz/actions": "jsr:@copilotz/copilotz@0.74.1/actions",
+    "@copilotz/copilotz/plugins": "jsr:@copilotz/copilotz@0.74.1/plugins",
+    "@copilotz/copilotz/llm": "jsr:@copilotz/copilotz@0.74.1/llm"
   }
 }
 ```
 
 ```sh
-deno run -A jsr:@copilotz/copilotz@0.74.0/build build .
+deno run -A jsr:@copilotz/copilotz@0.74.1/build build .
 deno run -A run.ts
 ```
 
 Expected output: `Hello from the generated support plugin.` Replace the demo LLM
 Adapter with your chosen connection/provider configuration when integrating the
 application. Keep credentials in the final application context.
+
+Deno 2.9 waits 24 hours before resolving newly published package versions by
+default. Wait for that window, or set `"minimumDependencyAge": 0` in the
+consumer's `deno.json` when an explicit trusted release policy permits it.

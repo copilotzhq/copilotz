@@ -1,6 +1,11 @@
 # Changelog
 
-## 0.74.0 — Unreleased
+## 0.74.1 — Unreleased
+
+- Forward the consumer's Deno configuration to the published build command's
+  type check, validation and ESM bundle subprocesses.
+
+## 0.74.0 — 2026-09-16
 
 - Add the build-host-only `copilotz build` command: deterministic convention
   discovery, native composition validation, generated TypeScript and bundled

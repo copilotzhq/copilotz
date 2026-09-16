@@ -171,7 +171,7 @@ async function fixture(
   });
   const application = await createCopilotzApplication({
     database: db,
-    namespace: NAMESPACE,
+    namespace: "unused-application-default",
     databaseSchema: SCHEMA,
     plugins: [corePlugin, fixturePlugin],
     engine: { retryBaseMs: 0, random: () => 0 },
@@ -296,7 +296,10 @@ Deno.test("Goal Action rejects invalid configuration through its normal caller",
 Deno.test("Goal Action runs within engine dispatch and publishes ordinary progress/terminal Events", async () => {
   const f = await fixture({ maxTurns: 1 });
   try {
-    const handle = await f.application.send({ type: "test.goal.request" });
+    const handle = await f.application.send({
+      type: "test.goal.request",
+      namespace: NAMESPACE,
+    });
     const types: string[] = [];
     for await (const event of handle.outputs) types.push(event.type);
     await handle.done;

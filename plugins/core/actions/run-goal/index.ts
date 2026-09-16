@@ -238,6 +238,8 @@ async function completedTurn(
   application: GoalConversationAdapter,
   input: Readonly<{
     goalId: string;
+    namespace: string;
+    databaseSchema: string;
     turn: number;
     phase: GoalPhase;
     scope: GoalScope;
@@ -245,20 +247,24 @@ async function completedTurn(
     setActive(handle?: GoalSendHandle): void;
   }>,
 ): Promise<GoalTurn> {
-  const handle = await application.send(message({
-    deduplicationId: `${input.goalId}:${input.turn}:${input.phase}`,
-    thread: input.scope.thread,
-    participant: input.scope.participant,
-    recipientIds: [requiredText(input.scope.recipient, "Goal recipient")],
-    content: input.content,
-    metadata: goalMetadata(
-      input.scope,
-      input.goalId,
-      input.turn,
-      input.phase,
-    ),
-    ...(input.scope.visibility ? { visibility: input.scope.visibility } : {}),
-  }));
+  const handle = await application.send({
+    ...message({
+      deduplicationId: `${input.goalId}:${input.turn}:${input.phase}`,
+      thread: input.scope.thread,
+      participant: input.scope.participant,
+      recipientIds: [requiredText(input.scope.recipient, "Goal recipient")],
+      content: input.content,
+      metadata: goalMetadata(
+        input.scope,
+        input.goalId,
+        input.turn,
+        input.phase,
+      ),
+      ...(input.scope.visibility ? { visibility: input.scope.visibility } : {}),
+    }),
+    namespace: input.namespace,
+    databaseSchema: input.databaseSchema,
+  });
   input.setActive(handle);
   const messages: ObservedMessage[] = [];
   try {
@@ -369,6 +375,8 @@ export const runGoalAction: ActionDefinition<RunGoalInput, GoalResult> =
           context.signal.throwIfAborted();
           const targetReply = await completedTurn(adapter, {
             goalId: id,
+            namespace: context.namespace,
+            databaseSchema: context.databaseSchema,
             turn,
             phase: "target",
             scope: target,
@@ -409,6 +417,8 @@ export const runGoalAction: ActionDefinition<RunGoalInput, GoalResult> =
           }
           const leadReply = await completedTurn(adapter, {
             goalId: id,
+            namespace: context.namespace,
+            databaseSchema: context.databaseSchema,
             turn,
             phase: "lead",
             scope: lead,

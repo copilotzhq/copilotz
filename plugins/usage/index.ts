@@ -6,7 +6,7 @@
 
 export { usageCollection } from "./collections/index.ts";
 export { usagePlugin } from "./plugin.ts";
-export { METRIC_DESCRIPTORS } from "./internal/contracts.ts";
+export { METRIC_DESCRIPTORS } from "./shared/contracts.ts";
 export type {
   MetricDescriptor,
   UsageCost,
@@ -17,7 +17,7 @@ export type {
   UsageRecord,
   UsageResolveCost,
   UsageResolveCostContext,
-} from "./internal/contracts.ts";
+} from "./shared/contracts.ts";
 export {
   createUsageClient,
   createUsageHttpAdapter,

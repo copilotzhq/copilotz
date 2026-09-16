@@ -18,12 +18,12 @@ import type {
 import type {
   ConversationMessage,
   ConversationThread,
-} from "../../../core-collections/internal/contracts.ts";
+} from "../../shared/contracts.ts";
 import type { ContentInput } from "@copilotz/copilotz/content";
 export type {
   ConversationMessage,
   ConversationThread,
-} from "../../../core-collections/internal/contracts.ts";
+} from "../../shared/contracts.ts";
 export type Page<T> = Readonly<
   {
     data: readonly T[];

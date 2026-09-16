@@ -34,6 +34,11 @@ Deno.test("scoped streams without an operation require a local authority", async
       get: () => Promise.resolve(null),
     },
     collections: {
+      vectors: () => ({
+        search: () => {
+          throw new Error("Unused vector test capability");
+        },
+      }),
       withScope: () => ({}),
     },
     publishOutput() {
@@ -89,7 +94,14 @@ Deno.test("Processor/unscoped streams do not invent Action provenance", async ()
     streamBodyStore: bodyStore,
     streamBodyPrefix: "",
     operationCatalog: {},
-    collections: { withScope: () => ({}) },
+    collections: {
+      vectors: () => ({
+        search: () => {
+          throw new Error("Unused vector test capability");
+        },
+      }),
+      withScope: () => ({}),
+    },
     publishLocalStream(output: StreamOutput) {
       published = output;
       return Promise.resolve();
@@ -149,7 +161,14 @@ Deno.test("unscoped streams publish an exact local failed prefix", async () => {
     streamBodyStore: bodyStore,
     streamBodyPrefix: "",
     operationCatalog: {},
-    collections: { withScope: () => ({}) },
+    collections: {
+      vectors: () => ({
+        search: () => {
+          throw new Error("Unused vector test capability");
+        },
+      }),
+      withScope: () => ({}),
+    },
     publishLocalStream(output: StreamOutput) {
       published = output;
       return Promise.resolve();
@@ -207,7 +226,14 @@ Deno.test("unscoped streams reject publication without a local authority", async
     streamBodyStore: bodyStore,
     streamBodyPrefix: "",
     operationCatalog: {},
-    collections: { withScope: () => ({}) },
+    collections: {
+      vectors: () => ({
+        search: () => {
+          throw new Error("Unused vector test capability");
+        },
+      }),
+      withScope: () => ({}),
+    },
     assets: {},
     preparer: {},
     resolver: {},
@@ -256,7 +282,14 @@ Deno.test("unscoped observed publication rejection retains an exact terminal", a
     streamBodyStore: bodyStore,
     streamBodyPrefix: "",
     operationCatalog: {},
-    collections: { withScope: () => ({}) },
+    collections: {
+      vectors: () => ({
+        search: () => {
+          throw new Error("Unused vector test capability");
+        },
+      }),
+      withScope: () => ({}),
+    },
     publishLocalStream(output: StreamOutput) {
       published = output;
       return Promise.reject(new Error("local publication relay failed"));

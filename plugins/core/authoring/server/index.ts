@@ -10,7 +10,7 @@ import {
   mapMessageRecord,
   mapParticipantRecord,
   mapThreadRecord,
-} from "../../../core-collections/index.ts";
+} from "../../index.ts";
 import type { CollectionRecord } from "@copilotz/copilotz/collections";
 import {
   deleteConversation,

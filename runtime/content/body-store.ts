@@ -241,17 +241,17 @@ export function writerCapabilityFromHead(
       "Only an active progressive body can produce a writer capability.",
     );
   }
-  return Object.freeze({
+  return ({
     bodyId: head.bodyId,
     mediaType: head.mediaType,
     reservationId: head.reservationId,
     generation: head.writerGeneration ?? 1,
     byteLength: head.byteLength,
     discarded: head.discarded,
-    protection: Object.freeze({
+    protection: {
       remainingMs: Math.max(0, head.writerLeaseRemainingMs ?? 0),
-    }),
-  });
+    } as const,
+  } as const);
 }
 
 export async function readBodyBytes(
@@ -407,15 +407,15 @@ export function createFixedBodyStoreAdapter(
   store: BodyStore,
   deployment: BodyStoreDeployment,
 ): BodyStoreAdapter {
-  return Object.freeze({
-    deployment: Object.freeze({ ...deployment }),
+  return ({
+    deployment: { ...deployment } as const,
     forScope(_scope) {
       return store;
     },
     maintenanceForScope(_scope) {
       return store.maintenance;
     },
-  });
+  } as const);
 }
 
 export const DEFAULT_MAX_DATABASE_ASSET_BYTES = 8 * 1024 * 1024;
@@ -604,11 +604,10 @@ export function createMemoryBodyStore(
   const withLease = (
     head: ActiveMutableBodyHead,
     leaseExpiresAt: number,
-  ): ActiveMutableBodyHead =>
-    Object.freeze({
-      ...head,
-      writerLeaseRemainingMs: Math.max(0, leaseExpiresAt - Date.now()),
-    });
+  ): ActiveMutableBodyHead => ({
+    ...head,
+    writerLeaseRemainingMs: Math.max(0, leaseExpiresAt - Date.now()),
+  } as const);
   const newLeaseExpiresAt = () => Date.now() + protectionMs;
   const store: BodyStore = {
     kind: "memory",
@@ -635,7 +634,7 @@ export function createMemoryBodyStore(
           );
         }
         validateHead(input, existing.head);
-        const head = Object.freeze({
+        const head = {
           ...existing.head,
           maintenanceVersion: existing.head.maintenanceVersion + 1,
           protectedUntil: latestBodyProtectionUntil(
@@ -643,7 +642,7 @@ export function createMemoryBodyStore(
             requestedProtection,
           ),
           lastModified: new Date(now).toISOString(),
-        });
+        } as const;
         entries.set(input.bodyId, {
           head,
           bytes: existing.bytes,
@@ -651,7 +650,7 @@ export function createMemoryBodyStore(
         });
         return Promise.resolve(head);
       }
-      const head = Object.freeze({
+      const head = {
         bodyId: input.bodyId,
         state: "ready" as const,
         byteLength: input.bytes.byteLength,
@@ -661,7 +660,7 @@ export function createMemoryBodyStore(
         protectedUntil: requestedProtection,
         etag: input.digest.slice("sha256:".length),
         lastModified: new Date(now).toISOString(),
-      });
+      } as const;
       entries.set(input.bodyId, {
         head,
         bytes: input.bytes.slice(),
@@ -775,13 +774,13 @@ export function createMemoryBodyStore(
           );
         }
         const leaseExpiresAt = newLeaseExpiresAt();
-        const head = Object.freeze({
+        const head = {
           ...existing.head,
           reservationId: crypto.randomUUID(),
           maintenanceVersion: existing.head.maintenanceVersion + 1,
           writerGeneration: (existing.head.writerGeneration ?? 1) + 1,
           writerLeaseRemainingMs: protectionMs,
-        });
+        } as const;
         mutable.set(input.bodyId, {
           ...existing,
           head,
@@ -796,7 +795,7 @@ export function createMemoryBodyStore(
           "An immutable body already exists for this id.",
         );
       }
-      const head = Object.freeze({
+      const head = {
         bodyId: input.bodyId,
         state: "open" as const,
         mediaType: input.mediaType,
@@ -806,7 +805,7 @@ export function createMemoryBodyStore(
         writerGeneration: 1,
         writerLeaseRemainingMs: protectionMs,
         reservationId: crypto.randomUUID(),
-      });
+      } as const;
       mutable.set(input.bodyId, {
         head,
         leaseExpiresAt: newLeaseExpiresAt(),
@@ -828,20 +827,22 @@ export function createMemoryBodyStore(
         );
       }
       const leaseExpiresAt = newLeaseExpiresAt();
-      const head = Object.freeze({
+      const head = {
         ...entry.head,
         maintenanceVersion: entry.head.maintenanceVersion + 1,
         writerLeaseRemainingMs: protectionMs,
-      });
+      } as const;
       mutable.set(input.writer.bodyId, {
         ...entry,
         head,
         leaseExpiresAt,
         updatedAt: Date.now(),
       });
-      return Promise.resolve(Object.freeze({
-        remainingMs: Math.max(0, leaseExpiresAt - Date.now()),
-      }));
+      return Promise.resolve(
+        {
+          remainingMs: Math.max(0, leaseExpiresAt - Date.now()),
+        } as const,
+      );
     },
     append(input) {
       const entry = mutable.get(input.writer.bodyId);
@@ -873,13 +874,15 @@ export function createMemoryBodyStore(
             "Progressive append id was reused with different bytes.",
           );
         }
-        return Promise.resolve(Object.freeze({
-          startOffset: input.expectedOffset,
-          endOffset: entry.head.byteLength,
-          protection: Object.freeze({
-            remainingMs: Math.max(0, entry.leaseExpiresAt - Date.now()),
-          }),
-        }));
+        return Promise.resolve(
+          {
+            startOffset: input.expectedOffset,
+            endOffset: entry.head.byteLength,
+            protection: {
+              remainingMs: Math.max(0, entry.leaseExpiresAt - Date.now()),
+            } as const,
+          } as const,
+        );
       }
       if (input.expectedOffset !== entry.head.byteLength) {
         throw createContentError(
@@ -888,12 +891,12 @@ export function createMemoryBodyStore(
         );
       }
       const leaseExpiresAt = newLeaseExpiresAt();
-      const head = Object.freeze({
+      const head = {
         ...entry.head,
         byteLength: entry.head.byteLength + input.bytes.byteLength,
         maintenanceVersion: entry.head.maintenanceVersion + 1,
         writerLeaseRemainingMs: protectionMs,
-      });
+      } as const;
       const bytes = input.bytes.slice();
       entry.chunks.push(bytes);
       entry.appendIds.set(input.appendId, bytes);
@@ -904,13 +907,15 @@ export function createMemoryBodyStore(
         chunks: entry.chunks,
         appendIds: entry.appendIds,
       });
-      return Promise.resolve(Object.freeze({
-        startOffset: input.expectedOffset,
-        endOffset: head.byteLength,
-        protection: Object.freeze({
-          remainingMs: Math.max(0, head.writerLeaseRemainingMs ?? 0),
-        }),
-      }));
+      return Promise.resolve(
+        {
+          startOffset: input.expectedOffset,
+          endOffset: head.byteLength,
+          protection: {
+            remainingMs: Math.max(0, head.writerLeaseRemainingMs ?? 0),
+          } as const,
+        } as const,
+      );
     },
     async seal(input) {
       let entry = mutable.get(input.writer.bodyId);
@@ -946,11 +951,11 @@ export function createMemoryBodyStore(
         );
       }
       if (entry.head.state === "open") {
-        const head: ActiveMutableBodyHead = Object.freeze({
+        const head: ActiveMutableBodyHead = {
           ...entry.head,
           state: "sealing",
           maintenanceVersion: entry.head.maintenanceVersion + 1,
-        });
+        } as const;
         entry = { ...entry, head, updatedAt: Date.now() };
         // Freeze the committed prefix before the digest yields. Append and
         // terminate synchronously observe `sealing` from this point onward.
@@ -984,7 +989,7 @@ export function createMemoryBodyStore(
           "Progressive writer was fenced while sealing this body.",
         );
       }
-      const head = Object.freeze({
+      const head = {
         bodyId: input.writer.bodyId,
         state: "ready" as const,
         byteLength: bytes.byteLength,
@@ -994,7 +999,7 @@ export function createMemoryBodyStore(
         protectedUntil: bodyProtectionUntil(protectionMs),
         etag: digest.slice("sha256:".length),
         lastModified: new Date().toISOString(),
-      });
+      } as const;
       entries.set(input.writer.bodyId, {
         head,
         bytes,
@@ -1044,11 +1049,11 @@ export function createMemoryBodyStore(
         );
       }
       if (entry.head.state === "open") {
-        const head: ActiveMutableBodyHead = Object.freeze({
+        const head: ActiveMutableBodyHead = {
           ...entry.head,
           state: "terminating",
           maintenanceVersion: entry.head.maintenanceVersion + 1,
-        });
+        } as const;
         entry = { ...entry, head, updatedAt: Date.now() };
         // The terminal prefix becomes immutable before digesting it.
         mutable.set(input.writer.bodyId, entry);
@@ -1081,7 +1086,7 @@ export function createMemoryBodyStore(
         );
       }
       const now = Date.now();
-      const head: IncompleteBodyHead = Object.freeze({
+      const head: IncompleteBodyHead = {
         bodyId: input.writer.bodyId,
         state: "incomplete",
         byteLength: bytes.byteLength,
@@ -1091,7 +1096,7 @@ export function createMemoryBodyStore(
         protectedUntil: bodyProtectionUntil(protectionMs, now),
         etag: digest.slice("sha256:".length),
         lastModified: new Date(now).toISOString(),
-      });
+      } as const;
       entries.set(input.writer.bodyId, { head, bytes, updatedAt: now });
       mutable.delete(input.writer.bodyId);
       return head;
@@ -1147,12 +1152,14 @@ export function createMemoryBodyStore(
           0,
           input.limit,
         );
-        return Promise.resolve(Object.freeze({
-          bodies: Object.freeze(page),
-          ...(page.length === input.limit
-            ? { after: page[page.length - 1].bodyId }
-            : {}),
-        }));
+        return Promise.resolve(
+          {
+            bodies: page,
+            ...(page.length === input.limit
+              ? { after: page[page.length - 1].bodyId }
+              : {}),
+          } as const,
+        );
       },
       delete(input) {
         const ready = entries.get(input.bodyId);
@@ -1188,7 +1195,7 @@ export function createMemoryBodyStore(
       },
     },
   };
-  return Object.freeze(store);
+  return store;
 }
 
 function stagingDataKey(key: string): string {
@@ -1273,7 +1280,7 @@ function parseSpillHead(
       : undefined;
     if (state === "incomplete") {
       if (typeof parsed.digest !== "string") return null;
-      return Object.freeze({
+      return ({
         bodyId,
         state,
         mediaType: parsed.mediaType,
@@ -1289,9 +1296,9 @@ function parseSpillHead(
         ...(typeof parsed.lastModified === "string"
           ? { lastModified: parsed.lastModified }
           : {}),
-      });
+      } as const);
     }
-    return Object.freeze({
+    return ({
       bodyId,
       state,
       mediaType: parsed.mediaType,
@@ -1308,7 +1315,7 @@ function parseSpillHead(
         ? parsed.reservationId
         : "",
       ...(leaseExpiresAt ? { leaseExpiresAt } : {}),
-    });
+    } as const);
   } catch {
     return null;
   }
@@ -1438,18 +1445,18 @@ function createFilesystemProgressive(
             "A progressive writer lease is still live for this asset body.",
           );
         }
-        const taken = Object.freeze({
+        const taken = {
           ...existing,
           reservationId: crypto.randomUUID(),
           maintenanceVersion: existing.maintenanceVersion + 1,
           writerGeneration: existing.writerGeneration + 1,
           writerLeaseRemainingMs: protectionMs,
           leaseExpiresAt: bodyProtectionUntil(protectionMs),
-        });
+        } as const;
         await writeHead(taken);
         return writerCapabilityFromHead(taken);
       }
-      const created = Object.freeze({
+      const created = {
         bodyId: input.bodyId,
         state: "open" as const,
         mediaType: input.mediaType,
@@ -1460,7 +1467,7 @@ function createFilesystemProgressive(
         writerLeaseRemainingMs: protectionMs,
         reservationId: crypto.randomUUID(),
         leaseExpiresAt: bodyProtectionUntil(protectionMs),
-      });
+      } as const;
       const bytes = encodeSpillHead(created);
       const result = await access.writeExclusive({
         bodyId: stagingMetaKey(input.bodyId),
@@ -1477,14 +1484,14 @@ function createFilesystemProgressive(
         input.expectedGeneration === raced.writerGeneration &&
         bodyProtectionRemainingMs(raced.leaseExpiresAt) === 0
       ) {
-        const taken = Object.freeze({
+        const taken = {
           ...raced,
           reservationId: crypto.randomUUID(),
           maintenanceVersion: raced.maintenanceVersion + 1,
           writerGeneration: raced.writerGeneration + 1,
           writerLeaseRemainingMs: protectionMs,
           leaseExpiresAt: bodyProtectionUntil(protectionMs),
-        });
+        } as const;
         await writeHead(taken);
         return writerCapabilityFromHead(taken);
       }
@@ -1515,11 +1522,11 @@ function createFilesystemProgressive(
         );
       }
       if (existing.state === "sealing") return existing;
-      const sealing: SpillHead = Object.freeze({
+      const sealing: SpillHead = {
         ...existing,
         state: "sealing" as const,
         maintenanceVersion: existing.maintenanceVersion + 1,
-      });
+      } as const;
       await writeHead(sealing);
       return sealing;
     },
@@ -1548,16 +1555,16 @@ function createFilesystemProgressive(
           "Progressive body is not open.",
         );
       }
-      const head = Object.freeze({
+      const head = {
         ...existing,
         maintenanceVersion: existing.maintenanceVersion + 1,
         writerLeaseRemainingMs: protectionMs,
         leaseExpiresAt: bodyProtectionUntil(protectionMs),
-      });
+      } as const;
       await writeHead(head);
-      return Object.freeze({
+      return ({
         remainingMs: bodyProtectionRemainingMs(head.leaseExpiresAt),
-      });
+      } as const);
     },
     async append(input) {
       const existing = await requireOwner(
@@ -1577,13 +1584,13 @@ function createFilesystemProgressive(
         );
       }
       if (input.bytes.byteLength === 0) {
-        return Object.freeze({
+        return ({
           startOffset: input.expectedOffset,
           endOffset: existing.byteLength,
-          protection: Object.freeze({
+          protection: {
             remainingMs: bodyProtectionRemainingMs(existing.leaseExpiresAt),
-          }),
-        });
+          } as const,
+        } as const);
       }
       if (input.expectedOffset < existing.byteLength) {
         const existingBytes = await progressive.readRange({
@@ -1594,13 +1601,13 @@ function createFilesystemProgressive(
         const same = existingBytes.byteLength === input.bytes.byteLength &&
           existingBytes.every((byte, index) => byte === input.bytes[index]);
         if (same) {
-          return Object.freeze({
+          return ({
             startOffset: input.expectedOffset,
             endOffset: existing.byteLength,
-            protection: Object.freeze({
+            protection: {
               remainingMs: Math.max(0, existing.writerLeaseRemainingMs ?? 0),
-            }),
-          });
+            } as const,
+          } as const);
         }
         throw createContentError(
           "asset_conflict",
@@ -1619,7 +1626,7 @@ function createFilesystemProgressive(
           bytes: input.bytes,
         });
       }
-      const head = Object.freeze({
+      const head = {
         bodyId: input.writer.bodyId,
         state: "open" as const,
         mediaType: input.writer.mediaType,
@@ -1630,15 +1637,15 @@ function createFilesystemProgressive(
         writerLeaseRemainingMs: protectionMs,
         reservationId: existing.reservationId,
         leaseExpiresAt: bodyProtectionUntil(protectionMs),
-      });
+      } as const;
       await writeHead(head);
-      return Object.freeze({
+      return ({
         startOffset: input.expectedOffset,
         endOffset: head.byteLength,
-        protection: Object.freeze({
+        protection: {
           remainingMs: Math.max(0, head.writerLeaseRemainingMs ?? 0),
-        }),
-      });
+        } as const,
+      } as const);
     },
     async readRange(input) {
       const head = await readHeadAny(input.bodyId);
@@ -1695,11 +1702,11 @@ function createFilesystemProgressive(
       }
       const terminating: SpillHead = existing.state === "terminating"
         ? existing
-        : Object.freeze({
+        : ({
           ...existing,
           state: "terminating" as const,
           maintenanceVersion: existing.maintenanceVersion + 1,
-        });
+        } as const);
       if (existing.state !== "terminating") await writeHead(terminating);
       const bytes = await progressive.readRange({
         bodyId: input.writer.bodyId,
@@ -1714,7 +1721,7 @@ function createFilesystemProgressive(
         );
       }
       const now = Date.now();
-      const incomplete: IncompleteBodyHead = Object.freeze({
+      const incomplete: IncompleteBodyHead = {
         bodyId: input.writer.bodyId,
         state: "incomplete",
         mediaType: terminating.mediaType,
@@ -1724,7 +1731,7 @@ function createFilesystemProgressive(
         protectedUntil: bodyProtectionUntil(protectionMs, now),
         etag: digest.slice("sha256:".length),
         lastModified: new Date(now).toISOString(),
-      });
+      } as const;
       await access.writeReplace({
         bodyId: stagingMetaKey(input.writer.bodyId),
         bytes: encodeSpillHead(incomplete),
@@ -1745,7 +1752,7 @@ function createFilesystemProgressive(
       await cleanup(input.writer.bodyId);
     },
   };
-  return Object.freeze(progressive);
+  return progressive;
 }
 
 // Filesystem adapters advertise process reach. Serialize every mutation for a
@@ -1958,12 +1965,12 @@ export function createFilesystemBodyStore(
           0,
           input.limit,
         );
-        return Object.freeze({
-          bodies: Object.freeze(page),
+        return ({
+          bodies: page,
           ...(page.length === input.limit
             ? { after: page[page.length - 1].bodyId }
             : {}),
-        });
+        } as const);
       },
       delete: (input) =>
         withFilesystemBodyMutationLock(input.bodyId, async () => {
@@ -1994,7 +2001,7 @@ export function createFilesystemBodyStore(
         }),
     },
   };
-  return Object.freeze(store);
+  return store;
 }
 
 export async function readBodiesBounded<T>(
@@ -2002,7 +2009,7 @@ export async function readBodiesBounded<T>(
   concurrency: number,
   read: (value: T, index: number) => Promise<Uint8Array>,
 ): Promise<readonly Uint8Array[]> {
-  if (values.length === 0) return Object.freeze([]);
+  if (values.length === 0) return ([] as const);
   const limit = Math.max(1, Math.min(values.length, Math.floor(concurrency)));
   const result = new Array<Uint8Array>(values.length);
   let cursor = 0;
@@ -2013,5 +2020,5 @@ export async function readBodiesBounded<T>(
       result[index] = await read(values[index], index);
     }
   }));
-  return Object.freeze(result);
+  return result;
 }

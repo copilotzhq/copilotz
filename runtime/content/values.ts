@@ -28,7 +28,7 @@ export async function resolveContentInputs(
     throw new Error("Content resolution returned an incomplete batch.");
   }
   let index = 0;
-  return Object.freeze(snapshot.map((input): ContentValue => {
+  return (snapshot.map((input): ContentValue => {
     if (!isContentRef(input)) return input;
     const item = resolved[index++];
     if (item.ref.assetId !== input.assetId) {

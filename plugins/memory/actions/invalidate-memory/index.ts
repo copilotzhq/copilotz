@@ -12,10 +12,10 @@ import {
 import { memoryRecordCollection } from "../../collections/memory-record/index.ts";
 import { memorySourceKey } from "../../authoring/ontology/index.ts";
 
-import type { MemoryActionContext } from "../../internal/contracts.ts";
-import { record, requiredText } from "../../internal/input.ts";
-import { threadMemorySpaces } from "../../internal/access.ts";
-import { memoryRecord } from "../../internal/retrieval.ts";
+import type { MemoryActionContext } from "../../shared/contracts.ts";
+import { record, requiredText } from "../../shared/input.ts";
+import { threadMemorySpaces } from "../../shared/access.ts";
+import { memoryRecord } from "../../shared/retrieval.ts";
 
 export const invalidateMemoryInputSchema = {
   type: "object",

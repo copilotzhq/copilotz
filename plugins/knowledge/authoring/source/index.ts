@@ -1,10 +1,10 @@
 /** Builds portable Knowledge source-loading declarations. @module */
-import { parseDocumentToText } from "./internal/document-parser.ts";
+import { parseDocumentToText } from "./document-parser.ts";
 import type {
   KnowledgeSourceLoader,
   KnowledgeTextExtractor,
   LoadedKnowledgeSource,
-} from "../../internal/types.ts";
+} from "../../shared/types.ts";
 
 const DEFAULT_MAX_SOURCE_BYTES = 10 * 1024 * 1024;
 

@@ -11,7 +11,7 @@ import {
   type PreparedContent,
 } from "@copilotz/copilotz/content";
 import { type ActionContext, defineAction } from "@copilotz/copilotz/actions";
-import { cloneLosslessJson } from "../../../tools/authoring/internal/lifecycle-json.ts";
+import { cloneLosslessJson } from "@copilotz/copilotz/core";
 
 export type PersistentTerminalScope = "agent" | "project" | "tenant";
 

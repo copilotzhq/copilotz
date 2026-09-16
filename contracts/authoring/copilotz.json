@@ -1,1 +1,10 @@
-{ "id": "example.support", "version": "1.0.0" }
+{
+  "id": "example.support",
+  "version": "1.0.0",
+  "plugins": [
+    {
+      "from": "@copilotz/copilotz/core",
+      "export": "corePlugin"
+    }
+  ]
+}

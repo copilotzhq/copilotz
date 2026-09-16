@@ -1,4 +1,4 @@
-import type { ToolDefinition } from "@copilotz/copilotz/tools";
+import type { ToolDefinition } from "@copilotz/copilotz/core";
 import { persistentTerminalAction } from "../../../actions/persistent-terminal/index.ts";
 /**
  * Defines the data-only Persistent Terminal Tool Resource.
@@ -6,7 +6,7 @@ import { persistentTerminalAction } from "../../../actions/persistent-terminal/i
  * @module
  */
 
-import { defineTool } from "@copilotz/copilotz/tools";
+import { defineTool } from "@copilotz/copilotz/core";
 
 export const persistentTerminalToolResource: ToolDefinition<
   typeof persistentTerminalAction

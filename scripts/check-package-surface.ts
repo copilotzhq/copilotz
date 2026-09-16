@@ -79,7 +79,7 @@ async function* productionSources(
       !path.startsWith("contracts/") &&
       !path.startsWith("scripts/") &&
       !path.startsWith("runtime/testing/") &&
-      !path.startsWith("plugins/core/internal/testing/")
+      !path.startsWith("plugins/core/shared/testing/")
     ) yield { path, text: await Deno.readTextFile(url) };
   }
 }

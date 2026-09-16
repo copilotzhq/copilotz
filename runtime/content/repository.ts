@@ -40,7 +40,7 @@ function cloneOrigin(origin: AssetOrigin | undefined): AssetOrigin | undefined {
       "Asset origin must contain exactly non-empty type and id.",
     );
   }
-  return Object.freeze({ type: origin.type.trim(), id: origin.id.trim() });
+  return ({ type: origin.type.trim(), id: origin.id.trim() } as const);
 }
 
 function cloneRecord(record: AssetRecord): AssetRecord {
@@ -206,10 +206,10 @@ export function createMemoryAssetRepository(
         location: input.location ?? { kind: "memory" },
         createdAt: timestamp,
         readyAt: timestamp,
-        origin: cloneOrigin(input.origin) ?? Object.freeze({
+        origin: cloneOrigin(input.origin) ?? ({
           type: "namespace",
           id: namespace,
-        }),
+        } as const),
         metadata: cloneMetadata(input.metadata),
       };
       records.set(key, record);

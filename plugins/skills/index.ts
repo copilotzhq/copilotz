@@ -36,4 +36,4 @@ export type {
   SkillIndexEntry,
   SkillManifest,
   SkillReadOptions,
-} from "./internal/contracts.ts";
+} from "./shared/contracts.ts";

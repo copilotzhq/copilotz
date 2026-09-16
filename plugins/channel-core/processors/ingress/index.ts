@@ -19,7 +19,7 @@ import type {
 import {
   CHANNEL_INGRESS_INPUT_EVENT,
   type ChannelIngressInput,
-} from "../../internal/contracts.ts";
+} from "../../shared/contracts.ts";
 
 type ChannelProcessorContext = ProcessorContext<
   ChannelActionResources,

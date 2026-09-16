@@ -6,8 +6,8 @@ import type { ActionDefinition } from "@copilotz/copilotz/actions";
  */
 
 import { defineAction } from "@copilotz/copilotz/actions";
-import { record, requiredText } from "../internal/input.ts";
-import { metadataText } from "../internal/participants.ts";
+import { record, requiredText } from "../../shared/input.ts";
+import { metadataText } from "../../shared/participants.ts";
 
 type UserMemoryItem = Readonly<{
   id: string;

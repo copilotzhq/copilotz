@@ -3,8 +3,8 @@
 import { assertEquals, assertRejects } from "@std/assert";
 import type { ActionContext } from "@copilotz/copilotz/actions";
 import { financeAction } from "./index.ts";
-import { createFinanceProviderRegistry } from "./internal/provider/registry.ts";
-import type { FinanceDataProvider } from "./internal/provider/types.ts";
+import { createFinanceProviderRegistry } from "./provider/registry.ts";
+import type { FinanceDataProvider } from "./provider/types.ts";
 
 function provider(): FinanceDataProvider {
   const searchAssets: FinanceDataProvider["searchAssets"] = async (

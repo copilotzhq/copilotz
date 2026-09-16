@@ -47,21 +47,21 @@ function deploymentContract(
       "BodyStore deployment minimumProtectionMs must be a non-negative integer.",
     );
   }
-  return Object.freeze({ ...input });
+  return ({ ...input } as const);
 }
 
 function withoutReadyGarbageCollection(store: BodyStore): BodyStore {
-  return Object.freeze({
+  return ({
     ...store,
-    maintenance: Object.freeze({
+    maintenance: {
       ...store.maintenance,
       delete(input: Parameters<BodyStore["maintenance"]["delete"]>[0]) {
         return input.expectedState === "ready"
           ? Promise.resolve(false)
           : store.maintenance.delete(input);
       },
-    }),
-  });
+    } as const,
+  } as const);
 }
 
 /** Compiles declarative application configuration into body-store capabilities. */
@@ -152,7 +152,7 @@ export function createBodyStorageRuntime(
   for (const reader of options.readers ?? []) {
     readers.set(reader.backendId, reader);
   }
-  return Object.freeze({
+  return ({
     ...(adapter ? { adapter } : {}),
     ...(writer ? { writer } : {}),
     readers,
@@ -163,5 +163,5 @@ export function createBodyStorageRuntime(
       8,
       "assets.readConcurrency",
     ),
-  });
+  } as const);
 }

@@ -7,10 +7,10 @@ import {
   type LlmAdapterResult,
 } from "@copilotz/copilotz/llm";
 import { definePlugin } from "@copilotz/copilotz/plugins";
-import { defineTool } from "@copilotz/copilotz/tools";
+import { defineTool } from "@copilotz/copilotz/core";
 import { createCopilotzApplication } from "../../../../runtime/application/application.ts";
 import { createTestDatabase } from "../../../../runtime/testing/ominipg.ts";
-import { createTestDomainContext } from "../../internal/testing/context.ts";
+import { createTestDomainContext } from "../../shared/testing/context.ts";
 import { runGoal } from "./index.ts";
 
 const NAMESPACE = "goal-runner-test";

@@ -2,7 +2,7 @@ import { definePlugin as defineFixturePlugin } from "@copilotz/copilotz/plugins"
 import { assert, assertEquals } from "@std/assert";
 import { type UsageOptions, usagePlugin } from "./index.ts";
 import { createCopilotzApplication } from "../../runtime/application/application.ts";
-import { createTestDomainContext } from "../core/internal/testing/context.ts";
+import { createTestDomainContext } from "../core/shared/testing/context.ts";
 import {
   createTestDatabase,
   type TestDatabase,
@@ -24,10 +24,8 @@ import {
 } from "../../runtime/actions/index.ts";
 import { coreCollections, createThreadAction } from "../core/index.ts";
 import type { LlmCallInput, LlmCallOutput } from "@copilotz/copilotz/llm";
-
 const NAMESPACE = "tenant-a";
 const THREAD_ID = "thread-a";
-
 function llmOutput(
   model: string,
   input: Readonly<{
@@ -71,7 +69,6 @@ function llmOutput(
     finishReason: "stop",
   });
 }
-
 const usageLlmAction = defineAction<LlmCallInput, LlmCallOutput>({
   id: "llm.call",
   async execute(input, context) {
@@ -242,19 +239,19 @@ const usageLlmAction = defineAction<LlmCallInput, LlmCallOutput>({
     });
   },
 });
-
 const usageToolAction = defineAction<unknown, unknown>({
   id: "test.lookup",
   execute(input: unknown) {
     const value = input as Record<string, unknown>;
-    if (value.mode === "failed") throw new Error("lookup failed");
+    if (value.mode === "failed") {
+      throw new Error("lookup failed");
+    }
     if (value.mode === "cancelled") {
       throw new DOMException("lookup cancelled", "AbortError");
     }
     return value.result;
   },
 });
-
 type UsageDriverContext = ProcessorContext<
   ProcessorContext["resources"],
   ProcessorContext["adapters"],
@@ -264,14 +261,12 @@ type UsageDriverContext = ProcessorContext<
   }>,
   ProcessorContext["collections"]
 >;
-
 const usageCorePlugin = definePlugin({
   id: "test.usage-core",
   version: "1.0.0",
   collections: coreCollections,
   actions: { createThread: createThreadAction },
 });
-
 const usageActionDriverPlugin = definePlugin({
   id: "test.usage-action-driver",
   version: "1.0.0",
@@ -308,15 +303,11 @@ const usageActionDriverPlugin = definePlugin({
     }),
   },
 });
-
 type Fixture = Readonly<{
   db: TestDatabase;
   engine: CopilotzEngine;
 }>;
-
-async function createFixture(
-  options: UsageOptions = {},
-): Promise<Fixture> {
+async function createFixture(options: UsageOptions = {}): Promise<Fixture> {
   const db = await createTestDatabase({ url: ":memory:" });
   const registry = await createPluginRegistry({
     plugins: [
@@ -354,12 +345,10 @@ async function createFixture(
   });
   return Object.freeze({ db, engine });
 }
-
 async function closeFixture(fixture: Fixture): Promise<void> {
   await fixture.engine.shutdown();
   await fixture.db.close();
 }
-
 Deno.test("usage workflow has static processors and accepts context configuration", () => {
   const enabled = usagePlugin;
   assertEquals(Object.keys(enabled.collections), ["usage"]);
@@ -376,7 +365,6 @@ Deno.test("usage workflow has static processors and accepts context configuratio
       "llm.call.progress",
     ],
   );
-
   const disabled = defineFixturePlugin({
     ...usagePlugin,
     resources: { usage: { config: { enabled: false } } },
@@ -385,7 +373,6 @@ Deno.test("usage workflow has static processors and accepts context configuratio
   assertEquals(Object.keys(disabled.collections), ["usage"]);
   assertEquals(disabled.resources.usage.config.enabled, false);
 });
-
 Deno.test("package-root composes an explicitly supplied usage plugin", async () => {
   const application = await createCopilotzApplication({
     namespace: "usage-root",
@@ -407,7 +394,6 @@ Deno.test("package-root composes an explicitly supplied usage plugin", async () 
     await application.shutdown();
   }
 });
-
 Deno.test("usage workflow records Action terminals once without payload copies", async () => {
   const hookKinds: string[] = [];
   const fixture = await createFixture({
@@ -439,10 +425,14 @@ Deno.test("usage workflow records Action terminals once without payload copies",
       const appended = await fixture.engine.events.append({
         type,
         namespace: NAMESPACE,
-        threadId: THREAD_ID,
         payload,
         correlationId: `usage:${String(payload.key)}`,
         deduplicationId: `usage:${String(payload.key)}:requested`,
+        metadata: {
+          core: {
+            threadId: THREAD_ID,
+          },
+        },
       });
       await Promise.all(appended.dispatch.handles.map((handle) => handle.done));
     };
@@ -503,8 +493,7 @@ Deno.test("usage workflow records Action terminals once without payload copies",
         },
       },
     });
-
-    const deadline = Date.now() + 10_000;
+    const deadline = Date.now() + 10000;
     const usage = fixture.engine.collections.withScope({ namespace: NAMESPACE })
       .usage;
     while ((await usage.list()).length < 3) {
@@ -514,13 +503,11 @@ Deno.test("usage workflow records Action terminals once without payload copies",
       await fixture.engine.recover({ namespace: NAMESPACE });
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
-
     const rows = [
       ...await usage.list(),
     ].sort((left, right) => left.id.localeCompare(right.id));
     assertEquals(rows.length, 3);
     assertEquals(hookKinds.sort(), ["llm", "llm", "tool"]);
-
     const first = rows.find((row) => row.resource === "primary-model")!;
     assertEquals(first.kind, "llm");
     assertEquals(first.resource, "primary-model");
@@ -549,14 +536,12 @@ Deno.test("usage workflow records Action terminals once without payload copies",
     assertEquals(first.pricingModelId, "gpt-5-mini-test");
     assertEquals(first.pricingSource, "contract-pricing");
     assertEquals(first.rawUsage, null);
-
     const unattributed = rows.find((row) => row.resource === "failing-model")!;
     assertEquals(unattributed.status, "failed");
     assertEquals(unattributed.threadId, null);
     assertEquals(unattributed.messageId, null);
     assertEquals(unattributed.agentId, null);
     assertEquals(unattributed.initiatedById, null);
-
     const toolRow = rows.find((row) => row.kind === "tool")!;
     assertEquals(toolRow.resource, "lookup");
     assertEquals(toolRow.metrics, {
@@ -571,17 +556,12 @@ Deno.test("usage workflow records Action terminals once without payload copies",
     assert(!serialized.includes("provider-output-must-not-be-copied"));
     assert(!serialized.includes("tool-call-must-not-be-copied"));
     assert(!serialized.includes("do not duplicate"));
-
     await fixture.engine.recover({ namespace: NAMESPACE });
-    assertEquals(
-      (await usage.list()).length,
-      3,
-    );
+    assertEquals((await usage.list()).length, 3);
   } finally {
     await closeFixture(fixture);
   }
 });
-
 Deno.test("usage recognizes failed and cancelled Tool Actions structurally", async () => {
   const fixture = await createFixture();
   try {
@@ -590,7 +570,6 @@ Deno.test("usage recognizes failed and cancelled Tool Actions structurally", asy
       const appended = await fixture.engine.events.append({
         type: "test.usage.tool",
         namespace: NAMESPACE,
-        threadId: THREAD_ID,
         payload: {
           key,
           input: { mode, secret: `${mode}-must-not-be-copied` },
@@ -613,13 +592,17 @@ Deno.test("usage recognizes failed and cancelled Tool Actions structurally", asy
         },
         correlationId: key,
         deduplicationId: `${key}:requested`,
+        metadata: {
+          core: {
+            threadId: THREAD_ID,
+          },
+        },
       });
       await Promise.all(appended.dispatch.handles.map((handle) => handle.done));
     }
-
     const usage = fixture.engine.collections.withScope({ namespace: NAMESPACE })
       .usage;
-    const deadline = Date.now() + 10_000;
+    const deadline = Date.now() + 10000;
     while ((await usage.list()).length < 2) {
       if (Date.now() >= deadline) {
         throw new Error("Tool terminal Usage records did not settle.");
@@ -628,10 +611,7 @@ Deno.test("usage recognizes failed and cancelled Tool Actions structurally", asy
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
     const rows = await usage.list();
-    assertEquals(
-      rows.map((row) => row.status).sort(),
-      ["cancelled", "failed"],
-    );
+    assertEquals(rows.map((row) => row.status).sort(), ["cancelled", "failed"]);
     for (const row of rows) {
       assertEquals(row.resource, "lookup");
       assertEquals(row.operation, "lookup");
@@ -645,7 +625,6 @@ Deno.test("usage recognizes failed and cancelled Tool Actions structurally", asy
     await closeFixture(fixture);
   }
 });
-
 Deno.test("usage projects one ledger row per reported llm provider attempt", async () => {
   const fixture = await createFixture();
   try {
@@ -654,7 +633,6 @@ Deno.test("usage projects one ledger row per reported llm provider attempt", asy
       const appended = await fixture.engine.events.append({
         type: "test.usage.llm",
         namespace: NAMESPACE,
-        threadId: THREAD_ID,
         payload: {
           key,
           input: {
@@ -669,19 +647,22 @@ Deno.test("usage projects one ledger row per reported llm provider attempt", asy
         },
         correlationId: key,
         deduplicationId: `${key}:requested`,
+        metadata: {
+          core: {
+            threadId: THREAD_ID,
+          },
+        },
       });
       await Promise.all(appended.dispatch.handles.map((handle) => handle.done));
     };
-
     await invoke("aggregate-model");
     await invoke("uncosted-model");
     await invoke("failing-model");
     await invoke("cancelled-model");
     await invoke("reported-failure");
-
     const usage = fixture.engine.collections.withScope({ namespace: NAMESPACE })
       .usage;
-    const deadline = Date.now() + 10_000;
+    const deadline = Date.now() + 10000;
     while ((await usage.list()).length < 7) {
       if (Date.now() >= deadline) {
         throw new Error("Aggregate Usage Actions did not settle.");
@@ -689,10 +670,8 @@ Deno.test("usage projects one ledger row per reported llm provider attempt", asy
       await fixture.engine.recover({ namespace: NAMESPACE });
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
-
     const rows = await usage.list();
     assertEquals(rows.length, 7);
-
     const attempts = rows.filter((row) =>
       typeof row.dedupeKey === "string" && row.dedupeKey.includes(":attempt:")
     );
@@ -745,7 +724,6 @@ Deno.test("usage projects one ledger row per reported llm provider attempt", asy
         },
       ],
     );
-
     const reportedFailure = rows.find((row) =>
       row.model === "reported-failure" &&
       typeof row.dedupeKey === "string" && row.dedupeKey.endsWith(":attempt:0")
@@ -764,7 +742,6 @@ Deno.test("usage projects one ledger row per reported llm provider attempt", asy
       rows.filter((row) => row.resource === "reported-failure").length,
       1,
     );
-
     for (
       const [model, status] of [
         ["failing-model", "failed"],
@@ -780,7 +757,6 @@ Deno.test("usage projects one ledger row per reported llm provider attempt", asy
       assertEquals(terminal.totalCostUsd, null);
       assertEquals(terminal.threadId, null);
     }
-
     const serialized = JSON.stringify(rows);
     assert(!serialized.includes("aggregate-attempt-0"));
     assert(!serialized.includes("uncosted-attempt-0"));
@@ -790,7 +766,6 @@ Deno.test("usage projects one ledger row per reported llm provider attempt", asy
     assert(!serialized.includes("tool-call-must-not-be-copied"));
     assert(serialized.includes("EUR"));
     assert(serialized.includes("GBP"));
-
     await fixture.engine.recover({ namespace: NAMESPACE });
     assertEquals((await usage.list()).length, 7);
   } finally {

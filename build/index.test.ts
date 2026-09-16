@@ -32,7 +32,7 @@ Deno.test("discovery is deterministic and never executes source", async () => {
     "actions/zebra/index.ts":
       'throw new Error("must not execute"); export default {};',
     "resources/policy/default/index.ts": "export default {limit:2};",
-    "actions/internal/helper.ts": "export const privateValue = 1;",
+    "shared/helper.ts": "export const privateValue = 1;",
   }, async (root) => {
     const first = await generate(root);
     assertEquals(first, await generate(root));
@@ -80,4 +80,80 @@ Deno.test("built ESM executes through a separately imported runtime", async () =
     assert(!generated.includes("readDir("));
     assert(!generated.includes("typescript@"));
   });
+});
+
+Deno.test("manifest dependencies generate direct imports and shared modules are not discovered", async () => {
+  await fixture({
+    "copilotz.json": JSON.stringify({
+      id: "dependent",
+      version: "1",
+      plugins: [{ from: "./shared/base.ts", export: "default" }],
+    }),
+    "shared/base.ts":
+      'import {definePlugin} from "@copilotz/copilotz/plugins"; export default definePlugin({id:"base",version:"1"});',
+    "shared/actions/not-a-primitive/index.ts":
+      'throw new Error("not discovered");',
+  }, async (root) => {
+    const source = await generate(root);
+    assert(
+      source.includes(
+        'import { default as dependency0 } from "./shared/base.ts";',
+      ),
+    );
+    assert(source.includes("plugins: [dependency0]"));
+    assert(!source.includes("not-a-primitive"));
+    await build(root);
+    const plugin = (await import("file://" + root + "/dist/plugin.js")).default;
+    assertEquals(plugin.plugins.map((p: { id: string }) => p.id), ["base"]);
+  });
+});
+Deno.test("build rejects removed folder conventions and duplicate plugin imports", async () => {
+  await fixture(
+    { "dependencies/old/index.ts": "export default {}" },
+    (root) =>
+      assertRejects(() => generate(root), Error, "manifest plugin imports")
+        .then(() => undefined),
+  );
+  await fixture(
+    {
+      "copilotz.json": JSON.stringify({
+        id: "bad",
+        version: "1",
+        plugins: [{ from: "x", export: "plugin" }, {
+          from: "x",
+          export: "plugin",
+        }],
+      }),
+    },
+    (root) =>
+      assertRejects(() => generate(root), Error, "Duplicate plugin import")
+        .then(() => undefined),
+  );
+});
+
+Deno.test("build rejects missing dependency exports and cyclic plugin identities", async () => {
+  for (const cyclic of [false, true]) {
+    await fixture({
+      "copilotz.json": JSON.stringify({
+        id: "dependent",
+        version: "1",
+        plugins: [{
+          from: "./shared/base.ts",
+          export: cyclic ? "default" : "missing",
+        }],
+      }),
+      "shared/base.ts":
+        'import {definePlugin} from "@copilotz/copilotz/plugins"; export default definePlugin({id:"dependent",version:"1"});',
+    }, async (root) => {
+      await assertRejects(
+        () => build(root),
+        Error,
+        cyclic ? "composition validation failed" : "type check failed",
+      );
+      assertEquals(
+        await Deno.stat(root + "/dist/plugin.js").catch(() => null),
+        null,
+      );
+    });
+  }
 });

@@ -44,7 +44,7 @@ export function parseDataUrl(
     const bytes = segments.includes("base64")
       ? base64ToBytes(encoded)
       : new TextEncoder().encode(decodeURIComponent(encoded));
-    return Object.freeze({ mediaType, bytes });
+    return ({ mediaType, bytes } as const);
   } catch {
     return null;
   }

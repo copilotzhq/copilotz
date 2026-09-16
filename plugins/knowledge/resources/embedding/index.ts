@@ -3,7 +3,7 @@ import type {
   KnowledgeEmbeddingConfig,
   KnowledgeEmbeddingProviderResource,
   KnowledgeEmbeddingResponse,
-} from "../../internal/types.ts";
+} from "../../shared/types.ts";
 
 function required(value: string, name: string): string {
   const normalized = value.trim();

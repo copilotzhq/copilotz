@@ -58,7 +58,7 @@ export type ManagedOminipgDatabase = Readonly<{
 export function createOminipgSqlSession(
   database: OminipgDatabaseLike,
 ): SqlSession {
-  return Object.freeze(createSqlSession(database));
+  return (createSqlSession(database));
 }
 
 /** Opens an application-owned Ominipg database and its private SQL adapter. */
@@ -101,12 +101,12 @@ export async function openManagedOminipgDatabase(
   const adapted = database as unknown as OminipgDatabaseLike;
   const session = createOminipgSqlSession(adapted);
   let closeTask: Promise<void> | undefined;
-  return Object.freeze({
+  return ({
     database: adapted,
     session,
     close() {
       closeTask ??= database.close();
       return closeTask;
     },
-  });
+  } as const);
 }

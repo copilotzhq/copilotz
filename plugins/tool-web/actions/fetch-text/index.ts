@@ -6,7 +6,7 @@ import type { ActionDefinition } from "@copilotz/copilotz/actions";
  */
 
 import { type ActionContext, defineAction } from "@copilotz/copilotz/actions";
-import { actionAbortError } from "../internal/abort.ts";
+import { actionAbortError } from "../../shared/abort.ts";
 
 interface FetchTextParams {
   url: string;

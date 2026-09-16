@@ -12,7 +12,7 @@ import {
 } from "@copilotz/copilotz/plugins";
 import type { dispatchScheduledMessageAction } from "../../actions/dispatch-scheduled-message/index.ts";
 import { coreScheduledMessageOccurrence } from "../../authoring/scheduled-message/index.ts";
-import { CORE_SCHEDULED_MESSAGE_PAYLOAD_TYPE } from "../../internal/contracts.ts";
+import { CORE_SCHEDULED_MESSAGE_PAYLOAD_TYPE } from "../../shared/contracts.ts";
 
 type CoreSchedulesProcessorContext =
   & Omit<ProcessorContext, "actions">

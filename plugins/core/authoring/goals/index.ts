@@ -8,11 +8,8 @@ import type {
 import type { ContentSequence } from "@copilotz/copilotz/content";
 import type { ResolvedCopilotzEvent } from "@copilotz/copilotz/events";
 import type { StreamOutput } from "@copilotz/copilotz/streams";
-import {
-  type CoreMessageInput,
-  message,
-} from "../../../core-collections/authoring/message-input/index.ts";
-import { workflowMetadata } from "../../internal/workflow-metadata.ts";
+import { type CoreMessageInput, message } from "../message-input/index.ts";
+import { workflowMetadata } from "../../shared/workflow-metadata.ts";
 
 export type GoalPhase = "target" | "lead";
 export type GoalStatus = "completed" | "failed" | "stopped" | "cancelled";

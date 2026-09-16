@@ -1,7 +1,7 @@
 import { assertEquals, assertThrows } from "@std/assert";
 
-import { withInternalPromptCacheKey } from "../../internal/internal-cache-key.ts";
-import type { ChatMessage, ProviderConfig } from "../../internal/types.ts";
+import { withInternalPromptCacheKey } from "../../shared/internal-cache-key.ts";
+import type { ChatMessage, ProviderConfig } from "../../shared/types.ts";
 import { openaiProvider } from "./index.ts";
 
 const messages: ChatMessage[] = [

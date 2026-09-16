@@ -7,6 +7,8 @@ export interface BuildConfig {
   version: string;
   /** Relative entry path to explicit runtime alias. */
   aliases?: Record<string, string>;
+  /** Statically imported plugin dependencies. */
+  plugins?: { from: string; export: string }[];
   /** Deliberately selected entries. Omit to discover every conventional entry. */
   include?: string[];
 }
@@ -24,7 +26,6 @@ const categories = [
   "processors",
   "resources",
   "adapters",
-  "dependencies",
 ];
 const compare = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
 const aliasFrom = (name: string) =>
@@ -35,7 +36,14 @@ async function files(directory: string, prefix = ""): Promise<string[]> {
   const result: string[] = [];
   for await (const entry of Deno.readDir(directory)) {
     if (
-      ["internal", "authoring", "node_modules", "dist", ".git"].includes(
+      entry.isDirectory && ["internal", "dependencies"].includes(entry.name)
+    ) {
+      throw new Error(
+        `${prefix}${entry.name}: use primitive-local helpers, shared/, or manifest plugin imports.`,
+      );
+    }
+    if (
+      ["shared", "authoring", "node_modules", "dist", ".git"].includes(
         entry.name,
       )
     ) continue;
@@ -65,6 +73,26 @@ export function inventory(
     config.aliases &&
     (typeof config.aliases !== "object" || Array.isArray(config.aliases))
   ) throw new TypeError("aliases must be a path-to-alias map.");
+  if (config.plugins !== undefined) {
+    if (!Array.isArray(config.plugins)) {
+      throw new TypeError("plugins must be an array.");
+    }
+    const seen = new Set<string>();
+    for (const entry of config.plugins) {
+      if (
+        !entry || typeof entry.from !== "string" || !entry.from.trim() ||
+        typeof entry.export !== "string" ||
+        !/^[A-Za-z_$][\w$]*$/.test(entry.export)
+      ) {
+        throw new TypeError(
+          "plugins entries require from and a valid export name.",
+        );
+      }
+      const key = `${entry.from}#${entry.export}`;
+      if (seen.has(key)) throw new Error(`Duplicate plugin import: ${key}`);
+      seen.add(key);
+    }
+  }
   const entries: Entry[] = [];
   const aliases = new Map<string, string>();
   const matched = new Set<string>();
@@ -160,18 +188,28 @@ export function emitPlugin(
     ...entries.map((entry, i) =>
       `import entry${i} from ${JSON.stringify("./" + entry.path)};`
     ),
+    ...(config.plugins ?? []).map((entry, i) =>
+      `import { ${entry.export} as dependency${i} } from ${
+        JSON.stringify(entry.from)
+      };`
+    ),
     "const definition = {",
     `  id: ${JSON.stringify(config.id)},`,
     `  version: ${JSON.stringify(config.version)},`,
   ];
+  if (config.plugins?.length) {
+    lines.push(
+      `  plugins: [${
+        config.plugins.map((_, i) => `dependency${i}`).join(", ")
+      }],`,
+    );
+  }
   for (const category of categories) {
     const group = entries.map((entry, i) => ({ ...entry, i })).filter((e) =>
       e.category === category
     );
     if (!group.length) continue;
-    if (category === "dependencies") {
-      lines.push(`  plugins: [${group.map((e) => `entry${e.i}`).join(", ")}],`);
-    } else if (category === "resources" || category === "adapters") {
+    if (category === "resources" || category === "adapters") {
       lines.push(`  ${category}: {`);
       for (
         const namespace of [...new Set(group.map((e) => e.namespace!))].sort(

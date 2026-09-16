@@ -1,14 +1,14 @@
 /** Coordinates durable Tool-plan stage dispatch and fan-in. @module */
 
 import { defineProcessor, type Processor } from "@copilotz/copilotz/plugins";
-import type { CoreToolProcessorContext } from "../../internal/runtime-context.ts";
+import type { CoreToolProcessorContext } from "../../shared/runtime-context.ts";
 import {
   advanceCompletedToolMembers,
   dispatchReadyStage,
   projectDurableToolPlan,
   scheduleReadyBranches,
-} from "../../internal/tool-plan.ts";
-import { asRecord, collectionEventRecord } from "../internal/helpers.ts";
+} from "../../shared/tool-plan.ts";
+import { asRecord, collectionEventRecord } from "../../shared/helpers.ts";
 
 async function withToolPlanConflictRetry(
   context: CoreToolProcessorContext,

@@ -11,10 +11,10 @@ import {
   withCoreAgentTurnMetadata,
   withCoreToolPlanMetadata,
   withWorkflowMetadata,
-} from "../../internal/workflow-metadata.ts";
+} from "../../shared/workflow-metadata.ts";
 import type { LlmCallOutput, LlmToolCall } from "@copilotz/copilotz/llm";
 import { defineProcessor, type Processor } from "@copilotz/copilotz/plugins";
-import type { CoreToolProcessorContext } from "../../internal/runtime-context.ts";
+import type { CoreToolProcessorContext } from "../../shared/runtime-context.ts";
 import {
   type CoreToolPlanBase,
   createDurableToolPlan,
@@ -22,8 +22,8 @@ import {
   snapshotToolStageActionIds,
   snapshotToolStageHistory,
   validateCoreToolPlan,
-} from "../../internal/tool-plan.ts";
-import { asRecord, loadParticipant } from "../internal/helpers.ts";
+} from "../../shared/tool-plan.ts";
+import { asRecord, loadParticipant } from "../../shared/helpers.ts";
 
 function llmOutput(value: unknown): LlmCallOutput {
   const output = asRecord(value);

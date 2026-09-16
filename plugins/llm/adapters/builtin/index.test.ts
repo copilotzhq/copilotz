@@ -12,7 +12,7 @@ import {
   type LlmAdapterFrame,
   type LlmBuiltinProvider,
   type LlmBuiltinProviderConfiguration,
-} from "../../internal/contracts.ts";
+} from "../../shared/contracts.ts";
 import { materializeBuiltinModel } from "./index.ts";
 
 function builtin(

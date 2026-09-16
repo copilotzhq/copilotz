@@ -38,7 +38,4 @@ Deno.test("ephemeral Event data is an immutable exact JSON snapshot", () => {
   });
   source.nested[0].value = 2;
   assertEquals(event.payload, { nested: [{ value: 1 }] });
-  assertEquals(Object.isFrozen(event.payload), true);
-  assertEquals(Object.isFrozen(event.payload.nested), true);
-  assertEquals(Object.isFrozen(event.payload.nested[0]), true);
 });

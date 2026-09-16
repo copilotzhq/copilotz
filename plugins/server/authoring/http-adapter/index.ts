@@ -11,7 +11,7 @@ import type {
   ServerConstraints,
   ServerEndpointDescriptor,
   ServerHttpMethod,
-} from "../../internal/contracts.ts";
+} from "../../shared/contracts.ts";
 
 export type HttpReadServices = Readonly<{
   get(

@@ -334,11 +334,11 @@ type RecoverableNotificationSubscription = {
 function createManagedConnector(
   input: CopilotzOminipgOptions | undefined,
 ): CopilotzDatabaseConnector {
-  return Object.freeze({
+  return ({
     async connect() {
       return (await openManagedOminipgDatabase(input)).database;
     },
-  });
+  } as const);
 }
 
 async function openRecoverablePersistence(
@@ -377,13 +377,12 @@ async function openRecoverablePersistence(
   let unavailableNotifications: Promise<void> | undefined;
   let closeTask: Promise<void> | undefined;
 
-  const snapshot = (): CopilotzPersistenceSnapshot =>
-    Object.freeze({
-      state,
-      generation: current?.id ?? generation,
-      reconnectAttempt: attempt,
-      ...(lastError === undefined ? {} : { lastError }),
-    });
+  const snapshot = (): CopilotzPersistenceSnapshot => ({
+    state,
+    generation: current?.id ?? generation,
+    reconnectAttempt: attempt,
+    ...(lastError === undefined ? {} : { lastError }),
+  } as const);
 
   const closeGeneration = (value: DatabaseGeneration): Promise<void> => {
     value.retired = true;
@@ -404,12 +403,11 @@ async function openRecoverablePersistence(
 
   const lifecycleContext = (
     reason?: unknown,
-  ): CopilotzPersistenceLifecycleContext =>
-    Object.freeze({
-      generation: current?.id ?? generation,
-      attempt,
-      ...(reason === undefined ? {} : { reason }),
-    });
+  ): CopilotzPersistenceLifecycleContext => ({
+    generation: current?.id ?? generation,
+    attempt,
+    ...(reason === undefined ? {} : { reason }),
+  } as const);
 
   const runRecoveryParticipants = async () => {
     const readySnapshot = snapshot();
@@ -636,7 +634,7 @@ async function openRecoverablePersistence(
 
   await connect(true);
 
-  const database: CopilotzDatabase = Object.freeze({
+  const database: CopilotzDatabase = {
     query: (sql, params) => execute((selected) => selected.query(sql, params)),
     transaction: (operation) =>
       execute((selected) => selected.transaction(operation)),
@@ -661,7 +659,7 @@ async function openRecoverablePersistence(
         notificationSubscriptions.delete(subscription);
         throw error;
       }
-      return Object.freeze({
+      return ({
         async close() {
           if (subscription.closed) return;
           subscription.closed = true;
@@ -670,10 +668,10 @@ async function openRecoverablePersistence(
           subscription.current = undefined;
           await current?.close();
         },
-      });
+      } as const);
     },
     close: () => close(),
-  });
+  } as const;
 
   const close = (): Promise<void> => {
     if (closeTask) return closeTask;
@@ -692,20 +690,20 @@ async function openRecoverablePersistence(
     return closeTask;
   };
 
-  return Object.freeze({
+  return ({
     database,
     session: createOminipgSqlSession(database),
     ownership: "application" as const,
-    recovery: Object.freeze({
+    recovery: {
       snapshot,
       admit,
       register(participant: CopilotzPersistenceRecoveryParticipant) {
         participants.add(participant);
         return () => participants.delete(participant);
       },
-    }),
+    } as const,
     close,
-  });
+  } as const);
 }
 
 /** Resolves explicit ownership and adds generation recovery only when reconnectable. */
@@ -724,7 +722,7 @@ export async function openCopilotzPersistence(
         "Shared persistence cannot be combined with database or database lifecycle options.",
       );
     }
-    return Object.freeze({
+    return ({
       database: options.persistence.database,
       session: createOminipgSqlSession(options.persistence.database),
       ownership: "injected" as const,
@@ -732,15 +730,15 @@ export async function openCopilotzPersistence(
         ? { recovery: options.persistence.recovery }
         : {}),
       close: () => Promise.resolve(),
-    });
+    } as const);
   }
   if (options.database && isDatabase(options.database)) {
-    return Object.freeze({
+    return ({
       database: options.database,
       session: createOminipgSqlSession(options.database),
       ownership: "injected" as const,
       close: () => Promise.resolve(),
-    });
+    } as const);
   }
   const connector = isConnector(options.database)
     ? options.database
@@ -759,10 +757,10 @@ export async function createCopilotzPersistence(
     options.databaseLifecycle ?? {},
 ): Promise<CopilotzPersistence> {
   const opened = await openCopilotzPersistence(options, lifecycle);
-  return Object.freeze({
+  return ({
     database: opened.database,
     ownership: opened.ownership,
     ...(opened.recovery ? { recovery: opened.recovery } : {}),
     close: opened.close,
-  });
+  } as const);
 }

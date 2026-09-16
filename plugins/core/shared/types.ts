@@ -1,0 +1,91 @@
+/** Defines Context Resource and contribution contracts. @module */
+
+import type { AgentResource } from "../resources/agent/index.ts";
+import type {
+  ConversationMessage,
+  ConversationThread,
+  Participant,
+} from "./contracts.ts";
+import type { ScopedCollections } from "@copilotz/copilotz/collections";
+import type { ProcessorContext } from "@copilotz/copilotz/plugins";
+import type { ContentInput, ContentRef } from "@copilotz/copilotz/content";
+
+export type ContextPurpose = "conversation";
+
+export type ContextSourceRef =
+  | Readonly<{ type: "message"; id: string }>
+  | Readonly<{ type: "asset"; id: string }>
+  | Readonly<{ type: "external"; id: string }>
+  | Readonly<{
+    type: "collection_record";
+    collection: string;
+    id: string;
+    version?: string | number;
+    updatedAt?: string;
+    fragment?: string;
+  }>;
+
+export type ContextContributionInput = Readonly<{
+  context: ProcessorContext;
+  purpose: ContextPurpose;
+  agent: AgentResource;
+  participant: Participant;
+  thread: ConversationThread;
+  /** The participant-relative internal history scope, when applicable. */
+  historyScopeId?: string;
+  sourceRange?: Readonly<{
+    startMessageId: string;
+    endMessageId: string;
+    messages: readonly ConversationMessage[];
+  }>;
+  collections: ScopedCollections;
+  signal: AbortSignal;
+  idempotencyKey: string;
+}>;
+
+export type ContextContribution = Readonly<{
+  id: string;
+  title: string;
+  role: "context" | "evidence";
+  content: ContentInput;
+  source?: ContextSourceRef;
+  capturedAt?: string;
+}>;
+
+export type ContextResource = Readonly<{
+  id: string;
+  type: "context";
+  purposes: readonly ContextPurpose[];
+  contribute(
+    input: ContextContributionInput,
+  ):
+    | ContextContribution
+    | readonly ContextContribution[]
+    | null
+    | Promise<ContextContribution | readonly ContextContribution[] | null>;
+  /** Optional bounded maintenance hook; true means a ready certified boundary advanced. */
+  compact?(
+    input:
+      & ContextContributionInput
+      & Readonly<{
+        /** Trusted scoped runtime capability for bounded maintenance only. */
+        context: ProcessorContext;
+        triggerMessageId: string;
+        historyAfterMessageId?: string;
+        estimatedTokens: number;
+        limitEstimatedTokens: number;
+      }>,
+  ): boolean | Promise<boolean>;
+}>;
+
+export type FrozenContextContribution = Readonly<{
+  id: string;
+  resourceId: string;
+  title: string;
+  role: "context" | "evidence";
+  content: readonly ContentRef[];
+  source?: ContextSourceRef;
+  capturedAt: string;
+  /** Reserved for the built-in long-term-memory context resource. */
+  historyAfterMessageId?: string;
+}>;

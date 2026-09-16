@@ -10,8 +10,8 @@ import type { CopilotzEvent } from "@copilotz/copilotz/events";
 import {
   type CoreMessageInput,
   message,
-} from "../../../core-collections/authoring/message-input/index.ts";
-import { CORE_LLM_STREAM_METADATA_SCHEMA } from "../../internal/workflow-metadata.ts";
+} from "../../authoring/message-input/index.ts";
+import { CORE_LLM_STREAM_METADATA_SCHEMA } from "../../shared/workflow-metadata.ts";
 
 export type CliMessageScope = Readonly<
   Omit<

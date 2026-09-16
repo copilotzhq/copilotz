@@ -6,8 +6,8 @@ import type {
   LlmBuiltinProviderConfiguration,
   LlmJsonObject,
   LlmMode,
-} from "../../internal/contracts.ts";
-import type { ProviderFactory } from "../../internal/types.ts";
+} from "../../shared/contracts.ts";
+import type { ProviderFactory } from "../../shared/types.ts";
 import {
   createProviderAdapter,
   validateBuiltinProviderCall,

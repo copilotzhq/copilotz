@@ -9,7 +9,7 @@ export function assetNodeData(
   if (!normalizedBodyId) {
     throw new TypeError("Asset bodyId must be non-empty.");
   }
-  return Object.freeze({
+  return ({
     mediaType: asset.mediaType,
     byteLength: asset.byteLength,
     digest: asset.digest,
@@ -20,5 +20,5 @@ export function assetNodeData(
     ...(asset.deletedAt ? { deletedAt: asset.deletedAt } : {}),
     ...(asset.origin ? { origin: structuredClone(asset.origin) } : {}),
     metadata: structuredClone(asset.metadata ?? {}),
-  });
+  } as const);
 }

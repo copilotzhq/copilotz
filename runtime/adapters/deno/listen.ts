@@ -57,11 +57,11 @@ export function listen(
     shutdownTask = server.shutdown().catch(() => undefined);
     return shutdownTask;
   };
-  return Object.freeze({
+  return ({
     hostname: server.addr.hostname,
     port: server.addr.port,
     url: listenerUrl(server.addr.hostname, server.addr.port),
     finished: server.finished,
     shutdown,
-  });
+  } as const);
 }

@@ -1,6 +1,6 @@
 import { assertEquals } from "@std/assert";
 
-import type { ProviderConfig } from "../../internal/types.ts";
+import type { ProviderConfig } from "../../shared/types.ts";
 import { deepseekProvider } from "./index.ts";
 
 Deno.test("DeepSeek adapter exposes a provider factory", () => {

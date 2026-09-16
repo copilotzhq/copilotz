@@ -115,13 +115,13 @@ function offsets(value: unknown): Readonly<Record<string, number>> {
     }
     result[streamId] = Number(offset);
   }
-  return Object.freeze(result);
+  return result;
 }
 
 function operationPositions(
   value: unknown,
 ): Readonly<Record<string, string>> {
-  if (value === undefined) return Object.freeze({});
+  if (value === undefined) return ({} as const);
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw invalidCursor();
   }
@@ -136,7 +136,7 @@ function operationPositions(
     if (!operationId.trim() || operationId.length > 512) throw invalidCursor();
     result[operationId] = eventPosition(position)!;
   }
-  return Object.freeze(result);
+  return result;
 }
 
 function ordinal(value: unknown): number {
@@ -152,7 +152,7 @@ function ordinal(value: unknown): number {
 function operationStreams(
   value: unknown,
 ): Readonly<Record<string, OperationStreamReplayPosition>> {
-  if (value === undefined) return Object.freeze({});
+  if (value === undefined) return ({} as const);
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw invalidCursor();
   }
@@ -172,12 +172,12 @@ function operationStreams(
     for (const key of Object.keys(streamOffsets)) {
       if (!/^[1-9][0-9]*$/.test(key)) throw invalidCursor();
     }
-    result[operationId] = Object.freeze({
+    result[operationId] = {
       highWatermark: ordinal(state[0]),
       offsets: streamOffsets,
-    });
+    } as const;
   }
-  return Object.freeze(result);
+  return result;
 }
 
 function operationStreamsJson(
@@ -197,7 +197,7 @@ function operationStreamsJson(
       if (!/^[1-9][0-9]*$/.test(key)) throw invalidCursor();
     }
     if (highWatermark > 0 || Object.keys(streamOffsets).length > 0) {
-      result[operationId] = Object.freeze([highWatermark, streamOffsets]);
+      result[operationId] = [highWatermark, streamOffsets] as const;
     }
   }
   if (Object.keys(result).length > MAX_OPERATION_CURSOR_STREAMS) {
@@ -205,7 +205,7 @@ function operationStreamsJson(
       "Operation replay cursor contains too many operations.",
     );
   }
-  return Object.freeze(result);
+  return result;
 }
 
 function assertSparseCapacity(
@@ -229,7 +229,7 @@ export function encodeOperationReplayCursor(
     operationStreamsJson(position.operationStreamPositions),
   );
   assertSparseCapacity(operation);
-  const normalized = Object.freeze({
+  const normalized = {
     kind: OPERATION_REPLAY_CURSOR_FINGERPRINT,
     ...(eventPosition(position.eventPosition)
       ? { event: eventPosition(position.eventPosition) }
@@ -241,7 +241,7 @@ export function encodeOperationReplayCursor(
     ...(Object.keys(operation).length
       ? { lanes: operationStreamsJson(operation) }
       : {}),
-  });
+  } as const;
   const bytes = new TextEncoder().encode(JSON.stringify(normalized));
   if (bytes.byteLength > MAX_OPERATION_REPLAY_CURSOR_BYTES) {
     throw replayCapacity("Operation replay cursor is too large.");
@@ -253,7 +253,7 @@ export function decodeOperationReplayCursor(
   cursor: string | null | undefined,
 ): OperationReplayPosition {
   if (cursor === undefined || cursor === null || !cursor.trim()) {
-    return Object.freeze({});
+    return ({} as const);
   }
   let decoded: unknown;
   try {
@@ -282,13 +282,13 @@ export function decodeOperationReplayCursor(
   const operations = operationPositions(value.operations);
   const lanes = operationStreams(value.lanes);
   assertSparseCapacity(lanes);
-  return Object.freeze({
+  return ({
     ...(event ? { eventPosition: event } : {}),
     ...(Object.keys(operations).length
       ? { operationEventPositions: operations }
       : {}),
     ...(Object.keys(lanes).length ? { operationStreamPositions: lanes } : {}),
-  });
+  } as const);
 }
 
 function streamOrdinal(replayKey: string): number {
@@ -319,7 +319,7 @@ function mutablePosition(position: OperationReplayPosition) {
 function snapshotMutable(
   position: ReturnType<typeof mutablePosition>,
 ): OperationReplayPosition {
-  return Object.freeze({
+  return ({
     ...(position.eventPosition
       ? { eventPosition: position.eventPosition }
       : {}),
@@ -329,7 +329,7 @@ function snapshotMutable(
     ...(Object.keys(position.operationStreamPositions).length
       ? { operationStreamPositions: position.operationStreamPositions }
       : {}),
-  });
+  } as const);
 }
 
 function applyMutation(
@@ -394,7 +394,7 @@ export function createOperationReplayCursorTracker(
     }
     return next;
   };
-  return Object.freeze({
+  return ({
     cursor(mutations = []) {
       return encodeOperationReplayCursor(
         snapshotMutable(candidate(mutations)),
@@ -408,12 +408,12 @@ export function createOperationReplayCursorTracker(
       const state = position.operationStreamPositions[input.operationId];
       const sparse = state?.offsets[String(ordinal)];
       if (sparse !== undefined) {
-        return Object.freeze({ consumed: false, offset: sparse });
+        return ({ consumed: false, offset: sparse } as const);
       }
       if (state && ordinal <= state.highWatermark) {
-        return Object.freeze({ consumed: true, offset: 0 });
+        return ({ consumed: true, offset: 0 } as const);
       }
-      return Object.freeze({ consumed: false, offset: 0 });
+      return ({ consumed: false, offset: 0 } as const);
     },
-  });
+  } as const);
 }

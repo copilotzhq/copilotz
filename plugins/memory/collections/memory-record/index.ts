@@ -4,7 +4,7 @@ import {
   defineCollection,
   relation,
 } from "@copilotz/copilotz/collections";
-import { MEMORY_EDGE } from "../internal/relations.ts";
+import { MEMORY_EDGE } from "../../shared/relations.ts";
 
 /** Compares JSON-safe values independent of object-key serialization order. */
 /** Compares JSON-safe values independently of object-key order. */
@@ -85,7 +85,6 @@ const schema = {
     epistemic: { type: ["object", "null"] },
     provenance: { type: "object" },
     data: { type: "object" },
-    embedding: { type: ["array", "null"] },
     metadata: { type: ["object", "null"] },
     createdAt: { type: "string" },
     updatedAt: { type: "string" },

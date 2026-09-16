@@ -3,20 +3,20 @@ import type { ActionDefinition } from "@copilotz/copilotz/actions";
  *
  * @module
  */
-
 import { type ActionContext, defineAction } from "@copilotz/copilotz/actions";
 import type { AgentResource, ParticipantInput } from "@copilotz/copilotz/core";
 import type { ContentRef } from "@copilotz/copilotz/content";
-import { optionalText, record, requiredText } from "../internal/input.ts";
+import { optionalText, record, requiredText } from "../../shared/input.ts";
 import {
   loadCallerParticipant,
   metadataText,
   participantByExternalId,
   participantInput,
-} from "../internal/participants.ts";
-
+} from "../../shared/participants.ts";
 function stableJson(value: unknown): string {
-  if (Array.isArray(value)) return "[" + value.map(stableJson).join(",") + "]";
+  if (Array.isArray(value)) {
+    return "[" + value.map(stableJson).join(",") + "]";
+  }
   if (value && typeof value === "object") {
     const entries = Object.entries(value as Record<string, unknown>)
       .sort(([left], [right]) => left.localeCompare(right))
@@ -25,7 +25,6 @@ function stableJson(value: unknown): string {
   }
   return JSON.stringify(value) ?? "null";
 }
-
 async function resolveThreadParticipant(
   context: ActionContext,
   reference: unknown,
@@ -33,14 +32,18 @@ async function resolveThreadParticipant(
   const id = requiredText(reference, "participant");
   const existing = await context.collections.participant.get({ id }) ??
     await participantByExternalId(context, id);
-  if (existing) return participantInput(existing);
+  if (existing) {
+    return participantInput(existing);
+  }
   const agents = (context.resources.agents ?? {}) as Readonly<
     Record<string, AgentResource | undefined>
   >;
   const agent = agents[id] ?? Object.values(agents)
     .filter((value): value is AgentResource => !!value)
     .find((candidate) => candidate.name === id || candidate.id === id);
-  if (!agent) throw new Error("Thread participant '" + id + "' was not found.");
+  if (!agent) {
+    throw new Error("Thread participant '" + id + "' was not found.");
+  }
   return ({
     externalId: agent.id,
     participantType: "agent",
@@ -48,20 +51,15 @@ async function resolveThreadParticipant(
     name: agent.name,
   } as const);
 }
-
-export const createThreadAction: ActionDefinition<
-  unknown,
-  {
-    threadId: string;
-    name: string;
-    participantIds: string[];
-    mode: string;
-    status: string;
-    eventId: string;
-    messageEventId: string;
-  },
-  ActionContext
-> = defineAction({
+export const createThreadAction: ActionDefinition<unknown, {
+  threadId: string;
+  name: string;
+  participantIds: string[];
+  mode: string;
+  status: string;
+  eventId: string;
+  messageEventId: string;
+}, ActionContext> = defineAction({
   id: "copilotz.tools.builtin.create_thread",
   inputSchema: {
     type: "object",
@@ -162,9 +160,7 @@ export const createThreadAction: ActionDefinition<
         ...(description ? { description } : {}),
         ...(summary ? { summary } : {}),
       };
-      const existingMetadata = structuredClone(
-        record(existingThread.metadata),
-      );
+      const existingMetadata = structuredClone(record(existingThread.metadata));
       const createdByActionRunId = optionalText(
         existingMetadata.createdByActionRunId,
       );
@@ -172,11 +168,10 @@ export const createThreadAction: ActionDefinition<
       const expectedRecipientIds = expectedParticipantIds
         .filter((id) => id !== caller.id)
         .sort();
-      const actualRecipientIds = Array.isArray(
-          existingInitialMessage.recipientIds,
-        )
-        ? existingInitialMessage.recipientIds.map(String).sort()
-        : [];
+      const actualRecipientIds =
+        Array.isArray(existingInitialMessage.recipientIds)
+          ? existingInitialMessage.recipientIds.map(String).sort()
+          : [];
       const messageMetadata = record(existingInitialMessage.metadata);
       if (
         existingThread.name !== name ||
@@ -240,7 +235,13 @@ export const createThreadAction: ActionDefinition<
           ...(participant.email ? { email: participant.email } : {}),
           ...(participant.agentId ? { agentId: participant.agentId } : {}),
           metadata: structuredClone(participant.metadata ?? {}),
-        }, { threadId });
+        }, {
+          metadata: {
+            core: {
+              threadId,
+            },
+          },
+        });
         ensuredIds.push(ref.id);
       }
       const thread = await transaction.collections.thread.create({
@@ -251,7 +252,13 @@ export const createThreadAction: ActionDefinition<
         ...(description ? { description } : {}),
         participantIds: ensuredIds,
         metadata,
-      }, { threadId });
+      }, {
+        metadata: {
+          core: {
+            threadId,
+          },
+        },
+      });
       const recipientIds = ensuredIds.filter((id) => id !== caller.id);
       const messageMetadata = {
         kind: "thread_initial_message",
@@ -266,10 +273,14 @@ export const createThreadAction: ActionDefinition<
         content: preparedContent,
         metadata: messageMetadata,
       }, {
-        threadId,
-        routing: { senderId: caller.id, recipientIds },
-        visibility: { kind: "public" },
         identity: { metadata: messageMetadata },
+        metadata: {
+          core: {
+            threadId,
+            routing: { senderId: caller.id, recipientIds },
+            visibility: { kind: "public" },
+          },
+        },
       });
       return { thread, message, participantIds: ensuredIds };
     }, {

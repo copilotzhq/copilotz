@@ -11,7 +11,7 @@ import {
   applyWorkspacePatch,
   type PatchOperation,
   summarizePatchOperations,
-} from "../internal/fs-utils.ts";
+} from "../../shared/fs-utils.ts";
 
 interface ApplyPatchParams {
   path: string;

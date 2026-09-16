@@ -3,9 +3,9 @@ import type { LlmAdapter } from "@copilotz/copilotz/llm";
 import { definePlugin } from "@copilotz/copilotz/plugins";
 import { assertEquals, assertExists } from "@std/assert";
 import { createCopilotzApplication } from "../../runtime/application/application.ts";
-import { createTestDomainContext } from "../core/internal/testing/context.ts";
+import { createTestDomainContext } from "../core/shared/testing/context.ts";
 import { createTestDatabase } from "../../runtime/testing/ominipg.ts";
-import { projectActionEvents } from "../core/internal/testing/projections.ts";
+import { projectActionEvents } from "../core/shared/testing/projections.ts";
 import { createServerFacadeFetchHandler } from "../../server/facade.ts";
 import { serverPlugin } from "../server/index.ts";
 import { CHANNEL_INGRESS_ACTION_ID } from "../channel-core/actions/ingress/index.ts";
@@ -40,8 +40,8 @@ import type {
   TelegramConfig,
   TelegramTransport,
 } from "../channel-telegram/index.ts";
-import type { ChannelAdapter } from "../channel-core/internal/contracts.ts";
-import { CHANNEL_INGRESS_INPUT_EVENT } from "../channel-core/internal/contracts.ts";
+import type { ChannelAdapter } from "../channel-core/shared/contracts.ts";
+import { CHANNEL_INGRESS_INPUT_EVENT } from "../channel-core/shared/contracts.ts";
 
 const NAMESPACE = "channel-provider-server";
 const CONFIG: WhatsAppConfig = Object.freeze({

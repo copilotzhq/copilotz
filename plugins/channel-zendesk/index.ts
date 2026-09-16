@@ -16,4 +16,4 @@ export type {
   ZendeskMediaInput,
   ZendeskTransport,
   ZendeskWebhookPayload,
-} from "./internal/contracts.ts";
+} from "./adapters/channels/zendesk/contracts.ts";

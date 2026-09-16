@@ -1,16 +1,17 @@
+import { storageFixture } from "../../plugins/core/shared/testing/storage-plugin.ts";
 import { assertEquals, assertExists } from "@std/assert";
 
-import { coreCollectionsPlugin } from "../../plugins/core/plugin.ts";
+import {} from "../../plugins/core/plugin.ts";
 import { createCoreTableNames, type SqlSession } from "../events/index.ts";
 import { createPluginRegistry, defineProcessor } from "../plugins/index.ts";
 import { createTestDatabase } from "../testing/ominipg.ts";
 import { createCopilotzEngine } from "./index.ts";
-import { createTestDomainContext } from "../../plugins/core/internal/testing/context.ts";
+import { createTestDomainContext } from "../../plugins/core/shared/testing/context.ts";
 
 const NAMESPACE = "tenant-transient-regression";
 
 async function coreRegistry() {
-  return await createPluginRegistry({ plugins: [coreCollectionsPlugin] });
+  return await createPluginRegistry({ plugins: [storageFixture] });
 }
 
 Deno.test("transient catch-up reads every event page beyond 1,000 events", async () => {
@@ -33,7 +34,7 @@ Deno.test("transient catch-up reads every event page beyond 1,000 events", async
     const tables = createCoreTableNames(schema);
     await db.query(
       `INSERT INTO ${tables.events} (
-         id, schema_version, type, namespace, payload, routing, visibility,
+         id, schema_version, type, namespace, payload,
          metadata, correlation_id
        )
        SELECT
@@ -42,8 +43,6 @@ Deno.test("transient catch-up reads every event page beyond 1,000 events", async
          'thread.created',
          $1,
          '{}'::jsonb,
-         '{}'::jsonb,
-         '{"kind":"public"}'::jsonb,
          '{}'::jsonb,
          'correlation-' || value::text
        FROM generate_series(1, 1001) AS value`,

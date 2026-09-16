@@ -5,7 +5,7 @@ import type {
   ContentRef,
   PreparedContent,
 } from "@copilotz/copilotz/content";
-import type { MCPServer } from "../../../tools/authoring/integration-resources/index.ts";
+import type { MCPServer } from "../contracts/index.ts";
 import {
   type McpRuntimeConnection,
   prepareMcpTools,

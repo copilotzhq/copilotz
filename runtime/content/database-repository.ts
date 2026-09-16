@@ -194,7 +194,7 @@ function cloneOrigin(value: unknown): AssetOrigin | undefined {
       "Asset origin must contain exactly non-empty type and id.",
     );
   }
-  return Object.freeze({ type: fields.type.trim(), id: fields.id.trim() });
+  return ({ type: fields.type.trim(), id: fields.id.trim() } as const);
 }
 
 function requiredText(value: string, name: string): string {
@@ -290,7 +290,7 @@ function mapAsset(row: AssetNodeRow): AssetRecord {
       ? { metadata: cloneMetadata(data.metadata) }
       : {}),
   };
-  return Object.freeze(mapped);
+  return mapped;
 }
 
 function isContentSequence(
@@ -301,10 +301,10 @@ function isContentSequence(
 
 function preparedInput(content: DurableContentInput): PreparedContent {
   if (isContentSequence(content)) {
-    return Object.freeze({
-      content: Object.freeze(content.map(cloneContentRef)),
-      assets: Object.freeze([]),
-    });
+    return ({
+      content: content.map(cloneContentRef),
+      assets: [] as const,
+    } as const);
   }
   if (
     !content || typeof content !== "object" ||
@@ -371,7 +371,7 @@ function assetManifestEntry(
       { namespace: asset.namespace, assetId: asset.id },
     );
   }
-  return Object.freeze({
+  return ({
     assetId: asset.id,
     bodyId,
     mediaType: asset.mediaType,
@@ -383,7 +383,7 @@ function assetManifestEntry(
     ...(asset.metadata ? { metadata: structuredClone(asset.metadata) } : {}),
     createdAt: asset.createdAt,
     ...(asset.readyAt ? { readyAt: asset.readyAt } : {}),
-  });
+  } as const);
 }
 
 /** Creates the graph-native database asset repository and aggregate seam. */
@@ -401,12 +401,12 @@ export function createDatabaseAssetRepository(
       backendId: "database:default",
     });
   const adapter = configuredStorage.adapter ?? defaultDatabaseAdapter!;
-  const scope = Object.freeze({
+  const scope = {
     namespace: "@copilotz/content",
     databaseSchema: options.databaseSchema,
-  });
+  } as const;
   const scopedWriter = adapter.forScope(scope);
-  const storage: BodyStorageRuntime = Object.freeze({
+  const storage: BodyStorageRuntime = {
     adapter,
     writer: scopedWriter,
     readers: new Map([
@@ -416,7 +416,7 @@ export function createDatabaseAssetRepository(
     prefix: configuredStorage.prefix,
     maxDatabaseBytes: configuredStorage.maxDatabaseBytes,
     readConcurrency: configuredStorage.readConcurrency,
-  });
+  } as const;
   const maxDatabaseBytes = storage.maxDatabaseBytes;
   const tables = options.eventStore.tables;
 
@@ -549,12 +549,12 @@ export function createDatabaseAssetRepository(
     const candidates = new Map<string, PreparedAsset>();
     const referenced = new Set(prepared.content.map((ref) => ref.assetId));
     for (const source of prepared.assets) {
-      const candidate = Object.freeze({
+      const candidate = ({
         ...source,
         ...(cloneOrigin(source.origin)
           ? { origin: cloneOrigin(source.origin) }
           : {}),
-      }) as PreparedAsset;
+      } as const) as PreparedAsset;
       if (candidates.has(candidate.id)) {
         throw createContentError(
           "content_invalid",
@@ -572,7 +572,7 @@ export function createDatabaseAssetRepository(
       await validateCandidate(namespace, candidate);
       candidates.set(candidate.id, candidate);
     }
-    return Object.freeze({ namespace, prepared, candidates });
+    return ({ namespace, prepared, candidates } as const);
   };
 
   const resolveRefs = async (
@@ -611,7 +611,7 @@ export function createDatabaseAssetRepository(
       }
       refs.push(ref);
     }
-    return Object.freeze(refs);
+    return refs;
   };
 
   const prepareCandidate = async (
@@ -622,7 +622,7 @@ export function createDatabaseAssetRepository(
   ): Promise<
     Readonly<{ asset: AssetRecord; adoption?: AssetAdoptionPlan }>
   > => {
-    const candidate: PreparedAsset = Object.freeze({
+    const candidate: PreparedAsset = {
       ...source,
       body: source.body.slice(),
       ...(source.readyBody
@@ -637,7 +637,7 @@ export function createDatabaseAssetRepository(
       ...(source.metadata
         ? { metadata: structuredClone(source.metadata) }
         : {}),
-    });
+    } as const;
     const key = candidate.idempotencyKey?.trim() || undefined;
     if (key) {
       const existing = await findByIdempotency(
@@ -648,7 +648,7 @@ export function createDatabaseAssetRepository(
       if (existing) {
         const asset = mapAsset(existing);
         assertRecordMatches(asset, candidate, key);
-        return Object.freeze({ asset });
+        return ({ asset } as const);
       }
     }
     const idCollision = await findById(
@@ -664,7 +664,7 @@ export function createDatabaseAssetRepository(
       );
     }
     const origin = candidate.origin ?? cloneOrigin(fallbackOrigin) ??
-      Object.freeze({ type: "namespace", id: namespace });
+      ({ type: "namespace", id: namespace } as const);
     try {
       JSON.stringify({
         ...(origin ? { origin } : {}),
@@ -731,38 +731,38 @@ export function createDatabaseAssetRepository(
           backendId: configuredWriter.backendId,
           key: bodyId,
         };
-      adoptionCandidate = Object.freeze({
+      adoptionCandidate = {
         ...candidate,
-        readyBody: Object.freeze(structuredClone(head)),
-        location: Object.freeze(structuredClone(storedLocation)),
-      });
+        readyBody: structuredClone(head),
+        location: structuredClone(storedLocation),
+      } as const;
     }
     const readyAt = now().toISOString();
-    const asset: AssetRecord = Object.freeze({
+    const asset: AssetRecord = {
       id: candidate.id,
       namespace,
       mediaType: candidate.mediaType,
       byteLength: candidate.byteLength,
       digest: candidate.digest,
       state: "ready",
-      location: Object.freeze(storedLocation),
-      origin: Object.freeze(structuredClone(origin)),
+      location: storedLocation,
+      origin: structuredClone(origin),
       createdAt: readyAt,
       readyAt,
       ...(cloneMetadata(candidate.metadata)
         ? { metadata: cloneMetadata(candidate.metadata) }
         : {}),
-    });
-    return Object.freeze({
+    } as const;
+    return ({
       asset,
-      adoption: Object.freeze({
+      adoption: {
         kind: adoptionKind,
         protectionRequired: adoptionKind === "ready" &&
           adapter.deployment.readyGarbageCollection,
         candidate: adoptionCandidate,
         asset,
-      }),
-    });
+      } as const,
+    } as const);
   };
 
   const lockMaterializationKeys = async (
@@ -964,12 +964,12 @@ export function createDatabaseAssetRepository(
       resolved,
       remapped,
     );
-    return Object.freeze({
+    return ({
       namespace,
       content,
-      assets: Object.freeze(manifest),
-      adoptions: Object.freeze(adoptions),
-    });
+      assets: manifest,
+      adoptions: adoptions,
+    } as const);
   };
 
   const adoptMaterialization = async (
@@ -1020,12 +1020,12 @@ export function createDatabaseAssetRepository(
         { namespace, assetId: asset.id },
       );
     }
-    const eventBody: AssetEventBody = Object.freeze({
+    const eventBody: AssetEventBody = {
       operation: "create",
       asset,
       bodyId,
       ...(key ? { idempotencyKey: key } : {}),
-    });
+    } as const;
     return await options.coordinator.commitMutation({
       draft: {
         type: "asset.created",
@@ -1189,12 +1189,10 @@ export function createDatabaseAssetRepository(
         return body;
       },
     );
-    return Object.freeze(assets.map((asset, index) =>
-      Object.freeze({
-        asset,
-        bytes: bytes[index],
-      })
-    ));
+    return (assets.map((asset, index) => ({
+      asset,
+      bytes: bytes[index],
+    } as const)));
   };
 
   // Rotate bounded Ready-body scans across maintenance calls. Otherwise a
@@ -1218,7 +1216,7 @@ export function createDatabaseAssetRepository(
         type: "namespace",
         id: namespace,
       };
-      const candidate: PreparedAsset = Object.freeze({
+      const candidate: PreparedAsset = {
         id: assetId,
         namespace,
         mediaType,
@@ -1230,7 +1228,7 @@ export function createDatabaseAssetRepository(
           ? { metadata: structuredClone(input.metadata) }
           : {}),
         origin: cloneOrigin(input.origin) ?? defaultOrigin,
-      });
+      } as const;
       await validateCandidate(namespace, candidate);
       const preparedCandidate = await prepareCandidate(
         options.session,
@@ -1409,12 +1407,12 @@ export function createDatabaseAssetRepository(
             );
           }
           const deleted = mapAsset(updated.rows[0]);
-          const eventBody: AssetEventBody = Object.freeze({
+          const eventBody: AssetEventBody = {
             operation: "delete",
             asset: deleted,
             bodyId,
             ...(idempotencyKey ? { idempotencyKey } : {}),
-          });
+          } as const;
           await writeEventBody({ transaction, tables: names }, {
             namespace,
             id: eventBodyId,
@@ -1591,12 +1589,12 @@ export function createDatabaseAssetRepository(
           }
         }
       }
-      return Object.freeze({ orphanedBodiesDeleted });
+      return ({ orphanedBodiesDeleted } as const);
     },
 
     async retireUnownedReadyBody(input) {
       if (input.body.state !== "ready") {
-        return Object.freeze({ status: "blocked" as const });
+        return ({ status: "blocked" as const } as const);
       }
       return await options.session.transaction(async (transaction) => {
         await transaction.query(
@@ -1628,11 +1626,11 @@ export function createDatabaseAssetRepository(
           ],
         );
         if (owner.rows[0]) {
-          return Object.freeze({
+          return ({
             status: "owned" as const,
             ownerId: owner.rows[0].id,
             ownerType: owner.rows[0].type,
-          });
+          } as const);
         }
         const maintenanceStore = input.store.kind === "database"
           ? createDatabaseBodyStore({
@@ -1647,9 +1645,9 @@ export function createDatabaseAssetRepository(
           expectedMaintenanceVersion: input.body.maintenanceVersion,
           idleForMs: 0,
         });
-        return Object.freeze({
+        return ({
           status: deleted ? "deleted" as const : "blocked" as const,
-        });
+        } as const);
       });
     },
 
@@ -1694,15 +1692,15 @@ export function createDatabaseAssetRepository(
     },
   };
 
-  const frozenRepository = Object.freeze(repository);
+  const frozenRepository = repository;
   collectionAssetAdopters.set(
     frozenRepository,
-    Object.freeze({
+    {
       prepareMaterialization: (input) =>
         prepareMaterializationOn(options.session, input),
       adoptMaterialization,
       reconcileMaterializations,
-    }),
+    } as const,
   );
   return frozenRepository;
 }

@@ -8,7 +8,7 @@ import type { CopilotzInputEnvelope } from "@copilotz/copilotz/application";
 import type {
   ScheduledJobRunNowInput,
   ScheduledJobTickInput,
-} from "../../internal/contracts.ts";
+} from "../../shared/contracts.ts";
 
 export const SCHEDULED_JOBS_TICK_INPUT_EVENT = "copilotz.schedules.tick.input";
 export const SCHEDULED_JOB_RUN_NOW_INPUT_EVENT =

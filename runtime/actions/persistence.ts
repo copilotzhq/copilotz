@@ -103,11 +103,11 @@ export function createActionLifecycleAppender(
           data,
         ),
       })
-      : Object.freeze({
+      : ({
         body: data,
         publicData: data,
-        prepared: Object.freeze([]),
-      });
+        prepared: [] as const,
+      } as const);
     const bodyId = `event-body:${draft.namespace}:${deduplicationId}`;
     const payload = {
       dataRef: {

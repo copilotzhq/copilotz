@@ -3,7 +3,7 @@
 import {
   type PreparedEntry,
   projectPreparedRequest,
-} from "../../internal/prepared-request.ts";
+} from "../../shared/prepared-request.ts";
 import { preflightLlmRequest } from "../../adapters/bridge/index.ts";
 
 import {
@@ -44,10 +44,10 @@ import {
   type LlmUsage,
   normalizeLlmConnection,
   normalizeLlmModelSelections,
-} from "../../internal/contracts.ts";
+} from "../../shared/contracts.ts";
 import { materializeBuiltinModel } from "../../adapters/index.ts";
 import { createLlmAdapter } from "../../authoring/custom-adapter/index.ts";
-import { deriveChatGptCodexCacheKey } from "../../internal/internal-cache-key.ts";
+import { deriveChatGptCodexCacheKey } from "../../shared/internal-cache-key.ts";
 
 export const LLM_CALL_ACTION_ID = "llm.call";
 export const LLM_CALL_ACTION_ALIAS = "callLlm";
@@ -2591,6 +2591,6 @@ export type {
   LlmToolPipelineStage,
   LlmToolPipelineToolStage,
   LlmUsage,
-} from "../../internal/contracts.ts";
+} from "../../shared/contracts.ts";
 
 export default callLlmAction;

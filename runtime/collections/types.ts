@@ -3,9 +3,7 @@ import type {
   EventBodyRef,
   EventDelivery,
   EventDispatchReport,
-  EventRouting,
   EventSubject,
-  EventVisibility,
 } from "../events/index.ts";
 import type { AssetManifestEntry } from "../content/index.ts";
 
@@ -65,10 +63,7 @@ export type CollectionDurableEvent = Readonly<{
   schemaVersion: number;
   eventType: string;
   namespace: string;
-  threadId?: string;
   subject?: EventSubject;
-  routing: EventRouting;
-  visibility: EventVisibility;
   metadata: Readonly<Record<string, unknown>>;
   causationId?: string;
   correlationId: string;
@@ -88,9 +83,7 @@ export type CollectionMutationIdentity = Readonly<{
 export type CollectionWriteOptions = Readonly<{
   namespace: string;
   identity?: CollectionMutationIdentity;
-  threadId?: string;
-  routing?: EventRouting;
-  visibility?: EventVisibility;
+  metadata?: Record<string, unknown>;
 }>;
 
 export type CollectionUpdatePatch<TRecord> = Readonly<{

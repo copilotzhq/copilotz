@@ -2,13 +2,13 @@ import { assert, assertEquals, assertRejects, assertThrows } from "@std/assert";
 import type {
   LlmAuthResolution,
   LlmConnectionContext,
-} from "../../internal/contracts.ts";
+} from "../../shared/contracts.ts";
 import {
   type ChatGptAccount,
   type ChatGptConnectionOptions,
   createChatGptConnection,
 } from "./index.ts";
-import { deriveChatGptCodexCacheKey } from "../../internal/internal-cache-key.ts";
+import { deriveChatGptCodexCacheKey } from "../../shared/internal-cache-key.ts";
 
 const timestamp = 1_700_000_000_000;
 const initial: ChatGptAccount = Object.freeze({

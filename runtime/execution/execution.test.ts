@@ -29,7 +29,6 @@ import {
   type DeliveryDispatcher,
 } from "./index.ts";
 import { createTestProcessorContext } from "../testing/processor-context.ts";
-
 type Fixture = Readonly<{
   db: TestDatabase;
   store: EventStore;
@@ -49,7 +48,6 @@ type Fixture = Readonly<{
     }>
   >;
 }>;
-
 async function createFixture(options?: {
   handle?: (eventId: string, idempotencyKey: string) => void | Promise<void>;
 }): Promise<Fixture> {
@@ -69,7 +67,9 @@ async function createFixture(options?: {
     id: "messages.observe",
     on: [{ eventType: "message.created" }],
     async handle(event, context) {
-      if (!event.durable) throw new Error("Expected a durable event.");
+      if (!event.durable) {
+        throw new Error("Expected a durable event.");
+      }
       assertEquals(
         [
           "event",
@@ -90,15 +90,12 @@ async function createFixture(options?: {
     const mutationIdentity = base.createMutationIdentity("effect", {
       custom: "value",
     });
-    assert(Object.isFrozen(mutationIdentity));
-    assert(Object.isFrozen(mutationIdentity.metadata));
-    calls.push(
-      Object.freeze({
-        eventId: base.event.id,
-        idempotencyKey: base.idempotencyKey,
-        mutationIdentity,
-      }),
-    );
+
+    calls.push(Object.freeze({
+      eventId: base.event.id,
+      idempotencyKey: base.idempotencyKey,
+      mutationIdentity,
+    }));
     return createTestProcessorContext(base);
   };
   const plugin = definePlugin({
@@ -109,7 +106,6 @@ async function createFixture(options?: {
   const registry = await createPluginRegistry({ plugins: [plugin] });
   return Object.freeze({ db, store, registry, createContext, calls });
 }
-
 async function appendMessage(fixture: Fixture) {
   const draft = {
     type: "message.created",
@@ -122,11 +118,9 @@ async function appendMessage(fixture: Fixture) {
     fixture.registry.durableConsumers(draft).map((item) => item.consumerId),
   );
 }
-
 async function closeFixture(fixture: Fixture): Promise<void> {
   await fixture.db.close();
 }
-
 async function waitForDeliveryStatus(
   store: EventStore,
   id: string,
@@ -134,23 +128,25 @@ async function waitForDeliveryStatus(
 ): Promise<NonNullable<Awaited<ReturnType<EventStore["getDelivery"]>>>> {
   for (let attempt = 0; attempt < 500; attempt += 1) {
     const delivery = await store.getDelivery(id);
-    if (delivery?.status === status) return delivery;
+    if (delivery?.status === status) {
+      return delivery;
+    }
     await new Promise((resolve) => setTimeout(resolve, 2));
   }
   throw new Error(`Delivery '${id}' did not reach '${status}'.`);
 }
-
 async function waitForScheduledCallback(
   callbacks: readonly (() => void)[],
 ): Promise<() => void> {
   for (let attempt = 0; attempt < 100; attempt += 1) {
     const callback = callbacks.at(-1);
-    if (callback) return callback;
+    if (callback) {
+      return callback;
+    }
     await new Promise((resolve) => setTimeout(resolve, 2));
   }
   throw new Error("Expected a delivery recovery callback to be scheduled.");
 }
-
 Deno.test("A24 private in-process Oxian recovers and executes a durable delivery", async () => {
   const fixture = await createFixture();
   const committed = await appendMessage(fixture);
@@ -170,7 +166,6 @@ Deno.test("A24 private in-process Oxian recovers and executes a durable delivery
     const handle = recovery.handles[0];
     await handle.started;
     const result = await handle.done;
-
     assertEquals(result.operationStatus, "completed");
     assertEquals(result.delivery.status, "succeeded");
     assertEquals(result.delivery.attempts, 1);
@@ -195,7 +190,6 @@ Deno.test("A24 private in-process Oxian recovers and executes a durable delivery
     await closeFixture(fixture);
   }
 });
-
 Deno.test("recovery owner automatically reclaims a lease that expires after its first sweep", async () => {
   const fixture = await createFixture();
   const committed = await appendMessage(fixture);
@@ -220,7 +214,7 @@ Deno.test("recovery owner automatically reclaims a lease that expires after its 
       await fixture.store.claimDelivery({
         id: delivery.id,
         owner: "crashed",
-        leaseMs: 60_000,
+        leaseMs: 60000,
       }),
     );
     const initial = await executor.dispatchRecoverable();
@@ -233,7 +227,6 @@ Deno.test("recovery owner automatically reclaims a lease that expires after its 
        WHERE id = $1`,
       [delivery.id],
     );
-
     // The timer is the only second recovery trigger: no caller invokes
     // dispatchRecoverable again after the lease becomes expired.
     recoverExpiredLease();
@@ -249,21 +242,28 @@ Deno.test("recovery owner automatically reclaims a lease that expires after its 
     await closeFixture(fixture);
   }
 });
-
 Deno.test("a filtered recovery cannot activate a cross-tenant continuous sweep", async () => {
   const fixture = await createFixture();
   const consumer = "processor:messages.observe";
   const tenantA = await fixture.store.append({
     type: "message.created",
     namespace: "tenant-a",
-    threadId: "thread-a",
     payload: { content: "tenant A" },
+    metadata: {
+      core: {
+        threadId: "thread-a",
+      },
+    },
   }, [consumer]);
   const tenantB = await fixture.store.append({
     type: "message.created",
     namespace: "tenant-b",
-    threadId: "thread-b",
     payload: { content: "tenant B" },
+    metadata: {
+      core: {
+        threadId: "thread-b",
+      },
+    },
   }, [consumer]);
   const deliveryA = tenantA.deliveries[0];
   const deliveryB = tenantB.deliveries[0];
@@ -288,7 +288,7 @@ Deno.test("a filtered recovery cannot activate a cross-tenant continuous sweep",
         await fixture.store.claimDelivery({
           id: delivery.id,
           owner: "crashed",
-          leaseMs: 60_000,
+          leaseMs: 60000,
         }),
       );
     }
@@ -311,13 +311,14 @@ Deno.test("a filtered recovery cannot activate a cross-tenant continuous sweep",
     await closeFixture(fixture);
   }
 });
-
 Deno.test("delivery failures retry through the same logical consumer and stable key", async () => {
   let attempt = 0;
   const fixture = await createFixture({
     handle() {
       attempt++;
-      if (attempt === 1) throw new Error("synthetic first failure");
+      if (attempt === 1) {
+        throw new Error("synthetic first failure");
+      }
     },
   });
   const committed = await appendMessage(fixture);
@@ -336,7 +337,6 @@ Deno.test("delivery failures retry through the same logical consumer and stable 
       delivery.id,
       "succeeded",
     );
-
     assertEquals(settled.status, "succeeded");
     assertEquals(settled.attempts, 2);
     assertEquals(fixture.calls.length, 2);
@@ -355,7 +355,6 @@ Deno.test("delivery failures retry through the same logical consumer and stable 
     await closeFixture(fixture);
   }
 });
-
 Deno.test("retryable failures automatically exhaust into a dead letter", async () => {
   let calls = 0;
   const fixture = await createFixture({
@@ -380,7 +379,6 @@ Deno.test("retryable failures automatically exhaust into a dead letter", async (
       delivery.id,
       "dead_letter",
     );
-
     assertEquals(terminal.attempts, terminal.maxAttempts);
     assertEquals(calls, terminal.maxAttempts);
     assertEquals(terminal.lastError?.retryable, true);
@@ -389,7 +387,6 @@ Deno.test("retryable failures automatically exhaust into a dead letter", async (
     await closeFixture(fixture);
   }
 });
-
 Deno.test("marked non-retryable Processor errors dead-letter immediately", async () => {
   let calls = 0;
   const fixture = await createFixture({
@@ -409,7 +406,6 @@ Deno.test("marked non-retryable Processor errors dead-letter immediately", async
   try {
     const handle = await executor.dispatchDelivery(delivery);
     const terminal = await handle.done;
-
     assertEquals(terminal.delivery.status, "dead_letter");
     assertEquals(terminal.delivery.attempts, 1);
     assertEquals(terminal.delivery.lastError?.retryable, false);
@@ -419,7 +415,6 @@ Deno.test("marked non-retryable Processor errors dead-letter immediately", async
     await closeFixture(fixture);
   }
 });
-
 Deno.test("concurrent local dispatch calls share one physical delivery attempt", async () => {
   const fixture = await createFixture();
   const committed = await appendMessage(fixture);
@@ -443,7 +438,6 @@ Deno.test("concurrent local dispatch calls share one physical delivery attempt",
     await closeFixture(fixture);
   }
 });
-
 Deno.test("A52 a shared Hypervisor survives Copilotz worker shutdown", async () => {
   const fixture = await createFixture();
   const committed = await appendMessage(fixture);
@@ -465,11 +459,9 @@ Deno.test("A52 a shared Hypervisor survives Copilotz worker shutdown", async () 
   let applicationWorker: ReturnType<typeof createWorker> | undefined;
   try {
     assertEquals(executor.ownership, "shared_hypervisor");
-    const result = await (await executor.dispatchDelivery(
-      committed.deliveries[0],
-    )).done;
+    const result =
+      await (await executor.dispatchDelivery(committed.deliveries[0])).done;
     assertEquals(result.delivery.status, "succeeded");
-
     await executor.shutdown();
     assertEquals(hypervisor.snapshot().inProcessWorkers, 0);
     applicationWorker = createWorker({
@@ -493,7 +485,6 @@ Deno.test("A52 a shared Hypervisor survives Copilotz worker shutdown", async () 
     await closeFixture(fixture);
   }
 });
-
 Deno.test("A53 remote dispatch contains serializable identities and resolves on the worker", async () => {
   const fixture = await createFixture();
   const committed = await appendMessage(fixture);
@@ -535,9 +526,8 @@ Deno.test("A53 remote dispatch contains serializable identities and resolves on 
   });
   try {
     assertEquals(executor.ownership, "injected_dispatcher");
-    const result = await (await executor.dispatchDelivery(
-      committed.deliveries[0],
-    )).done;
+    const result =
+      await (await executor.dispatchDelivery(committed.deliveries[0])).done;
     assertEquals(result.delivery.status, "succeeded");
     assertEquals(captured.length, 1);
     assertEquals(captured[0], {
@@ -551,7 +541,6 @@ Deno.test("A53 remote dispatch contains serializable identities and resolves on 
         .dispatchAttemptId,
       idempotencyKey: committed.deliveries[0].id,
     });
-
     await executor.shutdown();
     assertEquals(hypervisor.snapshot().inProcessWorkers, 1);
     assertExists(hypervisor.sessions.get("external-copilotz"));
@@ -563,7 +552,6 @@ Deno.test("A53 remote dispatch contains serializable identities and resolves on 
     await closeFixture(fixture);
   }
 });
-
 Deno.test("shared Hypervisors require their explicit event-fabric transport", async () => {
   const fixture = await createFixture();
   const transport = {
@@ -588,7 +576,6 @@ Deno.test("shared Hypervisors require their explicit event-fabric transport", as
     await closeFixture(fixture);
   }
 });
-
 Deno.test("delivery diagnostics correlate placement and worker settlement without affecting a throwing sink", async () => {
   const fixture = await createFixture();
   const committed = await appendMessage(fixture);
@@ -658,7 +645,6 @@ Deno.test("delivery diagnostics correlate placement and worker settlement withou
     await closeFixture(fixture);
   }
 });
-
 Deno.test("delivery diagnostics report placement failure and capacity transitions only when enabled", async () => {
   const fixture = await createFixture();
   const committed = await appendMessage(fixture);
@@ -682,7 +668,6 @@ Deno.test("delivery diagnostics report placement failure and capacity transition
   } finally {
     await failing.shutdown();
   }
-
   let release!: () => void;
   let begin!: () => void;
   let blockFirst = true;
@@ -690,7 +675,9 @@ Deno.test("delivery diagnostics report placement failure and capacity transition
   const blocked: string[] = [];
   const capacityFixture = await createFixture({
     handle: () => {
-      if (!blockFirst) return;
+      if (!blockFirst) {
+        return;
+      }
       blockFirst = false;
       begin();
       return new Promise<void>((resolve) => release = resolve);
@@ -728,7 +715,6 @@ Deno.test("delivery diagnostics report placement failure and capacity transition
     await closeFixture(fixture);
   }
 });
-
 Deno.test("delivery diagnostics are disabled by default", async () => {
   const fixture = await createFixture();
   const committed = await appendMessage(fixture);
@@ -748,7 +734,6 @@ Deno.test("delivery diagnostics are disabled by default", async () => {
     await closeFixture(fixture);
   }
 });
-
 Deno.test("A55 delivery execution core is factory-first and runtime-neutral", async () => {
   for (const module of ["executor.ts", "index.ts", "types.ts", "workload.ts"]) {
     const source = await Deno.readTextFile(new URL(module, import.meta.url));

@@ -1,3 +1,5 @@
+import { storageFixture } from "../core/shared/testing/storage-plugin.ts";
+import { coreEvent } from "../core/authoring/events/index.ts";
 import { definePlugin as defineFixturePlugin } from "@copilotz/copilotz/plugins";
 import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
 import {
@@ -8,7 +10,7 @@ import {
   projectMessages,
   projectParticipantById,
   projectThreadById,
-} from "../core/internal/testing/projections.ts";
+} from "../core/shared/testing/projections.ts";
 import { createSqlSession } from "@copilotz/copilotz/events";
 import {
   createPluginRegistry,
@@ -19,21 +21,15 @@ import {
   type ProcessorEvent,
 } from "@copilotz/copilotz/plugins";
 import { BUILT_IN_CORE_TOOL_IDS, builtInToolsPlugin } from "./plugin.ts";
-import {
-  type AgentResource,
-  coreCollectionsPlugin,
-  corePlugin,
-} from "@copilotz/copilotz/core";
+import { type AgentResource, corePlugin } from "@copilotz/copilotz/core";
 import type { ActionCallOptions } from "@copilotz/copilotz/actions";
-import type { ToolResource } from "../tools/authoring/define-tool/index.ts";
+import type { ToolResource } from "../core/authoring/define-tool/index.ts";
 import {
   createTestDatabase,
   type TestDatabase,
 } from "../../runtime/testing/ominipg.ts";
 import { defineInlineSkill, skillsPlugin } from "@copilotz/copilotz/skills";
-
 const TEST_SCHEMA = "copilotz_core_tools";
-
 const agent: AgentResource = {
   id: "agent-a",
   name: "Agent A",
@@ -42,7 +38,6 @@ const agent: AgentResource = {
   instructions: "Exercise built-in tools.",
   capabilities: { skills: ["contract-skill"] },
 };
-
 const secondaryAgent: AgentResource = {
   id: "agent-b",
   name: "Agent B",
@@ -50,7 +45,6 @@ const secondaryAgent: AgentResource = {
   models: {},
   instructions: "Exercise atomic thread creation.",
 };
-
 const skill = defineInlineSkill({
   directoryName: "contract-skill",
   markdown: `---
@@ -60,22 +54,17 @@ description: Contract skill used by the built-in tool integration test.
 Follow the contract.`,
   files: { "references/guide.md": "Contract guide" },
 });
-
 type RunAction<T> = (
   context: ProcessorContext,
   sourceEvent: ProcessorEvent,
 ) => Promise<T>;
-
 type Fixture = Readonly<{
   db: TestDatabase;
   engine: CopilotzEngine;
   registry: PluginRegistry;
   run<T>(action: RunAction<T>): Promise<T>;
 }>;
-
-async function createFixture(
-  builtIns = builtInToolsPlugin,
-): Promise<Fixture> {
+async function createFixture(builtIns = builtInToolsPlugin): Promise<Fixture> {
   const db = await createTestDatabase({ url: ":memory:" });
   let active: RunAction<unknown> | undefined;
   let output: unknown;
@@ -85,7 +74,9 @@ async function createFixture(
     id: "test.core-tools.runner",
     on: [{ eventType: "message.created" }],
     async handle(event, context) {
-      if (event.threadId !== "thread-a") return;
+      if (coreEvent(event).threadId !== "thread-a") {
+        return;
+      }
       try {
         output = await active?.(context, event);
       } catch (error) {
@@ -105,7 +96,7 @@ async function createFixture(
   });
   const registry = await createPluginRegistry({
     plugins: [
-      coreCollectionsPlugin,
+      storageFixture,
       builtIns,
       defineFixturePlugin({
         ...skillsPlugin,
@@ -177,26 +168,30 @@ async function createFixture(
         content,
         metadata: {},
       }, {
-        threadId: "thread-a",
-        routing: {
-          senderId: "user-participant",
-          recipientIds: ["agent-participant"],
+        metadata: {
+          core: {
+            threadId: "thread-a",
+            routing: {
+              senderId: "user-participant",
+              recipientIds: ["agent-participant"],
+            },
+          },
         },
       });
       await done;
       completed = undefined;
       active = undefined;
-      if (failure) throw failure;
+      if (failure) {
+        throw failure;
+      }
       return output as T;
     },
   });
 }
-
 async function closeFixture(fixture: Fixture): Promise<void> {
   await fixture.engine.shutdown();
   await fixture.db.close();
 }
-
 function actionOptions(
   _context: ProcessorContext,
   sourceEvent: ProcessorEvent,
@@ -213,7 +208,6 @@ function actionOptions(
     },
   };
 }
-
 async function invoke(
   context: ProcessorContext,
   id: string,
@@ -223,25 +217,24 @@ async function invoke(
   const found = context.actions[id] as
     | ((input: unknown, options?: ActionCallOptions) => Promise<unknown>)
     | undefined;
-  if (!found) throw new Error(`Unknown Action '${id}'.`);
+  if (!found) {
+    throw new Error(`Unknown Action '${id}'.`);
+  }
   return await found(input, actionOptions(context, sourceEvent, id));
 }
-
 Deno.test("built-in tools exclude optional plugin-owned skill tools", () => {
   const plugin = builtInToolsPlugin;
   const tools = plugin.resources.tools as
     | Readonly<Record<string, ToolResource>>
     | undefined;
   assertEquals(Object.keys(tools ?? {}), [...BUILT_IN_CORE_TOOL_IDS]);
-  assertEquals(
-    Object.values(tools ?? {}).map((value) => value.action),
-    [...BUILT_IN_CORE_TOOL_IDS],
-  );
+  assertEquals(Object.values(tools ?? {}).map((value) => value.action), [
+    ...BUILT_IN_CORE_TOOL_IDS,
+  ]);
   assertEquals(Object.keys(plugin.actions), [...BUILT_IN_CORE_TOOL_IDS]);
   assert(Object.values(tools ?? {}).every((value) => !("execute" in value)));
   assert(!Object.hasOwn(tools ?? {}, "load_skill"));
 });
-
 Deno.test("built-in tools compose beside Core without owning Core state", async () => {
   const builtIns = defineFixturePlugin({
     ...builtInToolsPlugin,
@@ -251,15 +244,11 @@ Deno.test("built-in tools compose beside Core without owning Core state", async 
       ) => [id, builtInToolsPlugin.actions[id]]),
     ),
     resources: {
-      tools: Object.fromEntries(
-        ["get_current_time"].map(
-          (id) => [
-            id,
-            builtInToolsPlugin.resources
-              .tools[id as keyof typeof builtInToolsPlugin.resources.tools],
-          ],
-        ),
-      ),
+      tools: Object.fromEntries(["get_current_time"].map((id) => [
+        id,
+        builtInToolsPlugin.resources
+          .tools[id as keyof typeof builtInToolsPlugin.resources.tools],
+      ])),
     },
     adapters: { clock: { default: { now: undefined, sleep: undefined } } },
   });
@@ -269,86 +258,64 @@ Deno.test("built-in tools compose beside Core without owning Core state", async 
   });
   assertEquals(registry.collections.participant.name, "participant");
   const clock = registry.resources.tools.get_current_time as ToolResource;
-  assertEquals(
-    clock.action,
-    "get_current_time",
-  );
+  assertEquals(clock.action, "get_current_time");
 });
-
 Deno.test("asset, skill, clock, and wait tools use typed capabilities", async () => {
   const waits: number[] = [];
-  const fixture = await createFixture(
-    defineFixturePlugin({
-      ...builtInToolsPlugin,
-      adapters: {
-        clock: {
-          default: {
-            now: () => new Date("2026-08-06T12:34:56.000Z"),
-            sleep: (milliseconds: number) => {
-              waits.push(milliseconds);
-              return Promise.resolve();
-            },
+  const fixture = await createFixture(defineFixturePlugin({
+    ...builtInToolsPlugin,
+    adapters: {
+      clock: {
+        default: {
+          now: () => new Date("2026-08-06T12:34:56.000Z"),
+          sleep: (milliseconds: number) => {
+            waits.push(milliseconds);
+            return Promise.resolve();
           },
         },
       },
-    }),
-  );
+    },
+  }));
   try {
     const result = await fixture.run(async (processor, sourceEvent) => {
       const largeBody = new TextEncoder().encode(
-        "large-asset-marker:".repeat(32_768),
+        "large-asset-marker:".repeat(32768),
       );
       const published = await processor.content.publish({
         mediaType: "text/plain",
         body: largeBody,
       }, { operationKey: "built-in-test:large-asset" });
-      const saved = await invoke(
-        processor,
-        "save_asset",
-        { assetId: published.id },
-        sourceEvent,
-      ) as Record<string, unknown>;
-      const fetched = await invoke(
-        processor,
-        "fetch_asset",
-        { assetId: saved.assetId },
-        sourceEvent,
-      ) as Record<string, unknown>;
-
+      const saved = await invoke(processor, "save_asset", {
+        assetId: published.id,
+      }, sourceEvent) as Record<string, unknown>;
+      const fetched = await invoke(processor, "fetch_asset", {
+        assetId: saved.assetId,
+      }, sourceEvent) as Record<string, unknown>;
       const listed = await invoke(
         processor,
         "list_skills",
         {},
         sourceEvent,
       ) as Record<string, unknown>;
-      const loaded = await invoke(
-        processor,
-        "load_skill",
-        { name: "contract-skill" },
-        sourceEvent,
-      ) as Record<string, unknown>;
-      const resource = await invoke(
-        processor,
-        "read_skill_resource",
-        { skill: "contract-skill", path: "references/guide.md" },
-        sourceEvent,
-      ) as Record<string, unknown>;
+      const loaded = await invoke(processor, "load_skill", {
+        name: "contract-skill",
+      }, sourceEvent) as Record<string, unknown>;
+      const resource = await invoke(processor, "read_skill_resource", {
+        skill: "contract-skill",
+        path: "references/guide.md",
+      }, sourceEvent) as Record<string, unknown>;
       await assertRejects(
         async () =>
-          await invoke(
-            processor,
-            "read_skill_resource",
-            { skill: "contract-skill", path: "../secret" },
-            sourceEvent,
-          ),
+          await invoke(processor, "read_skill_resource", {
+            skill: "contract-skill",
+            path: "../secret",
+          }, sourceEvent),
         TypeError,
       );
-      const clock = await invoke(
-        processor,
-        "get_current_time",
-        { format: "iso", timezone: "UTC" },
-        sourceEvent,
-      ) as Record<string, unknown>;
+      const clock = await invoke(processor, "get_current_time", {
+        format: "iso",
+        timezone: "UTC",
+      }, sourceEvent) as Record<string, unknown>;
       const waited = await invoke(
         processor,
         "wait",
@@ -357,7 +324,6 @@ Deno.test("asset, skill, clock, and wait tools use typed capabilities", async ()
       );
       return { saved, fetched, listed, loaded, resource, clock, waited };
     });
-
     assertEquals(result.saved.mimeType, "text/plain");
     assertEquals(result.fetched.content, result.saved.content);
     assertEquals(result.listed.count, 1);
@@ -365,7 +331,6 @@ Deno.test("asset, skill, clock, and wait tools use typed capabilities", async ()
     assertEquals(result.resource.content, "Contract guide");
     assertEquals(result.clock.iso, "2026-08-06T12:34:56.000Z");
     assertEquals(waits, [250]);
-
     const assets = await fixture.engine.events.list({ namespace: "tenant-a" });
     const assetEvent = assets.find((event) => event.type === "asset.created");
     assertExists(assetEvent);
@@ -376,21 +341,18 @@ Deno.test("asset, skill, clock, and wait tools use typed capabilities", async ()
     await closeFixture(fixture);
   }
 });
-
 Deno.test("memory and thread tools mutate domain state idempotently", async () => {
-  const fixture = await createFixture(
-    defineFixturePlugin({
-      ...builtInToolsPlugin,
-      adapters: {
-        clock: {
-          default: {
-            now: () => new Date("2026-08-06T12:00:00.000Z"),
-            sleep: undefined,
-          },
+  const fixture = await createFixture(defineFixturePlugin({
+    ...builtInToolsPlugin,
+    adapters: {
+      clock: {
+        default: {
+          now: () => new Date("2026-08-06T12:00:00.000Z"),
+          sleep: undefined,
         },
       },
-    }),
-  );
+    },
+  }));
   const childDeclaration = {
     id: "thread:separate-research",
     externalId: "separate-research",
@@ -404,18 +366,15 @@ Deno.test("memory and thread tools mutate domain state idempotently", async () =
   } as const;
   try {
     const result = await fixture.run(async (processor, sourceEvent) => {
-      await invoke(
-        processor,
-        "update_my_memory",
-        { key: "architecture", value: "event-native", operation: "set" },
-        sourceEvent,
-      );
-      const first = await invoke(
-        processor,
-        "update_user_memory",
-        { content: "Prefers factory APIs", category: "preference" },
-        sourceEvent,
-      );
+      await invoke(processor, "update_my_memory", {
+        key: "architecture",
+        value: "event-native",
+        operation: "set",
+      }, sourceEvent);
+      const first = await invoke(processor, "update_user_memory", {
+        content: "Prefers factory APIs",
+        category: "preference",
+      }, sourceEvent);
       const separate = await invoke(
         processor,
         "create_thread",
@@ -428,12 +387,9 @@ Deno.test("memory and thread tools mutate domain state idempotently", async () =
         childDeclaration,
         sourceEvent,
       );
-      await invoke(
-        processor,
-        "end_thread",
-        { summary: "Core tool migration complete" },
-        sourceEvent,
-      );
+      await invoke(processor, "end_thread", {
+        summary: "Core tool migration complete",
+      }, sourceEvent);
       return { first, separate, separateReplay };
     });
     assertEquals(result.separate, result.separateReplay);
@@ -462,7 +418,6 @@ Deno.test("memory and thread tools mutate domain state idempotently", async () =
         "does not match the requested declaration",
       );
     }
-
     const agentParticipant = await projectParticipantById(
       fixture.engine,
       "tenant-a",
@@ -486,13 +441,19 @@ Deno.test("memory and thread tools mutate domain state idempotently", async () =
       items: unknown[];
     }).items;
     assertEquals(items.length, 1);
-    assert((items[0] as { id: string }).id.startsWith("memory:"));
+    assert((items[0] as {
+      id: string;
+    }).id.startsWith("memory:"));
     assertEquals(thread?.status, "archived");
     assertEquals(thread?.metadata.summary, "Core tool migration complete");
     const child = await projectThreadById(
       fixture.engine,
       "tenant-a",
-      String((result.separate as { threadId: string }).threadId),
+      String(
+        (result.separate as {
+          threadId: string;
+        }).threadId,
+      ),
     );
     assertEquals(child?.parentThreadId, "thread-a");
     assertEquals(child?.metadata.name, "Separate research");
@@ -507,7 +468,11 @@ Deno.test("memory and thread tools mutate domain state idempotently", async () =
     const childMessages = await projectMessages(
       fixture.engine,
       "tenant-a",
-      String((result.separate as { threadId: string }).threadId),
+      String(
+        (result.separate as {
+          threadId: string;
+        }).threadId,
+      ),
     );
     assertEquals(childMessages.length, 1);
     assertEquals(
@@ -516,7 +481,6 @@ Deno.test("memory and thread tools mutate domain state idempotently", async () =
       }).then((parts) => parts[0].text),
       "Investigate independently.",
     );
-
     const events = await fixture.engine.events.list({ namespace: "tenant-a" });
     assertEquals(
       events.filter((event) => event.type === "participant.updated").length,
@@ -534,7 +498,6 @@ Deno.test("memory and thread tools mutate domain state idempotently", async () =
     await closeFixture(fixture);
   }
 });
-
 Deno.test("create_thread fails closed on an initial Message conflict without partial graph writes", async () => {
   const fixture = await createFixture();
   const namespace = "tenant-a";
@@ -562,10 +525,13 @@ Deno.test("create_thread fails closed on an initial Message conflict without par
       content,
       metadata: {},
     }, {
-      threadId: conflictThreadId,
-      routing: { senderId: "user-participant", recipientIds: [] },
+      metadata: {
+        core: {
+          threadId: conflictThreadId,
+          routing: { senderId: "user-participant", recipientIds: [] },
+        },
+      },
     });
-
     await assertRejects(
       () =>
         fixture.run(async (processor, sourceEvent) =>
@@ -595,7 +561,6 @@ Deno.test("create_thread fails closed on an initial Message conflict without par
     await closeFixture(fixture);
   }
 });
-
 Deno.test("A55 built-in tool core stays factory-first and runtime-neutral", async () => {
   for (const module of ["plugin.ts"]) {
     const source = await Deno.readTextFile(new URL(module, import.meta.url));

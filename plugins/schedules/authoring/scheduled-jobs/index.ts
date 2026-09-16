@@ -18,13 +18,13 @@ import {
   normalizeScheduledJobStatus,
   requireScheduledText,
   scheduledRecord,
-} from "../../internal/model.ts";
+} from "../../shared/model.ts";
 import type {
   ScheduledJob,
   ScheduledJobPayload,
   ScheduledJobSchedule,
   ScheduledJobStatus,
-} from "../../internal/contracts.ts";
+} from "../../shared/contracts.ts";
 
 export type CreateScheduledJobInput<
   TPayload extends ScheduledJobPayload = ScheduledJobPayload,

@@ -9,13 +9,13 @@ import type {
   ProviderFactory,
   ProviderFinishReason,
   ProviderUsageUpdate,
-} from "../../internal/types.ts";
+} from "../../shared/types.ts";
 import {
   isOpenAIReasoningModel,
   type OpenAIApiMode,
   resolveOpenAIApiMode,
-} from "../../internal/openai-api-mode.ts";
-import { readInternalPromptCacheKey } from "../../internal/internal-cache-key.ts";
+} from "./openai-api-mode.ts";
+import { readInternalPromptCacheKey } from "../../shared/internal-cache-key.ts";
 import { matchingNativeBlocks } from "../native-reasoning/index.ts";
 
 interface OpenAIResponsesExtractionState {

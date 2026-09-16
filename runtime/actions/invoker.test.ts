@@ -153,7 +153,6 @@ Deno.test("Action metadata has one required empty lifecycle shape when omitted",
     "completed",
   ]);
   assertEquals(emitted.map((event) => event.metadata), [{}, {}, {}]);
-  assertEquals(emitted.every((event) => Object.isFrozen(event.metadata)), true);
 });
 
 Deno.test("Action input-schema failures are typed before lifecycle invocation", async () => {

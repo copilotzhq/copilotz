@@ -86,18 +86,18 @@ export function protectedActionLifecycleBody(
       protectedFields.output === undefined)
   ) throw new TypeError("Protected Action lifecycle references are invalid.");
   const data = durableActionValue(input.data) as ActionEventData;
-  return Object.freeze({
+  return ({
     schema: PROTECTED_ACTION_LIFECYCLE_SCHEMA,
     data,
-    protected: Object.freeze({
+    protected: {
       ...(protectedFields.input !== undefined
         ? { input: protectedValueRef(protectedFields.input) }
         : {}),
       ...(protectedFields.output !== undefined
         ? { output: protectedValueRef(protectedFields.output) }
         : {}),
-    }),
-  });
+    } as const,
+  } as const);
 }
 
 /** Returns the observer/processor-safe lifecycle data for any stored body. */
@@ -109,12 +109,10 @@ export function protectedActionLifecycleRefs(
   value: unknown,
 ): readonly ProtectedValueRef[] {
   const body = protectedActionLifecycleBody(value);
-  if (!body) return Object.freeze([]);
-  return Object.freeze(
-    [body.protected.input, body.protected.output].filter(
-      (ref): ref is ProtectedValueRef => ref !== undefined,
-    ),
-  );
+  if (!body) return ([] as const);
+  return ([body.protected.input, body.protected.output].filter(
+    (ref): ref is ProtectedValueRef => ref !== undefined,
+  ));
 }
 
 function coordinates(
@@ -122,11 +120,11 @@ function coordinates(
   data: ActionEventData,
   slot: "input" | "output",
 ) {
-  return Object.freeze({
+  return ({
     namespace,
     ownerId: `${data.actionId}:${data.actionRunId}`,
     slot,
-  });
+  } as const);
 }
 
 /** Seals secret-bearing sides and constructs the safe durable representation. */
@@ -176,32 +174,32 @@ export async function prepareActionLifecycleBody(
     outputRef = value.ref;
   }
 
-  const publicData = Object.freeze({
+  const publicData = ({
     ...data,
     input: inputSplit.publicValue,
     ...(data.status === "completed"
       ? { output: outputSplit!.publicValue }
       : {}),
-  }) as ActionEventData;
+  } as const) as ActionEventData;
   if (!inputRef && !outputRef) {
-    return Object.freeze({
+    return ({
       body: publicData,
       publicData,
-      prepared: Object.freeze([]),
-    });
+      prepared: [] as const,
+    } as const);
   }
-  return Object.freeze({
-    body: Object.freeze({
+  return ({
+    body: {
       schema: PROTECTED_ACTION_LIFECYCLE_SCHEMA,
       data: publicData,
-      protected: Object.freeze({
+      protected: {
         ...(inputRef ? { input: inputRef } : {}),
         ...(outputRef ? { output: outputRef } : {}),
-      }),
-    }),
+      } as const,
+    } as const,
     publicData,
-    prepared: Object.freeze(prepared),
-  });
+    prepared: prepared,
+  } as const);
 }
 
 /** Opens and validates one authoritative stored lifecycle receipt. */
@@ -250,11 +248,11 @@ export async function hydrateActionLifecycleBody(
   } else if (protectedBody.protected.output) {
     throw new Error("Only completed Actions may own a protected output.");
   }
-  return Object.freeze({
+  return ({
     ...data,
     input: hydratedInput,
     ...(data.status === "completed" ? { output: hydratedOutput } : {}),
-  }) as ActionEventData;
+  } as const) as ActionEventData;
 }
 
 /** Duplicate equivalence ignores randomized ciphertext identity. */

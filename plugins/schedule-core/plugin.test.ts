@@ -1,8 +1,7 @@
 import { assertEquals, assertExists, assertRejects } from "@std/assert";
-
 import type { ActionCaller } from "@copilotz/copilotz/actions";
 import type { LlmAdapter, LlmAdapterCallInput } from "@copilotz/copilotz/llm";
-import type { ToolResource } from "@copilotz/copilotz/tools";
+import type { ToolResource } from "@copilotz/copilotz/core";
 import { createCopilotzApplication } from "../../runtime/application/index.ts";
 import {
   createPluginRegistry,
@@ -10,7 +9,7 @@ import {
   defineProcessor,
   type ProcessorContext,
 } from "../../runtime/plugins/index.ts";
-import { createTestDomainContext } from "../core/internal/testing/context.ts";
+import { createTestDomainContext } from "../core/shared/testing/context.ts";
 import {
   createTestDatabase,
   type TestDatabase,
@@ -18,7 +17,7 @@ import {
 import {
   projectMessages,
   projectThreads,
-} from "../core/internal/testing/projections.ts";
+} from "../core/shared/testing/projections.ts";
 import { createScheduledJob, scheduleTick } from "../schedules/index.ts";
 import {
   CORE_SCHEDULED_MESSAGE_PAYLOAD_TYPE,
@@ -26,10 +25,8 @@ import {
   scheduledJobsAction,
   scheduledMessageJob,
 } from "./index.ts";
-
 const BASE = new Date("2026-01-01T00:00:00.000Z");
 const NAMESPACE = "tenant-core-schedules";
-
 type ScheduledJobsDriverContext =
   & Omit<ProcessorContext, "actions">
   & Readonly<{
@@ -37,11 +34,9 @@ type ScheduledJobsDriverContext =
       scheduled_jobs: ActionCaller<typeof scheduledJobsAction>;
     }>;
   }>;
-
 async function close(db: TestDatabase): Promise<void> {
   await db.close();
 }
-
 Deno.test("Core Schedules composes its dependencies and turns only typed due payloads into messages", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   const application = await createCopilotzApplication({
@@ -101,14 +96,12 @@ Deno.test("Core Schedules composes its dependencies and turns only typed due pay
     );
     assertEquals(created.payload.type, CORE_SCHEDULED_MESSAGE_PAYLOAD_TYPE);
     assertEquals(created.content?.length, 2);
-
     const sent = await application.send(scheduleTick({
       namespace: NAMESPACE,
       checkedAt: "2026-01-01T00:01:00.000Z",
       deduplicationId: "core-tick-a",
     }));
     await sent.done;
-
     const threads = await projectThreads(application, NAMESPACE);
     assertEquals(threads.map((thread) => thread.id), ["thread-a"]);
     const messages = await projectMessages(application, NAMESPACE, "thread-a");
@@ -116,7 +109,9 @@ Deno.test("Core Schedules composes its dependencies and turns only typed due pay
     assertEquals(messages[0].sender.participantType, "job");
     assertEquals(messages[0].recipientIds, ["recipient-a"]);
     assertEquals(
-      (messages[0].metadata.scheduledJob as { occurrenceId: string })
+      (messages[0].metadata.scheduledJob as {
+        occurrenceId: string;
+      })
         .occurrenceId,
       "morning-brief:1767225660000",
     );
@@ -145,7 +140,6 @@ Deno.test("Core Schedules composes its dependencies and turns only typed due pay
     await application.shutdown();
     await close(db);
   }
-
   const registry = createPluginRegistry({ plugins: [coreSchedulesPlugin] });
   assertEquals(
     registry.plugins.filter((plugin) => plugin.id === "@copilotz/schedules")
@@ -177,7 +171,6 @@ Deno.test("Core Schedules composes its dependencies and turns only typed due pay
     "scheduled_jobs",
   );
 });
-
 Deno.test("scheduled payload metadata cannot suppress Agent LLM routing", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   const calls: LlmAdapterCallInput[] = [];
@@ -261,14 +254,12 @@ Deno.test("scheduled payload metadata cannot suppress Agent LLM routing", async 
       }),
       context,
     );
-
     const sent = await application.send(scheduleTick({
       namespace: NAMESPACE,
       checkedAt: "2026-01-01T00:01:00.000Z",
       deduplicationId: "core-tick-agent-route",
     }));
     await sent.done;
-
     assertEquals(calls.length, 1);
     assertEquals(calls[0].model, "fixture-scheduled-model");
     const [thread] = await projectThreads(application, NAMESPACE);
@@ -296,7 +287,6 @@ Deno.test("scheduled payload metadata cannot suppress Agent LLM routing", async 
     await close(db);
   }
 });
-
 Deno.test("Core scheduled-message dispatch rolls back every graph mutation when message creation fails", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   const application = await createCopilotzApplication({
@@ -340,8 +330,12 @@ Deno.test("Core scheduled-message dispatch rolls back every graph mutation when 
       content: [],
       metadata: { collision: true },
     }, {
-      threadId: "collision-thread",
-      routing: { senderId: "collision-sender", recipientIds: [] },
+      metadata: {
+        core: {
+          threadId: "collision-thread",
+          routing: { senderId: "collision-sender", recipientIds: [] },
+        },
+      },
     });
     await assertRejects(
       () =>
@@ -361,7 +355,6 @@ Deno.test("Core scheduled-message dispatch rolls back every graph mutation when 
       Error,
       "while its mutation was prepared",
     );
-
     assertEquals(
       await context.collections.participant.queries.byExternalId({
         externalId: "rollback-job",
@@ -389,7 +382,6 @@ Deno.test("Core scheduled-message dispatch rolls back every graph mutation when 
     await close(db);
   }
 });
-
 Deno.test("scheduled_jobs Action manages only Core scheduled-message jobs", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   const outputs = new Map<string, unknown>();
@@ -460,10 +452,11 @@ Deno.test("scheduled_jobs Action manages only Core scheduled-message jobs", asyn
       });
       await sent.done;
       const output = outputs.get(sent.eventId);
-      if (output === undefined) throw new Error("Tool produced no output.");
+      if (output === undefined) {
+        throw new Error("Tool produced no output.");
+      }
       return output as Record<string, unknown>;
     };
-
     const created = await invoke({
       action: "create",
       jobId: "tool-job",
@@ -475,11 +468,20 @@ Deno.test("scheduled_jobs Action manages only Core scheduled-message jobs", asyn
       },
     });
     assertEquals(
-      (created.job as { payload: { type: string } }).payload.type,
+      (created.job as {
+        payload: {
+          type: string;
+        };
+      }).payload.type,
       CORE_SCHEDULED_MESSAGE_PAYLOAD_TYPE,
     );
     const listed = await invoke({ action: "list" });
-    assertEquals((listed.jobs as readonly { id: string }[])[0].id, "tool-job");
+    assertEquals(
+      (listed.jobs as readonly {
+        id: string;
+      }[])[0].id,
+      "tool-job",
+    );
     await invoke({ action: "run_now", jobId: "tool-job" });
     assertEquals(
       (await projectMessages(application, NAMESPACE, "thread-tool")).length,

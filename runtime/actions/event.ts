@@ -4,26 +4,22 @@ import type {
   AnyActionDefinition,
 } from "./types.ts";
 
-const ACTION_STATUSES = Object.freeze(
-  [
-    "invoked",
-    "progress",
-    "completed",
-    "failed",
-    "cancelled",
-  ] as const satisfies readonly ActionStatus[],
-);
+const ACTION_STATUSES = [
+  "invoked",
+  "progress",
+  "completed",
+  "failed",
+  "cancelled",
+] as const satisfies readonly ActionStatus[];
 
 const ACTION_STATUS_SET = new Set<ActionStatus>(ACTION_STATUSES);
-const BASE_DATA_KEYS = Object.freeze(
-  [
-    "actionId",
-    "actionRunId",
-    "input",
-    "metadata",
-    "status",
-  ] as const,
-);
+const BASE_DATA_KEYS = [
+  "actionId",
+  "actionRunId",
+  "input",
+  "metadata",
+  "status",
+] as const;
 
 export type ParseActionLifecycleEventOptions = Readonly<{
   /** Require the lifecycle to belong to this stable Action id. */

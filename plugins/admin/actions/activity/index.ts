@@ -8,18 +8,18 @@ import {
   inDateRange,
   optionalDate,
   queryText,
-} from "../internal/projections.ts";
+} from "../../shared/projections.ts";
 import {
   type AdminActionContext,
   adminRequestSchema,
   asRequest,
   readOnly,
-} from "../internal/request.ts";
+} from "../../shared/request.ts";
 import type {
   AdminActivityPoint,
   AdminRequest,
   AdminResponse,
-} from "../../internal/contracts.ts";
+} from "../../shared/contracts.ts";
 
 type ActivityInterval = "hour" | "day" | "week" | "month";
 

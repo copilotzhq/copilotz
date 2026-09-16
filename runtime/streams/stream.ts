@@ -133,7 +133,7 @@ export function createContentStreamRuntime(
       }`
       : semanticId;
 
-  return Object.freeze({
+  return ({
     async open(input, openOptions = {}) {
       throwIfAborted(openOptions.signal);
       const semanticId = input.id?.trim() || createId();
@@ -158,7 +158,7 @@ export function createContentStreamRuntime(
         options.store,
         { bodyId, mediaType },
       );
-      const opened = Object.freeze({
+      const opened = {
         id,
         semanticId,
         ...(incarnationId ? { incarnationId } : {}),
@@ -171,16 +171,16 @@ export function createContentStreamRuntime(
         ...(input.disposition ? { disposition: input.disposition } : {}),
         metadata,
         ...(correlationId ? { correlationId } : {}),
-      });
+      } as const;
       let published = false;
       try {
         await options.onOpen?.(
           opened,
-          Object.freeze({
+          {
             established() {
               published = true;
             },
-          }),
+          } as const,
         );
         if (!published) {
           throw new Error(
@@ -194,10 +194,10 @@ export function createContentStreamRuntime(
             undefined
           );
         } else {
-          const termination = Object.freeze({
+          const termination = {
             outcome: "abandoned" as const,
             capture: "truncated" as const,
-          });
+          } as const;
           body.fence();
           await Promise.resolve(options.onTerminalizing?.(opened, termination))
             .catch(() => undefined);
@@ -232,20 +232,19 @@ export function createContentStreamRuntime(
         | undefined;
       let removeLifetimeAbort = () => {};
 
-      const contentRef = (assetId: string): ContentRef =>
-        Object.freeze({
-          assetId,
-          kind,
-          role,
-          mediaType,
-          ...(name ? { name } : {}),
-          ...(alt ? { alt } : {}),
-          ...(language ? { language } : {}),
-          ...(input.disposition ? { disposition: input.disposition } : {}),
-          ...(input.metadata
-            ? { metadata: metadata as Record<string, unknown> }
-            : {}),
-        });
+      const contentRef = (assetId: string): ContentRef => ({
+        assetId,
+        kind,
+        role,
+        mediaType,
+        ...(name ? { name } : {}),
+        ...(alt ? { alt } : {}),
+        ...(language ? { language } : {}),
+        ...(input.disposition ? { disposition: input.disposition } : {}),
+        ...(input.metadata
+          ? { metadata: metadata as Record<string, unknown> }
+          : {}),
+      } as const);
 
       const close = async (
         closeInput: ContentStreamCloseInput,
@@ -264,7 +263,7 @@ export function createContentStreamRuntime(
             `Content stream '${id}' was already closed with another Asset identity.`,
           );
         }
-        closeIdentity ??= Object.freeze({ assetId, input: closeInput });
+        closeIdentity ??= { assetId, input: closeInput } as const;
         terminalKind = "sealed";
         terminalTask ??= (async () => {
           body.fence();
@@ -286,31 +285,33 @@ export function createContentStreamRuntime(
         throwIfAborted(closeOptions.signal);
         const finalBody = readyBody!;
         const ref = contentRef(assetId);
-        return Object.freeze({
-          content: Object.freeze([ref]),
-          assets: Object.freeze([Object.freeze({
-            id: assetId,
-            namespace,
-            mediaType,
-            body: new Uint8Array(),
-            readyBody: finalBody,
-            location: bodyLocation(options.store, finalBody),
-            byteLength: finalBody.byteLength,
-            digest: finalBody.digest,
-            idempotencyKey:
-              `${namespace}:content-stream:${id}:asset:${assetId}`,
-            ...(closeInput.origin
-              ? { origin: structuredClone(closeInput.origin) }
-              : {}),
-            metadata: {
-              ...metadata,
-              ...(closeInput.metadata
-                ? structuredClone(closeInput.metadata)
+        return ({
+          content: [ref] as const,
+          assets: [
+            {
+              id: assetId,
+              namespace,
+              mediaType,
+              body: new Uint8Array(),
+              readyBody: finalBody,
+              location: bodyLocation(options.store, finalBody),
+              byteLength: finalBody.byteLength,
+              digest: finalBody.digest,
+              idempotencyKey:
+                `${namespace}:content-stream:${id}:asset:${assetId}`,
+              ...(closeInput.origin
+                ? { origin: structuredClone(closeInput.origin) }
                 : {}),
-              streamId: id,
-            },
-          })]),
-        });
+              metadata: {
+                ...metadata,
+                ...(closeInput.metadata
+                  ? structuredClone(closeInput.metadata)
+                  : {}),
+                streamId: id,
+              },
+            } as const,
+          ] as const,
+        } as const);
       };
 
       const abort = async (
@@ -319,10 +320,10 @@ export function createContentStreamRuntime(
       ): Promise<void> => {
         throwIfAborted(abortOptions.signal);
         if (terminalKind === "sealed") return;
-        const normalized = Object.freeze({
+        const normalized = {
           outcome: abortInput.outcome ?? "failed",
           capture: abortInput.capture ?? "truncated",
-        });
+        } as const;
         if (
           termination &&
           (termination.outcome !== normalized.outcome ||
@@ -366,18 +367,18 @@ export function createContentStreamRuntime(
         }
         const normalized: ContentStreamRetentionInput =
           retentionInput.retention === "canonical"
-            ? Object.freeze({
+            ? ({
               retention: "canonical",
               assetId: retentionInput.assetId.trim(),
-            })
-            : Object.freeze({ retention: "observation" });
+            } as const)
+            : ({ retention: "observation" } as const);
         if (normalized.retention === "canonical" && !normalized.assetId) {
           throw new TypeError("Canonical stream retention requires assetId.");
         }
         await options.onRetain?.(opened, normalized);
       };
 
-      const writer = Object.freeze({
+      const writer = {
         id,
         offset: () => body.offset(),
         async append(
@@ -389,10 +390,10 @@ export function createContentStreamRuntime(
             throw new Error(`Content stream '${id}' is already settling.`);
           }
           const result = await body.append(appendInput);
-          const appended = Object.freeze({
+          const appended = {
             startOffset: result.startOffset,
             endOffset: result.endOffset,
-          });
+          } as const;
           try {
             await options.onAppend?.(opened, appended);
           } catch (error) {
@@ -416,7 +417,7 @@ export function createContentStreamRuntime(
             outcome: "abandoned",
           });
         },
-      });
+      } as const;
       if (options.signal) {
         const lifetimeAbort = () => {
           // Execution signals also end after successful Processor completion.
@@ -454,5 +455,5 @@ export function createContentStreamRuntime(
         ...(input.offset !== undefined ? { offset: input.offset } : {}),
       });
     },
-  });
+  } as const);
 }

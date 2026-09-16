@@ -1,6 +1,6 @@
 import { listKnowledgeSpacesAction } from "../../../actions/list-knowledge-spaces/index.ts";
 /** Tool resource exposing visible memory spaces. @module */
-import { defineTool, type ToolResource } from "@copilotz/copilotz/tools";
+import { defineTool, type ToolResource } from "@copilotz/copilotz/core";
 
 export const listKnowledgeSpacesTool: ToolResource<"list_knowledge_spaces"> =
   defineTool("list_knowledge_spaces", listKnowledgeSpacesAction, {

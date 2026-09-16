@@ -134,7 +134,7 @@ export function createContentResolver(dependencies: {
     }
     options.signal?.throwIfAborted();
     const ids = [...new Set(refs.map((ref) => ref.assetId))];
-    if (!ids.length) return Object.freeze([]);
+    if (!ids.length) return ([] as const);
     if (options.maxBytes !== undefined) {
       const metadata = await dependencies.assets.getMany(
         options.namespace,
@@ -189,7 +189,7 @@ export function createContentResolver(dependencies: {
         options.maxBytes,
       );
     }
-    return Object.freeze(resolved);
+    return resolved;
   };
 
   const get: ContentResolver["get"] = async (ref, options) => {

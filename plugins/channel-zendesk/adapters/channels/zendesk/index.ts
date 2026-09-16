@@ -1,4 +1,4 @@
-import { channelProviderOptions } from "../../../../channel-core/internal/provider-options.ts";
+import { channelProviderOptions } from "@copilotz/copilotz/channels/core";
 /**
  * Defines the Zendesk Channel Adapter.
  *
@@ -17,13 +17,13 @@ import {
   requestHeader,
   requiredProviderText,
   timingSafeTextEqual,
-} from "../../../../channel-core/internal/helpers.ts";
+} from "@copilotz/copilotz/channels/core";
 import type {
   ChannelAdapter,
   ChannelDeliveryAttempt,
   ChannelJsonObject,
-} from "../../../../channel-core/internal/contracts.ts";
-import { createZendeskTransport } from "./internal/transport.ts";
+} from "@copilotz/copilotz/channels/core";
+import { createZendeskTransport } from "./transport.ts";
 import type {
   ZendeskActionPayload,
   ZendeskChannelOptions,
@@ -32,7 +32,7 @@ import type {
   ZendeskDelivery,
   ZendeskTransport,
   ZendeskWebhookPayload,
-} from "../../../internal/contracts.ts";
+} from "./contracts.ts";
 
 function configContext(
   operation: ZendeskConfigContext["operation"],
@@ -418,6 +418,6 @@ export const zendeskChannelAdapter: ChannelAdapter = {
   },
 } as const;
 
-export { createZendeskTransport } from "./internal/transport.ts";
+export { createZendeskTransport } from "./transport.ts";
 
 export default zendeskChannelAdapter;

@@ -1,6 +1,6 @@
 import { assertEquals } from "@std/assert";
 
-import type { ProviderConfig } from "../../internal/types.ts";
+import type { ProviderConfig } from "../../shared/types.ts";
 import { ollamaProvider } from "./index.ts";
 
 Deno.test("Ollama adapter exposes a provider factory", () => {

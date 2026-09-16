@@ -1,6 +1,6 @@
 import { inspectMemoryAction } from "../../../actions/inspect-memory/index.ts";
 /** Tool resource exposing one semantic-memory record inspection. @module */
-import { defineTool, type ToolResource } from "@copilotz/copilotz/tools";
+import { defineTool, type ToolResource } from "@copilotz/copilotz/core";
 
 export const inspectMemoryTool: ToolResource<"inspect_memory"> = defineTool(
   "inspect_memory",

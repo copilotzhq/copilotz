@@ -1,3 +1,5 @@
+import { loadThreadRecord } from "@copilotz/copilotz/core";
+import { memoryFilter, vectorSimilarity } from "../../shared/retrieval.ts";
 /** Searches accessible semantic-memory records. @module */
 import {
   type ActionDefinition,
@@ -10,19 +12,19 @@ import {
   lexicalScore,
   memoryRecord,
   terminalStatus,
-} from "../../internal/retrieval.ts";
-import type { MemoryActionContext } from "../../internal/contracts.ts";
+} from "../../shared/retrieval.ts";
+import type { MemoryActionContext } from "../../shared/contracts.ts";
 import {
   memoryActionProvenance,
   threadMemorySpaces,
-} from "../../internal/access.ts";
-import { optionalText, positiveInteger, record } from "../../internal/input.ts";
+} from "../../shared/access.ts";
+import { optionalText, positiveInteger, record } from "../../shared/input.ts";
 import {
   PUBLIC_MEMORY_RESULT_LIMIT,
   PUBLIC_MEMORY_SCAN_LIMIT,
   publicMemorySummary,
   searchMemoryOutputSchema,
-} from "../internal/public-projection.ts";
+} from "../../shared/public-projection.ts";
 
 export const searchMemoryAction: ActionDefinition<
   unknown,
@@ -52,11 +54,66 @@ export const searchMemoryAction: ActionDefinition<
       memoryActionProvenance(context).threadId,
     );
     const readable = new Set(spaces.map((space) => space.id));
+    const query = optionalText(input.query) ?? "";
+    const embed = context.adapters.memoryEmbedding?.default;
+    if (query && embed) {
+      const profile = context.resources.memory?.embeddingProfile;
+      if (!profile) {
+        throw new Error(
+          "Memory embedding requires resources.memory.embeddingProfile.",
+        );
+      }
+      const provenance = memoryActionProvenance(context);
+      const agent = context.resources.agents[provenance.agentId];
+      const thread = await loadThreadRecord(context, provenance.threadId);
+      if (!agent || !thread) {
+        throw new Error("Memory search requires a current agent and thread.");
+      }
+      const values = await embed([query], {
+        agent,
+        thread,
+        context,
+        checkpointId: `search:${context.operationKey}`,
+      });
+      const limit = Math.min(
+        positiveInteger(input.limit, 20),
+        PUBLIC_MEMORY_RESULT_LIMIT,
+      );
+      const matches = await context.vectors.search({
+        ownerType: "memory_record",
+        field: "summary",
+        profile,
+        values: values[0],
+        filter: memoryFilter(spaces, input),
+        limit: limit + 1,
+      });
+      const memories = matches.slice(0, limit).flatMap(
+        ({ record: raw, distance }) => {
+          const mapped = memoryRecord(raw);
+          return mapped
+            ? [
+              publicMemorySummary(
+                raw,
+                mapped,
+                vectorSimilarity(profile.metric, distance),
+              ),
+            ]
+            : [];
+        },
+      );
+      return {
+        memories,
+        scanned: matches.length,
+        matched: matches.length,
+        returned: memories.length,
+        truncated: matches.length > limit,
+      };
+    }
     const values = await context.collections.memoryRecord.list({
       filter: { field: "memorySpaceId", in: [...readable] },
       limit: PUBLIC_MEMORY_SCAN_LIMIT,
     });
-    const query = optionalText(input.query) ?? "";
+
     let scanned = 0;
     const matched = values.flatMap((item) => {
       const mapped = memoryRecord(item);

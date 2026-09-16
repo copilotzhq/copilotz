@@ -248,7 +248,7 @@ export type CopilotzEngine = Readonly<{
     ): Promise<ActionEventData | null>;
     list(options: {
       namespace: string;
-      threadId?: string;
+      metadata?: Readonly<Record<string, unknown>>;
       correlationId?: string;
       afterPosition?: string;
       order?: "asc" | "desc";

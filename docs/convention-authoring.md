@@ -9,22 +9,22 @@ plugins; there are no `createXPlugin(options)` compatibility wrappers.
 ```text
 my-plugin/
   copilotz.json
-  dependencies/core/index.ts
   collections/ticket/index.ts
   actions/close-ticket/index.ts
   processors/notify-owner/index.ts
   resources/tools/search-tickets/index.ts
   resources/support/config/index.ts
   adapters/ticketStore/default/index.ts
-  internal/queries.ts
+  shared/queries.ts
   plugin.generated.ts
 ```
 
 Each discovered `index.ts` has a default export. Collections, Actions, and
 Processors have one alias segment; Resources and Adapters have a namespace and
-an alias. Dependency entries default-export another static plugin. Helpers live
-in `internal/`; reusable authoring helpers live in `authoring/`. Tests and
-README files are not discovered. Symlink directories are not traversed.
+an alias. A helper used by one primitive stays inside that primitive module. Use
+`shared/` only for code reused across different primitives; public authoring
+APIs live in `authoring/`. Tests and README files are not discovered. Symlink
+directories are not traversed.
 
 Directory names become camelCase aliases: `close-ticket` becomes `closeTicket`.
 Aliases are local registration names; stable Action IDs and Collection names
@@ -35,6 +35,7 @@ model-facing names such as `search_tickets`:
 {
   "id": "acme.support",
   "version": "1.0.0",
+  "plugins": [{ "from": "@copilotz/copilotz/core", "export": "corePlugin" }],
   "aliases": {
     "resources/tools/search-tickets/index.ts": "search_tickets"
   }
@@ -44,7 +45,9 @@ model-facing names such as `search_tickets`:
 An optional `include` array lists exact entry paths. Omit it to discover every
 conventional entry. Use it to deliberately select capabilities; nothing scans
 arbitrary exports or infers dependencies from imports. Dependencies are explicit
-`dependencies/<alias>/index.ts` entries.
+manifest `plugins` imports. Each entry has a `from` module specifier and an
+`export` name (use `default` for default exports). There are no dependency
+forwarding modules. `shared/` is excluded from discovery.
 
 ## Build on the development or CI host
 
@@ -80,14 +83,14 @@ bundling.
 Generated modules contain ordinary static imports and `definePlugin`. They do
 not contain filesystem discovery or the TypeScript compiler. Keep compilation
 and native adapter imports out of deployment runtime entry points. In this
-repository, `deno task build:plugins` regenerates all 24 concrete roots and
+repository, `deno task build:plugins` regenerates all 23 concrete roots and
 `deno task check:generated` verifies them.
 
 ## Define a tool once
 
 ```ts
 // resources/tools/search-tickets/index.ts
-import { defineTool } from "@copilotz/copilotz/tools";
+import { defineTool } from "@copilotz/copilotz/core";
 
 export default defineTool({
   id: "acme.support.search",

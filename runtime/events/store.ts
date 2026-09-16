@@ -1,4 +1,5 @@
 import { ulid } from "../../dependencies/ulid.ts";
+import { assertJsonValue } from "../json.ts";
 import { errorRetryability } from "../failure.ts";
 import { createEventStoreError } from "./errors.ts";
 import {
@@ -14,9 +15,7 @@ import type {
   DurableEvent,
   DurableEventDraft,
   EventDelivery,
-  EventRouting,
   EventSubject,
-  EventVisibility,
 } from "./types.ts";
 
 type EventRow = Record<string, unknown> & {
@@ -25,13 +24,10 @@ type EventRow = Record<string, unknown> & {
   schema_version: number;
   type: string;
   namespace: string;
-  thread_id: string | null;
   subject_type: string | null;
   subject_id: string | null;
   payload: unknown;
   delta: unknown;
-  routing: unknown;
-  visibility: unknown;
   metadata: unknown;
   causation_id: string | null;
   correlation_id: string;
@@ -65,8 +61,6 @@ type EncodedJson = {
 type EncodedDraft = {
   payload: EncodedJson;
   delta: EncodedJson;
-  routing: EncodedJson;
-  visibility: EncodedJson;
   metadata: EncodedJson;
 };
 
@@ -141,7 +135,7 @@ export type EventStore = {
   ): Promise<DurableEvent | null>;
   listEvents(options: {
     namespace: string;
-    threadId?: string;
+    metadata?: Readonly<Record<string, unknown>>;
     correlationId?: string;
     afterPosition?: string;
     /** Result order. `afterPosition` remains an ascending position bound. */
@@ -229,16 +223,6 @@ function record(value: unknown): Record<string, unknown> {
     : {};
 }
 
-function deepFreeze<T>(value: T): T {
-  if (value && typeof value === "object" && !Object.isFrozen(value)) {
-    for (const child of Object.values(value as Record<string, unknown>)) {
-      deepFreeze(child);
-    }
-    Object.freeze(value);
-  }
-  return value;
-}
-
 function encodeJson(value: unknown, field: string): EncodedJson {
   try {
     const text = JSON.stringify(value === undefined ? null : value);
@@ -271,12 +255,6 @@ function canonicalJson(value: unknown): string {
 }
 
 function mapEvent(row: EventRow): DurableEvent {
-  const routing = record(row.routing) as EventRouting;
-  const visibilityValue = record(row.visibility);
-  const visibility =
-    (typeof visibilityValue.kind === "string"
-      ? visibilityValue
-      : { kind: "public" }) as EventVisibility;
   const event: DurableEvent = {
     durable: true,
     id: String(row.id),
@@ -284,7 +262,6 @@ function mapEvent(row: EventRow): DurableEvent {
     schemaVersion: Number(row.schema_version),
     type: String(row.type),
     namespace: String(row.namespace),
-    ...(row.thread_id ? { threadId: String(row.thread_id) } : {}),
     ...(row.subject_type && row.subject_id
       ? {
         subject: {
@@ -295,8 +272,6 @@ function mapEvent(row: EventRow): DurableEvent {
       : {}),
     payload: row.payload,
     ...(row.delta == null ? {} : { delta: row.delta }),
-    routing,
-    visibility,
     metadata: record(row.metadata),
     ...(row.causation_id ? { causationId: String(row.causation_id) } : {}),
     correlationId: String(row.correlation_id),
@@ -305,12 +280,12 @@ function mapEvent(row: EventRow): DurableEvent {
       : {}),
     createdAt: iso(row.created_at)!,
   };
-  return deepFreeze(event);
+  return event;
 }
 
 function mapDelivery(row: DeliveryRow, databaseSchema: string): EventDelivery {
   const lastError = row.last_error == null ? undefined : record(row.last_error);
-  return deepFreeze({
+  return ({
     databaseSchema,
     id: String(row.id),
     eventId: String(row.event_id),
@@ -365,11 +340,6 @@ function encodeDraft(draft: DurableEventDraft): EncodedDraft {
   return {
     payload: encodeJson(draft.payload, "payload"),
     delta: encodeJson(draft.delta, "delta"),
-    routing: encodeJson(draft.routing ?? {}, "routing"),
-    visibility: encodeJson(
-      draft.visibility ?? { kind: "public" },
-      "visibility",
-    ),
     metadata: encodeJson(draft.metadata ?? {}, "metadata"),
   };
 }
@@ -388,16 +358,12 @@ function assertDuplicateMatches(
 ): void {
   const mismatch = event.type !== draft.type.trim() ||
     event.namespace !== draft.namespace.trim() ||
-    event.threadId !== draft.threadId ||
     !sameSubject(event.subject, draft.subject) ||
     event.causationId !== draft.causationId ||
     (draft.correlationId !== undefined &&
       event.correlationId !== draft.correlationId) ||
     canonicalJson(event.payload) !== canonicalJson(encoded.payload.value) ||
     canonicalJson(event.delta ?? null) !== canonicalJson(encoded.delta.value) ||
-    canonicalJson(event.routing) !== canonicalJson(encoded.routing.value) ||
-    canonicalJson(event.visibility) !==
-      canonicalJson(encoded.visibility.value) ||
     canonicalJson(event.metadata) !== canonicalJson(encoded.metadata.value);
 
   if (mismatch) {
@@ -450,10 +416,10 @@ function uniqueConsumers(
     }
     consumers.set(
       consumerId,
-      Object.freeze({
+      {
         consumerId,
         settlement: value.settlement,
-      }),
+      } as const,
     );
   }
   return [...consumers.values()];
@@ -567,13 +533,13 @@ export function createEventStore(
       createdAt: event.createdAt,
       metadata: event.metadata,
     });
-    return Object.freeze({
+    return ({
       value,
       event,
       deliveries: await deliveriesForEvent(executor, event.id),
       settlementScopeId,
       deduplicated: true,
-    });
+    } as const);
   };
 
   const loadDuplicate = async (
@@ -638,26 +604,22 @@ export function createEventStore(
       const value = await mutation.mutate(context);
       const inserted = await transaction.query<EventRow>(
         `INSERT INTO ${tables.events} (
-            id, schema_version, type, namespace, thread_id,
-            subject_type, subject_id, payload, delta, routing, visibility,
+            id, schema_version, type, namespace,
+            subject_type, subject_id, payload, delta,
             metadata, causation_id, correlation_id, deduplication_id, created_at
           ) VALUES (
-            $1, $2, $3, $4, $5, $6, $7,
-            $8::jsonb, $9::jsonb, $10::jsonb, $11::jsonb,
-            $12::jsonb, $13, $14, $15, $16::timestamptz
+            $1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb,
+            $9::jsonb, $10, $11, $12, $13::timestamptz
           ) RETURNING *`,
         [
           eventId,
           EVENT_SCHEMA_VERSION,
           draft.type,
           draft.namespace,
-          draft.threadId ?? null,
           draft.subject?.type ?? null,
           draft.subject?.id ?? null,
           encoded.payload.text,
           encoded.delta.text,
-          encoded.routing.text,
-          encoded.visibility.text,
           encoded.metadata.text,
           draft.causationId ?? null,
           correlationId,
@@ -700,13 +662,13 @@ export function createEventStore(
         deliveries.push(mapDelivery(result.rows[0], databaseSchema));
       }
 
-      return Object.freeze({
+      return ({
         value,
         event,
         deliveries,
         settlementScopeId,
         deduplicated: false,
-      });
+      } as const);
     };
 
     const recoverOn = async (
@@ -929,9 +891,18 @@ export function createEventStore(
     async listEvents(listOptions, executor = session) {
       const conditions = ["namespace = $1"];
       const params: unknown[] = [listOptions.namespace];
-      if (listOptions.threadId) {
-        params.push(listOptions.threadId);
-        conditions.push(`thread_id = $${params.length}`);
+      if (listOptions.metadata) {
+        assertJsonValue(listOptions.metadata, {
+          label: "Event metadata filter",
+          maxDepth: 16,
+          maxNodes: 256,
+        });
+        const filter = encodeJson(listOptions.metadata, "metadata filter").text;
+        if (filter.length > 16384) {
+          throw new TypeError("Event metadata filter exceeds 16 KiB.");
+        }
+        params.push(filter);
+        conditions.push(`metadata @> $${params.length}::jsonb`);
       }
       if (listOptions.correlationId) {
         params.push(listOptions.correlationId);
@@ -1085,7 +1056,7 @@ export function createEventStore(
         [namespace, settlementScopeId],
       );
       const row = result.rows[0];
-      return deepFreeze({
+      return ({
         unsettled: Number(row?.unsettled ?? 0),
         deadLetters: Number(row?.dead_letters ?? 0),
         cancelled: Number(row?.cancelled ?? 0),

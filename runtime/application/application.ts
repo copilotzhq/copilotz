@@ -477,7 +477,6 @@ export async function createCopilotzApplication(
         type: inputType,
         namespace: inputNamespace,
         payload: structuredClone(input.payload),
-        visibility: input.visibility ?? { kind: "public" },
         metadata: {
           source: "application.input",
           ...(input.metadata ? structuredClone(input.metadata) : {}),
@@ -1031,8 +1030,6 @@ export async function createCopilotzApplication(
                     state,
                     payload: { status: state } as const,
                     data: { status: state } as const,
-                    routing: {} as const,
-                    visibility: { kind: "public" as const } as const,
                     metadata: {
                       operationId: status.operationId,
                       status: state,

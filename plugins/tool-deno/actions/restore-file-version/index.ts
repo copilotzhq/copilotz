@@ -7,7 +7,7 @@ import type { ActionDefinition } from "@copilotz/copilotz/actions";
  */
 
 import { defineAction } from "@copilotz/copilotz/actions";
-import { restoreWorkspaceFileVersion } from "../internal/fs-utils.ts";
+import { restoreWorkspaceFileVersion } from "../../shared/fs-utils.ts";
 
 interface RestoreFileVersionParams {
   path: string;

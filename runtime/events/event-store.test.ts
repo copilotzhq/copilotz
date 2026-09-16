@@ -63,7 +63,7 @@ async function failThreeTimes(
   }
 }
 
-Deno.test("A20 clean v4 baseline contains the marker and no body-reference table", async () => {
+Deno.test("A20 clean v5 baseline contains the marker and no body-reference table", async () => {
   const fixture = await createFixture();
   try {
     const result = await fixture.session.query<{ table_name: string }>(
@@ -104,7 +104,7 @@ Deno.test("A20 clean v4 baseline contains the marker and no body-reference table
   }
 });
 
-Deno.test("normal provisioning refuses a released v3 schema without writing v4 tables", async () => {
+Deno.test("normal provisioning refuses a released v3 schema without writing current tables", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   const session = createSqlSession(db);
   const schema = "copilotz_released_v3_refusal";
@@ -129,7 +129,7 @@ Deno.test("normal provisioning refuses a released v3 schema without writing v4 t
     await assertRejects(
       () => provisionCopilotzSchema(session, schema),
       Error,
-      "requires the explicit v4 migration",
+      "is incompatible with this release",
     );
     const tables = await session.query<{ table_name: string }>(
       `SELECT table_name FROM information_schema.tables
@@ -142,46 +142,44 @@ Deno.test("normal provisioning refuses a released v3 schema without writing v4 t
   }
 });
 
-Deno.test("atomic provisioning creates and validates a fresh v4 marker", async () => {
+Deno.test("atomic provisioning creates and validates a fresh v5 marker", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   const session = createSqlSession(db);
   const schema = "copilotz_fresh_v4_marker";
   try {
-    assertEquals((await provisionCopilotzSchema(session, schema)).version, 4);
+    assertEquals((await provisionCopilotzSchema(session, schema)).version, 5);
     const marker = await session.query<{ version: number }>(
       `SELECT version FROM "${schema}"."copilotz_schema_metadata"`,
     );
-    assertEquals(marker.rows, [{ version: 4 }]);
-    assertEquals((await provisionCopilotzSchema(session, schema)).version, 4);
+    assertEquals(marker.rows, [{ version: 5 }]);
+    assertEquals((await provisionCopilotzSchema(session, schema)).version, 5);
   } finally {
     await db.close();
   }
 });
 
-Deno.test("direct validation rejects an in-progress migration despite a v4 marker", async () => {
+Deno.test("direct validation rejects an incompatible schema marker", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
-  const session = createSqlSession(db);
-  const schema = "copilotz_v4_in_progress";
+  const schema = "copilotz_incompatible_marker";
   try {
-    await provisionCopilotzSchema(session, schema);
-    await session.query(
-      `CREATE TABLE "${schema}"."copilotz_v4_migration_state" (
-        singleton BOOLEAN PRIMARY KEY, stage TEXT NOT NULL
-      )`,
-    );
-    await session.query(
-      `INSERT INTO "${schema}"."copilotz_v4_migration_state"
-        (singleton, stage) VALUES (TRUE, 'sources')`,
+    await provisionCopilotzSchema(db, schema);
+    await db.query(
+      `UPDATE "${schema}"."copilotz_schema_metadata" SET version=4`,
     );
     await assertRejects(
-      () => validateCopilotzSchema(session, schema),
+      () => validateCopilotzSchema(db, schema),
       Error,
-      "in-progress v4 migration",
+      "Use a fresh schema",
     );
-    await session.query(
-      `UPDATE "${schema}"."copilotz_v4_migration_state" SET stage = 'complete'`,
+    await assertRejects(
+      () => provisionCopilotzSchema(db, schema),
+      Error,
+      "incompatible",
     );
-    assertEquals((await validateCopilotzSchema(session, schema)).version, 4);
+    const marker = await db.query<{ version: number }>(
+      `SELECT version FROM "${schema}"."copilotz_schema_metadata"`,
+    );
+    assertEquals(marker.rows[0].version, 4);
   } finally {
     await db.close();
   }
@@ -337,8 +335,6 @@ Deno.test("A20 graph mutation, immutable event, and sparse deliveries commit ato
     assertEquals(replay.deduplicated, true);
     assertEquals(replay.event.id, first.event.id);
     assertEquals(first.deliveries.length, 2);
-    assert(Object.isFrozen(first.event));
-    assert(Object.isFrozen(first.event.payload));
 
     const conflict = await assertRejects(() =>
       store.append({

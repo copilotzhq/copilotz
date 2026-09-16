@@ -1,6 +1,6 @@
 {
   "id": "@copilotz/core",
-  "version": "0.65.1",
+  "version": "0.75.0",
   "include": [
     "actions/compact-context/index.ts",
     "processors/message-router/index.ts",
@@ -11,7 +11,26 @@
     "processors/fail-ask/index.ts",
     "processors/tool-plan-coordinator/index.ts",
     "resources/tools/ask/index.ts",
-    "dependencies/llm/index.ts",
-    "dependencies/collections/index.ts"
+    "actions/ask/index.ts",
+    "actions/spaces/index.ts",
+    "actions/create-thread-message/index.ts",
+    "actions/revise-message/index.ts",
+    "actions/delete-thread-messages/index.ts",
+    "actions/add-thread-participant/index.ts",
+    "actions/create-thread/index.ts",
+    "collections/space-attachment/index.ts",
+    "collections/participant/index.ts",
+    "collections/message/index.ts",
+    "collections/tool-plan-stage-result/index.ts",
+    "collections/tool-plan/index.ts",
+    "collections/space/index.ts",
+    "collections/thread/index.ts",
+    "processors/message-input/index.ts"
+  ],
+  "plugins": [
+    {
+      "from": "../llm/plugin.ts",
+      "export": "llmPlugin"
+    }
   ]
 }

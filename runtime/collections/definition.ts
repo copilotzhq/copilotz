@@ -135,7 +135,7 @@ export type CollectionDefinitionInput<S extends JsonSchema = JsonSchema> = Omit<
   "$inferSelect" | "$inferInsert"
 >;
 
-const RESERVED_COLLECTION_MEMBERS = Object.freeze([
+const RESERVED_COLLECTION_MEMBERS = [
   "create",
   "update",
   "delete",
@@ -145,7 +145,7 @@ const RESERVED_COLLECTION_MEMBERS = Object.freeze([
   "query",
   "search",
   "definition",
-]);
+] as const;
 
 function requiredText(value: string, name: string): string {
   const normalized = value.trim();
@@ -158,7 +158,7 @@ function requiredMemberName(value: string, kind: string): string {
   if (!/^[a-z][a-z0-9_.-]*$/i.test(name)) {
     throw new TypeError(`Invalid collection ${kind} '${name}'.`);
   }
-  if (RESERVED_COLLECTION_MEMBERS.includes(name)) {
+  if ((RESERVED_COLLECTION_MEMBERS as readonly string[]).includes(name)) {
     throw new TypeError(
       `Collection ${kind} '${name}' collides with a kernel method.`,
     );
@@ -168,16 +168,6 @@ function requiredMemberName(value: string, kind: string): string {
 
 function isSchema(value: unknown): value is CollectionNamedQuerySchema {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function freezeSnapshot<T>(value: T, seen = new WeakSet<object>()): T {
-  if (!value || typeof value !== "object") return value;
-  if (seen.has(value)) return value;
-  seen.add(value);
-  for (const nested of Object.values(value as Record<string, unknown>)) {
-    freezeSnapshot(nested, seen);
-  }
-  return Object.freeze(value);
 }
 
 function optionalQuerySchema(
@@ -191,7 +181,7 @@ function optionalQuerySchema(
       `Collection query '${queryName}' ${name} must be a JSON Schema object.`,
     );
   }
-  return freezeSnapshot(structuredClone(value)) as CollectionNamedQuerySchema;
+  return (structuredClone(value)) as CollectionNamedQuerySchema;
 }
 
 function createRelation(
@@ -201,7 +191,7 @@ function createRelation(
   edgeType?: string,
   edge?: CollectionRelation["edge"],
 ): CollectionRelation {
-  return Object.freeze({
+  return ({
     type,
     collection: requiredText(collection, "Relation collection"),
     foreignKey: requiredText(foreignKey, "Relation foreign key"),
@@ -209,7 +199,7 @@ function createRelation(
       ? {}
       : { edgeType: requiredText(edgeType, "Relation edge type") }),
     ...(edge ? { edge } : {}),
-  });
+  } as const);
 }
 
 type CollectionRelationFactory = (
@@ -223,7 +213,7 @@ export const relation: Readonly<{
   hasOne: CollectionRelationFactory;
   hasMany: CollectionRelationFactory;
   belongsTo: CollectionRelationFactory;
-}> = Object.freeze({
+}> = {
   hasOne: (
     collection: string,
     foreignKey: string,
@@ -245,7 +235,7 @@ export const relation: Readonly<{
     edge?: CollectionRelation["edge"],
   ): CollectionRelation =>
     createRelation("belongsTo", collection, foreignKey, edgeType, edge),
-});
+} as const;
 
 /** Defines one canonical collection. The runtime derives commands and types. */
 export function defineCollection<S extends JsonSchema>(
@@ -267,7 +257,7 @@ export function defineCollection<S extends JsonSchema>(
     throw new TypeError(`Collection name '${name}' cannot form an event type.`);
   }
   const commands = input.commands
-    ? Object.freeze(Object.fromEntries(
+    ? (Object.fromEntries(
       Object.entries(
         input.commands as Record<string, CollectionCommandDefinition>,
       ).map(([command, definition]) => {
@@ -285,13 +275,13 @@ export function defineCollection<S extends JsonSchema>(
         }
         return [
           commandName,
-          Object.freeze({ ...definition, ...(event ? { event } : {}) }),
+          { ...definition, ...(event ? { event } : {}) } as const,
         ];
       }),
     ))
     : undefined;
   const queries = input.queries
-    ? Object.freeze(Object.fromEntries(
+    ? (Object.fromEntries(
       Object.entries(
         input.queries as Record<string, CollectionNamedQuery>,
       ).map(([queryName, definition]) => {
@@ -317,27 +307,26 @@ export function defineCollection<S extends JsonSchema>(
         );
         return [
           name,
-          Object.freeze({
+          {
             ...definition,
             ...(inputSchema ? { inputSchema } : {}),
             ...(outputSchema ? { outputSchema } : {}),
-          }),
+          } as const,
         ];
       }),
     ))
     : undefined;
-  return Object.freeze({
+  return ({
     ...input,
     name,
-    timestamps: Object.freeze(
-      input.timestamps ?? { createdAt: "createdAt", updatedAt: "updatedAt" },
-    ),
-    defaults: Object.freeze({ ...(input.defaults ?? {}) }),
-    indexes: Object.freeze([...(input.indexes ?? [])]),
-    relations: Object.freeze({ ...(input.relations ?? {}) }),
+    timestamps: input.timestamps ??
+      { createdAt: "createdAt", updatedAt: "updatedAt" },
+    defaults: { ...(input.defaults ?? {}) } as const,
+    indexes: [...(input.indexes ?? [])] as const,
+    relations: { ...(input.relations ?? {}) } as const,
     ...(input.identity
       ? {
-        identity: Object.freeze({
+        identity: {
           sourceType: requiredText(
             input.identity.sourceType,
             "Identity sourceType",
@@ -346,27 +335,27 @@ export function defineCollection<S extends JsonSchema>(
             input.identity.sourceField,
             "Identity sourceField",
           ),
-        }),
+        } as const,
       }
       : {}),
     ...(input.search
       ? {
-        search: Object.freeze({
+        search: {
           ...input.search,
-          fields: Object.freeze([...input.search.fields]),
-        }),
+          fields: [...input.search.fields] as const,
+        } as const,
       }
       : {}),
     ...(input.content
       ? {
-        content: Object.freeze({
-          fields: Object.freeze([...input.content.fields]),
-        }),
+        content: {
+          fields: [...input.content.fields] as const,
+        } as const,
       }
       : {}),
     ...(commands ? { commands } : {}),
     ...(queries ? { queries } : {}),
-  }) as CollectionDefinition<
+  } as const) as CollectionDefinition<
     S,
     S extends JsonSchema ? FromSchema<S> : Record<string, unknown>,
     S extends JsonSchema

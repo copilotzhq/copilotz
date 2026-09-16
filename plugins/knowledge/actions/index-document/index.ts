@@ -1,4 +1,4 @@
-import { knowledgeConfig } from "../../internal/config.ts";
+import { knowledgeConfig } from "../../shared/config.ts";
 import {
   defaultKnowledgeSourceLoader,
   defaultKnowledgeTextExtractor,
@@ -9,7 +9,7 @@ import {
   type DurableContentInput,
 } from "@copilotz/copilotz/content";
 
-import { chunkText } from "../internal/chunker.ts";
+import { chunkText } from "./chunker.ts";
 import { embedKnowledgeTexts } from "../../resources/embedding/index.ts";
 import type {
   CompleteKnowledgeDocumentInput,
@@ -17,19 +17,19 @@ import type {
   KnowledgeSourceLoader,
   LoadedKnowledgeSource,
   MarkKnowledgeDocumentDuplicateInput,
-} from "../../internal/types.ts";
+} from "../../shared/types.ts";
 import {
   type ActionDefinition,
   defineAction,
 } from "@copilotz/copilotz/actions";
-import type { KnowledgeActionContext } from "../internal/context.ts";
+import type { KnowledgeActionContext } from "../../shared/context.ts";
 import {
   finiteVector,
   optional,
   record,
   requireText,
-} from "../internal/input.ts";
-import { listDocumentChunks } from "../internal/records.ts";
+} from "../../shared/input.ts";
+import { listDocumentChunks } from "../../shared/records.ts";
 export const INDEX_KNOWLEDGE_DOCUMENT_ACTION_ID =
   "copilotz.knowledge.indexDocument";
 

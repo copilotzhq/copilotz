@@ -8,9 +8,9 @@ import {
   coreLlmCallMetadata,
   withAgentFailureMetadata,
   withWorkflowMetadata,
-} from "../../internal/workflow-metadata.ts";
-import type { CoreToolProcessorContext } from "../../internal/runtime-context.ts";
-import { loadParticipant } from "../internal/helpers.ts";
+} from "../../shared/workflow-metadata.ts";
+import type { CoreToolProcessorContext } from "../../shared/runtime-context.ts";
+import { loadParticipant } from "../../shared/helpers.ts";
 
 function isPrivateOrDelegated(
   metadata: NonNullable<ReturnType<typeof coreLlmCallMetadata>>,

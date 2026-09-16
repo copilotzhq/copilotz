@@ -23,4 +23,4 @@ export type {
   DiscordTransport,
   DiscordUser,
   TransformDiscordDelivery,
-} from "./internal/contracts.ts";
+} from "./adapters/channels/discord/contracts.ts";

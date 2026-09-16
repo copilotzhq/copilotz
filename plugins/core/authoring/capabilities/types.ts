@@ -1,0 +1,33 @@
+import type { AgentResource } from "../../resources/agent/index.ts";
+import type { Skill } from "@copilotz/copilotz/skills";
+import type { ToolResource } from "@copilotz/copilotz/core";
+import type { PluginRegistry } from "@copilotz/copilotz/plugins";
+
+export type CapabilityGrantSource = "explicit" | "derived";
+
+export type ResolvedCapabilityResource<T extends object> = Readonly<{
+  id: string;
+  resource: T;
+  grant: CapabilityGrantSource;
+}>;
+
+export type ResolvedAgentCapabilities = Readonly<{
+  agent: AgentResource;
+  tools: readonly ResolvedCapabilityResource<ToolResource>[];
+  agents: readonly ResolvedCapabilityResource<AgentResource>[];
+  skills: readonly ResolvedCapabilityResource<Skill>[];
+}>;
+
+export type ResolveAgentCapabilitiesInput = Readonly<{
+  agent: string;
+}>;
+
+export type AgentCapabilityResolver = Readonly<{
+  resolve(
+    input: ResolveAgentCapabilitiesInput,
+  ): Promise<ResolvedAgentCapabilities>;
+}>;
+
+export type CreateAgentCapabilityResolverOptions = Readonly<{
+  registry: PluginRegistry;
+}>;

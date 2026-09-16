@@ -237,13 +237,13 @@ export function createPromotedBodyStore(
   > => {
     const staged = await staging.head({ bodyId });
     if (isActive(staged)) {
-      return Object.freeze({ store: staging, head: staged });
+      return ({ store: staging, head: staged } as const);
     }
     if (isIncomplete(staged)) {
-      return Object.freeze({ store: staging, head: staged });
+      return ({ store: staging, head: staged } as const);
     }
     if (isReady(staged)) {
-      return Object.freeze({ store: ready, head: await promote(staged) });
+      return ({ store: ready, head: await promote(staged) } as const);
     }
     const canonical = requireReadyHead(
       bodyId,
@@ -253,17 +253,17 @@ export function createPromotedBodyStore(
       // Preserve active-staging precedence across the cross-store lookup race.
       const latest = await staging.head({ bodyId });
       if (isActive(latest)) {
-        return Object.freeze({ store: staging, head: latest });
+        return ({ store: staging, head: latest } as const);
       }
       if (isIncomplete(latest)) {
-        return Object.freeze({ store: staging, head: latest });
+        return ({ store: staging, head: latest } as const);
       }
       if (isReady(latest)) {
-        return Object.freeze({ store: ready, head: await promote(latest) });
+        return ({ store: ready, head: await promote(latest) } as const);
       }
-      return Object.freeze({ store: ready, head: canonical });
+      return ({ store: ready, head: canonical } as const);
     }
-    return Object.freeze({ store: staging, head: staged });
+    return ({ store: staging, head: staged } as const);
   };
 
   const recoverReadyPage = async (
@@ -418,10 +418,10 @@ export function createPromotedBodyStore(
         const after = bodies.length === input.limit
           ? bodies.at(-1)?.bodyId
           : sourceAfter;
-        return Object.freeze({
-          bodies: Object.freeze(bodies),
+        return ({
+          bodies: bodies,
           ...(after ? { after } : {}),
-        });
+        } as const);
       },
       async delete(input) {
         if (input.expectedState !== "ready") {
@@ -441,7 +441,7 @@ export function createPromotedBodyStore(
       },
     },
   };
-  return Object.freeze(store);
+  return store;
 }
 
 function requireClusterDurable(
@@ -480,18 +480,18 @@ export function createPromotedBodyStoreAdapter(
     stores.set(key, created);
     return created;
   };
-  return Object.freeze({
-    deployment: Object.freeze({
+  return ({
+    deployment: {
       durability: "durable" as const,
       reach: "cluster" as const,
       minimumProtectionMs: options.ready.deployment.minimumProtectionMs,
       readyGarbageCollection: options.ready.deployment.readyGarbageCollection,
-    }),
+    } as const,
     forScope(scope) {
       return storeFor(scope);
     },
     maintenanceForScope(scope) {
       return storeFor(scope).maintenance;
     },
-  });
+  } as const);
 }

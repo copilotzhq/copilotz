@@ -1,7 +1,7 @@
 import type {
   ServerAuthorizedScope,
   ServerConstraints,
-} from "../plugins/server/internal/contracts.ts";
+} from "../plugins/server/shared/contracts.ts";
 
 export type FacadeContext = Readonly<{
   serverScope: ServerAuthorizedScope;

@@ -67,6 +67,6 @@ export type {
   KnowledgeTextExtractor,
   LoadedKnowledgeSource,
   MarkKnowledgeDocumentDuplicateInput,
-} from "./internal/types.ts";
+} from "./shared/types.ts";
 
 export * from "./authoring/tool-resources/index.ts";

@@ -1,12 +1,9 @@
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
-
 import { type InteractiveCliIo, startInteractiveCli } from "./index.ts";
 import type { ApplicationOutput } from "@copilotz/copilotz/application";
 import { createEphemeralEvent } from "@copilotz/copilotz/events";
-import type { CoreMessageInputEnvelope } from "../../../core-collections/authoring/message-input/index.ts";
-
+import type { CoreMessageInputEnvelope } from "../../authoring/message-input/index.ts";
 const encoder = new TextEncoder();
-
 function completedTerminal(chunks: readonly string[]) {
   return Promise.resolve(Object.freeze({
     outcome: "completed" as const,
@@ -16,7 +13,6 @@ function completedTerminal(chunks: readonly string[]) {
     terminalAt: "2026-09-01T12:00:00.000Z",
   }));
 }
-
 function stripCliFormatting(value: string): string {
   for (
     const sequence of [
@@ -28,15 +24,19 @@ function stripCliFormatting(value: string): string {
       "\x1b[35m",
       "\x1b[36m",
     ]
-  ) value = value.replaceAll(sequence, "");
+  ) {
+    value = value.replaceAll(sequence, "");
+  }
   return value;
 }
-
 function streamedText(
   role: "content" | "reasoning",
   streamId: string,
   chunks: readonly string[],
-  agent?: Readonly<{ id: string; name: string }>,
+  agent?: Readonly<{
+    id: string;
+    name: string;
+  }>,
 ): ApplicationOutput {
   return Object.freeze({
     type: "stream.output" as const,
@@ -59,17 +59,21 @@ function streamedText(
     }),
     payload: new ReadableStream<Uint8Array>({
       start(controller) {
-        for (const chunk of chunks) controller.enqueue(encoder.encode(chunk));
+        for (const chunk of chunks) {
+          controller.enqueue(encoder.encode(chunk));
+        }
         controller.close();
       },
     }),
     terminal: completedTerminal(chunks),
   });
 }
-
 function streamedToolCalls(
   chunks: readonly string[],
-  agent?: Readonly<{ id: string; name: string }>,
+  agent?: Readonly<{
+    id: string;
+    name: string;
+  }>,
 ): ApplicationOutput {
   return Object.freeze({
     type: "stream.output" as const,
@@ -92,14 +96,15 @@ function streamedToolCalls(
     }),
     payload: new ReadableStream<Uint8Array>({
       start(controller) {
-        for (const chunk of chunks) controller.enqueue(encoder.encode(chunk));
+        for (const chunk of chunks) {
+          controller.enqueue(encoder.encode(chunk));
+        }
         controller.close();
       },
     }),
     terminal: completedTerminal(chunks),
   });
 }
-
 Deno.test("portable CLI preserves interactive run, rendering, and session commands", async () => {
   const answers = [
     "hello",
@@ -141,9 +146,13 @@ Deno.test("portable CLI preserves interactive run, rendering, and session comman
         const event = createEphemeralEvent({
           type: "text.delta",
           namespace: "tenant-a",
-          threadId: "thread-a",
           payload: { text: "hi", agent: { name: "Support" } },
           correlationId: "correlation-a",
+          metadata: {
+            core: {
+              threadId: "thread-a",
+            },
+          },
         });
         return Promise.resolve({
           eventId: "event-a",
@@ -160,7 +169,6 @@ Deno.test("portable CLI preserves interactive run, rendering, and session comman
       },
     }),
   });
-
   await handle.closed;
   assertEquals(ioClosed, 1);
   assertEquals(messages.length, 1);
@@ -174,7 +182,6 @@ Deno.test("portable CLI preserves interactive run, rendering, and session comman
   assertStringIncludes(rendered, "support-guide: Support guidance");
   assertStringIncludes(rendered, "Ending session. Goodbye.");
 });
-
 Deno.test("portable CLI renders one labelled line for a streamed tool-call draft", async () => {
   const answers = ["what time is it?", "/exit"];
   const output: string[] = [];
@@ -191,9 +198,13 @@ Deno.test("portable CLI renders one labelled line for a streamed tool-call draft
     createEphemeralEvent({
       type,
       namespace: "tenant-a",
-      threadId: "thread-a",
       payload: { ...payload, agent },
       correlationId: "correlation-a",
+      metadata: {
+        core: {
+          threadId: "thread-a",
+        },
+      },
     });
   const events = [
     frame("text.delta", { text: "Checking now." }),
@@ -251,7 +262,9 @@ Deno.test("portable CLI renders one labelled line for a streamed tool-call draft
           correlationId: "correlation-a",
           outputs: new ReadableStream({
             start(controller) {
-              for (const event of events) controller.enqueue(event);
+              for (const event of events) {
+                controller.enqueue(event);
+              }
               controller.close();
             },
           }),
@@ -261,7 +274,6 @@ Deno.test("portable CLI renders one labelled line for a streamed tool-call draft
       },
     }),
   });
-
   await handle.closed;
   const rendered = output.join("");
   assertEquals(rendered.split("tool>\x1b[0m get_current_time").length - 1, 1);
@@ -269,7 +281,6 @@ Deno.test("portable CLI renders one labelled line for a streamed tool-call draft
   assertEquals(rendered.match(/Support>/g)?.length, 2);
   assertStringIncludes(rendered, "It is noon.");
 });
-
 Deno.test("portable CLI renders tool-call NDJSON as one safe tool block", async () => {
   const answers = ["what time is it?", "/exit"];
   const output: string[] = [];
@@ -332,7 +343,9 @@ Deno.test("portable CLI renders tool-call NDJSON as one safe tool block", async 
           correlationId: "correlation-a",
           outputs: new ReadableStream<ApplicationOutput>({
             start(controller) {
-              for (const stream of outputs) controller.enqueue(stream);
+              for (const stream of outputs) {
+                controller.enqueue(stream);
+              }
               controller.close();
             },
           }),
@@ -342,7 +355,6 @@ Deno.test("portable CLI renders tool-call NDJSON as one safe tool block", async 
       },
     }),
   });
-
   await handle.closed;
   const rendered = stripCliFormatting(output.join(""));
   assertEquals(rendered.split("tool> get_current_time").length - 1, 1);
@@ -358,7 +370,6 @@ Deno.test("portable CLI renders tool-call NDJSON as one safe tool block", async 
   assertEquals(rendered.includes("draftId"), false);
   assertEquals(rendered.includes('"phase":"delta"'), false);
 });
-
 Deno.test("portable CLI renders reasoning and answer streams separately", async () => {
   const answers = ["work it out", "/exit"];
   const output: string[] = [];
@@ -391,7 +402,9 @@ Deno.test("portable CLI renders reasoning and answer streams separately", async 
           correlationId: "correlation-a",
           outputs: new ReadableStream<ApplicationOutput>({
             start(controller) {
-              for (const stream of outputs) controller.enqueue(stream);
+              for (const stream of outputs) {
+                controller.enqueue(stream);
+              }
               controller.close();
             },
           }),
@@ -401,7 +414,6 @@ Deno.test("portable CLI renders reasoning and answer streams separately", async 
       },
     }),
   });
-
   await handle.closed;
   const rendered = stripCliFormatting(output.join(""));
   assertStringIncludes(
@@ -410,7 +422,6 @@ Deno.test("portable CLI renders reasoning and answer streams separately", async 
   );
   assertEquals(rendered.includes("the facts.Final answer."), false);
 });
-
 Deno.test("portable CLI uses Core stream agents and renders fragmented Ask drafts safely", async () => {
   const answers = ["coordinate the research", "/exit"];
   const output: string[] = [];
@@ -503,7 +514,9 @@ Deno.test("portable CLI uses Core stream agents and renders fragmented Ask draft
           correlationId: "correlation-a",
           outputs: new ReadableStream<ApplicationOutput>({
             start(controller) {
-              for (const stream of outputs) controller.enqueue(stream);
+              for (const stream of outputs) {
+                controller.enqueue(stream);
+              }
               controller.close();
             },
           }),
@@ -513,7 +526,6 @@ Deno.test("portable CLI uses Core stream agents and renders fragmented Ask draft
       },
     }),
   });
-
   await handle.closed;
   const rendered = stripCliFormatting(output.join(""));
   assertStringIncludes(rendered, "Coordinator thinking> Delegate this.");
@@ -527,7 +539,6 @@ Deno.test("portable CLI uses Core stream agents and renders fragmented Ask draft
   assertEquals(rendered.includes("\\uD83D"), false);
   assertEquals(rendered.split("🚀").length - 1, 1);
 });
-
 Deno.test("portable CLI is factory-first and imports no host terminal API", async () => {
   const source = await Deno.readTextFile(new URL("index.ts", import.meta.url));
   assert(!/^\s*(?:export\s+)?class\s/m.test(source));

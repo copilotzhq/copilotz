@@ -2,26 +2,26 @@
 import { definePlugin, type DefinedPlugin } from "@copilotz/copilotz/plugins";
 import entry0 from "./actions/dispatch-scheduled-message/index.ts";
 import entry1 from "./actions/scheduled-jobs/index.ts";
-import entry2 from "./dependencies/core/index.ts";
-import entry3 from "./dependencies/schedules/index.ts";
-import entry4 from "./processors/dispatch-scheduled-message/index.ts";
-import entry5 from "./resources/tools/scheduled-jobs/index.ts";
+import entry2 from "./processors/dispatch-scheduled-message/index.ts";
+import entry3 from "./resources/tools/scheduled-jobs/index.ts";
+import { corePlugin as dependency0 } from "../core/plugin.ts";
+import { schedulesPlugin as dependency1 } from "../schedules/plugin.ts";
 const definition = {
   id: "@copilotz/core-schedules",
   version: "0.65.1",
+  plugins: [dependency0, dependency1],
   actions: {
     "dispatchScheduledMessage": entry0,
     "scheduled_jobs": entry1,
   },
   processors: {
-    "dispatchScheduledMessage": entry4,
+    "dispatchScheduledMessage": entry2,
   },
   resources: {
     "tools": {
-      "scheduled_jobs": entry5,
+      "scheduled_jobs": entry3,
     },
   },
-  plugins: [entry2, entry3],
 } as const;
 const plugin: DefinedPlugin<typeof definition> = definePlugin(definition);
 export default plugin;

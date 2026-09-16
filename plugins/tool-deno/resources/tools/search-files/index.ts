@@ -1,11 +1,11 @@
-import type { ToolDefinition } from "@copilotz/copilotz/tools";
+import type { ToolDefinition } from "@copilotz/copilotz/core";
 /**
  * Defines the data-only Search Files Tool Resource.
  *
  * @module
  */
 
-import { defineTool } from "@copilotz/copilotz/tools";
+import { defineTool } from "@copilotz/copilotz/core";
 import { searchFilesAction } from "../../../actions/search-files/index.ts";
 
 export const searchFilesTool: ToolDefinition<typeof searchFilesAction> =

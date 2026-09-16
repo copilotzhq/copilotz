@@ -4,13 +4,13 @@ import {
   defineAction,
 } from "@copilotz/copilotz/actions";
 import type { ProcessorContext } from "@copilotz/copilotz/plugins";
-import type { CoreActionContext } from "../../internal/runtime-context.ts";
-import { coreAgent } from "../../internal/runtime-context.ts";
+import type { CoreActionContext } from "../../shared/runtime-context.ts";
+import { coreAgent } from "../../shared/runtime-context.ts";
 import {
   loadCoreThreadMetadata,
   participantAgentId,
-} from "../../processors/internal/helpers.ts";
-import { mapParticipantRecord } from "../../../core-collections/internal/projections.ts";
+} from "../../shared/helpers.ts";
+import { mapParticipantRecord } from "../../shared/projections.ts";
 import { isContextResource } from "../../resources/context/index.ts";
 
 const inputSchema = {

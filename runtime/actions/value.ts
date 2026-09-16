@@ -1,16 +1,6 @@
 import { assertJsonValue } from "../json.ts";
 import type { ActionInvocationMetadata } from "./types.ts";
 
-function freezeValue<T>(value: T): T {
-  if (value && typeof value === "object" && !Object.isFrozen(value)) {
-    for (const child of Object.values(value as Record<string, unknown>)) {
-      freezeValue(child);
-    }
-    Object.freeze(value);
-  }
-  return value;
-}
-
 function invalidMetadata(path: string): never {
   throw new TypeError(
     `Action invocation metadata must be a strict JSON-safe object; invalid value at ${path}.`,
@@ -32,7 +22,7 @@ export function durableActionMetadata(
       { cause },
     );
   }
-  return freezeValue(ordered(value)) as ActionInvocationMetadata;
+  return (ordered(value)) as ActionInvocationMetadata;
 }
 
 /** Normalizes one Action input/output to the exact JSON value EventBodyStore persists. */
@@ -42,7 +32,7 @@ export function durableActionValue(value: unknown): unknown {
     if (text === undefined) {
       throw new TypeError("Value is not JSON serializable.");
     }
-    return freezeValue(JSON.parse(text));
+    return (JSON.parse(text));
   } catch (cause) {
     throw new TypeError("Action input/output must be JSON serializable.", {
       cause,

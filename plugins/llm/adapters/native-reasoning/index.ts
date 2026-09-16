@@ -1,6 +1,6 @@
 /** Shared helpers for bounded provider-native reasoning state. @module */
 
-import type { ChatMessage, ProviderConfig } from "../../internal/types.ts";
+import type { ChatMessage, ProviderConfig } from "../../shared/types.ts";
 
 export type NativeReasoningBlock = Record<string, unknown>;
 

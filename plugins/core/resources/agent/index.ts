@@ -73,12 +73,9 @@ export type AgentInstructionExecution = Readonly<{
 /** Read-only durable Core facts available to a dynamic instruction resolver. */
 export type AgentInstructionContext = Readonly<{
   agent: AgentResource;
-  participant:
-    import("../../../core-collections/internal/contracts.ts").Participant;
-  thread:
-    import("../../../core-collections/internal/contracts.ts").ConversationThread;
-  triggerMessage:
-    import("../../../core-collections/internal/contracts.ts").ConversationMessage;
+  participant: import("../../shared/contracts.ts").Participant;
+  thread: import("../../shared/contracts.ts").ConversationThread;
+  triggerMessage: import("../../shared/contracts.ts").ConversationMessage;
 }>;
 
 export type AgentInstructionResolution = Readonly<{

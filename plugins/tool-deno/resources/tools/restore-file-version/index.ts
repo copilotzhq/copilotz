@@ -1,11 +1,11 @@
-import type { ToolDefinition } from "@copilotz/copilotz/tools";
+import type { ToolDefinition } from "@copilotz/copilotz/core";
 /**
  * Defines the data-only Restore File Version Tool Resource.
  *
  * @module
  */
 
-import { defineTool } from "@copilotz/copilotz/tools";
+import { defineTool } from "@copilotz/copilotz/core";
 import { restoreFileVersionAction } from "../../../actions/restore-file-version/index.ts";
 
 export const restoreFileVersionTool: ToolDefinition<

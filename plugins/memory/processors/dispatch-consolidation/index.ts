@@ -8,32 +8,29 @@ import {
 
 import { defineProcessor, type Processor } from "@copilotz/copilotz/plugins";
 import { deriveWorkflowId } from "@copilotz/copilotz/events";
-import { createThreadMessage } from "../../../core-collections/actions/create-thread-message/index.ts";
+import { createThreadMessage } from "../../../core/actions/create-thread-message/index.ts";
 import {
   buildMemoryConsolidationInstruction,
   isEditoriallyVisible,
 } from "../../authoring/consolidation/index.ts";
 
-import type { MemoryProcessorContext } from "../../internal/contracts.ts";
+import type { MemoryProcessorContext } from "../../shared/contracts.ts";
 import {
   checkpointSourceMessages,
   MemorySourceInvalidatedError,
   projectedSourceMessages,
-} from "../../internal/source.ts";
-import { record, requiredText } from "../../internal/input.ts";
-import { threadMemorySpaces } from "../../internal/access.ts";
-import {
-  activeMemoryRecords,
-  terminalStatus,
-} from "../../internal/retrieval.ts";
+} from "../../shared/source.ts";
+import { record, requiredText } from "../../shared/input.ts";
+import { threadMemorySpaces } from "../../shared/access.ts";
+import { activeMemoryRecords, terminalStatus } from "../../shared/retrieval.ts";
 import {
   captureContextSnapshot,
   frozenSnapshot,
   memoryKinds,
-} from "../../internal/snapshot.ts";
-import { settleCheckpointError } from "../../internal/checkpoints.ts";
-import { activeSpacesForCheckpoint } from "../../actions/consolidate-memory/internal/checkpoint.ts";
-import { memoryTaskMetadata } from "../internal/task.ts";
+} from "../../shared/snapshot.ts";
+import { settleCheckpointError } from "../../shared/checkpoints.ts";
+import { activeSpacesForCheckpoint } from "../../shared/checkpoint.ts";
+import { memoryTaskMetadata } from "../../shared/task.ts";
 
 export const dispatchMemoryConsolidationProcessor: Processor<
   MemoryProcessorContext

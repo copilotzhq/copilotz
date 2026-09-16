@@ -3,12 +3,13 @@ import { definePlugin, type DefinedPlugin } from "@copilotz/copilotz/plugins";
 import entry0 from "./actions/egress/index.ts";
 import entry1 from "./actions/ingress/index.ts";
 import entry2 from "./collections/channel-binding/index.ts";
-import entry3 from "./dependencies/core/index.ts";
-import entry4 from "./processors/egress/index.ts";
-import entry5 from "./processors/ingress/index.ts";
+import entry3 from "./processors/egress/index.ts";
+import entry4 from "./processors/ingress/index.ts";
+import { corePlugin as dependency0 } from "../core/plugin.ts";
 const definition = {
   id: "@copilotz/channels",
   version: "0.65.1",
+  plugins: [dependency0],
   collections: {
     "channelBinding": entry2,
   },
@@ -17,10 +18,9 @@ const definition = {
     "channelIngress": entry1,
   },
   processors: {
-    "channelEgress": entry4,
-    "channelIngress": entry5,
+    "channelEgress": entry3,
+    "channelIngress": entry4,
   },
-  plugins: [entry3],
 } as const;
 const plugin: DefinedPlugin<typeof definition> = definePlugin(definition);
 export default plugin;

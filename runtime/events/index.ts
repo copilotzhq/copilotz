@@ -54,11 +54,9 @@ export type {
   EphemeralEventDraft,
   EventBodyRef,
   EventDelivery,
-  EventRouting,
   EventStoreError,
   EventStoreErrorCode,
   EventSubject,
-  EventVisibility,
   ResolvedCopilotzEvent,
 } from "./types.ts";
 export {

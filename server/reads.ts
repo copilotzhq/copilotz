@@ -6,7 +6,7 @@ import type { HttpReadServices } from "../plugins/server/authoring/http-adapter/
 import type {
   ServerAuthorizedScope,
   ServerConstraints,
-} from "../plugins/server/internal/contracts.ts";
+} from "../plugins/server/shared/contracts.ts";
 
 export async function createHttpReads(
   application: InternalCopilotzApplication,
@@ -40,7 +40,7 @@ export async function createHttpReads(
     }
     return { collection: collections[entry[1].name], schema: entry[1], policy };
   };
-  const read: HttpReadServices = Object.freeze({
+  const read: HttpReadServices = {
     async get(name, id, options) {
       return (await read.list(name, { where: { id }, limit: 1 }, options))[0] ??
         null;
@@ -121,6 +121,6 @@ export async function createHttpReads(
       }
       return value;
     },
-  });
+  } as const;
   return read;
 }

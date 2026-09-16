@@ -20,7 +20,7 @@ import type {
   ChannelEgressActionOutput,
   ChannelJsonObject,
   ChannelResource,
-} from "../../internal/contracts.ts";
+} from "../../shared/contracts.ts";
 import type { ChannelActionContext } from "../ingress/index.ts";
 
 export const CHANNEL_EGRESS_ACTION_ID = "copilotz.channels.egress";

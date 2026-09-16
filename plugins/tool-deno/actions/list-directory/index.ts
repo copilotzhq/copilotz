@@ -17,7 +17,7 @@ interface ListDirectoryParams {
 }
 
 import { defineAction } from "@copilotz/copilotz/actions";
-import { listWorkspaceDirectory } from "../internal/fs-utils.ts";
+import { listWorkspaceDirectory } from "../../shared/fs-utils.ts";
 
 export const listDirectoryAction: ActionDefinition<
   ListDirectoryParams,

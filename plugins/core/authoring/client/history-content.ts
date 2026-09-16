@@ -7,7 +7,7 @@ import type {
   ContentJsonValue,
   ContentRef,
 } from "@copilotz/copilotz/content/codec";
-import type { ConversationMessage } from "../../../core-collections/internal/contracts.ts";
+import type { ConversationMessage } from "../../shared/contracts.ts";
 
 export type ResolvedMessageContent =
   & ContentRef

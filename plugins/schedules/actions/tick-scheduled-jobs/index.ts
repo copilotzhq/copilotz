@@ -12,8 +12,8 @@ import {
 import type {
   ScheduledJobTickInput,
   ScheduledJobTickResult,
-} from "../../internal/contracts.ts";
-import { executeTickScheduledJobs } from "./internal/execute.ts";
+} from "../../shared/contracts.ts";
+import { executeTickScheduledJobs } from "./execute.ts";
 
 export const tickScheduledJobsAction: ActionDefinition<
   ScheduledJobTickInput,

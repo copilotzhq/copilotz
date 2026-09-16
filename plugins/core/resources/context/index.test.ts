@@ -3,7 +3,7 @@ import type { AgentResource } from "../agent/index.ts";
 import type {
   ConversationThread,
   Participant,
-} from "../../../core-collections/internal/contracts.ts";
+} from "../../shared/contracts.ts";
 import type { ProcessorContext } from "@copilotz/copilotz/plugins";
 import {
   collectContextContributions,
@@ -240,8 +240,8 @@ Deno.test("context modules remain factory-first and runtime-neutral", async () =
   for (
     const module of [
       "index.ts",
-      "internal/types.ts",
-      "internal/contributions.ts",
+      "../../shared/types.ts",
+      "../../shared/contributions.ts",
     ]
   ) {
     const source = await Deno.readTextFile(new URL(module, import.meta.url));

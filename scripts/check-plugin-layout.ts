@@ -9,7 +9,6 @@ export const CONCRETE_PLUGIN_ROOTS = [
   "channel-whatsapp",
   "channel-zendesk",
   "core",
-  "core-collections",
   "knowledge",
   "llm",
   "memory",
@@ -81,13 +80,12 @@ export async function validateConcretePlugin(
   const allowed = new Set([
     ...rootFiles,
     "plugin.test.ts",
-    "internal",
+    "shared",
     "actions",
     "collections",
     "processors",
     "resources",
     "adapters",
-    "dependencies",
     "authoring",
   ]);
   for await (const entry of Deno.readDir(root)) {

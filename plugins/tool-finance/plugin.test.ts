@@ -2,7 +2,7 @@
 
 import { assertEquals } from "@std/assert";
 import { financeToolsPlugin } from "./plugin.ts";
-import type { ToolResource } from "@copilotz/copilotz/tools";
+import type { ToolResource } from "@copilotz/copilotz/core";
 
 Deno.test("Finance plugin composes an Action with a data-only Tool Resource", () => {
   const plugin = financeToolsPlugin;

@@ -4,7 +4,7 @@
  * @module
  */
 
-import { defineTool, type ToolResource } from "@copilotz/copilotz/tools";
+import { defineTool, type ToolResource } from "@copilotz/copilotz/core";
 import { scheduledJobsAction } from "../../../actions/scheduled-jobs/index.ts";
 
 export const scheduledJobsToolResource: ToolResource<"scheduled_jobs"> =

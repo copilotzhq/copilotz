@@ -198,11 +198,11 @@ export function createDatabaseScope(
     contentResolver: resolver,
     createId: engine.createId,
     now: options.now,
-    runtimeProjections: Object.freeze({
-      nodeTypes: Object.freeze([
+    runtimeProjections: {
+      nodeTypes: [
         "@copilotz/action-content",
         ...(protectedValues ? [PROTECTED_VALUE_NODE_TYPE] : []),
-      ]),
+      ] as const,
       async projectBody(context, namespace, body, event) {
         if (protectedValues) {
           for (
@@ -223,24 +223,24 @@ export function createDatabaseScope(
           await retainActionInputContent(context, namespace, action, data);
         }
       },
-    }),
+    } as const,
   });
   for (const resource of Object.values(options.registry.collections)) {
     if (isKernelCollection(resource)) collections.bind(resource);
   }
-  const capabilities: DatabaseScopeCapabilities = Object.freeze({
+  const capabilities: DatabaseScopeCapabilities = {
     assets,
     collections,
     streamBodyStore,
     ...(protectedValues ? { protectedValues } : {}),
-  });
+  } as const;
   const deliveryInNamespace = async (namespace: string, id: string) => {
     const delivery = await store.getDelivery(id);
     if (!delivery) return null;
     const event = await store.getEvent(delivery.eventId);
     return event?.namespace === namespace ? delivery : null;
   };
-  const events: CopilotzEngineDatabaseScope["events"] = Object.freeze({
+  const events: CopilotzEngineDatabaseScope["events"] = {
     append(draft, appendOptions) {
       if (
         isReservedActionLifecycleDeduplicationId(draft.deduplicationId)
@@ -278,13 +278,13 @@ export function createDatabaseScope(
         protectedValues,
       });
       const bodyId = `event-body:${draft.namespace}:${deduplicationId}`;
-      const payload = Object.freeze({
-        dataRef: Object.freeze({
+      const payload = {
+        dataRef: {
           eventBodyId: bodyId,
           schemaVersion: 1,
           mediaType: "application/json" as const,
-        }),
-      });
+        } as const,
+      } as const;
       return await coordinator.commitMutation({
         draft: { ...draft, payload },
         matchData: prepared.publicData,
@@ -333,7 +333,7 @@ export function createDatabaseScope(
         loadDurable: () =>
           store.listEvents({
             namespace: filter.namespace,
-            threadId: filter.threadId,
+            metadata: filter.metadata,
             correlationId: filter.correlationId,
             afterPosition: filter.afterPosition,
             limit: 1_000,
@@ -395,8 +395,8 @@ export function createDatabaseScope(
       store.scopeSettlement(namespace, settlementScopeId),
     cancel: (namespace, settlementScopeId, reason) =>
       store.cancelScope(namespace, settlementScopeId, reason),
-  });
-  const deliveries: CopilotzEngineDatabaseScope["deliveries"] = Object.freeze({
+  } as const;
+  const deliveries: CopilotzEngineDatabaseScope["deliveries"] = {
     get: deliveryInNamespace,
     list: (listOptions) => store.listDeliveries(listOptions),
     async retry(namespace, id) {
@@ -413,7 +413,7 @@ export function createDatabaseScope(
       if (!await deliveryInNamespace(namespace, id)) return false;
       return await store.discardDeadLetter(id);
     },
-  });
+  } as const;
   const recover: CopilotzEngineDatabaseScope["recover"] = (recovery = {}) =>
     coordinator.recover({ ...recovery, databaseSchema });
   let progressiveMaintenanceAfter: string | undefined;
@@ -597,7 +597,7 @@ export function createDatabaseScope(
     const operationRetentionMs = maintenanceOptions.operationRetentionMs ??
       DEFAULT_OPERATION_REPLAY_RETENTION_MS;
     const expired = maintenanceOptions.operationRetentionMs === null
-      ? Object.freeze([])
+      ? ([] as const)
       : await options.operationCatalog.listExpiredObservationStreams({
         now: maintenanceOptions.now,
         operationRetentionMs,
@@ -652,19 +652,19 @@ export function createDatabaseScope(
       ) prunedCatalogEntries += 1;
     }
     const terminal = maintenanceOptions.operationRetentionMs === null
-      ? Object.freeze({ streams: 0, events: 0, operations: 0 })
+      ? ({ streams: 0, events: 0, operations: 0 } as const)
       : await options.operationCatalog.pruneTerminalMetadata({
         now: maintenanceOptions.now,
         retentionMs: operationRetentionMs,
         limit: maintenanceOptions.limit,
       });
-    const result: CopilotzEngineMaintenanceResult = Object.freeze({
+    const result: CopilotzEngineMaintenanceResult = {
       recovered: recovery.handles.length,
       dispatchFailures: recovery.failures.length,
-      compacted: Object.freeze(compacted),
+      compacted: compacted,
       progressiveBodies,
       assets: assetMaintenance,
-      operations: Object.freeze({
+      operations: {
         reconciled,
         reconciledStreams,
         expiredObservationStreams: expired.length,
@@ -673,15 +673,15 @@ export function createDatabaseScope(
         prunedTerminalStreams: terminal.streams,
         prunedOperationEvents: terminal.events,
         prunedOperations: terminal.operations,
-      }),
-    });
+      } as const,
+    } as const;
     return result;
   };
-  const publicScope: CopilotzEngineDatabaseScope = Object.freeze({
+  const publicScope: CopilotzEngineDatabaseScope = {
     databaseSchema,
-    content: Object.freeze({ assets, preparer: options.preparer, resolver }),
+    content: { assets, preparer: options.preparer, resolver } as const,
     collections,
-    streams: Object.freeze({
+    streams: {
       async follow(namespace: string, input: ContentStreamFollowInput) {
         const follower = await createContentStreamRuntime({
           namespace,
@@ -709,15 +709,15 @@ export function createDatabaseScope(
         const end = Math.min(input.end, bytes.byteLength);
         return bytes.slice(start, end);
       },
-    }),
+    } as const,
     operations: options.operationCatalog,
     events,
     deliveries,
     recover,
     maintenance,
-  });
+  } as const;
 
-  return Object.freeze({
+  return ({
     public: publicScope,
     store,
     coordinator,
@@ -725,5 +725,5 @@ export function createDatabaseScope(
     streamBodyStore,
     transients: options.transients,
     operationCatalog: options.operationCatalog,
-  });
+  } as const);
 }

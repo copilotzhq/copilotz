@@ -14,9 +14,9 @@ export function createTransientProcessorSet(
   initial: readonly Processor[] = [],
 ): TransientProcessorSet {
   const processors: Processor[] = [...initial];
-  return Object.freeze({
+  return ({
     list() {
-      return Object.freeze([...processors]);
+      return ([...processors] as const);
     },
     get(id) {
       return processors.find((processor) => processor.id === id);
@@ -31,11 +31,9 @@ export function createTransientProcessorSet(
       };
     },
     match(event, data) {
-      return Object.freeze(
-        processors.filter((processor) =>
-          matchProcessor(processor, event, data)
-        ),
-      );
+      return (processors.filter((processor) =>
+        matchProcessor(processor, event, data)
+      ));
     },
-  });
+  } as const);
 }

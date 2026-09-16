@@ -8,16 +8,6 @@ const SECRET_DISCLOSURE_KEYWORDS = new Set([
   "example",
 ]);
 
-function deepFreeze<T>(value: T): T {
-  if (!value || typeof value !== "object" || Object.isFrozen(value)) {
-    return value;
-  }
-  for (const nested of Object.values(value as Record<string, unknown>)) {
-    deepFreeze(nested);
-  }
-  return value;
-}
-
 function jsonEnvelope(
   data: Readonly<Record<string, unknown>>,
   pageInfo = false,
@@ -236,7 +226,7 @@ export function openApi(
     item[route.endpoint.method.toLowerCase()] = operationObject(route);
     paths[path] = item;
   }
-  return deepFreeze(projectOpenApiSecrets({
+  return (projectOpenApiSecrets({
     openapi: "3.2.0",
     info: { title: "Copilotz Server", version: "0.66.0" },
     paths,

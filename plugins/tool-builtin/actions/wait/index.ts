@@ -1,13 +1,13 @@
 import type { ActionContext } from "@copilotz/copilotz/actions";
 import type { ActionDefinition } from "@copilotz/copilotz/actions";
-import { defaultSleep } from "../internal/sleep.ts";
+import { defaultSleep } from "./sleep.ts";
 /** Built-in Action that waits with cancellation support.
  *
  * @module
  */
 
 import { defineAction } from "@copilotz/copilotz/actions";
-import { record } from "../internal/input.ts";
+import { record } from "../../shared/input.ts";
 
 export const waitAction: ActionDefinition<
   unknown,

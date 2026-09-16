@@ -3,7 +3,7 @@ import {
   definePromptInstructionResource,
   isPromptInstructionResource,
 } from "./index.ts";
-import { collectPromptInstructions } from "./internal/collection.ts";
+import { collectPromptInstructions } from "../../processors/message-router/collection.ts";
 
 Deno.test("PromptInstructionResource validates, normalizes text, and freezes", () => {
   const instruction = definePromptInstructionResource({

@@ -20,7 +20,7 @@ export {
 } from "./plugin.ts";
 export { dispatchScheduledMessageProcessor } from "./processors/index.ts";
 export { scheduledJobsToolResource } from "./resources/index.ts";
-export { CORE_SCHEDULED_MESSAGE_PAYLOAD_TYPE } from "./internal/contracts.ts";
+export { CORE_SCHEDULED_MESSAGE_PAYLOAD_TYPE } from "./shared/contracts.ts";
 export type {
   CoreScheduledMessageInput,
   CoreScheduledMessageJob,
@@ -30,4 +30,4 @@ export type {
   CoreScheduledMessageSender,
   CoreScheduledMessageThread,
   DispatchScheduledMessageResult,
-} from "./internal/contracts.ts";
+} from "./shared/contracts.ts";

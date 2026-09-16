@@ -29,7 +29,5 @@ plans and removed migration APIs are intentionally not published.
 
 ## Database upgrade
 
-- [Migrate the exact 0.47/0.48 legacy graph to v4](migration-v4.md)
-
 `../ARCHITECTURE.md` is the first-principles architecture authority. The
 package's actual public entrypoints are the `exports` in `../deno.json`.

@@ -140,11 +140,10 @@ See [Goal runner](./docs/goals.md).
 | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------- |
 | Application        | root factory; `/application` types                                                                                                    |
 | Generic primitives | `/actions`, `/collections`, `/content`, `/streams`, `/events`, `/plugins`, `/persistence`                                             |
-| AI harness         | `/core`, `/llm`, `/llm/tokens`, `/tools`, `/skills`, `/knowledge`, `/memory`, `/goals`, `/usage`, `/usage/client`                     |
+| AI harness         | `/core`, `/llm`, `/llm/tokens`, `/skills`, `/knowledge`, `/memory`, `/goals`, `/usage`, `/usage/client`                               |
 | Integrations       | `/channels`, `/schedules`, `/schedules/core`, `/admin`, `/server`                                                                     |
 | Host capabilities  | `/adapters/deno`, `/core/cli`, `/core/cli/node`, `/skills/deno`, `/tools/deno`, `/tools/mcp/stdio`, `/tools/persistent-terminal/deno` |
-| Tool factories     | `/tools/builtin`, `/tools/finance`, `/tools/mcp`, `/tools/openapi`, `/tools/persistent-terminal`, `/tools/web`                        |
-| Database upgrade   | `/migration/v4`                                                                                                                       |
+| Tool providers     | `/tools/builtin`, `/tools/finance`, `/tools/mcp`, `/tools/openapi`, `/tools/persistent-terminal`, `/tools/web`                        |
 
 The authoritative export list is `deno.json`. There are no `/domain`,
 `/attachments`, generic `/adapters`, `/adapters/node`, or legacy migration
@@ -162,7 +161,6 @@ subpaths.
 - [Server façade](docs/server.md)
 - [Progressive streams](docs/streams.md)
 - [Embedding, Gateway, and Worker roles](docs/embedding-and-hypervisors.md)
-- [Legacy 0.47/0.48 to v4 migration](docs/migration-v4.md)
 
 The first-principles contract is [ARCHITECTURE.md](ARCHITECTURE.md).
 

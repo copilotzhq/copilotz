@@ -9,4 +9,12 @@ export {
   channelsPlugin,
 } from "./plugin.ts";
 export * from "./processors/index.ts";
-export * from "./internal/contracts.ts";
+export * from "./shared/contracts.ts";
+export { channelProviderOptions } from "./shared/provider-options.ts";
+export {
+  outboundText,
+  providerRecord,
+  requestHeader,
+  requiredProviderText,
+  timingSafeTextEqual,
+} from "./shared/helpers.ts";

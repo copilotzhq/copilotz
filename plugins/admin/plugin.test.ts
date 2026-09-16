@@ -10,7 +10,7 @@ import {
 import { corePlugin, message } from "../core/index.ts";
 import { usagePlugin } from "../usage/index.ts";
 import { adminPlugin } from "./plugin.ts";
-import { createTestDomainContext } from "../core/internal/testing/context.ts";
+import { createTestDomainContext } from "../core/shared/testing/context.ts";
 
 const SCHEMA = "copilotz_admin_plugin";
 const NAMESPACE = "tenant-a";
@@ -206,9 +206,9 @@ Deno.test("admin plugin remains factory-first, runtime-neutral, and storage-opaq
   for (
     const module of [
       "plugin.ts",
-      "internal/contracts.ts",
-      "actions/internal/request.ts",
-      "actions/internal/projections.ts",
+      "shared/contracts.ts",
+      "shared/request.ts",
+      "shared/projections.ts",
       "actions/overview/index.ts",
       "actions/activity/index.ts",
       "actions/threads/index.ts",

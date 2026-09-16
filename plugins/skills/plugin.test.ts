@@ -190,7 +190,7 @@ Deno.test("skills plugins own disclosure tools and preserve stable-ID overrides"
 Deno.test("skill core remains factory-first and runtime-neutral", async () => {
   for (
     const module of [
-      "resources/skill/internal/parser.ts",
+      "shared/parser.ts",
       "plugin.ts",
       "resources/skill/index.ts",
       "authoring/action-resources/index.ts",

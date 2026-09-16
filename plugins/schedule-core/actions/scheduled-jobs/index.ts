@@ -34,13 +34,13 @@ import type {
   CoreScheduledMessagePayload,
   CoreScheduledMessageSender,
   CoreScheduledMessageThread,
-} from "../../internal/contracts.ts";
-import type { CoreResources } from "../../../core/internal/runtime-context.ts";
-import { coreToolActionMetadata } from "../../../core/internal/workflow-metadata.ts";
+} from "../../shared/contracts.ts";
+import type { CoreResources } from "@copilotz/copilotz/core";
+import { coreToolActionMetadata } from "@copilotz/copilotz/core";
 import {
   resolveScheduledRecipientSelection,
   type ScheduledRecipientSelection,
-} from "../../internal/recipients.ts";
+} from "../../shared/recipients.ts";
 
 type ScheduledJobsToolAction =
   | "create"

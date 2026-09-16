@@ -401,14 +401,16 @@ export function applicationOutputsMultipartResponse(
           part(
             boundary,
             "output",
-            encoder.encode(JSON.stringify(Object.freeze({
-              type: "replay.capacity",
-              code: "operation_replay_capacity_exceeded",
-              ...(source.operationId
-                ? { operationId: source.operationId }
-                : {}),
-              ...(source.threadId ? { threadId: source.threadId } : {}),
-            }))),
+            encoder.encode(JSON.stringify(
+              {
+                type: "replay.capacity",
+                code: "operation_replay_capacity_exceeded",
+                ...(source.operationId
+                  ? { operationId: source.operationId }
+                  : {}),
+                ...(source.threadId ? { threadId: source.threadId } : {}),
+              } as const,
+            )),
             { cursor: replayCursor },
           )
         ).catch(() => undefined);

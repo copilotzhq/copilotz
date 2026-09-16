@@ -1,11 +1,11 @@
-import type { ToolDefinition } from "@copilotz/copilotz/tools";
+import type { ToolDefinition } from "@copilotz/copilotz/core";
 import type { ActionDefinition } from "@copilotz/copilotz/actions";
-import { defineTool } from "@copilotz/copilotz/tools";
+import { defineTool } from "@copilotz/copilotz/core";
 import type { ActionSchema } from "@copilotz/copilotz/actions";
 import {
   availableSkills,
   type SkillActionContext,
-} from "../../../internal/tool-context.ts";
+} from "../../../shared/tool-context.ts";
 export const listSkillsTool: ToolDefinition<
   ActionDefinition<unknown, unknown, SkillActionContext>
 > = defineTool<

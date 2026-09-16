@@ -1,11 +1,11 @@
-import type { ToolDefinition } from "@copilotz/copilotz/tools";
+import type { ToolDefinition } from "@copilotz/copilotz/core";
 import { fetchAssetAction } from "../../../actions/fetch-asset/index.ts";
 /** Data-only Tool Resource for the fetch-asset Action.
  *
  * @module
  */
 
-import { defineTool } from "../../../../tools/authoring/define-tool/index.ts";
+import { defineTool } from "../../../../core/authoring/define-tool/index.ts";
 
 export const fetchAssetToolResource: ToolDefinition<typeof fetchAssetAction> =
   defineTool({

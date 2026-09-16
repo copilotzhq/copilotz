@@ -1,7 +1,10 @@
 /** Defines the data-only Ask Tool Resource over Core's Ask Action. @module */
 
-import { defineTool, type ToolResource } from "@copilotz/copilotz/tools";
-import { askAction } from "../../../../core-collections/actions/ask/index.ts";
+import {
+  defineTool,
+  type ToolResource,
+} from "../../../authoring/define-tool/index.ts";
+import { askAction } from "../../../actions/ask/index.ts";
 
 export const askTool: ToolResource<"ask"> = defineTool("ask", askAction, {
   name: "Ask Agent",

@@ -1,13 +1,13 @@
 /** Projects terminal Tool Action facts into their durable plan branch. @module */
 
 import { defineProcessor, type Processor } from "@copilotz/copilotz/plugins";
-import type { CoreToolProcessorContext } from "../../internal/runtime-context.ts";
-import { CORE_TOOL_ACTION_METADATA_SCHEMA } from "../../internal/workflow-metadata.ts";
+import type { CoreToolProcessorContext } from "../../shared/runtime-context.ts";
+import { CORE_TOOL_ACTION_METADATA_SCHEMA } from "../../shared/workflow-metadata.ts";
 import {
   coreToolTerminal,
   projectAndAdvanceToolPlan,
-} from "../../internal/tool-plan.ts";
-import { asRecord } from "../internal/helpers.ts";
+} from "../../shared/tool-plan.ts";
+import { asRecord } from "../../shared/helpers.ts";
 
 export const projectToolResultProcessor: Processor<
   CoreToolProcessorContext

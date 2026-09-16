@@ -13,7 +13,7 @@ import {
   type LlmInvocation,
   type LlmRejectedAttemptEvidence,
   normalizeLlmAdapter,
-} from "../../internal/contracts.ts";
+} from "../../shared/contracts.ts";
 
 export { LlmAdapterCallError };
 export type {

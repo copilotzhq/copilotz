@@ -136,12 +136,12 @@ function mergeIdentity(
 ): RuntimeIdentity | undefined {
   if (!parent) return child;
   if (!child) return parent;
-  return Object.freeze({
+  return ({
     causationId: child.causationId ?? parent.causationId,
     correlationId: child.correlationId ?? parent.correlationId,
     deduplicationId: child.deduplicationId ?? parent.deduplicationId,
     settlementScopeId: child.settlementScopeId ?? parent.settlementScopeId,
-  });
+  } as const);
 }
 
 /**
@@ -163,13 +163,13 @@ export function actionTransactionIdentity(
     !causationId && !correlationId && !settlementScopeId &&
     !deduplicationId && !metadata
   ) return undefined;
-  return Object.freeze({
+  return ({
     ...(causationId ? { causationId } : {}),
     ...(correlationId ? { correlationId } : {}),
     ...(deduplicationId ? { deduplicationId } : {}),
     ...(settlementScopeId ? { settlementScopeId } : {}),
     ...(metadata ? { metadata } : {}),
-  });
+  } as const);
 }
 
 function throwIfAborted(signal: AbortSignal | undefined): void {
@@ -194,23 +194,23 @@ function safeError(
     return result;
   };
   if (error instanceof Error) {
-    return Object.freeze({
+    return ({
       name: error.name || "Error",
       message: redact(error.message || error.name || "Action failed."),
-    });
+    } as const);
   }
-  return Object.freeze({ name: "Error", message: redact(String(error)) });
+  return ({ name: "Error", message: redact(String(error)) } as const);
 }
 
 function protectedActionError(
   cancelled: boolean,
 ): SerializedActionError {
-  return Object.freeze({
+  return ({
     name: cancelled ? "AbortError" : "Error",
     message: cancelled
       ? "Action execution was cancelled."
       : "Action execution failed.",
-  });
+  } as const);
 }
 
 function isRedactedSecret(value: unknown): boolean {
@@ -254,9 +254,7 @@ function protectedStrings(
     }
   };
   visit(value, projected);
-  return Object.freeze(
-    [...strings].sort((left, right) => right.length - left.length),
-  );
+  return ([...strings].sort((left, right) => right.length - left.length));
 }
 
 function assertMetadataIsSecretFree(
@@ -337,7 +335,7 @@ function createFrame(
     ? `${rootKey}/action:${action.id}:${localKey}`
     : `${rootKey}/action:${action.id}`;
   let actionIndex = 0;
-  return Object.freeze({
+  return ({
     actionId: action.id,
     actionRunId,
     rootKey,
@@ -347,7 +345,7 @@ function createFrame(
     ...(identity ? { identity } : {}),
     signal,
     nextActionIndex: () => ++actionIndex,
-  });
+  } as const);
 }
 
 function lifecycleCommon(
@@ -728,7 +726,7 @@ function actionCaller(
       );
     },
   });
-  return Object.freeze(caller) as BoundActionCaller<AnyActionDefinition>;
+  return caller as BoundActionCaller<AnyActionDefinition>;
 }
 
 /** Builds the single direct Action API from the composed Action alias map. */
@@ -742,5 +740,5 @@ export function createActionCallers<const TActions extends ActionMap>(
     callerDefinitionIds.set(caller as object, action.id);
     return [requireAlias(rawAlias), caller] as const;
   });
-  return Object.freeze(Object.fromEntries(entries)) as ActionCallers<TActions>;
+  return (Object.fromEntries(entries)) as ActionCallers<TActions>;
 }

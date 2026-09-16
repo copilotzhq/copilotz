@@ -1,3 +1,4 @@
+import type { VectorWrite } from "@copilotz/copilotz/actions";
 import { memoryConfig } from "../../resources/memory/config/index.ts";
 /** Validates and commits one semantic-memory consolidation proposal. @module */
 import {
@@ -33,12 +34,12 @@ import type {
   ConsolidateMemoryActionInput,
   ConsolidateMemoryActionResult,
   MemoryActionContext,
-} from "../../internal/contracts.ts";
+} from "../../shared/contracts.ts";
 import {
   checkpointSourceMessages,
   MemorySourceInvalidatedError,
-} from "../../internal/source.ts";
-import { optionalText, record, requiredText } from "../../internal/input.ts";
+} from "../../shared/source.ts";
+import { optionalText, record, requiredText } from "../../shared/input.ts";
 import {
   assertedBy,
   draftData,
@@ -48,28 +49,28 @@ import {
   sourceCatalog,
   stableJson,
   validateMemoryKindData,
-} from "./internal/proposal.ts";
+} from "./proposal.ts";
 import {
   commitMemoryConsolidation,
   type MemoryRecordWrite,
   type MemoryRelationWrite,
-} from "./internal/commit.ts";
-import { threadMemorySpaces } from "../../internal/access.ts";
+} from "./commit.ts";
+import { threadMemorySpaces } from "../../shared/access.ts";
 import {
   activeMemoryRecords,
   candidateRecords,
   finiteEmbedding,
   lexicalScore,
   terminalStatus,
-} from "../../internal/retrieval.ts";
-import { frozenSnapshot, memoryKinds } from "../../internal/snapshot.ts";
+} from "../../shared/retrieval.ts";
+import { frozenSnapshot, memoryKinds } from "../../shared/snapshot.ts";
 import {
   activeSpacesForCheckpoint,
   checkpointForConsolidation,
   prepareCheckpointSettlement,
   settleCheckpoint,
-} from "./internal/checkpoint.ts";
-import { settleCheckpointError } from "../../internal/checkpoints.ts";
+} from "../../shared/checkpoint.ts";
+import { settleCheckpointError } from "../../shared/checkpoints.ts";
 
 export const CONSOLIDATE_MEMORY_ACTION_ID =
   "copilotz.memory.consolidation.commit";
@@ -171,6 +172,13 @@ export const consolidateMemoryAction: ActionDefinition<
     const checkpointId = requiredText(checkpoint.id, "Memory checkpoint id");
     const raw = proposal;
     const embed = context.adapters.memoryEmbedding?.default;
+    const profile = context.resources.memory?.embeddingProfile;
+    if (embed && !profile) {
+      throw new Error(
+        "Memory embedding requires resources.memory.embeddingProfile.",
+      );
+    }
+    const vectors: VectorWrite[] = [];
     if (checkpoint.status === "ready") {
       const prior = record(record(checkpoint.metadata).result);
       const outcome = optionalText(prior.outcome);
@@ -363,7 +371,6 @@ export const consolidateMemoryAction: ActionDefinition<
           continue;
         }
         const id = localIds.get(draft.localId)!;
-        let embedding: readonly number[] | null = null;
         if (embed) {
           const values = await embed([draft.summary], {
             agent,
@@ -374,7 +381,15 @@ export const consolidateMemoryAction: ActionDefinition<
           if (!finiteEmbedding(values[0])) {
             throw new Error("Memory embedder returned an invalid vector.");
           }
-          embedding = values[0];
+          vectors.push({
+            ownerType: "memory_record",
+            ownerId: id,
+            field: "summary",
+            sourceField: "summary",
+            source: draft.summary,
+            values: values[0],
+            profile: profile!,
+          });
         }
         const status = intentOrInquiryStatus(
           form,
@@ -416,7 +431,6 @@ export const consolidateMemoryAction: ActionDefinition<
             consolidationId: checkpointId,
           },
           data,
-          embedding,
           metadata: {},
         };
         createdRecords.set(id, newRecord);
@@ -635,6 +649,7 @@ export const consolidateMemoryAction: ActionDefinition<
       await commitMemoryConsolidation(context, {
         checkpointId,
         records: recordWrites,
+        vectors,
         relations: relationWrites,
         checkpointPatch: settlement.patch,
         checkpointContent: settlement.content,

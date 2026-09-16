@@ -1,88 +1,47 @@
 # Plugin ownership and layout audit
 
-Date: 2026-09-15. Inspected implementation: local commit `7e06bfb`.
+## Completed structure
 
-## Decisions
+- Core owns its collections, Actions, Processors and Tool authoring. The
+  `core-collections` and `tools` roots and their export shims are removed.
+- Optional Tool providers stay independent. OpenAPI and MCP contracts live with
+  their owning providers.
+- All 23 concrete roots compose through generated declarations. Manifest
+  `plugins: [{from, export}]` replaces dependency forwarding directories.
+- Plugin `internal` and `dependencies` directories are removed. The build
+  rejects those conventions and excludes `shared` from discovery.
+- A single-primitive helper sits in that primitive's module. `shared` is
+  reserved for real reuse across different primitives. Public authoring APIs
+  stay under `authoring`.
 
-- Merge Core Collections and Tool authoring into Core; remove obsolete roots and
-  export shims. Optional provider/native tool plugins remain independent.
-- Eliminate plugin `internal` and `dependencies` folders. Shared code must serve
-  different primitives; a single-primitive helper belongs in that module.
-- Use direct manifest dependency imports instead of one-file dependency
-  re-exports.
-- No legacy data migration/backfill or compatibility implementation is required.
-  Planning does not authorize deleting a database.
+## Ownership evidence
 
-## Initial inventory
+The initial inventory contained 119 production helper/dependency files. After
+Core consolidation and provider-contract separation, import-symbol resolution
+was used to follow direct and transitive consumers, including worker URL
+imports. Tests, test support and re-export-only barrels do not count as
+primitive owners. 141 helper, test and support files were relocated. The final
+inventory contains 71 production `shared` modules, each with at least two
+distinct primitive owners.
 
-The static import/re-export triage found 119 production files in helper or
-plugin dependency folders. Tests and test-support directories were excluded.
-Transitive consumers were followed through helper/barrel imports. This is an
-initial move-map input, not proof every helper is classified: confirm worker and
-dynamic imports, ownership after the merge and public API consumers manually.
+Representative decisions:
 
-| Plugin/family    | Files |
-| ---------------- | ----: |
-| admin            |     3 |
-| channel-core     |     4 |
-| channel-discord  |     3 |
-| channel-telegram |     3 |
-| channel-web      |     1 |
-| channel-whatsapp |     3 |
-| channel-zendesk  |     3 |
-| core             |    21 |
-| core-collections |     4 |
-| knowledge        |     8 |
-| llm              |    21 |
-| memory           |    15 |
-| schedule-core    |     4 |
-| schedules        |     6 |
-| server           |     1 |
-| skills           |     3 |
-| tool-builtin     |     4 |
-| tool-deno        |     1 |
-| tool-finance     |     5 |
-| tool-mcp         |     1 |
-| tool-web         |     1 |
-| tools            |     2 |
-| usage            |     2 |
+| Module family                                          | Location and reason                                                           |
+| ------------------------------------------------------ | ----------------------------------------------------------------------------- |
+| Core action validation, history and Tool-plan helpers  | Core `shared`; reused by Actions and Processors.                              |
+| Core Agent instruction rendering                       | Message Router module; one Processor owns it.                                 |
+| Core capability resolver and public types              | Core `authoring/capabilities`; explicit public authoring API.                 |
+| LLM request execution, HTTP and provider orchestration | Bridge Adapter module.                                                        |
+| Channel provider transport and contracts               | Respective provider Adapter module where it is the sole consumer.             |
+| Memory input, access, retrieval and source policy      | Memory `shared`; multiple Actions, Processors and Resources use them.         |
+| Memory proposal and commit helpers                     | Consolidate Memory Action module.                                             |
+| Knowledge chunker                                      | Index Document Action module.                                                 |
+| Finance clients and providers                          | Finance Action module.                                                        |
+| Tool serialization and generated alias helpers         | Core shared authoring support with public exports used by optional providers. |
 
-## Concrete moves and boundaries
+Generic runtime tests use a test-only storage primitive fixture. It is excluded
+from publishing and does not reintroduce a production compatibility plugin.
 
-- Core `thread-metadata`: only Message Router is a resolved production consumer;
-  put it with that Processor, reviewing/removing obsolete legacy key handling.
-- Core Collections action validation: used by five Actions; move to Core shared
-  after the merge rather than duplicating it in each Action.
-- Memory input utilities: multiple Actions, Processors and prompt-context
-  Resource consumers; genuine Memory shared code.
-- Channel provider transport helpers: keep with their Adapter primitive. The
-  provider-options resolver has multiple provider-Adapter consumers and needs a
-  deliberate Channel Core public helper surface.
-- Knowledge config/input utilities: shared across indexing/search/ingest/delete
-  Actions; shared is justified, but embedding and search semantics stay owned by
-  Knowledge, not runtime.
-- Finance provider helpers: the initial graph resolves to one Finance Action;
-  place them within that primitive, subject to public export review.
-- Tool lifecycle JSON helper: multiple primitive/provider consumers; determine
-  whether Core authoring should publicly own the domain contract or each
-  provider only needs existing generic JSON validation. Do not create a private
-  cross-plugin shared import or move provider behavior into Core.
-- Tools integration-resources contains OpenAPI/MCP-specific contracts. Split
-  ownership to those provider plugins while moving defineTool/ToolResource into
-  Core. Merging directories blindly would create new domain leaks.
-- Core's llm/collections dependency files are re-export stubs, not shared logic.
-  Remove the collections dependency after merging ownership; express LLM as a
-  direct manifest import. Apply the same rule to other plugin dependency stubs.
-
-## Implementation rule
-
-For each helper, record source, owning primitive(s), public consumers and
-target. A helper shared by two files inside one primitive is still
-primitive-local. A transitive helper serving distinct primitives can be shared
-even if only one helper imports it directly. Test files do not count as
-independent production consumers. Generated files, worker URLs and public
-barrels must be checked.
-
-Keep the ownership map and the build/layout checks in sync. Shared files must
-never be convention-discovered as primitive registrations. Do not add runtime
-factories, service locators, automatic plugin discovery or unnecessary freezing.
+No plugin factory wrappers, runtime discovery, or new dependency registries are
+introduced. Production freezing wrappers and their redundant recursive walks
+have been removed; required snapshot copies remain.

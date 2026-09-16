@@ -32,7 +32,7 @@ function optionalText(value: string | undefined): string | undefined {
 function safeError(error: SerializedActionError): SerializedActionError {
   const name = requireText(error.name, "Action error name");
   const message = requireText(error.message, "Action error message");
-  return Object.freeze({ name, message });
+  return ({ name, message } as const);
 }
 
 function eventData(input: ActionLifecycleInput): ActionEventData {
@@ -50,7 +50,7 @@ function eventData(input: ActionLifecycleInput): ActionEventData {
   };
   switch (input.status) {
     case "invoked":
-      return Object.freeze({ ...base, status: "invoked" });
+      return ({ ...base, status: "invoked" } as const);
     case "progress": {
       if (
         !Number.isSafeInteger(input.progressIndex) || input.progressIndex < 1
@@ -59,26 +59,26 @@ function eventData(input: ActionLifecycleInput): ActionEventData {
           "Action progress index must be a positive safe integer.",
         );
       }
-      return Object.freeze({
+      return ({
         ...base,
         status: "progress",
         progressIndex: input.progressIndex,
         progress: durableActionValue(input.progress),
-      });
+      } as const);
     }
     case "completed":
-      return Object.freeze({
+      return ({
         ...base,
         status: "completed",
         output: durableActionValue(input.output),
-      });
+      } as const);
     case "failed":
     case "cancelled":
-      return Object.freeze({
+      return ({
         ...base,
         status: input.status,
         error: safeError(input.error),
-      });
+      } as const);
   }
 }
 
@@ -91,7 +91,7 @@ export function createActionLifecycleEmitter(
   }>,
 ): ActionLifecycleEmitter {
   const namespace = requireText(input.namespace, "Action namespace");
-  const originMetadata = Object.freeze(structuredClone(input.metadata ?? {}));
+  const originMetadata = structuredClone(input.metadata ?? {});
   const load = async (
     actionRunId: string,
     suffix: "invoked" | "terminal",
@@ -105,7 +105,7 @@ export function createActionLifecycleEmitter(
     }
     return data;
   };
-  return Object.freeze({
+  return ({
     emit(event) {
       const data = eventData(event);
       return input.append({
@@ -158,5 +158,5 @@ export function createActionLifecycleEmitter(
       }
       return data;
     },
-  });
+  } as const);
 }

@@ -5,10 +5,10 @@ import type {
   ServerCollectionExposure,
   ServerFacadeResource,
   ServerPatternPolicy,
-} from "../../internal/contracts.ts";
-import { DEFAULT_SERVER_ASSET_UPLOAD_BYTES as defaultMaxAssetUploadBytes } from "../../internal/contracts.ts";
+} from "../../shared/contracts.ts";
+import { DEFAULT_SERVER_ASSET_UPLOAD_BYTES as defaultMaxAssetUploadBytes } from "../../shared/contracts.ts";
 
-export { DEFAULT_SERVER_ASSET_UPLOAD_BYTES } from "../../internal/contracts.ts";
+export { DEFAULT_SERVER_ASSET_UPLOAD_BYTES } from "../../shared/contracts.ts";
 
 function plainRecord(value: unknown, label: string): Record<string, unknown> {
   if (
@@ -169,4 +169,4 @@ export type {
   ServerExposureOptions,
   ServerFacadeResource,
   ServerPatternPolicy,
-} from "../../internal/contracts.ts";
+} from "../../shared/contracts.ts";

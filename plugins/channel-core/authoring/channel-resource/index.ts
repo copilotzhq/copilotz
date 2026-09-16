@@ -7,7 +7,7 @@
 import type {
   ChannelJsonObject,
   ChannelResource,
-} from "../../internal/contracts.ts";
+} from "../../shared/contracts.ts";
 import { cloneChannelJson } from "../channel-ingress/index.ts";
 
 const RESOURCE_KEYS = new Set([

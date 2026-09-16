@@ -1,12 +1,10 @@
 import { assertEquals } from "@std/assert";
-
 import type { CopilotzEvent, DurableEvent, EphemeralEvent } from "./types.ts";
 import {
   createCopilotzEventHub,
   matchesCopilotzEvent,
   waitForCopilotzEvent,
 } from "./hub.ts";
-
 const durable: DurableEvent = Object.freeze({
   durable: true,
   id: "event-a",
@@ -14,31 +12,26 @@ const durable: DurableEvent = Object.freeze({
   schemaVersion: 1,
   type: "message.created",
   namespace: "tenant-a",
-  threadId: "thread-a",
   subject: { type: "message", id: "message-a" },
   payload: { messageId: "message-a" },
-  routing: {},
-  visibility: { kind: "public" as const },
-  metadata: { nested: { phase: "answer", retained: true } },
+  metadata: {
+    core: { threadId: "thread-a" },
+    nested: { phase: "answer", retained: true },
+  },
   correlationId: "correlation-a",
   createdAt: "2026-08-06T00:00:00.000Z",
 });
-
 const ephemeral: EphemeralEvent = Object.freeze({
   durable: false,
   type: "text.delta",
   namespace: "tenant-a",
-  threadId: "thread-a",
   payload: { text: "hello" },
-  routing: {},
-  visibility: { kind: "public" as const },
-  metadata: {},
+  metadata: { core: { threadId: "thread-a" } },
   correlationId: "correlation-a",
   streamId: "stream-a",
   sequence: 1,
   createdAt: "2026-08-06T00:00:00.000Z",
 });
-
 Deno.test("event hub filters durable replay and live ephemeral vocabulary", async () => {
   assertEquals(
     matchesCopilotzEvent(durable, {
@@ -53,12 +46,15 @@ Deno.test("event hub filters durable replay and live ephemeral vocabulary", asyn
     }),
     false,
   );
-
   const hub = createCopilotzEventHub();
   const reader = hub.subscribe({
     namespace: "tenant-a",
-    threadId: "thread-a",
     types: ["text.delta"],
+    metadata: {
+      core: {
+        threadId: "thread-a",
+      },
+    },
   }).getReader();
   await hub.publish(durable);
   await hub.publish(ephemeral);
@@ -67,7 +63,6 @@ Deno.test("event hub filters durable replay and live ephemeral vocabulary", asyn
   hub.close();
   assertEquals((await hub.subscribe().getReader().read()).done, true);
 });
-
 Deno.test("event waits combine durable replay with live subscription", async () => {
   const hub = createCopilotzEventHub();
   let loads = 0;
@@ -83,18 +78,16 @@ Deno.test("event waits combine durable replay with live subscription", async () 
     timeoutMs: 100,
   });
   assertEquals(replayed, durable);
-
   const live = waitForCopilotzEvent({
     hub,
     filter: { types: ["text.delta"] },
     pollIntervalMs: 100,
-    timeoutMs: 1_000,
+    timeoutMs: 1000,
   });
   await hub.publish(ephemeral);
   assertEquals(await live, ephemeral);
   hub.close();
 });
-
 Deno.test("A55 event hub is factory-first and runtime-neutral", async () => {
   const source = await Deno.readTextFile(new URL("hub.ts", import.meta.url));
   assertEquals(

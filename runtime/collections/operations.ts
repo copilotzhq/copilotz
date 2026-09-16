@@ -174,7 +174,7 @@ export function createCollectionOperations(
     options?.signal?.throwIfAborted();
     return result;
   };
-  return Object.freeze({
+  return ({
     definition: collection.definition,
     get: read((ns, input: Readonly<{ id: string }>) =>
       collection.get(text(input.id, `${name} id`), ns)
@@ -219,53 +219,49 @@ export function createCollectionOperations(
     ) {
       const id = text(input.id, `${name} id`);
       await collection.delete(id, writeOptions(scope, "delete", id, options));
-      return Object.freeze({ id, deleted: true as const });
+      return ({ id, deleted: true as const } as const);
     },
-    commands: Object.freeze(
-      Object.fromEntries(
-        Object.keys(collection.definition.commands ?? {}).map((
-          command,
-        ) => [
-          command,
-          async (
-            scope: CollectionScope,
-            input: Readonly<Record<string, unknown> & { id: string }>,
-            options?: ScopedCollectionCallOptions,
-          ) => {
-            const { id: rawId, ...value } = input;
-            const id = text(rawId, `${name} id`);
-            return (await collection.mutate(
-              text(id, `${name} id`),
-              command,
-              value,
-              writeOptions(scope, `command:${command}`, id, options),
-            )).record;
-          },
-        ]),
-      ),
+    commands: Object.fromEntries(
+      Object.keys(collection.definition.commands ?? {}).map((
+        command,
+      ) => [
+        command,
+        async (
+          scope: CollectionScope,
+          input: Readonly<Record<string, unknown> & { id: string }>,
+          options?: ScopedCollectionCallOptions,
+        ) => {
+          const { id: rawId, ...value } = input;
+          const id = text(rawId, `${name} id`);
+          return (await collection.mutate(
+            text(id, `${name} id`),
+            command,
+            value,
+            writeOptions(scope, `command:${command}`, id, options),
+          )).record;
+        },
+      ]),
     ),
-    queries: Object.freeze(
-      Object.fromEntries(
-        Object.keys(collection.definition.queries ?? {}).map((
-          query,
-        ) => [
-          query,
-          (
-            scope: CollectionScope,
-            input: Readonly<Record<string, unknown>> = {},
-            options?: Pick<ScopedCollectionReadOptions, "signal">,
-          ) =>
-            readWithSignal(() =>
-              collection.query[query](
-                namespace(scope),
-                { ...input },
-                scope,
-                options,
-              ), options),
-        ]),
-      ),
+    queries: Object.fromEntries(
+      Object.keys(collection.definition.queries ?? {}).map((
+        query,
+      ) => [
+        query,
+        (
+          scope: CollectionScope,
+          input: Readonly<Record<string, unknown>> = {},
+          options?: Pick<ScopedCollectionReadOptions, "signal">,
+        ) =>
+          readWithSignal(() =>
+            collection.query[query](
+              namespace(scope),
+              { ...input },
+              scope,
+              options,
+            ), options),
+      ]),
     ),
-    relations: Object.freeze({
+    relations: {
       list: (
         scope: CollectionScope,
         query?: CollectionRelationQuery,
@@ -275,8 +271,8 @@ export function createCollectionOperations(
           () => services.relations(namespace(scope), query),
           options,
         ),
-    }),
-  });
+    } as const,
+  } as const);
 }
 
 function bindMethods<Args extends unknown[], Result>(
@@ -285,13 +281,11 @@ function bindMethods<Args extends unknown[], Result>(
   >,
   scope: CollectionScope,
 ): Readonly<Record<string, (...args: Args) => Result>> {
-  return Object.freeze(
-    Object.fromEntries(
-      Object.entries(methods).map((
-        [name, method],
-      ) => [name, method.bind(null, scope)]),
-    ),
-  );
+  return (Object.fromEntries(
+    Object.entries(methods).map((
+      [name, method],
+    ) => [name, method.bind(null, scope)]),
+  ));
 }
 
 /** Scope binding only: no read, write, identity, or transaction behavior. */
@@ -299,8 +293,8 @@ export function bindCollectionScope(
   base: CollectionOperations,
   context: CollectionScope,
 ): ScopedCollection {
-  const scope = Object.freeze({ ...context });
-  return Object.freeze({
+  const scope = { ...context } as const;
+  return ({
     definition: base.definition,
     get: base.get.bind(null, scope),
     list: base.list.bind(null, scope),
@@ -311,6 +305,6 @@ export function bindCollectionScope(
     delete: base.delete.bind(null, scope),
     commands: bindMethods(base.commands, scope),
     queries: bindMethods(base.queries, scope),
-    relations: Object.freeze({ list: base.relations.list.bind(null, scope) }),
+    relations: { list: base.relations.list.bind(null, scope) } as const,
   } as ScopedCollection);
 }

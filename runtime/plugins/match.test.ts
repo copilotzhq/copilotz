@@ -1,12 +1,9 @@
 import { assert, assertEquals } from "@std/assert";
-
 import { defineProcessor } from "./processor.ts";
 import { matchesPartial, matchProcessor } from "./match.ts";
-
 const envelope = {
   type: "tool_execution.created",
   namespace: "tenant-a",
-  threadId: "thread-a",
   subject: { type: "tool_execution", id: "tool-execution-a" },
   payload: {
     dataRef: {
@@ -15,16 +12,27 @@ const envelope = {
       mediaType: "application/json",
     },
   },
-  routing: { senderId: "user-a", recipientIds: ["agent-a"] },
-  visibility: { kind: "public" as const },
-  metadata: { copilotzWorkflow: { kind: "agent_output" } },
+  metadata: {
+    core: {
+      threadId: "thread-a",
+      routing: { senderId: "user-a", recipientIds: ["agent-a"] },
+      visibility: { kind: "public" as const },
+    },
+    copilotzWorkflow: { kind: "agent_output" },
+  },
 };
-
 Deno.test("matcher entries are OR and fields in one entry are AND", () => {
   const processor = defineProcessor({
     id: "core.or-and",
     on: [
-      { eventType: "message.created", routing: { senderId: "user-a" } },
+      {
+        eventType: "message.created",
+        metadata: {
+          core: {
+            routing: { senderId: "user-a" },
+          },
+        },
+      },
       {
         eventType: "tool_execution.created",
         data: { record: { lane: "content", mediaType: "audio/*" } },
@@ -49,7 +57,11 @@ Deno.test("matcher entries are OR and fields in one entry are AND", () => {
     matchProcessor(processor, {
       ...envelope,
       type: "message.created",
-      routing: { senderId: "other" },
+      metadata: {
+        core: {
+          routing: { senderId: "other" },
+        },
+      },
     }),
     false,
   );
@@ -60,7 +72,6 @@ Deno.test("matcher entries are OR and fields in one entry are AND", () => {
     false,
   );
 });
-
 Deno.test("nested objects use partial equality and media wildcards", () => {
   assert(matchesPartial({ lane: "content" }, {
     lane: "content",
@@ -76,7 +87,6 @@ Deno.test("nested objects use partial equality and media wildcards", () => {
     false,
   );
 });
-
 Deno.test("matching ignores dataRef-only payloads unless match data is provided", () => {
   const processor = defineProcessor({
     id: "core.body",
@@ -92,11 +102,18 @@ Deno.test("matching ignores dataRef-only payloads unless match data is provided"
     true,
   );
 });
-
 Deno.test("transient eventType * matches any type when clause fields match", () => {
   const processor = defineProcessor({
     id: "transient.thread-observer",
-    on: [{ eventType: "*", namespace: "tenant-a", threadId: "thread-a" }],
+    on: [{
+      eventType: "*",
+      namespace: "tenant-a",
+      metadata: {
+        core: {
+          threadId: "thread-a",
+        },
+      },
+    }],
     handle() {},
   });
   assertEquals(matchProcessor(processor, envelope), true);
@@ -105,7 +122,14 @@ Deno.test("transient eventType * matches any type when clause fields match", () 
     true,
   );
   assertEquals(
-    matchProcessor(processor, { ...envelope, threadId: "thread-b" }),
+    matchProcessor(processor, {
+      ...envelope,
+      metadata: {
+        core: {
+          threadId: "thread-b",
+        },
+      },
+    }),
     false,
   );
 });

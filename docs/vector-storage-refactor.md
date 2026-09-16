@@ -1,81 +1,61 @@
-# Vector storage addition to the authoring refactor
+# Optional vector persistence
 
-## Agreed outcome and proposed design
+## Storage and composition
 
-The user requested adding a fix for JSON-stored Memory embeddings to this
-refactor on 2026-09-15. The outcome is in scope; the following storage layout is
-the recommended design, not implemented functionality.
+[Vector storage](../runtime/vectors/index.ts) is an optional generic persistence
+capability. The host calls `provisionVectorStorage(session, schema)` after base
+provisioning. PostgreSQL requires pgvector; PGlite is opened with
+`pgliteExtensions: ["vector"]`. Base runtime operation never requires either.
 
-Current Memory persists vectors inside Collection record JSON and ranks a
-bounded candidate scan in application code. Public searchMemory uses lexical
-scoring. Knowledge also loads vectors and computes similarity in application
-code; it is a potential consumer of the same capability, not a reason to put
-Memory or Knowledge semantics into runtime.
+The table stores namespace, owner type/id, logical field, embedding profile,
+dimensions, source field/revision, a typed `vector` column, and an optional
+Asset reference. A profile identifies model, revision, dimensions and distance
+metric. A record can carry independent vectors for different fields or profiles.
+It does not need a fabricated Asset to hold a short summary vector.
 
-## Storage recommendation
+`context.vectors.search` joins current owner records and applies the existing
+bounded Collection predicate compiler before distance ordering and LIMIT. It
+returns records and distances. Runtime knows no Memory space, Agent, thread,
+editorial status or visibility policy. Memory supplies those predicates.
 
-Assets are nodes with a generic body-storage mechanism, not a separate physical
-Assets table. Retain Asset ownership/content provenance where appropriate, but
-keep the searchable vector in a small optional relational projection with a real
-pgvector column. A record may have several embeddings (different fields, chunks,
-model revisions); an Asset may be shared without sharing access rights. Do not
-force every memory summary into an Asset just to hold a vector.
+`context.transaction` includes `tx.vectors.upsert`. Vector writes enter the same
+mutation plan and SQL transaction as record writes. Immutable vector Event
+bodies are replay authority; the physical vector table is a projection. Owner
+deletion cascades projection cleanup. Source-text revision checks exclude stale
+vectors. Invalid dimensions, non-finite values and zero cosine vectors fail
+explicitly.
 
-A minimal entry identifies tenant namespace, owning Collection/record, indexed
-field or chunk, embedding profile, source revision/digest, and the vector. An
-Asset reference is optional. The embedding profile identifies the model,
-revision, dimensions and distance metric; identical dimensions alone do not make
-two vector spaces compatible. Index layout must follow the configured
-profile/dimensions and the supported extension's actual limits.
+## Memory
 
-Memory owns what text to embed, generation through context adapters, eligible
-records and access rules. An optional generic persistence capability owns SQL
-storage/upsert/delete and nearest-neighbor queries. The base runtime remains
-usable without the vector extension. Keep the API small and use existing
-transaction/persistence seams instead of plugin factories or a second lifecycle
-framework. Exact public API names remain to be finalized.
+Memory supplies its embedder through `adapters.memoryEmbedding.default` and its
+profile through `resources.memory.embeddingProfile`. Consolidation and public
+`searchMemory` share SQL vector retrieval. Authorization, form, kind, status and
+editorial validity filters apply before ranking. Embedding-enabled retrieval
+never loads a fixed set of JSON vectors to rank in JavaScript.
 
-## Search and correctness
+Memory record JSON contains no embedding array. Without an embedder, the
+existing bounded lexical mode remains explicit. A configured embedding error is
+surfaced; it does not silently choose another ranking strategy.
 
-- Use database-side exact distance search first; remove the arbitrary 1,000-row
-  preselection from Memory's semantic path. Return IDs and scores, then hydrate
-  only selected records.
-- Include current namespace, permitted Memory spaces, record validity/status,
-  and domain filters in the SQL result selection before the result limit. Keep
-  authorization tied to the owner, not to a shared Asset or content hash.
-- Preserve access revocation and verify authorization again before returning
-  protected content where the existing read boundary requires it.
-- Use both consolidation matching and public searchMemory as integration paths.
-  Preserve explicit lexical behavior when embedding is not configured. If
-  semantic search is configured but vector storage is unavailable, report the
-  configuration error rather than silently scanning JSON.
-- Add approximate indexing only with measurements and filtered-recall tests.
-  pgvector approximate index scans can filter after scanning and return fewer
-  matches; SQL authorization filtering remains mandatory and index tuning is not
-  a replacement for it.
-- Keep record and projection changes consistent across transaction failure,
-  retries, edits, deletes and archive/access changes. Specify a durable rebuild
-  source or re-embedding procedure; vectors must not depend on an unrecoverable
-  process-local write.
+## Validation and limits
 
-## Fresh-data implementation and evidence
+Tests cover transactional rollback and retries, unawaited planned writes, tenant
+and profile isolation, authorization-before-LIMIT, source changes, deletion and
+current-format replay. Memory integration verifies consolidation, public search,
+typed column storage and replay. The same generic vector contract runs against
+PGlite and the PostgreSQL CI service with pgvector installed.
 
-User decision, 2026-09-15: no data migration, backfill, compatibility readers,
-dual writes, or legacy format support. Compass is the only Memory consumer and
-is internally used. The new milestone targets clean schemas and fresh Memory
-data. This planning decision does not authorize deleting any existing database.
+Search uses exact SQL distance. No approximate/HNSW index or dimension-specific
+schema is created. This keeps the first implementation direct and supports mixed
+profiles. Index tuning can follow measured workloads.
 
-1. Verify PostgreSQL and bundled PGlite vector loading/type/index capabilities.
-2. Add optional provisioning and a small generic vector persistence contract.
-3. Integrate Memory writes, consolidation candidates and public semantic search.
-4. Remove embedding arrays from Memory record schemas and the unused physical
-   nodes.embedding column in the new schema. Add no old-format fallback.
-5. Verify tenant/space access and revocation, more than 1,000 candidates,
-   profile/dimension mismatch, revisions, deletes, retries and current-format
-   restart/rebuild. Measure ranking correctness, transfer and query performance.
-6. Document fresh setup and the breaking change. Application reset/deployment is
-   separate work; do not build migration machinery for the few existing users.
+The local PGlite ranking fixture contains 1,202 vectors, including 1,201
+authorized candidates. A limit-one search correctly returns the best authorized
+record beyond position 1,000 and transfers 105 bytes of result JSON. One local
+run took 184 ms for the search; this is a correctness fixture, not a production
+latency benchmark. Its `EXPLAIN ANALYZE` checks the SQL limit plan. Memory's
+integration test separately verifies revoked-space access through public search.
 
-Reference: https://github.com/pgvector/pgvector (exact search, filtered
-approximate indexes, supported vector/index dimensions). Ominipg supports
-loading vector for PGlite, but current Memory does not issue vector SQL.
+This release starts on a fresh v5 schema. No migration, backfill, compatibility
+reader or dual write is included. No existing database is deleted or deployed by
+this refactor.

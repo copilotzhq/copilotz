@@ -9,7 +9,7 @@ import { fetchTextTool } from "./resources/index.ts";
 import { assert, assertEquals, assertRejects } from "@std/assert";
 import type { ActionContext } from "@copilotz/copilotz/actions";
 
-import type { ToolResource } from "../tools/authoring/define-tool/index.ts";
+import type { ToolResource } from "../core/authoring/define-tool/index.ts";
 import { WEB_TOOL_IDS, webToolsPlugin } from "./plugin.ts";
 
 Deno.test("Web tools compose as stable plugin resources", () => {

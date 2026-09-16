@@ -8,4 +8,4 @@ export { preflightLlmRequest } from "./adapters/bridge/index.ts";
 export {
   ContextInputLimitError,
   isContextInputLimitError,
-} from "./internal/errors.ts";
+} from "./shared/errors.ts";

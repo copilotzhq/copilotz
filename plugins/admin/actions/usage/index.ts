@@ -6,8 +6,8 @@ import {
   adminRequestSchema,
   asRequest,
   readOnly,
-} from "../internal/request.ts";
-import type { AdminRequest, AdminResponse } from "../../internal/contracts.ts";
+} from "../../shared/request.ts";
+import type { AdminRequest, AdminResponse } from "../../shared/contracts.ts";
 export const adminUsageAction: ActionDefinition<
   AdminRequest,
   AdminResponse,

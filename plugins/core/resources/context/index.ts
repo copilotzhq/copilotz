@@ -1,6 +1,6 @@
 /** Defines runtime-neutral prompt Context Resources. @module */
 
-import type { ContextResource } from "./internal/types.ts";
+import type { ContextResource } from "../../shared/types.ts";
 
 function requiredText(value: unknown, label: string): string {
   const normalized = typeof value === "string" ? value.trim() : "";
@@ -47,7 +47,7 @@ export {
   type CollectedContextContribution,
   prepareContextContributions,
   renderContextContent,
-} from "./internal/contributions.ts";
+} from "../../shared/contributions.ts";
 export type {
   ContextContribution,
   ContextContributionInput,
@@ -55,4 +55,4 @@ export type {
   ContextResource,
   ContextSourceRef,
   FrozenContextContribution,
-} from "./internal/types.ts";
+} from "../../shared/types.ts";

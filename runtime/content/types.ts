@@ -91,18 +91,7 @@ export type ContentKind =
   | "file";
 
 /** Common roles; applications and plugins may use additional stable strings. */
-export type ContentRole =
-  | "body"
-  | "attachment"
-  | "reasoning"
-  | "tool.arguments"
-  | "tool.output"
-  | "tool.projected_output"
-  | "tool.error_detail"
-  | "transcript"
-  | "recording"
-  | "document.source"
-  | "provider.trace";
+export type ContentRole = string;
 
 /** Domain-safe pointer to a content body. Storage locators stay private. */
 export interface ContentRef {

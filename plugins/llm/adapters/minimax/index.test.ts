@@ -1,6 +1,6 @@
 import { assert, assertEquals } from "@std/assert";
 
-import type { ChatMessage, ProviderConfig } from "../../internal/types.ts";
+import type { ChatMessage, ProviderConfig } from "../../shared/types.ts";
 import { minimaxProvider } from "./index.ts";
 
 const baseConfig: ProviderConfig = {

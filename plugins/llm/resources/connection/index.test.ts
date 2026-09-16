@@ -9,7 +9,7 @@ import type {
   LlmCallOutput,
   LlmConnectionResource,
   LlmRequest,
-} from "../../internal/contracts.ts";
+} from "../../shared/contracts.ts";
 import { createLlmAdapter } from "../../authoring/custom-adapter/index.ts";
 import { defineLlmConnection, normalizeLlmModelSelections } from "./index.ts";
 

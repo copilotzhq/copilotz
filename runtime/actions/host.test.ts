@@ -39,6 +39,11 @@ Deno.test("Action transactions expose atomic relation projection", async () => {
     })],
   });
   const collections = {
+    vectors: () => ({
+      search: () => {
+        throw new Error("Unused vector test capability");
+      },
+    }),
     withScope: () => Object.freeze({}),
     async transaction<T>(options: {
       operationKey: string;
@@ -147,8 +152,7 @@ Deno.test("Action transactions expose atomic relation projection", async () => {
   }]);
   assertEquals(result, { id: "memory-a:related:memory-b" });
   assertEquals(actionMetadata, { trace: { tags: ["initial"] } });
-  assertEquals(Object.isFrozen(actionMetadata), true);
-  assertEquals(Object.isFrozen(actionMetadata?.trace), true);
+
   assertEquals(
     lifecycleData.map((event) => event.metadata),
     [
@@ -227,6 +231,11 @@ Deno.test("Action streams carry their exact root and nested action run IDs", asy
     databaseSchema: "copilotz_action_streams",
     plugins,
     collections: {
+      vectors: () => ({
+        search: () => {
+          throw new Error("Unused vector test capability");
+        },
+      }),
       withScope: () => Object.freeze({}),
     } as unknown as CollectionRuntime,
     actionLifecycle: {

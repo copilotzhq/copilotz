@@ -124,10 +124,10 @@ Deno.test("optional skills implementation stays off the root runtime graph", asy
 Deno.test("agent capability resolution remains factory-first and host-neutral", async () => {
   for (
     const module of [
-      "plugins/core/internal/capabilities/grants.ts",
-      "plugins/core/internal/capabilities/resolver.ts",
-      "plugins/core/internal/capabilities/selection.ts",
-      "plugins/core/internal/capabilities/types.ts",
+      "plugins/core/shared/capabilities/grants.ts",
+      "plugins/core/authoring/capabilities/resolver.ts",
+      "plugins/core/shared/capabilities/selection.ts",
+      "plugins/core/authoring/capabilities/types.ts",
     ]
   ) {
     const value = await source(module);

@@ -1,11 +1,11 @@
-import type { ToolDefinition } from "@copilotz/copilotz/tools";
+import type { ToolDefinition } from "@copilotz/copilotz/core";
 /**
  * Defines the data-only Read File Tool Resource.
  *
  * @module
  */
 
-import { defineTool } from "@copilotz/copilotz/tools";
+import { defineTool } from "@copilotz/copilotz/core";
 import { readFileAction } from "../../../actions/read-file/index.ts";
 
 export const readFileTool: ToolDefinition<typeof readFileAction> = defineTool({

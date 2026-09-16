@@ -9,7 +9,7 @@ import {
   KNOWLEDGE_CHUNK_COLLECTION,
   KNOWLEDGE_DOCUMENT_COLLECTION,
   KNOWLEDGE_HAS_CHUNK_EDGE,
-} from "../internal/contracts.ts";
+} from "../../shared/contracts.ts";
 
 const schema = {
   type: "object",

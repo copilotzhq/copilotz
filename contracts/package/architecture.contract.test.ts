@@ -14,7 +14,6 @@ const canonicalEntries = [
   "runtime/execution",
   "runtime/actions",
   "runtime/plugins",
-  "plugins/tools",
   "plugins/llm",
   "plugins",
 ] as const;
@@ -150,5 +149,25 @@ Deno.test("createCopilotz returns one application", async () => {
   } finally {
     await application.close();
     await application.close();
+  }
+});
+
+Deno.test("runtime has no conversational event, vector-model or plugin policy vocabulary", async () => {
+  for (
+    const file of await collectProductionFiles(join(repositoryRoot, "runtime"))
+  ) {
+    if (file.includes("/testing/")) continue;
+    const text = await Deno.readTextFile(file);
+    assert(
+      !/\b(?:threadId|thread_id|EventVisibility|EventRouting|coreEvent|belongsToThread|listForThread|threadEventWatermark)\b/
+        .test(text),
+      relative(repositoryRoot, file),
+    );
+    assert(
+      !/"(?:tool\.arguments|tool\.output|reasoning\.delta|tool_call\.delta)"/
+        .test(text),
+      relative(repositoryRoot, file),
+    );
+    assert(!/Object\.freeze\(/.test(text), relative(repositoryRoot, file));
   }
 });

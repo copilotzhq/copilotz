@@ -7,7 +7,7 @@ import type { ActionDefinition } from "@copilotz/copilotz/actions";
  */
 
 import { defineAction } from "@copilotz/copilotz/actions";
-import { globToRegex, listWorkspaceDirectory } from "../internal/fs-utils.ts";
+import { globToRegex, listWorkspaceDirectory } from "../../shared/fs-utils.ts";
 
 interface SearchFilesParams {
   directory?: string;

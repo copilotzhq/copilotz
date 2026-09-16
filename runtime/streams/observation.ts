@@ -1,6 +1,6 @@
 import type { ContentStreamOpened } from "./stream.ts";
 import type { StreamOutputDescriptor } from "./types.ts";
-import { deepFreeze, snapshotStreamMetadata } from "./json.ts";
+import { snapshotStreamMetadata } from "./json.ts";
 
 function requiredText(value: string, name: string): string {
   const normalized = value.trim();
@@ -32,11 +32,11 @@ export function createStreamOutputDescriptor(
 ): StreamOutputDescriptor {
   const streamMetadata = snapshotStreamMetadata(stream.metadata);
   const contextMetadata = snapshotStreamMetadata(context.metadata ?? {});
-  const metadata = deepFreeze({
+  const metadata = {
     ...streamMetadata,
     ...contextMetadata,
-  });
-  return Object.freeze({
+  };
+  return ({
     type: "stream.output",
     namespace: requiredText(context.namespace, "Stream output namespace"),
     streamId: requiredText(stream.id, "Stream output id"),
@@ -54,7 +54,7 @@ export function createStreamOutputDescriptor(
       ? { correlationId: context.correlationId.trim() }
       : {}),
     metadata: metadata as Readonly<Record<string, unknown>>,
-  });
+  } as const);
 }
 
 /** Strictly excludes event, routing, collection, and transport-only fields. */

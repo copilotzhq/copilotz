@@ -56,22 +56,22 @@ function route(url: URL, base: string): readonly string[] | null {
     return null;
   }
   const relative = base ? pathname.slice(base.length) : pathname;
-  return Object.freeze(
-    relative.split("/").filter(Boolean).map((part) => decodeURIComponent(part)),
-  );
+  return (relative.split("/").filter(Boolean).map((part) =>
+    decodeURIComponent(part)
+  ));
 }
 
 function query(url: URL): HttpRequest["query"] {
   const values: Record<string, string | readonly string[]> = {};
   for (const key of new Set(url.searchParams.keys())) {
     const all = url.searchParams.getAll(key);
-    values[key] = all.length === 1 ? all[0] : Object.freeze(all);
+    values[key] = all.length === 1 ? all[0] : all;
   }
-  return Object.freeze(values);
+  return values;
 }
 
 function headers(request: Request): Readonly<Record<string, string>> {
-  return Object.freeze(Object.fromEntries(request.headers.entries()));
+  return (Object.fromEntries(request.headers.entries()));
 }
 
 function rawBodyTooLarge(policy: HttpBodyPolicy): Error {
@@ -328,14 +328,14 @@ export function createHttpFetchHandler(
       const result = await app.handle({
         resource: parts[0],
         method: method as HttpRequest["method"],
-        path: Object.freeze(parts.slice(1)),
+        path: parts.slice(1),
         query: query(url),
         headers: headers(request),
         body: parsedBody.value,
-        context: Object.freeze({
+        context: {
           ...(context ?? {}),
           ...(parsedBody.raw ? { rawBody: parsedBody.raw } : {}),
-        }),
+        } as const,
       });
       return await jsonResponse(result, options, request);
     } catch (error) {

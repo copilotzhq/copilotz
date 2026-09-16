@@ -41,10 +41,10 @@ function collectionOrder(query: CollectionQuery): CollectionOrder {
     : query.order?.field === "updatedAt"
     ? "updated_at"
     : "id";
-  return Object.freeze({
+  return ({
     field,
     direction: query.order?.direction === "desc" ? "DESC" : "ASC",
-  });
+  } as const);
 }
 
 function cursorValue(value: string | undefined): string | undefined {
@@ -187,13 +187,11 @@ export async function queryCollectionRelations(
         (target.type = $2 AND edge.target_node_id = $${nodeParameter}))`
     : "(source.type = $2 OR target.type = $2)";
   const filters = ["edge.namespace = $1", membership];
-  const types = Object.freeze(
-    [
-      ...new Set(
-        (query.types ?? []).map((type) => type.trim()).filter(Boolean),
-      ),
-    ],
-  );
+  const types = [
+    ...new Set(
+      (query.types ?? []).map((type) => type.trim()).filter(Boolean),
+    ),
+  ] as const;
   if (types.length) {
     filters.push(`edge.type = ANY($${params.push([...types])}::text[])`);
   }
@@ -211,20 +209,20 @@ export async function queryCollectionRelations(
       LIMIT ${relationLimit(query.limit)}`,
     params,
   );
-  return Object.freeze(result.rows.map((row) => {
+  return (result.rows.map((row) => {
     const data = jsonRecord(row.data);
-    return Object.freeze({
+    return ({
       id: row.id,
       namespace: row.namespace,
       type: row.type,
-      source: Object.freeze({ type: row.source_type, id: row.source_node_id }),
-      target: Object.freeze({ type: row.target_type, id: row.target_node_id }),
-      metadata: Object.freeze(jsonRecord(data.metadata)),
+      source: { type: row.source_type, id: row.source_node_id } as const,
+      target: { type: row.target_type, id: row.target_node_id } as const,
+      metadata: jsonRecord(data.metadata),
       weight: Number(row.weight ?? 1),
       createdAt: row.created_at instanceof Date
         ? row.created_at.toISOString()
         : new Date(row.created_at).toISOString(),
-    });
+    } as const);
   }));
 }
 
@@ -306,7 +304,7 @@ export async function queryCollectionRecords(
     params,
   );
   const records = result.rows.map(mapNode);
-  if (!query.include?.length) return Object.freeze(records);
+  if (!query.include?.length) return records;
 
   const hydrated = [];
   for (const value of records) {
@@ -342,22 +340,20 @@ export async function queryCollectionRecords(
                ORDER BY target_node_id`,
           [namespace, value.id, edgeType],
         );
-        extra[name] = Object.freeze(
-          (await Promise.all(
-            edges.rows.map((edge) =>
-              loadCollectionRecord(
-                executor,
-                tables,
-                namespace,
-                relation.collection,
-                edge.related_id,
-              )
-            ),
-          )).filter((item) => item !== null),
-        );
+        extra[name] = (await Promise.all(
+          edges.rows.map((edge) =>
+            loadCollectionRecord(
+              executor,
+              tables,
+              namespace,
+              relation.collection,
+              edge.related_id,
+            )
+          ),
+        )).filter((item) => item !== null);
       }
     }
-    hydrated.push(Object.freeze({ ...value, ...extra }));
+    hydrated.push({ ...value, ...extra } as const);
   }
-  return Object.freeze(hydrated);
+  return hydrated;
 }

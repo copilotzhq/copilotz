@@ -10,8 +10,15 @@ arbitrary imports.
 
 - Collections, Actions, and Processors: `<category>/<alias>/index.ts`.
 - Resources and Adapters: `<category>/<namespace>/<alias>/index.ts`.
-- Explicit dependencies: `dependencies/<alias>/index.ts`.
-- Helpers: `internal/` and `authoring/`, excluded from discovery.
+- Explicit dependencies: `plugins: [{from, export}]` in `copilotz.json`.
+- Private helpers used by one primitive: inside that primitive module.
+- Helpers shared across different primitives: `shared/`, excluded from
+  discovery.
+- Public authoring APIs: `authoring/`, excluded from discovery.
+
+Core owns its collections and Tool authoring. Optional tool providers remain
+separate plugins. Provider-specific OpenAPI and MCP contracts belong to those
+providers. Plugin `internal/` and `dependencies/` folders are not supported.
 
 A primitive owns its definition and stable identity. Avoid definition-fragment
 factories, plugin factory wrappers, duplicated registration maps, and runtime

@@ -77,29 +77,11 @@ function matchesClause(
     return false;
   }
   if (
-    clause.threadId !== undefined &&
-    !matchesPartial(clause.threadId, event.threadId)
-  ) {
-    return false;
-  }
-  if (
     clause.subject !== undefined &&
     !matchesPartial(
       clause.subject,
       "subject" in event ? event.subject : undefined,
     )
-  ) {
-    return false;
-  }
-  if (
-    clause.routing !== undefined &&
-    !matchesPartial(clause.routing, event.routing ?? {})
-  ) {
-    return false;
-  }
-  if (
-    clause.visibility !== undefined &&
-    !matchesPartial(clause.visibility, event.visibility ?? {})
   ) {
     return false;
   }

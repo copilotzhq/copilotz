@@ -1,7 +1,6 @@
 import type { ActionDefinition } from "@copilotz/copilotz/actions";
 /** Conversation mutations use ordinary durable Actions and existing Collections. */
 import { type ActionContext, defineAction } from "@copilotz/copilotz/actions";
-
 export const sendSchema = {
   type: "object",
   additionalProperties: false,
@@ -23,7 +22,6 @@ export const sendSchema = {
   required: ["content"],
   oneOf: [{ required: ["threadId"] }, { required: ["externalThreadId"] }],
 } as const;
-
 function actor(context: ActionContext) {
   const value = context.action.metadata.httpActor as {
     id?: string;
@@ -40,44 +38,40 @@ function actor(context: ActionContext) {
     participantType: "human" as const,
   };
 }
-
 async function ownedThread(context: ActionContext, id: string) {
   const sender = actor(context);
   const thread = await context.collections.thread.get({ id });
   if (
     !thread || !Array.isArray(thread.participantIds) ||
     (!thread.participantIds.includes(sender.id) &&
-      (context.action.metadata.coreConversationAccess as { threadId?: string })
+      (context.action.metadata.coreConversationAccess as {
+          threadId?: string;
+        })
           ?.threadId !== id)
   ) {
     throw new Error("Thread was not found.");
   }
   return thread;
 }
-
-export const sendConversation: ActionDefinition<
-  {
+export const sendConversation: ActionDefinition<{
+  threadId?: string;
+  externalThreadId?: string;
+  content: unknown;
+  participantIds?: string[];
+  recipientIds?: string[];
+}, {
+  threadId: string;
+  message: unknown;
+}, ActionContext> = defineAction({
+  id: "copilotz.core.conversation.send",
+  inputSchema: sendSchema,
+  async execute(input: {
     threadId?: string;
     externalThreadId?: string;
     content: unknown;
     participantIds?: string[];
     recipientIds?: string[];
-  },
-  { threadId: string; message: unknown },
-  ActionContext
-> = defineAction({
-  id: "copilotz.core.conversation.send",
-  inputSchema: sendSchema,
-  async execute(
-    input: {
-      threadId?: string;
-      externalThreadId?: string;
-      content: unknown;
-      participantIds?: string[];
-      recipientIds?: string[];
-    },
-    context: ActionContext,
-  ) {
+  }, context: ActionContext) {
     const sender = actor(context);
     let threadId = input.threadId;
     if (!threadId) {
@@ -85,12 +79,15 @@ export const sendConversation: ActionDefinition<
       const existing = await context.collections.thread.queries.byExternalId({
         externalId,
       });
-      if (existing.length) threadId = existing[0].id;
-      else {
+      if (existing.length) {
+        threadId = existing[0].id;
+      } else {
         const created = await context.actions.createThread({
           externalId,
           participants: [sender],
-        }, { operationKey: "thread" }) as { id: string };
+        }, { operationKey: "thread" }) as {
+          id: string;
+        };
         threadId = created.id;
       }
     }
@@ -100,7 +97,10 @@ export const sendConversation: ActionDefinition<
     const members = new Set(input.participantIds ?? []);
     const selections = new Map<string, {
       participantId?: string;
-      agent?: { id: string; name: string };
+      agent?: {
+        id: string;
+        name: string;
+      };
     }>();
     for (
       const requested of new Set([...members, ...input.recipientIds ?? []])
@@ -118,17 +118,28 @@ export const sendConversation: ActionDefinition<
       const agent = Object.entries(context.resources.agents ?? {}).find((
         [alias, value],
       ) =>
-        alias === requested || (value as { id?: string }).id === requested ||
+        alias === requested || (value as {
+            id?: string;
+          }).id === requested ||
         participant?.participantType === "agent" &&
-          (value as { id?: string }).id === participant.agentId
-      )?.[1] as { id: string; name: string } | undefined;
-      if (!agent) throw new Error("Agent or recipient was not found.");
+          (value as {
+              id?: string;
+            }).id === participant.agentId
+      )?.[1] as {
+        id: string;
+        name: string;
+      } | undefined;
+      if (!agent) {
+        throw new Error("Agent or recipient was not found.");
+      }
       selections.set(requested, { agent });
     }
     const enrolled = new Map<string, string>();
     for (const selection of selections.values()) {
       const agent = selection.agent;
-      if (!agent) continue;
+      if (!agent) {
+        continue;
+      }
       if (!enrolled.has(agent.id)) {
         const added = await context.actions.addThreadParticipant({
           threadId,
@@ -139,7 +150,9 @@ export const sendConversation: ActionDefinition<
             name: agent.name,
           },
         }, { operationKey: `participant:${agent.id}` }) as {
-          participant: { id: string };
+          participant: {
+            id: string;
+          };
         };
         enrolled.set(agent.id, added.participant.id);
       }
@@ -159,17 +172,20 @@ export const sendConversation: ActionDefinition<
       content: input.content,
       recipientIds,
       metadata: {
-        clientMessageId:
-          (context.action.metadata.copilotzServer as { requestId?: string })
-            ?.requestId,
+        clientMessageId: (context.action.metadata.copilotzServer as {
+          requestId?: string;
+        })
+          ?.requestId,
       },
     }, { operationKey: "message" });
     return { threadId, message };
   },
 });
-
 export const updateConversation: ActionDefinition<
-  { threadId: string; patch: Record<string, unknown> },
+  {
+    threadId: string;
+    patch: Record<string, unknown>;
+  },
   Readonly<
     Record<string, unknown> & {
       id: string;
@@ -211,10 +227,10 @@ export const updateConversation: ActionDefinition<
     },
     required: ["threadId", "patch"],
   } as const,
-  async execute(
-    input: { threadId: string; patch: Record<string, unknown> },
-    context: ActionContext,
-  ) {
+  async execute(input: {
+    threadId: string;
+    patch: Record<string, unknown>;
+  }, context: ActionContext) {
     const thread = await ownedThread(context, input.threadId);
     const { tags, ...set } = input.patch;
     if (tags) {
@@ -227,12 +243,12 @@ export const updateConversation: ActionDefinition<
     return await context.collections.thread.update({ id: input.threadId, set });
   },
 });
-
-export const deleteConversation: ActionDefinition<
-  { threadId: string },
-  { threadId: string; deleted: boolean },
-  ActionContext
-> = defineAction({
+export const deleteConversation: ActionDefinition<{
+  threadId: string;
+}, {
+  threadId: string;
+  deleted: boolean;
+}, ActionContext> = defineAction({
   id: "copilotz.core.conversation.delete",
   inputSchema: {
     type: "object",
@@ -240,13 +256,17 @@ export const deleteConversation: ActionDefinition<
     properties: { threadId: { type: "string" } },
     required: ["threadId"],
   } as const,
-  async execute(input: { threadId: string }, context: ActionContext) {
+  async execute(input: {
+    threadId: string;
+  }, context: ActionContext) {
     const existing = await context.collections.thread.get({
       id: input.threadId,
     });
     // A completed deletion is already satisfied, including a replay after the
     // atomic Collection commit but before the Action's terminal Event.
-    if (!existing) return { threadId: input.threadId, deleted: true };
+    if (!existing) {
+      return { threadId: input.threadId, deleted: true };
+    }
     await ownedThread(context, input.threadId);
     const ids: string[] = [];
     let after: string | undefined;
@@ -257,25 +277,38 @@ export const deleteConversation: ActionDefinition<
         after,
       });
       ids.push(...messages.map((message) => message.id));
-      if (messages.length < 1000) break;
+      if (messages.length < 1000) {
+        break;
+      }
       after = messages.at(-1)!.id;
     }
     await context.transaction(async (tx) => {
       for (const id of ids) {
         await tx.collections.message.delete({ id }, {
-          threadId: input.threadId,
+          metadata: {
+            core: {
+              threadId: input.threadId,
+            },
+          },
         });
       }
       await tx.collections.thread.delete({ id: input.threadId }, {
-        threadId: input.threadId,
+        metadata: {
+          core: {
+            threadId: input.threadId,
+          },
+        },
       });
     }, { operationKey: "delete" });
     return { threadId: input.threadId, deleted: true };
   },
 });
-
 export const editConversationMessage: ActionDefinition<
-  { threadId: string; messageId: string; content: unknown },
+  {
+    threadId: string;
+    messageId: string;
+    content: unknown;
+  },
   unknown,
   ActionContext
 > = defineAction({
@@ -290,10 +323,11 @@ export const editConversationMessage: ActionDefinition<
     },
     required: ["threadId", "messageId", "content"],
   } as const,
-  async execute(
-    input: { threadId: string; messageId: string; content: unknown },
-    context: ActionContext,
-  ) {
+  async execute(input: {
+    threadId: string;
+    messageId: string;
+    content: unknown;
+  }, context: ActionContext) {
     await ownedThread(context, input.threadId);
     const message = await context.collections.message.get({
       id: input.messageId,
@@ -304,7 +338,9 @@ export const editConversationMessage: ActionDefinition<
         (context.action.metadata.coreConversationAccess as {
             messageId?: string;
           })?.messageId !== input.messageId)
-    ) throw new Error("Message was not found.");
+    ) {
+      throw new Error("Message was not found.");
+    }
     return await context.actions.reviseMessage({
       ...input,
       id: `${context.action.runId}:revision`,

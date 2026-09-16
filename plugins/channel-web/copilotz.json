@@ -3,7 +3,12 @@
   "version": "4.0.0",
   "include": [
     "resources/channels/web/index.ts",
-    "adapters/channels/web/index.ts",
-    "dependencies/channels/index.ts"
+    "adapters/channels/web/index.ts"
+  ],
+  "plugins": [
+    {
+      "from": "../channel-core/plugin.ts",
+      "export": "channelsPlugin"
+    }
   ]
 }

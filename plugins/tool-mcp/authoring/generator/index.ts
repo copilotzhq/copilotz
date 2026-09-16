@@ -20,31 +20,28 @@ import {
   defineTool,
   type ToolDefinition,
   type ToolResource,
-} from "../../../tools/authoring/define-tool/index.ts";
+} from "../../../core/authoring/define-tool/index.ts";
 import {
   assertGeneratedEntryUnique,
   generatedActionAlias,
   generatedActionIdSegment,
-} from "../../../tools/authoring/internal/generated.ts";
-import {
-  assertLosslessJson,
-  cloneLosslessJson,
-} from "../../../tools/authoring/internal/lifecycle-json.ts";
-import type { MCPServer } from "../../../tools/authoring/integration-resources/index.ts";
+} from "@copilotz/copilotz/core";
+import { assertLosslessJson, cloneLosslessJson } from "@copilotz/copilotz/core";
+import type { MCPServer } from "../contracts/index.ts";
 
 import type {
   ConnectMcpRuntime,
   McpRuntimeConnection,
   McpToolDescriptor,
   PrepareMcpToolsOptions,
-} from "../../internal/contracts.ts";
+} from "../../shared/contracts.ts";
 
 export type {
   ConnectMcpRuntime,
   McpRuntimeConnection,
   McpToolDescriptor,
   PrepareMcpToolsOptions,
-} from "../../internal/contracts.ts";
+} from "../../shared/contracts.ts";
 
 type GeneratedMcpTool = Readonly<{
   alias: string;

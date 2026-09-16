@@ -4,12 +4,12 @@ import {
   type AgentAskMetadata,
   CORE_LLM_CALL_METADATA_SCHEMA,
   coreLlmCallMetadata,
-} from "../../internal/workflow-metadata.ts";
+} from "../../shared/workflow-metadata.ts";
 import { parseActionLifecycleEvent } from "@copilotz/copilotz/actions";
 import { defineProcessor, type Processor } from "@copilotz/copilotz/plugins";
-import type { CoreToolProcessorContext } from "../../internal/runtime-context.ts";
-import { resumeDeferredToolPlan } from "../../internal/tool-plan.ts";
-import { asRecord, optionalText } from "../internal/helpers.ts";
+import type { CoreToolProcessorContext } from "../../shared/runtime-context.ts";
+import { resumeDeferredToolPlan } from "../../shared/tool-plan.ts";
+import { asRecord, optionalText } from "../../shared/helpers.ts";
 
 function askFailure(
   error: Record<string, unknown>,

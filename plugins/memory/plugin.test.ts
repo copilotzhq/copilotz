@@ -30,14 +30,15 @@ import {
   createTestDatabase,
   type TestDatabase,
 } from "../../runtime/testing/ominipg.ts";
-import { projectMessages } from "../core/internal/testing/projections.ts";
-import { createTestDomainContext } from "../core/internal/testing/context.ts";
+import { projectMessages } from "../core/shared/testing/projections.ts";
+import { createTestDomainContext } from "../core/shared/testing/context.ts";
 import AjvModule from "ajv";
 import { consolidateMemoryAction } from "./actions/consolidate-memory/index.ts";
 import { inspectMemoryAction } from "./actions/inspect-memory/index.ts";
 import { searchMemoryAction } from "./actions/search-memory/index.ts";
 import { memoryPlugin } from "./plugin.ts";
 import type { LongTermMemoryConfig } from "./resources/memory/config/index.ts";
+import { provisionVectorStorage } from "@copilotz/copilotz/persistence";
 
 const NAMESPACE = "tenant-memory-native-turn";
 const SCHEMA = "copilotz_memory_native_turn";
@@ -123,9 +124,13 @@ async function fixture(
     enabled?: boolean;
     inputLimit?: number;
     memoryConfig?: Partial<LongTermMemoryConfig>;
+    vectors?: boolean;
   }> = {},
 ): Promise<Fixture> {
-  const db = await createTestDatabase({ url: ":memory:" });
+  const db = await createTestDatabase({
+    url: ":memory:",
+    ...(options.vectors ? { pgliteExtensions: ["vector"] } : {}),
+  });
   const inputs: LlmAdapterCallInput[] = [];
   const memory = memoryPlugin;
   const app = definePlugin({
@@ -133,6 +138,16 @@ async function fixture(
     version: "1.0.0",
     resources: {
       memory: {
+        ...(options.vectors
+          ? {
+            embeddingProfile: {
+              model: "fixture",
+              revision: "1",
+              dimensions: 2,
+              metric: "cosine" as const,
+            },
+          }
+          : {}),
         config: {
           enabled: options.enabled,
           triggerEstimatedTokens: 1,
@@ -175,7 +190,15 @@ async function fixture(
         }),
       },
     },
-    adapters: { llm: { test: adapter(script, inputs) } },
+    adapters: {
+      llm: { test: adapter(script, inputs) },
+      memoryEmbedding: options.vectors
+        ? {
+          default: (texts: readonly string[]) =>
+            Promise.resolve(texts.map(() => [1, 0])),
+        }
+        : {},
+    },
   });
   const registry = await createPluginRegistry({ plugins: [memory, app] });
   const engine = await createCopilotzEngine({
@@ -185,6 +208,7 @@ async function fixture(
     retryBaseMs: 0,
     random: () => 0,
   });
+  if (options.vectors) await provisionVectorStorage(db, SCHEMA);
   return Object.freeze({
     db,
     engine,
@@ -253,8 +277,15 @@ async function createHumanMessage(
     metadata: {},
   }, {
     namespace: NAMESPACE,
-    threadId: "thread-a",
-    routing: { senderId: "human-a", recipientIds: input.recipientIds ?? [] },
+    metadata: {
+      core: {
+        threadId: "thread-a",
+        routing: {
+          senderId: "human-a",
+          recipientIds: input.recipientIds ?? [],
+        },
+      },
+    },
     identity: { deduplicationId: `${input.id}:create` },
   });
   return created.id;
@@ -488,7 +519,7 @@ Deno.test("an uncertified legacy checkpoint rebuilds from the raw bounded prefix
       content: [],
       contextSnapshotContent: [],
       contextSnapshot: null,
-      embedding: null,
+
       contentHash: null,
       tokenEstimate: null,
       error: null,
@@ -969,7 +1000,7 @@ Deno.test("a direct forged Agent-turn provenance cannot select a checkpoint", as
       content: [],
       contextSnapshotContent: [],
       contextSnapshot: null,
-      embedding: null,
+
       contentHash: null,
       tokenEstimate: null,
       error: null,
@@ -1096,7 +1127,7 @@ Deno.test("invalidate_memory retracts editorially without changing lifecycle", a
       content: [],
       contextSnapshotContent: [],
       contextSnapshot: null,
-      embedding: null,
+
       contentHash: null,
       tokenEstimate: null,
       error: null,
@@ -1131,7 +1162,7 @@ Deno.test("invalidate_memory retracts editorially without changing lifecycle", a
         consolidationId: "internal-checkpoint-token",
       },
       data: { publicField: "public-value" },
-      embedding: [0.123456789, 0.987654321],
+
       metadata: { storageSecret: "internal-metadata-token" },
     });
     for (let index = 0; index < 51; index++) {
@@ -1155,7 +1186,7 @@ Deno.test("invalidate_memory retracts editorially without changing lifecycle", a
           consolidationId: "checkpoint-a",
         },
         data: {},
-        embedding: null,
+
         metadata: {},
       });
     }
@@ -1185,7 +1216,7 @@ Deno.test("invalidate_memory retracts editorially without changing lifecycle", a
       epistemic: null,
       provenance: { sources: [], recordedBy: { type: "agent", id: "north" } },
       data: {},
-      embedding: null,
+
       metadata: {},
     });
     for (let index = 0; index < 51; index++) {
@@ -1524,6 +1555,63 @@ Deno.test("consolidation cannot change the lifecycle of a readable Space peer", 
       "read-only peer",
     );
     assertEquals(await c.memoryRecord.get({ id: "peer-record" }), peer);
+  } finally {
+    await run.close();
+  }
+});
+
+Deno.test("Memory consolidation and public search use persisted pgvector projections", async () => {
+  const run = await fixture(
+    (_input, call) => call === 1 ? stop("Remembered.") : tool(memoryProposal()),
+    { vectors: true },
+  );
+  try {
+    await startUserTurn(run);
+    await eventually(
+      run,
+      async () => (await checkpoints(run))[0]?.status === "ready",
+    );
+    const records = await collection(run, "memory_record").list({ limit: 100 });
+    assertEquals(records.length, 1);
+    assertEquals("embedding" in records[0], false);
+    const persisted = await run.db.query<{ type: string; count: string }>(
+      `SELECT pg_typeof(value)::text AS type, count(*)::text AS count FROM "${SCHEMA}".copilotz_vectors GROUP BY pg_typeof(value)`,
+    );
+    assertEquals(persisted.rows, [{ type: "vector", count: "1" }]);
+    const context = createTestDomainContext(run.engine, NAMESPACE);
+    const result = await context.actions.search_memory({
+      query: "Compass",
+      limit: 5,
+    }, {
+      operationKey: "vector-search",
+      metadata: { threadId: "thread-a", agentId: "north" },
+    }) as { memories: Array<{ id: string; similarity: number }> };
+    assertEquals(result.memories.map((x) => x.id), [records[0].id]);
+    assertEquals(result.memories[0].similarity, 1);
+    await run.engine.collections.rebuild(NAMESPACE);
+    const replayed = await context.actions.search_memory({
+      query: "Compass",
+      limit: 5,
+    }, {
+      operationKey: "vector-search-after-replay",
+      metadata: { threadId: "thread-a", agentId: "north" },
+    }) as typeof result;
+    assertEquals(replayed.memories, result.memories);
+    for (
+      const grant of await context.collections.memorySpaceAccess.list({
+        where: { threadId: "thread-a" },
+      })
+    ) {
+      await context.collections.memorySpaceAccess.delete({ id: grant.id });
+    }
+    const revoked = await context.actions.search_memory({
+      query: "Compass",
+      limit: 5,
+    }, {
+      operationKey: "vector-search-revoked",
+      metadata: { threadId: "thread-a", agentId: "north" },
+    }) as typeof result;
+    assertEquals(revoked.memories, []);
   } finally {
     await run.close();
   }

@@ -84,12 +84,12 @@ type CreateProtectedValueRuntimeOptions = Readonly<{
   createId?: () => string;
 }>;
 
-const DATABASE_DEPLOYMENT: BodyStoreDeployment = Object.freeze({
+const DATABASE_DEPLOYMENT: BodyStoreDeployment = {
   durability: "durable",
   reach: "cluster",
   minimumProtectionMs: DEFAULT_BODY_PROTECTION_MS,
   readyGarbageCollection: true,
-});
+} as const;
 
 function requiredText(value: unknown, label: string): string {
   const normalized = typeof value === "string" ? value.trim() : "";
@@ -166,7 +166,7 @@ function reference(value: unknown): ProtectedValueRef {
   if (commitment.length > 1_024) {
     throw new TypeError("Protected commitment is too long.");
   }
-  return Object.freeze({
+  return ({
     schema: PROTECTED_VALUE_REF_SCHEMA,
     ownerNodeId: requiredText(input.ownerNodeId, "Protected owner node id"),
     bodyId: requiredText(input.bodyId, "Protected body id"),
@@ -178,7 +178,7 @@ function reference(value: unknown): ProtectedValueRef {
     commitment,
     envelope: secretEnvelope(input.envelope),
     protectedUntil: new Date(input.protectedUntil).toISOString(),
-  });
+  } as const);
 }
 
 export function protectedValueRef(value: unknown): ProtectedValueRef {
@@ -186,17 +186,17 @@ export function protectedValueRef(value: unknown): ProtectedValueRef {
 }
 
 function nodeData(ref: ProtectedValueRef): Readonly<Record<string, unknown>> {
-  return Object.freeze({
+  return ({
     state: "ready",
     bodyId: ref.bodyId,
     byteLength: ref.byteLength,
     digest: ref.digest,
     mediaType: ref.mediaType,
-    location: Object.freeze({
+    location: {
       kind: ref.storeKind,
       backendId: ref.backendId,
-    }),
-  });
+    } as const,
+  } as const);
 }
 
 async function insertOwner(
@@ -286,7 +286,7 @@ export function createProtectedValueRuntime(
     return reader;
   };
 
-  return Object.freeze({
+  return ({
     async prepare(coordinates, value) {
       const namespace = requiredText(
         coordinates.namespace,
@@ -337,7 +337,7 @@ export function createProtectedValueRuntime(
         ? ciphertext
         : undefined;
       const head = databaseBytes
-        ? Object.freeze({
+        ? ({
           bodyId,
           state: "ready" as const,
           byteLength: ciphertext.byteLength,
@@ -345,7 +345,7 @@ export function createProtectedValueRuntime(
           digest,
           maintenanceVersion: 1,
           protectedUntil,
-        })
+        } as const)
         : await store.put({
           bodyId,
           bytes: ciphertext,
@@ -367,10 +367,10 @@ export function createProtectedValueRuntime(
         envelope,
         protectedUntil: head.protectedUntil ?? protectedUntil,
       });
-      return Object.freeze({
+      return ({
         ref,
         ...(databaseBytes ? { databaseBytes: databaseBytes.slice() } : {}),
-      });
+      } as const);
     },
     async open(coordinates, rawRef) {
       const ref = reference(rawRef);
@@ -438,5 +438,5 @@ export function createProtectedValueRuntime(
         undefined,
       );
     },
-  });
+  } as const);
 }

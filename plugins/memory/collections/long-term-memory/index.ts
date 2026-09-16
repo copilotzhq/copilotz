@@ -4,7 +4,7 @@ import {
   defineCollection,
   relation,
 } from "@copilotz/copilotz/collections";
-import { MEMORY_EDGE } from "../internal/relations.ts";
+import { MEMORY_EDGE } from "../../shared/relations.ts";
 const schema = {
   type: "object",
   properties: {

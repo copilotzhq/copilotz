@@ -39,7 +39,7 @@ import {
   type LlmCallInput,
   type LlmConnectionContext,
   type LlmConnectionExecution,
-} from "../../internal/contracts.ts";
+} from "../../shared/contracts.ts";
 import { llmPlugin } from "../../plugin.ts";
 
 const encoder = new TextEncoder();

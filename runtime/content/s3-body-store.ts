@@ -238,7 +238,7 @@ export function createS3BodyStore(
       const etag = etagHeader?.startsWith('"') && etagHeader.endsWith('"')
         ? etagHeader.slice(1, -1)
         : etagHeader || undefined;
-      const head = Object.freeze({
+      const head = {
         bodyId,
         state: "ready" as const,
         byteLength,
@@ -248,21 +248,21 @@ export function createS3BodyStore(
         ...(protectedUntil ? { protectedUntil } : {}),
         ...(etag ? { etag } : {}),
         ...(lastModified ? { lastModified } : {}),
-      });
+      } as const;
       const generation = provider === "gcs"
         ? positiveInt64(response.headers.get("x-goog-generation"))
         : undefined;
       const metageneration = provider === "gcs"
         ? positiveInt64(response.headers.get("x-goog-metageneration"))
         : undefined;
-      return Object.freeze({
+      return ({
         head,
         ...(generation && metageneration
           ? {
-            guard: Object.freeze({ generation, metageneration }),
+            guard: { generation, metageneration } as const,
           }
           : {}),
-      });
+      } as const);
     } catch (error) {
       if (isAbsentError(error)) return null;
       throw error;
@@ -545,11 +545,11 @@ export function createS3BodyStore(
         headers.get("x-goog-metageneration"),
       );
       return generation && metageneration
-        ? Object.freeze({ kind: "gcs", generation, metageneration })
+        ? ({ kind: "gcs", generation, metageneration } as const)
         : undefined;
     }
     const etag = parseStrongEtag(headers.get("etag"));
-    return etag ? Object.freeze({ kind: "s3", etag }) : undefined;
+    return etag ? ({ kind: "s3", etag } as const) : undefined;
   };
 
   const spillConditionalHeaders = (guard: SpillGuard): Headers =>
@@ -667,16 +667,18 @@ export function createS3BodyStore(
       if (!Number.isSafeInteger(expectedOffset)) throw invalidSpillMeta();
       appendIds.add(appendId);
       keys.add(key);
-      parts.push(Object.freeze({
-        seq: seq as number,
-        appendId,
-        offset: offset as number,
-        length: length as number,
-        key,
-      }));
+      parts.push(
+        {
+          seq: seq as number,
+          appendId,
+          offset: offset as number,
+          length: length as number,
+          key,
+        } as const,
+      );
     }
     if (expectedOffset !== byteLength) throw invalidSpillMeta();
-    return Object.freeze({
+    return ({
       state,
       mediaType: parsed.mediaType,
       byteLength: byteLength as number,
@@ -685,11 +687,11 @@ export function createS3BodyStore(
       writerGeneration: writerGeneration as number,
       leaseExpiresAt,
       maintenanceVersion: maintenanceVersion as number,
-      parts: Object.freeze(parts),
+      parts: parts,
       ...(sealedDigest ? { sealedDigest } : {}),
       ...(terminalDigest ? { terminalDigest } : {}),
       ...(protectedUntil ? { protectedUntil } : {}),
-    });
+    } as const);
   };
 
   const readSpillInspection = async (
@@ -739,13 +741,13 @@ export function createS3BodyStore(
       }
       const modifiedHeader = response.headers.get("last-modified");
       const modifiedAt = modifiedHeader ? Date.parse(modifiedHeader) : NaN;
-      return Object.freeze({
+      return ({
         meta: parseSpillMeta(bodyId, bytes),
         guard,
         ...(Number.isFinite(modifiedAt)
           ? { lastModified: new Date(modifiedAt).toISOString() }
           : {}),
-      });
+      } as const);
     } catch (error) {
       if (isAbsentError(error)) return null;
       throw error;
@@ -878,19 +880,19 @@ export function createS3BodyStore(
       })
     ) {
       if (entry.key === stagingMetaKey(bodyId)) continue;
-      entries.push(Object.freeze({
-        key: entry.key,
-        lastModified: entry.lastModified.toISOString(),
-      }));
+      entries.push(
+        {
+          key: entry.key,
+          lastModified: entry.lastModified.toISOString(),
+        } as const,
+      );
     }
     const after = await readSpillInspection(bodyId);
-    return Object.freeze(
-      entries.filter((entry) =>
-        bodyHasBeenIdle(entry.lastModified, idleForMs) &&
-        !protectedSpillPart(bodyId, before?.meta, entry.key) &&
-        !protectedSpillPart(bodyId, after?.meta, entry.key)
-      ).map((entry) => entry.key),
-    );
+    return (entries.filter((entry) =>
+      bodyHasBeenIdle(entry.lastModified, idleForMs) &&
+      !protectedSpillPart(bodyId, before?.meta, entry.key) &&
+      !protectedSpillPart(bodyId, after?.meta, entry.key)
+    ).map((entry) => entry.key));
   };
 
   const deleteSpillMeta = async (
@@ -944,7 +946,7 @@ export function createS3BodyStore(
   ): IncompleteBodyHead | MutableBodyHead => {
     if (meta.state === "incomplete") {
       if (!meta.terminalDigest) throw invalidSpillMeta();
-      return Object.freeze({
+      return ({
         bodyId,
         state: "incomplete" as const,
         mediaType: meta.mediaType,
@@ -954,7 +956,7 @@ export function createS3BodyStore(
         ...(meta.protectedUntil ? { protectedUntil: meta.protectedUntil } : {}),
         etag: meta.terminalDigest.slice("sha256:".length),
         ...(lastModified ? { lastModified } : {}),
-      });
+      } as const);
     }
     const common = {
       bodyId,
@@ -965,14 +967,14 @@ export function createS3BodyStore(
       reservationId: meta.reservationId,
     };
     if (meta.state === "aborting") {
-      return Object.freeze({ ...common, state: "aborted" as const });
+      return ({ ...common, state: "aborted" as const } as const);
     }
-    return Object.freeze({
+    return ({
       ...common,
       state: meta.state === "terminating" ? "terminating" as const : meta.state,
       writerGeneration: meta.writerGeneration,
       writerLeaseRemainingMs: bodyProtectionRemainingMs(meta.leaseExpiresAt),
-    });
+    } as const);
   };
 
   const writerSpillHead = (
@@ -1120,14 +1122,13 @@ export function createS3BodyStore(
   const appendResult = (
     input: AppendBodyInput,
     meta: S3SpillMeta,
-  ): AppendResult =>
-    Object.freeze({
-      startOffset: input.expectedOffset,
-      endOffset: meta.byteLength,
-      protection: Object.freeze({
-        remainingMs: bodyProtectionRemainingMs(meta.leaseExpiresAt),
-      }),
-    });
+  ): AppendResult => ({
+    startOffset: input.expectedOffset,
+    endOffset: meta.byteLength,
+    protection: {
+      remainingMs: bodyProtectionRemainingMs(meta.leaseExpiresAt),
+    } as const,
+  } as const);
 
   const findIdenticalAppend = async (
     meta: S3SpillMeta,
@@ -1207,7 +1208,7 @@ export function createS3BodyStore(
             "A progressive writer lease is still live for this asset body.",
           );
         }
-        const candidate: S3SpillMeta = Object.freeze({
+        const candidate: S3SpillMeta = {
           ...existing.meta,
           reservationId,
           writerGeneration: advanceSpillCounter(
@@ -1217,7 +1218,7 @@ export function createS3BodyStore(
             existing.meta.maintenanceVersion,
           ),
           leaseExpiresAt: bodyProtectionUntil(protectionMs),
-        });
+        } as const;
         const committed = await casSpillMeta(
           input.bodyId,
           existing,
@@ -1258,7 +1259,7 @@ export function createS3BodyStore(
         writerGeneration: 1,
         leaseExpiresAt: bodyProtectionUntil(protectionMs),
         maintenanceVersion: 1,
-        parts: Object.freeze([]),
+        parts: [] as const,
       };
       try {
         await putObject(
@@ -1302,13 +1303,13 @@ export function createS3BodyStore(
       const existing = await requireSpillInspection(input.writer.bodyId);
       requireOwner(existing.meta, input.writer);
       requireOpen(existing.meta);
-      const candidate: S3SpillMeta = Object.freeze({
+      const candidate: S3SpillMeta = {
         ...existing.meta,
         maintenanceVersion: advanceSpillCounter(
           existing.meta.maintenanceVersion,
         ),
         leaseExpiresAt: bodyProtectionUntil(protectionMs),
-      });
+      } as const;
       const committed = await casSpillMeta(
         input.writer.bodyId,
         existing,
@@ -1320,11 +1321,11 @@ export function createS3BodyStore(
           "Progressive lease renewal lost its metadata commit race.",
         );
       }
-      return Object.freeze({
+      return ({
         remainingMs: bodyProtectionRemainingMs(
           committed.meta.leaseExpiresAt,
         ),
-      });
+      } as const);
     },
     async append(input) {
       const existing = await requireSpillInspection(input.writer.bodyId);
@@ -1352,17 +1353,17 @@ export function createS3BodyStore(
           input.appendId,
         );
         await putSpillPart(key, input.bytes, input.writer.mediaType);
-        part = Object.freeze({
+        part = {
           seq,
           appendId: input.appendId,
           offset: existing.meta.byteLength,
           length: input.bytes.byteLength,
           key,
-        });
+        } as const;
       }
       const byteLength = existing.meta.byteLength + input.bytes.byteLength;
       if (!Number.isSafeInteger(byteLength)) throw invalidSpillMeta();
-      const candidate: S3SpillMeta = Object.freeze({
+      const candidate: S3SpillMeta = {
         ...existing.meta,
         byteLength,
         maintenanceVersion: advanceSpillCounter(
@@ -1370,9 +1371,9 @@ export function createS3BodyStore(
         ),
         leaseExpiresAt: bodyProtectionUntil(protectionMs),
         parts: part
-          ? Object.freeze([...existing.meta.parts, part])
+          ? ([...existing.meta.parts, part] as const)
           : existing.meta.parts,
-      });
+      } as const;
       const committed = await casSpillMeta(
         input.writer.bodyId,
         existing,
@@ -1456,14 +1457,14 @@ export function createS3BodyStore(
           );
         }
         if (current.meta.state === "open") {
-          const frozen: S3SpillMeta = Object.freeze({
+          const frozen: S3SpillMeta = {
             ...current.meta,
             state: "terminating",
             maintenanceVersion: advanceSpillCounter(
               current.meta.maintenanceVersion,
             ),
             leaseExpiresAt: bodyProtectionUntil(protectionMs),
-          });
+          } as const;
           const committed = await casSpillMeta(bodyId, current, frozen);
           if (!committed) continue;
           current = committed;
@@ -1480,7 +1481,7 @@ export function createS3BodyStore(
             "Progressive body digest does not match terminate expectation.",
           );
         }
-        const terminal: S3SpillMeta = Object.freeze({
+        const terminal: S3SpillMeta = {
           ...current.meta,
           state: "incomplete",
           terminalDigest: digest,
@@ -1489,7 +1490,7 @@ export function createS3BodyStore(
             current.meta.maintenanceVersion,
           ),
           leaseExpiresAt: bodyProtectionUntil(protectionMs),
-        });
+        } as const;
         const committed = await casSpillMeta(bodyId, current, terminal);
         if (!committed) continue;
         const head = spillHead(bodyId, committed.meta, committed.lastModified);
@@ -1511,14 +1512,14 @@ export function createS3BodyStore(
         );
       }
       if (current.meta.state === "open") {
-        const candidate: S3SpillMeta = Object.freeze({
+        const candidate: S3SpillMeta = {
           ...current.meta,
           state: "aborting",
           maintenanceVersion: advanceSpillCounter(
             current.meta.maintenanceVersion,
           ),
           leaseExpiresAt: bodyProtectionUntil(protectionMs),
-        });
+        } as const;
         const committed = await casSpillMeta(
           input.writer.bodyId,
           current,
@@ -1629,7 +1630,7 @@ export function createS3BodyStore(
         const lastModified = lastModifiedHeader
           ? new Date(lastModifiedHeader).toISOString()
           : undefined;
-        return Object.freeze({
+        return ({
           bodyId: input.bodyId,
           state: "ready" as const,
           byteLength: input.bytes.byteLength,
@@ -1639,7 +1640,7 @@ export function createS3BodyStore(
           protectedUntil,
           ...(etag ? { etag } : {}),
           ...(lastModified ? { lastModified } : {}),
-        });
+        } as const);
       }
       throw createContentError(
         "asset_storage_unavailable",
@@ -1762,14 +1763,14 @@ export function createS3BodyStore(
           );
         }
         if (current.meta.state === "open") {
-          const frozen: S3SpillMeta = Object.freeze({
+          const frozen: S3SpillMeta = {
             ...current.meta,
             state: "sealing",
             maintenanceVersion: advanceSpillCounter(
               current.meta.maintenanceVersion,
             ),
             leaseExpiresAt: bodyProtectionUntil(protectionMs),
-          });
+          } as const;
           const committed = await casSpillMeta(bodyId, current, frozen);
           if (!committed) continue;
           current = committed;
@@ -1809,14 +1810,14 @@ export function createS3BodyStore(
           );
         }
         if (!current.meta.sealedDigest) {
-          const checksummed: S3SpillMeta = Object.freeze({
+          const checksummed: S3SpillMeta = {
             ...current.meta,
             sealedDigest: digest,
             maintenanceVersion: advanceSpillCounter(
               current.meta.maintenanceVersion,
             ),
             leaseExpiresAt: bodyProtectionUntil(protectionMs),
-          });
+          } as const;
           const committed = await casSpillMeta(bodyId, current, checksummed);
           if (!committed) continue;
           current = committed;
@@ -1905,15 +1906,17 @@ export function createS3BodyStore(
             ) continue;
             const current = await readSpillInspection(bodyId);
             if (protectedSpillPart(bodyId, current?.meta, entry.key)) continue;
-            bodies.push(Object.freeze({
-              bodyId,
-              state: "aborted" as const,
-              mediaType: "application/octet-stream",
-              byteLength: 0,
-              discarded: 0,
-              maintenanceVersion: 1,
-              reservationId: "orphaned-progressive-parts",
-            }));
+            bodies.push(
+              {
+                bodyId,
+                state: "aborted" as const,
+                mediaType: "application/octet-stream",
+                byteLength: 0,
+                discarded: 0,
+                maintenanceVersion: 1,
+                reservationId: "orphaned-progressive-parts",
+              } as const,
+            );
             listedBodyIds.add(bodyId);
           } else if (
             states.has("ready") && !entry.key.includes(".progressive/") &&
@@ -1932,12 +1935,12 @@ export function createS3BodyStore(
         }
         bodies.sort((left, right) => left.bodyId.localeCompare(right.bodyId));
         const page = bodies.slice(0, input.limit);
-        return Object.freeze({
-          bodies: Object.freeze(page),
+        return ({
+          bodies: page,
           ...(page.length === input.limit
             ? { after: page[page.length - 1].bodyId }
             : {}),
-        });
+        } as const);
       },
       async delete(input) {
         if (!Number.isSafeInteger(input.idleForMs) || input.idleForMs < 0) {
@@ -2018,5 +2021,5 @@ export function createS3BodyStore(
       },
     },
   };
-  return Object.freeze(store);
+  return store;
 }

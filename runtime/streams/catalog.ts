@@ -100,6 +100,7 @@ export type OperationEventIndexInput = Readonly<{
 
 export type OperationCatalog = Readonly<{
   databaseSchema: string;
+  session: SqlSession;
   tables: OperationCatalogTables;
   watch(operationId: string): Promise<OperationChangeSubscription>;
   indexEvent(
@@ -116,24 +117,6 @@ export type OperationCatalog = Readonly<{
       limit?: number;
     }>,
   ): Promise<readonly OperationRecord[]>;
-  belongsToThread(
-    namespace: string,
-    operationId: string,
-    threadId: string,
-  ): Promise<boolean>;
-  listForThread(
-    input: Readonly<{
-      namespace: string;
-      threadId: string;
-      states?: readonly OperationState[];
-      afterPosition?: string;
-      limit?: number;
-    }>,
-  ): Promise<readonly OperationRecord[]>;
-  threadEventWatermark(
-    namespace: string,
-    threadId: string,
-  ): Promise<string | undefined>;
   mark(
     namespace: string,
     operationId: string,
@@ -295,7 +278,7 @@ function operationNotificationHub(
   const existing = notificationHubs.get(session);
   if (existing) return existing;
   const listeners = new Set<(operationId: string) => void>();
-  const hub = Object.freeze({ listeners });
+  const hub = { listeners } as const;
   const pending = (async () => {
     if (session.listen) {
       await session.listen(OPERATION_CHANGE_CHANNEL, (notification) => {
@@ -445,40 +428,40 @@ function terminalStatus(stream: OperationStreamRecord): StreamTerminalStatus {
   ) {
     throw new Error(`Operation stream '${stream.streamId}' is not terminal.`);
   }
-  return Object.freeze({
+  return ({
     outcome: stream.outcome,
     availability: stream.availability,
     capture: stream.capture,
     offset: stream.committedOffset,
     terminalAt: stream.terminalAt,
-  });
+  } as const);
 }
 
 function tableNames(schemaName: string): OperationCatalogTables {
   const schema = quoteEventIdentifier(validateEventSchemaName(schemaName));
   const table = (name: string) => `${schema}.${quoteEventIdentifier(name)}`;
-  return Object.freeze({
+  return ({
     metadata: table("copilotz_operation_catalog_metadata"),
     operations: table("copilotz_operations"),
     operationEvents: table("copilotz_operation_events"),
     operationStreams: table("copilotz_operation_streams"),
     events: table("events"),
-  });
+  } as const);
 }
 
 function mapOperation(row: OperationRow): OperationRecord {
   const completedAt = iso(row.completed_at);
-  return Object.freeze({
+  return ({
     operationId: String(row.operation_id),
     namespace: String(row.namespace),
     rootEventId: String(row.root_event_id),
     correlationId: String(row.correlation_id),
-    metadata: Object.freeze(snapshotStreamMetadata(row.metadata)),
+    metadata: snapshotStreamMetadata(row.metadata),
     state: row.state,
     acceptedAt: iso(row.accepted_at)!,
     updatedAt: iso(row.updated_at)!,
     ...(completedAt ? { completedAt } : {}),
-  });
+  } as const);
 }
 
 function mapStream(row: StreamRow): OperationStreamRecord {
@@ -508,7 +491,7 @@ function mapStream(row: StreamRow): OperationStreamRecord {
       "Operation stream catalog contains invalid terminal state.",
     );
   }
-  return Object.freeze({
+  return ({
     operationId: String(row.operation_id),
     namespace: String(row.namespace),
     streamId: String(row.stream_id),
@@ -516,7 +499,7 @@ function mapStream(row: StreamRow): OperationStreamRecord {
     replayKey: String(row.replay_key),
     streamOrdinal: String(row.stream_ordinal),
     bodyId: String(row.body_id),
-    descriptor: Object.freeze(descriptor),
+    descriptor: descriptor,
     state: row.state,
     ...(row.outcome ? { outcome: row.outcome } : {}),
     availability: row.availability,
@@ -528,7 +511,7 @@ function mapStream(row: StreamRow): OperationStreamRecord {
     ...(terminalAt ? { terminalAt } : {}),
     createdAt: iso(row.created_at)!,
     updatedAt: iso(row.updated_at)!,
-  });
+  } as const);
 }
 
 /** Additive operational tables; the Core Event schema is unchanged. */
@@ -739,6 +722,7 @@ export function createOperationCatalog(
 ): OperationCatalog {
   const tables = tableNames(databaseSchema);
   const catalog: OperationCatalog = {
+    session,
     databaseSchema: validateEventSchemaName(databaseSchema),
     tables,
     async watch(operationIdInput) {
@@ -753,7 +737,7 @@ export function createOperationCatalog(
         resolveWaiting?.(true);
       };
       hub.listeners.add(listener);
-      return Object.freeze({
+      return ({
         wait(options = {}) {
           if (closed) return Promise.resolve(false);
           if (pending > 0) {
@@ -790,7 +774,7 @@ export function createOperationCatalog(
           resolveWaiting?.(false);
           resolveWaiting = undefined;
         },
-      });
+      } as const);
     },
     async indexEvent(transaction, input) {
       const namespace = requiredText(input.namespace, "Operation namespace");
@@ -878,83 +862,7 @@ export function createOperationCatalog(
           ORDER BY updated_at DESC, operation_id DESC LIMIT $${params.length}`,
         params,
       );
-      return Object.freeze(result.rows.map(mapOperation));
-    },
-    async belongsToThread(namespaceInput, operationIdInput, threadIdInput) {
-      const namespace = requiredText(namespaceInput, "Operation namespace");
-      const operationId = requiredText(operationIdInput, "Operation id");
-      const threadId = requiredText(threadIdInput, "Thread id");
-      const result = await session.query<{ operation_id: string }>(
-        `SELECT operation.operation_id
-           FROM ${tables.operations} AS operation
-          WHERE operation.namespace = $1 AND operation.operation_id = $2
-            AND (
-              operation.metadata -> 'operationMetadata' ->> 'threadId' = $3
-              OR EXISTS (
-                SELECT 1 FROM ${tables.operationEvents} AS indexed
-                JOIN ${tables.events} AS event ON event.id = indexed.event_id
-                WHERE indexed.namespace = operation.namespace
-                  AND indexed.operation_id = operation.operation_id
-                  AND event.thread_id = $3
-              )
-            )
-          LIMIT 1`,
-        [namespace, operationId, threadId],
-      );
-      return result.rows.length > 0;
-    },
-    async listForThread(input) {
-      const namespace = requiredText(input.namespace, "Operation namespace");
-      const threadId = requiredText(input.threadId, "Thread id");
-      const params: unknown[] = [namespace, threadId];
-      const stateFilter = input.states?.length
-        ? ` AND operation.state = ANY($${
-          params.push([...new Set(input.states)])
-        }::text[])`
-        : "";
-      if (
-        input.afterPosition && !/^(0|[1-9][0-9]*)$/.test(input.afterPosition)
-      ) throw new TypeError("Invalid event position.");
-      const progressFilter = input.afterPosition
-        ? ` AND (operation.state IN ('accepted', 'running') OR EXISTS (
-        SELECT 1 FROM ${tables.operationEvents} AS progress WHERE progress.namespace = operation.namespace
-        AND progress.operation_id = operation.operation_id AND progress.event_position > $${
-          params.push(input.afterPosition)
-        }::bigint))`
-        : "";
-      params.push(boundedLimit(input.limit));
-      const result = await session.query<OperationRow>(
-        `SELECT operation.* FROM ${tables.operations} AS operation
-          WHERE operation.namespace = $1${stateFilter}${progressFilter}
-            AND (
-              operation.metadata -> 'operationMetadata' ->> 'threadId' = $2
-              OR EXISTS (
-                SELECT 1 FROM ${tables.operationEvents} AS indexed
-                JOIN ${tables.events} AS event ON event.id = indexed.event_id
-                WHERE indexed.namespace = operation.namespace
-                  AND indexed.operation_id = operation.operation_id
-                  AND event.thread_id = $2
-              )
-            )
-          ORDER BY operation.updated_at DESC, operation.operation_id DESC
-          LIMIT $${params.length}`,
-        params,
-      );
-      return Object.freeze(result.rows.map(mapOperation));
-    },
-    async threadEventWatermark(namespaceInput, threadIdInput) {
-      const result = await session.query<{
-        position: string | number | bigint | null;
-      }>(
-        `SELECT MAX(position) AS position FROM ${tables.events}
-          WHERE namespace = $1 AND thread_id = $2`,
-        [
-          requiredText(namespaceInput, "Operation namespace"),
-          requiredText(threadIdInput, "Thread id"),
-        ],
-      );
-      const value = result.rows[0]?.position;
-      return value === null || value === undefined ? undefined : String(value);
+      return (result.rows.map(mapOperation));
     },
     async mark(namespaceInput, operationIdInput, state) {
       const namespace = requiredText(namespaceInput, "Operation namespace");
@@ -1015,12 +923,10 @@ export function createOperationCatalog(
           ORDER BY event_position LIMIT $${params.length}`,
         params,
       );
-      return Object.freeze(result.rows.map((row) =>
-        Object.freeze({
-          eventId: String(row.event_id),
-          position: String(row.event_position),
-        })
-      ));
+      return (result.rows.map((row) => ({
+        eventId: String(row.event_id),
+        position: String(row.event_position),
+      } as const)));
     },
     async openStream(input) {
       const descriptor = snapshotStreamMetadata(input.descriptor);
@@ -1099,10 +1005,10 @@ export function createOperationCatalog(
               WHERE namespace = $1 AND operation_id = $2 AND stream_id = $3`,
             [namespace, operationId, streamId, JSON.stringify(descriptor)],
           );
-          return Object.freeze({
+          return ({
             replayKey: String(existing.rows[0].replay_key),
             streamOrdinal: String(existing.rows[0].stream_ordinal),
-          });
+          } as const);
         }
         const ordinal = String(operation.rows[0].next_stream_ordinal);
         await transaction.query(
@@ -1135,10 +1041,10 @@ export function createOperationCatalog(
             JSON.stringify(descriptor),
           ],
         );
-        return Object.freeze({
+        return ({
           replayKey: String(inserted.rows[0].replay_key),
           streamOrdinal: ordinal,
-        });
+        } as const);
       });
       if (replayKey === undefined) return undefined;
       await notifyOperationChange(session, session, operationId);
@@ -1347,7 +1253,7 @@ export function createOperationCatalog(
             boundedLimit(input.limit),
           ],
       );
-      return Object.freeze(result.rows.map(mapStream));
+      return (result.rows.map(mapStream));
     },
     async getStream(namespace, operationId, streamId) {
       const result = await session.query<StreamRow>(
@@ -1465,12 +1371,10 @@ export function createOperationCatalog(
           ? [boundedLimit(input.limit)]
           : [after, boundedLimit(input.limit)],
       );
-      return Object.freeze(result.rows.map((row) =>
-        Object.freeze({
-          ...mapStream(row),
-          operationState: row.operation_state,
-        })
-      ));
+      return (result.rows.map((row) => ({
+        ...mapStream(row),
+        operationState: row.operation_state,
+      } as const)));
     },
     async listExpiredObservationStreams(input = {}) {
       const operationRetentionMs = input.operationRetentionMs ??
@@ -1501,7 +1405,7 @@ export function createOperationCatalog(
                    stream.operation_id, stream.stream_id LIMIT $2`,
         [completedCutoff, boundedLimit(input.limit)],
       );
-      return Object.freeze(result.rows.map(mapStream));
+      return (result.rows.map(mapStream));
     },
     async reconcile(input = {}) {
       const terminalizable = await session.query<{
@@ -1668,11 +1572,11 @@ export function createOperationCatalog(
             [candidate.namespace, candidate.operation_id],
           );
           if (remaining.rows.length > 0) {
-            return Object.freeze({
+            return ({
               streams: removedStreams.rows.length,
               events: 0,
               operations: 0,
-            });
+            } as const);
           }
           const removedEvents = await transaction.query<{ event_id: string }>(
             `DELETE FROM ${tables.operationEvents}
@@ -1688,17 +1592,17 @@ export function createOperationCatalog(
               RETURNING operation_id`,
             [candidate.namespace, candidate.operation_id],
           );
-          return Object.freeze({
+          return ({
             streams: removedStreams.rows.length,
             events: removedEvents.rows.length,
             operations: removedOperation.rows.length,
-          });
+          } as const);
         });
         streams += result.streams;
         events += result.events;
         operations += result.operations;
       }
-      return Object.freeze({ streams, events, operations });
+      return ({ streams, events, operations } as const);
     },
     async pruneStream(input) {
       const result = await session.query<{ stream_id: string }>(
@@ -1730,7 +1634,7 @@ export function createOperationCatalog(
       return result.rows.length > 0;
     },
   };
-  return Object.freeze(catalog);
+  return catalog;
 }
 
 export function operationStreamBodyId(

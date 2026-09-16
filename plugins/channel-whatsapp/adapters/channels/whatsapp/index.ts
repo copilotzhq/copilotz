@@ -1,4 +1,4 @@
-import { channelProviderOptions } from "../../../../channel-core/internal/provider-options.ts";
+import { channelProviderOptions } from "@copilotz/copilotz/channels/core";
 /**
  * Defines the WhatsApp Channel Adapter.
  *
@@ -15,12 +15,12 @@ import {
   outboundText,
   providerRecord,
   requiredProviderText,
-} from "../../../../channel-core/internal/helpers.ts";
+} from "@copilotz/copilotz/channels/core";
 import type {
   ChannelAdapter,
   ChannelDeliveryAttempt,
   ChannelJsonObject,
-} from "../../../../channel-core/internal/contracts.ts";
+} from "@copilotz/copilotz/channels/core";
 import {
   buildWhatsAppMediaCarouselMessage,
   buildWhatsAppReplyButtonsMessage,
@@ -32,7 +32,7 @@ import {
   createWhatsAppGraphTransport,
   verifyWhatsAppSignature,
   whatsappHeader,
-} from "./internal/transport.ts";
+} from "./transport.ts";
 import type {
   WhatsAppActionPayload,
   WhatsAppChannelOptions,
@@ -43,7 +43,7 @@ import type {
   WhatsAppTransport,
   WhatsAppWebhookMessage,
   WhatsAppWebhookPayload,
-} from "../../../internal/contracts.ts";
+} from "../../../shared/contracts.ts";
 
 function query(request: { query?: Record<string, unknown> }, key: string) {
   const value = request.query?.[key];
@@ -568,6 +568,6 @@ export {
   createWhatsAppGraphTransport,
   verifyWhatsAppSignature,
   whatsappHeader,
-} from "./internal/transport.ts";
+} from "./transport.ts";
 
 export default whatsappChannelAdapter;

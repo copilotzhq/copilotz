@@ -1,4 +1,4 @@
-import { channelProviderOptions } from "../../../../channel-core/internal/provider-options.ts";
+import { channelProviderOptions } from "@copilotz/copilotz/channels/core";
 /**
  * Defines the Discord Channel Adapter.
  *
@@ -16,16 +16,13 @@ import {
   providerRecord,
   requestHeader,
   requiredProviderText,
-} from "../../../../channel-core/internal/helpers.ts";
+} from "@copilotz/copilotz/channels/core";
 import type {
   ChannelAdapter,
   ChannelDeliveryAttempt,
   ChannelJsonObject,
-} from "../../../../channel-core/internal/contracts.ts";
-import {
-  createDiscordTransport,
-  verifyDiscordSignature,
-} from "./internal/transport.ts";
+} from "@copilotz/copilotz/channels/core";
+import { createDiscordTransport, verifyDiscordSignature } from "./transport.ts";
 import type {
   DiscordActionPayload,
   DiscordChannelOptions,
@@ -35,7 +32,7 @@ import type {
   DiscordInteraction,
   DiscordTransport,
   DiscordUser,
-} from "../../../internal/contracts.ts";
+} from "./contracts.ts";
 
 function configContext(
   operation: DiscordConfigContext["operation"],
@@ -435,9 +432,6 @@ export const discordChannelAdapter: ChannelAdapter = {
   },
 } as const;
 
-export {
-  createDiscordTransport,
-  verifyDiscordSignature,
-} from "./internal/transport.ts";
+export { createDiscordTransport, verifyDiscordSignature } from "./transport.ts";
 
 export default discordChannelAdapter;

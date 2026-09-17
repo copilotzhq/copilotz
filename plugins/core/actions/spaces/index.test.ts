@@ -65,6 +65,40 @@ for (const url of [":memory:", ...(databaseUrl ? [databaseUrl] : [])]) {
       for (const spaceId of ["a", "b"]) {
         await run({ operation: "create", spaceId, ownerId: "owner" });
       }
+      const legacySpace = await c.space.get({ id: "a" });
+      assertEquals(legacySpace?.description, undefined);
+      const updated = await run({
+        operation: "update",
+        spaceId: "a",
+        name: "Research",
+        description: "Shared notes",
+      }) as { space?: Record<string, unknown> };
+      assertEquals(updated.space?.name, "Research");
+      assertEquals(updated.space?.description, "Shared notes");
+      assertEquals((await c.space.get({ id: "a" }))?.name, "Research");
+      await run({
+        operation: "update",
+        spaceId: "a",
+        description: "Updated notes",
+      });
+      assertEquals((await c.space.get({ id: "a" }))?.name, "Research");
+      assertEquals(
+        (await c.space.get({ id: "a" }))?.description,
+        "Updated notes",
+      );
+      await run({
+        operation: "update",
+        spaceId: "a",
+        description: "   ",
+      });
+      assertEquals((await c.space.get({ id: "a" }))?.description, "");
+      await assertRejects(() => run({ operation: "update", spaceId: "a" }));
+      await assertRejects(() =>
+        run({ operation: "update", spaceId: "a", name: "   " })
+      );
+      await assertRejects(() =>
+        run({ operation: "update", spaceId: "a", name: "Research" })
+      );
       await run({
         operation: "addMember",
         spaceId: "a",
@@ -124,6 +158,9 @@ for (const url of [":memory:", ...(databaseUrl ? [databaseUrl] : [])]) {
       );
       await run({ operation: "archive", spaceId: "b" });
       await assertRejects(() => attach("b"));
+      await assertRejects(() =>
+        run({ operation: "update", spaceId: "b", name: "Archived" })
+      );
       const attachmentId = spaceAttachmentId("thread", "thread");
       assertEquals(
         (await c.spaceAttachment.get({ id: attachmentId }))?.spaceId,
@@ -171,6 +208,24 @@ for (const url of [":memory:", ...(databaseUrl ? [databaseUrl] : [])]) {
           recordId: "thread",
         })
       );
+      await assertRejects(() =>
+        other.actions.spaces({
+          operation: "update",
+          spaceId: "a",
+          name: "Foreign",
+        })
+      );
+      await run({
+        operation: "create",
+        spaceId: "with-description",
+        ownerId: "owner",
+        description: "Created with metadata",
+      });
+      assertEquals(
+        (await c.space.get({ id: "with-description" }))?.description,
+        "Created with metadata",
+      );
+      await run({ operation: "remove", spaceId: "with-description" });
       // Removal must not silently stop at one query page.
       await context.transaction(async (tx) => {
         for (let i = 0; i < 205; i++) {

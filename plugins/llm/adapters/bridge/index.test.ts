@@ -3,9 +3,49 @@ import { ContextInputLimitError } from "../../shared/errors.ts";
 import {
   createProviderAdapter,
   preflightLlmRequest,
+  toolDefinition,
   validateBuiltinProviderCall,
 } from "./index.ts";
 import type { ChatMessage, ProviderFactory } from "../../shared/types.ts";
+import type { LlmJsonObject } from "../../shared/contracts.ts";
+
+Deno.test("bridge renders action schemas as TypeScript tool input types", () => {
+  const tool = toolDefinition({
+    name: "space_scheduled_jobs",
+    description: "Create and manage scheduled jobs.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        schedule: {
+          type: "object",
+          properties: { expression: { type: "string" } },
+          required: ["expression"],
+        },
+        action: { type: "string", enum: ["create", "list"] },
+      },
+      required: ["action", "schedule"],
+    },
+  });
+  const inputTypes = tool.function.inputTypes;
+  assert(inputTypes.includes("export interface SpaceScheduledJobsInput {"));
+  assert(inputTypes.includes("export interface Schedule {"));
+  assert(inputTypes.includes("expression: string;"));
+  assert(inputTypes.includes('"create" | "list"'));
+  assertEquals(inputTypes.includes('"type": "object"'), false);
+});
+
+Deno.test("bridge falls back to a generic type for unrenderable schemas", () => {
+  const tool = toolDefinition({
+    name: "third_party_tool",
+    description: "A third-party tool with an unsupported schema shape.",
+    inputSchema: { $ref: 7 } as unknown as LlmJsonObject,
+  });
+
+  assertEquals(
+    tool.function.inputTypes,
+    "export type ToolInput = Record<string, unknown>;\n",
+  );
+});
 
 Deno.test("provider bridge rejects unsupported built-in session mode", () => {
   assertThrows(() => validateBuiltinProviderCall("openai", "session", {}));

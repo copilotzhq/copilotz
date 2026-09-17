@@ -1,6 +1,7 @@
 /** Provider-wire to LLM Adapter bridge. @module */
 
 import { projectPreparedRequest } from "../../shared/prepared-request.ts";
+import { generateAgentTypesFromSchema } from "../../shared/schema-to-agent-types.ts";
 
 import { bytesToBase64, toDataUrl } from "@copilotz/copilotz/content";
 
@@ -351,15 +352,38 @@ function toolResultOutput(content: ChatContentPart[]): unknown {
     : content;
 }
 
-function toolDefinition(definition: LlmToolDefinition): ToolDefinition {
+function toolTypeName(name: string): string {
+  const parts = name
+    .replace(/[\[\].{}]/g, " ")
+    .split(/[^A-Za-z0-9]+/)
+    .filter(Boolean);
+  const base = parts.map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join("");
+  return `${base || "Tool"}Input`;
+}
+
+export function toolDefinition(definition: LlmToolDefinition): ToolDefinition {
+  let inputTypes = "export type ToolInput = Record<string, unknown>;\n";
+  if (definition.inputSchema) {
+    try {
+      inputTypes = generateAgentTypesFromSchema(
+        definition.inputSchema as Record<string, unknown>,
+        {
+          rootName: toolTypeName(definition.name),
+          moduleName: definition.name,
+        },
+      );
+    } catch {
+      // Keep catalog construction available for third-party schemas the
+      // renderer cannot represent. The raw schema remains the wire contract.
+    }
+  }
   return {
     type: "function",
     function: {
       name: definition.name,
       description: definition.description,
-      inputTypes: definition.inputSchema
-        ? JSON.stringify(definition.inputSchema, null, 2)
-        : "{}",
+      inputTypes,
     },
   };
 }

@@ -21,7 +21,13 @@ Call `actions.spaces({ operation, spaceId, ... })`:
   result is `{ spaceId, operation: "update", space }` with the updated Space.
 - `addMember` / `removeMember`: existing `participantId`.
 - `attach` / `detach`: `collection` alias and `recordId`.
-- `archive` / `restore` / `remove`: only `spaceId`.
+- `archive` / `restore`: only `spaceId`.
+- `remove`: `spaceId`; pass `requireEmpty: true` to reject removal while the
+  Space has attachments.
+
+Core also exports `attachSpaceRecord` for authorized Action or Processor code
+that already has a transaction. It applies the same canonical attachment,
+relation and atomic move semantics as the `attach` operation.
 
 Application/server guards must authorize the operation, both Spaces on a move,
 and the target record. The Action does not authenticate callers. Use ordinary

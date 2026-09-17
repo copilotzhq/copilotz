@@ -42,6 +42,10 @@ const records = await context.collections.spaceAttachment.queries.bySpace({
 });
 ```
 
+Code that already owns a transaction can call the exported
+`attachSpaceRecord(context, transaction, spaceId, collection, recordId)` helper
+to apply the same canonical attachment and atomic move semantics as the Action.
+
 Participants and target records must already exist in the current namespace.
 `collection` is a registered alias; attachment identity uses its canonical
 collection name and record ID, so aliases cannot bypass uniqueness. Each record
@@ -66,8 +70,10 @@ the Action for lifecycle and attachment invariants.
   derived memory access, while keeping attachments and membership.
 - `restore` reactivates remaining attachments. A record moved out while archived
   is not reclaimed, so restoration cannot introduce a second active attachment.
-- `remove` permanently removes the Space and its attachments. Original records,
-  Thread producer scopes and memory records survive, now without that Space.
+- `remove` permanently removes the Space and its attachments. Pass
+  `requireEmpty: true` to reject removal while attachments exist. Original
+  records, Thread producer scopes and memory records survive, now without that
+  Space.
 
 Archive, restore and remove need only `spaceId`. Ordinary collection listing is
 an administrative view and can include archived Spaces. Use the active query for

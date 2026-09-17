@@ -17,9 +17,8 @@ Call `actions.spaces({ operation, spaceId, ... })`:
 - `create`: existing `ownerId`, optional `name` and `description`.
 - `update`: an application-authorized owner/member supplies a non-empty `name`
   and/or `description`; an explicitly empty description clears it, while an
-  omitted description is unchanged. No-op and invalid patches are rejected.
-  The result is `{ spaceId, operation: "update", space }` with the updated
-  Space.
+  omitted description is unchanged. No-op and invalid patches are rejected. The
+  result is `{ spaceId, operation: "update", space }` with the updated Space.
 - `addMember` / `removeMember`: existing `participantId`.
 - `attach` / `detach`: `collection` alias and `recordId`.
 - `archive` / `restore` / `remove`: only `spaceId`.

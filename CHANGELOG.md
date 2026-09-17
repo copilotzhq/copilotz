@@ -1,10 +1,10 @@
 # Changelog
 
-## 0.76.3 — 2026-09-17
+## 0.76.4 — 2026-09-17
 
 - Allow authorized applications to update a Space's canonical name and optional
-  description through Core's Space Action. Existing Spaces remain compatible;
-  an explicit empty description clears it.
+  description through Core's Space Action. Existing Spaces remain compatible; an
+  explicit empty description clears it.
 
 ## 0.76.2 — 2026-09-17
 

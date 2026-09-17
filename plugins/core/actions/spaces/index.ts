@@ -31,6 +31,7 @@ export type SpaceInput = {
   participantId?: string;
   collection?: string;
   recordId?: string;
+  requireEmpty?: boolean;
 };
 
 export type SpaceResult = Pick<SpaceInput, "spaceId" | "operation"> & {
@@ -142,6 +143,7 @@ export const spacesAction: ActionDefinition<SpaceInput, SpaceResult> =
           participantId: { type: "string", minLength: 1 },
           collection: { type: "string", minLength: 1 },
           recordId: { type: "string", minLength: 1 },
+          requireEmpty: { type: "boolean" },
         },
         required: ["operation", "spaceId"],
       } as const,
@@ -267,6 +269,7 @@ export const spacesAction: ActionDefinition<SpaceInput, SpaceResult> =
               });
               break;
             case "remove": {
+              const attachments: CollectionRecord[] = [];
               let after: string | undefined;
               while (true) {
                 const page = await collections.spaceAttachment.list({
@@ -275,13 +278,19 @@ export const spacesAction: ActionDefinition<SpaceInput, SpaceResult> =
                   after,
                   limit: 200,
                 });
-                for (const attachment of page) {
-                  await tx.collections.spaceAttachment.delete({
-                    id: attachment.id,
-                  });
-                }
+                attachments.push(...page);
                 if (page.length < 200) break;
                 after = page[page.length - 1].id;
+              }
+              if (input.requireEmpty && attachments.length > 0) {
+                throw new Error(
+                  "Space cannot be removed while it has attachments.",
+                );
+              }
+              for (const attachment of attachments) {
+                await tx.collections.spaceAttachment.delete({
+                  id: attachment.id,
+                });
               }
               await tx.collections.space.delete({ id: spaceId });
               break;

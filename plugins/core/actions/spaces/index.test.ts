@@ -141,6 +141,21 @@ for (const url of [":memory:", ...(databaseUrl ? [databaseUrl] : [])]) {
         collection: "document",
         recordId: "doc",
       });
+      const guardedAttachments = await c.spaceAttachment.list({
+        where: { spaceId: "a" },
+      });
+      await assertRejects(
+        () => run({ operation: "remove", spaceId: "a", requireEmpty: true }),
+        Error,
+        "Space cannot be removed while it has attachments.",
+      );
+      assert(await c.space.get({ id: "a" }));
+      assertEquals(
+        (await c.spaceAttachment.list({ where: { spaceId: "a" } })).map((
+          attachment,
+        ) => attachment.id),
+        guardedAttachments.map((attachment) => attachment.id),
+      );
       await context.transaction(async (tx) => {
         await attachSpaceRecord({ collections: c }, tx, "b", "document", "doc");
       });
@@ -239,7 +254,11 @@ for (const url of [":memory:", ...(databaseUrl ? [databaseUrl] : [])]) {
         (await c.space.get({ id: "with-description" }))?.description,
         "Created with metadata",
       );
-      await run({ operation: "remove", spaceId: "with-description" });
+      await run({
+        operation: "remove",
+        spaceId: "with-description",
+        requireEmpty: true,
+      });
       // Removal must not silently stop at one query page.
       await context.transaction(async (tx) => {
         for (let i = 0; i < 205; i++) {

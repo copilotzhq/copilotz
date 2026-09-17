@@ -39,18 +39,22 @@ export async function createHttpOperations(
   const runtime = databaseSchema === application.config.databaseSchema
     ? application
     : await application.databaseScope(databaseSchema);
+  const authorizedOperationMetadata = (candidate: unknown): boolean => {
+    const metadata = candidate && typeof candidate === "object" &&
+        !Array.isArray(candidate)
+      ? candidate as Record<string, unknown>
+      : {};
+    return Object.entries(constraints.operations?.metadata ?? {}).every((
+      [key, value],
+    ) => JSON.stringify(metadata[key]) === JSON.stringify(value));
+  };
   const get = async (operationId: string) => {
     const status = await application.operationStatus({
       operationId,
       namespace,
       databaseSchema,
     });
-    if (
-      !status ||
-      Object.entries(constraints.operations?.metadata ?? {}).some((
-        [key, value],
-      ) => JSON.stringify(status.metadata[key]) !== JSON.stringify(value))
-    ) {
+    if (!status || !authorizedOperationMetadata(status.metadata)) {
       throw failure("operation_not_found", 404, "Operation was not found.");
     }
     return status;
@@ -76,7 +80,11 @@ export async function createHttpOperations(
         "Observation exceeds 32 operations.",
       );
     }
-    for (const operation of operations) await get(operation.operationId);
+    for (const operation of operations) {
+      if (!authorizedOperationMetadata(operation.metadata.operationMetadata)) {
+        throw failure("operation_not_found", 404, "Operation was not found.");
+      }
+    }
     return operations.map((operation) => operation.operationId);
   };
   return ({
@@ -207,7 +215,9 @@ export async function createHttpOperations(
           "Observation exceeds 32 operations.",
         );
       }
-      for (const id of ids) await get(id);
+      if (!selection.threadId) {
+        for (const id of ids) await get(id);
+      }
       const bootstrap = selection.threadId
         ? [] as {
           streamId: string;
@@ -274,6 +284,7 @@ export async function createHttpOperations(
       selection.signal?.addEventListener("abort", cancelled, { once: true });
       void writer.closed.catch(() => detach());
       const attach = async (id: string) => {
+        if (abort.signal.aborted) return;
         if (attachments.has(id)) return;
         if (attachments.size >= 32) {
           throw failure(
@@ -288,6 +299,10 @@ export async function createHttpOperations(
           databaseSchema,
           cursor: checkpoint,
         });
+        if (abort.signal.aborted) {
+          await attachment.detach("observation_detached");
+          return;
+        }
         attachments.set(id, attachment);
         const pump = (async () => {
           for await (const output of attachment.outputs) {

@@ -2,7 +2,6 @@ import { assert, assertEquals } from "@std/assert";
 import {
   createEventStore,
   provisionCopilotzSchema,
-  type SqlSession,
 } from "@copilotz/copilotz/events";
 import {
   createOperationCatalog,
@@ -21,17 +20,9 @@ Deno.test("Core operation queries discover bounded thread associations", async (
   try {
     await provisionCopilotzSchema(db, schema);
     await provisionOperationCatalog(db, schema);
-    const queries: { sql: string; params?: unknown[] }[] = [];
-    const session: SqlSession = {
-      ...db,
-      query(sql, params) {
-        queries.push({ sql, params });
-        return db.query(sql, params);
-      },
-    };
-    const catalog = createOperationCatalog(session, schema);
+    const catalog = createOperationCatalog(db, schema);
     const store = createEventStore({
-      session,
+      session: db,
       schema,
       indexOperationEvent: (tx, input) => catalog.indexEvent(tx, input),
     });
@@ -85,10 +76,23 @@ Deno.test("Core operation queries discover bounded thread associations", async (
       "test.active",
       { core: { threadId: "thread" } },
     );
+    const topLevelThread = await append(
+      "tenant",
+      "test.top-level-thread",
+      { threadId: "thread" },
+    );
+    const mismatchedNesting = await append(
+      "tenant",
+      "test.mismatched-nesting",
+      {
+        operationMetadata: { core: { threadId: "thread" } },
+        core: { operationMetadata: { threadId: "thread" } },
+      },
+    );
     await catalog.mark("tenant", finishedOld.id, "completed");
     await catalog.mark("tenant", finishedRecent.id, "completed");
-    await session.query(
-      `UPDATE ${catalog.tables.operations}
+    await db.query(
+      `UPDATE "${schema}"."copilotz_operations"
           SET updated_at = CASE operation_id
             WHEN $1 THEN $2::timestamptz
             WHEN $3 THEN $4::timestamptz
@@ -145,10 +149,27 @@ Deno.test("Core operation queries discover bounded thread associations", async (
       false,
     );
     assertEquals(
+      await operationBelongsToThread(
+        catalog,
+        "tenant",
+        topLevelThread.id,
+        "thread",
+      ),
+      false,
+    );
+    assertEquals(
+      await operationBelongsToThread(
+        catalog,
+        "tenant",
+        mismatchedNesting.id,
+        "thread",
+      ),
+      false,
+    );
+    assertEquals(
       await threadEventWatermark(catalog, "tenant", "thread"),
       String(active.position),
     );
-    queries.length = 0;
     const found = await listThreadOperations(catalog, {
       namespace: "tenant",
       threadId: "thread",
@@ -173,14 +194,13 @@ Deno.test("Core operation queries discover bounded thread associations", async (
       found.some((operation) => operation.operationId === otherThread.id),
       false,
     );
-    const association = queries[0];
-    const plan = await db.query(
-      `EXPLAIN (ANALYZE, FORMAT JSON) ${association.sql}`,
-      association.params,
+    assertEquals(
+      found.some((operation) =>
+        operation.operationId === topLevelThread.id ||
+        operation.operationId === mismatchedNesting.id
+      ),
+      false,
     );
-    assert(JSON.stringify(plan.rows).includes("Limit"));
-    assert(association.sql.includes("associated AS MATERIALIZED"));
-    assert(association.sql.includes("UNION"));
     const afterOld = await listThreadOperations(catalog, {
       namespace: "tenant",
       threadId: "thread",

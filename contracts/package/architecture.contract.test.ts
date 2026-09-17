@@ -72,6 +72,46 @@ Deno.test("package root is a runtime-neutral composition barrel", async () => {
   );
 });
 
+Deno.test("Core HTTP production source stays behind generic read services", async () => {
+  const forbiddenImport =
+    /(?:from|import\s*\()\s*["'][^"']*(?:\/(?:database|events|persistence|storage)(?:\/|["']))/;
+  const forbiddenSql =
+    /\b(?:SELECT\s+[^;]*?\s+FROM\b|INSERT\s+INTO\b|UPDATE\s+\S+\s+SET\b|DELETE\s+FROM\b|(?:CREATE|ALTER|DROP)\s+TABLE\b)/i;
+  const forbiddenEscape =
+    /\b(?:catalog|context)\.(?:session|tables|database|storage|sql|query)\b/;
+  assert(
+    forbiddenImport.test(
+      'import { createEventStore } from "@copilotz/copilotz/events";',
+    ),
+  );
+  assert(
+    forbiddenImport.test(
+      'import { createSqlSession } from "../../runtime/persistence/index.ts";',
+    ),
+  );
+  assert(forbiddenEscape.test("catalog.session.query(sql)"));
+  assert(forbiddenEscape.test("catalog.tables.operations"));
+  assert(forbiddenSql.test("SELECT operation_id FROM operations"));
+  assert(forbiddenSql.test("SELECT MAX(position) AS position FROM events"));
+  assert(forbiddenSql.test('UPDATE "operations" SET state = $1'));
+  assert(!forbiddenSql.test("context.collections.message.delete({ id })"));
+  assert(!forbiddenSql.test('context.read.query("message", "history", input)'));
+  assert(
+    !forbiddenEscape.test('context.read.query("message", "history", input)'),
+  );
+  for (
+    const file of await collectProductionFiles(
+      join(repositoryRoot, "plugins/core-http"),
+    )
+  ) {
+    const source = await Deno.readTextFile(file);
+    const path = relative(repositoryRoot, file);
+    assert(!forbiddenImport.test(source), path);
+    assert(!forbiddenSql.test(source), path);
+    assert(!forbiddenEscape.test(source), path);
+  }
+});
+
 Deno.test("retired runtime and v1 server modules are deleted", async () => {
   for (
     const path of [

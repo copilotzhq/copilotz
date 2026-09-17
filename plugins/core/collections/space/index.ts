@@ -15,6 +15,7 @@ export const spaceCollection: CollectionDefinition = defineCollection({
       id: { type: "string" },
       namespace: { type: "string" },
       name: { type: "string" },
+      description: { type: "string" },
       ownerId: { type: "string", minLength: 1 },
       memberIds: {
         type: "array",

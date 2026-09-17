@@ -11,3 +11,14 @@ Deno.test("Space membership cannot remove the owner and additions are idempotent
     mutate({ current, input: { participantId: "owner", remove: true } });
   });
 });
+
+Deno.test("Space metadata description is optional for existing records", () => {
+  const schema = spaceCollection.schema as {
+    properties: Record<string, unknown>;
+    required: readonly string[];
+  };
+  assertEquals(schema.properties.description, {
+    type: "string",
+  });
+  assertEquals(schema.required.includes("description"), false);
+});

@@ -3,6 +3,7 @@ import {
   type ActionDefinition,
   defineAction,
 } from "@copilotz/copilotz/actions";
+import type { CollectionRecord } from "@copilotz/copilotz/collections";
 import { spaceAttachmentId } from "../../collections/space-attachment/index.ts";
 
 export const SPACES_ACTION_ID = "copilotz.core.spaces";
@@ -14,18 +15,36 @@ export type SpaceInput = {
     | "removeMember"
     | "attach"
     | "detach"
+    | "update"
     | "archive"
     | "restore"
     | "remove";
   spaceId: string;
   name?: string;
+  description?: string;
   ownerId?: string;
   participantId?: string;
   collection?: string;
   recordId?: string;
 };
 
-export type SpaceResult = Pick<SpaceInput, "spaceId" | "operation">;
+export type SpaceResult = Pick<SpaceInput, "spaceId" | "operation"> & {
+  space?: CollectionRecord;
+};
+
+function nonEmptyText(value: unknown, label: string): string {
+  if (typeof value !== "string" || !value.trim()) {
+    throw new TypeError(`${label} must be non-empty.`);
+  }
+  return value.trim();
+}
+
+function optionalText(value: unknown, label: string): string {
+  if (typeof value !== "string") {
+    throw new TypeError(`${label} must be a string.`);
+  }
+  return value.trim();
+}
 
 export const spacesAction: ActionDefinition<SpaceInput, SpaceResult> =
   defineAction(
@@ -42,13 +61,15 @@ export const spacesAction: ActionDefinition<SpaceInput, SpaceResult> =
               "removeMember",
               "attach",
               "detach",
+              "update",
               "archive",
               "restore",
               "remove",
             ],
           },
           spaceId: { type: "string", minLength: 1 },
-          name: { type: "string" },
+          name: { type: "string", minLength: 1 },
+          description: { type: "string" },
           ownerId: { type: "string", minLength: 1 },
           participantId: { type: "string", minLength: 1 },
           collection: { type: "string", minLength: 1 },
@@ -66,18 +87,22 @@ export const spacesAction: ActionDefinition<SpaceInput, SpaceResult> =
           ) {
             throw new Error("An existing owner Participant is required.");
           }
+          const description = input.description === undefined
+            ? undefined
+            : optionalText(input.description, "Space description");
           await collections.space.create({
             id: spaceId,
             name: input.name ?? "",
             ownerId: input.ownerId,
             memberIds: [input.ownerId],
+            ...(description ? { description } : {}),
           });
           return { spaceId, operation };
         }
         await context.transaction(async (tx) => {
           await tx.collections.space.commands.touch({
             id: spaceId,
-            active: operation === "attach",
+            active: operation === "attach" || operation === "update",
           });
           switch (operation) {
             case "addMember":
@@ -143,6 +168,41 @@ export const spacesAction: ActionDefinition<SpaceInput, SpaceResult> =
               });
               break;
             }
+            case "update": {
+              const current = await collections.space.get({ id: spaceId });
+              if (!current) throw new Error("Space was not found.");
+              if (input.name === undefined && input.description === undefined) {
+                throw new TypeError(
+                  "Space update requires a name or description.",
+                );
+              }
+              const set: Record<string, string> = {};
+              if (input.name !== undefined) {
+                const name = nonEmptyText(input.name, "Space name");
+                if (name !== current.name) set.name = name;
+              }
+              if (input.description !== undefined) {
+                const description = optionalText(
+                  input.description,
+                  "Space description",
+                );
+                const currentDescription = typeof current.description ===
+                    "string"
+                  ? current.description
+                  : "";
+                if (description !== currentDescription) {
+                  set.description = description;
+                }
+              }
+              if (Object.keys(set).length === 0) {
+                throw new Error("Space update does not change anything.");
+              }
+              await tx.collections.space.update({
+                id: spaceId,
+                set,
+              });
+              break;
+            }
             case "archive":
             case "restore":
               await tx.collections.space.update({
@@ -174,6 +234,11 @@ export const spacesAction: ActionDefinition<SpaceInput, SpaceResult> =
             }
           }
         });
+        if (operation === "update") {
+          const space = await collections.space.get({ id: spaceId });
+          if (!space) throw new Error("Updated Space was not found.");
+          return { spaceId, operation, space };
+        }
         return { spaceId, operation };
       },
     },

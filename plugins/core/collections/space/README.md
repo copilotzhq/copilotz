@@ -2,8 +2,8 @@
 
 ## What it is
 
-A durable Core hub with an owner Participant, members and active/archived
-status.
+A durable Core hub with an owner Participant, members, optional description and
+active/archived status. `name` remains its canonical title field.
 
 ## Why it exists
 
@@ -14,8 +14,9 @@ runtime.
 
 Use `actions.spaces` to create a Space and change membership or lifecycle.
 `collections.space.queries.active()` discovers active Spaces. The owner is
-included in membership and cannot be removed. Application guards authorize every
-operation and all direct collection reads/writes.
+included in membership and cannot be removed. Existing records may omit
+`description`. Application guards authorize every operation and all direct
+collection reads/writes.
 
 ## How it works
 

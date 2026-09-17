@@ -15,8 +15,9 @@
 ## Core corrections
 
 Core HTTP is an optional generated plugin with four conversation mutation
-Actions and one HTTP Adapter. Its operation queries stay with the Adapter. Core
-alone installs no HTTP routes. The browser conversation client and CLI are
+Actions and one HTTP Adapter. Conversation association criteria stay with the
+Adapter; generic operation/event queries run through the runtime catalog API.
+Core alone installs no HTTP routes. The browser conversation client and CLI are
 Adapters; the client/server history codec is shared. Agent capability resolution
 is a static context-resolved Resource. Goal execution is an Action with a policy
 Resource and explicit conversation Adapter.

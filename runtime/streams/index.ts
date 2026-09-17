@@ -41,6 +41,7 @@ export {
 } from "./catalog.ts";
 export type {
   OperationCatalog,
+  OperationCatalogAssociation,
   OperationChangeSubscription,
   OperationRecord,
   OperationState,

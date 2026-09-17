@@ -98,10 +98,17 @@ export type OperationEventIndexInput = Readonly<{
   metadata?: Readonly<Record<string, unknown>>;
 }>;
 
+/**
+ * Generic metadata branches used to associate operations with indexed events.
+ * Supplied branches are combined with OR semantics; list metadata stays AND.
+ */
+export type OperationCatalogAssociation = Readonly<{
+  operationMetadata?: Readonly<Record<string, unknown>>;
+  eventMetadata?: Readonly<Record<string, unknown>>;
+}>;
+
 export type OperationCatalog = Readonly<{
   databaseSchema: string;
-  session: SqlSession;
-  tables: OperationCatalogTables;
   watch(operationId: string): Promise<OperationChangeSubscription>;
   indexEvent(
     transaction: SqlExecutor,
@@ -114,9 +121,18 @@ export type OperationCatalog = Readonly<{
       operationIds?: readonly string[];
       states?: readonly OperationState[];
       metadata?: Readonly<Record<string, unknown>>;
+      association?: OperationCatalogAssociation;
+      afterPosition?: string;
       limit?: number;
     }>,
   ): Promise<readonly OperationRecord[]>;
+  /** Omitted or empty eventMetadata means every event in the namespace. */
+  maxEventPosition(
+    input: Readonly<{
+      namespace: string;
+      eventMetadata?: Readonly<Record<string, unknown>>;
+    }>,
+  ): Promise<string | undefined>;
   mark(
     namespace: string,
     operationId: string,
@@ -390,6 +406,82 @@ function boundedLimit(value: number | undefined, fallback = 1_000): number {
     throw new TypeError("Operation catalog limit must be between 1 and 10000.");
   }
   return value;
+}
+
+function eventPosition(value: string, label = "Event position"): string {
+  if (typeof value !== "string" || !/^(0|[1-9][0-9]*)$/.test(value)) {
+    throw new TypeError(`${label} is invalid.`);
+  }
+  return value;
+}
+
+function operationState(value: OperationState): OperationState {
+  if (
+    value !== "accepted" && value !== "running" &&
+    value !== "completed" && value !== "failed" && value !== "cancelled"
+  ) {
+    throw new TypeError("Operation state is invalid.");
+  }
+  return value;
+}
+
+function metadataObject(
+  value: unknown,
+  label: string,
+): Readonly<Record<string, unknown>> {
+  if (
+    value === null || typeof value !== "object" || Array.isArray(value) ||
+    Object.getPrototypeOf(value) !== Object.prototype
+  ) {
+    throw new TypeError(`${label} must be a plain object.`);
+  }
+  return snapshotStreamMetadata(value);
+}
+
+type PreparedAssociation = Readonly<{
+  operationMetadata?: string;
+  eventMetadata?: string;
+}>;
+
+function prepareAssociation(
+  value: OperationCatalogAssociation | undefined,
+): PreparedAssociation | undefined {
+  if (value === undefined) return undefined;
+  if (
+    !value || typeof value !== "object" || Array.isArray(value) ||
+    Object.getPrototypeOf(value) !== Object.prototype
+  ) {
+    throw new TypeError("Operation association must be a plain object.");
+  }
+  const operationMetadata = value.operationMetadata === undefined
+    ? undefined
+    : metadataObject(
+      value.operationMetadata,
+      "Operation association operationMetadata",
+    );
+  const eventMetadata = value.eventMetadata === undefined
+    ? undefined
+    : metadataObject(
+      value.eventMetadata,
+      "Operation association eventMetadata",
+    );
+  if (operationMetadata === undefined && eventMetadata === undefined) {
+    throw new TypeError(
+      "Operation association requires operationMetadata or eventMetadata.",
+    );
+  }
+  if (operationMetadata && Object.keys(operationMetadata).length === 0) {
+    throw new TypeError("Operation association operationMetadata is empty.");
+  }
+  if (eventMetadata && Object.keys(eventMetadata).length === 0) {
+    throw new TypeError("Operation association eventMetadata is empty.");
+  }
+  return {
+    ...(operationMetadata
+      ? { operationMetadata: JSON.stringify(operationMetadata) }
+      : {}),
+    ...(eventMetadata ? { eventMetadata: JSON.stringify(eventMetadata) } : {}),
+  };
 }
 
 function offset(value: number): number {
@@ -722,9 +814,7 @@ export function createOperationCatalog(
 ): OperationCatalog {
   const tables = tableNames(databaseSchema);
   const catalog: OperationCatalog = {
-    session,
     databaseSchema: validateEventSchemaName(databaseSchema),
-    tables,
     async watch(operationIdInput) {
       const operationId = requiredText(operationIdInput, "Operation id");
       const hub = await operationNotificationHub(session);
@@ -837,32 +927,135 @@ export function createOperationCatalog(
     },
     async list(input) {
       const namespace = requiredText(input.namespace, "Operation namespace");
-      const conditions = ["namespace = $1"];
+      const limit = boundedLimit(input.limit);
+      const conditions = ["operation.namespace = $1"];
       const params: unknown[] = [namespace];
-      if (input.operationIds?.length) {
-        params.push([
+      let operationIds: readonly string[] | undefined;
+      if (input.operationIds !== undefined) {
+        if (!Array.isArray(input.operationIds)) {
+          throw new TypeError("Operation ids must be an array.");
+        }
+        operationIds = [
           ...new Set(
             input.operationIds.map((id) => requiredText(id, "Operation id")),
           ),
+        ];
+      }
+      if (operationIds) {
+        params.push([
+          ...operationIds,
         ]);
-        conditions.push(`operation_id = ANY($${params.length}::text[])`);
+        conditions.push(
+          `operation.operation_id = ANY($${params.length}::text[])`,
+        );
+      }
+      if (input.states !== undefined && !Array.isArray(input.states)) {
+        throw new TypeError("Operation states must be an array.");
       }
       if (input.states?.length) {
-        params.push([...new Set(input.states)]);
-        conditions.push(`state = ANY($${params.length}::text[])`);
+        params.push([
+          ...new Set(input.states.map((state) => operationState(state))),
+        ]);
+        conditions.push(`operation.state = ANY($${params.length}::text[])`);
       }
-      if (input.metadata && Object.keys(input.metadata).length) {
-        params.push(JSON.stringify(snapshotStreamMetadata(input.metadata)));
-        conditions.push(`metadata @> $${params.length}::jsonb`);
+      if (input.metadata !== undefined) {
+        const metadata = metadataObject(input.metadata, "Operation metadata");
+        if (Object.keys(metadata).length) {
+          params.push(JSON.stringify(metadata));
+          conditions.push(`operation.metadata @> $${params.length}::jsonb`);
+        }
       }
-      params.push(boundedLimit(input.limit));
+      const association = prepareAssociation(input.association);
+      const afterPosition = input.afterPosition === undefined
+        ? undefined
+        : eventPosition(input.afterPosition);
+      if (operationIds?.length === 0) return [];
+      if (afterPosition !== undefined) {
+        params.push(afterPosition);
+        conditions.push(`(
+          operation.state IN ('accepted','running')
+          OR EXISTS (
+            SELECT 1 FROM ${tables.operationEvents} AS progress
+             WHERE progress.namespace = operation.namespace
+               AND progress.operation_id = operation.operation_id
+               AND progress.event_position > $${params.length}::bigint
+          )
+        )`);
+      }
+      let associationQuery = "";
+      if (association) {
+        const branches: string[] = [];
+        // Keep the association lookup bounded by operationIds when a caller
+        // asks about a specific operation (membership checks use this path).
+        if (association.operationMetadata) {
+          params.push(association.operationMetadata);
+          branches.push(
+            `SELECT operation.namespace, operation.operation_id
+               FROM ${tables.operations} AS operation
+              WHERE operation.namespace = $1${
+              operationIds
+                ? ` AND operation.operation_id = ANY($2::text[])`
+                : ""
+            } AND operation.metadata @> $${params.length}::jsonb`,
+          );
+        }
+        if (association.eventMetadata) {
+          params.push(association.eventMetadata);
+          const ids = operationIds
+            ? " AND indexed.operation_id = ANY($2::text[])"
+            : "";
+          branches.push(
+            `SELECT indexed.namespace, indexed.operation_id
+               FROM ${tables.operationEvents} AS indexed
+               JOIN ${tables.events} AS event
+                 ON event.id = indexed.event_id
+                AND event.namespace = indexed.namespace
+              WHERE indexed.namespace = $1${ids}
+                AND event.metadata @> $${params.length}::jsonb`,
+          );
+        }
+        associationQuery = `WITH associated AS MATERIALIZED (
+          ${branches.join("\n          UNION\n          ")}
+        ) `;
+        conditions.push(
+          `EXISTS (
+             SELECT 1 FROM associated
+              WHERE associated.namespace = operation.namespace
+                AND associated.operation_id = operation.operation_id
+           )`,
+        );
+      }
+      params.push(limit);
       const result = await session.query<OperationRow>(
-        `SELECT * FROM ${tables.operations}
+        `${associationQuery}SELECT operation.* FROM ${tables.operations} AS operation
           WHERE ${conditions.join(" AND ")}
-          ORDER BY updated_at DESC, operation_id DESC LIMIT $${params.length}`,
+          ORDER BY operation.updated_at DESC, operation.operation_id DESC LIMIT $${params.length}`,
         params,
       );
       return (result.rows.map(mapOperation));
+    },
+    async maxEventPosition(input) {
+      const namespace = requiredText(input.namespace, "Operation namespace");
+      const params: unknown[] = [namespace];
+      const eventMetadata = input.eventMetadata === undefined
+        ? undefined
+        : metadataObject(input.eventMetadata, "Event metadata");
+      const metadataFilter = eventMetadata && Object.keys(eventMetadata).length
+        ? ` AND metadata @> $${
+          params.push(JSON.stringify(eventMetadata))
+        }::jsonb`
+        : "";
+      const result = await session.query<{
+        position: string | number | bigint | null;
+      }>(
+        `SELECT MAX(position) AS position FROM ${tables.events}
+          WHERE namespace = $1${metadataFilter}`,
+        params,
+      );
+      const position = result.rows[0]?.position;
+      return position === null || position === undefined
+        ? undefined
+        : String(position);
     },
     async mark(namespaceInput, operationIdInput, state) {
       const namespace = requiredText(namespaceInput, "Operation namespace");

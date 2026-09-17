@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.76.0 — 2026-09-17
+
+- Move Core HTTP operation discovery, membership and event-watermark SQL behind
+  generic operation-catalog reads using the existing metadata index.
+- Add operation/event metadata associations, progress filtering and generic
+  event watermarks to the catalog API. Empty operation ID selections return no
+  records.
+- Remove the catalog’s exposed SQL session and table names. Core retains
+  conversation criteria; runtime owns SQL and namespace-scoped lookup mechanics.
+- Keep schema v5 and its generic indexes; no conversation-specific index is
+  required by the new queries. Older consumers must be upgraded before removing
+  a temporary index installed for their query paths.
+
 ## 0.75.1 — 2026-09-17
 
 - Bound thread operation discovery to the associated operations before applying

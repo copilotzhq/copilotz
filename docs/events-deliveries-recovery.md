@@ -103,23 +103,55 @@ a deployment migration before routing traffic to a 0.64 runtime. Missing tables
 fail startup/scope opening with `copilotz_operation_catalog_not_provisioned`;
 existing v4 Events and deliveries remain unchanged.
 
-Core HTTP thread observation uses the additive
-`events_core_thread_namespace_position_idx` index on the v5 Event metadata
-projection. This Core-specific performance index is managed by the deployment
-operator for every physical schema, including fresh schemas, followed by a
-statistics refresh:
+Operation metadata queries use the runtime's existing generic indexes, including
+`events_metadata_idx` (`GIN (metadata jsonb_path_ops)`) and namespace/position
+indexes. Core supplies JSON metadata criteria through the operation catalog; SQL
+and table names stay inside the runtime. No schema version or fingerprint change
+is required for these query APIs.
 
-```sql
-CREATE INDEX CONCURRENTLY IF NOT EXISTS "events_core_thread_namespace_position_idx"
-  ON "<schema>"."events"
-    ((metadata -> 'core' ->> 'threadId'), namespace, position);
-ANALYZE "<schema>"."events";
+The temporary `events_core_thread_namespace_position_idx` used by older Core
+HTTP queries is not required by 0.76.0. Operators must upgrade all affected
+consumers and validate membership, discovery, watermarks and actual request
+latency before removing that index concurrently. Runtime startup does not create
+or remove indexes on an already-current schema.
+
+### Generic catalog reads
+
+`catalog.list` retains its required namespace, operation IDs, state filter,
+operation metadata filter, descending update-time/ID order and bounded limit.
+The optional association matches either operation metadata or metadata on an
+indexed event. The ordinary `metadata` filter remains an additional AND
+condition.
+
+```ts
+const operations = await catalog.list({
+  namespace: "tenant-a",
+  association: {
+    operationMetadata: { work: { group: "batch-1" } },
+    eventMetadata: { work: { group: "batch-1" } },
+  },
+  afterPosition: "120",
+  limit: 32,
+});
+const position = await catalog.maxEventPosition({
+  namespace: "tenant-a",
+  eventMetadata: { work: { group: "batch-1" } },
+});
 ```
 
-This is an additive performance index; it does not change `EVENT_SCHEMA_VERSION`
-or the schema fingerprint. Generic event schema provisioning deliberately does
-not create this conversational index. Runtime validation remains read-only, so
-it will not silently build the index on an already-current schema.
+Metadata matching uses JSON containment: strings and numbers remain distinct;
+objects can match a subset of keys. Empty association objects or supplied empty
+branches are rejected. An explicitly empty operation ID selection returns no
+records. `afterPosition` accepts an unsigned decimal event position and includes
+active operations or operations with progress beyond that position; an explicit
+state filter still applies. `maxEventPosition` returns the greatest matching
+position as a string, or `undefined`; an empty metadata object selects the
+entire namespace.
+
+`OperationCatalog.session` and `OperationCatalog.tables` are removed. Consumers
+use catalog methods instead of constructing SQL against runtime tables. Plugin
+policy and authorization remain with the caller; metadata association alone is
+not an authorization decision.
 
 Replay cursors use a per-operation stream high-watermark plus sparse byte
 offsets for lanes that are still incomplete. Sequential completed lanes remain

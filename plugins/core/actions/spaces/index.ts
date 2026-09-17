@@ -3,7 +3,12 @@ import {
   type ActionDefinition,
   defineAction,
 } from "@copilotz/copilotz/actions";
-import type { CollectionRecord } from "@copilotz/copilotz/collections";
+import type {
+  CollectionRecord,
+  CollectionTransactionCollections,
+  CollectionTransactionRelations,
+  ScopedCollections,
+} from "@copilotz/copilotz/collections";
 import { spaceAttachmentId } from "../../collections/space-attachment/index.ts";
 
 export const SPACES_ACTION_ID = "copilotz.core.spaces";
@@ -44,6 +49,69 @@ function optionalText(value: unknown, label: string): string {
     throw new TypeError(`${label} must be a string.`);
   }
   return value.trim();
+}
+
+export type SpaceAttachmentTransaction = Readonly<{
+  collections: CollectionTransactionCollections;
+  relations: CollectionTransactionRelations;
+}>;
+
+/**
+ * Attaches a registered collection record to a Space using Core's canonical
+ * attachment and relation semantics. Reads come from the surrounding Action
+ * context while writes are staged in the caller's existing transaction.
+ */
+export async function attachSpaceRecord(
+  context: Readonly<{ collections: ScopedCollections }>,
+  transaction: SpaceAttachmentTransaction,
+  spaceId: string,
+  collection: string,
+  recordId: string,
+): Promise<
+  Readonly<{ collection: string; recordId: string; movedFrom?: string }>
+> {
+  const target = context.collections[collection];
+  if (!target || !recordId) {
+    throw new Error(
+      "A registered collection alias and recordId are required.",
+    );
+  }
+  const type = target.definition.name;
+  const id = spaceAttachmentId(type, recordId);
+  await transaction.collections.space.commands.touch({
+    id: spaceId,
+    active: true,
+  });
+  const current = await context.collections.spaceAttachment.get({ id });
+  if (!await target.get({ id: recordId })) {
+    throw new Error("Attachment target does not exist.");
+  }
+  if (current?.spaceId === spaceId) {
+    return { collection: type, recordId };
+  }
+  const movedFrom = current ? String(current.spaceId) : undefined;
+  if (current) {
+    if (!movedFrom) throw new Error("Space attachment is invalid.");
+    // Both sides participate in the same optimistic transaction.
+    await transaction.collections.space.commands.touch({ id: movedFrom });
+    await transaction.collections.spaceAttachment.update({
+      id,
+      set: { spaceId },
+    });
+  } else {
+    await transaction.collections.spaceAttachment.create({
+      id,
+      collection: type,
+      recordId,
+      spaceId,
+    });
+  }
+  await transaction.relations.upsert({
+    type: "attached_record",
+    source: { type: "spaceAttachment", id },
+    target: { type, id: recordId },
+  });
+  return { collection: type, recordId, ...(movedFrom ? { movedFrom } : {}) };
 }
 
 export const spacesAction: ActionDefinition<SpaceInput, SpaceResult> =
@@ -100,10 +168,12 @@ export const spacesAction: ActionDefinition<SpaceInput, SpaceResult> =
           return { spaceId, operation };
         }
         await context.transaction(async (tx) => {
-          await tx.collections.space.commands.touch({
-            id: spaceId,
-            active: operation === "attach" || operation === "update",
-          });
+          if (operation !== "attach") {
+            await tx.collections.space.commands.touch({
+              id: spaceId,
+              active: operation === "update",
+            });
+          }
           switch (operation) {
             case "addMember":
             case "removeMember": {
@@ -130,6 +200,16 @@ export const spacesAction: ActionDefinition<SpaceInput, SpaceResult> =
                   "A registered collection alias and recordId are required.",
                 );
               }
+              if (operation === "attach") {
+                await attachSpaceRecord(
+                  { collections },
+                  tx,
+                  spaceId,
+                  collection,
+                  recordId,
+                );
+                break;
+              }
               // Store the canonical collection name, so two aliases cannot create two attachments.
               const type = target.definition.name;
               const id = spaceAttachmentId(type, recordId);
@@ -140,32 +220,6 @@ export const spacesAction: ActionDefinition<SpaceInput, SpaceResult> =
                 }
                 break;
               }
-              if (!await target.get({ id: recordId })) {
-                throw new Error("Attachment target does not exist.");
-              }
-              if (current?.spaceId === spaceId) break;
-              if (current) {
-                // Both sides participate in the same optimistic transaction.
-                await tx.collections.space.commands.touch({
-                  id: String(current.spaceId),
-                });
-                await tx.collections.spaceAttachment.update({
-                  id,
-                  set: { spaceId },
-                });
-              } else {
-                await tx.collections.spaceAttachment.create({
-                  id,
-                  collection: type,
-                  recordId,
-                  spaceId,
-                });
-              }
-              await tx.relations.upsert({
-                type: "attached_record",
-                source: { type: "spaceAttachment", id },
-                target: { type, id: recordId },
-              });
               break;
             }
             case "update": {

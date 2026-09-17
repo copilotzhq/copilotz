@@ -1,13 +1,14 @@
 import { storageFixture } from "../../shared/testing/storage-plugin.ts";
 import { assert, assertEquals, assertRejects } from "@std/assert";
 import { defineCollection } from "@copilotz/copilotz/collections";
+import { attachSpaceRecord as publicAttachSpaceRecord } from "@copilotz/copilotz/core";
 import { createPluginRegistry, definePlugin } from "@copilotz/copilotz/plugins";
 import { createCopilotzEngine } from "../../../../runtime/engine/index.ts";
 import { createTestDatabase } from "../../../../runtime/testing/ominipg.ts";
 import { createTestDomainContext } from "../../shared/testing/context.ts";
 import {} from "../../plugin.ts";
 import { spaceAttachmentId } from "../../collections/space-attachment/index.ts";
-import { type SpaceInput, spacesAction } from "./index.ts";
+import { attachSpaceRecord, type SpaceInput, spacesAction } from "./index.ts";
 
 const databaseUrl = Deno.env.get("COPILOTZ_TEST_POSTGRES_URL");
 for (const url of [":memory:", ...(databaseUrl ? [databaseUrl] : [])]) {
@@ -49,6 +50,7 @@ for (const url of [":memory:", ...(databaseUrl ? [databaseUrl] : [])]) {
     const run = (input: SpaceInput) => context.actions.spaces(input);
     try {
       assertEquals(spacesAction.id, "copilotz.core.spaces");
+      assertEquals(publicAttachSpaceRecord, attachSpaceRecord);
       await c.participant.create({
         id: "owner",
         externalId: "owner",
@@ -138,6 +140,18 @@ for (const url of [":memory:", ...(databaseUrl ? [databaseUrl] : [])]) {
         spaceId: "a",
         collection: "document",
         recordId: "doc",
+      });
+      await context.transaction(async (tx) => {
+        await attachSpaceRecord({ collections: c }, tx, "b", "document", "doc");
+      });
+      assertEquals(
+        (await c.spaceAttachment.get({
+          id: spaceAttachmentId("custom_document", "doc"),
+        }))?.spaceId,
+        "b",
+      );
+      await context.transaction(async (tx) => {
+        await attachSpaceRecord({ collections: c }, tx, "a", "document", "doc");
       });
       assertEquals((await c.spaceAttachment.list()).length, 2);
       await assertRejects(() =>

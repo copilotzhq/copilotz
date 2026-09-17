@@ -562,6 +562,51 @@ Deno.test("operation catalog coalesces notification bursts into one catalog resc
   watch.close();
 });
 
+Deno.test("operation catalog change listeners are safe and removable", async () => {
+  let notify!: (notification: { channel: string; payload?: string }) => void;
+  const query: SqlExecutor["query"] = () => Promise.resolve({ rows: [] });
+  const session: SqlSession = {
+    query,
+    transaction: async <T>(
+      operation: (transaction: SqlExecutor) => Promise<T>,
+    ) => await operation(session),
+    listen: (
+      _channel: string,
+      handler: typeof notify,
+    ) => {
+      notify = handler;
+      return Promise.resolve({ close: () => Promise.resolve() });
+    },
+  };
+  const catalog = createOperationCatalog(session, "public");
+  const received: string[] = [];
+  const receivedBySecond: string[] = [];
+  const remove = await catalog.onChange((operationId) => {
+    received.push(operationId);
+    if (operationId === "operation-change-failure") {
+      throw new Error("consumer failure");
+    }
+  });
+  const removeSecond = await catalog.onChange((operationId) => {
+    receivedBySecond.push(operationId);
+  });
+  notify({ channel: OPERATION_CHANGE_CHANNEL, payload: "operation-change" });
+  notify({
+    channel: OPERATION_CHANGE_CHANNEL,
+    payload: "operation-change-failure",
+  });
+  assertEquals(received, ["operation-change", "operation-change-failure"]);
+  assertEquals(receivedBySecond, [
+    "operation-change",
+    "operation-change-failure",
+  ]);
+  remove();
+  removeSecond();
+  remove();
+  notify({ channel: OPERATION_CHANGE_CHANNEL, payload: "after-remove" });
+  assertEquals(received, ["operation-change", "operation-change-failure"]);
+});
+
 Deno.test("post-commit notification failure does not fail a stream catalog mutation", async () => {
   const database = await createTestDatabase({ url: ":memory:" });
   try {

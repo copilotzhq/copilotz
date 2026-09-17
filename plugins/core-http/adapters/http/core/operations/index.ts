@@ -47,6 +47,7 @@ export async function listThreadOperations(
   input: {
     namespace: string;
     threadId: string;
+    operationIds?: readonly string[];
     states?: readonly OperationState[];
     afterPosition?: string;
     limit?: number;
@@ -59,6 +60,7 @@ export async function listThreadOperations(
   ) throw new TypeError("Invalid event position.");
   return await catalog.list({
     namespace,
+    operationIds: input.operationIds,
     states: input.states,
     association: {
       operationMetadata: { operationMetadata: { threadId } },

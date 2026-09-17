@@ -102,12 +102,39 @@ function testScope(): ServerAuthorizedScope {
   return { namespace: "tenant", databaseSchema: "test" };
 }
 
+function pause(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+async function withDeadline<T>(
+  promise: Promise<T>,
+  milliseconds: number,
+  message: string,
+  onTimeout?: () => void,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          onTimeout?.();
+          reject(new Error(message));
+        }, milliseconds);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 function testApplication(
   options: Readonly<{
     operations?: Readonly<{
       list(input: unknown): Promise<readonly OperationRecord[]>;
       maxEventPosition(input: unknown): Promise<string | undefined>;
       listStreams(input: unknown): Promise<readonly []>;
+      onChange?(listener: (operationId: string) => void): Promise<() => void>;
     }>;
     attach(input: unknown): Promise<ApplicationOperationAttachment>;
     operationStatus(input: unknown): Promise<ApplicationOperationStatus | null>;
@@ -120,17 +147,25 @@ function testApplication(
       pluginIds: [],
       databaseOwnership: "injected" as const,
     },
-    operations: options.operations ?? {
-      async list() {
-        return [];
+    operations: options.operations
+      ? {
+        ...options.operations,
+        onChange: options.operations.onChange ?? (async () => () => undefined),
+      }
+      : {
+        async list() {
+          return [];
+        },
+        async maxEventPosition() {
+          return undefined;
+        },
+        async listStreams() {
+          return [];
+        },
+        async onChange() {
+          return () => undefined;
+        },
       },
-      async maxEventPosition() {
-        return undefined;
-      },
-      async listStreams() {
-        return [];
-      },
-    },
     databaseScope: async () => application,
     attach: options.attach,
     operationStatus: options.operationStatus,
@@ -141,12 +176,13 @@ function testApplication(
 async function createOperations(
   application: InternalCopilotzApplication,
   constraints: ServerConstraints = {},
+  read: HttpReadServices = testRead(),
 ) {
   return await createHttpOperations(
     application,
     testScope(),
     constraints,
-    testRead(),
+    read,
   );
 }
 
@@ -257,4 +293,335 @@ Deno.test("thread discovery rejects nested operation metadata that does not matc
   );
   assertEquals((error as { code?: string }).code, "operation_not_found");
   assertEquals((error as { status?: number }).status, 404);
+});
+
+Deno.test("thread observation discovers only notified operations", async () => {
+  const initial = operation("initial", { operationMetadata: {} });
+  const notified = operation("notified", { operationMetadata: {} });
+  const notifiedAgain = operation("notified-again", {
+    operationMetadata: {},
+  });
+  const listInputs: unknown[] = [];
+  const targetedDiscovery = deferred<void>();
+  let targetedDiscoveryCount = 0;
+  let notify!: (operationId: string) => void;
+  const application = testApplication({
+    attach: async (input) =>
+      closedAttachment(
+        (input as { operationId: string }).operationId,
+      ),
+    operationStatus: async () => status("operation"),
+    operations: {
+      async list(input) {
+        listInputs.push(input);
+        const operationIds = (input as { operationIds?: readonly string[] })
+          .operationIds;
+        if (operationIds?.length) {
+          targetedDiscoveryCount++;
+          if (targetedDiscoveryCount === 2) targetedDiscovery.resolve();
+        }
+        return operationIds?.length
+          ? operationIds.includes(notified.operationId)
+            ? [notified]
+            : operationIds.includes(notifiedAgain.operationId)
+            ? [notifiedAgain]
+            : []
+          : [initial];
+      },
+      async maxEventPosition() {
+        return "0";
+      },
+      async listStreams() {
+        return [];
+      },
+      async onChange(listener) {
+        notify = listener;
+        return () => undefined;
+      },
+    },
+  });
+  const operations = await createOperations(application);
+  const controller = new AbortController();
+  const observation = await operations.observe({
+    threadId: "thread",
+    signal: controller.signal,
+  });
+  notify(notified.operationId);
+  notify(notifiedAgain.operationId);
+  await withDeadline(
+    targetedDiscovery.promise,
+    2_000,
+    "Timed out waiting for targeted discovery.",
+    () => controller.abort("targeted_discovery_timeout"),
+  );
+  for (let index = 0; index < 4; index++) notify(notified.operationId);
+  await pause(300);
+  controller.abort("test_finished");
+  await observation.done;
+  assertEquals(listInputs.length, 3);
+  assertEquals(
+    listInputs.slice(1).map((input) =>
+      (input as { operationIds?: readonly string[] }).operationIds
+    ),
+    [[notified.operationId], [notifiedAgain.operationId]],
+  );
+});
+
+Deno.test("idle thread observation avoids full discovery scans", async () => {
+  let listCalls = 0;
+  const application = testApplication({
+    attach: async () => closedAttachment("initial"),
+    operationStatus: async () => status("initial"),
+    operations: {
+      async list() {
+        listCalls++;
+        return [operation("initial", { operationMetadata: {} })];
+      },
+      async maxEventPosition() {
+        return "0";
+      },
+      async listStreams() {
+        return [];
+      },
+    },
+  });
+  const operations = await createOperations(application);
+  const controller = new AbortController();
+  const observation = await operations.observe({
+    threadId: "thread",
+    signal: controller.signal,
+  });
+  await pause(700);
+  controller.abort("test_finished");
+  await observation.done;
+  assertEquals(listCalls, 1);
+});
+
+Deno.test("idle thread observation still validates thread access", async () => {
+  let threadReads = 0;
+  let removeCalls = 0;
+  const application = testApplication({
+    attach: async () => closedAttachment("initial"),
+    operationStatus: async () => status("initial"),
+    operations: {
+      async list() {
+        return [operation("initial", { operationMetadata: {} })];
+      },
+      async maxEventPosition() {
+        return "0";
+      },
+      async listStreams() {
+        return [];
+      },
+      async onChange() {
+        return () => removeCalls++;
+      },
+    },
+  });
+  const read: HttpReadServices = {
+    ...testRead(),
+    async get(collection, id) {
+      if (collection === "thread") {
+        threadReads++;
+        if (threadReads > 1) return null;
+      }
+      return {
+        id,
+        namespace: "tenant",
+        createdAt: "2026-09-16T00:00:00.000Z",
+        updatedAt: "2026-09-16T00:00:00.000Z",
+      };
+    },
+  };
+  const operations = await createOperations(application, {}, read);
+  const observation = await operations.observe({ threadId: "thread" });
+  const error = await assertRejects(() => observation.done);
+  assertEquals((error as { code?: string }).code, "thread_not_found");
+  assertEquals(threadReads, 2);
+  assertEquals(removeCalls, 1);
+});
+
+Deno.test("missed change hints recover on the bounded safety resync", async () => {
+  let listCalls = 0;
+  let visible = false;
+  const attached: string[] = [];
+  const application = testApplication({
+    attach: async (input) => {
+      const operationId = (input as { operationId: string }).operationId;
+      attached.push(operationId);
+      return closedAttachment(operationId);
+    },
+    operationStatus: async () => status("initial"),
+    operations: {
+      async list() {
+        listCalls++;
+        return visible
+          ? [
+            operation("initial", { operationMetadata: {} }),
+            operation("missed", { operationMetadata: {} }),
+          ]
+          : [operation("initial", { operationMetadata: {} })];
+      },
+      async maxEventPosition() {
+        return "0";
+      },
+      async listStreams() {
+        return [];
+      },
+    },
+  });
+  const operations = await createOperations(application);
+  const controller = new AbortController();
+  const observation = await operations.observe({
+    threadId: "thread",
+    signal: controller.signal,
+  });
+  await pause(300);
+  visible = true;
+  await pause(5_250);
+  controller.abort("test_finished");
+  await observation.done;
+  assertEquals(listCalls, 2);
+  assertEquals(attached, ["initial", "missed"]);
+});
+
+Deno.test("thread observation overflow requests one bounded full resync", async () => {
+  let notify!: (operationId: string) => void;
+  let listCalls = 0;
+  const application = testApplication({
+    attach: async () => closedAttachment("initial"),
+    operationStatus: async () => status("initial"),
+    operations: {
+      async list() {
+        listCalls++;
+        return [];
+      },
+      async maxEventPosition() {
+        return "0";
+      },
+      async listStreams() {
+        return [];
+      },
+      async onChange(listener) {
+        notify = listener;
+        return () => undefined;
+      },
+    },
+  });
+  const operations = await createOperations(application);
+  const controller = new AbortController();
+  const observation = await operations.observe({
+    threadId: "thread",
+    signal: controller.signal,
+  });
+  for (let index = 0; index < 33; index++) notify(`operation-${index}`);
+  await pause(350);
+  controller.abort("test_finished");
+  await observation.done;
+  assertEquals(listCalls, 2);
+});
+
+Deno.test("thread observation removes its change listener on initial failure and abort", async () => {
+  let removeCalls = 0;
+  const failing = testApplication({
+    attach: async () => closedAttachment("operation"),
+    operationStatus: async () => status("operation"),
+    operations: {
+      async list() {
+        throw new Error("discovery failed");
+      },
+      async maxEventPosition() {
+        return "0";
+      },
+      async listStreams() {
+        return [];
+      },
+      async onChange() {
+        return () => removeCalls++;
+      },
+    },
+  });
+  const failingOperations = await createOperations(failing);
+  const failureController = new AbortController();
+  const failure = await withDeadline(
+    assertRejects(() =>
+      failingOperations.observe({
+        threadId: "thread",
+        signal: failureController.signal,
+      })
+    ),
+    2_000,
+    "Timed out waiting for initial discovery failure.",
+    () => failureController.abort("initial_failure_timeout"),
+  );
+  void failure;
+  assertEquals(removeCalls, 1);
+
+  let notify!: (operationId: string) => void;
+  const running = testApplication({
+    attach: async () => closedAttachment("operation"),
+    operationStatus: async () => status("operation"),
+    operations: {
+      async list() {
+        return [operation("operation", { operationMetadata: {} })];
+      },
+      async maxEventPosition() {
+        return "0";
+      },
+      async listStreams() {
+        return [];
+      },
+      async onChange(listener) {
+        notify = listener;
+        return () => removeCalls++;
+      },
+    },
+  });
+  const runningOperations = await createOperations(running);
+  const controller = new AbortController();
+  const observation = await runningOperations.observe({
+    threadId: "thread",
+    signal: controller.signal,
+  });
+  notify("operation");
+  controller.abort("test_finished");
+  await withDeadline(
+    observation.done,
+    2_000,
+    "Timed out waiting for observation abort.",
+    () => controller.abort("abort_timeout"),
+  );
+  assertEquals(removeCalls, 2);
+
+  const subscription = deferred<() => void>();
+  let lateRemoveCalls = 0;
+  const late = testApplication({
+    attach: async () => closedAttachment("operation"),
+    operationStatus: async () => status("operation"),
+    operations: {
+      async list() {
+        return [];
+      },
+      async maxEventPosition() {
+        return "0";
+      },
+      async listStreams() {
+        return [];
+      },
+      async onChange() {
+        return await subscription.promise;
+      },
+    },
+  });
+  const lateOperations = await createOperations(late);
+  const lateController = new AbortController();
+  const pendingObserve = lateOperations.observe({
+    threadId: "thread",
+    signal: lateController.signal,
+  });
+  lateController.abort("test_finished");
+  subscription.resolve(() => lateRemoveCalls++);
+  const lateObservation = await pendingObserve;
+  await lateObservation.done;
+  assertEquals(lateRemoveCalls, 1);
 });

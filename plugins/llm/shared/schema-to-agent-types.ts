@@ -75,65 +75,57 @@ const DEFAULT_OPTIONS: GeneratorOptions = {
   strictAdditionalProperties: true,
 };
 
-class GenericJsonSchemaToAgentTs {
-  private readonly schema: JsonSchema;
-  private readonly options: GeneratorOptions;
-  private readonly named = new Map<string, GeneratedNamedType>();
-  private readonly emittedAliases = new Map<string, string>();
-  private readonly reservedNames = new Set<string>();
-  private readonly refStack = new Set<string>();
+type RendererContext = {
+  schema: JsonSchema;
+  options: GeneratorOptions;
+  named: Map<string, GeneratedNamedType>;
+  emittedAliases: Map<string, string>;
+  reservedNames: Set<string>;
+  refStack: Set<string>;
+};
 
-  constructor(schema: JsonSchema, options: Partial<GeneratorOptions> = {}) {
-    this.schema = schema;
-    const inferredRoot = schema.title
-      ? pascalCase(schema.title)
-      : DEFAULT_OPTIONS.rootName;
-    this.options = { ...DEFAULT_OPTIONS, rootName: inferredRoot, ...options };
+function generateSchema(ctx: RendererContext): string {
+  const root = resolveAndMerge(ctx.schema);
+  const moduleDocText = moduleDoc(root);
+  const rootName = uniqueTypeName(ctx.options.rootName);
+  if (root.oneOf?.length || root.anyOf?.length) {
+    // Root properties apply to every branch in JSON Schema. Include them in
+    // each generated variant so a discriminated action schema remains
+    // useful to the model instead of emitting only the branch discriminator.
+    const base = { ...root, oneOf: undefined, anyOf: undefined };
+    const variants = root.oneOf ?? root.anyOf ?? [];
+    const rootUnion = {
+      ...root,
+      oneOf: root.oneOf
+        ? variants.map((variant) => mergeSchemas(base, variant))
+        : undefined,
+      anyOf: root.anyOf
+        ? variants.map((variant) => mergeSchemas(base, variant))
+        : undefined,
+    };
+    typeFor(rootUnion, rootName, "$");
+  } else {
+    emitInterface(rootName, root, {
+      path: "$",
+      description: root.description ||
+        "Root input object generated from JSON Schema.",
+    });
   }
 
-  generate(): string {
-    const root = this.resolveAndMerge(this.schema);
-    const moduleDoc = this.moduleDoc(root);
-    const rootName = this.uniqueTypeName(this.options.rootName);
-    if (root.oneOf?.length || root.anyOf?.length) {
-      // Root properties apply to every branch in JSON Schema. Include them in
-      // each generated variant so a discriminated action schema remains
-      // useful to the model instead of emitting only the branch discriminator.
-      const base = { ...root, oneOf: undefined, anyOf: undefined };
-      const variants = root.oneOf ?? root.anyOf ?? [];
-      const rootUnion = {
-        ...root,
-        oneOf: root.oneOf
-          ? variants.map((variant) => this.mergeSchemas(base, variant))
-          : undefined,
-        anyOf: root.anyOf
-          ? variants.map((variant) => this.mergeSchemas(base, variant))
-          : undefined,
-      };
-      this.typeFor(rootUnion, rootName, "$");
-    } else {
-      this.emitInterface(rootName, root, {
-        path: "$",
-        description: root.description ||
-          "Root input object generated from JSON Schema.",
-      });
-    }
+  const interfacesAndObjectTypes = Array.from(ctx.named.values()).map((
+    entry,
+  ) => entry.code).join("\n\n");
+  const aliases = Array.from(ctx.emittedAliases.values()).join("\n\n");
 
-    const interfacesAndObjectTypes = Array.from(this.named.values()).map((
-      entry,
-    ) => entry.code).join("\n\n");
-    const aliases = Array.from(this.emittedAliases.values()).join("\n\n");
+  return [moduleDocText, interfacesAndObjectTypes, aliases]
+    .filter(Boolean)
+    .join("\n\n")
+    .trim() + "\n";
 
-    return [moduleDoc, interfacesAndObjectTypes, aliases]
-      .filter(Boolean)
-      .join("\n\n")
-      .trim() + "\n";
-  }
-
-  private moduleDoc(root: JsonSchema): string {
-    const title = this.options.moduleName || root.title || "Agent Tool Input";
+  function moduleDoc(root: JsonSchema): string {
+    const title = ctx.options.moduleName || root.title || "Agent Tool Input";
     const rootRequired = root.required ?? [];
-    const unionCount = this.countUnions(root);
+    const unionCount = countUnions(root);
     const lines = [
       "/**",
       ` * ${escapeComment(title)}`,
@@ -164,36 +156,36 @@ class GenericJsonSchemaToAgentTs {
     return lines.join("\n");
   }
 
-  private countUnions(
+  function countUnions(
     schema: JsonSchema | undefined,
     seen = new Set<JsonSchema>(),
   ): number {
     if (!schema || seen.has(schema)) return 0;
     seen.add(schema);
-    const s = this.resolveAndMerge(schema);
+    const s = resolveAndMerge(schema);
     let count = (s.oneOf?.length ?? 0) + (s.anyOf?.length ?? 0);
     for (const child of Object.values(s.properties ?? {})) {
-      count += this.countUnions(child, seen);
+      count += countUnions(child, seen);
     }
-    const items = this.itemsOf(s);
-    for (const item of items) count += this.countUnions(item, seen);
+    const items = itemsOf(s);
+    for (const item of items) count += countUnions(item, seen);
     for (
       const child of [
         ...(s.oneOf ?? []),
         ...(s.anyOf ?? []),
         ...(s.allOf ?? []),
       ]
-    ) count += this.countUnions(child, seen);
+    ) count += countUnions(child, seen);
     if (s.additionalProperties && typeof s.additionalProperties === "object") {
-      count += this.countUnions(s.additionalProperties, seen);
+      count += countUnions(s.additionalProperties, seen);
     }
     for (const child of Object.values(s.patternProperties ?? {})) {
-      count += this.countUnions(child, seen);
+      count += countUnions(child, seen);
     }
     return count;
   }
 
-  private emitInterface(
+  function emitInterface(
     name: string,
     schemaRaw: JsonSchema,
     meta: {
@@ -202,11 +194,11 @@ class GenericJsonSchemaToAgentTs {
       validWhen?: LiteralCondition[];
     },
   ): string {
-    const schema = this.resolveAndMerge(schemaRaw);
+    const schema = resolveAndMerge(schemaRaw);
 
-    if (this.named.has(name)) return this.named.get(name)!.code;
+    if (ctx.named.has(name)) return ctx.named.get(name)!.code;
 
-    this.named.set(name, {
+    ctx.named.set(name, {
       name,
       code: `export interface ${name} {}`,
       kind: "interface",
@@ -217,33 +209,33 @@ class GenericJsonSchemaToAgentTs {
     const lines: string[] = [];
     const docs = [
       meta.description,
-      this.validWhenText(meta.validWhen),
-      this.objectRuleText(schema),
-      this.objectConstraintText(schema),
+      validWhenText(meta.validWhen),
+      objectRuleText(schema),
+      objectConstraintText(schema),
     ].filter(Boolean) as string[];
 
-    const interfaceDoc = this.jsDoc(docs);
+    const interfaceDoc = jsDoc(docs);
     if (interfaceDoc) lines.push(interfaceDoc);
     lines.push(`export interface ${name} {`);
 
     for (const [propName, propSchemaRaw] of Object.entries(props)) {
-      const propSchema = this.resolveAndMerge(propSchemaRaw);
+      const propSchema = resolveAndMerge(propSchemaRaw);
       const optional = required.has(propName) ? "" : "?";
-      const childPreferredName = this.childTypeName(name, propName);
-      const typeExpression = this.typeFor(
+      const childPreferredName = childTypeName(name, propName);
+      const typeExpression = typeFor(
         propSchema,
         childPreferredName,
         `${meta.path}.${propName}`,
       );
-      const propDoc = this.jsDoc(
-        this.commentPartsForProperty(
+      const propDoc = jsDoc(
+        commentPartsForProperty(
           propName,
           propSchema,
           required.has(propName),
           typeExpression,
         ),
       );
-      if (propDoc) lines.push(this.indent(propDoc, 2));
+      if (propDoc) lines.push(indent(propDoc, 2));
       lines.push(`  ${propertyKey(propName)}${optional}: ${typeExpression};`);
     }
 
@@ -252,7 +244,7 @@ class GenericJsonSchemaToAgentTs {
         schema.patternProperties ?? {},
       )
     ) {
-      const valueType = this.typeFor(
+      const valueType = typeFor(
         patternSchema,
         `${name}PatternProperty`,
         `${meta.path}.{${pattern}}`,
@@ -262,7 +254,7 @@ class GenericJsonSchemaToAgentTs {
       break;
     }
 
-    const indexLine = this.dynamicIndexLine(
+    const indexLine = dynamicIndexLine(
       schema,
       `${name}AdditionalProperty`,
       `${meta.path}.{key}`,
@@ -276,35 +268,35 @@ class GenericJsonSchemaToAgentTs {
 
     lines.push("}");
     const code = lines.join("\n");
-    this.named.set(name, { name, code, kind: "interface" });
+    ctx.named.set(name, { name, code, kind: "interface" });
     return code;
   }
 
-  private typeFor(
+  function typeFor(
     schemaRaw: JsonSchema,
     preferredNameRaw: string,
     path: string,
   ): string {
-    const schema = this.resolveAndMerge(schemaRaw);
+    const schema = resolveAndMerge(schemaRaw);
     const preferredName = pascalCase(preferredNameRaw);
 
     if (schema.const !== undefined) return literal(schema.const);
     if (schema.enum) return enumToTs(schema.enum);
     if (schema.oneOf?.length) {
-      return this.emitUnion(preferredName, schema.oneOf, path, "oneOf");
+      return emitUnion(preferredName, schema.oneOf, path, "oneOf");
     }
     if (schema.anyOf?.length) {
-      return this.emitUnion(preferredName, schema.anyOf, path, "anyOf");
+      return emitUnion(preferredName, schema.anyOf, path, "anyOf");
     }
 
-    const types = this.normalizedTypes(schema);
+    const types = normalizedTypes(schema);
     const tsTypes = types.map((t) =>
-      this.singleTypeFor(t, schema, preferredName, path)
+      singleTypeFor(t, schema, preferredName, path)
     );
     return unique(tsTypes).join(" | ") || "unknown";
   }
 
-  private singleTypeFor(
+  function singleTypeFor(
     type: string,
     schema: JsonSchema,
     preferredName: string,
@@ -322,15 +314,15 @@ class GenericJsonSchemaToAgentTs {
       case "null":
         return "null";
       case "array":
-        return this.arrayTypeFor(schema, preferredName, path);
+        return arrayTypeFor(schema, preferredName, path);
       case "object":
-        return this.objectTypeFor(schema, preferredName, path);
+        return objectTypeFor(schema, preferredName, path);
       default:
         return "unknown";
     }
   }
 
-  private arrayTypeFor(
+  function arrayTypeFor(
     schema: JsonSchema,
     preferredName: string,
     path: string,
@@ -340,7 +332,7 @@ class GenericJsonSchemaToAgentTs {
     if (tupleItems?.length) {
       return `[${
         tupleItems.map((item, index) =>
-          this.typeFor(
+          typeFor(
             item,
             `${preferredName}${index + 1}`,
             `${path}[${index}]`,
@@ -354,19 +346,19 @@ class GenericJsonSchemaToAgentTs {
     const itemName = isProbablyPlural(preferredName)
       ? singularize(preferredName)
       : preferredName;
-    const itemType = this.typeFor(itemSchema, itemName, `${path}[]`);
+    const itemType = typeFor(itemSchema, itemName, `${path}[]`);
     return itemType.includes(" | ") ? `Array<${itemType}>` : `${itemType}[]`;
   }
 
-  private objectTypeFor(
+  function objectTypeFor(
     schema: JsonSchema,
     preferredName: string,
     path: string,
   ): string {
     const hasNamedProps = Object.keys(schema.properties ?? {}).length > 0;
     if (hasNamedProps) {
-      if (!this.named.has(preferredName)) {
-        this.emitInterface(preferredName, schema, {
+      if (!ctx.named.has(preferredName)) {
+        emitInterface(preferredName, schema, {
           path,
           description: schema.description,
         });
@@ -378,7 +370,7 @@ class GenericJsonSchemaToAgentTs {
       schema.additionalProperties &&
       typeof schema.additionalProperties === "object"
     ) {
-      const valueType = this.typeFor(
+      const valueType = typeFor(
         schema.additionalProperties,
         `${preferredName}Value`,
         `${path}.{key}`,
@@ -392,31 +384,31 @@ class GenericJsonSchemaToAgentTs {
       Object.keys(schema.patternProperties).length > 0
     ) {
       const first = Object.values(schema.patternProperties)[0];
-      const valueType = this.typeFor(
+      const valueType = typeFor(
         first,
         `${preferredName}PatternValue`,
         `${path}.{patternKey}`,
       );
       return `Record<string, ${valueType}>`;
     }
-    return this.options.strictAdditionalProperties
+    return ctx.options.strictAdditionalProperties
       ? "Record<string, never>"
       : "Record<string, unknown>";
   }
 
-  private emitUnion(
+  function emitUnion(
     preferredNameRaw: string,
     variantsRaw: JsonSchema[],
     path: string,
     unionKind: "oneOf" | "anyOf",
   ): string {
     const unionName = pascalCase(preferredNameRaw.replace(/Union$/, ""));
-    const variants = variantsRaw.map((v) => this.resolveAndMerge(v));
-    const variantInfos = this.variantInfos(unionName, variants, path);
+    const variants = variantsRaw.map((v) => resolveAndMerge(v));
+    const infos = variantInfos(unionName, variants, path);
 
-    for (const info of variantInfos) {
+    for (const info of infos) {
       if (info.isObjectVariant) {
-        this.emitInterface(info.interfaceOrTypeName, info.schema, {
+        emitInterface(info.interfaceOrTypeName, info.schema, {
           path,
           description: info.title,
           validWhen: info.validWhen,
@@ -425,37 +417,35 @@ class GenericJsonSchemaToAgentTs {
     }
 
     const aliasLines = [
-      this.jsDoc([
+      jsDoc([
         `${unionKind} from JSON Schema. ${
           unionKind === "oneOf"
             ? "Choose exactly one compatible shape."
             : "Choose a compatible shape; JSON Schema anyOf may allow overlap."
         }`,
-        `Options: ${variantInfos.map((v) => v.title).join("; ")}.`,
+        `Options: ${infos.map((v) => v.title).join("; ")}.`,
       ]),
       `export type ${unionName} =`,
-      ...variantInfos.map((v, i) =>
+      ...infos.map((v, i) =>
         `  ${i === 0 ? "" : "| "}${v.typeExpression ?? v.interfaceOrTypeName}`
       ),
       ";",
     ].filter(Boolean);
 
     const aliasCode = aliasLines.join("\n");
-    if (!this.emittedAliases.has(unionName)) {
-      this.emittedAliases.set(unionName, aliasCode);
+    if (!ctx.emittedAliases.has(unionName)) {
+      ctx.emittedAliases.set(unionName, aliasCode);
     }
     return unionName;
   }
 
-  private variantInfos(
+  function variantInfos(
     unionName: string,
     variants: JsonSchema[],
     path: string,
   ): VariantInfo[] {
-    const allConditions = variants.map((variant) =>
-      this.literalConditions(variant)
-    );
-    const disambiguatingProps = this.disambiguatingConditionProps(
+    const allConditions = variants.map((variant) => literalConditions(variant));
+    const disambiguatingProps = disambiguatingConditionProps(
       allConditions,
     );
     const usedNames = new Set<string>();
@@ -464,16 +454,16 @@ class GenericJsonSchemaToAgentTs {
       const conditions = allConditions[index].filter((c) =>
         disambiguatingProps.has(c.prop) || c.required
       );
-      const title = this.variantTitle(conditions, index);
-      const baseName = this.variantTypeName(unionName, conditions, index);
+      const title = variantTitle(conditions, index);
+      const baseName = variantTypeName(unionName, conditions, index);
       const interfaceOrTypeName = uniqueWithin(baseName, usedNames);
-      const objectLike = this.normalizedTypes(schema).includes("object") ||
+      const objectLike = normalizedTypes(schema).includes("object") ||
         !!schema.properties;
       const isObjectVariant = objectLike &&
         Object.keys(schema.properties ?? {}).length > 0;
       const typeExpression = isObjectVariant
         ? undefined
-        : this.typeForNonUnionVariant(
+        : typeForNonUnionVariant(
           schema,
           `${interfaceOrTypeName}Value`,
           `${path}<variant${index + 1}>`,
@@ -490,33 +480,33 @@ class GenericJsonSchemaToAgentTs {
     });
   }
 
-  private typeForNonUnionVariant(
+  function typeForNonUnionVariant(
     schemaRaw: JsonSchema,
     preferredName: string,
     path: string,
   ): string {
-    const schema = this.resolveAndMerge({
+    const schema = resolveAndMerge({
       ...schemaRaw,
       oneOf: undefined,
       anyOf: undefined,
     });
     if (schema.const !== undefined) return literal(schema.const);
     if (schema.enum) return enumToTs(schema.enum);
-    const types = this.normalizedTypes(schema);
+    const types = normalizedTypes(schema);
     const tsTypes = types.map((t) =>
-      this.singleTypeFor(t, schema, preferredName, path)
+      singleTypeFor(t, schema, preferredName, path)
     );
     return unique(tsTypes).join(" | ") || "unknown";
   }
 
-  private literalConditions(schema: JsonSchema): LiteralCondition[] {
+  function literalConditions(schema: JsonSchema): LiteralCondition[] {
     const required = new Set(schema.required ?? []);
     const out: LiteralCondition[] = [];
     for (
       const [prop, propSchemaRaw] of Object.entries(schema.properties ?? {})
     ) {
-      const propSchema = this.resolveAndMerge(propSchemaRaw);
-      const values = this.literalValues(propSchema);
+      const propSchema = resolveAndMerge(propSchemaRaw);
+      const values = literalValues(propSchema);
       if (values.length > 0) {
         out.push({ prop, values, required: required.has(prop) });
       }
@@ -524,7 +514,7 @@ class GenericJsonSchemaToAgentTs {
     return out;
   }
 
-  private literalValues(schema: JsonSchema): unknown[] {
+  function literalValues(schema: JsonSchema): unknown[] {
     if (schema.const !== undefined) return [schema.const];
     if (
       Array.isArray(schema.enum) && schema.enum.length > 0 &&
@@ -535,7 +525,7 @@ class GenericJsonSchemaToAgentTs {
     return [];
   }
 
-  private disambiguatingConditionProps(
+  function disambiguatingConditionProps(
     allConditions: LiteralCondition[][],
   ): Set<string> {
     const valuesByProp = new Map<string, Set<string>>();
@@ -556,7 +546,7 @@ class GenericJsonSchemaToAgentTs {
     return out;
   }
 
-  private variantTitle(conditions: LiteralCondition[], index: number): string {
+  function variantTitle(conditions: LiteralCondition[], index: number): string {
     if (!conditions.length) return `Variant ${index + 1}`;
     return `Variant where ${
       conditions.map((c) => `${c.prop}=${conditionValueText(c.values)}`).join(
@@ -565,7 +555,7 @@ class GenericJsonSchemaToAgentTs {
     }`;
   }
 
-  private variantTypeName(
+  function variantTypeName(
     unionName: string,
     conditions: LiteralCondition[],
     index: number,
@@ -582,14 +572,14 @@ class GenericJsonSchemaToAgentTs {
     return `${unionName}${suffix || `Variant${index + 1}`}`;
   }
 
-  private commentPartsForProperty(
+  function commentPartsForProperty(
     propName: string,
     schema: JsonSchema,
     required: boolean,
     typeExpression: string,
   ): string[] {
     const parts: string[] = [];
-    const literalValues = this.literalValues(schema);
+    const literalValuesFound = literalValues(schema);
     const isOnlyLiteral = schema.const !== undefined ||
       (schema.enum?.length === 1);
 
@@ -597,7 +587,7 @@ class GenericJsonSchemaToAgentTs {
     else if (isOnlyLiteral) {
       parts.push(
         `Literal validity field: ${propName} must be ${
-          conditionValueText(literalValues)
+          conditionValueText(literalValuesFound)
         }.`,
       );
     } else if (schema.oneOf?.length || schema.anyOf?.length) {
@@ -618,15 +608,15 @@ class GenericJsonSchemaToAgentTs {
       meta.push(`allowed ${schema.enum.map(literal).join(" | ")}`);
     }
 
-    const constraints = this.constraints(schema);
-    if (constraints.length) meta.push(constraints.join(", "));
+    const constraintList = constraints(schema);
+    if (constraintList.length) meta.push(constraintList.join(", "));
     if (meta.length) parts.push(meta.join("; "));
 
     if (!required && !parts.length) parts.push("Optional.");
     return parts;
   }
 
-  private constraints(schema: JsonSchema): string[] {
+  function constraints(schema: JsonSchema): string[] {
     const out: string[] = [];
     if (
       typeof schema.minimum === "number" && typeof schema.maximum === "number"
@@ -675,7 +665,7 @@ class GenericJsonSchemaToAgentTs {
     return out;
   }
 
-  private objectRuleText(schema: JsonSchema): string | undefined {
+  function objectRuleText(schema: JsonSchema): string | undefined {
     if (schema.additionalProperties === false) {
       return "No extra keys according to JSON Schema.";
     }
@@ -691,12 +681,12 @@ class GenericJsonSchemaToAgentTs {
     return undefined;
   }
 
-  private objectConstraintText(schema: JsonSchema): string | undefined {
-    const constraints = this.constraints(schema);
-    return constraints.length ? constraints.join(", ") : undefined;
+  function objectConstraintText(schema: JsonSchema): string | undefined {
+    const constraintList = constraints(schema);
+    return constraintList.length ? constraintList.join(", ") : undefined;
   }
 
-  private validWhenText(conditions?: LiteralCondition[]): string | undefined {
+  function validWhenText(conditions?: LiteralCondition[]): string | undefined {
     if (!conditions?.length) return undefined;
     return `Valid when ${
       conditions.map((c) => `${c.prop}=${conditionValueText(c.values)}`).join(
@@ -705,7 +695,7 @@ class GenericJsonSchemaToAgentTs {
     }.`;
   }
 
-  private dynamicIndexLine(
+  function dynamicIndexLine(
     schema: JsonSchema,
     valueName: string,
     path: string,
@@ -715,7 +705,7 @@ class GenericJsonSchemaToAgentTs {
       schema.additionalProperties === false
     ) return undefined;
     if (schema.additionalProperties === true) return `[key: string]: unknown;`;
-    const valueType = this.typeFor(
+    const valueType = typeFor(
       schema.additionalProperties,
       valueName,
       path,
@@ -723,7 +713,7 @@ class GenericJsonSchemaToAgentTs {
     return `[key: string]: ${valueType};`;
   }
 
-  private normalizedTypes(schema: JsonSchema): string[] {
+  function normalizedTypes(schema: JsonSchema): string[] {
     if (Array.isArray(schema.type)) return schema.type;
     if (schema.type) return [schema.type];
     if (schema.const !== undefined) return [primitiveTypeOf(schema.const)];
@@ -737,49 +727,49 @@ class GenericJsonSchemaToAgentTs {
     return ["unknown"];
   }
 
-  private resolveAndMerge(schema: JsonSchema): JsonSchema {
-    return this.mergeAllOf(this.resolve(schema));
+  function resolveAndMerge(schema: JsonSchema): JsonSchema {
+    return mergeAllOf(resolve(schema));
   }
 
-  private resolve(schema: JsonSchema): JsonSchema {
+  function resolve(schema: JsonSchema): JsonSchema {
     if (!schema?.$ref) return schema ?? {};
     const ref = schema.$ref;
     if (!ref.startsWith("#/")) return schema;
-    if (this.refStack.has(ref)) {
+    if (ctx.refStack.has(ref)) {
       return {
         type: "object",
         additionalProperties: true,
         description: `Circular reference ${ref}`,
       };
     }
-    this.refStack.add(ref);
+    ctx.refStack.add(ref);
     const target = ref.slice(2).split("/").reduce<unknown>(
       (acc, part) => (acc as Record<string, unknown>)?.[unescapePointer(part)],
-      this.schema,
+      ctx.schema,
     );
-    const resolved = this.resolve((target ?? {}) as JsonSchema);
-    this.refStack.delete(ref);
+    const resolved = resolve((target ?? {}) as JsonSchema);
+    ctx.refStack.delete(ref);
 
     const siblings = { ...schema } as JsonSchema;
     delete siblings.$ref;
     return Object.keys(siblings).length
-      ? this.mergeSchemas(resolved, siblings)
+      ? mergeSchemas(resolved, siblings)
       : resolved;
   }
 
-  private mergeAllOf(schema: JsonSchema): JsonSchema {
+  function mergeAllOf(schema: JsonSchema): JsonSchema {
     if (!Array.isArray(schema.allOf) || schema.allOf.length === 0) {
       return schema;
     }
     const mergedBase = { ...schema } as JsonSchema;
     delete mergedBase.allOf;
     return schema.allOf.reduce(
-      (acc, part) => this.mergeSchemas(acc, this.resolveAndMerge(part)),
+      (acc, part) => mergeSchemas(acc, resolveAndMerge(part)),
       mergedBase,
     );
   }
 
-  private mergeSchemas(a: JsonSchema, b: JsonSchema): JsonSchema {
+  function mergeSchemas(a: JsonSchema, b: JsonSchema): JsonSchema {
     const merged: JsonSchema = { ...a, ...b };
     merged.properties = { ...(a.properties ?? {}), ...(b.properties ?? {}) };
     merged.required = unique([...(a.required ?? []), ...(b.required ?? [])]);
@@ -790,56 +780,54 @@ class GenericJsonSchemaToAgentTs {
     return merged;
   }
 
-  private itemsOf(schema: JsonSchema): JsonSchema[] {
+  function itemsOf(schema: JsonSchema): JsonSchema[] {
     if (schema.prefixItems?.length) return schema.prefixItems;
     if (Array.isArray(schema.items)) return schema.items;
     return schema.items ? [schema.items] : [];
   }
 
-  private childTypeName(parent: string, prop: string): string {
+  function childTypeName(parent: string, prop: string): string {
     const propName = pascalCase(prop);
-    if (parent === this.options.rootName) {
+    if (parent === ctx.options.rootName) {
       return isProbablyPlural(propName) ? singularize(propName) : propName;
     }
     return `${parent}${propName}`;
   }
 
-  private uniqueTypeName(name: string): string {
+  function uniqueTypeName(name: string): string {
     const base = pascalCase(name) || "GeneratedType";
-    if (!this.reservedNames.has(base)) {
-      this.reservedNames.add(base);
+    if (!ctx.reservedNames.has(base)) {
+      ctx.reservedNames.add(base);
       return base;
     }
-    if (this.named.has(base) || this.emittedAliases.has(base)) return base;
+    if (ctx.named.has(base) || ctx.emittedAliases.has(base)) return base;
     let i = 2;
-    while (this.reservedNames.has(`${base}${i}`)) i++;
+    while (ctx.reservedNames.has(`${base}${i}`)) i++;
     const out = `${base}${i}`;
-    this.reservedNames.add(out);
+    ctx.reservedNames.add(out);
     return out;
   }
 
-  private jsDoc(parts: Array<string | undefined>): string {
-    const clean = parts.filter(Boolean).map((part) =>
-      this.compact(String(part))
-    )
+  function jsDoc(parts: Array<string | undefined>): string {
+    const clean = parts.filter(Boolean).map((part) => compact(String(part)))
       .filter(Boolean);
     if (!clean.length) return "";
     return `/** ${clean.join(" ")} */`;
   }
 
-  private compact(text: string): string {
+  function compact(text: string): string {
     const oneLine = escapeComment(text.replace(/\s+/g, " ").trim());
     if (!oneLine) return "";
-    if (oneLine.length <= this.options.commentMaxChars) return oneLine;
+    if (oneLine.length <= ctx.options.commentMaxChars) return oneLine;
     const firstSentence = oneLine.match(/^(.+?[.!?])\s/)?.[1];
     const candidate = firstSentence &&
-        firstSentence.length <= this.options.commentMaxChars
+        firstSentence.length <= ctx.options.commentMaxChars
       ? firstSentence
       : oneLine;
-    return candidate.slice(0, this.options.commentMaxChars - 1).trimEnd() + "…";
+    return candidate.slice(0, ctx.options.commentMaxChars - 1).trimEnd() + "…";
   }
 
-  private indent(text: string, spaces: number): string {
+  function indent(text: string, spaces: number): string {
     const pad = " ".repeat(spaces);
     return text.split("\n").map((line) => pad + line).join("\n");
   }
@@ -942,9 +930,18 @@ export function generateAgentTypesFromSchema(
   schema: Record<string, unknown>,
   options?: { rootName?: string; moduleName?: string },
 ): string {
-  const generator = new GenericJsonSchemaToAgentTs(schema as JsonSchema, {
-    rootName: options?.rootName ?? "ToolInput",
-    moduleName: options?.moduleName,
-  });
-  return generator.generate();
+  const sourceSchema = schema as JsonSchema;
+  const context: RendererContext = {
+    schema: sourceSchema,
+    options: {
+      ...DEFAULT_OPTIONS,
+      rootName: options?.rootName ?? "ToolInput",
+      moduleName: options?.moduleName,
+    },
+    named: new Map<string, GeneratedNamedType>(),
+    emittedAliases: new Map<string, string>(),
+    reservedNames: new Set<string>(),
+    refStack: new Set<string>(),
+  };
+  return generateSchema(context);
 }

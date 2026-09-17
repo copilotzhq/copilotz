@@ -4,8 +4,8 @@
 
 - Render LLM tool input schemas as generated TypeScript contracts, with a
   generic fallback for schemas that cannot be represented.
-- Expose the transaction-aware `attachSpaceRecord` helper for canonical,
-  atomic Space record attachment and moves.
+- Expose the transaction-aware `attachSpaceRecord` helper for canonical, atomic
+  Space record attachment and moves.
 - Add an optional `requireEmpty` guard to Space removal so attached records can
   block deletion when requested.
 

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.76.1 — 2026-09-17
+
+- Detach observations that finish attaching after request cancellation.
+- Validate operation discovery from the catalog metadata already selected,
+  avoiding repeated operation-status settlement work during every discovery
+  poll.
+- Preserve replay, authorization and the existing observation interval. Schema
+  v5 and its indexes are unchanged.
+
 ## 0.76.0 — 2026-09-17
 
 - Move Core HTTP operation discovery, membership and event-watermark SQL behind

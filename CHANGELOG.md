@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.76.2 — 2026-09-17
+
+- Use operation-change hints for targeted live discovery instead of repeatedly
+  scanning unchanged history every 250 ms.
+- Retain initial discovery and a five-second recovery scan for missed hints,
+  with bounded pending IDs and listener cleanup on cancellation or failure.
+- Stabilize filtered event-watermark reads against PostgreSQL backward-index
+  plans that can scan unrelated history. Namespace-only reads retain their
+  indexed maximum query.
+- Preserve discovery SQL, schema, authorization and replay checkpoints.
+
 ## 0.76.1 — 2026-09-17
 
 - Detach observations that finish attaching after request cancellation.

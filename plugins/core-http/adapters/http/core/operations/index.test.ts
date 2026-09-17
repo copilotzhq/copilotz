@@ -186,6 +186,16 @@ Deno.test("Core operation queries discover bounded thread associations", async (
         active.id,
       ]),
     );
+    const hinted = await listThreadOperations(catalog, {
+      namespace: "tenant",
+      threadId: "thread",
+      operationIds: [explicit.id, otherThread.id],
+      limit: 20,
+    });
+    assertEquals(
+      hinted.map((operation) => operation.operationId),
+      [explicit.id],
+    );
     assertEquals(
       found.some((operation) => operation.operationId === foreignNamespace.id),
       false,

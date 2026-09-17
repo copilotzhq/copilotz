@@ -30,6 +30,8 @@ export type OperationChangeSubscription = Readonly<{
   close(): void;
 }>;
 
+export type OperationChangeListener = (operationId: string) => void;
+
 export type OperationState =
   | "accepted"
   | "running"
@@ -110,6 +112,13 @@ export type OperationCatalogAssociation = Readonly<{
 export type OperationCatalog = Readonly<{
   databaseSchema: string;
   watch(operationId: string): Promise<OperationChangeSubscription>;
+  /**
+   * Subscribes to best-effort operation change hints. Hints may be duplicated,
+   * missed, or come from another namespace; consumers must re-read and
+   * authorize through their scoped catalog. The returned unsubscribe is
+   * idempotent.
+   */
+  onChange(listener: OperationChangeListener): Promise<() => void>;
   indexEvent(
     transaction: SqlExecutor,
     input: OperationEventIndexInput,
@@ -280,7 +289,7 @@ export type OperationCatalog = Readonly<{
 }>;
 
 type OperationNotificationHub = Readonly<{
-  listeners: Set<(operationId: string) => void>;
+  listeners: Set<OperationChangeListener>;
 }>;
 
 const notificationHubs = new WeakMap<
@@ -293,19 +302,33 @@ function operationNotificationHub(
 ): Promise<OperationNotificationHub> {
   const existing = notificationHubs.get(session);
   if (existing) return existing;
-  const listeners = new Set<(operationId: string) => void>();
+  const listeners = new Set<OperationChangeListener>();
   const hub = { listeners } as const;
   const pending = (async () => {
     if (session.listen) {
       await session.listen(OPERATION_CHANGE_CHANNEL, (notification) => {
         if (!notification.payload) return;
-        for (const listener of listeners) listener(notification.payload);
+        dispatchOperationChange(hub, notification.payload);
       }).catch(() => undefined);
     }
     return hub;
   })();
   notificationHubs.set(session, pending);
   return pending;
+}
+
+function dispatchOperationChange(
+  hub: OperationNotificationHub,
+  operationId: string,
+): void {
+  for (const listener of hub.listeners) {
+    try {
+      listener(operationId);
+    } catch {
+      // Notifications are acceleration hints. A consumer must not interfere
+      // with catalog persistence or other listeners.
+    }
+  }
 }
 
 async function notifyOperationChange(
@@ -317,7 +340,7 @@ async function notifyOperationChange(
   const payload = requiredText(operationId, "Operation id");
   if (!strict) {
     const hub = await operationNotificationHub(session);
-    for (const listener of hub.listeners) listener(payload);
+    dispatchOperationChange(hub, payload);
   }
   if (!session.listen) return;
   if (new TextEncoder().encode(payload).byteLength > 7_500) return;
@@ -815,6 +838,16 @@ export function createOperationCatalog(
   const tables = tableNames(databaseSchema);
   const catalog: OperationCatalog = {
     databaseSchema: validateEventSchemaName(databaseSchema),
+    async onChange(listener) {
+      if (typeof listener !== "function") {
+        throw new TypeError("Operation change listener must be a function.");
+      }
+      const hub = await operationNotificationHub(session);
+      hub.listeners.add(listener);
+      return () => {
+        hub.listeners.delete(listener);
+      };
+    },
     async watch(operationIdInput) {
       const operationId = requiredText(operationIdInput, "Operation id");
       const hub = await operationNotificationHub(session);
@@ -1045,11 +1078,20 @@ export function createOperationCatalog(
           params.push(JSON.stringify(eventMetadata))
         }::jsonb`
         : "";
+      const watermarkQuery = metadataFilter
+        ? `WITH matching AS MATERIALIZED (
+             -- Filter metadata before MAX so it cannot walk unrelated history
+             -- through the namespace/position index.
+             SELECT position FROM ${tables.events}
+              WHERE namespace = $1${metadataFilter}
+           )
+           SELECT MAX(position) AS position FROM matching`
+        : `SELECT MAX(position) AS position FROM ${tables.events}
+          WHERE namespace = $1`;
       const result = await session.query<{
         position: string | number | bigint | null;
       }>(
-        `SELECT MAX(position) AS position FROM ${tables.events}
-          WHERE namespace = $1${metadataFilter}`,
+        watermarkQuery,
         params,
       );
       const position = result.rows[0]?.position;

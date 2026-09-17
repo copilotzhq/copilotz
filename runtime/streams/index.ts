@@ -42,6 +42,7 @@ export {
 export type {
   OperationCatalog,
   OperationCatalogAssociation,
+  OperationChangeListener,
   OperationChangeSubscription,
   OperationRecord,
   OperationState,

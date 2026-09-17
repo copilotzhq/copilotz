@@ -103,11 +103,11 @@ a deployment migration before routing traffic to a 0.64 runtime. Missing tables
 fail startup/scope opening with `copilotz_operation_catalog_not_provisioned`;
 existing v4 Events and deliveries remain unchanged.
 
-Core thread observation uses the additive
+Core HTTP thread observation uses the additive
 `events_core_thread_namespace_position_idx` index on the v5 Event metadata
-projection. Fresh schema provisioning creates it alongside the other Event
-indexes. Existing v5 schemas require an operator-run online index build for each
-physical schema, followed by a statistics refresh:
+projection. This Core-specific performance index is managed by the deployment
+operator for every physical schema, including fresh schemas, followed by a
+statistics refresh:
 
 ```sql
 CREATE INDEX CONCURRENTLY IF NOT EXISTS "events_core_thread_namespace_position_idx"
@@ -117,8 +117,9 @@ ANALYZE "<schema>"."events";
 ```
 
 This is an additive performance index; it does not change `EVENT_SCHEMA_VERSION`
-or the schema fingerprint. Runtime validation remains read-only, so it will not
-silently build the index on an already-current schema.
+or the schema fingerprint. Generic event schema provisioning deliberately does
+not create this conversational index. Runtime validation remains read-only, so
+it will not silently build the index on an already-current schema.
 
 Replay cursors use a per-operation stream high-watermark plus sparse byte
 offsets for lanes that are still incomplete. Sequential completed lanes remain

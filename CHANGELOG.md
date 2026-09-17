@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.75.1 — 2026-09-17
+
+- Bound thread operation discovery to the associated operations before applying
+  state and progress filters, avoiding repeated whole-history progress scans.
+- Document the online event-metadata index required for efficient Core thread
+  observation on existing databases.
+- Read each unique message sender once per history page.
+
 ## 0.75.0 — Unreleased
 
 - Remove frontend conversation-tag fields and metadata mutation support.

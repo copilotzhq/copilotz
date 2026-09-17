@@ -201,28 +201,6 @@ Deno.test("schema provisioning contains no operational tool-execution indexes", 
   }
 });
 
-Deno.test("schema provisioning indexes Core thread metadata in event order", async () => {
-  const fixture = await createFixture();
-  try {
-    const indexes = await fixture.session.query<{
-      indexname: string;
-      indexdef: string;
-    }>(
-      `SELECT indexname, indexdef FROM pg_indexes
-       WHERE schemaname = $1
-         AND indexname = 'events_core_thread_namespace_position_idx'`,
-      [TEST_SCHEMA],
-    );
-    assertEquals(indexes.rows.length, 1);
-    assertStringIncludes(indexes.rows[0].indexdef, "metadata");
-    assertStringIncludes(indexes.rows[0].indexdef, "threadId");
-    assertStringIncludes(indexes.rows[0].indexdef, "namespace");
-    assertStringIncludes(indexes.rows[0].indexdef, "position");
-  } finally {
-    await closeFixture(fixture);
-  }
-});
-
 Deno.test("schema provisioning backfills legacy deliveries to their causal root scope", async () => {
   const fixture = await createFixture();
   try {

@@ -1,9 +1,4 @@
-import {
-  assert,
-  assertEquals,
-  assertRejects,
-  assertStringIncludes,
-} from "@std/assert";
+import { assert, assertEquals, assertRejects } from "@std/assert";
 import { createTestDatabase } from "../testing/ominipg.ts";
 import {
   createCoreSchemaStatements,
@@ -45,19 +40,6 @@ Deno.test({
         "events",
         "nodes",
       ]);
-      const threadIndexes = await session.query<{
-        indexname: string;
-        indexdef: string;
-      }>(
-        `SELECT indexname, indexdef FROM pg_indexes
-         WHERE schemaname = $1
-           AND indexname = 'events_core_thread_namespace_position_idx'`,
-        [schema],
-      );
-      assertEquals(threadIndexes.rows.length, 1);
-      assertStringIncludes(threadIndexes.rows[0].indexdef, "threadId");
-      assertStringIncludes(threadIndexes.rows[0].indexdef, "namespace");
-      assertStringIncludes(threadIndexes.rows[0].indexdef, "position");
       const store = createEventStore({
         session,
         schema,

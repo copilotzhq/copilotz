@@ -75,18 +75,23 @@ export async function listThreadOperations(
     : "";
   params.push(boundedLimit(input.limit));
   const result = await session.query<{ operation_id: string }>(
-    `SELECT operation.operation_id FROM ${tables.operations} AS operation
+    `WITH associated AS MATERIALIZED (
+           SELECT operation.namespace, operation.operation_id
+             FROM ${tables.operations} AS operation
+            WHERE operation.namespace = $1
+              AND operation.metadata -> 'operationMetadata' ->> 'threadId' = $2
+           UNION
+           SELECT indexed.namespace, indexed.operation_id
+             FROM ${tables.operationEvents} AS indexed
+             JOIN ${tables.events} AS event ON event.id = indexed.event_id
+            WHERE indexed.namespace = $1
+              AND event.metadata -> 'core' ->> 'threadId' = $2
+         )
+      SELECT operation.operation_id FROM ${tables.operations} AS operation
+        JOIN associated
+          ON associated.namespace = operation.namespace
+         AND associated.operation_id = operation.operation_id
           WHERE operation.namespace = $1${stateFilter}${progressFilter}
-            AND (
-              operation.metadata -> 'operationMetadata' ->> 'threadId' = $2
-              OR EXISTS (
-                SELECT 1 FROM ${tables.operationEvents} AS indexed
-                JOIN ${tables.events} AS event ON event.id = indexed.event_id
-                WHERE indexed.namespace = operation.namespace
-                  AND indexed.operation_id = operation.operation_id
-                  AND event.metadata -> 'core' ->> 'threadId' = $2
-              )
-            )
           ORDER BY operation.updated_at DESC, operation.operation_id DESC
           LIMIT $${params.length}`,
     params,

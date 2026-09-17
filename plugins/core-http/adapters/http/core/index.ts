@@ -151,20 +151,27 @@ export const coreHttpAdapter: HttpAdapter = createHttpAdapter({
           limit,
           overfetch: true,
         });
-        const messages = await Promise.all(
-          records.slice(0, limit).map(async (record) => {
-            const sender = await context.read.get(
-              "participant",
-              String(record.senderId),
-            );
-            if (!sender) throw new Error("Message sender was not found.");
-            return mapMessageRecord(
-              record as CollectionRecord,
-              mapParticipantRecord(sender),
-            );
-          }),
+        const page = records.slice(0, limit);
+        const senderIds = [
+          ...new Set(page.map((record) => String(record.senderId))),
+        ];
+        const senders = new Map(
+          await Promise.all(senderIds.map(async (id) =>
+            [
+              id,
+              await context.read.get("participant", id),
+            ] as const
+          )),
         );
-        const actionRunIds = records.slice(0, limit).flatMap(
+        const messages = page.map((record) => {
+          const sender = senders.get(String(record.senderId));
+          if (!sender) throw new Error("Message sender was not found.");
+          return mapMessageRecord(
+            record as CollectionRecord,
+            mapParticipantRecord(sender),
+          );
+        });
+        const actionRunIds = page.flatMap(
           (record, index) => {
             const metadata = record.metadata as Record<string, unknown>;
             const workflow = metadata.copilotzWorkflow as

@@ -347,6 +347,10 @@ export function createCoreSchemaStatements(
       ON ${tables.events} (namespace, deduplication_id)
       WHERE deduplication_id IS NOT NULL`,
     `CREATE INDEX IF NOT EXISTS "events_metadata_idx" ON ${tables.events} USING GIN (metadata jsonb_path_ops)`,
+    `CREATE INDEX IF NOT EXISTS "events_core_thread_namespace_position_idx"
+      ON ${tables.events} (
+        (metadata -> 'core' ->> 'threadId'), namespace, position
+      )`,
     `CREATE INDEX IF NOT EXISTS "events_namespace_position_idx" ON ${tables.events} (namespace, position)`,
     `CREATE INDEX IF NOT EXISTS "events_correlation_position_idx"
       ON ${tables.events} (namespace, correlation_id, position)`,

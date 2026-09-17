@@ -11,9 +11,124 @@ import {
   createCopilotzClient,
 } from "../../../../../client/index.ts";
 import { createCoreClient } from "../../../../core/adapters/client/index.ts";
-import { coreHttpPlugin } from "../../../index.ts";
+import { coreHttpAdapter, coreHttpPlugin } from "../../../index.ts";
+import type { HttpHandlerContext } from "../../../../server/authoring/http-adapter/index.ts";
 import { corePlugin } from "../../../../core/plugin.ts";
 import type { LlmAdapter } from "../../../../llm/index.ts";
+
+Deno.test("Core message history reads each unique sender once", async () => {
+  const route = coreHttpAdapter.routes.find((value) =>
+    value.id === "core.threads.messages"
+  );
+  if (!route || !("handler" in route) || !route.handler) {
+    throw new Error("Core message history route is not available.");
+  }
+  const senderReads: string[] = [];
+  const participants: Record<string, Record<string, unknown>> = {
+    "sender-a": {
+      id: "sender-a",
+      namespace: "tenant",
+      externalId: "sender-a",
+      participantType: "human",
+      metadata: {},
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    },
+    "sender-b": {
+      id: "sender-b",
+      namespace: "tenant",
+      externalId: "sender-b",
+      participantType: "agent",
+      agentId: "north",
+      metadata: {},
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    },
+  };
+  const thread = {
+    id: "thread-history",
+    namespace: "tenant",
+    participantIds: ["sender-a", "sender-b"],
+  };
+  const messages = [
+    {
+      id: "message-a1",
+      namespace: "tenant",
+      threadId: thread.id,
+      senderId: "sender-a",
+      recipientIds: [],
+      content: [],
+      metadata: {},
+      createdAt: "2026-01-01T00:00:01.000Z",
+      updatedAt: "2026-01-01T00:00:01.000Z",
+    },
+    {
+      id: "message-a2",
+      namespace: "tenant",
+      threadId: thread.id,
+      senderId: "sender-a",
+      recipientIds: [],
+      content: [],
+      metadata: {},
+      createdAt: "2026-01-01T00:00:02.000Z",
+      updatedAt: "2026-01-01T00:00:02.000Z",
+    },
+    {
+      id: "message-b1",
+      namespace: "tenant",
+      threadId: thread.id,
+      senderId: "sender-b",
+      recipientIds: [],
+      content: [],
+      metadata: {},
+      createdAt: "2026-01-01T00:00:03.000Z",
+      updatedAt: "2026-01-01T00:00:03.000Z",
+    },
+  ];
+  const context = {
+    request: new Request(
+      "https://test/api/threads/thread-history/messages",
+    ),
+    endpoint: {},
+    params: { id: thread.id },
+    input: undefined,
+    scope: { actor: { id: "viewer" } },
+    constraints: {},
+    read: {
+      list: () => Promise.resolve([thread]),
+      get: (_name: string, id: string) => {
+        senderReads.push(id);
+        return Promise.resolve(participants[id] ?? null);
+      },
+      query: () => Promise.resolve(messages),
+      aggregate: () => Promise.resolve([]),
+    },
+    invoke: () => Promise.reject(new Error("Unexpected action invocation.")),
+    content: {
+      get: () => Promise.reject(new Error("Unexpected asset read.")),
+    },
+    operations: {
+      checkpoint: (threadId: string) =>
+        Promise.resolve(threadId === thread.id ? "checkpoint" : ""),
+      observe: () => Promise.reject(new Error("Unexpected observation.")),
+    },
+  } as unknown as HttpHandlerContext;
+
+  const response = await route.handler(context);
+  assertEquals(response instanceof Response, true);
+  const body = await (response as Response).json() as {
+    data: { id: string; sender: { id: string } }[];
+  };
+  assertEquals(senderReads, ["sender-a", "sender-b"]);
+  assertEquals(
+    body.data.map((message) => [message.id, message.sender.id]),
+    [
+      ["message-a1", "sender-a"],
+      ["message-a2", "sender-a"],
+      ["message-b1", "sender-b"],
+    ],
+  );
+});
 
 Deno.test("Core round trip keeps stored history, actor identity, and multipart bytes", async () => {
   const database = await createTestDatabase({ url: ":memory:" });

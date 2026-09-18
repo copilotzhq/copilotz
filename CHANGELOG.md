@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.76.6 — 2026-09-17
+
+- Synchronize the lockstep frontend package release for stable streamed
+  responses and tool activity. Core runtime behavior is unchanged.
+
 ## 0.76.5 — 2026-09-17
 
 - Render LLM tool input schemas as generated TypeScript contracts, with a

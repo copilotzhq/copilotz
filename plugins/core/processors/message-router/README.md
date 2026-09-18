@@ -14,5 +14,6 @@ It is installed by `corePlugin` and reacts to `message.created`.
 
 ## How it works
 
-It builds participant-relative history, resolves
-instructions/models/tools/context, and invokes `llm.call` idempotently.
+It builds participant-relative history, resolves an Agent's dynamic instructions
+and model routes inside one read-only snapshot, then resolves tools/context and
+invokes `llm.call` idempotently.

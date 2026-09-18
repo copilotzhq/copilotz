@@ -19,6 +19,8 @@ export type {
   ServerAuthorize,
   ServerAuthorizedScope,
   ServerCollectionExposure,
+  ServerCollectionMutationConstraints,
+  ServerCollectionMutationPolicy,
   ServerConstraints,
   ServerEndpointDescriptor,
   ServerExposureOptions,

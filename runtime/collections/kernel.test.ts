@@ -1088,6 +1088,107 @@ Deno.test("scoped collection calls own namespace and expose property commands an
   }
 });
 
+Deno.test("conditional collection writes recheck current and planned scope in the commit transaction", async () => {
+  const fixture = await createFixture(
+    ":memory:",
+    "copilotz_collection_write_conditions",
+  );
+  try {
+    const jobs =
+      fixture.runtime.withScope({ namespace: "tenant-conditions" }).job;
+    const created = await jobs.create({
+      id: "job-condition",
+      externalId: "condition",
+      title: "Condition",
+    });
+    await jobs.update({ id: created.id, set: { status: "claimed" } });
+    const denied = await assertRejects(
+      () =>
+        jobs.update({
+          id: created.id,
+          set: { title: "should-not-commit" },
+        }, {
+          operationKey: "job:guarded-update",
+          condition: {
+            current: { where: { status: "open" } },
+            next: { where: { status: "claimed" } },
+          },
+        }),
+    );
+    assertEquals(
+      (denied as { code?: string }).code,
+      "collection_mutation_condition_failed",
+    );
+    assertEquals((await jobs.get({ id: created.id }))?.title, "Condition");
+
+    const deniedNoop = await assertRejects(
+      () =>
+        jobs.update({ id: created.id, set: { title: "Condition" } }, {
+          condition: {
+            current: { where: { status: "open" } },
+            next: { where: { status: "open" } },
+          },
+        }),
+    );
+    assertEquals(
+      (deniedNoop as { code?: string }).code,
+      "collection_mutation_condition_failed",
+    );
+
+    const claimed = await jobs.create({
+      id: "job-condition-command-noop",
+      externalId: "condition-command-noop",
+      title: "Command noop",
+    });
+    await jobs.commands.claim({ id: claimed.id, claimedBy: "agent" });
+    const deniedCommandNoop = await assertRejects(
+      () =>
+        jobs.commands.claim({ id: claimed.id, claimedBy: "agent" }, {
+          condition: {
+            current: { where: { status: "open" } },
+            next: { where: { status: "open" } },
+          },
+        }),
+    );
+    assertEquals(
+      (deniedCommandNoop as { code?: string }).code,
+      "collection_mutation_condition_failed",
+    );
+
+    const raced = await jobs.create({
+      id: "job-condition-race",
+      externalId: "condition-race",
+      title: "Race",
+    });
+    const outcomes = await Promise.allSettled([
+      jobs.update({ id: raced.id, set: { title: "winner-a" } }, {
+        operationKey: "job:guarded-race-a",
+        condition: {
+          current: { where: { status: "open" } },
+          next: { where: { status: "open" } },
+        },
+      }),
+      jobs.update({ id: raced.id, set: { title: "winner-b" } }, {
+        operationKey: "job:guarded-race-b",
+        condition: {
+          current: { where: { status: "open" } },
+          next: { where: { status: "open" } },
+        },
+      }),
+    ]);
+    assertEquals(
+      outcomes.filter((item) => item.status === "fulfilled").length,
+      1,
+    );
+    assertEquals(
+      outcomes.filter((item) => item.status === "rejected").length,
+      1,
+    );
+  } finally {
+    await closeFixture(fixture);
+  }
+});
+
 Deno.test("collection verification scans every projection page", async () => {
   const fixture = await createFixture(
     ":memory:",

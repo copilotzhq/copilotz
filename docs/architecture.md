@@ -71,16 +71,18 @@ fail the foreground operation.
 ## AI harness
 
 Agent, LLM connection, Tool, and Skill values are Resources. Declarative fields
-are data; Agent instruction resolution, Context contribution, and Skill reading
-are examples of typed process-local policy hooks. Hooks are neither durable
-Actions nor persisted configuration. Built-in provider credentials and transport
-configuration live only in process-local LLM connections; custom provider
-implementations live in Adapters. Core turns an Agent's ordered connection/model
-selections into one `llm.call` Action. Tool Resources map model presentation to
-the same Action aliases present under `context.actions`; there is no Tool
-catalog, executor, wrapper Action, or second validation lifecycle. Tool and
-OpenAPI factories are compiler conveniences that materialize native Actions plus
-those data-only Tool Resources.
+are data; Agent dynamic resolution, Context contribution, and Skill reading are
+examples of typed process-local policy hooks. Dynamic resolution sees one
+read-only durable turn snapshot and may select effective instructions and model
+routes before preparation. Hooks are neither durable Actions nor persisted
+configuration. Built-in provider credentials and transport configuration live
+only in process-local LLM connections; custom provider implementations live in
+Adapters. Core turns an Agent's ordered connection/model selections into one
+`llm.call` Action. Tool Resources map model presentation to the same Action
+aliases present under `context.actions`; there is no Tool catalog, executor,
+wrapper Action, or second validation lifecycle. Tool and OpenAPI factories are
+compiler conveniences that materialize native Actions plus those data-only Tool
+Resources.
 
 Multiple model-produced Tool calls form a deterministic plan. Independent root
 branches run concurrently, stages inside each pipeline run sequentially, and the

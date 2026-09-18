@@ -1,9 +1,5 @@
-import { assert, assertEquals, assertThrows } from "@std/assert";
-import {
-  agentInstructionBase,
-  type AgentResource,
-  defineAgent,
-} from "./index.ts";
+import { assertEquals, assertThrows } from "@std/assert";
+import { type AgentResource, defineAgent } from "./index.ts";
 
 Deno.test("AgentResource is a plain Core resource with explicit aliases", () => {
   const agent = {
@@ -204,22 +200,21 @@ Deno.test("defineAgent accepts canonical hyphenated Skill names", () => {
   );
 });
 
-Deno.test("defineAgent keeps a dynamic instruction hook process-local and frozen", () => {
+Deno.test("defineAgent keeps a dynamic resolver process-local", () => {
   const dynamic = defineAgent({
     id: "dynamic",
     name: "Dynamic",
     role: "helper",
     models: { generate: [{ connection: "default", model: "default" }] },
-    instructions: { base: "base", resolve: () => "override" },
+    instructions: "base",
+    dynamicResolve: () => ({ instructions: "override" }),
   });
 
-  assert(typeof dynamic.instructions === "object");
-
-  assertEquals(agentInstructionBase(dynamic.instructions), "base");
-  assertEquals("instructionResolver" in dynamic, false);
+  assertEquals(dynamic.instructions, "base");
+  assertEquals(typeof dynamic.dynamicResolve, "function");
 });
 
-Deno.test("defineAgent validates dynamic instruction declarations", () => {
+Deno.test("defineAgent validates dynamic resolver declarations", () => {
   assertThrows(
     () =>
       defineAgent({
@@ -227,10 +222,10 @@ Deno.test("defineAgent validates dynamic instruction declarations", () => {
         name: "Dynamic",
         role: "helper",
         models: {},
-        instructions: { base: "base" },
+        dynamicResolve: "bad",
       } as unknown as AgentResource),
     TypeError,
-    "requires resolve",
+    "dynamicResolve must be a function",
   );
   assertThrows(
     () =>
@@ -239,18 +234,11 @@ Deno.test("defineAgent validates dynamic instruction declarations", () => {
         name: "Dynamic",
         role: "helper",
         models: {},
-        instructions: { base: " base ", resolve: () => null },
+        instructions: { base: "base", resolve: () => null },
       } as unknown as AgentResource),
     TypeError,
-    "must not contain surrounding whitespace",
+    "instructions must be text",
   );
-  const accessorResolver: Record<string, unknown> = {};
-  Object.defineProperty(accessorResolver, "resolve", {
-    enumerable: true,
-    get: () => {
-      throw new Error("must not execute");
-    },
-  });
   assertThrows(
     () =>
       defineAgent({
@@ -258,30 +246,10 @@ Deno.test("defineAgent validates dynamic instruction declarations", () => {
         name: "Accessor Resolver",
         role: "helper",
         models: {},
-        instructions:
-          accessorResolver as unknown as AgentResource["instructions"],
+        dynamicResolve: Object.create(null),
       }),
     TypeError,
-    "requires resolve",
-  );
-  const accessorBase: Record<string, unknown> = { resolve: () => null };
-  Object.defineProperty(accessorBase, "base", {
-    enumerable: true,
-    get: () => {
-      throw new Error("must not execute");
-    },
-  });
-  assertThrows(
-    () =>
-      defineAgent({
-        id: "accessor-base",
-        name: "Accessor Base",
-        role: "helper",
-        models: {},
-        instructions: accessorBase as unknown as AgentResource["instructions"],
-      }),
-    TypeError,
-    "requires resolve",
+    "dynamicResolve must be a function",
   );
 });
 

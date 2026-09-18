@@ -28,6 +28,7 @@ import { admitHttpOperation } from "./admission.ts";
 import { createHttpFetchHandler, type HttpFetchHandler } from "./fetch.ts";
 import { assetUploadResponse } from "./assets.ts";
 import { actionResponse, operationResult } from "./actions.ts";
+import { collectionMutationResponse } from "./mutations.ts";
 
 export type CreateServerFacadeFetchHandlerOptions = Readonly<{
   facade?: ServerFacadeResource;
@@ -256,6 +257,33 @@ export function createServerFacadeFetchHandler(
       }
       if (endpoint.kind === "collection") {
         const name = endpoint.collectionAlias!;
+        if (
+          endpoint.operation === "create" || endpoint.operation === "update" ||
+          endpoint.operation === "delete" ||
+          endpoint.operation?.startsWith("command:")
+        ) {
+          const runtime =
+            context.databaseSchema !== application.config.databaseSchema
+              ? await application.databaseScope(context.databaseSchema!)
+              : application;
+          const collection = runtime.collections.withScope({
+            namespace: context.namespace!,
+          })[endpoint.id];
+          if (!collection) {
+            throw appError(
+              404,
+              "collection_not_found",
+              "Collection was not found.",
+            );
+          }
+          return await collectionMutationResponse(
+            application,
+            endpoint,
+            request,
+            context,
+            collection,
+          );
+        }
         if (endpoint.operation === "get") {
           const value = await read.get(name, context.serverParams.id);
           if (!value) {
@@ -310,7 +338,11 @@ export function createServerFacadeFetchHandler(
             },
           };
         }
-        throw appError(405, "method_not_allowed", "Mutations require Actions.");
+        throw appError(
+          405,
+          "method_not_allowed",
+          "Collection operation is not supported.",
+        );
       }
       if (endpoint.kind === "operation") {
         if (endpoint.operation !== "observe") {

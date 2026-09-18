@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.77.0 — 2026-09-18
+
+- Replace the instruction-only Agent resolver with `dynamicResolve`, which
+  resolves effective instructions and model selections from one read-only turn
+  snapshot and records a durable configuration revision for the prepared call.
+- Add atomic plugin-owned Thread system-metadata patches so applications can
+  persist optional thread configuration without overriding the Core collection.
+- Add opt-in, policy-bound Server Collection mutations and matching client
+  helpers. Collection writes remain durable and authorization-constrained;
+  Actions remain for multi-resource orchestration.
+
 ## 0.76.7 — 2026-09-17
 
 - Synchronize the lockstep frontend package release for preserved streamed-turn

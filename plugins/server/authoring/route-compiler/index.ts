@@ -50,9 +50,13 @@ function enabled(
 function operationEnabled(
   policy: boolean | ServerCollectionExposure,
   operation: string,
+  mutation = false,
 ): boolean {
   if (policy === false) return false;
-  if (policy === true || policy.operations === undefined) return true;
+  // Collection exposure has historically meant read access. Writes are only
+  // reachable through an explicit operations policy, so adding a collection to
+  // an existing facade cannot silently make it writable.
+  if (policy === true || policy.operations === undefined) return !mutation;
   return enabled(policy.operations, operation);
 }
 
@@ -93,6 +97,62 @@ function cloneSchema(
   return (structuredClone(value as Record<string, unknown>));
 }
 
+function updateInputSchema(
+  schema: Readonly<Record<string, unknown>> | undefined,
+): Readonly<Record<string, unknown>> {
+  if (!schema) {
+    return {
+      type: "object",
+      properties: {
+        set: { type: "object" },
+        unset: { type: "array", items: { type: "string" } },
+      },
+      additionalProperties: false,
+    };
+  }
+  const set = structuredClone(schema) as Record<string, unknown>;
+  delete set.required;
+  return {
+    type: "object",
+    properties: {
+      set,
+      unset: { type: "array", items: { type: "string" }, uniqueItems: true },
+    },
+    additionalProperties: false,
+  };
+}
+
+function createInputSchema(
+  schema: Readonly<Record<string, unknown>> | undefined,
+  defaults?: Readonly<Record<string, unknown>>,
+): Readonly<Record<string, unknown>> {
+  if (!schema) return { type: "object" };
+  const input = structuredClone(schema) as Record<string, unknown>;
+  const properties = input.properties;
+  if (
+    properties && typeof properties === "object" && !Array.isArray(properties)
+  ) {
+    const next = { ...(properties as Record<string, unknown>) };
+    for (const field of ["namespace", "createdAt", "updatedAt"]) {
+      delete next[field];
+    }
+    input.properties = next;
+  }
+  if (Array.isArray(input.required)) {
+    const generated = new Set([
+      "id",
+      "namespace",
+      "createdAt",
+      "updatedAt",
+      ...Object.keys(defaults ?? {}),
+    ]);
+    input.required = input.required.filter((field) =>
+      !generated.has(String(field))
+    );
+  }
+  return input;
+}
+
 /** Compiles one complete registry into deterministic routes and OpenAPI. */
 export function compileServerRoutes(
   registry: PluginRegistry,
@@ -131,8 +191,9 @@ export function compileServerRoutes(
       inputSchema?: Readonly<Record<string, unknown>>,
       outputSchema?: Readonly<Record<string, unknown>>,
       member?: string,
+      mutation = false,
     ) => {
-      if (!operationEnabled(policy, operation)) return;
+      if (!operationEnabled(policy, operation, mutation)) return;
       endpoints.push(endpoint({
         kind: "collection",
         id: collection.name,
@@ -158,6 +219,36 @@ export function compileServerRoutes(
         cloneSchema(query.inputSchema),
         queryOutput,
         name,
+      );
+    }
+    add(
+      "POST",
+      "create",
+      "",
+      createInputSchema(schema, collection.defaults),
+      schema,
+      undefined,
+      true,
+    );
+    add(
+      "PATCH",
+      "update",
+      "/:id",
+      updateInputSchema(schema),
+      schema,
+      undefined,
+      true,
+    );
+    add("DELETE", "delete", "/:id", undefined, undefined, undefined, true);
+    for (const [name, command] of Object.entries(collection.commands ?? {})) {
+      add(
+        "POST",
+        `command:${name}`,
+        `/:id/commands/${encodeURIComponent(name)}`,
+        cloneSchema(command.input as Readonly<Record<string, unknown>>),
+        schema,
+        name,
+        true,
       );
     }
   }

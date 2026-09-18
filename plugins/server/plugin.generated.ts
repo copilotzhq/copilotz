@@ -2,7 +2,8 @@
 import { definePlugin, type DefinedPlugin } from "@copilotz/copilotz/plugins";
 import entry0 from "./actions/invoke-action/index.ts";
 import entry1 from "./processors/action-request/index.ts";
-import entry2 from "./resources/server/default/index.ts";
+import entry2 from "./processors/collection-mutation-request/index.ts";
+import entry3 from "./resources/server/default/index.ts";
 const definition = {
   id: "copilotz.server",
   version: "1.0.0",
@@ -11,10 +12,11 @@ const definition = {
   },
   processors: {
     "serverActionRequest": entry1,
+    "serverCollectionMutationRequest": entry2,
   },
   resources: {
     "server": {
-      "default": entry2,
+      "default": entry3,
     },
   },
 } as const;

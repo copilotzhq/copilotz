@@ -84,6 +84,11 @@ export type CollectionWriteOptions = Readonly<{
   namespace: string;
   identity?: CollectionMutationIdentity;
   metadata?: Record<string, unknown>;
+  /** Optional atomic policy checks evaluated by the collection kernel. */
+  condition?: Readonly<{
+    current?: CollectionFilter;
+    next?: CollectionFilter;
+  }>;
 }>;
 
 export type CollectionUpdatePatch<TRecord> = Readonly<{

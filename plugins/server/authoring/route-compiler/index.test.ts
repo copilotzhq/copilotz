@@ -9,9 +9,24 @@ const notes = defineCollection({
   name: "notes",
   schema: {
     type: "object",
-    properties: { id: { type: "string" }, label: { type: "string" } },
-    required: ["label"],
+    properties: {
+      id: { type: "string" },
+      namespace: { type: "string" },
+      createdAt: { type: "string" },
+      updatedAt: { type: "string" },
+      archived: { type: "boolean" },
+      label: { type: "string" },
+    },
+    required: [
+      "id",
+      "namespace",
+      "createdAt",
+      "updatedAt",
+      "archived",
+      "label",
+    ],
   } as const,
+  defaults: { namespace: "tenant", archived: false },
   queries: {
     byLabel: {
       inputSchema: {
@@ -176,6 +191,84 @@ Deno.test("route compiler applies glob exclusion", () => {
   assertEquals(
     routes.match("POST", "/api/actions/compass/sandbox/preview/list"),
     null,
+  );
+});
+
+Deno.test("route compiler exposes writes only through an explicit operation policy", () => {
+  const registry = createPluginRegistry({ plugins: [fixture] });
+  const defaultRoutes = compileServerRoutes(registry, defineServerFacade());
+  assertEquals(defaultRoutes.match("POST", "/api/collections/notes"), null);
+  const readOnlyRoutes = compileServerRoutes(
+    registry,
+    defineServerFacade({ expose: { collections: { include: ["notes"] } } }),
+  );
+  assertEquals(readOnlyRoutes.match("POST", "/api/collections/notes"), null);
+  const routes = compileServerRoutes(
+    registry,
+    defineServerFacade({
+      expose: {
+        collections: {
+          include: ["notes"],
+          operations: {
+            include: ["create", "update", "delete", "command:rename"],
+          },
+        },
+      },
+    }),
+  );
+  assertEquals(
+    routes.match("POST", "/api/collections/notes")?.endpoint.operation,
+    "create",
+  );
+  assertEquals(
+    routes.match("PATCH", "/api/collections/notes/n-1")?.endpoint.operation,
+    "update",
+  );
+  assertEquals(
+    routes.match("DELETE", "/api/collections/notes/n-1")?.endpoint.operation,
+    "delete",
+  );
+  assertEquals(
+    routes.match("POST", "/api/collections/notes/n-1/commands/rename")?.endpoint
+      .operation,
+    "command:rename",
+  );
+  const create = routes.match("POST", "/api/collections/notes")?.endpoint;
+  assertEquals(create?.inputSchema?.required, ["label"]);
+  const paths = routes.openApi.paths as Record<string, Record<string, unknown>>;
+  assertEquals(
+    (paths["/api/collections/notes"].post as Record<string, unknown>).responses,
+    {
+      "202": {
+        description: "Successful response",
+        content: {
+          "application/json": {
+            schema: {
+              type: "object",
+              required: ["data"],
+              properties: {
+                data: {
+                  type: "object",
+                  required: [
+                    "operationId",
+                    "correlationId",
+                    "status",
+                    "acceptedAt",
+                  ],
+                  properties: {
+                    operationId: { type: "string" },
+                    correlationId: { type: "string" },
+                    status: { type: "string" },
+                    acceptedAt: { type: "string", format: "date-time" },
+                    checkpoint: { type: "string" },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
   );
 });
 

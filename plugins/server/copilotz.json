@@ -3,11 +3,13 @@
   "version": "1.0.0",
   "aliases": {
     "actions/invoke-action/index.ts": "serverInvoke",
-    "processors/action-request/index.ts": "serverActionRequest"
+    "processors/action-request/index.ts": "serverActionRequest",
+    "processors/collection-mutation-request/index.ts": "serverCollectionMutationRequest"
   },
   "include": [
     "actions/invoke-action/index.ts",
     "processors/action-request/index.ts",
+    "processors/collection-mutation-request/index.ts",
     "resources/server/default/index.ts"
   ]
 }

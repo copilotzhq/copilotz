@@ -13,6 +13,7 @@ import {
 } from "../plugins/server/shared/contracts.ts";
 import type { HttpRequest, HttpResponse } from "./http-types.ts";
 import type { FacadeContext } from "./context.ts";
+import { collectionMutationResult } from "./mutations.ts";
 function appError(status: number, code: string, message: string): Error {
   return Object.assign(new Error(message), { status, code });
 }
@@ -326,6 +327,12 @@ export async function operationResult(
     ? await application.databaseScope(context.databaseSchema)
     : application;
   const event = await scoped.events.resolve(status.namespace, operationId);
+  const collectionResult = await collectionMutationResult(
+    application,
+    context,
+    operationId,
+  );
+  if (collectionResult) return collectionResult;
   if (event?.type !== SERVER_ACTION_REQUEST_EVENT_TYPE) {
     if (status.state === "accepted" || status.state === "running") {
       return pending();

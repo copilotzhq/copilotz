@@ -7,6 +7,7 @@ import {
   assertExists,
   assertRejects,
   assertStringIncludes,
+  assertThrows,
 } from "@std/assert";
 import {
   agentFailureMetadata,
@@ -1346,6 +1347,7 @@ Deno.test("Core selects an Agent session Model alias without a wrapper Action", 
 });
 Deno.test("dynamic Agent instructions resolve for each routed LLM request", async () => {
   const resolverCalls: string[] = [];
+  const snapshotReads: string[] = [];
   const authored = defineAgent({
     id: "north",
     name: "North",
@@ -1354,16 +1356,34 @@ Deno.test("dynamic Agent instructions resolve for each routed LLM request", asyn
       generate: [{
         connection: "primaryModel",
         model: "generate-provider-model",
+      }, {
+        connection: "backupModel",
+        model: "backup-provider-model",
       }],
     },
-    instructions: {
-      base: "DYNAMIC_BASE",
-      resolve(_facts, execution) {
-        resolverCalls.push(execution.triggerMessageId);
-        return execution.triggerMessageId === "message:user"
-          ? { instructions: "DYNAMIC_OVERRIDE", revision: "ab-override-v1" }
-          : { instructions: null, revision: "ab-base-v1" };
-      },
+    instructions: "DYNAMIC_BASE",
+    async dynamicResolve(facts, execution) {
+      assertThrows(() => {
+        (facts.baseAgent.models.generate as unknown as Array<unknown>).push({});
+      });
+      assertEquals(facts.baseAgent.models.generate?.length, 2);
+      const snapshotThread = await facts.collections.thread.get({
+        id: facts.thread.id,
+      });
+      snapshotReads.push(String(snapshotThread?.id));
+      assert(Object.isFrozen(facts.thread));
+      resolverCalls.push(execution.triggerMessageId);
+      return execution.triggerMessageId === "message:user"
+        ? { instructions: "DYNAMIC_OVERRIDE", revision: "ab-override-v1" }
+        : {
+          models: {
+            generate: [{
+              connection: "secondaryModel",
+              model: "secondary-provider-model",
+            }],
+          },
+          revision: "ab-base-v1",
+        };
     },
   });
   const db = await createTestDatabase({ url: ":memory:" });
@@ -1373,7 +1393,11 @@ Deno.test("dynamic Agent instructions resolve for each routed LLM request", asyn
     version: "1.0.0",
     resources: {
       agents: { north: authored },
-      llmConnections: { primaryModel: { adapter: "test" } },
+      llmConnections: {
+        primaryModel: { adapter: "test" },
+        backupModel: { adapter: "test" },
+        secondaryModel: { adapter: "test" },
+      },
     },
     adapters: {
       llm: {
@@ -1414,11 +1438,15 @@ Deno.test("dynamic Agent instructions resolve for each routed LLM request", asyn
     const second = await continueRun(fixture, "message:second", "Again");
     await waitForRun(fixture, second, 4);
     assertEquals(resolverCalls, ["message:user", "message:second"]);
+    assertEquals(snapshotReads, ["thread-a", "thread-a"]);
     assertStringIncludes(
       inputs[0].request.instructions ?? "",
       "DYNAMIC_OVERRIDE",
     );
+    assertEquals(inputs[0].fallbackAvailable, true);
     assertStringIncludes(inputs[1].request.instructions ?? "", "DYNAMIC_BASE");
+    assertEquals(inputs[1].providerModel, "secondary-provider-model");
+    assertEquals(inputs[1].fallbackAvailable, false);
     const llmEvents = await projectActionEvents(
       fixture.engine,
       NAMESPACE,
@@ -1479,11 +1507,9 @@ Deno.test("pure dynamic instructions survive router delivery retry without anoth
         model: "generate-provider-model",
       }],
     },
-    instructions: {
-      resolve(facts, execution) {
-        retriedFacts.push(`${facts.thread.id}:${execution.triggerMessageId}`);
-        return { instructions: "RETRY_STABLE", revision: "retry-v1" };
-      },
+    dynamicResolve(facts, execution) {
+      retriedFacts.push(`${facts.thread.id}:${execution.triggerMessageId}`);
+      return { instructions: "RETRY_STABLE", revision: "retry-v1" };
     },
   });
   const fixture = await createFixture(
@@ -1522,11 +1548,9 @@ Deno.test("invalid dynamic Agent instruction output fails before llm.call", asyn
         model: "generate-provider-model",
       }],
     },
-    instructions: {
-      resolve: () => ({ instructions: 42 } as unknown as {
-        instructions: null;
-      }),
-    },
+    dynamicResolve: () => ({ instructions: 42 } as unknown as {
+      instructions: string;
+    }),
   });
   const fixture = await createFixture(
     () => {

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.76.7 — 2026-09-17
+
+- Synchronize the lockstep frontend package release for preserved streamed-turn
+  ordering. Core runtime behavior is unchanged.
+
 ## 0.76.6 — 2026-09-17
 
 - Synchronize the lockstep frontend package release for stable streamed

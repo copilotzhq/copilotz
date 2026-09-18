@@ -45,7 +45,10 @@ function prompt(input: LlmAdapterCallInput): string {
   ).join("\n");
 }
 
-async function fixture(instructions?: AgentResource["instructions"]) {
+async function fixture(
+  options: Readonly<Pick<AgentResource, "instructions" | "dynamicResolve">> =
+    {},
+) {
   const db = await createTestDatabase({ url: ":memory:" });
   const inputs: LlmAdapterCallInput[] = [];
   const app = definePlugin({
@@ -57,7 +60,7 @@ async function fixture(instructions?: AgentResource["instructions"]) {
           id: "north",
           name: "North",
           role: "assistant",
-          instructions,
+          ...options,
           models: { generate: [{ connection: "model", model: "test" }] },
         }),
       },
@@ -138,16 +141,15 @@ Deno.test("real Core route selects latest public history across more than one pa
 
 Deno.test("removing an Agent during preparation prevents the uncaptured model invocation", async () => {
   const entered = Promise.withResolvers<void>();
-  const resume = Promise.withResolvers<void>();
   const test = await fixture({
-    resolve: async () => {
+    dynamicResolve: async () => {
       entered.resolve();
-      await resume.promise;
+      await Promise.resolve();
       return { instructions: "ready" };
     },
   });
   try {
-    const sent = await test.application.send(
+    const sending = test.application.send(
       message({
         thread: "thread",
         participant: "user",
@@ -160,11 +162,10 @@ Deno.test("removing an Agent during preparation prevents the uncaptured model in
       id: "thread",
       set: { participantIds: ["user", "other"] },
     });
-    resume.resolve();
+    const sent = await sending;
     await sent.done;
     assertEquals(test.inputs.length, 0);
   } finally {
-    resume.resolve();
     await test.close();
   }
 });

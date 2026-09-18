@@ -1,5 +1,6 @@
 import { assertJsonValue } from "../json.ts";
 import { stableStringify } from "./equal.ts";
+import type { CollectionFilter } from "./types.ts";
 
 /** Scalar predicates deliberately avoid string/number coercion. */
 export type CollectionPredicateValue = string | number | boolean | null;
@@ -27,6 +28,210 @@ export type CollectionPredicate =
       | Readonly<{ jsonEquals: unknown }>
     )
   );
+
+function valueAt(
+  record: Readonly<Record<string, unknown>>,
+  field: string,
+): unknown {
+  return field.split(".").reduce<unknown>(
+    (value, part) =>
+      value && typeof value === "object" && !Array.isArray(value) &&
+        Object.hasOwn(value, part)
+        ? (value as Record<string, unknown>)[part]
+        : undefined,
+    record,
+  );
+}
+
+function jsonContains(actual: unknown, expected: unknown): boolean {
+  if (Array.isArray(expected)) {
+    return Array.isArray(actual) &&
+      expected.every((item) =>
+        actual.some((candidate) => jsonContains(candidate, item))
+      );
+  }
+  if (expected && typeof expected === "object" && !Array.isArray(expected)) {
+    if (!actual || typeof actual !== "object" || Array.isArray(actual)) {
+      return false;
+    }
+    return Object.entries(expected as Record<string, unknown>).every((
+      [key, value],
+    ) => jsonContains((actual as Record<string, unknown>)[key], value));
+  }
+  return stableStringify(actual) === stableStringify(expected);
+}
+
+/** Mirrors query.ts JSON text comparisons, including SQL NULL behavior. */
+function jsonText(value: unknown): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value === "string") return value;
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  if (typeof value === "boolean") return value ? "true" : "false";
+  return undefined;
+}
+
+/** PostgreSQL timestamptz comparisons retain microseconds and normalize offsets. */
+function timestampMicros(value: unknown): bigint | undefined {
+  if (typeof value !== "string") return undefined;
+  const match = /^(.*?)(?:\.(\d+))?(Z|[+-]\d{2}:\d{2})$/.exec(value);
+  if (!match) return undefined;
+  const base = Date.parse(`${match[1]}${match[3]}`);
+  if (!Number.isFinite(base)) return undefined;
+  const fraction = (match[2] ?? "").padEnd(6, "0").slice(0, 6);
+  return BigInt(base) * 1_000n + BigInt(fraction);
+}
+
+function predicateEqual(
+  field: string,
+  actual: unknown,
+  expected: unknown,
+): boolean {
+  if (field === "createdAt" || field === "updatedAt") {
+    const left = timestampMicros(actual);
+    const right = timestampMicros(expected);
+    return left !== undefined && right !== undefined && left === right;
+  }
+  return stableStringify(actual) === stableStringify(expected);
+}
+
+function predicateCompare(
+  field: string,
+  actual: unknown,
+  expected: string | number,
+  comparison: (
+    left: bigint | string | number,
+    right: bigint | string | number,
+  ) => boolean,
+): boolean {
+  if (field === "createdAt" || field === "updatedAt") {
+    const left = timestampMicros(actual);
+    const right = timestampMicros(expected);
+    return left !== undefined && right !== undefined
+      ? comparison(left, right)
+      : false;
+  }
+  return typeof actual === typeof expected
+    ? comparison(actual as string | number, expected)
+    : false;
+}
+
+/** Evaluates the bounded JSON filter form against a candidate record. */
+export function matchesCollectionPredicate(
+  input: CollectionPredicate,
+  record: Readonly<Record<string, unknown>>,
+): boolean {
+  if ("and" in input) {
+    return input.and.every((item) => matchesCollectionPredicate(item, record));
+  }
+  if ("or" in input) {
+    return input.or.some((item) => matchesCollectionPredicate(item, record));
+  }
+  if ("not" in input) return !matchesCollectionPredicate(input.not, record);
+  const actual = valueAt(record, input.field);
+  if ("exists" in input) return input.exists === (actual !== undefined);
+  if ("isNull" in input) return input.isNull === (actual === null);
+  if ("isBlank" in input) {
+    return input.isBlank ===
+      (typeof actual === "string" && actual.trim() === "");
+  }
+  if ("eq" in input) {
+    return predicateEqual(input.field, actual, input.eq);
+  }
+  if ("ne" in input) {
+    return !predicateEqual(input.field, actual, input.ne);
+  }
+  if ("jsonEquals" in input) {
+    return stableStringify(actual) === stableStringify(input.jsonEquals);
+  }
+  if ("in" in input) {
+    return input.in.some((entry) => predicateEqual(input.field, actual, entry));
+  }
+  if ("overlaps" in input) {
+    return Array.isArray(actual) &&
+      actual.some((entry) =>
+        input.overlaps.some((candidate) =>
+          stableStringify(entry) === stableStringify(candidate)
+        )
+      );
+  }
+  if ("trimEq" in input) {
+    return typeof actual === "string" && actual.trim() === input.trimEq;
+  }
+  if ("eqIgnoreCase" in input) {
+    return typeof actual === "string" &&
+      actual.toLowerCase() === input.eqIgnoreCase.toLowerCase();
+  }
+  if ("inIgnoreCase" in input) {
+    return typeof actual === "string" &&
+      input.inIgnoreCase.some((entry) =>
+        actual.toLowerCase() === entry.toLowerCase()
+      );
+  }
+  if (typeof actual !== "string" && typeof actual !== "number") return false;
+  if ("lt" in input) {
+    return predicateCompare(
+      input.field,
+      actual,
+      input.lt,
+      (left, right) => left < right,
+    );
+  }
+  if ("lte" in input) {
+    return predicateCompare(
+      input.field,
+      actual,
+      input.lte,
+      (left, right) => left <= right,
+    );
+  }
+  if ("gt" in input) {
+    return predicateCompare(
+      input.field,
+      actual,
+      input.gt,
+      (left, right) => left > right,
+    );
+  }
+  if ("gte" in input) {
+    return predicateCompare(
+      input.field,
+      actual,
+      input.gte,
+      (left, right) => left >= right,
+    );
+  }
+  return false;
+}
+
+export function matchesCollectionFilter(
+  filter: CollectionFilter,
+  record: Readonly<Record<string, unknown>>,
+): boolean {
+  if (filter.filter && !matchesCollectionPredicate(filter.filter, record)) {
+    return false;
+  }
+  for (const [field, expected] of Object.entries(filter.where ?? {})) {
+    const actualText = jsonText(valueAt(record, field));
+    const expectedText = jsonText(expected);
+    if (
+      actualText === undefined || expectedText === undefined ||
+      actualText !== expectedText
+    ) return false;
+  }
+  for (const [field, expected] of Object.entries(filter.contains ?? {})) {
+    if (!jsonContains(valueAt(record, field), expected)) return false;
+  }
+  for (const [field, expected] of Object.entries(filter.containsAny ?? {})) {
+    const actual = valueAt(record, field);
+    if (
+      !Array.isArray(actual) ||
+      !expected.some((candidate) =>
+        actual.some((entry) => jsonContains(entry, candidate))
+      )
+    ) return false;
+  }
+  return true;
+}
 
 const MAX_DEPTH = 16;
 const MAX_NODES = 256;

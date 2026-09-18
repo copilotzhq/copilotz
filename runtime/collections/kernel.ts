@@ -54,6 +54,8 @@ import {
 } from "../events/body-store.ts";
 import type { CollectionDefinition } from "./definition.ts";
 import { sameValue } from "./equal.ts";
+import { matchesCollectionFilter } from "./predicate.ts";
+import { markNonRetryable } from "../failure.ts";
 import {
   loadGraphRelation,
   mergeGraphRelation,
@@ -923,6 +925,7 @@ export function createCollectionKernel(
           `${scope.operationKey}:${collectionName}:${operation}:${subjectId}`,
         metadata: { ...scope.metadata, ...inherited?.metadata },
       },
+      ...(writeOptions.condition ? { condition: writeOptions.condition } : {}),
     };
   };
 
@@ -1392,6 +1395,7 @@ export function createCollectionKernel(
           matchData,
         }),
         mutate: async (context) => {
+          let currentForCondition: CollectionRecord | null | undefined;
           if ("expected" in plan) {
             const current = await loadCollectionRecord(
               context.transaction,
@@ -1401,6 +1405,7 @@ export function createCollectionKernel(
               subjectId,
               true,
             );
+            currentForCondition = current;
             if (plan.expected === null ? current !== null : !current) {
               throw new Error(
                 plan.expected === null
@@ -1414,6 +1419,48 @@ export function createCollectionKernel(
             ) {
               throw new Error(
                 `Collection '${name}' '${subjectId}' changed while its mutation was prepared.`,
+              );
+            }
+          }
+          if (scoped.condition) {
+            if (currentForCondition === undefined) {
+              currentForCondition = await loadCollectionRecord(
+                context.transaction,
+                tables,
+                scoped.namespace,
+                name,
+                subjectId,
+                true,
+              );
+            }
+            if (
+              scoped.condition.current &&
+              (!currentForCondition ||
+                !matchesCollectionFilter(
+                  scoped.condition.current,
+                  currentForCondition,
+                ))
+            ) {
+              throw markNonRetryable(
+                Object.assign(
+                  new Error(
+                    "Collection mutation is outside its authorized scope.",
+                  ),
+                  { code: "collection_mutation_condition_failed", status: 403 },
+                ),
+              );
+            }
+            if (
+              scoped.condition.next &&
+              !matchesCollectionFilter(scoped.condition.next, plan.write.record)
+            ) {
+              throw markNonRetryable(
+                Object.assign(
+                  new Error(
+                    "Collection mutation result is outside its authorized scope.",
+                  ),
+                  { code: "collection_mutation_condition_failed", status: 403 },
+                ),
               );
             }
           }
@@ -1773,6 +1820,7 @@ export function createCollectionKernel(
         next = stamp(
           definition.beforeUpdate(next, {
             namespace: current.namespace,
+            current,
           }),
           {
             namespace: current.namespace,
@@ -1872,7 +1920,8 @@ export function createCollectionKernel(
         unset: [...(patchSnapshot.unset ?? [])] as const,
       } as const;
       const keyed = Boolean(
-        optionsSnapshot.identity?.deduplicationId?.trim(),
+        optionsSnapshot.identity?.deduplicationId?.trim() ||
+          optionsSnapshot.condition,
       );
       try {
         return await commitOperation(
@@ -2064,7 +2113,8 @@ export function createCollectionKernel(
         input: await canonicalIntent(value),
       } as const;
       const keyed = Boolean(
-        optionsSnapshot.identity?.deduplicationId?.trim(),
+        optionsSnapshot.identity?.deduplicationId?.trim() ||
+          optionsSnapshot.condition,
       );
       const eventType = commandDefinition.event ?? `${name}.updated`;
       try {

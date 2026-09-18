@@ -39,7 +39,10 @@ function responseSchema(
   const endpoint = route.endpoint;
   if (
     endpoint.kind === "action" || endpoint.actionAlias ||
-    endpoint.kind === "channel" && endpoint.operation === "submit"
+    endpoint.kind === "channel" && endpoint.operation === "submit" ||
+    endpoint.kind === "collection" &&
+      ["create", "update", "delete"].includes(endpoint.operation ?? "") ||
+    endpoint.kind === "collection" && endpoint.operation?.startsWith("command:")
   ) {
     return jsonEnvelope({
       type: "object",
@@ -139,23 +142,21 @@ function operationObject(route: CompiledServerRoute): Record<string, unknown> {
       },
     }
     : undefined;
-  const noContent = value.kind === "collection" &&
-    value.operation === "delete";
+  const durableMutation = value.kind === "collection" &&
+    (value.operation === "create" || value.operation === "update" ||
+      value.operation === "delete" || value.operation?.startsWith("command:"));
   const successStatus = value.kind === "action" || value.actionAlias ||
-      value.kind === "channel" && value.operation === "submit"
+      value.kind === "channel" && value.operation === "submit" ||
+      durableMutation
     ? "202"
-    : (value.kind === "collection" &&
-        value.operation === "create") ||
-        (value.kind === "asset" && value.operation === "upload")
+    : value.kind === "asset" && value.operation === "upload"
     ? "201"
-    : noContent
-    ? "204"
     : "200";
   const mediaType = value.responseMediaType ??
     (value.kind === "asset" && value.method === "GET"
       ? "application/octet-stream"
       : "application/json");
-  const content = noContent ? undefined : {
+  const content = {
     [mediaType]: {
       schema: mediaType === "application/json"
         ? responseSchema(route)
@@ -170,7 +171,8 @@ function operationObject(route: CompiledServerRoute): Record<string, unknown> {
       schema: { type: "string" },
     }));
   const headers = value.kind === "action" || value.actionAlias ||
-      value.kind === "channel" && value.operation === "submit"
+      value.kind === "channel" && value.operation === "submit" ||
+      durableMutation
     ? [{
       name: "Idempotency-Key",
       in: "header",

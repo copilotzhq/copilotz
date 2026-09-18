@@ -25,6 +25,8 @@ export type CollectionRelation = Readonly<{
 
 export type CollectionHookContext = Readonly<{
   namespace: string;
+  /** Existing record for an update hook; absent for creation hooks. */
+  current?: Readonly<Record<string, unknown>>;
 }>;
 
 export type CollectionMutateContext<TRecord> = Readonly<{

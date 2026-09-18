@@ -4,6 +4,7 @@ import {
   type LlmModelSelections,
   normalizeLlmModelSelections,
 } from "@copilotz/copilotz/llm";
+import type { SnapshotCollections } from "@copilotz/copilotz/collections";
 
 const ALIAS_PATTERN = /^[a-z][a-zA-Z0-9_]*$/;
 const UNSAFE_ALIASES = new Set(["__proto__", "constructor", "prototype"]);
@@ -12,6 +13,7 @@ const AGENT_KEYS = new Set([
   "name",
   "role",
   "instructions",
+  "dynamicResolve",
   "personality",
   "description",
   "models",
@@ -41,16 +43,17 @@ export type AgentModels = Readonly<{
 
 /**
  * Frozen, process-local Agent definition. Provider configuration and clients
- * belong to LLM connections and Adapters, never to an Agent. Instruction
- * hooks are pure, deterministic composition policy over the supplied durable
- * turn facts: their resolved text is persisted only by the subsequent
+ * belong to LLM connections and Adapters, never to an Agent. Dynamic
+ * resolution is pure, deterministic composition policy over the supplied
+ * durable turn facts: its result is captured only by the subsequent
  * `llm.call` Action.
  */
 export type AgentResource = Readonly<{
   id: string;
   name: string;
   role: string;
-  instructions?: string | AgentInstructionResolver;
+  instructions?: string;
+  dynamicResolve?: AgentDynamicResolver;
   personality?: string;
   description?: string;
   models: AgentModels;
@@ -58,8 +61,8 @@ export type AgentResource = Readonly<{
   metadata?: Readonly<Record<string, unknown>>;
 }>;
 
-/** Stable turn identity supplied to a process-local instruction hook. */
-export type AgentInstructionExecution = Readonly<{
+/** Stable turn identity supplied to a process-local dynamic resolver. */
+export type AgentDynamicResolveExecution = Readonly<{
   agentId: string;
   agentParticipantId: string;
   threadId: string;
@@ -70,47 +73,32 @@ export type AgentInstructionExecution = Readonly<{
   causationId?: string;
 }>;
 
-/** Read-only durable Core facts available to a dynamic instruction resolver. */
-export type AgentInstructionContext = Readonly<{
-  agent: AgentResource;
+/** Read-only durable Core facts available to a dynamic Agent resolver. */
+export type AgentDynamicResolveContext = Readonly<{
+  baseAgent: AgentResource;
   participant: import("../../shared/contracts.ts").Participant;
   thread: import("../../shared/contracts.ts").ConversationThread;
   triggerMessage: import("../../shared/contracts.ts").ConversationMessage;
+  collections: SnapshotCollections;
 }>;
 
-export type AgentInstructionResolution = Readonly<{
-  instructions: string | null;
+/** Effective values selected for one prepared Agent turn. */
+export type AgentDynamicResolveOutput = Readonly<{
+  instructions?: string;
+  models?: AgentModels;
   /** Small durable prompt-policy identifier, never prompt text. */
   revision?: string;
 }>;
 
-export type AgentInstructionResolver = Readonly<{
-  base?: string;
-  resolve(
-    context: AgentInstructionContext,
-    execution: AgentInstructionExecution,
-  ):
-    | string
-    | null
-    | undefined
-    | AgentInstructionResolution
-    | Promise<
-      | string
-      | null
-      | undefined
-      | AgentInstructionResolution
-    >;
-}>;
-
-/**
- * Returns only an Agent definition's static instruction baseline. Dynamic
- * resolution belongs to Core's message router, where durable turn facts exist.
- */
-export function agentInstructionBase(
-  instructions: AgentResource["instructions"],
-): string | undefined {
-  return typeof instructions === "string" ? instructions : instructions?.base;
-}
+export type AgentDynamicResolver = (
+  context: AgentDynamicResolveContext,
+  execution: AgentDynamicResolveExecution,
+) =>
+  | AgentDynamicResolveOutput
+  | undefined
+  | Promise<
+    AgentDynamicResolveOutput | undefined
+  >;
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
@@ -175,6 +163,14 @@ function models(value: unknown, agentId: string): AgentModels {
     ...(generate ? { generate } : {}),
     ...(session ? { session } : {}),
   } as const);
+}
+
+/** Validates a complete model map returned by a dynamic Agent resolver. */
+export function normalizeAgentModels(
+  value: unknown,
+  agentId: string,
+): AgentModels {
+  return models(value, agentId);
 }
 
 function selection(
@@ -329,39 +325,25 @@ export function defineAgent(
   return defineAgentValue(resource);
 }
 
-function instructions(
+function instructions(value: unknown, agentId: string): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string") {
+    throw new TypeError(`Agent '${agentId}' instructions must be text.`);
+  }
+  return optionalText(value, `Agent '${agentId}' instructions`);
+}
+
+function dynamicResolve(
   value: unknown,
   agentId: string,
-): string | AgentInstructionResolver | undefined {
+): AgentDynamicResolver | undefined {
   if (value === undefined) return undefined;
-  if (typeof value === "string") {
-    return optionalText(value, `Agent '${agentId}' instructions`);
-  }
-  if (!isPlainRecord(value) || Array.isArray(value)) {
+  if (typeof value !== "function") {
     throw new TypeError(
-      `Agent '${agentId}' instructions must be text or a resolver object.`,
+      `Agent '${agentId}' dynamicResolve must be a function.`,
     );
   }
-  const keys = Reflect.ownKeys(value);
-  const resolveDescriptor = Object.getOwnPropertyDescriptor(value, "resolve");
-  const baseDescriptor = Object.getOwnPropertyDescriptor(value, "base");
-  if (
-    keys.some((key) => key !== "base" && key !== "resolve") ||
-    !resolveDescriptor || !("value" in resolveDescriptor) ||
-    typeof resolveDescriptor.value !== "function" ||
-    (baseDescriptor !== undefined && !("value" in baseDescriptor))
-  ) {
-    throw new TypeError(
-      "Agent instruction resolver requires resolve(context, execution).",
-    );
-  }
-  const base = baseDescriptor === undefined ? undefined : optionalText(
-    baseDescriptor.value,
-    `Agent '${agentId}' instruction resolver base`,
-  );
-  const resolve = resolveDescriptor
-    .value as AgentInstructionResolver["resolve"];
-  return ({ ...(base !== undefined ? { base } : {}), resolve } as const);
+  return value as AgentDynamicResolver;
 }
 
 function defineAgentValue<const TResource extends AgentResource>(
@@ -374,6 +356,7 @@ function defineAgentValue<const TResource extends AgentResource>(
 
   const id = requiredText(resource.id, "Agent id");
   const normalizedInstructions = instructions(resource.instructions, id);
+  const normalizedDynamicResolve = dynamicResolve(resource.dynamicResolve, id);
   const normalizedCapabilities = capabilities(resource.capabilities, id);
   const normalizedMetadata = metadata(resource.metadata, id);
   const result: AgentResource = {
@@ -382,6 +365,9 @@ function defineAgentValue<const TResource extends AgentResource>(
     role: requiredText(resource.role, `Agent '${id}' role`),
     ...(normalizedInstructions !== undefined
       ? { instructions: normalizedInstructions }
+      : {}),
+    ...(normalizedDynamicResolve !== undefined
+      ? { dynamicResolve: normalizedDynamicResolve }
       : {}),
     ...(resource.personality !== undefined
       ? {

@@ -24,6 +24,21 @@ export type ReadOptions = Readonly<{ signal?: AbortSignal }>;
 export type SubmitOptions = Readonly<
   { idempotencyKey: string; signal?: AbortSignal }
 >;
+export type CollectionMutation =
+  | Readonly<{ operation: "create"; name: string; input?: unknown }>
+  | Readonly<{
+    operation: "update" | "delete";
+    name: string;
+    id: string;
+    input?: unknown;
+  }>
+  | Readonly<{
+    operation: "command";
+    name: string;
+    id: string;
+    command: string;
+    input?: unknown;
+  }>;
 export type ObserveOptions = Readonly<{
   checkpoint?: string;
   signal?: AbortSignal;
@@ -114,6 +129,7 @@ export function createCopilotzClient(options: ClientOptions): CopilotzClient {
     path: string,
     input: unknown,
     submitOptions: SubmitOptions,
+    method = "POST",
   ): Promise<OperationReceipt> => {
     if (!submitOptions.idempotencyKey.trim()) {
       throw new TypeError("Idempotency key is required.");
@@ -124,7 +140,7 @@ export function createCopilotzClient(options: ClientOptions): CopilotzClient {
       let responseReceived = false;
       try {
         const response = await request(path, {
-          method: "POST",
+          method,
           ...serialized,
           signal: submitOptions.signal,
           headers: {
@@ -153,6 +169,27 @@ export function createCopilotzClient(options: ClientOptions): CopilotzClient {
         await pause(100 * 2 ** attempt, submitOptions.signal);
       }
     }
+  };
+  const submitCollectionMutation = async (
+    mutation: CollectionMutation,
+    submitOptions: SubmitOptions,
+  ): Promise<OperationReceipt> => {
+    const name = segment(mutation.name);
+    const id = mutation.operation === "create"
+      ? ""
+      : `/${segment(mutation.id)}`;
+    const method = mutation.operation === "create"
+      ? "POST"
+      : mutation.operation === "update"
+      ? "PATCH"
+      : mutation.operation === "delete"
+      ? "DELETE"
+      : "POST";
+    const command = mutation.operation === "command"
+      ? `/commands/${segment(mutation.command)}`
+      : "";
+    const path = `/collections/${name}${id}${command}`;
+    return await submit(path, mutation.input ?? {}, submitOptions, method);
   };
   const observe = async (
     path: string,
@@ -262,6 +299,39 @@ export function createCopilotzClient(options: ClientOptions): CopilotzClient {
           method: "POST",
           ...body(input),
         }),
+      submit: submitCollectionMutation,
+      async invoke(mutation: CollectionMutation, options: SubmitOptions) {
+        const receipt = await submitCollectionMutation(mutation, options);
+        return await result(receipt.operationId, options.signal);
+      },
+      create: (name: string, input: unknown, options: SubmitOptions) =>
+        submitCollectionMutation({ operation: "create", name, input }, options),
+      update: (
+        name: string,
+        id: string,
+        input: unknown,
+        options: SubmitOptions,
+      ) =>
+        submitCollectionMutation(
+          { operation: "update", name, id, input },
+          options,
+        ),
+      delete: (name: string, id: string, options: SubmitOptions) =>
+        submitCollectionMutation({ operation: "delete", name, id }, options),
+      command: (
+        name: string,
+        id: string,
+        command: string,
+        input: unknown,
+        options: SubmitOptions,
+      ) =>
+        submitCollectionMutation({
+          operation: "command",
+          name,
+          id,
+          command,
+          input,
+        }, options),
     } as const,
     assets: {
       upload: (
@@ -331,6 +401,37 @@ export type CopilotzClient = Readonly<{
     get(name: string, id: string): Promise<unknown>;
     list(name: string, query?: unknown): Promise<unknown>;
     query(name: string, queryName: string, input: unknown): Promise<unknown>;
+    submit(
+      mutation: CollectionMutation,
+      options: SubmitOptions,
+    ): Promise<OperationReceipt>;
+    invoke(
+      mutation: CollectionMutation,
+      options: SubmitOptions,
+    ): Promise<unknown>;
+    create(
+      name: string,
+      input: unknown,
+      options: SubmitOptions,
+    ): Promise<OperationReceipt>;
+    update(
+      name: string,
+      id: string,
+      input: unknown,
+      options: SubmitOptions,
+    ): Promise<OperationReceipt>;
+    delete(
+      name: string,
+      id: string,
+      options: SubmitOptions,
+    ): Promise<OperationReceipt>;
+    command(
+      name: string,
+      id: string,
+      command: string,
+      input: unknown,
+      options: SubmitOptions,
+    ): Promise<OperationReceipt>;
   }>;
   assets: Readonly<{
     upload(

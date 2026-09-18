@@ -18,12 +18,17 @@ import {
   type ServerEndpointDescriptor,
   serverPlugin,
 } from "../plugins/server/index.ts";
+import { threadCollection } from "../plugins/core/collections/thread/index.ts";
+import { participantCollection } from "../plugins/core/collections/participant/index.ts";
+import type { HttpReadServices } from "../plugins/server/authoring/http-adapter/index.ts";
 import { createCopilotzApplication } from "../runtime/application/index.ts";
 import { createTestDatabase } from "../runtime/testing/ominipg.ts";
 import { createServerFacadeFetchHandler } from "./facade.ts";
 import { CopilotzHttpError, createCopilotzClient } from "../client/index.ts";
 import { base64ToBytes, bytesToBase64 } from "../runtime/content/index.ts";
 import { provisionOperationCatalog } from "../runtime/streams/index.ts";
+import { createHttpOperations } from "./operations.ts";
+import { listThreadOperations } from "../plugins/core-http/adapters/http/core/operations/index.ts";
 
 function arrayBuffer(bytes: Uint8Array): ArrayBuffer {
   return bytes.slice().buffer as ArrayBuffer;
@@ -189,6 +194,12 @@ const protectedFixture = definePlugin({
   id: "test.server-facade-protected",
   version: "1.0.0",
   actions: { protectedEcho },
+});
+
+const threadMutationFixture = definePlugin({
+  id: "test.server-thread-mutation",
+  version: "1.0.0",
+  collections: { participant: participantCollection, thread: threadCollection },
 });
 
 function browser(
@@ -645,5 +656,234 @@ Deno.test("Gateway mounts the composed facade in Oxian-compatible Fetch and reje
       worker.close("server_gateway_test_done"),
     ]);
     await database.close();
+  }
+});
+
+Deno.test("collection mutations are opt-in, policy-bound, and durably replayable", async () => {
+  const application = await createCopilotzApplication({
+    namespace: "tenant-a",
+    databaseSchema: "server_collection_mutation_test",
+    plugins: [
+      fixture,
+      defineFixturePlugin({
+        ...serverPlugin,
+        resources: {
+          server: {
+            default: fixtureServerFacade({
+              expose: {
+                collections: {
+                  include: ["serverNotes"],
+                  operations: {
+                    include: ["create", "update", "delete", "command:rename"],
+                  },
+                },
+                actions: false,
+                channels: false,
+              },
+              authorize() {
+                return {
+                  operations: { metadata: { threadId: "thread-1" } },
+                  collectionMutations: {
+                    serverNotes: {
+                      create: { fields: ["label"] },
+                      update: {
+                        fields: ["label"],
+                        filter: { where: { label: "allowed" } },
+                      },
+                      delete: { filter: { where: { label: "allowed" } } },
+                      commands: { rename: { fields: ["label"] } },
+                    },
+                  },
+                };
+              },
+            }),
+          },
+        },
+      }),
+    ],
+  });
+  const handler = createServerFacadeFetchHandler(application);
+  const client = browser(handler);
+  try {
+    const created = await client.collections.create("serverNotes", {
+      label: "allowed",
+    }, { idempotencyKey: "create-1" });
+    const createdResult = await client.operations.result(
+      created.operationId,
+    ) as { id: string; label: string };
+    assertEquals(createdResult.label, "allowed");
+    const createdStatus = (await client.operations.get(created.operationId) as {
+      data?: { metadata?: Record<string, unknown> };
+    }).data!;
+    assertEquals(createdStatus.metadata?.threadId, "thread-1");
+    const associated = await listThreadOperations(
+      application.engine.operations,
+      {
+        namespace: "tenant-a",
+        threadId: "thread-1",
+        operationIds: [created.operationId],
+      },
+    );
+    assertEquals(
+      associated.map((operation) => operation.operationId),
+      [created.operationId],
+    );
+    const renamed = await client.collections.command(
+      "serverNotes",
+      createdResult.id,
+      "rename",
+      { label: "renamed" },
+      { idempotencyKey: "rename-1" },
+    );
+    const renamedResult = await client.operations.result(
+      renamed.operationId,
+    ) as { id: string; label: string };
+    assertEquals(renamedResult.label, "renamed");
+    const replay = await client.collections.command(
+      "serverNotes",
+      createdResult.id,
+      "rename",
+      { label: "renamed" },
+      { idempotencyKey: "rename-1" },
+    );
+    assertEquals(replay.operationId, renamed.operationId);
+    await assertRejects(
+      () =>
+        client.collections.command(
+          "serverNotes",
+          createdResult.id,
+          "rename",
+          { label: "different" },
+          { idempotencyKey: "rename-1" },
+        ),
+      CopilotzHttpError,
+      "Idempotency key was reused with different input.",
+    );
+  } finally {
+    await application.close();
+  }
+});
+
+Deno.test("thread observation discovers and receives a generic metadata command event", async () => {
+  const databaseSchema = "server_thread_observer_test";
+  const application = await createCopilotzApplication({
+    namespace: "tenant-a",
+    databaseSchema,
+    plugins: [
+      threadMutationFixture,
+      defineFixturePlugin({
+        ...serverPlugin,
+        resources: {
+          server: {
+            default: fixtureServerFacade({
+              authenticate() {
+                return { actor: { id: "participant-a" } };
+              },
+              authorize() {
+                return {
+                  operations: { metadata: { threadId: "thread-1" } },
+                  collectionMutations: {
+                    thread: {
+                      commands: {
+                        patchSystemMetadata: {
+                          fields: ["namespace", "set", "unset"],
+                          input: { namespace: "compass" },
+                          filter: {
+                            contains: { participantIds: ["participant-a"] },
+                          },
+                        },
+                      },
+                    },
+                  },
+                };
+              },
+              expose: {
+                collections: {
+                  include: ["thread"],
+                  operations: { include: ["command:patchSystemMetadata"] },
+                },
+                actions: false,
+                channels: false,
+              },
+            }),
+          },
+        },
+      }),
+    ],
+  });
+  const handler = createServerFacadeFetchHandler(application);
+  const client = browser(handler);
+  const thread = application.engine.collections.get("thread");
+  const participant = application.engine.collections.get("participant");
+  assert(thread);
+  assert(participant);
+  await participant.create({ namespace: "tenant-a" }, {
+    id: "participant-a",
+    namespace: "tenant-a",
+    externalId: "user-a",
+    participantType: "human",
+  }, { identity: { deduplicationId: "seed-participant-a" } });
+  await thread.create({ namespace: "tenant-a" }, {
+    id: "thread-1",
+    namespace: "tenant-a",
+    metadata: { public: {}, system: {} },
+    participantIds: ["participant-a"],
+  }, {
+    identity: { deduplicationId: "seed-thread-1" },
+  });
+  const read: HttpReadServices = {
+    async get(collection, id) {
+      return collection === "thread"
+        ? await thread.get({ namespace: "tenant-a" }, { id })
+        : null;
+    },
+    list() {
+      return Promise.resolve([]);
+    },
+    aggregate() {
+      return Promise.resolve([]);
+    },
+    query() {
+      return Promise.resolve([]);
+    },
+  };
+  const operations = await createHttpOperations(
+    application,
+    {
+      namespace: "tenant-a",
+      databaseSchema,
+      actor: { id: "participant-a" },
+    },
+    { operations: { metadata: { threadId: "thread-1" } } },
+    read,
+  );
+  const controller = new AbortController();
+  const observation = await operations.observe({
+    threadId: "thread-1",
+    signal: controller.signal,
+  });
+  const reader = observation.outputs.getReader();
+  const types: string[] = [];
+  try {
+    const receipt = await client.collections.command(
+      "thread",
+      "thread-1",
+      "patchSystemMetadata",
+      { namespace: "compass", set: { teamProfileId: "profile-1" } },
+      { idempotencyKey: "thread-command-1" },
+    );
+    await client.operations.result(receipt.operationId);
+    for (;;) {
+      const next = await reader.read();
+      if (next.done) break;
+      types.push(next.value.type);
+      if (next.value.type === "thread.system-metadata-patched") break;
+    }
+    assert(types.includes("thread.system-metadata-patched"));
+  } finally {
+    controller.abort("test_finished");
+    await observation.done.catch(() => undefined);
+    await reader.cancel().catch(() => undefined);
+    await application.close();
   }
 });

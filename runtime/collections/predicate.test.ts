@@ -6,6 +6,7 @@ import { queryCollectionRecords } from "./query.ts";
 import {
   type CollectionPredicate,
   compileCollectionPredicate,
+  matchesCollectionFilter,
 } from "./predicate.ts";
 import type { CollectionQuery } from "./types.ts";
 
@@ -285,6 +286,77 @@ Deno.test("collection predicate compiler filters and paginates in PGlite with ex
   } finally {
     await db.close();
   }
+});
+
+Deno.test("collection mutation filters match SQL JSON containment and null semantics", () => {
+  const record = {
+    metadata: { tenant: "a", flags: ["one", "two"] },
+    tags: ["x", "y"],
+    explicitNull: null,
+    enabled: true,
+    count: 2,
+  };
+  assertEquals(
+    matchesCollectionFilter(
+      { contains: { metadata: { tenant: "a" } } },
+      record,
+    ),
+    true,
+  );
+  assertEquals(
+    matchesCollectionFilter({ contains: { tags: ["x"] } }, record),
+    true,
+  );
+  assertEquals(
+    matchesCollectionFilter({ containsAny: { tags: ["z", "y"] } }, record),
+    true,
+  );
+  assertEquals(
+    matchesCollectionFilter(
+      { filter: { field: "explicitNull", isNull: true } },
+      record,
+    ),
+    true,
+  );
+  assertEquals(
+    matchesCollectionFilter(
+      { filter: { field: "missing", isNull: true } },
+      record,
+    ),
+    false,
+  );
+  assertEquals(
+    matchesCollectionFilter({ where: { missing: null } }, record),
+    false,
+  );
+  assertEquals(
+    matchesCollectionFilter({ where: { enabled: true } }, record),
+    true,
+  );
+  assertEquals(
+    matchesCollectionFilter({ where: { count: "2" } }, record),
+    true,
+  );
+  assertEquals(
+    matchesCollectionFilter({ filter: { field: "count", lt: "10" } }, record),
+    false,
+  );
+  const timestamped = { createdAt: "2026-09-18T12:00:00.123456Z" };
+  assertEquals(
+    matchesCollectionFilter({
+      filter: {
+        field: "createdAt",
+        eq: "2026-09-18T12:00:00.123456+00:00",
+      },
+    }, timestamped),
+    true,
+  );
+  assertEquals(
+    matchesCollectionFilter({
+      filter: { field: "createdAt", gt: "2026-09-18T12:00:00.123457Z" },
+    }, timestamped),
+    false,
+  );
 });
 
 Deno.test("collection predicates reject malformed, unbounded, and injectable structures", () => {

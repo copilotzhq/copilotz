@@ -92,13 +92,17 @@ function exposure(
     ),
     label,
   );
-  const operations = input.operations === undefined ||
-      input.operations === true
+  const operations = input.operations === undefined
+    ? undefined
+    : input.operations === true
     ? true
     : input.operations === false
     ? false
     : patterns(input.operations, `${label}.operations`);
-  return ({ ...base, operations } as const);
+  return ({
+    ...base,
+    ...(operations === undefined ? {} : { operations }),
+  } as const);
 }
 
 function maxAssetUploadBytes(value: unknown): number {
@@ -164,6 +168,8 @@ export type {
   ServerAuthorize,
   ServerAuthorizedScope,
   ServerCollectionExposure,
+  ServerCollectionMutationConstraints,
+  ServerCollectionMutationPolicy,
   ServerConstraints,
   ServerEndpointDescriptor,
   ServerExposureOptions,

@@ -70,6 +70,47 @@ appropriate status codes. Asset uploads default to 20 MiB; `maxAssetUploadBytes`
 can lower that bound. `Content-Type` supplies media type and
 `Content-Disposition` supplies filename.
 
+### Collection mutations
+
+Collection reads remain available through the existing collection exposure. A
+collection write is compiled only when its operation is explicitly included in
+`expose.collections.operations`; the default exposure never adds writes. The
+operation names are `create`, `update`, `delete`, and `command:<name>`.
+
+```ts
+defineServerFacade({
+  expose: {
+    collections: {
+      include: ["teamProfile"],
+      operations: {
+        include: ["create", "update", "delete", "command:archive"],
+      },
+    },
+  },
+  authorize(_request, context) {
+    return {
+      collectionMutations: {
+        teamProfile: {
+          create: { fields: ["name", "description"] },
+          update: {
+            fields: ["name", "description"],
+            filter: { where: { tenantId: context.scope.namespace } },
+          },
+          commands: { archive: { fields: [] } },
+        },
+      },
+    };
+  },
+});
+```
+
+Mutation constraints are separate from read filters. `fields` limits caller
+supplied fields, `input` enforces exact values, and `filter` scopes the existing
+record and, when applicable, the resulting record. Mutations use the durable
+collection event path and a stable idempotency key, so retries replay one
+request. Each mutation returns a 202 receipt; use `operations.result` for its
+record result.
+
 ## Browser usage
 
 ```ts

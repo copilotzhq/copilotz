@@ -19,15 +19,20 @@ import {
   workflowMetadata,
 } from "../../shared/workflow-metadata.ts";
 import { defineProcessor, type Processor } from "@copilotz/copilotz/plugins";
-import type { CollectionRecord } from "@copilotz/copilotz/collections";
+import type {
+  CollectionRecord,
+  SnapshotCollections,
+} from "@copilotz/copilotz/collections";
 import { buildCoreLlmRequest } from "./agents/prompt.ts";
 import { isContextResource } from "../../authoring/define-context/index.ts";
 import type {
-  AgentInstructionContext,
-  AgentInstructionExecution,
+  AgentDynamicResolveContext,
+  AgentDynamicResolveExecution,
+  AgentDynamicResolveOutput,
   AgentModelSelection,
   AgentResource,
 } from "../../authoring/define-agent/index.ts";
+import { normalizeAgentModels } from "../../authoring/define-agent/index.ts";
 import {
   coreAgent,
   type CoreProcessorContext,
@@ -61,9 +66,23 @@ function modelsFor(agent: AgentResource): Readonly<{
   }
   throw new Error(`Agent '${agent.id}' requires a generate or session model.`);
 }
-/** Clones durable facts so a process-local instruction hook cannot mutate them. */
+/** Clones durable facts so a process-local resolver cannot mutate them. */
 function frozenFact<T>(value: T): T {
   return freezeFact(structuredClone(value), new WeakSet<object>()) as T;
+}
+/** Clones static Agent data before handing it to an untrusted resolver. */
+function frozenBaseAgent(agent: AgentResource): AgentResource {
+  const { dynamicResolve, ...staticAgent } = agent;
+  const clone = structuredClone(staticAgent) as AgentResource;
+  if (dynamicResolve) {
+    Object.defineProperty(clone, "dynamicResolve", {
+      configurable: false,
+      enumerable: true,
+      value: dynamicResolve,
+      writable: false,
+    });
+  }
+  return freezeFact(clone, new WeakSet<object>()) as AgentResource;
 }
 function freezeFact(value: unknown, seen: WeakSet<object>): unknown {
   if (!value || typeof value !== "object" || seen.has(value)) {
@@ -76,9 +95,10 @@ function freezeFact(value: unknown, seen: WeakSet<object>): unknown {
       freezeFact(descriptor.value, seen);
     }
   }
+  Object.freeze(value);
   return value;
 }
-async function resolvedAgentInstructions(
+async function resolvedAgent(
   context: CoreProcessorContext,
   agent: AgentResource,
   input: Readonly<{
@@ -86,52 +106,62 @@ async function resolvedAgentInstructions(
     thread: ConversationThread;
     triggerMessage: CollectionRecord;
     triggerSender: CollectionRecord;
+    collections: SnapshotCollections;
   }>,
 ): Promise<
   Readonly<{
     agent: AgentResource;
-    instructionRevision?: string;
+    revision?: string;
   }>
 > {
-  const policy = agent.instructions;
-  if (!policy || typeof policy === "string") {
+  const resolver = agent.dynamicResolve;
+  if (!resolver) {
     return ({ agent } as const);
   }
-  const facts: AgentInstructionContext = {
-    agent,
-    participant: frozenFact(mapParticipantRecord(input.agentParticipant)),
-    thread: frozenFact(input.thread),
-    triggerMessage: frozenFact(
-      mapMessageRecord(
-        input.triggerMessage,
-        mapParticipantRecord(input.triggerSender),
+  const facts: AgentDynamicResolveContext = Object.freeze(
+    {
+      baseAgent: frozenBaseAgent(agent),
+      participant: frozenFact(mapParticipantRecord(input.agentParticipant)),
+      thread: frozenFact(input.thread),
+      triggerMessage: frozenFact(
+        mapMessageRecord(
+          input.triggerMessage,
+          mapParticipantRecord(input.triggerSender),
+        ),
       ),
-    ),
-  } as const;
-  const execution: AgentInstructionExecution = {
-    agentId: agent.id,
-    agentParticipantId: String(input.agentParticipant.id),
-    threadId: input.thread.id,
-    triggerMessageId: String(input.triggerMessage.id),
-    namespace: context.namespace,
-    operationKey: context.operationKey,
-    ...(context.identity.correlationId
-      ? { correlationId: context.identity.correlationId }
-      : {}),
-    ...(context.identity.causationId
-      ? { causationId: context.identity.causationId }
-      : {}),
-  } as const;
-  const output = await policy.resolve(facts, execution);
-  const resolved = instructionResolution(output, agent.id);
-  const { instructions: _instructions, ...staticAgent } = agent;
-  const selected = resolved.instructions ?? policy.base;
+      collections: input.collections,
+    } as const,
+  );
+  const execution: AgentDynamicResolveExecution = Object.freeze(
+    {
+      agentId: agent.id,
+      agentParticipantId: String(input.agentParticipant.id),
+      threadId: input.thread.id,
+      triggerMessageId: String(input.triggerMessage.id),
+      namespace: context.namespace,
+      operationKey: context.operationKey,
+      ...(context.identity.correlationId
+        ? { correlationId: context.identity.correlationId }
+        : {}),
+      ...(context.identity.causationId
+        ? { causationId: context.identity.causationId }
+        : {}),
+    } as const,
+  );
+  const resolved = dynamicResolution(
+    await resolver(facts, execution),
+    agent.id,
+  );
+  const { dynamicResolve: _dynamicResolve, ...staticAgent } = agent;
   return ({
     agent: {
       ...staticAgent,
-      ...(selected !== undefined ? { instructions: selected } : {}),
+      ...(resolved.instructions !== undefined
+        ? { instructions: resolved.instructions }
+        : {}),
+      ...(resolved.models !== undefined ? { models: resolved.models } : {}),
     } as const,
-    ...(resolved.revision ? { instructionRevision: resolved.revision } : {}),
+    ...(resolved.revision ? { revision: resolved.revision } : {}),
   } as const);
 }
 function stableText(value: unknown, label: string): string {
@@ -140,46 +170,47 @@ function stableText(value: unknown, label: string): string {
   }
   return value;
 }
-function instructionResolution(value: unknown, agentId: string): Readonly<{
-  instructions?: string;
-  revision?: string;
-}> {
-  if (value === null || value === undefined) {
-    return ({} as const);
-  }
-  if (typeof value === "string") {
-    return ({ instructions: stableText(value, agentId) } as const);
-  }
+function dynamicResolution(
+  value: unknown,
+  agentId: string,
+): Readonly<AgentDynamicResolveOutput> {
+  if (value === undefined) return ({} as const);
   if (
     !value || typeof value !== "object" || Array.isArray(value) ||
     (Object.getPrototypeOf(value) !== Object.prototype &&
       Object.getPrototypeOf(value) !== null)
   ) {
     throw new TypeError(
-      `Agent '${agentId}' resolver returned invalid instructions.`,
+      `Agent '${agentId}' dynamicResolve returned invalid output.`,
     );
   }
   const record = value as Record<string, unknown>;
   if (
     Reflect.ownKeys(record).some((key) =>
-      key !== "instructions" && key !== "revision"
-    ) ||
-    !("instructions" in record) ||
-    (record.instructions !== null && typeof record.instructions !== "string")
+      key !== "instructions" && key !== "models" && key !== "revision"
+    )
   ) {
     throw new TypeError(
-      `Agent '${agentId}' resolver returned invalid instructions.`,
+      `Agent '${agentId}' dynamicResolve returned invalid output.`,
     );
   }
+  let instructions: string | undefined;
+  if (record.instructions !== undefined) {
+    instructions = stableText(record.instructions, `${agentId} instructions`);
+  }
+  const models = record.models === undefined
+    ? undefined
+    : normalizeAgentModels(record.models, `Agent '${agentId}'`);
+  const revision = record.revision === undefined
+    ? undefined
+    : stableText(record.revision, `${agentId} revision`);
   return ({
-    ...(typeof record.instructions === "string"
-      ? { instructions: stableText(record.instructions, agentId) }
-      : {}),
-    ...(record.revision === undefined
-      ? {}
-      : { revision: stableText(record.revision, agentId) }),
+    ...(instructions !== undefined ? { instructions } : {}),
+    ...(models !== undefined ? { models } : {}),
+    ...(revision !== undefined ? { revision } : {}),
   } as const);
 }
+
 export const messageRouterProcessor: Processor<CoreProcessorContext> =
   defineProcessor<CoreProcessorContext>({
     id: "copilotz.core.message-to-llm-call",
@@ -247,12 +278,29 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
                         participantAgentId(participant),
                       )
                       : undefined;
-                  const contributions = participant && agent
+                  const sender = metadata.participantRecords.find((candidate) =>
+                    String(candidate.id) === String(record.senderId)
+                  );
+                  if (participant && agent && !sender) {
+                    throw new Error(
+                      `Message '${record.id}' sender was not found.`,
+                    );
+                  }
+                  const resolved = participant && agent && sender
+                    ? await resolvedAgent(context, agent, {
+                      agentParticipant: participant,
+                      thread: metadata.thread,
+                      triggerMessage: record,
+                      triggerSender: sender,
+                      collections,
+                    })
+                    : undefined;
+                  const contributions = participant && resolved
                     ? await collectContextContributions(
                       { ...context, collections } as typeof context,
                       {
                         purpose: "conversation",
-                        agent,
+                        agent: resolved.agent,
                         participant: mapParticipantRecord(participant),
                         thread: metadata.thread,
                         ...(agentTurn ? { historyScopeId: agentTurn.id } : {}),
@@ -278,7 +326,7 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
                       ...(afterMessageId ? { afterMessageId } : {}),
                     },
                   );
-                  return { snapshot, contributions };
+                  return { snapshot, contributions, resolved };
                 },
               );
               const snapshot = captured.snapshot;
@@ -320,12 +368,12 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
               }
               const availableTools = toolsForAgent(context, agent);
               const availableToolIds = availableTools.map((tool) => tool.alias);
-              const resolved = await resolvedAgentInstructions(context, agent, {
-                agentParticipant: participant,
-                thread: snapshot.thread,
-                triggerMessage: record,
-                triggerSender: sender,
-              });
+              const resolved = captured.resolved;
+              if (!resolved) {
+                throw new SupersededMessageError(
+                  "Message recipient could not be resolved as an Agent.",
+                );
+              }
               const selection = modelsFor(resolved.agent);
               const afterMessageId = captured.contributions.map((item) =>
                 item.historyAfterMessageId
@@ -447,8 +495,8 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
                   : {}),
                 ...(ask ? { ask: structuredClone(ask) } : {}),
                 ...(agentTurn ? { agentTurn: structuredClone(agentTurn) } : {}),
-                ...(resolved.instructionRevision
-                  ? { instructionRevision: resolved.instructionRevision }
+                ...(resolved.revision
+                  ? { instructionRevision: resolved.revision }
                   : {}),
                 llmSession: {
                   schema: "copilotz.llm-session.v1",

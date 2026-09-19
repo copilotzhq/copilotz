@@ -31,6 +31,7 @@ import {
   projectActionEvents,
   projectMessages,
 } from "../testing/projections.ts";
+import { agentCapabilities } from "../../resources/capabilities/default/index.ts";
 const NAMESPACE = "parallel-tool-plan";
 const SCHEMA = "copilotz_parallel_tool_plan";
 type Handler = (
@@ -858,6 +859,99 @@ Deno.test("an unavailable root branch fans in with a successful sibling and one 
       (messages[1].metadata as Record<string, unknown>).copilotzToolAction,
       undefined,
     );
+  } finally {
+    await engine.shutdown();
+    await db.close();
+  }
+});
+Deno.test("recovery policy sees only actual callers for the current stage", async () => {
+  const executions: string[] = [];
+  const good = defineAction({
+    id: "test.parallel.recovery-good",
+    execute(input: unknown) {
+      executions.push("good");
+      return input;
+    },
+  });
+  // This Tool Resource is deliberately composed without its Action caller.
+  // Recovery must not synthesize a no-op caller just to resolve the selected
+  // stage, because final capability policies inspect the caller map.
+  const unrelated = defineAction({
+    id: "test.parallel.recovery-unrelated",
+    execute() {
+      throw new Error("unrelated Action must never run");
+    },
+  });
+  const goodTool = defineTool("good", good, {
+    name: "Good",
+    description: "Completes normally",
+  });
+  const unrelatedTool = defineTool("unrelated", unrelated, {
+    name: "Unrelated",
+    description: "Has no registered caller in this composed root",
+  });
+  const testAgent = agent("a", ["good"]);
+  let policyCalls = 0;
+  const policy = {
+    resolve(
+      input: Parameters<typeof agentCapabilities.resolve>[0],
+      options: Parameters<typeof agentCapabilities.resolve>[1],
+    ) {
+      policyCalls += 1;
+      assert(
+        !Object.hasOwn(options.actions, "unrelated"),
+        "capability policy must receive the actual caller map",
+      );
+      return agentCapabilities.resolve(input, options);
+    },
+  } satisfies typeof agentCapabilities;
+  const calls: string[] = [];
+  const app = definePlugin({
+    id: "test.parallel-recovery-policy",
+    version: "1.0.0",
+    // `unrelated` is intentionally absent here while its Tool Resource is
+    // present above, matching a restart with a partial caller registry.
+    actions: { good },
+    resources: {
+      agents: { a: testAgent },
+      tools: { good: goodTool, unrelated: unrelatedTool },
+      capabilities: { default: policy },
+      llmConnections: { testModel: { adapter: "test" } },
+    },
+    adapters: {
+      llm: {
+        test: adapterFrom((input) => {
+          calls.push(activeAgent(input));
+          return calls.length === 1
+            ? {
+              content: [],
+              toolCalls: [{ id: "good-root", action: "good", input: {} }],
+              attempts: [{ status: "completed" }],
+              finishReason: "tool_calls",
+            }
+            : {
+              content: { type: "text", role: "body", text: "continued" },
+              attempts: [{ status: "completed" }],
+            };
+        }),
+      },
+    },
+  });
+  const db = await createTestDatabase({ url: ":memory:" });
+  const registry = await createPluginRegistry({ plugins: [corePlugin, app] });
+  const engine = await createCopilotzEngine({
+    session: createSqlSession(db),
+    registry,
+    defaultDatabaseSchema: SCHEMA,
+    retryBaseMs: 0,
+    random: () => 0,
+  });
+  try {
+    const rootEventId = await startRun(engine, [testAgent]);
+    await waitForIdle(engine, rootEventId);
+    assertEquals(executions, ["good"]);
+    assertEquals(calls, ["a", "a"]);
+    assert(policyCalls > 0, "durable recovery must invoke the final policy");
   } finally {
     await engine.shutdown();
     await db.close();

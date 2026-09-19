@@ -17,8 +17,10 @@ import { skillsPlugin } from "@copilotz/copilotz/skills";
 ```
 
 Register named skills in `resources.skills`. Set the read bound at
-`resources.skillConfig.default.maximumTextBytes`. Individual tool declarations
-can be selected explicitly.
+`resources.skillConfig.default.maximumTextBytes`. Explicitly grant individual
+skill names in `agent.capabilities.skills`; the plugin then contributes their
+metadata to conversation context without reading their bodies and derives its
+reader tools. It never adds an implicit filesystem or network grant.
 
 ## How it works
 
@@ -26,7 +28,10 @@ can be selected explicitly.
 composition and `plugin.ts` exposes its public name. Regenerate with
 `deno task build:plugins`. Actions and Processors read final context
 configuration at invocation; there is no plugin factory or runtime directory
-discovery.
+discovery. The generated plugin owns the catalog contribution and reader-tool
+derivation; Core stays generic and respects any final application capability
+resource override. Direct host API reads may omit `agentId`; Agent-bound reads
+must carry a known Agent ID and remain limited to that Agent's explicit grants.
 
 See [convention-first authoring](../../docs/convention-authoring.md) for the
 shared file structure, compiler, configuration locations, and migration guide.

@@ -7,7 +7,11 @@ import type {
   AgentCapabilitySelection,
   AgentResource,
 } from "../../authoring/define-agent/index.ts";
-import { defineInlineSkill, skillsPlugin } from "@copilotz/copilotz/skills";
+import {
+  defineInlineSkill,
+  defineSkill,
+  skillsPlugin,
+} from "@copilotz/copilotz/skills";
 import { corePlugin } from "@copilotz/copilotz/core";
 import { defineTool } from "@copilotz/copilotz/core";
 import { agentCapabilities } from "../../resources/capabilities/default/index.ts";
@@ -83,6 +87,20 @@ async function registry() {
   });
 }
 
+function capabilityContext(value: {
+  resources: Readonly<Record<string, unknown>>;
+  actions: Readonly<Record<string, unknown>>;
+}) {
+  return {
+    resources: value.resources,
+    // Capability resolution runs against composed runtime callers. The test
+    // registry stores Action definitions, so provide callable stand-ins here.
+    actions: Object.fromEntries(
+      Object.keys(value.actions).map((alias) => [alias, async () => undefined]),
+    ),
+  } as never;
+}
+
 Deno.test("capability selections are least-authority explicit aliases", () => {
   const resources = [{ id: "a" }, { id: "b" }, { id: "c" }];
   const select = (selection?: AgentCapabilitySelection) =>
@@ -100,8 +118,11 @@ Deno.test("capability selections are least-authority explicit aliases", () => {
 
 Deno.test("resolver derives ask and skill mechanisms from higher-level grants", async () => {
   const resources = await registry();
-  const resolver = agentCapabilities;
-  const resolved = await resolver.resolve({ agent: "coordinator" }, resources);
+  const resolver = resources.resources.capabilities.default;
+  const resolved = await resolver.resolve(
+    { agent: "coordinator" },
+    capabilityContext(resources),
+  );
 
   assertEquals(resolved.agents.map((entry) => entry.id), ["researcher"]);
   assertEquals(resolved.skills.map((entry) => entry.id), ["contract-guide"]);
@@ -118,7 +139,10 @@ Deno.test("resolver derives ask and skill mechanisms from higher-level grants", 
   assertEquals(resolved.tools[0].resource.action, "clock");
   assertEquals("origin" in resolved.tools[0], false);
 
-  const restricted = await resolver.resolve({ agent: "researcher" }, resources);
+  const restricted = await resolver.resolve(
+    { agent: "researcher" },
+    capabilityContext(resources),
+  );
   assertEquals(restricted.tools, []);
   assertEquals(restricted.agents, []);
   assertEquals(restricted.skills, []);
@@ -141,10 +165,128 @@ Deno.test("resolver rejects unknown grants instead of silently broadening access
   const combined = await createPluginRegistry({
     plugins: [...resources.plugins, overriding],
   });
-  const resolver = agentCapabilities;
+  const resolver = (combined.resources as unknown as {
+    capabilities: { default: typeof agentCapabilities };
+  }).capabilities.default;
   await assertRejects(
-    async () => await resolver.resolve({ agent: invalid.id }, combined),
+    async () =>
+      await resolver.resolve(
+        { agent: invalid.id },
+        capabilityContext(combined),
+      ),
     Error,
     "grants unknown tool 'missing'",
   );
+});
+
+Deno.test("a final-root capability Resource overrides the Skills overlay", async () => {
+  const resources = await registry();
+  const overridden = createPluginRegistry({
+    plugins: resources.plugins,
+    resources: { capabilities: { default: agentCapabilities } },
+  });
+  const resolver = (overridden.resources as {
+    capabilities: { default: typeof agentCapabilities };
+  }).capabilities.default;
+  const resolved = resolver.resolve(
+    { agent: "coordinator" },
+    capabilityContext(overridden),
+  );
+
+  assertEquals(resolved.skills.map((entry) => entry.id), ["contract-guide"]);
+  assertEquals(
+    resolved.tools.map((entry) => [entry.id, entry.grant]),
+    [["clock", "explicit"], ["ask", "derived"]],
+  );
+});
+
+Deno.test("external Skill locators do not derive a reader or implicit fetch tool", async () => {
+  const resources = await registry();
+  const external = defineSkill({
+    manifest: {
+      name: "contract-guide",
+      description: "An externally hosted capability contract guide.",
+    },
+    files: [{ path: "SKILL.md", mediaType: "text/markdown;charset=utf-8" }],
+    locator: "https://example.test/skills/contract-guide/SKILL.md",
+    read: () => "---\nname: contract-guide\ndescription: guide\n---\n# Guide",
+  });
+  const located = createPluginRegistry({
+    plugins: resources.plugins,
+    resources: { skills: { [external.name]: external } },
+  });
+  const resolver = (located.resources as unknown as {
+    capabilities: { default: typeof agentCapabilities };
+  }).capabilities.default;
+  const resolved = resolver.resolve(
+    { agent: "coordinator" },
+    capabilityContext(located),
+  );
+
+  assertEquals(
+    resolved.tools.map((entry) => entry.id),
+    ["clock", "ask"],
+  );
+});
+
+Deno.test("capability selection tolerates missing unrelated callers without synthesizing one", async () => {
+  const unavailableAction = defineAction({
+    id: "test.capabilities.unavailable",
+    execute: () => "unavailable",
+  });
+  const unavailable = defineTool("unavailable", unavailableAction, {
+    name: "Unavailable",
+    description: "Has a resource but no composed Action caller.",
+  });
+  const values = agents().map((item, index) =>
+    index === 0 ? { ...item, capabilities: { tools: [clock.action] } } : item
+  );
+  const agent = values[0];
+  const application = definePlugin({
+    id: "test.capabilities.missing-unrelated-caller",
+    version: "1.0.0",
+    actions: { clock: clockAction },
+    resources: {
+      // Deliberately use composition aliases different from stable Agent IDs.
+      agents: Object.fromEntries(
+        values.map((item, index) => [`agent-alias-${index}`, item]),
+      ),
+      tools: { clock, unavailable },
+    },
+  });
+  const registry = await createPluginRegistry({
+    plugins: [corePlugin, application],
+  });
+  const resolver = registry.resources.capabilities.default;
+  const resolved = resolver.resolve(
+    { agent: agent.id },
+    capabilityContext(registry),
+  );
+  assertEquals(resolved.tools.map((entry) => entry.id), ["clock"]);
+});
+
+Deno.test("final-root capability policies receive actual composed callers", async () => {
+  let observed: readonly string[] = [];
+  const policy = {
+    resolve(
+      input: { agent: string },
+      context: Parameters<typeof agentCapabilities.resolve>[1],
+    ) {
+      observed = Object.keys(context.actions);
+      return agentCapabilities.resolve(input, context);
+    },
+  };
+  const resources = await registry();
+  const combined = createPluginRegistry({
+    plugins: resources.plugins,
+    resources: { capabilities: { default: policy } },
+  });
+  const finalPolicy = (combined.resources as unknown as {
+    capabilities: { default: typeof policy };
+  }).capabilities.default;
+  finalPolicy.resolve(
+    { agent: "coordinator" },
+    capabilityContext(combined),
+  );
+  assertEquals(observed, Object.keys(combined.actions));
 });

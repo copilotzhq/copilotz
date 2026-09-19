@@ -26,6 +26,12 @@ an alias. A helper used by one primitive stays inside that primitive module. Use
 APIs live in `authoring/`. Tests and README files are not discovered. Symlink
 directories are not traversed.
 
+Collection declarations that only define schemas and relations should import
+`@copilotz/copilotz/collections/authoring`. This declaration-only subpath
+exports `defineCollection`, `relation`, and collection types without loading the
+persistence kernel. Use `@copilotz/copilotz/collections` when a runtime
+collection reader or writer is actually required.
+
 Directory names become camelCase aliases: `close-ticket` becomes `closeTicket`.
 Aliases are local registration names; stable Action IDs and Collection names
 remain explicit inside their declarations. Explicit aliases are useful for

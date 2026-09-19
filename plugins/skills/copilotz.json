@@ -2,13 +2,25 @@
   "id": "@copilotz/skills",
   "version": "0.57.0",
   "aliases": {
+    "resources/capabilities/default/index.ts": "default",
+    "resources/promptInstructions/skill-usage/index.ts": "skillUsage",
+    "resources/promptContext/skillsCatalog/index.ts": "skillsCatalog",
     "resources/tools/list-skills/index.ts": "list_skills",
     "resources/tools/load-skill/index.ts": "load_skill",
     "resources/tools/read-skill-resource/index.ts": "read_skill_resource"
   },
   "include": [
+    "resources/capabilities/default/index.ts",
+    "resources/promptInstructions/skill-usage/index.ts",
+    "resources/promptContext/skillsCatalog/index.ts",
     "resources/tools/list-skills/index.ts",
     "resources/tools/load-skill/index.ts",
     "resources/tools/read-skill-resource/index.ts"
+  ],
+  "plugins": [
+    {
+      "from": "../core/plugin.ts",
+      "export": "corePlugin"
+    }
   ]
 }

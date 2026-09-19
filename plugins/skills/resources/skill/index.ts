@@ -33,6 +33,8 @@ export type SkillFileLoader = (
 export type DefineSkillInput = Readonly<{
   manifest: SkillManifest;
   files: readonly SkillFileDescriptor[];
+  /** A real application-accessible file: or http(s): SKILL.md location. */
+  locator?: string;
   read(
     path: string,
     options?: SkillReadOptions,
@@ -113,6 +115,7 @@ export function skillFileMediaType(path: string): string {
   if (normalized.endsWith(".sh")) return "text/x-shellscript;charset=utf-8";
   if (normalized.endsWith(".html")) return "text/html;charset=utf-8";
   if (normalized.endsWith(".css")) return "text/css;charset=utf-8";
+  if (normalized.endsWith(".xml")) return "application/xml";
   if (normalized.endsWith(".svg")) return "image/svg+xml";
   if (normalized.endsWith(".png")) return "image/png";
   if (normalized.endsWith(".jpg") || normalized.endsWith(".jpeg")) {
@@ -146,6 +149,32 @@ function descriptor(value: SkillFileDescriptor): SkillFileDescriptor {
     ...(value.size !== undefined ? { size: value.size } : {}),
     ...(value.digest ? { digest: value.digest.trim() } : {}),
   } as const);
+}
+
+function locator(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" || !value.trim() || value !== value.trim()) {
+    throw new TypeError(
+      "Skill locator must be a non-empty URL without whitespace.",
+    );
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new TypeError(
+      "Skill locator must be an absolute file: or http(s): URL.",
+    );
+  }
+  if (
+    !["file:", "http:", "https:"].includes(parsed.protocol) ||
+    parsed.username || parsed.password
+  ) {
+    throw new TypeError(
+      "Skill locator must be a credential-free file: or http(s): URL.",
+    );
+  }
+  return parsed.href;
 }
 
 function isReadableStream(value: unknown): value is ReadableStream<Uint8Array> {
@@ -183,6 +212,7 @@ export function defineSkill(input: DefineSkillInput): Skill {
   if (typeof input.read !== "function") {
     throw new TypeError(`Skill '${manifest.name}' requires a file reader.`);
   }
+  const externalLocator = locator(input.locator);
   const descriptors = new Map(files.map((file) => [file.path, file]));
 
   const read = async (
@@ -200,7 +230,12 @@ export function defineSkill(input: DefineSkillInput): Skill {
     return ({ ...file, body } as const);
   };
 
-  return ({ ...manifest, files, read } as const);
+  return ({
+    ...manifest,
+    files,
+    ...(externalLocator ? { locator: externalLocator } : {}),
+    read,
+  } as const);
 }
 
 function byteSize(value: SkillFileBody): number | undefined {
@@ -277,40 +312,87 @@ export function defineInlineSkill(input: DefineInlineSkillInput): Skill {
 export async function readSkillFileText(
   file: SkillFile,
   maximumBytes = 1_000_000,
+  signal?: AbortSignal,
 ): Promise<string> {
   if (!Number.isSafeInteger(maximumBytes) || maximumBytes < 1) {
     throw new TypeError("maximumBytes must be a positive safe integer.");
   }
+  abort(signal);
   if (typeof file.body === "string") {
     if (new TextEncoder().encode(file.body).length > maximumBytes) {
       throw new RangeError(`Skill file '${file.path}' exceeds the text limit.`);
     }
+    abort(signal);
     return file.body;
   }
   if (file.body instanceof Uint8Array) {
     if (file.body.byteLength > maximumBytes) {
       throw new RangeError(`Skill file '${file.path}' exceeds the text limit.`);
     }
+    abort(signal);
     return new TextDecoder().decode(file.body);
   }
 
   const reader = file.body.getReader();
   const chunks: Uint8Array[] = [];
   let size = 0;
+  let aborted = false;
+  let abortListener: (() => void) | undefined;
+  let rejectAbort: ((reason: unknown) => void) | undefined;
+  let cancelPromise: Promise<void> | undefined;
+  const abortRead = signal
+    ? new Promise<never>((_resolve, reject) => {
+      rejectAbort = reject;
+    })
+    : undefined;
+  if (signal && abortRead) {
+    abortListener = () => {
+      if (aborted) return;
+      aborted = true;
+      const reason = signal.reason ??
+        new DOMException("Cancelled", "AbortError");
+      // Reject the read race immediately. The cancellation is also issued to
+      // settle the underlying pending reader and allow lock cleanup.
+      rejectAbort?.(reason);
+      cancelPromise = reader.cancel(reason).then(
+        () => undefined,
+        () => undefined,
+      );
+    };
+    signal.addEventListener("abort", abortListener, { once: true });
+    if (signal.aborted) abortListener();
+  }
   try {
     while (true) {
-      const next = await reader.read();
+      abort(signal);
+      const pending = reader.read();
+      const next = abortRead
+        ? await Promise.race([pending, abortRead])
+        : await pending;
       if (next.done) break;
       size += next.value.byteLength;
       if (size > maximumBytes) {
-        await reader.cancel("skill_file_text_limit");
+        // A hostile stream can stall its cancel hook. Initiate cancellation
+        // without making the bounded-read error wait for that hook.
+        void reader.cancel("skill_file_text_limit").catch(() => undefined);
         throw new RangeError(
           `Skill file '${file.path}' exceeds the text limit.`,
         );
       }
       chunks.push(next.value);
     }
+    abort(signal);
   } finally {
+    if (abortListener) signal?.removeEventListener("abort", abortListener);
+    if (aborted) {
+      // The abort listener has already rejected the pending read. Cancellation
+      // is best-effort: a source may stall in its cancel hook, so do not make
+      // the caller wait for it before releasing the reader lock.
+      void (cancelPromise ?? reader.cancel(signal?.reason).then(
+        () => undefined,
+        () => undefined,
+      ));
+    }
     reader.releaseLock();
   }
   const bytes = new Uint8Array(size);

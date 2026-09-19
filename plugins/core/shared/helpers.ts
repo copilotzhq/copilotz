@@ -23,7 +23,10 @@ import type { ProcessorContext } from "@copilotz/copilotz/plugins";
 import type { ToolResource } from "@copilotz/copilotz/core";
 import type { AgentResource } from "../authoring/define-agent/index.ts";
 import type { CoreResources } from "./runtime-context.ts";
-import { resolveToolGrants } from "./capabilities/grants.ts";
+import type {
+  AgentCapabilitiesResource,
+  ResolvedAgentCapabilities,
+} from "../resources/capabilities/default/types.ts";
 
 export type CoreToolEntry = Readonly<{
   alias: string;
@@ -210,6 +213,27 @@ export async function loadCoreThreadMessageSnapshot(
   } as const);
 }
 
+/** Resolves one Agent's final composed capability policy. */
+export function capabilitiesForAgent(
+  context:
+    & Pick<ProcessorContext, "actions">
+    & Readonly<{
+      resources: CoreResources;
+    }>,
+  agent: AgentResource,
+): ResolvedAgentCapabilities {
+  const resolver = context.resources.capabilities?.default;
+  if (!resolver || typeof resolver.resolve !== "function") {
+    throw new Error(
+      "Core requires a composed default Agent capability Resource.",
+    );
+  }
+  return (resolver as AgentCapabilitiesResource).resolve(
+    { agent: agent.id },
+    { resources: context.resources, actions: context.actions },
+  );
+}
+
 /** Resolves one Agent's least-authority Tool Resources in stable grant order. */
 export function toolsForAgent(
   context:
@@ -219,39 +243,15 @@ export function toolsForAgent(
     }>,
   agent: AgentResource,
 ): readonly CoreToolEntry[] {
-  const entries = Object.entries(context.resources.tools ?? {}).flatMap(
-    ([alias, resource]): readonly CoreToolEntry[] => {
-      if (!resource) return ([] as const);
-      if (resource.action !== alias) {
-        throw new TypeError(
-          `Tool Resource '${alias}' must reference Action alias '${alias}'.`,
-        );
-      }
-      if (
-        typeof resource.name !== "string" || !resource.name.trim() ||
-        typeof resource.description !== "string" ||
-        !resource.description.trim()
-      ) {
-        throw new TypeError(
-          `Tool Resource '${alias}' requires a name and description.`,
-        );
-      }
-      if (typeof context.actions[alias] !== "function") {
-        throw new Error(
-          `Tool Resource '${alias}' has no composed Action '${alias}'.`,
-        );
-      }
-      return ([{ alias, resource } as const] as const);
-    },
-  );
-  return resolveToolGrants(agent, entries, {
-    agents: Object.values(context.resources.agents ?? {}).filter(
-      (value): value is AgentResource => Boolean(value),
-    ),
-    skills: Object.values(context.resources.skills ?? {}).filter(
-      (value): value is NonNullable<typeof value> => Boolean(value),
-    ),
-  });
+  // A custom final-root resolver is allowed to choose its own policy, but it
+  // cannot make an unavailable caller callable. Keep the policy result raw for
+  // callers that need its other namespaces and expose only real callers here.
+  return capabilitiesForAgent(context, agent).tools.filter((tool) =>
+    typeof context.actions[tool.id] === "function"
+  ).map((tool) => ({
+    alias: tool.id,
+    resource: tool.resource,
+  } as const));
 }
 
 export async function loadParticipant(

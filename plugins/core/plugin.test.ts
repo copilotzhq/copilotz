@@ -112,3 +112,22 @@ Deno.test("core production modules consume public Copilotz subpaths", async () =
   );
   assert(action.includes("@copilotz/copilotz/actions"));
 });
+
+Deno.test("Core collection declarations stay browser-bundle safe", async () => {
+  const entry = new URL("../skills/plugin.generated.ts", import.meta.url);
+  const output = await new Deno.Command(Deno.execPath(), {
+    args: ["bundle", "--platform=browser", entry.pathname],
+    stdout: "piped",
+    stderr: "piped",
+  }).output();
+  const stderr = new TextDecoder().decode(output.stderr);
+  assert(
+    output.success,
+    `browser bundle failed: ${stderr.slice(-4_000)}`,
+  );
+  const bundle = new TextDecoder().decode(output.stdout);
+  assert(
+    !bundle.includes("node:async_hooks"),
+    "Core collection declarations must not pull the runtime async-local kernel",
+  );
+});

@@ -1,7 +1,7 @@
 import type { AgentResource } from "../../../authoring/define-agent/index.ts";
-import type { Skill } from "@copilotz/copilotz/skills";
 import type { ToolResource } from "@copilotz/copilotz/core";
 import type { RuntimeContextNamespaces } from "@copilotz/copilotz/actions";
+import type { SkillCapabilityResource } from "../../../shared/capabilities/grants.ts";
 
 export type CapabilityGrantSource = "explicit" | "derived";
 
@@ -15,7 +15,7 @@ export type ResolvedAgentCapabilities = Readonly<{
   agent: AgentResource;
   tools: readonly ResolvedCapabilityResource<ToolResource>[];
   agents: readonly ResolvedCapabilityResource<AgentResource>[];
-  skills: readonly ResolvedCapabilityResource<Skill>[];
+  skills: readonly ResolvedCapabilityResource<SkillCapabilityResource>[];
 }>;
 
 export type ResolveAgentCapabilitiesInput = Readonly<{

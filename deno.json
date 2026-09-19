@@ -1,7 +1,7 @@
 {
   "name": "@copilotz/copilotz",
   "description": "Copilotz Lib",
-  "version": "0.77.0",
+  "version": "0.78.0",
   "license": "MIT",
   "exports": {
     ".": "./index.ts",
@@ -10,6 +10,7 @@
     "./application": "./runtime/application/public.ts",
     "./persistence": "./runtime/persistence/index.ts",
     "./collections": "./runtime/collections/index.ts",
+    "./collections/authoring": "./runtime/collections/authoring.ts",
     "./channels": "./plugins/channels/index.ts",
     "./channels/core": "./plugins/channel-core/index.ts",
     "./core": "./plugins/core/index.ts",
@@ -94,6 +95,7 @@
     "@copilotz/copilotz/application": "./runtime/application/public.ts",
     "@copilotz/copilotz/persistence": "./runtime/persistence/index.ts",
     "@copilotz/copilotz/collections": "./runtime/collections/index.ts",
+    "@copilotz/copilotz/collections/authoring": "./runtime/collections/authoring.ts",
     "@copilotz/copilotz/channels": "./plugins/channels/index.ts",
     "@copilotz/copilotz/channels/core": "./plugins/channel-core/index.ts",
     "@copilotz/copilotz/core": "./plugins/core/index.ts",

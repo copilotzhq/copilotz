@@ -3,7 +3,7 @@ import {
   type CollectionDefinition,
   defineCollection,
   relation,
-} from "@copilotz/copilotz/collections";
+} from "@copilotz/copilotz/collections/authoring";
 import { timestampsSchema } from "../../shared/schema.ts";
 
 export const spaceCollection: CollectionDefinition = defineCollection({

@@ -9,6 +9,7 @@ import {
   type SkillActionContext,
   skillByName,
 } from "../../../shared/tool-context.ts";
+import { isTextMediaType } from "../../../shared/media.ts";
 import { normalizeSkillPath, readSkillFileText } from "../../skill/index.ts";
 export const readSkillResourceTool: ToolDefinition<
   ActionDefinition<unknown, unknown, SkillActionContext>
@@ -36,12 +37,27 @@ export const readSkillResourceTool: ToolDefinition<
     if (path === "SKILL.md") {
       throw new TypeError("Use load_skill to load SKILL.md instructions.");
     }
+    const descriptor = skill.files.find((file) => file.path === path);
+    if (descriptor && !isTextMediaType(descriptor.mediaType)) {
+      throw new TypeError(
+        `Skill resource '${path}' is binary and cannot be read as text.`,
+      );
+    }
     const file = await skill.read(path, { signal: context.signal });
+    if (!isTextMediaType(file.mediaType)) {
+      throw new TypeError(
+        `Skill resource '${path}' is binary and cannot be read as text.`,
+      );
+    }
     return {
       skill: skill.name,
       path,
       mediaType: file.mediaType,
-      content: await readSkillFileText(file, maximumTextBytes(context)),
+      content: await readSkillFileText(
+        file,
+        maximumTextBytes(context),
+        context.signal,
+      ),
     };
   },
 });

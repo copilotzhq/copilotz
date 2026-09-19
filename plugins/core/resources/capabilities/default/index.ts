@@ -1,11 +1,11 @@
 import type { AgentResource } from "../../../authoring/define-agent/index.ts";
-import type { Skill } from "@copilotz/copilotz/skills";
 import type { ToolResource } from "@copilotz/copilotz/core";
 import {
   type AliasedToolResource,
   resolveAgentGrants,
   resolveSkillGrants,
   resolveToolGrants,
+  type SkillCapabilityResource,
 } from "../../../shared/capabilities/grants.ts";
 import type {
   AgentCapabilitiesResource,
@@ -32,9 +32,9 @@ function agentContext(
 
 function skillContext(
   options: CapabilityContext,
-): Readonly<Record<string, Skill | undefined>> {
+): Readonly<Record<string, SkillCapabilityResource | undefined>> {
   return (options.resources.skills ?? {}) as Readonly<
-    Record<string, Skill | undefined>
+    Record<string, SkillCapabilityResource | undefined>
   >;
 }
 
@@ -70,11 +70,6 @@ function toolEntries(
           `Tool Resource '${alias}' must present the same Action alias.`,
         );
       }
-      if (!options.actions[alias]) {
-        throw new Error(
-          `Tool Resource '${alias}' has no composed Action '${alias}'.`,
-        );
-      }
       return ({ alias, resource } as const);
     }));
 }
@@ -88,16 +83,26 @@ export const agentCapabilities: AgentCapabilitiesResource = {
     }
     const agentsContext = agentContext(options);
     const skillsContext = skillContext(options);
-    const agent = agentsContext[id];
+    // Resource aliases are composition keys; durable metadata carries the
+    // stable Agent resource ID. Resolve by ID so an alias rename cannot turn a
+    // valid Agent into an unknown context or accidentally widen access.
+    const agent = Object.values(agentsContext).find((candidate) =>
+      candidate?.id === id
+    );
     if (!agent) throw new Error(`Unknown agent context '${id}'.`);
     const availableAgents = definedValues<AgentResource>(agentsContext);
-    const availableSkills = definedValues<Skill>(skillsContext);
+    const availableSkills = definedValues<SkillCapabilityResource>(
+      skillsContext,
+    );
     const agents = resolveAgentGrants(agent, availableAgents);
     const skills = resolveSkillGrants(agent, availableSkills);
     const explicitToolKeys = new Set(agent.capabilities?.tools ?? []);
+    // Resolve declarations against every composed Tool Resource so unknown
+    // grants fail closed. Callable availability is enforced at the invocation
+    // boundary; this resource remains an honest description of the selected
+    // policy even during durable recovery with a partial caller map.
     const tools = resolveToolGrants(agent, toolEntries(options), {
       agents: availableAgents,
-      skills: availableSkills,
     });
     return ({
       agent,

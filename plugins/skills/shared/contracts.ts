@@ -38,6 +38,8 @@ export type Skill =
   & SkillManifest
   & Readonly<{
     files: readonly SkillFileDescriptor[];
+    /** Optional real file/HTTP location for an externally readable Skill. */
+    locator?: string;
     read(path: string, options?: SkillReadOptions): Promise<SkillFile>;
   }>;
 

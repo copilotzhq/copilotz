@@ -76,6 +76,12 @@ view.agents;
 view.skills;
 ```
 
+Core's resolved Skill resource contract intentionally contains only the stable
+`name` needed for grant resolution. Skill descriptions, file descriptors, and
+`read` belong to the Skills plugin's resource and context APIs; consumers that
+need those fields should use the Skills-owned surface after the grant has been
+resolved.
+
 The public application does not expose its registry. A trusted embedding that
 already owns composition may back the portable CLI's `inspect` callback with the
 same resolver so its `/tools`, `/agents`, and `/skills` views cannot drift:

@@ -3,7 +3,7 @@
 import {
   type CollectionDefinition,
   defineCollection,
-} from "@copilotz/copilotz/collections";
+} from "@copilotz/copilotz/collections/authoring";
 import { metadataSchema, timestampsSchema } from "../../shared/schema.ts";
 
 export const participantCollection: CollectionDefinition = defineCollection({

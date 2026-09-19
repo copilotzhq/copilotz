@@ -77,9 +77,11 @@ export const skillsCapabilities: AgentCapabilitiesResource = {
     if (!bundled.length) return { ...resolved, tools } as const;
     append(SKILL_TOOL_IDS[0]);
     append(SKILL_TOOL_IDS[1]);
-    if (bundled.some((skill) =>
-      skill.files.some((file) => file.path !== "SKILL.md")
-    )) append(SKILL_TOOL_IDS[2]);
+    if (
+      bundled.some((skill) =>
+        skill.files.some((file) => file.path !== "SKILL.md")
+      )
+    ) append(SKILL_TOOL_IDS[2]);
 
     return { ...resolved, tools } as const;
   },

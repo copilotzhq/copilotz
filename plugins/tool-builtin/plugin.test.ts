@@ -102,6 +102,10 @@ async function createFixture(builtIns = builtInToolsPlugin): Promise<Fixture> {
         ...skillsPlugin,
         id: "test.core-tools.skills",
         version: "1.0.0",
+        // storageFixture already contributes the Core primitive subset used by
+        // this test. Avoid registering corePlugin a second time through the
+        // production Skills dependency.
+        plugins: [],
         resources: {
           ...skillsPlugin.resources,
           skills: Object.fromEntries(

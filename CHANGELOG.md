@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.78.0 — 2026-09-19
+
+- Move Skills metadata and usage guidance into plugin context and instruction
+  contributions; retain lazy, policy-bound content readers.
+- Add the declaration-only `collections/authoring` entry so generated Skills
+  plugins avoid importing the server runtime in browsers.
+- Preserve textual JavaScript, XML, and SVG resources and promptly cancel
+  stalled content streams. Durable capability recovery now receives real Action
+  callers.
+- Narrow the Core resolved skill resource type to its domain-neutral name
+  contract; consumers needing Skill-specific fields should use the Skills type.
+
 ## 0.77.0 — 2026-09-18
 
 - Replace the instruction-only Agent resolver with `dynamicResolve`, which

@@ -19,7 +19,7 @@ import type {
 
 import { coreAgent, type CoreToolProcessorContext } from "./runtime-context.ts";
 
-import { resolveToolGrants } from "./capabilities/grants.ts";
+import { toolsForAgent } from "./helpers.ts";
 import { createThreadMessage } from "../actions/create-thread-message/index.ts";
 import {
   type AgentAskMetadata,
@@ -448,17 +448,11 @@ function currentStageGranted(
   const agent = coreAgent(context.resources, agentId);
   if (!agent) return false;
   try {
-    const entries = Object.entries(context.resources.tools ?? {}).flatMap((
-      [toolAlias, resource],
-    ) => resource ? [{ alias: toolAlias, resource } as const] : []);
-    return resolveToolGrants(agent, entries, {
-      agents: Object.values(context.resources.agents ?? {}).filter((
-        value,
-      ): value is NonNullable<typeof value> => Boolean(value)),
-      skills: Object.values(context.resources.skills ?? {}).filter((
-        value,
-      ): value is NonNullable<typeof value> => Boolean(value)),
-    }).some((tool) => tool.alias === alias);
+    if (typeof context.actions[alias] !== "function") return false;
+    // Keep the actual caller map intact. Missing unrelated callers are simply
+    // absent from the effective tools; a recovered stage is authorized only
+    // when its own Action is present and callable.
+    return toolsForAgent(context, agent).some((tool) => tool.alias === alias);
   } catch {
     // A removed mechanism resource is an unavailable current stage, not a
     // coordinator retry condition.

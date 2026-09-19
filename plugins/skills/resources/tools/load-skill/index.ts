@@ -31,6 +31,7 @@ export const loadSkillTool: ToolDefinition<
     const markdown = await readSkillFileText(
       await skill.read("SKILL.md", { signal: context.signal }),
       maximumTextBytes(context),
+      context.signal,
     );
     const parsed = parseSkillMarkdown(markdown);
     if (

@@ -7,7 +7,7 @@ import {
   type CollectionPredicate,
   defineCollection,
   relation,
-} from "@copilotz/copilotz/collections";
+} from "@copilotz/copilotz/collections/authoring";
 import { metadataSchema, timestampsSchema } from "../../shared/schema.ts";
 import type { MessageBranch, MessageRevision } from "../../shared/contracts.ts";
 

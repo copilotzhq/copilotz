@@ -27,6 +27,17 @@ Follow the generated instructions.`,
       join(references, "guide.md"),
       "# Generated guide",
     );
+    await Deno.mkdir(join(skillRoot, "scripts"));
+    await Deno.writeTextFile(
+      join(skillRoot, "scripts", "check.js"),
+      "export const ok = true;",
+    );
+    await Deno.writeTextFile(
+      join(skillRoot, "references", "schema.xml"),
+      "<schema />",
+    );
+    await Deno.mkdir(join(skillRoot, "assets"));
+    await Deno.writeTextFile(join(skillRoot, "assets", "icon.svg"), "<svg />");
 
     const build = await buildOpenSkillsPlugin({
       root,
@@ -52,6 +63,15 @@ Follow the generated instructions.`,
       (await skill.read("references/guide.md")).body,
       "# Generated guide",
     );
+    assertEquals(
+      (await skill.read("scripts/check.js")).body,
+      "export const ok = true;",
+    );
+    assertEquals(
+      (await skill.read("references/schema.xml")).body,
+      "<schema />",
+    );
+    assertEquals((await skill.read("assets/icon.svg")).body, "<svg />");
 
     await assertRejects(
       () =>

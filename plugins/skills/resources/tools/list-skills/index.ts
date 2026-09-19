@@ -25,6 +25,7 @@ export const listSkillsTool: ToolDefinition<
         name: skill.name,
         description: skill.description,
         compatibility: skill.compatibility,
+        ...(skill.locator ? { locator: skill.locator } : {}),
         resources: skill.files.filter((file) => file.path !== "SKILL.md"),
       })),
       count: skills.length,

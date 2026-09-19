@@ -14,6 +14,7 @@ import {
   parseSkillMarkdown,
   skillFileMediaType,
 } from "../../resources/skill/index.ts";
+import { isTextMediaType } from "../../shared/media.ts";
 import type {
   SkillFileDescriptor,
   SkillManifest,
@@ -163,18 +164,9 @@ function base64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
-function isText(descriptor: SkillFileDescriptor): boolean {
-  return descriptor.mediaType.startsWith("text/") ||
-    descriptor.mediaType.startsWith("application/json") ||
-    descriptor.mediaType.startsWith("application/yaml") ||
-    descriptor.mediaType.includes("javascript") ||
-    descriptor.mediaType.includes("xml") ||
-    descriptor.mediaType === "image/svg+xml";
-}
-
 function skillChunk(skill: PackedSkill): string {
   const entries = skill.files.map((file) => {
-    const body = isText(file.descriptor)
+    const body = isTextMediaType(file.descriptor.mediaType)
       ? JSON.stringify(new TextDecoder().decode(file.body))
       : `decodeBase64(${JSON.stringify(base64(file.body))})`;
     return `  ${JSON.stringify(file.descriptor.path)}: () => ${body},`;

@@ -4,7 +4,7 @@ import {
   type CollectionDefinition,
   defineCollection,
   relation,
-} from "@copilotz/copilotz/collections";
+} from "@copilotz/copilotz/collections/authoring";
 import { metadataSchema, timestampsSchema } from "../../shared/schema.ts";
 import { normalizeThreadMetadata } from "../../shared/thread-metadata.ts";
 

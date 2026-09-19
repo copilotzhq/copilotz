@@ -1,14 +1,11 @@
 import type { AgentResource } from "../../authoring/define-agent/index.ts";
-import type { Skill } from "@copilotz/copilotz/skills";
 import type { ToolResource } from "@copilotz/copilotz/core";
 import { selectCapabilityResources } from "./selection.ts";
 
 export const AGENT_CAPABILITY_TOOL_IDS = ["ask"] as const;
-export const SKILL_CAPABILITY_TOOL_IDS = [
-  "list_skills",
-  "load_skill",
-  "read_skill_resource",
-] as const;
+
+/** Core needs only a stable name to resolve an explicit Skill grant. */
+export type SkillCapabilityResource = Readonly<{ name: string }>;
 
 export type AliasedToolResource = Readonly<{
   alias: string;
@@ -28,10 +25,10 @@ export function resolveAgentGrants(
   });
 }
 
-export function resolveSkillGrants(
+export function resolveSkillGrants<T extends SkillCapabilityResource>(
   agent: AgentResource,
-  skills: readonly Skill[],
-): readonly Skill[] {
+  skills: readonly T[],
+): readonly T[] {
   return selectCapabilityResources({
     agentId: agent.id,
     kind: "skill",
@@ -62,7 +59,6 @@ export function resolveToolGrants<T extends AliasedToolResource>(
   tools: readonly T[],
   resources: Readonly<{
     agents: readonly AgentResource[];
-    skills: readonly Skill[];
   }>,
 ): readonly T[] {
   const selected = [...selectCapabilityResources({
@@ -82,26 +78,6 @@ export function resolveToolGrants<T extends AliasedToolResource>(
 
   if (resolveAgentGrants(agent, resources.agents).length > 0) {
     append(requireMechanismTool(agent, toolsByKey, "ask", "agent"));
-  }
-
-  const skills = resolveSkillGrants(agent, resources.skills);
-  if (skills.length > 0) {
-    append(requireMechanismTool(agent, toolsByKey, "list_skills", "skill"));
-    append(requireMechanismTool(agent, toolsByKey, "load_skill", "skill"));
-    const needsResources = skills.some((skill) =>
-      skill.files.some((file) => file.path !== "SKILL.md")
-    );
-    const readResource = toolsByKey.get("read_skill_resource");
-    if (needsResources) {
-      append(requireMechanismTool(
-        agent,
-        toolsByKey,
-        "read_skill_resource",
-        "skill",
-      ));
-    } else if (readResource) {
-      append(readResource);
-    }
   }
 
   return selected;

@@ -17,10 +17,7 @@ import type {
 } from "@copilotz/copilotz/llm";
 import type { CoreProcessorContext } from "../../../shared/runtime-context.ts";
 import type { CoreToolEntry } from "../../../shared/helpers.ts";
-import {
-  resolveAgentGrants,
-  resolveSkillGrants,
-} from "../../../shared/capabilities/grants.ts";
+import { resolveAgentGrants } from "../../../shared/capabilities/grants.ts";
 import {
   collectContextContributions,
   type CollectedContextContribution,
@@ -77,7 +74,6 @@ function systemPrompt(
     thread: ConversationThread;
     participant: Participant;
     agents: readonly AgentResource[];
-    skillDescriptions: readonly string[];
     userMetadata?: Readonly<Record<string, unknown>>;
     promptInstructions: readonly RenderedPromptInstruction[];
     context: readonly RenderedContext[];
@@ -165,14 +161,6 @@ function systemPrompt(
   ].filter(Boolean);
   const publicMetadata = getPublicThreadMetadata(input.thread.metadata);
   const sections = [
-    input.skillDescriptions.length
-      ? [
-        "## AVAILABLE SKILLS",
-        "Use the installed skill tools to load full instructions before using a skill.",
-        "",
-        ...input.skillDescriptions,
-      ].join("\n")
-      : "",
     input.promptInstructions.length
       ? [
         "## SHARED INSTRUCTIONS",
@@ -283,12 +271,6 @@ export async function buildCoreLlmRequest(
   const agents = Object.values(context.resources.agents ?? {}).filter(
     (value): value is AgentResource => Boolean(value),
   );
-  const skills = resolveSkillGrants(
-    input.agent,
-    Object.values(context.resources.skills ?? {}).filter(
-      (value): value is NonNullable<typeof value> => Boolean(value),
-    ),
-  );
   return ({
     messages,
     tools: llmTools(input.tools),
@@ -297,9 +279,6 @@ export async function buildCoreLlmRequest(
       thread,
       participant,
       agents,
-      skillDescriptions: skills.map((skill) =>
-        `- **${skill.name}**: ${skill.description}`
-      ),
       ...(userMetadata ? { userMetadata } : {}),
       promptInstructions,
       context: rendered,

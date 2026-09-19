@@ -15,16 +15,22 @@ import type {
 import type { AgentResource } from "../authoring/define-agent/index.ts";
 import type { PromptInstructionResource } from "../authoring/define-prompt-instructions/index.ts";
 import type { ToolResource } from "@copilotz/copilotz/core";
-import type { Skill } from "@copilotz/copilotz/skills";
 import type { createThreadMessageAction } from "../actions/create-thread-message/index.ts";
 import type { compactContextAction } from "../actions/compact-context/index.ts";
+import type {
+  AgentCapabilitiesResource,
+} from "../resources/capabilities/default/types.ts";
+import type { SkillCapabilityResource } from "./capabilities/grants.ts";
 
 export type CoreResources =
   & RuntimeContextNamespaces
   & Readonly<{
     agents: Readonly<Record<string, AgentResource | undefined>>;
     tools: Readonly<Record<string, ToolResource | undefined>>;
-    skills: Readonly<Record<string, Skill | undefined>>;
+    skills: Readonly<Record<string, SkillCapabilityResource | undefined>>;
+    capabilities: Readonly<
+      Record<string, AgentCapabilitiesResource | undefined>
+    >;
     llmConnections: Readonly<Record<string, LlmConnectionResource | undefined>>;
     promptInstructions: Readonly<
       Record<string, PromptInstructionResource | undefined>

@@ -39,14 +39,18 @@ function isAdaptiveThinkingModel(model: string): boolean {
   return [
     /^claude-(?:fable|mythos)-5(?:-|$)/,
     /^claude-mythos-preview(?:-|$)/,
+    /^claude-opus-5$/,
     /^claude-opus-4-(?:6|7|8)(?:-|$)/,
     /^claude-sonnet-(?:4-6|5)(?:-|$)/,
   ].some((pattern) => pattern.test(normalized));
 }
 
-function isAlwaysOnAdaptiveThinkingModel(model: string): boolean {
+function defaultsToAdaptiveThinking(model: string): boolean {
   const normalized = model.trim().toLowerCase();
-  return /^claude-(?:fable|mythos)-5(?:-|$)/.test(normalized) ||
+  // Opus 5 defaults to adaptive thinking; unlike Fable it can be disabled
+  // upstream. ProviderConfig currently exposes effort, not a thinking-off flag.
+  return normalized === "claude-opus-5" ||
+    /^claude-(?:fable|mythos)-5(?:-|$)/.test(normalized) ||
     /^claude-mythos-preview(?:-|$)/.test(normalized) ||
     /^claude-sonnet-5(?:-|$)/.test(normalized);
 }
@@ -188,9 +192,9 @@ export const anthropicProvider: ProviderFactory = (config: ProviderConfig) => {
       const transformed = transformMessages(messages, config);
       const model = config.model || "claude-3-haiku-20240307";
       const adaptiveThinking = isAdaptiveThinkingModel(model);
-      const alwaysOnAdaptiveThinking = isAlwaysOnAdaptiveThinkingModel(model);
+      const defaultAdaptiveThinking = defaultsToAdaptiveThinking(model);
       const adaptiveThinkingRequested = adaptiveThinking &&
-        (alwaysOnAdaptiveThinking || Boolean(config.reasoningEffort));
+        (defaultAdaptiveThinking || Boolean(config.reasoningEffort));
 
       const budgetTokens = !adaptiveThinking && config.reasoningEffort
         ? EFFORT_BUDGET_MAP[config.reasoningEffort]

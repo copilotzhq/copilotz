@@ -161,6 +161,7 @@ async function readBodyBytes(
 async function body(
   request: Request,
   rawPolicy: boolean | HttpBodyPolicy = false,
+  policy: HttpBodyPolicy = { maxBytes: 1024 * 1024 },
 ): Promise<
   Readonly<{
     value: unknown;
@@ -173,7 +174,7 @@ async function body(
   const rawOnly = Boolean(rawPolicy);
   const raw = await readBodyBytes(
     request,
-    typeof rawPolicy === "object" ? rawPolicy : { maxBytes: 1024 * 1024 },
+    typeof rawPolicy === "object" ? rawPolicy : policy,
   );
   if (!raw.length) return { value: undefined, raw };
   const mediaType = request.headers.get("content-type")?.split(";", 1)[0]
@@ -301,9 +302,8 @@ export function createHttpFetchHandler(
   const base = basePath(options.basePath);
   return async (request) => {
     try {
-      if (options.requestBodyPolicy) {
-        request = boundRequest(request, options.requestBodyPolicy(request));
-      }
+      const policy = options.requestBodyPolicy?.(request);
+      if (policy) request = boundRequest(request, policy);
       const method = request.method.toUpperCase();
       if (!METHODS.has(method as HttpRequest["method"])) {
         throw Object.assign(new Error("HTTP method is not supported."), {
@@ -324,6 +324,7 @@ export function createHttpFetchHandler(
       const parsedBody = await body(
         request,
         options.rawBody?.(request, context),
+        policy,
       );
       const result = await app.handle({
         resource: parts[0],

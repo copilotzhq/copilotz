@@ -86,6 +86,11 @@ export function createServerFacadeFetchHandler(
 ): ServerFacadeFetchHandler {
   const facade = facadeResource(application, options.facade);
   const routes = compileServerRoutes(application.plugins, facade);
+  const httpRoutes = new Map(
+    Object.values(application.plugins.adapters.http ?? {})
+      .flatMap((adapter) => (adapter as HttpAdapter).routes)
+      .map((route) => [route.id, route]),
+  );
   const app: HttpApplication = {
     async handle(request) {
       const context = request.context as FacadeContext | undefined;
@@ -115,10 +120,7 @@ export function createServerFacadeFetchHandler(
         read,
       );
       if (endpoint.kind === "http") {
-        const route = Object.values(application.plugins.adapters.http ?? {})
-          .flatMap((adapter) => (adapter as HttpAdapter).routes).find((route) =>
-            route.id === endpoint.id
-          );
+        const route = httpRoutes.get(endpoint.id);
         if (!route) {
           throw appError(
             500,
@@ -480,25 +482,27 @@ export function createServerFacadeFetchHandler(
             message: "Asset upload exceeds the configured byte limit.",
           },
         }
+        : endpoint?.kind === "http"
+        ? httpRoutes.get(endpoint.id)?.body ?? { maxBytes: 1024 * 1024 }
         : { maxBytes: 1024 * 1024 };
     },
     responseHeaders: options.responseHeaders,
     onError: options.onError,
     rawBody(_request, context) {
       const key = (context as FacadeContext | undefined)?.serverEndpointKey;
-      const upload = routes.routes.some((route) =>
-        route.endpoint.key === key && route.endpoint.kind === "asset" &&
-        route.endpoint.operation === "upload"
-      );
-      return upload
-        ? ({
+      const endpoint = routes.routes.find((route) => route.endpoint.key === key)
+        ?.endpoint;
+      if (endpoint?.kind === "asset" && endpoint.operation === "upload") {
+        return {
           maxBytes: facade.maxAssetUploadBytes,
           tooLarge: {
             code: "asset_too_large",
             message: "Asset upload exceeds the configured byte limit.",
-          } as const,
-        } as const)
-        : false;
+          },
+        };
+      }
+      return endpoint?.kind === "http" &&
+        httpRoutes.get(endpoint.id)?.body?.raw === true;
     },
     async resolveContext(request) {
       await options.admit?.();

@@ -216,3 +216,103 @@ Deno.test("anthropicProvider replays only matching finalized thinking blocks", (
     "anthropic.messages",
   );
 });
+
+Deno.test("anthropicProvider uses Opus 5 adaptive requests at every supported effort", () => {
+  for (
+    const effort of [undefined, "minimal", "low", "medium", "high"] as const
+  ) {
+    const config: ProviderConfig = {
+      provider: "anthropic",
+      model: "claude-opus-5",
+      reasoningEffort: effort,
+      temperature: 0.5,
+      topP: 0.7,
+      topK: 10,
+      maxTokens: 2000,
+    };
+    const body = anthropicProvider(config).body(messages, config);
+    assertEquals(body.thinking, { type: "adaptive" });
+    assertEquals(
+      body.output_config,
+      effort ? { effort: effort === "minimal" ? "low" : effort } : undefined,
+    );
+    assertEquals(body.max_tokens, 2000);
+    for (const field of ["temperature", "top_p", "top_k"]) {
+      assertEquals(
+        field in body,
+        false,
+      );
+    }
+  }
+});
+
+Deno.test("anthropicProvider does not guess unsupported Opus 5 aliases", () => {
+  // Opus 5 is a fixed ID without dated variants. Preserve unknown-model behavior.
+  for (
+    const model of [
+      "claude-opus-50",
+      "claude-opus-5-20260724",
+      "claude-opus-5-preview",
+      "claude-opus-4-5",
+    ]
+  ) {
+    const config: ProviderConfig = {
+      provider: "anthropic",
+      model,
+      reasoningEffort: "low",
+    };
+    const body = anthropicProvider(config).body(messages, config);
+    assertEquals(body.thinking, { type: "enabled", budget_tokens: 4096 });
+  }
+});
+
+Deno.test("Opus 5 omitted thinking survives streaming and tool-result continuation", () => {
+  const config: ProviderConfig = {
+    provider: "anthropic",
+    model: "claude-opus-5",
+  };
+  const adapter = anthropicProvider(config);
+  const extract = adapter.extractNativeReasoning!;
+  extract({
+    type: "content_block_start",
+    index: 0,
+    content_block: { type: "thinking", thinking: "", signature: "" },
+  });
+  extract({
+    type: "content_block_delta",
+    index: 0,
+    delta: { type: "signature_delta", signature: "opaque-signature" },
+  });
+  extract({ type: "content_block_stop", index: 0 });
+  extract({ type: "message_delta", delta: { stop_reason: "stop_sequence" } });
+  const blocks = extract({ type: "message_stop" })!;
+  assertEquals(blocks, [{
+    type: "thinking",
+    thinking: "",
+    signature: "opaque-signature",
+  }]);
+  assertEquals(
+    adapter.extractContent({
+      type: "content_block_delta",
+      delta: { type: "text_delta", text: "answer" },
+    }),
+    [{ text: "answer" }],
+  );
+  const body = adapter.body([
+    ...messages,
+    {
+      role: "assistant",
+      content: "<tool_calls>read_file</tool_calls>",
+      nativeReasoning: {
+        schema: "copilotz.llm-native-reasoning.v1",
+        adapter: "anthropic",
+        api: "anthropic.messages",
+        model: config.model!,
+        blocks: blocks as NonNullable<ChatMessage["nativeReasoning"]>["blocks"],
+      },
+    },
+    { role: "user", content: "<tool_results>file contents</tool_results>" },
+  ], config);
+  const replay = body.messages as { content: unknown[] }[];
+  assertEquals(replay[1].content[0], blocks[0]);
+});

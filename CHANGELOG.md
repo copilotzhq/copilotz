@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.78.1 — 2026-09-20
+
+- Recognize `claude-opus-5` adaptive thinking and its default-on behavior while
+  preserving signed thinking blocks and provider effort mappings.
+- Allow HTTP adapters to declare bounded raw or parsed request bodies per route;
+  enforce the same limit before authentication body reads and handler parsing.
+  Default limits and Asset upload policies remain unchanged.
+
 ## 0.78.0 — 2026-09-19
 
 - Move Skills metadata and usage guidance into plugin context and instruction

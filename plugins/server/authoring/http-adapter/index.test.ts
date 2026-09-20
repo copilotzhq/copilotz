@@ -70,3 +70,36 @@ Deno.test("compiled routes preserve frozen endpoint policy and prefer exact path
     id: "other",
   });
 });
+
+Deno.test("HTTP body policies are validated and copied", () => {
+  const route = {
+    id: "upload",
+    method: "POST",
+    path: "/upload",
+    handler: () => null,
+  } as const;
+  for (
+    const maxBytes of [0, -1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1]
+  ) {
+    assertThrows(
+      () => createHttpAdapter({ routes: [{ ...route, body: { maxBytes } }] }),
+      TypeError,
+    );
+  }
+  assertThrows(
+    () =>
+      createHttpAdapter({
+        routes: [
+          {
+            ...route,
+            body: { maxBytes: 10, raw: "yes" },
+          } as unknown as HttpRoute,
+        ],
+      }),
+    TypeError,
+  );
+  const body = { maxBytes: 42, raw: true };
+  const adapter = createHttpAdapter({ routes: [{ ...route, body }] });
+  body.maxBytes = 99;
+  assertEquals(adapter.routes[0].body, { maxBytes: 42, raw: true });
+});

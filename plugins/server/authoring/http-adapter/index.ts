@@ -77,6 +77,8 @@ export type HttpRoute = Readonly<
     /** Trusted endpoint policy labels, visible to authentication before body parsing. */
     metadata?: Readonly<Record<string, unknown>>;
     responseMediaType?: string;
+    /** Bounded buffered request body. Default: 1 MiB, parsed by Content-Type. */
+    body?: Readonly<{ maxBytes: number; raw?: boolean }>;
   }
   & (
     | {
@@ -102,6 +104,16 @@ export function createHttpAdapter(input: HttpAdapter): HttpAdapter {
     return value;
   };
   const routes = input.routes.map((route) => {
+    if (
+      route.body && (
+        !Number.isSafeInteger(route.body.maxBytes) || route.body.maxBytes < 1 ||
+        (route.body.raw !== undefined && typeof route.body.raw !== "boolean")
+      )
+    ) {
+      throw new TypeError(
+        "HTTP body maxBytes must be a positive safe integer and raw must be boolean.",
+      );
+    }
     const parts = route.path.split("/").slice(1);
     const parameters = parts.filter((part) => part.startsWith(":"));
     if (
@@ -125,6 +137,7 @@ export function createHttpAdapter(input: HttpAdapter): HttpAdapter {
     ids.add(route.id);
     return ({
       ...route,
+      ...(route.body ? { body: Object.freeze({ ...route.body }) } : {}),
       ...(route.metadata
         ? { metadata: freeze(structuredClone(route.metadata)) }
         : {}),

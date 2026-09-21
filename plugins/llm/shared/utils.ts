@@ -2275,15 +2275,20 @@ function parseCanonicalToolCallLines(blockContent: string): ToolInvocation[] {
         stages.push({ type: "jq", filter: obj.jq });
         continue;
       }
-      const canonical =
-        (keys.length === 2 && keys[0] === "arguments" && keys[1] === "name") ||
-        (keys.length === 3 && keys[0] === "arguments" && keys[1] === "name" &&
-          keys[2] === "tool_call_id");
+      const canonical = keys.length >= 2 && keys.length <= 4 &&
+        keys.includes("arguments") && keys.includes("name") &&
+        keys.every((key) =>
+          key === "arguments" || key === "name" || key === "tool_call_id" ||
+          key === "tool_plan_id"
+        );
       if (
         !canonical || typeof obj.name !== "string" ||
         !isPlainJsonObject(obj.arguments)
       ) return [];
       if ("tool_call_id" in obj && typeof obj.tool_call_id !== "string") {
+        return [];
+      }
+      if ("tool_plan_id" in obj && typeof obj.tool_plan_id !== "string") {
         return [];
       }
       stages.push({

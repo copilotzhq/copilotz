@@ -863,6 +863,13 @@ Deno.test("parseToolCallsFromResponse only accepts strict JSON-lines calls", () 
     ).toolCalls.length,
     0,
   );
+  assertEquals(
+    parseToolCallsFromResponse(
+      '<tool_calls>\n{"name":"known","arguments":{},"tool_plan_id":true}\n</tool_calls>',
+      ["known"],
+    ).toolCalls.length,
+    0,
+  );
   for (const attribute of ["batch_id", "batch_size", "batch_index"]) {
     assertEquals(
       parseToolCallsFromResponse(
@@ -951,8 +958,9 @@ Deno.test("recorded tool history retains durable plan correlation on both blocks
     args: "{}",
     output: { value: "done" },
   };
+  const toolCalls = buildToolCallsBlock([call]);
   assertEquals(
-    buildToolCallsBlock([call]).includes(
+    toolCalls.includes(
       '"tool_call_id":"reused-call","tool_plan_id":"server-plan-b"',
     ),
     true,
@@ -963,6 +971,11 @@ Deno.test("recorded tool history retains durable plan correlation on both blocks
     ),
     true,
   );
+  const reparsed = parseToolCallsFromResponse(toolCalls);
+  assertEquals(reparsed.toolCalls.length, 1);
+  assertEquals(reparsed.toolCalls[0].id === "reused-call", false);
+  assertEquals(reparsed.toolCalls[0].planId, undefined);
+  assertEquals(reparsed.toolCalls[0].tool.id, "lookup");
 });
 
 Deno.test("formatMessages materializes a plan-qualified historical tool result once", () => {

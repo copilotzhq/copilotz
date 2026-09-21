@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.78.2 — 2026-09-21
+
+- Accept legacy `tool_plan_id` metadata in canonical LLM tool-call blocks and
+  discard it before assigning the server-owned Tool plan. Providers that copy
+  historical Tool metadata no longer trigger a malformed-tool-call retry.
+
 ## 0.78.1 — 2026-09-20
 
 - Recognize `claude-opus-5` adaptive thinking and its default-on behavior while

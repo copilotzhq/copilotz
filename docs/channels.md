@@ -146,3 +146,11 @@ boundary now supplies it. Preserve provider authentication, current account
 authorization, booking/control mappings and actual delivery semantics. A thin
 re-export that already follows this pattern needs compatibility verification,
 not a second wrapper.
+
+In 0.80.0, the built-in WhatsApp, Zendesk, Telegram, and Discord receive mappers
+explicitly mark messages as public to represent their external conversation
+audience. Generic and Web/custom mappers keep omitted visibility
+participant-scoped; set `visibility: "public"` only when the transport has
+established that its conversation is the intended audience. Detached egress
+still suppresses participant, tool-policy, internal, and private-history
+messages. Live observation should use an explicit `projectCoreReply` scope.

@@ -453,6 +453,8 @@ export const whatsappChannelAdapter = {
       : "";
     return ({
       externalThreadId,
+      // Provider conversation participants are the external audience.
+      visibility: "public",
       sender: {
         externalId: senderPhone,
         participantType: "human" as const,

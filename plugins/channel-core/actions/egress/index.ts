@@ -26,6 +26,7 @@ import type {
   ChannelJsonObject,
   ChannelResource,
 } from "../../shared/contracts.ts";
+import { isPublicChannelMessage } from "../../shared/helpers.ts";
 import type { ChannelActionContext } from "../ingress/index.ts";
 
 export const CHANNEL_EGRESS_ACTION_ID = "copilotz.channels.egress";
@@ -45,6 +46,9 @@ const EGRESS_MESSAGE_KEYS = new Set([
   "id",
   "senderId",
   "threadId",
+  "visibility",
+  "historyScopeId",
+  "recipientIds",
   "content",
   "metadata",
 ]);
@@ -126,13 +130,18 @@ function dataArray(value: unknown, label: string): readonly unknown[] {
 
 function contentSequence(value: unknown): ContentSequence {
   return (dataArray(value, "Channel delivery content").map(
-    (value, index): ContentRef => {
+    (value, index): ContentRef | undefined => {
       if (!isContentRef(value)) {
         throw new TypeError(
           `Channel delivery content[${index}] must be a ref.`,
         );
       }
       const ref = value as ContentRef;
+      if (
+        (ref.kind === "text" || ref.kind === "json")
+          ? ref.role !== "body"
+          : ref.role !== "body" && ref.role !== "attachment"
+      ) return undefined;
       return {
         assetId: text(
           ref.assetId,
@@ -167,15 +176,38 @@ function contentSequence(value: unknown): ContentSequence {
         }),
       } as const;
     },
-  ));
+  ).filter((ref): ref is ContentRef => ref !== undefined));
 }
 
 function message(value: unknown): ChannelEgressMessage {
   const snapshot = fields(value, EGRESS_MESSAGE_KEYS, "Channel egress message");
+  const visibility = snapshot.visibility === undefined
+    ? undefined
+    : object(snapshot.visibility, "Channel egress message visibility");
+  let historyScopeId: string | undefined;
+  if (snapshot.historyScopeId !== undefined) {
+    if (typeof snapshot.historyScopeId !== "string") {
+      throw new TypeError(
+        "Channel egress message history scope ID must be a string.",
+      );
+    }
+    historyScopeId = snapshot.historyScopeId;
+  }
+  const recipientIds = snapshot.recipientIds === undefined
+    ? undefined
+    : dataArray(
+      snapshot.recipientIds,
+      "Channel egress message recipient IDs",
+    ).map((value, index) =>
+      text(value, `Channel egress message recipient ID[${index}]`)
+    );
   return {
     id: text(snapshot.id, "Channel egress message ID"),
     senderId: text(snapshot.senderId, "Channel egress message sender ID"),
     threadId: text(snapshot.threadId, "Channel egress message thread ID"),
+    ...(visibility ? { visibility } : {}),
+    ...(historyScopeId === undefined ? {} : { historyScopeId }),
+    ...(recipientIds ? { recipientIds } : {}),
     content: contentSequence(snapshot.content),
     metadata: object(snapshot.metadata, "Channel egress message metadata"),
   };
@@ -222,6 +254,7 @@ async function execute(
   const message = actionInput.message ??
     await context.collections.message.get({ id: messageId });
   if (!message) throw new Error(`Message '${messageId}' was not found.`);
+  if (!isPublicChannelMessage(message)) return ({ intents: [] as const });
   const sender = await context.collections.participant.get({
     id: text(message.senderId, "Message sender ID"),
   });
@@ -233,6 +266,7 @@ async function execute(
     threadId,
   });
   const content = contentSequence(message.content);
+  if (content.length === 0) return ({ intents: [] as const });
   const intents: ChannelDeliveryIntent[] = [];
   for (const value of bindings) {
     const binding = bindingRecord(value);

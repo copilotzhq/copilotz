@@ -351,6 +351,8 @@ export const telegramChannelAdapter = {
     );
     return ({
       externalThreadId: chatId,
+      // Provider conversation participants are the external audience.
+      visibility: "public",
       sender: {
         externalId: userId,
         participantType: "human" as const,

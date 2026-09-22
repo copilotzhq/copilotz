@@ -275,6 +275,7 @@ Deno.test("Telegram Adapter fails webhook auth closed and lowers callbacks witho
   assertEquals(received.sender.externalId, "user-a");
   assertEquals(received.content, "selected");
   assertEquals(received.route, { chatId: "chat-a" });
+  assertEquals(received.visibility, "public");
   assertEquals(calls, []);
 });
 
@@ -402,6 +403,21 @@ Deno.test("Discord Adapter answers ping, rejects invalid signatures, and uses Bo
   assertEquals(denied.status, 401);
   assertEquals(denied.occurrences, []);
 
+  const received = await adapter.receive(
+    Object.freeze({
+      channelId: "discord-channel-a",
+      interactionId: "interaction-a",
+      interactionType: 2,
+      user: { id: "discord-user-a", username: "Alice" },
+      text: "Hello",
+    }),
+    Object.freeze({
+      ...acceptContext("discord", resource, providerOptions),
+      occurrenceId: "discord:interaction-a",
+    }),
+  );
+  assertEquals(received.visibility, "public");
+
   const receipt = await adapter.deliver!(
     attempt(
       "discord",
@@ -528,6 +544,22 @@ Deno.test("WhatsApp Adapter verifies GET/HMAC handshakes and emits native text, 
   );
   assertEquals(denied.status, 403);
   assertEquals(denied.occurrences, []);
+
+  const received = await adapter.receive(
+    Object.freeze({
+      externalThreadId: "5511999999999",
+      senderPhone: "5511888888888",
+      messageId: "wamid.inbound-a",
+      businessId: "business-a",
+      messageType: "text",
+      text: "Hello",
+    }),
+    Object.freeze({
+      ...acceptContext("whatsapp", resource, providerOptions),
+      occurrenceId: "whatsapp:wamid.inbound-a",
+    }),
+  );
+  assertEquals(received.visibility, "public");
 
   const receipt = await adapter.deliver!(
     attempt(
@@ -742,6 +774,7 @@ Deno.test("Zendesk Adapter fails auth closed, normalizes media, and emits native
     mediaType: string;
   }>;
   assertEquals(receivedMedia.mediaType, "audio/opus");
+  assertEquals(received.visibility, "public");
   assertEquals(
     receivedMedia.bytes,
     new Uint8Array([0x4f, 0x67, 0x67, 0x53, 1]),

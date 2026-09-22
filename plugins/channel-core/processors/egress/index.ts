@@ -19,6 +19,7 @@ import type {
 import type { channelEgressAction } from "../../actions/egress/index.ts";
 import { defineChannelResource } from "../../authoring/channel-resource/index.ts";
 import type { ChannelEgressMessage } from "../../shared/contracts.ts";
+import { isPublicChannelMessage } from "../../shared/helpers.ts";
 
 type ChannelProcessorContext = ProcessorContext<
   ChannelActionResources,
@@ -30,6 +31,32 @@ function record(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : {};
+}
+
+function optionalRecord(
+  value: unknown,
+): Record<string, unknown> | null | undefined {
+  if (value === undefined) return undefined;
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function eventVisibility(
+  event: { metadata?: Readonly<Record<string, unknown>> },
+): ChannelEgressMessage["visibility"] | null | undefined {
+  const metadata = optionalRecord(event.metadata);
+  if (metadata === null) return null;
+  if (!metadata || metadata.core === undefined) return undefined;
+  const core = optionalRecord(metadata.core);
+  if (!core) return null;
+  // Core treats an omitted envelope visibility as public. Explicit row
+  // restrictions still apply independently below.
+  if (core.visibility === undefined) return undefined;
+  const visibility = optionalRecord(core.visibility);
+  return visibility === null
+    ? null
+    : visibility as ChannelEgressMessage["visibility"];
 }
 
 function text(value: unknown): string {
@@ -64,12 +91,32 @@ function message(value: Record<string, unknown>): ChannelEgressMessage | null {
   if (!id || !senderId || !threadId || !entries) {
     return null;
   }
+  const metadata = optionalRecord(value.metadata);
+  const visibility = optionalRecord(value.visibility);
+  if (metadata === null || visibility === null) return null;
+  const historyScopeId = value.historyScopeId;
+  if (historyScopeId !== undefined && typeof historyScopeId !== "string") {
+    return null;
+  }
+  const recipientIds = value.recipientIds;
+  if (
+    recipientIds !== undefined &&
+    (!Array.isArray(recipientIds) ||
+      !recipientIds.every((entry) =>
+        typeof entry === "string" && entry.trim().length > 0
+      ))
+  ) return null;
   return {
     id,
     senderId,
     threadId,
     content: entries,
-    metadata: record(value.metadata) as ChannelEgressMessage["metadata"],
+    ...(visibility === undefined ? {} : {
+      visibility: visibility as ChannelEgressMessage["visibility"],
+    }),
+    ...(historyScopeId === undefined ? {} : { historyScopeId }),
+    ...(recipientIds === undefined ? {} : { recipientIds }),
+    metadata: (metadata ?? {}) as ChannelEgressMessage["metadata"],
   };
 }
 
@@ -95,8 +142,22 @@ export const channelEgressProcessor: Processor<ChannelProcessorContext> =
     settlement: "detached",
     async handle(event, context) {
       if (!event.durable) return;
-      const snapshot = message(record(record(event.data).record));
+      let snapshot = message(record(record(event.data).record));
       if (!snapshot) return;
+      const envelopeVisibility = eventVisibility(event);
+      if (envelopeVisibility === null) return;
+      if (envelopeVisibility !== undefined) {
+        if (
+          !isPublicChannelMessage({
+            ...snapshot,
+            visibility: envelopeVisibility,
+          })
+        ) return;
+        if (snapshot.visibility === undefined) {
+          snapshot = { ...snapshot, visibility: envelopeVisibility };
+        }
+      }
+      if (!isPublicChannelMessage(snapshot)) return;
       const messageId = snapshot.id;
       const senderId = snapshot.senderId;
       const sender = await context.collections.participant.get({

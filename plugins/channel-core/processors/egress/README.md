@@ -17,3 +17,8 @@ deliver-capable adapter.
 
 It invokes egress, resolves content, then calls the provider adapter with the
 stable delivery key.
+
+Automatic detached egress delivers only public conversation content. Internal,
+participant-scoped, tool, and private-history messages are suppressed before
+content resolution. Live channel responses that need an explicit audience should
+use Core's `projectCoreReply` projection instead.

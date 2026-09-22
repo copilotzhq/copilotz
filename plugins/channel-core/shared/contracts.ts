@@ -103,7 +103,7 @@ export type ChannelReceivedMessage = Readonly<{
   /** Non-secret provider coordinates required by detached egress. */
   route?: ChannelJsonObject;
   metadata?: ChannelJsonObject;
-  /** Defaults to public conversation visibility when omitted. */
+  /** Defaults to participant-scoped visibility when omitted. */
   visibility?: ChannelMessageVisibility;
 }>;
 
@@ -250,6 +250,12 @@ export type ChannelEgressMessage = Readonly<{
   id: string;
   senderId: string;
   threadId: string;
+  /** Core visibility evidence; omitted only for legacy public rows. */
+  visibility?: ChannelJsonObject;
+  /** Non-empty values identify private transcript history. */
+  historyScopeId?: string;
+  /** Durable audience evidence retained for snapshot integrity checks. */
+  recipientIds?: readonly string[];
   content: ContentSequence;
   metadata: ChannelJsonObject;
 }>;

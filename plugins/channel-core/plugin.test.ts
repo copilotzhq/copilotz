@@ -143,6 +143,7 @@ Deno.test("Channel occurrence becomes one atomic binding graph and external egre
       event.type === "message.created" && event.subject?.id === messages[0].id
     );
     assertExists(inboundCreated);
+    // Generic adapters omit visibility and remain participant-scoped.
     assertEquals(coreEvent(inboundCreated).visibility, {
       kind: "participants",
       participantIds: [

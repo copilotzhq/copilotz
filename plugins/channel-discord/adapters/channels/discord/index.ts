@@ -354,6 +354,8 @@ export const discordChannelAdapter = {
       : "";
     return ({
       externalThreadId: channelId,
+      // Provider conversation participants are the external audience.
+      visibility: "public",
       sender: {
         externalId: userId,
         participantType: "human" as const,

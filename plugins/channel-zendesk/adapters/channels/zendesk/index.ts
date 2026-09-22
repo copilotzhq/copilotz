@@ -342,6 +342,8 @@ export const zendeskChannelAdapter = {
       : "";
     return ({
       externalThreadId: conversationId,
+      // Provider conversation participants are the external audience.
+      visibility: "public",
       sender: {
         externalId,
         participantType: "human" as const,

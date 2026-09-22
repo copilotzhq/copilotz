@@ -120,6 +120,10 @@ Reasoning, tool results and private agent conversations are separate from a
 customer reply. A spoken narration can accompany tool calls; the presence of
 tool-call metadata alone does not make its body text ineligible.
 
+Core's pure [`projectCoreReply`](../plugins/core/authoring/reply/README.md)
+helper takes that explicit scope and returns only `{ messageId, text }` or
+`null`. It reads resolved output data; it performs no database or content read.
+
 Choose committed replies or a deliberate progressive-stream policy. Emitting
 both token streams and their final committed messages duplicates replies.
 Consumers of `stream.output` must check its `terminal` status after reading the

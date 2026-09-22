@@ -478,6 +478,11 @@ Deno.test("Core invokes llm.call with explicit model selections and connections"
     );
     assertEquals(await messageText(fixture, messages[1]), "Hello from North");
     assertEquals(messages[1].sender.id, "agent-north");
+    assertEquals(
+      (messages[1].metadata.copilotzWorkflow as Record<string, unknown>)
+        .agentId,
+      "north",
+    );
     const lifecycle = await projectActionEvents(
       fixture.engine,
       NAMESPACE,

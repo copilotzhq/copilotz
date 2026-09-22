@@ -1,6 +1,12 @@
 import { assertEquals, assertRejects } from "@std/assert";
 import { createCopilotzClient } from "./index.ts";
-import { decodeObservation, ProtocolError } from "./protocol.ts";
+import {
+  decodeObservation,
+  MAX_FRAME_BYTES,
+  MAX_JSON_FRAME_BYTES,
+  OBSERVATION_FRAME_CAPACITY_CODE,
+  ProtocolError,
+} from "./protocol.ts";
 
 const enc = new TextEncoder();
 function wire(
@@ -38,6 +44,34 @@ function wire(
     }),
     { headers: { "content-type": "multipart/mixed; boundary=test" } },
   );
+}
+
+function singleFrame(
+  kind: string,
+  content: string | Uint8Array,
+  headers = "",
+): Response {
+  const bytes = typeof content === "string" ? enc.encode(content) : content;
+  const head = enc.encode(
+    `--test\r\ncontent-length: ${bytes.length}\r\nx-copilotz-frame: ${kind}\r\nx-copilotz-cursor: checkpoint-0\r\n${headers}\r\n`,
+  );
+  const tail = enc.encode("\r\n--test--\r\n");
+  const body = new Uint8Array(head.length + bytes.length + tail.length);
+  body.set(head);
+  body.set(bytes, head.length);
+  body.set(tail, head.length + bytes.length);
+  return new Response(body, {
+    headers: { "content-type": "multipart/mixed; boundary=test" },
+  });
+}
+
+function headerOnlyFrame(kind: string, length: number): Response {
+  const body = enc.encode(
+    `--test\r\ncontent-length: ${length}\r\nx-copilotz-frame: ${kind}\r\nx-copilotz-cursor: checkpoint-0\r\n\r\n`,
+  );
+  return new Response(body, {
+    headers: { "content-type": "multipart/mixed; boundary=test" },
+  });
 }
 
 Deno.test("multipart preserves binary boundary bytes and split UTF-8 JSON", async () => {
@@ -95,6 +129,71 @@ Deno.test("truncation and orphaned streams fail explicitly", async () => {
     ProtocolError,
     "lane",
   );
+});
+
+Deno.test("large logical output envelopes remain distinct from binary chunk limits", async () => {
+  const value = "x".repeat(MAX_FRAME_BYTES + 4096);
+  const frames = await Array.fromAsync(
+    decodeObservation(singleFrame(
+      "output",
+      JSON.stringify({
+        type: "message.created",
+        value,
+      }),
+    )),
+  );
+  assertEquals(frames.length, 1);
+  assertEquals(
+    frames[0].kind === "output" && frames[0].output.value,
+    value,
+  );
+  await assertRejects(
+    () =>
+      Array.fromAsync(
+        decodeObservation(headerOnlyFrame("stream-chunk", MAX_FRAME_BYTES + 1)),
+      ),
+    ProtocolError,
+    "capacity",
+  );
+  await assertRejects(
+    () =>
+      Array.fromAsync(
+        decodeObservation(
+          headerOnlyFrame("output", MAX_JSON_FRAME_BYTES + 1),
+        ),
+      ),
+    ProtocolError,
+    "capacity",
+  );
+});
+
+Deno.test("observation failure is a deterministic non-retryable protocol error", async () => {
+  let calls = 0;
+  const client = createCopilotzClient({
+    baseUrl: "/api",
+    fetch: (() => {
+      calls++;
+      return Promise.resolve(singleFrame(
+        "observation-error",
+        JSON.stringify({
+          type: "observation.error",
+          code: OBSERVATION_FRAME_CAPACITY_CODE,
+          message: "The output envelope exceeded its capacity.",
+        }),
+      ));
+    }) as typeof fetch,
+  });
+  const error = await assertRejects(
+    () =>
+      client.operations.observe({
+        operationIds: ["operation"],
+        onFrame: () => undefined,
+      }),
+    ProtocolError,
+    "capacity",
+  );
+  assertEquals(error.code, OBSERVATION_FRAME_CAPACITY_CODE);
+  assertEquals(calls, 1);
 });
 
 Deno.test("onFrame is awaited and callback failure detaches without retry", async () => {

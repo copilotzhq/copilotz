@@ -22,6 +22,16 @@ export type ObservationFrame =
 
 export class ProtocolError extends Error {
   override name = "ProtocolError";
+
+  readonly code?: string;
+
+  constructor(
+    message: string,
+    options?: ErrorOptions & Readonly<{ code?: string }>,
+  ) {
+    super(message, options);
+    this.code = options?.code;
+  }
 }
 
 export class TruncatedObservationError extends ProtocolError {
@@ -31,7 +41,13 @@ export class TruncatedObservationError extends ProtocolError {
 const encoder = new TextEncoder();
 const decoder = new TextDecoder("utf-8", { fatal: true });
 const MAX_HEADERS = 32 * 1024;
+/** Maximum bytes in one binary stream chunk or control frame. */
 export const MAX_FRAME_BYTES = 1024 * 1024;
+/** Maximum bytes in one logical JSON output envelope. */
+export const MAX_JSON_FRAME_BYTES = 64 * 1024 * 1024;
+
+export const OBSERVATION_FRAME_CAPACITY_CODE =
+  "observation_frame_capacity_exceeded";
 
 function object(bytes: Uint8Array): Record<string, unknown> {
   const value = JSON.parse(decoder.decode(bytes));
@@ -108,10 +124,28 @@ export async function* decodeObservation(
         }
         headers.set(name, value.slice(separator + 1).trim());
       }
+      const kind = headers.get("x-copilotz-frame");
+      const jsonKind = kind === "output" || kind === "stream-end" ||
+        kind === "stream-error" || kind === "observation-error";
+      if (!jsonKind && kind !== "stream-chunk") {
+        throw new ProtocolError("Unknown frame kind.");
+      }
       const rawLength = headers.get("content-length") ?? "";
       const length = Number(rawLength);
-      if (!/^(0|[1-9][0-9]*)$/.test(rawLength) || length > MAX_FRAME_BYTES) {
-        throw new ProtocolError("Frame length is invalid or exceeds capacity.");
+      const limit = kind === "output" ? MAX_JSON_FRAME_BYTES : MAX_FRAME_BYTES;
+      if (
+        !/^(0|[1-9][0-9]*)$/.test(rawLength) ||
+        !Number.isSafeInteger(length) || length > limit
+      ) {
+        const frameLabel = kind === "output"
+          ? "JSON output"
+          : kind === "stream-chunk"
+          ? "binary stream"
+          : "control";
+        throw new ProtocolError(
+          `${frameLabel} frame length is invalid or exceeds capacity.`,
+          { code: "frame_capacity_exceeded" },
+        );
       }
       await fill(length + 2);
       if (buffer[length] !== 13 || buffer[length + 1] !== 10) {
@@ -121,7 +155,6 @@ export async function* decodeObservation(
       buffer = buffer.subarray(length + 2);
       const checkpoint = headers.get("x-copilotz-cursor");
       if (!checkpoint) throw new ProtocolError("Frame has no checkpoint.");
-      const kind = headers.get("x-copilotz-frame");
       if (kind === "output") {
         const output = object(bytes);
         if (typeof output.type !== "string") {
@@ -139,6 +172,16 @@ export async function* decodeObservation(
           streams.set(id, undefined);
         }
         yield { kind, output: output as OutputDescriptor, checkpoint };
+      } else if (kind === "observation-error") {
+        const failure = object(bytes);
+        if (
+          failure.type !== "observation.error" ||
+          typeof failure.code !== "string" || !failure.code ||
+          typeof failure.message !== "string" || !failure.message
+        ) {
+          throw new ProtocolError("Invalid observation failure.");
+        }
+        throw new ProtocolError(failure.message, { code: failure.code });
       } else {
         const streamId = headers.get("x-copilotz-stream-id") ?? "";
         const rawOffset = headers.get("x-copilotz-offset") ?? "";

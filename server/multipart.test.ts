@@ -1,4 +1,4 @@
-import { assertEquals, assertRejects } from "@std/assert";
+import { assertEquals, assertRejects, assertThrows } from "@std/assert";
 import { createEphemeralEvent } from "@copilotz/copilotz/events";
 import type {
   ApplicationOutput,
@@ -6,7 +6,12 @@ import type {
 } from "@copilotz/copilotz/streams";
 import { HTTP_OBSERVATION, type HttpObservation } from "./http-types.ts";
 import { applicationOutputsMultipartResponse } from "./multipart.ts";
-import { decodeObservation, ProtocolError } from "../client/protocol.ts";
+import {
+  decodeObservation,
+  MAX_FRAME_BYTES,
+  OBSERVATION_FRAME_CAPACITY_CODE,
+  ProtocolError,
+} from "../client/protocol.ts";
 import { decodeOperationReplayCursor } from "../runtime/streams/index.ts";
 
 function completedTerminal(
@@ -89,6 +94,159 @@ Deno.test("multipart round-trips exact descriptors and independent raw streams",
     );
   assertEquals(bytes("a"), [1, 2, 3]);
   assertEquals(bytes("b"), [9, 8, 7]);
+});
+
+Deno.test("multipart preserves resolved output envelopes above the binary chunk limit", async () => {
+  const value = "x".repeat(MAX_FRAME_BYTES + 4096);
+  const event = Object.freeze({
+    ...createEphemeralEvent({
+      type: "large.output",
+      namespace: "tenant-a",
+      correlationId: "large-output",
+      payload: { value },
+    }),
+    data: Object.freeze({ value }),
+  });
+  const frames = await Array.fromAsync(
+    decodeObservation(applicationOutputsMultipartResponse({
+      type: HTTP_OBSERVATION,
+      operationId: "large-stream-operation",
+      outputs: new ReadableStream({
+        start(controller) {
+          controller.enqueue(event);
+          controller.close();
+        },
+      }),
+      done: Promise.resolve(),
+      cancel: () => Promise.resolve(),
+    })),
+  );
+  const output = frames.find((frame) => frame.kind === "output");
+  assertEquals(output?.kind === "output" && output.output.data, { value });
+});
+
+Deno.test("multipart keeps binary stream chunks capped at 1 MiB", async () => {
+  const bytes = new Uint8Array(MAX_FRAME_BYTES + 1).fill(7);
+  const frames = await Array.fromAsync(
+    decodeObservation(applicationOutputsMultipartResponse({
+      type: HTTP_OBSERVATION,
+      operationId: "large-stream-operation",
+      outputs: new ReadableStream({
+        start(controller) {
+          controller.enqueue(
+            {
+              type: "stream.output",
+              namespace: "tenant-a",
+              streamId: "large-stream",
+              streamOrdinal: "1",
+              mediaType: "application/octet-stream",
+              kind: "file",
+              role: "assistant.file",
+              metadata: {},
+              payload: new ReadableStream({
+                start(payloadController) {
+                  payloadController.enqueue(bytes);
+                  payloadController.close();
+                },
+              }),
+              terminal: completedTerminal(bytes.length),
+            } satisfies StreamOutput,
+          );
+          controller.close();
+        },
+      }),
+      done: Promise.resolve(),
+      cancel: () => Promise.resolve(),
+    })),
+  );
+  const chunks = frames.filter((frame) => frame.kind === "stream-chunk");
+  assertEquals(chunks.map((frame) => frame.bytes.length), [MAX_FRAME_BYTES, 1]);
+});
+
+Deno.test("multipart reports oversized output as a non-retryable observation failure", async () => {
+  let detached = "";
+  const safe = Object.freeze({
+    ...createEphemeralEvent({
+      type: "safe.output",
+      namespace: "tenant-a",
+      correlationId: "oversized-output",
+      payload: { value: "safe" },
+    }),
+    durable: true,
+    id: "safe-event",
+    position: "1",
+    schemaVersion: 1,
+    data: { value: "safe" },
+  }) as ApplicationOutput;
+  const source: HttpObservation = {
+    type: HTTP_OBSERVATION,
+    operationId: "oversized-output",
+    outputs: new ReadableStream({
+      start(controller) {
+        controller.enqueue(safe);
+        controller.enqueue({
+          ...createEphemeralEvent({
+            type: "oversized.output",
+            namespace: "tenant-a",
+            correlationId: "oversized-output",
+            payload: { value: "x".repeat(2048) },
+          }),
+          durable: true,
+          id: "oversized-event",
+          position: "2",
+          schemaVersion: 1,
+          data: { value: "x".repeat(2048) },
+        } as ApplicationOutput);
+        controller.close();
+      },
+    }),
+    done: Promise.resolve(),
+    cancel(reason) {
+      detached = reason ?? "";
+      return Promise.resolve();
+    },
+  };
+  const response = applicationOutputsMultipartResponse(source, {
+    maxJsonFrameBytes: 1024,
+  });
+  const bytes = await response.arrayBuffer();
+  const raw = new TextDecoder().decode(bytes);
+  const errorCursor = raw.match(
+    /x-copilotz-frame: observation-error\r\nx-copilotz-cursor: ([^\r\n]+)/,
+  )?.[1];
+  const iterator = decodeObservation(
+    new Response(bytes, { headers: response.headers }),
+  );
+  const safeFrame = await iterator.next();
+  const error = await assertRejects(
+    () => iterator.next(),
+    ProtocolError,
+    "capacity",
+  );
+  assertEquals(error.code, OBSERVATION_FRAME_CAPACITY_CODE);
+  assertEquals(detached, OBSERVATION_FRAME_CAPACITY_CODE);
+  assertEquals(safeFrame.value?.kind, "output");
+  assertEquals(errorCursor, safeFrame.value?.checkpoint);
+});
+
+Deno.test("multipart rejects invalid lower JSON envelope capacities", () => {
+  const source: HttpObservation = {
+    type: HTTP_OBSERVATION,
+    outputs: new ReadableStream(),
+    done: Promise.resolve(),
+    cancel: () => Promise.resolve(),
+  };
+  assertThrows(
+    () => applicationOutputsMultipartResponse(source, { maxJsonFrameBytes: 0 }),
+    RangeError,
+    "between 1",
+  );
+  assertThrows(
+    () =>
+      applicationOutputsMultipartResponse(source, { maxJsonFrameBytes: -1 }),
+    RangeError,
+    "between 1",
+  );
 });
 
 Deno.test("multipart cursor tracks an operation lane independently of its stream identifier", async () => {

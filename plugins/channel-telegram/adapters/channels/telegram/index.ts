@@ -265,172 +265,172 @@ function providerId(value: unknown): string | undefined {
 }
 
 /** Executable Telegram behavior composed separately under the same alias. */
-export const telegramChannelAdapter:
+type TelegramChannelAdapter =
   & ChannelAdapter
-  & Required<Pick<ChannelAdapter, "accept">> = {
-    async accept(request, context) {
-      const options = channelProviderOptions<TelegramChannelOptions>(context);
-      const transport = options.transport ??
-        createTelegramTransport({ fetch: options.fetch });
-      const config = await configFor(
-        options,
-        configContext("accept", context, request),
+  & Required<Pick<ChannelAdapter, "accept">>;
+
+export const telegramChannelAdapter: TelegramChannelAdapter = {
+  async accept(request, context) {
+    const options = channelProviderOptions<TelegramChannelOptions>(context);
+    const transport = options.transport ??
+      createTelegramTransport({ fetch: options.fetch });
+    const config = await configFor(
+      options,
+      configContext("accept", context, request),
+    );
+    if (config.secretToken) {
+      const supplied = requestHeader(
+        request.headers,
+        "x-telegram-bot-api-secret-token",
       );
-      if (config.secretToken) {
-        const supplied = requestHeader(
-          request.headers,
-          "x-telegram-bot-api-secret-token",
-        );
-        if (!supplied || !timingSafeTextEqual(supplied, config.secretToken)) {
-          return ({
-            status: 403,
-            response: { error: "Forbidden" } as const,
-            occurrences: [] as const,
-          } as const);
-        }
+      if (!supplied || !timingSafeTextEqual(supplied, config.secretToken)) {
+        return ({
+          status: 403,
+          response: { error: "Forbidden" } as const,
+          occurrences: [] as const,
+        } as const);
       }
-      const update = request.body as TelegramUpdate;
-      const occurrences = [];
-      const message = update?.message ?? update?.edited_message;
-      const inbound = message
-        ? await messageOccurrence(message, transport, config)
-        : null;
-      if (inbound) occurrences.push(inbound);
-      const callback = callbackOccurrence(update ?? {});
-      if (callback) occurrences.push(callback);
-      return ({
-        status: 200,
-        response: { status: "ok" } as const,
-        occurrences: occurrences,
-      } as const);
-    },
-    receive(value, _context) {
-      const input = providerRecord(value);
-      const chatId = requiredProviderText(input.chatId, "Telegram chat ID");
-      const user = providerRecord(input.user);
-      const userId = requiredProviderText(user.id, "Telegram user ID");
-      const name = userName({
-        id: userId,
-        ...(typeof user.username === "string"
-          ? { username: user.username }
-          : {}),
-        ...(typeof user.firstName === "string"
-          ? { first_name: user.firstName }
-          : {}),
-        ...(typeof user.lastName === "string"
-          ? { last_name: user.lastName }
+    }
+    const update = request.body as TelegramUpdate;
+    const occurrences = [];
+    const message = update?.message ?? update?.edited_message;
+    const inbound = message
+      ? await messageOccurrence(message, transport, config)
+      : null;
+    if (inbound) occurrences.push(inbound);
+    const callback = callbackOccurrence(update ?? {});
+    if (callback) occurrences.push(callback);
+    return ({
+      status: 200,
+      response: { status: "ok" } as const,
+      occurrences: occurrences,
+    } as const);
+  },
+  receive(value, _context) {
+    const input = providerRecord(value);
+    const chatId = requiredProviderText(input.chatId, "Telegram chat ID");
+    const user = providerRecord(input.user);
+    const userId = requiredProviderText(user.id, "Telegram user ID");
+    const name = userName({
+      id: userId,
+      ...(typeof user.username === "string" ? { username: user.username } : {}),
+      ...(typeof user.firstName === "string"
+        ? { first_name: user.firstName }
+        : {}),
+      ...(typeof user.lastName === "string"
+        ? { last_name: user.lastName }
+        : {}),
+    });
+    const contents: ContentInput[] = [];
+    const text = input.kind === "callback"
+      ? requiredProviderText(input.data, "Telegram callback data")
+      : typeof input.text === "string"
+      ? input.text.trim()
+      : "";
+    if (text) contents.push(text);
+    const descriptor = providerRecord(input.media);
+    if (Object.keys(descriptor).length) {
+      contents.push({
+        type: requiredProviderText(
+          descriptor.kind,
+          "Telegram media kind",
+        ) as "image" | "audio" | "video" | "file",
+        bytes: base64ToBytes(requiredProviderText(
+          descriptor.dataBase64,
+          "Telegram media base64",
+        )),
+        mediaType: requiredProviderText(
+          descriptor.mediaType,
+          "Telegram media type",
+        ),
+        ...(typeof descriptor.name === "string"
+          ? { name: descriptor.name }
           : {}),
       });
-      const contents: ContentInput[] = [];
-      const text = input.kind === "callback"
-        ? requiredProviderText(input.data, "Telegram callback data")
-        : typeof input.text === "string"
-        ? input.text.trim()
-        : "";
-      if (text) contents.push(text);
-      const descriptor = providerRecord(input.media);
-      if (Object.keys(descriptor).length) {
-        contents.push({
-          type: requiredProviderText(
-            descriptor.kind,
-            "Telegram media kind",
-          ) as "image" | "audio" | "video" | "file",
-          bytes: base64ToBytes(requiredProviderText(
-            descriptor.dataBase64,
-            "Telegram media base64",
-          )),
-          mediaType: requiredProviderText(
-            descriptor.mediaType,
-            "Telegram media type",
-          ),
-          ...(typeof descriptor.name === "string"
-            ? { name: descriptor.name }
-            : {}),
-        });
-      }
-      if (!contents.length) throw new TypeError("Telegram message is empty.");
-      const providerMessageId = requiredProviderText(
-        input.messageId ?? input.callbackId,
-        "Telegram provider message ID",
-      );
-      return ({
-        externalThreadId: chatId,
-        // Provider conversation participants are the external audience.
-        visibility: "public",
-        sender: {
-          externalId: userId,
-          participantType: "human" as const,
-          ...(name ? { name } : {}),
-          metadata: {
-            provider: "telegram",
-            user: user as ChannelJsonObject,
-          } as const,
-        } as const,
-        content: contents.length === 1 ? contents[0] : contents,
-        route: { chatId } as const,
+    }
+    if (!contents.length) throw new TypeError("Telegram message is empty.");
+    const providerMessageId = requiredProviderText(
+      input.messageId ?? input.callbackId,
+      "Telegram provider message ID",
+    );
+    return ({
+      externalThreadId: chatId,
+      // Provider conversation participants are the external audience.
+      visibility: "public",
+      sender: {
+        externalId: userId,
+        participantType: "human" as const,
+        ...(name ? { name } : {}),
         metadata: {
           provider: "telegram",
-          providerMessageId,
+          user: user as ChannelJsonObject,
         } as const,
-        thread: {
-          metadata: {
-            provider: "telegram",
-            chatId,
-            userId,
-            ...(typeof user.username === "string"
-              ? { userName: user.username }
-              : {}),
-            lastInboundMessageId: providerMessageId,
-          } as const,
-        } as const,
-      } as const);
-    },
-    async deliver(attempt, context) {
-      const options = channelProviderOptions<TelegramChannelOptions>(context);
-      const transport = options.transport ??
-        createTelegramTransport({ fetch: options.fetch });
-      const route = providerRecord(attempt.intent.route);
-      const chatId = requiredProviderText(route.chatId, "Telegram chat ID");
-      const config = await configFor(
-        options,
-        configContext("deliver", context, undefined, attempt.intent.route),
-      );
-      let delivered = 0;
-      const providerIds: string[] = [];
-      for (const item of attempt.content) {
-        const result = await deliverContent(
-          item,
-          async (delivery) =>
-            await emit(options, transport, config, attempt, {
-              ...delivery,
-              chatId,
-            } as TelegramDelivery),
-        );
-        if (result === undefined) continue;
-        delivered += 1;
-        const id = providerId(result);
-        if (id) providerIds.push(id);
-      }
-      const metadata = providerRecord(attempt.intent.metadata);
-      const message = providerRecord(metadata.message);
-      const buttons = action(message);
-      if (buttons) {
-        const result = await emit(options, transport, config, attempt, {
-          kind: "reply_buttons",
+      } as const,
+      content: contents.length === 1 ? contents[0] : contents,
+      route: { chatId } as const,
+      metadata: {
+        provider: "telegram",
+        providerMessageId,
+      } as const,
+      thread: {
+        metadata: {
+          provider: "telegram",
           chatId,
-          action: buttons,
-        });
-        delivered += 1;
-        const id = providerId(result);
-        if (id) providerIds.push(id);
-      }
-      return ({
-        deliveryKey: attempt.intent.deliveryKey,
-        delivered,
-        ...(providerIds.length ? { providerIds: providerIds } : {}),
-      } as const);
-    },
-  };
+          userId,
+          ...(typeof user.username === "string"
+            ? { userName: user.username }
+            : {}),
+          lastInboundMessageId: providerMessageId,
+        } as const,
+      } as const,
+    } as const);
+  },
+  async deliver(attempt, context) {
+    const options = channelProviderOptions<TelegramChannelOptions>(context);
+    const transport = options.transport ??
+      createTelegramTransport({ fetch: options.fetch });
+    const route = providerRecord(attempt.intent.route);
+    const chatId = requiredProviderText(route.chatId, "Telegram chat ID");
+    const config = await configFor(
+      options,
+      configContext("deliver", context, undefined, attempt.intent.route),
+    );
+    let delivered = 0;
+    const providerIds: string[] = [];
+    for (const item of attempt.content) {
+      const result = await deliverContent(
+        item,
+        async (delivery) =>
+          await emit(options, transport, config, attempt, {
+            ...delivery,
+            chatId,
+          } as TelegramDelivery),
+      );
+      if (result === undefined) continue;
+      delivered += 1;
+      const id = providerId(result);
+      if (id) providerIds.push(id);
+    }
+    const metadata = providerRecord(attempt.intent.metadata);
+    const message = providerRecord(metadata.message);
+    const buttons = action(message);
+    if (buttons) {
+      const result = await emit(options, transport, config, attempt, {
+        kind: "reply_buttons",
+        chatId,
+        action: buttons,
+      });
+      delivered += 1;
+      const id = providerId(result);
+      if (id) providerIds.push(id);
+    }
+    return ({
+      deliveryKey: attempt.intent.deliveryKey,
+      delivered,
+      ...(providerIds.length ? { providerIds: providerIds } : {}),
+    } as const);
+  },
+};
 
 async function deliverContent(
   content: ResolvedContent,

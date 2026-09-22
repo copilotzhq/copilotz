@@ -338,235 +338,237 @@ async function emitContent(
   return [];
 }
 
-export const whatsappChannelAdapter:
+type WhatsAppChannelAdapter =
   & ChannelAdapter
-  & Required<Pick<ChannelAdapter, "accept">> = {
-    async accept(request, context) {
-      const options = channelProviderOptions<WhatsAppChannelOptions>(context);
-      const transport = options.transport ??
-        createWhatsAppGraphTransport({ fetch: options.fetch });
-      const config = await configFor(
-        options,
-        configContext("accept", context, request),
+  & Required<Pick<ChannelAdapter, "accept">>;
+
+export const whatsappChannelAdapter: WhatsAppChannelAdapter = {
+  async accept(request, context) {
+    const options = channelProviderOptions<WhatsAppChannelOptions>(context);
+    const transport = options.transport ??
+      createWhatsAppGraphTransport({ fetch: options.fetch });
+    const config = await configFor(
+      options,
+      configContext("accept", context, request),
+    );
+    if (request.method.toUpperCase() === "GET") {
+      const verified = query(request, "hub.mode") === "subscribe" &&
+        query(request, "hub.verify_token") === config.webhookVerifyToken;
+      return ({
+        status: verified ? 200 : 403,
+        response: verified
+          ? query(request, "hub.challenge") ?? ""
+          : ({ error: "Forbidden" } as const),
+        occurrences: [] as const,
+      } as const);
+    }
+    if (config.appSecret) {
+      const signature = whatsappHeader(
+        request.headers,
+        "x-hub-signature-256",
       );
-      if (request.method.toUpperCase() === "GET") {
-        const verified = query(request, "hub.mode") === "subscribe" &&
-          query(request, "hub.verify_token") === config.webhookVerifyToken;
+      if (
+        !signature || !request.rawBody ||
+        !await verifyWhatsAppSignature(
+          request.rawBody,
+          config.appSecret,
+          signature,
+        )
+      ) {
         return ({
-          status: verified ? 200 : 403,
-          response: verified
-            ? query(request, "hub.challenge") ?? ""
-            : ({ error: "Forbidden" } as const),
+          status: 403,
+          response: { error: "Forbidden" } as const,
           occurrences: [] as const,
         } as const);
       }
-      if (config.appSecret) {
-        const signature = whatsappHeader(
-          request.headers,
-          "x-hub-signature-256",
-        );
-        if (
-          !signature || !request.rawBody ||
-          !await verifyWhatsAppSignature(
-            request.rawBody,
-            config.appSecret,
-            signature,
-          )
-        ) {
-          return ({
-            status: 403,
-            response: { error: "Forbidden" } as const,
-            occurrences: [] as const,
-          } as const);
+    }
+    const payload = request.body as WhatsAppWebhookPayload;
+    const occurrences = [];
+    for (const entry of payload?.entry ?? []) {
+      for (const change of entry.changes ?? []) {
+        const value = change.value;
+        const userName = value?.contacts?.[0]?.profile?.name;
+        const phoneId = value?.metadata?.phone_number_id;
+        for (const message of value?.messages ?? []) {
+          const accepted = await occurrence(options, transport, config, {
+            businessId: entry.id,
+            phoneId,
+            userName,
+            message,
+          });
+          if (accepted) occurrences.push(accepted);
         }
       }
-      const payload = request.body as WhatsAppWebhookPayload;
-      const occurrences = [];
-      for (const entry of payload?.entry ?? []) {
-        for (const change of entry.changes ?? []) {
-          const value = change.value;
-          const userName = value?.contacts?.[0]?.profile?.name;
-          const phoneId = value?.metadata?.phone_number_id;
-          for (const message of value?.messages ?? []) {
-            const accepted = await occurrence(options, transport, config, {
-              businessId: entry.id,
-              phoneId,
-              userName,
-              message,
-            });
-            if (accepted) occurrences.push(accepted);
-          }
-        }
-      }
-      return ({
-        status: 200,
-        response: { status: "ok" } as const,
-        occurrences: occurrences,
-      } as const);
-    },
-    receive(value, _context) {
-      const input = providerRecord(value);
-      const externalThreadId = requiredProviderText(
-        input.externalThreadId,
-        "WhatsApp external thread ID",
-      );
-      const senderPhone = requiredProviderText(
-        input.senderPhone,
-        "WhatsApp sender phone",
-      );
-      const phoneId = typeof input.phoneId === "string"
-        ? input.phoneId.trim()
-        : "";
-      const contents: ContentInput[] = [];
-      if (typeof input.text === "string" && input.text.trim()) {
-        contents.push(input.text.trim());
-      }
-      const descriptor = providerRecord(input.media);
-      if (Object.keys(descriptor).length) {
-        contents.push({
-          type: requiredProviderText(
-            descriptor.kind,
-            "WhatsApp media kind",
-          ) as "image" | "audio" | "video" | "file",
-          bytes: base64ToBytes(requiredProviderText(
-            descriptor.dataBase64,
-            "WhatsApp media base64",
-          )),
-          mediaType: requiredProviderText(
-            descriptor.mediaType,
-            "WhatsApp media type",
-          ),
-          ...(typeof descriptor.name === "string"
-            ? { name: descriptor.name }
-            : {}),
-        });
-      }
-      if (!contents.length) throw new TypeError("WhatsApp message is empty.");
-      const messageId = requiredProviderText(
-        input.messageId,
-        "WhatsApp message ID",
-      );
-      const businessId = requiredProviderText(
-        input.businessId,
-        "WhatsApp business ID",
-      );
-      const userName = typeof input.userName === "string"
-        ? input.userName.trim()
-        : "";
-      return ({
-        externalThreadId,
-        // Provider conversation participants are the external audience.
-        visibility: "public",
-        sender: {
-          externalId: senderPhone,
-          participantType: "human" as const,
-          ...(userName ? { name: userName } : {}),
-          metadata: {
-            provider: "whatsapp",
-            phone: senderPhone,
-          } as const,
+    }
+    return ({
+      status: 200,
+      response: { status: "ok" } as const,
+      occurrences: occurrences,
+    } as const);
+  },
+  receive(value, _context) {
+    const input = providerRecord(value);
+    const externalThreadId = requiredProviderText(
+      input.externalThreadId,
+      "WhatsApp external thread ID",
+    );
+    const senderPhone = requiredProviderText(
+      input.senderPhone,
+      "WhatsApp sender phone",
+    );
+    const phoneId = typeof input.phoneId === "string"
+      ? input.phoneId.trim()
+      : "";
+    const contents: ContentInput[] = [];
+    if (typeof input.text === "string" && input.text.trim()) {
+      contents.push(input.text.trim());
+    }
+    const descriptor = providerRecord(input.media);
+    if (Object.keys(descriptor).length) {
+      contents.push({
+        type: requiredProviderText(
+          descriptor.kind,
+          "WhatsApp media kind",
+        ) as "image" | "audio" | "video" | "file",
+        bytes: base64ToBytes(requiredProviderText(
+          descriptor.dataBase64,
+          "WhatsApp media base64",
+        )),
+        mediaType: requiredProviderText(
+          descriptor.mediaType,
+          "WhatsApp media type",
+        ),
+        ...(typeof descriptor.name === "string"
+          ? { name: descriptor.name }
+          : {}),
+      });
+    }
+    if (!contents.length) throw new TypeError("WhatsApp message is empty.");
+    const messageId = requiredProviderText(
+      input.messageId,
+      "WhatsApp message ID",
+    );
+    const businessId = requiredProviderText(
+      input.businessId,
+      "WhatsApp business ID",
+    );
+    const userName = typeof input.userName === "string"
+      ? input.userName.trim()
+      : "";
+    return ({
+      externalThreadId,
+      // Provider conversation participants are the external audience.
+      visibility: "public",
+      sender: {
+        externalId: senderPhone,
+        participantType: "human" as const,
+        ...(userName ? { name: userName } : {}),
+        metadata: {
+          provider: "whatsapp",
+          phone: senderPhone,
         } as const,
-        content: contents.length === 1 ? contents[0] : contents,
-        route: {
+      } as const,
+      content: contents.length === 1 ? contents[0] : contents,
+      route: {
+        recipientPhone: senderPhone,
+        ...(phoneId ? { phoneId } : {}),
+        businessId,
+      } as const,
+      metadata: {
+        provider: "whatsapp",
+        providerMessageId: messageId,
+        ...(typeof input.timestamp === "string"
+          ? { providerTimestamp: input.timestamp }
+          : {}),
+        messageType: requiredProviderText(
+          input.messageType,
+          "WhatsApp message type",
+        ),
+        ...(input.interactive && typeof input.interactive === "object"
+          ? { interactive: input.interactive as ChannelJsonObject }
+          : {}),
+      } as const,
+      thread: {
+        metadata: {
+          provider: "whatsapp",
           recipientPhone: senderPhone,
           ...(phoneId ? { phoneId } : {}),
           businessId,
+          ...(userName ? { userName } : {}),
+          lastInboundMessageId: messageId,
         } as const,
-        metadata: {
-          provider: "whatsapp",
-          providerMessageId: messageId,
-          ...(typeof input.timestamp === "string"
-            ? { providerTimestamp: input.timestamp }
-            : {}),
-          messageType: requiredProviderText(
-            input.messageType,
-            "WhatsApp message type",
-          ),
-          ...(input.interactive && typeof input.interactive === "object"
-            ? { interactive: input.interactive as ChannelJsonObject }
-            : {}),
-        } as const,
-        thread: {
-          metadata: {
-            provider: "whatsapp",
-            recipientPhone: senderPhone,
-            ...(phoneId ? { phoneId } : {}),
-            businessId,
-            ...(userName ? { userName } : {}),
-            lastInboundMessageId: messageId,
-          } as const,
-        } as const,
-      } as const);
-    },
-    async deliver(attempt, context) {
-      const options = channelProviderOptions<WhatsAppChannelOptions>(context);
-      const transport = options.transport ??
-        createWhatsAppGraphTransport({ fetch: options.fetch });
-      const route = providerRecord(attempt.intent.route);
-      const to = requiredProviderText(
-        route.recipientPhone,
-        "WhatsApp recipient phone",
-      );
-      const phoneId = typeof route.phoneId === "string"
-        ? route.phoneId.trim()
-        : "";
-      const base = await configFor(
+      } as const,
+    } as const);
+  },
+  async deliver(attempt, context) {
+    const options = channelProviderOptions<WhatsAppChannelOptions>(context);
+    const transport = options.transport ??
+      createWhatsAppGraphTransport({ fetch: options.fetch });
+    const route = providerRecord(attempt.intent.route);
+    const to = requiredProviderText(
+      route.recipientPhone,
+      "WhatsApp recipient phone",
+    );
+    const phoneId = typeof route.phoneId === "string"
+      ? route.phoneId.trim()
+      : "";
+    const base = await configFor(
+      options,
+      configContext("deliver", context, undefined, attempt.intent.route),
+    );
+    const config = {
+      ...base,
+      phoneId: phoneId || requiredProviderText(
+        base.phoneId,
+        "WhatsApp phoneId",
+      ),
+    } as const;
+    const providerIds: string[] = [];
+    let delivered = 0;
+    for (const content of attempt.content) {
+      const ids = await emitContent(
         options,
-        configContext("deliver", context, undefined, attempt.intent.route),
+        transport,
+        config,
+        attempt,
+        to,
+        content,
       );
-      const config = {
-        ...base,
-        phoneId: phoneId || requiredProviderText(
-          base.phoneId,
-          "WhatsApp phoneId",
-        ),
-      } as const;
-      const providerIds: string[] = [];
-      let delivered = 0;
-      for (const content of attempt.content) {
-        const ids = await emitContent(
-          options,
-          transport,
-          config,
-          attempt,
-          to,
-          content,
-        );
-        if (
-          ids.length || outboundText(content) ||
-          ["image", "audio", "video", "file"].includes(content.ref.kind)
-        ) {
-          delivered += 1;
-          providerIds.push(...ids);
-        }
-      }
-      const metadata = providerRecord(attempt.intent.metadata);
-      const message = providerRecord(metadata.message);
-      const semantic = action(message);
-      if (semantic) {
-        const ids = await emit(
-          options,
-          transport,
-          config,
-          attempt,
-          semantic.type === "media_carousel"
-            ? {
-              kind: "media_carousel",
-              to,
-              action: semantic as WhatsAppMediaCarouselAction,
-            }
-            : { kind: "reply_buttons", to, action: semantic },
-        );
+      if (
+        ids.length || outboundText(content) ||
+        ["image", "audio", "video", "file"].includes(content.ref.kind)
+      ) {
         delivered += 1;
         providerIds.push(...ids);
       }
-      return ({
-        deliveryKey: attempt.intent.deliveryKey,
-        delivered,
-        ...(providerIds.length ? { providerIds: providerIds } : {}),
-      } as const);
-    },
-  };
+    }
+    const metadata = providerRecord(attempt.intent.metadata);
+    const message = providerRecord(metadata.message);
+    const semantic = action(message);
+    if (semantic) {
+      const ids = await emit(
+        options,
+        transport,
+        config,
+        attempt,
+        semantic.type === "media_carousel"
+          ? {
+            kind: "media_carousel",
+            to,
+            action: semantic as WhatsAppMediaCarouselAction,
+          }
+          : { kind: "reply_buttons", to, action: semantic },
+      );
+      delivered += 1;
+      providerIds.push(...ids);
+    }
+    return ({
+      deliveryKey: attempt.intent.deliveryKey,
+      delivered,
+      ...(providerIds.length ? { providerIds: providerIds } : {}),
+    } as const);
+  },
+};
 
 export {
   createWhatsAppGraphTransport,

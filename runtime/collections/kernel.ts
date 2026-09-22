@@ -224,7 +224,9 @@ export type ScopedCollection<
   TSelect extends CollectionRecord = CollectionRecord,
   TInsert extends object = Record<string, unknown>,
 > = Readonly<{
-  definition: Readonly<{ name: string; schema: unknown }>;
+  definition: Readonly<
+    Pick<CollectionDefinition, "name" | "schema" | "relations">
+  >;
   create(
     input: TInsert,
     options?: ScopedCollectionCallOptions,

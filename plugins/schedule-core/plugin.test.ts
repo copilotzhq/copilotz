@@ -2,7 +2,6 @@ import { assertEquals, assertExists, assertRejects } from "@std/assert";
 import type { ActionCaller } from "@copilotz/copilotz/actions";
 import type { LlmAdapter, LlmAdapterCallInput } from "@copilotz/copilotz/llm";
 import type { ToolResource } from "@copilotz/copilotz/core";
-import { spaceAttachmentId } from "@copilotz/copilotz/core";
 import { createCopilotzApplication } from "../../runtime/application/index.ts";
 import {
   createPluginRegistry,
@@ -276,11 +275,9 @@ for (
         }),
         context,
       );
-      await context.collections.spaceAttachment.create({
-        id: spaceAttachmentId("scheduled_job", "space-job"),
-        collection: "scheduled_job",
-        recordId: "space-job",
-        spaceId: "space-a",
+      await context.collections.scheduledJob.update({
+        id: "space-job",
+        set: { spaceId: "space-a" },
       });
 
       const move = () =>

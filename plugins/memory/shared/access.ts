@@ -3,7 +3,7 @@ import type {
   CollectionRecord,
   SnapshotCollections,
 } from "@copilotz/copilotz/collections";
-import { type Participant, spaceAttachmentId } from "@copilotz/copilotz/core";
+import type { Participant } from "@copilotz/copilotz/core";
 import type { MemorySpaceDescriptor } from "../authoring/consolidation/index.ts";
 import type {
   MemoryActionContext,
@@ -50,30 +50,28 @@ export async function threadMemorySpaces(
     after = grants.length === 200 ? grants[grants.length - 1].id : undefined;
   } while (after);
 
-  const attachment = await collections.spaceAttachment?.get({
-    id: spaceAttachmentId("thread", threadId),
-  });
-  const space = attachment &&
-    await collections.space?.get({ id: String(attachment.spaceId) });
+  const thread = await collections.thread.get({ id: threadId });
+  const spaceId = optionalText(thread?.spaceId);
+  const space = spaceId ? await collections.space?.get({ id: spaceId }) : null;
   if (space?.status === "active") {
+    let peerAfter: string | undefined;
     do {
-      const peers = await collections.spaceAttachment.list({
-        where: { spaceId: space.id, collection: "thread" },
+      const peers = await collections.thread.list({
+        where: { spaceId: space.id },
         order: { field: "id" },
-        after,
+        after: peerAfter,
         limit: 200,
       });
       for (const peer of peers) {
         if (
-          peer.recordId === threadId ||
-          !await collections.thread.get({ id: String(peer.recordId) })
+          peer.id === threadId
         ) continue;
         // Only the peer's producer scope is shared, never its consumer grants.
-        const id = `memory-space:thread:${peer.recordId}`;
+        const id = `memory-space:thread:${peer.id}`;
         const producer = await collections.memorySpace.get({ id });
         if (
           !producer || producer.scopeType !== "thread" ||
-          producer.scopeId !== peer.recordId || spaces.has(id)
+          producer.scopeId !== peer.id || spaces.has(id)
         ) continue;
         spaces.set(id, {
           id,
@@ -84,8 +82,8 @@ export async function threadMemorySpaces(
           defaultWrite: false,
         });
       }
-      after = peers.length === 200 ? peers[peers.length - 1].id : undefined;
-    } while (after);
+      peerAfter = peers.length === 200 ? peers[peers.length - 1].id : undefined;
+    } while (peerAfter);
   }
   const ordered = [...spaces.values()].sort((a, b) =>
     Number(b.defaultWrite) - Number(a.defaultWrite) || a.id.localeCompare(b.id)

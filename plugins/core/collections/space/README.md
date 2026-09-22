@@ -20,6 +20,9 @@ collection reads/writes.
 
 ## How it works
 
-Ordinary collection relations connect the owner and members. Attachments touch a
+Ordinary collection relations connect the owner and members. Resources declare
+their own `belongsTo("space", "spaceId")` relation; the runtime projects the
+corresponding `has_<resource>` edge from this Space. Ownership changes touch a
 revision in the same transaction to conflict with concurrent archive/removal.
-Archiving retains attachments; restoring reactivates remaining attachments.
+Archiving retains ownership; restoring does not reclaim resources moved
+elsewhere.

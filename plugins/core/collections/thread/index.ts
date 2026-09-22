@@ -76,6 +76,7 @@ export const threadCollection: CollectionDefinition = defineCollection({
       name: { type: "string" },
       description: { type: "string" },
       status: { type: "string" },
+      spaceId: { type: "string", minLength: 1 },
       parentThreadId: { type: "string" },
       metadata: metadataSchema,
       participantIds: {
@@ -120,7 +121,9 @@ export const threadCollection: CollectionDefinition = defineCollection({
     sourceField: "externalId",
   },
   search: { enabled: true, fields: ["name", "description"] },
+  indexes: ["spaceId"],
   relations: {
+    space: relation.belongsTo("space", "spaceId"),
     participants: relation.hasMany(
       "participant",
       "participantIds",

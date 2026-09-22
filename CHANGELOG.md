@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.79.0 — 2026-09-21
+
+- Make each Space-owned Collection declare
+  `space: relation.belongsTo("space",
+  "spaceId")`; `spaceId` is now the sole
+  ownership record and the runtime projects the ordinary `has_<resource>`
+  relation.
+- Make Core Space moves, detach, removal, memory reads, and scheduled-job safety
+  checks use the resource relationship directly. The historical
+  `spaceAttachment` Collection remains registered only for durable replay and
+  deployment migration compatibility.
+
 ## 0.78.2 — 2026-09-21
 
 - Accept legacy `tool_plan_id` metadata in canonical LLM tool-call blocks and

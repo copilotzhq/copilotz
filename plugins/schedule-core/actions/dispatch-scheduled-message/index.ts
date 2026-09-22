@@ -14,7 +14,7 @@ import type {
   CollectionMutationRef,
   CollectionRecord,
 } from "@copilotz/copilotz/collections";
-import { type CoreResources, spaceAttachmentId } from "@copilotz/copilotz/core";
+import type { CoreResources } from "@copilotz/copilotz/core";
 import type {
   CoreScheduledMessageOccurrence,
   DispatchScheduledMessageResult,
@@ -94,33 +94,28 @@ async function checkSpaceOwnership(
   context: CoreSchedulesActionContext,
   transaction: ActionTransactionContext,
 ): Promise<SpaceOwnership> {
-  const jobAttachment = await context.collections.spaceAttachment.get({
-    id: spaceAttachmentId("scheduled_job", item.jobId),
-  });
-  if (!jobAttachment) return { status: "unscoped" };
-  const spaceId = text(record(jobAttachment).spaceId);
   const scheduledJobs = context.collections.scheduledJob;
-  if (!spaceId || !scheduledJobs || !transaction.collections.scheduledJob) {
+  const job = scheduledJobs && await scheduledJobs.get({ id: item.jobId });
+  const spaceId = text(job?.spaceId);
+  if (!spaceId) return { status: "unscoped" };
+  if (!scheduledJobs || !transaction.collections.scheduledJob) {
     return { status: "skipped", reason: "space_ownership", jobId: item.jobId };
   }
 
-  // Core attachment changes touch this same Space. Read ownership again
+  // Space moves touch this same Space. Read ownership again
   // after staging the fence; never downgrade a formerly owned occurrence.
   await transaction.collections.space.commands.touch({ id: spaceId });
-  const currentAttachment = await context.collections.spaceAttachment.get({
-    id: spaceAttachmentId("scheduled_job", item.jobId),
-  });
-  if (text(currentAttachment?.spaceId) !== spaceId) {
+  const currentJob = await scheduledJobs.get({ id: item.jobId });
+  if (text(currentJob?.spaceId) !== spaceId) {
     return { status: "skipped", reason: "space_ownership", jobId: item.jobId };
   }
-  const job = await scheduledJobs.get({ id: item.jobId });
-  if (!job) {
+  if (!currentJob) {
     return { status: "skipped", reason: "space_ownership", jobId: item.jobId };
   }
-  if (job.status !== "active") {
+  if (currentJob.status !== "active") {
     return { status: "skipped", reason: "space_ownership", jobId: item.jobId };
   }
-  const payload = record(job.payload);
+  const payload = record(currentJob.payload);
   const liveTarget = await resolveThreadTarget(
     record(
       payload.thread,
@@ -134,13 +129,11 @@ async function checkSpaceOwnership(
   const targetChanged = liveTarget.ambiguous || occurrenceTarget.ambiguous ||
     !liveTarget.id || liveTarget.id !== occurrenceTarget.id;
   const targetThreadId = liveTarget.id;
-  const threadAttachment = targetThreadId
-    ? await context.collections.spaceAttachment.get({
-      id: spaceAttachmentId("thread", targetThreadId),
-    })
+  const targetThread = targetThreadId
+    ? await context.collections.thread.get({ id: targetThreadId })
     : null;
   const ownsLiveTarget = !liveTarget.ambiguous && Boolean(liveTarget.id) &&
-    text(record(threadAttachment).spaceId) === spaceId;
+    text(targetThread?.spaceId) === spaceId;
   if (ownsLiveTarget) {
     // An edited job may already point somewhere valid. Drop the old queued
     // occurrence without pausing the newly configured schedule.
@@ -155,7 +148,7 @@ async function checkSpaceOwnership(
       nextRunAt: null,
       nextRunAtMs: null,
       metadata: {
-        ...structuredClone(record(job.metadata)),
+        ...structuredClone(record(currentJob.metadata)),
         scheduledPause: {
           reason: "target_thread_space_unavailable",
           ...(targetThreadId ? { threadId: targetThreadId } : {}),

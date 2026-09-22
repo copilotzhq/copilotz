@@ -1,4 +1,4 @@
-/** Core Space lifecycle and attachment API. Applications authorize each operation. @module */
+/** Core Space lifecycle API. Applications authorize each operation. @module */
 import {
   type ActionDefinition,
   defineAction,
@@ -6,10 +6,8 @@ import {
 import type {
   CollectionRecord,
   CollectionTransactionCollections,
-  CollectionTransactionRelations,
   ScopedCollections,
 } from "@copilotz/copilotz/collections";
-import { spaceAttachmentId } from "../../collections/space-attachment/index.ts";
 
 export const SPACES_ACTION_ID = "copilotz.core.spaces";
 
@@ -52,19 +50,18 @@ function optionalText(value: unknown, label: string): string {
   return value.trim();
 }
 
-export type SpaceAttachmentTransaction = Readonly<{
+export type SpaceTransaction = Readonly<{
   collections: CollectionTransactionCollections;
-  relations: CollectionTransactionRelations;
 }>;
 
 /**
- * Attaches a registered collection record to a Space using Core's canonical
- * attachment and relation semantics. Reads come from the surrounding Action
- * context while writes are staged in the caller's existing transaction.
+ * Attaches a registered collection record through the relationship declared by
+ * that resource's own schema. Reads come from the surrounding Action context
+ * while writes are staged in the caller's existing transaction.
  */
 export async function attachSpaceRecord(
   context: Readonly<{ collections: ScopedCollections }>,
-  transaction: SpaceAttachmentTransaction,
+  transaction: SpaceTransaction,
   spaceId: string,
   collection: string,
   recordId: string,
@@ -77,42 +74,126 @@ export async function attachSpaceRecord(
       "A registered collection alias and recordId are required.",
     );
   }
+  requireSpaceRelation(target);
+  const mutations = transaction.collections[collection];
+  if (!mutations) {
+    throw new Error(
+      `Collection '${collection}' is unavailable in this transaction.`,
+    );
+  }
   const type = target.definition.name;
-  const id = spaceAttachmentId(type, recordId);
+  const record = await target.get({ id: recordId });
+  if (!record) throw new Error("Space resource does not exist.");
+  const currentSpaceId = typeof record.spaceId === "string"
+    ? record.spaceId.trim()
+    : "";
   await transaction.collections.space.commands.touch({
     id: spaceId,
     active: true,
   });
-  const current = await context.collections.spaceAttachment.get({ id });
-  if (!await target.get({ id: recordId })) {
-    throw new Error("Attachment target does not exist.");
-  }
-  if (current?.spaceId === spaceId) {
+  if (currentSpaceId === spaceId) {
     return { collection: type, recordId };
   }
-  const movedFrom = current ? String(current.spaceId) : undefined;
-  if (current) {
-    if (!movedFrom) throw new Error("Space attachment is invalid.");
+  const movedFrom = currentSpaceId || undefined;
+  if (movedFrom) {
     // Both sides participate in the same optimistic transaction.
     await transaction.collections.space.commands.touch({ id: movedFrom });
-    await transaction.collections.spaceAttachment.update({
-      id,
-      set: { spaceId },
-    });
-  } else {
-    await transaction.collections.spaceAttachment.create({
-      id,
-      collection: type,
-      recordId,
-      spaceId,
-    });
   }
-  await transaction.relations.upsert({
-    type: "attached_record",
-    source: { type: "spaceAttachment", id },
-    target: { type, id: recordId },
+  await mutations.update({
+    id: recordId,
+    set: { spaceId },
   });
   return { collection: type, recordId, ...(movedFrom ? { movedFrom } : {}) };
+}
+
+function isSpaceResource(
+  collection: ScopedCollections[string],
+): boolean {
+  const relation = collection.definition.relations?.space;
+  return collection.definition.name !== "spaceAttachment" &&
+    relation?.type === "belongsTo" && relation.collection === "space" &&
+    relation.foreignKey === "spaceId";
+}
+
+function requireSpaceRelation(collection: ScopedCollections[string]): void {
+  if (!isSpaceResource(collection)) {
+    throw new Error(
+      `Collection '${collection.definition.name}' must declare space: relation.belongsTo("space", "spaceId").`,
+    );
+  }
+}
+
+function requiresSpace(collection: ScopedCollections[string]): boolean {
+  const schema = collection.definition.schema;
+  if (!schema || typeof schema !== "object" || Array.isArray(schema)) {
+    return false;
+  }
+  const required = (schema as { required?: unknown }).required;
+  return Array.isArray(required) && required.includes("spaceId");
+}
+
+function spaceResources(
+  collections: ScopedCollections,
+): readonly (readonly [string, ScopedCollections[string]])[] {
+  const resources: [string, ScopedCollections[string]][] = [];
+  const seen = new Set<string>();
+  for (const [alias, collection] of Object.entries(collections)) {
+    if (!isSpaceResource(collection) || seen.has(collection.definition.name)) {
+      continue;
+    }
+    seen.add(collection.definition.name);
+    resources.push([alias, collection]);
+  }
+  return resources;
+}
+
+async function hasSpaceResource(
+  resources: readonly (readonly [string, ScopedCollections[string]])[],
+  spaceId: string,
+): Promise<boolean> {
+  for (const [, collection] of resources) {
+    if ((await collection.list({ where: { spaceId }, limit: 1 })).length) {
+      return true;
+    }
+  }
+  return false;
+}
+
+async function clearSpaceResources(
+  resources: readonly (readonly [string, ScopedCollections[string]])[],
+  transaction: SpaceTransaction,
+  spaceId: string,
+): Promise<void> {
+  for (const [alias, collection] of resources) {
+    const mutations = transaction.collections[alias];
+    if (!mutations) {
+      throw new Error(
+        `Collection '${alias}' is unavailable in this transaction.`,
+      );
+    }
+    let after: string | undefined;
+    do {
+      const records = await collection.list({
+        where: { spaceId },
+        order: { field: "id" },
+        after,
+        limit: 200,
+      });
+      if (records.length && requiresSpace(collection)) {
+        throw new Error(
+          `Space cannot be removed while required resource '${
+            records[0].id
+          }' is attached.`,
+        );
+      }
+      for (const record of records) {
+        await mutations.update({ id: record.id, unset: ["spaceId"] });
+      }
+      after = records.length === 200
+        ? records[records.length - 1].id
+        : undefined;
+    } while (after);
+  }
 }
 
 export const spacesAction: ActionDefinition<SpaceInput, SpaceResult> =
@@ -212,15 +293,25 @@ export const spacesAction: ActionDefinition<SpaceInput, SpaceResult> =
                 );
                 break;
               }
-              // Store the canonical collection name, so two aliases cannot create two attachments.
-              const type = target.definition.name;
-              const id = spaceAttachmentId(type, recordId);
-              const current = await collections.spaceAttachment.get({ id });
-              if (operation === "detach") {
-                if (current?.spaceId === spaceId) {
-                  await tx.collections.spaceAttachment.delete({ id });
+              requireSpaceRelation(target);
+              const current = await target.get({ id: recordId });
+              if (!current) throw new Error("Space resource does not exist.");
+              if (current.spaceId === spaceId) {
+                if (requiresSpace(target)) {
+                  throw new Error(
+                    "A required Space relationship cannot be detached.",
+                  );
                 }
-                break;
+                const mutations = tx.collections[collection];
+                if (!mutations) {
+                  throw new Error(
+                    `Collection '${collection}' is unavailable in this transaction.`,
+                  );
+                }
+                await mutations.update({
+                  id: recordId,
+                  unset: ["spaceId"],
+                });
               }
               break;
             }
@@ -269,29 +360,15 @@ export const spacesAction: ActionDefinition<SpaceInput, SpaceResult> =
               });
               break;
             case "remove": {
-              const attachments: CollectionRecord[] = [];
-              let after: string | undefined;
-              while (true) {
-                const page = await collections.spaceAttachment.list({
-                  where: { spaceId },
-                  order: { field: "id" },
-                  after,
-                  limit: 200,
-                });
-                attachments.push(...page);
-                if (page.length < 200) break;
-                after = page[page.length - 1].id;
-              }
-              if (input.requireEmpty && attachments.length > 0) {
+              const resources = spaceResources(collections);
+              if (
+                input.requireEmpty && await hasSpaceResource(resources, spaceId)
+              ) {
                 throw new Error(
-                  "Space cannot be removed while it has attachments.",
+                  "Space cannot be removed while it has resources.",
                 );
               }
-              for (const attachment of attachments) {
-                await tx.collections.spaceAttachment.delete({
-                  id: attachment.id,
-                });
-              }
+              await clearSpaceResources(resources, tx, spaceId);
               await tx.collections.space.delete({ id: spaceId });
               break;
             }

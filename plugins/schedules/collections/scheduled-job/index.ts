@@ -7,6 +7,7 @@
 import {
   type CollectionDefinition,
   defineCollection,
+  relation,
 } from "@copilotz/copilotz/collections";
 import { getNextScheduledRunAt } from "../../shared/model.ts";
 import type { ScheduledJobSchedule } from "../../shared/contracts.ts";
@@ -49,6 +50,7 @@ const scheduledJobSchema = {
     id: { type: "string" },
     namespace: { type: "string" },
     name: { type: "string" },
+    spaceId: { type: "string", minLength: 1 },
     status: {
       type: "string",
       enum: ["active", "paused", "cancelled"],
@@ -106,7 +108,15 @@ export const scheduledJobCollection: CollectionDefinition<
   schema: scheduledJobSchema,
   timestamps: { createdAt: "createdAt", updatedAt: "updatedAt" },
   content: { fields: ["content"] },
-  indexes: ["status", "nextRunAtMs", ["status", "nextRunAtMs"]],
+  indexes: [
+    "spaceId",
+    "status",
+    "nextRunAtMs",
+    ["status", "nextRunAtMs"],
+  ],
+  relations: {
+    space: relation.belongsTo("space", "spaceId"),
+  },
   commands: {
     due: {
       event: "scheduled_job.due",

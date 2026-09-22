@@ -113,6 +113,29 @@ export function createChannelSession<TInput>(
     });
   };
 
+  const awaitDone = async (
+    turn: Turn,
+    done: Promise<void>,
+  ): Promise<void> => {
+    if (turn.controller.signal.aborted) {
+      throw turn.controller.signal.reason;
+    }
+    let onAbort: (() => void) | undefined;
+    const aborted = new Promise<never>((_, reject) => {
+      onAbort = () => reject(turn.controller.signal.reason);
+      turn.controller.signal.addEventListener("abort", onAbort, {
+        once: true,
+      });
+    });
+    try {
+      await Promise.race([done, aborted]);
+    } finally {
+      if (onAbort) {
+        turn.controller.signal.removeEventListener("abort", onAbort);
+      }
+    }
+  };
+
   const run = async (turn: Turn, input: TInput): Promise<void> => {
     const envelope = await options.ingress(input, turn.controller.signal);
     if (turn.controller.signal.aborted) throw turn.controller.signal.reason;
@@ -151,6 +174,13 @@ export function createChannelSession<TInput>(
         void cancel(turn, failure).catch(() => undefined);
         throw failure;
       }
+      if (!turn.cancelTask) {
+        try {
+          await handle.detach("channel_session_failed");
+        } catch {
+          // Preserve the durable failure rather than replacing it with cleanup.
+        }
+      }
       throw turn.controller.signal.reason;
     } finally {
       try {
@@ -184,14 +214,23 @@ export function createChannelSession<TInput>(
     // authority and may reject after the output stream has closed.
     let doneFailure: unknown;
     try {
-      await handle.done;
+      await awaitDone(turn, handle.done);
     } catch (failure) {
+      if (turn.controller.signal.aborted && turn.cancelTask) {
+        throw turn.controller.signal.reason;
+      }
       doneFailure = failure;
     }
-    try {
-      await handle.detach("channel_session_completed");
-    } catch (detachFailure) {
-      if (doneFailure === undefined) throw detachFailure;
+    if (!turn.cancelTask) {
+      try {
+        await handle.detach(
+          doneFailure === undefined
+            ? "channel_session_completed"
+            : "channel_session_failed",
+        );
+      } catch (detachFailure) {
+        if (doneFailure === undefined) throw detachFailure;
+      }
     }
     if (turn.controller.signal.aborted) throw turn.controller.signal.reason;
     if (doneFailure !== undefined) throw doneFailure;

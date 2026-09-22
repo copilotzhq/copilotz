@@ -130,6 +130,39 @@ Deno.test("Channel session maps one input, awaits ordered egress, and done", asy
   assertEquals(detached, ["channel_session_completed"]);
 });
 
+Deno.test("Channel session interrupts after output EOF without waiting for done", async () => {
+  const done = deferred<void>();
+  const cancelled: string[] = [];
+  const detached: string[] = [];
+  const base = fixtureHandle({
+    outputs: closedOutputs(),
+    done,
+    cancelled,
+    detached,
+  });
+  const handle: ApplicationSendHandle = {
+    ...base,
+    async cancel(reason) {
+      cancelled.push(reason ?? "");
+    },
+  };
+  const session = createChannelSession(application(async () => handle), {
+    ingress: () => ({ type: "post-eof.input" }),
+    egress: () => undefined,
+  });
+  const sending = session.send(undefined);
+  await flush();
+  await session.interrupt("post-eof-interrupt");
+  await assertRejects(
+    () => sending,
+    DOMException,
+    "post-eof-interrupt",
+  );
+  assertEquals(cancelled, ["post-eof-interrupt"]);
+  assertEquals(detached, []);
+  done.resolve();
+});
+
 Deno.test("Channel session interrupts pending admission and suppresses late output", async () => {
   const admission = deferred<ApplicationSendHandle>();
   const cancelled: string[] = [];

@@ -77,6 +77,16 @@ function jsonFrame(kind: number, value: unknown): Uint8Array {
 }
 
 function eventFrame(output: RuntimeOutputDescriptor): Uint8Array {
+  if (
+    !isStreamOutputDescriptor(output) && Object.hasOwn(output, "data")
+  ) {
+    // ProcessorEvent.data is a derived, hydrated view. Keep the original
+    // payload/reference on the worker relay and let the receiving engine
+    // resolve it in its own database scope.
+    const resolved = output as CopilotzEvent & { readonly data: unknown };
+    const { data: _data, ...raw } = resolved;
+    return jsonFrame(EVENT_FRAME, raw);
+  }
   return jsonFrame(EVENT_FRAME, output);
 }
 

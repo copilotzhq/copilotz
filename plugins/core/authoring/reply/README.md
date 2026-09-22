@@ -2,8 +2,8 @@
 
 ## What it is
 
-Projects one resolved, durable Core agent Message into `{ messageId, text }`
-for a trusted live-channel viewer.
+Projects one resolved, durable Core agent Message into `{ messageId, text }` for
+a trusted live-channel viewer.
 
 ## Why it exists
 

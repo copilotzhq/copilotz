@@ -2,8 +2,7 @@
 
 ## What it is
 
-Submits accepted Channel occurrences through an application's `send`
-capability.
+Submits accepted Channel occurrences through an application's `send` capability.
 
 ## Why it exists
 
@@ -19,5 +18,5 @@ occurrence before sending the first one.
 ## How it works
 
 It delegates strict JSON and credential checks to `channelIngress`, clones
-trusted operation metadata for each envelope, and cancels earlier handles when
-a later send fails.
+trusted operation metadata for each envelope, and cancels earlier handles when a
+later send fails.

@@ -65,7 +65,7 @@ Deno.test("Channel receipts precede settlement and detaching observers does not 
     ...web,
     accept(request, context) {
       acceptSignal = context.signal;
-      return web.accept(request);
+      return web.accept(request, context);
     },
   });
   const channelProvider = definePlugin({

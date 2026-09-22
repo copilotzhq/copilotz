@@ -26,7 +26,7 @@ function output(
       kind: "text",
       role: "body",
       mediaType: "text/plain",
-      text: "Hello",
+      value: "Hello",
     }],
     metadata: {
       copilotzWorkflow: {
@@ -69,14 +69,14 @@ Deno.test("Core reply projection returns ordered resolved body narration", () =>
         kind: "text",
         role: "body",
         mediaType: "text/plain",
-        text: "Hello",
+        value: "Hello",
       },
       {
         assetId: "asset-reasoning",
         kind: "text",
         role: "reasoning",
         mediaType: "text/plain",
-        text: "private reasoning",
+        value: "private reasoning",
       },
       {
         assetId: "asset-image",
@@ -89,14 +89,14 @@ Deno.test("Core reply projection returns ordered resolved body narration", () =>
         kind: "text",
         role: "tool.output",
         mediaType: "text/plain",
-        text: "tool result",
+        value: "tool result",
       },
       {
         assetId: "asset-b",
         kind: "text",
         role: "body",
         mediaType: "text/plain",
-        text: "world",
+        value: "world",
       },
     ],
     metadata: {
@@ -123,18 +123,35 @@ Deno.test("Core reply projection accepts remote text and legacy row visibility",
       kind: "text",
       role: "body",
       mediaType: "text/plain",
-      text: "Hydrated remotely",
+      value: "Hydrated remotely",
     }, {
       assetId: "unresolved-asset",
       kind: "text",
       role: "body",
       mediaType: "text/plain",
+      resolve: false,
+      value: "must stay unresolved",
     }],
   });
   assertEquals(projectCoreReply(candidate, SCOPE), {
     messageId: "message-a",
     text: "Hydrated remotely",
   });
+  assertEquals(
+    projectCoreReply(
+      output({
+        content: [{
+          assetId: "legacy-asset",
+          kind: "text",
+          role: "body",
+          mediaType: "text/plain",
+          text: "legacy field must be ignored",
+        }],
+      }),
+      SCOPE,
+    ),
+    null,
+  );
 });
 
 Deno.test("Core reply projection requires an authorized participant audience", () => {
@@ -198,6 +215,11 @@ Deno.test("Core reply projection rejects identity, provenance, and private visib
     projectCoreReply(output({}, { correlationId: "other" }), SCOPE),
     null,
   );
+  assertEquals(
+    projectCoreReply(output({ namespace: undefined }), SCOPE),
+    { messageId: "message-a", text: "Hello" },
+  );
+  assertEquals(projectCoreReply(output({ namespace: 42 }), SCOPE), null);
   assertEquals(projectCoreReply(output({}, {}, "update"), SCOPE), null);
   assertEquals(
     projectCoreReply(

@@ -259,166 +259,170 @@ async function emitContent(
   return undefined;
 }
 
-export const zendeskChannelAdapter = {
-  async accept(request, context) {
-    const options = channelProviderOptions<ZendeskChannelOptions>(context);
-    const transport = options.transport ??
-      createZendeskTransport({ fetch: options.fetch });
-    const config = await configFor(
-      options,
-      configContext("accept", context, request),
-    );
-    if (request.method.toUpperCase() === "GET") {
-      return ({
-        status: 200,
-        response: "ok",
-        occurrences: [] as const,
-      } as const);
-    }
-    if (config.webhookSecret) {
-      const supplied = requestHeader(request.headers, "x-api-key");
-      if (!supplied || !timingSafeTextEqual(supplied, config.webhookSecret)) {
+export const zendeskChannelAdapter:
+  & ChannelAdapter
+  & Required<Pick<ChannelAdapter, "accept">> = {
+    async accept(request, context) {
+      const options = channelProviderOptions<ZendeskChannelOptions>(context);
+      const transport = options.transport ??
+        createZendeskTransport({ fetch: options.fetch });
+      const config = await configFor(
+        options,
+        configContext("accept", context, request),
+      );
+      if (request.method.toUpperCase() === "GET") {
         return ({
-          status: 403,
-          response: { error: "Forbidden" } as const,
+          status: 200,
+          response: "ok",
           occurrences: [] as const,
         } as const);
       }
-    }
-    const events = (request.body as ZendeskWebhookPayload)?.events;
-    const occurrences = [];
-    for (const event of events ?? []) {
-      const accepted = await occurrence(event, transport);
-      if (accepted) occurrences.push(accepted);
-    }
-    return ({
-      status: events ? 200 : 400,
-      response: events
-        ? ({ status: "ok" } as const)
-        : ({ error: "No events found" } as const),
-      occurrences: occurrences,
-    } as const);
-  },
-  receive(value, _context) {
-    const input = providerRecord(value);
-    const conversationId = requiredProviderText(
-      input.conversationId,
-      "Zendesk conversation ID",
-    );
-    const contents: ContentInput[] = [];
-    if (typeof input.text === "string" && input.text.trim()) {
-      contents.push(input.text.trim());
-    }
-    const descriptor = providerRecord(input.media);
-    if (Object.keys(descriptor).length) {
-      const name = typeof descriptor.name === "string"
-        ? descriptor.name
-        : undefined;
-      const mediaType = normalizedMediaType(
-        requiredProviderText(descriptor.mediaType, "Zendesk media type"),
-        name,
+      if (config.webhookSecret) {
+        const supplied = requestHeader(request.headers, "x-api-key");
+        if (!supplied || !timingSafeTextEqual(supplied, config.webhookSecret)) {
+          return ({
+            status: 403,
+            response: { error: "Forbidden" } as const,
+            occurrences: [] as const,
+          } as const);
+        }
+      }
+      const events = (request.body as ZendeskWebhookPayload)?.events;
+      const occurrences = [];
+      for (const event of events ?? []) {
+        const accepted = await occurrence(event, transport);
+        if (accepted) occurrences.push(accepted);
+      }
+      return ({
+        status: events ? 200 : 400,
+        response: events
+          ? ({ status: "ok" } as const)
+          : ({ error: "No events found" } as const),
+        occurrences: occurrences,
+      } as const);
+    },
+    receive(value, _context) {
+      const input = providerRecord(value);
+      const conversationId = requiredProviderText(
+        input.conversationId,
+        "Zendesk conversation ID",
       );
-      contents.push({
-        type: mediaKind(mediaType),
-        bytes: base64ToBytes(requiredProviderText(
-          descriptor.dataBase64,
-          "Zendesk media base64",
-        )),
-        mediaType,
-        ...(name ? { name } : {}),
-      });
-    }
-    if (!contents.length) throw new TypeError("Zendesk message is empty.");
-    const messageId = requiredProviderText(
-      input.messageId,
-      "Zendesk message ID",
-    );
-    const externalId = requiredProviderText(
-      input.externalUserId,
-      "Zendesk external user ID",
-    );
-    const displayName = typeof input.displayName === "string"
-      ? input.displayName.trim()
-      : "";
-    return ({
-      externalThreadId: conversationId,
-      // Provider conversation participants are the external audience.
-      visibility: "public",
-      sender: {
-        externalId,
-        participantType: "human" as const,
-        ...(displayName ? { name: displayName } : {}),
+      const contents: ContentInput[] = [];
+      if (typeof input.text === "string" && input.text.trim()) {
+        contents.push(input.text.trim());
+      }
+      const descriptor = providerRecord(input.media);
+      if (Object.keys(descriptor).length) {
+        const name = typeof descriptor.name === "string"
+          ? descriptor.name
+          : undefined;
+        const mediaType = normalizedMediaType(
+          requiredProviderText(descriptor.mediaType, "Zendesk media type"),
+          name,
+        );
+        contents.push({
+          type: mediaKind(mediaType),
+          bytes: base64ToBytes(requiredProviderText(
+            descriptor.dataBase64,
+            "Zendesk media base64",
+          )),
+          mediaType,
+          ...(name ? { name } : {}),
+        });
+      }
+      if (!contents.length) throw new TypeError("Zendesk message is empty.");
+      const messageId = requiredProviderText(
+        input.messageId,
+        "Zendesk message ID",
+      );
+      const externalId = requiredProviderText(
+        input.externalUserId,
+        "Zendesk external user ID",
+      );
+      const displayName = typeof input.displayName === "string"
+        ? input.displayName.trim()
+        : "";
+      return ({
+        externalThreadId: conversationId,
+        // Provider conversation participants are the external audience.
+        visibility: "public",
+        sender: {
+          externalId,
+          participantType: "human" as const,
+          ...(displayName ? { name: displayName } : {}),
+          metadata: {
+            provider: "zendesk",
+            ...(typeof input.userId === "string"
+              ? { userId: input.userId }
+              : {}),
+          } as const,
+        } as const,
+        content: contents.length === 1 ? contents[0] : contents,
+        route: { conversationId } as const,
         metadata: {
           provider: "zendesk",
-          ...(typeof input.userId === "string" ? { userId: input.userId } : {}),
+          providerMessageId: messageId,
         } as const,
-      } as const,
-      content: contents.length === 1 ? contents[0] : contents,
-      route: { conversationId } as const,
-      metadata: {
-        provider: "zendesk",
-        providerMessageId: messageId,
-      } as const,
-      thread: {
-        metadata: {
-          provider: "zendesk",
-          conversationId,
-          ...(typeof input.conversationType === "string"
-            ? { conversationType: input.conversationType }
-            : {}),
-          lastInboundMessageId: messageId,
+        thread: {
+          metadata: {
+            provider: "zendesk",
+            conversationId,
+            ...(typeof input.conversationType === "string"
+              ? { conversationType: input.conversationType }
+              : {}),
+            lastInboundMessageId: messageId,
+          } as const,
         } as const,
-      } as const,
-    } as const);
-  },
-  async deliver(attempt, context) {
-    const options = channelProviderOptions<ZendeskChannelOptions>(context);
-    const transport = options.transport ??
-      createZendeskTransport({ fetch: options.fetch });
-    const route = providerRecord(attempt.intent.route);
-    const conversationId = requiredProviderText(
-      route.conversationId,
-      "Zendesk conversation ID",
-    );
-    const config = await configFor(
-      options,
-      configContext("deliver", context, undefined, attempt.intent.route),
-    );
-    let delivered = 0;
-    const providerIds: string[] = [];
-    for (const content of attempt.content) {
-      const result = await emitContent(
+      } as const);
+    },
+    async deliver(attempt, context) {
+      const options = channelProviderOptions<ZendeskChannelOptions>(context);
+      const transport = options.transport ??
+        createZendeskTransport({ fetch: options.fetch });
+      const route = providerRecord(attempt.intent.route);
+      const conversationId = requiredProviderText(
+        route.conversationId,
+        "Zendesk conversation ID",
+      );
+      const config = await configFor(
         options,
-        transport,
-        config,
-        attempt,
-        conversationId,
-        content,
+        configContext("deliver", context, undefined, attempt.intent.route),
       );
-      if (result === undefined) continue;
-      delivered += 1;
-      const id = providerId(result);
-      if (id) providerIds.push(id);
-    }
-    const metadata = providerRecord(attempt.intent.metadata);
-    const semantic = action(providerRecord(metadata.message));
-    if (semantic) {
-      const result = await emit(options, transport, config, attempt, {
-        kind: "reply_buttons",
-        conversationId,
-        action: semantic,
-      });
-      delivered += 1;
-      const id = providerId(result);
-      if (id) providerIds.push(id);
-    }
-    return ({
-      deliveryKey: attempt.intent.deliveryKey,
-      delivered,
-      ...(providerIds.length ? { providerIds: providerIds } : {}),
-    } as const);
-  },
-} as const satisfies ChannelAdapter;
+      let delivered = 0;
+      const providerIds: string[] = [];
+      for (const content of attempt.content) {
+        const result = await emitContent(
+          options,
+          transport,
+          config,
+          attempt,
+          conversationId,
+          content,
+        );
+        if (result === undefined) continue;
+        delivered += 1;
+        const id = providerId(result);
+        if (id) providerIds.push(id);
+      }
+      const metadata = providerRecord(attempt.intent.metadata);
+      const semantic = action(providerRecord(metadata.message));
+      if (semantic) {
+        const result = await emit(options, transport, config, attempt, {
+          kind: "reply_buttons",
+          conversationId,
+          action: semantic,
+        });
+        delivered += 1;
+        const id = providerId(result);
+        if (id) providerIds.push(id);
+      }
+      return ({
+        deliveryKey: attempt.intent.deliveryKey,
+        delivered,
+        ...(providerIds.length ? { providerIds: providerIds } : {}),
+      } as const);
+    },
+  };
 
 export { createZendeskTransport } from "./transport.ts";
 

@@ -1,8 +1,8 @@
 # Channels
 
 A channel maps outside input into application events, then selects and maps
-application outputs for its audience. The host creates the application once.
-The basic boundary is ordinary `send`:
+application outputs for its audience. The host creates the application once. The
+basic boundary is ordinary `send`:
 
 ```ts
 const operation = await application.send(await ingress(input));
@@ -19,15 +19,15 @@ socket in an event payload, or a second application instance.
 
 ## Choose the lifetime at the host boundary
 
-| Use case | Submission and output | Disconnect behavior |
-| --- | --- | --- |
-| Browser chat | Submit once; observe or reattach using the operation receipt | Detach observation; retain durable work |
-| Provider webhook | Authenticate, accept occurrences, acknowledge promptly | Detached processors retain external delivery obligations |
-| Live voice | Map each admitted transcript; consume replies while the session is active | Interrupt or close explicitly cancels the turn |
+| Use case         | Submission and output                                                     | Disconnect behavior                                      |
+| ---------------- | ------------------------------------------------------------------------- | -------------------------------------------------------- |
+| Browser chat     | Submit once; observe or reattach using the operation receipt              | Detach observation; retain durable work                  |
+| Provider webhook | Authenticate, accept occurrences, acknowledge promptly                    | Detached processors retain external delivery obligations |
+| Live voice       | Map each admitted transcript; consume replies while the session is active | Interrupt or close explicitly cancels the turn           |
 
 The generic runtime keeps these policies separate. A local output observer is
-not a durable delivery queue. Replacing a webhook delivery processor with a
-loop over `send().outputs` would lose delivery after the host disconnects.
+not a durable delivery queue. Replacing a webhook delivery processor with a loop
+over `send().outputs` would lose delivery after the host disconnects.
 
 ## Core conversation channels
 

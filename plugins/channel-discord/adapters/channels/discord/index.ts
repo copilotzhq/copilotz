@@ -269,170 +269,174 @@ async function emitContent(
   return undefined;
 }
 
-export const discordChannelAdapter = {
-  async accept(request, context) {
-    const options = channelProviderOptions<DiscordChannelOptions>(context);
-    const transport = options.transport ??
-      createDiscordTransport({ fetch: options.fetch });
-    const config = await configFor(
-      options,
-      configContext("accept", context, request),
-    );
-    const signature = requestHeader(request.headers, "x-signature-ed25519");
-    const timestamp = requestHeader(request.headers, "x-signature-timestamp");
-    if (
-      !signature || !timestamp || !request.rawBody ||
-      !await verifyDiscordSignature(
-        config.publicKey,
-        signature,
-        timestamp,
-        request.rawBody,
-      )
-    ) {
-      return ({
-        status: 401,
-        response: { error: "Invalid request signature" } as const,
-        occurrences: [] as const,
-      } as const);
-    }
-    const interaction = request.body as DiscordInteraction;
-    if (interaction.type === 1) {
+export const discordChannelAdapter:
+  & ChannelAdapter
+  & Required<Pick<ChannelAdapter, "accept">> = {
+    async accept(request, context) {
+      const options = channelProviderOptions<DiscordChannelOptions>(context);
+      const transport = options.transport ??
+        createDiscordTransport({ fetch: options.fetch });
+      const config = await configFor(
+        options,
+        configContext("accept", context, request),
+      );
+      const signature = requestHeader(request.headers, "x-signature-ed25519");
+      const timestamp = requestHeader(request.headers, "x-signature-timestamp");
+      if (
+        !signature || !timestamp || !request.rawBody ||
+        !await verifyDiscordSignature(
+          config.publicKey,
+          signature,
+          timestamp,
+          request.rawBody,
+        )
+      ) {
+        return ({
+          status: 401,
+          response: { error: "Invalid request signature" } as const,
+          occurrences: [] as const,
+        } as const);
+      }
+      const interaction = request.body as DiscordInteraction;
+      if (interaction.type === 1) {
+        return ({
+          status: 200,
+          response: { type: 1 } as const,
+          occurrences: [] as const,
+        } as const);
+      }
+      const accepted = await occurrence(interaction, transport);
       return ({
         status: 200,
-        response: { type: 1 } as const,
-        occurrences: [] as const,
+        response: accepted
+          ? ({ type: 5 } as const)
+          : ({ status: "ok" } as const),
+        occurrences: accepted ? [accepted] : [],
       } as const);
-    }
-    const accepted = await occurrence(interaction, transport);
-    return ({
-      status: 200,
-      response: accepted ? ({ type: 5 } as const) : ({ status: "ok" } as const),
-      occurrences: accepted ? [accepted] : [],
-    } as const);
-  },
-  receive(value, _context) {
-    const input = providerRecord(value);
-    const channelId = requiredProviderText(
-      input.channelId,
-      "Discord channel ID",
-    );
-    const user = providerRecord(input.user);
-    const userId = requiredProviderText(user.id, "Discord user ID");
-    const contents: ContentInput[] = [];
-    if (typeof input.text === "string" && input.text.trim()) {
-      contents.push(input.text.trim());
-    }
-    for (
-      const value of Array.isArray(input.attachments) ? input.attachments : []
-    ) {
-      const attachment = providerRecord(value);
-      const mediaType = requiredProviderText(
-        attachment.mediaType,
-        "Discord attachment media type",
+    },
+    receive(value, _context) {
+      const input = providerRecord(value);
+      const channelId = requiredProviderText(
+        input.channelId,
+        "Discord channel ID",
       );
-      contents.push({
-        type: mediaKind(mediaType),
-        bytes: base64ToBytes(requiredProviderText(
-          attachment.dataBase64,
-          "Discord attachment base64",
-        )),
-        mediaType,
-        ...(typeof attachment.name === "string"
-          ? { name: attachment.name }
-          : {}),
-      });
-    }
-    if (!contents.length) throw new TypeError("Discord message is empty.");
-    const interactionId = requiredProviderText(
-      input.interactionId,
-      "Discord interaction ID",
-    );
-    const name = typeof user.globalName === "string" && user.globalName.trim()
-      ? user.globalName.trim()
-      : typeof user.username === "string"
-      ? user.username.trim()
-      : "";
-    return ({
-      externalThreadId: channelId,
-      // Provider conversation participants are the external audience.
-      visibility: "public",
-      sender: {
-        externalId: userId,
-        participantType: "human" as const,
-        ...(name ? { name } : {}),
-        metadata: {
-          provider: "discord",
-          user: user as ChannelJsonObject,
-        } as const,
-      } as const,
-      content: contents.length === 1 ? contents[0] : contents,
-      route: { channelId } as const,
-      metadata: {
-        provider: "discord",
-        interactionId,
-        interactionType: Number(input.interactionType),
-      } as const,
-      thread: {
-        metadata: {
-          provider: "discord",
-          channelId,
-          ...(typeof input.guildId === "string"
-            ? { guildId: input.guildId }
+      const user = providerRecord(input.user);
+      const userId = requiredProviderText(user.id, "Discord user ID");
+      const contents: ContentInput[] = [];
+      if (typeof input.text === "string" && input.text.trim()) {
+        contents.push(input.text.trim());
+      }
+      for (
+        const value of Array.isArray(input.attachments) ? input.attachments : []
+      ) {
+        const attachment = providerRecord(value);
+        const mediaType = requiredProviderText(
+          attachment.mediaType,
+          "Discord attachment media type",
+        );
+        contents.push({
+          type: mediaKind(mediaType),
+          bytes: base64ToBytes(requiredProviderText(
+            attachment.dataBase64,
+            "Discord attachment base64",
+          )),
+          mediaType,
+          ...(typeof attachment.name === "string"
+            ? { name: attachment.name }
             : {}),
-          userId,
-          lastInboundInteractionId: interactionId,
-        } as const,
-      } as const,
-    } as const);
-  },
-  async deliver(attempt, context) {
-    const options = channelProviderOptions<DiscordChannelOptions>(context);
-    const transport = options.transport ??
-      createDiscordTransport({ fetch: options.fetch });
-    const route = providerRecord(attempt.intent.route);
-    const channelId = requiredProviderText(
-      route.channelId,
-      "Discord channel ID",
-    );
-    const config = await configFor(
-      options,
-      configContext("deliver", context, undefined, attempt.intent.route),
-    );
-    let delivered = 0;
-    const providerIds: string[] = [];
-    for (const content of attempt.content) {
-      const result = await emitContent(
-        options,
-        transport,
-        config,
-        attempt,
-        channelId,
-        content,
+        });
+      }
+      if (!contents.length) throw new TypeError("Discord message is empty.");
+      const interactionId = requiredProviderText(
+        input.interactionId,
+        "Discord interaction ID",
       );
-      if (result === undefined) continue;
-      delivered += 1;
-      const id = providerId(result);
-      if (id) providerIds.push(id);
-    }
-    const metadata = providerRecord(attempt.intent.metadata);
-    const semantic = action(providerRecord(metadata.message));
-    if (semantic) {
-      const result = await emit(options, transport, config, attempt, {
-        kind: "reply_buttons",
-        channelId,
-        action: semantic,
-      });
-      delivered += 1;
-      const id = providerId(result);
-      if (id) providerIds.push(id);
-    }
-    return ({
-      deliveryKey: attempt.intent.deliveryKey,
-      delivered,
-      ...(providerIds.length ? { providerIds: providerIds } : {}),
-    } as const);
-  },
-} as const satisfies ChannelAdapter;
+      const name = typeof user.globalName === "string" && user.globalName.trim()
+        ? user.globalName.trim()
+        : typeof user.username === "string"
+        ? user.username.trim()
+        : "";
+      return ({
+        externalThreadId: channelId,
+        // Provider conversation participants are the external audience.
+        visibility: "public",
+        sender: {
+          externalId: userId,
+          participantType: "human" as const,
+          ...(name ? { name } : {}),
+          metadata: {
+            provider: "discord",
+            user: user as ChannelJsonObject,
+          } as const,
+        } as const,
+        content: contents.length === 1 ? contents[0] : contents,
+        route: { channelId } as const,
+        metadata: {
+          provider: "discord",
+          interactionId,
+          interactionType: Number(input.interactionType),
+        } as const,
+        thread: {
+          metadata: {
+            provider: "discord",
+            channelId,
+            ...(typeof input.guildId === "string"
+              ? { guildId: input.guildId }
+              : {}),
+            userId,
+            lastInboundInteractionId: interactionId,
+          } as const,
+        } as const,
+      } as const);
+    },
+    async deliver(attempt, context) {
+      const options = channelProviderOptions<DiscordChannelOptions>(context);
+      const transport = options.transport ??
+        createDiscordTransport({ fetch: options.fetch });
+      const route = providerRecord(attempt.intent.route);
+      const channelId = requiredProviderText(
+        route.channelId,
+        "Discord channel ID",
+      );
+      const config = await configFor(
+        options,
+        configContext("deliver", context, undefined, attempt.intent.route),
+      );
+      let delivered = 0;
+      const providerIds: string[] = [];
+      for (const content of attempt.content) {
+        const result = await emitContent(
+          options,
+          transport,
+          config,
+          attempt,
+          channelId,
+          content,
+        );
+        if (result === undefined) continue;
+        delivered += 1;
+        const id = providerId(result);
+        if (id) providerIds.push(id);
+      }
+      const metadata = providerRecord(attempt.intent.metadata);
+      const semantic = action(providerRecord(metadata.message));
+      if (semantic) {
+        const result = await emit(options, transport, config, attempt, {
+          kind: "reply_buttons",
+          channelId,
+          action: semantic,
+        });
+        delivered += 1;
+        const id = providerId(result);
+        if (id) providerIds.push(id);
+      }
+      return ({
+        deliveryKey: attempt.intent.deliveryKey,
+        delivered,
+        ...(providerIds.length ? { providerIds: providerIds } : {}),
+      } as const);
+    },
+  };
 
 export { createDiscordTransport, verifyDiscordSignature } from "./transport.ts";
 

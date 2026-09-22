@@ -3,16 +3,16 @@
 ## What it is
 
 The shared conversation graph, ingress, and durable egress integration used by
-Core channel providers. Generic event channels can use application sends
-without this conversation integration.
+Core channel providers. Generic event channels can use application sends without
+this conversation integration.
 
 ## Why it exists
 
 It gives providers one durable mapping from their external threads to Copilotz
 threads.
 
-HTTP admission is optional. Trusted session hosts can submit channel
-occurrences directly; live sessions choose their own interruption policy. See
+HTTP admission is optional. Trusted session hosts can submit channel occurrences
+directly; live sessions choose their own interruption policy. See
 [Channels](../../docs/channels.md) for the ingress/egress boundary and examples.
 
 ## How to use it

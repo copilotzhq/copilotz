@@ -1,6 +1,7 @@
 /** Projects one authorized resolved Core Message into a narrow reply. @module */
 
 import type { ApplicationOutput } from "@copilotz/copilotz/application";
+import { isContentRef } from "@copilotz/copilotz/content";
 import { workflowMetadata } from "../../shared/workflow-metadata.ts";
 
 export type CoreReplyProjectionScope = Readonly<{
@@ -129,10 +130,14 @@ export function projectCoreReply(
   const data = plainRecord(envelope.data);
   const row = plainRecord(data?.record);
   if (!data || data.operation !== "create" || !row) return null;
+  if (text(row.id) !== messageId || text(row.threadId) !== selected.threadId) {
+    return null;
+  }
   if (
-    text(row.id) !== messageId || text(row.namespace) !== selected.namespace ||
-    text(row.threadId) !== selected.threadId
-  ) return null;
+    row.namespace !== undefined && text(row.namespace) !== selected.namespace
+  ) {
+    return null;
+  }
   if (
     row.historyScopeId !== undefined &&
     (typeof row.historyScopeId !== "string" || row.historyScopeId.trim())
@@ -202,13 +207,12 @@ export function projectCoreReply(
   const bodyText: string[] = [];
   for (const value of row.content) {
     const part = plainRecord(value);
-    if (!part || part.resolve === false) continue;
-    const reference = part.ref === undefined ? part : plainRecord(part.ref);
-    if (!reference) continue;
-    if (reference.resolve === false) continue;
-    if (reference.kind !== "text" || reference.role !== "body") continue;
-    if (typeof part.text !== "string" || !part.text.trim()) continue;
-    bodyText.push(part.text);
+    if (!part || !isContentRef(part)) continue;
+    if (part.resolve === false) continue;
+    if (part.kind !== "text" || part.role !== "body") continue;
+    const valueText = text(part.value);
+    if (!valueText) continue;
+    bodyText.push(valueText);
   }
   const textValue = bodyText.join("\n").trim();
   return textValue ? { messageId, text: textValue } : null;

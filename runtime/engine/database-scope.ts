@@ -398,12 +398,21 @@ export function createDatabaseScope(
         publicActionLifecycleData(raw),
       ));
       if (!parsed) return null;
-      return await hydrateActionLifecycleBody({
+      const data = await hydrateActionLifecycleBody({
         namespace,
         body: raw as never,
         action: actionDefinitionById(options.registry.actions, parsed.actionId),
         protectedValues,
       });
+      if (data.status !== "completed") return data;
+      return {
+        ...data,
+        output: await hydrateProcessorEventContent(
+          data.output,
+          resolver,
+          namespace,
+        ),
+      };
     },
     list: (listOptions) => store.listEvents(listOptions),
     settlement: (namespace, settlementScopeId) =>

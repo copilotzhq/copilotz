@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.80.1 — 2026-09-22
+
+- Resolve text and JSON references in completed HTTP Action results after
+  protected-output recovery, restoring readable coordination history and search.
+  Durable values and Action inputs retain canonical references; binary content
+  and refs marked `resolve: false` remain unloaded. No migration is required.
+
 ## 0.80.0 — 2026-09-22
 
 - Make channel HTTP admission optional and expose `submitChannel` for trusted

@@ -153,4 +153,8 @@ audience. Generic and Web/custom mappers keep omitted visibility
 participant-scoped; set `visibility: "public"` only when the transport has
 established that its conversation is the intended audience. Detached egress
 still suppresses participant, tool-policy, internal, and private-history
-messages. Live observation should use an explicit `projectCoreReply` scope.
+messages. Public messages with originally empty content can still carry provider
+presentation metadata, such as a carousel; the adapter decides whether to
+deliver them. A nonempty sequence containing only filtered reasoning or tool
+content remains suppressed. Live observation should use an explicit
+`projectCoreReply` scope.

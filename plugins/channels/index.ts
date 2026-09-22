@@ -1,6 +1,7 @@
 /** Public family API for the Channel core and provider plugins. @module */
 
 export * from "../channel-core/index.ts";
+export * from "./session.ts";
 export {
   webChannelAdapter,
   webChannelPlugin,

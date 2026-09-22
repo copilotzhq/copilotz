@@ -16,3 +16,6 @@ created.
 ## How it works
 
 It finds applicable bindings and returns one stable intent per external channel.
+Only public conversation messages can produce intents. Text and JSON body parts,
+plus media body or attachment parts, are eligible; reasoning and tool parts are
+omitted while message metadata remains available for provider actions.

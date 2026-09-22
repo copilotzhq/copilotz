@@ -78,6 +78,7 @@ async function runCollectionContentContract(
     schema: string;
     assets?: BodyStorageOptions;
     puts?: () => number;
+    reads?: () => number;
   }>,
 ): Promise<void> {
   const db = await createTestDatabase({ url: ":memory:" });
@@ -199,6 +200,7 @@ async function runCollectionContentContract(
       ],
     );
     assertEquals(Number(matchedDeliveries.rows[0]?.n ?? 0), 1);
+    const readsBeforeFirstBody = input.reads?.();
     assertEquals(
       new TextDecoder().decode(
         (await engine.content.assets.read(
@@ -208,6 +210,13 @@ async function runCollectionContentContract(
       ),
       "first body",
     );
+    if (readsBeforeFirstBody !== undefined) {
+      assertEquals(
+        input.reads?.(),
+        readsBeforeFirstBody,
+        "a committed collection body is available without a storage read",
+      );
+    }
 
     const second = await engine.content.preparer.prepare("second body", {
       namespace: "tenant-a",
@@ -618,14 +627,19 @@ Deno.test("custom collection replay preserves object Bodies without rewriting th
     backendId: "object:collection-content",
   });
   let puts = 0;
-  const objectStore = Object.freeze({
+  let reads = 0;
+  const objectStore = {
     ...memory,
     kind: "object" as const,
     async put(input: Parameters<typeof memory.put>[0]) {
       puts++;
       return await memory.put(input);
     },
-  });
+    async read(input: Parameters<typeof memory.read>[0]) {
+      reads++;
+      return await memory.read(input);
+    },
+  };
   await runCollectionContentContract({
     schema: "collection_content_object_contract",
     assets: {
@@ -644,6 +658,7 @@ Deno.test("custom collection replay preserves object Bodies without rewriting th
       },
     },
     puts: () => puts,
+    reads: () => reads,
   });
 });
 

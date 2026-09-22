@@ -115,6 +115,7 @@ export const projectTextResultProcessor: Processor<
         llmAttemptId: actionRunId,
         parentLlmAttemptId: metadata.parentActionRunId,
         sourceMessageId: metadata.triggerMessageId,
+        agentId: metadata.agentId,
         agentParticipantId: participant.id,
         initiatorParticipantId: metadata.initiatorParticipantId,
       },

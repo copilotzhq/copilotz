@@ -265,7 +265,11 @@ function providerId(value: unknown): string | undefined {
 }
 
 /** Executable Telegram behavior composed separately under the same alias. */
-export const telegramChannelAdapter: ChannelAdapter = {
+type TelegramChannelAdapter =
+  & ChannelAdapter
+  & Required<Pick<ChannelAdapter, "accept">>;
+
+export const telegramChannelAdapter: TelegramChannelAdapter = {
   async accept(request, context) {
     const options = channelProviderOptions<TelegramChannelOptions>(context);
     const transport = options.transport ??
@@ -351,6 +355,8 @@ export const telegramChannelAdapter: ChannelAdapter = {
     );
     return ({
       externalThreadId: chatId,
+      // Provider conversation participants are the external audience.
+      visibility: "public",
       sender: {
         externalId: userId,
         participantType: "human" as const,
@@ -424,7 +430,7 @@ export const telegramChannelAdapter: ChannelAdapter = {
       ...(providerIds.length ? { providerIds: providerIds } : {}),
     } as const);
   },
-} as const;
+};
 
 async function deliverContent(
   content: ResolvedContent,

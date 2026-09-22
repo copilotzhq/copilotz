@@ -259,7 +259,11 @@ async function emitContent(
   return undefined;
 }
 
-export const zendeskChannelAdapter: ChannelAdapter = {
+type ZendeskChannelAdapter =
+  & ChannelAdapter
+  & Required<Pick<ChannelAdapter, "accept">>;
+
+export const zendeskChannelAdapter: ZendeskChannelAdapter = {
   async accept(request, context) {
     const options = channelProviderOptions<ZendeskChannelOptions>(context);
     const transport = options.transport ??
@@ -342,6 +346,8 @@ export const zendeskChannelAdapter: ChannelAdapter = {
       : "";
     return ({
       externalThreadId: conversationId,
+      // Provider conversation participants are the external audience.
+      visibility: "public",
       sender: {
         externalId,
         participantType: "human" as const,
@@ -416,7 +422,7 @@ export const zendeskChannelAdapter: ChannelAdapter = {
       ...(providerIds.length ? { providerIds: providerIds } : {}),
     } as const);
   },
-} as const;
+};
 
 export { createZendeskTransport } from "./transport.ts";
 

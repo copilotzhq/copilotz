@@ -338,7 +338,11 @@ async function emitContent(
   return [];
 }
 
-export const whatsappChannelAdapter: ChannelAdapter = {
+type WhatsAppChannelAdapter =
+  & ChannelAdapter
+  & Required<Pick<ChannelAdapter, "accept">>;
+
+export const whatsappChannelAdapter: WhatsAppChannelAdapter = {
   async accept(request, context) {
     const options = channelProviderOptions<WhatsAppChannelOptions>(context);
     const transport = options.transport ??
@@ -453,6 +457,8 @@ export const whatsappChannelAdapter: ChannelAdapter = {
       : "";
     return ({
       externalThreadId,
+      // Provider conversation participants are the external audience.
+      visibility: "public",
       sender: {
         externalId: senderPhone,
         participantType: "human" as const,
@@ -562,7 +568,7 @@ export const whatsappChannelAdapter: ChannelAdapter = {
       ...(providerIds.length ? { providerIds: providerIds } : {}),
     } as const);
   },
-} as const;
+};
 
 export {
   createWhatsAppGraphTransport,

@@ -141,6 +141,12 @@ The client awaits `onFrame` before advancing its checkpoint. Retry resumes only
 successfully applied frames. Aborting observation detaches the connection; only
 the explicit operation cancellation endpoint stops durable work.
 
+Binary chunks and protocol control frames are bounded at 1 MiB. Resolved JSON
+output envelopes are bounded separately at 64 MiB so completed text can exceed
+one stream chunk. An oversized envelope produces a non-retryable `ProtocolError`
+with code `observation_frame_capacity_exceeded`; it keeps the last successful
+checkpoint and detaches the observer without cancelling durable work.
+
 A result waits for its own Action's streams; operation completion waits for all
 remaining streams. Observation bounds are 32 operations and 256 streams, with
 explicit capacity errors requiring a fresh history bootstrap. Core captures a

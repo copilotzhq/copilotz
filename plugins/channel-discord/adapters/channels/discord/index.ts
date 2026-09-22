@@ -269,7 +269,11 @@ async function emitContent(
   return undefined;
 }
 
-export const discordChannelAdapter: ChannelAdapter = {
+type DiscordChannelAdapter =
+  & ChannelAdapter
+  & Required<Pick<ChannelAdapter, "accept">>;
+
+export const discordChannelAdapter: DiscordChannelAdapter = {
   async accept(request, context) {
     const options = channelProviderOptions<DiscordChannelOptions>(context);
     const transport = options.transport ??
@@ -354,6 +358,8 @@ export const discordChannelAdapter: ChannelAdapter = {
       : "";
     return ({
       externalThreadId: channelId,
+      // Provider conversation participants are the external audience.
+      visibility: "public",
       sender: {
         externalId: userId,
         participantType: "human" as const,
@@ -430,7 +436,7 @@ export const discordChannelAdapter: ChannelAdapter = {
       ...(providerIds.length ? { providerIds: providerIds } : {}),
     } as const);
   },
-} as const;
+};
 
 export { createDiscordTransport, verifyDiscordSignature } from "./transport.ts";
 

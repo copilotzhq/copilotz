@@ -1,9 +1,30 @@
-import { assert, assertEquals, assertStringIncludes } from "@std/assert";
+import {
+  assert,
+  assertEquals,
+  assertRejects,
+  assertStringIncludes,
+} from "@std/assert";
 import { type InteractiveCliIo, startInteractiveCli } from "./index.ts";
-import type { ApplicationOutput } from "@copilotz/copilotz/application";
+import type {
+  ApplicationOutput,
+  ApplicationSendHandle,
+} from "@copilotz/copilotz/application";
 import { createEphemeralEvent } from "@copilotz/copilotz/events";
 import type { CoreMessageInputEnvelope } from "../../processors/message-input/input/index.ts";
 const encoder = new TextEncoder();
+type Deferred<T> = {
+  promise: Promise<T>;
+  resolve(value: T): void;
+  reject(error: unknown): void;
+};
+function deferred<T>(): Deferred<T> {
+  return Promise.withResolvers<T>();
+}
+const flush = async () => {
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+};
 function completedTerminal(chunks: readonly string[]) {
   return Promise.resolve(Object.freeze({
     outcome: "completed" as const,
@@ -104,6 +125,50 @@ function streamedToolCalls(
     }),
     terminal: completedTerminal(chunks),
   });
+}
+
+function cliHandle(
+  outputs: ReadableStream<ApplicationOutput>,
+  done: Promise<void>,
+  cancel?: () => Promise<void>,
+):
+  & Pick<ApplicationSendHandle, "eventId" | "outputs" | "done">
+  & Partial<Pick<ApplicationSendHandle, "cancel" | "detach">> {
+  return {
+    eventId: "event-lifecycle",
+    outputs,
+    done,
+    ...(cancel ? { cancel } : {}),
+  };
+}
+
+function lifecycleOutput(
+  text: string,
+  outcome: "completed" | "failed" = "completed",
+): ApplicationOutput {
+  return {
+    type: "stream.output",
+    namespace: "tenant-a",
+    streamId: crypto.randomUUID(),
+    mediaType: "text/plain",
+    kind: "text",
+    role: "content",
+    correlationId: "correlation-a",
+    metadata: { lane: "content" },
+    payload: new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode(text));
+        controller.close();
+      },
+    }),
+    terminal: Promise.resolve({
+      outcome,
+      availability: "retained" as const,
+      capture: "complete" as const,
+      offset: encoder.encode(text).byteLength,
+      terminalAt: "2026-09-01T12:00:00.000Z",
+    }),
+  };
 }
 Deno.test("portable CLI preserves interactive run, rendering, and session commands", async () => {
   const answers = [
@@ -545,4 +610,188 @@ Deno.test("portable CLI is factory-first and imports no host terminal API", asyn
   assert(!/from\s+["']node:|\bDeno\.|\bBun\.|\bprocess\./.test(source));
   assert(!/attachments|performRun|RunInput/.test(source));
   assert(/application\.send\(message/.test(source));
+});
+
+Deno.test("portable CLI stop cancels an operation admitted after stop", async () => {
+  const admission = deferred<ReturnType<typeof cliHandle>>();
+  const cancelled: string[] = [];
+  let questions = 0;
+  let ioClosed = 0;
+  const output: string[] = [];
+  const cli = startInteractiveCli({
+    io: {
+      question: () => {
+        questions++;
+        return questions === 1
+          ? Promise.resolve("hello")
+          : new Promise<string>(() => {});
+      },
+      write: (value) => output.push(value),
+      close: () => ioClosed++,
+    },
+    scope: {
+      thread: "thread-a",
+      participant: "user-a",
+      recipientIds: ["agent-a"],
+    },
+    application: {
+      send: () => admission.promise,
+    },
+  });
+  await flush();
+  cli.stop();
+  const done = deferred<void>();
+  admission.resolve(cliHandle(
+    new ReadableStream<ApplicationOutput>({
+      start(controller) {
+        controller.close();
+      },
+    }),
+    done.promise,
+    async () => {
+      cancelled.push("cancelled");
+      done.resolve();
+    },
+  ));
+  await cli.closed;
+  assertEquals(ioClosed, 1);
+  assertEquals(cancelled, ["cancelled"]);
+  assert(!output.join("").includes("hello"));
+});
+
+Deno.test("portable CLI stop cancels a blocked nested stream and suppresses late writes", async () => {
+  const done = deferred<void>();
+  let nestedCancelled = false;
+  let resolveNestedCancel: (() => void) | undefined;
+  const nested = new ReadableStream<Uint8Array>({
+    cancel() {
+      nestedCancelled = true;
+      resolveNestedCancel?.();
+    },
+  });
+  const stream = {
+    type: "stream.output" as const,
+    namespace: "tenant-a",
+    streamId: "blocked-tool",
+    mediaType: "text/plain",
+    kind: "text" as const,
+    role: "content" as const,
+    correlationId: "correlation-a",
+    metadata: { lane: "content" },
+    payload: nested,
+    terminal: Promise.resolve({
+      outcome: "completed" as const,
+      availability: "retained" as const,
+      capture: "complete" as const,
+      offset: 0,
+      terminalAt: "2026-09-01T12:00:00.000Z",
+    }),
+  };
+  const output: string[] = [];
+  const nestedCancelledPromise = new Promise<void>((resolve) =>
+    resolveNestedCancel = resolve
+  );
+  let questions = 0;
+  const cli = startInteractiveCli({
+    io: {
+      question: () => {
+        questions++;
+        return questions === 1
+          ? Promise.resolve("hello")
+          : new Promise<string>(() => {});
+      },
+      write: (value) => output.push(value),
+      close: () => undefined,
+    },
+    scope: {
+      thread: "thread-a",
+      participant: "user-a",
+      recipientIds: ["agent-a"],
+    },
+    application: {
+      send: () =>
+        Promise.resolve(cliHandle(
+          new ReadableStream<ApplicationOutput>({
+            start(controller) {
+              controller.enqueue(stream);
+            },
+          }),
+          done.promise,
+          async () => done.resolve(),
+        )),
+    },
+  });
+  await flush();
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  const stopOutput = output.join("");
+  cli.stop();
+  await cli.closed;
+  await nestedCancelledPromise;
+  assert(nestedCancelled);
+  assertEquals(output.join(""), stopOutput);
+});
+
+Deno.test("portable CLI preserves durable failure after output EOF", async () => {
+  const failure = new Error("durable operation failed");
+  const done = deferred<void>();
+  const answers = ["hello"];
+  const cli = startInteractiveCli({
+    io: {
+      question: () => Promise.resolve(answers.shift() ?? "/exit"),
+      write: () => undefined,
+      close: () => undefined,
+    },
+    scope: {
+      thread: "thread-a",
+      participant: "user-a",
+      recipientIds: ["agent-a"],
+    },
+    application: {
+      send: () => {
+        queueMicrotask(() => done.reject(failure));
+        return Promise.resolve(cliHandle(
+          new ReadableStream<ApplicationOutput>({
+            start(controller) {
+              controller.close();
+            },
+          }),
+          done.promise,
+        ));
+      },
+    },
+  });
+  await assertRejects(() => cli.closed, Error, "durable operation failed");
+});
+
+Deno.test("portable CLI observes failed stream lanes without failing a later retry", async () => {
+  const answers = ["hello", "/exit"];
+  const output: string[] = [];
+  const cli = startInteractiveCli({
+    io: {
+      question: () => Promise.resolve(answers.shift() ?? "/exit"),
+      write: (value) => output.push(value),
+      close: () => undefined,
+    },
+    scope: {
+      thread: "thread-a",
+      participant: "user-a",
+      recipientIds: ["agent-a"],
+    },
+    application: {
+      send: () =>
+        Promise.resolve(cliHandle(
+          new ReadableStream<ApplicationOutput>({
+            start(controller) {
+              controller.enqueue(lifecycleOutput("failed attempt", "failed"));
+              controller.enqueue(lifecycleOutput("successful retry"));
+              controller.close();
+            },
+          }),
+          Promise.resolve(),
+        )),
+    },
+  });
+  await cli.closed;
+  assertStringIncludes(output.join(""), "failed attempt");
+  assertStringIncludes(output.join(""), "successful retry");
 });

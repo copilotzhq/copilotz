@@ -18,6 +18,7 @@ export {
   matchProcessor,
 } from "./match.ts";
 export {
+  hydrateProcessorEventContent,
   resolveProcessorEvent,
   resolveProcessorEventData,
 } from "./event-data.ts";

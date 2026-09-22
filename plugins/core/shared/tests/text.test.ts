@@ -478,6 +478,11 @@ Deno.test("Core invokes llm.call with explicit model selections and connections"
     );
     assertEquals(await messageText(fixture, messages[1]), "Hello from North");
     assertEquals(messages[1].sender.id, "agent-north");
+    assertEquals(
+      (messages[1].metadata.copilotzWorkflow as Record<string, unknown>)
+        .agentId,
+      "north",
+    );
     const lifecycle = await projectActionEvents(
       fixture.engine,
       NAMESPACE,
@@ -1630,7 +1635,7 @@ Deno.test("invalid dynamic Agent instruction output fails before llm.call", asyn
     await fixture.close();
   }
 });
-Deno.test("Core replays persisted own reasoning through prepared LLM input without embedding bodies in receipts", async () => {
+Deno.test("Core replays persisted own reasoning through prepared LLM input and resolves lifecycle delivery", async () => {
   const fixture = await createFixture(() => ({
     result: {
       content: { type: "text", text: "Answer", role: "body" },
@@ -1673,9 +1678,18 @@ Deno.test("Core replays persisted own reasoning through prepared LLM input witho
       )
     );
     assertEquals(reasoning.length, 1);
-    assertEquals("value" in reasoning[0], false);
+    assertEquals("value" in reasoning[0], true);
     assertEquals(
       JSON.stringify(inputs).includes("Remember the earlier derivation."),
+      true,
+    );
+    const rawLifecycle = await fixture.engine.events.list({
+      namespace: NAMESPACE,
+      metadata: { actionId: "llm.call" },
+      limit: 100,
+    });
+    assertEquals(
+      JSON.stringify(rawLifecycle).includes("Remember the earlier derivation."),
       false,
     );
   } finally {

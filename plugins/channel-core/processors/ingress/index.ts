@@ -49,10 +49,10 @@ export const channelIngressProcessor: Processor<ChannelProcessorContext> =
     on: [{ eventType: CHANNEL_INGRESS_INPUT_EVENT }],
     async handle(event, context) {
       if (!event.durable) return;
-      const payload = record(event.payload);
+      const input = record(event.data);
       await settled(() =>
         context.actions.channelIngress(
-          payload as ChannelIngressInput,
+          input as ChannelIngressInput,
           {
             operationKey: `ingress:${event.id}`,
             identity: {

@@ -221,6 +221,10 @@ Deno.test("Action content deduplicates literal bodies, preserves per-entry kinds
   });
   assertEquals(f.publishes, 1);
   assertEquals(f.reads, 0);
+  assertEquals(
+    (f.events[0].input as Input).messages[0].content[2].resolve,
+    false,
+  );
 });
 
 Deno.test("Action content rejects changed and cross-namespace Assets before invocation", async () => {

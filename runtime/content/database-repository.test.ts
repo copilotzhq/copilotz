@@ -217,6 +217,93 @@ Deno.test("database assets publish immutable bodies, events, and deliveries with
   }
 });
 
+Deno.test("prepared bodies warm canonical reads after commit and remapping", async () => {
+  const memory = createMemoryBodyStore({ backendId: "object:prepared-cache" });
+  let bodyReads = 0;
+  const objectStore = {
+    ...memory,
+    kind: "object" as const,
+    async read(input: Parameters<typeof memory.read>[0]) {
+      bodyReads += 1;
+      return await memory.read(input);
+    },
+  };
+  const storage = {
+    storage: {
+      type: "custom" as const,
+      config: {
+        store: objectStore,
+        prefix: "prepared-cache",
+        deployment: {
+          durability: "ephemeral" as const,
+          reach: "process" as const,
+          minimumProtectionMs: 0,
+          readyGarbageCollection: false,
+        },
+      },
+    },
+  };
+  const fixture = await createFixture({ storage });
+  try {
+    const bytes = new TextEncoder().encode("prepared cache body");
+    const asset = await fixture.assets.publish({
+      namespace: "tenant-a",
+      id: "canonical-asset",
+      idempotencyKey: "canonical-body",
+      mediaType: "text/plain; charset=utf-8",
+      body: bytes,
+    });
+
+    assertEquals(
+      (await fixture.assets.read("tenant-a", asset.id)).bytes,
+      bytes,
+    );
+    assertEquals(bodyReads, 0, "a freshly committed body is warm");
+
+    const cold = createDatabaseAssetRepository({
+      coordinator: fixture.coordinator,
+      session: fixture.session,
+      eventStore: fixture.store,
+      databaseSchema: TEST_SCHEMA,
+      storage: createBodyStorageRuntime(storage),
+    });
+    assertEquals((await cold.read("tenant-a", asset.id)).bytes, bytes);
+    assertEquals(bodyReads, 1, "a new repository starts cold");
+
+    const source = await createContentPreparer({
+      createId: () => "prepared-loser",
+    }).prepare("prepared cache body", {
+      namespace: "tenant-a",
+    });
+    const refs = await cold.materialize({
+      namespace: "tenant-a",
+      content: {
+        content: source.content,
+        assets: [{ ...source.assets[0], idempotencyKey: "canonical-body" }],
+      },
+    });
+    assertEquals(refs[0].assetId, asset.id, "dedup keeps the canonical ID");
+
+    const beforeWarmRead = bodyReads;
+    assertEquals((await cold.read("tenant-a", asset.id)).bytes, bytes);
+    assertEquals(
+      bodyReads,
+      beforeWarmRead,
+      "a remapped prepared body avoids a second storage read",
+    );
+
+    await cold.markDeleted("tenant-a", asset.id);
+    await assertRejects(
+      () => cold.read("tenant-a", asset.id),
+      Error,
+      "deleted",
+    );
+    assertEquals(bodyReads, beforeWarmRead, "deleted assets never serve cache");
+  } finally {
+    await closeFixture(fixture);
+  }
+});
+
 Deno.test("database assets batch and stream UTF-8, JSON, and binary bodies in caller order", async () => {
   const fixture = await createFixture();
   try {

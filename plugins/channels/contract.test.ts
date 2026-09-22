@@ -90,7 +90,7 @@ Deno.test("Channel public data snapshots are isolated from caller mutation", () 
   });
   assertEquals(coreEvent(envelope).visibility, { kind: "internal" });
 });
-Deno.test("Channel public exports and provider composition expose only the Resource/Adapter split", () => {
+Deno.test("Channel exports expose transport helpers and Resource/Adapter composition", () => {
   assertEquals(
     Object.keys(channelPublic).sort(),
     [
@@ -115,6 +115,8 @@ Deno.test("Channel public exports and provider composition expose only the Resou
       "channelIngressAction",
       "channelIngressProcessor",
       "channelsPlugin",
+      "createChannelSession",
+      "submitChannel",
       "discordChannelAdapter",
       "discordChannelPlugin",
       "discordChannelResource",

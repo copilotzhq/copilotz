@@ -316,6 +316,57 @@ Deno.test("defineCollection rejects names that cannot form events", () => {
   );
 });
 
+Deno.test("collection projections discard hydrated content reference fields", async () => {
+  const fixture = await createFixture(":memory:", "collection_content_refs");
+  const records = fixture.runtime.bind(defineCollection({
+    name: "content_ref_record",
+    schema: {
+      type: "object",
+      additionalProperties: true,
+      properties: {
+        id: { type: "string" },
+        metadata: { type: "object" },
+      },
+      required: ["id"],
+    } as const,
+  }));
+  try {
+    const created = await records.create({
+      id: "record-a",
+      metadata: {
+        ref: {
+          assetId: "asset-a",
+          kind: "text",
+          role: "body",
+          mediaType: "text/plain",
+          value: "hydrated body",
+          resolve: true,
+          extra: "not durable",
+        },
+      },
+    }, { namespace: "tenant-a" });
+    await settle(created);
+
+    const stored = await fixture.session.query<{
+      data: { metadata: Record<string, unknown> };
+    }>(
+      `SELECT data FROM ${fixture.store.tables.nodes}
+        WHERE namespace = $1 AND id = $2`,
+      ["tenant-a", "record-a"],
+    );
+    assertEquals(stored.rows[0].data.metadata, {
+      ref: {
+        assetId: "asset-a",
+        kind: "text",
+        role: "body",
+        mediaType: "text/plain",
+      },
+    });
+  } finally {
+    await closeFixture(fixture);
+  }
+});
+
 Deno.test("read snapshots expose only scoped reads and close before later work", async () => {
   const fixture = await createFixture(":memory:", "snapshot_reads");
   try {

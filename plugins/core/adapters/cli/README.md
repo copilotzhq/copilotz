@@ -17,4 +17,8 @@ Provide an `InteractiveCliIo`, application, and Message scope to
 ## How it works
 
 It sends one typed Message per prompt and renders independent content,
-reasoning, and Tool-call stream lanes.
+reasoning, and Tool-call stream lanes. Stopping the CLI cancels the current
+operation and its readers, including an operation admitted after stop. Completed
+operations detach their observer. Stream EOF is not operation completion: the
+CLI waits for `done` and preserves durable failures, while allowing an
+individual failed model stream to be followed by a successful retry.

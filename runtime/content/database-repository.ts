@@ -116,6 +116,9 @@ type CollectionAssetAdopter = Readonly<{
     context: EventMutationContext,
     plan: AssetMaterializationPlan,
   ): Promise<void>;
+  publishMaterializations(
+    plans: readonly AssetMaterializationPlan[],
+  ): void;
 }>;
 
 const collectionAssetAdopters = new WeakMap<
@@ -386,6 +389,20 @@ function assetManifestEntry(
   } as const);
 }
 
+const PREPARED_BODY_CACHE_MAX_ENTRIES = 64;
+const PREPARED_BODY_CACHE_MAX_BYTES = 16 * 1024 * 1024;
+
+type PreparedBodyCacheEntry = Readonly<{
+  mediaType: string;
+  byteLength: number;
+  digest: `sha256:${string}`;
+  bytes: Uint8Array;
+}>;
+
+function preparedBodyCacheKey(namespace: string, assetId: string): string {
+  return `${namespace}\0${assetId}`;
+}
+
 /** Creates the graph-native database asset repository and aggregate seam. */
 export function createDatabaseAssetRepository(
   options: CreateDatabaseAssetRepositoryOptions,
@@ -419,6 +436,85 @@ export function createDatabaseAssetRepository(
   } as const;
   const maxDatabaseBytes = storage.maxDatabaseBytes;
   const tables = options.eventStore.tables;
+  const preparedBodies = new Map<string, PreparedBodyCacheEntry>();
+  let preparedBodyBytes = 0;
+
+  const retainPreparedBody = (
+    asset: AssetRecord,
+    candidate: PreparedAsset,
+  ): void => {
+    try {
+      if (
+        candidate.namespace !== asset.namespace ||
+        candidate.mediaType !== asset.mediaType ||
+        candidate.byteLength !== asset.byteLength ||
+        candidate.digest !== asset.digest ||
+        candidate.body.byteLength !== asset.byteLength ||
+        candidate.body.byteLength > PREPARED_BODY_CACHE_MAX_BYTES
+      ) return;
+      const key = preparedBodyCacheKey(asset.namespace, asset.id);
+      const existing = preparedBodies.get(key);
+      if (existing) {
+        preparedBodyBytes -= existing.byteLength;
+        preparedBodies.delete(key);
+      }
+      while (
+        preparedBodies.size >= PREPARED_BODY_CACHE_MAX_ENTRIES ||
+        preparedBodyBytes + candidate.body.byteLength >
+          PREPARED_BODY_CACHE_MAX_BYTES
+      ) {
+        const oldest = preparedBodies.entries().next().value;
+        if (!oldest) break;
+        preparedBodies.delete(oldest[0]);
+        preparedBodyBytes -= oldest[1].byteLength;
+      }
+      preparedBodies.set(key, {
+        mediaType: asset.mediaType,
+        byteLength: asset.byteLength,
+        digest: asset.digest,
+        bytes: candidate.body.slice(),
+      });
+      preparedBodyBytes += candidate.body.byteLength;
+    } catch {
+      // A post-commit cache miss must never delay durable event delivery.
+    }
+  };
+
+  const cachedPreparedBody = (asset: AssetRecord): Uint8Array | undefined => {
+    const key = preparedBodyCacheKey(asset.namespace, asset.id);
+    const cached = preparedBodies.get(key);
+    if (!cached) return undefined;
+    if (
+      cached.mediaType !== asset.mediaType ||
+      cached.byteLength !== asset.byteLength ||
+      cached.digest !== asset.digest
+    ) {
+      preparedBodies.delete(key);
+      preparedBodyBytes -= cached.byteLength;
+      return undefined;
+    }
+    preparedBodies.delete(key);
+    preparedBodies.set(key, cached);
+    return cached.bytes.slice();
+  };
+
+  const forgetPreparedBody = (namespace: string, assetId: string): void => {
+    const key = preparedBodyCacheKey(namespace, assetId);
+    const cached = preparedBodies.get(key);
+    if (!cached) return;
+    preparedBodies.delete(key);
+    preparedBodyBytes -= cached.byteLength;
+  };
+
+  const publishMaterializations = (
+    plans: readonly AssetMaterializationPlan[],
+  ): void => {
+    for (const plan of plans) {
+      for (const adoption of plan.adoptions) {
+        retainPreparedBody(adoption.asset, adoption.candidate);
+      }
+    }
+  };
 
   const findById = async (
     executor: SqlExecutor,
@@ -648,6 +744,7 @@ export function createDatabaseAssetRepository(
       if (existing) {
         const asset = mapAsset(existing);
         assertRecordMatches(asset, candidate, key);
+        retainPreparedBody(asset, candidate);
         return ({ asset } as const);
       }
     }
@@ -805,6 +902,7 @@ export function createDatabaseAssetRepository(
       if (!row) continue;
       const current = mapAsset(row);
       assertRecordMatches(current, candidate, key);
+      retainPreparedBody(current, candidate);
       replacements.set(asset.id, assetManifestEntry(current, key));
     }
     return replacements;
@@ -1004,6 +1102,7 @@ export function createDatabaseAssetRepository(
           dispatch: false,
         });
       });
+      retainPreparedBody(result.value!, adoption.candidate);
       await options.coordinator.flushCommitted(result);
       return result;
     }
@@ -1097,6 +1196,7 @@ export function createDatabaseAssetRepository(
         );
       }
     });
+    publishMaterializations([plan]);
     for (const result of pending) {
       await options.coordinator.flushCommitted(result);
     }
@@ -1165,6 +1265,8 @@ export function createDatabaseAssetRepository(
       rows.map((row, index) => ({ row, asset: assets[index] })),
       storage.readConcurrency,
       async ({ asset }) => {
+        const prepared = cachedPreparedBody(asset);
+        if (prepared) return prepared;
         const key = assetBodyId(asset);
         if (!key) {
           throw createContentError(
@@ -1251,6 +1353,7 @@ export function createDatabaseAssetRepository(
           if (raced) {
             const asset = mapAsset(raced);
             assertRecordMatches(asset, candidate, key);
+            retainPreparedBody(asset, candidate);
             return asset;
           }
         }
@@ -1436,7 +1539,9 @@ export function createDatabaseAssetRepository(
           return body.asset;
         },
       });
-      return result.value!;
+      const deleted = result.value!;
+      forgetPreparedBody(namespace, assetId);
+      return deleted;
     },
 
     async maintainBodies(maintenance = {}) {
@@ -1700,6 +1805,7 @@ export function createDatabaseAssetRepository(
         prepareMaterializationOn(options.session, input),
       adoptMaterialization,
       reconcileMaterializations,
+      publishMaterializations,
     } as const,
   );
   return frozenRepository;

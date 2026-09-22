@@ -178,7 +178,8 @@ export type ChannelDeliveryReceipt = Readonly<{
 
 /** Executable behavior separately composed under the same channel alias. */
 export type ChannelAdapter = Readonly<{
-  accept(
+  /** Optional HTTP ingress binding; worker-only adapters may omit it. */
+  accept?(
     request: ChannelRequest,
     context: ChannelAcceptContext,
   ): ChannelAcceptResult | Promise<ChannelAcceptResult>;
@@ -244,8 +245,25 @@ export type ChannelIngressActionOutput = Readonly<{
   messageId: string;
 }>;
 
+/** Immutable message fields needed to prepare one external delivery. */
+export type ChannelEgressMessage = Readonly<{
+  id: string;
+  senderId: string;
+  threadId: string;
+  /** Core visibility evidence; omitted only for legacy public rows. */
+  visibility?: ChannelJsonObject;
+  /** Non-empty values identify private transcript history. */
+  historyScopeId?: string;
+  /** Durable audience evidence retained for snapshot integrity checks. */
+  recipientIds?: readonly string[];
+  content: ContentSequence;
+  metadata: ChannelJsonObject;
+}>;
+
 export type ChannelEgressActionInput = Readonly<{
   messageId: string;
+  /** Processors pass the triggering snapshot; ID-only callers remain valid. */
+  message?: ChannelEgressMessage;
 }>;
 
 export type ChannelEgressActionOutput = Readonly<{

@@ -62,8 +62,11 @@ const auditMessages = defineProcessor<AuditContext>({
 ```
 
 Each `on` entry is an alternative match; fields within one entry must all match.
-Use `event.data` for the resolved Event Body. Checks that depend on changing
-state belong in `handle`, not in subscription metadata.
+Use `event.data` for the resolved Event Body. Text and JSON content refs are
+expanded there with `value`, unless a ref declares `resolve: false`; binary and
+descriptor-only refs can be resolved explicitly through `context.content` when
+needed. Checks that depend on changing state belong in `handle`, not in
+subscription metadata.
 
 Durable Processor delivery is at least once. Collection operation keys and
 Action invocation identity must therefore remain stable across retries.

@@ -14,7 +14,11 @@ import type {
   OperationReplayCursorMutation,
 } from "../runtime/streams/index.ts";
 
-import { MAX_FRAME_BYTES } from "../client/protocol.ts";
+import {
+  MAX_FRAME_BYTES,
+  MAX_JSON_FRAME_BYTES,
+  OBSERVATION_FRAME_CAPACITY_CODE,
+} from "../client/protocol.ts";
 import { outputActionRuns } from "./output-order.ts";
 
 const encoder = new TextEncoder();
@@ -23,7 +27,32 @@ const STREAM_HEADER = "x-copilotz-stream-id";
 const OFFSET_HEADER = "x-copilotz-offset";
 const CURSOR_HEADER = "x-copilotz-cursor";
 
-type FrameKind = "output" | "stream-chunk" | "stream-end" | "stream-error";
+type FrameKind =
+  | "output"
+  | "stream-chunk"
+  | "stream-end"
+  | "stream-error"
+  | "observation-error";
+
+type PartOptions = Readonly<{
+  streamId?: string;
+  offset?: number;
+  cursor?: string;
+  maxJsonFrameBytes?: number;
+}>;
+
+class MultipartFrameCapacityError extends RangeError {
+  readonly code = OBSERVATION_FRAME_CAPACITY_CODE;
+
+  constructor(
+    readonly kind: FrameKind,
+    readonly maxBytes: number,
+  ) {
+    super(
+      `Multipart ${kind} frame exceeds its ${maxBytes} byte capacity.`,
+    );
+  }
+}
 
 function bytes(...values: readonly Uint8Array[]): Uint8Array {
   const size = values.reduce((total, value) => total + value.byteLength, 0);
@@ -46,11 +75,13 @@ function part(
   boundary: string,
   kind: FrameKind,
   content: Uint8Array,
-  options: Readonly<{ streamId?: string; offset?: number; cursor?: string }> =
-    {},
+  options: PartOptions = {},
 ): Uint8Array {
-  if (content.byteLength > MAX_FRAME_BYTES) {
-    throw new RangeError("Multipart frame capacity exceeded.");
+  const maxBytes = kind === "output"
+    ? options.maxJsonFrameBytes ?? MAX_JSON_FRAME_BYTES
+    : MAX_FRAME_BYTES;
+  if (content.byteLength > maxBytes) {
+    throw new MultipartFrameCapacityError(kind, maxBytes);
   }
   const headers = [
     `--${boundary}`,
@@ -104,19 +135,43 @@ function isReplayCapacityError(error: unknown): boolean {
     "operation_replay_capacity_exceeded";
 }
 
-/** Encodes one complete request observation without materializing raw bytes. */
+function isFrameCapacityError(
+  error: unknown,
+): error is MultipartFrameCapacityError {
+  return error instanceof MultipartFrameCapacityError;
+}
+
+/**
+ * Encodes one complete request observation without materializing raw bytes.
+ * Output events use the bounded logical JSON capacity; stream and control
+ * frames remain capped by MAX_FRAME_BYTES.
+ */
 export function applicationOutputsMultipartResponse(
   source: HttpObservation,
   options: Readonly<{
     headers?: HeadersInit;
     boundary?: string;
     signal?: AbortSignal;
+    /** Optional lower bound for logical JSON output envelopes. */
+    maxJsonFrameBytes?: number;
   }> = {},
 ): Response {
   const boundary = safeHeader(
     options.boundary ?? `copilotz-${crypto.randomUUID()}`,
     "Multipart boundary",
   );
+  const maxJsonFrameBytes = options.maxJsonFrameBytes === undefined
+    ? MAX_JSON_FRAME_BYTES
+    : options.maxJsonFrameBytes;
+  if (
+    !Number.isSafeInteger(maxJsonFrameBytes) || maxJsonFrameBytes <= 0 ||
+    maxJsonFrameBytes > MAX_JSON_FRAME_BYTES
+  ) {
+    throw new RangeError(
+      `maxJsonFrameBytes must be an integer between 1 and ${MAX_JSON_FRAME_BYTES}.`,
+    );
+  }
+  const partOptions = { maxJsonFrameBytes } as const;
   const transport = new TransformStream<Uint8Array, Uint8Array>(undefined, {
     highWaterMark: 256 * 1024,
     size: (value) => value.byteLength,
@@ -198,6 +253,7 @@ export function applicationOutputsMultipartResponse(
           const toOffset = offset + chunk.length;
           await writePart((cursor) =>
             part(boundary, "stream-chunk", chunk, {
+              ...partOptions,
               streamId: output.streamId,
               offset: fromOffset,
               cursor,
@@ -220,6 +276,7 @@ export function applicationOutputsMultipartResponse(
               "stream-error",
               encoder.encode(JSON.stringify(streamError)),
               {
+                ...partOptions,
                 streamId: output.streamId,
                 offset: terminalOffset,
                 cursor: replayCursor,
@@ -237,6 +294,7 @@ export function applicationOutputsMultipartResponse(
               "stream-end",
               encoder.encode(JSON.stringify(terminal)),
               {
+                ...partOptions,
                 streamId: output.streamId,
                 offset: terminalOffset,
                 cursor: replayCursor,
@@ -268,7 +326,7 @@ export function applicationOutputsMultipartResponse(
           boundary,
           "output",
           encoder.encode(JSON.stringify({ type: "observation.heartbeat" })),
-          { cursor },
+          { ...partOptions, cursor },
         )
       )
         .catch(detach).finally(() => {
@@ -291,7 +349,7 @@ export function applicationOutputsMultipartResponse(
                 streams: source.bootstrap!.slice(offset, offset + 128),
                 more: offset + 128 < source.bootstrap!.length,
               })),
-              { cursor },
+              { ...partOptions, cursor },
             )
           );
         }
@@ -365,7 +423,7 @@ export function applicationOutputsMultipartResponse(
               boundary,
               "output",
               encoder.encode(JSON.stringify(descriptor(output))),
-              { cursor: replayCursor },
+              { ...partOptions, cursor: replayCursor },
             ),
           mutations,
         );
@@ -411,7 +469,7 @@ export function applicationOutputsMultipartResponse(
                 ...(source.threadId ? { threadId: source.threadId } : {}),
               } as const,
             )),
-            { cursor: replayCursor },
+            { ...partOptions, cursor: replayCursor },
           )
         ).catch(() => undefined);
         cancelled = true;
@@ -425,6 +483,37 @@ export function applicationOutputsMultipartResponse(
         await serializeFrame(() => write(encoder.encode(`--${boundary}--\r\n`)))
           .catch(() => undefined);
         await writer.close().catch(() => undefined);
+        return;
+      }
+      if (isFrameCapacityError(error)) {
+        cancelled = true;
+        const cleanup = Promise.allSettled([
+          source.cancel(OBSERVATION_FRAME_CAPACITY_CODE),
+          ...[...readers].map((reader) =>
+            reader.cancel(OBSERVATION_FRAME_CAPACITY_CODE)
+          ),
+        ]);
+        try {
+          await writePart((replayCursor) =>
+            part(
+              boundary,
+              "observation-error",
+              encoder.encode(JSON.stringify({
+                type: "observation.error",
+                code: OBSERVATION_FRAME_CAPACITY_CODE,
+                message: error.message,
+              })),
+              { ...partOptions, cursor: replayCursor },
+            )
+          );
+          await serializeFrame(() =>
+            write(encoder.encode(`--${boundary}--\r\n`))
+          );
+          await writer.close();
+        } catch (closeError) {
+          await writer.abort(closeError).catch(() => undefined);
+        }
+        await cleanup;
         return;
       }
       await source.cancel(

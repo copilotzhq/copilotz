@@ -236,6 +236,7 @@ export type WorkflowMetadata = Readonly<{
   outcome?: "failed" | "cancelled";
   parentLlmAttemptId?: string;
   sourceMessageId?: string;
+  agentId?: string;
   agentParticipantId?: string;
   initiatorParticipantId?: string;
 }>;
@@ -268,6 +269,10 @@ export function workflowMetadata(value: unknown): WorkflowMetadata | null {
     kind !== "agent_output" && kind !== "agent_failure" &&
     kind !== "tool_result" &&
     kind !== "provider_attempt" && kind !== "realtime_message"
+  ) return null;
+  if (
+    candidate.agentId !== undefined &&
+    !optionalMetadataText(candidate.agentId)
   ) return null;
   if (
     candidate.initiatorParticipantId !== undefined &&

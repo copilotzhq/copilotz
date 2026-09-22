@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.80.0 — 2026-09-22
+
+- Make channel HTTP admission optional and expose `submitChannel` for trusted
+  hosts to submit validated Core occurrences through ordinary application sends.
+- Add `createChannelSession` for ordered live replies, explicit interruption,
+  late-admission cancellation, and suppression of obsolete outputs.
+- Add Core's `projectCoreReply` to select resolved body text within an explicit
+  operation, thread, agent, and viewer scope without extra content reads.
+- Filter detached provider egress by conversation visibility and content role,
+  retaining durable retries and stable delivery identity. Built-in external
+  providers explicitly use public conversation visibility; custom and Web
+  channel defaults remain participant-scoped.
+- Resolve text and JSON Asset refs recursively in Processor Events, engine
+  outputs, application observations, and replay reads. Durable Event envelopes
+  retain canonical refs; binary refs remain metadata-only.
+- Reuse a bounded, process-local prepared-body cache after committed Asset and
+  Collection writes, avoiding an immediate body-storage read without changing
+  authorization or integrity checks.
+- Update native channel, memory, and schedule Processors to consume the
+  immutable `event.data` snapshot. Channel egress carries that message snapshot
+  into its Action while retaining current sender and binding checks.
+
 ## 0.79.1 — 2026-09-21
 
 - Expose the cohesive low-level `copilotz/engine` runtime for operator-owned,

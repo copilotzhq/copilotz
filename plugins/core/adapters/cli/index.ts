@@ -55,13 +55,17 @@ export type InteractiveCliIo = Readonly<{
   cwd?(): string;
 }>;
 
+type CliApplicationHandle =
+  & Pick<ApplicationSendHandle, "eventId" | "outputs" | "done">
+  & Partial<Pick<ApplicationSendHandle, "cancel" | "detach">>;
+
 export interface InteractiveCliOptions {
   io: InteractiveCliIo;
   /** Application ingress used for every typed Core message. */
   application:
     & Readonly<{
       send(input: ApplicationSendInput): Promise<
-        Pick<ApplicationSendHandle, "eventId" | "outputs" | "done">
+        CliApplicationHandle
       >;
     }>
     & Readonly<{
@@ -186,6 +190,17 @@ function responseAgentName(
     (scope.recipientIds?.[0] ?? "assistant");
 }
 
+type ActiveCliOperation = {
+  readonly controller: AbortController;
+  handle?: CliApplicationHandle;
+  outputReader?: ReadableStreamDefaultReader<ApplicationOutput>;
+  nestedReader?: ReadableStreamDefaultReader<Uint8Array>;
+};
+
+function isCliAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === "AbortError";
+}
+
 function threadLabel(scope: CliMessageScope): string {
   if (typeof scope.thread === "string") return scope.thread;
   return scope.thread.externalId ?? scope.thread.id ?? "(new thread)";
@@ -213,8 +228,47 @@ export function createInteractiveCli(options: InteractiveCliOptions): Readonly<{
     renderedMessage: string;
     rendered: boolean;
   }>();
+  let activeOperation: ActiveCliOperation | undefined;
 
-  const printLine = (line: string): void => io.write(line + "\n");
+  const cancelReaders = (
+    operation: ActiveCliOperation,
+    reason: unknown,
+  ): void => {
+    for (const reader of [operation.outputReader, operation.nestedReader]) {
+      if (reader) void reader.cancel(reason).catch(() => undefined);
+    }
+  };
+
+  const cancelOperation = (
+    operation: ActiveCliOperation,
+    reason: unknown,
+  ): void => {
+    cancelReaders(operation, reason);
+    const handle = operation.handle;
+    operation.handle = undefined;
+    if (!handle?.cancel) return;
+    const reasonText = reason instanceof Error && reason.message.trim()
+      ? reason.message
+      : typeof reason === "string" && reason.trim()
+      ? reason
+      : "interactive_cli_stopped";
+    void handle.cancel(reasonText).catch(() => undefined);
+  };
+
+  const observeDone = (operation: ActiveCliOperation): void => {
+    const handle = operation.handle;
+    if (!handle) return;
+    void handle.done.catch((failure) => {
+      if (!operation.controller.signal.aborted) {
+        operation.controller.abort(failure);
+      }
+      cancelReaders(operation, failure);
+    });
+  };
+
+  const printLine = (line: string): void => {
+    if (!stopped) io.write(line + "\n");
+  };
   const cwd = (): string => options.cwd ?? io.cwd?.() ?? ".";
   const inspect = async (): Promise<CliInspection> =>
     await options.inspect?.() ?? ({
@@ -224,7 +278,20 @@ export function createInteractiveCli(options: InteractiveCliOptions): Readonly<{
     } as const);
 
   const stop = (): void => {
+    if (stopped) {
+      if (!ioClosed) {
+        ioClosed = true;
+        io.close();
+      }
+      return;
+    }
     stopped = true;
+    const operation = activeOperation;
+    const reason = new DOMException("Interactive CLI stopped.", "AbortError");
+    if (operation && !operation.controller.signal.aborted) {
+      operation.controller.abort(reason);
+      cancelOperation(operation, reason);
+    }
     if (ioClosed) return;
     ioClosed = true;
     io.close();
@@ -510,6 +577,27 @@ export function createInteractiveCli(options: InteractiveCliOptions): Readonly<{
     renderGenericToolCall(name, draftId);
   };
 
+  const awaitWithCancellation = async <T>(
+    operation: ActiveCliOperation,
+    promise: Promise<T>,
+  ): Promise<T> => {
+    operation.controller.signal.throwIfAborted();
+    let onAbort: (() => void) | undefined;
+    const aborted = new Promise<never>((_, reject) => {
+      onAbort = () => reject(operation.controller.signal.reason);
+      operation.controller.signal.addEventListener("abort", onAbort, {
+        once: true,
+      });
+    });
+    try {
+      return await Promise.race([promise, aborted]);
+    } finally {
+      if (onAbort) {
+        operation.controller.signal.removeEventListener("abort", onAbort);
+      }
+    }
+  };
+
   const renderToolCall = (event: CopilotzEvent): void => {
     renderToolCallPayload(eventPayload(event));
   };
@@ -528,10 +616,12 @@ export function createInteractiveCli(options: InteractiveCliOptions): Readonly<{
   const renderToolCallStream = async (
     output: Extract<ApplicationOutput, { type: "stream.output" }>,
     askingAgentName: string,
+    operation: ActiveCliOperation,
   ): Promise<void> => {
     if (output.mediaType !== "application/x-ndjson") return;
     const decoder = new TextDecoder();
     const reader = output.payload.getReader();
+    operation.nestedReader = reader;
     let buffered = "";
     const renderLine = (line: string): void => {
       const normalized = line.trim();
@@ -559,21 +649,34 @@ export function createInteractiveCli(options: InteractiveCliOptions): Readonly<{
     };
     try {
       while (true) {
+        operation.controller.signal.throwIfAborted();
         const next = await reader.read();
+        operation.controller.signal.throwIfAborted();
         if (next.done) break;
         consume(decoder.decode(next.value, { stream: true }));
       }
       consume(decoder.decode());
       renderLine(buffered);
+      // A failed LLM attempt can be followed by a successful retry. Observe
+      // each lane's terminal status, while handle.done remains the operation
+      // authority for the prompt as a whole.
+      await awaitWithCancellation(operation, output.terminal);
     } finally {
-      reader.releaseLock();
+      if (operation.nestedReader === reader) operation.nestedReader = undefined;
+      try {
+        reader.releaseLock();
+      } catch {
+        // Cancellation may already have released this reader.
+      }
     }
   };
 
   const renderOutput = async (
     output: ApplicationOutput,
     respondingAgentName: string,
+    operation: ActiveCliOperation,
   ): Promise<void> => {
+    operation.controller.signal.throwIfAborted();
     if (!isStreamOutput(output)) {
       renderEvent(output);
       return;
@@ -581,7 +684,7 @@ export function createInteractiveCli(options: InteractiveCliOptions): Readonly<{
     const lane = llmStreamLane(output);
     const streamAgentName = coreStreamAgentName(output) ?? respondingAgentName;
     if (lane === "tool-calls") {
-      await renderToolCallStream(output, streamAgentName);
+      await renderToolCallStream(output, streamAgentName, operation);
       return;
     }
     let started = false;
@@ -614,17 +717,26 @@ export function createInteractiveCli(options: InteractiveCliOptions): Readonly<{
     };
     const decoder = new TextDecoder();
     const reader = output.payload.getReader();
+    operation.nestedReader = reader;
     try {
       while (true) {
+        operation.controller.signal.throwIfAborted();
         const next = await reader.read();
+        operation.controller.signal.throwIfAborted();
         if (next.done) break;
         const chunk = decoder.decode(next.value, { stream: true });
         writeStreamText(chunk);
       }
       const tail = decoder.decode();
       writeStreamText(tail);
+      await awaitWithCancellation(operation, output.terminal);
     } finally {
-      reader.releaseLock();
+      if (operation.nestedReader === reader) operation.nestedReader = undefined;
+      try {
+        reader.releaseLock();
+      } catch {
+        // Cancellation may already have released this reader.
+      }
     }
   };
 
@@ -632,32 +744,80 @@ export function createInteractiveCli(options: InteractiveCliOptions): Readonly<{
     content: ContentInput | readonly ContentInput[],
     historyLabel?: string,
   ): Promise<void> => {
+    const operation: ActiveCliOperation = {
+      controller: new AbortController(),
+    };
+    activeOperation = operation;
     const label = historyLabel ??
       (typeof content === "string"
         ? content.replace(/\s+/g, " ").trim()
         : "[rich content]");
-    resetRenderState();
-    printLine("");
-    const respondingAgentName = responseAgentName(
-      options.scope,
-      await inspect(),
-    );
-    const handle = await options.application.send(message({
-      ...options.scope,
-      content,
-    }));
-    activeEventId = handle.eventId;
-    history.push({
-      input: label,
-      at: now().toISOString(),
-      eventId: handle.eventId,
-    });
-    for await (const output of handle.outputs) {
-      await renderOutput(output, respondingAgentName);
+    try {
+      operation.controller.signal.throwIfAborted();
+      resetRenderState();
+      printLine("");
+      const respondingAgentName = responseAgentName(
+        options.scope,
+        await inspect(),
+      );
+      operation.controller.signal.throwIfAborted();
+      const handle = await options.application.send(message({
+        ...options.scope,
+        content,
+      }));
+      operation.handle = handle;
+      observeDone(operation);
+      if (operation.controller.signal.aborted) {
+        const reason = operation.controller.signal.reason;
+        if (isCliAbortError(reason)) cancelOperation(operation, reason);
+        throw reason;
+      }
+      activeEventId = handle.eventId;
+      history.push({
+        input: label,
+        at: now().toISOString(),
+        eventId: handle.eventId,
+      });
+      const reader = handle.outputs.getReader();
+      operation.outputReader = reader;
+      try {
+        while (true) {
+          operation.controller.signal.throwIfAborted();
+          const next = await reader.read();
+          operation.controller.signal.throwIfAborted();
+          if (next.done) break;
+          await renderOutput(next.value, respondingAgentName, operation);
+        }
+      } finally {
+        if (operation.outputReader === reader) {
+          operation.outputReader = undefined;
+        }
+        try {
+          reader.releaseLock();
+        } catch {
+          // Cancellation may already have released this reader.
+        }
+      }
+      operation.controller.signal.throwIfAborted();
+      await awaitWithCancellation(operation, handle.done);
+      operation.controller.signal.throwIfAborted();
+      if (inReasoning || sawVisibleOutput) io.write("\n");
+      printLine(color("─".repeat(60), "dim"));
+    } catch (error) {
+      if (operation.controller.signal.aborted) {
+        throw operation.controller.signal.reason;
+      }
+      operation.controller.abort(error);
+      cancelOperation(operation, error);
+      throw error;
+    } finally {
+      // Cancellation takes ownership of the handle above. Completed or failed
+      // operations only release their observer; done remains the authority.
+      await operation.handle?.detach?.("interactive_cli_finished").catch(() =>
+        undefined
+      );
+      if (activeOperation === operation) activeOperation = undefined;
     }
-    await handle.done;
-    if (inReasoning || sawVisibleOutput) io.write("\n");
-    printLine(color("─".repeat(60), "dim"));
   };
 
   const handleCommand = async (line: string): Promise<boolean> => {
@@ -722,6 +882,7 @@ export function createInteractiveCli(options: InteractiveCliOptions): Readonly<{
           if (stopped) break;
           throw error;
         }
+        if (stopped) break;
         const input = answer.trim();
         if (!input) continue;
         if (input.toLowerCase() === quitCommand || input === "/exit") {
@@ -732,6 +893,8 @@ export function createInteractiveCli(options: InteractiveCliOptions): Readonly<{
         if (input.startsWith("/") && await handleCommand(input)) continue;
         await send(input);
       }
+    } catch (error) {
+      if (!stopped || !isCliAbortError(error)) throw error;
     } finally {
       stop();
     }

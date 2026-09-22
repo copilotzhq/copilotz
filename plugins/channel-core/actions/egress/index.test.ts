@@ -271,3 +271,113 @@ Deno.test("channel egress action suppresses private messages before participant 
   assertEquals(participantReads, 0);
   assertEquals(bindingReads, 0);
 });
+
+Deno.test("channel egress distinguishes metadata-only public messages from filtered content", async () => {
+  const binding = {
+    id: "binding-carousel",
+    channelId: "support",
+    externalThreadId: "external-carousel",
+    route: { conversation: "carousel" },
+    metadata: { source: "test" },
+  };
+  const contextFor = (message: Record<string, unknown>) => ({
+    collections: {
+      message: { get: async () => message },
+      participant: {
+        get: async () => ({
+          id: "agent-a",
+          participantType: "agent",
+          externalId: "agent-external-a",
+        }),
+      },
+      channelBinding: {
+        queries: { byThreadId: async () => [binding] },
+      },
+    },
+    resources: { channels: { support: { egress: "external" } } },
+  } as never);
+  const metadataOnly = {
+    id: "message-carousel",
+    senderId: "agent-a",
+    threadId: "thread-a",
+    visibility: { kind: "public" },
+    content: [],
+    metadata: {
+      type: "media_carousel",
+      cards: [{ id: "card-a", title: "A trusted card" }],
+    },
+  };
+  const metadataOutput = await channelEgressAction.execute({
+    messageId: metadataOnly.id,
+    message: metadataOnly,
+  }, contextFor(metadataOnly));
+  assertEquals(metadataOutput.intents.length, 1);
+  assertEquals(metadataOutput.intents[0].content, []);
+  assertEquals(metadataOutput.intents[0].metadata, {
+    binding: binding.metadata,
+    message: metadataOnly.metadata,
+  });
+
+  let participantReads = 0;
+  let bindingReads = 0;
+  const privateContext = {
+    collections: {
+      message: { get: async () => ({}) },
+      participant: {
+        get: async () => {
+          participantReads += 1;
+          return { id: "agent-a", participantType: "agent" };
+        },
+      },
+      channelBinding: {
+        queries: {
+          byThreadId: async () => {
+            bindingReads += 1;
+            return [binding];
+          },
+        },
+      },
+    },
+    resources: { channels: { support: { egress: "external" } } },
+  } as never;
+  const privateMessage = {
+    ...metadataOnly,
+    id: "message-private-carousel",
+    visibility: { kind: "internal" },
+  };
+  assertEquals(
+    await channelEgressAction.execute({
+      messageId: privateMessage.id,
+      message: privateMessage,
+    }, privateContext),
+    { intents: [] },
+  );
+  assertEquals(participantReads, 0);
+  assertEquals(bindingReads, 0);
+
+  const toolOnlyMessage = {
+    ...metadataOnly,
+    id: "message-tool-only",
+    content: [
+      {
+        assetId: "reasoning",
+        kind: "text",
+        role: "reasoning",
+        mediaType: "text/plain",
+      },
+      {
+        assetId: "tool-output",
+        kind: "json",
+        role: "tool.output",
+        mediaType: "application/json",
+      },
+    ] as const,
+  };
+  assertEquals(
+    await channelEgressAction.execute({
+      messageId: toolOnlyMessage.id,
+      message: toolOnlyMessage,
+    }, contextFor(toolOnlyMessage)),
+    { intents: [] },
+  );
+});

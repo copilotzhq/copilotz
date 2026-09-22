@@ -130,18 +130,13 @@ function dataArray(value: unknown, label: string): readonly unknown[] {
 
 function contentSequence(value: unknown): ContentSequence {
   return (dataArray(value, "Channel delivery content").map(
-    (value, index): ContentRef | undefined => {
+    (value, index): ContentRef => {
       if (!isContentRef(value)) {
         throw new TypeError(
           `Channel delivery content[${index}] must be a ref.`,
         );
       }
       const ref = value as ContentRef;
-      if (
-        (ref.kind === "text" || ref.kind === "json")
-          ? ref.role !== "body"
-          : ref.role !== "body" && ref.role !== "attachment"
-      ) return undefined;
       return {
         assetId: text(
           ref.assetId,
@@ -176,7 +171,13 @@ function contentSequence(value: unknown): ContentSequence {
         }),
       } as const;
     },
-  ).filter((ref): ref is ContentRef => ref !== undefined));
+  ));
+}
+
+function isDeliverableContent(ref: ContentRef): boolean {
+  return (ref.kind === "text" || ref.kind === "json")
+    ? ref.role === "body"
+    : ref.role === "body" || ref.role === "attachment";
 }
 
 function message(value: unknown): ChannelEgressMessage {
@@ -265,8 +266,11 @@ async function execute(
   const bindings = await context.collections.channelBinding.queries.byThreadId({
     threadId,
   });
-  const content = contentSequence(message.content);
-  if (content.length === 0) return ({ intents: [] as const });
+  const originalContent = contentSequence(message.content);
+  const content = originalContent.filter(isDeliverableContent);
+  if (originalContent.length > 0 && content.length === 0) {
+    return ({ intents: [] as const });
+  }
   const intents: ChannelDeliveryIntent[] = [];
   for (const value of bindings) {
     const binding = bindingRecord(value);

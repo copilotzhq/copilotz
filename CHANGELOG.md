@@ -11,7 +11,8 @@
 - Filter detached provider egress by conversation visibility and content role,
   retaining durable retries and stable delivery identity. Built-in external
   providers explicitly use public conversation visibility; custom and Web
-  channel defaults remain participant-scoped.
+  channel defaults remain participant-scoped. Preserve public metadata-only
+  presentations such as carousels for adapter-specific delivery.
 - Resolve text and JSON Asset refs recursively in Processor Events, engine
   outputs, application observations, and replay reads. Durable Event envelopes
   retain canonical refs; binary refs remain metadata-only.
@@ -21,6 +22,12 @@
 - Update native channel, memory, and schedule Processors to consume the
   immutable `event.data` snapshot. Channel egress carries that message snapshot
   into its Action while retaining current sender and binding checks.
+
+- Keep internal worker relay events reference-based and resolve public output
+  data at the gateway. Bound resolved HTTP output envelopes separately from
+  binary chunks and preserve the last successful cursor on capacity failure.
+- Cancel active CLI operations and stream readers on shutdown, including
+  interruption after output EOF while durable completion is still pending.
 
 ## 0.79.1 — 2026-09-21
 

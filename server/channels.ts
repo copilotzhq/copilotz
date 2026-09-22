@@ -1,6 +1,6 @@
 /** Channel ingress over the single compiled HTTP boundary. */
-import { channelIngress } from "../plugins/channel-core/authoring/channel-ingress/index.ts";
 import { defineChannelResource } from "../plugins/channel-core/authoring/channel-resource/index.ts";
+import { submitChannel } from "../plugins/channel-core/authoring/submit-channel/index.ts";
 import type {
   ChannelAcceptResult,
   ChannelAdapter,
@@ -9,7 +9,6 @@ import type {
 } from "../plugins/channel-core/shared/contracts.ts";
 import type {
   ApplicationSendHandle,
-  ApplicationSendInput,
   InternalCopilotzApplication as CopilotzApplication,
 } from "../runtime/application/types.ts";
 import type { HttpError, HttpRequest, HttpResponse } from "./http-types.ts";
@@ -100,26 +99,10 @@ export async function handleChannel(
       "A rejected Channel request cannot contain accepted occurrences.",
     );
   }
-  let envelopes: ApplicationSendInput[];
-  try {
-    const operationMetadata = record(request.context?.operationMetadata);
-    envelopes = accepted.occurrences.map((occurrence) => {
-      const envelope = channelIngress(channelId, occurrence, {
-        namespace,
-        databaseSchema: application.config.databaseSchema,
-      });
-      return ({
-        ...envelope,
-        ...(Object.keys(operationMetadata).length
-          ? { operationMetadata: structuredClone(operationMetadata) }
-          : {}),
-      } as const);
-    });
-  } catch (error) {
-    abort.abort(error);
-    throw error;
-  }
-  if (channel.egress === "request-observation" && envelopes.length > 1) {
+  if (
+    channel.egress === "request-observation" &&
+    accepted.occurrences.length > 1
+  ) {
     abort.abort("channel_request_has_multiple_occurrences");
     throw appError(
       400,
@@ -127,27 +110,30 @@ export async function handleChannel(
       "A request-observation Channel must accept exactly one occurrence.",
     );
   }
-  const handles: ApplicationSendHandle[] = [];
+  let handles: readonly ApplicationSendHandle[];
   try {
-    for (const envelope of envelopes) {
-      handles.push(
-        await application.send(envelope).catch((error) => {
-          if (error?.code === "event_deduplication_conflict") {
-            throw appError(
-              409,
-              "idempotency_conflict",
-              "Idempotency key was reused with different input.",
-            );
-          }
-          throw error;
-        }),
-      );
-    }
+    handles = await submitChannel(
+      application,
+      channelId,
+      accepted.occurrences,
+      {
+        namespace,
+        databaseSchema: application.config.databaseSchema,
+        operationMetadata: record(request.context?.operationMetadata),
+      },
+    );
   } catch (error) {
     abort.abort(error);
-    await Promise.allSettled(
-      handles.map((handle) => handle.cancel("channel_accept_failed")),
-    );
+    if (
+      error && typeof error === "object" && "code" in error &&
+      error.code === "event_deduplication_conflict"
+    ) {
+      throw appError(
+        409,
+        "idempotency_conflict",
+        "Idempotency key was reused with different input.",
+      );
+    }
     throw error;
   }
   if (channel.egress === "request-observation" && handles.length > 0) {

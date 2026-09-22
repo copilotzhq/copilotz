@@ -259,7 +259,7 @@ async function emitContent(
   return undefined;
 }
 
-export const zendeskChannelAdapter: ChannelAdapter = {
+export const zendeskChannelAdapter = {
   async accept(request, context) {
     const options = channelProviderOptions<ZendeskChannelOptions>(context);
     const transport = options.transport ??
@@ -416,7 +416,7 @@ export const zendeskChannelAdapter: ChannelAdapter = {
       ...(providerIds.length ? { providerIds: providerIds } : {}),
     } as const);
   },
-} as const;
+} as const satisfies ChannelAdapter;
 
 export { createZendeskTransport } from "./transport.ts";
 

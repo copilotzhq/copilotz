@@ -103,7 +103,7 @@ export type ChannelReceivedMessage = Readonly<{
   /** Non-secret provider coordinates required by detached egress. */
   route?: ChannelJsonObject;
   metadata?: ChannelJsonObject;
-  /** Defaults to participant-scoped visibility when omitted. */
+  /** Defaults to public conversation visibility when omitted. */
   visibility?: ChannelMessageVisibility;
 }>;
 
@@ -178,7 +178,8 @@ export type ChannelDeliveryReceipt = Readonly<{
 
 /** Executable behavior separately composed under the same channel alias. */
 export type ChannelAdapter = Readonly<{
-  accept(
+  /** Optional HTTP ingress binding; worker-only adapters may omit it. */
+  accept?(
     request: ChannelRequest,
     context: ChannelAcceptContext,
   ): ChannelAcceptResult | Promise<ChannelAcceptResult>;

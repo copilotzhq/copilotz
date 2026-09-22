@@ -338,7 +338,7 @@ async function emitContent(
   return [];
 }
 
-export const whatsappChannelAdapter: ChannelAdapter = {
+export const whatsappChannelAdapter = {
   async accept(request, context) {
     const options = channelProviderOptions<WhatsAppChannelOptions>(context);
     const transport = options.transport ??
@@ -562,7 +562,7 @@ export const whatsappChannelAdapter: ChannelAdapter = {
       ...(providerIds.length ? { providerIds: providerIds } : {}),
     } as const);
   },
-} as const;
+} as const satisfies ChannelAdapter;
 
 export {
   createWhatsAppGraphTransport,

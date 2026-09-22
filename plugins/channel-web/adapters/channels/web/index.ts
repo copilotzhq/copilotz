@@ -99,7 +99,7 @@ function thread(value: unknown): ChannelThreadInput {
 
 /** Converts one typed Web body into a durable occurrence and worker semantics. */
 
-export const webChannelAdapter: ChannelAdapter = {
+export const webChannelAdapter = {
   accept(request) {
     const body = record(request.body, "Web Channel request body");
     if (request.method !== "POST") {
@@ -205,6 +205,6 @@ export const webChannelAdapter: ChannelAdapter = {
       ...(visibility ? { visibility } : {}),
     } as const);
   },
-} as const;
+} as const satisfies ChannelAdapter;
 
 export default webChannelAdapter;

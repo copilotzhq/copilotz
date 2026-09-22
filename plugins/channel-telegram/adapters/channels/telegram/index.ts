@@ -265,7 +265,7 @@ function providerId(value: unknown): string | undefined {
 }
 
 /** Executable Telegram behavior composed separately under the same alias. */
-export const telegramChannelAdapter: ChannelAdapter = {
+export const telegramChannelAdapter = {
   async accept(request, context) {
     const options = channelProviderOptions<TelegramChannelOptions>(context);
     const transport = options.transport ??
@@ -424,7 +424,7 @@ export const telegramChannelAdapter: ChannelAdapter = {
       ...(providerIds.length ? { providerIds: providerIds } : {}),
     } as const);
   },
-} as const;
+} as const satisfies ChannelAdapter;
 
 async function deliverContent(
   content: ResolvedContent,

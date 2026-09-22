@@ -269,7 +269,7 @@ async function emitContent(
   return undefined;
 }
 
-export const discordChannelAdapter: ChannelAdapter = {
+export const discordChannelAdapter = {
   async accept(request, context) {
     const options = channelProviderOptions<DiscordChannelOptions>(context);
     const transport = options.transport ??
@@ -430,7 +430,7 @@ export const discordChannelAdapter: ChannelAdapter = {
       ...(providerIds.length ? { providerIds: providerIds } : {}),
     } as const);
   },
-} as const;
+} as const satisfies ChannelAdapter;
 
 export { createDiscordTransport, verifyDiscordSignature } from "./transport.ts";
 

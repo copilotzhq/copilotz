@@ -84,6 +84,11 @@
       "title": "Semantic Plugins",
       "items": [
         {
+          "title": "Channels",
+          "slug": "channels",
+          "description": "Ingress and egress mapping, optional HTTP, durable delivery and live sessions."
+        },
+        {
           "title": "Agent Capabilities",
           "slug": "agent-capabilities",
           "description": "Exact alias grants and derived Core/Skills mechanisms."

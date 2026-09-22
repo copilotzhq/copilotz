@@ -93,3 +93,40 @@ Deno.test("media codec rejects getters before taking its input snapshot", () => 
   assertThrows(() => decodeContent(content), TypeError);
   assertEquals(reads, 0);
 });
+
+Deno.test("content codec re-ingresses hydrated references as canonical refs", () => {
+  assertEquals(
+    decodeContent({
+      assetId: "asset-a",
+      kind: "text",
+      role: "body",
+      mediaType: "text/plain",
+      value: "hydrated body",
+      resolve: true,
+      extra: "not durable",
+      metadata: {
+        nested: {
+          assetId: "asset-b",
+          kind: "json",
+          role: "attachment",
+          mediaType: "application/json",
+          value: { hydrated: true },
+        },
+      },
+    }),
+    {
+      assetId: "asset-a",
+      kind: "text",
+      role: "body",
+      mediaType: "text/plain",
+      metadata: {
+        nested: {
+          assetId: "asset-b",
+          kind: "json",
+          role: "attachment",
+          mediaType: "application/json",
+        },
+      },
+    },
+  );
+});

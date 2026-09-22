@@ -16,13 +16,13 @@ export const scheduledJobRunNowInputProcessor: Processor<
   on: [{ eventType: SCHEDULED_JOB_RUN_NOW_INPUT_EVENT }],
   async handle(event, context) {
     if (
-      !event.durable || !event.payload ||
-      typeof event.payload !== "object" || Array.isArray(event.payload)
+      !event.durable || !event.data ||
+      typeof event.data !== "object" || Array.isArray(event.data)
     ) {
       throw new TypeError("Scheduled run-now input must be an object.");
     }
     await context.actions.runScheduledJobNow(
-      event.payload as ScheduledJobRunNowInput,
+      event.data as ScheduledJobRunNowInput,
       { operationKey: "scheduled-job-run-now-input" },
     );
   },

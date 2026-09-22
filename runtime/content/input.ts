@@ -1,4 +1,5 @@
 import { createContentError } from "./errors.ts";
+import { isContentRef } from "./schema.ts";
 import type {
   AssetOrigin,
   ContentInput,
@@ -41,9 +42,49 @@ export function withoutUndefined<T extends Record<string, unknown>>(
 
 export function cloneContentRef(ref: ContentRef): ContentRef {
   return withoutUndefined({
-    ...ref,
+    assetId: ref.assetId,
+    kind: ref.kind,
+    role: ref.role,
+    mediaType: ref.mediaType,
+    name: ref.name,
+    alt: ref.alt,
+    language: ref.language,
+    disposition: ref.disposition,
     metadata: cloneMetadata(ref.metadata),
   });
+}
+
+/** Removes resolved data from Content references before JSON becomes durable. */
+export function canonicalizeContentRefs(value: unknown): unknown {
+  if (isContentRef(value)) {
+    const ref = cloneContentRef(value);
+    const canonical = ref.metadata === undefined ? ref : {
+      ...ref,
+      metadata: canonicalizeContentRefs(ref.metadata) as Record<
+        string,
+        unknown
+      >,
+    };
+    // `resolve: false` is a caller-owned instruction to keep this reference
+    // descriptor-only. Unlike a hydrated value, it must survive Action replay.
+    return (value as { resolve?: unknown }).resolve === false
+      ? { ...canonical, resolve: false }
+      : canonical;
+  }
+  if (Array.isArray(value)) return value.map(canonicalizeContentRefs);
+  if (value && typeof value === "object") {
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) {
+      return structuredClone(value);
+    }
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([key, child]) => [
+        key,
+        canonicalizeContentRefs(child),
+      ]),
+    );
+  }
+  return value;
 }
 
 function defaultRole(kind: ContentKind): ContentRole {
@@ -156,7 +197,7 @@ export async function materializeContentInput(
     if (value.type === "json") {
       let encoded: string | undefined;
       try {
-        encoded = JSON.stringify(value.value);
+        encoded = JSON.stringify(canonicalizeContentRefs(value.value));
       } catch (cause) {
         throw createContentError(
           "content_invalid",

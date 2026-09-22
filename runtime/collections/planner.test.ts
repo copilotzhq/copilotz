@@ -71,6 +71,9 @@ Deno.test("collection mutations prepare once before SQL and only adopt inside co
       context: EventMutationContext,
       plan: AssetMaterializationPlan,
     ): Promise<void>;
+    publishMaterializations(
+      plans: readonly AssetMaterializationPlan[],
+    ): Promise<void>;
   }> = {
     reconcileMaterializations() {
       assert(sqlOpen);
@@ -107,6 +110,11 @@ Deno.test("collection mutations prepare once before SQL and only adopt inside co
           ],
         );
       }
+    },
+    publishMaterializations(plans) {
+      assertEquals(sqlOpen, false);
+      assertEquals(plans.length, 1);
+      return Promise.resolve();
     },
   };
   let beforeCreateCalls = 0;

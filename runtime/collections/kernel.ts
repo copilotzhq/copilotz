@@ -47,6 +47,7 @@ import {
   type DurableContentInput,
   type PreparedAsset,
 } from "../content/index.ts";
+import { canonicalizeContentRefs } from "../content/input.ts";
 import {
   eventDataRef,
   readEventBody,
@@ -131,6 +132,9 @@ type CollectionAssetAdopter = Readonly<{
     context: EventMutationContext,
     plan: AssetMaterializationPlan,
   ): Promise<void>;
+  publishMaterializations(
+    plans: readonly AssetMaterializationPlan[],
+  ): void;
 }>;
 
 export type BoundCollectionQuery<TSelect extends object> =
@@ -784,6 +788,9 @@ export function createCollectionKernel(
     id: string;
     order: readonly number[];
     protectionDeadline?: number;
+    materializations?(
+      replacements: ReadonlyMap<string, AssetManifestEntry>,
+    ): readonly AssetMaterializationPlan[];
     commit(
       transaction: SqlExecutor,
       pending: CoordinatedMutationResult<unknown>[],
@@ -1063,6 +1070,19 @@ export function createCollectionKernel(
       expected?: CollectionRecord | null,
       emitNoChange = false,
     ): Promise<CollectionMutationPlan> => {
+      const canonicalRecord = canonicalizeContentRefs(
+        write.record,
+      ) as CollectionRecord;
+      const body = canonicalizeContentRefs(write.body) as CollectionEventBody<
+        CollectionRecord
+      >;
+      write = {
+        record: canonicalRecord,
+        body: {
+          ...body,
+          record: canonicalRecord,
+        } as CollectionEventBody<CollectionRecord>,
+      };
       const declaredFields = definition.content?.fields ?? [];
       const fields = write.body.operation === "create"
         ? declaredFields
@@ -1320,6 +1340,7 @@ export function createCollectionKernel(
         plan.content.some((item) => item.adoptions.length)
       ) {
         const pending: CoordinatedMutationResult<unknown>[] = [];
+        let resolvedPlan: CollectionMutationPlan | undefined;
         const result = await options.session.transaction(
           async (transaction) => {
             const replacements = await options.assets!
@@ -1329,6 +1350,7 @@ export function createCollectionKernel(
               definition.content?.fields ?? [],
               replacements,
             );
+            resolvedPlan = resolved;
             return await commit(
               eventType,
               subjectId,
@@ -1340,6 +1362,7 @@ export function createCollectionKernel(
             );
           },
         );
+        options.assets.publishMaterializations(resolvedPlan!.content);
         const reports = [];
         for (const item of pending) {
           reports.push(await options.coordinator.flushCommitted(item));
@@ -1631,6 +1654,12 @@ export function createCollectionKernel(
           ...(deadlines.length
             ? { protectionDeadline: Math.min(...deadlines) }
             : {}),
+          materializations: (replacements) =>
+            reconcileCollectionContent(
+              planned.plan,
+              definition.content?.fields ?? [],
+              replacements,
+            ).content,
           commit: (transaction, pending, replacements) => {
             const plan = reconcileCollectionContent(
               planned.plan,
@@ -2757,7 +2786,9 @@ export function createCollectionKernel(
       upsert(relationInput, relationOptions) {
         const order = allocateOrder();
         return registerMutation(order, () => {
-          const relationSnapshot = structuredClone(relationInput);
+          const relationSnapshot = canonicalizeContentRefs(
+            structuredClone(relationInput),
+          ) as GraphRelationUpsertInput;
           assertLosslessJson(relationSnapshot, "Relation mutation input");
           const optionsSnapshot = relationOptions
             ? (structuredClone(relationOptions))
@@ -2972,8 +3003,10 @@ export function createCollectionKernel(
       upsert(input) {
         const order = allocateOrder();
         return registerMutation(order, () => {
-          validateVector(input.profile, input.values);
-          const body = structuredClone(input);
+          const body = canonicalizeContentRefs(
+            structuredClone(input),
+          ) as VectorWrite;
+          validateVector(body.profile, body.values);
           const target = JSON.stringify([
             "vector",
             body.ownerType,
@@ -3065,6 +3098,7 @@ export function createCollectionKernel(
     const pending: CoordinatedMutationResult<unknown>[] = [];
     const writes: CollectionWrite<CollectionRecord>[] = [];
     const orderedPlans = [...scope.plans].sort(comparePlanOrder);
+    let replacements: ReadonlyMap<string, AssetManifestEntry> = new Map();
     const assertProtection = (plan: PlannedTransactionMutation): void => {
       if (
         plan.protectionDeadline !== undefined &&
@@ -3078,7 +3112,7 @@ export function createCollectionKernel(
     for (const plan of orderedPlans) assertProtection(plan);
     try {
       await options.session.transaction(async (transaction) => {
-        const replacements = options.assets
+        replacements = options.assets
           ? await options.assets.reconcileMaterializations(transaction, [
             ...new Set([...scope.assets.values()].map((asset) => asset.plan)),
           ])
@@ -3091,6 +3125,14 @@ export function createCollectionKernel(
       });
     } catch (error) {
       throw error;
+    }
+
+    if (options.assets) {
+      options.assets.publishMaterializations(
+        orderedPlans.flatMap((plan) =>
+          plan.materializations?.(replacements) ?? []
+        ),
+      );
     }
 
     const reports: EventDispatchReport[] = [];

@@ -244,8 +244,19 @@ export type ChannelIngressActionOutput = Readonly<{
   messageId: string;
 }>;
 
+/** Immutable message fields needed to prepare one external delivery. */
+export type ChannelEgressMessage = Readonly<{
+  id: string;
+  senderId: string;
+  threadId: string;
+  content: ContentSequence;
+  metadata: ChannelJsonObject;
+}>;
+
 export type ChannelEgressActionInput = Readonly<{
   messageId: string;
+  /** Processors pass the triggering snapshot; ID-only callers remain valid. */
+  message?: ChannelEgressMessage;
 }>;
 
 export type ChannelEgressActionOutput = Readonly<{

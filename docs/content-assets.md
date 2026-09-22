@@ -62,6 +62,35 @@ content.
 Use `context.content.resolve`, `resolveMany`, or `open` to read refs. Resolution
 enforces namespace isolation, canonical media metadata, and body integrity.
 
+## Event data
+
+Processors, `engine.events.resolve()`, and application output streams
+(`send().outputs`, `observe()`, and replay attachments) receive a resolved
+`event.data` snapshot. The runtime walks that data recursively: text and JSON
+refs keep their canonical metadata and add `value`; image, audio, video, and
+file refs remain metadata-only. A ref marked `resolve: false` also remains a
+descriptor, without a body read or `value`. This keeps ordinary Event delivery
+small and avoids embedding arbitrary binary bodies in every processor or output
+frame.
+
+```ts
+// event.data.record.content[0]
+{
+  assetId: "asset-123",
+  kind: "text",
+  role: "body",
+  mediaType: "text/plain; charset=utf-8",
+  value: "Hello"
+}
+```
+
+Durable Event envelopes and bodies, Action values, Collection projections,
+relation/vector payloads, and JSON Assets keep canonical refs only; derived
+`value` fields are never persisted. The low-level `events.get()` and
+`events.subscribe()` APIs intentionally expose raw Event envelopes. Use
+`events.resolve()` when reading a stored Event for consumption, or
+`context.content.resolveMany()` when a Processor needs binary bytes.
+
 ## Resolve content with a Collection read
 
 Scoped Collections accept `content` in the existing second options argument of

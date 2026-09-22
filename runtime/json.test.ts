@@ -66,3 +66,44 @@ Deno.test("JSON validation rejects cycles, accessors and hidden or extra propert
   const shared = { a: 1 };
   assertJsonValue([shared, shared]);
 });
+
+Deno.test("durable Action values discard hydrated content reference fields", () => {
+  assertEquals(
+    durableActionValue({
+      result: {
+        assetId: "asset-a",
+        kind: "text",
+        role: "body",
+        mediaType: "text/plain",
+        value: "hydrated body",
+        resolve: true,
+        extra: "not durable",
+        metadata: {
+          nested: {
+            assetId: "asset-b",
+            kind: "json",
+            role: "attachment",
+            mediaType: "application/json",
+            value: { hydrated: true },
+          },
+        },
+      },
+    }),
+    {
+      result: {
+        assetId: "asset-a",
+        kind: "text",
+        role: "body",
+        mediaType: "text/plain",
+        metadata: {
+          nested: {
+            assetId: "asset-b",
+            kind: "json",
+            role: "attachment",
+            mediaType: "application/json",
+          },
+        },
+      },
+    },
+  );
+});

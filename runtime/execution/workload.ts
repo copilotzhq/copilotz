@@ -245,7 +245,9 @@ export function createDeliveryWorkload(
       } as const;
       const context = await options.createContext(base);
       abort.signal.throwIfAborted();
-      const processorEvent = await resolveProcessorEvent(store, event);
+      const processorEvent = await resolveProcessorEvent(store, event, {
+        getMany: (refs) => context.content.resolveMany(refs),
+      });
       const handle = processor.handle as (
         event: typeof processorEvent,
         executionContext: typeof context,

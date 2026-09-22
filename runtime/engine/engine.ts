@@ -171,6 +171,24 @@ export async function createCopilotzEngine(
   let resolver:
     | DatabaseScopeRuntime["public"]["content"]["resolver"]
     | undefined;
+  const resolveEventInScope = async (
+    event: CopilotzEvent,
+    requestedDatabaseSchema: string,
+  ) => {
+    const additional = requestedDatabaseSchema === databaseSchema
+      ? undefined
+      : await resolveAdditionalScope(requestedDatabaseSchema);
+    const scopedResolver = additional?.runtime.public.content.resolver ??
+      resolver;
+    if (!scopedResolver) {
+      throw new Error("Copilotz event content resolver is not initialized.");
+    }
+    return await resolveProcessorEvent(
+      additional?.runtime.store ?? store,
+      event,
+      scopedResolver,
+    );
+  };
   const createContextFor = async (
     base: EngineContextSeed,
   ): Promise<ProcessorContext> => {
@@ -341,6 +359,7 @@ export async function createCopilotzEngine(
         registry: options.registry,
         transients,
         createContext: createLiveContext,
+        resolveEvent: resolveEventInScope,
       }),
     } as const,
     localWorkloadWorkers: configuredLocalWorkers,
@@ -378,7 +397,10 @@ export async function createCopilotzEngine(
         }
       }
       if (publish) {
-        const resolvedEvent = await resolveProcessorEvent(scoped.store, event);
+        const resolvedEvent = await resolveEventInScope(
+          event,
+          context.databaseSchema,
+        );
         const eventData = resolvedEvent.data;
         await scoped.hub.publish(event);
         await invokeLiveProcessors({
@@ -392,7 +414,7 @@ export async function createCopilotzEngine(
           createContext: createLiveContext,
         }).catch(() => undefined);
         await options.publish?.(resolvedEvent, context);
-        await options.execution?.onOutput?.(event, context);
+        await options.execution?.onOutput?.(resolvedEvent, context);
       }
       if (!event.durable) return;
       const deliveries = await scoped.store.listDeliveries({
@@ -436,10 +458,10 @@ export async function createCopilotzEngine(
     const scopedDatabaseSchema = publishOptions.databaseSchema ??
       databaseSchema;
     const scopedEventHub = publishOptions.eventHub ?? eventHub;
-    const scopedStore = scopedDatabaseSchema === databaseSchema
-      ? store
-      : (await resolveAdditionalScope(scopedDatabaseSchema)).runtime.store;
-    const resolvedEvent = await resolveProcessorEvent(scopedStore, event);
+    const resolvedEvent = await resolveEventInScope(
+      event,
+      scopedDatabaseSchema,
+    );
     const eventData = resolvedEvent.data;
     await scopedEventHub.publish(event);
     await options.publish?.(resolvedEvent, {
@@ -644,7 +666,10 @@ export async function createCopilotzEngine(
               limit: 1_000,
             });
             for (const event of events) {
-              const resolvedEvent = await resolveProcessorEvent(store, event);
+              const resolvedEvent = await resolveEventInScope(
+                event,
+                databaseSchema,
+              );
               const eventData = resolvedEvent.data;
               if (!matchProcessor(catchupProcessor, event, eventData)) continue;
               await invokeLiveProcessors({

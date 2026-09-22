@@ -1,4 +1,5 @@
 import { ulid } from "../../dependencies/ulid.ts";
+import { canonicalizeContentRefs } from "../content/input.ts";
 import { assertJsonValue } from "../json.ts";
 import { errorRetryability } from "../failure.ts";
 import { createEventStoreError } from "./errors.ts";
@@ -338,9 +339,12 @@ function validateDraft(draft: DurableEventDraft): void {
 
 function encodeDraft(draft: DurableEventDraft): EncodedDraft {
   return {
-    payload: encodeJson(draft.payload, "payload"),
-    delta: encodeJson(draft.delta, "delta"),
-    metadata: encodeJson(draft.metadata ?? {}, "metadata"),
+    payload: encodeJson(canonicalizeContentRefs(draft.payload), "payload"),
+    delta: encodeJson(canonicalizeContentRefs(draft.delta), "delta"),
+    metadata: encodeJson(
+      canonicalizeContentRefs(draft.metadata ?? {}),
+      "metadata",
+    ),
   };
 }
 

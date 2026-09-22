@@ -1,5 +1,6 @@
 import type { EventMutationContext } from "./store.ts";
 import type { EventBodyRef } from "./types.ts";
+import { canonicalizeContentRefs } from "../content/input.ts";
 
 export const EVENT_BODY_SCHEMA_VERSION = 1;
 
@@ -95,8 +96,9 @@ export async function writeEventBody(
   context: EventBodyStoreContext,
   input: WriteEventBodyInput,
 ): Promise<EventBodyRef> {
-  const digest = await eventBodyDigest(input.json);
-  const body = canonicalJson(input.json);
+  const json = canonicalizeContentRefs(input.json);
+  const digest = await eventBodyDigest(json);
+  const body = canonicalJson(json);
   const inserted = await context.transaction.query<EventBodyRow>(
     `INSERT INTO ${context.tables.event_bodies} (
        namespace, event_body_id, schema_version, body, digest, created_at

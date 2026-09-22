@@ -104,6 +104,7 @@ Deno.test("base schedules turn opaque jobs into self-contained durable due event
       scheduledFor: "2026-01-01T00:01:00.000Z",
     });
     assertEquals(updated.nextRunAt, "2026-01-01T00:02:00.000Z");
+    assertEquals(updated.content, created.content);
     const body = dueData as {
       record: {
         payload: unknown;
@@ -113,7 +114,10 @@ Deno.test("base schedules turn opaque jobs into self-contained durable due event
     };
     assertEquals(body.record.payload, created.payload);
     assertEquals(body.record.lastOccurrence, updated.lastOccurrence);
-    assertEquals(body.record.content, [...(created.content ?? [])]);
+    assertEquals(body.record.content, [
+      { ...created.content![0], value: "Prepare the report" },
+      created.content![1],
+    ]);
 
     const manualInput = runScheduledJobNow({
       namespace: NAMESPACE,

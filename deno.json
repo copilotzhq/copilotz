@@ -1,13 +1,14 @@
 {
   "name": "@copilotz/copilotz",
   "description": "Copilotz Lib",
-  "version": "0.79.0",
+  "version": "0.79.1",
   "license": "MIT",
   "exports": {
     ".": "./index.ts",
     "./admin": "./plugins/admin/index.ts",
     "./adapters/deno": "./runtime/adapters/deno/index.ts",
     "./application": "./runtime/application/public.ts",
+    "./engine": "./runtime/engine/index.ts",
     "./persistence": "./runtime/persistence/index.ts",
     "./collections": "./runtime/collections/index.ts",
     "./collections/authoring": "./runtime/collections/authoring.ts",
@@ -93,6 +94,7 @@
     "@copilotz/copilotz/admin": "./plugins/admin/index.ts",
     "@copilotz/copilotz/adapters/deno": "./runtime/adapters/deno/index.ts",
     "@copilotz/copilotz/application": "./runtime/application/public.ts",
+    "@copilotz/copilotz/engine": "./runtime/engine/index.ts",
     "@copilotz/copilotz/persistence": "./runtime/persistence/index.ts",
     "@copilotz/copilotz/collections": "./runtime/collections/index.ts",
     "@copilotz/copilotz/collections/authoring": "./runtime/collections/authoring.ts",

@@ -4,6 +4,7 @@ import { assertEquals } from "@std/assert";
 import * as copilotz from "../../index.ts";
 import * as denoAdapters from "../../runtime/adapters/deno/index.ts";
 import * as application from "../../runtime/application/public.ts";
+import * as engine from "../../runtime/engine/index.ts";
 import * as actions from "../../runtime/actions/index.ts";
 import * as content from "../../runtime/content/index.ts";
 import * as events from "../../runtime/events/index.ts";
@@ -97,6 +98,7 @@ Deno.test("package root exposes only the application factory", () => {
 Deno.test("package subpaths expose cohesive owner APIs", () => {
   assertEquals(Object.keys(application), []);
   assertEquals("createCopilotzApplication" in application, false);
+  assertFunctions(engine, ["createCopilotzEngine"]);
   assertFunctions(persistence, ["createCopilotzPersistence"]);
   assertFunctions(coreCli, ["createInteractiveCli", "startInteractiveCli"]);
   assertFunctions(denoAdapters, ["listen"]);

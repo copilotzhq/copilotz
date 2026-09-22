@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.79.1 — 2026-09-21
+
+- Expose the cohesive low-level `copilotz/engine` runtime for operator-owned,
+  durable collection migrations. It accepts a static plugin registry and an
+  injected SQL session without starting a Gateway or Worker.
+
 ## 0.79.0 — 2026-09-21
 
 - Make each Space-owned Collection declare

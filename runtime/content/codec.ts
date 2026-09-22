@@ -1,8 +1,9 @@
 /** Browser-safe content serialization and reference validation. @module */
 import { assertJsonValue } from "../json.ts";
 import { base64ToBytes, bytesToBase64, parseDataUrl } from "./encoding.ts";
+import { canonicalizeContentRefs } from "./input.ts";
 import { isContentRef } from "./schema.ts";
-import type { ContentInput } from "./types.ts";
+import type { ContentInput, ContentRef } from "./types.ts";
 
 type MediaInput = Extract<ContentInput, { bytes: Uint8Array }>;
 /** Canonical JSON media representation. Encoders never emit data URLs or bytes. */
@@ -36,11 +37,9 @@ function part(value: unknown): ContentInput {
   });
   const input = structuredClone(value) as Record<string, unknown>;
   if (isContentRef(input)) {
-    if ("value" in input || "resolve" in input) {
-      throw new TypeError("Wire references cannot contain resolved values.");
-    }
-    assertJson(input);
-    return input;
+    const ref = canonicalizeContentRefs(input) as ContentRef;
+    assertJson(ref);
+    return ref;
   }
   if (input.type === "text" && typeof input.text === "string") {
     assertJson(input);

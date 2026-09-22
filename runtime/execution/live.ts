@@ -1,5 +1,6 @@
 import type { CopilotzEvent } from "../events/index.ts";
 import {
+  hydrateProcessorEventContent,
   isProcessor,
   matchProcessor,
   type PluginRegistry,
@@ -51,10 +52,16 @@ export type LiveProcessorContextFactory = (
   base: LiveProcessorContextBase,
 ) => ProcessorContext | Promise<ProcessorContext>;
 
+export type LiveProcessorEventResolver = (
+  event: CopilotzEvent,
+  databaseSchema: string,
+) => Promise<ProcessorEvent>;
+
 export type CreateLiveProcessorWorkloadOptions = Readonly<{
   registry: PluginRegistry;
   transients?: TransientProcessorSet;
   createContext: LiveProcessorContextFactory;
+  resolveEvent?: LiveProcessorEventResolver;
   maxEventBytes?: number;
 }>;
 
@@ -67,6 +74,8 @@ export type InvokeLiveProcessorsOptions = Readonly<{
   eventData?: unknown;
   /** Reused immutable view also published to application observers. */
   resolvedEvent?: ProcessorEvent;
+  /** Resolves an Event for transport-hosted live processors. */
+  resolveEvent?: LiveProcessorEventResolver;
   signal: AbortSignal;
   settlementScopeId?: string;
   createContext: LiveProcessorContextFactory;
@@ -260,14 +269,7 @@ async function invokeOne(
   dispatchAttemptId: string,
 ): Promise<void> {
   const processor = lookupProcessor(options, processorId);
-  if (
-    !isProcessor(processor) ||
-    !matchProcessor(
-      processor,
-      options.event,
-      options.resolvedEvent?.data ?? options.eventData,
-    )
-  ) {
+  if (!isProcessor(processor)) {
     throw new Error(
       `Live processor '${processorId}' is unavailable or no longer matches.`,
     );
@@ -291,15 +293,25 @@ async function invokeOne(
   } as const;
   const context = await options.createContext(base);
   options.signal.throwIfAborted();
-  await processor.handle(
-    options.resolvedEvent ?? withProcessorEventData(
-      options.event,
-      options.eventData === undefined
-        ? options.event.payload
-        : options.eventData,
-    ),
-    context,
-  );
+  const processorEvent = options.resolvedEvent ??
+    (options.resolveEvent
+      ? await options.resolveEvent(options.event, options.databaseSchema)
+      : withProcessorEventData(
+        options.event,
+        await hydrateProcessorEventContent(
+          options.eventData === undefined
+            ? options.event.payload
+            : options.eventData,
+          { getMany: (refs) => context.content.resolveMany(refs) },
+          options.event.namespace,
+        ),
+      ));
+  if (!matchProcessor(processor, options.event, processorEvent.data)) {
+    throw new Error(
+      `Live processor '${processorId}' is unavailable or no longer matches.`,
+    );
+  }
+  await processor.handle(processorEvent, context);
   options.signal.throwIfAborted();
 }
 
@@ -346,6 +358,7 @@ export function createLiveProcessorWorkload(
         event,
         signal,
         createContext: options.createContext,
+        resolveEvent: options.resolveEvent,
         transients: options.transients,
         settlementScopeId: metadata.settlementScopeId,
       },

@@ -16,9 +16,9 @@ export const scheduledJobsTickInputProcessor: Processor<
   on: [{ eventType: SCHEDULED_JOBS_TICK_INPUT_EVENT }],
   async handle(event, context) {
     if (!event.durable) return;
-    const input = event.payload && typeof event.payload === "object" &&
-        !Array.isArray(event.payload)
-      ? event.payload as ScheduledJobTickInput
+    const input = event.data && typeof event.data === "object" &&
+        !Array.isArray(event.data)
+      ? event.data as ScheduledJobTickInput
       : {};
     await context.actions.tickScheduledJobs(input, {
       operationKey: "scheduled-jobs-tick-input",

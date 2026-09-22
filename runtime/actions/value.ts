@@ -1,4 +1,5 @@
 import { assertJsonValue } from "../json.ts";
+import { canonicalizeContentRefs } from "../content/input.ts";
 import type { ActionInvocationMetadata } from "./types.ts";
 
 function invalidMetadata(path: string): never {
@@ -22,7 +23,7 @@ export function durableActionMetadata(
       { cause },
     );
   }
-  return (ordered(value)) as ActionInvocationMetadata;
+  return (ordered(canonicalizeContentRefs(value))) as ActionInvocationMetadata;
 }
 
 /** Normalizes one Action input/output to the exact JSON value EventBodyStore persists. */
@@ -32,7 +33,7 @@ export function durableActionValue(value: unknown): unknown {
     if (text === undefined) {
       throw new TypeError("Value is not JSON serializable.");
     }
-    return (JSON.parse(text));
+    return canonicalizeContentRefs(JSON.parse(text));
   } catch (cause) {
     throw new TypeError("Action input/output must be JSON serializable.", {
       cause,

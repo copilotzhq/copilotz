@@ -9,7 +9,11 @@ import {
   defineAction,
 } from "@copilotz/copilotz/actions";
 import type { CollectionRecord } from "@copilotz/copilotz/collections";
-import type { ContentRef, ContentSequence } from "@copilotz/copilotz/content";
+import {
+  type ContentRef,
+  type ContentSequence,
+  isContentRef,
+} from "@copilotz/copilotz/content";
 import { deriveWorkflowId } from "@copilotz/copilotz/events";
 import { cloneChannelJson } from "../../authoring/channel-ingress/index.ts";
 import { defineChannelResource } from "../../authoring/channel-resource/index.ts";
@@ -18,6 +22,7 @@ import type {
   ChannelDeliveryIntent,
   ChannelEgressActionInput,
   ChannelEgressActionOutput,
+  ChannelEgressMessage,
   ChannelJsonObject,
   ChannelResource,
 } from "../../shared/contracts.ts";
@@ -28,9 +33,21 @@ export const CHANNEL_EGRESS_ACTION_ID = "copilotz.channels.egress";
 const egressSchema = {
   type: "object",
   additionalProperties: false,
-  properties: { messageId: { type: "string" } },
+  properties: {
+    messageId: { type: "string" },
+    message: { type: "object" },
+  },
   required: ["messageId"],
 } as const;
+
+const EGRESS_INPUT_KEYS = new Set(["messageId", "message"]);
+const EGRESS_MESSAGE_KEYS = new Set([
+  "id",
+  "senderId",
+  "threadId",
+  "content",
+  "metadata",
+]);
 
 function text(value: unknown, label: string): string {
   const normalized = typeof value === "string" ? value.trim() : "";
@@ -42,32 +59,35 @@ function optionalText(value: unknown, label: string): string | undefined {
   return value === undefined ? undefined : text(value, label);
 }
 
-function input(value: unknown): ChannelEgressActionInput {
+function fields(
+  value: unknown,
+  allowed: ReadonlySet<string>,
+  label: string,
+): Readonly<Record<string, unknown>> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new TypeError("Channel egress Action input must be a plain object.");
+    throw new TypeError(`${label} must be a plain object.`);
   }
   const prototype = Object.getPrototypeOf(value);
   if (prototype !== Object.prototype && prototype !== null) {
-    throw new TypeError("Channel egress Action input must be a plain object.");
+    throw new TypeError(`${label} must be a plain object.`);
   }
-  const keys = Reflect.ownKeys(value);
-  if (keys.length !== 1 || keys[0] !== "messageId") {
-    throw new TypeError(
-      "Channel egress Action input cannot declare extra properties.",
-    );
+  const result: Record<string, unknown> = {};
+  for (const key of Reflect.ownKeys(value)) {
+    if (typeof key !== "string" || !allowed.has(key)) {
+      throw new TypeError(`${label} cannot declare '${String(key)}'.`);
+    }
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (!descriptor?.enumerable || !("value" in descriptor)) {
+      throw new TypeError(
+        `${label}.${key} must be an enumerable data property.`,
+      );
+    }
+    if (descriptor.value === undefined) {
+      throw new TypeError(`${label}.${key} cannot be undefined.`);
+    }
+    result[key] = descriptor.value;
   }
-  const descriptor = Object.getOwnPropertyDescriptor(value, "messageId");
-  if (
-    !descriptor?.enumerable || !("value" in descriptor) ||
-    descriptor.value === undefined
-  ) {
-    throw new TypeError(
-      "Channel egress Action input.messageId must be an enumerable data property.",
-    );
-  }
-  return ({
-    messageId: text(descriptor.value, "Channel egress message ID"),
-  } as const);
+  return result;
 }
 
 function object(value: unknown, label: string): ChannelJsonObject {
@@ -105,23 +125,75 @@ function dataArray(value: unknown, label: string): readonly unknown[] {
 }
 
 function contentSequence(value: unknown): ContentSequence {
-  return (dataArray(value, "Channel delivery content").map((value, index) => {
-    const cloned = cloneChannelJson(
-      value,
-      `Channel delivery content[${index}]`,
+  return (dataArray(value, "Channel delivery content").map(
+    (value, index): ContentRef => {
+      if (!isContentRef(value)) {
+        throw new TypeError(
+          `Channel delivery content[${index}] must be a ref.`,
+        );
+      }
+      const ref = value as ContentRef;
+      return {
+        assetId: text(
+          ref.assetId,
+          `Channel delivery content[${index}] Asset ID`,
+        ),
+        kind: ref.kind,
+        role: text(ref.role, `Channel delivery content[${index}] role`),
+        mediaType: text(
+          ref.mediaType,
+          `Channel delivery content[${index}] media type`,
+        ),
+        ...(ref.name === undefined ? {} : {
+          name: text(ref.name, `Channel delivery content[${index}] name`),
+        }),
+        ...(ref.alt === undefined ? {} : {
+          alt: text(ref.alt, `Channel delivery content[${index}] alt`),
+        }),
+        ...(ref.language === undefined ? {} : {
+          language: text(
+            ref.language,
+            `Channel delivery content[${index}] language`,
+          ),
+        }),
+        ...(ref.disposition === undefined
+          ? {}
+          : { disposition: ref.disposition }),
+        ...(ref.metadata === undefined ? {} : {
+          metadata: object(
+            ref.metadata,
+            `Channel delivery content[${index}] metadata`,
+          ) as unknown as Record<string, unknown>,
+        }),
+      } as const;
+    },
+  ));
+}
+
+function message(value: unknown): ChannelEgressMessage {
+  const snapshot = fields(value, EGRESS_MESSAGE_KEYS, "Channel egress message");
+  return {
+    id: text(snapshot.id, "Channel egress message ID"),
+    senderId: text(snapshot.senderId, "Channel egress message sender ID"),
+    threadId: text(snapshot.threadId, "Channel egress message thread ID"),
+    content: contentSequence(snapshot.content),
+    metadata: object(snapshot.metadata, "Channel egress message metadata"),
+  };
+}
+
+function input(value: unknown): ChannelEgressActionInput {
+  const raw = fields(value, EGRESS_INPUT_KEYS, "Channel egress Action input");
+  const messageId = text(raw.messageId, "Channel egress message ID");
+  const snapshot = raw.message === undefined ? undefined : message(raw.message);
+  if (snapshot && snapshot.id !== messageId) {
+    throw new TypeError(
+      "Channel egress message snapshot ID must match messageId.",
     );
-    if (!cloned || typeof cloned !== "object" || Array.isArray(cloned)) {
-      throw new TypeError(
-        `Channel delivery content[${index}] must be a ref.`,
-      );
-    }
-    const ref = cloned as unknown as ContentRef;
-    text(ref.assetId, `Channel delivery content[${index}] Asset ID`);
-    text(ref.kind, `Channel delivery content[${index}] kind`);
-    text(ref.role, `Channel delivery content[${index}] role`);
-    text(ref.mediaType, `Channel delivery content[${index}] media type`);
-    return ref;
-  }));
+  }
+  return {
+    messageId,
+    ...(snapshot ? { message: snapshot } : {}),
+  };
 }
 
 function channel(
@@ -145,8 +217,10 @@ async function execute(
   rawInput: ChannelEgressActionInput,
   context: ChannelActionContext,
 ): Promise<ChannelEgressActionOutput> {
-  const messageId = input(rawInput).messageId;
-  const message = await context.collections.message.get({ id: messageId });
+  const actionInput = input(rawInput);
+  const messageId = actionInput.messageId;
+  const message = actionInput.message ??
+    await context.collections.message.get({ id: messageId });
   if (!message) throw new Error(`Message '${messageId}' was not found.`);
   const sender = await context.collections.participant.get({
     id: text(message.senderId, "Message sender ID"),

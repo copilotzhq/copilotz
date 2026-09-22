@@ -20,21 +20,28 @@ import {
 } from "../../runtime/plugins/index.ts";
 import {
   type ActionCallers,
+  type ActionContext,
   defineAction,
 } from "../../runtime/actions/index.ts";
 import { coreCollections, createThreadAction } from "../core/index.ts";
 import type { LlmCallInput, LlmCallOutput } from "@copilotz/copilotz/llm";
 const NAMESPACE = "tenant-a";
 const THREAD_ID = "thread-a";
-function llmOutput(
+async function llmOutput(
   model: string,
   input: Readonly<{
     usage: NonNullable<LlmCallOutput["usage"]>;
     attempts?: NonNullable<LlmCallOutput["attempts"]>;
     secret?: string;
   }>,
-): LlmCallOutput {
+  context: Pick<ActionContext, "action" | "content">,
+): Promise<LlmCallOutput> {
   const secret = input.secret ?? "provider-output-must-not-be-copied";
+  const content = await context.content.materialize(
+    await context.content.prepare(secret, {
+      operationKey: `${context.action.runId}:output`,
+    }),
+  );
   const attempts = input.attempts ?? Object.freeze([Object.freeze({
     id: `${model}-attempt-0`,
     index: 0,
@@ -53,12 +60,7 @@ function llmOutput(
     connection: "primary",
     adapter: "openai-primary",
     providerModel: "gpt-5-mini-test",
-    content: Object.freeze([Object.freeze({
-      assetId: secret,
-      kind: "text" as const,
-      mediaType: "text/plain",
-      role: "body" as const,
-    })]),
+    content,
     toolCalls: Object.freeze([Object.freeze({
       id: "tool-call-1",
       action: "lookup",
@@ -131,7 +133,7 @@ const usageLlmAction = defineAction<LlmCallInput, LlmCallOutput>({
       throw new Error("framework rejected provider output");
     }
     if (model === "aggregate-model") {
-      return llmOutput(model, {
+      return await llmOutput(model, {
         usage: Object.freeze({
           inputTokens: 23,
           outputTokens: 7,
@@ -179,10 +181,10 @@ const usageLlmAction = defineAction<LlmCallInput, LlmCallOutput>({
           }),
         ]),
         secret: "aggregate-content-must-not-be-copied",
-      });
+      }, context);
     }
     if (model === "uncosted-model") {
-      return llmOutput(model, {
+      return await llmOutput(model, {
         usage: Object.freeze({
           inputTokens: 4,
           outputTokens: 3,
@@ -224,9 +226,9 @@ const usageLlmAction = defineAction<LlmCallInput, LlmCallOutput>({
           }),
         ]),
         secret: "uncosted-content-must-not-be-copied",
-      });
+      }, context);
     }
-    return llmOutput(model, {
+    return await llmOutput(model, {
       usage: Object.freeze({
         inputTokens: 10,
         outputTokens: 5,
@@ -236,7 +238,7 @@ const usageLlmAction = defineAction<LlmCallInput, LlmCallOutput>({
         totalTokens: 17,
         cost: Object.freeze({ amount: 0.02, currency: "USD" }),
       }),
-    });
+    }, context);
   },
 });
 const usageToolAction = defineAction<unknown, unknown>({

@@ -69,7 +69,11 @@ import type {
   PluginRegistry,
   TransientProcessorSet,
 } from "../plugins/index.ts";
-import { resolveProcessorEvent } from "../plugins/index.ts";
+import {
+  hydrateProcessorEventContent,
+  resolveProcessorEvent,
+} from "../plugins/index.ts";
+import { canonicalizeContentRefs } from "../content/input.ts";
 import { withProcessorEventData } from "../plugins/processor.ts";
 import type {
   CopilotzEngineDatabaseScope,
@@ -261,7 +265,13 @@ export function createDatabaseScope(
           `Event type '${draft.type.trim()}' is reserved for the registered Action lifecycle.`,
         );
       }
-      return coordinator.append(draft, appendOptions);
+      return coordinator.append({
+        ...draft,
+        payload: canonicalizeContentRefs(draft.payload),
+        ...(draft.delta === undefined
+          ? {}
+          : { delta: canonicalizeContentRefs(draft.delta) }),
+      }, appendOptions);
     },
     async appendProtected(draft, schema, ownerId) {
       const deduplicationId = draft.deduplicationId?.trim();
@@ -270,15 +280,16 @@ export function createDatabaseScope(
           "Protected Event ingress requires deduplicationId.",
         );
       }
+      const payload = canonicalizeContentRefs(draft.payload);
       const prepared = await prepareProtectedEventBody({
         namespace: draft.namespace,
         ownerId,
-        data: draft.payload,
+        data: payload,
         schema,
         protectedValues,
       });
       const bodyId = `event-body:${draft.namespace}:${deduplicationId}`;
-      const payload = {
+      const persistedPayload = {
         dataRef: {
           eventBodyId: bodyId,
           schemaVersion: 1,
@@ -286,7 +297,7 @@ export function createDatabaseScope(
         } as const,
       } as const;
       return await coordinator.commitMutation({
-        draft: { ...draft, payload },
+        draft: { ...draft, payload: persistedPayload },
         matchData: prepared.publicData,
         mutate: async (context) => {
           for (const value of prepared.prepared) {
@@ -347,7 +358,7 @@ export function createDatabaseScope(
     async resolve(namespace, id) {
       const event = await store.getEvent(id);
       if (!event || event.namespace !== namespace) return null;
-      return await resolveProcessorEvent(store, event);
+      return await resolveProcessorEvent(store, event, resolver);
     },
     async resolveProtected(namespace, id, schema) {
       const event = await store.getEvent(id);
@@ -357,12 +368,16 @@ export function createDatabaseScope(
       }
       return withProcessorEventData(
         event,
-        await resolveProtectedEventData({
-          store,
-          event,
-          schema,
-          protectedValues,
-        }),
+        await hydrateProcessorEventContent(
+          await resolveProtectedEventData({
+            store,
+            event,
+            schema,
+            protectedValues,
+          }),
+          resolver,
+          namespace,
+        ),
       );
     },
     async resolveActionLifecycle(namespace, id) {

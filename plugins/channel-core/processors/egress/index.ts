@@ -6,6 +6,7 @@
 
 import { isSettledActionError } from "@copilotz/copilotz/actions";
 import type { ActionCaller } from "@copilotz/copilotz/actions";
+import { type ContentRef, isContentRef } from "@copilotz/copilotz/content";
 import {
   defineProcessor,
   type Processor,
@@ -17,6 +18,7 @@ import type {
 } from "../../actions/ingress/index.ts";
 import type { channelEgressAction } from "../../actions/egress/index.ts";
 import { defineChannelResource } from "../../authoring/channel-resource/index.ts";
+import type { ChannelEgressMessage } from "../../shared/contracts.ts";
 
 type ChannelProcessorContext = ProcessorContext<
   ChannelActionResources,
@@ -32,6 +34,43 @@ function record(value: unknown): Record<string, unknown> {
 
 function text(value: unknown): string {
   return typeof value === "string" && value.trim() ? value.trim() : "";
+}
+
+function content(value: unknown): ChannelEgressMessage["content"] | null {
+  if (!Array.isArray(value) || !value.every(isContentRef)) return null;
+  return value.map((ref) => {
+    const entry = ref as ContentRef;
+    return {
+      assetId: entry.assetId,
+      kind: entry.kind,
+      role: entry.role,
+      mediaType: entry.mediaType,
+      ...(entry.name === undefined ? {} : { name: entry.name }),
+      ...(entry.alt === undefined ? {} : { alt: entry.alt }),
+      ...(entry.language === undefined ? {} : { language: entry.language }),
+      ...(entry.disposition === undefined
+        ? {}
+        : { disposition: entry.disposition }),
+      ...(entry.metadata === undefined ? {} : { metadata: entry.metadata }),
+    };
+  });
+}
+
+function message(value: Record<string, unknown>): ChannelEgressMessage | null {
+  const id = text(value.id);
+  const senderId = text(value.senderId);
+  const threadId = text(value.threadId);
+  const entries = content(value.content);
+  if (!id || !senderId || !threadId || !entries) {
+    return null;
+  }
+  return {
+    id,
+    senderId,
+    threadId,
+    content: entries,
+    metadata: record(value.metadata) as ChannelEgressMessage["metadata"],
+  };
 }
 
 function receipt(
@@ -56,20 +95,15 @@ export const channelEgressProcessor: Processor<ChannelProcessorContext> =
     settlement: "detached",
     async handle(event, context) {
       if (!event.durable) return;
-      const messageId = text(
-        record(event.data).record && record(record(event.data).record).id,
-      ) || text(event.subject?.id);
-      if (!messageId) return;
-      const message = await context.collections.message.get({ id: messageId });
-      if (!message) return;
-      const senderId = text(message.senderId);
-      if (!senderId) return;
+      const snapshot = message(record(record(event.data).record));
+      if (!snapshot) return;
+      const messageId = snapshot.id;
+      const senderId = snapshot.senderId;
       const sender = await context.collections.participant.get({
         id: senderId,
       });
       if (sender?.participantType !== "agent") return;
-      const threadId = text(message.threadId);
-      if (!threadId) return;
+      const threadId = snapshot.threadId;
       const bindings = await context.collections.channelBinding.queries
         .byThreadId({ threadId });
       const hasExternalBinding = bindings.some((binding) => {
@@ -83,7 +117,10 @@ export const channelEgressProcessor: Processor<ChannelProcessorContext> =
       if (!hasExternalBinding) return;
       let output;
       try {
-        output = await context.actions.channelEgress({ messageId }, {
+        output = await context.actions.channelEgress({
+          messageId,
+          message: snapshot,
+        }, {
           operationKey: `egress:${messageId}`,
           identity: {
             causationId: event.id,

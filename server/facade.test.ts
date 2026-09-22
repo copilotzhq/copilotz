@@ -25,7 +25,11 @@ import { createCopilotzApplication } from "../runtime/application/index.ts";
 import { createTestDatabase } from "../runtime/testing/ominipg.ts";
 import { createServerFacadeFetchHandler } from "./facade.ts";
 import { CopilotzHttpError, createCopilotzClient } from "../client/index.ts";
-import { base64ToBytes, bytesToBase64 } from "../runtime/content/index.ts";
+import {
+  base64ToBytes,
+  bytesToBase64,
+  type ContentRef,
+} from "../runtime/content/index.ts";
 import { provisionOperationCatalog } from "../runtime/streams/index.ts";
 import { createHttpOperations } from "./operations.ts";
 import { listThreadOperations } from "../plugins/core-http/adapters/http/core/operations/index.ts";
@@ -183,10 +187,50 @@ const protectedEcho = defineAction({
   },
 });
 
+const contentOutput = defineAction({
+  id: "test.server.content-output",
+  async execute(_input, context) {
+    const textAsset = await context.content.publish({
+      mediaType: "text/plain",
+      body: new TextEncoder().encode("resolved action text"),
+    }, { operationKey: "content-output:text" });
+    const jsonAsset = await context.content.publish({
+      mediaType: "application/json",
+      body: new TextEncoder().encode('{"answer":42}'),
+    }, { operationKey: "content-output:json" });
+    const binaryAsset = await context.content.publish({
+      mediaType: "application/octet-stream",
+      body: new Uint8Array([1, 2, 3]),
+    }, { operationKey: "content-output:binary" });
+    const text: ContentRef = {
+      assetId: textAsset.id,
+      kind: "text",
+      role: "body",
+      mediaType: textAsset.mediaType,
+    };
+    const json: ContentRef = {
+      assetId: jsonAsset.id,
+      kind: "json",
+      role: "body",
+      mediaType: jsonAsset.mediaType,
+    };
+    return {
+      nested: { text, json },
+      unresolved: { ...text, resolve: false },
+      binary: {
+        assetId: binaryAsset.id,
+        kind: "file",
+        role: "attachment",
+        mediaType: binaryAsset.mediaType,
+      },
+    };
+  },
+});
+
 const fixture = definePlugin({
   id: "test.server-facade",
   version: "1.0.0",
-  actions: { echo },
+  actions: { echo, contentOutput },
   collections: { notes },
 });
 
@@ -312,6 +356,70 @@ Deno.test("Server facade protects durable secrets and restricts plaintext to aut
     const durable = JSON.stringify({ bodies: bodies.rows, nodes: nodes.rows });
     assertEquals(durable.includes(SECRET_INPUT), false);
     assertEquals(durable.includes(SECRET_OUTPUT), false);
+  } finally {
+    await application.close();
+    await database.close();
+  }
+});
+
+Deno.test("HTTP Action results hydrate nested output content without changing durable refs", async () => {
+  const databaseSchema = "server_facade_content_result_test";
+  const database = await createTestDatabase({ url: ":memory:" });
+  const application = await createCopilotzApplication({
+    database,
+    namespace: "tenant-a",
+    databaseSchema,
+    plugins: [
+      fixture,
+      defineFixturePlugin({
+        ...serverPlugin,
+        resources: {
+          server: {
+            default: fixtureServerFacade({
+              authenticate() {
+                return { namespace: "tenant-a" };
+              },
+              expose: {
+                actions: { include: ["test.server.content-output"] },
+                collections: false,
+                channels: false,
+              },
+            }),
+          },
+        },
+      }),
+    ],
+  });
+  const handler = createServerFacadeFetchHandler(application);
+  const client = browser(handler);
+  try {
+    const receipt = await client.actions.submit(
+      "test.server.content-output",
+      {},
+      { idempotencyKey: "content-output-result" },
+    );
+    const result = await client.operations.result(receipt.operationId) as {
+      nested: {
+        text: ContentRef & { value?: unknown };
+        json: ContentRef & { value?: unknown };
+      };
+      unresolved: ContentRef & { value?: unknown; resolve?: boolean };
+      binary: ContentRef & { value?: unknown };
+    };
+    assertEquals(result.nested.text.value, "resolved action text");
+    assertEquals(result.nested.json.value, { answer: 42 });
+    assertEquals(result.unresolved.value, undefined);
+    assertEquals(result.unresolved.resolve, false);
+    assertEquals(result.binary.value, undefined);
+
+    const tables = createCoreTableNames(databaseSchema);
+    const bodies = await database.query<{ body: unknown }>(
+      `SELECT body FROM ${tables.event_bodies}`,
+    );
+    const raw = JSON.stringify(bodies.rows);
+    assert(raw.includes(result.nested.text.assetId));
+    assertEquals(raw.includes("resolved action text"), false);
+    assertEquals(raw.includes('"answer":42'), false);
   } finally {
     await application.close();
     await database.close();

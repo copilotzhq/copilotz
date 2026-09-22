@@ -156,9 +156,12 @@ merely because an operation has settled.
 
 Secret-marked inputs are encrypted before the existing durable Action ingress.
 Observations retain redacted values. Authorized result reads hydrate protected
-results and use `Cache-Control: no-store`; generated OpenAPI removes examples
-and defaults from secret-marked schema nodes. HTTP adds no storage format,
-database migration, output log, or execution lifecycle.
+results and text/JSON content references nested in completed Action output;
+durable event bodies retain descriptor-only references, and binary references
+remain descriptor-only at this boundary. Result reads set `Cache-Control` to
+`no-store`; generated OpenAPI removes examples and defaults from secret-marked
+schema nodes. HTTP adds no storage format, database migration, output log, or
+execution lifecycle.
 
 ### Conversation membership and recipients
 

@@ -1,5 +1,9 @@
 /** Pure conversion shared by preflight and durable Action execution. @module */
-import { type ContentRef, formatAssetRef } from "@copilotz/copilotz/content";
+import {
+  type ContentBodyValue,
+  type ContentRef,
+  formatAssetRef,
+} from "@copilotz/copilotz/content";
 import type {
   LlmAdapterContentPart,
   LlmAdapterMessage,
@@ -8,7 +12,9 @@ import type {
   LlmMessage,
   LlmRequest,
 } from "./contracts.ts";
-function contentFields(ref: ContentRef): Readonly<Record<string, unknown>> {
+function contentFields(
+  ref: Omit<ContentRef, "assetId">,
+): Readonly<Record<string, unknown>> {
   return {
     role: ref.role,
     mediaType: ref.mediaType,
@@ -20,7 +26,13 @@ function contentFields(ref: ContentRef): Readonly<Record<string, unknown>> {
   };
 }
 
-export type PreparedEntry = ContentRef & { value?: unknown; resolve?: false };
+export type PreparedEntry =
+  | (Omit<ContentRef, "assetId"> & {
+    assetId?: string;
+    value: ContentBodyValue;
+    resolve?: never;
+  })
+  | (ContentRef & { resolve: false; value?: never });
 
 function preparedPart(ref: PreparedEntry): LlmAdapterContentPart {
   const fields = contentFields(ref);

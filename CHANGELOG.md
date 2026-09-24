@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.80.4 — 2026-09-24
+
+- Bound oversized Tool results when preparing model and Memory transcripts,
+  including results already stored in conversation history. Keep the original
+  result durable and show a compact marker instead of spending the input budget
+  on its full body.
+- Add the automatically available `readToolResult` Tool for authorized agents to
+  retrieve a bounded UTF-8 slice or search for literal text by Message ID.
+  Configure inline, read, and source-size limits through Core's `toolResults`
+  resource.
+
 ## 0.80.3 — 2026-09-24
 
 - Prepare each built-in model's final provider transcript before starting a

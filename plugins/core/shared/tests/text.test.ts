@@ -478,6 +478,7 @@ Deno.test("Core invokes llm.call with explicit model selections and connections"
     assertStringIncludes(inputText(input), "Answer this message");
     assertEquals(input.request.tools?.map((tool) => tool.name), [
       "contract_tool",
+      "readToolResult",
     ]);
     const messages = await projectMessages(
       fixture.engine,
@@ -513,7 +514,7 @@ Deno.test("Core invokes llm.call with explicit model selections and connections"
       agentId: "north",
       agentParticipantId: "agent-north",
       initiatorParticipantId: "user-a",
-      availableToolIds: ["contract_tool"],
+      availableToolIds: ["contract_tool", "readToolResult"],
       responseVisibility: { kind: "public" },
       llmSession: {
         schema: "copilotz.llm-session.v1",
@@ -1004,7 +1005,7 @@ description: Shows the plugin-owned catalog in a Core prompt.
     assertEquals(reads, 0);
     assertEquals(
       (fixture.inputs[0]?.request.tools ?? []).map((tool) => tool.name),
-      ["contract_tool", "list_skills", "load_skill"],
+      ["contract_tool", "readToolResult", "list_skills", "load_skill"],
     );
   } finally {
     await fixture.close();

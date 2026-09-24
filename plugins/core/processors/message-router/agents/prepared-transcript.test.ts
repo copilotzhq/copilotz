@@ -1,4 +1,9 @@
-import { assertEquals, assertRejects } from "@std/assert";
+import {
+  assert,
+  assertEquals,
+  assertRejects,
+  assertStringIncludes,
+} from "@std/assert";
 import { createTestDatabase } from "../../../../../runtime/testing/ominipg.ts";
 import { createSqlSession } from "../../../../../runtime/events/index.ts";
 import { queryCollectionRecords } from "../../../../../runtime/collections/query.ts";
@@ -22,8 +27,321 @@ import {
 import type { Participant } from "../../../shared/contracts.ts";
 import type { CoreProcessorContext } from "../../../shared/runtime-context.ts";
 import { prepareLlmTranscript } from "../../../shared/agents/prepared-transcript.ts";
+import { projectedSourceMessages } from "../../../../memory/shared/source.ts";
+import { readToolResultAction } from "../../../actions/read-tool-result/index.ts";
+import { CORE_TOOL_ACTION_METADATA_SCHEMA } from "../../../shared/workflow-metadata.ts";
 
 const date = "2026-09-06T00:00:00.000Z";
+Deno.test("oversized stored Tool results become budgeted markers for prompt and memory", async () => {
+  const db = await createTestDatabase({ url: ":memory:" });
+  const session = createSqlSession(db);
+  const assets = createMemoryAssetRepository();
+  const readIds: string[] = [];
+  const resolver = createContentResolver({
+    assets,
+    authorize: ({ ref }) => {
+      readIds.push(ref.assetId);
+      return true;
+    },
+  });
+  try {
+    const rawText = `KANBAN_PRIVATE_RESULT_${"x".repeat(40 * 1024)}`;
+    await assets.publish({
+      namespace: "tenant",
+      id: "legacy-tool-body",
+      mediaType: "text/plain",
+      body: new TextEncoder().encode(rawText),
+    });
+    const ref = {
+      assetId: "legacy-tool-body",
+      kind: "text",
+      role: "tool.output",
+      mediaType: "text/plain",
+    } as const;
+    const records = [{
+      id: "old-tool-result",
+      namespace: "tenant",
+      threadId: "thread",
+      senderId: "north-tool",
+      recipientIds: ["north"],
+      content: [ref],
+      metadata: {
+        requesterId: "north",
+        historyVisibility: "requester_only",
+        toolStatus: "completed",
+        toolId: "search",
+        toolInvocation: { id: "north-call", tool: { id: "search" } },
+        copilotzWorkflow: {
+          kind: "tool_result",
+          agentParticipantId: "north",
+        },
+      },
+      visibility: {
+        kind: "tool",
+        policy: "requester_only",
+        requesterId: "north",
+      },
+      createdAt: date,
+      updatedAt: date,
+    }, {
+      id: "public-peer-tool-result",
+      namespace: "tenant",
+      threadId: "thread",
+      senderId: "east-tool",
+      recipientIds: ["north"],
+      content: [ref],
+      metadata: {
+        requesterId: "east",
+        historyVisibility: "public",
+        toolStatus: "completed",
+        toolId: "search",
+        toolInvocation: { id: "east-call", tool: { id: "search" } },
+      },
+      visibility: { kind: "public" },
+      createdAt: new Date(Date.parse(date) + 1_000).toISOString(),
+      updatedAt: new Date(Date.parse(date) + 1_000).toISOString(),
+    }].map((record) => record as CollectionRecord);
+    await session.query(
+      "CREATE TABLE bounded_tool_nodes (id text,namespace text,type text,data jsonb,created_at timestamptz,updated_at timestamptz,content text)",
+    );
+    await session.query(
+      "INSERT INTO bounded_tool_nodes SELECT r->>'id','tenant','message',r,(r->>'createdAt')::timestamptz,(r->>'updatedAt')::timestamptz,'' FROM jsonb_array_elements($1::jsonb) r",
+      [JSON.stringify(records)],
+    );
+    const list = createResolvedCollectionReader(
+      (query: CollectionQuery) =>
+        queryCollectionRecords(
+          session,
+          { nodes: "bounded_tool_nodes", edges: "unused" },
+          messageCollection,
+          "tenant",
+          query,
+        ),
+      messageCollection,
+      "tenant",
+      resolver,
+    );
+    const participants = [
+      ["north", "agent"],
+      ["north-tool", "tool"],
+      ["east-tool", "tool"],
+    ] as const;
+    const history = records.map((record) => {
+      const [id, type] = participants.find(([id]) => id === record.senderId)!;
+      const sender = {
+        id,
+        namespace: "tenant",
+        externalId: id,
+        participantType: type,
+        metadata: {},
+        createdAt: date,
+        updatedAt: date,
+      } as Participant;
+      return {
+        ...mapMessageRecord(record, sender),
+        visibility: record.visibility as Record<string, unknown>,
+      };
+    });
+    const context = {
+      collections: { message: { list } as unknown as ScopedCollection },
+      content: {
+        getMany: (ids: readonly string[]) => assets.getMany("tenant", ids),
+        resolveMany: (refs: readonly typeof ref[]) =>
+          resolver.getMany(refs, { namespace: "tenant" }),
+      },
+      resources: { toolResults: {} },
+    } as unknown as CoreProcessorContext;
+    const input = {
+      threadId: "thread",
+      participantId: "north",
+      history,
+    } as const;
+
+    const prompt = await prepareLlmTranscript(context, input, {
+      byteLimit: 4 * 1024,
+    });
+    assertEquals(prompt.map((message) => message.role), ["tool", "user"]);
+    const markers = prompt.map((message) => {
+      const entry = message.content[0];
+      return String(entry && "value" in entry ? entry.value : "");
+    });
+    assertStringIncludes(markers[0], "old-tool-result");
+    assertStringIncludes(markers[1], "public-peer-tool-result");
+    assertStringIncludes(markers[0], "full stored result remains retrievable");
+    assertEquals(markers.some((marker) => marker.includes(rawText)), false);
+
+    const memory = await projectedSourceMessages(context as never, {
+      threadId: "thread",
+      participantId: "north",
+      messages: history,
+      byteLimit: 4 * 1024,
+    });
+    assertStringIncludes(memory[0].text, "old-tool-result");
+    assertStringIncludes(memory[1].text, "public-peer-tool-result");
+    assertEquals(
+      memory.some((message) => message.text.includes(rawText)),
+      false,
+    );
+    assertEquals(readIds, []);
+
+    const readOrigin = {
+      schema: CORE_TOOL_ACTION_METADATA_SCHEMA,
+      planId: "read-plan",
+      planMessageId: "read-plan-message",
+      planIndex: 0,
+      stageIndex: 0,
+      stageCount: 1,
+      planSize: 1,
+      toolCallId: "read-call",
+      action: "readToolResult",
+      threadId: "thread",
+      triggerMessageId: "trigger",
+      agentId: "north-agent",
+      agentParticipantId: "north",
+      initiatorParticipantId: "north",
+      availableToolIds: ["readToolResult"],
+      responseVisibility: { kind: "public" },
+      parentLlmActionRunId: "llm-run",
+    };
+    const retrieved = await readToolResultAction.execute({
+      messageId: "old-tool-result",
+      offset: 0,
+      limit: 1_024,
+    }, {
+      resources: {
+        agents: { "north-agent": { id: "north-agent" } },
+        toolResults: { default: { maxInlineBytes: 10 * 1024 } },
+      },
+      action: { metadata: readOrigin },
+      collections: {
+        thread: {
+          get: () =>
+            Promise.resolve({
+              id: "thread",
+              participantIds: ["north", "human"],
+            }),
+        },
+        participant: {
+          get: ({ id }: { id: string }) =>
+            Promise.resolve(
+              id === "north"
+                ? { id, participantType: "agent", agentId: "north-agent" }
+                : id === "north-tool"
+                ? { id, participantType: "tool" }
+                : null,
+            ),
+        },
+        message: {
+          queries: {
+            history: ({ messageId }: { messageId: string }) =>
+              Promise.resolve(
+                records.filter((record) => record.id === messageId),
+              ),
+          },
+          get: ({ id }: { id: string }) =>
+            Promise.resolve(records.find((record) => record.id === id) ?? null),
+        },
+      },
+      content: {
+        getMany: (ids: readonly string[]) => assets.getMany("tenant", ids),
+        resolveMany: (refs: readonly typeof ref[]) =>
+          resolver.getMany(refs, { namespace: "tenant" }),
+      },
+    } as never);
+    assertStringIncludes(retrieved.content, "KANBAN_PRIVATE_RESULT_");
+    assert(retrieved.content.length <= 1_024);
+    assertEquals(readIds, ["legacy-tool-body"]);
+
+    const readBytes = new TextEncoder().encode(JSON.stringify(retrieved));
+    await assets.publish({
+      namespace: "tenant",
+      id: "read-result-body",
+      mediaType: "application/json",
+      body: readBytes,
+    });
+    const readRecord = {
+      id: "read-result-message",
+      namespace: "tenant",
+      threadId: "thread",
+      senderId: "north-tool",
+      recipientIds: ["north"],
+      content: [{
+        assetId: "read-result-body",
+        kind: "json",
+        role: "tool.output",
+        mediaType: "application/json",
+      }],
+      metadata: {
+        requesterId: "north",
+        historyVisibility: "requester_only",
+        toolStatus: "completed",
+        toolId: "readToolResult",
+        toolInvocation: { id: "read-call", tool: { id: "readToolResult" } },
+      },
+      visibility: {
+        kind: "tool",
+        policy: "requester_only",
+        requesterId: "north",
+      },
+      createdAt: new Date(Date.parse(date) + 2_000).toISOString(),
+      updatedAt: new Date(Date.parse(date) + 2_000).toISOString(),
+    } as CollectionRecord;
+    await session.query(
+      "INSERT INTO bounded_tool_nodes VALUES ($1,'tenant','message',$2::jsonb,$3::timestamptz,$4::timestamptz,'')",
+      [
+        readRecord.id,
+        JSON.stringify(readRecord),
+        readRecord.createdAt,
+        readRecord.updatedAt,
+      ],
+    );
+    const readHistory = [...history, {
+      ...mapMessageRecord(readRecord, {
+        id: "north-tool",
+        namespace: "tenant",
+        externalId: "north-tool",
+        participantType: "tool",
+        metadata: {},
+        createdAt: date,
+        updatedAt: date,
+      } as Participant),
+      visibility: readRecord.visibility,
+    }];
+    const nextPrompt = await prepareLlmTranscript(context, {
+      threadId: "thread",
+      participantId: "north",
+      history: readHistory as never,
+    }, { byteLimit: 4 * 1024 });
+    const readTurn = nextPrompt.find((message) =>
+      message.role === "tool" && message.toolCallId === "read-call"
+    );
+    assert(readTurn);
+    const readTurnContent = readTurn.content[0];
+    assert(readTurnContent && "value" in readTurnContent);
+    assertStringIncludes(
+      JSON.stringify(readTurnContent.value),
+      "KANBAN_PRIVATE_RESULT_",
+    );
+    assertEquals(
+      JSON.stringify(readTurnContent.value).includes("omitted from this input"),
+      false,
+    );
+
+    const markerBytes = markers.reduce(
+      (total, marker) => total + new TextEncoder().encode(marker).byteLength,
+      0,
+    );
+    await assertRejects(
+      () =>
+        prepareLlmTranscript(context, input, { byteLimit: markerBytes - 1 }),
+      RangeError,
+      "byte budget",
+    );
+  } finally {
+    await db.close();
+  }
+});
+
 Deno.test("Core resolves own native reasoning, leaves peer state unread, and counts it in the byte limit", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   const session = createSqlSession(db);

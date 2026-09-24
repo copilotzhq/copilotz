@@ -131,6 +131,7 @@ Deno.test("resolver derives ask and skill mechanisms from higher-level grants", 
     [
       ["clock", "explicit"],
       ["ask", "derived"],
+      ["readToolResult", "derived"],
       ["list_skills", "derived"],
       ["load_skill", "derived"],
       ["read_skill_resource", "derived"],
@@ -143,7 +144,7 @@ Deno.test("resolver derives ask and skill mechanisms from higher-level grants", 
     { agent: "researcher" },
     capabilityContext(resources),
   );
-  assertEquals(restricted.tools, []);
+  assertEquals(restricted.tools.map((entry) => entry.id), ["readToolResult"]);
   assertEquals(restricted.agents, []);
   assertEquals(restricted.skills, []);
 });
@@ -196,7 +197,11 @@ Deno.test("a final-root capability Resource overrides the Skills overlay", async
   assertEquals(resolved.skills.map((entry) => entry.id), ["contract-guide"]);
   assertEquals(
     resolved.tools.map((entry) => [entry.id, entry.grant]),
-    [["clock", "explicit"], ["ask", "derived"]],
+    [
+      ["clock", "explicit"],
+      ["ask", "derived"],
+      ["readToolResult", "derived"],
+    ],
   );
 });
 
@@ -225,7 +230,7 @@ Deno.test("external Skill locators do not derive a reader or implicit fetch tool
 
   assertEquals(
     resolved.tools.map((entry) => entry.id),
-    ["clock", "ask"],
+    ["clock", "ask", "readToolResult"],
   );
 });
 
@@ -262,7 +267,10 @@ Deno.test("capability selection tolerates missing unrelated callers without synt
     { agent: agent.id },
     capabilityContext(registry),
   );
-  assertEquals(resolved.tools.map((entry) => entry.id), ["clock"]);
+  assertEquals(resolved.tools.map((entry) => entry.id), [
+    "clock",
+    "readToolResult",
+  ]);
 });
 
 Deno.test("final-root capability policies receive actual composed callers", async () => {

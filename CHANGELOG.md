@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.80.5 — 2026-09-24
+
+- Give each parallel Tool pipeline its own durable branch cursor so sibling
+  completions do not contend on one mutable plan record. Project the ordered
+  Tool messages once after every branch settles.
+- Migrate in-flight plans on access and keep legacy coordinator events
+  compatible. Retry transient PostgreSQL and collection conflicts around state
+  transactions without rerunning completed Tool Actions.
+
 ## 0.80.4 — 2026-09-24
 
 - Bound oversized Tool results when preparing model and Memory transcripts,

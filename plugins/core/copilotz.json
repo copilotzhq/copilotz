@@ -26,6 +26,7 @@
     "collections/message/index.ts",
     "collections/tool-plan-stage-result/index.ts",
     "collections/tool-plan/index.ts",
+    "collections/tool-plan-branch/index.ts",
     "collections/space/index.ts",
     "collections/thread/index.ts",
     "processors/message-input/index.ts",

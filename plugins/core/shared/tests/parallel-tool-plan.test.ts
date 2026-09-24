@@ -16,6 +16,7 @@ import type {
 import {
   createPluginRegistry,
   definePlugin,
+  defineProcessor,
 } from "../../../../runtime/plugins/index.ts";
 import {
   type CopilotzEngine,
@@ -32,6 +33,8 @@ import {
   projectMessages,
 } from "../testing/projections.ts";
 import { agentCapabilities } from "../../resources/capabilities/default/index.ts";
+import type { CoreToolProcessorContext } from "../runtime-context.ts";
+import { ensureToolPlanBranchLayout } from "../tool-plan.ts";
 const NAMESPACE = "parallel-tool-plan";
 const SCHEMA = "copilotz_parallel_tool_plan";
 type Handler = (
@@ -85,8 +88,9 @@ function activeAgent(input: LlmAdapterCallInput): string {
 async function waitForIdle(
   engine: CopilotzEngine,
   rootEventId: string,
+  timeoutMs = 15000,
 ): Promise<void> {
-  const deadline = Date.now() + 15000;
+  const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const settlement = await engine.events.settlement(NAMESPACE, rootEventId);
     if (settlement.deadLetters) {
@@ -418,6 +422,430 @@ Deno.test("parallel Tool branches fan out, preserve pipes, and fan in in provide
       );
     }
   } finally {
+    await engine.shutdown();
+    await db.close();
+  }
+});
+Deno.test("47 pipeline branches settle independently and project once", async () => {
+  const branchCount = 47;
+  const rootRuns: string[] = [];
+  const finishRuns: string[] = [];
+  const calls: string[] = [];
+  const root = defineAction({
+    id: "test.parallel.bulkRoot",
+    execute(input: Readonly<{ run: string; branch: string }>) {
+      rootRuns.push(input.branch);
+      return { ...input, parallel: true };
+    },
+  });
+  const finish = defineAction({
+    id: "test.parallel.bulkFinish",
+    execute(
+      input: Readonly<{
+        run: string;
+        branch: string;
+        parallel: boolean;
+        expected: string;
+      }>,
+    ) {
+      assertEquals(input.expected, input.branch);
+      finishRuns.push(input.branch);
+      return { final: input.branch };
+    },
+  });
+  const tools = {
+    root: defineTool("root", root, {
+      name: "Parallel Root",
+      description: "Runs one independent branch root",
+    }),
+    finish: defineTool("finish", finish, {
+      name: "Parallel Finish",
+      description: "Finishes one branch after jq",
+    }),
+  };
+  const testAgent = agent("a", Object.keys(tools));
+  const app = definePlugin({
+    id: "test.parallel-tool-plan-47",
+    version: "1.0.0",
+    actions: { root, finish },
+    resources: {
+      agents: { a: testAgent },
+      tools,
+      llmConnections: { testModel: { adapter: "test" } },
+    },
+    adapters: {
+      llm: {
+        test: adapterFrom((input) => {
+          calls.push(activeAgent(input));
+          return calls.length === 1
+            ? {
+              content: [],
+              toolCalls: Array.from({ length: branchCount }, (_value, index) =>
+                pipeline(
+                  `bulk-${index}`,
+                  "root",
+                  "finish",
+                  String(index),
+                  true,
+                )),
+              attempts: [{ status: "completed" }],
+              finishReason: "tool_calls",
+            }
+            : {
+              content: {
+                type: "text",
+                role: "body",
+                text: "all branches complete",
+              },
+              attempts: [{ status: "completed" }],
+            };
+        }),
+      },
+    },
+  });
+  const db = await createTestDatabase({
+    url: Deno.env.get("COPILOTZ_TEST_POSTGRES_URL") ?? ":memory:",
+  });
+  const registry = await createPluginRegistry({ plugins: [corePlugin, app] });
+  const schema = `${SCHEMA}_bulk_${crypto.randomUUID().replaceAll("-", "")}`;
+  const engine = await createCopilotzEngine({
+    session: createSqlSession(db),
+    registry,
+    defaultDatabaseSchema: schema,
+    retryBaseMs: 0,
+    random: () => 0,
+    execution: { capacity: 128 },
+  });
+  try {
+    const rootEventId = await startRun(engine, [testAgent]);
+    const deadline = Date.now() + 60_000;
+    while (
+      (rootRuns.length < branchCount || finishRuns.length < branchCount ||
+        calls.length < 2) && Date.now() < deadline
+    ) {
+      const deadLetters = await engine.deliveries.list({
+        namespace: NAMESPACE,
+        status: "dead_letter",
+        limit: 10,
+      });
+      if (deadLetters.length) {
+        throw new Error(
+          `Tool-plan workflow dead-lettered: ${JSON.stringify(deadLetters)}`,
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    await waitForIdle(engine, rootEventId, 60_000);
+    const settlementEvent = (await engine.events.list({
+      namespace: NAMESPACE,
+      limit: 2_000,
+    })).find((event) => event.type === "tool_plan_branch.stage-settled");
+    assert(settlementEvent, "a branch settlement event was recorded");
+    const duplicate = await engine.events.append({
+      type: settlementEvent.type,
+      namespace: settlementEvent.namespace,
+      subject: settlementEvent.subject,
+      payload: settlementEvent.payload,
+      metadata: { ...settlementEvent.metadata },
+      correlationId: "duplicate-tool-plan-settlement",
+      deduplicationId: "duplicate-tool-plan-settlement:one",
+    });
+    await Promise.all(duplicate.dispatch.handles.map((handle) => handle.done));
+    assertEquals(
+      rootRuns.length,
+      branchCount,
+      "all roots overlap before the gate opens",
+    );
+    assertEquals(finishRuns.length, branchCount);
+    assertEquals(new Set(rootRuns).size, branchCount);
+    assertEquals(new Set(finishRuns).size, branchCount);
+    assertEquals(
+      calls,
+      ["a", "a"],
+      "only the final barrier continues the Agent",
+    );
+
+    const messages = await projectMessages(engine, NAMESPACE, "thread");
+    const toolMessages = messages.filter((message) =>
+      message.sender.participantType === "tool"
+    );
+    assertEquals(toolMessages.length, branchCount);
+    assertEquals(
+      toolMessages.map((message) =>
+        (message.metadata as Record<string, unknown>).toolPlanIndex
+      ),
+      Array.from({ length: branchCount }, (_value, index) => index),
+    );
+    for (const actionId of [root.id, finish.id]) {
+      const events = await projectActionEvents(engine, NAMESPACE, actionId);
+      assertEquals(
+        events.filter((event) => event.status === "completed").length,
+        branchCount,
+        `${actionId} runs once per branch`,
+      );
+    }
+    const plans = engine.collections.get("toolPlan");
+    const branches = engine.collections.get("toolPlanBranch");
+    assert(plans && branches);
+    const planRecords = await plans.list({ namespace: NAMESPACE }, {
+      limit: 100,
+    });
+    assertEquals(planRecords.length, 1);
+    const planState = planRecords[0].state as Record<string, unknown>;
+    assertEquals(planState.layoutVersion, 2);
+    assertEquals(planState.status, "projected");
+    const branchRecords = await branches.list(
+      { namespace: NAMESPACE },
+      { limit: 100 },
+    );
+    const finalBranches = branchRecords.filter((item) =>
+      item.planId === planRecords[0].id
+    );
+    assertEquals(finalBranches.length, branchCount);
+    assert(
+      finalBranches.every((item) =>
+        (item.state as Record<string, unknown>).status === "settled"
+      ),
+    );
+    const events = await engine.events.list({
+      namespace: NAMESPACE,
+      limit: 1000,
+    });
+    assertEquals(
+      events.filter((event) =>
+        event.type === "tool_plan.projection-ready" &&
+        event.subject?.id === planRecords[0].id
+      ).length,
+      1,
+      "the all-final barrier emits one projection-ready event",
+    );
+  } finally {
+    await engine.shutdown();
+    await db.close();
+  }
+});
+Deno.test("in-flight legacy plan migrates its running cursor and prior jq result", async () => {
+  let finishStarted!: () => void;
+  const finishStartedPromise = new Promise<void>((resolve) =>
+    finishStarted = resolve
+  );
+  let releaseFinish!: () => void;
+  const finishReleased = new Promise<void>((resolve) =>
+    releaseFinish = resolve
+  );
+  const rootRuns: string[] = [];
+  const finishRuns: string[] = [];
+  const calls: string[] = [];
+  let concurrentMigrations = 0;
+  const migrationRaceProcessor = defineProcessor<CoreToolProcessorContext>({
+    id: "test.parallel.legacyMigrationRace",
+    on: [{ eventType: "test.tool-plan.legacy-migrate" }],
+    async handle(event, context) {
+      if (!event.durable) return;
+      const planId = String(event.subject?.id ?? "");
+      const plan = await context.collections.toolPlan?.get({ id: planId });
+      assert(plan, "legacy migration event identifies its plan");
+      const migrated = await Promise.all([
+        ensureToolPlanBranchLayout(context, plan),
+        ensureToolPlanBranchLayout(context, plan),
+      ]);
+      assertEquals(
+        migrated.map((item) =>
+          (item.state as Record<string, unknown>).layoutVersion
+        ),
+        [2, 2],
+      );
+      concurrentMigrations++;
+    },
+  });
+  const root = defineAction({
+    id: "test.parallel.legacyRoot",
+    execute(input: Readonly<{ run: string; branch: string }>) {
+      rootRuns.push(input.branch);
+      return { ...input, parallel: true };
+    },
+  });
+  const finish = defineAction({
+    id: "test.parallel.legacyFinish",
+    async execute(
+      input: Readonly<{
+        run: string;
+        branch: string;
+        parallel: boolean;
+        expected: string;
+      }>,
+    ) {
+      assertEquals(input.expected, input.branch);
+      finishRuns.push(input.branch);
+      finishStarted();
+      await finishReleased;
+      return { final: input.branch };
+    },
+  });
+  const tools = {
+    root: defineTool("root", root, {
+      name: "Legacy Root",
+      description: "Creates the prior pipeline result",
+    }),
+    finish: defineTool("finish", finish, {
+      name: "Legacy Finish",
+      description: "Completes a migrated in-flight branch",
+    }),
+  };
+  const testAgent = agent("a", Object.keys(tools));
+  const app = definePlugin({
+    id: "test.parallel-tool-plan-legacy-migration",
+    version: "1.0.0",
+    actions: { root, finish },
+    resources: {
+      agents: { a: testAgent },
+      tools,
+      llmConnections: { testModel: { adapter: "test" } },
+    },
+    adapters: {
+      llm: {
+        test: adapterFrom((input) => {
+          calls.push(activeAgent(input));
+          return calls.length === 1
+            ? {
+              content: [],
+              toolCalls: [
+                pipeline("legacy-call", "root", "finish", "old", true),
+              ],
+              attempts: [{ status: "completed" }],
+              finishReason: "tool_calls",
+            }
+            : {
+              content: {
+                type: "text",
+                role: "body",
+                text: "migrated branch complete",
+              },
+              attempts: [{ status: "completed" }],
+            };
+        }),
+      },
+    },
+    processors: { migrationRace: migrationRaceProcessor },
+  });
+  const db = await createTestDatabase({ url: ":memory:" });
+  const registry = await createPluginRegistry({ plugins: [corePlugin, app] });
+  const engine = await createCopilotzEngine({
+    session: createSqlSession(db),
+    registry,
+    defaultDatabaseSchema: `${SCHEMA}_legacy_${
+      crypto.randomUUID().replaceAll("-", "")
+    }`,
+    retryBaseMs: 0,
+    random: () => 0,
+    execution: { capacity: 16 },
+  });
+  try {
+    const rootEventId = await startRun(engine, [testAgent]);
+    await Promise.race([
+      finishStartedPromise,
+      new Promise<never>((_resolve, reject) =>
+        setTimeout(
+          () =>
+            reject(
+              new Error("legacy pipeline did not reach its in-flight Tool"),
+            ),
+          15_000,
+        )
+      ),
+    ]);
+    const plans = engine.collections.get("toolPlan");
+    const branches = engine.collections.get("toolPlanBranch");
+    const results = engine.collections.get("toolPlanStageResult");
+    assert(plans && branches && results);
+    const [plan] = await plans.list({ namespace: NAMESPACE }, { limit: 20 });
+    assert(plan);
+    const planBranches = (await branches.list(
+      { namespace: NAMESPACE },
+      { limit: 20 },
+    )).filter((item) => item.planId === plan.id);
+    assertEquals(planBranches.length, 1);
+    const oldBranchState = structuredClone(
+      planBranches[0].state,
+    ) as Record<string, unknown>;
+    assertEquals(oldBranchState.status, "running");
+    assertEquals(oldBranchState.stageIndex, 2);
+    assertEquals(typeof oldBranchState.owner, "string");
+    const priorJqResultId = String(oldBranchState.resultId);
+    assert(priorJqResultId);
+    oldBranchState.attempt = 3;
+    const legacyState = structuredClone(plan.state) as Record<string, unknown>;
+    delete legacyState.layoutVersion;
+    delete legacyState.branchCount;
+    legacyState.branches = [oldBranchState];
+    await plans.update({ namespace: NAMESPACE }, {
+      id: plan.id,
+      set: { state: legacyState },
+    }, { operationKey: `test:${plan.id}:legacy-state` });
+    for (const item of planBranches) {
+      await branches.delete({ namespace: NAMESPACE }, { id: item.id }, {
+        operationKey: `test:${item.id}:legacy-delete`,
+      });
+    }
+    const migration = await engine.events.append({
+      type: "test.tool-plan.legacy-migrate",
+      namespace: NAMESPACE,
+      subject: { type: "toolPlan", id: plan.id },
+      payload: {},
+      metadata: {},
+      correlationId: "legacy-tool-plan-migration-race",
+      deduplicationId: "legacy-tool-plan-migration-race:one",
+    });
+    await Promise.all(migration.dispatch.handles.map((handle) => handle.done));
+    assertEquals(concurrentMigrations, 1);
+    releaseFinish();
+
+    const deadline = Date.now() + 60_000;
+    while (
+      (calls.length < 2 || finishRuns.length < 1) && Date.now() < deadline
+    ) {
+      const deadLetters = await engine.deliveries.list({
+        namespace: NAMESPACE,
+        status: "dead_letter",
+        limit: 10,
+      });
+      if (deadLetters.length) {
+        throw new Error(
+          `Legacy Tool plan dead-lettered: ${JSON.stringify(deadLetters)}`,
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    await waitForIdle(engine, rootEventId, 60_000);
+    const migratedPlan = await plans.get({ namespace: NAMESPACE }, {
+      id: plan.id,
+    });
+    assert(migratedPlan);
+    const migratedState = migratedPlan.state as Record<string, unknown>;
+    assertEquals(migratedState.layoutVersion, 2);
+    assertEquals(migratedState.status, "projected");
+    const [migratedBranch] = (await branches.list(
+      { namespace: NAMESPACE },
+      { limit: 20 },
+    )).filter((item) => item.planId === plan.id);
+    assert(migratedBranch);
+    const finalBranchState = migratedBranch.state as Record<string, unknown>;
+    assertEquals(finalBranchState.status, "settled");
+    assertEquals(finalBranchState.attempt, 3);
+    assert(
+      await results.get({ namespace: NAMESPACE }, { id: priorJqResultId }),
+    );
+    assertEquals(rootRuns, ["old"]);
+    assertEquals(finishRuns, ["old"]);
+    assertEquals(calls, ["a", "a"]);
+    assertEquals(
+      (await projectMessages(engine, NAMESPACE, "thread")).filter((message) =>
+        message.sender.participantType === "tool"
+      ).length,
+      1,
+    );
+  } finally {
+    releaseFinish();
     await engine.shutdown();
     await db.close();
   }

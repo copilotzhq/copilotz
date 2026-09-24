@@ -81,6 +81,51 @@ type ToolPlan = Readonly<
   { message: CollectionRecord; calls: readonly LlmToolCall[] }
 >;
 
+function retryableToolPlanMutationFailure(error: unknown): boolean {
+  const visited = new Set<object>();
+  let current = error;
+  while (
+    (typeof current === "object" && current !== null) ||
+    typeof current === "function"
+  ) {
+    const candidate = current as Record<string, unknown>;
+    if (visited.has(candidate)) return false;
+    visited.add(candidate);
+    if (candidate.retryable === false) return false;
+    const code = candidate.code ?? candidate.sqlState ?? candidate.sqlstate;
+    if (code === "40P01" || code === "40001") return true;
+    if (
+      typeof candidate.message === "string" &&
+      (candidate.message.includes("changed while its mutation was prepared") ||
+        candidate.message.includes("created while its mutation was prepared") ||
+        /(?:^|:\s*)deadlock detected(?:$|\n)/i.test(candidate.message) ||
+        /(?:^|:\s*)could not serialize access(?:\b|$)/i.test(
+          candidate.message,
+        ))
+    ) return true;
+    current = candidate.cause;
+  }
+  return false;
+}
+
+/** Retries only known transient collection transaction failures. */
+export async function retryToolPlanMutation<T>(
+  operation: () => Promise<T>,
+): Promise<T> {
+  for (let attempt = 0;; attempt++) {
+    try {
+      return await operation();
+    } catch (error) {
+      if (
+        attempt >= 8 || !retryableToolPlanMutationFailure(error)
+      ) throw error;
+      await new Promise((resolve) =>
+        setTimeout(resolve, Math.min(25, 2 ** attempt))
+      );
+    }
+  }
+}
+
 function record(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -253,14 +298,99 @@ function baseFrom(recordValue: CollectionRecord): CoreToolPlanBase {
   }
   return structuredClone(base) as CoreToolPlanBase;
 }
-function branch(
+async function branchId(planId: string, index: number): Promise<string> {
+  return await deriveWorkflowId("tool-plan-branch", planId, String(index));
+}
+async function branchRecord(
+  context: CoreToolProcessorContext,
   plan: CollectionRecord,
   index: number,
-): Record<string, unknown> | undefined {
-  const branches = Array.isArray(record(plan.state).branches)
-    ? record(plan.state).branches as unknown[]
-    : [];
-  return record(branches[index]);
+): Promise<CollectionRecord | undefined> {
+  const state = record(plan.state);
+  if (state.layoutVersion !== 2) {
+    throw new Error(`Tool plan '${plan.id}' branch layout is not migrated.`);
+  }
+  if (
+    !Number.isSafeInteger(index) || index < 0 ||
+    index >= Number(state.branchCount)
+  ) {
+    return undefined;
+  }
+  const id = await branchId(String(plan.id), index);
+  const item = await context.collections.toolPlanBranch?.get({ id });
+  if (
+    !item || item.planId !== plan.id || Number(item.branchIndex) !== index
+  ) return undefined;
+  return item;
+}
+async function branchState(
+  context: CoreToolProcessorContext,
+  plan: CollectionRecord,
+  index: number,
+): Promise<Record<string, unknown> | undefined> {
+  const item = await branchRecord(context, plan, index);
+  return item ? record(item.state) : undefined;
+}
+function legacyBranches(
+  plan: CollectionRecord,
+): readonly unknown[] | undefined {
+  const branches = record(plan.state).branches;
+  return Array.isArray(branches) ? branches : undefined;
+}
+
+/** Lazily upgrades pre-release shared-cursor plans without changing branch facts. */
+export async function ensureToolPlanBranchLayout(
+  context: CoreToolProcessorContext,
+  plan: CollectionRecord,
+): Promise<CollectionRecord> {
+  const state = record(plan.state);
+  if (state.layoutVersion === 2) return plan;
+  if (state.status === "projected") return plan;
+  const oldBranches = legacyBranches(plan);
+  if (!oldBranches) {
+    throw new Error(`Tool plan '${plan.id}' has an unsupported branch layout.`);
+  }
+  const branches = context.collections.toolPlanBranch;
+  const plans = context.collections.toolPlan;
+  if (!branches || !plans) {
+    throw new Error("Tool-plan branch collections are not bound.");
+  }
+  await retryToolPlanMutation(() =>
+    context.transaction(async (tx) => {
+      const targetBranches = tx.collections.toolPlanBranch;
+      const targetPlans = tx.collections.toolPlan;
+      if (!targetBranches || !targetPlans) {
+        throw new Error("Tool-plan branch collections are not bound.");
+      }
+      for (const [branchIndex, value] of oldBranches.entries()) {
+        await targetBranches.create({
+          id: await branchId(String(plan.id), branchIndex),
+          planId: String(plan.id),
+          branchIndex,
+          state: record(value),
+          metadata: {},
+        }, {
+          operationKey: `tool-plan:${plan.id}:${branchIndex}:branch:migrate-v2`,
+        });
+      }
+      await targetPlans.commands.migrateLegacyBranches(
+        { id: String(plan.id) },
+        {
+          operationKey: `tool-plan:${plan.id}:migrate-v2`,
+        },
+      );
+    }, {
+      operationKey: `tool-plan:${plan.id}:migrate-v2`,
+      identity: {
+        deduplicationId: `tool-plan:${plan.id}:migration-transaction`,
+      },
+    })
+  );
+  const migrated = await plans.get({ id: String(plan.id) });
+  if (!migrated || record(migrated.state).layoutVersion !== 2) {
+    throw new Error(`Tool plan '${plan.id}' migration did not complete.`);
+  }
+  return migrated;
 }
 function terminalContent(value: ToolTerminal): ContentInput {
   return {
@@ -288,14 +418,16 @@ async function stageResult(
   );
   const operationKey =
     `tool-plan:${planId}:${branchIndex}:${stageIndex}:result`;
-  await collection.create({
-    id,
-    planId,
-    branchIndex,
-    stageIndex,
-    content: terminalContent(terminal),
-    metadata: {},
-  }, { operationKey });
+  await retryToolPlanMutation(() =>
+    collection.create({
+      id,
+      planId,
+      branchIndex,
+      stageIndex,
+      content: terminalContent(terminal),
+      metadata: {},
+    }, { operationKey, identity: { deduplicationId: operationKey } })
+  );
   // A deterministic id makes post-create/pre-settle recovery idempotent. It
   // must nevertheless remain bound to this exact branch cursor.
   const persisted = await collection.get({ id });
@@ -423,7 +555,7 @@ async function inputFor(
   branchIndex: number,
   stageIndex: number,
 ): Promise<LlmJsonObject> {
-  const current = branch(plan, branchIndex);
+  const current = await branchState(context, plan, branchIndex);
   const stage = stageAt(call, stageIndex);
   if (current?.resultId === undefined) return structuredClone(stage.input);
   const prior = await readTerminal(
@@ -506,63 +638,106 @@ export async function createDurableToolPlan(
   plan: CoreToolPlanBase,
   planCalls: readonly LlmToolCall[],
 ): Promise<void> {
-  const collection = context.collections.toolPlan;
-  if (!collection) throw new Error("Collection 'toolPlan' is not bound.");
-  await collection.create({
-    id: plan.planId,
-    threadId: plan.threadId,
-    planMessageId: plan.planMessageId,
-    state: {
-      status: "running",
-      base: structuredClone(plan),
-      branches: planCalls.map(() => ({ status: "ready", stageIndex: 0 })),
-    },
-    metadata: {},
-  }, { operationKey: `tool-plan:${plan.planId}:create` });
+  if (!context.collections.toolPlan || !context.collections.toolPlanBranch) {
+    throw new Error("Tool-plan collections are not bound.");
+  }
+  await retryToolPlanMutation(() =>
+    context.transaction(async (tx) => {
+      const plans = tx.collections.toolPlan;
+      const branches = tx.collections.toolPlanBranch;
+      if (!plans || !branches) {
+        throw new Error("Tool-plan collections are not bound.");
+      }
+      await plans.create({
+        id: plan.planId,
+        threadId: plan.threadId,
+        planMessageId: plan.planMessageId,
+        state: {
+          layoutVersion: 2,
+          status: "running",
+          base: structuredClone(plan),
+          branchCount: planCalls.length,
+        },
+        metadata: {},
+      }, {
+        operationKey: `tool-plan:${plan.planId}:create`,
+      });
+      for (const [branchIndex] of planCalls.entries()) {
+        await branches.create({
+          id: await branchId(plan.planId, branchIndex),
+          planId: plan.planId,
+          branchIndex,
+          state: { status: "ready", stageIndex: 0 },
+          metadata: {},
+        }, {
+          operationKey: `tool-plan:${plan.planId}:${branchIndex}:branch:create`,
+        });
+      }
+    }, {
+      operationKey: `tool-plan:${plan.planId}:create`,
+      identity: {
+        deduplicationId: `tool-plan:${plan.planId}:create-transaction`,
+      },
+    })
+  );
 }
 /** Emits independent ready events. It never invokes a Tool itself. */
 export async function scheduleReadyBranches(
   context: CoreToolProcessorContext,
   plan: CollectionRecord,
+  branchIndices?: readonly number[],
 ): Promise<void> {
-  if (
-    !context.collections.toolPlan || record(plan.state).status !== "running"
-  ) {
-    return;
-  }
-  const branches = Array.isArray(record(plan.state).branches)
-    ? record(plan.state).branches as unknown[]
-    : [];
-  const ready = branches.flatMap((raw, branchIndex) => {
-    const item = record(raw);
-    return item.status === "ready"
-      ? [{ branchIndex, stageIndex: Number(item.stageIndex) }]
-      : [];
-  });
+  if (!context.collections.toolPlanBranch) return;
+  const currentPlan = await ensureToolPlanBranchLayout(context, plan);
+  const state = record(currentPlan.state);
+  if (state.status !== "running") return;
+  const indices = branchIndices ?? Array.from(
+    { length: Number(state.branchCount) },
+    (_value, index) => index,
+  );
+  const loaded = await Promise.all(indices.map(async (branchIndex) => {
+    const item = await branchState(context, currentPlan, branchIndex);
+    return item?.status === "ready"
+      ? { branchIndex, stageIndex: Number(item.stageIndex) }
+      : undefined;
+  }));
+  const ready = loaded.filter((item): item is NonNullable<typeof item> =>
+    item !== undefined
+  );
   if (ready.length === 0) return;
   // Publish every currently-ready cursor in one transaction. Dispatch begins
-  // only after commit, so a fast branch cannot claim the shared plan record
-  // while sibling ready Events are still being prepared.
-  await context.transaction(async (tx) => {
-    const plans = tx.collections.toolPlan;
-    if (!plans) throw new Error("Collection 'toolPlan' is not bound.");
-    for (const cursor of ready) {
-      await plans.commands.stageReady({
-        id: plan.id,
-        branchIndex: cursor.branchIndex,
-        stageIndex: cursor.stageIndex,
-      }, {
-        operationKey:
-          `tool-plan:${plan.id}:${cursor.branchIndex}:${cursor.stageIndex}:ready`,
-      });
-    }
-  }, {
-    operationKey: `tool-plan:${plan.id}:schedule:${
-      ready.map((cursor) => `${cursor.branchIndex}:${cursor.stageIndex}`).join(
-        ",",
-      )
-    }`,
-  });
+  // only after commit; each mutation targets its own branch record.
+  await retryToolPlanMutation(() =>
+    context.transaction(async (tx) => {
+      const branches = tx.collections.toolPlanBranch;
+      if (!branches) {
+        throw new Error("Collection 'toolPlanBranch' is not bound.");
+      }
+      for (const cursor of ready) {
+        await branches.commands.stageReady({
+          id: await branchId(String(currentPlan.id), cursor.branchIndex),
+          branchIndex: cursor.branchIndex,
+          stageIndex: cursor.stageIndex,
+        }, {
+          operationKey:
+            `tool-plan:${currentPlan.id}:${cursor.branchIndex}:${cursor.stageIndex}:ready`,
+        });
+      }
+    }, {
+      operationKey: `tool-plan:${currentPlan.id}:schedule:${
+        ready.map((cursor) => `${cursor.branchIndex}:${cursor.stageIndex}`)
+          .join(
+            ",",
+          )
+      }`,
+      identity: {
+        deduplicationId: `tool-plan:${currentPlan.id}:schedule:${
+          ready.map((cursor) => `${cursor.branchIndex}:${cursor.stageIndex}`)
+            .join(",")
+        }:transaction`,
+      },
+    })
+  );
 }
 /** Sole Tool dispatcher: the durable stage-ready event id is the lease owner. */
 export async function dispatchReadyStage(
@@ -572,20 +747,24 @@ export async function dispatchReadyStage(
   branchIndex: number,
   stageIndex: number,
 ): Promise<void> {
-  const collection = context.collections.toolPlan;
-  if (!collection) throw new Error("Collection 'toolPlan' is not bound.");
-  const claimed = await collection.commands.claimStage({
-    id: plan.id,
-    branchIndex,
-    stageIndex,
-    owner: event.id,
-  }, {
-    operationKey:
-      `tool-plan:${plan.id}:${branchIndex}:${stageIndex}:claim:${event.id}`,
-  });
-  const current = branch(claimed, branchIndex);
+  const collection = context.collections.toolPlanBranch;
+  if (!collection) throw new Error("Collection 'toolPlanBranch' is not bound.");
+  const currentPlan = await ensureToolPlanBranchLayout(context, plan);
+  if (record(currentPlan.state).status !== "running") return;
+  const id = await branchId(String(currentPlan.id), branchIndex);
+  const claimed = await retryToolPlanMutation(() =>
+    collection.commands.claimStage({
+      id,
+      stageIndex,
+      owner: event.id,
+    }, {
+      operationKey:
+        `tool-plan:${currentPlan.id}:${branchIndex}:${stageIndex}:claim:${event.id}`,
+    })
+  );
+  const current = record(claimed.state);
   if (current?.status !== "running" || current.owner !== event.id) return;
-  const base = baseFrom(claimed);
+  const base = baseFrom(currentPlan);
   const loaded = await loadPlan(context, base);
   const call = loaded.calls[branchIndex];
   if (!call) throw new Error("Tool-plan branch does not exist.");
@@ -620,7 +799,7 @@ export async function dispatchReadyStage(
   }
   let input: LlmJsonObject;
   try {
-    input = await inputFor(context, claimed, call, branchIndex, stageIndex);
+    input = await inputFor(context, currentPlan, call, branchIndex, stageIndex);
   } catch (error) {
     if (context.signal.aborted) throw error;
     const prior = current.resultId
@@ -651,14 +830,17 @@ export async function projectAndAdvanceToolPlan(
   authority?: Readonly<{ actionId: string; causationId?: string }>,
 ): Promise<void> {
   if (authority) {
-    const plan = await context.collections.toolPlan?.get({
+    const foundPlan = await context.collections.toolPlan?.get({
       id: metadata.planId,
     });
-    if (!plan) throw new Error(`Tool plan '${metadata.planId}' was not found.`);
+    if (!foundPlan) {
+      throw new Error(`Tool plan '${metadata.planId}' was not found.`);
+    }
+    const plan = await ensureToolPlanBranchLayout(context, foundPlan);
     const base = baseFrom(plan),
       loaded = await loadPlan(context, base),
       call = loaded.calls[metadata.planIndex];
-    const current = branch(plan, metadata.planIndex);
+    const current = await branchState(context, plan, metadata.planIndex);
     if (
       !call || metadata.planSize !== base.planSize ||
       metadata.stageCount !== stages(call).length ||
@@ -707,47 +889,50 @@ export async function projectAndAdvanceToolPlan(
   );
   const resultKey =
     `tool-plan:${metadata.planId}:${metadata.planIndex}:${metadata.stageIndex}:result`;
-  // Collection planning prepares content before the atomic commit of the result
-  // record and cursor settlement, so a crash cannot leave a running lease behind.
-  // Parallel roots may settle against the same plan revision. Retry only the
-  // optimistic collection revision conflict; all semantic failures still
-  // surface to the durable delivery.
-  for (let attempt = 0;; attempt += 1) {
-    try {
-      await context.transaction(async (tx) => {
-        const results = tx.collections.toolPlanStageResult;
-        const plans = tx.collections.toolPlan;
-        if (!results || !plans) {
-          throw new Error("Tool-plan collections are not bound.");
-        }
-        await results.create({
-          id: resultId,
-          planId: metadata.planId,
-          branchIndex: metadata.planIndex,
-          stageIndex: metadata.stageIndex,
-          content: terminalContent(terminal),
-          metadata: {},
-        }, { operationKey: resultKey });
-        await plans.commands.settleStage({
-          id: metadata.planId,
-          branchIndex: metadata.planIndex,
-          stageIndex: metadata.stageIndex,
-          resultId,
-        }, {
-          operationKey:
-            `tool-plan:${metadata.planId}:${metadata.planIndex}:${metadata.stageIndex}:settle`,
-        });
+  // Immutable result creation and this branch's cursor settlement commit
+  // together. A retry repeats this state transaction with stable operation
+  // keys; it never invokes the Tool Action.
+  const plan = await context.collections.toolPlan?.get({ id: metadata.planId });
+  if (!plan) throw new Error(`Tool plan '${metadata.planId}' was not found.`);
+  const currentPlan = await ensureToolPlanBranchLayout(context, plan);
+  const targetBranch = await branchRecord(
+    context,
+    currentPlan,
+    metadata.planIndex,
+  );
+  if (!targetBranch) throw new Error("Tool-plan branch does not exist.");
+  await retryToolPlanMutation(() =>
+    context.transaction(async (tx) => {
+      const results = tx.collections.toolPlanStageResult;
+      const branches = tx.collections.toolPlanBranch;
+      if (!results || !branches) {
+        throw new Error("Tool-plan collections are not bound.");
+      }
+      await results.create({
+        id: resultId,
+        planId: metadata.planId,
+        branchIndex: metadata.planIndex,
+        stageIndex: metadata.stageIndex,
+        content: terminalContent(terminal),
+        metadata: {},
+      }, { operationKey: resultKey, identity: { deduplicationId: resultKey } });
+      await branches.commands.settleStage({
+        id: targetBranch.id,
+        stageIndex: metadata.stageIndex,
+        resultId,
       }, {
         operationKey:
-          `tool-plan:${metadata.planId}:${metadata.planIndex}:${metadata.stageIndex}:settlement:${attempt}`,
+          `tool-plan:${metadata.planId}:${metadata.planIndex}:${metadata.stageIndex}:settle`,
       });
-      break;
-    } catch (error) {
-      const stale = error instanceof Error &&
-        error.message.includes("changed while its mutation was prepared");
-      if (!stale || attempt >= 8 || context.signal.aborted) throw error;
-    }
-  }
+    }, {
+      operationKey:
+        `tool-plan:${metadata.planId}:${metadata.planIndex}:${metadata.stageIndex}:settlement`,
+      identity: {
+        deduplicationId:
+          `tool-plan:${metadata.planId}:${metadata.planIndex}:${metadata.stageIndex}:settlement-transaction`,
+      },
+    })
+  );
   const persisted = await context.collections.toolPlanStageResult?.get({
     id: resultId,
   });
@@ -777,86 +962,145 @@ async function derivedResult(
 export async function advanceCompletedToolMembers(
   context: CoreToolProcessorContext,
   plan: CollectionRecord,
+  branchIndex: number,
 ): Promise<void> {
-  const collection = context.collections.toolPlan;
-  if (!collection) return;
-  // A previous delivery may have committed the final `advanceBranch(done)` and
-  // crashed before emitting projectionReady. Replays recover that exact gap.
-  if (record(plan.state).status === "ready") {
-    await collection.commands.projectionReady({ id: plan.id }, {
-      operationKey: `tool-plan:${plan.id}:projection-ready`,
-    });
+  const branches = context.collections.toolPlanBranch;
+  const plans = context.collections.toolPlan;
+  if (!branches || !plans) return;
+  const currentPlan = await ensureToolPlanBranchLayout(context, plan);
+  const state = record(currentPlan.state);
+  if (state.status === "ready") {
+    await projectionReady(context, String(currentPlan.id));
     return;
   }
-  if (record(plan.state).status !== "running") return;
-  const base = baseFrom(plan), loaded = await loadPlan(context, base);
-  for (const [index, call] of loaded.calls.entries()) {
-    const current = branch(plan, index);
-    if (current?.status !== "settled-stage") continue;
-    const from = Number(current.stageIndex),
-      initialId = text(current.resultId, "Stage result ID"),
-      initial = await readTerminal(context, initialId, {
-        planId: base.planId,
-        branchIndex: index,
-        stageIndex: from,
-      });
-    let resultId = initialId, terminal = initial.terminal, next = from + 1;
-    if (terminal.status === "completed") {
-      try {
-        let output = terminal.output;
-        while (stages(call)[next]?.type === "jq") {
-          output = await evaluateCoreJq(
-            output,
-            (stages(call)[next] as { filter: string }).filter,
-            context.signal,
-          );
-          resultId = await derivedResult(
-            context,
-            base.planId,
-            index,
-            next,
-            output,
-            terminal.sourceAction,
-          );
-          next++;
-        }
-      } catch (error) {
-        if (context.signal.aborted) throw error;
-        resultId = await stageResult(context, base.planId, index, next, {
-          ...(terminal.sourceAction
-            ? {
-              actionRunId: terminal.sourceAction.actionRunId,
-              sourceAction: terminal.sourceAction,
-            }
-            : {}),
-          status: context.signal.aborted ? "cancelled" : "failed",
-          error: {
-            name: context.signal.aborted ? "AbortError" : "PipelineError",
-            message: error instanceof Error ? error.message : String(error),
-          },
-        });
-        terminal = (await readTerminal(context, resultId)).terminal;
-        next = stages(call).length;
+  if (state.status !== "running") return;
+  const current = await branchState(context, currentPlan, branchIndex);
+  if (!current) throw new Error("Tool-plan branch does not exist.");
+  if (current.status === "ready") {
+    await scheduleReadyBranches(context, currentPlan, [branchIndex]);
+    return;
+  }
+  if (current.status === "settled") {
+    await openProjectionBarrier(context, currentPlan);
+    return;
+  }
+  if (current.status !== "settled-stage") return;
+  const base = baseFrom(currentPlan), loaded = await loadPlan(context, base);
+  const call = loaded.calls[branchIndex];
+  if (!call) throw new Error("Tool-plan branch does not exist.");
+  const from = Number(current.stageIndex),
+    initialId = text(current.resultId, "Stage result ID"),
+    initial = await readTerminal(context, initialId, {
+      planId: base.planId,
+      branchIndex,
+      stageIndex: from,
+    });
+  let resultId = initialId, terminal = initial.terminal, next = from + 1;
+  if (terminal.status === "completed") {
+    try {
+      let output = terminal.output;
+      while (stages(call)[next]?.type === "jq") {
+        output = await evaluateCoreJq(
+          output,
+          (stages(call)[next] as { filter: string }).filter,
+          context.signal,
+        );
+        resultId = await derivedResult(
+          context,
+          base.planId,
+          branchIndex,
+          next,
+          output,
+          terminal.sourceAction,
+        );
+        next++;
       }
+    } catch (error) {
+      if (context.signal.aborted) throw error;
+      resultId = await stageResult(context, base.planId, branchIndex, next, {
+        ...(terminal.sourceAction
+          ? {
+            actionRunId: terminal.sourceAction.actionRunId,
+            sourceAction: terminal.sourceAction,
+          }
+          : {}),
+        status: "failed",
+        error: {
+          name: "PipelineError",
+          message: error instanceof Error ? error.message : String(error),
+        },
+      });
+      terminal = (await readTerminal(context, resultId)).terminal;
+      next = stages(call).length;
     }
-    const hasNextTool = terminal.status === "completed" &&
-      next < stages(call).length;
-    await collection.commands.advanceBranch({
-      id: plan.id,
-      branchIndex: index,
+  }
+  const hasNextTool = terminal.status === "completed" &&
+    next < stages(call).length;
+  const currentBranchId = await branchId(String(currentPlan.id), branchIndex);
+  await retryToolPlanMutation(() =>
+    branches.commands.advanceBranch({
+      id: currentBranchId,
       fromStageIndex: from,
       ...(hasNextTool
         ? { stageIndex: next, resultId }
         : { done: true, resultId }),
-    }, { operationKey: `tool-plan:${plan.id}:${index}:${from}:advance` });
-  }
-  const latest = await collection.get({ id: plan.id });
+    }, {
+      operationKey:
+        `tool-plan:${currentPlan.id}:${branchIndex}:${from}:advance`,
+      identity: {
+        deduplicationId:
+          `tool-plan:${currentPlan.id}:${branchIndex}:${from}:advance`,
+      },
+    })
+  );
+  const latest = await plans.get({ id: String(currentPlan.id) });
   if (!latest) return;
-  if (record(latest.state).status === "ready") {
-    await collection.commands.projectionReady({ id: latest.id }, {
-      operationKey: `tool-plan:${latest.id}:projection-ready`,
-    });
-  } else await scheduleReadyBranches(context, latest);
+  const latestBranch = await branchState(context, latest, branchIndex);
+  if (latestBranch?.status === "ready") {
+    await scheduleReadyBranches(context, latest, [branchIndex]);
+  } else if (latestBranch?.status === "settled") {
+    await openProjectionBarrier(context, latest);
+  }
+}
+
+async function openProjectionBarrier(
+  context: CoreToolProcessorContext,
+  plan: CollectionRecord,
+): Promise<void> {
+  const plans = context.collections.toolPlan;
+  if (!plans || record(plan.state).status !== "running") return;
+  const currentPlan = await ensureToolPlanBranchLayout(context, plan);
+  const state = record(currentPlan.state);
+  if (state.status !== "running") return;
+  const count = Number(state.branchCount);
+  if (!Number.isSafeInteger(count) || count < 1) {
+    throw new Error("Tool-plan branch count is invalid.");
+  }
+  const branches = await Promise.all(
+    Array.from(
+      { length: count },
+      (_value, index) => branchState(context, currentPlan, index),
+    ),
+  );
+  if (!branches.every((branch) => branch?.status === "settled")) return;
+  await projectionReady(context, currentPlan.id);
+}
+
+async function projectionReady(
+  context: CoreToolProcessorContext,
+  planId: string,
+): Promise<void> {
+  const plans = context.collections.toolPlan;
+  if (!plans) throw new Error("Collection 'toolPlan' is not bound.");
+  const deduplicationId = `tool-plan:${planId}:projection-ready`;
+  await retryToolPlanMutation(() =>
+    plans.commands.projectionReady({
+      id: planId,
+    }, {
+      operationKey: deduplicationId,
+      identity: { deduplicationId },
+    })
+  );
 }
 type ToolVisibility = Extract<EventVisibility, { kind: "tool" }>;
 function configuredVisibility(
@@ -928,10 +1172,15 @@ export async function projectDurableToolPlan(
 ): Promise<void> {
   const collection = context.collections.toolPlan;
   if (!collection) throw new Error("Collection 'toolPlan' is not bound.");
-  const claimed = await collection.commands.claimProjection({
-    id: plan.id,
-    owner: event.id,
-  }, { operationKey: `tool-plan:${plan.id}:projection-claim:${event.id}` });
+  const currentPlan = await ensureToolPlanBranchLayout(context, plan);
+  const claimed = await retryToolPlanMutation(() =>
+    collection.commands.claimProjection({
+      id: currentPlan.id,
+      owner: event.id,
+    }, {
+      operationKey: `tool-plan:${currentPlan.id}:projection-claim:${event.id}`,
+    })
+  );
   const state = record(claimed.state);
   if (state.status !== "projecting" || state.projectionOwner !== event.id) {
     return;
@@ -943,7 +1192,7 @@ export async function projectDurableToolPlan(
     : undefined;
   const completesTurn = completionAction
     ? (await Promise.all(loaded.calls.map(async (call, index) => {
-      const current = branch(claimed, index);
+      const current = await branchState(context, claimed, index);
       const resultId = current?.finalResultId;
       if (!resultId) return false;
       const result = await readTerminal(
@@ -961,7 +1210,7 @@ export async function projectDurableToolPlan(
     }))).some(Boolean)
     : false;
   for (const [index, call] of loaded.calls.entries()) {
-    const current = branch(claimed, index);
+    const current = await branchState(context, claimed, index);
     const result = await readTerminal(
       context,
       text(current?.finalResultId, "Final stage result ID"),
@@ -1098,9 +1347,12 @@ export async function projectDurableToolPlan(
       ...(base.agentTurn ? { historyScopeId: base.agentTurn.id } : {}),
     }, context);
   }
-  await collection.commands.finishProjection({ id: plan.id, owner: event.id }, {
-    operationKey: `tool-plan:${plan.id}:projected:${event.id}`,
-  });
+  await retryToolPlanMutation(() =>
+    collection.commands.finishProjection({
+      id: currentPlan.id,
+      owner: event.id,
+    }, { operationKey: `tool-plan:${currentPlan.id}:projected:${event.id}` })
+  );
 }
 async function parentAskForResume(
   context: CoreToolProcessorContext,

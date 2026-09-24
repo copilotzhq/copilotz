@@ -457,6 +457,7 @@ Deno.test("checkpoint dispatch is a hidden ordinary Agent turn that atomically c
     assertEquals(maintenance.request.messages[0]?.role, "user");
     assertEquals(maintenance.request.tools?.map((value) => value.name), [
       "consolidate_memory",
+      "readToolResult",
     ]);
     const savedCheckpoint = await checkpoint(run);
     assertEquals(savedCheckpoint.status, "ready");
@@ -858,7 +859,7 @@ Deno.test("forced consolidation advances full bounded ranges across a large back
   }
 });
 
-Deno.test("forced compaction advances past an indivisible post-boundary tool result", async () => {
+Deno.test("bounded post-boundary Tool history lets the next turn continue", async () => {
   const run = await fixture(
     (input) =>
       text(input).includes("Internal memory maintenance")
@@ -914,41 +915,24 @@ Deno.test("forced compaction advances past an indivisible post-boundary tool res
       recipientIds: ["agent-north"],
     });
 
-    await eventually(run, async () => {
-      const ready = (await checkpoints(run)).filter(
-        (item: { status: string }) => item.status === "ready",
-      );
-      return ready.length >= 2 &&
-        run.inputs.some((input) => text(input).includes("CURRENT_USER_REPLY"));
-    });
-    const ready = (await checkpoints(run)).filter(
-      (item: { status: string }) => item.status === "ready",
-    ).sort((left: { sequence: number }, right: { sequence: number }) =>
-      left.sequence - right.sequence
+    await eventually(
+      run,
+      async () =>
+        run.inputs.some((input) => text(input).includes("CURRENT_USER_REPLY")),
     );
-    const advanced = ready.find((item: { sequence: number }) =>
-      item.sequence > boundary.sequence
-    );
-    assert(advanced);
-    assertEquals(advanced.sourceStartMessageId, "message:kanban:result");
-    assertEquals(advanced.sourceEndMessageId, "message:kanban:result");
     assertEquals(
-      (advanced.metadata as { coverage: { endMessageId: string } }).coverage
-        .endMessageId,
-      "message:kanban:result",
+      (await checkpoints(run)).filter((item: { status: string }) =>
+        item.status === "ready"
+      ).length,
+      1,
     );
-
-    const maintenance = run.inputs.find((input) =>
-      text(input).includes("Internal memory maintenance") &&
-      text(input).includes("KBN-428")
-    );
-    assert(maintenance);
-    assert(!text(maintenance).includes("POST_BOUNDARY_0"));
     const reply = run.inputs.find((input) =>
       text(input).includes("CURRENT_USER_REPLY")
     );
     assert(reply);
     assert(!text(reply).includes("KBN-428"));
+    assertStringIncludes(text(reply), "message:kanban:result");
+    assertStringIncludes(text(reply), "readToolResult");
     assertStringIncludes(text(reply), "POST_BOUNDARY_0");
     assertStringIncludes(text(reply), "POST_BOUNDARY_1");
     assertStringIncludes(text(reply), "POST_BOUNDARY_2");

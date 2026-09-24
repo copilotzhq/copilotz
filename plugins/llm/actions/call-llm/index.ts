@@ -16,6 +16,7 @@ import {
 } from "@copilotz/copilotz/actions";
 import type {
   AssetOrigin,
+  ContentBodyValue,
   ContentInput,
   ContentRef,
   ContentSequence,
@@ -978,15 +979,20 @@ function normalizedPreparedSequence(
   return (value.map((value, index) => {
     const item = plainRecord(value, `${path}[${index}]`);
     const { value: body, resolve, ...reference } = item;
-    const ref = normalizedContentInput(reference, `${path}[${index}]`);
-    if (typeof ref === "string" || !("assetId" in ref)) {
+    const ref = "assetId" in reference
+      ? normalizedContentInput(reference, `${path}[${index}]`)
+      : normalizedInlinePreparedReference(reference, `${path}[${index}]`);
+    if (typeof ref === "string" || !("kind" in ref)) {
       throw new TypeError(`${path} requires prepared content entries.`);
     }
     if (resolve === false) {
+      if (!("assetId" in ref) || typeof ref.assetId !== "string") {
+        throw new TypeError("Descriptor content requires an Asset ID.");
+      }
       if (Object.hasOwn(item, "value")) {
         throw new TypeError("Descriptor content cannot contain a value.");
       }
-      return { ...ref, resolve: false as const };
+      return { ...ref, assetId: ref.assetId, resolve: false as const };
     }
     if (resolve !== undefined || !Object.hasOwn(item, "value")) {
       throw new TypeError(`${path} requires runtime-prepared values.`);
@@ -1000,11 +1006,28 @@ function normalizedPreparedSequence(
     }
     return {
       ...ref,
-      value: ref.kind === "json"
+      value: (ref.kind === "json"
         ? canonicalJson(body, `${path}[${index}].value`)
-        : structuredClone(body),
+        : structuredClone(body)) as ContentBodyValue,
     };
   }));
+}
+
+function normalizedInlinePreparedReference(
+  record: Record<string, unknown>,
+  path: string,
+): Omit<ContentRef, "assetId"> {
+  exactKeys(record, CONTENT_REF_KEYS, path);
+  const kind = requiredText(record.kind, `${path}.kind`);
+  if (!CONTENT_KINDS.has(kind)) {
+    throw new TypeError(`${path}.kind is invalid.`);
+  }
+  return {
+    kind: kind as ContentRef["kind"],
+    role: requiredText(record.role, `${path}.role`),
+    mediaType: requiredText(record.mediaType, `${path}.mediaType`),
+    ...contentCommon(record, path),
+  };
 }
 
 function normalizedNativeReasoning(
@@ -1030,7 +1053,8 @@ function normalizedNativeReasoning(
   if (
     blocks.length === 0 ||
     blocks.some((block) =>
-      block.kind !== "json" || block.resolve === false ||
+      !("assetId" in block) || block.kind !== "json" ||
+      block.resolve === false ||
       !Object.hasOwn(block, "value") || !block.value ||
       typeof block.value !== "object" || Array.isArray(block.value)
     )
@@ -1042,7 +1066,7 @@ function normalizedNativeReasoning(
     adapter: requiredText(record.adapter, `${path}.adapter`),
     api: requiredText(record.api, `${path}.api`),
     model: requiredText(record.model, `${path}.model`),
-    blocks,
+    blocks: blocks as ContentSequence,
   } as const);
 }
 

@@ -544,7 +544,7 @@ Deno.test("skills plugins own disclosure tools and preserve stable-ID overrides"
   );
   assertEquals(
     Object.keys(registry.resources.tools),
-    ["ask", ...SKILL_TOOL_IDS],
+    ["ask", "readToolResult", ...SKILL_TOOL_IDS],
   );
   for (const alias of SKILL_TOOL_IDS) assert(registry.actions[alias]);
 });

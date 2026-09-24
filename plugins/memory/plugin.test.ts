@@ -21,6 +21,7 @@ import {
   createPluginRegistry,
   definePlugin,
 } from "../../runtime/plugins/index.ts";
+import { estimateTextTokens } from "@copilotz/copilotz/llm/tokens";
 import {
   type CopilotzEngine,
   createCopilotzEngine,
@@ -51,6 +52,7 @@ type Fixture = Readonly<{
   db: TestDatabase;
   engine: CopilotzEngine;
   inputs: readonly LlmAdapterCallInput[];
+  setMemoryConfig(config: Partial<LongTermMemoryConfig>): void;
   close(): Promise<void>;
 }>;
 
@@ -132,6 +134,12 @@ async function fixture(
     ...(options.vectors ? { pgliteExtensions: ["vector"] } : {}),
   });
   const inputs: LlmAdapterCallInput[] = [];
+  const mutableMemoryConfig: Record<string, unknown> = {
+    enabled: options.enabled,
+    triggerEstimatedTokens: 1,
+    retainRecentEstimatedTokens: 0,
+    ...options.memoryConfig,
+  };
   const memory = memoryPlugin;
   const app = definePlugin({
     id: "test.memory-native-agent-turn",
@@ -148,12 +156,7 @@ async function fixture(
             },
           }
           : {}),
-        config: {
-          enabled: options.enabled,
-          triggerEstimatedTokens: 1,
-          retainRecentEstimatedTokens: 0,
-          ...options.memoryConfig,
-        },
+        config: mutableMemoryConfig,
       },
       agents: {
         north: defineAgent({
@@ -213,6 +216,9 @@ async function fixture(
     db,
     engine,
     inputs,
+    setMemoryConfig(config) {
+      Object.assign(mutableMemoryConfig, config);
+    },
     async close() {
       await engine.shutdown();
       await db.close();
@@ -289,6 +295,46 @@ async function createHumanMessage(
     identity: { deduplicationId: `${input.id}:create` },
   });
   return created.id;
+}
+
+async function createKanbanToolResult(fixture: Fixture, text: string) {
+  const participants = collection(fixture, "participant");
+  await participants.create({
+    id: "kanban-tool",
+    externalId: "kanban",
+    participantType: "tool",
+    name: "Kanban",
+  }, { namespace: NAMESPACE });
+  const threads = collection(fixture, "thread");
+  await threads.update({
+    id: "thread-a",
+    set: { participantIds: ["human-a", "agent-north", "kanban-tool"] },
+  }, { namespace: NAMESPACE });
+  const content = await fixture.engine.content.preparer.prepare(text, {
+    namespace: NAMESPACE,
+    idempotencyKey: "message:kanban:result:content",
+  });
+  return await collection(fixture, "message").create({
+    id: "message:kanban:result",
+    threadId: "thread-a",
+    senderId: "kanban-tool",
+    recipientIds: [],
+    content,
+    metadata: {
+      requesterId: "agent-north",
+      historyVisibility: "public",
+      toolInvocation: { id: "kanban:result" },
+    },
+  }, {
+    namespace: NAMESPACE,
+    metadata: {
+      core: {
+        threadId: "thread-a",
+        routing: { senderId: "kanban-tool", recipientIds: [] },
+      },
+    },
+    identity: { deduplicationId: "message:kanban:result:create" },
+  });
 }
 
 async function startUserTurn(fixture: Fixture, id = "message:user") {
@@ -785,14 +831,14 @@ Deno.test("forced consolidation advances full bounded ranges across a large back
       (first.metadata as { estimatedTokens: number }).estimatedTokens > 50_000,
     );
     assert(
-      (first.metadata as { estimatedTokens: number }).estimatedTokens <= 60_000,
+      (first.metadata as { estimatedTokens: number }).estimatedTokens <= 90_000,
     );
     assert(
       (second.metadata as { estimatedTokens: number }).estimatedTokens > 50_000,
     );
     assert(
       (second.metadata as { estimatedTokens: number }).estimatedTokens <=
-        60_000,
+        90_000,
     );
     assert(first.sourceEndMessageId !== "message:batch:tail");
     assert(second.sourceEndMessageId !== "message:batch:tail");
@@ -806,6 +852,106 @@ Deno.test("forced consolidation advances full bounded ranges across a large back
       ),
       false,
     );
+    await assertNoDeadLetters(run);
+  } finally {
+    await run.close();
+  }
+});
+
+Deno.test("forced compaction advances past an indivisible post-boundary tool result", async () => {
+  const run = await fixture(
+    (input) =>
+      text(input).includes("Internal memory maintenance")
+        ? tool(memoryProposal())
+        : stop("The post-compaction user request can continue."),
+    {
+      inputLimit: 180_000,
+      memoryConfig: {
+        triggerEstimatedTokens: 1,
+        retainRecentEstimatedTokens: 0,
+      },
+    },
+  );
+  try {
+    await startUserTurn(run, "message:boundary");
+    await eventually(
+      run,
+      async () => (await checkpoints(run))[0]?.status === "ready",
+    );
+    const boundary = (await checkpoints(run)).find(
+      (item: { status: string }) => item.status === "ready",
+    );
+    assert(boundary);
+
+    // Prevent background threshold-based reservation so the oversized user
+    // turn exercises the forced foreground compaction hook below.
+    run.setMemoryConfig({
+      triggerEstimatedTokens: 999_999,
+      retainRecentEstimatedTokens: 8_000,
+    });
+
+    const json =
+      '{"card":"KBN-428","status":"active","summary":"review persistence behavior"}, ';
+    const prose =
+      "Kanban card KBN-428 is active and must be reviewed before release. ";
+    const pattern = json.repeat(2) + prose.repeat(7);
+    const kanbanResult = pattern.repeat(Math.ceil(241_125 / pattern.length))
+      .slice(0, 241_125);
+    assertEquals(new TextEncoder().encode(kanbanResult).byteLength, 241_125);
+    const kanbanTokens = estimateTextTokens(kanbanResult);
+    assert(kanbanTokens > 65_000 && kanbanTokens < 66_000);
+    await createKanbanToolResult(run, kanbanResult);
+
+    for (let index = 0; index < 3; index++) {
+      await createHumanMessage(run, {
+        id: `message:post-boundary:${index}`,
+        text: `POST_BOUNDARY_${index} ${"界".repeat(40_000)}`,
+      });
+    }
+    await createHumanMessage(run, {
+      id: "message:current-request",
+      text: "CURRENT_USER_REPLY continue the active Kanban task.",
+      recipientIds: ["agent-north"],
+    });
+
+    await eventually(run, async () => {
+      const ready = (await checkpoints(run)).filter(
+        (item: { status: string }) => item.status === "ready",
+      );
+      return ready.length >= 2 &&
+        run.inputs.some((input) => text(input).includes("CURRENT_USER_REPLY"));
+    });
+    const ready = (await checkpoints(run)).filter(
+      (item: { status: string }) => item.status === "ready",
+    ).sort((left: { sequence: number }, right: { sequence: number }) =>
+      left.sequence - right.sequence
+    );
+    const advanced = ready.find((item: { sequence: number }) =>
+      item.sequence > boundary.sequence
+    );
+    assert(advanced);
+    assertEquals(advanced.sourceStartMessageId, "message:kanban:result");
+    assertEquals(advanced.sourceEndMessageId, "message:kanban:result");
+    assertEquals(
+      (advanced.metadata as { coverage: { endMessageId: string } }).coverage
+        .endMessageId,
+      "message:kanban:result",
+    );
+
+    const maintenance = run.inputs.find((input) =>
+      text(input).includes("Internal memory maintenance") &&
+      text(input).includes("KBN-428")
+    );
+    assert(maintenance);
+    assert(!text(maintenance).includes("POST_BOUNDARY_0"));
+    const reply = run.inputs.find((input) =>
+      text(input).includes("CURRENT_USER_REPLY")
+    );
+    assert(reply);
+    assert(!text(reply).includes("KBN-428"));
+    assertStringIncludes(text(reply), "POST_BOUNDARY_0");
+    assertStringIncludes(text(reply), "POST_BOUNDARY_1");
+    assertStringIncludes(text(reply), "POST_BOUNDARY_2");
     await assertNoDeadLetters(run);
   } finally {
     await run.close();

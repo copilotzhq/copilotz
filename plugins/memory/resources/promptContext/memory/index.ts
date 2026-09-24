@@ -50,7 +50,7 @@ export const memoryContextResource:
         {
           ownerParticipantId: input.participant.id,
           force: true,
-          maxSourceEstimatedTokens: Math.floor(input.limitEstimatedTokens / 3),
+          maxSourceEstimatedTokens: Math.floor(input.limitEstimatedTokens / 2),
         },
       );
       if (!checkpoint) return false;

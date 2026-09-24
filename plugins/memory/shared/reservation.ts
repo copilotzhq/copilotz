@@ -121,7 +121,7 @@ export async function reserveMemoryCheckpoint(
               ? model.options.limitEstimatedInputTokens
               : 150_000
           ),
-      ) / 3,
+      ) / 2,
     );
   // Background eligibility may require seeing more source than one maintenance
   // turn can carry. The scan remains bounded, while range selection below

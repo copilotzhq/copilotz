@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.80.2 — 2026-09-23
+
+- Let memory maintenance consolidate a single tool result that exceeds the
+  former one-third source limit while keeping each checkpoint below half of the
+  model input budget. This restores forward progress for existing threads with
+  large indivisible results without changing stored history or coverage.
+
 ## 0.80.1 — 2026-09-22
 
 - Resolve text and JSON references in completed HTTP Action results after

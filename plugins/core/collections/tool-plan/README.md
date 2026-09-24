@@ -2,12 +2,13 @@
 
 ## What it is
 
-The durable cursor and fan-in barrier for parallel Tool branches.
+The immutable Tool-plan header and single fan-in projection barrier.
 
 ## Why it exists
 
-Parallel branch progress must survive retries and crashes without duplicating
-side effects.
+Parallel branch progress lives in independent `toolPlanBranch` records so one
+branch can advance without rewriting sibling cursors. The parent header keeps
+the provider plan snapshot and projection ownership state.
 
 ## How to use it
 
@@ -16,5 +17,7 @@ only for diagnostics.
 
 ## How it works
 
-Command mutations claim stages, settle immutable result references, advance
-branches, and elect one projection owner.
+The coordinator creates the header and branch records atomically. Each branch
+claims stages, settles immutable result references, and advances its own cursor.
+The parent barrier opens only after every branch is final, then elects one
+projection owner.

@@ -5,6 +5,7 @@ export type { MessageRecord } from "./message/index.ts";
 export { participantCollection } from "./participant/index.ts";
 export { threadCollection } from "./thread/index.ts";
 export { toolPlanCollection } from "./tool-plan/index.ts";
+export { toolPlanBranchCollection } from "./tool-plan-branch/index.ts";
 export { toolPlanStageResultCollection } from "./tool-plan-stage-result/index.ts";
 export type { MessageBranch, MessageRevision } from "../shared/contracts.ts";
 export { projectActiveMessageBranch } from "../shared/projections.ts";
@@ -14,6 +15,7 @@ export const CORE_COLLECTION_NAMES = [
   "thread",
   "message",
   "toolPlan",
+  "toolPlanBranch",
   "toolPlanStageResult",
   "space",
   "spaceAttachment",

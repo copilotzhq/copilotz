@@ -15,21 +15,22 @@ import entry11 from "./collections/participant/index.ts";
 import entry12 from "./collections/space-attachment/index.ts";
 import entry13 from "./collections/space/index.ts";
 import entry14 from "./collections/thread/index.ts";
-import entry15 from "./collections/tool-plan-stage-result/index.ts";
-import entry16 from "./collections/tool-plan/index.ts";
-import entry17 from "./processors/complete-ask/index.ts";
-import entry18 from "./processors/fail-ask/index.ts";
-import entry19 from "./processors/message-input/index.ts";
-import entry20 from "./processors/message-router/index.ts";
-import entry21 from "./processors/project-agent-failure/index.ts";
-import entry22 from "./processors/project-text-result/index.ts";
-import entry23 from "./processors/project-tool-result/index.ts";
-import entry24 from "./processors/tool-plan-coordinator/index.ts";
-import entry25 from "./resources/capabilities/default/index.ts";
-import entry26 from "./resources/goals/default/index.ts";
-import entry27 from "./resources/toolResults/default/index.ts";
-import entry28 from "./resources/tools/ask/index.ts";
-import entry29 from "./resources/tools/read-tool-result/index.ts";
+import entry15 from "./collections/tool-plan-branch/index.ts";
+import entry16 from "./collections/tool-plan-stage-result/index.ts";
+import entry17 from "./collections/tool-plan/index.ts";
+import entry18 from "./processors/complete-ask/index.ts";
+import entry19 from "./processors/fail-ask/index.ts";
+import entry20 from "./processors/message-input/index.ts";
+import entry21 from "./processors/message-router/index.ts";
+import entry22 from "./processors/project-agent-failure/index.ts";
+import entry23 from "./processors/project-text-result/index.ts";
+import entry24 from "./processors/project-tool-result/index.ts";
+import entry25 from "./processors/tool-plan-coordinator/index.ts";
+import entry26 from "./resources/capabilities/default/index.ts";
+import entry27 from "./resources/goals/default/index.ts";
+import entry28 from "./resources/toolResults/default/index.ts";
+import entry29 from "./resources/tools/ask/index.ts";
+import entry30 from "./resources/tools/read-tool-result/index.ts";
 import { llmPlugin as dependency0 } from "../llm/plugin.ts";
 const definition = {
   id: "@copilotz/core",
@@ -41,8 +42,9 @@ const definition = {
     "spaceAttachment": entry12,
     "space": entry13,
     "thread": entry14,
-    "toolPlanStageResult": entry15,
-    "toolPlan": entry16,
+    "toolPlanBranch": entry15,
+    "toolPlanStageResult": entry16,
+    "toolPlan": entry17,
   },
   actions: {
     "addThreadParticipant": entry0,
@@ -57,28 +59,28 @@ const definition = {
     "spaces": entry9,
   },
   processors: {
-    "completeAsk": entry17,
-    "failAsk": entry18,
-    "messageInput": entry19,
-    "messageRouter": entry20,
-    "projectAgentFailure": entry21,
-    "projectTextResult": entry22,
-    "projectToolResult": entry23,
-    "toolPlanCoordinator": entry24,
+    "completeAsk": entry18,
+    "failAsk": entry19,
+    "messageInput": entry20,
+    "messageRouter": entry21,
+    "projectAgentFailure": entry22,
+    "projectTextResult": entry23,
+    "projectToolResult": entry24,
+    "toolPlanCoordinator": entry25,
   },
   resources: {
     "capabilities": {
-      "default": entry25,
-    },
-    "goals": {
       "default": entry26,
     },
-    "toolResults": {
+    "goals": {
       "default": entry27,
     },
+    "toolResults": {
+      "default": entry28,
+    },
     "tools": {
-      "ask": entry28,
-      "readToolResult": entry29,
+      "ask": entry29,
+      "readToolResult": entry30,
     },
   },
 } as const;

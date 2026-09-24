@@ -80,5 +80,8 @@ export function resolveToolGrants<T extends AliasedToolResource>(
     append(requireMechanismTool(agent, toolsByKey, "ask", "agent"));
   }
 
+  const resultReader = toolsByKey.get("readToolResult");
+  if (resultReader) append(resultReader);
+
   return selected;
 }

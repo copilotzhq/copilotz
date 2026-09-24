@@ -21,12 +21,14 @@ import type {
   AgentCapabilitiesResource,
 } from "../resources/capabilities/default/types.ts";
 import type { SkillCapabilityResource } from "./capabilities/grants.ts";
+import type { ToolResultPolicy } from "../resources/toolResults/default/index.ts";
 
 export type CoreResources =
   & RuntimeContextNamespaces
   & Readonly<{
     agents: Readonly<Record<string, AgentResource | undefined>>;
     tools: Readonly<Record<string, ToolResource | undefined>>;
+    toolResults: Readonly<Record<string, ToolResultPolicy | undefined>>;
     skills: Readonly<Record<string, SkillCapabilityResource | undefined>>;
     capabilities: Readonly<
       Record<string, AgentCapabilitiesResource | undefined>

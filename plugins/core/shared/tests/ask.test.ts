@@ -470,7 +470,9 @@ Deno.test("an ask resumes through durable llm.call metadata", async () => {
     counts.set(id, count);
     assertEquals(
       input.request.tools?.map((tool) => tool.name) ?? [],
-      id === "a" ? ["mark", "publish", "ask"] : [],
+      id === "a"
+        ? ["mark", "publish", "ask", "readToolResult"]
+        : ["readToolResult"],
     );
     if (id === "a") {
       const definition = input.request.tools?.find((tool) =>
@@ -615,7 +617,10 @@ Deno.test("asked Agent Tool Actions retain the root human initiator", async () =
       };
     }
     if (id === "b" && count === 1) {
-      assertEquals(input.request.tools?.map((tool) => tool.name), ["mark"]);
+      assertEquals(input.request.tools?.map((tool) => tool.name), [
+        "mark",
+        "readToolResult",
+      ]);
       return {
         content: [],
         toolCalls: [{

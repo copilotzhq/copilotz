@@ -12,6 +12,7 @@ const CORE_ACTION_IDS = [
   "copilotz.core.message.revise",
   "copilotz.core.thread-message.create",
   "copilotz.core.ask",
+  "copilotz.core.read-tool-result",
 ];
 
 Deno.test("core plugin is direct static plugin composition", () => {
@@ -46,6 +47,14 @@ Deno.test("core plugin is direct static plugin composition", () => {
   ]);
   assertEquals(corePlugin.adapters, {});
   assertStrictEquals(corePlugin.resources.tools.ask.action, "ask");
+  assertStrictEquals(
+    corePlugin.resources.tools.readToolResult.action,
+    "readToolResult",
+  );
+  assertEquals(
+    corePlugin.resources.toolResults.default.maxInlineBytes,
+    10 * 1024,
+  );
   assertEquals("manifest" in corePlugin, false);
   assertEquals("features" in corePlugin, false);
   assertEquals(
@@ -79,6 +88,7 @@ Deno.test("core production modules consume public Copilotz subpaths", async () =
     "plugin.ts",
     "shared/runtime-context.ts",
     "./actions/ask/index.ts",
+    "./actions/read-tool-result/index.ts",
     "shared/helpers.ts",
     "processors/message-router/index.ts",
     "processors/project-text-result/index.ts",
@@ -88,6 +98,7 @@ Deno.test("core production modules consume public Copilotz subpaths", async () =
     "processors/fail-ask/index.ts",
     "processors/tool-plan-coordinator/index.ts",
     "resources/tools/ask/index.ts",
+    "resources/tools/read-tool-result/index.ts",
     "./actions/create-thread-message/index.ts",
     "./actions/create-thread/index.ts",
     "./actions/revise-message/index.ts",

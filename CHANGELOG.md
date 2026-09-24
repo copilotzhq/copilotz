@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.80.3 — 2026-09-24
+
+- Prepare each built-in model's final provider transcript before starting a
+  durable LLM call. When every route exceeds its input limit, Core compacts
+  the conversation first and retries with a fresh request.
+- Pin the token calibration used for admission through the provider attempt
+  and verify the prepared transcript before network I/O. This prevents a
+  calibration change between routing and execution from turning a recoverable
+  oversized prompt into a failed conversation response. Custom adapters keep
+  their existing generic input estimate.
+
 ## 0.80.2 — 2026-09-23
 
 - Let memory maintenance consolidate a single tool result that exceeds the

@@ -28,6 +28,7 @@ import {
   LLM_CALL_ACTION_ALIAS,
   LLM_CALL_ACTION_ID,
   type LlmActionContext,
+  prepareLlmCall,
 } from "./index.ts";
 import {
   type LlmAdapter,
@@ -451,6 +452,92 @@ Deno.test("llm.call runs a built-in Model without adapters and never returns its
       JSON.stringify(output).includes("https://account.example/v1"),
       false,
     );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("llm.call rejects a changed prepared transcript or limit before provider I/O", async () => {
+  const connection = {
+    provider: "openai",
+    baseUrl: "https://account.example/v1",
+    auth: { apiKey: "built-in-secret" },
+  } as const;
+  const input = {
+    ...baseInput,
+    models: [{
+      connection: "primary",
+      model: "gpt-4o-mini",
+      options: {
+        estimateCost: false,
+        limitEstimatedInputTokens: 10_000,
+        openaiApi: "chat_completions",
+      },
+    }] as const,
+    request: {
+      messages: [{
+        role: "user",
+        content: [{
+          assetId: "prepared:original-prompt",
+          kind: "text",
+          mediaType: "text/plain",
+          role: "body",
+          value: "Original prepared prompt",
+        }],
+      }],
+    },
+  } as unknown as LlmCallInput;
+  const preparation = await prepareLlmCall(
+    input,
+    { primary: connection },
+    "tenant-a",
+  );
+  const originalFetch = globalThis.fetch;
+  let providerRequests = 0;
+  globalThis.fetch = () => {
+    providerRequests += 1;
+    throw new Error("A stale preparation must fail before provider I/O.");
+  };
+  const test = fixture({ llmConnections: { primary: connection } });
+  try {
+    await assertRejects(
+      async () =>
+        callLlmAction.execute({
+          ...input,
+          preparation,
+          request: {
+            messages: [{
+              role: "user",
+              content: [{
+                assetId: "prepared:original-prompt",
+                kind: "text",
+                mediaType: "text/plain",
+                role: "body",
+                value: "Changed prepared prompt",
+              }],
+            }],
+          },
+        }, test.context),
+      TypeError,
+      "preparation no longer matches",
+    );
+    await assertRejects(
+      async () =>
+        callLlmAction.execute({
+          ...input,
+          preparation,
+          models: [{
+            ...input.models[0],
+            options: {
+              ...input.models[0].options,
+              limitEstimatedInputTokens: 1,
+            },
+          }],
+        }, test.context),
+      TypeError,
+      "preparation no longer matches",
+    );
+    assertEquals(providerRequests, 0);
   } finally {
     globalThis.fetch = originalFetch;
   }

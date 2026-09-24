@@ -5,6 +5,9 @@ import {
   projectPreparedRequest,
 } from "../../shared/prepared-request.ts";
 import { preflightLlmRequest } from "../../adapters/bridge/index.ts";
+import { assertEstimatedInputLimit } from "../../shared/utils.ts";
+import { toLLMConfig } from "../../adapters/bridge/config.ts";
+import type { PreparedAttemptTranscript } from "../../adapters/bridge/transcript.ts";
 
 import {
   type ActionContext,
@@ -23,12 +26,16 @@ import {
   type LlmAdapter,
   type LlmAdapterAttempt,
   LlmAdapterCallError,
+  type LlmAdapterCallInput,
   type LlmAdapterFrame,
   type LlmAdapterResult,
   type LlmAttemptUsage,
   type LlmAuthResolution,
+  type LlmBuiltinProviderConfiguration,
   type LlmCallInput,
   type LlmCallOutput,
+  type LlmCallPreparation,
+  type LlmCallPreparationCandidate,
   type LlmConnectionContext,
   type LlmConnectionResource,
   type LlmJsonObject,
@@ -45,9 +52,13 @@ import {
   normalizeLlmConnection,
   normalizeLlmModelSelections,
 } from "../../shared/contracts.ts";
-import { materializeBuiltinModel } from "../../adapters/index.ts";
+import {
+  materializeBuiltinModel,
+  prepareBuiltinModelTranscript,
+} from "../../adapters/index.ts";
 import { createLlmAdapter } from "../../authoring/custom-adapter/index.ts";
 import { deriveChatGptCodexCacheKey } from "../../shared/internal-cache-key.ts";
+import { ContextInputLimitError } from "../../shared/errors.ts";
 
 export const LLM_CALL_ACTION_ID = "llm.call";
 export const LLM_CALL_ACTION_ALIAS = "callLlm";
@@ -82,6 +93,46 @@ const llmCallInputSchema = {
     },
     mode: { enum: ["generate", "session"] },
     request: { type: "object" },
+    preparation: {
+      type: "object",
+      additionalProperties: false,
+      required: ["schema", "candidates"],
+      properties: {
+        schema: { const: "copilotz.llm-call-preparation.v1" },
+        candidates: {
+          type: "array",
+          minItems: 1,
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: [
+              "index",
+              "connection",
+              "model",
+              "adapter",
+              "status",
+              "estimatedInputTokens",
+              "limitEstimatedInputTokens",
+            ],
+            properties: {
+              index: { type: "integer", minimum: 0 },
+              connection: { type: "string", minLength: 1 },
+              model: { type: "string", minLength: 1 },
+              adapter: { type: "string", minLength: 1 },
+              status: { enum: ["fit", "too_large"] },
+              estimatedInputTokens: { type: "number", minimum: 0 },
+              limitEstimatedInputTokens: {
+                type: "number",
+                exclusiveMinimum: 0,
+              },
+              promptFingerprint: { type: "string", minLength: 1 },
+              calibrationKey: { type: "string", minLength: 1 },
+              calibrationFactor: { type: "number", minimum: 0.5, maximum: 2 },
+            },
+          },
+        },
+      },
+    },
     stream: { type: "object" },
     inputStreamId: { type: "string" },
   },
@@ -123,6 +174,7 @@ type ResolvedModel = Readonly<{
   selection: LlmModelSelection;
   connection: LlmConnectionResource;
   adapterAlias: string;
+  builtinConfiguration?: LlmBuiltinProviderConfiguration;
   adapter?: LlmAdapter;
 }>;
 
@@ -610,12 +662,17 @@ async function attemptModel(
         ),
       }
       : undefined;
+  const builtinConfiguration = {
+    ...resource,
+    ...(executionIdentity ? { executionIdentity } : {}),
+  };
   return ({
     kind: "ready",
     candidate: {
       ...candidate,
+      builtinConfiguration,
       adapter: materializeBuiltinModel(
-        { ...resource, ...(executionIdentity ? { executionIdentity } : {}) },
+        builtinConfiguration,
         input.mode,
         candidate.selection.options ?? ({} as const),
       ),
@@ -1142,6 +1199,94 @@ function normalizedRequest(value: unknown): LlmCallInput["request"] {
   } as const);
 }
 
+function normalizedPreparation(value: unknown): LlmCallPreparation {
+  const record = plainRecord(value, "LLM call preparation");
+  exactKeys(record, new Set(["schema", "candidates"]), "LLM call preparation");
+  if (record.schema !== "copilotz.llm-call-preparation.v1") {
+    throw new TypeError("LLM call preparation has an unsupported schema.");
+  }
+  if (!Array.isArray(record.candidates) || record.candidates.length === 0) {
+    throw new TypeError("LLM call preparation requires candidate summaries.");
+  }
+  const candidates = record.candidates.map((value, index) => {
+    const path = `LLM call preparation.candidates[${index}]`;
+    const item = plainRecord(value, path);
+    exactKeys(
+      item,
+      new Set([
+        "index",
+        "connection",
+        "model",
+        "adapter",
+        "status",
+        "estimatedInputTokens",
+        "limitEstimatedInputTokens",
+        "promptFingerprint",
+        "calibrationKey",
+        "calibrationFactor",
+      ]),
+      path,
+    );
+    if (!Number.isInteger(item.index) || (item.index as number) < 0) {
+      throw new TypeError(`${path}.index must be a non-negative integer.`);
+    }
+    if (item.status !== "fit" && item.status !== "too_large") {
+      throw new TypeError(`${path}.status must be 'fit' or 'too_large'.`);
+    }
+    const estimatedInputTokens = Number(item.estimatedInputTokens);
+    const limitEstimatedInputTokens = Number(item.limitEstimatedInputTokens);
+    if (
+      !Number.isFinite(estimatedInputTokens) || estimatedInputTokens < 0 ||
+      !Number.isFinite(limitEstimatedInputTokens) ||
+      limitEstimatedInputTokens <= 0
+    ) {
+      throw new TypeError(`${path} has an invalid token estimate or limit.`);
+    }
+    const promptFingerprint = optionalText(
+      item.promptFingerprint,
+      `${path}.promptFingerprint`,
+    );
+    const calibrationKey = optionalText(
+      item.calibrationKey,
+      `${path}.calibrationKey`,
+    );
+    let calibrationFactor: number | undefined;
+    if (item.calibrationFactor !== undefined) {
+      const factor = Number(item.calibrationFactor);
+      if (!Number.isFinite(factor) || factor < 0.5 || factor > 2) {
+        throw new TypeError(
+          `${path}.calibrationFactor must be between 0.5 and 2.`,
+        );
+      }
+      calibrationFactor = factor;
+    }
+    if (
+      (promptFingerprint === undefined) !== (calibrationKey === undefined) ||
+      (promptFingerprint === undefined) !== (calibrationFactor === undefined)
+    ) {
+      throw new TypeError(
+        `${path} has an incomplete built-in admission stamp.`,
+      );
+    }
+    return ({
+      index: item.index as number,
+      connection: requiredText(item.connection, `${path}.connection`),
+      model: requiredText(item.model, `${path}.model`),
+      adapter: requiredText(item.adapter, `${path}.adapter`),
+      status: item.status,
+      estimatedInputTokens,
+      limitEstimatedInputTokens,
+      ...(promptFingerprint ? { promptFingerprint } : {}),
+      ...(calibrationKey ? { calibrationKey } : {}),
+      ...(calibrationFactor === undefined ? {} : { calibrationFactor }),
+    } as const);
+  });
+  return ({
+    schema: "copilotz.llm-call-preparation.v1",
+    candidates,
+  } as const);
+}
+
 function normalizedCallInput(value: unknown): LlmCallInput {
   const record = plainRecord(value, "LLM call input");
   exactKeys(
@@ -1150,6 +1295,7 @@ function normalizedCallInput(value: unknown): LlmCallInput {
       "models",
       "mode",
       "request",
+      "preparation",
       "stream",
       "inputStreamId",
     ]),
@@ -1164,6 +1310,9 @@ function normalizedCallInput(value: unknown): LlmCallInput {
   }
   const mode = record.mode;
   const request = normalizedRequest(record.request);
+  const preparation = record.preparation === undefined
+    ? undefined
+    : normalizedPreparation(record.preparation);
   let stream: LlmCallInput["stream"];
   if (record.stream !== undefined) {
     const item = plainRecord(record.stream, "LLM stream descriptor");
@@ -1185,8 +1334,119 @@ function normalizedCallInput(value: unknown): LlmCallInput {
     models,
     mode,
     request,
+    ...(preparation ? { preparation } : {}),
     ...(stream ? { stream } : {}),
     ...(inputStreamId ? { inputStreamId } : {}),
+  } as const);
+}
+
+/**
+ * Prepare the ordered candidate transcripts before Core starts a durable
+ * `llm.call`. Built-in candidates use their provider's exact bridge formatter;
+ * custom adapters retain the generic LLM estimate because their wire format
+ * is not available to this plugin.
+ */
+export async function prepareLlmCall(
+  rawInput: LlmCallInput,
+  connections: LlmActionResources["llmConnections"],
+  namespace = "",
+): Promise<LlmCallPreparation> {
+  const input = normalizedCallInput(rawInput);
+  const candidates: LlmCallPreparationCandidate[] = [];
+  for (let index = 0; index < input.models.length; index += 1) {
+    const selection = input.models[index];
+    if (!selection) continue;
+    const rawConnection = connections[selection.connection];
+    if (!rawConnection) {
+      throw new Error(`Unknown LLM connection '${selection.connection}'.`);
+    }
+    const connection = normalizeLlmConnection(rawConnection);
+    const adapter = connection.provider ?? connection.adapter;
+    const options = selection.options ?? ({} as const);
+    if (connection.provider !== undefined) {
+      const auth = connection.auth;
+      const builtinConfiguration = {
+        provider: connection.provider,
+        model: selection.model,
+        ...(connection.baseUrl ? { baseUrl: connection.baseUrl } : {}),
+        ...(connection.runtimeDiagnostics
+          ? { runtimeDiagnostics: connection.runtimeDiagnostics }
+          : {}),
+        ...("resolve" in auth ? {} : {
+          ...(auth.apiKey === undefined ? {} : { apiKey: auth.apiKey }),
+          ...(auth.extraHeaders === undefined
+            ? {}
+            : { extraHeaders: auth.extraHeaders }),
+        }),
+      };
+      const request = projectPreparedRequest(input.request, namespace, {
+        adapter,
+        model: selection.model,
+      });
+      const adapterInput: LlmAdapterCallInput = {
+        model: selection.model,
+        adapter,
+        providerModel: selection.model,
+        mode: input.mode,
+        fallbackAvailable: index < input.models.length - 1,
+        options,
+        request,
+        signal: new AbortController().signal,
+      };
+      const prepared = await prepareBuiltinModelTranscript(
+        builtinConfiguration,
+        input.mode,
+        options,
+        adapterInput,
+      );
+      const limit = prepared.limitEstimatedInputTokens ?? 150_000;
+      candidates.push({
+        index,
+        connection: selection.connection,
+        model: selection.model,
+        adapter,
+        status: prepared.inputTokenEstimate.estimatedTokens > limit
+          ? "too_large"
+          : "fit",
+        estimatedInputTokens: prepared.inputTokenEstimate.estimatedTokens,
+        limitEstimatedInputTokens: limit,
+        promptFingerprint: prepared.promptFingerprint,
+        calibrationKey: prepared.inputTokenEstimate.calibrationKey,
+        calibrationFactor: prepared.inputTokenEstimate.calibrationFactor,
+      });
+      continue;
+    }
+
+    let estimatedInputTokens: number;
+    let limitEstimatedInputTokens: number;
+    let tooLarge = false;
+    try {
+      const measured = preflightLlmRequest(input.request, {
+        ...options,
+        model: selection.model,
+      }, namespace);
+      estimatedInputTokens = measured.estimatedInputTokens;
+      limitEstimatedInputTokens = measured.limitEstimatedInputTokens ??
+        150_000;
+    } catch (error) {
+      if (!(error instanceof ContextInputLimitError)) throw error;
+      estimatedInputTokens = error.estimatedInputTokens;
+      limitEstimatedInputTokens = error.limitEstimatedInputTokens;
+      tooLarge = true;
+    }
+    candidates.push({
+      index,
+      connection: selection.connection,
+      model: selection.model,
+      adapter,
+      status: tooLarge ? "too_large" : "fit",
+      estimatedInputTokens,
+      limitEstimatedInputTokens,
+    });
+  }
+  return ({
+    schema: "copilotz.llm-call-preparation.v1",
+    candidates,
   } as const);
 }
 
@@ -2430,23 +2690,7 @@ async function executeLlmCall(
     let attemptInput: ManagedInput | undefined;
     let result: LlmAdapterResult;
     try {
-      // The same guard applies to custom adapters and replayed prepared inputs.
-      preflightLlmRequest(input.request, {
-        ...candidate.selection.options,
-        model: candidate.selection.model,
-        ...(candidate.connection.provider
-          ? { provider: candidate.connection.provider }
-          : {}),
-      }, context.namespace);
-      const inputFollower = input.inputStreamId
-        ? await context.streams.follow({
-          id: requiredText(input.inputStreamId, "LLM input stream ID"),
-        }, { signal: attemptSignal })
-        : undefined;
-      attemptInput = inputFollower
-        ? managedInput(inputFollower.body)
-        : undefined;
-      const invocation = invocationOf(candidate.adapter!.call({
+      const adapterCallInput: LlmAdapterCallInput = {
         model: candidate.selection.model,
         adapter: candidate.adapterAlias,
         providerModel: candidate.selection.model,
@@ -2455,8 +2699,85 @@ async function executeLlmCall(
         options: candidate.selection.options ?? ({} as const),
         request,
         signal: attemptSignal,
+      };
+      let preparedAttemptTranscript: PreparedAttemptTranscript | undefined;
+      if (candidate.connection.provider !== undefined) {
+        const stamp = input.preparation?.candidates.find((entry) =>
+          entry.index === index
+        );
+        const builtinConfiguration = candidate.builtinConfiguration;
+        if (!builtinConfiguration) {
+          throw new TypeError(
+            "Built-in LLM candidate has no resolved provider configuration.",
+          );
+        }
+        preparedAttemptTranscript = await prepareBuiltinModelTranscript(
+          builtinConfiguration,
+          input.mode,
+          candidate.selection.options ?? ({} as const),
+          adapterCallInput,
+          stamp?.calibrationFactor,
+        );
+        const config = toLLMConfig({
+          ...candidate.selection.options,
+          model: candidate.selection.model,
+          provider: candidate.connection.provider,
+        });
+        if (input.preparation) {
+          if (!stamp) {
+            throw new TypeError(
+              "LLM call preparation is missing a built-in candidate.",
+            );
+          }
+          const estimated = preparedAttemptTranscript.inputTokenEstimate;
+          const expectedStatus = estimated.estimatedTokens >
+              (config.limitEstimatedInputTokens ?? 150_000)
+            ? "too_large"
+            : "fit";
+          if (
+            stamp.connection !== candidate.alias ||
+            stamp.model !== candidate.selection.model ||
+            stamp.adapter !== candidate.adapterAlias ||
+            stamp.promptFingerprint !==
+              preparedAttemptTranscript.promptFingerprint ||
+            stamp.calibrationKey !== estimated.calibrationKey ||
+            stamp.calibrationFactor !== estimated.calibrationFactor ||
+            stamp.estimatedInputTokens !== estimated.estimatedTokens ||
+            stamp.limitEstimatedInputTokens !==
+              config.limitEstimatedInputTokens ||
+            stamp.status !== expectedStatus
+          ) {
+            throw new TypeError(
+              "LLM call preparation no longer matches its candidate.",
+            );
+          }
+        }
+        assertEstimatedInputLimit(
+          preparedAttemptTranscript.inputTokenEstimate,
+          config,
+        );
+      } else {
+        // Custom adapters do not expose their final wire transcript. Retain
+        // their existing generic LLM preflight guard.
+        preflightLlmRequest(input.request, {
+          ...candidate.selection.options,
+          model: candidate.selection.model,
+        }, context.namespace);
+      }
+      const inputFollower = input.inputStreamId
+        ? await context.streams.follow({
+          id: requiredText(input.inputStreamId, "LLM input stream ID"),
+        }, { signal: attemptSignal })
+        : undefined;
+      attemptInput = inputFollower
+        ? managedInput(inputFollower.body)
+        : undefined;
+      const callInput = {
+        ...adapterCallInput,
+        ...(preparedAttemptTranscript ? { preparedAttemptTranscript } : {}),
         ...(attemptInput ? { input: attemptInput.stream } : {}),
-      }));
+      } as LlmAdapterCallInput;
+      const invocation = invocationOf(candidate.adapter!.call(callInput));
       result = await settleInvocation(
         invocation,
         candidate,
@@ -2578,6 +2899,8 @@ export type {
   LlmAttemptUsage,
   LlmCallInput,
   LlmCallOutput,
+  LlmCallPreparation,
+  LlmCallPreparationCandidate,
   LlmCost,
   LlmMessage,
   LlmNativeReasoning,

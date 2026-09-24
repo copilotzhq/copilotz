@@ -26,6 +26,7 @@ import type {
   LlmAdapterCallInput,
   LlmAdapterFrame,
   LlmAdapterResult,
+  LlmConnectionResource,
   LlmMode,
 } from "@copilotz/copilotz/llm";
 import { defineAction } from "@copilotz/copilotz/actions";
@@ -41,6 +42,12 @@ import type {
   CoreProcessorContext,
   CoreToolProcessorContext,
 } from "../runtime-context.ts";
+import {
+  getTokenCalibrationFactor,
+  observeTokenCalibration,
+  resetTokenCalibration,
+  tokenCalibrationKey,
+} from "../../../llm/shared/token-calibration.ts";
 import {
   type CopilotzEngine,
   createCopilotzEngine,
@@ -157,6 +164,10 @@ async function createFixture(
       Record<string, ReturnType<typeof defineContextResource>>
     >;
   }> = {},
+  llmConnections: Readonly<Record<string, LlmConnectionResource>> = {
+    primaryModel: { adapter: "test" },
+    backupModel: { adapter: "test" },
+  },
 ): Promise<Fixture> {
   toolExecutions.splice(0);
   const db = await createTestDatabase({ url: ":memory:" });
@@ -172,10 +183,7 @@ async function createFixture(
     resources: {
       agents: { north: agentResource },
       tools: { contract_tool: contractTool },
-      llmConnections: {
-        primaryModel: { adapter: "test" },
-        backupModel: { adapter: "test" },
-      },
+      llmConnections,
       promptInstructions: promptResources.promptInstructions ?? {},
       promptContext: promptResources.promptContext ?? {},
     },
@@ -492,6 +500,7 @@ Deno.test("Core invokes llm.call with explicit model selections and connections"
     const invoked = lifecycle.find((event) => event.status === "invoked");
     assertExists(invoked);
     assertExists(completed);
+    assertEquals(lifecycle.some((event) => event.status === "failed"), false);
     assertEquals(
       (invoked.input as Record<string, unknown>).models,
       orderedAgent.models.generate,
@@ -516,6 +525,293 @@ Deno.test("Core invokes llm.call with explicit model selections and connections"
       "threadId" in (completed.input as Record<string, unknown>),
       false,
     );
+  } finally {
+    await fixture.close();
+  }
+});
+Deno.test("Core compacts an exact LLM preparation overflow before llm.call", async () => {
+  let compacted = false;
+  let compactions = 0;
+  const context = defineContextResource({
+    id: "application.large-context",
+    type: "context",
+    purposes: ["conversation"],
+    contribute: () => ({
+      id: "large-context",
+      title: "LARGE CONTEXT",
+      role: "context",
+      content: compacted ? "ready" : "context ".repeat(2_000),
+    }),
+    compact: () => {
+      compacted = true;
+      compactions += 1;
+      return true;
+    },
+  });
+  const compactableAgent = {
+    ...agent(),
+    models: {
+      generate: [{
+        connection: "primaryModel",
+        model: "generate-provider-model",
+        options: { limitEstimatedInputTokens: 2_500 },
+      }] as const,
+    },
+  } satisfies AgentResource;
+  const fixture = await createFixture(
+    () => ({
+      result: {
+        content: {
+          type: "text",
+          text: "Prepared after compaction",
+          role: "body",
+        },
+        attempts: [{ status: "completed" }],
+        finishReason: "stop",
+      },
+    }),
+    "generate",
+    corePlugin,
+    compactableAgent,
+    { promptContext: { large: context } },
+  );
+  try {
+    const root = await startRun(fixture, "Question");
+    await waitForRun(fixture, root, 2);
+    assertEquals(compactions, 1);
+    assertEquals(fixture.inputs.length, 1);
+    assertStringIncludes(
+      fixture.inputs[0]!.request.instructions ?? "",
+      "LARGE CONTEXT",
+    );
+    assertEquals(
+      (fixture.inputs[0]!.request.instructions ?? "").includes(
+        "context ".repeat(20),
+      ),
+      false,
+    );
+    const lifecycle = await projectActionEvents(
+      fixture.engine,
+      NAMESPACE,
+      "llm.call",
+    );
+    assertEquals(lifecycle.map((event) => event.status), [
+      "invoked",
+      "completed",
+    ]);
+    const routed = await projectMessages(fixture.engine, NAMESPACE, "thread-a");
+    assertEquals(
+      await messageText(fixture, routed[1]!),
+      "Prepared after compaction",
+    );
+  } finally {
+    await fixture.close();
+  }
+});
+Deno.test("Core pins built-in transcript calibration through llm.call execution", async () => {
+  const calibrationKey = tokenCalibrationKey(
+    "openai",
+    "gpt-4o-mini",
+    "protocol+text",
+  );
+  resetTokenCalibration();
+  let factorAfterActionPreparation = 1;
+  let requests = 0;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = () => {
+    requests += 1;
+    return Promise.resolve(
+      new Response(
+        [
+          'data: {"choices":[{"delta":{"content":"Pinned transcript succeeded"},"finish_reason":null}]}',
+          'data: {"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}',
+          "data: [DONE]",
+          "",
+        ].join("\n\n"),
+        { headers: { "content-type": "text/event-stream" } },
+      ),
+    );
+  };
+  const builtinAgent = {
+    ...agent(),
+    models: {
+      generate: [{
+        connection: "primaryModel",
+        model: "gpt-4o-mini",
+        options: {
+          estimateCost: false,
+          limitEstimatedInputTokens: 16_000,
+          openaiApi: "chat_completions",
+        },
+      }] as const,
+    },
+  } satisfies AgentResource;
+  const fixture = await createFixture(
+    () => {
+      throw new Error("The built-in route should not use the test adapter.");
+    },
+    "generate",
+    corePlugin,
+    builtinAgent,
+    {},
+    {
+      primaryModel: {
+        provider: "openai",
+        auth: {
+          resolve: () => {
+            observeTokenCalibration(calibrationKey, 100, 200);
+            factorAfterActionPreparation = getTokenCalibrationFactor(
+              calibrationKey,
+            );
+            return { available: true, apiKey: "integration-test-key" };
+          },
+        },
+      },
+    },
+  );
+  try {
+    const root = await startRun(fixture, "Question ".repeat(6_000));
+    await waitForRun(fixture, root, 2);
+    assertEquals(requests, 1);
+    assertEquals(factorAfterActionPreparation, 2);
+    const lifecycle = await projectActionEvents(
+      fixture.engine,
+      NAMESPACE,
+      "llm.call",
+    );
+    assertEquals(lifecycle.map((event) => event.status), [
+      "invoked",
+      "completed",
+    ]);
+    const invoked = lifecycle.find((event) => event.status === "invoked");
+    assertExists(invoked);
+    const input = invoked.input as LlmCallInput;
+    const admission = input.preparation?.candidates[0];
+    assertExists(admission);
+    assertEquals(admission.calibrationFactor, 1);
+    assert(
+      admission.estimatedInputTokens <= admission.limitEstimatedInputTokens,
+    );
+    assert(
+      admission.estimatedInputTokens * factorAfterActionPreparation >
+        admission.limitEstimatedInputTokens,
+    );
+    const messages = await projectMessages(
+      fixture.engine,
+      NAMESPACE,
+      "thread-a",
+    );
+    assertEquals(
+      await messageText(fixture, messages.at(-1)!),
+      "Pinned transcript succeeded",
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+    resetTokenCalibration();
+    await fixture.close();
+  }
+});
+Deno.test("an oversized first route can fall through to a fitting LLM candidate", async () => {
+  const fallbackAgent = {
+    ...agent(),
+    models: {
+      generate: [{
+        connection: "primaryModel",
+        model: "too-small-provider-model",
+        options: { limitEstimatedInputTokens: 1 },
+      }, {
+        connection: "backupModel",
+        model: "fitting-provider-model",
+        options: { limitEstimatedInputTokens: 10_000 },
+      }] as const,
+    },
+  } satisfies AgentResource;
+  const fixture = await createFixture(
+    (input) => ({
+      result: {
+        content: { type: "text", text: "Backup succeeded", role: "body" },
+        attempts: [{ status: "completed" }],
+        finishReason: "stop",
+      },
+    }),
+    "generate",
+    corePlugin,
+    fallbackAgent,
+  );
+  try {
+    const root = await startRun(fixture, "Question");
+    await waitForRun(fixture, root, 2);
+    assertEquals(fixture.inputs.length, 1);
+    assertEquals(fixture.inputs[0]!.model, "fitting-provider-model");
+    const lifecycle = await projectActionEvents(
+      fixture.engine,
+      NAMESPACE,
+      "llm.call",
+    );
+    assertEquals(lifecycle.map((event) => event.status), [
+      "invoked",
+      "completed",
+    ]);
+    const completed = lifecycle.find((event) => event.status === "completed");
+    assertExists(completed);
+    assertEquals(
+      (completed.output as Record<string, unknown>).attempts instanceof Array,
+      true,
+    );
+  } finally {
+    await fixture.close();
+  }
+});
+Deno.test("a no-progress compactor never records a successful llm.call", async () => {
+  let compactions = 0;
+  const context = defineContextResource({
+    id: "application.stuck-context",
+    type: "context",
+    purposes: ["conversation"],
+    contribute: () => ({
+      id: "stuck-context",
+      title: "STUCK CONTEXT",
+      role: "context",
+      content: "context ".repeat(2_000),
+    }),
+    compact: () => {
+      compactions += 1;
+      return true;
+    },
+  });
+  const compactableAgent = {
+    ...agent(),
+    models: {
+      generate: [{
+        connection: "primaryModel",
+        model: "generate-provider-model",
+        options: { limitEstimatedInputTokens: 2_500 },
+      }] as const,
+    },
+  } satisfies AgentResource;
+  const fixture = await createFixture(
+    () => {
+      throw new Error("No provider request should occur.");
+    },
+    "generate",
+    corePlugin,
+    compactableAgent,
+    { promptContext: { stuck: context } },
+  );
+  try {
+    const root = await startRun(fixture, "Question");
+    await assertRejects(
+      () => waitForRun(fixture, root, 2),
+      Error,
+      "dead-lettered",
+    );
+    assertEquals(compactions, 1);
+    assertEquals(
+      await projectActionEvents(fixture.engine, NAMESPACE, "llm.call"),
+      [],
+    );
+    const settlement = await fixture.engine.events.settlement(NAMESPACE, root);
+    assertEquals(settlement.deadLetters, 1);
   } finally {
     await fixture.close();
   }

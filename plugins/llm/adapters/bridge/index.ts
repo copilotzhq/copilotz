@@ -28,6 +28,10 @@ import { LLMProviderError } from "../../shared/errors.ts";
 import { toLLMConfig } from "./config.ts";
 import { chat } from "./orchestrator.ts";
 import {
+  prepareAttemptTranscript,
+  type PreparedAttemptTranscript,
+} from "./transcript.ts";
+import {
   assertEstimatedInputLimit,
   formatMessagesDetailed,
 } from "../../shared/utils.ts";
@@ -837,17 +841,14 @@ function providerConfig(
   };
 }
 
-/** Private bridge from the mature wire protocol runner to the final contract. */
-export function createProviderAdapter(
-  provider: ProviderName,
+function captureProviderConfiguration(
   configuration: BuiltinProviderConfiguration,
-  protocol: ProviderFactory,
-): LlmAdapter {
+): BuiltinProviderConfiguration {
   const options = configuration.options
     ? captureJson(configuration.options) as LlmJsonObject
     : undefined;
   runtimeOptions(options);
-  const captured = {
+  return {
     apiKey: configuration.apiKey,
     baseUrl: configuration.baseUrl,
     extraHeaders: cloneStringRecord(configuration.extraHeaders),
@@ -858,8 +859,41 @@ export function createProviderAdapter(
       ? ({ ...configuration.executionIdentity } as const)
       : undefined,
     options,
-  } as const;
+  };
+}
 
+/** Internal exact-transcript helper shared by Core preparation and Action execution. */
+export async function prepareProviderAttemptTranscript(
+  provider: ProviderName,
+  configuration: BuiltinProviderConfiguration,
+  protocol: ProviderFactory,
+  input: LlmAdapterCallInput,
+  calibrationFactor?: number,
+): Promise<PreparedAttemptTranscript> {
+  const config = providerConfig(
+    provider,
+    input,
+    captureProviderConfiguration(configuration),
+  );
+  const providerAPI = protocol(config);
+  const nativeReasoningApi = providerAPI.replaysNativeReasoning === false
+    ? undefined
+    : providerAPI.nativeReasoningApi;
+  return await prepareAttemptTranscript({
+    request: createChatRequest(input, input.signal, nativeReasoningApi),
+    config,
+    calibrationFactor,
+    enforceLimit: false,
+  });
+}
+
+/** Private bridge from the mature wire protocol runner to the final contract. */
+export function createProviderAdapter(
+  provider: ProviderName,
+  configuration: BuiltinProviderConfiguration,
+  protocol: ProviderFactory,
+): LlmAdapter {
+  const captured = captureProviderConfiguration(configuration);
   return ({
     call(input) {
       const channel = frameChannel(input.signal);
@@ -889,6 +923,11 @@ export function createProviderAdapter(
             providerAPI.replaysNativeReasoning === false
               ? undefined
               : providerAPI.nativeReasoningApi;
+          const preparedAttemptTranscript = (
+            input as LlmAdapterCallInput & {
+              preparedAttemptTranscript?: PreparedAttemptTranscript;
+            }
+          ).preparedAttemptTranscript;
           const response = await chat(
             {
               ...createChatRequest(input, channel.signal, nativeReasoningApi),
@@ -915,7 +954,14 @@ export function createProviderAdapter(
               });
             },
             { [provider]: protocol },
-            { hasExternalFallback: input.fallbackAvailable },
+            {
+              hasExternalFallback: input.fallbackAvailable,
+              ...(preparedAttemptTranscript
+                ? {
+                  preparedTranscript: preparedAttemptTranscript,
+                }
+                : {}),
+            },
           );
           if (channel.signal.aborted) {
             throw abortError(channel.signal.reason);

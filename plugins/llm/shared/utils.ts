@@ -231,6 +231,7 @@ export interface FormattedMessagesResult {
 
 export function formatMessagesDetailed(
   { messages, instructions, config, tools }: ChatRequest,
+  options: Readonly<{ calibrationFactor?: number }> = {},
 ): FormattedMessagesResult {
   // Build system content with instructions and tool definitions
   let systemContent: ChatMessage["content"] = instructions ?? "";
@@ -284,7 +285,11 @@ export function formatMessagesDetailed(
   // alternates assistant/user turns (system messages stay separate).
   const finalMessages = mergeConsecutiveMessages(normalizedMessages);
   assertWireMessageInvariants(finalMessages);
-  const estimate = estimateChatMessages(finalMessages, config);
+  const estimate = estimateChatMessages(
+    finalMessages,
+    config,
+    options.calibrationFactor,
+  );
   return {
     messages: finalMessages,
     estimate,

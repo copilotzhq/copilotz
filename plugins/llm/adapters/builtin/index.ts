@@ -2,6 +2,7 @@
 
 import type {
   LlmAdapter,
+  LlmAdapterCallInput,
   LlmBuiltinProvider,
   LlmBuiltinProviderConfiguration,
   LlmJsonObject,
@@ -10,6 +11,7 @@ import type {
 import type { ProviderFactory } from "../../shared/types.ts";
 import {
   createProviderAdapter,
+  prepareProviderAttemptTranscript,
   validateBuiltinProviderCall,
 } from "../bridge/index.ts";
 import { anthropicProvider } from "../anthropic/index.ts";
@@ -41,5 +43,23 @@ export function materializeBuiltinModel(
     resource.provider,
     resource,
     PROVIDERS[resource.provider],
+  );
+}
+
+/** Internal bridge used to admit and execute the same built-in transcript. */
+export function prepareBuiltinModelTranscript(
+  resource: LlmBuiltinProviderConfiguration,
+  mode: LlmMode,
+  options: LlmJsonObject,
+  input: LlmAdapterCallInput,
+  calibrationFactor?: number,
+) {
+  validateBuiltinProviderCall(resource.provider, mode, options);
+  return prepareProviderAttemptTranscript(
+    resource.provider,
+    resource,
+    PROVIDERS[resource.provider],
+    input,
+    calibrationFactor,
   );
 }

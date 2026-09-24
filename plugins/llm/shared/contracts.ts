@@ -277,8 +277,29 @@ export type LlmCallInput = Readonly<{
   models: LlmModelSelections;
   mode: LlmMode;
   request: LlmRequest;
+  /** LLM-produced Core admission snapshot. Revalidated before provider I/O. */
+  preparation?: LlmCallPreparation;
   stream?: LlmStreamDescriptor;
   inputStreamId?: string;
+}>;
+
+export type LlmCallPreparationCandidate = Readonly<{
+  index: number;
+  connection: string;
+  model: string;
+  adapter: string;
+  status: "fit" | "too_large";
+  estimatedInputTokens: number;
+  limitEstimatedInputTokens: number;
+  /** Present for built-in provider transcripts prepared by the LLM bridge. */
+  promptFingerprint?: string;
+  calibrationKey?: string;
+  calibrationFactor?: number;
+}>;
+
+export type LlmCallPreparation = Readonly<{
+  schema: "copilotz.llm-call-preparation.v1";
+  candidates: readonly LlmCallPreparationCandidate[];
 }>;
 
 export type LlmCost = Readonly<{

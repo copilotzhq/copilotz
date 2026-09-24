@@ -43,6 +43,7 @@ import {
   type RecoveryDecision,
 } from "./recovery-policy.ts";
 import { prepareAttemptTranscript } from "./transcript.ts";
+import type { PreparedAttemptTranscript } from "./transcript.ts";
 import {
   accountCompletedAttempt,
   accountFailedAttempt,
@@ -363,6 +364,8 @@ function toUsageStatusReason(
 export type ChatOptions = {
   /** The owning `llm.call` invocation has another model candidate. */
   hasExternalFallback?: boolean;
+  /** Exact initial transcript prepared by the durable llm.call admission step. */
+  preparedTranscript?: PreparedAttemptTranscript;
 };
 
 /**
@@ -616,11 +619,15 @@ export async function chat(
           },
         ]
         : [];
-      const transcript = await prepareAttemptTranscript({
-        request,
-        config: attemptConfig,
-        recoveryMessages,
-      });
+      const transcript = state.attemptSequence === 0 &&
+          state.providerIndex === 0 && recoveryMessages.length === 0 &&
+          options?.preparedTranscript
+        ? options.preparedTranscript
+        : await prepareAttemptTranscript({
+          request,
+          config: attemptConfig,
+          recoveryMessages,
+        });
       const attemptMessages = transcript.messages;
       lastPrompt = attemptMessages;
       const attemptId = crypto.randomUUID();

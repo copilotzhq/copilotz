@@ -82,6 +82,7 @@ export interface ChatTokenEstimate extends TokenEstimate {
 export function estimateChatMessages(
   messages: readonly ChatMessage[],
   config: Pick<ProviderConfig, "provider" | "model"> = {},
+  calibrationFactor?: number,
 ): ChatTokenEstimate {
   const messageParts = messages.map((message) => [
     { type: "protocol" as const, tokens: 4 },
@@ -108,11 +109,12 @@ export function estimateChatMessages(
     config.model,
     modalityMask,
   );
-  const calibrationFactor = getTokenCalibrationFactor(calibrationKey);
+  const resolvedCalibrationFactor = calibrationFactor ??
+    getTokenCalibrationFactor(calibrationKey);
   const estimate = estimateTokens(messageParts.flat(), {
     provider: config.provider,
     model: config.model,
-    calibrationFactor,
+    calibrationFactor: resolvedCalibrationFactor,
   });
   return {
     ...estimate,

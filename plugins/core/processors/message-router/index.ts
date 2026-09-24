@@ -1,11 +1,7 @@
 import { collectContextContributions } from "../../shared/contributions.ts";
 import { coreEvent } from "../../shared/events/index.ts";
 /** Routes canonical Messages into agent LLM calls. @module */
-import {
-  ContextInputLimitError,
-  isContextInputLimitError,
-  preflightLlmRequest,
-} from "@copilotz/copilotz/llm";
+import { ContextInputLimitError, prepareLlmCall } from "@copilotz/copilotz/llm";
 import { isContentByteLimitError } from "@copilotz/copilotz/content";
 import { isSettledActionError } from "@copilotz/copilotz/actions";
 import {
@@ -52,6 +48,7 @@ import {
   stringArray,
   toolsForAgent,
 } from "../../shared/helpers.ts";
+
 class SupersededMessageError extends Error {
 }
 function modelsFor(agent: AgentResource): Readonly<{
@@ -383,14 +380,14 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
                   .some((resource) =>
                     isContextResource(resource) && resource.compact
                   );
-              const limits = selection.models.map((model) =>
-                preflightLlmRequest({ messages: [] }, {
-                  ...model.options,
-                  model: model.model,
-                }, context.namespace).limitEstimatedInputTokens
-              ).filter((limit): limit is number =>
-                typeof limit === "number" && Number.isFinite(limit) && limit > 0
-              );
+              const limits = selection.models.flatMap((model) => {
+                const configured = model.options?.limitEstimatedInputTokens;
+                if (configured === undefined) return [150_000];
+                return typeof configured === "number" &&
+                    Number.isFinite(configured) && configured > 0
+                  ? [configured]
+                  : [];
+              });
               const limit = limits.length ? Math.min(...limits) : undefined;
               const compact = async (error: ContextInputLimitError) => {
                 const boundaryKey = afterMessageId ?? "initial";
@@ -504,43 +501,49 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
                   agentId,
                 },
               });
-              try {
-                for (const model of selection.models) {
-                  const connection =
-                    context.resources.llmConnections[model.connection];
-                  if (!connection) {
-                    throw new Error(
-                      `Unknown LLM connection '${model.connection}'.`,
-                    );
-                  }
-                  preflightLlmRequest(request, {
-                    ...model.options,
-                    model: model.model,
-                    ...(connection.provider
-                      ? { provider: connection.provider }
-                      : {}),
-                  }, context.namespace);
-                }
-              } catch (error) {
-                if (!isContextInputLimitError(error)) {
-                  throw error;
-                }
-                if (hasCompaction) {
-                  await compact(error);
-                  continue;
-                }
+              const callInput = {
+                models: selection.models,
+                mode: selection.mode,
+                request,
+                stream: {
+                  metadata: coreLlmStreamMetadata(
+                    resolved.agent,
+                    ask ?? undefined,
+                  ),
+                },
+              } as const;
+              const preparation = await prepareLlmCall(
+                callInput,
+                context.resources.llmConnections,
+                context.namespace,
+              );
+              const oversized = preparation.candidates.filter((candidate) =>
+                candidate.status === "too_large"
+              );
+              if (
+                hasCompaction &&
+                oversized.length === preparation.candidates.length
+              ) {
+                const mostConstrained = oversized.reduce((current, candidate) =>
+                  candidate.estimatedInputTokens /
+                        candidate.limitEstimatedInputTokens >
+                      current.estimatedInputTokens /
+                        current.limitEstimatedInputTokens
+                    ? candidate
+                    : current
+                );
+                await compact(
+                  new ContextInputLimitError(
+                    mostConstrained.estimatedInputTokens,
+                    mostConstrained.limitEstimatedInputTokens,
+                  ),
+                );
+                continue;
               }
               return {
                 input: {
-                  models: selection.models,
-                  mode: selection.mode,
-                  request,
-                  stream: {
-                    metadata: coreLlmStreamMetadata(
-                      resolved.agent,
-                      ask ?? undefined,
-                    ),
-                  },
+                  ...callInput,
+                  preparation,
                 },
                 metadata,
               };

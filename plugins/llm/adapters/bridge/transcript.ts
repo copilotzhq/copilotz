@@ -19,6 +19,7 @@ export interface PreparedAttemptTranscript {
   promptPrefixFingerprint: string;
   promptPrefixMessageCount: number;
   inputTokenEstimate: ChatTokenEstimate;
+  limitEstimatedInputTokens?: number;
 }
 
 async function fingerprintMessages(messages: ChatMessage[]): Promise<string> {
@@ -37,7 +38,18 @@ export async function prepareAttemptTranscript(args: {
   request: ChatRequest;
   config: ProviderConfig;
   recoveryMessages?: ChatMessage[];
+  /** Pinned Core admission calibration for a prepared initial transcript. */
+  calibrationFactor?: number;
+  /** Prepare a candidate decision without throwing for an over-budget prompt. */
+  enforceLimit?: boolean;
 }): Promise<PreparedAttemptTranscript> {
+  if (
+    args.calibrationFactor !== undefined &&
+    (!Number.isFinite(args.calibrationFactor) || args.calibrationFactor < 0.5 ||
+      args.calibrationFactor > 2)
+  ) {
+    throw new TypeError("Pinned token calibration must be between 0.5 and 2.");
+  }
   const materialized = args.request.materializeMessages
     ? await args.request.materializeMessages(
       args.request.messages,
@@ -50,7 +62,7 @@ export async function prepareAttemptTranscript(args: {
     ...args.request,
     messages: materialized,
     config,
-  });
+  }, { calibrationFactor: args.calibrationFactor });
   const messages = [
     ...formatted.messages,
     ...recoveryMessages,
@@ -67,15 +79,24 @@ export async function prepareAttemptTranscript(args: {
     fingerprintMessages(messages.slice(0, promptPrefixMessageCount)),
   ]);
 
-  const inputTokenEstimate = estimateChatMessages(messages, config);
+  const inputTokenEstimate = estimateChatMessages(
+    messages,
+    config,
+    args.calibrationFactor,
+  );
   // Recovery context is part of the provider request, so enforce the same
   // ceiling after it is appended instead of silently discarding history.
-  assertEstimatedInputLimit(inputTokenEstimate, config);
+  if (args.enforceLimit !== false) {
+    assertEstimatedInputLimit(inputTokenEstimate, config);
+  }
   return {
     messages,
     promptFingerprint,
     promptPrefixFingerprint,
     promptPrefixMessageCount,
     inputTokenEstimate,
+    ...(typeof config.limitEstimatedInputTokens === "number"
+      ? { limitEstimatedInputTokens: config.limitEstimatedInputTokens }
+      : {}),
   };
 }

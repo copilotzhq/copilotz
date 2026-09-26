@@ -8,6 +8,7 @@ export type {
   ResolvedMessageContent,
 } from "../../shared/history-content.ts";
 
+import { encodeContent } from "@copilotz/copilotz/content";
 import type {
   CopilotzClient,
   ObserveOptions,
@@ -91,7 +92,7 @@ export function createCoreClient(client: CopilotzClient): CoreClient {
       send: (input: SendInput, options: SubmitOptions) =>
         client.actions.submit(
           "copilotz.core.conversation.send",
-          input,
+          { ...input, content: encodeContent(input.content) },
           options,
         ),
       observe: (id: string, options: ObserveOptions) =>

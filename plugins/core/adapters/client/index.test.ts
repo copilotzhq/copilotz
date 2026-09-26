@@ -112,3 +112,31 @@ Deno.test("resolved history preserves text, JSON, binary and reasoning through J
       }],
     }, "decode"), TypeError);
 });
+
+Deno.test("Core threads.send encodes image bytes before JSON submission", async () => {
+  let sent: unknown;
+  const core = createCoreClient(createCopilotzClient({
+    baseUrl: "https://test/api",
+    fetch: (async (_url, init) => {
+      sent = JSON.parse(String(init?.body));
+      return Response.json({ data: { operationId: "op" } }, { status: 202 });
+    }) as typeof fetch,
+  }));
+  await core.threads.send({
+    threadId: "thread",
+    content: [{
+      type: "image",
+      bytes: new Uint8Array([1, 2, 3]),
+      mediaType: "image/png",
+      role: "attachment",
+      disposition: "inline",
+    }],
+  }, { idempotencyKey: "image" });
+  assertEquals((sent as { content: unknown[] }).content[0], {
+    type: "image",
+    dataBase64: "AQID",
+    mediaType: "image/png",
+    role: "attachment",
+    disposition: "inline",
+  });
+});

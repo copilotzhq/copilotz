@@ -432,26 +432,25 @@ function createChatRequest(
   };
 }
 
+type PreflightConfig =
+  & Pick<
+    ProviderConfig,
+    | "model"
+    | "limitEstimatedInputTokens"
+    | "toolSystemPromptVariant"
+    | "reasoningEffort"
+  >
+  & Partial<Pick<ProviderConfig, "provider">>;
+
 /**
- * Formats a durable request through the same bridge used by provider attempts
- * and returns its exact input estimate without contacting a provider.
+ * Formats a durable request into the exact provider-neutral wire messages used
+ * by provider attempts, without contacting a provider.
  */
-export function preflightLlmRequest(
+export function formatLlmRequestForWire(
   request: LlmRequest,
-  config:
-    & Pick<
-      ProviderConfig,
-      | "model"
-      | "limitEstimatedInputTokens"
-      | "toolSystemPromptVariant"
-      | "reasoningEffort"
-    >
-    & Partial<Pick<ProviderConfig, "provider">>,
+  config: PreflightConfig,
   namespace = "",
-): Readonly<{
-  estimatedInputTokens: number;
-  limitEstimatedInputTokens?: number;
-}> {
+) {
   const chatRequest = createChatRequest(
     {
       request: projectPreparedRequest(request, namespace),
@@ -459,11 +458,33 @@ export function preflightLlmRequest(
     new AbortController().signal,
   );
   const resolved = toLLMConfig(config);
-  const formatted = formatMessagesDetailed({
-    messages: chatRequest.messages,
-    ...(chatRequest.tools ? { tools: chatRequest.tools } : {}),
+  return {
     config: resolved,
-  });
+    ...formatMessagesDetailed({
+      messages: chatRequest.messages,
+      ...(chatRequest.tools ? { tools: chatRequest.tools } : {}),
+      config: resolved,
+    }),
+  };
+}
+
+/**
+ * Formats a durable request through the same bridge used by provider attempts
+ * and returns its exact input estimate without contacting a provider.
+ */
+export function preflightLlmRequest(
+  request: LlmRequest,
+  config: PreflightConfig,
+  namespace = "",
+): Readonly<{
+  estimatedInputTokens: number;
+  limitEstimatedInputTokens?: number;
+}> {
+  const { config: resolved, ...formatted } = formatLlmRequestForWire(
+    request,
+    config,
+    namespace,
+  );
   assertEstimatedInputLimit(formatted.estimate, resolved);
   return ({
     estimatedInputTokens: formatted.estimate.estimatedTokens,

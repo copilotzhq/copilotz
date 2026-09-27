@@ -1,6 +1,7 @@
 import type {
   ExtractedPart,
   ProcessStreamOptions,
+  ProviderConfig,
   ProviderFinishReason,
   ProviderUsageUpdate,
   StreamCallback,
@@ -388,6 +389,100 @@ function parseLine(line: string, format: "sse" | "jsonl"): any | null {
   return parseSSEData(line);
 }
 
+/** Splits a provider byte stream into lines. */
+function streamLines(reader: ReadableStreamDefaultReader<Uint8Array>) {
+  const decoder = new TextDecoder("utf-8");
+  let partial = "";
+  let received: string[] = [];
+  let ended = false;
+  return {
+    /** Lines already received but not yet read. Never waits on the network. */
+    takeReceived(): string[] {
+      const lines = received;
+      received = [];
+      return lines;
+    },
+    /** The next line, or `undefined` once the stream has ended. */
+    async next(): Promise<string | undefined> {
+      while (!received.length) {
+        if (ended) return undefined;
+        const { done, value } = await reader.read();
+        if (done) {
+          ended = true;
+          if (partial) received = [partial];
+          partial = "";
+          continue;
+        }
+        const lines = (partial + decoder.decode(value, { stream: true }))
+          .split("\n");
+        partial = lines.pop() || "";
+        received = lines;
+      }
+      return received.shift();
+    },
+  };
+}
+
+function releaseReader(reader: ReadableStreamDefaultReader<Uint8Array>) {
+  try {
+    reader.releaseLock();
+  } catch {
+    // ignore release errors
+  }
+}
+
+/**
+ * Console tracing of local stop behaviour, enabled by the provider config.
+ * It records whether the provider kept generating after a client-side stop.
+ */
+function createStopDebug(config: ProviderConfig | undefined) {
+  if (!isStopDebugEnabled(config)) return undefined;
+  const provider = { provider: config?.provider, model: config?.model };
+  let contentEvents = 0;
+  let visibleChars = 0;
+  let reasoningChars = 0;
+  let sample = "";
+  return {
+    init(details: Record<string, unknown>) {
+      console.log("[stop-debug] processStream init", {
+        ...provider,
+        ...details,
+      });
+    },
+    matched(matchedStop: string, visibleCharsBeforeStop: number) {
+      console.log("[stop-debug] local stop matched", {
+        matchedStop,
+        visibleCharsBeforeStop,
+      });
+    },
+    afterStop(parts: ExtractedPart[] | null) {
+      for (const part of parts ?? []) {
+        if (part.text.length === 0) continue;
+        contentEvents += 1;
+        if (part.isReasoning) {
+          reasoningChars += part.text.length;
+        } else {
+          visibleChars += part.text.length;
+          if (sample.length < 200) sample += part.text;
+        }
+      }
+    },
+    summary(finishReason: ProviderFinishReason | null) {
+      console.log("[stop-debug] post-stop drain summary", {
+        ...provider,
+        postStopContentEvents: contentEvents,
+        postStopVisibleChars: visibleChars,
+        postStopReasoningChars: reasoningChars,
+        finishReason,
+        postStopVisibleSample: sample,
+        interpretation: visibleChars > 0
+          ? "provider KEPT GENERATING visible content after the stop sequence (no server-side stop)"
+          : "no further visible content after the stop sequence (provider likely stopped server-side)",
+      });
+    },
+  };
+}
+
 /**
  * Unified stream processor for all LLM providers.
  *
@@ -416,39 +511,25 @@ export async function processStream(
   localStopReason?: "local_stop_sequence";
   localStopSequence?: string;
 }> {
-  const decoder = new TextDecoder("utf-8");
   const format = options?.format ?? "sse";
   const config = options?.config;
+  const lines = streamLines(reader);
   // fullResponse accumulates RAW content (including <tool_calls> blocks)
   // so parseToolCallsFromResponse can extract them downstream.
   let fullResponse = "";
   let reasoningResponse = "";
-  let buffer = "";
-  const localStopSequences = getLocalStopSequences(options?.config).length > 0
-    ? (options?.localStopSequences ?? getLocalStopSequences(options?.config))
-    : (options?.localStopSequences ?? []);
+  const localStopSequences = options?.localStopSequences ??
+    getLocalStopSequences(config);
   const localStopState: LocalStopState = { pending: "" };
   let stoppedByLocalStop = false;
-  const stopDebug = isStopDebugEnabled(config);
-  let postStopVisibleChars = 0;
-  let postStopReasoningChars = 0;
-  let postStopContentEvents = 0;
-  let postStopSample = "";
-  if (stopDebug) {
-    console.log("[stop-debug] processStream init", {
-      provider: config?.provider,
-      model: config?.model,
-      format,
-      continueAfterLocalStop: options?.continueAfterLocalStop === true,
-      localStopSequences,
-    });
-  }
-  const filterState: {
-    activeTag: string | null;
-    pending: string;
-    controlPending: string;
-  } = {
-    activeTag: null,
+  const stopDebug = createStopDebug(config);
+  stopDebug?.init({
+    format,
+    continueAfterLocalStop: options?.continueAfterLocalStop === true,
+    localStopSequences,
+  });
+  const filterState = {
+    activeTag: null as string | null,
     pending: "",
     controlPending: "",
   };
@@ -457,31 +538,28 @@ export async function processStream(
   let nativeReasoning: Record<string, unknown>[] | undefined;
   let releaseInBackground = false;
 
-  const mergeUsage = (update: ProviderUsageUpdate | null | undefined) => {
-    if (!update) return;
-    usage = {
-      inputTokens: update.inputTokens ?? usage?.inputTokens,
-      outputTokens: update.outputTokens ?? usage?.outputTokens,
-      reasoningTokens: update.reasoningTokens ?? usage?.reasoningTokens,
-      cacheReadInputTokens: update.cacheReadInputTokens ??
-        usage?.cacheReadInputTokens,
-      cacheCreationInputTokens: update.cacheCreationInputTokens ??
-        usage?.cacheCreationInputTokens,
-      totalTokens: update.totalTokens ?? usage?.totalTokens,
-      rawUsage: update.rawUsage ?? usage?.rawUsage ?? null,
-    };
-  };
-
-  const mergeFinishReason = (
-    update: ProviderFinishReason | null | undefined,
-  ) => {
-    if (update) finishReason = update;
-  };
-
-  const observeNativeReasoning = (data: any) => {
+  /** Records usage, finish reason and native reasoning carried by an event. */
+  const observeMetadata = (data: any) => {
     const blocks = options?.extractNativeReasoning?.(data);
-    if (!blocks || blocks.length === 0) return;
-    nativeReasoning = blocks.map((block) => structuredClone(block));
+    if (blocks && blocks.length > 0) {
+      nativeReasoning = blocks.map((block) => structuredClone(block));
+    }
+    const update = options?.extractUsage?.(data);
+    if (update) {
+      usage = {
+        inputTokens: update.inputTokens ?? usage?.inputTokens,
+        outputTokens: update.outputTokens ?? usage?.outputTokens,
+        reasoningTokens: update.reasoningTokens ?? usage?.reasoningTokens,
+        cacheReadInputTokens: update.cacheReadInputTokens ??
+          usage?.cacheReadInputTokens,
+        cacheCreationInputTokens: update.cacheCreationInputTokens ??
+          usage?.cacheCreationInputTokens,
+        totalTokens: update.totalTokens ?? usage?.totalTokens,
+        rawUsage: update.rawUsage ?? usage?.rawUsage ?? null,
+      };
+    }
+    const reason = options?.extractFinishReason?.(data);
+    if (reason) finishReason = reason;
   };
 
   const appendVisibleContent = (text: string) => {
@@ -496,120 +574,56 @@ export async function processStream(
     if (filtered) onChunk(filtered, { isReasoning: false });
   };
 
-  const flushLocalStopPending = () => {
-    if (!localStopState.pending || stoppedByLocalStop) return;
-    const pending = localStopState.pending;
-    localStopState.pending = "";
-    appendVisibleContent(pending);
-  };
-
-  const handleParts = (parts: ExtractedPart[]) => {
+  /** Streams the parts of one event; true when a local stop sequence matched. */
+  const handleParts = (parts: ExtractedPart[]): boolean => {
     for (const part of parts) {
       if (part.isReasoning) {
         reasoningResponse += part.text;
         if (config?.outputReasoning !== false) {
           onChunk(part.text, { isReasoning: true });
         }
-      } else {
-        const localStopResult = applyLocalStopSequences(
-          part.text,
-          localStopSequences,
-          localStopState,
-        );
-        appendVisibleContent(localStopResult.text);
-        if (localStopResult.matchedStop) {
-          stoppedByLocalStop = true;
-          if (stopDebug) {
-            console.log("[stop-debug] local stop matched", {
-              matchedStop: localStopResult.matchedStop,
-              visibleCharsBeforeStop: fullResponse.length,
-            });
-          }
-          options?.onLocalStop?.(localStopResult.matchedStop);
-          return true;
-        }
+        continue;
+      }
+      const { text, matchedStop } = applyLocalStopSequences(
+        part.text,
+        localStopSequences,
+        localStopState,
+      );
+      appendVisibleContent(text);
+      if (matchedStop) {
+        stoppedByLocalStop = true;
+        stopDebug?.matched(matchedStop, fullResponse.length);
+        options?.onLocalStop?.(matchedStop);
+        return true;
       }
     }
-
     return false;
   };
 
-  const parseUsageOnlyLine = (line: string) => {
+  /** After a stop, events only update metadata; their text is discarded. */
+  const observeAfterStop = (line: string) => {
     const data = parseLine(line, format);
     if (!data) return;
-    observeNativeReasoning(data);
-    mergeUsage(options?.extractUsage?.(data));
-    mergeFinishReason(options?.extractFinishReason?.(data));
-    if (stopDebug) {
-      const parts = extractContent(data);
-      if (parts) {
-        for (const part of parts) {
-          if (part.text.length === 0) continue;
-          postStopContentEvents += 1;
-          if (part.isReasoning) {
-            postStopReasoningChars += part.text.length;
-          } else {
-            postStopVisibleChars += part.text.length;
-            if (postStopSample.length < 200) postStopSample += part.text;
-          }
-        }
-      }
-    }
+    observeMetadata(data);
+    if (stopDebug) stopDebug.afterStop(extractContent(data));
   };
 
-  const drainForFinalUsage = async (
-    pendingLines: string[] = [],
-  ): Promise<{
-    usage?: ProviderUsageUpdate;
-    finishReason: ProviderFinishReason | null;
-    nativeReasoning?: Record<string, unknown>[];
-  }> => {
+  const drainForFinalUsage = async () => {
     try {
-      for (const line of pendingLines) parseUsageOnlyLine(line);
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) {
-          if (buffer) {
-            for (const line of buffer.split("\n")) parseUsageOnlyLine(line);
-            buffer = "";
-          }
-          break;
-        }
-
-        const chunk = decoder.decode(value, { stream: true });
-        buffer += chunk;
-        const lines = buffer.split("\n");
-        buffer = lines.pop() || "";
-        for (const line of lines) parseUsageOnlyLine(line);
+      // Lines from the chunk that held the stop are read before this
+      // function first yields, so the immediate result already includes them.
+      for (const line of lines.takeReceived()) observeAfterStop(line);
+      for (let line; (line = await lines.next()) !== undefined;) {
+        observeAfterStop(line);
       }
     } catch (error) {
       if ((error as { name?: unknown })?.name !== "AbortError") {
         console.warn("Stream final usage drain failed:", error);
       }
     } finally {
-      try {
-        reader.releaseLock();
-      } catch {
-        // ignore release errors
-      }
+      releaseReader(reader);
     }
-
-    if (stopDebug) {
-      console.log("[stop-debug] post-stop drain summary", {
-        provider: config?.provider,
-        model: config?.model,
-        postStopContentEvents,
-        postStopVisibleChars,
-        postStopReasoningChars,
-        finishReason,
-        postStopVisibleSample: postStopSample,
-        interpretation: postStopVisibleChars > 0
-          ? "provider KEPT GENERATING visible content after the stop sequence (no server-side stop)"
-          : "no further visible content after the stop sequence (provider likely stopped server-side)",
-      });
-    }
-
+    stopDebug?.summary(finishReason);
     return {
       ...(usage ? { usage } : {}),
       finishReason,
@@ -617,116 +631,10 @@ export async function processStream(
     };
   };
 
-  const buildLocalStopResult = (pendingLines: string[] = []) => {
-    const finalized = options?.continueAfterLocalStop === true
-      ? drainForFinalUsage(pendingLines)
-      : undefined;
-    const usageFinalized = finalized?.then(({ usage, finishReason }) => ({
-      ...(usage ? { usage } : {}),
-      finishReason,
-    }));
-    const nativeReasoningFinalized = finalized?.then((result) =>
-      result.nativeReasoning
-    );
-    if (usageFinalized) releaseInBackground = true;
-    const content = options?.postProcess
+  const result = () => ({
+    content: options?.postProcess
       ? options.postProcess(fullResponse)
-      : fullResponse;
-
-    return {
-      content,
-      reasoning: reasoningResponse,
-      ...(usage ? { usage } : {}),
-      ...(usageFinalized ? { usageFinalized } : {}),
-      ...(nativeReasoning ? { nativeReasoning } : {}),
-      ...(nativeReasoningFinalized
-        ? {
-          nativeReasoningFinalized,
-        }
-        : {}),
-      finishReason,
-      stoppedByLocalStop,
-      localStopReason: "local_stop_sequence" as const,
-      ...(localStopState.matchedStop
-        ? { localStopSequence: localStopState.matchedStop }
-        : {}),
-    };
-  };
-
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-
-      if (done) {
-        if (buffer) {
-          const bufferedLines = buffer.split("\n");
-          for (let i = 0; i < bufferedLines.length; i++) {
-            const line = bufferedLines[i];
-            const data = parseLine(line, format);
-            if (data) {
-              observeNativeReasoning(data);
-              mergeUsage(options?.extractUsage?.(data));
-              mergeFinishReason(options?.extractFinishReason?.(data));
-              const parts = extractContent(data);
-              if (parts) {
-                const shouldStop = handleParts(parts);
-                if (shouldStop) {
-                  return buildLocalStopResult(bufferedLines.slice(i + 1));
-                }
-              }
-            }
-          }
-        }
-        flushLocalStopPending();
-        break;
-      }
-
-      const chunk = decoder.decode(value, { stream: true });
-      buffer += chunk;
-
-      const lines = buffer.split("\n");
-      buffer = lines.pop() || "";
-
-      for (let i = 0; i < lines.length; i++) {
-        const line = lines[i];
-        const data = parseLine(line, format);
-        if (data) {
-          observeNativeReasoning(data);
-          mergeUsage(options?.extractUsage?.(data));
-          mergeFinishReason(options?.extractFinishReason?.(data));
-          const parts = extractContent(data);
-          if (parts) {
-            const shouldStop = handleParts(parts);
-            if (shouldStop) {
-              return buildLocalStopResult(lines.slice(i + 1));
-            }
-          }
-        }
-      }
-    }
-  } catch (error) {
-    if (!stoppedByLocalStop) {
-      if ((error as { name?: unknown })?.name !== "AbortError") {
-        console.error("Stream processing error:", error);
-      }
-      throw error;
-    }
-  } finally {
-    if (!releaseInBackground) {
-      try {
-        reader.releaseLock();
-      } catch {
-        // ignore release errors
-      }
-    }
-  }
-
-  if (options?.postProcess) {
-    fullResponse = options.postProcess(fullResponse);
-  }
-
-  return {
-    content: fullResponse,
+      : fullResponse,
     reasoning: reasoningResponse,
     ...(usage ? { usage } : {}),
     ...(nativeReasoning ? { nativeReasoning } : {}),
@@ -738,7 +646,51 @@ export async function processStream(
     ...(localStopState.matchedStop
       ? { localStopSequence: localStopState.matchedStop }
       : {}),
+  });
+
+  const localStopResult = () => {
+    const finalized = options?.continueAfterLocalStop === true
+      ? drainForFinalUsage()
+      : undefined;
+    if (!finalized) return result();
+    releaseInBackground = true;
+    return {
+      ...result(),
+      usageFinalized: finalized.then(({ usage, finishReason }) => ({
+        ...(usage ? { usage } : {}),
+        finishReason,
+      })),
+      nativeReasoningFinalized: finalized.then((final) =>
+        final.nativeReasoning
+      ),
+    };
   };
+
+  try {
+    for (let line; (line = await lines.next()) !== undefined;) {
+      const data = parseLine(line, format);
+      if (!data) continue;
+      observeMetadata(data);
+      const parts = extractContent(data);
+      if (parts && handleParts(parts)) return localStopResult();
+    }
+    if (localStopState.pending) {
+      const pending = localStopState.pending;
+      localStopState.pending = "";
+      appendVisibleContent(pending);
+    }
+  } catch (error) {
+    if (!stoppedByLocalStop) {
+      if ((error as { name?: unknown })?.name !== "AbortError") {
+        console.error("Stream processing error:", error);
+      }
+      throw error;
+    }
+  } finally {
+    if (!releaseInBackground) releaseReader(reader);
+  }
+
+  return result();
 }
 
 export function filterTaggedControlTokensStreaming(

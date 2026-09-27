@@ -271,7 +271,9 @@ export function formatMessagesDetailed(
   // Materialize first so tool I/O is embedded in `content` (tool_results /
   // tool_calls blocks). The input limiter only inspects `content` (plus
   // multimodal parts); it cannot see structured `toolCalls` on the wire.
-  let normalizedMessages = formattedMessages.map(materializeHistoryMessage);
+  let normalizedMessages = groupAdjacentToolResults(formattedMessages).map(
+    materializeWireContent,
+  );
 
   // Ensure system message is first if it exists
   if (hasSystemContent && normalizedMessages[0]?.role !== "system") {
@@ -649,8 +651,24 @@ function materializeWireContent(message: ChatMessage): WireChatMessage {
   }
 }
 
-function materializeHistoryMessage(message: ChatMessage): WireChatMessage {
-  return materializeWireContent(message);
+/** Adjacent tool messages become one results turn with a single block. */
+function groupAdjacentToolResults(messages: ChatMessage[]): ChatMessage[] {
+  const grouped: ChatMessage[] = [];
+  for (const message of messages) {
+    const previous = grouped[grouped.length - 1];
+    if (
+      message.role === "tool" && previous?.role === "tool" &&
+      message.toolCalls?.length && previous.toolCalls?.length
+    ) {
+      grouped[grouped.length - 1] = {
+        ...previous,
+        toolCalls: [...previous.toolCalls, ...message.toolCalls],
+      };
+      continue;
+    }
+    grouped.push(message);
+  }
+  return grouped;
 }
 
 function mergeConsecutiveMessages(

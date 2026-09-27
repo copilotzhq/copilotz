@@ -281,7 +281,7 @@ Deno.test("formatMessages preserves recorded tool result order without batch att
   const resultTurn = formatted[1]?.content as string;
   assertEquals(
     (resultTurn.match(/<tool_results>/g) ?? []).length,
-    2,
+    1,
   );
   assertEquals(resultTurn.includes("batch_"), false);
   assertEquals(

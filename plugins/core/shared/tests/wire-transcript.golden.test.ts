@@ -297,9 +297,6 @@ Deno.test("golden: parallel tool plan with chained results", () => {
 --- user
 <tool_results>
 {"name":"weather","output":"21°C","tool_call_id":"call-a","tool_plan_id":"plan-2"}
-</tool_results>
-
-<tool_results>
 {"name":"weather","output":"14°C","tool_call_id":"call-b","tool_plan_id":"plan-2"}
 </tool_results>`,
   );

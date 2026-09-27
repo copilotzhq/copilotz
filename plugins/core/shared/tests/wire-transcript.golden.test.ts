@@ -369,10 +369,8 @@ const askAsker = `--- user
 </tool_calls>
 --- user
 <tool_results>
-{"name":"ask","output":"","tool_call_id":"ask-call","tool_plan_id":"plan-ask"}
+{"name":"ask","output":"About $10k.","tool_call_id":"ask-call","tool_plan_id":"plan-ask"}
 </tool_results>
-
-[South]: About $10k.
 --- assistant
 South estimates $10k.`;
 

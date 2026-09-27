@@ -220,24 +220,23 @@ function projectMessage(
   }
 }
 
-/** The asker's view of an Ask answer, when `receipt` completed that ask. */
-function askAnswerForReceipt(
+/** Whether `answer` is the viewer's answer to the ask that `receipt` completed. */
+function answersAskForViewer(
   receipt: ConversationMessage,
   answer: ConversationMessage | undefined,
   viewerId: string,
-): LlmMessage | null {
+): answer is ConversationMessage {
   const result = agentAskResultMetadata(receipt.metadata);
   if (
     !result || result.status !== "completed" ||
     !answer || answer.id !== result.answerMessageId ||
     answer.sender.id !== result.askedParticipantId
-  ) return null;
+  ) return false;
   const ask = agentAskMetadata(answer.metadata);
-  if (
-    !ask || ask.phase !== "answer" || ask.askId !== result.askId ||
-    ask.askingParticipantId !== viewerId
-  ) return null;
-  return userTurn(answer);
+  return Boolean(
+    ask && ask.phase === "answer" && ask.askId === result.askId &&
+      ask.askingParticipantId === viewerId,
+  );
 }
 
 /** Compiles immutable Core Messages into one participant's LLM history. */
@@ -264,30 +263,39 @@ export function buildLlmTranscript(
     });
   const selectedIds = new Set(selected.map((message) => message.id));
 
-  // The asker receives an Ask answer right after the receipt that closed the
-  // ask. This applies only when both are selected; a range that splits them
-  // keeps the answer in place, or leaves it to the receipt's range.
-  const answerAfterReceipt = new Map<string, LlmTranscriptEntry>();
+  // The asker receives an Ask answer at the receipt that closed the ask, as
+  // that tool call's output. This applies only when both are selected; a
+  // range that splits them keeps the answer in place, or leaves it to the
+  // receipt's range.
+  const answerByReceipt = new Map<string, ConversationMessage>();
   const movedAnswerIds = new Set<string>();
   for (const receipt of selected) {
     const answerId = agentAskResultMetadata(receipt.metadata)?.answerMessageId;
     if (
       !answerId || !selectedIds.has(answerId) || movedAnswerIds.has(answerId)
     ) continue;
-    const answer = askAnswerForReceipt(receipt, byId.get(answerId), viewerId);
-    if (!answer) continue;
-    answerAfterReceipt.set(receipt.id, { sourceId: answerId, message: answer });
+    const answer = byId.get(answerId);
+    if (!answersAskForViewer(receipt, answer, viewerId)) continue;
+    answerByReceipt.set(receipt.id, answer);
     movedAnswerIds.add(answerId);
   }
 
   const entries: LlmTranscriptEntry[] = [];
   for (const message of selected) {
-    if (!movedAnswerIds.has(message.id)) {
-      const projected = projectMessage(message, viewerId);
-      if (projected) entries.push({ sourceId: message.id, message: projected });
+    if (movedAnswerIds.has(message.id)) continue;
+    const projected = projectMessage(message, viewerId);
+    const answer = answerByReceipt.get(message.id);
+    if (answer && projected?.role === "tool") {
+      entries.push({
+        sourceId: answer.id,
+        message: { ...projected, content: structuredClone(answer.content) },
+      });
+      continue;
     }
-    const answer = answerAfterReceipt.get(message.id);
-    if (answer) entries.push(answer);
+    if (projected) entries.push({ sourceId: message.id, message: projected });
+    if (answer) {
+      entries.push({ sourceId: answer.id, message: userTurn(answer) });
+    }
   }
   return entries;
 }

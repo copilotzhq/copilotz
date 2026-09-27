@@ -158,8 +158,9 @@ Deno.test("consolidation may split an Ask answer from its receipt without losing
     history: [answer, receipt],
   };
   const full = buildEntries(input);
-  assertEquals(full.map((entry) => entry.message.role), ["tool", "user"]);
-  assertEquals(full.map((entry) => entry.sourceId), ["receipt", "answer"]);
+  assertEquals(full.map((entry) => entry.message.role), ["tool"]);
+  assertEquals(full.map((entry) => entry.sourceId), ["answer"]);
+  assertEquals(full[0].message.content, answer.content);
   const prefix = buildLlmTranscript({ ...input, messageIds: ["answer"] });
   assertEquals(prefix.map((item) => item.role), ["user"]);
   assertEquals(prefix[0].content, answer.content);

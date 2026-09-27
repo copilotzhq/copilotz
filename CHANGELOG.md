@@ -14,6 +14,8 @@
 - Label every model-facing user turn that has a `name` as `[Name]: …`, so
   agents can tell humans and peer agents apart. The speaking agent's own turns
   stay unlabelled. Existing threads get one prompt-cache miss when this ships.
+- Give the asking agent an Ask answer as the output of its `ask` tool call,
+  instead of an empty tool result followed by a separate user turn.
 
 ### Fixed
 

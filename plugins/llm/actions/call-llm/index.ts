@@ -5,7 +5,7 @@ import {
   projectPreparedRequest,
 } from "../../shared/prepared-request.ts";
 import { preflightLlmRequest } from "../../adapters/bridge/index.ts";
-import { assertEstimatedInputLimit } from "../../shared/utils.ts";
+import { assertEstimatedInputLimit } from "../../shared/token-estimates.ts";
 import { toLLMConfig } from "../../adapters/bridge/config.ts";
 import type { PreparedAttemptTranscript } from "../../adapters/bridge/transcript.ts";
 

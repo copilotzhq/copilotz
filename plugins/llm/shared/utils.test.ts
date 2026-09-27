@@ -1,25 +1,31 @@
 import { assertEquals, assertThrows } from "@std/assert";
 
+import { detectDegenerateRepetition } from "./repetition.ts";
+import {
+  getLocalStopSequences,
+  resolveProviderStopSequences,
+} from "./stop-sequences.ts";
+import {
+  createCanonicalToolCallDraftTracker,
+  filterTaggedControlTokensStreaming,
+  processStream,
+} from "./stream.ts";
+import { generateToolSystemPromptVariant } from "./tool-prompt.ts";
 import {
   buildToolCallsBlock,
   buildToolResultsBlock,
   composeWireContent,
-  createCanonicalToolCallDraftTracker,
-  detectDegenerateRepetition,
-  filterTaggedControlTokensStreaming,
   formatMessages,
   formatMessagesDetailed,
-  generateToolSystemPromptVariant,
-  getLocalStopSequences,
+} from "./wire-format.ts";
+import {
   parseToolCallsFromResponse,
-  processStream,
-  resolveProviderStopSequences,
   responseHasMalformedToolCallIntent,
   responseHasOrphanedToolResult,
   responseHasReasoningMarkup,
   responseHasToolIntent,
   sanitizeUserFacingText,
-} from "./utils.ts";
+} from "./wire-parse.ts";
 import type { ChatRequest } from "./types.ts";
 import { classifyLLMError, LLMTranscriptError } from "./errors.ts";
 

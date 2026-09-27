@@ -31,10 +31,8 @@ import {
   prepareAttemptTranscript,
   type PreparedAttemptTranscript,
 } from "./transcript.ts";
-import {
-  assertEstimatedInputLimit,
-  formatMessagesDetailed,
-} from "../../shared/utils.ts";
+import { assertEstimatedInputLimit } from "../../shared/token-estimates.ts";
+import { formatMessagesDetailed } from "../../shared/wire-format.ts";
 import type {
   ChatContentPart,
   ChatMessage,

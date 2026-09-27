@@ -14,13 +14,15 @@ import type {
   ToolInvocation,
 } from "../../shared/types.ts";
 import { resolveProviderApiKey } from "./config.ts";
+import { withDefaultStopSequences } from "../../shared/stop-sequences.ts";
 import {
   composeWireContent,
   createMockResponse,
+} from "../../shared/wire-format.ts";
+import {
   sanitizeUserFacingText,
   stripStructuralLeakTokens,
-  withDefaultStopSequences,
-} from "../../shared/utils.ts";
+} from "../../shared/wire-parse.ts";
 import {
   classifyLLMError,
   getErrorMessage,

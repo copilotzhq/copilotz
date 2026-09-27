@@ -11,7 +11,7 @@ import type {
   ProviderUsageUpdate,
 } from "../../shared/types.ts";
 import { withInclusiveInputTokens } from "../../shared/usage.ts";
-import { resolveProviderStopSequences } from "../../shared/utils.ts";
+import { resolveProviderStopSequences } from "../../shared/stop-sequences.ts";
 import {
   createAnthropicNativeReasoningExtractor,
   matchingNativeBlocks,

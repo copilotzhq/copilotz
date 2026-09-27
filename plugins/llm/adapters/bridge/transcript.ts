@@ -4,10 +4,8 @@ import type {
   ProviderConfig,
 } from "../../shared/types.ts";
 import { toLLMConfig } from "./config.ts";
-import {
-  assertEstimatedInputLimit,
-  formatMessagesDetailed,
-} from "../../shared/utils.ts";
+import { assertEstimatedInputLimit } from "../../shared/token-estimates.ts";
+import { formatMessagesDetailed } from "../../shared/wire-format.ts";
 import {
   type ChatTokenEstimate,
   estimateChatMessages,

@@ -9,6 +9,12 @@
   `buildLlmTranscript` no longer takes a source callback. `participantId` is now
   required on both. Use `entry.message` for the previous value.
 
+### Changed
+
+- Label every model-facing user turn that has a `name` as `[Name]: …`, so
+  agents can tell humans and peer agents apart. The speaking agent's own turns
+  stay unlabelled. Existing threads get one prompt-cache miss when this ships.
+
 ### Fixed
 
 - Send `llm.call` tool results that have no `toolPlanId` as `<tool_results>`

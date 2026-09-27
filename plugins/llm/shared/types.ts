@@ -53,8 +53,8 @@ export interface ChatMessage {
    * - [ { type: 'input_audio', input_audio: { data: '<base64>', format: 'wav' } } ]
    */
   content: string | ChatContentPart[];
-  /** Internal sender identity used for history-aware message normalization. */
-  senderId?: string;
+  /** Who said this. User turns render it as a `[speaker]:` label. */
+  speaker?: string;
   /** Internal metadata used to reconstruct hidden control blocks for model-facing history. */
   metadata?: Record<string, unknown>;
   /** Server-derived durable plan identity for a historical tool call/result. */

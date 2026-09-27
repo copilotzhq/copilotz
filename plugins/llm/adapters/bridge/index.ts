@@ -299,7 +299,7 @@ function adapterMessageToChatMessage(
   const content = message.content.map(adapterPartToChatPart);
   const common = {
     content,
-    ...(message.name ? { senderId: message.name } : {}),
+    ...(message.name ? { speaker: message.name } : {}),
     ...(message.metadata
       ? { metadata: message.metadata as Record<string, unknown> }
       : {}),

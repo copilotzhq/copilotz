@@ -178,13 +178,13 @@ Deno.test("golden: peer conversation seen by North", () => {
   assertEquals(
     wire(peerConversation, "north"),
     `--- user
-Hi team, plan the launch.
+[Ana]: Hi team, plan the launch.
 --- assistant
 I'll draft the timeline.
 --- user
-I'll handle the budget.
+[South]: I'll handle the budget.
 
-North, what do you think of South's plan?`,
+[Ana]: North, what do you think of South's plan?`,
   );
 });
 
@@ -192,13 +192,13 @@ Deno.test("golden: peer conversation seen by South", () => {
   assertEquals(
     wire(peerConversation, "south"),
     `--- user
-Hi team, plan the launch.
+[Ana]: Hi team, plan the launch.
 
-I'll draft the timeline.
+[North]: I'll draft the timeline.
 --- assistant
 I'll handle the budget.
 --- user
-North, what do you think of South's plan?`,
+[Ana]: North, what do you think of South's plan?`,
   );
 });
 
@@ -227,7 +227,7 @@ Deno.test("golden: own tool plan seen by its requester", () => {
   assertEquals(
     wire(toolConversation(), "north"),
     `--- user
-What's the weather in Tokyo?
+[Ana]: What's the weather in Tokyo?
 --- assistant
 <think>
 Need the weather tool.
@@ -245,7 +245,7 @@ Checking.
 --- assistant
 It's 21°C and clear in Tokyo.
 --- user
-Thanks North.`,
+[South]: Thanks North.`,
   );
 });
 
@@ -253,9 +253,9 @@ Deno.test("golden: peer tool plan with default visibility", () => {
   assertEquals(
     wire(toolConversation(), "south"),
     `--- user
-What's the weather in Tokyo?
+[Ana]: What's the weather in Tokyo?
 
-It's 21°C and clear in Tokyo.
+[North]: It's 21°C and clear in Tokyo.
 --- assistant
 Thanks North.`,
   );
@@ -265,11 +265,11 @@ Deno.test("golden: peer tool plan with public result visibility", () => {
   assertEquals(
     wire(toolConversation({ historyVisibility: "public" }), "south"),
     `--- user
-What's the weather in Tokyo?
+[Ana]: What's the weather in Tokyo?
 
-21°C, clear
+[tool]: 21°C, clear
 
-It's 21°C and clear in Tokyo.
+[North]: It's 21°C and clear in Tokyo.
 --- assistant
 Thanks North.`,
   );
@@ -288,7 +288,7 @@ Deno.test("golden: parallel tool plan with chained results", () => {
   assertEquals(
     wire(history, "north"),
     `--- user
-Compare Tokyo and Paris.
+[Ana]: Compare Tokyo and Paris.
 --- assistant
 <tool_calls>
 {"name":"weather","arguments":{"city":"Tokyo"},"tool_call_id":"call-a","tool_plan_id":"plan-2"}
@@ -362,7 +362,7 @@ function askConversation(mode: "public" | "private") {
 }
 
 const askAsker = `--- user
-North, get South's budget estimate.
+[Ana]: North, get South's budget estimate.
 --- assistant
 <tool_calls>
 {"name":"ask","arguments":{"agent":"south","question":"Budget estimate?"},"tool_call_id":"ask-call","tool_plan_id":"plan-ask"}
@@ -372,39 +372,39 @@ North, get South's budget estimate.
 {"name":"ask","output":"","tool_call_id":"ask-call","tool_plan_id":"plan-ask"}
 </tool_results>
 
-About $10k.
+[South]: About $10k.
 --- assistant
 South estimates $10k.`;
 
 const askAsked = `--- user
-North, get South's budget estimate.
+[Ana]: North, get South's budget estimate.
 
-What is your budget estimate?
+[North]: What is your budget estimate?
 --- assistant
 About $10k.
 --- user
-South estimates $10k.`;
+[North]: South estimates $10k.`;
 
 const expectedAsk = {
   public: {
     north: askAsker,
     south: askAsked,
     west: `--- user
-North, get South's budget estimate.
+[Ana]: North, get South's budget estimate.
 
-What is your budget estimate?
+[North]: What is your budget estimate?
 
-About $10k.
+[South]: About $10k.
 
-South estimates $10k.`,
+[North]: South estimates $10k.`,
   },
   private: {
     north: askAsker,
     south: askAsked,
     west: `--- user
-North, get South's budget estimate.
+[Ana]: North, get South's budget estimate.
 
-South estimates $10k.`,
+[North]: South estimates $10k.`,
   },
 } as const;
 

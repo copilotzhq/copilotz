@@ -562,12 +562,7 @@ function collectWireSegmentsFromMessage(
 
 function shouldMaterializeWireContent(message: ChatMessage): boolean {
   if (message.role === "tool") return true;
-
-  const speakerLabel = message.metadata &&
-    typeof message.metadata === "object" &&
-    typeof (message.metadata as { speakerLabel?: unknown }).speakerLabel ===
-      "string";
-  if (speakerLabel) return true;
+  if (message.role === "user" && message.speaker) return true;
 
   const toolCalls = Array.isArray(message.toolCalls) &&
     message.toolCalls.length > 0;
@@ -629,32 +624,17 @@ function materializeWireContent(message: ChatMessage): WireChatMessage {
 
   try {
     const segments = collectWireSegmentsFromMessage(message);
-    let composed = composeWireContent(segments);
-    const speakerLabel = message.metadata &&
-        typeof message.metadata === "object" &&
-        typeof (message.metadata as { speakerLabel?: unknown }).speakerLabel ===
-          "string"
-      ? (message.metadata as { speakerLabel: string }).speakerLabel
-      : undefined;
-    if (speakerLabel) {
-      composed = prefixSpeakerLabel(speakerLabel, composed);
-    }
-
-    const nextMetadata = message.metadata &&
-        typeof message.metadata === "object"
-      ? { ...message.metadata }
-      : undefined;
-    if (nextMetadata) {
-      delete (nextMetadata as { speakerLabel?: unknown }).speakerLabel;
-    }
+    const composed = composeWireContent(segments);
+    const labelled = message.role === "user" && message.speaker
+      ? prefixSpeakerLabel(message.speaker, composed)
+      : composed;
 
     return {
       ...wireMessage,
       role: message.role === "tool" ? "user" : message.role,
-      content: applyComposedWireContent(message.content, composed),
-      metadata: nextMetadata &&
-          Object.keys(nextMetadata).length > 0
-        ? nextMetadata
+      content: applyComposedWireContent(message.content, labelled),
+      metadata: message.metadata && Object.keys(message.metadata).length > 0
+        ? message.metadata
         : undefined,
       toolCalls: undefined,
       reasoning: undefined,
@@ -690,14 +670,13 @@ function mergeConsecutiveMessages(
       !hasNativeReasoning(message);
 
     if (canMerge) {
-      const sameSender = typeof previous.senderId === "string" &&
-        typeof message.senderId === "string" &&
-        previous.senderId === message.senderId;
+      const sameSender = typeof previous.speaker === "string" &&
+        previous.speaker === message.speaker;
 
       merged[merged.length - 1] = {
         ...previous,
         content: mergeMessageContent(previous.content, message.content),
-        senderId: sameSender ? previous.senderId : undefined,
+        speaker: sameSender ? previous.speaker : undefined,
         metadata: sameSender ? previous.metadata : undefined,
         reasoning: sameSender ? previous.reasoning : undefined,
         reasoningMaxEstimatedTokens: sameSender

@@ -4,7 +4,6 @@
  * strings changes what a model sees and must be deliberate.
  */
 import { assertEquals } from "@std/assert";
-import type { LlmMessage } from "@copilotz/copilotz/llm";
 import type { ConversationMessage } from "../contracts.ts";
 import { buildLlmTranscript } from "../agents/transcript.ts";
 import {
@@ -159,9 +158,9 @@ function wire(
     threadId: "thread",
     participantId,
     history,
-  });
+  }).map((entry) => entry.message);
   const { messages: formatted } = formatLlmRequestForWire(
-    { messages: messages as LlmMessage[] },
+    { messages },
     { model: "test-model" },
     "tenant",
   );

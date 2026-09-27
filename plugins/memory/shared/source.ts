@@ -5,7 +5,6 @@ import type {
   ConversationThread,
 } from "@copilotz/copilotz/core";
 import {
-  buildLlmTranscript,
   loadCoreThreadMessageSnapshot,
   prepareLlmTranscript,
 } from "@copilotz/copilotz/core";
@@ -75,12 +74,6 @@ export async function projectedSourceMessages(
     byteLimit?: number;
   }>,
 ): Promise<readonly MemorySourceMessage[]> {
-  const sourceIds: string[] = [];
-  buildLlmTranscript({
-    threadId: input.threadId,
-    participantId: input.participantId,
-    history: input.messages,
-  }, (id) => sourceIds.push(id));
   const prepared = await prepareLlmTranscript(context as never, {
     threadId: input.threadId,
     participantId: input.participantId,
@@ -90,29 +83,23 @@ export async function projectedSourceMessages(
     message.id,
     index,
   ]));
-  const projected = prepared.flatMap((message, index) => {
-    const id = sourceIds[index];
-    if (!id) return [];
-    return [
-      {
-        id,
-        senderType: message.role,
-        senderId: message.name ?? message.role,
-        text: preparedSourceText(message.content),
-        ...((message.role === "assistant" || message.role === "tool") &&
-            message.toolPlanId
-          ? { toolPlanId: message.toolPlanId }
-          : {}),
-        ...(message.role === "tool" ? { toolCallId: message.toolCallId } : {}),
-        ...(message.role === "assistant" && message.reasoning
-          ? { reasoning: preparedSourceText(message.reasoning) }
-          : {}),
-        ...(message.role === "assistant" && message.toolCalls
-          ? { toolCalls: structuredClone(message.toolCalls) }
-          : {}),
-      } as const,
-    ];
-  });
+  const projected = prepared.map(({ sourceId, message }) => ({
+    id: sourceId,
+    senderType: message.role,
+    senderId: message.name ?? message.role,
+    text: preparedSourceText(message.content),
+    ...((message.role === "assistant" || message.role === "tool") &&
+        message.toolPlanId
+      ? { toolPlanId: message.toolPlanId }
+      : {}),
+    ...(message.role === "tool" ? { toolCallId: message.toolCallId } : {}),
+    ...(message.role === "assistant" && message.reasoning
+      ? { reasoning: preparedSourceText(message.reasoning) }
+      : {}),
+    ...(message.role === "assistant" && message.toolCalls
+      ? { toolCalls: structuredClone(message.toolCalls) }
+      : {}),
+  } as const));
   // Transcript preparation can reposition an Ask receipt next to its answer.
   // Checkpoints always cover a contiguous raw-history prefix instead.
   return (projected.sort((left, right) =>

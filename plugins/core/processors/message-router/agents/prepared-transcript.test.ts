@@ -31,6 +31,10 @@ import {
 import type { Participant } from "../../../shared/contracts.ts";
 import type { CoreProcessorContext } from "../../../shared/runtime-context.ts";
 import { prepareLlmTranscript } from "../../../shared/agents/prepared-transcript.ts";
+
+const preparedMessages = async (
+  ...args: Parameters<typeof prepareLlmTranscript>
+) => (await prepareLlmTranscript(...args)).map((entry) => entry.message);
 import { projectedSourceMessages } from "../../../../memory/shared/source.ts";
 import { readToolResultAction } from "../../../actions/read-tool-result/index.ts";
 import { CORE_TOOL_ACTION_METADATA_SCHEMA } from "../../../shared/workflow-metadata.ts";
@@ -161,7 +165,7 @@ Deno.test("oversized stored Tool results become budgeted markers for prompt and 
       history,
     } as const;
 
-    const prompt = await prepareLlmTranscript(context, input, {
+    const prompt = await preparedMessages(context, input, {
       byteLimit: 4 * 1024,
     });
     assertEquals(prompt.map((message) => message.role), ["tool", "user"]);
@@ -311,7 +315,7 @@ Deno.test("oversized stored Tool results become budgeted markers for prompt and 
       } as Participant),
       visibility: readRecord.visibility,
     }];
-    const nextPrompt = await prepareLlmTranscript(context, {
+    const nextPrompt = await preparedMessages(context, {
       threadId: "thread",
       participantId: "north",
       history: readHistory as never,
@@ -483,7 +487,7 @@ Deno.test("Core resolves own native reasoning, leaves peer state unread, and cou
         updatedAt: date,
       } as Participant)
     );
-    const transcript = await prepareLlmTranscript(context, {
+    const transcript = await preparedMessages(context, {
       threadId: "thread",
       participantId: "north",
       history,
@@ -524,7 +528,7 @@ Deno.test("Core resolves own native reasoning, leaves peer state unread, and cou
       "byte budget",
     );
     const queriesAfterByteLimit = queries.length;
-    const empty = await prepareLlmTranscript(context, {
+    const empty = await preparedMessages(context, {
       threadId: "thread",
       participantId: "north",
       history,

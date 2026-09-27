@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### Breaking
+
+- `buildLlmTranscript` and `prepareLlmTranscript` from `@copilotz/copilotz/core`
+  now return `{ sourceId, message }` entries instead of bare `LlmMessage`s, and
+  `buildLlmTranscript` no longer takes a source callback. `participantId` is now
+  required on both. Use `entry.message` for the previous value.
+
+### Fixed
+
+- Send `llm.call` tool results that have no `toolPlanId` as `<tool_results>`
+  linked to their call. Previously they reached the model as bare user text.
+- A peer agent's malformed stored tool call no longer fails other agents'
+  transcripts.
+
 ## 0.80.8 — 2026-09-27
 
 ### Fixed

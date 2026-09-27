@@ -5,7 +5,7 @@ import type {
 import type { LlmMessage } from "@copilotz/copilotz/llm";
 import type { ConversationMessage } from "../contracts.ts";
 import type { CoreProcessorContext } from "../runtime-context.ts";
-import { buildLlmTranscript } from "./transcript.ts";
+import { buildLlmTranscript, type LlmTranscriptEntry } from "./transcript.ts";
 import type { ContentRef } from "@copilotz/copilotz/content";
 import {
   createContentByteLimitError,
@@ -168,9 +168,10 @@ export async function prepareLlmTranscript(
   context: CoreProcessorContext,
   input: Parameters<typeof buildLlmTranscript>[0],
   options: Readonly<{ byteLimit?: number }> = {},
-): Promise<readonly LlmMessage[]> {
-  const sources: string[] = [];
-  const transcript = buildLlmTranscript(input, (id) => sources.push(id));
+): Promise<readonly LlmTranscriptEntry[]> {
+  const entries = buildLlmTranscript(input);
+  const sources = entries.map((entry) => entry.sourceId);
+  const transcript = entries.map((entry) => entry.message);
   const snapshots = new Map(
     input.history.map((message) => [message.id, message]),
   );
@@ -335,7 +336,7 @@ export async function prepareLlmTranscript(
       for (const record of records) resolved.set(record.id, record);
     }
   }
-  return (transcript.map((message, index) => {
+  const messagesWithBodies = transcript.map((message, index): LlmMessage => {
     const sourceId = sources[index];
     const record = resolved.get(sourceId);
     const marker = toolMarkers.get(sourceId);
@@ -371,5 +372,9 @@ export async function prepareLlmTranscript(
         }
         : {}),
     };
+  });
+  return messagesWithBodies.map((message, index) => ({
+    sourceId: sources[index],
+    message,
   }));
 }

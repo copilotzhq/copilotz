@@ -53,7 +53,10 @@ export * from "./authoring/define-tool/generated.ts";
 export * from "./shared/tools/lifecycle-json.ts";
 export type { CoreResources } from "./shared/runtime-context.ts";
 export { loadCoreThreadMessageSnapshot } from "./shared/helpers.ts";
-export { buildLlmTranscript } from "./shared/agents/transcript.ts";
+export {
+  buildLlmTranscript,
+  type LlmTranscriptEntry,
+} from "./shared/agents/transcript.ts";
 export { prepareLlmTranscript } from "./shared/agents/prepared-transcript.ts";
 
 export * from "./shared/events/index.ts";

@@ -308,7 +308,7 @@ function toChatCompletionsMessages(
 }
 
 function toResponsesRole(role: ChatMessage["role"]): string {
-  if (role === "tool" || role === "tool_result") return "user";
+  if (role === "tool") return "user";
   return role;
 }
 

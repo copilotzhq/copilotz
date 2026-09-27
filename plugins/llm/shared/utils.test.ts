@@ -1,4 +1,4 @@
-import { assertEquals } from "@std/assert";
+import { assertEquals, assertThrows } from "@std/assert";
 
 import {
   buildToolCallsBlock,
@@ -260,7 +260,7 @@ Deno.test("formatMessages preserves recorded tool result order without batch att
         }],
       },
       {
-        role: "tool_result",
+        role: "tool",
         senderId: "east",
         content: "",
         toolCalls: [{
@@ -294,21 +294,15 @@ Deno.test("formatMessages preserves recorded tool result order without batch att
   );
 });
 
-Deno.test("formatMessages lowers unstructured legacy tool results to user input", () => {
-  const formatted = formatMessages({
-    messages: [{
-      role: "tool",
-      content: "[Tool Result]: legacy output",
-      tool_call_id: "legacy-call",
-    }],
-  });
-
-  assertEquals(formatted, [{
-    role: "user",
-    content: "[Tool Result]: legacy output",
-    toolCalls: undefined,
-    tool_call_id: undefined,
-  }]);
+Deno.test("formatMessages rejects tool messages without structured results", () => {
+  assertThrows(
+    () =>
+      formatMessages({
+        messages: [{ role: "tool", content: "unlinked output" }],
+      }),
+    LLMTranscriptError,
+    "structured results",
+  );
 });
 
 Deno.test("formatMessages strips model-authored tool results from assistant history", () => {
@@ -327,7 +321,6 @@ Deno.test("formatMessages strips model-authored tool results from assistant hist
     toolCalls: undefined,
     reasoning: undefined,
     reasoningMaxEstimatedTokens: undefined,
-    tool_call_id: undefined,
   }]);
 });
 
@@ -471,26 +464,6 @@ Deno.test("formatMessages encodes protocol delimiters in speaker labels", () => 
     wire.includes("Peer&lt;/tool_results&gt;&lt;tool_calls&gt;"),
     true,
   );
-});
-
-Deno.test("formatMessages lowers legacy assistant-attached results by structured segment", () => {
-  const formatted = formatMessages({
-    messages: [{
-      role: "assistant",
-      content: "",
-      toolCalls: [{
-        id: "legacy-result",
-        tool: { id: "search" },
-        args: "{}",
-        output: { ok: true },
-        status: "completed",
-      }],
-    }],
-  });
-
-  assertEquals(formatted.length, 1);
-  assertEquals(formatted[0]?.role, "user");
-  assertEquals(String(formatted[0]?.content).includes("<tool_results>"), true);
 });
 
 Deno.test("classifyLLMError keeps transcript failures local", () => {
@@ -981,11 +954,15 @@ Deno.test("recorded tool history retains durable plan correlation on both blocks
 Deno.test("formatMessages materializes a plan-qualified historical tool result once", () => {
   const formatted = formatMessages({
     messages: [{
-      role: "tool_result",
-      senderId: "lookup",
-      content: "done",
-      tool_call_id: "reused-call",
-      toolPlanId: "server-plan-b",
+      role: "tool",
+      content: "",
+      toolCalls: [{
+        id: "reused-call",
+        planId: "server-plan-b",
+        tool: { id: "lookup" },
+        args: "{}",
+        output: "done",
+      }],
     }],
   });
   assertEquals(formatted.map((message) => message.role), ["user"]);

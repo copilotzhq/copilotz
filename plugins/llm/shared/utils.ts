@@ -368,7 +368,6 @@ export type ComposeWireContentInput = {
   toolResults?: ToolInvocation[];
   toolCallFormat?: WireToolFormat;
   toolResultFormat?: WireToolFormat;
-  toolResultsFallbackContent?: string;
 };
 
 function stripTaggedBlocksFromText(text: string, tagNames: string[]): string {
@@ -524,7 +523,6 @@ export function composeWireContent(input: ComposeWireContentInput): string {
   if (Array.isArray(input.toolResults) && input.toolResults.length > 0) {
     const block = buildToolResultsBlock(
       input.toolResults,
-      input.toolResultsFallbackContent,
       input.toolResultFormat ?? "request",
     );
     if (block) parts.push(block);
@@ -542,94 +540,28 @@ function readWireToolFormat(
     : "request";
 }
 
-function toolCallsRepresentResults(toolCalls: ToolInvocation[]): boolean {
-  return toolCalls.some((call) => typeof call.output !== "undefined");
-}
-
-function isToolResultRole(
-  role: ChatMessage["role"],
-): role is "tool" | "tool_result" {
-  return role === "tool" || role === "tool_result";
-}
-
 function collectWireSegmentsFromMessage(
   message: ChatMessage,
 ): ComposeWireContentInput {
-  const rawText = contentToText(message.content);
-  const toolCalls = Array.isArray(message.toolCalls) ? message.toolCalls : [];
+  const toolCalls = message.toolCalls ?? [];
   const wireToolFormat = readWireToolFormat(message.metadata);
-  const strippedVisible = stripWireProtocolFromText(rawText);
-
-  const base: ComposeWireContentInput = {
-    reasoning: typeof message.reasoning === "string"
-      ? message.reasoning
-      : undefined,
-    reasoningMaxEstimatedTokens:
-      typeof message.reasoningMaxEstimatedTokens === "number"
-        ? message.reasoningMaxEstimatedTokens
-        : undefined,
+  if (message.role === "tool") {
+    return { toolResults: toolCalls, toolResultFormat: wireToolFormat };
+  }
+  const rawText = contentToText(message.content);
+  const visible = stripWireProtocolFromText(rawText);
+  return {
+    reasoning: message.reasoning,
+    reasoningMaxEstimatedTokens: message.reasoningMaxEstimatedTokens,
     noResponse: hasNoResponseMarker(rawText),
-    visible: strippedVisible.length > 0 ? strippedVisible : undefined,
+    visible: visible || undefined,
+    toolCalls,
     toolCallFormat: wireToolFormat,
-    toolResultFormat: wireToolFormat,
   };
-
-  const emitToolResults = message.role === "tool" ||
-    message.role === "tool_result" ||
-    (message.metadata &&
-      typeof message.metadata === "object" &&
-      (message.metadata as { wireSegment?: unknown }).wireSegment ===
-        "toolResults") ||
-    toolCallsRepresentResults(toolCalls);
-
-  if (emitToolResults && toolCalls.length > 0) {
-    return {
-      ...base,
-      visible: undefined,
-      noResponse: false,
-      toolResults: toolCalls,
-      toolResultsFallbackContent: toolCalls.length === 1 &&
-          typeof toolCalls[0]?.output === "undefined"
-        ? strippedVisible
-        : undefined,
-    };
-  }
-
-  if (
-    isToolResultRole(message.role) &&
-    typeof message.tool_call_id === "string" && message.tool_call_id &&
-    typeof message.toolPlanId === "string" && message.toolPlanId
-  ) {
-    return {
-      ...base,
-      visible: undefined,
-      noResponse: false,
-      toolResults: [{
-        id: message.tool_call_id,
-        planId: message.toolPlanId,
-        tool: { id: message.senderId ?? "tool" },
-        args: "{}",
-        output: strippedVisible,
-      }],
-    };
-  }
-
-  if (toolCalls.length > 0) {
-    return {
-      ...base,
-      toolCalls,
-    };
-  }
-
-  return base;
 }
 
 function shouldMaterializeWireContent(message: ChatMessage): boolean {
-  if (message.role === "tool" || message.role === "tool_result") {
-    return (Array.isArray(message.toolCalls) && message.toolCalls.length > 0) ||
-      (typeof message.tool_call_id === "string" &&
-        typeof message.toolPlanId === "string");
-  }
+  if (message.role === "tool") return true;
 
   const speakerLabel = message.metadata &&
     typeof message.metadata === "object" &&
@@ -684,38 +616,15 @@ function prefixSpeakerLabel(label: string, body: string): string {
   return `[${safeLabel}]: ${trimmed}`;
 }
 
-function toWireRole(
-  role: ChatMessage["role"],
-): WireChatMessage["role"] {
-  return isToolResultRole(role) ? "user" : role;
-}
-
-function materializedWireRole(
-  message: ChatMessage,
-  segments: ComposeWireContentInput,
-): WireChatMessage["role"] {
-  return Array.isArray(segments.toolResults) && segments.toolResults.length > 0
-    ? "user"
-    : toWireRole(message.role);
-}
-
-function lowerUnmaterializedMessage(message: ChatMessage): WireChatMessage {
-  const role = toWireRole(message.role);
-  const { toolPlanId: _toolPlanId, ...wireMessage } = message;
-  if (!isToolResultRole(message.role)) {
-    return { ...wireMessage, role };
-  }
-  return {
-    ...wireMessage,
-    role,
-    toolCalls: undefined,
-    tool_call_id: undefined,
-  };
-}
-
 function materializeWireContent(message: ChatMessage): WireChatMessage {
-  if (!shouldMaterializeWireContent(message)) {
-    return lowerUnmaterializedMessage(message);
+  const { toolPlanId: _toolPlanId, ...wireMessage } = message;
+  if (message.role === "tool" && !message.toolCalls?.length) {
+    throw new LLMTranscriptError(
+      "Tool history messages must carry structured results",
+    );
+  }
+  if (message.role !== "tool" && !shouldMaterializeWireContent(message)) {
+    return { ...wireMessage, role: message.role };
   }
 
   try {
@@ -731,9 +640,6 @@ function materializeWireContent(message: ChatMessage): WireChatMessage {
       composed = prefixSpeakerLabel(speakerLabel, composed);
     }
 
-    const role = materializedWireRole(message, segments);
-    const { toolPlanId: _toolPlanId, ...wireMessage } = message;
-
     const nextMetadata = message.metadata &&
         typeof message.metadata === "object"
       ? { ...message.metadata }
@@ -744,7 +650,7 @@ function materializeWireContent(message: ChatMessage): WireChatMessage {
 
     return {
       ...wireMessage,
-      role,
+      role: message.role === "tool" ? "user" : message.role,
       content: applyComposedWireContent(message.content, composed),
       metadata: nextMetadata &&
           Object.keys(nextMetadata).length > 0
@@ -753,7 +659,6 @@ function materializeWireContent(message: ChatMessage): WireChatMessage {
       toolCalls: undefined,
       reasoning: undefined,
       reasoningMaxEstimatedTokens: undefined,
-      tool_call_id: undefined,
     };
   } catch (error) {
     if (error instanceof LLMTranscriptError) throw error;
@@ -798,7 +703,6 @@ function mergeConsecutiveMessages(
         reasoningMaxEstimatedTokens: sameSender
           ? previous.reasoningMaxEstimatedTokens
           : undefined,
-        tool_call_id: undefined,
         toolCalls: undefined,
       };
       continue;
@@ -2148,24 +2052,8 @@ export function buildToolCallsBlock(
   return ["<tool_calls>", ...objects, `</tool_calls>`].join("\n");
 }
 
-function normalizeToolResultOutput(
-  call: ToolInvocation,
-  fallbackContent?: string,
-): unknown {
-  if (typeof call.output !== "undefined") {
-    return call.output;
-  }
-
-  if (fallbackContent && fallbackContent.length > 0) {
-    return fallbackContent;
-  }
-
-  return null;
-}
-
 export function buildToolResultsBlock(
   toolResults: ToolInvocation[],
-  fallbackContent?: string,
   format: WireToolFormat = "request",
 ): string {
   const objects = toolResults.flatMap((call) => {
@@ -2187,13 +2075,7 @@ export function buildToolResultsBlock(
     const obj: Record<string, unknown> = {
       name: call.tool.id,
     };
-    const fallback = toolResults.length === 1 ? fallbackContent : undefined;
-    if (
-      typeof call.output !== "undefined" ||
-      (fallback && fallback.length > 0)
-    ) {
-      obj.output = normalizeToolResultOutput(call, fallback);
-    }
+    if (typeof call.output !== "undefined") obj.output = call.output;
     if (call.id) obj.tool_call_id = call.id;
     if (call.planId) obj.tool_plan_id = call.planId;
     if (call.status) obj.status = call.status;

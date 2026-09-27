@@ -328,21 +328,17 @@ function adapterMessageToChatMessage(
     };
   }
   if (message.role === "tool") {
-    const toolCalls = message.toolPlanId && toolName
-      ? [{
+    return {
+      role: "tool",
+      ...common,
+      content: "",
+      toolCalls: [{
         id: message.toolCallId,
-        planId: message.toolPlanId,
-        tool: { id: toolName },
+        ...(message.toolPlanId ? { planId: message.toolPlanId } : {}),
+        tool: { id: toolName ?? message.name ?? "tool" },
         args: "{}",
         output: toolResultOutput(content),
-      }]
-      : undefined;
-    return {
-      role: "tool_result",
-      ...common,
-      ...(toolCalls ? { content: "", toolCalls } : {}),
-      tool_call_id: message.toolCallId,
-      ...(message.toolPlanId ? { toolPlanId: message.toolPlanId } : {}),
+      }],
     };
   }
   return { role: message.role, ...common };
@@ -397,23 +393,25 @@ function createChatRequest(
   signal: AbortSignal,
   nativeReasoningApi?: string,
 ) {
-  const planTools = new Map<string, string>();
+  const callKey = (callId: string, planId?: string) =>
+    `${planId ?? ""}\u0000${callId}`;
+  const callActions = new Map<string, string>();
   const nativeReplay = nativeReasoningApi === undefined ? undefined : {
     adapter: input.adapter,
     model: input.providerModel,
     api: nativeReasoningApi,
   };
   for (const message of input.request.messages) {
-    if (message.role !== "assistant" || !message.toolPlanId) continue;
+    if (message.role !== "assistant") continue;
     for (const call of message.toolCalls ?? []) {
-      planTools.set(`${message.toolPlanId}\u0000${call.id}`, call.action);
+      callActions.set(callKey(call.id, message.toolPlanId), call.action);
     }
   }
   const messages = input.request.messages.map((message) =>
     adapterMessageToChatMessage(
       message,
-      message.role === "tool" && message.toolPlanId
-        ? planTools.get(`${message.toolPlanId}\u0000${message.toolCallId}`)
+      message.role === "tool"
+        ? callActions.get(callKey(message.toolCallId, message.toolPlanId))
         : undefined,
       nativeReplay,
     )

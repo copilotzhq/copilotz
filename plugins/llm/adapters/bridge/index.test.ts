@@ -2,6 +2,7 @@ import { assert, assertEquals, assertThrows } from "@std/assert";
 import { ContextInputLimitError } from "../../shared/errors.ts";
 import {
   createProviderAdapter,
+  formatLlmRequestForWire,
   preflightLlmRequest,
   toolDefinition,
   validateBuiltinProviderCall,
@@ -196,4 +197,37 @@ Deno.test("bridge strips native state unless adapter, API, and model all match b
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+Deno.test("bridge links tool results to their call without a durable plan", () => {
+  const text = (value: string) => [{
+    kind: "text" as const,
+    role: "body",
+    mediaType: "text/plain",
+    value,
+  }];
+  const { messages } = formatLlmRequestForWire({
+    messages: [
+      { role: "user", content: text("Weather in Tokyo?") },
+      {
+        role: "assistant",
+        content: [],
+        toolCalls: [{
+          id: "call-1",
+          action: "weather",
+          input: { city: "Tokyo" },
+        }],
+      },
+      { role: "tool", toolCallId: "call-1", content: text("21°C, clear") },
+    ],
+  } as never, { model: "test-model" });
+  assertEquals(messages.map((message) => message.role), [
+    "user",
+    "assistant",
+    "user",
+  ]);
+  assertEquals(
+    messages[2].content,
+    '<tool_results>\n{"name":"weather","output":"21°C, clear","tool_call_id":"call-1"}\n</tool_results>',
+  );
 });

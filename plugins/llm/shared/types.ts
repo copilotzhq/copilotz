@@ -42,7 +42,8 @@ export type ChatContentPart =
   };
 
 export interface ChatMessage {
-  role: "system" | "user" | "assistant" | "tool" | "tool_result";
+  /** `tool` messages carry their results as `toolCalls` entries with `output`. */
+  role: "system" | "user" | "assistant" | "tool";
   /**
    * Either a plain text string or an array of multimodal parts.
    *
@@ -56,7 +57,6 @@ export interface ChatMessage {
   senderId?: string;
   /** Internal metadata used to reconstruct hidden control blocks for model-facing history. */
   metadata?: Record<string, unknown>;
-  tool_call_id?: string;
   /** Server-derived durable plan identity for a historical tool call/result. */
   toolPlanId?: string;
   // Prefer passing tool calls explicitly for assistant messages
@@ -75,7 +75,7 @@ export interface ChatMessage {
 /**
  * Provider-facing message after Copilotz materializes its text protocol.
  *
- * Tool execution remains represented as `tool`/`tool_result` internally, but
+ * Tool execution remains represented as `tool` internally, but
  * results are external input to the model and are lowered to `user` turns
  * before provider adapters receive the transcript.
  */
@@ -275,7 +275,6 @@ export interface ChatRequest {
   config?: ProviderConfig;
   answer?: string; // For mock responses
   tools?: ToolDefinition[]; // Tool definitions for standardized tool calling
-  tool_call_id?: string;
   /**
    * Custom XML-like block tags to extract and remove from assistant output.
    * Example: ["think"] extracts `<think>...</think>`.

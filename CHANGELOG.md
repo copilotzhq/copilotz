@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.80.7 — 2026-09-26
+
+### Fixed
+
+- Encode inline media in the HTTP conversation client so image content survives
+  JSON submission and reaches model history.
+- Keep browser-uploaded non-image files on their existing attachment-reference
+  path.
+
 ## 0.80.5 — 2026-09-24
 
 - Give each parallel Tool pipeline its own durable branch cursor so sibling

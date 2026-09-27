@@ -138,6 +138,10 @@ Deno.test("collection predicate compiler filters and paginates in PGlite with ex
       "b",
     ]);
     assertEquals(await ids({ field: "id", in: [] }), []);
+    assertEquals(
+      await ids({ field: "id", in: ["a", "d", 2, false, null] }),
+      ["a", "d"],
+    );
     assertEquals(await ids({ field: "caseText", eqIgnoreCase: "MIXED" }), [
       "a",
       "b",
@@ -416,6 +420,19 @@ Deno.test("collection predicates reject malformed, unbounded, and injectable str
   );
   assertEquals(sql.includes("' OR TRUE --"), false);
   assertEquals(params, [JSON.stringify("' OR TRUE --")]);
+  const idParams: unknown[] = [];
+  const idSql = compileCollectionPredicate(
+    { field: "id", in: ["m1", "m2", 3, null] },
+    idParams,
+  );
+  assertEquals(idSql, "(id = ANY($1::text[]))");
+  assertEquals(idParams, [["m1", "m2"]]);
+  const noIdsParams: unknown[] = [];
+  assertEquals(
+    compileCollectionPredicate({ field: "id", in: [false, null] }, noIdsParams),
+    "(FALSE)",
+  );
+  assertEquals(noIdsParams, []);
   const jsonParams: unknown[] = [];
   compileCollectionPredicate(
     { field: "metadata", jsonEquals: { z: 1, a: 2 } },

@@ -387,6 +387,17 @@ export function compileCollectionPredicate(
       }
       for (const entry of value) scalar(entry);
       if (op === "in") {
+        if (column === "id") {
+          // Physical node ids are non-null text primary keys. One array
+          // parameter keeps bounded ID batches indexable without expanding
+          // them into a disjunction of JSON/text comparisons.
+          const ids = value.filter((entry): entry is string =>
+            typeof entry === "string"
+          );
+          return ids.length
+            ? `(${column} = ANY(${parameter(ids)}::text[]))`
+            : "(FALSE)";
+        }
         return `(${value.map(equality).join(" OR ") || "FALSE"})`;
       }
       const matches = value.map((entry) =>

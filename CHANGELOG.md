@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.80.8 — 2026-09-27
+
+### Fixed
+
+- Restrict prepared conversation snapshot reads to indexed message IDs before
+  checking the full captured snapshot. This reduces PostgreSQL CPU work for long
+  transcripts while retaining the check before content is opened.
+- Index operation metadata associations so repeated thread operation queries can
+  locate matching operations without scanning the catalog.
+
 ## 0.80.7 — 2026-09-26
 
 ### Fixed

@@ -447,6 +447,10 @@ Deno.test({
         "sparse association should use the canonical events_metadata_idx",
       );
       assert(
+        hasIndex(sparsePlan, "copilotz_operations_metadata_idx"),
+        "sparse association should use the operation metadata GIN index",
+      );
+      assert(
         hasIndex(watermarkPlan, "events_metadata_idx"),
         "sparse watermark should use the canonical events_metadata_idx",
       );

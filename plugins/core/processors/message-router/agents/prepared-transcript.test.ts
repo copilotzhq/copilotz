@@ -17,6 +17,10 @@ import type {
   CollectionRecord,
   ScopedCollection,
 } from "../../../../../runtime/collections/index.ts";
+import {
+  type CollectionPredicate,
+  compileCollectionPredicate,
+} from "../../../../../runtime/collections/predicate.ts";
 import { messageCollection } from "../../../collections/message/index.ts";
 import {
   loadThreadMessageRecordWindow,
@@ -581,8 +585,10 @@ Deno.test("Core rejects a changed content or visibility snapshot before opening 
       [JSON.stringify(record), date],
     );
     let mutated = false;
+    const queries: CollectionQuery[] = [];
     const list = createResolvedCollectionReader(
       async (query: CollectionQuery) => {
+        queries.push(query);
         if (!mutated) {
           mutated = true;
           await session.query(
@@ -629,6 +635,21 @@ Deno.test("Core rejects a changed content or visibility snapshot before opening 
       "no longer available",
     );
     assertEquals(readIds, []);
+    assertEquals(queries.length, 1);
+    const predicate = queries[0].filter as CollectionPredicate;
+    assert("and" in predicate);
+    assertEquals(predicate.and[0], { field: "id", in: ["message"] });
+    assert("or" in predicate.and[1]);
+    const predicateParams: unknown[] = [];
+    const predicateSql = compileCollectionPredicate(
+      predicate,
+      predicateParams,
+    );
+    assertStringIncludes(predicateSql, "id = ANY($1::text[])");
+    assertStringIncludes(predicateSql, " AND ");
+    assertStringIncludes(predicateSql, "created_at =");
+    assertStringIncludes(predicateSql, "(data #> '{content}')");
+    assertEquals(predicateParams[0], ["message"]);
   } finally {
     await db.close();
   }

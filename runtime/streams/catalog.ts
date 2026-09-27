@@ -662,6 +662,10 @@ export async function provisionOperationCatalog(
       ON ${tables.operations} (namespace, updated_at, operation_id)`,
     );
     await transaction.query(
+      `CREATE INDEX IF NOT EXISTS "copilotz_operations_metadata_idx"
+      ON ${tables.operations} USING GIN (metadata jsonb_path_ops)`,
+    );
+    await transaction.query(
       `CREATE TABLE IF NOT EXISTS ${tables.operationEvents} (
       namespace TEXT NOT NULL,
       operation_id TEXT NOT NULL,

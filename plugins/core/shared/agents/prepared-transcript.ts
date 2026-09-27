@@ -73,29 +73,36 @@ function snapshotFilter(
   snapshots: ReadonlyMap<string, ConversationMessage>,
 ): CollectionPredicate {
   return {
-    or: ids.flatMap((id) => {
-      const snapshot = snapshots.get(id);
-      return snapshot
-        ? [{
-          and: [
-            { field: "id", eq: id },
-            { field: "senderId", eq: snapshot.sender.id },
-            { field: "createdAt", eq: snapshot.createdAt },
-            { field: "updatedAt", eq: snapshot.updatedAt },
-            {
-              field: "content",
-              jsonEquals: contentReferences(snapshot.content),
-            },
-            {
-              field: "metadata",
-              jsonEquals: snapshotMetadata(snapshot.metadata),
-            },
-            optionalSnapshotFilter(snapshot, "visibility"),
-            optionalSnapshotFilter(snapshot, "revision"),
-          ],
-        }]
-        : [];
-    }),
+    and: [
+      // Keep the batch candidate set on the physical primary-key column so
+      // PostgreSQL can use its id index before evaluating snapshot JSON.
+      { field: "id", in: ids },
+      {
+        or: ids.flatMap((id) => {
+          const snapshot = snapshots.get(id);
+          return snapshot
+            ? [{
+              and: [
+                { field: "id", eq: id },
+                { field: "senderId", eq: snapshot.sender.id },
+                { field: "createdAt", eq: snapshot.createdAt },
+                { field: "updatedAt", eq: snapshot.updatedAt },
+                {
+                  field: "content",
+                  jsonEquals: contentReferences(snapshot.content),
+                },
+                {
+                  field: "metadata",
+                  jsonEquals: snapshotMetadata(snapshot.metadata),
+                },
+                optionalSnapshotFilter(snapshot, "visibility"),
+                optionalSnapshotFilter(snapshot, "revision"),
+              ],
+            }]
+            : [];
+        }),
+      },
+    ],
   };
 }
 

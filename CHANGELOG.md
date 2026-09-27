@@ -11,12 +11,19 @@
 
 ### Changed
 
-- Label every model-facing user turn that has a `name` as `[Name]: …`, so
-  agents can tell humans and peer agents apart. The speaking agent's own turns
-  stay unlabelled. Existing threads get one prompt-cache miss when this ships.
+- Label every model-facing user turn that has a `name` as `[Name]: …`, so agents
+  can tell humans and peer agents apart. The speaking agent's own turns stay
+  unlabelled. Existing threads get one prompt-cache miss when this ships.
 - Give the asking agent an Ask answer as the output of its `ask` tool call,
   instead of an empty tool result followed by a separate user turn.
 - Send adjacent tool results as one `<tool_results>` block.
+- Show other agents' tool results as status lines such as
+  `[North used weather: completed]`, followed by the output only when the
+  result's history visibility is `public`. `public_status` bodies are never
+  opened for other agents, and `requester_only` results stay invisible.
+  Previously `public_status` results were dropped and `public` output appeared
+  as `[tool]: …`.
+- Keep another agent's visible text on turns where it also called tools.
 
 ### Fixed
 

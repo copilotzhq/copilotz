@@ -18,11 +18,25 @@ import {
   workflowMetadata,
 } from "../workflow-metadata.ts";
 
+/**
+ * Another participant's tool result, shown as a status line such as
+ * `[North used weather: completed]`. The stored body follows the line only
+ * when the result's history visibility is `public`; otherwise it must never
+ * be opened for this viewer.
+ */
+export type PeerToolStatus = Readonly<{
+  line: string;
+  showsOutput: boolean;
+}>;
+
 /** One model-facing message paired with the stored Message it came from. */
 export type LlmTranscriptEntry = Readonly<{
   sourceId: string;
   message: LlmMessage;
+  peerToolStatus?: PeerToolStatus;
 }>;
+
+type Projection = Omit<LlmTranscriptEntry, "sourceId">;
 
 type AssistantMessage = Extract<LlmMessage, { role: "assistant" }>;
 
@@ -102,11 +116,6 @@ function embeddedToolCalls(value: unknown): readonly LlmToolCall[] {
   });
 }
 
-function hasToolCalls(message: ConversationMessage): boolean {
-  const calls = message.metadata.llmToolCalls;
-  return Array.isArray(calls) && calls.length > 0;
-}
-
 function toolCallId(message: ConversationMessage): string | undefined {
   return coreToolActionMessageMetadata(message.metadata)?.toolCallId ??
     coreToolPlanResultMetadata(message.metadata)?.origin.toolCallId ??
@@ -175,30 +184,78 @@ function projectAgentMessage(
   viewerId: string,
 ): LlmMessage | null {
   const ask = agentAskMetadata(message.metadata);
-  if (ask) {
-    const view = ASK_VIEWS[ask.phase][askViewer(ask, viewerId)];
-    if (view === "assistant") return ownAssistantTurn(message);
-    // A progress turn that only carried tool calls has nothing for others to read.
-    if (
-      view === "hidden" ||
-      (ask.phase === "progress" && !message.content.length)
-    ) return null;
-    return userTurn(message);
-  }
-  if (message.sender.id === viewerId) return ownAssistantTurn(message);
-  return hasToolCalls(message) ? null : userTurn(message);
+  const view = ask
+    ? ASK_VIEWS[ask.phase][askViewer(ask, viewerId)]
+    : message.sender.id === viewerId
+    ? "assistant"
+    : "user";
+  if (view === "assistant") return ownAssistantTurn(message);
+  // Others never see tool calls, so a turn that only made calls is empty.
+  if (view === "hidden" || !message.content.length) return null;
+  return userTurn(message);
+}
+
+function peerToolStatus(
+  message: ConversationMessage,
+  requesterName: string,
+): PeerToolStatus | undefined {
+  const visibility = message.metadata.historyVisibility;
+  const toolId = optionalText(message.metadata.toolId);
+  const status = optionalText(message.metadata.toolStatus);
+  if (
+    !toolId || !status ||
+    (visibility !== "public" && visibility !== "public_status")
+  ) return undefined;
+  return {
+    line: `[${requesterName} used ${toolId}: ${status}]`,
+    showsOutput: visibility === "public",
+  };
+}
+
+/** The status line, followed by `body` only when the output is public. */
+export function peerToolStatusContent(
+  status: PeerToolStatus,
+  body: LlmMessage["content"],
+): LlmMessage["content"] {
+  return [
+    {
+      kind: "text",
+      role: "body",
+      mediaType: "text/plain; charset=utf-8",
+      value: status.showsOutput ? `${status.line}\n` : status.line,
+    },
+    ...(status.showsOutput ? body : []),
+  ];
 }
 
 function projectToolMessage(
   message: ConversationMessage,
   viewerId: string,
-): LlmMessage | null {
+  names: ReadonlyMap<string, string>,
+): Projection | null {
   const requesterId = optionalText(message.metadata.requesterId) ??
     workflowMetadata(message.metadata)?.agentParticipantId;
   const callId = toolCallId(message);
-  if (callId && requesterId === viewerId) return toolTurn(message, callId);
+  if (callId && requesterId === viewerId) {
+    return { message: toolTurn(message, callId) };
+  }
+  const status = requesterId
+    ? peerToolStatus(message, names.get(requesterId) ?? requesterId)
+    : undefined;
+  if (status) {
+    return {
+      message: {
+        role: "user",
+        content: peerToolStatusContent(
+          status,
+          structuredClone(message.content),
+        ),
+      },
+      peerToolStatus: status,
+    };
+  }
   return message.metadata.historyVisibility === "public"
-    ? userTurn(message)
+    ? { message: userTurn(message) }
     : null;
 }
 
@@ -206,17 +263,20 @@ function projectToolMessage(
 function projectMessage(
   message: ConversationMessage,
   viewerId: string,
-): LlmMessage | null {
+  names: ReadonlyMap<string, string>,
+): Projection | null {
   // Failure receipts are for the human-facing timeline. Replaying one would
   // turn a transient provider failure into an instruction-bearing fact.
   if (agentFailureMetadata(message.metadata)) return null;
   switch (message.sender.participantType) {
-    case "agent":
-      return projectAgentMessage(message, viewerId);
+    case "agent": {
+      const turn = projectAgentMessage(message, viewerId);
+      return turn ? { message: turn } : null;
+    }
     case "tool":
-      return projectToolMessage(message, viewerId);
+      return projectToolMessage(message, viewerId, names);
     default:
-      return userTurn(message);
+      return { message: userTurn(message) };
   }
 }
 
@@ -280,19 +340,28 @@ export function buildLlmTranscript(
     movedAnswerIds.add(answerId);
   }
 
+  const names = new Map<string, string>();
+  for (const message of input.history) {
+    const name = senderName(message);
+    if (name) names.set(message.sender.id, name);
+  }
+
   const entries: LlmTranscriptEntry[] = [];
   for (const message of selected) {
     if (movedAnswerIds.has(message.id)) continue;
-    const projected = projectMessage(message, viewerId);
+    const projected = projectMessage(message, viewerId, names);
     const answer = answerByReceipt.get(message.id);
-    if (answer && projected?.role === "tool") {
+    if (answer && projected?.message.role === "tool") {
       entries.push({
         sourceId: answer.id,
-        message: { ...projected, content: structuredClone(answer.content) },
+        message: {
+          ...projected.message,
+          content: structuredClone(answer.content),
+        },
       });
       continue;
     }
-    if (projected) entries.push({ sourceId: message.id, message: projected });
+    if (projected) entries.push({ sourceId: message.id, ...projected });
     if (answer) {
       entries.push({ sourceId: answer.id, message: userTurn(answer) });
     }

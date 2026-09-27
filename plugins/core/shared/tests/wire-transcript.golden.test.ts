@@ -132,7 +132,13 @@ function toolResult(
     tool,
     body,
     withCoreToolActionMessageMetadata(
-      { requesterId: "north", ...extra },
+      {
+        requesterId: "north",
+        historyVisibility: "public_status",
+        toolStatus: "completed",
+        toolId: action,
+        ...extra,
+      },
       origin(planId, toolCallId, action),
       `run:${id}`,
     ),
@@ -255,6 +261,27 @@ Deno.test("golden: peer tool plan with default visibility", () => {
     `--- user
 [Ana]: What's the weather in Tokyo?
 
+[North]: Checking.
+
+[North used weather: completed]
+
+[North]: It's 21°C and clear in Tokyo.
+--- assistant
+Thanks North.`,
+  );
+});
+
+Deno.test("golden: peer tool plan with requester-only visibility", () => {
+  assertEquals(
+    wire(
+      toolConversation({ historyVisibility: "requester_only" }),
+      "south",
+    ),
+    `--- user
+[Ana]: What's the weather in Tokyo?
+
+[North]: Checking.
+
 [North]: It's 21°C and clear in Tokyo.
 --- assistant
 Thanks North.`,
@@ -267,7 +294,10 @@ Deno.test("golden: peer tool plan with public result visibility", () => {
     `--- user
 [Ana]: What's the weather in Tokyo?
 
-[tool]: 21°C, clear
+[North]: Checking.
+
+[North used weather: completed]
+21°C, clear
 
 [North]: It's 21°C and clear in Tokyo.
 --- assistant
@@ -378,6 +408,8 @@ const askAsked = `--- user
 --- assistant
 About $10k.
 --- user
+[North used ask: completed]
+
 [North]: South estimates $10k.`;
 
 const expectedAsk = {
@@ -391,6 +423,8 @@ const expectedAsk = {
 
 [South]: About $10k.
 
+[North used ask: completed]
+
 [North]: South estimates $10k.`,
   },
   private: {
@@ -398,6 +432,8 @@ const expectedAsk = {
     south: askAsked,
     west: `--- user
 [Ana]: North, get South's budget estimate.
+
+[North used ask: completed]
 
 [North]: South estimates $10k.`,
   },

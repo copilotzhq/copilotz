@@ -354,13 +354,6 @@ const WIRE_STRIP_TAG_NAMES = [
   "continue_after_tool_results",
 ] as const;
 
-const OMITTED_PEER_TOOL_VALUE = {
-  _copilotz_omitted: true,
-  reason: "public_status",
-} as const;
-
-export type WireToolFormat = "request" | "peer";
-
 export type ComposeWireContentInput = {
   reasoning?: string;
   reasoningMaxEstimatedTokens?: number;
@@ -368,8 +361,6 @@ export type ComposeWireContentInput = {
   visible?: string;
   toolCalls?: ToolInvocation[];
   toolResults?: ToolInvocation[];
-  toolCallFormat?: WireToolFormat;
-  toolResultFormat?: WireToolFormat;
 };
 
 function stripTaggedBlocksFromText(text: string, tagNames: string[]): string {
@@ -452,15 +443,6 @@ export function stripWireProtocolFromText(text: string): string {
   return stripped.replace(/\n{3,}/g, "\n\n").trim();
 }
 
-function parseToolCallArgs(args: ToolInvocation["args"]): unknown {
-  if (typeof args !== "string") return args ?? {};
-  try {
-    return JSON.parse(args);
-  } catch {
-    return args;
-  }
-}
-
 function stringifyWireJson(value: unknown): string {
   try {
     const serialized = JSON.stringify(value);
@@ -479,17 +461,6 @@ function stringifyWireJson(value: unknown): string {
       { cause: error },
     );
   }
-}
-
-function readPeerToolVisibility(
-  call: ToolInvocation,
-): "public" | "public_status" | "requester_only" {
-  const visibility = (call as ToolInvocation & {
-    visibility?: unknown;
-  }).visibility;
-  return visibility === "requester_only" || visibility === "public"
-    ? visibility
-    : "public_status";
 }
 
 export function composeWireContent(input: ComposeWireContentInput): string {
@@ -515,41 +486,23 @@ export function composeWireContent(input: ComposeWireContentInput): string {
   }
 
   if (Array.isArray(input.toolCalls) && input.toolCalls.length > 0) {
-    const block = buildToolCallsBlock(
-      input.toolCalls,
-      input.toolCallFormat ?? "request",
-    );
+    const block = buildToolCallsBlock(input.toolCalls);
     if (block) parts.push(block);
   }
 
   if (Array.isArray(input.toolResults) && input.toolResults.length > 0) {
-    const block = buildToolResultsBlock(
-      input.toolResults,
-      input.toolResultFormat ?? "request",
-    );
+    const block = buildToolResultsBlock(input.toolResults);
     if (block) parts.push(block);
   }
 
   return parts.join("\n\n");
 }
 
-function readWireToolFormat(
-  metadata: ChatMessage["metadata"],
-): WireToolFormat {
-  return metadata && typeof metadata === "object" &&
-      (metadata as { wireToolFormat?: unknown }).wireToolFormat === "peer"
-    ? "peer"
-    : "request";
-}
-
 function collectWireSegmentsFromMessage(
   message: ChatMessage,
 ): ComposeWireContentInput {
   const toolCalls = message.toolCalls ?? [];
-  const wireToolFormat = readWireToolFormat(message.metadata);
-  if (message.role === "tool") {
-    return { toolResults: toolCalls, toolResultFormat: wireToolFormat };
-  }
+  if (message.role === "tool") return { toolResults: toolCalls };
   const rawText = contentToText(message.content);
   const visible = stripWireProtocolFromText(rawText);
   return {
@@ -558,7 +511,6 @@ function collectWireSegmentsFromMessage(
     noResponse: hasNoResponseMarker(rawText),
     visible: visible || undefined,
     toolCalls,
-    toolCallFormat: wireToolFormat,
   };
 }
 
@@ -1999,26 +1951,8 @@ ${toolCatalog}`;
 /**
  * Rehydrate a <tool_calls> block from recorded tool calls, if present in message metadata
  */
-export function buildToolCallsBlock(
-  toolCalls: ToolInvocation[],
-  format: WireToolFormat = "request",
-): string {
+export function buildToolCallsBlock(toolCalls: ToolInvocation[]): string {
   const objects = toolCalls.flatMap((call) => {
-    if (format === "peer") {
-      const visibility = readPeerToolVisibility(call);
-      if (visibility === "requester_only") return [];
-      const obj: Record<string, unknown> = {
-        name: call.tool.id,
-        status: call.status ?? "requested",
-        arguments: visibility === "public"
-          ? parseToolCallArgs(call.args)
-          : OMITTED_PEER_TOOL_VALUE,
-      };
-      if (call.id) obj.tool_call_id = call.id;
-      if (call.planId) obj.tool_plan_id = call.planId;
-      return [stringifyWireJson(obj)];
-    }
-
     const stages = call.pipeline?.stages ?? [{
       type: "tool" as const,
       id: call.id,
@@ -2049,26 +1983,8 @@ export function buildToolCallsBlock(
   return ["<tool_calls>", ...objects, `</tool_calls>`].join("\n");
 }
 
-export function buildToolResultsBlock(
-  toolResults: ToolInvocation[],
-  format: WireToolFormat = "request",
-): string {
+export function buildToolResultsBlock(toolResults: ToolInvocation[]): string {
   const objects = toolResults.flatMap((call) => {
-    if (format === "peer") {
-      const visibility = readPeerToolVisibility(call);
-      if (visibility === "requester_only") return [];
-      const obj: Record<string, unknown> = {
-        name: call.tool.id,
-        status: call.status ?? "completed",
-        output: visibility === "public"
-          ? ("output" in call ? call.output : null)
-          : OMITTED_PEER_TOOL_VALUE,
-      };
-      if (call.id) obj.tool_call_id = call.id;
-      if (call.planId) obj.tool_plan_id = call.planId;
-      return [stringifyWireJson(obj)];
-    }
-
     const obj: Record<string, unknown> = {
       name: call.tool.id,
     };

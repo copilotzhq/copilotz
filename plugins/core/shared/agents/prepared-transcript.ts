@@ -5,7 +5,11 @@ import type {
 import type { LlmMessage } from "@copilotz/copilotz/llm";
 import type { ConversationMessage } from "../contracts.ts";
 import type { CoreProcessorContext } from "../runtime-context.ts";
-import { buildLlmTranscript, type LlmTranscriptEntry } from "./transcript.ts";
+import {
+  buildLlmTranscript,
+  type LlmTranscriptEntry,
+  peerToolStatusContent,
+} from "./transcript.ts";
 import type { ContentRef } from "@copilotz/copilotz/content";
 import {
   createContentByteLimitError,
@@ -295,23 +299,32 @@ async function loadBodies(
   }
 }
 
+function textBody(value: string) {
+  return {
+    kind: "text" as const,
+    role: "body",
+    mediaType: "text/plain; charset=utf-8",
+    value,
+  };
+}
+
 function withBodies(
-  message: LlmMessage,
+  entry: LlmTranscriptEntry,
   record: CollectionRecord | undefined,
   marker: ToolResultMarker | undefined,
   ownAssistant: boolean,
 ): LlmMessage {
+  const { message, peerToolStatus } = entry;
+  if (peerToolStatus && !peerToolStatus.showsOutput) return message;
   if (!record && !marker) {
     throw new Error("Message history is no longer available.");
   }
-  const content = marker
-    ? [{
-      kind: "text" as const,
-      role: "body",
-      mediaType: "text/plain; charset=utf-8",
-      value: marker.text,
-    }]
+  const body = marker
+    ? [textBody(marker.text)]
     : record!.content as LlmMessage["content"];
+  const content = peerToolStatus
+    ? peerToolStatusContent(peerToolStatus, body)
+    : body;
   if (message.role !== "assistant" || !ownAssistant) {
     return { ...message, content } as LlmMessage;
   }
@@ -358,9 +371,31 @@ export async function prepareLlmTranscript(
       snapshots.get(entry.sourceId)?.sender.id === input.participantId
     ).map((entry) => entry.sourceId),
   );
-  const uniqueIds = [...new Set(entries.map((entry) => entry.sourceId))];
+  // A status-only line is complete as built; its source body stays closed.
+  const bodylessIds = new Set(
+    entries.filter((entry) =>
+      entry.peerToolStatus && !entry.peerToolStatus.showsOutput
+    ).map((entry) => entry.sourceId),
+  );
+  const uniqueIds = [
+    ...new Set(
+      entries.map((entry) => entry.sourceId).filter((id) =>
+        !bodylessIds.has(id)
+      ),
+    ),
+  ];
   const inlineLimit = toolResultLimit(context);
   const budget = byteBudget(options.byteLimit);
+  budget.add(
+    entries.reduce(
+      (total, { peerToolStatus }) =>
+        total +
+        (peerToolStatus
+          ? bodyBytes(peerToolStatusContent(peerToolStatus, []))
+          : 0),
+      0,
+    ),
+  );
   const markers = new Map<string, ToolResultMarker>();
   const records = new Map<string, CollectionRecord>();
 
@@ -407,13 +442,13 @@ export async function prepareLlmTranscript(
     }
   }
 
-  return entries.map(({ sourceId, message }) => ({
-    sourceId,
+  return entries.map((entry) => ({
+    ...entry,
     message: withBodies(
-      message,
-      records.get(sourceId),
-      markers.get(sourceId),
-      ownAssistantIds.has(sourceId),
+      entry,
+      records.get(entry.sourceId),
+      markers.get(entry.sourceId),
+      ownAssistantIds.has(entry.sourceId),
     ),
   }));
 }

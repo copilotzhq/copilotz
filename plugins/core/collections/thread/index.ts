@@ -162,6 +162,56 @@ export const threadCollection: CollectionDefinition = defineCollection({
         };
       },
     },
+    ensureMembership: {
+      input: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          participantIds: {
+            type: "array",
+            minItems: 1,
+            uniqueItems: true,
+            items: { type: "string", minLength: 1 },
+          },
+        },
+        required: ["participantIds"],
+      },
+      mutate({ current, input }) {
+        const requested = (input as { participantIds: unknown })
+          .participantIds;
+        if (
+          !Array.isArray(requested) ||
+          requested.some((value) =>
+            typeof value !== "string" || !value.trim() ||
+            value !== value.trim()
+          )
+        ) {
+          throw new TypeError(
+            "Membership participant IDs must be non-empty canonical IDs.",
+          );
+        }
+        const participantIds = requested as string[];
+        const canonical = [...new Set(participantIds)].sort();
+        if (
+          canonical.length !== participantIds.length ||
+          canonical.some((id, index) => id !== participantIds[index])
+        ) {
+          throw new TypeError(
+            "Membership participant IDs must be sorted and deduplicated.",
+          );
+        }
+        const currentIds = Array.isArray(current.participantIds)
+          ? current.participantIds.filter((value): value is string =>
+            typeof value === "string"
+          )
+          : [];
+        const nextIds = [...new Set([...currentIds, ...participantIds])];
+        if (participantIds.every((id) => currentIds.includes(id))) {
+          return undefined;
+        }
+        return { set: { participantIds: nextIds } };
+      },
+    },
     /** Atomically patches one plugin-owned namespace under metadata.system. */
     patchSystemMetadata: {
       event: "thread.system-metadata-patched",

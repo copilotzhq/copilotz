@@ -3,6 +3,30 @@ import { threadCollection } from "./index.ts";
 Deno.test("Thread Collection owns its name", () =>
   assertEquals(threadCollection.name, "thread"));
 
+Deno.test("Thread ensures a canonical membership batch", () => {
+  const mutate = threadCollection.commands!.ensureMembership.mutate;
+  assertEquals(
+    mutate({
+      current: { participantIds: ["member-a", "member-a"] },
+      input: { participantIds: ["member-b"] },
+    }),
+    { set: { participantIds: ["member-a", "member-b"] } },
+  );
+  assertEquals(
+    mutate({
+      current: { participantIds: ["member-a"] },
+      input: { participantIds: ["member-a"] },
+    }),
+    undefined,
+  );
+  assertThrows(() =>
+    mutate({
+      current: { participantIds: [] },
+      input: { participantIds: ["member-c", "member-b"] },
+    })
+  );
+});
+
 Deno.test("Thread patches one system namespace without replacing siblings", () => {
   const mutate = threadCollection.commands!.patchSystemMetadata.mutate;
   assertEquals(

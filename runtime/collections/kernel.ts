@@ -133,6 +133,19 @@ type CollectionAssetAdopter = Readonly<{
     context: EventMutationContext,
     plan: AssetMaterializationPlan,
   ): Promise<void>;
+  /** Whether the plans can be adopted inside the write's own statement. */
+  adoptable(plans: readonly AssetMaterializationPlan[]): boolean;
+  composeAdoption(
+    plans: readonly AssetMaterializationPlan[],
+    param: (value: unknown) => string,
+    options: Readonly<{ nodes: boolean }>,
+  ): Readonly<{
+    ctes: readonly string[];
+    gate: string;
+    effects(source: string): readonly string[];
+    report: string;
+    refused(report: unknown): boolean;
+  }>;
   publishMaterializations(
     plans: readonly AssetMaterializationPlan[],
   ): void;
@@ -730,6 +743,14 @@ function isNoopError(
   return error instanceof Error && error.name === "CollectionNoop" &&
     "record" in error;
 }
+
+/** Marks the error of a write whose assets were already taken. */
+const staleAdoption = Symbol("copilotz.staleAdoption");
+
+const takenAdoption = (): Error =>
+  Object.assign(new Error("Asset adoption found its identity already taken."), {
+    [staleAdoption]: true,
+  });
 
 /** The error of a write whose scope condition rejects it, if any. */
 function conditionRefusal(
@@ -1364,11 +1385,42 @@ export function createCollectionKernel(
         transaction: SqlExecutor;
         pending: CoordinatedMutationResult<unknown>[];
       }>,
+      /**
+       * Whether the plan's assets are adopted inside the write's own
+       * statement (true), by the write's mutation (false), or still to be
+       * decided (undefined).
+       */
+      composed?: boolean,
     ): Promise<CollectionMutation<TSelect>> => {
-      if (
-        !execution && options.assets &&
-        plan.content.some((item) => item.adoptions.length)
-      ) {
+      const adopting = options.assets !== undefined &&
+        plan.content.some((item) => item.adoptions.length);
+      // The write's own statement adopts its assets and refuses when their
+      // keys or ids are already taken; only then does the write fall back to
+      // reconciling them, in a transaction of its own or in the one it joins.
+      const composable = composed === undefined && adopting &&
+        (plan.expected !== undefined || !writeOptions.condition) &&
+        options.assets!.adoptable(plan.content);
+      if (composable) {
+        try {
+          const result = await commit(
+            eventType,
+            subjectId,
+            operation,
+            writeOptions,
+            plan,
+            matchData,
+            execution,
+            true,
+          );
+          if (!execution) options.assets!.publishMaterializations(plan.content);
+          return result;
+        } catch (error) {
+          if (!(error as { [staleAdoption]?: true })[staleAdoption]) {
+            throw error;
+          }
+        }
+      }
+      if (composed === undefined && adopting && !execution) {
         const pending: CoordinatedMutationResult<unknown>[] = [];
         let resolvedPlan: CollectionMutationPlan | undefined;
         const result = await options.session.transaction(
@@ -1455,6 +1507,7 @@ export function createCollectionKernel(
         }
         : undefined;
       const adopts = plan.content.some((item) => item.adoptions.length > 0);
+      const inStatement = composed && adopts;
       const result = await options.coordinator.commitMutation({
         draft,
         ...(execution ? { transaction: execution.transaction } : {}),
@@ -1463,7 +1516,7 @@ export function createCollectionKernel(
           matchData,
         }),
         body: { id: bodyId, json: plan.write.body },
-        ...(adopts || (!guard && scoped.condition)
+        ...((adopts && !inStatement) || (!guard && scoped.condition)
           ? {
             mutate: async (context: EventMutationContext) => {
               if (!guard && scoped.condition) {
@@ -1504,11 +1557,40 @@ export function createCollectionKernel(
                 param,
                 guard,
               );
+              // The projection inserts the write's new asset nodes from its
+              // manifest; the adoption stores their bodies and checks that
+              // nothing holds their identity.
+              const adoption = inStatement
+                ? options.assets!.composeAdoption(plan.content, param, {
+                  nodes: false,
+                })
+                : undefined;
               return {
-                ...projection,
+                ctes: [...adoption?.ctes ?? [], ...projection.ctes],
+                gate: adoption
+                  ? `(${adoption.gate}) AND (${projection.gate})`
+                  : projection.gate,
+                effects: (source: string) => [
+                  ...adoption?.effects(source) ?? [],
+                  ...projection.effects(source),
+                ],
+                report: adoption
+                  ? `jsonb_build_object('adoption', ${adoption.report}, 'projection', ${projection.report})`
+                  : projection.report,
                 resolve: (report: unknown, inserted: boolean) => {
                   if (inserted) return plan.write.record;
-                  throw projection.failure(report) ??
+                  const parts = adoption
+                    ? (typeof report === "string"
+                      ? JSON.parse(report)
+                      : report) as {
+                        adoption: unknown;
+                        projection: unknown;
+                      }
+                    : undefined;
+                  if (adoption && adoption.refused(parts!.adoption)) {
+                    throw takenAdoption();
+                  }
+                  throw projection.failure(parts ? parts.projection : report) ??
                     new Error(
                       `Collection '${name}' '${subjectId}' was not written.`,
                     );
@@ -1711,14 +1793,10 @@ export function createCollectionKernel(
               CollectionWrite<CollectionRecord>
             >;
           },
-          ...(planned.plan.content.some((item) => item.adoptions.length)
-            ? {}
-            : {
-              commitAlone: () =>
-                commitOperation(planned) as Promise<
-                  CollectionMutation<CollectionRecord>
-                >,
-            }),
+          commitAlone: () =>
+            commitOperation(planned) as Promise<
+              CollectionMutation<CollectionRecord>
+            >,
         } as const,
       );
       scope.records.set(
@@ -3144,7 +3222,7 @@ export function createCollectionKernel(
     for (const plan of orderedPlans) assertProtection(plan);
     // A lone collection write commits atomically on its own.
     const [only] = orderedPlans;
-    if (orderedPlans.length === 1 && only.commitAlone && !scope.assets.size) {
+    if (orderedPlans.length === 1 && only.commitAlone) {
       const write = await only.commitAlone();
       return ({
         value,

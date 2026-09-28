@@ -439,6 +439,8 @@ Deno.test({
       const { nodes } = fixture.store.tables;
       // The update plans against the committed record, then waits on the row
       // a concurrent writer holds, and must see that writer's change.
+      // An update that changes nothing plans no write and would never wait.
+      const moved = current?.folderId === "f2" ? "f1" : "f2";
       const stale = await whileHeld(
         (transaction) =>
           transaction.query(
@@ -446,7 +448,7 @@ Deno.test({
              WHERE namespace = $1 AND id = 'd1'`,
             [namespace],
           ),
-        () => docs.update("d1", { set: { folderId: "f2" } }, { namespace }),
+        () => docs.update("d1", { set: { folderId: moved } }, { namespace }),
       );
       assert(stale.error instanceof Error);
       assertEquals(

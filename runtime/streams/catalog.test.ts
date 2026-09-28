@@ -32,12 +32,25 @@ function notificationSession(database: SqlSession): SqlSession {
   const handlers = new Set<
     (notification: { channel: string; payload?: string }) => void
   >();
-  const notification = (
+  // A bare `SELECT pg_notify($1, $2)` is simulated. A statement that embeds
+  // pg_notify runs for real and records one notification per returned row.
+  const notification = async (
+    executor: SqlExecutor,
+    sql: string,
     params: unknown[] | undefined,
     queue: Array<readonly [string, string]>,
   ) => {
-    queue.push([String(params?.[0] ?? ""), String(params?.[1] ?? "")]);
-    return Promise.resolve({ rows: [] });
+    const bare = /^\s*SELECT pg_notify\(\$1, \$2\)\s*$/.test(sql);
+    const [, channel, payload] = sql.match(/pg_notify\(\$(\d+), \$(\d+)\)/) ??
+      [];
+    const result = bare ? { rows: [{}] } : await executor.query(sql, params);
+    for (const _ of result.rows) {
+      queue.push([
+        String(params?.[Number(channel) - 1] ?? ""),
+        String(params?.[Number(payload) - 1] ?? ""),
+      ]);
+    }
+    return (bare ? { rows: [] } : result) as never;
   };
   const deliver = (queue: readonly (readonly [string, string])[]) => {
     for (const [channel, payload] of queue) {
@@ -47,7 +60,7 @@ function notificationSession(database: SqlSession): SqlSession {
   const query: SqlExecutor["query"] = async (sql, params) => {
     if (sql.includes("pg_notify")) {
       const queue: Array<readonly [string, string]> = [];
-      const result = await notification(params, queue);
+      const result = await notification(database, sql, params, queue);
       deliver(queue);
       return result;
     }
@@ -61,7 +74,7 @@ function notificationSession(database: SqlSession): SqlSession {
         operation({
           query: (sql, params) =>
             sql.includes("pg_notify")
-              ? notification(params, queue)
+              ? notification(transaction, sql, params, queue)
               : transaction.query(sql, params),
         })
       );

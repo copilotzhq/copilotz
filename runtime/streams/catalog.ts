@@ -123,6 +123,15 @@ export type OperationCatalog = Readonly<{
     transaction: SqlExecutor,
     input: OperationEventIndexInput,
   ): Promise<void>;
+  /**
+   * Returns CTEs that index an event inserted by a sibling `inserted_event`
+   * CTE of the same statement. `param` binds a value and returns its
+   * placeholder.
+   */
+  indexEventSql(
+    input: Omit<OperationEventIndexInput, "position">,
+    param: (value: unknown) => string,
+  ): string;
   get(namespace: string, operationId: string): Promise<OperationRecord | null>;
   list(
     input: Readonly<{
@@ -844,6 +853,69 @@ export function createOperationCatalog(
   }> = {},
 ): OperationCatalog {
   const tables = tableNames(databaseSchema);
+  // CTEs that index one event. A root event creates its operation in the same
+  // statement, which the other CTEs' snapshot cannot see, so "the operation
+  // exists" also accepts the row created here. Detached delivery settlement
+  // scopes deliberately have no operation root; they remain Core delivery
+  // mechanics and must not leak orphaned reconnect catalog rows.
+  const indexEventCtes = (
+    input: Omit<OperationEventIndexInput, "position">,
+    param: (value: unknown) => string,
+    event: Readonly<{ position: string; requires?: string }>,
+  ): string => {
+    const namespace = param(
+      requiredText(input.namespace, "Operation namespace"),
+    );
+    const operationId = requiredText(input.operationId, "Operation id");
+    const eventId = requiredText(input.eventId, "Operation event id");
+    const root = operationId === eventId;
+    const operation = param(operationId);
+    const eventRef = param(eventId);
+    const createdAt = `${param(input.createdAt)}::timestamptz`;
+    const created = root
+      ? `created_operation AS (
+           INSERT INTO ${tables.operations} (
+             operation_id, namespace, root_event_id, correlation_id, metadata,
+             state, accepted_at, updated_at
+           ) SELECT ${operation},${namespace},${eventRef},${
+        param(input.correlationId)
+      },${
+        param(JSON.stringify(snapshotStreamMetadata(input.metadata ?? {})))
+      }::jsonb,'accepted',${createdAt},${createdAt}
+             ${event.requires ? `WHERE ${event.requires}` : ""}
+           ON CONFLICT (operation_id) DO NOTHING
+           RETURNING operation_id
+         ), `
+      : "";
+    const conditions = [
+      `(EXISTS (
+         SELECT 1 FROM ${tables.operations}
+          WHERE namespace = ${namespace} AND operation_id = ${operation}
+       )${root ? " OR EXISTS (SELECT 1 FROM created_operation)" : ""})`,
+      ...(event.requires ? [event.requires] : []),
+    ];
+    // Data-modifying CTEs always run, so the notification rides on the
+    // indexed row even when no outer SELECT reads it.
+    const notify = notifiable(session, operationId)
+      ? `, pg_notify(${param(OPERATION_CHANGE_CHANNEL)}, ${operation})`
+      : "";
+    // Only a non-root event advances an existing operation to running.
+    const advanced = root ? "" : `, advanced_operation AS (
+        UPDATE ${tables.operations}
+           SET state = CASE WHEN state = 'accepted' THEN 'running' ELSE state END,
+               updated_at = GREATEST(updated_at, ${createdAt})
+         WHERE namespace = ${namespace} AND operation_id = ${operation}
+           AND EXISTS (SELECT 1 FROM indexed_event)
+      )`;
+    return `${created}indexed_event AS (
+         INSERT INTO ${tables.operationEvents} (
+           namespace, operation_id, event_id, event_position, created_at
+         ) SELECT ${namespace},${operation},${eventRef},${event.position},${createdAt}
+            WHERE ${conditions.join(" AND ")}
+         ON CONFLICT (event_id) DO NOTHING
+         RETURNING event_id${notify}
+       )${advanced}`;
+  };
   const catalog: OperationCatalog = {
     databaseSchema: validateEventSchemaName(databaseSchema),
     async onChange(listener) {
@@ -908,67 +980,24 @@ export function createOperationCatalog(
       } as const);
     },
     async indexEvent(transaction, input) {
-      const namespace = requiredText(input.namespace, "Operation namespace");
-      const operationId = requiredText(input.operationId, "Operation id");
-      const eventId = requiredText(input.eventId, "Operation event id");
       if (!/^(0|[1-9][0-9]*)$/.test(input.position)) {
         throw new TypeError("Operation event position is invalid.");
       }
-      const root = operationId === eventId;
-      const params: unknown[] = [
-        namespace,
-        operationId,
-        eventId,
-        input.position,
-        input.createdAt,
-      ];
-      // One statement indexes the event. A root event creates its operation in
-      // the same statement, which the other parts' snapshot cannot see, so
-      // "the operation exists" also accepts the row created here.
-      const created = root
-        ? `created_operation AS (
-             INSERT INTO ${tables.operations} (
-               operation_id, namespace, root_event_id, correlation_id, metadata,
-               state, accepted_at, updated_at
-             ) VALUES ($2,$1,$3,$${params.push(input.correlationId)},$${
-          params.push(
-            JSON.stringify(snapshotStreamMetadata(input.metadata ?? {})),
-          )
-        }::jsonb,'accepted',$5::timestamptz,$5::timestamptz)
-             ON CONFLICT (operation_id) DO NOTHING
-             RETURNING operation_id
-           ),`
-        : "";
-      const operationExists = `EXISTS (
-          SELECT 1 FROM ${tables.operations}
-           WHERE namespace = $1 AND operation_id = $2
-        )${root ? " OR EXISTS (SELECT 1 FROM created_operation)" : ""}`;
-      // Only a non-root event advances an existing operation to running.
-      const advanced = root ? "" : `, advanced_operation AS (
-          UPDATE ${tables.operations}
-             SET state = CASE WHEN state = 'accepted' THEN 'running' ELSE state END,
-                 updated_at = GREATEST(updated_at, $5::timestamptz)
-           WHERE namespace = $1 AND operation_id = $2
-             AND EXISTS (SELECT 1 FROM indexed_event)
-        )`;
-      const notify = notifiable(session, operationId)
-        ? `, pg_notify($${params.push(OPERATION_CHANGE_CHANNEL)}, $2)`
-        : "";
-      // Detached delivery settlement scopes deliberately have no operation
-      // root. They remain Core delivery mechanics and must not leak orphaned
-      // reconnect catalog rows.
+      const params: unknown[] = [];
+      const param = (value: unknown) => `$${params.push(value)}`;
+      const ctes = indexEventCtes(input, param, {
+        position: `${param(input.position)}::bigint`,
+      });
       await transaction.query(
-        `WITH ${created} indexed_event AS (
-           INSERT INTO ${tables.operationEvents} (
-             namespace, operation_id, event_id, event_position, created_at
-           ) SELECT $1,$2,$3,$4::bigint,$5::timestamptz
-              WHERE ${operationExists}
-           ON CONFLICT (event_id) DO NOTHING
-           RETURNING event_id
-         )${advanced}
-         SELECT event_id${notify} FROM indexed_event`,
+        `WITH ${ctes} SELECT event_id FROM indexed_event`,
         params,
       );
+    },
+    indexEventSql(input, param) {
+      return indexEventCtes(input, param, {
+        position: "(SELECT position FROM inserted_event)",
+        requires: "EXISTS (SELECT 1 FROM inserted_event)",
+      });
     },
     async get(namespaceInput, operationIdInput) {
       const namespace = requiredText(namespaceInput, "Operation namespace");

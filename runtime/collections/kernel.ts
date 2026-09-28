@@ -48,11 +48,7 @@ import {
   type PreparedAsset,
 } from "../content/index.ts";
 import { canonicalizeContentRefs } from "../content/input.ts";
-import {
-  eventDataRef,
-  readEventBody,
-  writeEventBody,
-} from "../events/body-store.ts";
+import { eventDataRef, readEventBody } from "../events/body-store.ts";
 import type { CollectionDefinition } from "./definition.ts";
 import { sameValue } from "./equal.ts";
 import { matchesCollectionFilter } from "./predicate.ts";
@@ -1419,6 +1415,7 @@ export function createCollectionKernel(
         ...(matchData === undefined ? {} : {
           matchData,
         }),
+        body: { id: bodyId, json: plan.write.body },
         mutate: async (context) => {
           let currentForCondition: CollectionRecord | null | undefined;
           if ("expected" in plan) {
@@ -1492,11 +1489,6 @@ export function createCollectionKernel(
           for (const content of plan.content) {
             await options.assets!.adoptMaterialization(context, content);
           }
-          await writeEventBody(context, {
-            namespace: scoped.namespace,
-            id: bodyId,
-            json: plan.write.body,
-          });
           await projectCollectionEvent(context, definition, plan.write.body);
           return plan.write.record;
         },
@@ -2946,6 +2938,7 @@ export function createCollectionKernel(
                       transaction,
                       dispatch: false,
                       matchData: body,
+                      body: { id: bodyId, json: body },
                       mutate: async (context) => {
                         if (expected !== undefined) {
                           const current = await loadGraphRelation(
@@ -2961,11 +2954,6 @@ export function createCollectionKernel(
                             );
                           }
                         }
-                        await writeEventBody(context, {
-                          namespace,
-                          id: bodyId,
-                          json: body,
-                        });
                         return await projectGraphRelation(
                           context,
                           body.relation,
@@ -3058,12 +3046,8 @@ export function createCollectionKernel(
                     },
                     transaction,
                     dispatch: false,
-                    async mutate(context) {
-                      await writeEventBody(context, {
-                        namespace,
-                        id: bodyId,
-                        json: body,
-                      });
+                    body: { id: bodyId, json: body },
+                    async mutate() {
                       await projectVector(
                         transaction,
                         options.eventStore.databaseSchema,

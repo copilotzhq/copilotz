@@ -51,11 +51,7 @@ import {
   type EventStore,
   waitForCopilotzEvent,
 } from "../events/index.ts";
-import {
-  eventDataRef,
-  readEventBody,
-  writeEventBody,
-} from "../events/body-store.ts";
+import { eventDataRef, readEventBody } from "../events/body-store.ts";
 import type {
   DeliveryExecutor,
   LiveEventDispatchHandle,
@@ -139,6 +135,8 @@ export function createDatabaseScope(
     retryCapMs: engine.retryCapMs,
     indexOperationEvent: (transaction, input) =>
       options.operationCatalog.indexEvent(transaction, input),
+    indexOperationEventSql: (input, param) =>
+      options.operationCatalog.indexEventSql(input, param),
   });
   if (store.databaseSchema !== databaseSchema) {
     throw new TypeError(
@@ -299,16 +297,16 @@ export function createDatabaseScope(
       return await coordinator.commitMutation({
         draft: { ...draft, payload: persistedPayload },
         matchData: prepared.publicData,
-        mutate: async (context) => {
-          for (const value of prepared.prepared) {
-            await protectedValues!.adopt(context, draft.namespace, value);
+        body: { id: bodyId, json: prepared.body },
+        ...(prepared.prepared.length > 0
+          ? {
+            mutate: async (context) => {
+              for (const value of prepared.prepared) {
+                await protectedValues!.adopt(context, draft.namespace, value);
+              }
+            },
           }
-          await writeEventBody(context, {
-            namespace: draft.namespace,
-            id: bodyId,
-            json: prepared.body,
-          });
-        },
+          : {}),
         recoverDuplicate: async (event, context) => {
           const existing = await readEventBody(
             context,

@@ -10,6 +10,7 @@ membership and the message commit together. Direct `addThreadParticipant` calls
 remain available; conversation sends no longer produce a child enrollment Action
 for each selected agent and instead record one bulk membership command.
 
-When upgrading, drain old in-flight sends before switching workers, or explicitly
-migrate their recorded progress during scheduled downtime. A partially completed
-old send must not restart its per-member work as a new bulk operation.
+When upgrading, drain old in-flight sends before switching workers, or
+explicitly migrate their recorded progress during scheduled downtime. A
+partially completed old send must not restart its per-member work as a new bulk
+operation.

@@ -201,6 +201,12 @@ export type BodyStore = Readonly<{
   head(
     input: { bodyId: string },
   ): Promise<TerminalBodyHead | MutableBodyHead | null>;
+  /**
+   * Optional lookup for immutable Ready metadata only. Backends that keep
+   * progressive state beside Ready bodies should skip that state here and
+   * return null when no immutable Ready body exists.
+   */
+  headReady?(input: { bodyId: string }): Promise<ReadyBodyHead | null>;
   read(input: { bodyId: string }): Promise<ReadableStream<Uint8Array>>;
   /** Reads one finite committed byte range without waiting for future appends. */
   readRange(input: ReadBodyRangeInput): Promise<Uint8Array>;

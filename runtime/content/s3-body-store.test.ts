@@ -1,7 +1,9 @@
 import { assertEquals, assertRejects } from "@std/assert";
 
+import { createMemoryBodyStore } from "./body-store.ts";
 import { digestContent } from "./digest.ts";
 import { readBodyBytes } from "./body-store.ts";
+import { createPromotedBodyStore } from "./promoted-body-store.ts";
 import { createS3BodyStore } from "./s3-body-store.ts";
 import type { ContentError } from "./types.ts";
 
@@ -59,6 +61,8 @@ function createMockGcs(
   const copyHeaders: Headers[] = [];
   let nextGeneration = 100;
   let deleteRequests = 0;
+  let readyHeadRequests = 0;
+  let progressiveMetaGetRequests = 0;
   const requestGates: Array<{
     method: string;
     pathIncludes: string;
@@ -131,6 +135,7 @@ function createMockGcs(
         );
       }
       if (request.method === "HEAD") {
+        if (!path.includes(".progressive/")) readyHeadRequests++;
         const existing = objects.get(path);
         if (!existing) return gcsError(404, "NoSuchKey");
         return new Response(null, {
@@ -277,6 +282,9 @@ function createMockGcs(
         });
       }
       if (request.method === "GET") {
+        if (path.endsWith(".progressive/meta.json")) {
+          progressiveMetaGetRequests++;
+        }
         const existing = objects.get(path);
         return existing
           ? new Response(existing.bytes.slice().buffer, {
@@ -289,6 +297,20 @@ function createMockGcs(
               ...(options.omitMetageneration
                 ? {}
                 : { "x-goog-metageneration": existing.metageneration }),
+              "x-goog-meta-copilotz-sha256": existing.digest.slice(
+                "sha256:".length,
+              ),
+              "x-goog-meta-copilotz-media-type": existing.mediaType,
+              "x-goog-meta-copilotz-maintenance-version":
+                existing.maintenanceVersion,
+              "x-goog-meta-copilotz-protected-until": existing.protectedUntil,
+              "x-amz-meta-copilotz-sha256": existing.digest.slice(
+                "sha256:".length,
+              ),
+              "x-amz-meta-copilotz-media-type": existing.mediaType,
+              "x-amz-meta-copilotz-maintenance-version":
+                existing.maintenanceVersion,
+              "x-amz-meta-copilotz-protected-until": existing.protectedUntil,
             },
           })
           : gcsError(404, "NoSuchKey");
@@ -335,6 +357,12 @@ function createMockGcs(
     endpoint: `http://127.0.0.1:${address.port}`,
     objects,
     copyHeaders,
+    get readyHeadRequests() {
+      return readyHeadRequests;
+    },
+    get progressiveMetaGetRequests() {
+      return progressiveMetaGetRequests;
+    },
     get deleteRequests() {
       return deleteRequests;
     },
@@ -413,6 +441,7 @@ function createS3CasStore(endpoint: string) {
 Deno.test("S3 BodyStore reuses immutable objects and disables unsafe Ready GC", async () => {
   const objects = new Map<string, StoredObject>();
   let headRequests = 0;
+  let getRequests = 0;
   let putRequests = 0;
   let deleteRequests = 0;
   const putPayloadDigests: string[] = [];
@@ -490,6 +519,7 @@ Deno.test("S3 BodyStore reuses immutable objects and disables unsafe Ready GC", 
         });
       }
       if (request.method === "GET") {
+        getRequests++;
         return existing
           ? new Response(
             existing.bytes.buffer.slice(
@@ -497,7 +527,19 @@ Deno.test("S3 BodyStore reuses immutable objects and disables unsafe Ready GC", 
               existing.bytes.byteOffset + existing.bytes.byteLength,
             ) as ArrayBuffer,
             {
-              headers: { "content-type": existing.mediaType },
+              headers: {
+                "content-length": String(existing.bytes.byteLength),
+                "content-type": existing.mediaType,
+                etag: '"etag"',
+                "last-modified": existing.modified,
+                "x-amz-meta-copilotz-sha256": existing.digest.slice(
+                  "sha256:".length,
+                ),
+                "x-amz-meta-copilotz-media-type": existing.mediaType,
+                "x-amz-meta-copilotz-maintenance-version":
+                  existing.maintenanceVersion,
+                "x-amz-meta-copilotz-protected-until": existing.protectedUntil,
+              },
             },
           )
           : new Response(null, { status: 404 });
@@ -545,11 +587,20 @@ Deno.test("S3 BodyStore reuses immutable objects and disables unsafe Ready GC", 
       putRequests: 2,
       headRequests: 1,
     });
+    const getRequestsBeforeReads = getRequests;
     assertEquals(await readBodyBytes(store, { bodyId: input.bodyId }), bytes);
+    assertEquals({ headRequests, getRequests }, {
+      headRequests: 1,
+      getRequests: getRequestsBeforeReads + 1,
+    });
     assertEquals(
       await new Response(await store.read({ bodyId: input.bodyId })).text(),
       "hello s3",
     );
+    assertEquals({ headRequests, getRequests }, {
+      headRequests: 1,
+      getRequests: getRequestsBeforeReads + 2,
+    });
     await store.put({ ...input, bodyId: "aaa/unrelated" });
     const listed = await store.maintenance.list({
       states: ["ready"],
@@ -583,6 +634,53 @@ Deno.test("S3 BodyStore reuses immutable objects and disables unsafe Ready GC", 
     );
   } finally {
     await server.shutdown();
+  }
+});
+
+Deno.test("promoted absence lookup skips S3 progressive metadata probing", async () => {
+  const gcs = createMockGcs();
+  try {
+    const ready = createS3CasStore(gcs.endpoint);
+    const promoted = createPromotedBodyStore({
+      staging: createMemoryBodyStore({ protectionMs: 0 }),
+      ready,
+    });
+    const bodyId = "copilotz/schemas/test/assets/absent-ready";
+
+    assertEquals(await promoted.head({ bodyId }), null);
+    assertEquals(gcs.readyHeadRequests, 1);
+    assertEquals(gcs.progressiveMetaGetRequests, 0);
+  } finally {
+    await gcs.shutdown();
+  }
+});
+
+Deno.test("S3 read validates GET metadata and preserves missing-body errors", async () => {
+  const gcs = createMockGcs();
+  try {
+    const store = createS3CasStore(gcs.endpoint);
+    const bodyId = "copilotz/schemas/test/assets/read-metadata";
+    const bytes = new TextEncoder().encode("validated from GET headers");
+    await store.put({
+      bodyId,
+      bytes,
+      mediaType: "text/plain",
+      digest: await digestContent(bytes),
+      ifAbsent: true,
+    });
+
+    const saved = gcs.objects.get(bodyId);
+    if (!saved) throw new Error("Expected stored Ready object.");
+    saved.digest = "sha256:invalid";
+    const corrupted = await assertRejects(() => store.read({ bodyId }));
+    assertEquals((corrupted as ContentError).code, "asset_corrupted");
+
+    const missing = await assertRejects(() =>
+      store.read({ bodyId: "copilotz/schemas/test/assets/missing" })
+    );
+    assertEquals((missing as ContentError).code, "asset_not_found");
+  } finally {
+    await gcs.shutdown();
   }
 });
 

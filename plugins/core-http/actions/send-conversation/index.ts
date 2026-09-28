@@ -67,6 +67,18 @@ export const sendConversation: ActionDefinition<{
     // Membership selects who may collaborate; recipients select who responds now.
     // Resolve every selection before enrolling anyone, including on old threads.
     const members = new Set(input.participantIds ?? []);
+    const requestedIds = [
+      ...new Set([
+        ...members,
+        ...(input.recipientIds ?? []),
+      ]),
+    ];
+    const requestedParticipants = await Promise.all(
+      requestedIds.map((id) => context.collections.participant.get({ id })),
+    );
+    const participantByRequestedId = new Map(
+      requestedIds.map((id, index) => [id, requestedParticipants[index]]),
+    );
     const selections = new Map<string, {
       participantId?: string;
       agent?: {
@@ -74,12 +86,8 @@ export const sendConversation: ActionDefinition<{
         name: string;
       };
     }>();
-    for (
-      const requested of new Set([...members, ...input.recipientIds ?? []])
-    ) {
-      const participant = await context.collections.participant.get({
-        id: requested,
-      });
+    for (const requested of requestedIds) {
+      const participant = participantByRequestedId.get(requested);
       if (
         !members.has(requested) && participant &&
         (thread.participantIds as string[]).includes(participant.id)
@@ -106,43 +114,45 @@ export const sendConversation: ActionDefinition<{
       }
       selections.set(requested, { agent });
     }
-    const enrolled = new Map<string, string>();
-    for (const selection of selections.values()) {
-      const agent = selection.agent;
-      if (!agent) {
-        continue;
+    const membershipParticipants = new Map<string, {
+      externalId: string;
+      participantType: "agent";
+      agentId: string;
+      name: string;
+    }>();
+    for (const requested of requestedIds) {
+      const agent = selections.get(requested)!.agent;
+      if (agent && !membershipParticipants.has(agent.id)) {
+        membershipParticipants.set(agent.id, {
+          externalId: agent.id,
+          participantType: "agent",
+          agentId: agent.id,
+          name: agent.name,
+        });
       }
-      if (!enrolled.has(agent.id)) {
-        const added = await context.actions.addThreadParticipant({
-          threadId,
-          participant: {
-            externalId: agent.id,
-            participantType: "agent",
-            agentId: agent.id,
-            name: agent.name,
-          },
-        }, { operationKey: `participant:${agent.id}` }) as {
-          participant: {
-            id: string;
-          };
-        };
-        enrolled.set(agent.id, added.participant.id);
-      }
-      selection.participantId = enrolled.get(agent.id)!;
     }
-    const recipientIds = [
-      ...new Set(
-        (input.recipientIds ?? []).map((id) =>
-          selections.get(id)!.participantId!
-        ),
-      ),
-    ];
+    const recipients = (input.recipientIds ?? []).map((requested) => {
+      const selection = selections.get(requested)!;
+      return selection.agent
+        ? { externalId: selection.agent.id }
+        : { participantId: selection.participantId! };
+    });
+    const membership = membershipParticipants.size
+      ? {
+        participants: [...membershipParticipants.values()],
+        recipients,
+      }
+      : undefined;
     const message = await context.actions.createThreadMessage({
       id: `${context.action.runId}:message`,
       threadId,
       sender,
       content: input.content,
-      recipientIds,
+      ...(membership ? { membership } : {
+        recipientIds: recipients.flatMap((recipient) =>
+          "participantId" in recipient ? [recipient.participantId] : []
+        ),
+      }),
       metadata: {
         clientMessageId: (context.action.metadata.copilotzServer as {
           requestId?: string;

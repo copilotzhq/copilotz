@@ -4,6 +4,11 @@ import { assertJsonValue } from "../json.ts";
 import { errorRetryability } from "../failure.ts";
 import { createEventStoreError } from "./errors.ts";
 import {
+  encodeEventBody,
+  EVENT_BODY_SCHEMA_VERSION,
+  writeEventBody,
+} from "./body-store.ts";
+import {
   type CoreTableName,
   createCoreTableNames,
   EVENT_SCHEMA_VERSION,
@@ -77,7 +82,13 @@ export type CommitEventMutationOptions<T> = {
   maxAttempts?: number;
   /** Join an already-open SQL transaction instead of opening a nested one. */
   transaction?: SqlExecutor;
-  mutate(context: EventMutationContext): Promise<T>;
+  /** An event body written by the event's own statement. */
+  body?: Readonly<{ id: string; json: unknown }>;
+  /**
+   * Writes that commit with the event. Without them (and without a joined
+   * transaction) the event commits as one autocommitted statement.
+   */
+  mutate?(context: EventMutationContext): Promise<T>;
   recoverDuplicate?: (
     event: DurableEvent,
     context: EventMutationContext,
@@ -115,6 +126,21 @@ export type CreateEventStoreOptions = {
       metadata?: Readonly<Record<string, unknown>>;
     }>,
   ) => Promise<void>;
+  /**
+   * The same index as CTEs over a sibling `inserted_event` CTE, so a new
+   * event is indexed by its own insert statement.
+   */
+  indexOperationEventSql?: (
+    input: Readonly<{
+      namespace: string;
+      operationId: string;
+      eventId: string;
+      correlationId: string;
+      createdAt: string;
+      metadata?: Readonly<Record<string, unknown>>;
+    }>,
+    param: (value: unknown) => string,
+  ) => string;
 };
 
 export type EventStore = {
@@ -444,19 +470,14 @@ function boundedInteger(
   return Math.max(minimum, Math.floor(value));
 }
 
-function isDeduplicationViolation(error: unknown): boolean {
+// Errors relayed by a database session may keep only their message.
+function isUniqueViolation(error: unknown): boolean {
   if (!error || typeof error !== "object") return false;
-  const value = error as {
-    code?: unknown;
-    constraint?: unknown;
-    message?: unknown;
-    cause?: unknown;
-  };
-  const namedConstraint = value.constraint === "events_namespace_dedup_idx" ||
+  const value = error as { code?: unknown; message?: unknown; cause?: unknown };
+  return value.code === "23505" ||
     (typeof value.message === "string" &&
-      value.message.includes("events_namespace_dedup_idx"));
-  return (value.code === "23505" && namedConstraint) ||
-    (value.cause !== undefined && isDeduplicationViolation(value.cause));
+      value.message.includes("violates unique constraint")) ||
+    (value.cause !== undefined && isUniqueViolation(value.cause));
 }
 
 function serializeError(
@@ -507,6 +528,7 @@ export function createEventStore(
   const retryBaseMs = boundedInteger(options.retryBaseMs, 250, 0);
   const retryCapMs = boundedInteger(options.retryCapMs, 30_000, 0);
   const indexOperationEvent = options.indexOperationEvent;
+  const indexOperationEventSql = options.indexOperationEventSql;
 
   const deliveriesForEvent = async (
     executor: SqlExecutor,
@@ -589,28 +611,18 @@ export function createEventStore(
     const priority = boundedInteger(mutation.priority, 0, -2147483648);
     const normalized = { ...mutation, draft };
 
-    const runOn = async (transaction: SqlExecutor) => {
-      if (draft.deduplicationId) {
-        await transaction.query(
-          "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
-          [JSON.stringify([
-            databaseSchema,
-            draft.namespace,
-            draft.deduplicationId,
-          ])],
-        );
-        const existing = await loadDuplicate(
-          transaction,
-          draft.namespace,
-          draft.deduplicationId,
-        );
-        if (existing) {
-          return await duplicateResult(transaction, existing, normalized);
-        }
-      }
+    const body = mutation.body
+      ? { id: mutation.body.id, ...await encodeEventBody(mutation.body.json) }
+      : undefined;
 
-      const context = { transaction, tables };
-      const value = await mutation.mutate(context);
+    // One statement inserts the event, its deliveries, body, and operation
+    // index. The dedup unique index arbitrates retries: a duplicate inserts
+    // nothing and is then read back. `tolerant` lets an existing body row
+    // through for verification; outside a transaction it must fail the
+    // statement instead, so that nothing commits.
+    const insertEvent = async (executor: SqlExecutor, tolerant: boolean) => {
+      const params: unknown[] = [];
+      const param = (value: unknown) => `$${params.push(value)}`;
       const deliveryRows = consumers.map((consumer) => ({
         id: createId(),
         consumerId: consumer.consumerId,
@@ -618,70 +630,107 @@ export function createEventStore(
           ? `detached:${eventId}:${consumer.consumerId}`
           : settlementScopeId,
       }));
-      // The event and its deliveries are written by one statement. Delivery
-      // rows come back as JSON because a statement returns one row shape.
-      const inserted = await transaction.query<
-        EventRow & { deliveries: unknown }
-      >(
-        `WITH inserted_event AS (
+      const ctes = [
+        `inserted_event AS (
            INSERT INTO ${tables.events} (
              id, schema_version, type, namespace,
              subject_type, subject_id, payload, delta,
              metadata, causation_id, correlation_id, deduplication_id, created_at
            ) VALUES (
-             $1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb,
-             $9::jsonb, $10, $11, $12, $13::timestamptz
-           ) RETURNING *
-         ), inserted_deliveries AS (
+             ${param(eventId)}, ${param(EVENT_SCHEMA_VERSION)},
+             ${param(draft.type)}, ${param(draft.namespace)},
+             ${param(draft.subject?.type ?? null)},
+             ${param(draft.subject?.id ?? null)},
+             ${param(encoded.payload.text)}::jsonb,
+             ${param(encoded.delta.text)}::jsonb,
+             ${param(encoded.metadata.text)}::jsonb,
+             ${param(draft.causationId ?? null)}, ${param(correlationId)},
+             ${param(draft.deduplicationId ?? null)},
+             ${param(createdAt)}::timestamptz
+           )
+           ON CONFLICT (namespace, deduplication_id)
+             WHERE deduplication_id IS NOT NULL DO NOTHING
+           RETURNING *
+         )`,
+        `inserted_deliveries AS (
            INSERT INTO ${tables.event_deliveries} (
              id, event_id, consumer_id, settlement_scope_id,
              status, attempts, max_attempts,
              priority, available_at, created_at, updated_at
            )
-           SELECT delivery.id, $1, delivery.consumer_id, delivery.scope_id,
-                  'pending', 0, $14, $15, NOW(), NOW(), NOW()
-           FROM unnest($16::text[], $17::text[], $18::text[])
-             AS delivery(id, consumer_id, scope_id)
+           SELECT delivery.id, inserted_event.id, delivery.consumer_id,
+                  delivery.scope_id, 'pending', 0, ${param(maxAttempts)},
+                  ${param(priority)}, NOW(), NOW(), NOW()
+           FROM inserted_event, unnest(
+             ${param(deliveryRows.map((row) => row.id))}::text[],
+             ${param(deliveryRows.map((row) => row.consumerId))}::text[],
+             ${param(deliveryRows.map((row) => row.scopeId))}::text[]
+           ) AS delivery(id, consumer_id, scope_id)
            RETURNING *
-         )
+         )`,
+      ];
+      if (body) {
+        ctes.push(`inserted_body AS (
+           INSERT INTO ${tables.event_bodies} (
+             namespace, event_body_id, schema_version, body, digest, created_at
+           )
+           SELECT ${param(draft.namespace)}, ${param(body.id)},
+                  ${param(EVENT_BODY_SCHEMA_VERSION)}, ${
+          param(body.body)
+        }::jsonb,
+                  ${param(body.digest)}, NOW()
+           FROM inserted_event
+           ${
+          tolerant ? "ON CONFLICT (namespace, event_body_id) DO NOTHING" : ""
+        }
+           RETURNING event_body_id
+         )`);
+      }
+      const indexInput = {
+        namespace: draft.namespace,
+        operationId: settlementScopeId,
+        eventId,
+        correlationId,
+        createdAt,
+        metadata: encoded.metadata.value as Record<string, unknown>,
+      } as const;
+      if (indexOperationEventSql) {
+        ctes.push(indexOperationEventSql(indexInput, param));
+      }
+      // Delivery rows come back as JSON because a statement returns one row
+      // shape.
+      const inserted = await executor.query<
+        EventRow & { deliveries: unknown; body_written?: boolean }
+      >(
+        `WITH ${ctes.join(", ")}
          SELECT inserted_event.*, COALESCE(
            (SELECT jsonb_agg(to_jsonb(inserted_deliveries)) FROM inserted_deliveries),
            '[]'::jsonb
-         ) AS deliveries
+         ) AS deliveries${
+          body ? ", EXISTS (SELECT 1 FROM inserted_body) AS body_written" : ""
+        }
          FROM inserted_event`,
-        [
-          eventId,
-          EVENT_SCHEMA_VERSION,
-          draft.type,
-          draft.namespace,
-          draft.subject?.type ?? null,
-          draft.subject?.id ?? null,
-          encoded.payload.text,
-          encoded.delta.text,
-          encoded.metadata.text,
-          draft.causationId ?? null,
-          correlationId,
-          draft.deduplicationId ?? null,
-          createdAt,
-          maxAttempts,
-          priority,
-          deliveryRows.map((row) => row.id),
-          deliveryRows.map((row) => row.consumerId),
-          deliveryRows.map((row) => row.scopeId),
-        ],
+        params,
       );
-      const { deliveries: deliveryJson, ...eventRow } = inserted.rows[0];
+      const row = inserted.rows[0];
+      if (!row) return undefined;
+      const { deliveries: deliveryJson, body_written, ...eventRow } = row;
       const event = mapEvent(eventRow as EventRow);
-      await indexOperationEvent?.(transaction, {
-        namespace: event.namespace,
-        operationId: settlementScopeId,
-        eventId: event.id,
-        position: event.position,
-        correlationId: event.correlationId,
-        createdAt: event.createdAt,
-        metadata: event.metadata,
-      });
-
+      if (body && !body_written) {
+        // Verifies the existing row against this body, or throws.
+        await writeEventBody({ transaction: executor, tables }, {
+          namespace: draft.namespace,
+          id: body.id,
+          json: mutation.body!.json,
+        });
+      }
+      if (!indexOperationEventSql) {
+        await indexOperationEvent?.(executor, {
+          ...indexInput,
+          position: event.position,
+          createdAt: event.createdAt,
+        });
+      }
       const deliveryById = new Map(
         (parseJsonRows(deliveryJson) as DeliveryRow[]).map((row) => [
           String(row.id),
@@ -691,40 +740,50 @@ export function createEventStore(
       const deliveries: EventDelivery[] = deliveryRows.map((row) =>
         mapDelivery(deliveryById.get(row.id)!, databaseSchema)
       );
+      return ({ event, deliveries } as const);
+    };
 
+    const runOn = async (
+      executor: SqlExecutor,
+      tolerant: boolean,
+    ): Promise<CommitEventMutationResult<T>> => {
+      const inserted = await insertEvent(executor, tolerant);
+      if (!inserted) {
+        const existing = draft.deduplicationId
+          ? await loadDuplicate(
+            executor,
+            draft.namespace,
+            draft.deduplicationId,
+          )
+          : null;
+        if (!existing) {
+          throw new Error(`Event '${eventId}' was not inserted.`);
+        }
+        return await duplicateResult(executor, existing, normalized);
+      }
+      const value = await mutation.mutate?.({ transaction: executor, tables });
       return ({
         value,
-        event,
-        deliveries,
+        event: inserted.event,
+        deliveries: inserted.deliveries,
         settlementScopeId,
         deduplicated: false,
       } as const);
     };
 
-    const recoverOn = async (
-      transaction: SqlExecutor,
-      error: unknown,
-    ) => {
-      const existing = await loadDuplicate(
-        transaction,
-        draft.namespace,
-        draft.deduplicationId!,
-      );
-      if (!existing) throw error;
-      return await duplicateResult(transaction, existing, normalized);
-    };
-
-    try {
-      return mutation.transaction
-        ? await runOn(mutation.transaction)
-        : await session.transaction(runOn);
-    } catch (error) {
-      if (!draft.deduplicationId || !isDeduplicationViolation(error)) {
-        throw error;
-      }
-      if (mutation.transaction) throw error;
+    if (mutation.transaction) return await runOn(mutation.transaction, true);
+    if (mutation.mutate) {
       return await session.transaction((transaction) =>
-        recoverOn(transaction, error)
+        runOn(transaction, true)
+      );
+    }
+    try {
+      return await runOn(session, false);
+    } catch (error) {
+      // An existing body row failed the statement; nothing committed.
+      if (!isUniqueViolation(error)) throw error;
+      return await session.transaction((transaction) =>
+        runOn(transaction, true)
       );
     }
   };
@@ -914,8 +973,6 @@ export function createEventStore(
         })),
         priority: appendOptions.priority,
         maxAttempts: appendOptions.maxAttempts,
-        mutate: () => Promise.resolve(undefined),
-        recoverDuplicate: () => Promise.resolve(undefined),
       });
     },
     getEvent,

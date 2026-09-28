@@ -1,11 +1,7 @@
 import { retainActionInputContent } from "./content-retention.ts";
 import type { EventCoordinator } from "../events/index.ts";
 import type { DurableEvent, EventStore } from "../events/index.ts";
-import {
-  eventDataRef,
-  readEventBody,
-  writeEventBody,
-} from "../events/body-store.ts";
+import { eventDataRef, readEventBody } from "../events/body-store.ts";
 import { withProcessorEventData } from "../plugins/processor.ts";
 import { parseActionLifecycleEvent } from "./event.ts";
 import {
@@ -116,31 +112,33 @@ export function createActionLifecycleAppender(
         mediaType: "application/json" as const,
       },
     };
+    const retainsContent = Boolean(action?.content) &&
+      data.status === "invoked";
     return await options.coordinator.commitMutation({
       draft: { ...draft, payload },
       matchData: prepared.publicData,
-      mutate: async (context) => {
-        if (action) {
-          await retainActionInputContent(
-            context,
-            draft.namespace,
-            action,
-            data,
-          );
+      body: { id: payload.dataRef.eventBodyId, json: prepared.body },
+      ...(retainsContent || prepared.prepared.length > 0
+        ? {
+          mutate: async (context) => {
+            if (action) {
+              await retainActionInputContent(
+                context,
+                draft.namespace,
+                action,
+                data,
+              );
+            }
+            for (const value of prepared.prepared) {
+              await options.protectedValues!.adopt(
+                context,
+                draft.namespace,
+                value,
+              );
+            }
+          },
         }
-        for (const value of prepared.prepared) {
-          await options.protectedValues!.adopt(
-            context,
-            draft.namespace,
-            value,
-          );
-        }
-        await writeEventBody(context, {
-          namespace: draft.namespace,
-          id: payload.dataRef.eventBodyId,
-          json: prepared.body,
-        });
-      },
+        : {}),
       recoverDuplicate: async (event, context) => {
         const existing = await readEventBody(
           context,

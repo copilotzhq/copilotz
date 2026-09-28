@@ -150,6 +150,8 @@ export async function createCopilotzEngine(
     retryCapMs: options.retryCapMs,
     indexOperationEvent: (transaction, input) =>
       operationCatalog.indexEvent(transaction, input),
+    indexOperationEventSql: (input, param) =>
+      operationCatalog.indexEventSql(input, param),
   });
   const additionalScopes = new Map<
     string,

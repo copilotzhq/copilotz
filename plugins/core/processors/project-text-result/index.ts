@@ -24,6 +24,7 @@ import type { CoreToolProcessorContext } from "../../shared/runtime-context.ts";
 import {
   type CoreToolPlanBase,
   createDurableToolPlan,
+  dispatchInitialStages,
 } from "../../shared/tool-plan.ts";
 import { asRecord, loadParticipant } from "../../shared/helpers.ts";
 
@@ -48,6 +49,7 @@ export const projectTextResultProcessor: Processor<
     },
   }],
   async handle(event, context) {
+    if (!event.durable) return;
     const lifecycle = parseActionLifecycleEvent(event, {
       actionId: "llm.call",
       statuses: ["completed"],
@@ -68,6 +70,17 @@ export const projectTextResultProcessor: Processor<
     const rawToolCalls = structuredClone(
       output.toolCalls ?? [],
     ) as readonly LlmToolCall[];
+    if (rawToolCalls.length) {
+      // A retry after the plan committed only resumes its dispatch; the plan
+      // was validated against the grants current when it was created.
+      const existing = await context.collections.toolPlan?.get({
+        id: await deriveWorkflowId("tool-plan", actionRunId),
+      });
+      if (existing) {
+        await dispatchInitialStages(context, event, existing);
+        return;
+      }
+    }
     const toolCalls = rawToolCalls.length
       ? validateCoreToolPlan(context, {
         agentId: metadata.agentId,
@@ -161,6 +174,9 @@ export const projectTextResultProcessor: Processor<
       ...(metadata.ask ? { ask: metadata.ask } : {}),
     } as const;
     await createDurableToolPlan(context, plan, toolCalls);
+    const created = await context.collections.toolPlan?.get({ id: planId });
+    if (!created) throw new Error(`Tool plan '${planId}' was not found.`);
+    await dispatchInitialStages(context, event, created);
   },
 });
 

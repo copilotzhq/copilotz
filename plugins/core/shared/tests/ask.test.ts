@@ -450,7 +450,7 @@ Deno.test("missing or forged parent ask cursors reject every retry", async () =>
           resumeDeferredToolPlan(context, child, {
             status: "completed",
             output: { status: "answered" },
-          }),
+          }, { ownerEventId: "answer-event" }),
         Error,
         scenario.error,
       );

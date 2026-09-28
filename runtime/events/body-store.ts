@@ -92,13 +92,22 @@ async function requireStoredBody(
   return row;
 }
 
+/** The canonical stored text and digest of an event body. */
+export async function encodeEventBody(
+  json: unknown,
+): Promise<Readonly<{ body: string; digest: string }>> {
+  const canonical = canonicalizeContentRefs(json);
+  return ({
+    body: canonicalJson(canonical),
+    digest: await eventBodyDigest(canonical),
+  } as const);
+}
+
 export async function writeEventBody(
   context: EventBodyStoreContext,
   input: WriteEventBodyInput,
 ): Promise<EventBodyRef> {
-  const json = canonicalizeContentRefs(input.json);
-  const digest = await eventBodyDigest(json);
-  const body = canonicalJson(json);
+  const { body, digest } = await encodeEventBody(input.json);
   const inserted = await context.transaction.query<EventBodyRow>(
     `INSERT INTO ${context.tables.event_bodies} (
        namespace, event_body_id, schema_version, body, digest, created_at

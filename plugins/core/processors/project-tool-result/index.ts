@@ -19,6 +19,7 @@ export const projectToolResultProcessor: Processor<
     },
   })),
   async handle(event, context) {
+    if (!event.durable) return;
     const parsed = coreToolTerminal(event);
     if (!parsed) return;
     if (
@@ -30,6 +31,7 @@ export const projectToolResultProcessor: Processor<
       context,
       parsed.metadata,
       parsed.terminal,
+      { ownerEventId: event.id },
       { actionId: parsed.actionId, causationId: parsed.causationId },
     );
   },

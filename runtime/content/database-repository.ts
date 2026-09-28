@@ -1149,15 +1149,8 @@ export function createDatabaseAssetRepository(
         ? { transaction: execution.transaction, dispatch: execution.dispatch }
         : {}),
       matchData: eventBody,
-      mutate: async (context) => {
-        const created = await adoptCandidate(context, adoption);
-        await writeEventBody(context, {
-          namespace,
-          id: eventBodyId,
-          json: eventBody,
-        });
-        return created;
-      },
+      body: { id: eventBodyId, json: eventBody },
+      mutate: (context) => adoptCandidate(context, adoption),
       recoverDuplicate: async (event, context) => {
         const body = await readEventBody<AssetEventBody>(
           context,

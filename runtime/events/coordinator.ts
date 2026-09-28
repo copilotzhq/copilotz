@@ -147,6 +147,7 @@ export function createEventCoordinator(
     );
     const committed = await options.store.commitMutation({
       draft: mutation.draft,
+      body: mutation.body,
       mutate: mutation.mutate,
       recoverDuplicate: mutation.recoverDuplicate,
       priority: mutation.priority,
@@ -182,6 +183,7 @@ export function createEventCoordinator(
   const flushCommitted = async (
     result: CommitEventMutationResult<unknown>,
   ): Promise<EventDispatchReport> => {
+    options.store.confirmCommitted?.(result.event.id);
     if (!result.deduplicated) {
       try {
         await options.publish?.(result.event, {
@@ -202,8 +204,6 @@ export function createEventCoordinator(
         draft,
         priority: appendOptions.priority,
         maxAttempts: appendOptions.maxAttempts,
-        mutate: () => Promise.resolve(undefined),
-        recoverDuplicate: () => Promise.resolve(undefined),
       });
     },
     recover(recoveryOptions = {}) {

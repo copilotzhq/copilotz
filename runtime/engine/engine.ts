@@ -150,6 +150,8 @@ export async function createCopilotzEngine(
     retryCapMs: options.retryCapMs,
     indexOperationEvent: (transaction, input) =>
       operationCatalog.indexEvent(transaction, input),
+    indexOperationEventSql: (input, param) =>
+      operationCatalog.indexEventSql(input, param),
   });
   const additionalScopes = new Map<
     string,
@@ -603,6 +605,8 @@ export async function createCopilotzEngine(
         workloads: executor.workloads,
         dispatchWork: (input) => executor.dispatchWork(input),
         settleOutputs: (scope) => executor.settleOutputs(scope),
+        awaitScopeProgress: (scope, signal) =>
+          executor.awaitScopeProgress(scope, signal),
       } as const,
       async recoverAll(recovery = {}) {
         const scoped = await Promise.allSettled([...additionalScopes.values()]);

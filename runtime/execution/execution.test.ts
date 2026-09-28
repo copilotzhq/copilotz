@@ -438,6 +438,41 @@ Deno.test("concurrent local dispatch calls share one physical delivery attempt",
     await closeFixture(fixture);
   }
 });
+Deno.test("scope progress resolves when local work for the scope finishes", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => release = resolve);
+  const fixture = await createFixture({ handle: () => gate });
+  const committed = await appendMessage(fixture);
+  const executor = createDeliveryExecutor({
+    store: fixture.store,
+    registry: fixture.registry,
+    createContext: fixture.createContext,
+    workerId: "copilotz-progress-test",
+  });
+  const scope = {
+    namespace: "tenant-a",
+    settlementScopeId: committed.deliveries[0].settlementScopeId,
+  };
+  try {
+    assertEquals(await executor.awaitScopeProgress(scope), false);
+    const handle = await executor.dispatchDelivery(committed.deliveries[0].id);
+    let progressed = false;
+    const progress = executor.awaitScopeProgress(scope).then((value) => {
+      progressed = value;
+    });
+    await handle.started;
+    assertEquals(progressed, false);
+    release();
+    await progress;
+    assertEquals(progressed, true);
+    assertEquals((await handle.done).delivery.status, "succeeded");
+    assertEquals(await executor.awaitScopeProgress(scope), false);
+  } finally {
+    release();
+    await executor.shutdown();
+    await closeFixture(fixture);
+  }
+});
 Deno.test("A52 a shared Hypervisor survives Copilotz worker shutdown", async () => {
   const fixture = await createFixture();
   const committed = await appendMessage(fixture);

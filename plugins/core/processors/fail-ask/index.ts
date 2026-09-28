@@ -40,6 +40,7 @@ export const failAskProcessor: Processor<CoreToolProcessorContext> =
       },
     ],
     async handle(event, context) {
+      if (!event.durable) return;
       const lifecycle = parseActionLifecycleEvent(event, {
         actionId: "llm.call",
         statuses: ["failed", "cancelled"],
@@ -60,7 +61,7 @@ export const failAskProcessor: Processor<CoreToolProcessorContext> =
       await resumeDeferredToolPlan(context, ask, {
         status: cancelled ? "cancelled" : "failed",
         error: askFailure(asRecord(lifecycle.error), ask, cancelled),
-      });
+      }, { ownerEventId: event.id });
     },
   });
 

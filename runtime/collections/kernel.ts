@@ -66,6 +66,7 @@ import {
   projectCollectionEvent,
   type ProjectionGuard,
 } from "./reducer.ts";
+import { readViewKey, readViews } from "./read-view.ts";
 import { aggregateCollectionRecords } from "./aggregate.ts";
 import { queryCollectionRecords, queryCollectionRelations } from "./query.ts";
 import {
@@ -1704,22 +1705,33 @@ export function createCollectionKernel(
       } as const);
     };
 
-    const commitOperation = (
+    const rowKey = (namespace: string, id: string) =>
+      readViewKey(tables.nodes, namespace, name, id);
+
+    const commitOperation = async (
       planned: PlannedCollectionOperation,
       execution?: Readonly<{
         transaction: SqlExecutor;
         pending: CoordinatedMutationResult<unknown>[];
       }>,
-    ) =>
-      commit(
-        planned.eventType,
-        planned.id,
-        planned.operation,
-        planned.writeOptions,
-        planned.plan,
-        planned.matchData,
-        execution,
-      );
+    ) => {
+      try {
+        return await commit(
+          planned.eventType,
+          planned.id,
+          planned.operation,
+          planned.writeOptions,
+          planned.plan,
+          planned.matchData,
+          execution,
+        );
+      } finally {
+        // Also when refused: a compare-and-set retry must read the row again.
+        readViews.invalidate(
+          rowKey(planned.writeOptions.namespace.trim(), planned.id),
+        );
+      }
+    };
 
     // A retry commits as a duplicate of its first attempt, so the transaction
     // identity is read only when the current state cannot be planned or
@@ -2367,12 +2379,31 @@ export function createCollectionKernel(
       return remembered.then((value) => structuredClone(value));
     };
 
+    // A hop remembers what it read until this process writes the row. A
+    // snapshot has its own memo and a write transaction plans on its own reads.
+    const loadInHop = async (
+      ns: string,
+      recordId: string,
+    ): Promise<CollectionRecord | null> => {
+      const memo = activeSnapshot() || activeScope()
+        ? undefined
+        : readViews.memo();
+      if (!memo) return await loadBatched(executor(), ns, recordId);
+      const key = rowKey(ns, recordId);
+      const hit = memo.recall<CollectionRecord | null>(key);
+      if (hit) return hit.value;
+      const ticket = memo.begin([key]);
+      const record = await loadBatched(executor(), ns, recordId);
+      ticket.remember(key, record);
+      return record;
+    };
+
     const read = (id: string, namespace: string) => {
       const ns = requireText(namespace, "Namespace");
       const recordId = requireText(id, `${name} id`);
       return inSnapshot(
         JSON.stringify(["get", name, ns, recordId]),
-        () => loadBatched(executor(), ns, recordId),
+        () => loadInHop(ns, recordId),
       ) as Promise<TSelect | null>;
     };
 
@@ -3340,6 +3371,8 @@ export function createCollectionKernel(
       throw error;
     }
 
+    // The writes became visible together, after their statements returned.
+    readViews.invalidateAll();
     if (options.assets) {
       options.assets.publishMaterializations(
         orderedPlans.flatMap((plan) =>
@@ -3493,15 +3526,19 @@ export function createCollectionKernel(
         );
       }),
     async rebuild(namespace) {
-      await options.session.transaction((transaction) =>
-        rebuildNamespaceProjections(
-          transaction,
-          options.eventStore,
-          [...bound.values()].map((collection) => collection.definition),
-          requireText(namespace, "Namespace"),
-          options.runtimeProjections,
-        )
-      );
+      try {
+        await options.session.transaction((transaction) =>
+          rebuildNamespaceProjections(
+            transaction,
+            options.eventStore,
+            [...bound.values()].map((collection) => collection.definition),
+            requireText(namespace, "Namespace"),
+            options.runtimeProjections,
+          )
+        );
+      } finally {
+        readViews.invalidateAll();
+      }
     },
   } as const;
   return runtime;

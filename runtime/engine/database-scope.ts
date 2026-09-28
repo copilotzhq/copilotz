@@ -72,6 +72,7 @@ import {
   hydrateProcessorEventContent,
   resolveProcessorEvent,
 } from "../plugins/index.ts";
+import { readViews } from "../collections/read-view.ts";
 import { canonicalizeContentRefs } from "../content/input.ts";
 import { withProcessorEventData } from "../plugins/processor.ts";
 import type {
@@ -168,6 +169,7 @@ export function createDatabaseScope(
     now: engine.now,
     digest: engine.digest,
     storage: engine.assetStorage,
+    readViews,
   });
   const resolver = createContentResolver({
     assets,

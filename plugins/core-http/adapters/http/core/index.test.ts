@@ -227,7 +227,8 @@ Deno.test("Core round trip keeps stored history, actor identity, and multipart b
     const receipt = await core.threads.send({
       externalThreadId: "new",
       content: "Hi",
-      recipientIds: ["support"],
+      participantIds: ["spare"],
+      recipientIds: ["support", "person"],
     }, { idempotencyKey: "hello" });
     const collected: number[] = [];
     await client.operations.observe({
@@ -247,11 +248,31 @@ Deno.test("Core round trip keeps stored history, actor identity, and multipart b
     assertEquals(page.data.length, 2);
     assertEquals(page.data[0].sender.id, "person");
     assertEquals(typeof page.pageInfo.checkpoint, "string");
+    const records = application.collections.withScope({ namespace: "tenant" });
+    const [support, spare, person] = await Promise.all([
+      records.participant.queries.byExternalId({ externalId: "support" }),
+      records.participant.queries.byExternalId({ externalId: "spare" }),
+      records.participant.queries.byExternalId({ externalId: "person" }),
+    ]);
+    assertEquals([support.length, spare.length, person.length], [1, 1, 1]);
+    const storedFirstMessage = await records.message.get({
+      id: page.data[0].id,
+    });
+    assertEquals(
+      storedFirstMessage?.recipientIds,
+      [support[0].id, person[0].id],
+    );
+    const storedThread = await records.thread.get({ id: result.threadId });
+    assertEquals(
+      (storedThread?.participantIds as string[]).includes(spare[0].id),
+      true,
+    );
     assertEquals((await core.threads.list()).data.length, 1);
     // Finish a follow-up entirely between the history read and live attachment.
     const followup = await core.threads.send({
       threadId: result.threadId,
       content: "Again",
+      participantIds: ["support", support[0].id],
       recipientIds: ["support"],
     }, { idempotencyKey: "followup" });
     await client.operations.observe({
@@ -324,7 +345,6 @@ Deno.test("Core round trip keeps stored history, actor identity, and multipart b
       }),
     );
     assertEquals(forgedOperation.status, 404);
-    const records = application.collections.withScope({ namespace: "tenant" });
     await records.participant.create({
       id: "foreign-human",
       externalId: "foreign-human",

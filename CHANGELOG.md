@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.81.0 — 2026-09-27
+## 0.81.0 — 2026-09-28
 
 ### Breaking
 
@@ -31,6 +31,15 @@
   linked to their call. Previously they reached the model as bare user text.
 - A peer agent's malformed stored tool call no longer fails other agents'
   transcripts.
+
+## 0.80.9 — 2026-09-28
+
+### Performance
+
+- Batch selected thread memberships with message creation to avoid repeated
+  enrollment Actions and durable transactions.
+- Reuse immutable Ready-object metadata during S3 body reads and promotion,
+  avoiding redundant metadata requests.
 
 ## 0.80.8 — 2026-09-27
 

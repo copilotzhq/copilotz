@@ -147,11 +147,16 @@ export function createPromotedBodyStore(
     }
   };
 
-  const promoteOnce = async (staged: ReadyBodyHead): Promise<ReadyBodyHead> => {
-    const existing = requireReadyHead(
-      staged.bodyId,
-      await ready.head({ bodyId: staged.bodyId }),
+  const lookupReady = async (bodyId: string): Promise<ReadyBodyHead | null> =>
+    requireReadyHead(
+      bodyId,
+      await (ready.headReady
+        ? ready.headReady({ bodyId })
+        : ready.head({ bodyId })),
     );
+
+  const promoteOnce = async (staged: ReadyBodyHead): Promise<ReadyBodyHead> => {
+    const existing = await lookupReady(staged.bodyId);
     if (existing) {
       validateReadyHead(staged, existing);
       await cleanupStagedReady(staged);
@@ -165,10 +170,7 @@ export function createPromotedBodyStore(
     } catch (error) {
       // A competing promoter may have published and cleaned staging between
       // our head and read. Accept only the exact canonical winner.
-      const winner = requireReadyHead(
-        staged.bodyId,
-        await ready.head({ bodyId: staged.bodyId }),
-      );
+      const winner = await lookupReady(staged.bodyId);
       if (!winner) throw error;
       validateReadyHead(staged, winner);
       return winner;
@@ -196,10 +198,7 @@ export function createPromotedBodyStore(
     } catch (error) {
       // A timeout may be observed after the conditional put committed. Read
       // the winner before deciding whether the promotion actually failed.
-      const winner = requireReadyHead(
-        staged.bodyId,
-        await ready.head({ bodyId: staged.bodyId }),
-      );
+      const winner = await lookupReady(staged.bodyId);
       if (!winner) throw error;
       validateReadyHead(staged, winner);
       published = winner;
@@ -245,10 +244,7 @@ export function createPromotedBodyStore(
     if (isReady(staged)) {
       return ({ store: ready, head: await promote(staged) } as const);
     }
-    const canonical = requireReadyHead(
-      bodyId,
-      await ready.head({ bodyId }),
-    );
+    const canonical = await lookupReady(bodyId);
     if (canonical) {
       // Preserve active-staging precedence across the cross-store lookup race.
       const latest = await staging.head({ bodyId });
@@ -324,18 +320,12 @@ export function createPromotedBodyStore(
       if (isIncomplete(staged)) {
         throw conflict(`Incomplete body '${input.bodyId}' already exists.`);
       }
-      const canonical = requireReadyHead(
-        input.bodyId,
-        await ready.head({ bodyId: input.bodyId }),
-      );
+      const canonical = await lookupReady(input.bodyId);
       if (canonical) {
         throw conflict(`Ready body '${input.bodyId}' already exists.`);
       }
       const writer = await staging.reserve(input);
-      const raced = requireReadyHead(
-        input.bodyId,
-        await ready.head({ bodyId: input.bodyId }),
-      );
+      const raced = await lookupReady(input.bodyId);
       if (raced) {
         await staging.abort({ writer }).catch(() => undefined);
         throw conflict(

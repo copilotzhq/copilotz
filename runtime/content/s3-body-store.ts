@@ -191,6 +191,72 @@ export function createS3BodyStore(
   });
   const protectionMs = bodyProtectionMs(config.protectionMs);
 
+  const parseReadyResponse = (
+    bodyId: string,
+    response: Response,
+  ): ReadyInspection => {
+    const lengthHeader = response.headers.get("content-length");
+    const byteLength = lengthHeader === null ? NaN : Number(lengthHeader);
+    const mediaType = response.headers.get("content-type") ??
+      copilotzMetadataValue(response.headers, "media-type") ??
+      "application/octet-stream";
+    const digest = normalizeDigest(
+      copilotzMetadataValue(response.headers, "sha256"),
+    );
+    const maintenanceVersion = Number(
+      copilotzMetadataValue(response.headers, "maintenance-version") ?? 1,
+    );
+    const protectedUntil = copilotzMetadataValue(
+      response.headers,
+      "protected-until",
+    );
+    if (
+      !Number.isSafeInteger(byteLength) || byteLength < 0 || !digest ||
+      !Number.isSafeInteger(maintenanceVersion) || maintenanceVersion < 1 ||
+      (protectedUntil !== undefined &&
+        !Number.isFinite(Date.parse(protectedUntil)))
+    ) {
+      throw createContentError(
+        "asset_corrupted",
+        "Object metadata is incomplete for a canonical asset body.",
+      );
+    }
+    const modifiedHeader = response.headers.get("last-modified");
+    const modifiedAt = modifiedHeader ? Date.parse(modifiedHeader) : NaN;
+    const lastModified = Number.isFinite(modifiedAt)
+      ? new Date(modifiedAt).toISOString()
+      : undefined;
+    const etagHeader = response.headers.get("etag")?.trim();
+    const etag = etagHeader?.startsWith('"') && etagHeader.endsWith('"')
+      ? etagHeader.slice(1, -1)
+      : etagHeader || undefined;
+    const head = {
+      bodyId,
+      state: "ready" as const,
+      byteLength,
+      mediaType,
+      digest,
+      maintenanceVersion,
+      ...(protectedUntil ? { protectedUntil } : {}),
+      ...(etag ? { etag } : {}),
+      ...(lastModified ? { lastModified } : {}),
+    } as const;
+    const generation = provider === "gcs"
+      ? positiveInt64(response.headers.get("x-goog-generation"))
+      : undefined;
+    const metageneration = provider === "gcs"
+      ? positiveInt64(response.headers.get("x-goog-metageneration"))
+      : undefined;
+    return ({
+      head,
+      ...(generation && metageneration
+        ? {
+          guard: { generation, metageneration } as const,
+        }
+        : {}),
+    } as const);
+  };
+
   const inspectReady = async (
     bodyId: string,
   ): Promise<ReadyInspection | null> => {
@@ -203,66 +269,33 @@ export function createS3BodyStore(
         returnBody: true,
       });
       if (!response.bodyUsed) await response.arrayBuffer();
-      const lengthHeader = response.headers.get("content-length");
-      const byteLength = lengthHeader === null ? NaN : Number(lengthHeader);
-      const mediaType = response.headers.get("content-type") ??
-        copilotzMetadataValue(response.headers, "media-type") ??
-        "application/octet-stream";
-      const digest = normalizeDigest(
-        copilotzMetadataValue(response.headers, "sha256"),
-      );
-      const maintenanceVersion = Number(
-        copilotzMetadataValue(response.headers, "maintenance-version") ?? 1,
-      );
-      const protectedUntil = copilotzMetadataValue(
-        response.headers,
-        "protected-until",
-      );
-      if (
-        !Number.isSafeInteger(byteLength) || byteLength < 0 || !digest ||
-        !Number.isSafeInteger(maintenanceVersion) || maintenanceVersion < 1 ||
-        (protectedUntil !== undefined &&
-          !Number.isFinite(Date.parse(protectedUntil)))
-      ) {
+      return parseReadyResponse(bodyId, response);
+    } catch (error) {
+      if (isAbsentError(error)) return null;
+      throw error;
+    }
+  };
+
+  const getReadyBody = async (
+    bodyId: string,
+  ): Promise<ReadableStream<Uint8Array> | null> => {
+    try {
+      const response = await client.getObject(bodyId, { bucketName: bucket });
+      if (response.status === 404) return null;
+      if (!response.ok) {
         throw createContentError(
-          "asset_corrupted",
-          "Object metadata is incomplete for a canonical asset body.",
+          "asset_storage_unavailable",
+          `Object read failed with status ${response.status}.`,
         );
       }
-      const modifiedHeader = response.headers.get("last-modified");
-      const modifiedAt = modifiedHeader ? Date.parse(modifiedHeader) : NaN;
-      const lastModified = Number.isFinite(modifiedAt)
-        ? new Date(modifiedAt).toISOString()
-        : undefined;
-      const etagHeader = response.headers.get("etag")?.trim();
-      const etag = etagHeader?.startsWith('"') && etagHeader.endsWith('"')
-        ? etagHeader.slice(1, -1)
-        : etagHeader || undefined;
-      const head = {
-        bodyId,
-        state: "ready" as const,
-        byteLength,
-        mediaType,
-        digest,
-        maintenanceVersion,
-        ...(protectedUntil ? { protectedUntil } : {}),
-        ...(etag ? { etag } : {}),
-        ...(lastModified ? { lastModified } : {}),
-      } as const;
-      const generation = provider === "gcs"
-        ? positiveInt64(response.headers.get("x-goog-generation"))
-        : undefined;
-      const metageneration = provider === "gcs"
-        ? positiveInt64(response.headers.get("x-goog-metageneration"))
-        : undefined;
-      return ({
-        head,
-        ...(generation && metageneration
-          ? {
-            guard: { generation, metageneration } as const,
-          }
-          : {}),
-      } as const);
+      if (!response.body) {
+        throw createContentError(
+          "asset_corrupted",
+          "Object response has no body.",
+        );
+      }
+      parseReadyResponse(bodyId, response);
+      return response.body;
     } catch (error) {
       if (isAbsentError(error)) return null;
       throw error;
@@ -1650,17 +1683,13 @@ export function createS3BodyStore(
     async head({ bodyId }) {
       return await head(bodyId) ?? await progressive.head(bodyId);
     },
+    async headReady({ bodyId }) {
+      return await head(bodyId);
+    },
     async read({ bodyId }) {
-      const ready = await inspectReady(bodyId);
+      const ready = await getReadyBody(bodyId);
       if (ready) {
-        const response = await client.getObject(bodyId, { bucketName: bucket });
-        if (!response.body) {
-          throw createContentError(
-            "asset_corrupted",
-            "Object response has no body.",
-          );
-        }
-        return response.body;
+        return ready;
       }
       const staged = await progressive.head(bodyId);
       if (staged?.state !== "incomplete") {

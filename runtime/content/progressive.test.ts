@@ -87,9 +87,24 @@ type StoredObject = {
   bytes: Uint8Array;
   mediaType: string;
   digest: string;
+  maintenanceVersion: string;
+  protectedUntil: string;
   modified: string;
   etag: string;
 };
+
+function readyObjectHeaders(existing: StoredObject): HeadersInit {
+  return {
+    "content-length": String(existing.bytes.byteLength),
+    "content-type": existing.mediaType,
+    etag: existing.etag,
+    "last-modified": existing.modified,
+    "x-amz-meta-copilotz-sha256": existing.digest.slice("sha256:".length),
+    "x-amz-meta-copilotz-media-type": existing.mediaType,
+    "x-amz-meta-copilotz-maintenance-version": existing.maintenanceVersion,
+    "x-amz-meta-copilotz-protected-until": existing.protectedUntil,
+  };
+}
 
 function xmlEscape(value: string): string {
   return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;")
@@ -108,18 +123,7 @@ function createS3Handle() {
       const existing = objects.get(path);
       if (request.method === "HEAD") {
         if (!existing) return new Response(null, { status: 404 });
-        return new Response(null, {
-          headers: {
-            "content-length": String(existing.bytes.byteLength),
-            "content-type": existing.mediaType,
-            "etag": existing.etag,
-            "last-modified": existing.modified,
-            "x-amz-meta-copilotz-sha256": existing.digest.slice(
-              "sha256:".length,
-            ),
-            "x-amz-meta-copilotz-media-type": existing.mediaType,
-          },
-        });
+        return new Response(null, { headers: readyObjectHeaders(existing) });
       }
       if (request.method === "PUT") {
         if (request.headers.get("if-none-match") === "*" && existing) {
@@ -138,6 +142,12 @@ function createS3Handle() {
           digest: `sha256:${
             request.headers.get("x-amz-meta-copilotz-sha256") ?? ""
           }`,
+          maintenanceVersion: request.headers.get(
+            "x-amz-meta-copilotz-maintenance-version",
+          ) ?? "1",
+          protectedUntil: request.headers.get(
+            "x-amz-meta-copilotz-protected-until",
+          ) ?? "",
           modified: new Date().toUTCString(),
           etag,
         });
@@ -189,11 +199,7 @@ function createS3Handle() {
           });
         }
         return new Response(existing.bytes.slice(), {
-          headers: {
-            "content-type": existing.mediaType,
-            etag: existing.etag,
-            "last-modified": existing.modified,
-          },
+          headers: readyObjectHeaders(existing),
         });
       }
       if (request.method === "DELETE") {

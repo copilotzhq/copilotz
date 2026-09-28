@@ -18,6 +18,7 @@ export const completeAskProcessor: Processor<CoreToolProcessorContext> =
       metadata: { copilotzAsk: { phase: "answer" } },
     }],
     async handle(event, context) {
+      if (!event.durable) return;
       const message = collectionEventRecord(event);
       const sender = await requireCollection(context, "participant").get({
         id: String(message.senderId),
@@ -40,7 +41,7 @@ export const completeAskProcessor: Processor<CoreToolProcessorContext> =
           askedAgentId: ask.askedAgentId,
           answerMessageId: String(message.id),
         },
-      });
+      }, { ownerEventId: event.id });
     },
   });
 

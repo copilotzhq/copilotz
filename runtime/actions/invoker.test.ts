@@ -28,17 +28,25 @@ function recordingLifecycle(
   if (receipt) invoked.set(receipt.actionRunId, receipt);
   const emitted: ActionLifecycleInput[] = [];
   const lifecycle: ActionLifecycleEmitter = {
+    // Like the event store, a receipt identity is written once: a second
+    // emit finds the first and reports a duplicate.
     emit(input) {
-      emitted.push(input);
       if (input.status === "invoked") {
+        if (invoked.has(input.actionRunId)) {
+          return Promise.resolve({ deduplicated: true } as never);
+        }
         invoked.set(input.actionRunId, input);
       } else if (
         input.status === "completed" || input.status === "failed" ||
         input.status === "cancelled"
       ) {
+        if (terminal.has(input.actionRunId)) {
+          return Promise.resolve({ deduplicated: true } as never);
+        }
         terminal.set(input.actionRunId, input);
       }
-      return Promise.resolve(undefined as never);
+      emitted.push(input);
+      return Promise.resolve({ deduplicated: false } as never);
     },
     invoked: (actionRunId) => Promise.resolve(invoked.get(actionRunId) ?? null),
     terminal: (actionRunId) =>
@@ -72,8 +80,15 @@ Deno.test("root Action identity combines host invocation and local operation", a
     ActionCompletedData | ActionFailedData
   >();
   const emitted: ActionLifecycleInput[] = [];
+  const claimed = new Set<string>();
   const lifecycle: ActionLifecycleEmitter = {
     emit(input) {
+      if (input.status === "invoked") {
+        if (claimed.has(input.actionRunId)) {
+          return Promise.resolve({ deduplicated: true } as never);
+        }
+        claimed.add(input.actionRunId);
+      }
       emitted.push(input);
       if (
         input.status === "completed" || input.status === "failed" ||
@@ -81,7 +96,7 @@ Deno.test("root Action identity combines host invocation and local operation", a
       ) {
         terminal.set(input.actionRunId, input);
       }
-      return Promise.resolve(undefined as never);
+      return Promise.resolve({ deduplicated: false } as never);
     },
     invoked: () => Promise.resolve(null),
     terminal: (actionRunId) =>

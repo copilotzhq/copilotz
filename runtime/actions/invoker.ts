@@ -501,65 +501,64 @@ function actionCaller(
     if (!preparedContent) validateInput(durableInput);
     const inputSecrets = protectedStrings(action.inputSchema, durableInput);
     assertMetadataIsSecretFree(frame.metadata, inputSecrets);
-    const existing = captureRace
-      ? await invoker.actionLifecycle.terminal(frame.actionRunId)
-      : await loadTerminal(invoker.actionLifecycle, frame, durableInput);
-    if (existing && captureRace) {
-      validateReceiptIdentity(existing, frame);
-      return await invoke(
-        existing.input,
-        {
-          ...options,
-          metadata: existing.metadata,
-        },
-        false,
-        prepared,
-      );
-    }
-    if (existing) return restoreTerminal(existing);
-
-    const invoked = captureRace
-      ? await invoker.actionLifecycle.invoked(frame.actionRunId)
-      : await loadInvoked(invoker.actionLifecycle, frame, durableInput);
-    if (invoked && captureRace) {
-      validateReceiptIdentity(invoked, frame);
-      return await invoke(
-        invoked.input,
-        {
-          ...options,
-          metadata: invoked.metadata,
-        },
-        false,
-        prepared,
-      );
-    }
     const executionInput = preparedContent
       ? await preparedContent.hydrate()
       : durableInput;
     if (preparedContent) validateInput(executionInput);
     throwIfAborted(frame.signal);
-    if (!invoked) {
-      try {
-        await invoker.actionLifecycle.emit({
-          ...lifecycleCommon(frame, durableInput),
-          status: "invoked",
-          deduplicationId: `${frame.actionRunId}:action:invoked`,
-        });
-      } catch (error) {
-        if (!captureRace) throw error;
-        const winner = await invoker.actionLifecycle.invoked(frame.actionRunId);
-        if (!winner) throw error;
-        validateReceiptIdentity(winner, frame);
+
+    // The invoked receipt is the claim on this run: its deduplication id is
+    // unique, so inserting it either wins the run or reports an earlier
+    // receipt. Only then are the receipts read, and a run seen for the first
+    // time reads nothing.
+    let claimError: unknown;
+    let claimed = false;
+    try {
+      const receipt = await invoker.actionLifecycle.emit({
+        ...lifecycleCommon(frame, durableInput),
+        status: "invoked",
+        deduplicationId: `${frame.actionRunId}:action:invoked`,
+      });
+      claimed =
+        (receipt as { deduplicated?: unknown } | undefined)?.deduplicated ===
+          false;
+    } catch (error) {
+      claimError = error;
+    }
+    if (!claimed) {
+      const existing = captureRace
+        ? await invoker.actionLifecycle.terminal(frame.actionRunId)
+        : await loadTerminal(invoker.actionLifecycle, frame, durableInput);
+      if (existing && captureRace) {
+        validateReceiptIdentity(existing, frame);
         return await invoke(
-          winner.input,
+          existing.input,
           {
             ...options,
-            metadata: winner.metadata,
+            metadata: existing.metadata,
           },
           false,
           prepared,
         );
       }
+      if (existing) return restoreTerminal(existing);
+
+      const invoked = captureRace
+        ? await invoker.actionLifecycle.invoked(frame.actionRunId)
+        : await loadInvoked(invoker.actionLifecycle, frame, durableInput);
+      if (invoked && captureRace) {
+        validateReceiptIdentity(invoked, frame);
+        return await invoke(
+          invoked.input,
+          {
+            ...options,
+            metadata: invoked.metadata,
+          },
+          false,
+          prepared,
+        );
+      }
+      if (!invoked && claimError !== undefined) throw claimError;
     }
 
     let progressIndex = 0;
@@ -701,20 +700,9 @@ function actionCaller(
         throw new TypeError("Action prepare factory must return an input.");
       }
       throwIfAborted(bootstrap.signal);
-      // A receipt may have won while preparation was in progress. Never compare
-      // freshly selected history to that capture; replay the durable winner.
-      const afterPreparationTerminal = await invoker.actionLifecycle.terminal(
-        bootstrap.actionRunId,
-      );
-      if (afterPreparationTerminal) {
-        return await restore(afterPreparationTerminal);
-      }
-      const afterPreparationInvoked = await invoker.actionLifecycle.invoked(
-        bootstrap.actionRunId,
-      );
-      if (afterPreparationInvoked) {
-        return await restore(afterPreparationInvoked);
-      }
+      // A receipt may have won while preparation was in progress. The call
+      // claims the run before it reads anything, so a winner is found there and
+      // replayed; freshly selected history is never compared to its capture.
       return await invoke(
         prepared.input,
         {

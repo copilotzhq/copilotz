@@ -59,9 +59,13 @@ function fixture() {
       content,
       createInvocationKey: () => key,
       actionLifecycle: {
+        // A receipt identity is written once, as in the event store.
         emit: (data) => {
+          if (events.some((e) => e.deduplicationId === data.deduplicationId)) {
+            return Promise.resolve({ deduplicated: true } as never);
+          }
           events.push(structuredClone(data));
-          return Promise.resolve(undefined as never);
+          return Promise.resolve({ deduplicated: false } as never);
         },
         invoked: (id) =>
           Promise.resolve(

@@ -1,4 +1,8 @@
-import { retainActionInputContent } from "./content-retention.ts";
+import {
+  composeActionInputRetention,
+  planActionInputRetention,
+  retainActionInputContent,
+} from "./content-retention.ts";
 import type { EventCoordinator } from "../events/index.ts";
 import type { DurableEvent, EventStore } from "../events/index.ts";
 import { eventDataRef, readEventBody } from "../events/body-store.ts";
@@ -7,6 +11,7 @@ import { parseActionLifecycleEvent } from "./event.ts";
 import {
   actionDefinitionById,
   actionDefinitionHasSecrets,
+  actionInputHasSecrets,
   hydrateActionLifecycleBody,
   prepareActionLifecycleBody,
   protectedActionLifecycleBody,
@@ -93,11 +98,11 @@ export function createActionLifecycleAppender(
         data,
         action,
         protectedValues: options.protectedValues,
-        existingInput: await invokedInputRef(
-          options,
-          draft.namespace,
-          data,
-        ),
+        // Only a secret input is sealed once, by the invoked receipt; a later
+        // receipt of that run reuses its reference.
+        existingInput: actionInputHasSecrets(action)
+          ? await invokedInputRef(options, draft.namespace, data)
+          : undefined,
       })
       : ({
         body: data,
@@ -112,23 +117,27 @@ export function createActionLifecycleAppender(
         mediaType: "application/json" as const,
       },
     };
-    const retainsContent = Boolean(action?.content) &&
-      data.status === "invoked";
+    const retention = action
+      ? await planActionInputRetention(draft.namespace, action, data)
+      : undefined;
+    const tables = options.store?.tables;
+    // The receipt's own statement retains the input Assets, unless protected
+    // values must be adopted in code beside them.
+    const inStatement = retention !== undefined && tables !== undefined &&
+      prepared.prepared.length === 0;
     return await options.coordinator.commitMutation({
       draft: { ...draft, payload },
       matchData: prepared.publicData,
       body: { id: payload.dataRef.eventBodyId, json: prepared.body },
-      ...(retainsContent || prepared.prepared.length > 0
+      ...(inStatement
+        ? {
+          statement: (param: (value: unknown) => string) =>
+            composeActionInputRetention(retention, tables, param),
+        }
+        : retention || prepared.prepared.length > 0
         ? {
           mutate: async (context) => {
-            if (action) {
-              await retainActionInputContent(
-                context,
-                draft.namespace,
-                action,
-                data,
-              );
-            }
+            if (retention) await retainActionInputContent(context, retention);
             for (const value of prepared.prepared) {
               await options.protectedValues!.adopt(
                 context,

@@ -65,6 +65,11 @@ export function actionDefinitionHasSecrets(
     actionSchemaHasSecrets(action.outputSchema);
 }
 
+/** Whether the Action's input carries values that are stored sealed. */
+export function actionInputHasSecrets(action: AnyActionDefinition): boolean {
+  return actionSchemaHasSecrets(action.inputSchema);
+}
+
 export function protectedActionLifecycleBody(
   value: unknown,
 ): ProtectedActionLifecycleBody | null {

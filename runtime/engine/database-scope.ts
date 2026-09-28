@@ -1,4 +1,7 @@
-import { retainActionInputContent } from "../actions/content-retention.ts";
+import {
+  planActionInputRetention,
+  retainActionInputContent,
+} from "../actions/content-retention.ts";
 import type { ActionEventData } from "../actions/types.ts";
 import {
   assetBodySchemaPrefix,
@@ -222,7 +225,12 @@ export function createDatabaseScope(
           action.id === data.actionId
         );
         if (action?.content && event.type === `${action.id}.invoked`) {
-          await retainActionInputContent(context, namespace, action, data);
+          const retention = await planActionInputRetention(
+            namespace,
+            action,
+            data,
+          );
+          if (retention) await retainActionInputContent(context, retention);
         }
       },
     } as const,

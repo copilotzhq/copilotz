@@ -102,7 +102,10 @@ export type CommitEventMutationOptions<T> = {
    * Writes and checks that commit in the event's own statement. They keep a
    * mutation a single autocommitted statement.
    */
-  statement?(param: (value: unknown) => string): EventStatement<T>;
+  statement?(
+    param: (value: unknown) => string,
+    tables: EventMutationContext["tables"],
+  ): EventStatement<T>;
   /**
    * Writes that commit with the event. Without them (and without a joined
    * transaction) the event commits as one autocommitted statement.
@@ -651,7 +654,7 @@ export function createEventStore(
     const insertEvent = async (executor: SqlExecutor, tolerant: boolean) => {
       const params: unknown[] = [];
       const param = (value: unknown) => `$${params.push(value)}`;
-      const statement = mutation.statement?.(param);
+      const statement = mutation.statement?.(param, tables);
       const deliveryRows = consumers.map((consumer) => ({
         id: createId(),
         consumerId: consumer.consumerId,

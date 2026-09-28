@@ -410,6 +410,80 @@ Deno.test("A47 positions, tenant isolation, and passive events do not multiply d
   }
 });
 
+Deno.test("events this store committed are read back without a query", async () => {
+  const fixture = await createFixture();
+  let statements = 0;
+  const counted: SqlSession = {
+    query: (sql, params) => {
+      statements++;
+      return fixture.session.query(sql, params);
+    },
+    transaction: (operation) => fixture.session.transaction(operation),
+  };
+  const store = createEventStore({ session: counted, schema: TEST_SCHEMA });
+  const draft = (id: string) => ({
+    type: "note.created",
+    namespace: "tenant-a",
+    payload: { ref: id },
+    deduplicationId: id,
+  });
+  try {
+    const committed = await store.commitMutation({
+      draft: draft("note-1"),
+      consumers: [],
+      body: { id: "body-1", json: { text: "hello" } },
+    });
+    statements = 0;
+    const read = await store.getEvent(committed.event.id);
+    assertEquals(statements, 0);
+    assertEquals(read, await fixture.store.getEvent(committed.event.id));
+    (read!.payload as Record<string, unknown>).ref = "changed";
+    assertEquals(
+      (await store.getEvent(committed.event.id))!.payload,
+      { ref: "note-1" },
+    );
+    assertEquals(
+      store.recentEventBody?.(committed.event.id, "body-1")?.json,
+      { text: "hello" },
+    );
+    assertEquals(
+      store.recentEventBody?.(committed.event.id, "body-2"),
+      undefined,
+    );
+
+    // A joined transaction's event is only remembered once confirmed.
+    const joined = await fixture.session.transaction((transaction) =>
+      store.commitMutation({
+        draft: draft("note-2"),
+        consumers: [],
+        transaction,
+      })
+    );
+    statements = 0;
+    assertExists(await store.getEvent(joined.event.id));
+    assertEquals(statements, 1);
+    store.confirmCommitted?.(joined.event.id);
+    statements = 0;
+    assertExists(await store.getEvent(joined.event.id));
+    assertEquals(statements, 0);
+
+    let rolledBackId = "";
+    await assertRejects(() =>
+      fixture.session.transaction(async (transaction) => {
+        rolledBackId = (await store.commitMutation({
+          draft: draft("note-3"),
+          consumers: [],
+          transaction,
+        })).event.id;
+        throw new Error("rollback");
+      })
+    );
+    assertEquals(await store.getEvent(rolledBackId), null);
+  } finally {
+    await closeFixture(fixture);
+  }
+});
+
 Deno.test("an event with only a body commits as one statement and dedupes on retry", async () => {
   const fixture = await createFixture();
   const statements: string[] = [];

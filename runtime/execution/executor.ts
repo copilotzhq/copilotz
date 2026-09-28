@@ -22,6 +22,7 @@ import { isStreamOutputDescriptor } from "../streams/index.ts";
 const RECOVERY_MINIMUM_DELAY_MS = 1_000;
 const PLACEMENT_FAILURE_DIAGNOSTIC_INTERVAL_MS = 1_000;
 const MAX_PLACEMENT_FAILURE_DIAGNOSTICS = 10_000;
+const SCOPE_PROGRESS_POLL_MS = 250;
 
 function positiveCapacity(value: number | undefined): number {
   const capacity = value ?? 8;
@@ -758,6 +759,26 @@ export function createDeliveryExecutor(
         if (tasks.length === 0) return;
         await Promise.allSettled(tasks);
       }
+    },
+    awaitScopeProgress(scope, signal) {
+      const tasks = activeOutputScopes.get(outputScopeKey(
+        scope.databaseSchema?.trim() || defaultDatabaseSchema,
+        scope.namespace,
+        scope.settlementScopeId,
+      ));
+      if (!tasks?.size || signal?.aborted) return Promise.resolve(false);
+      return new Promise<boolean>((resolve) => {
+        const finish = () => {
+          clearTimeout(timer);
+          signal?.removeEventListener("abort", finish);
+          resolve(true);
+        };
+        // Work elsewhere can change the scope too, so this only shortens a
+        // poll interval instead of replacing it.
+        const timer = setTimeout(finish, SCOPE_PROGRESS_POLL_MS);
+        signal?.addEventListener("abort", finish, { once: true });
+        for (const task of tasks) void task.then(finish, finish);
+      });
     },
     async shutdown(reason = "copilotz_delivery_executor_shutdown") {
       if (closed) return;

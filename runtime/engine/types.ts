@@ -203,6 +203,12 @@ export type CopilotzEngine = Readonly<{
       namespace: string;
       settlementScopeId: string;
     }): Promise<void>;
+    /** Waits until local work for one durable causal scope finishes, if any runs. */
+    awaitScopeProgress(scope: {
+      databaseSchema?: string;
+      namespace: string;
+      settlementScopeId: string;
+    }, signal?: AbortSignal): Promise<boolean>;
   }>;
   content: Readonly<{
     assets: DatabaseAssetRepository;

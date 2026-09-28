@@ -138,7 +138,10 @@ function lazyStreamFollower(
 
 async function waitForApplicationScope(
   eventScope: Pick<CopilotzEngine, "events" | "operations">,
-  execution: Pick<CopilotzEngine["execution"], "settleOutputs">,
+  execution: Pick<
+    CopilotzEngine["execution"],
+    "settleOutputs" | "awaitScopeProgress"
+  >,
   databaseSchema: string,
   namespace: string,
   settlementScopeId: string,
@@ -191,7 +194,12 @@ async function waitForApplicationScope(
         )
       ) return;
     }
-    await sleep(25, signal);
+    const progressed = await execution.awaitScopeProgress({
+      databaseSchema,
+      namespace,
+      settlementScopeId,
+    }, signal);
+    if (!progressed) await sleep(25, signal);
   }
 }
 

@@ -92,7 +92,9 @@ export async function hydrateProcessorEventContent(
 }
 
 export async function resolveProcessorEventData(
-  store: Pick<EventStore, "session" | "tables">,
+  store:
+    & Pick<EventStore, "session" | "tables">
+    & Partial<Pick<EventStore, "recentEventBody">>,
   event: CopilotzEvent,
   resolver?: Pick<ContentResolver, "getMany">,
 ): Promise<unknown> {
@@ -101,13 +103,17 @@ export async function resolveProcessorEventData(
     data = event.payload;
   } else {
     const fromPayload = matchDataFromPayload(event.payload);
-    data = fromPayload !== undefined ? fromPayload : publicProtectedEventData(
+    const ref = fromPayload === undefined
+      ? eventDataRef(event.payload)
+      : undefined;
+    data = ref === undefined ? fromPayload : publicProtectedEventData(
       publicActionLifecycleData(
-        await readEventBody(
-          { transaction: store.session, tables: store.tables },
-          event.namespace,
-          eventDataRef(event.payload),
-        ),
+        store.recentEventBody?.(event.id, ref.eventBodyId)?.json ??
+          await readEventBody(
+            { transaction: store.session, tables: store.tables },
+            event.namespace,
+            ref,
+          ),
       ),
     );
   }
@@ -117,7 +123,9 @@ export async function resolveProcessorEventData(
 }
 
 export async function resolveProcessorEvent(
-  store: Pick<EventStore, "session" | "tables">,
+  store:
+    & Pick<EventStore, "session" | "tables">
+    & Partial<Pick<EventStore, "recentEventBody">>,
   event: CopilotzEvent,
   resolver?: Pick<ContentResolver, "getMany">,
 ): Promise<ProcessorEvent> {

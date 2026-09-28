@@ -156,6 +156,13 @@ export type EventStore = {
     options?: { priority?: number; maxAttempts?: number },
   ): Promise<CommitEventMutationResult<void>>;
   getEvent(id: string): Promise<DurableEvent | null>;
+  /** The body of an event this store just committed, if it still holds it. */
+  recentEventBody?(
+    eventId: string,
+    eventBodyId: string,
+  ): Readonly<{ json: unknown }> | undefined;
+  /** Confirms that an event committed in a joined transaction is durable. */
+  confirmCommitted?(eventId: string): void;
   getEventByDeduplicationId(
     namespace: string,
     deduplicationId: string,
@@ -229,6 +236,7 @@ export type EventStore = {
 
 const DEFAULT_COMPACTION_LIMIT = 100;
 const MAX_COMPACTION_LIMIT = 1_000;
+const RECENT_EVENT_LIMIT = 256;
 
 function iso(value: string | Date | null | undefined): string | undefined {
   if (value == null) return undefined;
@@ -771,24 +779,77 @@ export function createEventStore(
       } as const);
     };
 
-    if (mutation.transaction) return await runOn(mutation.transaction, true);
-    if (mutation.mutate) {
-      return await session.transaction((transaction) =>
-        runOn(transaction, true)
-      );
+    const remembered = (event: DurableEvent) => ({
+      event,
+      ...(body ? { body: { id: body.id, json: JSON.parse(body.body) } } : {}),
+    });
+    // A joined transaction may still roll back, so its event is only held
+    // until the caller confirms the commit.
+    if (mutation.transaction) {
+      const result = await runOn(mutation.transaction, true);
+      if (!result.deduplicated) {
+        boundedSet(pendingEvents, result.event.id, remembered(result.event));
+      }
+      return result;
     }
-    try {
-      return await runOn(session, false);
-    } catch (error) {
-      // An existing body row failed the statement; nothing committed.
-      if (!isUniqueViolation(error)) throw error;
-      return await session.transaction((transaction) =>
-        runOn(transaction, true)
-      );
+    const committed = async () => {
+      if (mutation.mutate) {
+        return await session.transaction((transaction) =>
+          runOn(transaction, true)
+        );
+      }
+      try {
+        return await runOn(session, false);
+      } catch (error) {
+        // An existing body row failed the statement; nothing committed.
+        if (!isUniqueViolation(error)) throw error;
+        return await session.transaction((transaction) =>
+          runOn(transaction, true)
+        );
+      }
+    };
+    const result = await committed();
+    if (!result.deduplicated) {
+      boundedSet(recentEvents, result.event.id, remembered(result.event));
     }
+    return result;
+  };
+
+  // Events and event bodies are immutable, so a bounded copy of the events
+  // this store just committed spares their local consumers a re-read.
+  type RecentEvent = Readonly<{
+    event: DurableEvent;
+    body?: { id: string; json: unknown };
+  }>;
+  const recentEvents = new Map<string, RecentEvent>();
+  const pendingEvents = new Map<string, RecentEvent>();
+  const boundedSet = (
+    map: Map<string, RecentEvent>,
+    id: string,
+    value: RecentEvent,
+  ): void => {
+    map.set(id, value);
+    if (map.size > RECENT_EVENT_LIMIT) map.delete(map.keys().next().value!);
+  };
+  const confirmCommitted = (eventId: string): void => {
+    const pending = pendingEvents.get(eventId);
+    if (!pending) return;
+    pendingEvents.delete(eventId);
+    boundedSet(recentEvents, eventId, pending);
+  };
+  const recentEventBody = (
+    eventId: string,
+    eventBodyId: string,
+  ): Readonly<{ json: unknown }> | undefined => {
+    const body = recentEvents.get(eventId)?.body;
+    return body?.id === eventBodyId
+      ? { json: structuredClone(body.json) }
+      : undefined;
   };
 
   const getEvent = async (id: string): Promise<DurableEvent | null> => {
+    const recent = recentEvents.get(id)?.event;
+    if (recent) return structuredClone(recent);
     const result = await session.query<EventRow>(
       `SELECT * FROM ${tables.events} WHERE id = $1 LIMIT 1`,
       [id],
@@ -976,6 +1037,8 @@ export function createEventStore(
       });
     },
     getEvent,
+    recentEventBody,
+    confirmCommitted,
     getEventByDeduplicationId(namespace, deduplicationId) {
       return loadDuplicate(session, namespace, deduplicationId);
     },

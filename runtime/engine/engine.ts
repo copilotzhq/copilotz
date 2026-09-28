@@ -605,6 +605,8 @@ export async function createCopilotzEngine(
         workloads: executor.workloads,
         dispatchWork: (input) => executor.dispatchWork(input),
         settleOutputs: (scope) => executor.settleOutputs(scope),
+        awaitScopeProgress: (scope, signal) =>
+          executor.awaitScopeProgress(scope, signal),
       } as const,
       async recoverAll(recovery = {}) {
         const scoped = await Promise.allSettled([...additionalScopes.values()]);

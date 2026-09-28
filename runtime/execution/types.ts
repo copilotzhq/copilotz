@@ -231,6 +231,16 @@ export type DeliveryExecutor = Readonly<{
     namespace: string;
     settlementScopeId: string;
   }): Promise<void>;
+  /**
+   * Waits until some work this executor is running for the scope finishes.
+   * Resolves `false` at once when it runs none, since progress then happens
+   * elsewhere.
+   */
+  awaitScopeProgress(scope: {
+    databaseSchema?: string;
+    namespace: string;
+    settlementScopeId: string;
+  }, signal?: AbortSignal): Promise<boolean>;
   shutdown(reason?: string): Promise<void>;
 }>;
 

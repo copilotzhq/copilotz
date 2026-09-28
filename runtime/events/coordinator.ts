@@ -183,6 +183,7 @@ export function createEventCoordinator(
   const flushCommitted = async (
     result: CommitEventMutationResult<unknown>,
   ): Promise<EventDispatchReport> => {
+    options.store.confirmCommitted?.(result.event.id);
     if (!result.deduplicated) {
       try {
         await options.publish?.(result.event, {

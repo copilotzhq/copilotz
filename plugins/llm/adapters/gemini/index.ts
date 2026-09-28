@@ -9,7 +9,7 @@ import type {
   ProviderFinishReason,
   ProviderUsageUpdate,
 } from "../../shared/types.ts";
-import { resolveProviderStopSequences } from "../../shared/utils.ts";
+import { resolveProviderStopSequences } from "../../shared/stop-sequences.ts";
 import {
   cloneBlock,
   isRecord,

@@ -6,10 +6,8 @@ import type {
   ToolCallStreamDelta,
   ToolInvocation,
 } from "../../shared/types.ts";
-import {
-  createCanonicalToolCallDraftTracker,
-  responseHasOrphanedToolResult,
-} from "../../shared/utils.ts";
+import { createCanonicalToolCallDraftTracker } from "../../shared/stream.ts";
+import { responseHasOrphanedToolResult } from "../../shared/wire-parse.ts";
 import { runProviderStream, type StreamResult } from "./stream.ts";
 
 const ORPHANED_TOOL_RESULT_PREFIX_PATTERN = /^(?:"[}\],]{2,}"|[}\],]{3,})/;

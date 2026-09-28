@@ -14,8 +14,8 @@ import {
 import {
   getLocalStopSequences,
   isStopDebugEnabled,
-  processStream,
-} from "../../shared/utils.ts";
+} from "../../shared/stop-sequences.ts";
+import { processStream } from "../../shared/stream.ts";
 import { streamPost, type StreamResponse } from "./http.ts";
 
 const DEFAULT_FIRST_TOKEN_TIMEOUT_MS = 90_000;

@@ -31,10 +31,8 @@ import {
   prepareAttemptTranscript,
   type PreparedAttemptTranscript,
 } from "./transcript.ts";
-import {
-  assertEstimatedInputLimit,
-  formatMessagesDetailed,
-} from "../../shared/utils.ts";
+import { assertEstimatedInputLimit } from "../../shared/token-estimates.ts";
+import { formatMessagesDetailed } from "../../shared/wire-format.ts";
 import type {
   ChatContentPart,
   ChatMessage,
@@ -299,7 +297,7 @@ function adapterMessageToChatMessage(
   const content = message.content.map(adapterPartToChatPart);
   const common = {
     content,
-    ...(message.name ? { senderId: message.name } : {}),
+    ...(message.name ? { speaker: message.name } : {}),
     ...(message.metadata
       ? { metadata: message.metadata as Record<string, unknown> }
       : {}),
@@ -328,21 +326,17 @@ function adapterMessageToChatMessage(
     };
   }
   if (message.role === "tool") {
-    const toolCalls = message.toolPlanId && toolName
-      ? [{
+    return {
+      role: "tool",
+      ...common,
+      content: "",
+      toolCalls: [{
         id: message.toolCallId,
-        planId: message.toolPlanId,
-        tool: { id: toolName },
+        ...(message.toolPlanId ? { planId: message.toolPlanId } : {}),
+        tool: { id: toolName ?? message.name ?? "tool" },
         args: "{}",
         output: toolResultOutput(content),
-      }]
-      : undefined;
-    return {
-      role: "tool_result",
-      ...common,
-      ...(toolCalls ? { content: "", toolCalls } : {}),
-      tool_call_id: message.toolCallId,
-      ...(message.toolPlanId ? { toolPlanId: message.toolPlanId } : {}),
+      }],
     };
   }
   return { role: message.role, ...common };
@@ -397,23 +391,25 @@ function createChatRequest(
   signal: AbortSignal,
   nativeReasoningApi?: string,
 ) {
-  const planTools = new Map<string, string>();
+  const callKey = (callId: string, planId?: string) =>
+    `${planId ?? ""}\u0000${callId}`;
+  const callActions = new Map<string, string>();
   const nativeReplay = nativeReasoningApi === undefined ? undefined : {
     adapter: input.adapter,
     model: input.providerModel,
     api: nativeReasoningApi,
   };
   for (const message of input.request.messages) {
-    if (message.role !== "assistant" || !message.toolPlanId) continue;
+    if (message.role !== "assistant") continue;
     for (const call of message.toolCalls ?? []) {
-      planTools.set(`${message.toolPlanId}\u0000${call.id}`, call.action);
+      callActions.set(callKey(call.id, message.toolPlanId), call.action);
     }
   }
   const messages = input.request.messages.map((message) =>
     adapterMessageToChatMessage(
       message,
-      message.role === "tool" && message.toolPlanId
-        ? planTools.get(`${message.toolPlanId}\u0000${message.toolCallId}`)
+      message.role === "tool"
+        ? callActions.get(callKey(message.toolCallId, message.toolPlanId))
         : undefined,
       nativeReplay,
     )
@@ -432,26 +428,25 @@ function createChatRequest(
   };
 }
 
+type PreflightConfig =
+  & Pick<
+    ProviderConfig,
+    | "model"
+    | "limitEstimatedInputTokens"
+    | "toolSystemPromptVariant"
+    | "reasoningEffort"
+  >
+  & Partial<Pick<ProviderConfig, "provider">>;
+
 /**
- * Formats a durable request through the same bridge used by provider attempts
- * and returns its exact input estimate without contacting a provider.
+ * Formats a durable request into the exact provider-neutral wire messages used
+ * by provider attempts, without contacting a provider.
  */
-export function preflightLlmRequest(
+export function formatLlmRequestForWire(
   request: LlmRequest,
-  config:
-    & Pick<
-      ProviderConfig,
-      | "model"
-      | "limitEstimatedInputTokens"
-      | "toolSystemPromptVariant"
-      | "reasoningEffort"
-    >
-    & Partial<Pick<ProviderConfig, "provider">>,
+  config: PreflightConfig,
   namespace = "",
-): Readonly<{
-  estimatedInputTokens: number;
-  limitEstimatedInputTokens?: number;
-}> {
+) {
   const chatRequest = createChatRequest(
     {
       request: projectPreparedRequest(request, namespace),
@@ -459,11 +454,33 @@ export function preflightLlmRequest(
     new AbortController().signal,
   );
   const resolved = toLLMConfig(config);
-  const formatted = formatMessagesDetailed({
-    messages: chatRequest.messages,
-    ...(chatRequest.tools ? { tools: chatRequest.tools } : {}),
+  return {
     config: resolved,
-  });
+    ...formatMessagesDetailed({
+      messages: chatRequest.messages,
+      ...(chatRequest.tools ? { tools: chatRequest.tools } : {}),
+      config: resolved,
+    }),
+  };
+}
+
+/**
+ * Formats a durable request through the same bridge used by provider attempts
+ * and returns its exact input estimate without contacting a provider.
+ */
+export function preflightLlmRequest(
+  request: LlmRequest,
+  config: PreflightConfig,
+  namespace = "",
+): Readonly<{
+  estimatedInputTokens: number;
+  limitEstimatedInputTokens?: number;
+}> {
+  const { config: resolved, ...formatted } = formatLlmRequestForWire(
+    request,
+    config,
+    namespace,
+  );
   assertEstimatedInputLimit(formatted.estimate, resolved);
   return ({
     estimatedInputTokens: formatted.estimate.estimatedTokens,

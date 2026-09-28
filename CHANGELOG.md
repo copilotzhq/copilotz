@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.81.0 — 2026-09-28
+
+### Breaking
+
+- `buildLlmTranscript` and `prepareLlmTranscript` from `@copilotz/copilotz/core`
+  now return `{ sourceId, message }` entries instead of bare `LlmMessage`s, and
+  `buildLlmTranscript` no longer takes a source callback. `participantId` is now
+  required on both. Use `entry.message` for the previous value.
+
+### Changed
+
+- Label every model-facing user turn that has a `name` as `[Name]: …`, so agents
+  can tell humans and peer agents apart. The speaking agent's own turns stay
+  unlabelled. Existing threads get one prompt-cache miss when this ships.
+- Give the asking agent an Ask answer as the output of its `ask` tool call,
+  instead of an empty tool result followed by a separate user turn.
+- Send adjacent tool results as one `<tool_results>` block.
+- Show other agents' tool results as status lines such as
+  `[North used weather: completed]`, followed by the output only when the
+  result's history visibility is `public`. `public_status` bodies are never
+  opened for other agents, and `requester_only` results stay invisible.
+  Previously `public_status` results were dropped and `public` output appeared
+  as `[tool]: …`.
+- Keep another agent's visible text on turns where it also called tools.
+
+### Fixed
+
+- Send `llm.call` tool results that have no `toolPlanId` as `<tool_results>`
+  linked to their call. Previously they reached the model as bare user text.
+- A peer agent's malformed stored tool call no longer fails other agents'
+  transcripts.
+
 ## 0.80.9 — 2026-09-28
 
 ### Performance

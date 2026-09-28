@@ -31,6 +31,10 @@ import {
 import type { Participant } from "../../../shared/contracts.ts";
 import type { CoreProcessorContext } from "../../../shared/runtime-context.ts";
 import { prepareLlmTranscript } from "../../../shared/agents/prepared-transcript.ts";
+
+const preparedMessages = async (
+  ...args: Parameters<typeof prepareLlmTranscript>
+) => (await prepareLlmTranscript(...args)).map((entry) => entry.message);
 import { projectedSourceMessages } from "../../../../memory/shared/source.ts";
 import { readToolResultAction } from "../../../actions/read-tool-result/index.ts";
 import { CORE_TOOL_ACTION_METADATA_SCHEMA } from "../../../shared/workflow-metadata.ts";
@@ -104,7 +108,34 @@ Deno.test("oversized stored Tool results become budgeted markers for prompt and 
       visibility: { kind: "public" },
       createdAt: new Date(Date.parse(date) + 1_000).toISOString(),
       updatedAt: new Date(Date.parse(date) + 1_000).toISOString(),
+    }, {
+      id: "status-peer-tool-result",
+      namespace: "tenant",
+      threadId: "thread",
+      senderId: "east-tool",
+      recipientIds: ["north"],
+      content: [{ ...ref, assetId: "status-only-body" }],
+      metadata: {
+        requesterId: "east",
+        historyVisibility: "public_status",
+        toolStatus: "completed",
+        toolId: "search",
+        toolInvocation: { id: "east-status-call", tool: { id: "search" } },
+      },
+      visibility: {
+        kind: "tool",
+        policy: "public_status",
+        requesterId: "east",
+      },
+      createdAt: new Date(Date.parse(date) + 1_500).toISOString(),
+      updatedAt: new Date(Date.parse(date) + 1_500).toISOString(),
     }].map((record) => record as CollectionRecord);
+    await assets.publish({
+      namespace: "tenant",
+      id: "status-only-body",
+      mediaType: "text/plain",
+      body: new TextEncoder().encode("EAST_STATUS_ONLY_BODY"),
+    });
     await session.query(
       "CREATE TABLE bounded_tool_nodes (id text,namespace text,type text,data jsonb,created_at timestamptz,updated_at timestamptz,content text)",
     );
@@ -161,16 +192,23 @@ Deno.test("oversized stored Tool results become budgeted markers for prompt and 
       history,
     } as const;
 
-    const prompt = await prepareLlmTranscript(context, input, {
+    const prompt = await preparedMessages(context, input, {
       byteLimit: 4 * 1024,
     });
-    assertEquals(prompt.map((message) => message.role), ["tool", "user"]);
-    const markers = prompt.map((message) => {
-      const entry = message.content[0];
-      return String(entry && "value" in entry ? entry.value : "");
-    });
+    assertEquals(prompt.map((message) => message.role), [
+      "tool",
+      "user",
+      "user",
+    ]);
+    const markers = prompt.map((message) =>
+      message.content.map((entry) =>
+        String("value" in entry ? entry.value : "")
+      ).join("")
+    );
     assertStringIncludes(markers[0], "old-tool-result");
+    assertStringIncludes(markers[1], "[east used search: completed]\n");
     assertStringIncludes(markers[1], "public-peer-tool-result");
+    assertEquals(markers[2], "[east used search: completed]");
     assertStringIncludes(markers[0], "full stored result remains retrievable");
     assertEquals(markers.some((marker) => marker.includes(rawText)), false);
 
@@ -182,8 +220,12 @@ Deno.test("oversized stored Tool results become budgeted markers for prompt and 
     });
     assertStringIncludes(memory[0].text, "old-tool-result");
     assertStringIncludes(memory[1].text, "public-peer-tool-result");
+    assertEquals(memory[2].text, "[east used search: completed]");
     assertEquals(
-      memory.some((message) => message.text.includes(rawText)),
+      memory.some((message) =>
+        message.text.includes(rawText) ||
+        message.text.includes("EAST_STATUS_ONLY_BODY")
+      ),
       false,
     );
     assertEquals(readIds, []);
@@ -311,7 +353,7 @@ Deno.test("oversized stored Tool results become budgeted markers for prompt and 
       } as Participant),
       visibility: readRecord.visibility,
     }];
-    const nextPrompt = await prepareLlmTranscript(context, {
+    const nextPrompt = await preparedMessages(context, {
       threadId: "thread",
       participantId: "north",
       history: readHistory as never,
@@ -483,7 +525,7 @@ Deno.test("Core resolves own native reasoning, leaves peer state unread, and cou
         updatedAt: date,
       } as Participant)
     );
-    const transcript = await prepareLlmTranscript(context, {
+    const transcript = await preparedMessages(context, {
       threadId: "thread",
       participantId: "north",
       history,
@@ -524,7 +566,7 @@ Deno.test("Core resolves own native reasoning, leaves peer state unread, and cou
       "byte budget",
     );
     const queriesAfterByteLimit = queries.length;
-    const empty = await prepareLlmTranscript(context, {
+    const empty = await preparedMessages(context, {
       threadId: "thread",
       participantId: "north",
       history,

@@ -6,7 +6,9 @@ import type {
   LlmToolCall,
 } from "@copilotz/copilotz/llm";
 import {
+  type AgentAskMetadata,
   agentAskMetadata,
+  type AgentAskPhase,
   agentAskResultMetadata,
   agentFailureMetadata,
   coreToolActionMessageMetadata,
@@ -15,6 +17,64 @@ import {
   coreToolResultOrigin,
   workflowMetadata,
 } from "../workflow-metadata.ts";
+
+/**
+ * Another participant's tool result, shown as a status line such as
+ * `[North used weather: completed]`. The stored body follows the line only
+ * when the result's history visibility is `public`; otherwise it must never
+ * be opened for this viewer.
+ */
+export type PeerToolStatus = Readonly<{
+  line: string;
+  showsOutput: boolean;
+}>;
+
+/** One model-facing message paired with the stored Message it came from. */
+export type LlmTranscriptEntry = Readonly<{
+  sourceId: string;
+  message: LlmMessage;
+  peerToolStatus?: PeerToolStatus;
+}>;
+
+type Projection = Omit<LlmTranscriptEntry, "sourceId">;
+
+type AssistantMessage = Extract<LlmMessage, { role: "assistant" }>;
+
+type AskViewer =
+  | "asked"
+  | "askerPublic"
+  | "askerPrivate"
+  | "otherPublic"
+  | "otherPrivate";
+
+type AskView = "user" | "assistant" | "hidden";
+
+/** How each participant sees every message of an agent-to-agent ask. */
+const ASK_VIEWS: Readonly<
+  Record<AgentAskPhase, Readonly<Record<AskViewer, AskView>>>
+> = {
+  question: {
+    asked: "user",
+    askerPublic: "hidden",
+    askerPrivate: "hidden",
+    otherPublic: "user",
+    otherPrivate: "hidden",
+  },
+  progress: {
+    asked: "assistant",
+    askerPublic: "user",
+    askerPrivate: "hidden",
+    otherPublic: "user",
+    otherPrivate: "hidden",
+  },
+  answer: {
+    asked: "assistant",
+    askerPublic: "user",
+    askerPrivate: "user",
+    otherPublic: "user",
+    otherPrivate: "hidden",
+  },
+};
 
 function record(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -26,37 +86,40 @@ function optionalText(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-function messageName(message: ConversationMessage): string | undefined {
+function senderName(message: ConversationMessage): string | undefined {
   return optionalText(message.sender.name) ??
     optionalText(message.sender.externalId);
 }
 
+function askViewer(ask: AgentAskMetadata, viewerId: string): AskViewer {
+  if (viewerId === ask.askedParticipantId) return "asked";
+  const mode = ask.mode === "private" ? "Private" : "Public";
+  return viewerId === ask.askingParticipantId ? `asker${mode}` : `other${mode}`;
+}
+
 function embeddedToolCalls(value: unknown): readonly LlmToolCall[] {
-  if (!Array.isArray(value)) return ([] as const);
-  return (value.map((candidate, index) => {
+  if (!Array.isArray(value)) return [];
+  return value.map((candidate, index) => {
     const call = record(candidate);
     const id = optionalText(call.id);
     const action = optionalText(call.action);
-    const input = record(call.input);
     if (!id || !action) {
       throw new TypeError(
         `Assistant message tool call ${index} is missing its id or Action alias.`,
       );
     }
-    return ({
+    return {
       id,
       action,
-      input: structuredClone(input) as LlmJsonObject,
-    } as const);
-  }));
+      input: structuredClone(record(call.input)) as LlmJsonObject,
+    };
+  });
 }
 
 function toolCallId(message: ConversationMessage): string | undefined {
-  const toolAction = coreToolActionMessageMetadata(message.metadata);
-  if (toolAction?.toolCallId) return toolAction.toolCallId;
-  const branch = coreToolPlanResultMetadata(message.metadata);
-  if (branch?.origin.toolCallId) return branch.origin.toolCallId;
-  return optionalText(record(record(message.metadata).toolInvocation).id);
+  return coreToolActionMessageMetadata(message.metadata)?.toolCallId ??
+    coreToolPlanResultMetadata(message.metadata)?.origin.toolCallId ??
+    optionalText(record(message.metadata.toolInvocation).id);
 }
 
 function toolPlanId(message: ConversationMessage): string | undefined {
@@ -64,172 +127,188 @@ function toolPlanId(message: ConversationMessage): string | undefined {
     coreToolResultOrigin(message.metadata)?.planId;
 }
 
-/** Maps one canonical Message into the provider-neutral LLM history contract. */
-function projectMessage(
-  message: ConversationMessage,
-  targetParticipantId?: string,
-): LlmMessage | null {
-  // A public failure receipt is for the human-facing timeline only. Replaying
-  // it into a later Model request would turn a transient provider failure into
-  // an instruction-bearing conversation fact.
-  if (agentFailureMetadata(message.metadata)) return null;
-  const content = structuredClone(message.content);
-  const name = messageName(message);
-  if (message.sender.participantType === "agent") {
-    const ask = agentAskMetadata(message.metadata);
-    if (ask) {
-      const mode = ask.mode ?? "public";
-      if (ask.phase === "question") {
-        if (targetParticipantId === ask.askedParticipantId) {
-          return ({
-            role: "user",
-            content,
-            ...(name ? { name } : {}),
-          } as const);
-        }
-        return targetParticipantId === ask.askingParticipantId ||
-            mode === "private"
-          ? null
-          : ({ role: "user", content, ...(name ? { name } : {}) } as const);
-      }
-      if (ask.phase === "progress") {
-        if (targetParticipantId === ask.askedParticipantId) {
-          const toolCalls = embeddedToolCalls(message.metadata.llmToolCalls);
-          const planId = toolPlanId(message);
-          return ({
-            role: "assistant",
-            content,
-            ...(name ? { name } : {}),
-            ...(toolCalls.length ? { toolCalls } : {}),
-            ...(planId && toolCalls.length ? { toolPlanId: planId } : {}),
-          } as const);
-        }
-        return mode === "public" && content.length
-          ? ({ role: "user", content, ...(name ? { name } : {}) } as const)
-          : null;
-      }
-      if (targetParticipantId === ask.askingParticipantId) {
-        return ({
-          role: "user",
-          content,
-          ...(name ? { name } : {}),
-        } as const);
-      }
-      if (targetParticipantId === ask.askedParticipantId) {
-        return ({
-          role: "assistant",
-          content,
-          ...(name ? { name } : {}),
-        } as const);
-      }
-      return mode === "private"
-        ? null
-        : ({ role: "user", content, ...(name ? { name } : {}) } as const);
-    }
-    if (targetParticipantId && message.sender.id === targetParticipantId) {
-      const toolCalls = embeddedToolCalls(message.metadata.llmToolCalls);
-      const planId = toolPlanId(message);
-      return ({
-        role: "assistant",
-        content,
-        ...(name ? { name } : {}),
-        ...(toolCalls.length ? { toolCalls } : {}),
-        ...(planId && toolCalls.length ? { toolPlanId: planId } : {}),
-      } as const);
-    }
-    if (embeddedToolCalls(message.metadata.llmToolCalls).length) return null;
-    return ({ role: "user", content, ...(name ? { name } : {}) } as const);
-  }
-  if (message.sender.participantType === "tool") {
-    const requesterId = optionalText(message.metadata.requesterId) ??
-      workflowMetadata(message.metadata)?.agentParticipantId;
-    const id = toolCallId(message);
-    const planId = toolPlanId(message);
-    if (id && requesterId === targetParticipantId) {
-      return ({
-        role: "tool",
-        content,
-        toolCallId: id,
-        ...(planId ? { toolPlanId: planId } : {}),
-        ...(name ? { name } : {}),
-      } as const);
-    }
-    const historyVisibility = optionalText(
-      message.metadata.historyVisibility,
-    ) ?? "public_status";
-    if (historyVisibility !== "public") return null;
-  }
-  return ({ role: "user", content, ...(name ? { name } : {}) } as const);
-}
-
-function toLlmMessage(
-  message: ConversationMessage,
-  targetParticipantId?: string,
-): LlmMessage | null {
-  const projected = projectMessage(message, targetParticipantId);
-  if (
-    projected?.role !== "assistant" ||
-    message.sender.id !== targetParticipantId
-  ) return projected;
-  const metadata = record(message.metadata);
-  const native = metadata.llmNativeReasoning;
-  const nativeReasoning = native && typeof native === "object" &&
-      !Array.isArray(native) &&
-      (native as Record<string, unknown>).schema ===
-        "copilotz.llm-native-reasoning.v1" &&
-      typeof (native as Record<string, unknown>).adapter === "string" &&
-      typeof (native as Record<string, unknown>).api === "string" &&
-      typeof (native as Record<string, unknown>).model === "string" &&
-      Array.isArray((native as Record<string, unknown>).blocks)
+function nativeReasoning(value: unknown): LlmNativeReasoning | undefined {
+  const native = record(value);
+  return native.schema === "copilotz.llm-native-reasoning.v1" &&
+      typeof native.adapter === "string" &&
+      typeof native.api === "string" &&
+      typeof native.model === "string" &&
+      Array.isArray(native.blocks)
     ? structuredClone(native) as LlmNativeReasoning
     : undefined;
+}
+
+function userTurn(message: ConversationMessage): LlmMessage {
+  const name = senderName(message);
   return {
-    ...projected,
-    ...(Array.isArray(metadata.llmReasoning)
-      ? {
-        reasoning: metadata
-          .llmReasoning as import("@copilotz/copilotz/content").ContentSequence,
-      }
-      : {}),
-    ...(nativeReasoning ? { nativeReasoning } : {}),
+    role: "user",
+    content: structuredClone(message.content),
+    ...(name ? { name } : {}),
   };
 }
 
-function receiptAnswer(
-  receipt: ConversationMessage,
-  answer: ConversationMessage | undefined,
-  targetParticipantId?: string,
-): LlmMessage | null {
-  const result = agentAskResultMetadata(receipt.metadata);
-  if (
-    !result || result.status !== "completed" || !result.answerMessageId ||
-    !answer || answer.id !== result.answerMessageId ||
-    answer.sender.id !== result.askedParticipantId ||
-    targetParticipantId === undefined
-  ) return null;
-  const ask = agentAskMetadata(answer.metadata);
-  if (
-    !ask || ask.phase !== "answer" || ask.askId !== result.askId ||
-    ask.askingParticipantId !== targetParticipantId
-  ) return null;
-  const name = messageName(answer);
-  return ({
-    role: "user",
-    content: structuredClone(answer.content),
+/** The viewer's own turn, with its tool calls and reasoning. */
+function ownAssistantTurn(message: ConversationMessage): LlmMessage {
+  const name = senderName(message);
+  const toolCalls = embeddedToolCalls(message.metadata.llmToolCalls);
+  const planId = toolPlanId(message);
+  const reasoning = message.metadata.llmReasoning;
+  const native = nativeReasoning(message.metadata.llmNativeReasoning);
+  return {
+    role: "assistant",
+    content: structuredClone(message.content),
     ...(name ? { name } : {}),
-  } as const);
+    ...(toolCalls.length ? { toolCalls } : {}),
+    ...(planId && toolCalls.length ? { toolPlanId: planId } : {}),
+    ...(Array.isArray(reasoning)
+      ? { reasoning: reasoning as NonNullable<AssistantMessage["reasoning"]> }
+      : {}),
+    ...(native ? { nativeReasoning: native } : {}),
+  };
 }
 
-/** Compiles immutable Core Messages into participant-relative LLM history. */
+function toolTurn(message: ConversationMessage, callId: string): LlmMessage {
+  const name = senderName(message);
+  const planId = toolPlanId(message);
+  return {
+    role: "tool",
+    content: structuredClone(message.content),
+    toolCallId: callId,
+    ...(planId ? { toolPlanId: planId } : {}),
+    ...(name ? { name } : {}),
+  };
+}
+
+function projectAgentMessage(
+  message: ConversationMessage,
+  viewerId: string,
+): LlmMessage | null {
+  const ask = agentAskMetadata(message.metadata);
+  const view = ask
+    ? ASK_VIEWS[ask.phase][askViewer(ask, viewerId)]
+    : message.sender.id === viewerId
+    ? "assistant"
+    : "user";
+  if (view === "assistant") return ownAssistantTurn(message);
+  // Others never see tool calls, so a turn that only made calls is empty.
+  if (view === "hidden" || !message.content.length) return null;
+  return userTurn(message);
+}
+
+function peerToolStatus(
+  message: ConversationMessage,
+  requesterName: string,
+): PeerToolStatus | undefined {
+  const visibility = message.metadata.historyVisibility;
+  const toolId = optionalText(message.metadata.toolId);
+  const status = optionalText(message.metadata.toolStatus);
+  if (
+    !toolId || !status ||
+    (visibility !== "public" && visibility !== "public_status")
+  ) return undefined;
+  return {
+    line: `[${requesterName} used ${toolId}: ${status}]`,
+    showsOutput: visibility === "public",
+  };
+}
+
+/** The status line, followed by `body` only when the output is public. */
+export function peerToolStatusContent(
+  status: PeerToolStatus,
+  body: LlmMessage["content"],
+): LlmMessage["content"] {
+  return [
+    {
+      kind: "text",
+      role: "body",
+      mediaType: "text/plain; charset=utf-8",
+      value: status.showsOutput ? `${status.line}\n` : status.line,
+    },
+    ...(status.showsOutput ? body : []),
+  ];
+}
+
+function projectToolMessage(
+  message: ConversationMessage,
+  viewerId: string,
+  names: ReadonlyMap<string, string>,
+): Projection | null {
+  const requesterId = optionalText(message.metadata.requesterId) ??
+    workflowMetadata(message.metadata)?.agentParticipantId;
+  const callId = toolCallId(message);
+  if (callId && requesterId === viewerId) {
+    return { message: toolTurn(message, callId) };
+  }
+  const status = requesterId
+    ? peerToolStatus(message, names.get(requesterId) ?? requesterId)
+    : undefined;
+  if (status) {
+    return {
+      message: {
+        role: "user",
+        content: peerToolStatusContent(
+          status,
+          structuredClone(message.content),
+        ),
+      },
+      peerToolStatus: status,
+    };
+  }
+  return message.metadata.historyVisibility === "public"
+    ? { message: userTurn(message) }
+    : null;
+}
+
+/** Decides whether and how one stored Message appears in the viewer's transcript. */
+function projectMessage(
+  message: ConversationMessage,
+  viewerId: string,
+  names: ReadonlyMap<string, string>,
+): Projection | null {
+  // Failure receipts are for the human-facing timeline. Replaying one would
+  // turn a transient provider failure into an instruction-bearing fact.
+  if (agentFailureMetadata(message.metadata)) return null;
+  switch (message.sender.participantType) {
+    case "agent": {
+      const turn = projectAgentMessage(message, viewerId);
+      return turn ? { message: turn } : null;
+    }
+    case "tool":
+      return projectToolMessage(message, viewerId, names);
+    default:
+      return { message: userTurn(message) };
+  }
+}
+
+/** Whether `answer` is the viewer's answer to the ask that `receipt` completed. */
+function answersAskForViewer(
+  receipt: ConversationMessage,
+  answer: ConversationMessage | undefined,
+  viewerId: string,
+): answer is ConversationMessage {
+  const result = agentAskResultMetadata(receipt.metadata);
+  if (
+    !result || result.status !== "completed" ||
+    !answer || answer.id !== result.answerMessageId ||
+    answer.sender.id !== result.askedParticipantId
+  ) return false;
+  const ask = agentAskMetadata(answer.metadata);
+  return Boolean(
+    ask && ask.phase === "answer" && ask.askId === result.askId &&
+      ask.askingParticipantId === viewerId,
+  );
+}
+
+/** Compiles immutable Core Messages into one participant's LLM history. */
 export function buildLlmTranscript(
   input: Readonly<{
     threadId: string;
     history: readonly ConversationMessage[];
     messageIds?: readonly string[];
-    participantId?: string;
+    participantId: string;
   }>,
-  onSelectedSource?: (messageId: string) => void,
-): readonly LlmMessage[] {
+): readonly LlmTranscriptEntry[] {
+  const viewerId = input.participantId;
   const byId = new Map(input.history.map((message) => [message.id, message]));
   const selected = input.messageIds === undefined
     ? input.history
@@ -243,34 +322,49 @@ export function buildLlmTranscript(
       return message;
     });
   const selectedIds = new Set(selected.map((message) => message.id));
-  const answers = new Map<string, { id: string; message: LlmMessage }>();
-  const deferredAnswers = new Set<string>();
+
+  // The asker receives an Ask answer at the receipt that closed the ask, as
+  // that tool call's output. This applies only when both are selected; a
+  // range that splits them keeps the answer in place, or leaves it to the
+  // receipt's range.
+  const answerByReceipt = new Map<string, ConversationMessage>();
+  const movedAnswerIds = new Set<string>();
   for (const receipt of selected) {
-    const id = agentAskResultMetadata(receipt.metadata)?.answerMessageId;
-    if (!id || !selectedIds.has(id)) continue;
-    const answer = receiptAnswer(receipt, byId.get(id), input.participantId);
-    if (answer && !deferredAnswers.has(id)) {
-      answers.set(receipt.id, { id, message: answer });
-      deferredAnswers.add(id);
-    }
+    const answerId = agentAskResultMetadata(receipt.metadata)?.answerMessageId;
+    if (
+      !answerId || !selectedIds.has(answerId) || movedAnswerIds.has(answerId)
+    ) continue;
+    const answer = byId.get(answerId);
+    if (!answersAskForViewer(receipt, answer, viewerId)) continue;
+    answerByReceipt.set(receipt.id, answer);
+    movedAnswerIds.add(answerId);
   }
-  const output: LlmMessage[] = [];
+
+  const names = new Map<string, string>();
+  for (const message of input.history) {
+    const name = senderName(message);
+    if (name) names.set(message.sender.id, name);
+  }
+
+  const entries: LlmTranscriptEntry[] = [];
   for (const message of selected) {
-    // Keep existing receipt order when both records are present. A prefix ending
-    // before the receipt still includes the answer; a tail never reloads content
-    // already covered by its summary.
-    if (!deferredAnswers.has(message.id)) {
-      const projected = toLlmMessage(message, input.participantId);
-      if (projected) {
-        output.push(projected);
-        onSelectedSource?.(message.id);
-      }
+    if (movedAnswerIds.has(message.id)) continue;
+    const projected = projectMessage(message, viewerId, names);
+    const answer = answerByReceipt.get(message.id);
+    if (answer && projected?.message.role === "tool") {
+      entries.push({
+        sourceId: answer.id,
+        message: {
+          ...projected.message,
+          content: structuredClone(answer.content),
+        },
+      });
+      continue;
     }
-    const answer = answers.get(message.id);
+    if (projected) entries.push({ sourceId: message.id, ...projected });
     if (answer) {
-      output.push(answer.message);
-      onSelectedSource?.(answer.id);
+      entries.push({ sourceId: answer.id, message: userTurn(answer) });
     }
   }
-  return output;
+  return entries;
 }

@@ -1,7 +1,7 @@
 import { assertEquals } from "@std/assert";
 
 import type { ChatMessage, ProviderConfig, ProviderFactory } from "./types.ts";
-import { formatMessages } from "./utils.ts";
+import { formatMessages } from "./wire-format.ts";
 import { anthropicProvider } from "../adapters/anthropic/index.ts";
 import { deepseekProvider } from "../adapters/deepseek/index.ts";
 import { geminiProvider } from "../adapters/gemini/index.ts";

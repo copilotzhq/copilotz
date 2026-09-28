@@ -17,7 +17,7 @@ import type { ParsedAssistantResponse } from "./response-interpreter.ts";
 import type { PreparedAttemptTranscript } from "./transcript.ts";
 import { normalizeProviderUsage } from "../../shared/usage.ts";
 import { estimateUsageCost } from "./pricing.ts";
-import { countTokens, estimateUsage } from "../../shared/utils.ts";
+import { countTokens, estimateUsage } from "../../shared/token-estimates.ts";
 import { observeTokenCalibration } from "../../shared/token-calibration.ts";
 
 function usageStatusForReason(

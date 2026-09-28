@@ -2,8 +2,8 @@ import type {
   ProviderFinishReason,
   ToolInvocation,
 } from "../../shared/types.ts";
+import { detectDegenerateRepetition } from "../../shared/repetition.ts";
 import {
-  detectDegenerateRepetition,
   parseInternalControlTagsFromResponse,
   parseTaggedBlocksFromResponse,
   parseToolCallsFromResponse,
@@ -13,7 +13,7 @@ import {
   responseHasToolIntent,
   sanitizeUserFacingText,
   stripStructuralLeakTokens,
-} from "../../shared/utils.ts";
+} from "../../shared/wire-parse.ts";
 
 export const REASONING_HISTORY_TAGS = [
   "think",

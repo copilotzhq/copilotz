@@ -9,7 +9,10 @@ import {
   withCoreToolPlanMetadata,
   withCoreToolPlanResultMetadata,
 } from "../../../shared/workflow-metadata.ts";
-import { buildLlmTranscript } from "../../../shared/agents/transcript.ts";
+import { buildLlmTranscript as buildEntries } from "../../../shared/agents/transcript.ts";
+
+const buildLlmTranscript = (input: Parameters<typeof buildEntries>[0]) =>
+  buildEntries(input).map((entry) => entry.message);
 
 const participant = (id: string, participantType: "agent" | "tool") =>
   ({
@@ -154,10 +157,10 @@ Deno.test("consolidation may split an Ask answer from its receipt without losing
     participantId: "north",
     history: [answer, receipt],
   };
-  const sources: string[] = [];
-  const full = buildLlmTranscript(input, (id) => sources.push(id));
-  assertEquals(full.map((item) => item.role), ["tool", "user"]);
-  assertEquals(sources, ["receipt", "answer"]);
+  const full = buildEntries(input);
+  assertEquals(full.map((entry) => entry.message.role), ["tool"]);
+  assertEquals(full.map((entry) => entry.sourceId), ["answer"]);
+  assertEquals(full[0].message.content, answer.content);
   const prefix = buildLlmTranscript({ ...input, messageIds: ["answer"] });
   assertEquals(prefix.map((item) => item.role), ["user"]);
   assertEquals(prefix[0].content, answer.content);

@@ -262,12 +262,13 @@ export async function buildCoreLlmRequest(
   const promptInstructions = collectPromptInstructions(
     context.resources.promptInstructions,
   );
-  const messages = await prepareLlmTranscript(context, {
+  const transcript = await prepareLlmTranscript(context, {
     threadId: thread.id,
     history: rawHistory,
     messageIds: input.messageIds,
     participantId: participant.id,
   }, { byteLimit: input.historyByteLimit });
+  const messages = transcript.map((entry) => entry.message);
   const agents = Object.values(context.resources.agents ?? {}).filter(
     (value): value is AgentResource => Boolean(value),
   );

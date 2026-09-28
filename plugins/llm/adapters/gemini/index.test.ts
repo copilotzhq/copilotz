@@ -1,7 +1,7 @@
 import { assertEquals, assertStringIncludes } from "@std/assert";
 
 import { chat } from "../bridge/orchestrator.ts";
-import { processStream } from "../../shared/utils.ts";
+import { processStream } from "../../shared/stream.ts";
 import type {
   ChatMessage,
   ProviderConfig,

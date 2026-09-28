@@ -91,7 +91,57 @@ export async function hydrateProcessorEventContent(
   return hydrated;
 }
 
-export async function resolveProcessorEventData(
+const RESOLVED_EVENT_LIMIT = 256;
+const RESOLVED_EVENT_TTL_MS = 30_000;
+type ResolvedEventEntry = { at: number; data: Promise<unknown> };
+const resolvedEvents = new WeakMap<object, Map<string, ResolvedEventEntry>>();
+
+/**
+ * An Event and the content its data references are immutable, and one Event is
+ * resolved several times as it moves through publish, live matching and its
+ * delivery. Resolve it once per scope for a short window instead. Every caller
+ * still receives its own copy, and a failed resolution is never remembered.
+ */
+async function resolveOnce(
+  scope: object,
+  event: CopilotzEvent & { durable: true },
+  resolve: () => Promise<unknown>,
+): Promise<unknown> {
+  let entries = resolvedEvents.get(scope);
+  if (!entries) resolvedEvents.set(scope, entries = new Map());
+  const now = Date.now();
+  let entry = entries.get(event.id);
+  if (!entry || now - entry.at > RESOLVED_EVENT_TTL_MS) {
+    const created: ResolvedEventEntry = { at: now, data: resolve() };
+    entries.delete(event.id);
+    entries.set(event.id, entry = created);
+    if (entries.size > RESOLVED_EVENT_LIMIT) {
+      entries.delete(entries.keys().next().value!);
+    }
+    created.data.catch(() => {
+      if (entries!.get(event.id) === created) entries!.delete(event.id);
+    });
+  }
+  return structuredClone(await entry.data);
+}
+
+export function resolveProcessorEventData(
+  store:
+    & Pick<EventStore, "session" | "tables">
+    & Partial<Pick<EventStore, "recentEventBody">>,
+  event: CopilotzEvent,
+  resolver?: Pick<ContentResolver, "getMany">,
+): Promise<unknown> {
+  return resolver && event.durable
+    ? resolveOnce(
+      store.tables,
+      event,
+      () => loadProcessorEventData(store, event, resolver),
+    )
+    : loadProcessorEventData(store, event, resolver);
+}
+
+async function loadProcessorEventData(
   store:
     & Pick<EventStore, "session" | "tables">
     & Partial<Pick<EventStore, "recentEventBody">>,

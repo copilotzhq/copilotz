@@ -135,31 +135,15 @@ export function createContentResolver(dependencies: {
     options.signal?.throwIfAborted();
     const ids = [...new Set(refs.map((ref) => ref.assetId))];
     if (!ids.length) return ([] as const);
-    if (options.maxBytes !== undefined) {
-      const metadata = await dependencies.assets.getMany(
-        options.namespace,
-        ids,
-      );
-      options.signal?.throwIfAborted();
-      if (
-        metadata.length !== ids.length ||
-        metadata.some((asset, index) =>
-          asset.id !== ids[index] || asset.namespace !== options.namespace ||
-          !Number.isSafeInteger(asset.byteLength) || asset.byteLength < 0
-        )
-      ) {
-        throw createContentError(
-          "asset_corrupted",
-          "Asset repository returned an invalid metadata batch.",
-          { namespace: options.namespace },
-        );
-      }
-      const bytes = metadata.reduce((sum, asset) => sum + asset.byteLength, 0);
-      if (bytes > options.maxBytes) {
-        throw createContentByteLimitError(bytes, options.maxBytes);
-      }
-    }
-    const bodies = await dependencies.assets.readMany(options.namespace, ids);
+    // The repository enforces the byte budget from the metadata it already
+    // holds, so a bounded read costs the same round trip as an unbounded one.
+    const bodies = await dependencies.assets.readMany(
+      options.namespace,
+      ids,
+      options.maxBytes === undefined
+        ? undefined
+        : { maxBytes: options.maxBytes },
+    );
     options.signal?.throwIfAborted();
     if (bodies.length !== ids.length) {
       throw createContentError(

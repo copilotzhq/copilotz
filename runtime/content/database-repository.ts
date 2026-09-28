@@ -15,7 +15,7 @@ import {
 } from "../events/body-store.ts";
 import { digestContent } from "./digest.ts";
 import { assetNodeData } from "./asset-node.ts";
-import { createContentError } from "./errors.ts";
+import { createContentByteLimitError, createContentError } from "./errors.ts";
 import { cloneContentRef } from "./input.ts";
 import {
   assetBodyKey,
@@ -1537,8 +1537,15 @@ export function createDatabaseAssetRepository(
   const readRows = async (
     namespace: string,
     assetIds: readonly string[],
+    maxBytes?: number,
   ): Promise<readonly AssetBody[]> => {
     const rows = await getRows(options.session, namespace, assetIds);
+    if (maxBytes !== undefined) {
+      // The rows already carry every byte length: refuse before any body read.
+      const bytes = [...new Map(rows.map((row) => [row.id, row])).values()]
+        .reduce((sum, row) => sum + mapAsset(row).byteLength, 0);
+      if (bytes > maxBytes) throw createContentByteLimitError(bytes, maxBytes);
+    }
     const assets = rows.map((row) => {
       const asset = mapAsset(row);
       assertReadable(asset);
@@ -1664,10 +1671,11 @@ export function createDatabaseAssetRepository(
       return (await readRows(namespace, [assetId]))[0];
     },
 
-    async readMany(namespaceInput, assetIds) {
+    async readMany(namespaceInput, assetIds, readOptions) {
       return await readRows(
         requiredText(namespaceInput, "Asset namespace"),
         assetIds,
+        readOptions?.maxBytes,
       );
     },
 

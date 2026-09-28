@@ -62,6 +62,7 @@ import {
 import {
   composeCollectionProjection,
   loadCollectionRecord,
+  loadCollectionRecords,
   projectCollectionEvent,
   type ProjectionGuard,
 } from "./reducer.ts";
@@ -876,7 +877,12 @@ export function createCollectionKernel(
     state: "open" | "closing" | "closed";
   };
   const transactions = new AsyncLocalStorage<TransactionScope>();
-  type SnapshotScope = { executor: SqlExecutor; state: "open" | "closed" };
+  type SnapshotScope = {
+    executor: SqlExecutor;
+    state: "open" | "closed";
+    /** A repeatable-read snapshot answers the same question the same way. */
+    reads: Map<string, Promise<unknown>>;
+  };
   const snapshots = new AsyncLocalStorage<SnapshotScope>();
   const activeScope = () => transactions.getStore();
   const activeSnapshot = () => snapshots.getStore();
@@ -2294,23 +2300,106 @@ export function createCollectionKernel(
       }
     };
 
-    const read = (id: string, namespace: string) =>
-      loadCollectionRecord(
-        executor(),
-        tables,
-        requireText(namespace, "Namespace"),
-        name,
-        requireText(id, `${name} id`),
-      ) as Promise<TSelect | null>;
+    // Reads of one record issued in the same tick are one statement.
+    type ReadBatch = {
+      waiting: Map<
+        string,
+        {
+          resolve(record: CollectionRecord | null): void;
+          reject(e: unknown): void;
+        }[]
+      >;
+    };
+    const readBatches = new WeakMap<SqlExecutor, Map<string, ReadBatch>>();
+    const loadBatched = (
+      session: SqlExecutor,
+      namespace: string,
+      id: string,
+    ): Promise<CollectionRecord | null> =>
+      new Promise((resolve, reject) => {
+        let byNamespace = readBatches.get(session);
+        if (!byNamespace) readBatches.set(session, byNamespace = new Map());
+        let batch = byNamespace.get(namespace);
+        if (!batch) {
+          const created: ReadBatch = { waiting: new Map() };
+          batch = created;
+          byNamespace.set(namespace, created);
+          queueMicrotask(async () => {
+            byNamespace!.delete(namespace);
+            try {
+              const found = await loadCollectionRecords(
+                session,
+                tables,
+                namespace,
+                name,
+                [...created.waiting.keys()],
+              );
+              for (const [waitingId, waiters] of created.waiting) {
+                const record = found.get(waitingId) ?? null;
+                waiters.forEach((waiter, index) =>
+                  waiter.resolve(
+                    record && index > 0
+                      ? structuredClone(record) as CollectionRecord
+                      : record,
+                  )
+                );
+              }
+            } catch (error) {
+              for (const waiters of created.waiting.values()) {
+                for (const waiter of waiters) waiter.reject(error);
+              }
+            }
+          });
+        }
+        const waiters = batch.waiting.get(id) ?? [];
+        waiters.push({ resolve, reject });
+        batch.waiting.set(id, waiters);
+      });
 
-    const list = (namespace: string, query?: CollectionQuery) =>
-      queryCollectionRecords(
-        executor(),
-        tables,
-        definition,
-        requireText(namespace, "Namespace"),
-        query,
-      ) as Promise<readonly TSelect[]>;
+    const inSnapshot = <T>(
+      key: string,
+      load: () => Promise<T>,
+    ): Promise<T> => {
+      const snapshot = activeSnapshot();
+      if (!snapshot) return load();
+      let remembered = snapshot.reads.get(key) as Promise<T> | undefined;
+      if (!remembered) snapshot.reads.set(key, remembered = load());
+      return remembered.then((value) => structuredClone(value));
+    };
+
+    const read = (id: string, namespace: string) => {
+      const ns = requireText(namespace, "Namespace");
+      const recordId = requireText(id, `${name} id`);
+      return inSnapshot(
+        JSON.stringify(["get", name, ns, recordId]),
+        () => loadBatched(executor(), ns, recordId),
+      ) as Promise<TSelect | null>;
+    };
+
+    const list = (namespace: string, query?: CollectionQuery) => {
+      const ns = requireText(namespace, "Namespace");
+      let key: string | undefined;
+      try {
+        key = JSON.stringify(["list", name, ns, query ?? null], (_, value) => {
+          // Only queries that serialize faithfully may share an answer.
+          if (typeof value === "function" || typeof value === "bigint") {
+            throw new TypeError("Query is not serializable.");
+          }
+          return value;
+        });
+      } catch {
+        key = undefined;
+      }
+      const load = () =>
+        queryCollectionRecords(
+          executor(),
+          tables,
+          definition,
+          ns,
+          query,
+        ) as Promise<readonly TSelect[]>;
+      return key === undefined ? load() : inSnapshot(key, load);
+    };
 
     const aggregate = (namespace: string, query: CollectionAggregateQuery) =>
       aggregateCollectionRecords(
@@ -3301,7 +3390,11 @@ export function createCollectionKernel(
       );
     }
     return await options.session.readSnapshot(async (executor) => {
-      const snapshot: SnapshotScope = { executor, state: "open" };
+      const snapshot: SnapshotScope = {
+        executor,
+        state: "open",
+        reads: new Map(),
+      };
       return await snapshots.run(snapshot, async () => {
         const closed = () =>
           Promise.reject(

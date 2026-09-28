@@ -882,3 +882,19 @@ export async function loadCollectionRecord(
   );
   return result.rows[0] ? mapNode(result.rows[0]) : null;
 }
+
+/** Loads many records of one collection in one statement, keyed by id. */
+export async function loadCollectionRecords(
+  executor: SqlExecutor,
+  tables: { nodes: string },
+  namespace: string,
+  name: string,
+  ids: readonly string[],
+): Promise<ReadonlyMap<string, CollectionRecord>> {
+  const result = await executor.query<NodeRow>(
+    `SELECT * FROM ${tables.nodes}
+     WHERE namespace = $1 AND type = $2 AND id = ANY($3::text[])`,
+    [namespace, name, [...new Set(ids)]],
+  );
+  return new Map(result.rows.map((row) => [row.id, mapNode(row)]));
+}

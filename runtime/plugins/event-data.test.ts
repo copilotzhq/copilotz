@@ -179,3 +179,102 @@ Deno.test("processor Event resolution remains usable without a content resolver"
   const resolved = await resolveProcessorEvent({} as never, event);
   assertEquals(resolved.data, event.payload);
 });
+
+Deno.test("a durable Event is resolved once per scope and each caller gets its own copy", async () => {
+  const assets = createMemoryAssetRepository();
+  await assets.publish({
+    id: "once-text",
+    namespace: "tenant-a",
+    mediaType: "text/plain",
+    body: new TextEncoder().encode("resolved once"),
+  });
+  const baseResolver = createContentResolver({ assets });
+  let resolutions = 0;
+  const resolver = {
+    getMany(
+      refs: readonly import("../content/types.ts").ContentRef[],
+      options: { namespace: string },
+    ) {
+      resolutions++;
+      return baseResolver.getMany(refs, options);
+    },
+  };
+  const event = {
+    id: "event-once",
+    durable: true,
+    type: "event.content.created",
+    namespace: "tenant-a",
+    correlationId: "once",
+    metadata: {},
+    createdAt: new Date().toISOString(),
+    payload: {
+      body: {
+        assetId: "once-text",
+        kind: "text",
+        role: "body",
+        mediaType: "text/plain",
+      },
+    },
+  } as unknown as import("../events/index.ts").CopilotzEvent;
+  const scope = { session: undefined, tables: {} } as never;
+
+  const first = await resolveProcessorEvent(scope, event, resolver);
+  const second = await resolveProcessorEvent(scope, event, resolver);
+  assertEquals(resolutions, 1, "the second resolution reuses the first");
+  assertEquals(
+    (second.data as { body: { value: string } }).body.value,
+    "resolved once",
+  );
+  (first.data as { body: { value: string } }).body.value = "mutated";
+  const third = await resolveProcessorEvent(scope, event, resolver);
+  assertEquals(
+    (third.data as { body: { value: string } }).body.value,
+    "resolved once",
+    "a handler cannot change what another handler sees",
+  );
+
+  // A different scope resolves for itself.
+  await resolveProcessorEvent(
+    { session: undefined, tables: {} } as never,
+    event,
+    resolver,
+  );
+  assertEquals(resolutions, 2);
+});
+
+Deno.test("a failed Event resolution is not remembered", async () => {
+  let attempts = 0;
+  const resolver = {
+    getMany(): Promise<never> {
+      attempts++;
+      return Promise.reject(new Error("content unavailable"));
+    },
+  };
+  const event = {
+    id: "event-failing",
+    durable: true,
+    type: "event.content.created",
+    namespace: "tenant-a",
+    correlationId: "failing",
+    metadata: {},
+    createdAt: new Date().toISOString(),
+    payload: {
+      body: {
+        assetId: "missing",
+        kind: "text",
+        role: "body",
+        mediaType: "text/plain",
+      },
+    },
+  } as unknown as import("../events/index.ts").CopilotzEvent;
+  const scope = { session: undefined, tables: {} } as never;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    await resolveProcessorEvent(scope, event, resolver).then(
+      () => {
+        throw new Error("expected a failure");
+      },
+      (error: Error) => assertEquals(error.message, "content unavailable"),
+    );
+  }
+  assertEquals(attempts, 2, "the retry resolves again");
+});

@@ -55,10 +55,11 @@ Deno.test("scoped resolved reads preserve records, page boundaries, reference se
   const resolver = createContentResolver({
     assets: {
       ...assets,
-      async readMany(namespace, ids) {
+      async readMany(namespace, ids, options) {
         if (failReads) throw new Error("Storage unavailable");
+        // A batch the repository refuses on its byte budget reads no body.
+        const result = await assets.readMany(namespace, ids, options);
         batches.push([...ids]);
-        const result = await assets.readMany(namespace, ids);
         abortRead?.abort();
         return result;
       },

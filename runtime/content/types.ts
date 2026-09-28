@@ -223,9 +223,15 @@ export interface AssetRepository {
     assetIds: readonly AssetId[],
   ): Promise<readonly AssetRecord[]>;
   read(namespace: string, assetId: AssetId): Promise<AssetBody>;
+  /**
+   * Reads unique bodies in one metadata round trip. With `maxBytes` the
+   * repository rejects an oversized batch from the metadata it already holds,
+   * before it reads any body.
+   */
   readMany(
     namespace: string,
     assetIds: readonly AssetId[],
+    options?: { maxBytes?: number },
   ): Promise<readonly AssetBody[]>;
   open(
     namespace: string,

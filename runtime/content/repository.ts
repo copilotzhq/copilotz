@@ -1,5 +1,5 @@
 import { digestContent } from "./digest.ts";
-import { createContentError } from "./errors.ts";
+import { createContentByteLimitError, createContentError } from "./errors.ts";
 import type {
   AssetBody,
   AssetOrigin,
@@ -239,12 +239,22 @@ export function createMemoryAssetRepository(
       );
     },
 
-    readMany(namespace, assetIds) {
-      return Promise.resolve().then(() =>
-        assetIds.map((assetId) =>
+    readMany(namespace, assetIds, options) {
+      return Promise.resolve().then(() => {
+        const bodies = assetIds.map((assetId) =>
           cloneBody(requireReadable(namespace, assetId))
-        )
-      );
+        );
+        if (options?.maxBytes !== undefined) {
+          const unique = new Map(
+            assetIds.map((id, index) => [id, bodies[index].bytes.byteLength]),
+          );
+          const bytes = [...unique.values()].reduce((a, b) => a + b, 0);
+          if (bytes > options.maxBytes) {
+            throw createContentByteLimitError(bytes, options.maxBytes);
+          }
+        }
+        return bodies;
+      });
     },
 
     open(namespace, assetId) {

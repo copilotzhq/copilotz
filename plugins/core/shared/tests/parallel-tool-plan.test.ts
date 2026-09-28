@@ -1242,8 +1242,35 @@ Deno.test("an unavailable root branch fans in with a successful sibling and one 
   });
   const db = await createTestDatabase({ url: ":memory:" });
   const registry = await createPluginRegistry({ plugins: [corePlugin, app] });
+  // The plan dispatches its roots in the delivery that created it. Crash that
+  // delivery at its first stage claim and revoke only the second Tool, so the
+  // retry resumes the committed plan under the changed grant. The first branch
+  // remains a real Action lifecycle.
+  const base = createSqlSession(db);
+  let crashed = false;
+  const crashAtFirstClaim = (params?: unknown[]) => {
+    if (crashed || !params?.includes("tool_plan_branch.stage-claimed")) return;
+    crashed = true;
+    mutableAgent.capabilities.tools = ["good"];
+    throw new Error("Injected crash before the first stage claim.");
+  };
   const engine = await createCopilotzEngine({
-    session: createSqlSession(db),
+    session: {
+      ...base,
+      query: (sql, params) => {
+        crashAtFirstClaim(params);
+        return base.query(sql, params);
+      },
+      transaction: (operation) =>
+        base.transaction((transaction) =>
+          operation({
+            query: (sql, params) => {
+              crashAtFirstClaim(params);
+              return transaction.query(sql, params);
+            },
+          })
+        ),
+    },
     registry,
     defaultDatabaseSchema: SCHEMA,
     retryBaseMs: 0,
@@ -1253,9 +1280,7 @@ Deno.test("an unavailable root branch fans in with a successful sibling and one 
   try {
     const rootEventId = await startRun(engine, [testAgent]);
     await goodStarted.promise;
-    // Revoke only the second selected Tool after plan creation and before its
-    // ready delivery. The first branch remains a real Action lifecycle.
-    mutableAgent.capabilities.tools = ["good"];
+    assert(crashed, "the plan delivery crashed at its first stage claim");
     releaseGood();
     await waitForIdle(engine, rootEventId);
     assertEquals(

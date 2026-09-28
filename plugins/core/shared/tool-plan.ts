@@ -53,6 +53,8 @@ export type ToolTerminal = Readonly<
     askResult?: AgentAskResultMetadata;
   }
 >;
+/** The delivery event that owns the plan steps a settlement continues into. */
+export type ToolPlanContinuation = Readonly<{ ownerEventId: string }>;
 export type CoreToolPlanBase = Readonly<{
   planId: string;
   planMessageId: string;
@@ -595,7 +597,8 @@ function currentStageGranted(
 export async function invokeToolPlanAction(
   context: CoreToolProcessorContext,
   metadata: CoreToolActionMetadata,
-  input?: LlmJsonObject,
+  input: LlmJsonObject | undefined,
+  continuation: ToolPlanContinuation,
 ): Promise<void> {
   const plan = await loadPlan(context, metadata);
   const call = plan.calls[metadata.planIndex];
@@ -630,7 +633,7 @@ export async function invokeToolPlanAction(
           ? diagnostic.slice(0, 1_000)
           : `Tool Action '${metadata.action}' input failed validation.`,
       },
-    });
+    }, continuation);
   }
 }
 export async function createDurableToolPlan(
@@ -739,7 +742,31 @@ export async function scheduleReadyBranches(
     })
   );
 }
-/** Sole Tool dispatcher: the durable stage-ready event id is the lease owner. */
+/**
+ * Claims and runs every branch's first stage under the plan-created event,
+ * whose delivery retry re-enters the same claims.
+ */
+export async function dispatchInitialStages(
+  context: CoreToolProcessorContext,
+  event: { id: string },
+  plan: CollectionRecord,
+): Promise<void> {
+  if (!context.collections.toolPlanBranch) return;
+  const currentPlan = await ensureToolPlanBranchLayout(context, plan);
+  const state = record(currentPlan.state);
+  if (state.status !== "running") return;
+  // Every branch runs to its own end before a failure fails the delivery.
+  const settled = await Promise.allSettled(
+    Array.from(
+      { length: Number(state.branchCount) },
+      (_value, branchIndex) =>
+        dispatchReadyStage(context, event, currentPlan, branchIndex, 0),
+    ),
+  );
+  const failure = settled.find((result) => result.status === "rejected");
+  if (failure) throw (failure as PromiseRejectedResult).reason;
+}
+/** Sole Tool dispatcher: the claiming event id is the stage owner. */
 export async function dispatchReadyStage(
   context: CoreToolProcessorContext,
   event: { id: string },
@@ -763,7 +790,22 @@ export async function dispatchReadyStage(
     })
   );
   const current = record(claimed.state);
-  if (current?.status !== "running" || current.owner !== event.id) return;
+  if (current?.status !== "running" || current.owner !== event.id) {
+    // A retry after this stage settled resumes the settled branch.
+    if (
+      current?.status !== "running" && current?.status !== "ready" &&
+      Number(current?.stageIndex) === stageIndex
+    ) {
+      await continueSettledBranch(
+        context,
+        event.id,
+        String(currentPlan.id),
+        branchIndex,
+      );
+    }
+    return;
+  }
+  const continuation = { ownerEventId: event.id } as const;
   const base = baseFrom(currentPlan);
   const loaded = await loadPlan(context, base);
   const call = loaded.calls[branchIndex];
@@ -794,7 +836,7 @@ export async function dispatchReadyStage(
         message:
           `Tool Action '${metadata.action}' is unavailable for this stage.`,
       },
-    });
+    }, continuation);
     return;
   }
   let input: LlmJsonObject;
@@ -817,16 +859,17 @@ export async function dispatchReadyStage(
         name: "PipelineInputError",
         message: error instanceof Error ? error.message : String(error),
       },
-    });
+    }, continuation);
     return;
   }
-  await invokeToolPlanAction(context, metadata, input);
+  await invokeToolPlanAction(context, metadata, input, continuation);
 }
 /** Atomically creates a stage result content record and advances the cursor CAS. */
 export async function projectAndAdvanceToolPlan(
   context: CoreToolProcessorContext,
   metadata: CoreToolActionMetadata,
   terminal: ToolTerminal,
+  continuation: ToolPlanContinuation,
   authority?: Readonly<{ actionId: string; causationId?: string }>,
 ): Promise<void> {
   if (authority) {
@@ -867,7 +910,15 @@ export async function projectAndAdvanceToolPlan(
         if (
           persisted.terminal.sourceAction?.stageIndex === metadata.stageIndex &&
           persisted.terminal.sourceAction.actionRunId === terminal.actionRunId
-        ) return;
+        ) {
+          await continueSettledBranch(
+            context,
+            continuation.ownerEventId,
+            metadata.planId,
+            metadata.planIndex,
+          );
+          return;
+        }
       }
       throw new Error(
         `Tool plan '${metadata.planId}' terminal cursor is invalid.`,
@@ -941,6 +992,38 @@ export async function projectAndAdvanceToolPlan(
     Number(persisted.branchIndex) !== metadata.planIndex ||
     Number(persisted.stageIndex) !== metadata.stageIndex
   ) throw new Error("Tool stage result does not belong to its plan cursor.");
+  await continueSettledBranch(
+    context,
+    continuation.ownerEventId,
+    metadata.planId,
+    metadata.planIndex,
+  );
+}
+/**
+ * Advances a settled branch and, once every branch has settled, projects the
+ * plan, all within the delivery that settled it. Every step is an ownership
+ * CAS, so that delivery's retry resumes where a crash stopped it.
+ */
+export async function continueSettledBranch(
+  context: CoreToolProcessorContext,
+  ownerEventId: string,
+  planId: string,
+  branchIndex: number,
+): Promise<void> {
+  const plans = context.collections.toolPlan;
+  if (!plans) return;
+  const plan = await plans.get({ id: planId });
+  if (!plan) return;
+  await advanceCompletedToolMembers(context, plan, branchIndex);
+  const latest = await plans.get({ id: planId });
+  if (!latest) return;
+  const state = record(latest.state);
+  if (
+    state.status === "ready" ||
+    (state.status === "projecting" && state.projectionOwner === ownerEventId)
+  ) {
+    await projectDurableToolPlan(context, { id: ownerEventId }, latest);
+  }
 }
 async function derivedResult(
   context: CoreToolProcessorContext,
@@ -1409,6 +1492,7 @@ export async function resumeDeferredToolPlan(
   context: CoreToolProcessorContext,
   ask: AgentAskMetadata,
   terminal: Omit<ToolTerminal, "actionRunId">,
+  continuation: ToolPlanContinuation,
 ): Promise<void> {
   const parent = await parentAskForResume(context, ask);
   await projectAndAdvanceToolPlan(
@@ -1432,5 +1516,6 @@ export async function resumeDeferredToolPlan(
         actionRunId: ask.toolActionRunId,
       },
     },
+    continuation,
   );
 }

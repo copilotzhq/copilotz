@@ -4,10 +4,10 @@ import { defineProcessor, type Processor } from "@copilotz/copilotz/plugins";
 import type { CollectionRecord } from "@copilotz/copilotz/collections";
 import type { CoreToolProcessorContext } from "../../shared/runtime-context.ts";
 import {
-  advanceCompletedToolMembers,
+  continueSettledBranch,
+  dispatchInitialStages,
   dispatchReadyStage,
   projectDurableToolPlan,
-  scheduleReadyBranches,
 } from "../../shared/tool-plan.ts";
 import { asRecord, collectionEventRecord } from "../../shared/helpers.ts";
 
@@ -115,23 +115,25 @@ async function planForBranch(
 /**
  * Branch events mutate one branch record. Legacy flat-plan events remain
  * accepted while pre-release in-flight plans and their deliveries are drained.
+ *
+ * The delivery that creates a plan runs its first stages, and a stage
+ * settlement continues the plan in the delivery that settled it. Plan-created,
+ * branch stage-settled and projection-ready events therefore have no
+ * subscription; their handlers remain for deliveries created before that.
  */
 export const toolPlanCoordinatorProcessor: Processor<CoreToolProcessorContext> =
   defineProcessor<CoreToolProcessorContext>({
     id: "copilotz.core.tool-plan-coordinator",
     on: [
-      { eventType: "toolPlan.created" },
       { eventType: "tool_plan.stage-ready" },
       { eventType: "tool_plan.stage-settled" },
-      { eventType: "tool_plan.projection-ready" },
       { eventType: "tool_plan_branch.stage-ready" },
-      { eventType: "tool_plan_branch.stage-settled" },
     ],
     async handle(event, context) {
       if (!event.durable) return;
       const record = collectionEventRecord(event);
       if (event.type === "toolPlan.created") {
-        await scheduleReadyBranches(context, record);
+        await dispatchInitialStages(context, event, record);
         return;
       }
       if (
@@ -170,19 +172,19 @@ export const toolPlanCoordinatorProcessor: Processor<CoreToolProcessorContext> =
         event.type === "tool_plan_branch.stage-settled"
       ) {
         if (event.type === "tool_plan.stage-settled") {
-          const branchIndex = settledBranchIndex(event, record);
-          const plan = await context.collections.toolPlan?.get({
-            id: String(record.id),
-          });
-          if (plan) {
-            await advanceCompletedToolMembers(context, plan, branchIndex);
-          }
+          await continueSettledBranch(
+            context,
+            event.id,
+            String(record.id),
+            settledBranchIndex(event, record),
+          );
           return;
         }
         const target = await planForBranch(context, String(record.id));
-        await advanceCompletedToolMembers(
+        await continueSettledBranch(
           context,
-          target.plan,
+          event.id,
+          String(target.plan.id),
           target.branchIndex,
         );
         return;

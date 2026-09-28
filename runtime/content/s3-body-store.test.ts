@@ -672,8 +672,36 @@ Deno.test("S3 read validates GET metadata and preserves missing-body errors", as
     const saved = gcs.objects.get(bodyId);
     if (!saved) throw new Error("Expected stored Ready object.");
     saved.digest = "sha256:invalid";
-    const corrupted = await assertRejects(() => store.read({ bodyId }));
-    assertEquals((corrupted as ContentError).code, "asset_corrupted");
+    const realFetch = globalThis.fetch;
+    let bodyCancelled = false;
+    globalThis.fetch = async (input, init) => {
+      const response = await realFetch(input, init);
+      if ((init?.method ?? "GET") !== "GET" || !response.body) return response;
+      const reader = response.body.getReader();
+      const tracked = new ReadableStream<Uint8Array>({
+        async pull(controller) {
+          const { done, value } = await reader.read();
+          if (done) controller.close();
+          else controller.enqueue(value);
+        },
+        cancel(reason) {
+          bodyCancelled = true;
+          return reader.cancel(reason);
+        },
+      });
+      return new Response(tracked, {
+        status: response.status,
+        statusText: response.statusText,
+        headers: response.headers,
+      });
+    };
+    try {
+      const corrupted = await assertRejects(() => store.read({ bodyId }));
+      assertEquals((corrupted as ContentError).code, "asset_corrupted");
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+    assertEquals(bodyCancelled, true);
 
     const missing = await assertRejects(() =>
       store.read({ bodyId: "copilotz/schemas/test/assets/missing" })

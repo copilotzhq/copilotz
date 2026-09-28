@@ -9,6 +9,7 @@ import {
 } from "../events/index.ts";
 import { createPluginRegistry, definePlugin } from "../plugins/index.ts";
 import { defineCollection } from "./definition.ts";
+import { readViews } from "./read-view.ts";
 
 const POSTGRES_URL = Deno.env.get("COPILOTZ_TEST_POSTGRES_URL")?.trim();
 
@@ -191,4 +192,139 @@ Deno.test({
   sanitizeOps: false,
   sanitizeResources: false,
   fn: () => readScenarios(POSTGRES_URL!),
+});
+
+/**
+ * A handler reads through a view of its own: a row it has read is not asked
+ * for again, its own writes are always seen, and a snapshot is never served
+ * from it.
+ */
+async function hopViewScenarios(url: string) {
+  const recorder: Recorder = { statements: [], readSnapshots: 0 };
+  const db = await createTestDatabase({ url });
+  const schema = "hop_" + crypto.randomUUID().replaceAll("-", "").slice(0, 10);
+  const registry = await createPluginRegistry({
+    plugins: [definePlugin({
+      id: "hop",
+      version: "1",
+      collections: { note },
+    })],
+  });
+  const engine = await createCopilotzEngine({
+    session: recording(createSqlSession(db), recorder),
+    registry,
+    defaultDatabaseSchema: schema,
+  });
+  const namespace = "tenant";
+  const notes = engine.collections.withScope({ namespace }).note;
+  const measure = async <T>(work: () => Promise<T>) => {
+    recorder.statements.length = 0;
+    return await work();
+  };
+  // Another process changing a row: this engine's kernel never hears of it.
+  const changeElsewhere = (id: string, title: string) =>
+    db.query(
+      `UPDATE "${schema}"."nodes" SET data = jsonb_set(data, '{title}', $3::jsonb)
+       WHERE namespace = $1 AND data->>'id' = $2`,
+      [namespace, id, JSON.stringify(title)],
+    );
+  try {
+    for (const id of ["a", "b"]) {
+      await notes.create({ id, title: `Note ${id}` });
+    }
+    await notes.create({
+      id: "big",
+      title: "Note big",
+      content: "x".repeat(2_000),
+    });
+
+    // Within a hop a row is asked for once, however the reads are sequenced.
+    const twice = await measure(() =>
+      readViews.run(async () => {
+        const first = await notes.get({ id: "a" });
+        const second = await notes.get({ id: "a" });
+        const missing = await notes.get({ id: "nope" });
+        const missingAgain = await notes.get({ id: "nope" });
+        return { first, second, missing, missingAgain };
+      })
+    );
+    assertEquals(recordReads(recorder).length, 2, "one per distinct row");
+    assertEquals(twice.first, twice.second);
+    assert(twice.first !== twice.second, "each read has its own copy");
+    assertEquals(twice.missing, null);
+    assertEquals(twice.missingAgain, null);
+
+    // Two hops never share what they read.
+    const hop = () =>
+      readViews.run(async () => {
+        await notes.get({ id: "a" });
+        await notes.get({ id: "a" });
+      });
+    await measure(async () => {
+      await hop();
+      await hop();
+    });
+    assertEquals(recordReads(recorder).length, 2, "one per hop");
+
+    // A hop always sees its own writes, including a create over a miss.
+    await readViews.run(async () => {
+      assertEquals(await notes.get({ id: "fresh" }), null);
+      await notes.create({ id: "fresh", title: "Created" });
+      assertEquals((await notes.get({ id: "fresh" }))?.title, "Created");
+      await notes.update({ id: "fresh", set: { title: "Updated" } });
+      assertEquals((await notes.get({ id: "fresh" }))?.title, "Updated");
+      await notes.delete({ id: "fresh" });
+      assertEquals(await notes.get({ id: "fresh" }), null);
+    });
+
+    // Someone else's write is seen by the next hop, and by any read that is
+    // not inside one; within a hop it is allowed to be as old as the hop.
+    await readViews.run(async () => {
+      assertEquals((await notes.get({ id: "b" }))?.title, "Note b");
+      await changeElsewhere("b", "Elsewhere");
+      assertEquals((await notes.get({ id: "b" }))?.title, "Note b");
+    });
+    assertEquals((await notes.get({ id: "b" }))?.title, "Elsewhere");
+    await readViews.run(async () => {
+      assertEquals((await notes.get({ id: "b" }))?.title, "Elsewhere");
+    });
+
+    // A snapshot is one consistent point in time and is never served from
+    // what the hop remembered.
+    await readViews.run(async () => {
+      assertEquals((await notes.get({ id: "a" }))?.title, "Note a");
+      await changeElsewhere("a", "Later");
+      const snapshotted = await engine.collections.readSnapshot(
+        { namespace },
+        ({ collections }) => collections.note.get({ id: "a" }),
+      );
+      assertEquals(snapshotted?.title, "Later");
+    });
+
+    // Asset rows are remembered too, so a second bound is decided without
+    // asking the database again, and is still enforced.
+    await readViews.run(async () => {
+      await notes.get({ id: "big" }, { content: { byteLimit: 10_000 } });
+      const before = assetReads(recorder).length;
+      await assertRejects(
+        () => notes.get({ id: "big" }, { content: { byteLimit: 10 } }),
+        RangeError,
+      );
+      assertEquals(assetReads(recorder).length, before);
+    });
+  } finally {
+    await db.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
+    await db.close();
+  }
+}
+
+Deno.test("PGlite a handler reads through a view of its own", () =>
+  hopViewScenarios(":memory:"));
+
+Deno.test({
+  name: "PostgreSQL a handler reads through a view of its own",
+  ignore: !POSTGRES_URL,
+  sanitizeOps: false,
+  sanitizeResources: false,
+  fn: () => hopViewScenarios(POSTGRES_URL!),
 });

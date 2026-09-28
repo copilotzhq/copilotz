@@ -1,3 +1,4 @@
+import { readViews } from "../collections/read-view.ts";
 import type { CopilotzEvent } from "../events/index.ts";
 import {
   hydrateProcessorEventContent,
@@ -263,7 +264,16 @@ function mutationIdentity(
   };
 }
 
-async function invokeOne(
+/** One live processor call reads through a view of its own. */
+function invokeOne(
+  options: Omit<InvokeLiveProcessorsOptions, "createDispatchAttemptId">,
+  processorId: string,
+  dispatchAttemptId: string,
+): Promise<void> {
+  return readViews.run(() => runOne(options, processorId, dispatchAttemptId));
+}
+
+async function runOne(
   options: Omit<InvokeLiveProcessorsOptions, "createDispatchAttemptId">,
   processorId: string,
   dispatchAttemptId: string,

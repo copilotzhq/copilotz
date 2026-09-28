@@ -47,6 +47,7 @@ import type {
   PreparedAsset,
   PreparedContent,
   PublishAssetInput,
+  ReadViewAccess,
 } from "./types.ts";
 import type {
   BodyStorageRuntime,
@@ -178,6 +179,8 @@ export type CreateDatabaseAssetRepositoryOptions = Readonly<{
   createId?: () => string;
   now?: () => Date;
   digest?: (bytes: Uint8Array) => Promise<`sha256:${string}`>;
+  /** Lets a handler read an asset's row once; see ReadViewAccess. */
+  readViews?: ReadViewAccess;
 }>;
 
 function iso(value: string | Date): string {
@@ -1485,18 +1488,45 @@ export function createDatabaseAssetRepository(
     }
   };
 
+  const assetViewKey = (namespace: string, assetId: string) =>
+    [tables.nodes, namespace, "asset", assetId].join("\u0000");
+
   const getRows = async (
     executor: SqlExecutor,
     namespace: string,
     assetIds: readonly string[],
   ): Promise<readonly AssetNodeRow[]> => {
     if (assetIds.length === 0) return [];
-    const result = await executor.query<AssetNodeRow>(
-      `SELECT * FROM ${tables.nodes}
+    const unique = [...new Set(assetIds)];
+    // A handler reads a ready asset's row once: the row changes only when the
+    // asset is deleted, and this repository forgets it then.
+    const memo = executor === options.session
+      ? options.readViews?.memo()
+      : undefined;
+    const byId = new Map<string, AssetNodeRow>();
+    if (memo) {
+      for (const id of unique) {
+        const hit = memo.recall<AssetNodeRow>(assetViewKey(namespace, id));
+        if (hit) byId.set(id, hit.value);
+      }
+    }
+    const missing = unique.filter((id) => !byId.has(id));
+    if (missing.length) {
+      const ticket = memo?.begin(
+        missing.map((id) => assetViewKey(namespace, id)),
+      );
+      const result = await executor.query<AssetNodeRow>(
+        `SELECT * FROM ${tables.nodes}
        WHERE namespace = $1 AND type = 'asset' AND id = ANY($2::text[])`,
-      [namespace, [...new Set(assetIds)]],
-    );
-    const byId = new Map(result.rows.map((row) => [row.id, row]));
+        [namespace, missing],
+      );
+      for (const row of result.rows) {
+        byId.set(row.id, row);
+        if (ticket && mapAsset(row).state === "ready") {
+          ticket.remember(assetViewKey(namespace, row.id), row);
+        }
+      }
+    }
     return assetIds.map((assetId) => {
       const row = byId.get(assetId);
       if (!row) {
@@ -2087,6 +2117,28 @@ export function createDatabaseAssetRepository(
       return plan.content;
     },
   };
+
+  // A handler's remembered rows must not outlive what these calls change.
+  const markDeleted = repository.markDeleted.bind(repository);
+  const maintainBodies = repository.maintainBodies.bind(repository);
+  Object.assign(repository, {
+    async markDeleted(namespace: string, assetId: string) {
+      try {
+        return await markDeleted(namespace, assetId);
+      } finally {
+        options.readViews?.invalidate(
+          assetViewKey(namespace.trim(), assetId.trim()),
+        );
+      }
+    },
+    async maintainBodies(maintenance?: Parameters<typeof maintainBodies>[0]) {
+      try {
+        return await maintainBodies(maintenance);
+      } finally {
+        options.readViews?.invalidateAll();
+      }
+    },
+  });
 
   const frozenRepository = repository;
   collectionAssetAdopters.set(

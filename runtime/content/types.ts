@@ -214,6 +214,21 @@ export interface AssetBody {
   bytes: Uint8Array;
 }
 
+/**
+ * What a repository needs of the runtime's per-handler read view: remember
+ * rows a handler has read, and forget them when this runtime changes them.
+ */
+export interface ReadViewAccess {
+  memo(): {
+    recall<T>(key: string): { value: T } | undefined;
+    begin(keys: readonly string[]): {
+      remember(key: string, value: unknown): void;
+    };
+  } | undefined;
+  invalidate(key: string): void;
+  invalidateAll(): void;
+}
+
 /** Storage-neutral contract consumed by normalization and projection code. */
 export interface AssetRepository {
   publish(input: PublishAssetInput): Promise<AssetRecord>;

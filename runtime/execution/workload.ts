@@ -1,5 +1,6 @@
 import type { EventDelivery } from "../events/index.ts";
 import { isNonRetryableError } from "../failure.ts";
+import { readViews } from "../collections/read-view.ts";
 import { resolveProcessorEvent } from "../plugins/event-data.ts";
 import type {
   CreateDeliveryWorkloadOptions,
@@ -112,7 +113,9 @@ export function createDeliveryWorkload(
   }
   const scheduler = options.scheduler ?? createDefaultScheduler();
 
-  return async ({ metadata: rawMetadata, signal: dispatchSignal }) => {
+  const deliver: DeliveryWorkload = async (
+    { metadata: rawMetadata, signal: dispatchSignal },
+  ) => {
     const metadata = parseDeliveryDispatchMetadata(rawMetadata);
     const store = options.resolveStore
       ? await options.resolveStore(metadata.databaseSchema)
@@ -320,4 +323,7 @@ export function createDeliveryWorkload(
       dispatchSignal.removeEventListener("abort", relayAbort);
     }
   };
+
+  // Each delivery reads through a view of its own; see read-view.ts.
+  return async (call) => await readViews.run(async () => await deliver(call));
 }

@@ -1,6 +1,7 @@
 import { ulid } from "../../dependencies/ulid.ts";
 import type {
   CoordinatedMutationResult,
+  DurableEvent,
   EventCoordinator,
   EventMutationContext,
   EventStore,
@@ -23,6 +24,7 @@ import {
   readBodyBytes,
 } from "./body-store.ts";
 import {
+  composeDatabaseBodyPut,
   createDatabaseBodyStore,
   createDatabaseBodyStoreAdapter,
   provisionDatabaseBodyStore,
@@ -65,6 +67,14 @@ type AssetNodeRow = Record<string, unknown> & {
   updated_at: string | Date;
 };
 
+/** Marks the error of an adoption that found its identity already taken. */
+const adoptionTaken = Symbol("copilotz.adoptionTaken");
+
+const takenAdoption = (): Error =>
+  Object.assign(new Error("Asset adoption found its identity already taken."), {
+    [adoptionTaken]: true,
+  });
+
 export type AssetMutationInput = Readonly<{
   namespace: string;
   content: DurableContentInput;
@@ -104,11 +114,34 @@ export type DatabaseAssetRepository =
     ): Promise<ReadyBodyRetirementResult>;
   }>;
 
+/**
+ * An adoption composed into another statement: it stores the new bodies, and
+ * optionally the asset nodes, only while nothing already holds their identity.
+ */
+export type AssetAdoptionStatement = Readonly<{
+  ctes: readonly string[];
+  /** Holds while no asset, key or body already occupies the adoption. */
+  gate: string;
+  /** Writes applied with the inserted event, given its CTE name. */
+  effects(source: string): readonly string[];
+  /** A jsonb expression that `refused` reads. */
+  report: string;
+  /** Whether the report says the adoption found its identity taken. */
+  refused(report: unknown): boolean;
+}>;
+
 type CollectionAssetAdopter = Readonly<{
   reconcileMaterializations(
     transaction: SqlExecutor,
     plans: readonly AssetMaterializationPlan[],
   ): Promise<ReadonlyMap<string, AssetManifestEntry>>;
+  /** Whether the plans can be adopted inside another statement. */
+  adoptable(plans: readonly AssetMaterializationPlan[]): boolean;
+  composeAdoption(
+    plans: readonly AssetMaterializationPlan[],
+    param: (value: unknown) => string,
+    options: Readonly<{ nodes: boolean }>,
+  ): AssetAdoptionStatement;
 
   prepareMaterialization(
     input: AssetMutationInput,
@@ -750,17 +783,24 @@ export function createDatabaseAssetRepository(
         return ({ asset } as const);
       }
     }
-    const idCollision = await findById(
-      executor,
-      namespace,
-      candidate.id,
-    );
-    if (idCollision) {
-      throw createContentError(
-        "asset_conflict",
-        `Asset ID already exists: ${candidate.id}`,
-        { namespace, assetId: candidate.id },
+    // A database body is written by the commit itself, so nothing happens
+    // before it. The commit refuses a taken id (in its statement, or in
+    // adoptCandidate on the fallback path) with this same error, and the read
+    // is saved. A body written before the commit must not overwrite the
+    // body of the asset that holds the id, so it is checked first.
+    if (candidate.readyBody || storage.writer!.kind !== "database") {
+      const idCollision = await findById(
+        executor,
+        namespace,
+        candidate.id,
       );
+      if (idCollision) {
+        throw createContentError(
+          "asset_conflict",
+          `Asset ID already exists: ${candidate.id}`,
+          { namespace, assetId: candidate.id },
+        );
+      }
     }
     const origin = candidate.origin ?? cloneOrigin(fallbackOrigin) ??
       ({ type: "namespace", id: namespace } as const);
@@ -1093,25 +1133,203 @@ export function createDatabaseAssetRepository(
     }
   };
 
-  const commitAssetCreation = async (
-    adoption: AssetAdoptionPlan,
-    execution?: Readonly<{ transaction: SqlExecutor; dispatch: false }>,
-  ): Promise<CoordinatedMutationResult<AssetRecord>> => {
-    if (!execution) {
-      const result = await options.session.transaction(async (transaction) => {
-        await lockMaterializationKeys(transaction, [{
-          namespace: adoption.asset.namespace,
-          key: adoption.candidate.idempotencyKey?.trim(),
-        }]);
-        return await commitAssetCreation(adoption, {
-          transaction,
-          dispatch: false,
-        });
+  const adoptable = (plans: readonly AssetMaterializationPlan[]): boolean => {
+    const adoptions = plans.flatMap((plan) => plan.adoptions);
+    return adoptions.length > 0 && (databaseWriterProvisioned ||
+      adoptions.every(({ kind }) => kind !== "database"));
+  };
+
+  // The same checks and writes as adoptCandidate, as fragments of the
+  // statement that inserts the owning event. Anything that already occupies an
+  // adoption's identity refuses it whole, and the caller adopts the slow way.
+  const composeAdoption = (
+    plans: readonly AssetMaterializationPlan[],
+    param: (value: unknown) => string,
+    { nodes }: Readonly<{ nodes: boolean }>,
+  ): AssetAdoptionStatement => {
+    const wanted = plans.flatMap((plan) => {
+      const namespace = requiredText(plan.namespace, "Asset namespace");
+      return plan.adoptions.map((adoption) => {
+        const { asset, candidate } = adoption;
+        if (asset.namespace !== namespace) {
+          throw createContentError(
+            "content_invalid",
+            `Asset adoption belongs to another namespace: ${asset.id}`,
+            { namespace, assetId: asset.id },
+          );
+        }
+        const bodyId = assetBodyId(asset);
+        if (!bodyId) {
+          throw createContentError(
+            "asset_corrupted",
+            `Asset body location is missing a body id: ${asset.id}`,
+            { namespace, assetId: asset.id },
+          );
+        }
+        if (adoption.kind === "ready" && adoption.protectionRequired) {
+          const protectedUntil = candidate.readyBody?.protectedUntil;
+          const deadline = protectedUntil
+            ? Date.parse(protectedUntil)
+            : Number.NaN;
+          if (!Number.isFinite(deadline) || deadline <= Date.now()) {
+            throw createContentError(
+              "asset_corrupted",
+              `Prepared ready body protection expired before adoption: ${candidate.id}`,
+              { namespace, assetId: candidate.id },
+            );
+          }
+        }
+        const data = assetNodeData(asset, bodyId);
+        try {
+          JSON.stringify(data);
+        } catch (cause) {
+          throw createContentError(
+            "content_invalid",
+            `Asset metadata is not JSON serializable: ${asset.id}`,
+            { namespace, assetId: asset.id, cause },
+          );
+        }
+        return {
+          adoption,
+          bodyId,
+          row: {
+            id: asset.id,
+            namespace,
+            key: candidate.idempotencyKey?.trim() || null,
+            media_type: asset.mediaType,
+            created_at: asset.createdAt,
+            data,
+          },
+        } as const;
       });
-      retainPreparedBody(result.value!, adoption.candidate);
-      await options.coordinator.flushCommitted(result);
-      return result;
-    }
+    });
+    // Nodes are written in a fixed order so that concurrent adoptions of
+    // overlapping keys wait on each other instead of deadlocking.
+    wanted.sort((left, right) => {
+      const order = (item: typeof left) =>
+        `${item.row.namespace}\u0000${item.row.key ?? ""}\u0000${item.row.id}`;
+      return order(left) < order(right)
+        ? -1
+        : order(left) > order(right)
+        ? 1
+        : 0;
+    });
+    const rows = param(
+      JSON.stringify(wanted.map(({ row }, ord) => ({ ord, ...row }))),
+    );
+    const bodies = wanted.flatMap(({ adoption, bodyId }, ord) =>
+      adoption.kind === "database"
+        ? [composeDatabaseBodyPut({
+          schema: options.databaseSchema,
+          param,
+          label: `adoption_${ord}`,
+          bodyId,
+          mediaType: adoption.candidate.mediaType,
+          digest: adoption.candidate.digest,
+          bytes: adoption.candidate.body,
+        })]
+        : []
+    );
+    const keys = [
+      ...new Set(
+        wanted.flatMap(({ row }) =>
+          row.key ? [JSON.stringify([row.namespace, row.key])] : []
+        ),
+      ),
+    ].sort();
+    const taken = (match: string) =>
+      `SELECT 1 FROM adoption_rows AS wanted
+         JOIN ${tables.nodes} AS taken
+           ON taken.namespace = wanted.namespace AND taken.type = 'asset'
+          AND ${match}`;
+    return ({
+      ctes: [
+        `adoption_rows AS (
+           SELECT * FROM jsonb_to_recordset(${rows}::jsonb) AS wanted(
+             ord int, id text, namespace text, key text, media_type text,
+             created_at timestamptz, data jsonb
+           )
+         )`,
+        // The locks that adoption in a transaction takes, so that both kinds
+        // of adopter queue behind each other on a key. A statement that waited
+        // here read its snapshot before the winner committed; it then meets
+        // the key's unique index, and its retry sees the winner and refuses.
+        `adoption_lock AS (
+           SELECT (
+             SELECT count(*) FROM (
+               SELECT pg_advisory_xact_lock(
+                 hashtext(${
+          param(options.databaseSchema + ":asset-materialization")
+        }::text),
+                 hashtext(locked.key)
+               )
+               FROM (
+                 SELECT key, ord FROM unnest(${
+          param(keys)
+        }::text[]) WITH ORDINALITY AS keyed(key, ord)
+                 ORDER BY ord
+               ) AS locked
+             ) AS held
+           ) AS keys,
+           pg_advisory_xact_lock_shared(
+             hashtext(${param(options.databaseSchema)}::text),
+             hashtext('body-ownership')
+           ) AS body
+         )`,
+        `adoption_taken AS (
+           ${taken("taken.id = wanted.id")}
+           UNION ALL
+           ${
+          taken(
+            `taken.source_type = 'asset_idempotency' AND taken.source_id = wanted.key`,
+          )
+        }
+         )`,
+        `adoption_refused AS (
+           SELECT (EXISTS (SELECT 1 FROM adoption_taken)${
+          bodies.map(({ exists }) => ` OR ${exists}`).join("")
+        }) AS refused
+         )`,
+      ],
+      gate:
+        "EXISTS (SELECT 1 FROM adoption_lock) AND NOT (SELECT refused FROM adoption_refused)",
+      effects: (source) => [
+        ...(nodes
+          ? [`adoption_nodes AS (
+               INSERT INTO ${tables.nodes} (
+                 id, namespace, type, name, data, source_type, source_id,
+                 created_at, updated_at
+               )
+               SELECT wanted.id, wanted.namespace, 'asset', wanted.media_type,
+                      wanted.data,
+                      CASE WHEN wanted.key IS NULL THEN NULL
+                           ELSE 'asset_idempotency' END,
+                      wanted.key, wanted.created_at, wanted.created_at
+                 FROM adoption_rows AS wanted, ${source}
+                ORDER BY wanted.ord
+             )`]
+          : []),
+        ...bodies.flatMap((body) => body.effects(source)),
+      ],
+      report:
+        "jsonb_build_object('refused', (SELECT refused FROM adoption_refused))",
+      refused: (report) => {
+        const value = typeof report === "string" ? JSON.parse(report) : report;
+        return (value as { refused?: unknown } | null)?.refused === true;
+      },
+    } as const);
+  };
+
+  const soleAdoption = (
+    adoption: AssetAdoptionPlan,
+  ): AssetMaterializationPlan => ({
+    namespace: adoption.asset.namespace,
+    content: [],
+    assets: [],
+    adoptions: [adoption],
+  } as const);
+
+  const assetCreationEvent = (adoption: AssetAdoptionPlan) => {
     const { asset, candidate } = adoption;
     const namespace = asset.namespace;
     const key = candidate.idempotencyKey?.trim() || undefined;
@@ -1131,7 +1349,7 @@ export function createDatabaseAssetRepository(
       bodyId,
       ...(key ? { idempotencyKey: key } : {}),
     } as const;
-    return await options.coordinator.commitMutation({
+    return ({
       draft: {
         type: "asset.created",
         namespace,
@@ -1145,13 +1363,12 @@ export function createDatabaseAssetRepository(
         },
         deduplicationId: `asset.create:${logicalId}`,
       },
-      ...(execution
-        ? { transaction: execution.transaction, dispatch: execution.dispatch }
-        : {}),
       matchData: eventBody,
       body: { id: eventBodyId, json: eventBody },
-      mutate: (context) => adoptCandidate(context, adoption),
-      recoverDuplicate: async (event, context) => {
+      recoverDuplicate: async (
+        event: DurableEvent,
+        context: EventMutationContext,
+      ) => {
         const body = await readEventBody<AssetEventBody>(
           context,
           event.namespace,
@@ -1171,12 +1388,79 @@ export function createDatabaseAssetRepository(
         assertRecordMatches(body.asset, candidate, key);
         return body.asset;
       },
+    } as const);
+  };
+
+  const commitAssetCreation = async (
+    adoption: AssetAdoptionPlan,
+    execution?: Readonly<{ transaction: SqlExecutor; dispatch: false }>,
+  ): Promise<CoordinatedMutationResult<AssetRecord>> => {
+    const event = assetCreationEvent(adoption);
+    if (!execution) {
+      // One autocommitted statement inserts the event and the asset. It
+      // refuses when anything already holds the asset's identity, and the
+      // slower path below then decides what that means.
+      if (adoptable([soleAdoption(adoption)])) {
+        try {
+          const result = await options.coordinator.commitMutation({
+            ...event,
+            dispatch: false,
+            statement: (param) => {
+              const composed = composeAdoption(
+                [soleAdoption(adoption)],
+                param,
+                { nodes: true },
+              );
+              return {
+                ...composed,
+                resolve: (report: unknown, inserted: boolean) => {
+                  if (inserted) return adoption.asset;
+                  if (composed.refused(report)) throw takenAdoption();
+                  throw new Error(
+                    `Asset '${adoption.asset.id}' was not created.`,
+                  );
+                },
+              };
+            },
+          });
+          retainPreparedBody(result.value!, adoption.candidate);
+          await options.coordinator.flushCommitted(result);
+          return result;
+        } catch (error) {
+          if (!(error as { [adoptionTaken]?: true })[adoptionTaken]) {
+            throw error;
+          }
+        }
+      }
+      const result = await options.session.transaction(async (transaction) => {
+        await lockMaterializationKeys(transaction, [{
+          namespace: adoption.asset.namespace,
+          key: adoption.candidate.idempotencyKey?.trim(),
+        }]);
+        return await commitAssetCreation(adoption, {
+          transaction,
+          dispatch: false,
+        });
+      });
+      retainPreparedBody(result.value!, adoption.candidate);
+      await options.coordinator.flushCommitted(result);
+      return result;
+    }
+    return await options.coordinator.commitMutation({
+      ...event,
+      transaction: execution.transaction,
+      dispatch: execution.dispatch,
+      mutate: (context) => adoptCandidate(context, adoption),
     });
   };
 
   const commitStandaloneMaterialization = async (
     plan: AssetMaterializationPlan,
   ): Promise<void> => {
+    if (plan.adoptions.length === 1) {
+      await commitAssetCreation(plan.adoptions[0]);
+      return;
+    }
     const pending: CoordinatedMutationResult<AssetRecord>[] = [];
     await options.session.transaction(async (transaction) => {
       await lockMaterializationKeys(
@@ -1804,6 +2088,8 @@ export function createDatabaseAssetRepository(
         prepareMaterializationOn(options.session, input),
       adoptMaterialization,
       reconcileMaterializations,
+      adoptable,
+      composeAdoption,
       publishMaterializations,
     } as const,
   );

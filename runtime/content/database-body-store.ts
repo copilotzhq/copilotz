@@ -276,6 +276,60 @@ export async function provisionDatabaseBodyStore(
   return true;
 }
 
+/**
+ * SQL that stores a new immutable body inside a larger statement, with the
+ * row `put` would create. `exists` holds when the body id is already taken, in
+ * which case `put`'s acquire-or-verify logic must decide instead.
+ */
+export function composeDatabaseBodyPut(
+  input: Readonly<{
+    schema: string;
+    param(value: unknown): string;
+    /** Prefixes the composed CTE names. */
+    label: string;
+    bodyId: string;
+    mediaType: string;
+    digest: string;
+    bytes: Uint8Array;
+  }>,
+): Readonly<{
+  exists: string;
+  effects(source: string): readonly string[];
+}> {
+  const schema = quoteEventIdentifier(
+    validateEventSchemaName(input.schema.trim()),
+  );
+  const bodies = `${schema}."content_bodies"`;
+  const parts = `${schema}."content_body_parts"`;
+  const bodyId = input.param(input.bodyId);
+  const mediaType = input.param(input.mediaType);
+  const digest = input.param(input.digest);
+  const bytes = input.param(input.bytes);
+  const protectedUntil = input.param(
+    resolveBodyProtectionUntil(undefined, bodyProtectionMs(undefined)),
+  );
+  const byteLength = input.param(input.bytes.byteLength);
+  return ({
+    exists: `EXISTS (SELECT 1 FROM ${bodies} WHERE body_id = ${bodyId}::text)`,
+    effects: (source) => [
+      `${input.label}_body AS (
+         INSERT INTO ${bodies}
+           (body_id, state, media_type, byte_length, digest, protected_until,
+            maintenance_version, updated_at, ready_at)
+         SELECT ${bodyId}::text, 'ready', ${mediaType}::text,
+                ${byteLength}::bigint, ${digest}::text,
+                ${protectedUntil}::timestamptz, 1, NOW(), NOW()
+           FROM ${source}
+         RETURNING body_id
+       )`,
+      `${input.label}_part AS (
+         INSERT INTO ${parts} (body_id, start_offset, append_id, bytes)
+         SELECT body_id, 0, 'put', ${bytes}::bytea FROM ${input.label}_body
+       )`,
+    ],
+  } as const);
+}
+
 /** SQL BodyStore using the final content_bodies/content_body_parts layout. */
 export function createDatabaseBodyStore(
   options: Readonly<{
@@ -301,11 +355,10 @@ export function createDatabaseBodyStore(
     ? Promise.resolve()
     : undefined;
 
-  const ensure = () => {
-    ready ??= (async () => {
-      await session.query(`CREATE SCHEMA IF NOT EXISTS ${schema}`);
-      await session.query(
-        `CREATE TABLE IF NOT EXISTS ${bodies} (
+  const provision = async () => {
+    await session.query(`CREATE SCHEMA IF NOT EXISTS ${schema}`);
+    await session.query(
+      `CREATE TABLE IF NOT EXISTS ${bodies} (
           body_id TEXT PRIMARY KEY,
           state TEXT NOT NULL CHECK (state IN ('open', 'sealing', 'terminating', 'ready', 'incomplete', 'aborted')),
           media_type TEXT NOT NULL,
@@ -320,9 +373,9 @@ export function createDatabaseBodyStore(
           updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
           ready_at TIMESTAMPTZ
         )`,
-      );
-      await session.query(
-        `CREATE TABLE IF NOT EXISTS ${parts} (
+    );
+    await session.query(
+      `CREATE TABLE IF NOT EXISTS ${parts} (
           body_id TEXT NOT NULL REFERENCES ${bodies}(body_id) ON DELETE CASCADE,
           start_offset BIGINT NOT NULL CHECK (start_offset >= 0),
           append_id TEXT NOT NULL,
@@ -331,8 +384,17 @@ export function createDatabaseBodyStore(
           PRIMARY KEY (body_id, start_offset),
           UNIQUE (body_id, append_id)
         )`,
-      );
-    })();
+    );
+  };
+
+  const ensure = () => {
+    // IF NOT EXISTS is not atomic: a concurrent creator can win the catalog
+    // insert, after which the tables exist and one more pass finds them.
+    ready ??= provision().catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : "";
+      if (!message.includes("violates unique constraint")) throw error;
+      return provision();
+    });
     return ready;
   };
 

@@ -73,6 +73,8 @@ Deno.test("collection mutations prepare once before SQL and only adopt inside co
       context: EventMutationContext,
       plan: AssetMaterializationPlan,
     ): Promise<void>;
+    adoptable(plans: readonly AssetMaterializationPlan[]): boolean;
+    composeAdoption(): never;
     publishMaterializations(
       plans: readonly AssetMaterializationPlan[],
     ): Promise<void>;
@@ -118,6 +120,12 @@ Deno.test("collection mutations prepare once before SQL and only adopt inside co
           ],
         );
       }
+    },
+    // This adopter stores assets in a transaction, so the write reconciles
+    // them there instead of composing them into its own statement.
+    adoptable: () => false,
+    composeAdoption() {
+      throw new Error("The test adopter does not compose adoptions.");
     },
     publishMaterializations(plans) {
       assertEquals(sqlOpen, false);

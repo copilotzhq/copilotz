@@ -137,22 +137,15 @@ export const sendConversation: ActionDefinition<{
         ? { externalId: selection.agent.id }
         : { participantId: selection.participantId! };
     });
-    const membership = membershipParticipants.size
-      ? {
-        participants: [...membershipParticipants.values()],
-        recipients,
-      }
-      : undefined;
     const message = await context.actions.createThreadMessage({
       id: `${context.action.runId}:message`,
       threadId,
       sender,
       content: input.content,
-      ...(membership ? { membership } : {
-        recipientIds: recipients.flatMap((recipient) =>
-          "participantId" in recipient ? [recipient.participantId] : []
-        ),
-      }),
+      membership: {
+        participants: [...membershipParticipants.values()],
+        recipients,
+      },
       metadata: {
         clientMessageId: (context.action.metadata.copilotzServer as {
           requestId?: string;

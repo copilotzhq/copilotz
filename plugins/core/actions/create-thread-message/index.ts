@@ -212,8 +212,8 @@ type ThreadMembership = Readonly<{
     | Readonly<{ externalId: string }>
   )[];
 }>;
-function threadMembership(value: unknown): ThreadMembership | undefined {
-  if (value === undefined) return undefined;
+function threadMembership(value: unknown): ThreadMembership {
+  if (value === undefined) return { participants: [], recipients: [] };
   const record = asRecord(value);
   if (!Array.isArray(record.participants)) {
     throw new TypeError("Membership participants must be an array.");
@@ -291,13 +291,11 @@ export async function createThreadMessage(
     .all([
       findParticipant(context.collections, sender),
       threadCollection.get({ id: threadId }),
-      membership
-        ? Promise.all(
-          membership.participants.map((participant) =>
-            findParticipant(context.collections, participant)
-          ),
-        )
-        : Promise.resolve([] as (CollectionRecord | null)[]),
+      Promise.all(
+        membership.participants.map((participant) =>
+          findParticipant(context.collections, participant)
+        ),
+      ),
     ]);
   if (!thread) {
     throw new Error(`Thread '${threadId}' was not found.`);
@@ -320,45 +318,45 @@ export async function createThreadMessage(
       existingSender,
       threadId,
     );
-    let messageRecipientIds = recipientIds;
-    if (membership) {
-      const memberRefs = await Promise.all(
-        membership.participants.map((participant, index) =>
-          participant.externalId === senderExternalId
-            ? Promise.resolve(ensured)
-            : ensureParticipantInTransaction(
-              collections,
-              participant,
-              existingMembershipParticipants[index] ?? null,
-              threadId,
-            )
+    const memberRefs = await Promise.all(
+      membership.participants.map((participant, index) =>
+        participant.externalId === senderExternalId
+          ? Promise.resolve(ensured)
+          : ensureParticipantInTransaction(
+            collections,
+            participant,
+            existingMembershipParticipants[index] ?? null,
+            threadId,
+          )
+      ),
+    );
+    const memberIdByExternalId = new Map(
+      membership.participants.map((participant, index) => [
+        participant.externalId,
+        memberRefs[index].id,
+      ]),
+    );
+    const messageRecipientIds = [
+      ...new Set([
+        ...recipientIds,
+        ...membership.recipients.map((recipient) =>
+          "participantId" in recipient
+            ? recipient.participantId
+            : memberIdByExternalId.get(recipient.externalId)!
         ),
-      );
-      const memberIdByExternalId = new Map(
-        membership.participants.map((participant, index) => [
-          participant.externalId,
-          memberRefs[index].id,
-        ]),
-      );
-      messageRecipientIds = [
-        ...new Set([
-          ...recipientIds,
-          ...membership.recipients.map((recipient) =>
-            "participantId" in recipient
-              ? recipient.participantId
-              : memberIdByExternalId.get(recipient.externalId)!
-          ),
-        ]),
-      ];
-      const participantIds = [
-        ...new Set([
-          ensured.id,
-          ...memberRefs.map((participant) => participant.id),
-        ]),
-      ].sort();
+      ]),
+    ];
+    // The sender joins with the batch. Most messages add nobody new, so the
+    // thread is written only when someone is not yet a member.
+    const joining = [
+      ...new Set([ensured.id, ...memberRefs.map((member) => member.id)]),
+    ].filter((participantId) =>
+      !existingParticipantIds.includes(participantId)
+    );
+    if (joining.length) {
       await collections.thread.commands.ensureMembership({
         id: threadId,
-        participantIds,
+        participantIds: joining.sort(),
       }, {
         operationKey: `message-membership:${id}`,
         metadata: { core: { threadId } },
@@ -387,9 +385,6 @@ export async function createThreadMessage(
       visibility: messageVisibility,
       ...(historyScopeId ? { historyScopeId } : {}),
     }, options);
-    if (!membership && !existingParticipantIds.includes(ensured.id)) {
-      await addSenderToThreadInTransaction(collections, threadId, ensured.id);
-    }
     return created;
   });
   const created = await context.collections.message.get({ id });

@@ -294,7 +294,13 @@ export function createS3BodyStore(
           "Object response has no body.",
         );
       }
-      parseReadyResponse(bodyId, response);
+      try {
+        parseReadyResponse(bodyId, response);
+      } catch (error) {
+        // A rejected body must be cancelled, or its connection stays open.
+        await response.body.cancel().catch(() => undefined);
+        throw error;
+      }
       return response.body;
     } catch (error) {
       if (isAbsentError(error)) return null;

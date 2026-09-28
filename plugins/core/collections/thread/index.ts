@@ -190,16 +190,7 @@ export const threadCollection: CollectionDefinition = defineCollection({
             "Membership participant IDs must be non-empty canonical IDs.",
           );
         }
-        const participantIds = requested as string[];
-        const canonical = [...new Set(participantIds)].sort();
-        if (
-          canonical.length !== participantIds.length ||
-          canonical.some((id, index) => id !== participantIds[index])
-        ) {
-          throw new TypeError(
-            "Membership participant IDs must be sorted and deduplicated.",
-          );
-        }
+        const participantIds = [...new Set(requested as string[])].sort();
         const currentIds = Array.isArray(current.participantIds)
           ? current.participantIds.filter((value): value is string =>
             typeof value === "string"

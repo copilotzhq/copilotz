@@ -19,10 +19,17 @@ Deno.test("Thread ensures a canonical membership batch", () => {
     }),
     undefined,
   );
-  assertThrows(() =>
+  assertEquals(
     mutate({
       current: { participantIds: [] },
       input: { participantIds: ["member-c", "member-b"] },
+    }),
+    { set: { participantIds: ["member-b", "member-c"] } },
+  );
+  assertThrows(() =>
+    mutate({
+      current: { participantIds: [] },
+      input: { participantIds: [" member-a"] },
     })
   );
 });

@@ -783,17 +783,24 @@ export function createDatabaseAssetRepository(
         return ({ asset } as const);
       }
     }
-    const idCollision = await findById(
-      executor,
-      namespace,
-      candidate.id,
-    );
-    if (idCollision) {
-      throw createContentError(
-        "asset_conflict",
-        `Asset ID already exists: ${candidate.id}`,
-        { namespace, assetId: candidate.id },
+    // A database body is written by the commit itself, so nothing happens
+    // before it. The commit refuses a taken id (in its statement, or in
+    // adoptCandidate on the fallback path) with this same error, and the read
+    // is saved. A body written before the commit must not overwrite the
+    // body of the asset that holds the id, so it is checked first.
+    if (candidate.readyBody || storage.writer!.kind !== "database") {
+      const idCollision = await findById(
+        executor,
+        namespace,
+        candidate.id,
       );
+      if (idCollision) {
+        throw createContentError(
+          "asset_conflict",
+          `Asset ID already exists: ${candidate.id}`,
+          { namespace, assetId: candidate.id },
+        );
+      }
     }
     const origin = candidate.origin ?? cloneOrigin(fallbackOrigin) ??
       ({ type: "namespace", id: namespace } as const);

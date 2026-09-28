@@ -132,9 +132,9 @@ async function adoptionScenarios(url: string) {
       1,
       "the event, the asset and the projection are one statement",
     );
-    // Reads that hydrate the written content are outside the write.
+    // Two reads that hydrate the written content are outside the write.
     assert(
-      created.statements <= 6,
+      created.statements <= 5,
       `a content write took ${created.statements} statements`,
     );
     const stored = await notes.get({ id: "n1" }, { content: true });
@@ -148,7 +148,7 @@ async function adoptionScenarios(url: string) {
     await notes.create({ id: "n2", content: "Adopted by the write" });
     assertEquals(await assetIds(), before);
 
-    // A standalone publish is one statement after its two reads.
+    // A standalone publish is one statement after its key lookup.
     const published = await measure(recorder, async () => {
       const asset = await measured.content.assets.publish({
         namespace,
@@ -161,7 +161,7 @@ async function adoptionScenarios(url: string) {
     assertEquals(published.transactions, 0);
     assertEquals(writes(recorder), 1, "a publish is one writing statement");
     assert(
-      published.statements <= 3,
+      published.statements <= 2,
       `a publish took ${published.statements} statements`,
     );
     const [readBack] = await measured.content.assets.readMany(namespace, [
@@ -205,6 +205,19 @@ async function adoptionScenarios(url: string) {
     );
     // The published asset and the single contended asset.
     assertEquals(contendedAssets.length, 2);
+
+    // A taken id is still refused with the same error, by the commit.
+    const [taken] = await assetIds();
+    const conflict = await measured.content.assets.publish({
+      namespace,
+      id: taken,
+      mediaType: "text/plain",
+      body: new TextEncoder().encode("Another body"),
+    }).then(() => undefined, (error: unknown) => error as Error);
+    assert(
+      conflict?.message.includes(`Asset ID already exists: ${taken}`),
+      `expected an id conflict, got ${conflict?.message}`,
+    );
 
     // Writes that share a transaction each adopt their assets in their own
     // statement, after one reconcile of the keys the transaction holds.

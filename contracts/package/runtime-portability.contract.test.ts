@@ -142,7 +142,7 @@ Deno.test("external dependency versions are centralized in deno.json imports", a
   };
   assertEquals(
     configuration.imports["@oxian/ominipg"],
-    "jsr:@oxian/ominipg@0.9.0-rc.11",
+    "jsr:@oxian/ominipg@0.9.0",
   );
   assertEquals(
     configuration.imports["@oxian/oxian-js"],

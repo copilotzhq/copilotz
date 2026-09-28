@@ -40,6 +40,7 @@ export type {
   CommitEventMutationResult,
   CreateEventStoreOptions,
   EventMutationContext,
+  EventStatement,
   EventStore,
 } from "./store.ts";
 export { createEphemeralEvent, isDurableEvent } from "./types.ts";

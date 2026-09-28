@@ -16,8 +16,10 @@ import { createPluginRegistry } from "../plugins/index.ts";
 import type {
   AssetMaterializationPlan,
   AssetMutationInput,
+  AssetRecord,
   ContentSequence,
   DurableContentInput,
+  PreparedAsset,
 } from "../content/index.ts";
 
 import { defineCollection } from "./definition.ts";
@@ -82,11 +84,17 @@ Deno.test("collection mutations prepare once before SQL and only adopt inside co
     prepareMaterialization(input: AssetMutationInput) {
       assertEquals(sqlOpen, false);
       phases.push("prepare");
+      const content = canonicalContent(input.content);
       const plan: AssetMaterializationPlan = Object.freeze({
         namespace: input.namespace,
-        content: canonicalContent(input.content),
+        content,
         assets: Object.freeze([]),
-        adoptions: Object.freeze([]),
+        adoptions: Object.freeze(content.map((ref) => ({
+          kind: "database" as const,
+          protectionRequired: false,
+          candidate: {} as PreparedAsset,
+          asset: { id: ref.assetId, namespace: input.namespace } as AssetRecord,
+        }))),
       });
       return Promise.resolve(plan);
     },

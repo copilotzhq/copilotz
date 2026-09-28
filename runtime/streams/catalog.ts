@@ -331,6 +331,11 @@ function dispatchOperationChange(
   }
 }
 
+function notifiable(session: SqlSession, payload: string): boolean {
+  return Boolean(session.listen) &&
+    new TextEncoder().encode(payload).byteLength <= 7_500;
+}
+
 async function notifyOperationChange(
   session: SqlSession,
   executor: SqlExecutor,
@@ -342,8 +347,7 @@ async function notifyOperationChange(
     const hub = await operationNotificationHub(session);
     dispatchOperationChange(hub, payload);
   }
-  if (!session.listen) return;
-  if (new TextEncoder().encode(payload).byteLength > 7_500) return;
+  if (!notifiable(session, payload)) return;
   try {
     await executor.query("SELECT pg_notify($1, $2)", [
       OPERATION_CHANGE_CHANNEL,
@@ -910,47 +914,61 @@ export function createOperationCatalog(
       if (!/^(0|[1-9][0-9]*)$/.test(input.position)) {
         throw new TypeError("Operation event position is invalid.");
       }
-      if (operationId === eventId) {
-        await transaction.query(
-          `INSERT INTO ${tables.operations} (
-             operation_id, namespace, root_event_id, correlation_id, metadata,
-             state, accepted_at, updated_at
-           ) VALUES ($1,$2,$3,$4,$5::jsonb,'accepted',$6::timestamptz,$6::timestamptz)
-           ON CONFLICT (operation_id) DO NOTHING`,
-          [
-            operationId,
-            namespace,
-            eventId,
-            input.correlationId,
+      const root = operationId === eventId;
+      const params: unknown[] = [
+        namespace,
+        operationId,
+        eventId,
+        input.position,
+        input.createdAt,
+      ];
+      // One statement indexes the event. A root event creates its operation in
+      // the same statement, which the other parts' snapshot cannot see, so
+      // "the operation exists" also accepts the row created here.
+      const created = root
+        ? `created_operation AS (
+             INSERT INTO ${tables.operations} (
+               operation_id, namespace, root_event_id, correlation_id, metadata,
+               state, accepted_at, updated_at
+             ) VALUES ($2,$1,$3,$${params.push(input.correlationId)},$${
+          params.push(
             JSON.stringify(snapshotStreamMetadata(input.metadata ?? {})),
-            input.createdAt,
-          ],
-        );
-      }
-      const indexed = await transaction.query<{ event_id: string }>(
-        `INSERT INTO ${tables.operationEvents} (
-           namespace, operation_id, event_id, event_position, created_at
-         ) SELECT $1,$2,$3,$4::bigint,$5::timestamptz
-             FROM ${tables.operations}
-            WHERE namespace = $1 AND operation_id = $2
-         ON CONFLICT (event_id) DO NOTHING
-         RETURNING event_id`,
-        [namespace, operationId, eventId, input.position, input.createdAt],
-      );
+          )
+        }::jsonb,'accepted',$5::timestamptz,$5::timestamptz)
+             ON CONFLICT (operation_id) DO NOTHING
+             RETURNING operation_id
+           ),`
+        : "";
+      const operationExists = `EXISTS (
+          SELECT 1 FROM ${tables.operations}
+           WHERE namespace = $1 AND operation_id = $2
+        )${root ? " OR EXISTS (SELECT 1 FROM created_operation)" : ""}`;
+      // Only a non-root event advances an existing operation to running.
+      const advanced = root ? "" : `, advanced_operation AS (
+          UPDATE ${tables.operations}
+             SET state = CASE WHEN state = 'accepted' THEN 'running' ELSE state END,
+                 updated_at = GREATEST(updated_at, $5::timestamptz)
+           WHERE namespace = $1 AND operation_id = $2
+             AND EXISTS (SELECT 1 FROM indexed_event)
+        )`;
+      const notify = notifiable(session, operationId)
+        ? `, pg_notify($${params.push(OPERATION_CHANGE_CHANNEL)}, $2)`
+        : "";
       // Detached delivery settlement scopes deliberately have no operation
       // root. They remain Core delivery mechanics and must not leak orphaned
       // reconnect catalog rows.
-      if (indexed.rows.length === 0) return;
-      if (operationId !== eventId) {
-        await transaction.query(
-          `UPDATE ${tables.operations}
-             SET state = CASE WHEN state = 'accepted' THEN 'running' ELSE state END,
-                 updated_at = GREATEST(updated_at, $3::timestamptz)
-           WHERE namespace = $1 AND operation_id = $2`,
-          [namespace, operationId, input.createdAt],
-        );
-      }
-      await notifyOperationChange(session, transaction, operationId, true);
+      await transaction.query(
+        `WITH ${created} indexed_event AS (
+           INSERT INTO ${tables.operationEvents} (
+             namespace, operation_id, event_id, event_position, created_at
+           ) SELECT $1,$2,$3,$4::bigint,$5::timestamptz
+              WHERE ${operationExists}
+           ON CONFLICT (event_id) DO NOTHING
+           RETURNING event_id
+         )${advanced}
+         SELECT event_id${notify} FROM indexed_event`,
+        params,
+      );
     },
     async get(namespaceInput, operationIdInput) {
       const namespace = requiredText(namespaceInput, "Operation namespace");

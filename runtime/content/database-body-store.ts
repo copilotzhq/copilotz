@@ -260,6 +260,22 @@ export function createDatabaseBodyStoreAdapter(
   } as const);
 }
 
+const provisioners = new WeakMap<BodyStore, () => Promise<void>>();
+
+/**
+ * Creates a database BodyStore's tables through its own session. Returns false
+ * when the store is not a database BodyStore. Call it before a transaction that
+ * writes through a `provisioned` store bound to that transaction.
+ */
+export async function provisionDatabaseBodyStore(
+  store: BodyStore,
+): Promise<boolean> {
+  const provision = provisioners.get(store);
+  if (!provision) return false;
+  await provision();
+  return true;
+}
+
 /** SQL BodyStore using the final content_bodies/content_body_parts layout. */
 export function createDatabaseBodyStore(
   options: Readonly<{
@@ -267,6 +283,8 @@ export function createDatabaseBodyStore(
     schema: string;
     backendId?: string;
     protectionMs?: number;
+    /** The tables are known to exist; skip the per-store DDL check. */
+    provisioned?: boolean;
   }>,
 ): BodyStore {
   const session = options.session;
@@ -279,7 +297,9 @@ export function createDatabaseBodyStore(
   const schema = quoteEventIdentifier(schemaName);
   const bodies = `${schema}."content_bodies"`;
   const parts = `${schema}."content_body_parts"`;
-  let ready: Promise<void> | undefined;
+  let ready: Promise<void> | undefined = options.provisioned
+    ? Promise.resolve()
+    : undefined;
 
   const ensure = () => {
     ready ??= (async () => {
@@ -1085,5 +1105,6 @@ export function createDatabaseBodyStore(
       },
     },
   };
+  provisioners.set(store, ensure);
   return store;
 }

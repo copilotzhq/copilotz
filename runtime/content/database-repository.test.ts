@@ -612,15 +612,16 @@ Deno.test("database bodies and Asset metadata are adopted in one transaction", a
       content: prepared,
     });
     const bodyId = plan.assets[0].bodyId;
-    const before = await fixture.session.query<{ n: number }>(
-      `SELECT count(*)::int AS n
-         FROM information_schema.tables
-        WHERE table_schema = 'copilotz_database_assets'
-          AND table_name = 'content_bodies'`,
-    );
+    const bodyRows = async () =>
+      (await fixture.session.query<{ n: number }>(
+        `SELECT count(*)::int AS n
+           FROM "copilotz_database_assets"."content_bodies"
+          WHERE body_id = $1`,
+        [bodyId],
+      )).rows[0].n;
 
     assertEquals(plan.adoptions.map((item) => item.kind), ["database"]);
-    assertEquals(before.rows[0].n, 0);
+    assertEquals(await bodyRows(), 0);
     assertEquals(
       await fixture.assets.get("tenant-a", "asset-planned-database"),
       null,
@@ -633,13 +634,7 @@ Deno.test("database bodies and Asset metadata are adopted in one transaction", a
       }, plan)
     );
 
-    const after = await fixture.session.query<{ n: number }>(
-      `SELECT count(*)::int AS n
-         FROM "copilotz_database_assets"."content_bodies"
-        WHERE body_id = $1`,
-      [bodyId],
-    );
-    assertEquals(after.rows[0].n, 1);
+    assertEquals(await bodyRows(), 1);
     assert(await fixture.assets.get("tenant-a", "asset-planned-database"));
   } finally {
     await closeFixture(fixture);

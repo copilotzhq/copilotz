@@ -25,6 +25,7 @@ import {
 import {
   createDatabaseBodyStore,
   createDatabaseBodyStoreAdapter,
+  provisionDatabaseBodyStore,
 } from "./database-body-store.ts";
 import { createBodyStorageRuntime } from "./storage.ts";
 import type {
@@ -423,6 +424,7 @@ export function createDatabaseAssetRepository(
     databaseSchema: options.databaseSchema,
   } as const;
   const scopedWriter = adapter.forScope(scope);
+  let databaseWriterProvisioned = false;
   const storage: BodyStorageRuntime = {
     adapter,
     writer: scopedWriter,
@@ -790,6 +792,9 @@ export function createDatabaseAssetRepository(
     } else if (configuredWriter.kind === "database") {
       adoptionKind = "database";
       storedLocation = { kind: "database", key: bodyId };
+      databaseWriterProvisioned ||= await provisionDatabaseBodyStore(
+        configuredWriter,
+      );
     } else {
       const head = await configuredWriter.put({
         bodyId,
@@ -979,6 +984,7 @@ export function createDatabaseAssetRepository(
         session: context.transaction,
         schema: options.databaseSchema,
         backendId: storage.writer!.backendId,
+        provisioned: databaseWriterProvisioned,
       });
       await writer.put({
         bodyId,

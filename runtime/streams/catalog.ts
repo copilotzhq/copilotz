@@ -1153,18 +1153,8 @@ export function createOperationCatalog(
     async mark(namespaceInput, operationIdInput, state) {
       const namespace = requiredText(namespaceInput, "Operation namespace");
       const operationId = requiredText(operationIdInput, "Operation id");
-      const result = await session.transaction(async (transaction) => {
-        if (state === "cancelled") {
-          await transaction.query(
-            `UPDATE ${tables.operationStreams}
-                SET state = 'terminating', outcome = 'cancelled',
-                    capture = 'truncated', availability = 'retained',
-                    updated_at = NOW()
-              WHERE namespace = $1 AND operation_id = $2 AND state = 'open'`,
-            [namespace, operationId],
-          );
-        }
-        return await transaction.query<{ operation_id: string }>(
+      const update = (executor: SqlExecutor) =>
+        executor.query<{ operation_id: string }>(
           `UPDATE ${tables.operations}
            SET state = $3, updated_at = NOW(),
                completed_at = CASE WHEN $3 IN ('completed','failed','cancelled')
@@ -1185,7 +1175,19 @@ export function createOperationCatalog(
          RETURNING operation_id`,
           [namespace, operationId, state],
         );
-      });
+      const result = state === "cancelled"
+        ? await session.transaction(async (transaction) => {
+          await transaction.query(
+            `UPDATE ${tables.operationStreams}
+                SET state = 'terminating', outcome = 'cancelled',
+                    capture = 'truncated', availability = 'retained',
+                    updated_at = NOW()
+              WHERE namespace = $1 AND operation_id = $2 AND state = 'open'`,
+            [namespace, operationId],
+          );
+          return await update(transaction);
+        })
+        : await update(session);
       if (result.rows.length > 0) {
         await notifyOperationChange(session, session, operationId);
       }

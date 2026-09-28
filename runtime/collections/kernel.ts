@@ -59,7 +59,12 @@ import {
   normalizeGraphRelation,
   projectGraphRelation,
 } from "./relation-reducer.ts";
-import { loadCollectionRecord, projectCollectionEvent } from "./reducer.ts";
+import {
+  composeCollectionProjection,
+  loadCollectionRecord,
+  projectCollectionEvent,
+  type ProjectionGuard,
+} from "./reducer.ts";
 import { aggregateCollectionRecords } from "./aggregate.ts";
 import { queryCollectionRecords, queryCollectionRelations } from "./query.ts";
 import {
@@ -726,6 +731,33 @@ function isNoopError(
     "record" in error;
 }
 
+/** The error of a write whose scope condition rejects it, if any. */
+function conditionRefusal(
+  condition: CollectionWriteOptions["condition"],
+  current: CollectionRecord | null,
+  next: CollectionRecord,
+): Error | undefined {
+  const refused = (message: string) =>
+    markNonRetryable(
+      Object.assign(new Error(message), {
+        code: "collection_mutation_condition_failed",
+        status: 403,
+      }),
+    );
+  if (
+    condition?.current &&
+    (!current || !matchesCollectionFilter(condition.current, current))
+  ) {
+    return refused("Collection mutation is outside its authorized scope.");
+  }
+  if (condition?.next && !matchesCollectionFilter(condition.next, next)) {
+    return refused(
+      "Collection mutation result is outside its authorized scope.",
+    );
+  }
+  return undefined;
+}
+
 function mutationResult<TSelect extends object>(
   record: CollectionRecord,
   event: DurableEvent,
@@ -792,6 +824,8 @@ export function createCollectionKernel(
       pending: CoordinatedMutationResult<unknown>[],
       replacements: ReadonlyMap<string, AssetManifestEntry>,
     ): Promise<CollectionWrite<CollectionRecord> | undefined>;
+    /** Commits and dispatches the mutation outside a transaction. */
+    commitAlone?(): Promise<CollectionMutation<CollectionRecord>>;
   }>;
   type StagedAsset = Readonly<{
     manifest: AssetManifestEntry;
@@ -1408,6 +1442,19 @@ export function createCollectionKernel(
         deduplicationId: identity?.deduplicationId,
         settlementScopeId: identity?.settlementScopeId,
       };
+      // A plan records the state it was made against, so its scope condition
+      // is decided now; the commit only confirms that state is still current.
+      const guard: ProjectionGuard | undefined = plan.expected !== undefined
+        ? {
+          expected: plan.expected,
+          refusal: conditionRefusal(
+            scoped.condition,
+            plan.expected,
+            plan.write.record,
+          ),
+        }
+        : undefined;
+      const adopts = plan.content.some((item) => item.adoptions.length > 0);
       const result = await options.coordinator.commitMutation({
         draft,
         ...(execution ? { transaction: execution.transaction } : {}),
@@ -1416,82 +1463,59 @@ export function createCollectionKernel(
           matchData,
         }),
         body: { id: bodyId, json: plan.write.body },
-        mutate: async (context) => {
-          let currentForCondition: CollectionRecord | null | undefined;
-          if ("expected" in plan) {
-            const current = await loadCollectionRecord(
-              context.transaction,
-              tables,
-              scoped.namespace,
-              name,
-              subjectId,
-              true,
-            );
-            currentForCondition = current;
-            if (plan.expected === null ? current !== null : !current) {
-              throw new Error(
-                plan.expected === null
-                  ? `Collection '${name}' '${subjectId}' was created while its mutation was prepared.`
-                  : `Unknown ${name} '${subjectId}'.`,
+        ...(adopts || (!guard && scoped.condition)
+          ? {
+            mutate: async (context: EventMutationContext) => {
+              if (!guard && scoped.condition) {
+                const refusal = conditionRefusal(
+                  scoped.condition,
+                  await loadCollectionRecord(
+                    context.transaction,
+                    tables,
+                    scoped.namespace,
+                    name,
+                    subjectId,
+                    true,
+                  ),
+                  plan.write.record,
+                );
+                if (refusal) throw refusal;
+              }
+              if (!guard?.refusal) {
+                for (const content of plan.content) {
+                  await options.assets!.adoptMaterialization(context, content);
+                }
+              }
+              await projectCollectionEvent(
+                context,
+                definition,
+                plan.write.body,
+                guard,
               );
-            }
-            if (
-              plan.expected !== null &&
-              !sameValue(current, plan.expected)
-            ) {
-              throw new Error(
-                `Collection '${name}' '${subjectId}' changed while its mutation was prepared.`,
-              );
-            }
+              return plan.write.record;
+            },
           }
-          if (scoped.condition) {
-            if (currentForCondition === undefined) {
-              currentForCondition = await loadCollectionRecord(
-                context.transaction,
+          : {
+            statement: (param: (value: unknown) => string) => {
+              const projection = composeCollectionProjection(
                 tables,
-                scoped.namespace,
-                name,
-                subjectId,
-                true,
+                definition,
+                plan.write.body,
+                param,
+                guard,
               );
-            }
-            if (
-              scoped.condition.current &&
-              (!currentForCondition ||
-                !matchesCollectionFilter(
-                  scoped.condition.current,
-                  currentForCondition,
-                ))
-            ) {
-              throw markNonRetryable(
-                Object.assign(
-                  new Error(
-                    "Collection mutation is outside its authorized scope.",
-                  ),
-                  { code: "collection_mutation_condition_failed", status: 403 },
-                ),
-              );
-            }
-            if (
-              scoped.condition.next &&
-              !matchesCollectionFilter(scoped.condition.next, plan.write.record)
-            ) {
-              throw markNonRetryable(
-                Object.assign(
-                  new Error(
-                    "Collection mutation result is outside its authorized scope.",
-                  ),
-                  { code: "collection_mutation_condition_failed", status: 403 },
-                ),
-              );
-            }
-          }
-          for (const content of plan.content) {
-            await options.assets!.adoptMaterialization(context, content);
-          }
-          await projectCollectionEvent(context, definition, plan.write.body);
-          return plan.write.record;
-        },
+              return {
+                ...projection,
+                resolve: (report: unknown, inserted: boolean) => {
+                  if (inserted) return plan.write.record;
+                  throw projection.failure(report) ??
+                    new Error(
+                      `Collection '${name}' '${subjectId}' was not written.`,
+                    );
+                },
+              };
+            },
+          }),
         recoverDuplicate: async (event, context) => {
           if (!event.subject?.id) {
             throw new Error(`Deduplicated ${name} event is missing a subject.`);
@@ -1609,6 +1633,25 @@ export function createCollectionKernel(
         execution,
       );
 
+    // A retry commits as a duplicate of its first attempt, so the transaction
+    // identity is read only when the current state cannot be planned or
+    // committed. Declared content is prepared only once a replay is ruled out.
+    const commitPlanned = async (
+      plan: () => Promise<PlannedCollectionOperation>,
+      replay: () => Promise<PlannedCollectionOperation | null>,
+    ): Promise<CollectionMutation<TSelect>> => {
+      if (definition.content?.fields.length) {
+        return await commitOperation(await replay() ?? await plan());
+      }
+      try {
+        return await commitOperation(await plan());
+      } catch (error) {
+        const replayed = await replay();
+        if (!replayed) throw error;
+        return await commitOperation(replayed);
+      }
+    };
+
     const recordKey = (id: string) => `${name}\u0000${id}`;
 
     const stageOperation = (
@@ -1668,6 +1711,14 @@ export function createCollectionKernel(
               CollectionWrite<CollectionRecord>
             >;
           },
+          ...(planned.plan.content.some((item) => item.adoptions.length)
+            ? {}
+            : {
+              commitAlone: () =>
+                commitOperation(planned) as Promise<
+                  CollectionMutation<CollectionRecord>
+                >,
+            }),
         } as const,
       );
       scope.records.set(
@@ -1805,18 +1856,22 @@ export function createCollectionKernel(
         String((value as Record<string, unknown>).id ?? createId()),
         `${name} id`,
       );
-      const planned = await replayOperation(
-        `${name}.created`,
-        subjectId,
-        "create",
-        optionsSnapshot,
-        intent,
-      ) ?? await planCreate(
-        { ...value as Record<string, unknown>, id: subjectId } as TInsert,
-        optionsSnapshot,
-        intent,
+      return await commitPlanned(
+        () =>
+          planCreate(
+            { ...value as Record<string, unknown>, id: subjectId } as TInsert,
+            optionsSnapshot,
+            intent,
+          ),
+        () =>
+          replayOperation(
+            `${name}.created`,
+            subjectId,
+            "create",
+            optionsSnapshot,
+            intent,
+          ),
       );
-      return await commitOperation(planned);
     };
 
     const prepareUpdate = (
@@ -1947,20 +2002,16 @@ export function createCollectionKernel(
           optionsSnapshot.condition,
       );
       try {
-        return await commitOperation(
-          await replayOperation(
-            `${name}.updated`,
-            id,
-            "update",
-            optionsSnapshot,
-            intent,
-          ) ?? await planUpdate(
-            id,
-            patchSnapshot,
-            optionsSnapshot,
-            intent,
-            keyed,
-          ),
+        return await commitPlanned(
+          () => planUpdate(id, patchSnapshot, optionsSnapshot, intent, keyed),
+          () =>
+            replayOperation(
+              `${name}.updated`,
+              id,
+              "update",
+              optionsSnapshot,
+              intent,
+            ),
         );
       } catch (error) {
         if (isNoopError(error)) {
@@ -2027,14 +2078,16 @@ export function createCollectionKernel(
         operation: "delete",
         id,
       } as const;
-      return await commitOperation(
-        await replayOperation(
-          `${name}.deleted`,
-          id,
-          "delete",
-          optionsSnapshot,
-          intent,
-        ) ?? await planRemove(id, optionsSnapshot, intent),
+      return await commitPlanned(
+        () => planRemove(id, optionsSnapshot, intent),
+        () =>
+          replayOperation(
+            `${name}.deleted`,
+            id,
+            "delete",
+            optionsSnapshot,
+            intent,
+          ),
       );
     };
 
@@ -2141,21 +2194,16 @@ export function createCollectionKernel(
       );
       const eventType = commandDefinition.event ?? `${name}.updated`;
       try {
-        return await commitOperation(
-          await replayOperation(
-            eventType,
-            id,
-            `mutate:${command}`,
-            optionsSnapshot,
-            intent,
-          ) ?? await planMutate(
-            id,
-            command,
-            value,
-            optionsSnapshot,
-            intent,
-            keyed,
-          ),
+        return await commitPlanned(
+          () => planMutate(id, command, value, optionsSnapshot, intent, keyed),
+          () =>
+            replayOperation(
+              eventType,
+              id,
+              `mutate:${command}`,
+              optionsSnapshot,
+              intent,
+            ),
         );
       } catch (error) {
         if (isNoopError(error)) {
@@ -3094,6 +3142,20 @@ export function createCollectionKernel(
       }
     };
     for (const plan of orderedPlans) assertProtection(plan);
+    // A lone collection write commits atomically on its own.
+    const [only] = orderedPlans;
+    if (orderedPlans.length === 1 && only.commitAlone && !scope.assets.size) {
+      const write = await only.commitAlone();
+      return ({
+        value,
+        operationKey,
+        namespace,
+        settlementScopeId,
+        correlationId,
+        writes: [write],
+        dispatch: write.dispatch,
+      } as const);
+    }
     try {
       await options.session.transaction(async (transaction) => {
         replacements = options.assets

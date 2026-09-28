@@ -148,6 +148,7 @@ export function createEventCoordinator(
     const committed = await options.store.commitMutation({
       draft: mutation.draft,
       body: mutation.body,
+      statement: mutation.statement,
       mutate: mutation.mutate,
       recoverDuplicate: mutation.recoverDuplicate,
       priority: mutation.priority,

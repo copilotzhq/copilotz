@@ -1,5 +1,51 @@
 # Changelog
 
+## 0.82.0 — 2026-09-28
+
+### Breaking
+
+- `EventStore.succeedDelivery` and `cancelDelivery` now return the settled
+  `EventDelivery` (or `null` when the delivery was not in a settleable state)
+  instead of a boolean. Callers that only test truthiness are unaffected.
+
+### Performance
+
+A reply that calls one tool went from about 770 SQL statements to about 130
+(measured with the latency probe on Postgres). With a 5 ms database round trip
+that reply takes about 0.9 s end to end.
+
+- Commit each durable event, with its body, deliveries and operation index, as
+  one statement. Commit each collection write and its graph projection as one
+  statement, including the assets the write adopts.
+- Run a tool plan inside the deliveries that advance it: one tool call takes one
+  processor hop instead of five. The coordinator no longer subscribes to the
+  tool-plan intermediate events; their handlers remain for deliveries created
+  before this release.
+- Hand committed events to local consumers without re-reading them, and wait on
+  the executor's in-flight work instead of polling for settlement.
+- Claim an Action run with its invoked receipt and retain its input assets in
+  the same statement.
+- Read what a question needs once: collection gets issued together are one
+  statement, a snapshot answers a repeated read once, and a handler reads a row
+  once (its view lasts for that handler, at most two seconds, and is voided by
+  the runtime's own writes; another process's write is seen by the next
+  handler).
+- Prepare a prompt's messages in one pass: one list of the stored messages, one
+  read of their asset rows, and one resolution of the bodies. The byte limit is
+  now measured in stored bytes, the measure the resolver enforces.
+- Report a succeeded delivery's row with its result instead of reading it back.
+
+### Changed
+
+- Adopt Ominipg 0.9.0.
+- Add a single membership path for messages, and cancel S3 response bodies when
+  GET metadata fails validation, so the connection is released.
+
+### Documentation
+
+- Size the connection pool from the turns in flight: at least 1.5 connections
+  per concurrent turn (see `docs/embedding-and-hypervisors.md`).
+
 ## 0.81.0 — 2026-09-28
 
 ### Breaking

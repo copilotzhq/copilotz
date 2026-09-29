@@ -108,6 +108,60 @@ export function actionContentSequences(
   return sequences;
 }
 
+const TEXT_MEDIA_TYPE = "text/plain; charset=utf-8";
+
+/** Plain text written as a string is one ordinary text entry. */
+function textEntry(value: string): Record<string, unknown> {
+  return { kind: "text", role: "body", mediaType: TEXT_MEDIA_TYPE, value };
+}
+
+/**
+ * A string is the shorthand for one text entry, alone or inside a sequence.
+ * Every other shape is left as written so that validation still rejects it.
+ */
+function textSequence(value: unknown): unknown {
+  if (typeof value === "string") return [textEntry(value)];
+  if (!Array.isArray(value)) return value;
+  for (let index = 0; index < value.length; index++) {
+    if (typeof value[index] === "string") {
+      value[index] = textEntry(value[index] as string);
+    }
+  }
+  return value;
+}
+
+/**
+ * Rewrites string shorthand at declared paths in a private snapshot. It walks
+ * the same paths as `actionContentSequences` and skips whatever does not match
+ * them, so the shape errors stay with that function.
+ */
+function expandTextShorthand(
+  node: unknown,
+  segments: readonly string[],
+): void {
+  if (!node || typeof node !== "object" || Array.isArray(node)) return;
+  const [segment, ...rest] = segments;
+  const many = segment.endsWith("[]");
+  const key = many ? segment.slice(0, -2) : segment;
+  if (!Object.hasOwn(node, key)) return;
+  const record = node as Record<string, unknown>;
+  const value = record[key];
+  if (!rest.length) {
+    if (!many) {
+      record[key] = textSequence(value);
+    } else if (Array.isArray(value)) {
+      for (let index = 0; index < value.length; index++) {
+        value[index] = textSequence(value[index]);
+      }
+    }
+    return;
+  }
+  if (!many) expandTextShorthand(value, rest);
+  else if (Array.isArray(value)) {
+    for (const item of value) expandTextShorthand(item, rest);
+  }
+}
+
 function encode(kind: string, value: unknown): Uint8Array {
   if (kind === "text" && typeof value === "string") {
     return new TextEncoder().encode(value);
@@ -129,6 +183,9 @@ export async function prepareActionContentInput(
   signal: AbortSignal,
 ): Promise<{ durableInput: unknown; hydrate(): Promise<unknown> }> {
   const snapshot = structuredClone(input);
+  for (const path of declaration.input) {
+    expandTextShorthand(snapshot, path.split("."));
+  }
   const entries = actionContentSequences(snapshot, declaration).flat();
   if (entries.length && !content.authorize) {
     throw new Error("Action content requires an authorization service.");

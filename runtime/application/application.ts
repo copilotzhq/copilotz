@@ -172,10 +172,12 @@ async function waitForApplicationScope(
         namespace,
         settlementScopeId,
       });
-      const confirmed = await eventScope.events.settlement(
-        namespace,
-        settlementScopeId,
-      );
+      // The two checks read different tables and neither needs the other, so
+      // they share a round trip.
+      const [confirmed, streamsOpen] = await Promise.all([
+        eventScope.events.settlement(namespace, settlementScopeId),
+        eventScope.operations.hasOpenStreams(namespace, settlementScopeId),
+      ]);
       if (confirmed.deadLetters > 0) {
         throw new Error(
           `Settlement scope '${settlementScopeId}' contains dead-lettered work.`,
@@ -186,13 +188,7 @@ async function waitForApplicationScope(
           `Settlement scope '${settlementScopeId}' was cancelled.`,
         );
       }
-      if (
-        confirmed.unsettled === 0 &&
-        !await eventScope.operations.hasOpenStreams(
-          namespace,
-          settlementScopeId,
-        )
-      ) return;
+      if (confirmed.unsettled === 0 && !streamsOpen) return;
     }
     const progressed = await execution.awaitScopeProgress({
       databaseSchema,

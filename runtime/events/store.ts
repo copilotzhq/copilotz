@@ -222,8 +222,9 @@ export type EventStore = {
     owner: string;
     leaseMs?: number;
   }): Promise<boolean>;
-  succeedDelivery(id: string, owner: string): Promise<boolean>;
-  cancelDelivery(id: string, owner?: string): Promise<boolean>;
+  /** Settles a leased delivery and returns the row it settled into. */
+  succeedDelivery(id: string, owner: string): Promise<EventDelivery | null>;
+  cancelDelivery(id: string, owner?: string): Promise<EventDelivery | null>;
   failDelivery(options: {
     id: string;
     owner: string;
@@ -974,21 +975,21 @@ export function createEventStore(
     id: string,
     status: Extract<DeliveryStatus, "succeeded" | "cancelled">,
     owner?: string,
-  ): Promise<boolean> => {
+  ): Promise<EventDelivery | null> => {
     const params: unknown[] = [id, status];
     const ownerFilter = owner ? `AND lease_owner = $${params.push(owner)}` : "";
     const allowed = status === "succeeded"
       ? "status = 'leased'"
       : "status IN ('pending', 'leased', 'retry_wait')";
-    const result = await session.query<{ id: string }>(
+    const result = await session.query<DeliveryRow>(
       `UPDATE ${tables.event_deliveries}
        SET status = $2, lease_owner = NULL, lease_expires_at = NULL,
            updated_at = NOW(), settled_at = NOW()
        WHERE id = $1 AND ${allowed} ${ownerFilter}
-       RETURNING id`,
+       RETURNING *`,
       params,
     );
-    return result.rows.length === 1;
+    return result.rows[0] ? mapDelivery(result.rows[0], databaseSchema) : null;
   };
 
   const listRecoverable = async (

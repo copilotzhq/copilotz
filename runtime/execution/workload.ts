@@ -268,11 +268,11 @@ export function createDeliveryWorkload(
       });
       await handle(processorEvent, context);
       abort.signal.throwIfAborted();
-      const succeeded = await store.succeedDelivery(
+      const settled = await store.succeedDelivery(
         delivery.id,
         metadata.dispatchAttemptId,
       );
-      if (!succeeded) {
+      if (!settled) {
         throw new Error(`Delivery '${delivery.id}' could not be settled.`);
       }
       reportDeliveryDiagnostic(options.onDiagnostic, {
@@ -287,7 +287,14 @@ export function createDeliveryWorkload(
         namespace: metadata.namespace,
         status: "succeeded",
       });
-      return { metadata: statusMetadata(delivery.id, "succeeded") };
+      // The settled row travels with the result, so the executor need not
+      // read it back.
+      return {
+        metadata: {
+          ...statusMetadata(delivery.id, "succeeded"),
+          delivery: JSON.parse(JSON.stringify(settled)),
+        },
+      };
     } catch (error) {
       if (!abort.signal.aborted) abort.abort(error);
       const failed = await store.failDelivery({

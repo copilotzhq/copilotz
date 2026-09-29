@@ -6,8 +6,12 @@ embedded Gateway and Worker over a private in-process transport.
 ## Compose Core and one model
 
 ```ts
-import { createCopilotz } from "jsr:@copilotz/copilotz@^0.75.0";
-import { corePlugin, message } from "jsr:@copilotz/copilotz@^0.75.0/core";
+import { createCopilotz } from "jsr:@copilotz/copilotz@^0.82.0";
+import { corePlugin } from "jsr:@copilotz/copilotz@^0.82.0/core";
+import {
+  submitChannel,
+  webChannelPlugin,
+} from "jsr:@copilotz/copilotz@^0.82.0/channels";
 
 const apiKey = Deno.env.get("OPENAI_API_KEY");
 if (!apiKey) throw new Error("OPENAI_API_KEY is required.");
@@ -15,7 +19,7 @@ if (!apiKey) throw new Error("OPENAI_API_KEY is required.");
 const app = await createCopilotz({
   namespace: "acme",
   database: { url: ":memory:" },
-  plugins: [corePlugin],
+  plugins: [corePlugin, webChannelPlugin],
   resources: {
     agents: {
       support: {
@@ -23,7 +27,7 @@ const app = await createCopilotz({
         name: "Support",
         role: "Answer clearly and use only granted capabilities.",
         models: {
-          generate: [{ connection: "openai", model: "your-provider-model-id" }],
+          generate: [{ connection: "openai", model: "gpt-5.4-mini" }],
         },
         capabilities: {},
       },
@@ -78,26 +82,30 @@ writes. See
 Custom providers use `createLlmAdapter({ call })` and a connection
 `{ adapter }`.
 
-## Send typed ingress
+## Send a message
 
-Core messages target an existing thread and participant graph. Channel or
-onboarding workflows may create that graph as part of their atomic ingress; a
-trusted Gateway host can also bootstrap Collections through its
-`/api/collections/*` routes. The Goal Action consumes existing target and lead
-threads rather than provisioning them.
+Core messages belong to a thread with human and agent participants. Channel
+ingress creates that thread and its participants on first use, so the first
+message needs no separate setup. Occurrence IDs identify the message; a retry
+with the same ID is not processed twice.
 
 ```ts
-const operation = await app.send(message({
-  thread: "thread-1",
-  participant: "user-1",
-  recipientIds: ["agent-support"],
-  content: "How can you help me?",
-  deduplicationId: "demo:thread-1:message-1",
-}));
+import { isStreamOutput } from "jsr:@copilotz/copilotz@^0.82.0/streams";
+
+const [operation] = await submitChannel(app, "web", [{
+  id: "message-1",
+  input: {
+    externalThreadId: "thread-1",
+    sender: { externalId: "user-1", participantType: "human", name: "Ada" },
+    recipients: ["support"],
+    content: "How can you help me?",
+    thread: { participants: ["support"] },
+  },
+}]);
 
 for await (const output of operation.outputs) {
-  if (output.type === "stream.output") {
-    for await (const bytes of output.payload) consume(bytes);
+  if (isStreamOutput(output)) {
+    for await (const bytes of output.payload) await Deno.stdout.write(bytes);
   } else {
     console.log(output.type, output.subject);
   }
@@ -111,10 +119,14 @@ The output stream is installed before ingress is appended. `done` resolves only
 after the operation's durable settlement scope reaches zero and relayed output
 is drained. Detached Processors remain durable but do not delay this handle.
 
+A thread that already exists can also receive Core `message()` input through
+`app.send`. It targets the existing thread and participant graph and does not
+create them.
+
 ## Add a native Tool
 
 ```ts
-import { defineTool } from "jsr:@copilotz/copilotz@^0.75.0/tools";
+import { defineTool } from "jsr:@copilotz/copilotz@^0.82.0/core";
 
 const lookupCustomer = defineTool({
   id: "acme.customer.lookup",
@@ -130,7 +142,7 @@ const lookupCustomer = defineTool({
   },
 });
 
-import { definePlugin } from "@copilotz/copilotz/plugins";
+import { definePlugin } from "jsr:@copilotz/copilotz@^0.82.0/plugins";
 const customerPlugin = definePlugin({
   id: "@acme/customer-support",
   version: "1.0.0",
@@ -142,7 +154,7 @@ Install `customerPlugin`, then grant the exact alias on the Agent:
 
 ```ts
 capabilities: {
-  tools: ["lookup_customer"];
+  tools: ["lookup_customer"],
 }
 ```
 

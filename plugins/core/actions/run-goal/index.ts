@@ -11,7 +11,7 @@ import type {
 } from "@copilotz/copilotz/application";
 import type { ContentSequence } from "@copilotz/copilotz/content";
 import type { ResolvedCopilotzEvent } from "@copilotz/copilotz/events";
-import type { StreamOutput } from "@copilotz/copilotz/streams";
+import { isStreamOutput } from "@copilotz/copilotz/streams";
 import {
   type CoreMessageInput,
   message,
@@ -111,11 +111,6 @@ function requiredText(value: unknown, name: string): string {
   const normalized = typeof value === "string" ? value.trim() : "";
   if (!normalized) throw new TypeError(`${name} must be non-empty.`);
   return normalized;
-}
-
-function isStreamOutput(output: ApplicationOutput): output is StreamOutput {
-  return output.type === "stream.output" &&
-    "payload" in output && output.payload instanceof ReadableStream;
 }
 
 function messageRecord(output: ApplicationOutput): ObservedMessage | null {

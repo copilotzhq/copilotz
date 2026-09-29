@@ -276,6 +276,7 @@ export type CopilotzEngine = Readonly<{
       namespace: string;
       eventId?: string;
       consumerId?: string;
+      settlementScopeId?: string;
       status?: EventDelivery["status"];
       limit?: number;
     }): Promise<readonly EventDelivery[]>;

@@ -52,6 +52,7 @@ export type {
 } from "./catalog.ts";
 export {
   createStreamOutputDescriptor,
+  isStreamOutput,
   isStreamOutputDescriptor,
 } from "./observation.ts";
 export { streamErrorOutput } from "./terminal.ts";

@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.82.1 — 2026-09-29
+
+### Fixed
+
+- `close()` no longer crashes the process after successful work. Each stream
+  output's terminal wait kept polling the database after it closed and rejected
+  unhandled on Node and Deno. Shutdown now ends these waits.
+- A send whose work dead-lettered now names the cause, for example
+  `… contains dead-lettered work. <consumer>: Thread 'x' was not found.`, and
+  carries it as the error's `cause`.
+- PGlite now opens on Node and Bun without a custom `pgliteProvider` (Ominipg
+  0.9.1). Install `@electric-sql/pglite` alongside Copilotz.
+
+### Added
+
+- `isStreamOutput` from `@copilotz/copilotz/streams` narrows an Application
+  output to a progressive stream.
+- Deliveries can be listed by settlement scope.
+
+### Documentation
+
+- The README and quickstart examples run as written. They create the thread
+  through web channel ingress, use a real model, and import `defineTool` from
+  `/core`.
+
 ## 0.82.0 — 2026-09-28
 
 ### Breaking

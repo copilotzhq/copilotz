@@ -7,6 +7,7 @@ Deno.test("AgentResource is a plain Core resource with explicit aliases", () => 
     name: "Assistant",
     role: "Help the participant",
     instructions: "Be concise.",
+    history: { maxAgeMs: 24 * 60 * 60 * 1_000 },
     personality: "Thoughtful",
     description: "Default application assistant",
     models: {
@@ -25,6 +26,7 @@ Deno.test("AgentResource is a plain Core resource with explicit aliases", () => 
     connection: "default",
     model: "default",
   }]);
+  assertEquals(agent.history, { maxAgeMs: 24 * 60 * 60 * 1_000 });
   assertEquals(agent.capabilities.tools, ["search", "calculator"]);
 
   type HasProvider = "provider" extends keyof AgentResource ? true : false;
@@ -212,6 +214,45 @@ Deno.test("defineAgent keeps a dynamic resolver process-local", () => {
 
   assertEquals(dynamic.instructions, "base");
   assertEquals(typeof dynamic.dynamicResolve, "function");
+});
+
+Deno.test("defineAgent validates history age and rejects unknown policy keys", () => {
+  assertThrows(
+    () =>
+      defineAgent({
+        id: "invalid-history",
+        name: "Invalid History",
+        role: "helper",
+        models: {},
+        history: { maxAgeMs: 0 },
+      }),
+    TypeError,
+    "positive safe integer",
+  );
+  assertThrows(
+    () =>
+      defineAgent({
+        id: "unsafe-history",
+        name: "Unsafe History",
+        role: "helper",
+        models: {},
+        history: { maxAgeMs: Number.MAX_SAFE_INTEGER + 1 },
+      }),
+    TypeError,
+    "positive safe integer",
+  );
+  assertThrows(
+    () =>
+      defineAgent({
+        id: "unknown-history",
+        name: "Unknown History",
+        role: "helper",
+        models: {},
+        history: { maxAgeMs: 1_000, mode: "recent" },
+      } as unknown as AgentResource),
+    TypeError,
+    "cannot declare 'mode'",
+  );
 });
 
 Deno.test("defineAgent validates dynamic resolver declarations", () => {

@@ -28,7 +28,10 @@ import type {
   AgentModelSelection,
   AgentResource,
 } from "../../authoring/define-agent/index.ts";
-import { normalizeAgentModels } from "../../authoring/define-agent/index.ts";
+import {
+  normalizeAgentHistory,
+  normalizeAgentModels,
+} from "../../authoring/define-agent/index.ts";
 import {
   coreAgent,
   type CoreProcessorContext,
@@ -111,9 +114,12 @@ async function resolvedAgent(
     revision?: string;
   }>
 > {
+  const baseHistory = normalizeAgentHistory(agent.history, agent.id);
   const resolver = agent.dynamicResolve;
   if (!resolver) {
-    return ({ agent } as const);
+    return ({
+      agent: baseHistory ? { ...agent, history: baseHistory } : agent,
+    } as const);
   }
   const facts: AgentDynamicResolveContext = Object.freeze(
     {
@@ -149,17 +155,32 @@ async function resolvedAgent(
     await resolver(facts, execution),
     agent.id,
   );
-  const { dynamicResolve: _dynamicResolve, ...staticAgent } = agent;
+  const {
+    dynamicResolve: _dynamicResolve,
+    history: _history,
+    ...staticAgent
+  } = agent;
   return ({
     agent: {
       ...staticAgent,
+      ...(baseHistory ? { history: baseHistory } : {}),
       ...(resolved.instructions !== undefined
         ? { instructions: resolved.instructions }
         : {}),
       ...(resolved.models !== undefined ? { models: resolved.models } : {}),
+      ...(resolved.history !== undefined ? { history: resolved.history } : {}),
     } as const,
     ...(resolved.revision ? { revision: resolved.revision } : {}),
   } as const);
+}
+function historyStart(createdAt: unknown, maxAgeMs: number): string {
+  const timestamp = Date.parse(String(createdAt));
+  if (!Number.isFinite(timestamp)) {
+    throw new TypeError("Agent history requires a valid trigger timestamp.");
+  }
+  return new Date(
+    Math.max(-8_640_000_000_000_000, timestamp - maxAgeMs),
+  ).toISOString();
 }
 function stableText(value: unknown, label: string): string {
   if (typeof value !== "string" || !value.trim() || value.trim() !== value) {
@@ -184,7 +205,8 @@ function dynamicResolution(
   const record = value as Record<string, unknown>;
   if (
     Reflect.ownKeys(record).some((key) =>
-      key !== "instructions" && key !== "models" && key !== "revision"
+      key !== "instructions" && key !== "models" && key !== "history" &&
+      key !== "revision"
     )
   ) {
     throw new TypeError(
@@ -198,12 +220,14 @@ function dynamicResolution(
   const models = record.models === undefined
     ? undefined
     : normalizeAgentModels(record.models, `Agent '${agentId}'`);
+  const history = normalizeAgentHistory(record.history, agentId);
   const revision = record.revision === undefined
     ? undefined
     : stableText(record.revision, `${agentId} revision`);
   return ({
     ...(instructions !== undefined ? { instructions } : {}),
     ...(models !== undefined ? { models } : {}),
+    ...(history !== undefined ? { history } : {}),
     ...(revision !== undefined ? { revision } : {}),
   } as const);
 }
@@ -308,6 +332,7 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
                     entry.historyAfterMessageId
                   )
                     .filter((id): id is string => Boolean(id)).at(-1);
+                  const historyPolicy = resolved?.agent.history;
                   const snapshot = await loadCoreThreadMessageSnapshot(
                     { collections } as typeof context,
                     String(record.threadId),
@@ -321,6 +346,14 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
                         : {}),
                       viewerIds: [recipientId],
                       ...(afterMessageId ? { afterMessageId } : {}),
+                      ...(historyPolicy
+                        ? {
+                          createdAtOrAfter: historyStart(
+                            record.createdAt,
+                            historyPolicy.maxAgeMs,
+                          ),
+                        }
+                        : {}),
                     },
                   );
                   return { snapshot, contributions, resolved };

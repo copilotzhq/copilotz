@@ -119,6 +119,7 @@ export async function loadCoreThreadMessageSnapshot(
       historyScopeId?: string;
       internalOnly?: boolean;
       afterMessageId?: string;
+      createdAtOrAfter?: string;
       /** Exact inclusive range used to verify a reserved memory source. */
       range?: Readonly<{ startMessageId: string; endMessageId: string }>;
       viewerIds?: readonly string[];
@@ -154,6 +155,9 @@ export async function loadCoreThreadMessageSnapshot(
       : {}),
     ...(options.viewerIds ? { viewerIds: options.viewerIds } : {}),
     ...(options.internalOnly ? { internalOnly: true } : {}),
+    ...(options.createdAtOrAfter
+      ? { createdAtOrAfter: options.createdAtOrAfter }
+      : {}),
     ...(boundary ? { after: boundary } : {}),
   });
   const currentTrigger = await messages.get({ id: String(trigger.id) });

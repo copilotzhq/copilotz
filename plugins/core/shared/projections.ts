@@ -67,6 +67,7 @@ export type ThreadMessageRecordWindow = Readonly<{
   anchor?: CollectionRecord;
   after?: CollectionRecord;
   from?: CollectionRecord;
+  createdAtOrAfter?: string;
   branch?: ActiveBranchBounds;
 }>;
 
@@ -299,6 +300,8 @@ export function threadMessageRecordInWindow(
   return String(record.threadId) === String(window.threadRecord.id) &&
     (!window.anchor ||
       compareThreadMessageRecords(record, window.anchor) <= 0) &&
+    (!window.createdAtOrAfter ||
+      String(record.createdAt) >= window.createdAtOrAfter) &&
     (!window.after || compareThreadMessageRecords(record, window.after) > 0) &&
     (!window.from || compareThreadMessageRecords(record, window.from) >= 0) &&
     (!window.internalOnly || asRecord(record.visibility).kind === "internal") &&
@@ -374,6 +377,9 @@ export function threadMessageWindowFilter(
         : []),
       ...(window.anchor ? [boundary(window.anchor, "lte")] : []),
       ...(window.from ? [boundary(window.from, "gte")] : []),
+      ...(window.createdAtOrAfter
+        ? [{ field: "createdAt", gte: window.createdAtOrAfter }]
+        : []),
       ...(window.after
         ? [
           {
@@ -448,6 +454,7 @@ export async function loadThreadMessageRecordWindow(
     historyScopeId?: string;
     internalOnly?: boolean;
     viewerIds?: readonly string[];
+    createdAtOrAfter?: string;
     limit?: number;
   }> = {},
 ): Promise<ThreadMessageRecordWindow> {
@@ -494,6 +501,9 @@ export async function loadThreadMessageRecordWindow(
     ...(options.internalOnly ? { internalOnly: true } : {}),
     ...(options.viewerIds?.length
       ? { viewerIds: [...options.viewerIds] as const }
+      : {}),
+    ...(options.createdAtOrAfter
+      ? { createdAtOrAfter: options.createdAtOrAfter }
       : {}),
     ...(anchor ? { anchor } : {}),
     ...(after ? { after } : {}),
@@ -567,6 +577,9 @@ export async function loadThreadMessageRecordWindow(
     ...(options.internalOnly ? { internalOnly: true } : {}),
     ...(options.viewerIds?.length
       ? { viewerIds: [...options.viewerIds] as const }
+      : {}),
+    ...(options.createdAtOrAfter
+      ? { createdAtOrAfter: options.createdAtOrAfter }
       : {}),
     ...(anchor ? { anchor } : {}),
     ...(after ? { after } : {}),

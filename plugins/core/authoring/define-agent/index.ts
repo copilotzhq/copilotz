@@ -14,6 +14,7 @@ const AGENT_KEYS = new Set([
   "role",
   "instructions",
   "dynamicResolve",
+  "history",
   "personality",
   "description",
   "models",
@@ -22,6 +23,7 @@ const AGENT_KEYS = new Set([
 ]);
 const MODEL_KEYS = new Set(["generate", "session"]);
 const CAPABILITY_KEYS = new Set(["tools", "agents", "skills"]);
+const HISTORY_KEYS = new Set(["maxAgeMs"]);
 
 /** Explicit aliases granted to an Agent. Omission grants none. */
 export type AgentCapabilitySelection = readonly string[];
@@ -41,6 +43,11 @@ export type AgentModels = Readonly<{
   session?: AgentModelSelection;
 }>;
 
+/** Maximum age of prior conversation Messages included in an Agent turn. */
+export type AgentHistoryPolicy = Readonly<{
+  maxAgeMs: number;
+}>;
+
 /**
  * Frozen, process-local Agent definition. Provider configuration and clients
  * belong to LLM connections and Adapters, never to an Agent. Dynamic
@@ -54,6 +61,7 @@ export type AgentResource = Readonly<{
   role: string;
   instructions?: string;
   dynamicResolve?: AgentDynamicResolver;
+  history?: AgentHistoryPolicy;
   personality?: string;
   description?: string;
   models: AgentModels;
@@ -86,6 +94,7 @@ export type AgentDynamicResolveContext = Readonly<{
 export type AgentDynamicResolveOutput = Readonly<{
   instructions?: string;
   models?: AgentModels;
+  history?: AgentHistoryPolicy;
   /** Small durable prompt-policy identifier, never prompt text. */
   revision?: string;
 }>;
@@ -171,6 +180,26 @@ export function normalizeAgentModels(
   agentId: string,
 ): AgentModels {
   return models(value, agentId);
+}
+
+/** Validates the history-age policy authored on an Agent or returned by its resolver. */
+export function normalizeAgentHistory(
+  value: unknown,
+  agentId: string,
+): AgentHistoryPolicy | undefined {
+  if (value === undefined) return undefined;
+  if (!isPlainRecord(value)) {
+    throw new TypeError(`Agent '${agentId}' history must be an object.`);
+  }
+  assertKnownKeys(value, HISTORY_KEYS, `Agent '${agentId}' history`);
+  if (
+    !Number.isSafeInteger(value.maxAgeMs) || (value.maxAgeMs as number) <= 0
+  ) {
+    throw new TypeError(
+      `Agent '${agentId}' history.maxAgeMs must be a positive safe integer.`,
+    );
+  }
+  return ({ maxAgeMs: value.maxAgeMs as number } as const);
 }
 
 function selection(
@@ -357,6 +386,7 @@ function defineAgentValue<const TResource extends AgentResource>(
   const id = requiredText(resource.id, "Agent id");
   const normalizedInstructions = instructions(resource.instructions, id);
   const normalizedDynamicResolve = dynamicResolve(resource.dynamicResolve, id);
+  const normalizedHistory = normalizeAgentHistory(resource.history, id);
   const normalizedCapabilities = capabilities(resource.capabilities, id);
   const normalizedMetadata = metadata(resource.metadata, id);
   const result: AgentResource = {
@@ -369,6 +399,7 @@ function defineAgentValue<const TResource extends AgentResource>(
     ...(normalizedDynamicResolve !== undefined
       ? { dynamicResolve: normalizedDynamicResolve }
       : {}),
+    ...(normalizedHistory !== undefined ? { history: normalizedHistory } : {}),
     ...(resource.personality !== undefined
       ? {
         personality: optionalText(

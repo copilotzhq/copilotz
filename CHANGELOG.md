@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.82.2 — 2026-09-29
+
+### Added
+
+- Add `AgentResource.history.maxAgeMs` to bound authorized conversation history
+  by the durable trigger timestamp. `dynamicResolve` can override the policy for
+  one turn; omitted policy keeps the complete history.
+
 ## 0.82.1 — 2026-09-29
 
 ### Fixed
@@ -24,7 +32,6 @@
 - The README and quickstart examples run as written. They create the thread
   through web channel ingress, use a real model, and import `defineTool` from
   `/core`.
-
 ## 0.82.0 — 2026-09-28
 
 ### Breaking

@@ -32,6 +32,7 @@
 - The README and quickstart examples run as written. They create the thread
   through web channel ingress, use a real model, and import `defineTool` from
   `/core`.
+
 ## 0.82.0 — 2026-09-28
 
 ### Breaking

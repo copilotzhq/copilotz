@@ -6,9 +6,9 @@ chat UI on it. Each step adds to the previous one.
 You need Deno, or Node 24+, and an `OPENAI_API_KEY`.
 
 ```sh
-deno add jsr:@copilotz/copilotz@^0.82.4
+deno add jsr:@copilotz/copilotz@^0.82.5
 # or
-npx jsr add @copilotz/copilotz@^0.82.4 && npm i @electric-sql/pglite
+npx jsr add @copilotz/copilotz@^0.82.5 && npm i @electric-sql/pglite && npm pkg set type=module
 ```
 
 ## 1. A room with people and agents
@@ -23,6 +23,10 @@ Three things make it work:
 - **A room is a thread with participants.** Channel ingress creates the thread
   and its participants on first use, so the first message needs no setup. Each
   message names its `recipients`: the agents who should answer it.
+- **A namespace is the tenant boundary.** `createCopilotz({ namespace })` scopes
+  every record, and Copilotz never picks one for you: a send without one fails
+  with a message saying so. Any name works for a single-tenant app; a
+  multi-tenant app passes each request's tenant.
 - **Replies stream.** `send` and `submitChannel` return a turn whose `outputs`
   include each agent's reply as a stream. `coreStreamAgent(output)` says which
   agent is speaking. `done` resolves when the whole turn, including any `ask`,

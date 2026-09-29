@@ -67,7 +67,7 @@ function requiredNamespace(
   const namespace = explicit?.trim() || fallback;
   if (!namespace) {
     throw new TypeError(
-      "A tenant namespace is required on the application or operation.",
+      `A tenant namespace is required on the application or operation. Pass one to createCopilotz, for example createCopilotz({ namespace: "my-app" }); any string works for a single-tenant app. Copilotz keeps each namespace's data separate and never chooses one for you.`,
     );
   }
   return namespace;

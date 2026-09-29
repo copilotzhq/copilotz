@@ -13,6 +13,12 @@ await operation.done;
 await app.close();
 ```
 
+`namespace` is the tenant boundary. It is the default for every operation the
+application runs, and an operation may name its own. Copilotz never chooses one:
+a send with neither the application nor the operation naming a namespace is
+rejected, so a missing tenant cannot silently pool data. A single-tenant app
+uses any fixed name, such as `"acme"`.
+
 The embedded result exposes durable operation send/attach/status/list/cancel,
 bounded maintenance, live observe, close, and the same `fetch` as a Gateway.
 With `serverPlugin` composed, `fetch` serves the `/api` facade, so a

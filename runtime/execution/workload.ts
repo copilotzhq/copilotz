@@ -9,7 +9,10 @@ import type {
   DeliveryWorkload,
   DeliveryWorkloadScheduler,
 } from "./types.ts";
-import { reportDeliveryDiagnostic } from "./diagnostics.ts";
+import {
+  reportDeliveryDiagnostic,
+  summarizeDeliveryError,
+} from "./diagnostics.ts";
 
 const DEFAULT_LEASE_MS = 120_000;
 const DEFAULT_HEARTBEAT_MS = 30_000;
@@ -315,6 +318,7 @@ export function createDeliveryWorkload(
         databaseSchema: metadata.databaseSchema,
         namespace: metadata.namespace,
         status: current?.status ?? "missing",
+        error: summarizeDeliveryError(error),
       });
       return {
         metadata: statusMetadata(

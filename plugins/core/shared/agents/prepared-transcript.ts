@@ -33,15 +33,6 @@ function bodyBytes(value: unknown): number {
 const DEFAULT_TOOL_RESULT_INLINE_BYTES = 10 * 1024;
 const MIN_TOOL_RESULT_INLINE_BYTES = 2 * 1024;
 
-function contentRefs(value: unknown): ContentRef[] {
-  if (!Array.isArray(value)) return [];
-  return value.filter((entry): entry is ContentRef =>
-    Boolean(entry) && typeof entry === "object" &&
-    typeof (entry as Record<string, unknown>).assetId === "string" &&
-    typeof (entry as Record<string, unknown>).kind === "string"
-  );
-}
-
 function excludedFromTranscript(ref: ContentRef): boolean {
   return ref.disposition === "attachment" ||
     (ref.kind === "file" && ref.disposition == null);

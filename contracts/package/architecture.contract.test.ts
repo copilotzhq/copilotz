@@ -160,6 +160,7 @@ Deno.test("createCopilotz returns one application", async () => {
       "attach",
       "cancelOperation",
       "close",
+      "fetch",
       "listOperations",
       "maintenance",
       "observe",

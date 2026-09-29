@@ -14,9 +14,12 @@ await app.close();
 ```
 
 The embedded result exposes durable operation send/attach/status/list/cancel,
-bounded maintenance, live observe, and close. It owns its private in-process
-Gateway and Worker topology, and any database it created from configuration.
-Injected database, dispatcher, and Hypervisor values remain application-owned.
+bounded maintenance, live observe, close, and the same `fetch` as a Gateway.
+With `serverPlugin` composed, `fetch` serves the `/api` facade, so a
+single-process web application can pass `app.fetch` to any Fetch listener. It
+owns its private in-process Gateway and Worker topology, and any database it
+created from configuration. Injected database, dispatcher, and Hypervisor values
+remain application-owned.
 
 ## Split roles
 

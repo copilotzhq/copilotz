@@ -10,6 +10,7 @@ import type {
   CreateCopilotzWorkerOptions as RuntimeWorkerOptions,
 } from "./runtime/application/index.ts";
 import type { CopilotzApplication } from "./runtime/application/types.ts";
+import type { InternalCopilotzGateway } from "./runtime/application/gateway.ts";
 
 type EmbeddedOptions = RuntimeEmbeddedOptions & Readonly<{ role?: "embedded" }>;
 
@@ -33,11 +34,26 @@ type GatewayApplication =
     fetch(request: Request): Promise<Response>;
   }>;
 
+/** The embedded default serves the same `/api` facade as a Gateway. */
+type EmbeddedApplication = GatewayApplication;
+
 type WorkerFactoryResult = Readonly<{
   ready: Promise<void>;
   closed: Promise<void>;
   close(reason?: string): Promise<void>;
 }>;
+
+/** The `/api` facade when `serverPlugin` is composed; otherwise 404. */
+function serverFetch(
+  gateway: InternalCopilotzGateway,
+): (request: Request) => Promise<Response> {
+  return gateway.application.plugins.resources.server?.default
+    ? createServerFacadeFetchHandler(gateway.application, {
+      admit: gateway.admit,
+    })
+    : (_request: Request) =>
+      Promise.resolve(new Response(null, { status: 404 }));
+}
 
 export function createCopilotz(
   options: GatewayOptions,
@@ -47,7 +63,7 @@ export function createCopilotz(
 ): Promise<WorkerFactoryResult>;
 export function createCopilotz(
   options?: EmbeddedOptions,
-): Promise<CopilotzApplication>;
+): Promise<EmbeddedApplication>;
 /** Composes exactly the plugins, resources, and adapters supplied by the caller. */
 export async function createCopilotz(
   options: CreateCopilotzOptions = {},
@@ -69,12 +85,7 @@ export async function createCopilotz(
     } = options;
     const gateway = await createGateway(gatewayOptions);
     try {
-      const fetch = gateway.application.plugins.resources.server?.default
-        ? createServerFacadeFetchHandler(gateway.application, {
-          admit: gateway.admit,
-        })
-        : (_request: Request) =>
-          Promise.resolve(new Response(null, { status: 404 }));
+      const fetch = serverFetch(gateway);
       gateway.installFetchFallback(fetch);
       return ({
         send: gateway.send,
@@ -97,5 +108,9 @@ export async function createCopilotz(
   }
 
   const { role: _role, ...embeddedOptions } = options;
-  return await createEmbeddedCopilotz(embeddedOptions);
+  return await createEmbeddedCopilotz(
+    embeddedOptions,
+    embeddedOptions.databaseLifecycle,
+    (gateway) => serverFetch(gateway),
+  );
 }

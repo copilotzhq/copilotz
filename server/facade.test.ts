@@ -767,6 +767,55 @@ Deno.test("Gateway mounts the composed facade in Oxian-compatible Fetch and reje
   }
 });
 
+Deno.test("the embedded application serves the composed facade", async () => {
+  const database = await createTestDatabase({ url: ":memory:" });
+  const application = await createCopilotz({
+    database,
+    namespace: "tenant-a",
+    databaseSchema: "server_embedded_test",
+    plugins: [fixture, serverPlugin],
+    engine: { retryBaseMs: 0, random: () => 0 },
+  });
+  const bare = await createCopilotz({
+    database,
+    namespace: "tenant-a",
+    databaseSchema: "server_embedded_bare_test",
+    plugins: [fixture],
+  });
+  try {
+    const response = await application.fetch(
+      new Request("https://example.test/api/actions/test/server/echo", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "embedded-server-echo",
+        },
+        body: JSON.stringify({ value: "embedded" }),
+      }),
+    );
+    assertEquals(response.status, 202);
+    const client = createCopilotzClient({
+      baseUrl: "https://example.test/api",
+      fetch: ((url, init) =>
+        application.fetch(new Request(url, init))) as typeof fetch,
+    });
+    assertEquals(
+      await client.operations.result((await response.json()).data.operationId),
+      { echoed: "embedded" },
+    );
+    const unserved = await bare.fetch(
+      new Request("https://example.test/api/openapi.json"),
+    );
+    assertEquals(unserved.status, 404);
+  } finally {
+    await Promise.allSettled([
+      application.close("server_embedded_test_done"),
+      bare.close("server_embedded_test_done"),
+    ]);
+    await database.close();
+  }
+});
+
 Deno.test("collection mutations are opt-in, policy-bound, and durably replayable", async () => {
   const application = await createCopilotzApplication({
     namespace: "tenant-a",

@@ -95,6 +95,7 @@ Deno.test("package configuration composes plugins, resources, persistence, and e
       "attach",
       "cancelOperation",
       "close",
+      "fetch",
       "listOperations",
       "maintenance",
       "observe",

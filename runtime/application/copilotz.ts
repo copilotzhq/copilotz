@@ -1,6 +1,9 @@
 import type { HypervisorTransport } from "../../dependencies/oxian-hypervisor.ts";
 import { createCopilotzGateway } from "./gateway.ts";
-import type { CreateCopilotzGatewayOptions } from "./gateway.ts";
+import type {
+  CreateCopilotzGatewayOptions,
+  InternalCopilotzGateway,
+} from "./gateway.ts";
 import {
   type CopilotzPersistenceLifecycleCallbacks,
   openCopilotzPersistence,
@@ -32,6 +35,15 @@ export type CreateCopilotzOptions =
 
 export type CopilotzEmbeddedApplication = CopilotzApplication;
 
+/** Builds the embedded Gateway's Fetch handler; the caller owns HTTP policy. */
+export type EmbeddedFetchFactory = (
+  gateway: InternalCopilotzGateway,
+) => (request: Request) => Promise<Response>;
+
+export type CopilotzEmbeddedFetchApplication =
+  & CopilotzEmbeddedApplication
+  & Readonly<{ fetch(request: Request): Promise<Response> }>;
+
 /**
  * Creates the normal factory-first Copilotz application.
  *
@@ -39,10 +51,20 @@ export type CopilotzEmbeddedApplication = CopilotzApplication;
  * databases and execution infrastructure remain application-owned.
  */
 export async function createCopilotz(
+  options?: CreateCopilotzOptions,
+  lifecycle?: CopilotzPersistenceLifecycleCallbacks,
+): Promise<CopilotzEmbeddedApplication>;
+export async function createCopilotz(
+  options: CreateCopilotzOptions,
+  lifecycle: CopilotzPersistenceLifecycleCallbacks | undefined,
+  createFetch: EmbeddedFetchFactory,
+): Promise<CopilotzEmbeddedFetchApplication>;
+export async function createCopilotz(
   options: CreateCopilotzOptions = {},
   lifecycle: CopilotzPersistenceLifecycleCallbacks =
     options.databaseLifecycle ?? {},
-): Promise<CopilotzEmbeddedApplication> {
+  createFetch?: EmbeddedFetchFactory,
+): Promise<CopilotzEmbeddedApplication | CopilotzEmbeddedFetchApplication> {
   const persistence = await openCopilotzPersistence(options, lifecycle);
   const workerId = options.worker?.id?.trim() ||
     `copilotz-embedded-${crypto.randomUUID()}`;
@@ -56,6 +78,7 @@ export async function createCopilotz(
   const { publish: _publish, ...workerEngine } = engine;
   let gateway: Awaited<ReturnType<typeof createCopilotzGateway>> | undefined;
   let worker: Awaited<ReturnType<typeof createCopilotzWorker>> | undefined;
+  let fetch: ((request: Request) => Promise<Response>) | undefined;
   try {
     gateway = await createCopilotzGateway({
       namespace: options.namespace,
@@ -91,6 +114,10 @@ export async function createCopilotz(
       engine: workerEngine,
     });
     await worker.ready;
+    if (createFetch) {
+      fetch = createFetch(gateway);
+      gateway.installFetchFallback(fetch);
+    }
   } catch (error) {
     await Promise.allSettled([
       worker?.stop("copilotz_embedded_initialization_failed"),
@@ -141,5 +168,6 @@ export async function createCopilotz(
     maintenance: (input) => gateway!.maintenance(input),
     observe: () => gateway!.observe(),
     close: shutdown,
+    ...(fetch ? { fetch } : {}),
   } as const);
 }

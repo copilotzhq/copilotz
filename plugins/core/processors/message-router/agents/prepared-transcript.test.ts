@@ -28,6 +28,7 @@ import {
   threadMessageRecordInWindow,
   threadMessageWindowFilter,
 } from "../../../shared/projections.ts";
+import type { ContentRef } from "../../../../../runtime/content/index.ts";
 import type { Participant } from "../../../shared/contracts.ts";
 import type { CoreProcessorContext } from "../../../shared/runtime-context.ts";
 import { prepareLlmTranscript } from "../../../shared/agents/prepared-transcript.ts";
@@ -509,6 +510,11 @@ Deno.test("Core resolves own native reasoning, leaves peer state unread, and cou
     );
     const context = {
       collections: { message: { list } as unknown as ScopedCollection },
+      content: {
+        getMany: (ids: readonly string[]) => assets.getMany("tenant", ids),
+        resolveMany: (refs: readonly ContentRef[]) =>
+          resolver.getMany(refs, { namespace: "tenant" }),
+      },
     } as unknown as CoreProcessorContext;
     const history = records.map((record) =>
       mapMessageRecord(record, {
@@ -554,7 +560,7 @@ Deno.test("Core resolves own native reasoning, leaves peer state unread, and cou
     });
     assertEquals(readIds.includes("must-not-read"), false);
     assertEquals(readIds.includes("native-must-not-read"), false);
-    assertEquals(queries.length, 2);
+    assertEquals(queries.length, 1, "one stored read for every message");
     await assertRejects(
       () =>
         prepareLlmTranscript(context, {
@@ -803,4 +809,106 @@ Deno.test("Agent window predicates select private scope, branch and anchor befor
   } finally {
     await db.close();
   }
+});
+
+Deno.test("transcript preparation reads storage once per batch, sizes once, and opens bodies once", async () => {
+  const assets = createMemoryAssetRepository();
+  const resolver = createContentResolver({ assets });
+  const publish = async (id: string, text: string) => {
+    await assets.publish({
+      namespace: "tenant",
+      id,
+      mediaType: "text/plain",
+      body: new TextEncoder().encode(text),
+    });
+    return {
+      assetId: id,
+      kind: "text",
+      role: "body",
+      mediaType: "text/plain",
+    } as const;
+  };
+  const body = await publish("body", "hello");
+  const thought = await publish("thought", "own previous thought");
+  const records = Array.from({ length: 25 }, (_, index) => {
+    const own = index === 24;
+    return {
+      id: `m${String(index).padStart(2, "0")}`,
+      namespace: "tenant",
+      threadId: "thread",
+      senderId: own ? "north" : "human",
+      content: [body],
+      metadata: own ? { llmReasoning: [thought] } : {},
+      createdAt: new Date(Date.parse(date) + index * 1000).toISOString(),
+      updatedAt: new Date(Date.parse(date) + index * 1000).toISOString(),
+    };
+  }) as unknown as CollectionRecord[];
+  const calls = { list: 0, sizes: 0, opened: [] as ContentRef[][] };
+  const context = {
+    collections: {
+      message: {
+        list: (query: CollectionQuery) => {
+          calls.list++;
+          const filter = query.filter as unknown as {
+            and: { in?: string[] }[];
+          };
+          const wanted = new Set(filter.and[0].in);
+          return Promise.resolve(
+            records.filter((record) => wanted.has(record.id)),
+          );
+        },
+      } as unknown as ScopedCollection,
+    },
+    content: {
+      getMany: (ids: readonly string[]) => {
+        calls.sizes++;
+        return assets.getMany("tenant", ids);
+      },
+      resolveMany: (refs: readonly ContentRef[]) => {
+        calls.opened.push([...refs]);
+        return resolver.getMany(refs, { namespace: "tenant" });
+      },
+    },
+  } as unknown as CoreProcessorContext;
+  const history = records.map((record) =>
+    mapMessageRecord(record, {
+      id: String(record.senderId),
+      namespace: "tenant",
+      externalId: String(record.senderId),
+      participantType: record.senderId === "human" ? "human" : "agent",
+      metadata: {},
+      createdAt: date,
+      updatedAt: date,
+    } as Participant)
+  );
+  const input = {
+    threadId: "thread",
+    participantId: "north",
+    history,
+  } as const;
+
+  const prompt = await preparedMessages(context, input);
+  assertEquals(prompt.length, 25);
+  assertEquals(calls.list, 2, "25 messages are two batches of at most 20");
+  assertEquals(calls.sizes, 1, "every Asset row is read once");
+  assertEquals(calls.opened.length, 1, "every body is opened in one pass");
+  assertEquals(calls.opened[0].length, 26, "25 bodies and one reasoning");
+  const own = prompt[24];
+  assertEquals(own.role, "assistant");
+  if (own.role === "assistant") {
+    assertEquals(own.reasoning, [{
+      ...thought,
+      value: "own previous thought",
+    }]);
+  }
+  assertEquals("reasoning" in prompt[0], false);
+
+  // A history over budget is refused from the sizes alone: no body is opened.
+  calls.opened.length = 0;
+  await assertRejects(
+    () => prepareLlmTranscript(context, input, { byteLimit: 20 }),
+    RangeError,
+    "byte budget",
+  );
+  assertEquals(calls.opened, []);
 });

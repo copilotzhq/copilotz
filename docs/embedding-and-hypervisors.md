@@ -83,3 +83,30 @@ new work, and resumes durable processing after reconnection.
 
 Every selected physical schema must be a validated v5 schema. Ordinary role
 startup rejects incompatible schemas. This release provides no data migration.
+
+## Sizing the connection pool
+
+A turn is a serial chain of short statements: an ordinary reply is about 60 and
+a reply with one tool call about 140. It is busy nearly all of the time, so each
+turn in flight keeps about 1.2 PostgreSQL connections occupied. When the pool is
+smaller than the turns in flight, statements wait for a connection and latency
+grows in proportion.
+
+Measured on PostgreSQL with 5 ms of network round trip and one tool call per
+turn (median turn latency in milliseconds; a lone turn takes about 900):
+
+| Turns in flight | pool 3 | pool 5 | pool 8 | pool 12 | pool 16 |
+| --------------: | -----: | -----: | -----: | ------: | ------: |
+|               1 |    932 |    901 |    949 |     975 |     908 |
+|               4 |   2088 |   1082 |    950 |     924 |     892 |
+|               8 |   4818 |   2344 |   1345 |    1216 |    1194 |
+
+Set `pgPoolMax` (an Ominipg option, default 5) to at least 1.5 connections for
+every turn you expect to run at once. Beyond about 2 per turn there is nothing
+left to gain. The number of turns that run at once is bounded by the worker
+capacity (`capacity`, default 8), so the defaults are matched by a pool of 12 to
+16. Raise both together, and keep the total across processes below the
+database's `max_connections`.
+
+Persistence that uses `listen()` pins one connection for notifications, so it
+needs one more than the figures above.

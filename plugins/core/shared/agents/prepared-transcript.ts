@@ -10,10 +10,10 @@ import {
   type LlmTranscriptEntry,
   peerToolStatusContent,
 } from "./transcript.ts";
-import type { ContentRef } from "@copilotz/copilotz/content";
+import type { ContentRef, ResolvedContent } from "@copilotz/copilotz/content";
 import {
   createContentByteLimitError,
-  isContentByteLimitError,
+  isContentRef,
 } from "@copilotz/copilotz/content";
 
 function bodyBytes(value: unknown): number {
@@ -32,15 +32,6 @@ function bodyBytes(value: unknown): number {
 
 const DEFAULT_TOOL_RESULT_INLINE_BYTES = 10 * 1024;
 const MIN_TOOL_RESULT_INLINE_BYTES = 2 * 1024;
-
-function contentRefs(value: unknown): ContentRef[] {
-  if (!Array.isArray(value)) return [];
-  return value.filter((entry): entry is ContentRef =>
-    Boolean(entry) && typeof entry === "object" &&
-    typeof (entry as Record<string, unknown>).assetId === "string" &&
-    typeof (entry as Record<string, unknown>).kind === "string"
-  );
-}
 
 function excludedFromTranscript(ref: ContentRef): boolean {
   return ref.disposition === "attachment" ||
@@ -177,14 +168,10 @@ type Snapshots = ReadonlyMap<string, ConversationMessage>;
 
 type ToolResultMarker = Readonly<{ text: string; bytes: number }>;
 
-/** Running total of resolved bytes against an optional caller budget. */
+/** Running total of stored content bytes against an optional caller budget. */
 function byteBudget(limit: number | undefined) {
   let used = 0;
   return {
-    remaining: () =>
-      limit === undefined ? undefined : Math.max(0, limit - used),
-    overflowBy: (bytes: number) =>
-      createContentByteLimitError(used + bytes, limit!),
     add(bytes: number) {
       used += bytes;
       if (limit !== undefined && used > limit) {
@@ -194,109 +181,58 @@ function byteBudget(limit: number | undefined) {
   };
 }
 
-function recordBytes(record: CollectionRecord, withReasoning: boolean): number {
-  const metadata = record.metadata as Record<string, unknown> | undefined;
-  return bodyBytes(record.content) +
-    (withReasoning
-      ? bodyBytes(metadata?.llmReasoning) +
-        bodyBytes(nativeReasoningBlocks(metadata?.llmNativeReasoning))
-      : 0);
-}
-
 /**
- * Reads stored references and Asset sizes, without opening any body, and
- * returns a placeholder for each tool result over the inline limit.
+ * The reference lists of a stored message that a prompt may open: its body,
+ * and for the speaking Agent its readable and provider-native reasoning.
+ * Entries are replaced in place once resolved.
  */
-async function oversizedToolResultMarkers(
-  context: CoreProcessorContext,
-  messages: MessageCollection,
-  threadId: string,
-  batchIds: readonly string[],
-  snapshots: Snapshots,
-  toolResultIds: ReadonlySet<string>,
-  inlineLimit: number,
-): Promise<ReadonlyMap<string, ToolResultMarker>> {
-  const stored = await messages.list({
-    where: { threadId },
-    filter: snapshotFilter(batchIds, snapshots),
-    limit: batchIds.length,
-  });
-  if (stored.length !== batchIds.length) {
-    throw new Error("Message history is no longer available.");
-  }
-  const refsById = new Map(
-    stored.filter((record) => toolResultIds.has(record.id)).map((record) => [
-      record.id,
-      contentRefs(record.content).filter((ref) => !excludedFromTranscript(ref)),
-    ]),
-  );
-  const assetIds = [
-    ...new Set([...refsById.values()].flat().map((ref) => ref.assetId)),
-  ];
-  const markers = new Map<string, ToolResultMarker>();
-  if (!assetIds.length) return markers;
-  const sizes = new Map(
-    (await context.content.getMany(assetIds)).map((asset) => [
-      asset.id,
-      asset.byteLength,
-    ]),
-  );
-  for (const [id, refs] of refsById) {
-    const totalBytes = refs.reduce((total, ref) => {
-      const size = sizes.get(ref.assetId);
-      if (size === undefined) {
-        throw new Error(`Tool result content '${ref.assetId}' is unavailable.`);
-      }
-      return total + size;
-    }, 0);
-    if (totalBytes > inlineLimit) {
-      const text = toolResultMarker(id, totalBytes);
-      markers.set(id, {
-        text,
-        bytes: new TextEncoder().encode(text).byteLength,
-      });
-    }
-  }
-  return markers;
+function referenceLists(
+  record: CollectionRecord,
+  ownAssistant: boolean,
+): unknown[][] {
+  const metadata = record.metadata as Record<string, unknown> | undefined;
+  const nativeBlocks = nativeReasoningBlocks(metadata?.llmNativeReasoning);
+  return [
+    record.content,
+    ...(ownAssistant ? [metadata?.llmReasoning, nativeBlocks] : []),
+  ].filter((list): list is unknown[] => Array.isArray(list));
 }
 
-async function loadBodies(
+function referencesIn(lists: readonly unknown[][]): ContentRef[] {
+  return lists.flat().map((entry) => {
+    if (!isContentRef(entry)) {
+      throw new TypeError("Invalid content reference in message history.");
+    }
+    return entry;
+  }).filter((ref) => !excludedFromTranscript(ref));
+}
+
+const uniqueAssetIds = (refs: readonly ContentRef[]) => [
+  ...new Set(refs.map((ref) => ref.assetId)),
+];
+
+/** Reads the stored messages, one statement per batch, exactly as captured. */
+async function loadStored(
   messages: MessageCollection,
   threadId: string,
   ids: readonly string[],
   snapshots: Snapshots,
-  withReasoning: boolean,
-  budget: ReturnType<typeof byteBudget>,
-): Promise<readonly CollectionRecord[]> {
-  const remaining = budget.remaining();
-  try {
-    return await messages.list({
+): Promise<ReadonlyMap<string, CollectionRecord>> {
+  const stored = new Map<string, CollectionRecord>();
+  for (let offset = 0; offset < ids.length; offset += BATCH_SIZE) {
+    const batchIds = ids.slice(offset, offset + BATCH_SIZE);
+    const records = await messages.list({
       where: { threadId },
-      // Match the captured record before resolved-read can open any Body.
-      filter: snapshotFilter(ids, snapshots),
-      limit: BATCH_SIZE,
-    }, {
-      content: {
-        ...(remaining === undefined ? {} : { byteLimit: remaining }),
-        fields: withReasoning
-          ? [
-            "content",
-            "metadata.llmReasoning",
-            "metadata.llmNativeReasoning.blocks",
-          ]
-          : ["content"],
-        exclude: [{ disposition: "attachment" }, {
-          kind: "file",
-          disposition: null,
-        }],
-      },
+      // Match the captured record before any Body is opened.
+      filter: snapshotFilter(batchIds, snapshots),
+      limit: batchIds.length,
     });
-  } catch (error) {
-    if (isContentByteLimitError(error) && remaining !== undefined) {
-      throw budget.overflowBy(error.bytes);
+    if (records.length !== batchIds.length) {
+      throw new Error("Message history is no longer available.");
     }
-    throw error;
+    for (const record of records) stored.set(record.id, record);
   }
+  return stored;
 }
 
 function textBody(value: string) {
@@ -377,7 +313,7 @@ export async function prepareLlmTranscript(
       entry.peerToolStatus && !entry.peerToolStatus.showsOutput
     ).map((entry) => entry.sourceId),
   );
-  const uniqueIds = [
+  const ids = [
     ...new Set(
       entries.map((entry) => entry.sourceId).filter((id) =>
         !bodylessIds.has(id)
@@ -396,49 +332,81 @@ export async function prepareLlmTranscript(
       0,
     ),
   );
-  const markers = new Map<string, ToolResultMarker>();
-  const records = new Map<string, CollectionRecord>();
 
-  for (const withReasoning of [false, true]) {
-    const ids = uniqueIds.filter((id) =>
-      ownAssistantIds.has(id) === withReasoning
+  // 1. What is stored: the messages, verified against the captured history.
+  const records = new Map<string, CollectionRecord>();
+  const lists = new Map<string, unknown[][]>();
+  const references = new Map<string, ContentRef[]>();
+  for (
+    const [id, record] of await loadStored(
+      messages,
+      input.threadId,
+      ids,
+      snapshots,
+    )
+  ) {
+    records.set(id, record);
+    lists.set(id, referenceLists(record, ownAssistantIds.has(id)));
+    references.set(id, referencesIn(lists.get(id)!));
+  }
+
+  // 2. How large it is: every Asset row once, without opening a Body.
+  const sizes = new Map<string, number>();
+  const assetIds = uniqueAssetIds([...references.values()].flat());
+  if (assetIds.length) {
+    for (const asset of await context.content.getMany(assetIds)) {
+      sizes.set(asset.id, asset.byteLength);
+    }
+  }
+  const sizeOf = (ref: ContentRef) => {
+    const size = sizes.get(ref.assetId);
+    if (size === undefined) {
+      throw new Error(`Message content '${ref.assetId}' is unavailable.`);
+    }
+    return size;
+  };
+
+  // 3. What fits: an oversized Tool result becomes a marker, and the rest is
+  //    counted against the budget before any Body is opened.
+  const markers = new Map<string, ToolResultMarker>();
+  for (const id of ids) {
+    if (!toolResultIds.has(id)) continue;
+    const totalBytes = references.get(id)!.reduce(
+      (total, ref) => total + sizeOf(ref),
+      0,
     );
-    for (let offset = 0; offset < ids.length; offset += BATCH_SIZE) {
-      const batchIds = ids.slice(offset, offset + BATCH_SIZE);
-      if (batchIds.some((id) => toolResultIds.has(id))) {
-        const found = await oversizedToolResultMarkers(
-          context,
-          messages,
-          input.threadId,
-          batchIds,
-          snapshots,
-          toolResultIds,
-          inlineLimit,
-        );
-        for (const [id, marker] of found) markers.set(id, marker);
+    if (totalBytes > inlineLimit) {
+      const text = toolResultMarker(id, totalBytes);
+      markers.set(id, {
+        text,
+        bytes: new TextEncoder().encode(text).byteLength,
+      });
+    }
+  }
+  const opened = ids.filter((id) => !markers.has(id));
+  for (let offset = 0; offset < ids.length; offset += BATCH_SIZE) {
+    const batch = ids.slice(offset, offset + BATCH_SIZE);
+    budget.add(
+      batch.reduce((total, id) => total + (markers.get(id)?.bytes ?? 0), 0) +
+        uniqueAssetIds(
+          batch.filter((id) => !markers.has(id)).flatMap((id) =>
+            references.get(id)!
+          ),
+        ).reduce((total, assetId) => total + sizes.get(assetId)!, 0),
+    );
+  }
+
+  // 4. Open what remains in one resolution; the Asset rows are already held.
+  const toOpen = opened.flatMap((id) => references.get(id)!);
+  const bodies = toOpen.length ? await context.content.resolveMany(toOpen) : [];
+  const resolved = new Map<ContentRef, ResolvedContent>(
+    toOpen.map((ref, index) => [ref, bodies[index]]),
+  );
+  for (const id of opened) {
+    for (const list of lists.get(id)!) {
+      for (const [index, ref] of list.entries()) {
+        list[index] = resolvedReference(ref as ContentRef, resolved);
       }
-      const bodyIds = batchIds.filter((id) => !markers.has(id));
-      const loaded = bodyIds.length
-        ? await loadBodies(
-          messages,
-          input.threadId,
-          bodyIds,
-          snapshots,
-          withReasoning,
-          budget,
-        )
-        : [];
-      const markerBytes = batchIds.reduce(
-        (total, id) => total + (markers.get(id)?.bytes ?? 0),
-        0,
-      );
-      budget.add(
-        loaded.reduce(
-          (total, record) => total + recordBytes(record, withReasoning),
-          0,
-        ) + markerBytes,
-      );
-      for (const record of loaded) records.set(record.id, record);
     }
   }
 
@@ -451,4 +419,27 @@ export async function prepareLlmTranscript(
       ownAssistantIds.has(entry.sourceId),
     ),
   }));
+}
+
+/** A reference with its body attached, or closed when the prompt may not carry it. */
+function resolvedReference(
+  ref: ContentRef,
+  resolved: ReadonlyMap<ContentRef, ResolvedContent>,
+) {
+  const { value: _body, resolve: _policy, ...descriptor } = ref as
+    & ContentRef
+    & {
+      value?: unknown;
+      resolve?: unknown;
+    };
+  const item = resolved.get(ref);
+  if (!item) return { ...descriptor, resolve: false };
+  return {
+    ...descriptor,
+    value: ref.kind === "text"
+      ? item.text
+      : ref.kind === "json"
+      ? item.value
+      : item.bytes,
+  };
 }

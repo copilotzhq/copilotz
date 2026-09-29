@@ -116,6 +116,11 @@ Deno.test("build forwards a consumer's Deno configuration to its child commands"
         "fixture-dependency": "./shared/base.ts",
         "@copilotz/copilotz/plugins": plugins,
       },
+      // This fixture stands in for a consumer's config. The test checks that
+      // the config is forwarded, not Deno's wait for newly published
+      // dependencies, which would otherwise fail it for a day after every
+      // release of a dependency the runtime imports.
+      minimumDependencyAge: 0,
     }),
     "copilotz.json": JSON.stringify({
       id: "configured-consumer",

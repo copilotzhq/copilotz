@@ -1,154 +1,201 @@
 # Copilotz
 
-Copilotz is a plugin-first, event-sourced runtime for durable AI applications.
-The runtime owns generic mechanics; plugins own business meaning.
+**Multiplayer AI for your app.** Copilotz is a TypeScript framework for apps
+where people and AI agents share the same conversations: several people, several
+agents, one room.
 
-```mermaid
-flowchart LR
-  input["plugin input"] --> send["application.send"]
-  send --> event[("immutable Event")]
-  event --> processor["Processor"]
-  processor --> action["Action"]
-  processor --> collection["Collection mutation"]
-  action --> event
-  collection --> event
+Most AI SDKs assume one user talking to one assistant. Put two people and two
+agents in a conversation and the hard parts land on you: who is speaking, who is
+being addressed, who may see what, when an agent should answer, and how agents
+consult each other. In Copilotz that is the native model.
+
+```text
+Ana:     Planner, how should we launch our library next week?
+Critic:  The weakest point is the missing validation step before launch.
+Planner: - Announce on launch day with a short post.
+         - Test the quickstart with five outside developers first.
+         - Track installs and issues daily for the first week.
+Ben:     Critic, what worries you most?
+Critic:  That nobody owns each launch task yet.
 ```
 
-Plugins contribute five primitives:
-
-- Collections: durable semantic state and relations.
-- Actions: executable capabilities with one durable lifecycle.
-- Processors: event-driven orchestration.
-- Resources: process-local agents, models, tools, skills, configuration, and
-  policy.
-- Adapters: application-owned custom external implementations.
-
-Messages, agents, models, tools, and channels belong to their semantic plugins.
-Goals are a small Core authoring loop over ordinary application sends. The
-generic runtime contains no provider catalog, Tool executor, conversation DTO,
-or hidden workflow controller.
-
-## Convention-first authoring
-
-Use static plugins, configure capabilities through the final context, and run
-`copilotz build` on the development or CI host. See the
-[authoring guide](docs/convention-authoring.md) for discovery, file structure,
-validation, ESM generation, and migration from removed plugin factories.
+That is example output from the code below: two people and two agents in one
+room. Planner asked Critic before answering Ana, in the open, and Ben joined the
+same conversation.
 
 ## Install
 
-```ts
-import { createCopilotz } from "jsr:@copilotz/copilotz@^0.82.3";
+```sh
+deno add jsr:@copilotz/copilotz@^0.82.4
+# or, with Node 24+
+npx jsr add @copilotz/copilotz@^0.82.4 && npm i @electric-sql/pglite
 ```
 
-Host-only capabilities live on explicit subpaths. Importing the root does not
-pull in filesystem, subprocess, terminal, MCP stdio, or provider credentials.
-
-## Compose an AI application
+## A room with two people and two agents
 
 ```ts
-import { createCopilotz } from "jsr:@copilotz/copilotz@^0.82.3";
-import { corePlugin } from "jsr:@copilotz/copilotz@^0.82.3/core";
-import {
-  submitChannel,
-  webChannelPlugin,
-} from "jsr:@copilotz/copilotz@^0.82.3/channels";
-import { isStreamOutput } from "jsr:@copilotz/copilotz@^0.82.3/streams";
+import { createCopilotz } from "@copilotz/copilotz";
+import { corePlugin, coreStreamAgent } from "@copilotz/copilotz/core";
+import { submitChannel, webChannelPlugin } from "@copilotz/copilotz/channels";
+import { isStreamOutput } from "@copilotz/copilotz/streams";
 
-const openAiKey = Deno.env.get("OPENAI_API_KEY");
-if (!openAiKey) throw new Error("OPENAI_API_KEY is required");
+const models = { generate: [{ connection: "openai", model: "gpt-5.4-mini" }] };
 
 const app = await createCopilotz({
-  namespace: "acme",
-  database: { url: ":memory:" },
+  namespace: "demo",
   plugins: [corePlugin, webChannelPlugin],
   resources: {
-    agents: {
-      support: {
-        id: "support",
-        name: "Support",
-        role: "Answer clearly and use only explicitly granted capabilities.",
-        models: {
-          generate: [{ connection: "openai", model: "gpt-5.4-mini" }],
-        },
-        capabilities: {},
-      },
-    },
     llmConnections: {
       openai: {
         provider: "openai",
-        auth: { apiKey: openAiKey },
+        auth: { apiKey: process.env.OPENAI_API_KEY! },
+      },
+    },
+    agents: {
+      planner: {
+        id: "planner",
+        name: "Planner",
+        role:
+          "Turn ideas into a plan of three short bullets. Always ask Critic before you answer.",
+        models,
+        capabilities: { agents: ["critic"] }, // Planner may ask Critic.
+      },
+      critic: {
+        id: "critic",
+        name: "Critic",
+        role: "Name the weakest point of a plan in one sentence.",
+        models,
+        capabilities: {},
       },
     },
   },
 });
 
-// Channel ingress creates the thread and its participants on first use.
-const [operation] = await submitChannel(app, "web", [{
-  id: "message-1",
-  input: {
-    externalThreadId: "thread-1",
-    sender: { externalId: "user-1", participantType: "human", name: "Ada" },
-    recipients: ["support"],
-    content: "How can you help me?",
-    thread: { participants: ["support"] },
-  },
-}]);
+// Two people and two agents share one room.
+const room = [
+  "planner",
+  "critic",
+  { externalId: "ana", participantType: "human", name: "Ana" },
+  { externalId: "ben", participantType: "human", name: "Ben" },
+] as const;
 
-for await (const output of operation.outputs) {
-  if (!isStreamOutput(output)) continue;
-  for await (const bytes of output.payload) {
-    await Deno.stdout.write(bytes);
+async function say(name: string, text: string, to: string) {
+  console.log(`\n${name}: ${text}`);
+  const [turn] = await submitChannel(app, "web", [{
+    id: crypto.randomUUID(),
+    input: {
+      externalThreadId: "launch",
+      sender: {
+        externalId: name.toLowerCase(),
+        participantType: "human",
+        name,
+      },
+      recipients: [to],
+      content: text,
+      thread: { participants: [...room] },
+    },
+  }]);
+  for await (const output of turn.outputs) {
+    if (!isStreamOutput(output) || output.role !== "content") continue;
+    let reply = "";
+    for await (const bytes of output.payload) {
+      reply += new TextDecoder().decode(bytes);
+    }
+    if (reply.trim()) {
+      console.log(`\n${coreStreamAgent(output)?.name}: ${reply.trim()}`);
+    }
   }
+  await turn.done;
 }
-await operation.done;
+
+await say(
+  "Ana",
+  "Planner, how should we launch our library next week?",
+  "planner",
+);
+await say("Ben", "Critic, what worries you most?", "critic");
 await app.close();
 ```
 
-`send()` accepts one plugin-owned input envelope. It returns a durable operation
-identity, its ingress Event and correlation identities, an opaque replay cursor,
-a local output attachment, and settlement controls. `detach()` stops only that
-observer; `cancel()` is an explicit durable cancellation. `attach()` can resume
-the same operation from any Gateway replica, while `operationStatus()`,
-`listOperations()`, and `cancelOperation()` provide the generic host policy
-seams. `observe()` remains an independent process-local application-wide
-subscription. The embedded application and Gateway add `fetch`, which serves the
-`/api` facade when `serverPlugin` is composed; Worker returns
-`{ ready, closed, close }`.
+Run it with `OPENAI_API_KEY` set: `deno run -A room.ts`, or `node room.ts`.
+Without a `database`, Copilotz keeps everything in memory; pass
+`database: { url: "file://./data" }` for PGlite on disk, or a Postgres URL.
 
-For multi-turn evaluation, Core’s `runGoal` Action alternates settled target and
-lead sends through a context-supplied conversation Adapter. Policy lives in a
-Resource; progress and cancellation use the Action lifecycle. See
-[Goal Action](./docs/goals.md).
+## What you get
 
-## Core guarantees
+- **Rooms with people and agents.** Threads hold any mix of human and agent
+  participants. Each message says who sent it and whom it addresses, so an agent
+  answers when it is asked, not whenever anyone speaks.
+- **Agents that consult each other in the open.** Grant an agent its teammates
+  and it gets an `ask` tool. The question and the answer are ordinary messages
+  in the room that everyone can read, and the asking agent continues once the
+  answer arrives.
+- **Nothing is granted by default.** Tools, teammates and skills are exact
+  per-agent grants. Installing a plugin never widens what an existing agent may
+  do.
+- **A backend, not just a loop.** Add `serverPlugin` and `app.fetch` serves an
+  HTTP API with authentication and authorization hooks, live observation of each
+  room, idempotent writes and OpenAPI. `@copilotz/chat-adapter` renders a
+  multiplayer chat UI on top of it.
+- **Where people already are.** Web, WhatsApp, Telegram, Discord and Zendesk
+  channels, plus MCP, OpenAPI and web tools.
+- **It holds up.** Every message, model call and tool call is an immutable
+  event, committed together with the state it changes. Restart the process and
+  the room is intact; retried work restores the same result.
+- **Runs where TypeScript runs.** Deno and Node, with PGlite on local disk or
+  Postgres. Provider fallback across models and connections, with credentials
+  kept out of the durable record.
 
-- Collection state, Event Bodies, immutable Events, and required delivery
-  obligations commit atomically.
-- Durable Processor execution is at least once. Stable mutation operation keys
-  and Action identities make retries restore the same result.
-- Action lifecycle data is self-contained and authenticated by runtime-created
-  Event Bodies. Public input cannot forge a registered lifecycle receipt.
-- Agents and direct LLM calls select ordered `{ connection, model, options }`
-  candidates. One process-local `llmConnections` Resource owns each provider's
-  transport and static or dynamic authentication. Model choices and reasoning
-  options need no registry entries. Authentication resolves once per connection
-  per call; secrets never enter the durable call contract. `createLlmAdapter`
-  defines a genuinely custom provider implementation.
-- The Usage plugin records one durable row for each reported provider attempt
-  and provides authorized aggregate analytics and bounded attempt drill-down.
-- Tool Resources are data-only presentations of the same Action aliases that
-  Core invokes. There is no second Tool execution path.
-- Progressive `stream.output` observations contain generic content metadata and
-  one subscriber-owned byte follower. Semantic routing stays in plugins.
-- Operation replay stores semantic ordering in existing durable Events and
-  progressive bytes in their existing Bodies. Its catalog stores only bounded
-  discovery, lifecycle, and byte-offset metadata; it is not a second payload
-  journal.
-- Normal provisioning creates only a fresh v4 schema or validates an existing v4
-  schema. Legacy databases require the explicit migration.
+## See it in a real app
 
-## Public package map
+[Compass Mini](https://github.com/copilotzhq/compass-mini) is a complete
+multiplayer workspace in about 500 lines: people join by name, share rooms with
+four agents that ask each other for help, and see each other's messages live. It
+runs on Node with no database to set up.
+
+## Documentation
+
+**Start**
+
+- [Quickstart](docs/quickstart.md): a room, then an HTTP API, then a chat UI.
+
+**Build**
+
+- [Agent capabilities](docs/agent-capabilities.md): tools, teammates and skills,
+  granted per agent.
+- [Agents asking agents](docs/multi-agent-ask.md): the public `ask`.
+- [HTTP server and browser client](docs/server.md): auth, access and live rooms.
+- [Channels](docs/channels.md): web, messaging apps and support desks.
+- [Shared Spaces](docs/spaces.md), [memory](docs/memory.md) and
+  [skills](docs/skills.md).
+
+**Run in production**
+
+- [Events, deliveries, and recovery](docs/events-deliveries-recovery.md): what
+  "at least once" means for your code.
+- [Embedding, Gateway, and Worker roles](docs/embedding-and-hypervisors.md): one
+  process or many, and sizing the database pool.
+- [Host capability adapters](docs/runtime-adapters.md).
+
+**Understand and extend**
+
+- [Architecture](docs/architecture.md) and the first-principles contract in
+  [ARCHITECTURE.md](ARCHITECTURE.md).
+- [Plugins and processors](docs/plugins-and-processors.md): add your own
+  behavior.
+- [Content and assets](docs/content-assets.md) and
+  [progressive streams](docs/streams.md).
+- [API and package reference](docs/api.md).
+
+## How it is built
+
+The runtime owns generic mechanics; plugins own meaning. Plugins contribute five
+primitives: Collections (durable state), Actions (capabilities with one durable
+lifecycle), Processors (reactions to events), Resources (agents, models, tools
+and policy) and Adapters (external implementations). Messages, agents, tools and
+channels are plugins built from these primitives; the agent loop is Processors
+reacting to events, not a hidden controller. See
+[Architecture](docs/architecture.md).
 
 | Area               | Subpaths                                                                                                                              |
 | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------- |
@@ -159,26 +206,11 @@ Resource; progress and cancellation use the Action lifecycle. See
 | Host capabilities  | `/adapters/deno`, `/core/cli`, `/core/cli/node`, `/skills/deno`, `/tools/deno`, `/tools/mcp/stdio`, `/tools/persistent-terminal/deno` |
 | Tool providers     | `/tools/builtin`, `/tools/finance`, `/tools/mcp`, `/tools/openapi`, `/tools/persistent-terminal`, `/tools/web`                        |
 
-The authoritative export list is `deno.json`. There are no `/domain`,
-`/attachments`, generic `/adapters`, `/adapters/node`, or legacy migration
-subpaths.
+Importing the root does not pull in filesystem, subprocess, terminal, MCP stdio,
+or provider credentials; host-only capabilities live on explicit subpaths. The
+authoritative export list is `deno.json`.
 
-## Documentation
-
-- [Quickstart](docs/quickstart.md)
-- [Architecture](docs/architecture.md)
-- [API and package reference](docs/api.md)
-- [Shared Spaces](docs/spaces.md)
-- [Plugins and processors](docs/plugins-and-processors.md)
-- [Events, deliveries, and recovery](docs/events-deliveries-recovery.md)
-- [Content and assets](docs/content-assets.md)
-- [Server façade](docs/server.md)
-- [Progressive streams](docs/streams.md)
-- [Embedding, Gateway, and Worker roles](docs/embedding-and-hypervisors.md)
-
-The first-principles contract is [ARCHITECTURE.md](ARCHITECTURE.md).
-
-## Verification
+## Contributing
 
 ```sh
 deno task check

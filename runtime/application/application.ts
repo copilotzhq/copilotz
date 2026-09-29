@@ -113,6 +113,12 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
   });
 }
 
+/** A terminal status the observer may never await must not reject unhandled. */
+function optionalTerminal<T>(terminal: Promise<T>): Promise<T> {
+  terminal.catch(() => undefined);
+  return terminal;
+}
+
 function lazyStreamFollower(
   open: () => Promise<ReadableStream<Uint8Array>>,
 ): ReadableStream<Uint8Array> {
@@ -136,8 +142,29 @@ function lazyStreamFollower(
   });
 }
 
+/** Names the failure behind a dead-lettered settlement scope. */
+async function deadLetterError(
+  eventScope: Pick<CopilotzEngine, "deliveries">,
+  namespace: string,
+  settlementScopeId: string,
+): Promise<Error> {
+  const [first] = await eventScope.deliveries.list({
+    namespace,
+    settlementScopeId,
+    status: "dead_letter",
+    limit: 1,
+  }).catch(() => []);
+  const cause = typeof first?.lastError?.message === "string"
+    ? ` ${first.consumerId}: ${first.lastError.message}`
+    : "";
+  return new Error(
+    `Settlement scope '${settlementScopeId}' contains dead-lettered work.${cause}`,
+    first?.lastError ? { cause: first.lastError } : undefined,
+  );
+}
+
 async function waitForApplicationScope(
-  eventScope: Pick<CopilotzEngine, "events" | "operations">,
+  eventScope: Pick<CopilotzEngine, "events" | "deliveries" | "operations">,
   execution: Pick<
     CopilotzEngine["execution"],
     "settleOutputs" | "awaitScopeProgress"
@@ -154,9 +181,7 @@ async function waitForApplicationScope(
       settlementScopeId,
     );
     if (settlement.deadLetters > 0) {
-      throw new Error(
-        `Settlement scope '${settlementScopeId}' contains dead-lettered work.`,
-      );
+      throw await deadLetterError(eventScope, namespace, settlementScopeId);
     }
     if (settlement.cancelled > 0) {
       throw new Error(
@@ -179,9 +204,7 @@ async function waitForApplicationScope(
         eventScope.operations.hasOpenStreams(namespace, settlementScopeId),
       ]);
       if (confirmed.deadLetters > 0) {
-        throw new Error(
-          `Settlement scope '${settlementScopeId}' contains dead-lettered work.`,
-        );
+        throw await deadLetterError(eventScope, namespace, settlementScopeId);
       }
       if (confirmed.cancelled > 0) {
         throw new Error(
@@ -348,6 +371,9 @@ export async function createCopilotzApplication(
   const configuredPublish = options.engine?.publish;
 
   let engine: CopilotzEngine;
+  // Stream terminal waits outlive their observer; shutdown ends them before
+  // persistence closes.
+  const lifetime = new AbortController();
   const outputHub = createApplicationOutputHub(async (output, schema) => {
     const scoped = await openRecoveredScope(schema);
     return ({
@@ -357,9 +383,12 @@ export async function createCopilotzApplication(
           id: output.streamId,
         })
       ),
-      terminal: scoped.operations.waitForStreamTerminal(
-        output.namespace,
-        output.streamId,
+      terminal: optionalTerminal(
+        scoped.operations.waitForStreamTerminal(
+          output.namespace,
+          output.streamId,
+          { signal: lifetime.signal },
+        ),
       ),
     } as const);
   });
@@ -439,6 +468,7 @@ export async function createCopilotzApplication(
       // Shutting down this application is not a caller-directed cancellation of
       // durable work.  Interrupt only this application's local observers and
       // settlement waiters; another Gateway/Worker may recover the scope.
+      lifetime.abort(new Error(reason));
       interruptActiveSends(new Error(reason));
       activeSends.clear();
       const settled = await Promise.allSettled([
@@ -987,9 +1017,12 @@ export async function createCopilotzApplication(
                     ...stream.descriptor,
                     streamOrdinal: stream.streamOrdinal,
                     payload,
-                    terminal: boundary.scope.operations.waitForStreamTerminal(
-                      boundary.namespace,
-                      stream.streamId,
+                    terminal: optionalTerminal(
+                      boundary.scope.operations.waitForStreamTerminal(
+                        boundary.namespace,
+                        stream.streamId,
+                        { signal: lifetime.signal },
+                      ),
                     ),
                   } as const,
                 );

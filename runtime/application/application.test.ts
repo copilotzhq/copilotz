@@ -613,6 +613,66 @@ Deno.test("operation checkpoints page and compact more than one thousand sealed 
     await db.close();
   }
 });
+Deno.test("shutdown ends an unawaited stream terminal wait", async () => {
+  const db = await createTestDatabase({ url: ":memory:" });
+  const plugin = definePlugin({
+    id: "test.application.open-stream-shutdown",
+    version: "1.0.0",
+    processors: {
+      stream: defineProcessor<ProcessorContext>({
+        id: "application.open-stream-shutdown",
+        on: [{ eventType: "test.open-stream-shutdown" }],
+        async handle(_event, context) {
+          const writer = await context.streams.open({
+            id: "open-stream-shutdown",
+            mediaType: "text/plain",
+            role: "assistant",
+          });
+          await writer.append({
+            bytes: new TextEncoder().encode("partial"),
+            appendId: "open-stream-shutdown:1",
+          });
+        },
+      }),
+    },
+  });
+  const application = await createCopilotzApplication({
+    database: db,
+    namespace: NAMESPACE,
+    databaseSchema: `${SCHEMA}_open_stream_shutdown`,
+    plugins: [plugin],
+    engine: { retryBaseMs: 0, random: () => 0 },
+  });
+  let terminal: Promise<unknown> | undefined;
+  try {
+    const sent = await application.send({ type: "test.open-stream-shutdown" });
+    sent.done.catch(() => undefined);
+    const reader = sent.outputs.getReader();
+    while (!terminal) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      if (value.type === "stream.output") {
+        terminal = (value as StreamOutput).terminal;
+      }
+    }
+    reader.releaseLock();
+    assertExists(terminal);
+  } finally {
+    await application.shutdown();
+    await db.close();
+  }
+  // Nothing awaited `terminal` before shutdown. It must settle now, handled,
+  // instead of polling the closed database and rejecting later.
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const settled = await Promise.race([
+    terminal.then(() => "resolved", () => "rejected"),
+    new Promise((resolve) => {
+      timer = setTimeout(() => resolve("pending"), 1_000);
+    }),
+  ]);
+  clearTimeout(timer);
+  assertEquals(settled, "rejected");
+});
 Deno.test("operation attachment replays a retained failed prefix with generic terminal state", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   const plugin = definePlugin({
@@ -1464,6 +1524,34 @@ Deno.test("application Adapters overlay plugin Adapters", async () => {
     ]);
     assertEquals(application.plugins.adapters.llm.openai, replacement);
     assertEquals(application.plugins.resources.agents?.missing, undefined);
+  } finally {
+    await application.shutdown();
+    await closeDb(db);
+  }
+});
+Deno.test("a dead-lettered send names the failure behind it", async () => {
+  const db = await createTestDatabase({ url: ":memory:" });
+  const application = await createCopilotzApplication({
+    database: db,
+    namespace: NAMESPACE,
+    databaseSchema: `${SCHEMA}_dead_letter_cause`,
+    plugins: [corePlugin],
+    engine: { retryBaseMs: 0, random: () => 0 },
+  });
+  try {
+    const sent = await application.send(coreMessage({
+      thread: "missing-thread",
+      participant: "user-a",
+      content: "hello",
+    }));
+    await sent.outputs.cancel();
+    const error = await assertRejects(() => sent.done);
+    assert(
+      error instanceof Error &&
+        error.message.includes("dead-lettered work.") &&
+        error.message.includes("Thread 'missing-thread' was not found."),
+      String(error),
+    );
   } finally {
     await application.shutdown();
     await closeDb(db);

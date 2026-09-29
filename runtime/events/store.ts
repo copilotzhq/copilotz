@@ -203,6 +203,7 @@ export type EventStore = {
     namespace?: string;
     eventId?: string;
     consumerId?: string;
+    settlementScopeId?: string;
     status?: DeliveryStatus;
     limit?: number;
   }): Promise<readonly EventDelivery[]>;
@@ -1147,6 +1148,10 @@ export function createEventStore(
       if (listOptions.consumerId) {
         params.push(listOptions.consumerId);
         conditions.push(`d.consumer_id = $${params.length}`);
+      }
+      if (listOptions.settlementScopeId) {
+        params.push(listOptions.settlementScopeId);
+        conditions.push(`d.settlement_scope_id = $${params.length}`);
       }
       if (listOptions.status) {
         params.push(listOptions.status);

@@ -10,6 +10,7 @@ Deno.test("root createCopilotz exposes one causal send handle without queue stat
       "attach",
       "cancelOperation",
       "close",
+      "fetch",
       "listOperations",
       "maintenance",
       "observe",

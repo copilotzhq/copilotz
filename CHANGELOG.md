@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.82.3 — 2026-09-29
+
+### Added
+
+- The default embedded application has `fetch(request)`, like a Gateway. With
+  `serverPlugin` composed it serves the `/api` facade, so a single-process web
+  application needs one `createCopilotz()` call and any Fetch listener. Without
+  `serverPlugin` it answers 404.
+
 ## 0.82.2 — 2026-09-29
 
 ### Added

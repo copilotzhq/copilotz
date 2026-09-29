@@ -38,7 +38,7 @@ validation, ESM generation, and migration from removed plugin factories.
 ## Install
 
 ```ts
-import { createCopilotz } from "jsr:@copilotz/copilotz@^0.82.2";
+import { createCopilotz } from "jsr:@copilotz/copilotz@^0.82.3";
 ```
 
 Host-only capabilities live on explicit subpaths. Importing the root does not
@@ -47,13 +47,13 @@ pull in filesystem, subprocess, terminal, MCP stdio, or provider credentials.
 ## Compose an AI application
 
 ```ts
-import { createCopilotz } from "jsr:@copilotz/copilotz@^0.82.2";
-import { corePlugin } from "jsr:@copilotz/copilotz@^0.82.2/core";
+import { createCopilotz } from "jsr:@copilotz/copilotz@^0.82.3";
+import { corePlugin } from "jsr:@copilotz/copilotz@^0.82.3/core";
 import {
   submitChannel,
   webChannelPlugin,
-} from "jsr:@copilotz/copilotz@^0.82.2/channels";
-import { isStreamOutput } from "jsr:@copilotz/copilotz@^0.82.2/streams";
+} from "jsr:@copilotz/copilotz@^0.82.3/channels";
+import { isStreamOutput } from "jsr:@copilotz/copilotz@^0.82.3/streams";
 
 const openAiKey = Deno.env.get("OPENAI_API_KEY");
 if (!openAiKey) throw new Error("OPENAI_API_KEY is required");
@@ -112,7 +112,9 @@ observer; `cancel()` is an explicit durable cancellation. `attach()` can resume
 the same operation from any Gateway replica, while `operationStatus()`,
 `listOperations()`, and `cancelOperation()` provide the generic host policy
 seams. `observe()` remains an independent process-local application-wide
-subscription. Gateway adds `fetch`; Worker returns `{ ready, closed, close }`.
+subscription. The embedded application and Gateway add `fetch`, which serves the
+`/api` facade when `serverPlugin` is composed; Worker returns
+`{ ready, closed, close }`.
 
 For multi-turn evaluation, Core’s `runGoal` Action alternates settled target and
 lead sends through a context-supplied conversation Adapter. Policy lives in a

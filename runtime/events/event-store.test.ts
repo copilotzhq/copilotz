@@ -581,7 +581,7 @@ Deno.test("A22 delivery claims retry three times, dead-letter, retry, and discar
       leaseMs: 60_000,
     });
     assertEquals(first?.attempts, 1);
-    assertEquals(await store.succeedDelivery(id, "wrong-owner"), false);
+    assertEquals(await store.succeedDelivery(id, "wrong-owner"), null);
     assertEquals(
       await store.heartbeatDelivery({
         id,
@@ -698,7 +698,7 @@ Deno.test("A21 crash recovery and concurrent claims preserve one delivery owner"
     assertEquals(claims.filter(Boolean).length, 1);
     const owner = claims.find((claim) => claim)?.leaseOwner;
     assertExists(owner);
-    assertEquals(await store.succeedDelivery(id, owner), true);
+    assertEquals((await store.succeedDelivery(id, owner))?.status, "succeeded");
 
     const high = await store.append(
       {

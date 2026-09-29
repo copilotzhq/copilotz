@@ -718,12 +718,11 @@ Deno.test("operation reconciliation skips old live work instead of starving late
       }),
     );
     duringDrain = async () => {
-      assertEquals(
+      assertExists(
         await store.succeedDelivery(
           racedDelivery.id,
           "reconcile-race-owner",
         ),
-        true,
       );
     };
 

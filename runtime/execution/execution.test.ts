@@ -190,6 +190,55 @@ Deno.test("A24 private in-process Oxian recovers and executes a durable delivery
     await closeFixture(fixture);
   }
 });
+Deno.test("a settled delivery reports its row, so success is not read back", async () => {
+  const failing = { current: false };
+  const fixture = await createFixture({
+    handle: () => {
+      if (failing.current) throw new Error("boom");
+    },
+  });
+  let reads = 0;
+  const store: EventStore = {
+    ...fixture.store,
+    getDelivery: (id) => {
+      reads++;
+      return fixture.store.getDelivery(id);
+    },
+  };
+  const executor = createDeliveryExecutor({
+    store,
+    registry: fixture.registry,
+    createContext: fixture.createContext,
+    workerId: "copilotz-settled-row-test",
+  });
+  try {
+    await appendMessage(fixture);
+    const [handle] = (await executor.dispatchRecoverable({
+      namespace: "tenant-a",
+    })).handles;
+    const result = await handle.done;
+    assertEquals(result.delivery.status, "succeeded");
+    assertEquals(reads, 0, "success reports its own row");
+    // The reported row is what the database holds.
+    assertEquals(
+      result.delivery,
+      await fixture.store.getDelivery(handle.deliveryId),
+    );
+
+    // A failed run has no settled row to report, so it is read back.
+    failing.current = true;
+    await appendMessage(fixture);
+    reads = 0;
+    const [failed] = (await executor.dispatchRecoverable({
+      namespace: "tenant-a",
+    })).handles;
+    assertEquals((await failed.done).delivery.status, "retry_wait");
+    assert(reads > 0);
+  } finally {
+    await executor.shutdown();
+    await closeFixture(fixture);
+  }
+});
 Deno.test("recovery owner automatically reclaims a lease that expires after its first sweep", async () => {
   const fixture = await createFixture();
   const committed = await appendMessage(fixture);

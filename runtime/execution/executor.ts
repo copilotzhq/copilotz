@@ -408,6 +408,23 @@ export function createDeliveryExecutor(
     retryScheduler.cancel(timer.handle);
   };
 
+  /**
+   * A delivery a worker settled reports the row it settled into, which saves
+   * a read. Anything else, including a failed run, is read back.
+   */
+  const settledDelivery = (
+    claimed: EventDelivery,
+    result: Readonly<Record<string, unknown>> | undefined,
+  ): EventDelivery | undefined => {
+    const reported = result?.delivery as Partial<EventDelivery> | undefined;
+    return result?.schema === "copilotz.delivery.result.v1" &&
+        result.deliveryId === claimed.id && reported?.id === claimed.id &&
+        reported.databaseSchema === claimed.databaseSchema &&
+        reported.status === "succeeded"
+      ? reported as EventDelivery
+      : undefined;
+  };
+
   const createHandle = (
     delivery: EventDelivery,
     event: DurableEvent,
@@ -432,7 +449,15 @@ export function createDeliveryExecutor(
           ),
         });
       }
-      const current = await store.getDelivery(delivery.id);
+      // `completed` follows the output relay, so the result metadata has
+      // arrived if it ever will. Peek at it: a cancelled run never sends it.
+      // (Race the promise itself: a derived one settles a tick too late.)
+      const reported = await Promise.race([
+        work.metadata,
+        Promise.resolve(undefined),
+      ]).catch(() => undefined);
+      const current = settledDelivery(delivery, reported) ??
+        await store.getDelivery(delivery.id);
       if (!current) {
         throw new Error(
           `Delivery '${delivery.id}' disappeared after execution.`,

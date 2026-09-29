@@ -48,7 +48,12 @@ pull in filesystem, subprocess, terminal, MCP stdio, or provider credentials.
 
 ```ts
 import { createCopilotz } from "jsr:@copilotz/copilotz@^0.82.0";
-import { corePlugin, message } from "jsr:@copilotz/copilotz@^0.82.0/core";
+import { corePlugin } from "jsr:@copilotz/copilotz@^0.82.0/core";
+import {
+  submitChannel,
+  webChannelPlugin,
+} from "jsr:@copilotz/copilotz@^0.82.0/channels";
+import { isStreamOutput } from "jsr:@copilotz/copilotz@^0.82.0/streams";
 
 const openAiKey = Deno.env.get("OPENAI_API_KEY");
 if (!openAiKey) throw new Error("OPENAI_API_KEY is required");
@@ -56,7 +61,7 @@ if (!openAiKey) throw new Error("OPENAI_API_KEY is required");
 const app = await createCopilotz({
   namespace: "acme",
   database: { url: ":memory:" },
-  plugins: [corePlugin],
+  plugins: [corePlugin, webChannelPlugin],
   resources: {
     agents: {
       support: {
@@ -64,7 +69,7 @@ const app = await createCopilotz({
         name: "Support",
         role: "Answer clearly and use only explicitly granted capabilities.",
         models: {
-          generate: [{ connection: "openai", model: "provider-model-id" }],
+          generate: [{ connection: "openai", model: "gpt-5.4-mini" }],
         },
         capabilities: {},
       },
@@ -78,17 +83,23 @@ const app = await createCopilotz({
   },
 });
 
-// A Channel, onboarding flow, or trusted Gateway route has already
-// created this thread and its human/agent participants.
-const operation = await app.send(message({
-  thread: "thread-1",
-  participant: "user-1",
-  recipientIds: ["agent-support"],
-  content: "How can you help me?",
-}));
+// Channel ingress creates the thread and its participants on first use.
+const [operation] = await submitChannel(app, "web", [{
+  id: "message-1",
+  input: {
+    externalThreadId: "thread-1",
+    sender: { externalId: "user-1", participantType: "human", name: "Ada" },
+    recipients: ["support"],
+    content: "How can you help me?",
+    thread: { participants: ["support"] },
+  },
+}]);
 
 for await (const output of operation.outputs) {
-  console.log(output.type, output.correlationId);
+  if (!isStreamOutput(output)) continue;
+  for await (const bytes of output.payload) {
+    await Deno.stdout.write(bytes);
+  }
 }
 await operation.done;
 await app.close();

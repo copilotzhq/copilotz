@@ -8,6 +8,7 @@ import type { HttpObservation } from "./http-types.ts";
 import {
   createOperationReplayCursorTracker,
   decodeOperationReplayCursor,
+  isStreamOutput,
   streamErrorOutput,
 } from "../runtime/streams/index.ts";
 import type {
@@ -107,12 +108,6 @@ function part(
   return bytes(encoder.encode(headers), content, encoder.encode("\r\n"));
 }
 
-function isStream(output: ApplicationOutput): output is StreamOutput {
-  return output.type === "stream.output" &&
-    typeof (output as { payload?: { getReader?: unknown } }).payload
-        ?.getReader === "function";
-}
-
 function isTerminalOperationOutput(output: ApplicationOutput): boolean {
   return output.type === "operation.completed" ||
     output.type === "operation.failed" ||
@@ -120,7 +115,7 @@ function isTerminalOperationOutput(output: ApplicationOutput): boolean {
 }
 
 function descriptor(output: ApplicationOutput): unknown {
-  if (!isStream(output)) return output;
+  if (!isStreamOutput(output)) return output;
   const {
     payload: _payload,
     terminal: _terminal,
@@ -361,7 +356,7 @@ export function applicationOutputsMultipartResponse(
       );
       for await (const output of source.outputs) {
         if (isTerminalOperationOutput(output)) await Promise.all(pumps);
-        else if (!isStream(output)) {
+        else if (!isStreamOutput(output)) {
           await Promise.all(
             outputActionRuns(output).flatMap(
               (id) => [...(actionPumps.get(id) ?? [])],
@@ -396,7 +391,7 @@ export function applicationOutputsMultipartResponse(
           }
         }
         let streamOffset: number | undefined;
-        if (isStream(output)) {
+        if (isStreamOutput(output)) {
           const position = cursorTracker.streamPosition({
             operationId: operationId!,
             streamOrdinal: output.streamOrdinal!,
@@ -427,7 +422,7 @@ export function applicationOutputsMultipartResponse(
             ),
           mutations,
         );
-        if (isStream(output)) {
+        if (isStreamOutput(output)) {
           const pending = pump(output, operationId, streamOffset ?? 0);
           pumps.add(pending);
           const actionRunId = output.metadata.sourceActionRunId;

@@ -1,5 +1,9 @@
 import type { ContentStreamOpened } from "./stream.ts";
-import type { StreamOutputDescriptor } from "./types.ts";
+import type {
+  ApplicationOutput,
+  StreamOutput,
+  StreamOutputDescriptor,
+} from "./types.ts";
 import { snapshotStreamMetadata } from "./json.ts";
 
 function requiredText(value: string, name: string): string {
@@ -121,4 +125,13 @@ export function isStreamOutputDescriptor(
     (field("disposition") === undefined ||
       field("disposition") === "inline" ||
       field("disposition") === "attachment");
+}
+
+/** Narrows an Application output to a progressive stream with a byte payload. */
+export function isStreamOutput(
+  output: ApplicationOutput,
+): output is StreamOutput {
+  return output.type === "stream.output" &&
+    typeof (output as { payload?: { getReader?: unknown } }).payload
+        ?.getReader === "function";
 }

@@ -173,6 +173,46 @@ Membership selections resolve only to registered agents in the authenticated
 scope. Existing authorized threads enroll missing selections before delivery;
 this neither removes existing participants nor rewrites conversation history.
 
+### Shared rooms: several people in one conversation
+
+By default a caller reads and writes only threads they participate in. To let
+several people share a room, grant access from `authorize`:
+
+```ts
+defineServerFacade({
+  async authorize(request, { params, scope, read }) {
+    const body = request.method === "POST"
+      ? await request.json().catch(() => null)
+      : null;
+    const threadId = params.id ?? body?.threadId;
+    if (threadId && !(await mayJoin(scope.actor, threadId, read))) {
+      return new Response(null, { status: 403 });
+    }
+    return {
+      // Replace the default "participant only" read filter with your policy.
+      collections: {
+        thread: roomsFor(scope.actor),
+        message: {},
+        participant: {},
+      },
+      // Lets this caller post in the room before they are a participant.
+      ...(threadId
+        ? { actionMetadata: { coreConversationAccess: { threadId } } }
+        : {}),
+    };
+  },
+});
+```
+
+When `authorize` returns a `thread` collection filter, it replaces Core's
+default membership filter for thread reads. Once you return `collections`, list
+every collection the routes read: the conversation routes also read `message`
+and `participant`, and a collection left out is denied. `coreConversationAccess`
+authorizes conversation writes to that one thread. A caller who posts there is
+enrolled as a human participant, so later reads also match by membership. Keep
+both decisions in your policy: Core never grants access on a client-supplied
+thread ID alone.
+
 ### Message content access
 
 Use `core.messages.asset(threadId, messageId, assetId, { signal })` to read a

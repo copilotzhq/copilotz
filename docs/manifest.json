@@ -6,12 +6,12 @@
         {
           "title": "Documentation",
           "slug": "README",
-          "description": "Current Copilotz 0.62 documentation map."
+          "description": "Where to start and how the guides are organized."
         },
         {
           "title": "Quickstart",
           "slug": "quickstart",
-          "description": "Compose plugins, Resources, Adapters, and typed ingress."
+          "description": "A room with people and agents, served over HTTP, with a chat UI."
         },
         {
           "title": "Convention-first authoring",
@@ -69,7 +69,7 @@
           "description": "Embedded, split, remote, and injected-dispatcher placement."
         },
         {
-          "title": "Server Fa\u00e7ade",
+          "title": "Server Façade",
           "slug": "server",
           "description": "Automatic primitive routes, guards, OpenAPI, and lossless multipart outputs."
         },

@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.82.4 — 2026-09-29
+
+### Added
+
+- `coreStreamAgent(output)` from `@copilotz/copilotz/core` returns the Agent
+  (`{ id, name }`) speaking in a stream Core produced, so code reading
+  `send().outputs` can say who is talking without relying on stream metadata.
+  The interactive CLI uses it.
+
+### Documentation
+
+- Rewrite the README and quickstart around rooms with several people and agents:
+  an example with two people and two agents, then serving it over HTTP and
+  adding a chat UI.
+- Document shared rooms in the server guide: granting several people access to
+  one conversation from `authorize`, including `coreConversationAccess`.
+- Reorganize the documentation index, and stop publishing internal design notes
+  (moved to `design/`).
+
 ## 0.82.3 — 2026-09-29
 
 ### Added

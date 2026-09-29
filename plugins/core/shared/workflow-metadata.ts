@@ -558,6 +558,21 @@ export function coreLlmStreamMetadata(
   return ({ copilotzCore: metadata } as const);
 }
 
+/**
+ * The Agent speaking in a stream Core produced, read from its stream metadata.
+ * Returns `undefined` for any stream that Core's agents did not produce.
+ */
+export function coreStreamAgent(
+  output: Readonly<{ metadata?: unknown }>,
+): Readonly<{ id: string; name: string }> | undefined {
+  const core = record(record(output.metadata).copilotzCore);
+  if (core.schema !== CORE_LLM_STREAM_METADATA_SCHEMA) return undefined;
+  const agent = record(core.agent);
+  const id = optionalMetadataText(agent.id);
+  const name = optionalMetadataText(agent.name);
+  return id && name ? ({ id, name } as const) : undefined;
+}
+
 const CORE_LLM_CALL_KEYS = new Set([
   "schema",
   "threadId",

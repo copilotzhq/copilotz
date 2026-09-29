@@ -218,17 +218,17 @@ and create `deno.json` with these package imports (use the released version):
 ```json
 {
   "imports": {
-    "@copilotz/copilotz": "jsr:@copilotz/copilotz@0.75.0",
-    "@copilotz/copilotz/core": "jsr:@copilotz/copilotz@0.75.0/core",
-    "@copilotz/copilotz/actions": "jsr:@copilotz/copilotz@0.75.0/actions",
-    "@copilotz/copilotz/plugins": "jsr:@copilotz/copilotz@0.75.0/plugins",
-    "@copilotz/copilotz/llm": "jsr:@copilotz/copilotz@0.75.0/llm"
+    "@copilotz/copilotz": "jsr:@copilotz/copilotz@0.82.4",
+    "@copilotz/copilotz/core": "jsr:@copilotz/copilotz@0.82.4/core",
+    "@copilotz/copilotz/actions": "jsr:@copilotz/copilotz@0.82.4/actions",
+    "@copilotz/copilotz/plugins": "jsr:@copilotz/copilotz@0.82.4/plugins",
+    "@copilotz/copilotz/llm": "jsr:@copilotz/copilotz@0.82.4/llm"
   }
 }
 ```
 
 ```sh
-deno run -A jsr:@copilotz/copilotz@0.75.0/build build .
+deno run -A jsr:@copilotz/copilotz@0.82.4/build build .
 deno run -A run.ts
 ```
 

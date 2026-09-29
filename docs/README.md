@@ -1,33 +1,40 @@
 # Copilotz Documentation
 
-These guides describe the executable 0.73 public surface. Historical design
-plans and removed migration APIs are intentionally not published.
+Copilotz is a TypeScript framework for apps where people and AI agents share the
+same conversations. These guides describe the current public surface; the
+authoritative list of entrypoints is the `exports` in `../deno.json`.
 
-## Start here
+## Start
 
-1. [Quickstart](quickstart.md)
-2. [Architecture](architecture.md)
-3. [API and package reference](api.md)
-4. [Plugins and processors](plugins-and-processors.md)
-5. [Goal Action](goals.md)
+1. [Quickstart](quickstart.md): a room with people and agents, served over HTTP,
+   with a chat UI.
 
-## Runtime mechanics
+## Build
 
-- [Events, deliveries, and recovery](events-deliveries-recovery.md)
-- [Content and assets](content-assets.md)
-- [Progressive streams](streams.md)
-- [Embedding, Gateways, and Workers](embedding-and-hypervisors.md)
-- [Host capability adapters](runtime-adapters.md)
+- [Agent capabilities](agent-capabilities.md): tools, teammates and skills,
+  granted per agent.
+- [Agents asking agents](multi-agent-ask.md): the public `ask`.
+- [HTTP server and browser client](server.md): sign-in, access, shared rooms and
+  live observation.
+- [Channels](channels.md): web, WhatsApp, Telegram, Discord and Zendesk.
+- [Shared Spaces](spaces.md): work contexts with members and resources.
+- [Semantic memory](memory.md) and [skills](skills.md).
+- [Goal Action](goals.md): multi-turn evaluation over ordinary sends.
 
-## Semantic plugins
+## Run in production
 
-- [Agent capabilities](agent-capabilities.md)
-- [Multi-agent ask](multi-agent-ask.md)
-- [Shared Spaces](spaces.md)
-- [Semantic memory](memory.md)
-- [Skills](skills.md)
+- [Events, deliveries, and recovery](events-deliveries-recovery.md): durable
+  facts, retries, and what "at least once" means for your code.
+- [Embedding, Gateways, and Workers](embedding-and-hypervisors.md): one process
+  or many, and sizing the database pool.
+- [Host capability adapters](runtime-adapters.md).
 
-## Database upgrade
+## Understand and extend
 
-`../ARCHITECTURE.md` is the first-principles architecture authority. The
-package's actual public entrypoints are the `exports` in `../deno.json`.
+- [Architecture](architecture.md), and the first-principles contract in
+  [`ARCHITECTURE.md`](../ARCHITECTURE.md).
+- [Plugins and processors](plugins-and-processors.md): add your own behavior.
+- [Plugin source layout](plugin-layout.md) and
+  [convention-first authoring](convention-authoring.md).
+- [Content and assets](content-assets.md) and [progressive streams](streams.md).
+- [API and package reference](api.md).

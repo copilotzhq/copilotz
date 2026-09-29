@@ -11,7 +11,7 @@ import {
   type CoreMessageInput,
   message,
 } from "../../processors/message-input/input/index.ts";
-import { CORE_LLM_STREAM_METADATA_SCHEMA } from "../../shared/workflow-metadata.ts";
+import { coreStreamAgent } from "../../shared/workflow-metadata.ts";
 
 export type CliMessageScope = Readonly<
   Omit<
@@ -147,22 +147,8 @@ function llmStreamLane(
     : null;
 }
 
-function record(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null;
-}
-
 function nonEmptyText(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function coreStreamAgentName(
-  output: Extract<ApplicationOutput, { type: "stream.output" }>,
-): string | undefined {
-  const core = record(output.metadata.copilotzCore);
-  if (core?.schema !== CORE_LLM_STREAM_METADATA_SCHEMA) return undefined;
-  return nonEmptyText(record(core.agent)?.name);
 }
 
 function eventAgentName(event: CopilotzEvent): string {
@@ -682,7 +668,8 @@ export function createInteractiveCli(options: InteractiveCliOptions): Readonly<{
       return;
     }
     const lane = llmStreamLane(output);
-    const streamAgentName = coreStreamAgentName(output) ?? respondingAgentName;
+    const streamAgentName = coreStreamAgent(output)?.name ??
+      respondingAgentName;
     if (lane === "tool-calls") {
       await renderToolCallStream(output, streamAgentName, operation);
       return;

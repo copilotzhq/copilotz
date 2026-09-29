@@ -26,9 +26,9 @@ same conversation.
 ## Install
 
 ```sh
-deno add jsr:@copilotz/copilotz@^0.82.4
+deno add jsr:@copilotz/copilotz@^0.82.5
 # or, with Node 24+
-npx jsr add @copilotz/copilotz@^0.82.4 && npm i @electric-sql/pglite
+npx jsr add @copilotz/copilotz@^0.82.5 && npm i @electric-sql/pglite && npm pkg set type=module
 ```
 
 ## A room with two people and two agents
@@ -42,7 +42,7 @@ import { isStreamOutput } from "@copilotz/copilotz/streams";
 const models = { generate: [{ connection: "openai", model: "gpt-5.4-mini" }] };
 
 const app = await createCopilotz({
-  namespace: "demo",
+  namespace: "demo", // the tenant boundary: any name works for a single-tenant app
   plugins: [corePlugin, webChannelPlugin],
   resources: {
     llmConnections: {

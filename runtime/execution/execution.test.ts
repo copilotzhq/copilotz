@@ -29,6 +29,7 @@ import {
   type DeliveryDispatcher,
 } from "./index.ts";
 import { createTestProcessorContext } from "../testing/processor-context.ts";
+import { summarizeDeliveryError } from "./diagnostics.ts";
 type Fixture = Readonly<{
   db: TestDatabase;
   store: EventStore;
@@ -715,6 +716,7 @@ Deno.test("delivery diagnostics correlate placement and worker settlement withou
             "databaseSchema",
             "namespace",
             "status",
+            "error",
             "capacity",
             "activeCount",
             "queuedCount",
@@ -728,6 +730,189 @@ Deno.test("delivery diagnostics correlate placement and worker settlement withou
     await executor.shutdown();
     await closeFixture(fixture);
   }
+});
+Deno.test("a failed handler reports a bounded, credential-masked error in its diagnostic", async () => {
+  const secret = "sk-proj-abcdefghijklmnopqrstuvwxyz0123456789";
+  const fixture = await createFixture({
+    handle: () => {
+      const error = new TypeError(
+        `upstream rejected the call with Authorization: Bearer ${secret} ${
+          "x".repeat(2_000)
+        }`,
+      );
+      error.stack = `TypeError: leaked-in-stack ${secret}`;
+      (error as Error & { cause?: unknown }).cause = new Error(
+        `cause ${secret}`,
+      );
+      throw error;
+    },
+  });
+  const committed = await appendMessage(fixture);
+  const settled: Array<Record<string, unknown>> = [];
+  const executor = createDeliveryExecutor({
+    store: fixture.store,
+    registry: fixture.registry,
+    createContext: fixture.createContext,
+    onDiagnostic(diagnostic) {
+      if (diagnostic.phase === "worker_handler_settled") {
+        settled.push(diagnostic);
+      }
+    },
+  });
+  try {
+    const handle = await executor.dispatchDelivery(committed.deliveries[0]);
+    assertEquals((await handle.done).delivery.status, "retry_wait");
+    assertEquals(settled.length, 1);
+    assertEquals(settled[0].status, "retry_wait");
+    const error = settled[0].error as { name: string; message: string };
+    assertEquals(Object.keys(error).sort(), ["message", "name"]);
+    assertEquals(error.name, "TypeError");
+    assert(error.message.startsWith("upstream rejected the call with"));
+    assert(error.message.length <= 501, "the message is bounded");
+    const encoded = JSON.stringify(settled);
+    assertEquals(encoded.includes(secret), false);
+    assertEquals(encoded.includes("leaked-in-stack"), false);
+    assertEquals(encoded.includes("cause"), false);
+  } finally {
+    await executor.shutdown();
+    await closeFixture(fixture);
+  }
+});
+Deno.test("a successful or dead-lettered handler diagnostic is consistent about its error", async () => {
+  const fixture = await createFixture({
+    handle: () => {
+      throw markNonRetryable(new Error("configuration is invalid"));
+    },
+  });
+  const committed = await appendMessage(fixture);
+  const settled: Array<Record<string, unknown>> = [];
+  const executor = createDeliveryExecutor({
+    store: fixture.store,
+    registry: fixture.registry,
+    createContext: fixture.createContext,
+    onDiagnostic(diagnostic) {
+      if (diagnostic.phase === "worker_handler_settled") {
+        settled.push(diagnostic);
+      }
+    },
+  });
+  try {
+    const handle = await executor.dispatchDelivery(committed.deliveries[0]);
+    assertEquals((await handle.done).delivery.status, "dead_letter");
+    assertEquals(settled.map((item) => item.status), ["dead_letter"]);
+    assertEquals(settled[0].error, {
+      name: "Error",
+      message: "configuration is invalid",
+    });
+  } finally {
+    await executor.shutdown();
+    await closeFixture(fixture);
+  }
+  const ok = await createFixture();
+  const okCommitted = await appendMessage(ok);
+  const okSettled: Array<Record<string, unknown>> = [];
+  const okExecutor = createDeliveryExecutor({
+    store: ok.store,
+    registry: ok.registry,
+    createContext: ok.createContext,
+    onDiagnostic(diagnostic) {
+      if (diagnostic.phase === "worker_handler_settled") {
+        okSettled.push(diagnostic);
+      }
+    },
+  });
+  try {
+    await (await okExecutor.dispatchDelivery(okCommitted.deliveries[0])).done;
+    assertEquals(okSettled.map((item) => item.status), ["succeeded"]);
+    assertEquals("error" in okSettled[0], false);
+  } finally {
+    await okExecutor.shutdown();
+    await closeFixture(ok);
+  }
+});
+Deno.test("summarizeDeliveryError bounds and masks whatever is thrown", () => {
+  assertEquals(summarizeDeliveryError(new RangeError("out of range")), {
+    name: "RangeError",
+    message: "out of range",
+  });
+  // Values that are not errors never expose their own properties or string form.
+  assertEquals(summarizeDeliveryError({ apiKey: "sk-live-0123456789abcdef" }), {
+    name: "Error",
+    message: "A non-Error value was thrown.",
+  });
+  assertEquals(
+    summarizeDeliveryError(undefined).message,
+    "A non-Error value was thrown.",
+  );
+  assertEquals(summarizeDeliveryError("plain failure"), {
+    name: "Error",
+    message: "plain failure",
+  });
+  // A name cannot smuggle text into the summary.
+  const named = new Error("m");
+  named.name = "Not a name\nwith text sk-abcdefghijklmnopqrstuvwxyz";
+  assertEquals(summarizeDeliveryError(named).name, "Error");
+  // An empty message falls back to the name.
+  assertEquals(
+    summarizeDeliveryError(new SyntaxError("")).message,
+    "SyntaxError",
+  );
+  // A hostile message accessor cannot break settlement.
+  const hostile = new Error("x");
+  Object.defineProperty(hostile, "message", {
+    get() {
+      throw new Error("no");
+    },
+  });
+  assertEquals(
+    summarizeDeliveryError(hostile).message,
+    "The error message could not be read.",
+  );
+
+  const masked = (text: string) =>
+    summarizeDeliveryError(new Error(text)).message;
+  assertEquals(
+    masked("connect to postgres://app:hunter2@db.internal:5432/x failed"),
+    "connect to postgres://[redacted]@db.internal:5432/x failed",
+  );
+  assertEquals(
+    masked("401 from api with Bearer abcdEFGH1234567890"),
+    "401 from api with Bearer [redacted]",
+  );
+  assertEquals(
+    masked('bad config {"apiKey": "abc123", "region": "eu"}'),
+    'bad config {"apiKey": "[redacted]", "region": "eu"}',
+  );
+  assertEquals(
+    masked("password=hunter2&user=me"),
+    "password=[redacted]&user=me",
+  );
+  assertEquals(
+    masked(
+      "jwt eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcDEF12345 rejected",
+    ),
+    "jwt [redacted] rejected",
+  );
+  assertEquals(
+    masked("key sk-ant-api03-abcdefghijklmnopqrstuvwxyz was revoked"),
+    "key [redacted] was revoked",
+  );
+  // Ordinary, useful text is left alone, including ids and colons.
+  assertEquals(
+    masked(
+      "Event '01J8ZQ9K4X' was not found in asset 6c2b1e0a-1111-4222-8333-944455556666: timeout",
+    ),
+    "Event '01J8ZQ9K4X' was not found in asset 6c2b1e0a-1111-4222-8333-944455556666: timeout",
+  );
+  // The bound applies after masking, so a secret cannot straddle it.
+  const straddle = summarizeDeliveryError(
+    new Error(`${"a".repeat(495)} sk-abcdefghijklmnopqrstuvwxyz0123`),
+  ).message;
+  assertEquals(straddle.includes("sk-"), false);
+  assert(straddle.length <= 501);
+  assert(
+    summarizeDeliveryError(new Error("z".repeat(10_000))).message.endsWith("…"),
+  );
 });
 Deno.test("delivery diagnostics report placement failure and capacity transitions only when enabled", async () => {
   const fixture = await createFixture();

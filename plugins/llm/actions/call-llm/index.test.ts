@@ -17,6 +17,10 @@ import {
   createActionCallers,
   createActionLifecycleEmitter,
 } from "@copilotz/copilotz/actions";
+import {
+  createContentResolver,
+  createMemoryAssetRepository,
+} from "@copilotz/copilotz/content";
 import type {
   ContentStreamAbortInput,
   ContentStreamOpenInput,
@@ -3331,6 +3335,112 @@ Deno.test("llm.call strips foreign native state before fallback and replays it o
     { opaque: "previous" },
   ]);
   assertEquals(output.content, [ref("prepared:attempt:1:content:0")]);
+});
+
+Deno.test("callLlm accepts plain strings as text message content", async () => {
+  const assets = createMemoryAssetRepository();
+  const resolver = createContentResolver({ assets });
+  let seen: LlmAdapterCallInput | undefined;
+  const test = fixture({
+    llmConnections: { primary: { adapter: "provider" } },
+    adapters: {
+      provider: {
+        call(input) {
+          seen = input;
+          return invocation({
+            content: { type: "text", text: "ok" },
+            attempts: [{ status: "completed" }],
+          });
+        },
+      },
+    },
+  });
+  const content = {
+    ...test.context.content,
+    authorize: (value: ContentRef) =>
+      resolver.authorize(value, { namespace: "tenant-a" }),
+    getMany: (ids: readonly string[]) => assets.getMany("tenant-a", ids),
+    publish: (
+      input: { mediaType: string; body: Uint8Array },
+      options: { operationKey: string },
+    ) =>
+      assets.publish({
+        ...input,
+        namespace: "tenant-a",
+        idempotencyKey: options.operationKey,
+      }),
+    resolveMany: (refs: readonly ContentRef[]) =>
+      resolver.getMany(refs, { namespace: "tenant-a" }),
+  } as unknown as LlmActionContext["content"];
+  const durable: ActionEventData[] = [];
+  const actions = createActionCallers({ callLlm: callLlmAction }, {
+    actionLifecycle: {
+      emit(data) {
+        durable.push(structuredClone(data));
+        return Promise.resolve({ deduplicated: false } as never);
+      },
+      invoked: () => Promise.resolve(null),
+      terminal: () => Promise.resolve(null),
+    },
+    content,
+    signal: test.context.signal,
+    createInvocationKey: () => "plain-strings",
+    createContext(input) {
+      return Object.freeze({
+        ...test.context,
+        content,
+        action: Object.freeze({
+          id: input.frame.actionId,
+          runId: input.frame.actionRunId,
+          metadata: input.frame.metadata,
+        }),
+        progress: input.progress,
+      });
+    },
+  });
+  const explicit = (value: string) => ({
+    kind: "text",
+    role: "body",
+    mediaType: "text/plain; charset=utf-8",
+    value,
+  });
+
+  // The shorthand a caller would naturally write, in every place a message
+  // holds content.
+  await actions.callLlm({
+    models: [{ connection: "primary", model: "provider-model" }],
+    mode: "generate",
+    request: {
+      messages: [
+        { role: "system", content: "You title chat rooms." },
+        { role: "user", content: ["Name this: ", explicit("a chat")] },
+      ],
+    },
+  } as unknown as LlmCallInput, { operationKey: "plain-strings" });
+  assertEquals(
+    seen?.request.messages.map((message) =>
+      message.content.map((part) => part.type === "text" ? part.text : part)
+    ),
+    [["You title chat rooms."], ["Name this: ", "a chat"]],
+  );
+  const sent = durable.find((data) => data.status === "invoked");
+  assert(sent);
+  assertEquals(
+    JSON.stringify(sent.input).includes("You title chat rooms."),
+    false,
+  );
+
+  // Shapes that are not text or entries are still rejected, as before.
+  await assertRejects(
+    () =>
+      actions.callLlm({
+        models: [{ connection: "primary", model: "provider-model" }],
+        mode: "generate",
+        request: { messages: [{ role: "user", content: 42 }] },
+      } as unknown as LlmCallInput, { operationKey: "not-text" }),
+    TypeError,
+    "must be a sequence",
+  );
 });
 
 Deno.test("misplaced credentials are rejected before any durable Action input is emitted", async () => {

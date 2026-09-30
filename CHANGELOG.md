@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.82.5 — 2026-09-29
+
+### Added
+
+- A failed Processor now says why. The `worker_handler_settled` delivery
+  diagnostic carries `error: { name, message }` when the handler threw, next to
+  the delivery's new status (`retry_wait` or `dead_letter`), so
+  `onDeliveryDiagnostic` can log background failures. The message is cut to 500
+  characters and masks common credential shapes; the stack, the cause, and the
+  Event are never included. See "Seeing why a Processor failed" in
+  `docs/events-deliveries-recovery.md`.
+
+### Changed
+
+- Actions that declare content input (including `callLlm`) accept a plain string
+  as text, both in place of a whole sequence and as an element of one, so
+  `{ role: "system", content: "Be brief." }` works. Other shapes are still
+  rejected as before.
+- The error for a missing tenant namespace now says how to set one. Copilotz
+  still never picks a namespace for you; a default would let a forgotten tenant
+  silently share data.
+
+### Documentation
+
+- The README and quickstart explain the namespace, and the Node install line
+  sets `"type": "module"` so a fresh project runs `room.ts` without a warning.
+
 ## 0.82.4 — 2026-09-29
 
 ### Added

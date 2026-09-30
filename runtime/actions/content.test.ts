@@ -485,3 +485,74 @@ Deno.test("Action hydration rejects invalid UTF-8 even when a host returns undec
   assertEquals((error as { assetId: string }).assetId, asset.id);
   assertEquals((error as { namespace: string }).namespace, "tenant");
 });
+
+Deno.test("Action content accepts plain strings as text at declared paths", async () => {
+  const f = fixture();
+  const seen: Record<string, unknown>[][] = [];
+  const actions = f.callers((prepared) => {
+    seen.push(prepared.messages.map((message) => ({
+      content: message.content.map(({ assetId: _, ...entry }) => entry),
+    })));
+    return "ok";
+  });
+  const text = (value: string) => ({
+    kind: "text",
+    role: "body",
+    mediaType: "text/plain; charset=utf-8",
+    value,
+  });
+  const strings = {
+    messages: [
+      { content: "You are terse." },
+      { content: ["Hello ", text("there"), "!"] },
+    ],
+  };
+  assertEquals(await actions.test(strings as never), "ok");
+  // The handler sees ordinary text entries; the caller's input is untouched.
+  assertEquals(seen, [[
+    { content: [text("You are terse.")] },
+    { content: [text("Hello "), text("there"), text("!")] },
+  ]]);
+  assertEquals(strings.messages[0].content, "You are terse.");
+
+  // Lifecycle data holds references, exactly as it does for explicit entries.
+  assertEquals(f.events.length > 0, true);
+  const stored = f.events.flatMap((event) =>
+    (event.input as Input).messages.flatMap((message) => message.content)
+  );
+  assertEquals(stored.length, 2 * 4);
+  for (const entry of stored) {
+    assert(typeof entry.assetId === "string");
+    assert(!("value" in entry));
+  }
+
+  // The shorthand and the explicit entry are the same input: same Asset.
+  const explicit = f.callers(() => "ok", "explicit");
+  await explicit.test({ messages: [{ content: [text("You are terse.")] }] });
+  const first = (f.events[0].input as Input).messages[0].content[0].assetId;
+  const last = (f.events.at(-1)!.input as Input).messages[0].content[0].assetId;
+  assertEquals(last, first);
+});
+
+Deno.test("Action content still rejects shapes that are neither text nor entries", async () => {
+  const f = fixture();
+  const actions = f.callers(() => "ok");
+  const rejected = (content: unknown) =>
+    assertRejects(
+      () => actions.test({ messages: [{ content }] } as never),
+      TypeError,
+    );
+  await rejected(42);
+  await rejected({ kind: "text", role: "body", value: "x" });
+  await rejected(null);
+  await rejected([42]);
+  await rejected([null]);
+  await rejected([["nested"]]);
+  await rejected([{ kind: "text", role: "body", mediaType: "text/plain" }]);
+  // A string is an entry, not a whole document: the empty string is text.
+  assertEquals(f.events.length, 0);
+  assertEquals(
+    await actions.test({ messages: [{ content: "" }] } as never),
+    "ok",
+  );
+});

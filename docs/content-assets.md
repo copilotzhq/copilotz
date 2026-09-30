@@ -373,11 +373,15 @@ const consume = defineAction({
 
 Paths name content sequences; `[]` traverses arrays. Missing optional fields are
 allowed. Each entry has the usual `kind`, `role`, and `mediaType` metadata, plus
-`value`. An existing `assetId` is reused after authorization and value
-validation. A literal value without `assetId` is published using a
-media-type/content-hash idempotency key. Engine invocation uses namespace-scoped
-keys across Processor runs. Explicit `{ ...ref, resolve: false }` entries remain
-descriptors and are never hydrated.
+`value`. A plain string is shorthand for one text entry
+(`{ kind: "text", role: "body", mediaType: "text/plain; charset=utf-8", value }`),
+both in place of a whole sequence and as an element of one, so
+`{ role: "system", content: "Be brief." }` works for `callLlm`. Any other shape
+that is not a sequence of entries is rejected. An existing `assetId` is reused
+after authorization and value validation. A literal value without `assetId` is
+published using a media-type/content-hash idempotency key. Engine invocation
+uses namespace-scoped keys across Processor runs. Explicit
+`{ ...ref, resolve: false }` entries remain descriptors and are never hydrated.
 
 Runtime snapshots input, prepares reference-only lifecycle data, and supplies
 resolved values to the handler. JSON input schemas validate the execution shape,

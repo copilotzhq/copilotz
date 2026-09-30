@@ -81,6 +81,16 @@ export type DeliveryWorkloadScheduler = Readonly<{
   cancel(handle: unknown): void;
 }>;
 
+/**
+ * Why a delivery's handler failed, safe to log: the error's name and a message
+ * of at most 500 characters with common credential shapes masked. It never
+ * carries a stack, a cause, or the Event being handled.
+ */
+export type DeliveryDiagnosticError = Readonly<{
+  name: string;
+  message: string;
+}>;
+
 /** Opt-in, process-local delivery timing observation. Never persisted. */
 export type DeliveryDiagnostic = Readonly<{
   phase:
@@ -106,6 +116,12 @@ export type DeliveryDiagnostic = Readonly<{
   databaseSchema?: string;
   namespace?: string;
   status?: string;
+  /**
+   * Present on a `worker_handler_settled` diagnostic when the handler threw.
+   * `status` then says what became of the delivery: `retry_wait` or
+   * `dead_letter`.
+   */
+  error?: DeliveryDiagnosticError;
   origin?: "direct" | "scheduled" | "recovery";
   capacity?: number;
   activeCount?: number;

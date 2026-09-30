@@ -87,6 +87,11 @@ throw markNonRetryable(new TypeError("Archive configuration is invalid."));
 The delivery then dead-letters immediately. Do not infer permanence from broad
 JavaScript classes such as `TypeError`; network APIs can throw the same class.
 
+A failing `detached` Processor does not surface anywhere on its own. To log it,
+pass `onDeliveryDiagnostic` and read the `error` on a `worker_handler_settled`
+diagnostic; see
+[seeing why a Processor failed](events-deliveries-recovery.md#seeing-why-a-processor-failed).
+
 ## Runtime context
 
 Actions and Processors receive the same complete runtime-neutral context. A

@@ -40,6 +40,45 @@ Stable Collection operation keys and Action invocation identities are therefore
 part of plugin correctness. On retry, built-in mutations and Actions first load
 their authenticated durable result instead of repeating a settled effect.
 
+A `detached` Processor's failure does not reach the operation that triggered it,
+so nothing reports it unless you ask. See
+[Seeing why a Processor failed](#seeing-why-a-processor-failed) to log it.
+
+## Seeing why a Processor failed
+
+`onDeliveryDiagnostic` is an opt-in, process-local observer of delivery timing
+(`createCopilotz`, `createCopilotzGateway`, and `createCopilotzWorker` all take
+it). When a Processor throws, its `worker_handler_settled` diagnostic carries
+the delivery's new `status` (`retry_wait` while attempts remain, then
+`dead_letter`) and an `error`:
+
+```ts
+const app = await createCopilotz({
+  plugins,
+  onDeliveryDiagnostic(diagnostic) {
+    if (diagnostic.phase === "worker_handler_settled" && diagnostic.error) {
+      console.error(
+        `processor ${diagnostic.consumerId} ${diagnostic.status}:`,
+        `${diagnostic.error.name}: ${diagnostic.error.message}`,
+      );
+    }
+  },
+});
+```
+
+`error` is `{ name, message }` and nothing else: the message is cut to 500
+characters, common credential shapes (bearer tokens, `key=value` and JSON
+credential fields, URL passwords, JWTs, well-known API key prefixes) are masked,
+and the stack, the `cause`, and the Event being handled are never included. A
+Processor is not schema-marked the way an Action is, so the runtime cannot know
+which of its values are secret; masking is a best-effort courtesy, not a
+guarantee. Do not put secrets in error messages, and throw your own safe message
+where an underlying error might echo request data. The diagnostic is never
+persisted and a sink that throws cannot affect delivery.
+
+The full, unmasked error (including its stack) is stored on the delivery row's
+`last_error`, in your own database.
+
 ## Settlement scopes
 
 `application.send(input)` creates an explicit settlement scope and returns:

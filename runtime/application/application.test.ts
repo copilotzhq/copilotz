@@ -1557,6 +1557,33 @@ Deno.test("a dead-lettered send names the failure behind it", async () => {
     await closeDb(db);
   }
 });
+Deno.test("a missing tenant namespace fails closed and says how to set one", async () => {
+  const db = await createTestDatabase({ url: ":memory:" });
+  const application = await createCopilotzApplication({
+    database: db,
+    databaseSchema: `${SCHEMA}_missing_namespace`,
+    plugins: [storageFixture],
+  });
+  try {
+    // No default tenant is ever chosen: data would otherwise pool silently.
+    const error = await assertRejects(
+      () => application.send({ type: "probe.requested" }),
+      TypeError,
+      "A tenant namespace is required",
+    );
+    assert(error.message.includes('createCopilotz({ namespace: "my-app" })'));
+    // An operation may still name its own tenant.
+    const sent = await application.send({
+      type: "probe.requested",
+      namespace: "tenant-b",
+    });
+    await sent.outputs.cancel();
+    await sent.done;
+  } finally {
+    await application.shutdown();
+    await closeDb(db);
+  }
+});
 Deno.test("application never closes an injected database", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   let closes = 0;

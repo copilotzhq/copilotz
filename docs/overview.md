@@ -86,7 +86,7 @@ underlying data and operations belong to your application and services.
 
 | Your starting point                                            | Read next                                                                                                                                        |
 | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Learn agent composition, tool grants and conversation routing. | [Getting started](getting-started/README.md), beginning with one assistant.                                                                      |
+| Learn agent composition, tool grants and conversation routing. | [Getting started](getting-started.md), beginning with one assistant.                                                                             |
 | Embed Copilotz in an existing server or worker.                | [Embedding](embedding-and-hypervisors.md) for the application lifecycle, and [channels](channels.md) for incoming requests and outgoing replies. |
 | Serve conversations through HTTP and a browser client.         | [Quickstart](quickstart.md#3-serve-it-over-http) and [server](server.md).                                                                        |
 | Connect a product's APIs or an MCP server as tools.            | [OpenAPI tools](../plugins/tool-openapi/README.md), [MCP tools](../plugins/tool-mcp/README.md) and [agent capabilities](agent-capabilities.md).  |

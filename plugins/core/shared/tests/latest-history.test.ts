@@ -6,8 +6,15 @@ import {
   type AgentResource,
   corePlugin,
   defineAgent,
+  defineContextResource,
   message,
 } from "@copilotz/copilotz/core";
+import {
+  type BodyStorageOptions,
+  type BodyStore,
+  type ContentRef,
+  createMemoryBodyStore,
+} from "@copilotz/copilotz/content";
 import type {
   LlmAdapter,
   LlmAdapterCallInput,
@@ -50,6 +57,12 @@ async function fixture(
     Pick<AgentResource, "instructions" | "dynamicResolve" | "history">
   > = {},
   now: () => Date = () => new Date(),
+  runtimeOptions: Readonly<{
+    assets?: BodyStorageOptions;
+    promptContext?: Readonly<
+      Record<string, ReturnType<typeof defineContextResource>>
+    >;
+  }> = {},
 ) {
   const db = await createTestDatabase({ url: ":memory:" });
   const inputs: LlmAdapterCallInput[] = [];
@@ -66,6 +79,7 @@ async function fixture(
           models: { generate: [{ connection: "model", model: "test" }] },
         }),
       },
+      promptContext: runtimeOptions.promptContext ?? {},
       llmConnections: { model: { adapter: "test" } },
     },
     adapters: { llm: { test: adapter(inputs) } },
@@ -76,6 +90,7 @@ async function fixture(
     databaseSchema: "latest_history",
     plugins: [corePlugin, app],
     engine: { retryBaseMs: 0, random: () => 0, now },
+    ...(runtimeOptions.assets ? { assets: runtimeOptions.assets } : {}),
   });
   const domain = createTestDomainContext(application, namespace, { now });
   await domain.actions.createThread({
@@ -289,14 +304,53 @@ Deno.test("history cutoff stays tied to the trigger timestamp on router retry", 
 
 Deno.test("removing an Agent during preparation prevents the uncaptured model invocation", async () => {
   const entered = Promise.withResolvers<void>();
-  const test = await fixture({
-    dynamicResolve: async () => {
-      entered.resolve();
-      await Promise.resolve();
-      return { instructions: "ready" };
+  const release = Promise.withResolvers<void>();
+  let armed = false;
+  const backingStore = createMemoryBodyStore();
+  const gatedStore: BodyStore = {
+    ...backingStore,
+    async read(input) {
+      if (armed) {
+        armed = false;
+        entered.resolve();
+        await release.promise;
+      }
+      return await backingStore.read(input);
     },
+  };
+  let promptRef: ContentRef | undefined;
+  const promptContext = defineContextResource({
+    id: "test.latest-history.seeded-context",
+    type: "context",
+    purposes: ["conversation"],
+    contribute: () =>
+      promptRef
+        ? {
+          id: "seeded-context",
+          title: "Seeded context",
+          role: "context",
+          content: promptRef,
+        }
+        : null,
   });
+  const test = await fixture({}, () => new Date(), {
+    assets: { storage: { type: "custom", config: { store: gatedStore } } },
+    promptContext: { seeded: promptContext },
+  });
+  let finishSend: (() => Promise<void>) | undefined;
   try {
+    const asset = await test.domain.content.publish({
+      mediaType: "text/plain",
+      body: new TextEncoder().encode("context body held during preparation"),
+    }, { operationKey: "seed-context" });
+    promptRef = {
+      assetId: asset.id,
+      kind: "text",
+      role: "context",
+      mediaType: asset.mediaType,
+    };
+    // The context body read occurs after the message router's metadata snapshot.
+    armed = true;
     const sending = test.application.send(
       message({
         thread: "thread",
@@ -305,15 +359,30 @@ Deno.test("removing an Agent during preparation prevents the uncaptured model in
         content: "start",
       }),
     );
+    // Drain the in-flight turn during cleanup if an assertion or update fails.
+    finishSend = async () => {
+      try {
+        const sent = await sending;
+        await sent.done;
+      } catch {
+        // Preserve the original test failure while still releasing the fixture.
+      }
+    };
     await entered.promise;
     await test.domain.collections.thread.update({
       id: "thread",
       set: { participantIds: ["user", "other"] },
     });
+    // Keep prompt-context resolution paused until membership removal commits.
+    release.resolve();
     const sent = await sending;
     await sent.done;
     assertEquals(test.inputs.length, 0);
   } finally {
+    // Unblock body resolution before waiting for the in-flight operation or closing.
+    armed = false;
+    release.resolve();
+    await finishSend?.();
     await test.close();
   }
 });

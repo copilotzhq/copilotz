@@ -206,8 +206,9 @@ consumes them. Verify both before increasing Worker count.
 ## What's next
 
 You can stop here with an embedded application or follow only the production
-chapters that match your deployment. The [Getting Started index](../README.md)
-links the foundations, optional capabilities, and production choices. For
-complete API and host details, continue with the
-[documentation index](../../README.md), [API reference](../../api.md), and
+chapters that match your deployment. The
+[Getting Started index](../../getting-started.md) links the foundations,
+optional capabilities, and production choices. For complete API and host
+details, continue with the [documentation index](../../README.md),
+[API reference](../../api.md), and
 [Events, Deliveries, and Recovery](../../events-deliveries-recovery.md).

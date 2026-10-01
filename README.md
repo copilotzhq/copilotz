@@ -55,14 +55,14 @@ With Deno:
 
 ```sh
 # Add the package and its plugin subpaths to your Deno project.
-deno add jsr:@copilotz/copilotz@^0.82.6
+deno add jsr:@copilotz/copilotz@^0.82.7
 ```
 
 With Node 24+:
 
 ```sh
 # Install Copilotz and configure its imports for Node.
-npx jsr add @copilotz/copilotz@^0.82.6
+npx jsr add @copilotz/copilotz@^0.82.7
 # Node needs the PGlite package for the default in-memory database.
 npm i @electric-sql/pglite
 # Use ESM so Node 24+ can execute the TypeScript example directly.
@@ -156,7 +156,7 @@ const database = {
 ```
 
 Or use a PostgreSQL connection URL. The
-[Getting started guide](docs/getting-started/README.md) grows this assistant one
+[Getting started guide](docs/getting-started.md) grows this assistant one
 chapter at a time, adding tools, application data, workflows and the optional
 capabilities your product needs.
 
@@ -485,8 +485,8 @@ during development or CI. The application imports that composition at runtime.
 
 **Start building**
 
-- [Getting started](docs/getting-started/README.md) — a progressive guide from
-  one assistant to reusable application behavior and production choices
+- [Getting started](docs/getting-started.md) — a progressive guide from one
+  assistant to reusable application behavior and production choices
 - [Quickstart](docs/quickstart.md) — choose the next step for your application
 - [Understanding Copilotz](docs/overview.md) — the runtime, harness and
   integration choices

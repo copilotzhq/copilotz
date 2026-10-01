@@ -8,8 +8,8 @@ public surface; the authoritative list of entrypoints is the `exports` in
 
 ## Start
 
-1. [Getting started](getting-started/README.md): build one Notes assistant into
-   shared application behavior, with one new concept per chapter and commented
+1. [Getting started](getting-started.md): build one Notes assistant into shared
+   application behavior, with one new concept per chapter and commented
    examples. Complete the six foundation chapters, then choose optional
    branches.
 2. [Understanding Copilotz](overview.md): what you can build, how the runtime

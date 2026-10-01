@@ -1,13 +1,13 @@
 # Quickstart
 
-The [Getting started guide](getting-started/README.md) grows one assistant into
-an application, introducing one useful change at a time. Its examples explain
-the important declarations and configuration properties in code comments.
+The [Getting started guide](getting-started.md) grows one assistant into an
+application, introducing one useful change at a time. Its examples explain the
+important declarations and configuration properties in code comments.
 
 Use Deno 2.9+ or Node 24+. Follow the
-[project setup](getting-started/README.md#before-you-start), then choose a step
-below. The model examples require a provider credential; the runtime-only
-examples work without a model.
+[project setup](getting-started.md#before-you-start), then choose a step below.
+The model examples require a provider credential; the runtime-only examples work
+without a model.
 
 ## 1. Run your first assistant
 

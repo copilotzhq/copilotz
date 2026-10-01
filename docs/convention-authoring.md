@@ -26,11 +26,11 @@ an alias. A helper used by one primitive stays inside that primitive module. Use
 APIs live in `authoring/`. Tests and README files are not discovered. Symlink
 directories are not traversed.
 
-Collection declarations that only define schemas and relations should import
-`@copilotz/copilotz/collections/authoring`. This declaration-only subpath
-exports `defineCollection`, `relation`, and collection types without loading the
-persistence kernel. Use `@copilotz/copilotz/collections` when a runtime
-collection reader or writer is actually required.
+Import runtime primitives such as `defineCollection`, `relation`, `defineAction`
+and `definePlugin` from `@copilotz/copilotz`. Import plugin-owned definitions
+and helpers from that plugin's entrypoint, such as `defineTool` from
+`@copilotz/copilotz/core`. The existing narrow runtime subpaths remain available
+for source modules that need a smaller import graph.
 
 Directory names become camelCase aliases: `close-ticket` becomes `closeTicket`.
 Aliases are local registration names; stable Action IDs and Collection names
@@ -209,26 +209,34 @@ output into `createCopilotz`, creates a conversation, and verifies a streamed
 agent reply. No provider credentials are required. Run it from this repository:
 
 ```sh
+# Build and verify the repository's deterministic generated-plugin example.
 deno task smoke:authoring
 ```
 
 For an empty application outside the checkout, copy that example's source files
 and create `deno.json` with these package imports (use the released version):
 
-```json
+```jsonc
 {
+  // Pin the runtime and plugin entrypoints to the same released package version.
   "imports": {
-    "@copilotz/copilotz": "jsr:@copilotz/copilotz@0.82.5",
-    "@copilotz/copilotz/core": "jsr:@copilotz/copilotz@0.82.5/core",
-    "@copilotz/copilotz/actions": "jsr:@copilotz/copilotz@0.82.5/actions",
-    "@copilotz/copilotz/plugins": "jsr:@copilotz/copilotz@0.82.5/plugins",
-    "@copilotz/copilotz/llm": "jsr:@copilotz/copilotz@0.82.5/llm"
+    // Public application and runtime authoring API.
+    "@copilotz/copilotz": "jsr:@copilotz/copilotz@0.82.6",
+    // The example's agent harness and tool helpers.
+    "@copilotz/copilotz/core": "jsr:@copilotz/copilotz@0.82.6/core",
+    // Narrow compatibility imports used by the generated authoring fixture.
+    "@copilotz/copilotz/actions": "jsr:@copilotz/copilotz@0.82.6/actions",
+    "@copilotz/copilotz/plugins": "jsr:@copilotz/copilotz@0.82.6/plugins",
+    // Model connection contracts and the deterministic test adapter's types.
+    "@copilotz/copilotz/llm": "jsr:@copilotz/copilotz@0.82.6/llm"
   }
 }
 ```
 
 ```sh
-deno run -A jsr:@copilotz/copilotz@0.82.5/build build .
+# Discover source declarations on the build host and emit a static ESM plugin.
+deno run -A jsr:@copilotz/copilotz@0.82.6/build build .
+# Import the generated plugin and verify its mocked agent reply.
 deno run -A run.ts
 ```
 
@@ -239,3 +247,15 @@ application. Keep credentials in the final application context.
 Deno 2.9 waits 24 hours before resolving newly published package versions by
 default. Wait for that window, or set `"minimumDependencyAge": 0` in the
 consumer's `deno.json` when an explicit trusted release policy permits it.
+
+## Documentation examples
+
+New documentation snippets must explain their purpose inside the code. Comment
+each section, declaration, function and meaningful configuration property,
+including schemas, capability grants and cleanup. Shell blocks explain each
+command. Use `jsonc` when JSON configuration needs comments.
+
+Name complete example files and their dependencies. Label a configuration
+excerpt with its exact insertion or replacement point; do not present an
+isolated object property as a runnable program. Introduce one new concern at a
+time and verify examples against the exported API before publishing them.

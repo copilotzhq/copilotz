@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.82.6 — 2026-10-01
+
+### Added
+
+- Import public runtime APIs from `@copilotz/copilotz`: Actions, Collections,
+  Processors, plugin authoring, events, content, streams, Engine and
+  persistence. Existing narrow runtime subpaths remain available; plugin-owned
+  helpers keep their own entrypoints.
+- Core's `app.send(message(...))` creates or reuses a conversation when given a
+  thread object, enrolls selected registered agents and preserves the caller's
+  explicit record IDs. String thread references still require an existing
+  conversation. Generated identities include the namespace, and bootstrap
+  handles verified concurrent participant and membership conflicts.
+
+### Changed
+
+- Load native async-context support when scoped execution begins, so importing
+  runtime authoring APIs does not eagerly load `node:async_hooks`. Scoped
+  execution still requires native support and fails before running the callback
+  when it is unavailable.
+
+### Documentation
+
+- Rebuild the progressive Getting Started guide for the current API: six
+  foundation chapters grow a Notes assistant into reusable application behavior;
+  nine optional chapters cover integrations, context, collaboration, interfaces
+  and production choices.
+- Explain sections, declarations and configuration options inside every new code
+  snippet. Update the README, quickstart and navigation to the same import model
+  and Core-only first message.
+
 ## 0.82.5 — 2026-09-29
 
 ### Added

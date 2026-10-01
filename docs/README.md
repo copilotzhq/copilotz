@@ -1,13 +1,21 @@
 # Copilotz Documentation
 
-Copilotz is a TypeScript framework for apps where people and AI agents share the
-same conversations. These guides describe the current public surface; the
-authoritative list of entrypoints is the `exports` in `../deno.json`.
+Copilotz combines a generic event runtime with an agent harness composed from
+plugins. It supports agents embedded in existing products and shared
+conversations between people and agents. These guides describe the current
+public surface; the authoritative list of entrypoints is the `exports` in
+`../deno.json`.
 
 ## Start
 
-1. [Quickstart](quickstart.md): a room with people and agents, served over HTTP,
-   with a chat UI.
+1. [Getting started](getting-started/README.md): build one Notes assistant into
+   shared application behavior, with one new concept per chapter and commented
+   examples. Complete the six foundation chapters, then choose optional
+   branches.
+2. [Understanding Copilotz](overview.md): what you can build, how the runtime
+   and harness fit together, and choosing an integration path.
+3. [Quickstart](quickstart.md): find the next step if you already know what you
+   want to build.
 
 ## Build
 

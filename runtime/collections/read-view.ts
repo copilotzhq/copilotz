@@ -1,4 +1,4 @@
-import { AsyncLocalStorage } from "node:async_hooks";
+import { createAsyncContextStorage } from "../../dependencies/async-hooks.ts";
 
 /**
  * What one handler invocation (a "hop") has already learned about the rows it
@@ -46,7 +46,7 @@ export function createReadViews(
 ): ReadViews {
   const ttlMs = options.ttlMs ?? READ_VIEW_TTL_MS;
   const now = options.now ?? (() => performance.now());
-  const storage = new AsyncLocalStorage<View>();
+  const storage = createAsyncContextStorage<View>();
   const versions = new Map<string, number>();
   let floor = 0;
   let sequence = 0;

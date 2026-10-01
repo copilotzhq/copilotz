@@ -23,7 +23,7 @@ import type {
 } from "./read-options.ts";
 export type { ScopedCollectionReadOptions } from "./read-options.ts";
 import { ulid } from "../../dependencies/ulid.ts";
-import { AsyncLocalStorage } from "../../dependencies/async-hooks.ts";
+import { createAsyncContextStorage } from "../../dependencies/async-hooks.ts";
 import {
   type CoordinatedMutationResult,
   deriveWorkflowId,
@@ -877,14 +877,14 @@ export function createCollectionKernel(
     planningQueues: Map<string, Promise<void>>;
     state: "open" | "closing" | "closed";
   };
-  const transactions = new AsyncLocalStorage<TransactionScope>();
+  const transactions = createAsyncContextStorage<TransactionScope>();
   type SnapshotScope = {
     executor: SqlExecutor;
     state: "open" | "closed";
     /** A repeatable-read snapshot answers the same question the same way. */
     reads: Map<string, Promise<unknown>>;
   };
-  const snapshots = new AsyncLocalStorage<SnapshotScope>();
+  const snapshots = createAsyncContextStorage<SnapshotScope>();
   const activeScope = () => transactions.getStore();
   const activeSnapshot = () => snapshots.getStore();
 

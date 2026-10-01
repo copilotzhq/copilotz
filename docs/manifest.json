@@ -1,6 +1,91 @@
 {
   "sections": [
     {
+      "title": "Getting Started",
+      "items": [
+        {
+          "title": "Introduction",
+          "slug": "getting-started",
+          "description": "A progressive Notes application: six foundation chapters and optional capabilities."
+        },
+        {
+          "title": "Ch 1: Hello Agent",
+          "slug": "getting-started/part-1-foundations/01-hello-agent",
+          "description": "Run one assistant, send a message and read its reply."
+        },
+        {
+          "title": "Ch 2: Your First Tool",
+          "slug": "getting-started/part-1-foundations/02-your-first-tool",
+          "description": "Give the assistant one explicit, executable capability."
+        },
+        {
+          "title": "Ch 3: Application Data and Actions",
+          "slug": "getting-started/part-1-foundations/03-application-data-and-actions",
+          "description": "Store notes and share one operation across agents and application callers."
+        },
+        {
+          "title": "Ch 4: Processors and Lifecycles",
+          "slug": "getting-started/part-1-foundations/04-processors-and-lifecycles",
+          "description": "React to recorded changes and trace application execution."
+        },
+        {
+          "title": "Ch 5: Reusable Plugins",
+          "slug": "getting-started/part-1-foundations/05-reusable-plugins",
+          "description": "Package behavior once and compose it across applications."
+        },
+        {
+          "title": "Ch 6: Persistence and Recovery",
+          "slug": "getting-started/part-1-foundations/06-persistence-and-recovery",
+          "description": "Keep state across restarts and understand retry boundaries."
+        },
+        {
+          "title": "Ch 7: Existing APIs and Tools",
+          "slug": "getting-started/part-2-capabilities/07-existing-apis-and-tools",
+          "description": "Choose native, OpenAPI or MCP integration when a task needs it."
+        },
+        {
+          "title": "Ch 8: Skills",
+          "slug": "getting-started/part-2-capabilities/08-skills",
+          "description": "Package reusable instructions and grant access explicitly."
+        },
+        {
+          "title": "Ch 9: Agent Collaboration",
+          "slug": "getting-started/part-2-capabilities/09-agent-collaboration",
+          "description": "Add a specialist, establish membership and enable public questions."
+        },
+        {
+          "title": "Ch 10: Memory and Knowledge",
+          "slug": "getting-started/part-2-capabilities/10-memory-and-knowledge",
+          "description": "Distinguish conversation history, long-term memory and document retrieval."
+        },
+        {
+          "title": "Ch 11: HTTP and Client",
+          "slug": "getting-started/part-3-production/11-http-and-client",
+          "description": "Expose application Actions behind policy and call them from a typed client."
+        },
+        {
+          "title": "Ch 12: Interfaces and Channels",
+          "slug": "getting-started/part-3-production/12-interfaces-and-channels",
+          "description": "Connect a chat interface or another conversation transport."
+        },
+        {
+          "title": "Ch 13: Content and Usage",
+          "slug": "getting-started/part-3-production/13-content-and-usage",
+          "description": "Separate large bodies from records and account for model work."
+        },
+        {
+          "title": "Ch 14: Tenants and Access",
+          "slug": "getting-started/part-3-production/14-tenants-and-access",
+          "description": "Choose data scope from authenticated identity and enforce access policy."
+        },
+        {
+          "title": "Ch 15: Deployment and Next Steps",
+          "slug": "getting-started/part-3-production/15-deployment-and-next-steps",
+          "description": "Start embedded and choose Gateway/Worker placement when needed."
+        }
+      ]
+    },
+    {
       "title": "Start",
       "items": [
         {
@@ -9,9 +94,14 @@
           "description": "Where to start and how the guides are organized."
         },
         {
+          "title": "Understanding Copilotz",
+          "slug": "overview",
+          "description": "What you can build, how the runtime and harness fit together, and choosing an integration path."
+        },
+        {
           "title": "Quickstart",
           "slug": "quickstart",
-          "description": "A room with people and agents, served over HTTP, with a chat UI."
+          "description": "Choose the next step in the progressive getting-started guide."
         },
         {
           "title": "Convention-first authoring",
@@ -26,7 +116,7 @@
         {
           "title": "API Reference",
           "slug": "api",
-          "description": "Root role factory, returned surfaces, and explicit subpaths."
+          "description": "Application factory, runtime root exports and plugin entrypoints."
         },
         {
           "title": "Goal Runner",
@@ -69,7 +159,7 @@
           "description": "Embedded, split, remote, and injected-dispatcher placement."
         },
         {
-          "title": "Server Façade",
+          "title": "Server Fa\u00e7ade",
           "slug": "server",
           "description": "Automatic primitive routes, guards, OpenAPI, and lossless multipart outputs."
         },

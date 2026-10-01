@@ -6,7 +6,9 @@ import * as denoAdapters from "../../runtime/adapters/deno/index.ts";
 import * as application from "../../runtime/application/public.ts";
 import * as engine from "../../runtime/engine/index.ts";
 import * as actions from "../../runtime/actions/index.ts";
+import * as collections from "../../runtime/collections/index.ts";
 import * as content from "../../runtime/content/index.ts";
+import * as streams from "../../runtime/streams/index.ts";
 import * as events from "../../runtime/events/index.ts";
 import * as plugins from "../../runtime/plugins/index.ts";
 import * as persistence from "../../runtime/persistence/index.ts";
@@ -52,9 +54,19 @@ function assertFunctions(
   for (const name of names) assertEquals(typeof module[name], "function", name);
 }
 
-Deno.test("package root exposes only the application factory", () => {
-  assertFunctions(copilotz, ["createCopilotz"]);
-  assertEquals(Object.keys(copilotz).sort(), ["createCopilotz"]);
+Deno.test("package root exposes runtime APIs without feature plugins", () => {
+  assertFunctions(copilotz, [
+    "createCopilotz",
+    "defineAction",
+    "defineCollection",
+    "createContentResolver",
+    "definePlugin",
+    "defineProcessor",
+    "createEventStore",
+    "createCopilotzEngine",
+    "createCopilotzPersistence",
+    "isStreamOutput",
+  ]);
   for (
     const removed of [
       "createDatabase",
@@ -66,11 +78,8 @@ Deno.test("package root exposes only the application factory", () => {
       "createCopilotzApplication",
       "createCopilotzGateway",
       "createCopilotzWorker",
-      "createCopilotzPersistence",
-      "createCopilotzEngine",
       "createDeliveryExecutor",
       "createManagedOminipgSession",
-      "createOminipgSqlSession",
       "builtInToolsPlugin",
       "financeToolsPlugin",
       "persistentTerminalToolsPlugin",
@@ -85,6 +94,8 @@ Deno.test("package root exposes only the application factory", () => {
       "coreSchedulesPlugin",
       "defineLlmProviderResource",
       "defineAgent",
+      "defineTool",
+      "message",
       "defineLlmConnection",
       "llmPlugin",
       "agentCapabilities",
@@ -93,6 +104,24 @@ Deno.test("package root exposes only the application factory", () => {
       "workflowMetadata",
     ]
   ) assertEquals(removed in copilotz, false, removed);
+
+  const root = copilotz as unknown as Record<string, unknown>;
+  for (
+    const [surface, exports] of [
+      ["actions", actions],
+      ["collections", collections],
+      ["content", content],
+      ["streams", streams],
+      ["events", events],
+      ["plugins", plugins],
+      ["engine", engine],
+      ["persistence", persistence],
+    ] as const
+  ) {
+    for (const [name, value] of Object.entries(exports)) {
+      assertEquals(root[name], value, `${surface}.${name}`);
+    }
+  }
 });
 
 Deno.test("package subpaths expose cohesive owner APIs", () => {

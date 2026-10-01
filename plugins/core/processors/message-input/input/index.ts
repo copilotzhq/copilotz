@@ -12,10 +12,11 @@ import type {
 } from "../../../shared/contracts.ts";
 import type {} from "@copilotz/copilotz/events";
 export const CORE_MESSAGE_INPUT_EVENT = "copilotz.core.message.input";
-export type CoreThreadInput = Readonly<{
-  id?: string;
-  externalId?: string;
-}>;
+/** Object Thread references opt into create-or-reuse behavior at Core ingress. */
+export type CoreThreadInput = Readonly<
+  | { id: string; externalId?: string }
+  | { id?: string; externalId: string }
+>;
 export type CoreMessageInput = Readonly<{
   thread: string | CoreThreadInput;
   participant: string | Participant | ParticipantInput;

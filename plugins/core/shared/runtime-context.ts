@@ -16,6 +16,7 @@ import type { AgentResource } from "../authoring/define-agent/index.ts";
 import type { PromptInstructionResource } from "../authoring/define-prompt-instructions/index.ts";
 import type { ToolResource } from "@copilotz/copilotz/core";
 import type { createThreadMessageAction } from "../actions/create-thread-message/index.ts";
+import type { createThreadAction } from "../actions/create-thread/index.ts";
 import type { compactContextAction } from "../actions/compact-context/index.ts";
 import type {
   AgentCapabilitiesResource,
@@ -51,6 +52,7 @@ export type CoreComposedContext = Readonly<{
 }>;
 
 export type CoreActionCallers = Readonly<{
+  createThread: BoundActionCaller<typeof createThreadAction>;
   createThreadMessage: BoundActionCaller<typeof createThreadMessageAction>;
   callLlm: BoundActionCaller<typeof callLlmAction>;
   compactContext: BoundActionCaller<typeof compactContextAction>;

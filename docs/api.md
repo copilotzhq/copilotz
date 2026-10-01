@@ -100,23 +100,19 @@ const listener = listen(gateway, { hostname: "0.0.0.0", port: 8080 });
 
 ## Persistence
 
-`@copilotz/copilotz/persistence` is the explicit persistence contract subpath.
-It exports Ominipg connection options plus `createCopilotzPersistence()` for an
-application that deliberately shares one reconnectable database facade across
-several internal roles. The public application factory accepts that facade in
-its `persistence` option; its creator retains the final `close()` ownership.
+Import persistence contracts and Ominipg connection options from
+`@copilotz/copilotz`, including `createCopilotzPersistence()` for an application
+that deliberately shares one reconnectable database facade across several
+internal roles. The public application factory accepts that facade in its
+`persistence` option; its creator retains the final `close()` ownership.
 
 ## Protected Action values
 
-Use `secret(schema)` from `/actions`, or add the exact raw boolean extension
-`"x-copilotz-secret": true`, at any input/output schema subtree:
+Use `secret(schema)` from `@copilotz/copilotz`, or add the exact raw boolean
+extension `"x-copilotz-secret": true`, at any input/output schema subtree:
 
 ```ts
-import {
-  createSecretAdapter,
-  defineAction,
-  secret,
-} from "@copilotz/copilotz/actions";
+import { createSecretAdapter, defineAction, secret } from "@copilotz/copilotz";
 
 const exchange = defineAction({
   id: "myapp.auth.exchange",
@@ -148,13 +144,34 @@ Actions cannot emit progress until an inspectable progress schema exists.
 invoked from a protected durable source Event. It resolves only that exact
 causal Event in the current namespace; it is not a general Event lookup.
 
-## Explicit primitive and plugin packages
+## Runtime and plugin entrypoints
 
-The root exports only `createCopilotz`, `CreateCopilotzOptions`, and generic
-application/operation types. Import reusable primitives from their deliberate
-subpaths: `/actions`, `/collections`, `/content`, `/events`, `/plugins`, and
-`/persistence`. Import semantic composition from plugin packages such as
-`/core`, `/llm`, `/channels`, `/knowledge`, `/schedules`, and `/usage`.
+Import the public runtime API from `@copilotz/copilotz`: the application factory
+and types, Actions, Collections, events, Processors, plugin authoring, content,
+streams, the Engine and persistence. For example:
+
+```ts
+// Import application authoring primitives and their types from the runtime root.
+import {
+  type ActionContext,
+  defineAction,
+  defineCollection,
+  definePlugin,
+} from "@copilotz/copilotz";
+// Import model-facing tool presentation from the harness that owns it.
+import { defineTool } from "@copilotz/copilotz/core";
+```
+
+Each plugin supplies its definitions and helpers through its own entrypoint,
+such as `/core`, `/llm`, `/knowledge`, `/memory` or `/usage`. Core's `message()`
+helper creates an input envelope for the runtime's `app.send()`; it does not
+require a channel plugin. A thread object selects create-or-reuse behavior,
+while a string references an existing thread. See
+[Message input](../plugins/core/processors/message-input/input/README.md).
+
+The existing runtime subpaths (`/actions`, `/collections`, `/content`,
+`/events`, `/plugins`, `/streams`, `/engine` and `/persistence`) remain
+available.
 
 `/application` exports generic application types only; it does not expose a
 factory or runtime authority. `/server` exports the semantic Server plugin,
@@ -168,4 +185,4 @@ Host-specific entrypoints are `/adapters/deno`, `/core/cli`, `/core/cli/node`,
 
 This release requires a fresh v5 schema. There is no migration or compatibility
 entry point. Optional pgvector storage is explicitly provisioned through
-`provisionVectorStorage` from `/persistence`.
+`provisionVectorStorage` from `@copilotz/copilotz`.

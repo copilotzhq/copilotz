@@ -112,7 +112,7 @@ authorities. Public `maintenance()` exposes only bounded safe maintenance, and
 the operation APIs expose status, reconnect, and explicit durable cancellation;
 they do not expose delivery mutation.
 
-Copilotz-owned persistence reconnects, revalidates every opened v4 schema, and
+Copilotz-owned persistence reconnects, revalidates every opened v5 schema, and
 recovers durable obligations. It never replays the indeterminate SQL operation
 that detected the outage. Active `send` handles reject so callers receive an
 honest boundary; durable work remains recoverable and is not falsely marked
@@ -124,11 +124,14 @@ mutation to ordinary application code.
 
 ## Additive reconnect catalog provisioning
 
-Reconnect metadata is stored in additive operational tables; it does not change
-the immutable Core Event schema v4 marker. Normal engine startup provisions both
-v4 and the operation catalog. Hosts that set
-`provisionDefaultDatabaseSchema: false` must provision the catalog explicitly,
-once per physical tenant schema, before starting the new runtime:
+Reconnect metadata is stored in operational tables alongside the Core Event
+schema. The current runtime requires a validated v5 schema. Normal engine
+startup provisions a fresh schema and its operation catalog, and rejects an
+incompatible existing schema. This release provides no data migration.
+
+Hosts that set `provisionDefaultDatabaseSchema: false` must provision both the
+v5 schema and the catalog before startup. After provisioning the schema, add the
+catalog once per physical tenant schema:
 
 ```ts
 import { provisionOperationCatalog } from "@copilotz/copilotz/streams";
@@ -137,10 +140,10 @@ await provisionOperationCatalog(sqlSession, databaseSchema);
 ```
 
 Tenant selection on the request path only validates these tables and never runs
-DDL. Therefore multi-schema hosts should apply the additive provisioning step as
-a deployment migration before routing traffic to a 0.64 runtime. Missing tables
-fail startup/scope opening with `copilotz_operation_catalog_not_provisioned`;
-existing v4 Events and deliveries remain unchanged.
+DDL. Multi-schema hosts must provision each schema before routing traffic to it.
+Missing catalog tables fail startup/scope opening with
+`copilotz_operation_catalog_not_provisioned`. Adding the catalog does not
+migrate a schema from an earlier release.
 
 Operation metadata queries use the runtime's existing generic indexes, including
 `events_metadata_idx` (`GIN (metadata jsonb_path_ops)`) and namespace/position

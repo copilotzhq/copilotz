@@ -12,7 +12,7 @@ Start with one assistant. Give it a tool, add application data, and build a
 reusable operation that people, integrations and agents can share. Then choose
 the interfaces, context and deployment options your application needs.
 
-This guide targets **Copilotz 0.82.7**. It rebuilds the earlier guide’s
+This guide targets **Copilotz 0.82.8**. It rebuilds the earlier guide’s
 progressive format around the current runtime and plugin APIs.
 
 ## How this guide works
@@ -53,8 +53,29 @@ earlier declaration to edit.
 # Create a separate project for the guide’s files.
 mkdir copilotz-notes
 cd copilotz-notes
+```
+
+Deno 2.9 delays dependency versions published in the last 24 hours by default.
+For a recently published Copilotz release you have chosen to try immediately,
+create `deno.jsonc` with this package-specific exception before adding it. Older
+releases do not need the exception. See the
+[Deno configuration reference](https://docs.deno.com/runtime/reference/deno_json/#minimum-dependency-age).
+
+```jsonc
+{
+  // Configure the dependency age policy for this guide project.
+  "minimumDependencyAge": {
+    // Retain the normal 24-hour delay for other dependencies.
+    "age": "P1D",
+    // Allow the selected Copilotz release to install immediately.
+    "exclude": ["jsr:@copilotz/copilotz"]
+  }
+}
+```
+
+```sh
 # Add the package and mappings for its exported plugin subpaths.
-deno add jsr:@copilotz/copilotz@^0.82.7
+deno add jsr:@copilotz/copilotz@^0.82.8
 ```
 
 ### Node
@@ -65,7 +86,7 @@ mkdir copilotz-notes
 cd copilotz-notes
 npm init -y
 # Install Copilotz and configure its package imports.
-npx jsr add @copilotz/copilotz@^0.82.7
+npx jsr add @copilotz/copilotz@^0.82.8
 # Install the database implementation used by the default local runtime.
 npm i @electric-sql/pglite
 # Enable ESM so Node 24+ can execute the TypeScript examples.

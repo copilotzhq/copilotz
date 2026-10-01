@@ -55,14 +55,18 @@ With Deno:
 
 ```sh
 # Add the package and its plugin subpaths to your Deno project.
-deno add jsr:@copilotz/copilotz@^0.82.7
+deno add jsr:@copilotz/copilotz@^0.82.8
 ```
+
+Deno 2.9 delays freshly published dependencies for 24 hours. To try a new
+Copilotz release immediately, follow the package-specific exception in the
+[guide’s Deno setup](docs/getting-started.md#deno).
 
 With Node 24+:
 
 ```sh
 # Install Copilotz and configure its imports for Node.
-npx jsr add @copilotz/copilotz@^0.82.7
+npx jsr add @copilotz/copilotz@^0.82.8
 # Node needs the PGlite package for the default in-memory database.
 npm i @electric-sql/pglite
 # Use ESM so Node 24+ can execute the TypeScript example directly.

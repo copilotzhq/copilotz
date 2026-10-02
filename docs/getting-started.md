@@ -12,7 +12,7 @@ Start with one assistant. Give it a tool, add application data, and build a
 reusable operation that people, integrations and agents can share. Then choose
 the interfaces, context and deployment options your application needs.
 
-This guide targets **Copilotz 0.82.8**. It rebuilds the earlier guide’s
+This guide targets **Copilotz 0.83.0**. It rebuilds the earlier guide’s
 progressive format around the current runtime and plugin APIs.
 
 ## How this guide works
@@ -75,7 +75,7 @@ releases do not need the exception. See the
 
 ```sh
 # Add the package and mappings for its exported plugin subpaths.
-deno add jsr:@copilotz/copilotz@^0.82.8
+deno add jsr:@copilotz/copilotz@^0.83.0
 ```
 
 ### Node
@@ -86,7 +86,7 @@ mkdir copilotz-notes
 cd copilotz-notes
 npm init -y
 # Install Copilotz and configure its package imports.
-npx jsr add @copilotz/copilotz@^0.82.8
+npx jsr add @copilotz/copilotz@^0.83.0
 # Install the database implementation used by the default local runtime.
 npm i @electric-sql/pglite
 # Enable ESM so Node 24+ can execute the TypeScript examples.

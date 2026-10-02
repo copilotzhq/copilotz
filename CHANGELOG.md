@@ -1,4 +1,4 @@
-# 0.83.0
+## 0.83.0 — Optional prerecorded transcription
 
 - Add optional prerecorded transcription plugin with OpenAI and Gemini
   transports.

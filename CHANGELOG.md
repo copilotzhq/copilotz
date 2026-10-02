@@ -1,3 +1,11 @@
+# 0.83.0
+
+- Add optional prerecorded transcription plugin with OpenAI and Gemini
+  transports.
+- Bound audio, provider responses, cancellation and credential/source waits.
+  Transcripts use ordinary conversation-history semantics; no new authorization
+  framework or database migration.
+
 # Changelog
 
 ## 0.82.8 — 2026-10-01

@@ -27,7 +27,34 @@ function validate(input: TranscriptionHttpInput): AbortSignal {
   }
   const signals = [AbortSignal.timeout(timeout)];
   if (input.signal) signals.push(input.signal);
-  return AbortSignal.any(signals);
+  const signal = AbortSignal.any(signals);
+  signal.throwIfAborted();
+  return signal;
+}
+
+/** Bounds injected transports too, and disposes responses arriving after abort. */
+async function send(
+  transport: typeof fetch,
+  url: string,
+  init: RequestInit,
+  signal: AbortSignal,
+): Promise<Response> {
+  signal.throwIfAborted();
+  const work = transport(url, init);
+  void work.then((response) => {
+    if (signal.aborted) void response.body?.cancel().catch(() => {});
+  }, () => {});
+  return await new Promise<Response>((resolve, reject) => {
+    const abort = () => {
+      signal.removeEventListener("abort", abort);
+      reject(signal.reason);
+    };
+    signal.addEventListener("abort", abort, { once: true });
+    work.then(resolve, reject).finally(() =>
+      signal.removeEventListener("abort", abort)
+    );
+    if (signal.aborted) abort();
+  });
 }
 
 async function responseJson(
@@ -35,6 +62,7 @@ async function responseJson(
   signal: AbortSignal,
 ): Promise<Record<string, unknown>> {
   if (!response.ok) {
+    void response.body?.cancel().catch(() => {});
     // Provider bodies can contain private content; do not incorporate them in errors.
     throw new Error(`Transcription provider returned HTTP ${response.status}.`);
   }
@@ -114,12 +142,12 @@ export async function transcribeOpenAi(
     }
   }
   const result = await responseJson(
-    await transport("https://api.openai.com/v1/audio/transcriptions", {
+    await send(transport, "https://api.openai.com/v1/audio/transcriptions", {
       method: "POST",
       headers: { Authorization: `Bearer ${input.apiKey}` },
       body: form,
       signal,
-    }),
+    }, signal),
     signal,
   );
   if (typeof result.text !== "string" || !result.text.trim()) {
@@ -141,7 +169,8 @@ export async function transcribeGemini(
     );
   }
   const result = await responseJson(
-    await transport(
+    await send(
+      transport,
       "https://generativelanguage.googleapis.com/v1beta/interactions",
       {
         method: "POST",
@@ -168,6 +197,7 @@ export async function transcribeGemini(
           },
         }),
       },
+      signal,
     ),
     signal,
   );

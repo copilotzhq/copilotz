@@ -114,3 +114,71 @@ Deno.test("HTTP helper abort cancels stalled response body after headers", async
   await assertRejects(() => pending, Error, "cancelled response");
   assertEquals(cancelled, true);
 });
+for (const helper of [transcribeOpenAi, transcribeGemini]) {
+  Deno.test(`${helper.name} pre-abort prevents transport`, async () => {
+    const controller = new AbortController();
+    controller.abort(new Error("already cancelled"));
+    let calls = 0;
+    await assertRejects(
+      () =>
+        helper(
+          { ...input, signal: controller.signal },
+          (() => {
+            calls++;
+            return Promise.resolve(Response.json({}));
+          }) as typeof fetch,
+        ),
+      Error,
+      "already cancelled",
+    );
+    assertEquals(calls, 0);
+  });
+  Deno.test(`${helper.name} bounds noncooperating transport and disposes late response`, async () => {
+    const controller = new AbortController();
+    let deliver!: (response: Response) => void;
+    const work = new Promise<Response>((resolve) => {
+      deliver = resolve;
+    });
+    const pending = helper(
+      { ...input, signal: controller.signal },
+      (() => work) as typeof fetch,
+    );
+    controller.abort(new Error("cancelled transport"));
+    await assertRejects(() => pending, Error, "cancelled transport");
+    let cancelled = false;
+    deliver(
+      new Response(
+        new ReadableStream({
+          cancel() {
+            cancelled = true;
+          },
+        }),
+      ),
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+    assertEquals(cancelled, true);
+  });
+  Deno.test(`${helper.name} disposes non-2xx body without waiting on cleanup`, async () => {
+    let cancelled = false;
+    const body = new ReadableStream({
+      cancel() {
+        cancelled = true;
+        return new Promise(() => {});
+      },
+    });
+    await assertRejects(
+      () =>
+        helper(
+          input,
+          (() =>
+            Promise.resolve(
+              new Response(body, { status: 401 }),
+            )) as typeof fetch,
+        ),
+      Error,
+      "HTTP 401",
+    );
+    assertEquals(cancelled, true);
+  });
+}

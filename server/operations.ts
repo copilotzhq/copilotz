@@ -132,6 +132,11 @@ export async function createHttpOperations(
                     streamOrdinal: stream.streamOrdinal,
                     offset: stream.committedOffset,
                   }]);
+                  // commit() validates ordinal jumps, while cursor() validates
+                  // aggregate sparse-lane and encoded-byte capacity. Treat
+                  // either capacity failure as optional coverage and keep the
+                  // previous valid tracker intact.
+                  candidate.cursor();
                   tracker = candidate;
                 } catch (error) {
                   // Sparse coverage is optional: replay the omitted prefix instead

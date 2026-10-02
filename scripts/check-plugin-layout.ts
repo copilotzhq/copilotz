@@ -20,6 +20,7 @@ export const CONCRETE_PLUGIN_ROOTS = [
   "tool-builtin",
   "tool-deno",
   "tool-finance",
+  "transcription",
   "tool-mcp",
   "tool-openapi",
   "tool-persistent-terminal",

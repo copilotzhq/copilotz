@@ -1,0 +1,6 @@
+{
+  "id": "@copilotz/transcription",
+  "version": "1.0.0",
+  "aliases": { "actions/transcribe/index.ts": "transcribeAudio" },
+  "include": ["actions/transcribe/index.ts"]
+}

@@ -47,7 +47,8 @@
     "./core/client": "./plugins/core/adapters/client/index.ts",
     "./core/server": "./plugins/core-http/index.ts",
     "./usage/client": "./plugins/usage/authoring/client/index.ts",
-    "./build": "./build/index.ts"
+    "./build": "./build/index.ts",
+    "./transcription": "./plugins/transcription/index.ts"
   },
   "publish": {
     "include": [
@@ -149,7 +150,8 @@
     "@copilotz/copilotz/core/server": "./plugins/core-http/index.ts",
     "@copilotz/copilotz/usage/client": "./plugins/usage/authoring/client/index.ts",
     "@copilotz/copilotz/build": "./build/index.ts",
-    "typescript": "npm:typescript@5.8.2"
+    "typescript": "npm:typescript@5.8.2",
+    "@copilotz/copilotz/transcription": "./plugins/transcription/index.ts"
   },
   "minimumDependencyAge": {
     "age": "P1D",

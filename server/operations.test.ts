@@ -4,7 +4,15 @@ import type {
   ApplicationOperationStatus,
   InternalCopilotzApplication,
 } from "../runtime/application/types.ts";
-import type { OperationRecord } from "../runtime/streams/catalog.ts";
+import type {
+  OperationRecord,
+  OperationStreamRecord,
+} from "../runtime/streams/catalog.ts";
+import {
+  createOperationReplayCursorTracker,
+  decodeOperationReplayCursor,
+  encodeOperationReplayCursor,
+} from "../runtime/streams/cursor.ts";
 import type { HttpReadServices } from "../plugins/server/authoring/http-adapter/index.ts";
 import type {
   ServerAuthorizedScope,
@@ -133,7 +141,7 @@ function testApplication(
     operations?: Readonly<{
       list(input: unknown): Promise<readonly OperationRecord[]>;
       maxEventPosition(input: unknown): Promise<string | undefined>;
-      listStreams(input: unknown): Promise<readonly []>;
+      listStreams(input: unknown): Promise<readonly OperationStreamRecord[]>;
       onChange?(listener: (operationId: string) => void): Promise<() => void>;
     }>;
     attach(input: unknown): Promise<ApplicationOperationAttachment>;
@@ -185,6 +193,296 @@ async function createOperations(
     read,
   );
 }
+
+function terminalStream(
+  operationId: string,
+  streamOrdinal: number,
+  sourceActionRunId: string,
+): OperationStreamRecord {
+  const ordinal = String(streamOrdinal);
+  const streamId = `stream-${operationId}-${ordinal}`;
+  return {
+    operationId,
+    namespace: "tenant",
+    streamId,
+    semanticStreamId: streamId,
+    replayKey: ordinal,
+    streamOrdinal: ordinal,
+    bodyId: `body-${ordinal}`,
+    descriptor: {
+      type: "stream.output",
+      namespace: "tenant",
+      streamId,
+      mediaType: "text/plain",
+      kind: "text",
+      role: "content",
+      metadata: { sourceActionRunId },
+    },
+    state: "terminal",
+    outcome: "completed",
+    availability: "retained",
+    committedOffset: 1,
+    terminalAt: "2026-09-16T00:00:00.000Z",
+    createdAt: "2026-09-16T00:00:00.000Z",
+    updatedAt: "2026-09-16T00:00:00.000Z",
+  };
+}
+
+function checkpointApplication(
+  streamsByOperation: Readonly<
+    Record<string, readonly OperationStreamRecord[]>
+  >,
+) {
+  const records = Object.keys(streamsByOperation).map((operationId) =>
+    operation(operationId, { operationMetadata: { threadId: "thread" } })
+  );
+  return testApplication({
+    attach: async () => closedAttachment("unused"),
+    operationStatus: async () => null,
+    operations: {
+      async list() {
+        return records;
+      },
+      async maxEventPosition() {
+        return "1";
+      },
+      async listStreams(input) {
+        const { operationId } = input as { operationId: string };
+        return streamsByOperation[operationId] ?? [];
+      },
+    },
+  });
+}
+
+Deno.test("history checkpoint bounds sparse coverage and replays deferred lanes", async () => {
+  const coveredOrdinals = new Set([
+    245,
+    247,
+    248,
+    249,
+    250,
+    252,
+    255,
+    257,
+    259,
+    261,
+    263,
+    264,
+    266,
+    267,
+    270,
+    271,
+    273,
+    275,
+    277,
+    278,
+    280,
+    281,
+    282,
+    284,
+    285,
+  ]);
+  const operationId = "synthetic-history-operation";
+  const streams = Array.from({ length: 285 }, (_, index) => {
+    const ordinal = index + 1;
+    return terminalStream(
+      operationId,
+      ordinal,
+      coveredOrdinals.has(ordinal) ? "covered-run" : "uncovered-run",
+    );
+  });
+  const operations = await createOperations(
+    checkpointApplication({ [operationId]: streams }),
+  );
+  const checkpoint = await operations.checkpoint("thread", {
+    checkpoint: encodeOperationReplayCursor({ eventPosition: "1" }),
+    actionRunIds: ["covered-run"],
+  });
+  const initialTracker = createOperationReplayCursorTracker(
+    decodeOperationReplayCursor(checkpoint),
+  );
+  const initialPosition = decodeOperationReplayCursor(checkpoint)
+    .operationStreamPositions?.[operationId];
+
+  assertEquals(initialPosition?.highWatermark, 273);
+  assertEquals(Object.keys(initialPosition?.offsets ?? {}).length, 256);
+  const consumedAtCheckpoint = new Set<number>();
+  let unsafeSkips = 0;
+  for (const stream of streams) {
+    const consumed = initialTracker.streamPosition({
+      operationId,
+      streamOrdinal: stream.streamOrdinal,
+    }).consumed;
+    const ordinal = Number(stream.streamOrdinal);
+    if (consumed) {
+      consumedAtCheckpoint.add(ordinal);
+      if (!coveredOrdinals.has(ordinal)) unsafeSkips++;
+    }
+  }
+  assertEquals(unsafeSkips, 0);
+  assertEquals(consumedAtCheckpoint.size, 17);
+
+  // Simulate normal multipart replay, settling every lane left uncovered by
+  // the history page. Each pair mirrors stream registration and its terminal.
+  const replayTracker = createOperationReplayCursorTracker(
+    decodeOperationReplayCursor(checkpoint),
+  );
+  let replayed = 0;
+  for (const stream of streams) {
+    if (
+      replayTracker.streamPosition({
+        operationId,
+        streamOrdinal: stream.streamOrdinal,
+      }).consumed
+    ) continue;
+    replayed++;
+    const mutations = [
+      {
+        kind: "operation-stream" as const,
+        action: "register" as const,
+        operationId,
+        streamOrdinal: stream.streamOrdinal,
+        offset: 0,
+      },
+      {
+        kind: "operation-stream" as const,
+        action: "end" as const,
+        operationId,
+        streamOrdinal: stream.streamOrdinal,
+        offset: stream.committedOffset,
+      },
+    ];
+    replayTracker.cursor(mutations);
+    replayTracker.commit(mutations);
+  }
+  assertEquals(replayed, 268);
+  assertEquals(
+    replayTracker.streamPosition({
+      operationId,
+      streamOrdinal: "285",
+    }).consumed,
+    true,
+  );
+  assertEquals(
+    decodeOperationReplayCursor(replayTracker.cursor())
+      .operationStreamPositions?.[operationId],
+    { highWatermark: 285, offsets: {} },
+  );
+});
+
+Deno.test("history checkpoint enforces sparse capacity across operations", async () => {
+  const firstId = "synthetic-operation-a";
+  const secondId = "synthetic-operation-b";
+  const operations = await createOperations(checkpointApplication({
+    [firstId]: [terminalStream(firstId, 130, "covered-run")],
+    [secondId]: [terminalStream(secondId, 129, "covered-run")],
+  }));
+  const checkpoint = await operations.checkpoint("thread", {
+    checkpoint: encodeOperationReplayCursor({ eventPosition: "1" }),
+    actionRunIds: ["covered-run"],
+  });
+  const position = decodeOperationReplayCursor(checkpoint)
+    .operationStreamPositions;
+
+  assertEquals(position?.[firstId].highWatermark, 130);
+  assertEquals(Object.keys(position?.[firstId].offsets ?? {}).length, 129);
+  assertEquals(position?.[secondId], undefined);
+  const tracker = createOperationReplayCursorTracker(
+    position ? { operationStreamPositions: position } : {},
+  );
+  assertEquals(
+    tracker.streamPosition({
+      operationId: secondId,
+      streamOrdinal: "129",
+    }).consumed,
+    false,
+  );
+});
+
+Deno.test("history checkpoint validates encoded cursor byte capacity before adoption", async () => {
+  const streamsByOperation: Record<string, readonly OperationStreamRecord[]> =
+    {};
+  const operationIds = Array.from(
+    { length: 32 },
+    (_, index) => `${String(index).padStart(2, "0")}${"x".repeat(510)}`,
+  );
+  for (const operationId of operationIds) {
+    streamsByOperation[operationId] = [
+      terminalStream(operationId, 2, "covered-run"),
+    ];
+  }
+  const operations = await createOperations(
+    checkpointApplication(streamsByOperation),
+  );
+  const checkpoint = await operations.checkpoint("thread", {
+    checkpoint: encodeOperationReplayCursor({ eventPosition: "1" }),
+    actionRunIds: ["covered-run"],
+  });
+  const position = decodeOperationReplayCursor(checkpoint);
+  const lanes = position.operationStreamPositions ?? {};
+  const rejectedOperationId = operationIds.at(-1)!;
+
+  assertEquals(Object.keys(lanes).length < operationIds.length, true);
+  assertEquals(rejectedOperationId in lanes, false);
+  // The returned last valid cursor remains encodable within the byte limit.
+  assertEquals(typeof encodeOperationReplayCursor(position), "string");
+  assertEquals(
+    Object.keys(lanes).reduce(
+      (total, id) => total + Object.keys(lanes[id].offsets).length,
+      0,
+    ),
+    Object.keys(lanes).length,
+  );
+  const tracker = createOperationReplayCursorTracker(position);
+  let capacityErrorMessage: string | undefined;
+  try {
+    tracker.cursor([{
+      kind: "operation-stream",
+      action: "end",
+      operationId: rejectedOperationId,
+      streamOrdinal: "2",
+      offset: 1,
+    }]);
+  } catch (error) {
+    capacityErrorMessage = (error as Error).message;
+  }
+  assertEquals(capacityErrorMessage, "Operation replay cursor is too large.");
+});
+
+Deno.test("history checkpoint propagates unrelated stream catalog errors", async () => {
+  const operationId = "synthetic-error-operation";
+  const storageError = Object.assign(new Error("catalog read failed"), {
+    code: "storage_failure",
+  });
+  const application = testApplication({
+    attach: async () => closedAttachment("unused"),
+    operationStatus: async () => null,
+    operations: {
+      async list() {
+        return [operation(operationId, {
+          operationMetadata: { threadId: "thread" },
+        })];
+      },
+      async maxEventPosition() {
+        return "1";
+      },
+      async listStreams() {
+        throw storageError;
+      },
+    },
+  });
+  const operations = await createOperations(application);
+  const caught = await assertRejects(
+    () =>
+      operations.checkpoint("thread", {
+        checkpoint: encodeOperationReplayCursor({ eventPosition: "1" }),
+        actionRunIds: ["covered-run"],
+      }),
+    Error,
+  );
+
+  assertEquals((caught as { code?: string }).code, "storage_failure");
+});
 
 Deno.test("late operation attachments are detached after observation abort", async () => {
   const attachmentReady = deferred<ApplicationOperationAttachment>();

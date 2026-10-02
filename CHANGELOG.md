@@ -1,3 +1,11 @@
+## 0.83.1 — 2026-10-02
+
+### Fixed
+
+- Keep history replay checkpoints valid when a long operation leaves more than
+  256 historical stream gaps. Validate optional coverage before accepting it and
+  replay uncovered streams within the existing cursor limits.
+
 ## 0.83.0 — Optional prerecorded transcription
 
 - Add optional prerecorded transcription plugin with OpenAI and Gemini

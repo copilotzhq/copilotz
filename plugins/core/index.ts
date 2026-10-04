@@ -57,7 +57,10 @@ export {
   buildLlmTranscript,
   type LlmTranscriptEntry,
 } from "./shared/agents/transcript.ts";
-export { prepareLlmTranscript } from "./shared/agents/prepared-transcript.ts";
+export {
+  prepareLlmInput,
+  prepareLlmTranscript,
+} from "./shared/agents/prepared-transcript.ts";
 
 export * from "./shared/events/index.ts";
 export * from "./processors/message-input/input/index.ts";

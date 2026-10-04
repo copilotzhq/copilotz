@@ -1,4 +1,4 @@
-import { assert, assertEquals } from "@std/assert";
+import { assert, assertEquals, assertRejects } from "@std/assert";
 import { preflightLlmRequest, prepareLlmCall } from "@copilotz/copilotz/llm";
 import type { LlmCallInput } from "@copilotz/copilotz/llm";
 import { messageRouterProcessor } from "./index.ts";
@@ -63,5 +63,70 @@ Deno.test("LLM preparation counts provider-native state and preserves fitting fa
   ]);
   assert(
     preparation.candidates[0]!.estimatedInputTokens > limitEstimatedInputTokens,
+  );
+});
+
+Deno.test("scoped preparation failure is offered to its owning Context resource", async () => {
+  const { withCoreAgentTurnMetadata } = await import(
+    "../../shared/workflow-metadata.ts"
+  );
+  const turn = {
+    schema: "copilotz.core.agent-turn.v1" as const,
+    id: "scope",
+    ownerParticipantId: "north",
+    history: "scope" as const,
+    sourceHistory: { messages: [], context: [], branch: "null" },
+  };
+  const error = new Error("source changed");
+  const offered: unknown[] = [];
+  let handles = true;
+  const context = {
+    signal: new AbortController().signal,
+    identity: {},
+    actions: { callLlm: { prepare: () => Promise.reject(error) } },
+    resources: {
+      promptContext: {
+        owner: {
+          id: "owner",
+          type: "context",
+          purposes: ["conversation"],
+          contribute: () => null,
+          onTurnPreparationError: (input: unknown) => {
+            offered.push(input);
+            return handles;
+          },
+        },
+      },
+    },
+  } as unknown as Parameters<typeof messageRouterProcessor.handle>[1];
+  const event = {
+    id: "event",
+    durable: true,
+    metadata: {
+      core: {
+        threadId: "thread",
+        routing: { recipientIds: ["north"] },
+        visibility: { kind: "internal" },
+      },
+    },
+    data: {
+      record: {
+        id: "trigger",
+        threadId: "thread",
+        recipientIds: ["north"],
+        visibility: { kind: "internal" },
+        historyScopeId: "scope",
+        metadata: withCoreAgentTurnMetadata({}, turn),
+      },
+    },
+  } as unknown as Parameters<typeof messageRouterProcessor.handle>[0];
+  await messageRouterProcessor.handle(event, context);
+  assertEquals(offered.length, 1);
+  assertEquals((offered[0] as { error: unknown }).error, error);
+  handles = false;
+  await assertRejects(
+    async () => await messageRouterProcessor.handle(event, context),
+    Error,
+    "source changed",
   );
 });

@@ -31,7 +31,10 @@ import {
 import type { ContentRef } from "../../../../../runtime/content/index.ts";
 import type { Participant } from "../../../shared/contracts.ts";
 import type { CoreProcessorContext } from "../../../shared/runtime-context.ts";
-import { prepareLlmTranscript } from "../../../shared/agents/prepared-transcript.ts";
+import {
+  prepareLlmInput,
+  prepareLlmTranscript,
+} from "../../../shared/agents/prepared-transcript.ts";
 
 const preparedMessages = async (
   ...args: Parameters<typeof prepareLlmTranscript>
@@ -902,6 +905,30 @@ Deno.test("transcript preparation reads storage once per batch, sizes once, and 
     }]);
   }
   assertEquals("reasoning" in prompt[0], false);
+
+  const contribution = await publish("context", "frozen application context");
+  calls.list = 0;
+  calls.sizes = 0;
+  calls.opened.length = 0;
+  const combined = await prepareLlmInput(context, input, [
+    contribution,
+    "literal context",
+  ]);
+  assertEquals(combined.transcript.map((entry) => entry.message), prompt);
+  assertEquals(combined.contextValues, [{
+    role: "body",
+    mediaType: "text/plain",
+    type: "text",
+    text: "frozen application context",
+  }, "literal context"]);
+  assertEquals(calls.list, 2, "context adds no Message queries");
+  assertEquals(calls.sizes, 1, "history and context share Asset metadata");
+  assertEquals(
+    calls.opened.length,
+    1,
+    "history and context share body resolution",
+  );
+  assertEquals(calls.opened[0].length, 27);
 
   // A history over budget is refused from the sizes alone: no body is opened.
   calls.opened.length = 0;

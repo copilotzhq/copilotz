@@ -1,7 +1,4 @@
-import {
-  prepareContextContributions,
-  renderContextContent,
-} from "./contributions.ts";
+import { renderContextContent } from "./contributions.ts";
 import type { CollectionRecord } from "@copilotz/copilotz/collections";
 import type { AgentResource } from "../../../authoring/define-agent/index.ts";
 import type {
@@ -24,7 +21,7 @@ import {
 } from "../../../shared/contributions.ts";
 import { collectPromptInstructions } from "../collection.ts";
 import { getPublicThreadMetadata } from "../../../shared/thread-metadata.ts";
-import { prepareLlmTranscript } from "../../../shared/agents/prepared-transcript.ts";
+import { prepareLlmInput } from "../../../shared/agents/prepared-transcript.ts";
 
 type RenderedContext = Readonly<{
   title: string;
@@ -236,6 +233,8 @@ export async function buildCoreLlmRequest(
     tools: readonly CoreToolEntry[];
     contributions?: readonly CollectedContextContribution[];
     historyByteLimit?: number;
+    frozenContributions?:
+      readonly import("../../../shared/types.ts").FrozenContextContribution[];
   }>,
 ): Promise<LlmRequest> {
   const participant = mapParticipantRecord(input.participant);
@@ -245,7 +244,12 @@ export async function buildCoreLlmRequest(
   );
   const userMetadata = human ? visibleMetadata(human.metadata) : undefined;
   const rawHistory = input.history;
-  const contributions = input.contributions ??
+  const contributions = input.frozenContributions?.map((item) => ({
+    ...item,
+    content: item.content.length === 1
+      ? item.content[0]
+      : { type: "json" as const, value: item.content },
+  })) ?? input.contributions ??
     await collectContextContributions(context, {
       purpose: "conversation",
       agent: input.agent,
@@ -253,22 +257,29 @@ export async function buildCoreLlmRequest(
       thread,
       ...(input.historyScopeId ? { historyScopeId: input.historyScopeId } : {}),
     });
-  const prepared = await prepareContextContributions(context, contributions);
-  const rendered: readonly RenderedContext[] = prepared.map((contribution) => ({
-    title: contribution.title,
-    role: contribution.role,
-    text: renderContextContent(contribution.content),
-  } as const));
   const promptInstructions = collectPromptInstructions(
     context.resources.promptInstructions,
   );
-  const transcript = await prepareLlmTranscript(context, {
-    threadId: thread.id,
-    history: rawHistory,
-    messageIds: input.messageIds,
-    participantId: participant.id,
-  }, { byteLimit: input.historyByteLimit });
-  const messages = transcript.map((entry) => entry.message);
+  const prepared = await prepareLlmInput(
+    context,
+    {
+      threadId: thread.id,
+      history: rawHistory,
+      messageIds: input.messageIds,
+      participantId: participant.id,
+    },
+    contributions.map((item) => item.content),
+    { byteLimit: input.historyByteLimit },
+  );
+  const rendered: readonly RenderedContext[] = contributions.map((
+    item,
+    index,
+  ) => ({
+    title: item.title,
+    role: item.role,
+    text: renderContextContent(prepared.contextValues[index]),
+  }));
+  const messages = prepared.transcript.map((entry) => entry.message);
   const agents = Object.values(context.resources.agents ?? {}).filter(
     (value): value is AgentResource => Boolean(value),
   );

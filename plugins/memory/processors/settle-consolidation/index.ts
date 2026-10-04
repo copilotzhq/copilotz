@@ -114,7 +114,11 @@ export const settleMemoryConsolidationProcessor: Processor<
         text:
           "This internal task is unfinished. Call consolidate_memory now; do not answer the user.",
       },
-      metadata: memoryTaskMetadata(checkpoint.id, turn.ownerParticipantId),
+      metadata: memoryTaskMetadata(
+        checkpoint.id,
+        turn.ownerParticipantId,
+        turn.sourceHistory,
+      ),
     }, context);
   },
 });

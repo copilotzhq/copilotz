@@ -10,10 +10,16 @@ import {
   type LlmTranscriptEntry,
   peerToolStatusContent,
 } from "./transcript.ts";
-import type { ContentRef, ResolvedContent } from "@copilotz/copilotz/content";
+import type {
+  ContentInput,
+  ContentRef,
+  ResolvedContent,
+} from "@copilotz/copilotz/content";
 import {
+  type ContentValue,
   createContentByteLimitError,
   isContentRef,
+  resolveContentInputs,
 } from "@copilotz/copilotz/content";
 
 function bodyBytes(value: unknown): number {
@@ -283,11 +289,12 @@ function withBodies(
 }
 
 /** Resolve only final model-facing messages, after participant and causal projection. */
-export async function prepareLlmTranscript(
+async function prepareTranscript(
   context: CoreProcessorContext,
   input: Parameters<typeof buildLlmTranscript>[0],
   options: Readonly<{ byteLimit?: number }> = {},
-): Promise<readonly LlmTranscriptEntry[]> {
+  additionalRefs: readonly ContentRef[] = [],
+) {
   const messages = context.collections.message;
   if (!messages) throw new Error("Core requires the Message Collection.");
   const entries = buildLlmTranscript(input);
@@ -352,7 +359,9 @@ export async function prepareLlmTranscript(
 
   // 2. How large it is: every Asset row once, without opening a Body.
   const sizes = new Map<string, number>();
-  const assetIds = uniqueAssetIds([...references.values()].flat());
+  const assetIds = uniqueAssetIds(
+    [...references.values()].flat().concat(additionalRefs),
+  );
   if (assetIds.length) {
     for (const asset of await context.content.getMany(assetIds)) {
       sizes.set(asset.id, asset.byteLength);
@@ -398,7 +407,10 @@ export async function prepareLlmTranscript(
 
   // 4. Open what remains in one resolution; the Asset rows are already held.
   const toOpen = opened.flatMap((id) => references.get(id)!);
-  const bodies = toOpen.length ? await context.content.resolveMany(toOpen) : [];
+  const allRefs = [...toOpen, ...additionalRefs];
+  const bodies = allRefs.length
+    ? await context.content.resolveMany(allRefs)
+    : [];
   const resolved = new Map<ContentRef, ResolvedContent>(
     toOpen.map((ref, index) => [ref, bodies[index]]),
   );
@@ -410,15 +422,18 @@ export async function prepareLlmTranscript(
     }
   }
 
-  return entries.map((entry) => ({
-    ...entry,
-    message: withBodies(
-      entry,
-      records.get(entry.sourceId),
-      markers.get(entry.sourceId),
-      ownAssistantIds.has(entry.sourceId),
-    ),
-  }));
+  return {
+    transcript: entries.map((entry) => ({
+      ...entry,
+      message: withBodies(
+        entry,
+        records.get(entry.sourceId),
+        markers.get(entry.sourceId),
+        ownAssistantIds.has(entry.sourceId),
+      ),
+    })),
+    additional: bodies.slice(toOpen.length),
+  };
 }
 
 /** A reference with its body attached, or closed when the prompt may not carry it. */
@@ -442,4 +457,34 @@ function resolvedReference(
       ? item.value
       : item.bytes,
   };
+}
+
+/** Ordinary typed history preparation, with no extra context inputs. */
+export async function prepareLlmTranscript(
+  context: CoreProcessorContext,
+  input: Parameters<typeof buildLlmTranscript>[0],
+  options: Readonly<{ byteLimit?: number }> = {},
+): Promise<readonly LlmTranscriptEntry[]> {
+  return (await prepareTranscript(context, input, options)).transcript;
+}
+
+/** Resolve history and application context in the same metadata/body batches. */
+export async function prepareLlmInput(
+  context: CoreProcessorContext,
+  input: Parameters<typeof buildLlmTranscript>[0],
+  contextInputs: readonly ContentInput[],
+  options: Readonly<{ byteLimit?: number }> = {},
+): Promise<
+  Readonly<{
+    transcript: readonly LlmTranscriptEntry[];
+    contextValues: readonly ContentValue[];
+  }>
+> {
+  const snapshot = structuredClone(contextInputs);
+  const refs = snapshot.filter(isContentRef);
+  const prepared = await prepareTranscript(context, input, options, refs);
+  const contextValues = await resolveContentInputs(snapshot, {
+    resolveMany: () => Promise.resolve(prepared.additional),
+  });
+  return { transcript: prepared.transcript, contextValues };
 }

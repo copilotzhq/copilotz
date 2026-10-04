@@ -73,11 +73,23 @@ continue after the previous certified boundary and carry its summary forward.
 
 Compaction takes bounded chronological chunks and may cross unfinished Tool or
 Ask calls. Execution continues independently; continuity preserves outstanding
-work, and later results retain their plan and call identities. The private task
-contains its authorized source text and prior context; its own scoped transcript
-replaces replaying the whole public thread. The owning Agent's instructions,
-tools, model selection and authentication stay in effect. The private scope is
-never accepted from HTTP history input.
+work, and later results retain their plan and call identities. The private turn
+carries an authorized source snapshot as Message and Asset references plus
+frozen application Context. Core prepares that history and Context through its
+ordinary input pipeline, preserving typed media, reasoning and Tool
+relationships. The consolidation instruction and source-ID manifest follow the
+prepared history; the owning Agent's instructions, Tool catalog, Model selection
+and authentication stay in effect. For the same Context and Model, the normal
+provider prompt prefix is reusable. The private scope is never accepted from
+HTTP history input.
+
+History and Context share batched Asset metadata and body resolution. Range
+selection estimates the typed source through the ordinary LLM wire formatter;
+binary storage bytes remain separate from model token estimates. Source bodies
+are not opened again merely to construct the maintenance instruction. Resume
+preparation verifies stored Message snapshots, and checkpoint settlement still
+verifies authorized coverage. Preparation failures settle the owning private
+checkpoint instead of leaving it pending.
 
 Core preflights the same formatted input used by execution. If necessary, it
 waits for certified compaction progress and rebuilds the request. Waiting is

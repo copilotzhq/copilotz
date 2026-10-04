@@ -30,6 +30,9 @@ export function defineContextResource(
     type: "context",
     purposes: [...new Set(resource.purposes)] as const,
     contribute: resource.contribute,
+    ...(resource.onTurnPreparationError
+      ? { onTurnPreparationError: resource.onTurnPreparationError }
+      : {}),
     ...(resource.compact ? { compact: resource.compact } : {}),
   } as const);
 }

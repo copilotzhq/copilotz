@@ -307,16 +307,53 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
                       `Message '${record.id}' sender was not found.`,
                     );
                   }
+                  const source = agentTurn?.sourceHistory;
+                  if (
+                    source &&
+                    source.branch !==
+                      JSON.stringify(
+                        metadata.thread.activeMessageBranch ?? null,
+                      )
+                  ) {
+                    throw new Error(
+                      "Agent turn source branch changed during input preparation.",
+                    );
+                  }
+                  if (
+                    source && (agentTurn.ownerParticipantId !== recipientId ||
+                      source.messages.some((message) =>
+                        message.threadId !== String(record.threadId) ||
+                        message.namespace !== context.namespace
+                      ) ||
+                      source.trigger &&
+                        (source.trigger.threadId !== String(record.threadId) ||
+                          source.trigger.namespace !== context.namespace))
+                  ) {
+                    throw new Error(
+                      "Agent turn source history belongs to another thread.",
+                    );
+                  }
+                  const resolutionTrigger = source?.trigger;
                   const resolved = participant && agent && sender
                     ? await resolvedAgent(context, agent, {
                       agentParticipant: participant,
                       thread: metadata.thread,
-                      triggerMessage: record,
-                      triggerSender: sender,
+                      triggerMessage: resolutionTrigger
+                        ? {
+                          ...resolutionTrigger,
+                          senderId: resolutionTrigger.sender.id,
+                        } as unknown as CollectionRecord
+                        : record,
+                      triggerSender: resolutionTrigger
+                        ? resolutionTrigger
+                          .sender as unknown as CollectionRecord
+                        : sender,
                       collections,
                     })
                     : undefined;
-                  const contributions = participant && resolved
+                  const contributions = source
+                    ? []
+                    : participant && resolved
                     ? await collectContextContributions(
                       { ...context, collections } as typeof context,
                       {
@@ -460,8 +497,19 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
                   participant,
                   thread: snapshot.thread,
                   ...(agentTurn ? { historyScopeId: agentTurn.id } : {}),
-                  history: snapshot.messages,
-                  messageIds: snapshot.records.map((item) => String(item.id)),
+                  history: [
+                    ...(agentTurn?.sourceHistory?.messages ?? []),
+                    ...snapshot.messages,
+                  ],
+                  messageIds: [
+                    ...(agentTurn?.sourceHistory?.messages.map((message) =>
+                      message.id
+                    ) ?? []),
+                    ...snapshot.records.map((item) => String(item.id)),
+                  ],
+                  ...(agentTurn?.sourceHistory
+                    ? { frozenContributions: agentTurn.sourceHistory.context }
+                    : {}),
                   tools: availableTools,
                   contributions: captured.contributions,
                   ...(hasCompaction && limit
@@ -591,6 +639,25 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
             signal: context.signal,
           });
         } catch (error) {
+          if (agentTurn?.sourceHistory && !isSettledActionError(error)) {
+            let settled = false;
+            for (
+              const resource of Object.values(
+                context.resources.promptContext ?? {},
+              )
+            ) {
+              if (
+                !isContextResource(resource) || !resource.onTurnPreparationError
+              ) continue;
+              settled = await resource.onTurnPreparationError({
+                context,
+                turn: agentTurn,
+                triggerMessageId: String(record.id),
+                error,
+              }) || settled;
+            }
+            if (settled) continue;
+          }
           if (error instanceof SupersededMessageError) {
             continue;
           }

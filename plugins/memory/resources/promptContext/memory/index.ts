@@ -14,6 +14,8 @@ import {
   isEditoriallyVisible,
   renderLongTermMemory,
 } from "../../../authoring/consolidation/index.ts";
+import { memoryTaskOwnsTurn } from "../../../shared/task.ts";
+import { settleCheckpointError } from "../../../shared/checkpoints.ts";
 import { checkpoints } from "../../../shared/checkpoints.ts";
 import {
   checkpointAccessible,
@@ -32,6 +34,20 @@ export const memoryContextResource:
     id: MEMORY_RESOURCE_ID,
     type: "context",
     purposes: ["conversation"] as const,
+    async onTurnPreparationError(input) {
+      if (input.turn.completeOn?.action !== "consolidate_memory") return false;
+      const context = input.context as unknown as MemoryProcessorContext;
+      if (
+        !await memoryTaskOwnsTurn(context, input.turn, input.triggerMessageId)
+      ) return false;
+      await settleCheckpointError(
+        context,
+        input.turn.id,
+        context.signal.aborted ? "cancelled" : "failed",
+        input.error,
+      );
+      return true;
+    },
     async compact(input) {
       const config = memoryConfig(input.context);
       const enabled = config.enabled;

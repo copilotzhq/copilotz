@@ -1,5 +1,8 @@
 import type { EventVisibility } from "@copilotz/copilotz/core";
 import type {} from "@copilotz/copilotz/events";
+import type { ConversationMessage } from "./contracts.ts";
+import type { FrozenContextContribution } from "./types.ts";
+import { isContentRef } from "@copilotz/copilotz/content";
 
 const WORKFLOW_METADATA_KEY = "copilotzWorkflow";
 const AGENT_ASK_METADATA_KEY = "copilotzAsk";
@@ -65,6 +68,14 @@ export type CoreAgentTurnMetadata = Readonly<{
   completeOn?: Readonly<{ action: string }>;
   /** Bounded maintenance tasks may supply their entire source in their own scope. */
   history?: "scope";
+  /** Authorized caller snapshot, replayed through ordinary input preparation. */
+  sourceHistory?: Readonly<{
+    messages: readonly ConversationMessage[];
+    context: readonly FrozenContextContribution[];
+    branch: string;
+    /** Original trigger facts for the Agent's normal dynamic resolution. */
+    trigger?: ConversationMessage;
+  }>;
 }>;
 
 /** Durable Core provenance attached to one provider-neutral `llm.call`. */
@@ -328,6 +339,7 @@ const AGENT_TURN_KEYS = new Set([
   "ownerParticipantId",
   "completeOn",
   "history",
+  "sourceHistory",
 ]);
 
 function validCoreAgentTurnMetadata(
@@ -342,6 +354,36 @@ function validCoreAgentTurnMetadata(
   ) return null;
   if (candidate.history !== undefined && candidate.history !== "scope") {
     return null;
+  }
+  if (candidate.sourceHistory !== undefined) {
+    const source = record(candidate.sourceHistory);
+    const messageValid = (value: unknown) => {
+      const message = record(value);
+      return Boolean(
+        optionalMetadataText(message.id) &&
+          optionalMetadataText(message.threadId) &&
+          optionalMetadataText(record(message.sender).id) &&
+          Array.isArray(message.content) && message.content.every(isContentRef),
+      );
+    };
+    if (
+      candidate.history !== "scope" ||
+      Object.keys(source).some((key) =>
+        !["messages", "context", "branch", "trigger"].includes(key)
+      ) ||
+      typeof source.branch !== "string" ||
+      !Array.isArray(source.messages) || !source.messages.every(messageValid) ||
+      new Set(source.messages.map((message) => record(message).id)).size !==
+        source.messages.length ||
+      !Array.isArray(source.context) || !source.context.every((value) => {
+        const item = record(value);
+        return optionalMetadataText(item.id) &&
+          optionalMetadataText(item.resourceId) &&
+          optionalMetadataText(item.title) &&
+          (item.role === "context" || item.role === "evidence") &&
+          Array.isArray(item.content) && item.content.every(isContentRef);
+      }) || (source.trigger !== undefined && !messageValid(source.trigger))
+    ) return null;
   }
   if (candidate.completeOn !== undefined) {
     const completeOn = record(candidate.completeOn);

@@ -18,7 +18,6 @@ import type { MemoryProcessorContext } from "../../shared/contracts.ts";
 import {
   checkpointSourceMessages,
   MemorySourceInvalidatedError,
-  projectedSourceMessages,
 } from "../../shared/source.ts";
 import { record, requiredText } from "../../shared/input.ts";
 import { threadMemorySpaces } from "../../shared/access.ts";
@@ -89,11 +88,13 @@ export const dispatchMemoryConsolidationProcessor: Processor<
     ).slice(0, 100);
     const instruction = buildMemoryConsolidationInstruction({
       spaces,
-      sourceMessages: await projectedSourceMessages(context, {
-        threadId,
-        participantId: participant.id,
-        messages,
-      }),
+      // Bodies remain typed history; the maintenance suffix carries provenance only.
+      sourceMessages: messages.map((message) => ({
+        id: message.id,
+        senderType: message.sender.participantType,
+        senderId: message.sender.id,
+        text: "",
+      })),
       kinds: memoryKinds(context),
       previousRecords: previous,
       context: frozenSnapshot(checkpoint),
@@ -123,9 +124,18 @@ export const dispatchMemoryConsolidationProcessor: Processor<
       historyScopeId: checkpoint.id,
       content: [
         { type: "text", role: "memory.task", text: instruction },
-        ...frozenSnapshot(checkpoint).flatMap((item) => item.content),
       ],
-      metadata: memoryTaskMetadata(checkpoint.id, participant.id),
+      metadata: memoryTaskMetadata(checkpoint.id, participant.id, {
+        messages,
+        context: frozenSnapshot(checkpoint),
+        branch: JSON.stringify(thread.activeMessageBranch ?? null),
+        ...(record(checkpoint.metadata).preparationTrigger
+          ? {
+            trigger: record(checkpoint.metadata)
+              .preparationTrigger as ConversationMessage,
+          }
+          : {}),
+      }),
     }, context);
   },
 });

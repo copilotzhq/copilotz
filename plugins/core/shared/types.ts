@@ -63,6 +63,15 @@ export type ContextResource = Readonly<{
     | readonly ContextContribution[]
     | null
     | Promise<ContextContribution | readonly ContextContribution[] | null>;
+  /** Lets the owning contributor settle a scoped turn whose input preparation failed. */
+  onTurnPreparationError?(
+    input: Readonly<{
+      context: ProcessorContext;
+      turn: import("./workflow-metadata.ts").CoreAgentTurnMetadata;
+      triggerMessageId: string;
+      error: unknown;
+    }>,
+  ): boolean | Promise<boolean>;
   /** Optional bounded maintenance hook; true means a ready certified boundary advanced. */
   compact?(
     input:

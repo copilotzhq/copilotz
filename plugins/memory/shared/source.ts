@@ -8,6 +8,8 @@ import {
   loadCoreThreadMessageSnapshot,
   prepareLlmTranscript,
 } from "@copilotz/copilotz/core";
+import type { AgentResource } from "@copilotz/copilotz/core";
+import { formatLlmRequestForWire } from "@copilotz/copilotz/llm";
 import { deriveWorkflowId } from "@copilotz/copilotz/events";
 import type { MemorySourceMessage } from "../authoring/consolidation/index.ts";
 import type { MemoryProcessorContext } from "./contracts.ts";
@@ -53,16 +55,18 @@ export function certifiedHistoryBoundary(
   return optionalText(coverage.endMessageId);
 }
 
-function preparedSourceText(content: readonly unknown[]): string {
-  return content.map((entry) => {
+function sourceBytes(content: readonly unknown[]): number {
+  return content.reduce<number>((total, entry) => {
     const value = record(entry).value;
-    if (typeof value === "string") return value;
-    if (value !== undefined) return JSON.stringify(value);
-    const ref = record(entry);
-    return `[${String(ref.kind ?? "content")}:${
-      String(ref.name ?? ref.mediaType ?? "unknown")
-    }]`;
-  }).join("\n");
+    return total +
+      (value instanceof Uint8Array
+        ? value.byteLength
+        : value === undefined
+        ? 0
+        : new TextEncoder().encode(
+          typeof value === "string" ? value : JSON.stringify(value),
+        ).byteLength);
+  }, 0);
 }
 
 export async function projectedSourceMessages(
@@ -72,6 +76,7 @@ export async function projectedSourceMessages(
     participantId: string;
     messages: readonly ConversationMessage[];
     byteLimit?: number;
+    model?: NonNullable<AgentResource["models"]["generate"]>[number];
   }>,
 ): Promise<readonly MemorySourceMessage[]> {
   const prepared = await prepareLlmTranscript(context as never, {
@@ -83,23 +88,48 @@ export async function projectedSourceMessages(
     message.id,
     index,
   ]));
-  const projected = prepared.map(({ sourceId, message }) => ({
-    id: sourceId,
-    senderType: message.role,
-    senderId: message.name ?? message.role,
-    text: preparedSourceText(message.content),
-    ...((message.role === "assistant" || message.role === "tool") &&
-        message.toolPlanId
-      ? { toolPlanId: message.toolPlanId }
-      : {}),
-    ...(message.role === "tool" ? { toolCallId: message.toolCallId } : {}),
-    ...(message.role === "assistant" && message.reasoning
-      ? { reasoning: preparedSourceText(message.reasoning) }
-      : {}),
-    ...(message.role === "assistant" && message.toolCalls
-      ? { toolCalls: structuredClone(message.toolCalls) }
-      : {}),
-  } as const));
+  const projected = prepared.map(({ sourceId, message }) => {
+    const connection = record(
+      record(context.resources.llmConnections)[input.model?.connection ?? ""],
+    );
+    const formatted = formatLlmRequestForWire({ messages: [message] }, {
+      ...(input.model ? { model: input.model.model } : {}),
+      ...record(input.model?.options),
+      ...(typeof connection.provider === "string"
+        ? {
+          provider: connection
+            .provider as Parameters<
+              typeof formatLlmRequestForWire
+            >[1]["provider"],
+        }
+        : {}),
+    });
+    return {
+      id: sourceId,
+      senderType: message.role,
+      senderId: message.name ?? message.role,
+      text: formatted.messages.map((item) =>
+        typeof item.content === "string"
+          ? item.content
+          : item.content.filter((part) => part.type === "text").map((part) =>
+            part.text
+          ).join("\n")
+      ).join("\n"),
+      sourceBytes: sourceBytes(message.content) +
+        (message.role === "assistant"
+          ? sourceBytes(message.reasoning ?? [])
+          : 0),
+      estimatedTokens: formatted.estimate.estimatedTokens,
+      ...((message.role === "assistant" || message.role === "tool") &&
+          message.toolPlanId
+        ? { toolPlanId: message.toolPlanId }
+        : {}),
+      ...(message.role === "tool" ? { toolCallId: message.toolCallId } : {}),
+      ...(message.role === "assistant" && message.toolCalls
+        ? { toolCalls: structuredClone(message.toolCalls) }
+        : {}),
+    } as const;
+  });
   // Transcript preparation can reposition an Ask receipt next to its answer.
   // Checkpoints always cover a contiguous raw-history prefix instead.
   return (projected.sort((left, right) =>

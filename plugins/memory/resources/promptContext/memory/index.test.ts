@@ -181,3 +181,60 @@ Deno.test("pending compaction aborts without advancing its checkpoint", async ()
   assertEquals(reads, 1);
   assertEquals(pending.status, "pending");
 });
+
+Deno.test("memory settles preparation failure only for its authenticated private task", async () => {
+  const { deriveWorkflowId } = await import("@copilotz/copilotz/events");
+  const { memoryTaskMetadata } = await import("../../../shared/task.ts");
+  const { coreAgentTurnMetadata } = await import("@copilotz/copilotz/core");
+  const id = await deriveWorkflowId(
+    "message",
+    "memory-agent-turn",
+    "checkpoint",
+  );
+  const task = {
+    id,
+    visibility: { kind: "internal" },
+    historyScopeId: "checkpoint",
+    metadata: memoryTaskMetadata("checkpoint", "north"),
+  };
+  const updates: unknown[] = [];
+  const context = {
+    signal: new AbortController().signal,
+    collections: {
+      message: { get: () => Promise.resolve(task) },
+      longTermMemory: {
+        get: () => Promise.resolve({ id: "checkpoint", status: "pending" }),
+        update: (input: unknown) => {
+          updates.push(input);
+          return Promise.resolve({});
+        },
+      },
+    },
+  };
+  const turn = coreAgentTurnMetadata(task.metadata)!;
+  assertEquals(
+    await memoryContextResource.onTurnPreparationError!({
+      context: context as never,
+      turn,
+      triggerMessageId: id,
+      error: new Error("source changed"),
+    }),
+    true,
+  );
+  assertEquals(updates.length, 1);
+  assertEquals(
+    (updates[0] as { set: { status: string } }).set.status,
+    "failed",
+  );
+  task.visibility.kind = "public";
+  assertEquals(
+    await memoryContextResource.onTurnPreparationError!({
+      context: context as never,
+      turn,
+      triggerMessageId: id,
+      error: new Error("untrusted failure"),
+    }),
+    false,
+  );
+  assertEquals(updates.length, 1);
+});

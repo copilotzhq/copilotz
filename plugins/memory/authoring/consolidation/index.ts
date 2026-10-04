@@ -32,6 +32,9 @@ export type MemorySourceMessage = Readonly<{
   senderType: string;
   senderId: string;
   text: string;
+  /** Supplied by the shared typed LLM preparation path. */
+  estimatedTokens?: number;
+  sourceBytes?: number;
   toolCalls?: unknown;
   toolPlanId?: string;
   toolCallId?: string;
@@ -462,6 +465,7 @@ export function parseConsolidateMemoryInput(
 }
 
 function sourceMessageTokens(message: MemorySourceMessage): number {
+  if (message.estimatedTokens !== undefined) return message.estimatedTokens;
   return estimateTextTokens(
     [
       message.senderType,
@@ -585,7 +589,7 @@ export function buildMemoryConsolidationInstruction(
     'Review the reserved history using your normal identity and instructions. Call consolidate_memory exactly once. Every payload, including outcome no_changes, requires a non-empty continuity summary covering the complete reserved source range and reconciling any earlier continuity below. It will replace this compacted prefix: these source messages will no longer be directly present in the next prompt. Preserve the active task, constraints, decisions, useful results, outstanding work, uncertainty, and any tool/Ask identifiers needed to continue. Example when no durable record changes: {"outcome":"no_changes","continuity":"Continue the release validation. The output contract must include continuity; tests are pending. No durable memory record changed and no user answer is pending."}. Do not answer the user or continue the task.',
     "Extract only durable entities, assertions, meaningful occurrences, active intents, unresolved inquiries, and reusable procedures. Every record must be self-contained and cite allowed sources. Preserve uncertainty, negation, temporal meaning, authorship, and explicit corrections. Do not turn tentative language into facts, silently overwrite conflicts, create an entity for every noun, or persist small talk, raw tool output, token deltas, and transient wording. Use the default writable memory space unless another listed writable space clearly owns the record.",
     input.repair ? `Repair required: ${input.repair}` : "",
-    "Reserved source messages (complete bounded contents):",
+    "Reserved source message IDs (their typed contents precede this maintenance instruction):",
     JSON.stringify(input.sourceMessages.map((message) => ({
       type: "message",
       id: message.id,

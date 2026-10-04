@@ -150,6 +150,8 @@ export async function reserveMemoryCheckpoint(
         participantId: owner.id,
         messages: snapshot.messages.slice(offset, offset + batchSize),
         byteLimit: Math.max(0, sourceByteLimit - usedBytes),
+        model: (context.resources.agents[agentId]?.models.generate ??
+          context.resources.agents[agentId]?.models.session ?? [])[0],
       });
     } catch (error) {
       if (!isContentByteLimitError(error)) throw error;
@@ -171,7 +173,7 @@ export async function reserveMemoryCheckpoint(
     sources.push(...batch);
     usedBytes += batch.reduce(
       (total, source) =>
-        total + encoder.encode(source.text).byteLength +
+        total + (source.sourceBytes ?? encoder.encode(source.text).byteLength) +
         encoder.encode(source.reasoning ?? "").byteLength,
       0,
     );
@@ -199,6 +201,11 @@ export async function reserveMemoryCheckpoint(
     metadata: {
       agentParticipantId: owner.id,
       initiatorParticipantId,
+      preparationTrigger: snapshot.messages.find((item) =>
+        item.id ===
+          (workflowMetadata(messageRecord.metadata)?.sourceMessageId ??
+            messageRecord.id)
+      ) ?? snapshot.messages.findLast((item) => item.sender.id !== owner.id),
       estimatedTokens: range.estimatedTokens,
       retainedEstimatedTokens: range.retainedEstimatedTokens,
       retainedMessageCount: range.retainedMessageCount,

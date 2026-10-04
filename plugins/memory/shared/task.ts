@@ -1,5 +1,6 @@
 /** Identifies consolidation turns and their owning checkpoints. @module */
 import {
+  type CoreAgentTurnMetadata,
   coreAgentTurnMetadata,
   withCoreAgentTurnMetadata,
 } from "@copilotz/copilotz/core";
@@ -21,6 +22,7 @@ function memoryTaskCheckpointId(value: unknown): string | undefined {
 export function memoryTaskMetadata(
   checkpointId: string,
   ownerParticipantId: string,
+  sourceHistory?: CoreAgentTurnMetadata["sourceHistory"],
 ) {
   return withCoreAgentTurnMetadata({
     [MEMORY_TASK_METADATA_KEY]: { checkpointId },
@@ -30,6 +32,7 @@ export function memoryTaskMetadata(
     ownerParticipantId,
     completeOn: { action: "consolidate_memory" },
     history: "scope",
+    ...(sourceHistory ? { sourceHistory } : {}),
   });
 }
 

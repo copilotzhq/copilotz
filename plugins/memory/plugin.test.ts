@@ -26,7 +26,12 @@ import {
   type CopilotzEngine,
   createCopilotzEngine,
 } from "../../runtime/engine/index.ts";
-import { createSqlSession } from "../../runtime/events/index.ts";
+import {
+  createSqlSession,
+  type SqlExecutor,
+  type SqlSession,
+} from "../../runtime/events/index.ts";
+import { prepareBuiltinModelTranscript } from "../llm/adapters/builtin/index.ts";
 import {
   createTestDatabase,
   type TestDatabase,
@@ -120,6 +125,32 @@ function text(input: LlmAdapterCallInput): string {
   ).join("\n");
 }
 
+function recording(
+  base: SqlSession,
+  statements: { sql: string; params?: unknown[] }[],
+): SqlSession {
+  const recorded = (executor: SqlExecutor): SqlExecutor => ({
+    query: <T extends Record<string, unknown>>(
+      sql: string,
+      params?: unknown[],
+    ) => {
+      statements.push({ sql, params });
+      return executor.query<T>(sql, params);
+    },
+  });
+  return {
+    ...recorded(base),
+    transaction: (operation) =>
+      base.transaction((tx) => operation(recorded(tx))),
+    ...(base.readSnapshot
+      ? {
+        readSnapshot: <T>(operation: (executor: SqlExecutor) => Promise<T>) =>
+          base.readSnapshot!((snapshot) => operation(recorded(snapshot))),
+      }
+      : {}),
+  };
+}
+
 async function fixture(
   script: Script,
   options: Readonly<{
@@ -127,6 +158,8 @@ async function fixture(
     inputLimit?: number;
     memoryConfig?: Partial<LongTermMemoryConfig>;
     vectors?: boolean;
+    statements?: { sql: string; params?: unknown[] }[];
+    dynamicInstructions?: boolean;
   }> = {},
 ): Promise<Fixture> {
   const db = await createTestDatabase({
@@ -164,6 +197,14 @@ async function fixture(
           name: "North",
           role: "assistant",
           instructions: "NORTH_NATIVE_MEMORY_INSTRUCTIONS",
+          ...(options.dynamicInstructions
+            ? {
+              dynamicResolve: (facts) => ({
+                instructions:
+                  `NORTH_NATIVE_MEMORY_INSTRUCTIONS trigger=${facts.triggerMessage.id}`,
+              }),
+            }
+            : {}),
           models: {
             generate: [{
               connection: "test_model",
@@ -205,7 +246,9 @@ async function fixture(
   });
   const registry = await createPluginRegistry({ plugins: [memory, app] });
   const engine = await createCopilotzEngine({
-    session: createSqlSession(db),
+    session: options.statements
+      ? recording(createSqlSession(db), options.statements)
+      : createSqlSession(db),
     registry,
     defaultDatabaseSchema: SCHEMA,
     retryBaseMs: 0,
@@ -348,7 +391,7 @@ async function startUserTurn(fixture: Fixture, id = "message:user") {
 
 async function eventually(
   fixture: Fixture,
-  condition: () => Promise<boolean>,
+  condition: () => boolean | Promise<boolean>,
 ): Promise<void> {
   const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
@@ -389,7 +432,7 @@ async function assertNoDeadLetters(fixture: Fixture) {
 
 function assertConsolidationLifecycleOutput(value: unknown) {
   const validate = new AjvModule.default({ strict: false }).compile(
-    consolidateMemoryAction.outputSchema as any,
+    consolidateMemoryAction.outputSchema!,
   );
   assert(validate(value), JSON.stringify(validate.errors));
 }
@@ -444,17 +487,27 @@ Deno.test("checkpoint dispatch is a hidden ordinary Agent turn that atomically c
       "NORTH_NATIVE_MEMORY_INSTRUCTIONS",
     );
     const maintenanceText = text(maintenance);
-    assertStringIncludes(maintenanceText, "NATIVE_MEMORY_CONTEXT");
+    assertStringIncludes(
+      maintenance.request.instructions ?? "",
+      "NATIVE_MEMORY_CONTEXT",
+    );
     // The maintenance turn receives exactly the reserved source range, rather
     // than the ordinary public reply that follows the triggering message.
     assertStringIncludes(
       maintenanceText,
       "Remember Compass and answer normally.",
     );
-    // The ordinary source is embedded in the single maintenance task rather
-    // than replayed as separate raw public-history messages.
-    assertEquals(maintenance.request.messages.length, 1);
-    assertEquals(maintenance.request.messages[0]?.role, "user");
+    // The source uses the identical normal preparation, followed by maintenance.
+    assertEquals(
+      maintenance.request.instructions,
+      run.inputs[0]!.request.instructions,
+    );
+    assertEquals(maintenance.request.tools, run.inputs[0]!.request.tools);
+    assertEquals(
+      maintenance.request.messages[0],
+      run.inputs[0]!.request.messages[0],
+    );
+    assertEquals(maintenance.request.messages.at(-1)?.role, "user");
     assertEquals(maintenance.request.tools?.map((value) => value.name), [
       "consolidate_memory",
       "readToolResult",
@@ -707,8 +760,12 @@ Deno.test("an open Ask plan cannot pin the consolidation boundary", async () => 
     );
     assert(maintenance);
     assertStringIncludes(text(maintenance), "OPEN_ASK");
-    assertStringIncludes(text(maintenance), "ask-south");
-    assertStringIncludes(text(maintenance), "unresolved-plan");
+    const source = maintenance.request.messages.find((message) =>
+      message.role === "assistant"
+    );
+    assert(source?.role === "assistant");
+    assertEquals(source.toolCalls?.[0]?.id, "ask-south");
+    assertEquals(source.toolPlanId, "unresolved-plan");
     await assertNoDeadLetters(run);
   } finally {
     await run.close();
@@ -917,7 +974,7 @@ Deno.test("bounded post-boundary Tool history lets the next turn continue", asyn
 
     await eventually(
       run,
-      async () =>
+      () =>
         run.inputs.some((input) => text(input).includes("CURRENT_USER_REPLY")),
     );
     assertEquals(
@@ -1547,11 +1604,11 @@ Deno.test("invalidate_memory retracts editorially without changing lifecycle", a
     const searchValidate = new AjvModule.default({
       allErrors: true,
       strict: false,
-    }).compile(searchMemoryAction.outputSchema as any);
+    }).compile(searchMemoryAction.outputSchema!);
     const inspectValidate = new AjvModule.default({
       allErrors: true,
       strict: false,
-    }).compile(inspectMemoryAction.outputSchema as any);
+    }).compile(inspectMemoryAction.outputSchema!);
     assert(searchValidate(normal), JSON.stringify(searchValidate.errors));
     assert(searchValidate(historical), JSON.stringify(searchValidate.errors));
     assert(inspectValidate(inspected), JSON.stringify(inspectValidate.errors));
@@ -1742,6 +1799,176 @@ Deno.test("Memory consolidation and public search use persisted pgvector project
       metadata: { threadId: "thread-a", agentId: "north" },
     }) as typeof result;
     assertEquals(revoked.memories, []);
+  } finally {
+    await run.close();
+  }
+});
+
+Deno.test("memory preserves typed images and the normal provider prefix with dynamic instructions", async () => {
+  const run = await fixture(
+    (input) =>
+      text(input).includes("Internal memory maintenance")
+        ? tool(memoryProposal())
+        : stop("Image reviewed."),
+    { inputLimit: 180_000, dynamicInstructions: true },
+  );
+  try {
+    await startUserTurn(run, "message:prior-boundary");
+    await eventually(
+      run,
+      async () => (await checkpoints(run))[0]?.status === "ready",
+    );
+    const image = new Uint8Array(122_960);
+    image.set([137, 80, 78, 71, 13, 10, 26, 10]);
+    const content = await run.engine.content.preparer.prepare([
+      { type: "text", text: "Remember the diagram.", role: "body" },
+      {
+        type: "image",
+        bytes: image,
+        mediaType: "image/png",
+        name: "diagram.png",
+        role: "body",
+      },
+    ], { namespace: NAMESPACE, idempotencyKey: "image-regression" });
+    await collection(run, "message").create({
+      id: "message:image",
+      threadId: "thread-a",
+      senderId: "human-a",
+      recipientIds: ["agent-north"],
+      content,
+      metadata: {},
+    }, {
+      namespace: NAMESPACE,
+      metadata: {
+        core: {
+          threadId: "thread-a",
+          routing: { senderId: "human-a", recipientIds: ["agent-north"] },
+        },
+      },
+      identity: { deduplicationId: "image-regression:create" },
+    });
+    await eventually(
+      run,
+      async () =>
+        (await checkpoints(run)).filter((item: { status: string }) =>
+          item.status === "ready"
+        )
+          .length === 2,
+    );
+    assertEquals(run.inputs.length, 4);
+    const [ordinary, maintenance] = run.inputs.slice(2);
+    const newest = (await checkpoints(run)).find((item: { sequence: number }) =>
+      item.sequence === 2
+    );
+    assertEquals(newest.sourceStartMessageId, "message:image");
+    assertEquals(
+      maintenance!.request.instructions,
+      ordinary!.request.instructions,
+    );
+    assertEquals(maintenance!.request.tools, ordinary!.request.tools);
+    assertEquals(
+      maintenance!.request.messages[0],
+      ordinary!.request.messages[0],
+    );
+    const images = maintenance!.request.messages.flatMap((message) =>
+      message.content
+    ).filter((part) => part.type === "image");
+    assertEquals(images.length, 1);
+    const preparedImage = images[0];
+    assert(preparedImage?.type === "image");
+    assertEquals(preparedImage.bytes, image);
+    assert(
+      !text(maintenance!).includes('"0":137'),
+      "binary bytes are never flattened into JSON text",
+    );
+    const provider = {
+      provider: "openai" as const,
+      model: "native-memory-model",
+      apiKey: "unused-test-key",
+    };
+    const normalWire = await prepareBuiltinModelTranscript(
+      provider,
+      "generate",
+      {},
+      ordinary!,
+    );
+    const memoryWire = await prepareBuiltinModelTranscript(
+      provider,
+      "generate",
+      {},
+      maintenance!,
+    );
+    assertEquals(
+      memoryWire.messages.slice(0, normalWire.messages.length),
+      normalWire.messages,
+      "provider-prepared shared prefix must be identical, including images and tool definitions",
+    );
+    assertEquals(
+      memoryWire.inputTokenEstimate.byModality.image,
+      normalWire.inputTokenEstimate.byModality.image,
+    );
+    await assertNoDeadLetters(run);
+  } finally {
+    await run.close();
+  }
+});
+
+Deno.test("consolidation SQL statement budget uses batches for a 65-message source", async () => {
+  const statements: { sql: string; params?: unknown[] }[] = [];
+  const run = await fixture(
+    (_input, call) => call === 1 ? stop("Remembered.") : tool(memoryProposal()),
+    { statements },
+  );
+  try {
+    await setupThread(run);
+    for (let index = 0; index < 64; index++) {
+      await createHumanMessage(run, {
+        id: `message:sql:${index}`,
+        text: `SOURCE_${index} ` + "history ".repeat(20),
+      });
+    }
+    statements.length = 0;
+    await createHumanMessage(run, {
+      id: "message:sql:trigger",
+      text: "Remember this.",
+      recipientIds: ["agent-north"],
+    });
+    await eventually(
+      run,
+      async () => (await checkpoints(run))[0]?.status === "ready",
+    );
+    const reads = statements.filter(({ sql }) =>
+      /^\s*SELECT\b/.test(sql) && sql.includes('"nodes"')
+    );
+    const counts = Object.fromEntries(
+      ["message", "participant", "thread", "asset"].map((
+        kind,
+      ) => [
+        kind,
+        reads.filter(({ sql, params }) =>
+          kind === "asset" ? sql.includes("'asset'") : params?.includes(kind)
+        ).length,
+      ]),
+    );
+    console.log("CONSOLIDATION_SQL_READS=" + JSON.stringify(counts));
+    // Ceilings measured against the same flow on the pre-change implementation.
+    assert(
+      counts.message <= 43,
+      `message statement budget: ${JSON.stringify(counts)}`,
+    );
+    assert(
+      counts.asset <= 22,
+      `asset statement budget: ${JSON.stringify(counts)}`,
+    );
+    assert(
+      counts.participant <= 15,
+      `participant statement budget: ${JSON.stringify(counts)}`,
+    );
+    assert(
+      counts.thread <= 13,
+      `thread statement budget: ${JSON.stringify(counts)}`,
+    );
+    await assertNoDeadLetters(run);
   } finally {
     await run.close();
   }

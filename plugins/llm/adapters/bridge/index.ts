@@ -31,12 +31,14 @@ import {
   prepareAttemptTranscript,
   type PreparedAttemptTranscript,
 } from "./transcript.ts";
+import type { ChatTokenEstimate } from "../../shared/chat-tokens.ts";
 import { assertEstimatedInputLimit } from "../../shared/token-estimates.ts";
 import { formatMessagesDetailed } from "../../shared/wire-format.ts";
 import type {
   ChatContentPart,
   ChatMessage,
   ChatResponse,
+  LLMConfig,
   LLMUsageAttempt,
   ProviderConfig,
   ProviderFactory,
@@ -44,6 +46,7 @@ import type {
   TokenUsage,
   ToolDefinition,
   ToolInvocation,
+  WireChatMessage,
 } from "../../shared/types.ts";
 
 /**
@@ -446,7 +449,13 @@ export function formatLlmRequestForWire(
   request: LlmRequest,
   config: PreflightConfig,
   namespace = "",
-) {
+): Readonly<
+  {
+    config: LLMConfig;
+    messages: WireChatMessage[];
+    estimate: ChatTokenEstimate;
+  }
+> {
   const chatRequest = createChatRequest(
     {
       request: projectPreparedRequest(request, namespace),

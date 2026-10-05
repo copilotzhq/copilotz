@@ -13,40 +13,32 @@ export function createStreamOriginResolver(
     output: StreamOutput,
   ): Promise<StreamOutput> => {
     const runId = output.metadata.sourceActionRunId;
-    if (typeof runId !== "string") return output;
+    if (typeof runId !== "string" || runId.trim().length === 0) return output;
     const key = JSON.stringify([operationId, runId]);
     if (!origins.has(key)) {
       // Bound cache memory, not the lifetime number of Actions in a long run.
       if (origins.size >= 256) origins.delete(origins.keys().next().value!);
-      let afterPosition: string | undefined;
+      signal.throwIfAborted();
+      // Action receipts use this durable identity for invocation and retries.
+      // Keep operation membership authoritative and use a scoped fallback for
+      // older Events without the canonical receipt identity.
+      const eventId = await runtime.operations.findEventId({
+        namespace,
+        operationId,
+        subjectId: runId,
+        typeSuffix: ".invoked",
+        deduplicationId: `${runId}:action:invoked`,
+      });
       let origin: Record<string, unknown> | undefined;
-      search: while (true) {
+      if (eventId) {
         signal.throwIfAborted();
-        const entries = await runtime.operations.listEventIds({
-          namespace,
-          operationId,
-          afterPosition,
-          limit: 250,
-        });
-        for (const entry of entries) {
-          signal.throwIfAborted();
-          const event = await runtime.events.get(namespace, entry.eventId);
-          if (event?.subject?.id === runId && event.type.endsWith(".invoked")) {
-            // The ordinary resolver returns the public projection of protected
-            // Action inputs. Never hydrate secrets for observation.
-            const resolved = await runtime.events.resolve(
-              namespace,
-              entry.eventId,
-            );
-            const data = resolved?.data as Record<string, unknown> | undefined;
-            if (data?.actionRunId === runId) {
-              origin = { actionRunId: runId, metadata: data.metadata };
-            }
-            break search;
-          }
+        // The ordinary resolver returns the public projection of protected
+        // Action inputs. Never hydrate secrets for observation.
+        const resolved = await runtime.events.resolve(namespace, eventId);
+        const data = resolved?.data as Record<string, unknown> | undefined;
+        if (data?.actionRunId === runId) {
+          origin = { actionRunId: runId, metadata: data.metadata };
         }
-        if (entries.length < 250) break;
-        afterPosition = entries.at(-1)!.position;
       }
       origins.set(key, origin);
     }

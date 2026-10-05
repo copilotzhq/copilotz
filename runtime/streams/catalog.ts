@@ -22,6 +22,9 @@ export const OPERATION_CATALOG_FINGERPRINT = "retained-terminal-streams";
 export const OPERATION_CHANGE_CHANNEL = "copilotz_operations";
 export const DEFAULT_OPERATION_REPLAY_RETENTION_MS = 24 * 60 * 60_000;
 
+// Query work budget, independent of page size or operation membership rules.
+const MAX_CORRELATED_ASSOCIATION_CANDIDATES = 32;
+
 export type OperationChangeSubscription = Readonly<{
   /** True means a notification arrived; false is the bounded safety timeout. */
   wait(
@@ -164,6 +167,20 @@ export type OperationCatalog = Readonly<{
       limit?: number;
     }>,
   ): Promise<readonly Readonly<{ eventId: string; position: string }>[]>;
+  /**
+   * Finds an event in the operation by opaque subject/type coordinates. An
+   * optional authoritative deduplication identity is preferred; the earliest
+   * scoped match is the fallback for events without that identity.
+   */
+  findEventId(
+    input: Readonly<{
+      namespace: string;
+      operationId: string;
+      subjectId: string;
+      typeSuffix: string;
+      deduplicationId?: string;
+    }>,
+  ): Promise<string | undefined>;
   openStream(
     input: Readonly<{
       namespace: string;
@@ -1055,6 +1072,8 @@ export function createOperationCatalog(
         : eventPosition(input.afterPosition);
       if (operationIds?.length === 0) return [];
       if (afterPosition !== undefined) {
+        // Keep progress eligibility per operation; a hashed alternative can
+        // scan the historical event index just to construct the candidate set.
         params.push(afterPosition);
         conditions.push(`(
           operation.state IN ('accepted','running')
@@ -1063,56 +1082,131 @@ export function createOperationCatalog(
              WHERE progress.namespace = operation.namespace
                AND progress.operation_id = operation.operation_id
                AND progress.event_position > $${params.length}::bigint
+             OFFSET 0
           )
         )`);
       }
-      let associationQuery = "";
-      if (association) {
-        const branches: string[] = [];
-        // Keep the association lookup bounded by operationIds when a caller
-        // asks about a specific operation (membership checks use this path).
+      let query: string;
+      if (association && afterPosition !== undefined && afterPosition !== "0") {
+        const membership: string[] = [];
+        const associated: string[] = [];
+        let operationMetadataCondition: string | undefined;
         if (association.operationMetadata) {
           params.push(association.operationMetadata);
-          branches.push(
-            `SELECT operation.namespace, operation.operation_id
-               FROM ${tables.operations} AS operation
-              WHERE operation.namespace = $1${
-              operationIds
-                ? ` AND operation.operation_id = ANY($2::text[])`
-                : ""
-            } AND operation.metadata @> $${params.length}::jsonb`,
-          );
+          operationMetadataCondition =
+            `operation.metadata @> $${params.length}::jsonb`;
+          membership.push(operationMetadataCondition);
+          associated.push(`SELECT operation.namespace, operation.operation_id
+            FROM candidate AS operation
+            WHERE ${operationMetadataCondition}
+              AND (SELECT broad FROM strategy)`);
         }
         if (association.eventMetadata) {
           params.push(association.eventMetadata);
-          const ids = operationIds
-            ? " AND indexed.operation_id = ANY($2::text[])"
-            : "";
-          branches.push(
-            `SELECT indexed.namespace, indexed.operation_id
-               FROM ${tables.operationEvents} AS indexed
-               JOIN ${tables.events} AS event
-                 ON event.id = indexed.event_id
-                AND event.namespace = indexed.namespace
-              WHERE indexed.namespace = $1${ids}
-                AND event.metadata @> $${params.length}::jsonb`,
-          );
+          const eventMetadataCondition =
+            `event.metadata @> $${params.length}::jsonb`;
+          membership.push(`EXISTS (
+            SELECT 1 FROM ${tables.operationEvents} AS indexed
+            JOIN ${tables.events} AS event
+              ON event.id = indexed.event_id
+             AND event.namespace = indexed.namespace
+            WHERE indexed.namespace = operation.namespace
+              AND indexed.operation_id = operation.operation_id
+              AND ${eventMetadataCondition}
+            OFFSET 0
+          )`);
+          associated.push(`SELECT indexed.namespace, indexed.operation_id
+            FROM candidate AS operation
+            JOIN ${tables.operationEvents} AS indexed
+              ON indexed.namespace = operation.namespace
+             AND indexed.operation_id = operation.operation_id
+            JOIN ${tables.events} AS event
+              ON event.id = indexed.event_id
+             AND event.namespace = indexed.namespace
+            WHERE ${eventMetadataCondition}${
+            operationMetadataCondition
+              ? ` AND NOT (${operationMetadataCondition})`
+              : ""
+          }
+              AND (SELECT broad FROM strategy)`);
         }
-        associationQuery = `WITH associated AS MATERIALIZED (
-          ${branches.join("\n          UNION\n          ")}
-        ) `;
-        conditions.push(
-          `EXISTS (
-             SELECT 1 FROM associated
+        // Eligibility always precedes membership. OFFSET 0 keeps the few-
+        // candidate EXISTS probes correlated instead of hashing all history.
+        const candidateQuery = `WITH candidate AS MATERIALIZED (
+          SELECT operation.* FROM ${tables.operations} AS operation
+          WHERE ${conditions.join(" AND ")}
+        )`;
+        if (association.eventMetadata) {
+          // Old replay watermarks can leave most operations eligible. Cap
+          // per-operation probes even for large pages, then use metadata-index
+          // joins for broader candidates. Both paths share one snapshot; the
+          // strategy gates the unused association path before its scans run.
+          query = `${candidateQuery}, strategy AS MATERIALIZED (
+            SELECT COUNT(*) > ${MAX_CORRELATED_ASSOCIATION_CANDIDATES} AS broad FROM candidate
+          ), associated AS MATERIALIZED (
+            ${associated.join("\n            UNION\n            ")}
+          ) SELECT operation.* FROM candidate AS operation
+            WHERE CASE WHEN (SELECT broad FROM strategy) THEN EXISTS (
+              SELECT 1 FROM associated
               WHERE associated.namespace = operation.namespace
                 AND associated.operation_id = operation.operation_id
-           )`,
-        );
+            ) ELSE (${membership.join(" OR ")}) END`;
+        } else {
+          query =
+            `${candidateQuery} SELECT operation.* FROM candidate AS operation
+            WHERE (${membership.join(" OR ")})`;
+        }
+      } else {
+        // Broad initial/replay lists benefit from metadata indexes across the
+        // catalog instead of probing each eligible operation's event history.
+        let associationQuery = "";
+        if (association) {
+          const branches: string[] = [];
+          if (association.operationMetadata) {
+            params.push(association.operationMetadata);
+            branches.push(
+              `SELECT operation.namespace, operation.operation_id
+                 FROM ${tables.operations} AS operation
+                WHERE operation.namespace = $1${
+                operationIds
+                  ? ` AND operation.operation_id = ANY($2::text[])`
+                  : ""
+              } AND operation.metadata @> $${params.length}::jsonb`,
+            );
+          }
+          if (association.eventMetadata) {
+            params.push(association.eventMetadata);
+            const ids = operationIds
+              ? " AND indexed.operation_id = ANY($2::text[])"
+              : "";
+            branches.push(
+              `SELECT indexed.namespace, indexed.operation_id
+                 FROM ${tables.operationEvents} AS indexed
+                 JOIN ${tables.events} AS event
+                   ON event.id = indexed.event_id
+                  AND event.namespace = indexed.namespace
+                WHERE indexed.namespace = $1${ids}
+                  AND event.metadata @> $${params.length}::jsonb`,
+            );
+          }
+          associationQuery = `WITH associated AS MATERIALIZED (
+            ${branches.join("\n          UNION\n          ")}
+          ) `;
+          conditions.push(
+            `EXISTS (
+               SELECT 1 FROM associated
+                WHERE associated.namespace = operation.namespace
+                  AND associated.operation_id = operation.operation_id
+             )`,
+          );
+        }
+        query =
+          `${associationQuery}SELECT operation.* FROM ${tables.operations} AS operation
+          WHERE ${conditions.join(" AND ")}`;
       }
       params.push(limit);
       const result = await session.query<OperationRow>(
-        `${associationQuery}SELECT operation.* FROM ${tables.operations} AS operation
-          WHERE ${conditions.join(" AND ")}
+        `${query}
           ORDER BY operation.updated_at DESC, operation.operation_id DESC LIMIT $${params.length}`,
         params,
       );
@@ -1215,6 +1309,51 @@ export function createOperationCatalog(
         eventId: String(row.event_id),
         position: String(row.event_position),
       } as const)));
+    },
+    async findEventId(input) {
+      const namespace = requiredText(input.namespace, "Operation namespace");
+      const operationId = requiredText(input.operationId, "Operation id");
+      const subjectId = requiredText(input.subjectId, "Event subject id");
+      const typeSuffix = requiredText(input.typeSuffix, "Event type suffix");
+      const params: unknown[] = [namespace, operationId, subjectId, typeSuffix];
+      const scopedMatch = `indexed.namespace = $1 AND indexed.operation_id = $2
+          AND event.namespace = indexed.namespace
+          AND event.subject_id = $3
+          AND right(event.type, length($4::text)) = $4`;
+      // LIMIT in the correlated lookup keeps the fallback driven by this
+      // operation's index, rather than scanning namespace-wide event history.
+      const fallback = (preferred: boolean) =>
+        `SELECT indexed.event_id
+          FROM ${tables.operationEvents} AS indexed
+          JOIN LATERAL (
+            SELECT event.id FROM ${tables.events} AS event
+             WHERE event.id = indexed.event_id AND event.namespace = $1
+               AND event.subject_id = $3
+               AND right(event.type, length($4::text)) = $4
+             LIMIT 1
+          ) AS matching ON TRUE
+         WHERE indexed.namespace = $1 AND indexed.operation_id = $2
+           ${preferred ? "AND NOT EXISTS (SELECT 1 FROM preferred)" : ""}
+         ORDER BY indexed.event_position LIMIT 1`;
+      const deduplicationId = input.deduplicationId === undefined
+        ? undefined
+        : requiredText(input.deduplicationId, "Event deduplication id");
+      const query = deduplicationId === undefined ? fallback(false) : `
+        WITH preferred AS MATERIALIZED (
+          SELECT indexed.event_id
+            FROM ${tables.events} AS event
+            JOIN ${tables.operationEvents} AS indexed
+              ON indexed.event_id = event.id
+           WHERE ${scopedMatch} AND event.deduplication_id = $5
+           LIMIT 1
+        )
+        SELECT event_id FROM preferred
+        UNION ALL
+        SELECT event_id FROM (${fallback(true)}) AS fallback
+        LIMIT 1`;
+      if (deduplicationId !== undefined) params.push(deduplicationId);
+      const result = await session.query<{ event_id: string }>(query, params);
+      return result.rows[0]?.event_id;
     },
     async openStream(input) {
       const descriptor = snapshotStreamMetadata(input.descriptor);

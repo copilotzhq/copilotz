@@ -288,6 +288,53 @@ async function runQueryFixture(url: string): Promise<void> {
       }),
       undefined,
     );
+    // A newer nonmember must not consume LIMIT before membership is tested.
+    await appendEvent(events, {
+      namespace: "tenant-a",
+      metadata: { source: "unrelated" },
+      second: 100,
+    });
+    assertEquals(
+      (await catalog.list({
+        namespace: "tenant-a",
+        afterPosition: "999",
+        limit: 1,
+        association: { eventMetadata: { association: { side: "event" } } },
+      }))
+        .map((operation) => operation.operationId),
+      [eventOnly.event.id],
+    );
+    assertEquals(
+      (await catalog.list({
+        namespace: "tenant-a",
+        afterPosition: "999",
+        states: ["accepted"],
+        metadata: { source: "root" },
+        association: {
+          operationMetadata: { association: { side: "operation" } },
+          eventMetadata: { association: { side: "event" } },
+        },
+      })).map((operation) => operation.operationId),
+      [operationOnly.event.id],
+    );
+    assertEquals(
+      await catalog.list({
+        namespace: "tenant-a",
+        afterPosition: "999",
+        operationIds: [otherNamespace.event.id],
+        association: { eventMetadata: { association: { side: "event" } } },
+      }),
+      [],
+    );
+    assertEquals(
+      await catalog.list({
+        namespace: "tenant-a",
+        afterPosition: "999",
+        metadata: { source: "does-not-match" },
+        association: { eventMetadata: { association: { side: "event" } } },
+      }),
+      [],
+    );
   } finally {
     await closeFixture(fixture);
   }

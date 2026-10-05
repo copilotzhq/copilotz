@@ -425,6 +425,8 @@ export function createDatabaseScope(
     list: (listOptions) => store.listEvents(listOptions),
     settlement: (namespace, settlementScopeId) =>
       store.scopeSettlement(namespace, settlementScopeId),
+    outstanding: (namespace, settlementScopeId) =>
+      store.scopeOutstanding(namespace, settlementScopeId),
     cancel: (namespace, settlementScopeId, reason) =>
       store.cancelScope(namespace, settlementScopeId, reason),
   } as const;

@@ -165,6 +165,12 @@ export type CreateEventStoreOptions = {
   ) => string;
 };
 
+/** Internal completion counts; successful history is deliberately not counted. */
+export type DeliveryScopeOutstanding = Pick<
+  DeliveryScopeSettlement,
+  "unsettled" | "deadLetters" | "cancelled"
+>;
+
 export type EventStore = {
   databaseSchema: string;
   session: SqlSession;
@@ -244,6 +250,10 @@ export type EventStore = {
     namespace: string,
     settlementScopeId: string,
   ): Promise<DeliveryScopeSettlement>;
+  scopeOutstanding(
+    namespace: string,
+    settlementScopeId: string,
+  ): Promise<DeliveryScopeOutstanding>;
   cancelScope(
     namespace: string,
     settlementScopeId: string,
@@ -1290,6 +1300,45 @@ export function createEventStore(
         deadLetters: Number(row?.dead_letters ?? 0),
         cancelled: Number(row?.cancelled ?? 0),
         succeeded: Number(row?.succeeded ?? 0),
+      });
+    },
+    async scopeOutstanding(namespace, settlementScopeId) {
+      const params: unknown[] = [namespace, settlementScopeId];
+      const exhausted = exhaustedLeasesCte(params);
+      // The existing (scope, status) index can skip successful history before
+      // the namespace join. A caller-supplied scope may span namespaces.
+      // The CTE's dead-letters are invisible to this snapshot, so an exhausted
+      // lease is counted as the dead letter it is becoming.
+      const result = await session.query<{
+        unsettled: string | number;
+        dead_letters: string | number;
+        cancelled: string | number;
+      }>(
+        `WITH ${exhausted}, scoped AS (
+           SELECT CASE
+             WHEN d.status = 'leased' AND d.lease_expires_at <= NOW()
+               AND d.attempts >= d.max_attempts THEN 'dead_letter'
+             ELSE d.status
+           END AS status
+           FROM ${tables.event_deliveries} d
+           JOIN ${tables.events} e ON e.id = d.event_id
+           WHERE e.namespace = $1 AND d.settlement_scope_id = $2
+             AND d.status IN (
+               'pending', 'leased', 'retry_wait', 'dead_letter', 'cancelled'
+             )
+         )
+         SELECT
+           COUNT(*) FILTER (WHERE status IN ('pending', 'leased', 'retry_wait')) AS unsettled,
+           COUNT(*) FILTER (WHERE status = 'dead_letter') AS dead_letters,
+           COUNT(*) FILTER (WHERE status = 'cancelled') AS cancelled
+         FROM scoped`,
+        params,
+      );
+      const row = result.rows[0];
+      return ({
+        unsettled: Number(row?.unsettled ?? 0),
+        deadLetters: Number(row?.dead_letters ?? 0),
+        cancelled: Number(row?.cancelled ?? 0),
       });
     },
     async cancelScope(namespace, settlementScopeId, reason) {

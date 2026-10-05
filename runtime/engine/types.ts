@@ -1,3 +1,4 @@
+import type { DeliveryScopeOutstanding } from "../events/store.ts";
 import type {
   AuthorizeContent,
   BodyStorageOptions,
@@ -264,6 +265,11 @@ export type CopilotzEngine = Readonly<{
       namespace: string,
       settlementScopeId: string,
     ): Promise<DeliveryScopeSettlement>;
+    /** Internal completion check that skips successful delivery history. */
+    outstanding(
+      namespace: string,
+      settlementScopeId: string,
+    ): Promise<DeliveryScopeOutstanding>;
     cancel(
       namespace: string,
       settlementScopeId: string,

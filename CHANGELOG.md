@@ -1,3 +1,19 @@
+## Unreleased
+
+### Improved
+
+- Bound operation discovery by eligible operations before resolving their
+  associations, reducing repeated historical reads during conversation watching.
+- Check outstanding delivery statuses without recounting successful history in
+  operation observation and completion waiting. Public settlement counts retain
+  their existing meaning. Completion waiting without local work now polls every
+  250 ms instead of 25 ms, adding up to roughly 225 ms of polling delay in that
+  fallback case.
+- Enumerate new operation streams incrementally and coalesce observer catalog
+  checks while continuing to notify progressive byte readers.
+- Resolve a stream's source Action through a scoped invocation lookup rather than
+  fetching historical Events individually.
+
 ## 0.83.3 — 2026-10-05
 
 ### Improved

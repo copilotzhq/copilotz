@@ -309,7 +309,12 @@ async function setupThread(fixture: Fixture) {
 async function createHumanMessage(
   fixture: Fixture,
   input: Readonly<
-    { id: string; text: string; recipientIds?: readonly string[] }
+    {
+      id: string;
+      text: string;
+      recipientIds?: readonly string[];
+      metadata?: Readonly<Record<string, unknown>>;
+    }
   >,
 ) {
   const messages = collection(fixture, "message");
@@ -323,7 +328,7 @@ async function createHumanMessage(
     senderId: "human-a",
     recipientIds: input.recipientIds ?? [],
     content,
-    metadata: {},
+    metadata: input.metadata ?? {},
   }, {
     namespace: NAMESPACE,
     metadata: {
@@ -1906,6 +1911,75 @@ Deno.test("memory preserves typed images and the normal provider prefix with dyn
     assertEquals(
       memoryWire.inputTokenEstimate.byModality.image,
       normalWire.inputTokenEstimate.byModality.image,
+    );
+    await assertNoDeadLetters(run);
+  } finally {
+    await run.close();
+  }
+});
+
+Deno.test("consolidation accepts a frozen source snapshot larger than the JSON predicate budget", async () => {
+  const run = await fixture((_input, call) =>
+    call === 1 ? stop("Remembered.") : tool(memoryProposal())
+  );
+  try {
+    await setupThread(run);
+    // Each ordinary message fits the predicate budget, but their frozen
+    // history makes the private maintenance Message metadata exceed 1 MiB.
+    const metadata = { trace: "x".repeat(600 * 1024) };
+    await createHumanMessage(run, {
+      id: "message:large-source",
+      text: "Compass remains the active project.",
+      metadata,
+    });
+    await createHumanMessage(run, {
+      id: "message:large-trigger",
+      text: "Remember this and answer normally.",
+      recipientIds: ["agent-north"],
+      metadata,
+    });
+    await eventually(
+      run,
+      async () => {
+        const current = (await checkpoints(run))[0];
+        return current && current.status !== "pending";
+      },
+    );
+    const saved = await checkpoint(run);
+    assertEquals(saved.status, "ready", JSON.stringify(saved.error));
+    const scoped = await collection(run, "message").list({
+      where: { historyScopeId: saved.id },
+      limit: 10,
+    });
+    assert(
+      scoped.some((entry: { metadata: unknown }) =>
+        JSON.stringify(entry.metadata).length > 1024 * 1024
+      ),
+      "the real maintenance Message must carry the oversized frozen snapshot",
+    );
+    assertEquals(run.inputs.length, 2);
+    const [ordinary, maintenance] = run.inputs;
+    assertEquals(
+      maintenance!.request.instructions,
+      ordinary!.request.instructions,
+    );
+    assertEquals(maintenance!.request.tools, ordinary!.request.tools);
+    assertEquals(
+      maintenance!.request.messages.slice(0, ordinary!.request.messages.length),
+      ordinary!.request.messages,
+      "the ordinary input prefix remains identical for provider caching",
+    );
+    assertEquals(saved.sourceStartMessageId, "message:large-source");
+    const publicHistory = await projectMessages(
+      run.engine,
+      NAMESPACE,
+      "thread-a",
+    );
+    assertEquals(saved.sourceEndMessageId, publicHistory.at(-1)!.id);
+    assertEquals(
+      (saved.metadata as { coverage: { endMessageId: string } }).coverage
+        .endMessageId,
+      saved.sourceEndMessageId,
     );
     await assertNoDeadLetters(run);
   } finally {

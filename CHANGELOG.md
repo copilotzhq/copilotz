@@ -1,3 +1,14 @@
+## 0.83.2 — 2026-10-04
+
+### Fixed
+
+- Consolidate memory through the normal typed Agent input pipeline, preserving
+  media, reasoning, Tool relationships and the reusable provider prompt prefix.
+  Image bytes no longer expand into JSON text during source range estimation.
+- Batch history and frozen Context preparation together, avoid a redundant
+  source preparation at dispatch, and settle authenticated preparation failures
+  without leaving checkpoints pending.
+
 ## 0.83.1 — 2026-10-02
 
 ### Fixed

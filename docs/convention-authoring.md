@@ -221,21 +221,21 @@ and create `deno.json` with these package imports (use the released version):
   // Pin the runtime and plugin entrypoints to the same released package version.
   "imports": {
     // Public application and runtime authoring API.
-    "@copilotz/copilotz": "jsr:@copilotz/copilotz@0.83.1",
+    "@copilotz/copilotz": "jsr:@copilotz/copilotz@0.83.2",
     // The example's agent harness and tool helpers.
-    "@copilotz/copilotz/core": "jsr:@copilotz/copilotz@0.83.1/core",
+    "@copilotz/copilotz/core": "jsr:@copilotz/copilotz@0.83.2/core",
     // Narrow compatibility imports used by the generated authoring fixture.
-    "@copilotz/copilotz/actions": "jsr:@copilotz/copilotz@0.83.1/actions",
-    "@copilotz/copilotz/plugins": "jsr:@copilotz/copilotz@0.83.1/plugins",
+    "@copilotz/copilotz/actions": "jsr:@copilotz/copilotz@0.83.2/actions",
+    "@copilotz/copilotz/plugins": "jsr:@copilotz/copilotz@0.83.2/plugins",
     // Model connection contracts and the deterministic test adapter's types.
-    "@copilotz/copilotz/llm": "jsr:@copilotz/copilotz@0.83.1/llm"
+    "@copilotz/copilotz/llm": "jsr:@copilotz/copilotz@0.83.2/llm"
   }
 }
 ```
 
 ```sh
 # Discover source declarations on the build host and emit a static ESM plugin.
-deno run -A jsr:@copilotz/copilotz@0.83.1/build build .
+deno run -A jsr:@copilotz/copilotz@0.83.2/build build .
 # Import the generated plugin and verify its mocked agent reply.
 deno run -A run.ts
 ```

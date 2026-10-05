@@ -162,6 +162,8 @@ function generatedFixtureSql(schema: string): readonly string[] {
        jsonb_build_object('operationNo', operation_seed.operation_no, 'eventNo', event_seed.event_no),
        jsonb_build_object(
          'tenantClass', scope.tenant_class,
+         'discoveryGroup', CASE WHEN scope.namespace = '${SPARSE_NAMESPACE}'
+           AND operation_seed.operation_no <> 1599 THEN 'history' ELSE 'unrelated' END,
          'jobGroup', '${SPARSE_GROUP}',
          'eventKind', 'root',
          'cohort', 'cohort-' || ((operation_seed.operation_no * 31) % 257),
@@ -186,6 +188,8 @@ function generatedFixtureSql(schema: string): readonly string[] {
        jsonb_build_object('operationNo', operation_seed.operation_no, 'eventNo', event_seed.event_no),
        jsonb_build_object(
          'tenantClass', scope.tenant_class,
+         'discoveryGroup', CASE WHEN scope.namespace = '${SPARSE_NAMESPACE}'
+           AND operation_seed.operation_no <> 1599 THEN 'history' ELSE 'unrelated' END,
          'jobGroup', CASE
            WHEN scope.namespace = '${DENSE_NAMESPACE}' AND event_seed.event_no % 2 = 0
              THEN '${DENSE_GROUP}'
@@ -255,7 +259,9 @@ function hasIndex(root: ExplainRoot, indexName: string): boolean {
 
 function hasSequentialScan(root: ExplainRoot, relationName: string): boolean {
   return explainNodes(root).some((node) =>
-    node["Node Type"] === "Seq Scan" && node["Relation Name"] === relationName
+    node["Node Type"] === "Seq Scan" &&
+    node["Relation Name"] === relationName &&
+    Number(node["Actual Loops"] ?? 0) > 0
   );
 }
 
@@ -291,6 +297,35 @@ function bufferCount(root: ExplainRoot): number {
         ? node["Shared Read Blocks"] as number
         : 0),
     0,
+  );
+}
+
+function relationRows(root: ExplainRoot, relationName: string): number {
+  return explainNodes(root).reduce((total, node) => {
+    if (node["Relation Name"] !== relationName) return total;
+    return total + (Number(node["Actual Rows"] ?? 0) +
+          Number(node["Rows Removed by Filter"] ?? 0)) *
+        Number(node["Actual Loops"] ?? 1);
+  }, 0);
+}
+
+function assertCandidateMembershipPlan(root: ExplainRoot): void {
+  assert(
+    !hasSequentialScan(root, "copilotz_operation_events") &&
+      !hasSequentialScan(root, "events"),
+    "candidate membership should not scan unrelated event history",
+  );
+  const nodes = explainNodes(root);
+  const hashedSubplans = nodes.flatMap((node) =>
+    [...String(node["Filter"] ?? "").matchAll(/hashed SubPlan (\d+)/g)]
+      .map((match) => `SubPlan ${match[1]}`)
+  );
+  assert(
+    nodes.every((node) =>
+      !hashedSubplans.includes(String(node["Subplan Name"] ?? "")) ||
+      Number(node["Actual Loops"] ?? 0) === 0
+    ),
+    "candidate membership executed a history-wide hashed subplan",
   );
 }
 
@@ -475,6 +510,402 @@ Deno.test({
         `sparse watermark filtered too many unrelated rows (${watermarkRowsRemoved})`,
       );
 
+      const broadCandidatePlan = await explain(database, {
+        scenario: "forced broad candidate discovery",
+        queryMs: 0,
+        params: [
+          SPARSE_NAMESPACE,
+          JSON.stringify({ unrelatedGroup: "operation-group-0" }),
+          JSON.stringify({ jobGroup: SPARSE_GROUP }),
+          25,
+        ],
+        sql: `WITH candidate AS MATERIALIZED (
+          SELECT * FROM ${table(schema, "copilotz_operations")}
+            WHERE namespace = $1
+        ) SELECT operation.* FROM candidate operation
+          WHERE operation.metadata @> $2::jsonb OR EXISTS (
+            SELECT 1 FROM ${table(schema, "copilotz_operation_events")} indexed
+              JOIN ${
+          table(schema, "events")
+        } event ON event.id = indexed.event_id
+                AND event.namespace = indexed.namespace
+              WHERE indexed.namespace = operation.namespace
+                AND indexed.operation_id = operation.operation_id
+                AND event.metadata @> $3::jsonb OFFSET 0
+          ) ORDER BY operation.updated_at DESC, operation.operation_id DESC LIMIT $4`,
+      });
+      assert(
+        bufferCount(sparsePlan) < bufferCount(broadCandidatePlan),
+        "initial sparse list should preserve the efficient metadata-index plan",
+      );
+
+      const defaultReplayInput = {
+        namespace: SPARSE_NAMESPACE,
+        states: ["completed"] as const,
+        association: {
+          operationMetadata: { unrelatedGroup: "operation-group-0" },
+          eventMetadata: { jobGroup: SPARSE_GROUP },
+        },
+      };
+      const defaultReplayBaseline = await captureScenario(
+        captured,
+        "default broad replay baseline",
+        () => catalog.list({ ...defaultReplayInput, afterPosition: "0" }),
+      );
+      const defaultReplay = await captureScenario(
+        captured,
+        "default positive old replay",
+        () => catalog.list({ ...defaultReplayInput, afterPosition: "1" }),
+      );
+      assertEquals(
+        defaultReplay.value.map((operation) => operation.operationId),
+        defaultReplayBaseline.value.map((operation) => operation.operationId),
+      );
+      const defaultReplayBaselinePlan = await explain(
+        database,
+        defaultReplayBaseline.query,
+      );
+      const defaultReplayPlan = await explain(database, defaultReplay.query);
+      console.log(
+        JSON.stringify({
+          defaultReplayPlan,
+          defaultReplayBaselineBuffers: bufferCount(defaultReplayBaselinePlan),
+        }),
+      );
+
+      const denseReplay = await captureScenario(
+        captured,
+        "dense positive old replay",
+        () =>
+          catalog.list({
+            namespace: DENSE_NAMESPACE,
+            afterPosition: "1",
+            limit: 20,
+            association: {
+              operationMetadata: { jobGroup: DENSE_GROUP },
+              eventMetadata: { jobGroup: DENSE_GROUP },
+            },
+          }),
+      );
+      assertEquals(
+        denseReplay.value.map((operation) => operation.operationId),
+        denseOperations.map((operation) => operation.operationId),
+      );
+      const denseReplayPlan = await explain(database, denseReplay.query);
+      const denseBaselinePlan = await explain(database, denseRun.query);
+      assert(
+        bufferCount(denseReplayPlan) <= bufferCount(denseBaselinePlan) * 2,
+        "dense old replay regressed compared to broad catalog discovery",
+      );
+      const broadMissing = await captureScenario(
+        captured,
+        "broad missing association",
+        () =>
+          catalog.list({
+            namespace: SPARSE_NAMESPACE,
+            afterPosition: "1",
+            association: { eventMetadata: { jobGroup: "missing" } },
+          }),
+      );
+      assertEquals(broadMissing.value, []);
+      const broadMissingPlan = await explain(database, broadMissing.query);
+      assert(
+        !hasSequentialScan(broadMissingPlan, "events") &&
+          !hasSequentialScan(broadMissingPlan, "copilotz_operation_events"),
+        "empty broad membership should not scan event history",
+      );
+
+      const gateScenarios: Record<string, unknown>[] = [];
+      for (
+        const [candidateCount, pageLimit] of [[1, 1], [32, 33], [33, 1], [
+          33,
+          1000,
+        ]]
+      ) {
+        const operationIds = Array.from(
+          { length: candidateCount },
+          (_, index) => `catalog-op-${index + 1}`,
+        );
+        const input = {
+          namespace: SPARSE_NAMESPACE,
+          operationIds,
+          association: { eventMetadata: { jobGroup: SPARSE_GROUP } },
+          limit: pageLimit,
+        };
+        const baseline = await captureScenario(
+          captured,
+          "gate baseline",
+          () => catalog.list({ ...input, afterPosition: "0" }),
+        );
+        const gated = await captureScenario(
+          captured,
+          "candidate-budget boundary",
+          () => catalog.list({ ...input, afterPosition: "1" }),
+        );
+        assertEquals(
+          gated.value.map((operation) => operation.operationId),
+          baseline.value.map((operation) => operation.operationId),
+        );
+        const plan = await explain(database, gated.query);
+        const broadAssociationExecuted = explainNodes(plan).some((node) =>
+          node["Subplan Name"] === "CTE associated" &&
+          Number(node["Actual Loops"] ?? 0) > 0
+        );
+        assertEquals(
+          broadAssociationExecuted,
+          candidateCount > 32,
+          "candidate work budget must be independent of requested page limit",
+        );
+        if (candidateCount <= 32) assertCandidateMembershipPlan(plan);
+        gateScenarios.push({
+          candidateCount,
+          pageLimit,
+          buffers: bufferCount(plan),
+          explainMs: plan["Execution Time"],
+          eventRows: relationRows(plan, "events"),
+        });
+      }
+
+      // Model periodic discovery with almost all history completed. The long
+      // running operation has 7,500 indexed events; another running operation
+      // is unrelated, and a completed member gets new progress after a fixed
+      // watermark. Matching historical events are deliberately common so the
+      // old namespace-wide association has to examine substantial history.
+      const operationsTable = table(schema, "copilotz_operations");
+      const eventsTable = table(schema, "events");
+      const indexedTable = table(schema, "copilotz_operation_events");
+      await database.query(`UPDATE ${operationsTable}
+        SET state = CASE WHEN operation_id IN ('catalog-op-1600', 'catalog-op-1599')
+          THEN 'running' ELSE 'completed' END`);
+      await database.query(`UPDATE ${operationsTable}
+        SET metadata = metadata || '{"discoveryMember":true}'::jsonb
+        WHERE operation_id = 'catalog-op-1600'`);
+      await database.query(`WITH inserted AS (
+        INSERT INTO ${eventsTable} (
+          id, schema_version, type, namespace, payload, metadata, correlation_id, created_at
+        ) SELECT 'discovery-long-' || event_no, 5, 'catalog.fixture',
+          '${SPARSE_NAMESPACE}', '{}', '{"discoveryGroup":"history"}',
+          'catalog-correlation-1600', TIMESTAMPTZ '2026-02-01 00:00:00+00'
+          FROM generate_series(52, 7499) AS seed(event_no)
+          RETURNING namespace, id, position, created_at
+      ) INSERT INTO ${indexedTable} (
+        namespace, operation_id, event_id, event_position, created_at
+      ) SELECT namespace, 'catalog-op-1600', id, position, created_at FROM inserted`);
+      const fixedWatermark = await catalog.maxEventPosition({
+        namespace: SPARSE_NAMESPACE,
+      });
+      assert(fixedWatermark);
+      await database.query(`WITH inserted AS (
+        INSERT INTO ${eventsTable} (
+          id, schema_version, type, namespace, payload, metadata, correlation_id, created_at
+        ) VALUES ('discovery-late-progress', 5, 'catalog.fixture',
+          '${SPARSE_NAMESPACE}', '{}', '{}', 'catalog-correlation-1592',
+          TIMESTAMPTZ '2026-03-01 00:00:00+00')
+          RETURNING namespace, id, position, created_at
+      ) INSERT INTO ${indexedTable} (
+        namespace, operation_id, event_id, event_position, created_at
+      ) SELECT namespace, 'catalog-op-1592', id, position, created_at FROM inserted`);
+      for (const relation of [operationsTable, eventsTable, indexedTable]) {
+        await database.query(`ANALYZE ${relation}`);
+      }
+      const discoveryRun = await captureScenario(
+        captured,
+        "active/new discovery",
+        () =>
+          catalog.list({
+            namespace: SPARSE_NAMESPACE,
+            association: {
+              operationMetadata: { discoveryMember: true },
+              eventMetadata: { discoveryGroup: "history" },
+            },
+            afterPosition: fixedWatermark,
+            limit: 25,
+          }),
+      );
+      assertEquals(
+        discoveryRun.value.map((operation) => operation.operationId),
+        ["catalog-op-1600", "catalog-op-1592"],
+      );
+      const discoveryPlan = await explain(database, discoveryRun.query);
+      assertCandidateMembershipPlan(discoveryPlan);
+      const discoveryEventRows = relationRows(discoveryPlan, "events");
+      assert(
+        discoveryEventRows <= 60,
+        `discovery examined ${discoveryEventRows} event rows for two bounded membership probes`,
+      );
+
+      const hotSmallPageRun = await captureScenario(
+        captured,
+        "hot discovery limit one",
+        () =>
+          catalog.list({
+            namespace: SPARSE_NAMESPACE,
+            afterPosition: fixedWatermark,
+            limit: 1,
+            association: {
+              operationMetadata: { discoveryMember: true },
+              eventMetadata: { discoveryGroup: "history" },
+            },
+          }),
+      );
+      assertEquals(
+        hotSmallPageRun.value.map((operation) => operation.operationId),
+        ["catalog-op-1600"],
+      );
+      const hotSmallPagePlan = await explain(database, hotSmallPageRun.query);
+      assertCandidateMembershipPlan(hotSmallPagePlan);
+      assert(
+        bufferCount(hotSmallPagePlan) <= bufferCount(discoveryPlan) * 1.1,
+        "small page must keep the cheap small-candidate plan",
+      );
+
+      // Capture the former query shape against exactly the same snapshot/data,
+      // including the watermark and OR membership, rather than compare timings
+      // across unrelated test cases or rely on planner cost estimates.
+      const formerQuery: CapturedQuery = {
+        scenario: "former active/new discovery",
+        queryMs: 0,
+        params: [
+          SPARSE_NAMESPACE,
+          fixedWatermark,
+          JSON.stringify({ discoveryMember: true }),
+          JSON.stringify({ discoveryGroup: "history" }),
+          25,
+        ],
+        sql: `WITH associated AS MATERIALIZED (
+          SELECT namespace, operation_id FROM ${operationsTable}
+            WHERE namespace = $1 AND metadata @> $3::jsonb
+          UNION
+          SELECT indexed.namespace, indexed.operation_id FROM ${indexedTable} indexed
+            JOIN ${eventsTable} event ON event.id = indexed.event_id
+              AND event.namespace = indexed.namespace
+            WHERE indexed.namespace = $1 AND event.metadata @> $4::jsonb
+        ) SELECT operation.* FROM ${operationsTable} operation
+          WHERE operation.namespace = $1 AND (
+            operation.state IN ('accepted','running') OR EXISTS (
+              SELECT 1 FROM ${indexedTable} progress
+              WHERE progress.namespace = operation.namespace
+                AND progress.operation_id = operation.operation_id
+                AND progress.event_position > $2::bigint
+            )
+          ) AND EXISTS (SELECT 1 FROM associated
+            WHERE associated.namespace = operation.namespace
+              AND associated.operation_id = operation.operation_id)
+          ORDER BY operation.updated_at DESC, operation.operation_id DESC LIMIT $5`,
+      };
+      const formerRows = await database.query(
+        formerQuery.sql,
+        formerQuery.params,
+      );
+      assertEquals(
+        formerRows.rows.map((row) => row.operation_id),
+        discoveryRun.value.map((operation) => operation.operationId),
+      );
+      const formerPlan = await explain(database, formerQuery);
+      assert(
+        relationRows(formerPlan, "events") > 50_000,
+        "former query fixture did not exercise historical association amplification",
+      );
+      assert(
+        bufferCount(discoveryPlan) * 2 < bufferCount(formerPlan),
+        "candidate discovery did not substantially reduce historical buffer work",
+      );
+
+      // Event-only membership still probes the long candidate when its operation
+      // metadata cannot answer membership. Bound it by candidate history and
+      // preserve empty matches, ID selection, and completed-operation filtering.
+      const eventOnlyRun = await captureScenario(
+        captured,
+        "long event-only membership",
+        () =>
+          catalog.list({
+            namespace: SPARSE_NAMESPACE,
+            operationIds: ["catalog-op-1600"],
+            afterPosition: fixedWatermark,
+            association: { eventMetadata: { discoveryGroup: "missing" } },
+          }),
+      );
+      assertEquals(eventOnlyRun.value, []);
+      const eventOnlyPlan = await explain(database, eventOnlyRun.query);
+      assertCandidateMembershipPlan(eventOnlyPlan);
+      assertEquals(relationRows(eventOnlyPlan, "events"), 7_500);
+
+      // Add 50k matching events to an ineligible completed operation. Discovery
+      // work should stay stable even as namespace history grows.
+      await database.query(`WITH inserted AS (
+        INSERT INTO ${eventsTable} (
+          id, schema_version, type, namespace, payload, metadata, correlation_id, created_at
+        ) SELECT 'discovery-extra-' || event_no, 5, 'catalog.fixture',
+          '${SPARSE_NAMESPACE}', '{}', '{"discoveryGroup":"history"}',
+          'catalog-correlation-1598', TIMESTAMPTZ '2026-01-01 00:00:00+00'
+          FROM generate_series(1, 50000) AS seed(event_no)
+          RETURNING namespace, id, position, created_at
+      ) INSERT INTO ${indexedTable} (
+        namespace, operation_id, event_id, event_position, created_at
+      ) SELECT namespace, 'catalog-op-1598', id, position, created_at FROM inserted`);
+      // Simulate a fresh observer after the extra completed history: capture a
+      // new fixed watermark, then make the same completed member eligible.
+      const largerHistoryWatermark = await catalog.maxEventPosition({
+        namespace: SPARSE_NAMESPACE,
+      });
+      assert(largerHistoryWatermark);
+      await database.query(`WITH inserted AS (
+        INSERT INTO ${eventsTable} (
+          id, schema_version, type, namespace, payload, metadata, correlation_id, created_at
+        ) VALUES ('discovery-larger-late-progress', 5, 'catalog.fixture',
+          '${SPARSE_NAMESPACE}', '{}', '{}', 'catalog-correlation-1592',
+          TIMESTAMPTZ '2026-03-01 00:00:01+00')
+          RETURNING namespace, id, position, created_at
+      ) INSERT INTO ${indexedTable} (
+        namespace, operation_id, event_id, event_position, created_at
+      ) SELECT namespace, 'catalog-op-1592', id, position, created_at FROM inserted`);
+      for (const relation of [eventsTable, indexedTable]) {
+        await database.query(`ANALYZE ${relation}`);
+      }
+      const largerHistoryQuery = {
+        ...discoveryRun.query,
+        params: [...discoveryRun.query.params],
+      };
+      largerHistoryQuery.params[1] = largerHistoryWatermark;
+      const largerHistoryRows = await database.query(
+        largerHistoryQuery.sql,
+        largerHistoryQuery.params,
+      );
+      assertEquals(
+        largerHistoryRows.rows.map((row) => row.operation_id),
+        discoveryRun.value.map((operation) => operation.operationId),
+      );
+      const largerHistoryPlan = await explain(database, largerHistoryQuery);
+      assertCandidateMembershipPlan(largerHistoryPlan);
+      assertEquals(
+        relationRows(largerHistoryPlan, "events"),
+        discoveryEventRows,
+      );
+      assert(
+        bufferCount(largerHistoryPlan) <= bufferCount(discoveryPlan) * 1.5,
+        "discovery buffers grew with unrelated completed history",
+      );
+      console.log(JSON.stringify({
+        discovery: {
+          fixedWatermark,
+          candidateEventRows: discoveryEventRows,
+          formerEventRows: relationRows(formerPlan, "events"),
+          formerIndexedRows: relationRows(
+            formerPlan,
+            "copilotz_operation_events",
+          ),
+          buffers: bufferCount(discoveryPlan),
+          formerBuffers: bufferCount(formerPlan),
+          explainMs: discoveryPlan["Execution Time"],
+          formerExplainMs: formerPlan["Execution Time"],
+          largerHistoryBuffers: bufferCount(largerHistoryPlan),
+        },
+        eventOnly: {
+          events: relationRows(eventOnlyPlan, "events"),
+          buffers: bufferCount(eventOnlyPlan),
+          explainMs: eventOnlyPlan["Execution Time"],
+        },
+      }));
       console.log(JSON.stringify({
         fixture: { operations: OPERATION_COUNT, events: EVENT_COUNT },
         sparse: {
@@ -497,6 +928,27 @@ Deno.test({
           buffers: bufferCount(membershipPlan),
         },
         capturedQueries: measuredQueries.map((query) => query.scenario),
+        defaultReplay: {
+          buffers: bufferCount(defaultReplayPlan),
+          baselineBuffers: bufferCount(defaultReplayBaselinePlan),
+          explainMs: defaultReplayPlan["Execution Time"],
+          baselineExplainMs: defaultReplayBaselinePlan["Execution Time"],
+        },
+        gateScenarios,
+        denseReplay: {
+          buffers: bufferCount(denseReplayPlan),
+          baselineBuffers: bufferCount(denseBaselinePlan),
+          explainMs: denseReplayPlan["Execution Time"],
+          baselineExplainMs: denseBaselinePlan["Execution Time"],
+        },
+        broadMissing: {
+          buffers: bufferCount(broadMissingPlan),
+          explainMs: broadMissingPlan["Execution Time"],
+        },
+        broadCandidate: {
+          buffers: bufferCount(broadCandidatePlan),
+          explainMs: broadCandidatePlan["Execution Time"],
+        },
         sparsePlanNodes: sparseNodes.length,
         watermarkPlanNodes: watermarkNodes.length,
       }));

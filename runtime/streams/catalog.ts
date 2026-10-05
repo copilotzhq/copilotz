@@ -22,6 +22,9 @@ export const OPERATION_CATALOG_FINGERPRINT = "retained-terminal-streams";
 export const OPERATION_CHANGE_CHANNEL = "copilotz_operations";
 export const DEFAULT_OPERATION_REPLAY_RETENTION_MS = 24 * 60 * 60_000;
 
+// Query work budget, independent of page size or operation membership rules.
+const MAX_CORRELATED_ASSOCIATION_CANDIDATES = 32;
+
 export type OperationChangeSubscription = Readonly<{
   /** True means a notification arrived; false is the bounded safety timeout. */
   wait(
@@ -1069,6 +1072,8 @@ export function createOperationCatalog(
         : eventPosition(input.afterPosition);
       if (operationIds?.length === 0) return [];
       if (afterPosition !== undefined) {
+        // Keep progress eligibility per operation; a hashed alternative can
+        // scan the historical event index just to construct the candidate set.
         params.push(afterPosition);
         conditions.push(`(
           operation.state IN ('accepted','running')
@@ -1077,56 +1082,131 @@ export function createOperationCatalog(
              WHERE progress.namespace = operation.namespace
                AND progress.operation_id = operation.operation_id
                AND progress.event_position > $${params.length}::bigint
+             OFFSET 0
           )
         )`);
       }
-      let associationQuery = "";
-      if (association) {
-        const branches: string[] = [];
-        // Keep the association lookup bounded by operationIds when a caller
-        // asks about a specific operation (membership checks use this path).
+      let query: string;
+      if (association && afterPosition !== undefined && afterPosition !== "0") {
+        const membership: string[] = [];
+        const associated: string[] = [];
+        let operationMetadataCondition: string | undefined;
         if (association.operationMetadata) {
           params.push(association.operationMetadata);
-          branches.push(
-            `SELECT operation.namespace, operation.operation_id
-               FROM ${tables.operations} AS operation
-              WHERE operation.namespace = $1${
-              operationIds
-                ? ` AND operation.operation_id = ANY($2::text[])`
-                : ""
-            } AND operation.metadata @> $${params.length}::jsonb`,
-          );
+          operationMetadataCondition =
+            `operation.metadata @> $${params.length}::jsonb`;
+          membership.push(operationMetadataCondition);
+          associated.push(`SELECT operation.namespace, operation.operation_id
+            FROM candidate AS operation
+            WHERE ${operationMetadataCondition}
+              AND (SELECT broad FROM strategy)`);
         }
         if (association.eventMetadata) {
           params.push(association.eventMetadata);
-          const ids = operationIds
-            ? " AND indexed.operation_id = ANY($2::text[])"
-            : "";
-          branches.push(
-            `SELECT indexed.namespace, indexed.operation_id
-               FROM ${tables.operationEvents} AS indexed
-               JOIN ${tables.events} AS event
-                 ON event.id = indexed.event_id
-                AND event.namespace = indexed.namespace
-              WHERE indexed.namespace = $1${ids}
-                AND event.metadata @> $${params.length}::jsonb`,
-          );
+          const eventMetadataCondition =
+            `event.metadata @> $${params.length}::jsonb`;
+          membership.push(`EXISTS (
+            SELECT 1 FROM ${tables.operationEvents} AS indexed
+            JOIN ${tables.events} AS event
+              ON event.id = indexed.event_id
+             AND event.namespace = indexed.namespace
+            WHERE indexed.namespace = operation.namespace
+              AND indexed.operation_id = operation.operation_id
+              AND ${eventMetadataCondition}
+            OFFSET 0
+          )`);
+          associated.push(`SELECT indexed.namespace, indexed.operation_id
+            FROM candidate AS operation
+            JOIN ${tables.operationEvents} AS indexed
+              ON indexed.namespace = operation.namespace
+             AND indexed.operation_id = operation.operation_id
+            JOIN ${tables.events} AS event
+              ON event.id = indexed.event_id
+             AND event.namespace = indexed.namespace
+            WHERE ${eventMetadataCondition}${
+            operationMetadataCondition
+              ? ` AND NOT (${operationMetadataCondition})`
+              : ""
+          }
+              AND (SELECT broad FROM strategy)`);
         }
-        associationQuery = `WITH associated AS MATERIALIZED (
-          ${branches.join("\n          UNION\n          ")}
-        ) `;
-        conditions.push(
-          `EXISTS (
-             SELECT 1 FROM associated
+        // Eligibility always precedes membership. OFFSET 0 keeps the few-
+        // candidate EXISTS probes correlated instead of hashing all history.
+        const candidateQuery = `WITH candidate AS MATERIALIZED (
+          SELECT operation.* FROM ${tables.operations} AS operation
+          WHERE ${conditions.join(" AND ")}
+        )`;
+        if (association.eventMetadata) {
+          // Old replay watermarks can leave most operations eligible. Cap
+          // per-operation probes even for large pages, then use metadata-index
+          // joins for broader candidates. Both paths share one snapshot; the
+          // strategy gates the unused association path before its scans run.
+          query = `${candidateQuery}, strategy AS MATERIALIZED (
+            SELECT COUNT(*) > ${MAX_CORRELATED_ASSOCIATION_CANDIDATES} AS broad FROM candidate
+          ), associated AS MATERIALIZED (
+            ${associated.join("\n            UNION\n            ")}
+          ) SELECT operation.* FROM candidate AS operation
+            WHERE CASE WHEN (SELECT broad FROM strategy) THEN EXISTS (
+              SELECT 1 FROM associated
               WHERE associated.namespace = operation.namespace
                 AND associated.operation_id = operation.operation_id
-           )`,
-        );
+            ) ELSE (${membership.join(" OR ")}) END`;
+        } else {
+          query =
+            `${candidateQuery} SELECT operation.* FROM candidate AS operation
+            WHERE (${membership.join(" OR ")})`;
+        }
+      } else {
+        // Broad initial/replay lists benefit from metadata indexes across the
+        // catalog instead of probing each eligible operation's event history.
+        let associationQuery = "";
+        if (association) {
+          const branches: string[] = [];
+          if (association.operationMetadata) {
+            params.push(association.operationMetadata);
+            branches.push(
+              `SELECT operation.namespace, operation.operation_id
+                 FROM ${tables.operations} AS operation
+                WHERE operation.namespace = $1${
+                operationIds
+                  ? ` AND operation.operation_id = ANY($2::text[])`
+                  : ""
+              } AND operation.metadata @> $${params.length}::jsonb`,
+            );
+          }
+          if (association.eventMetadata) {
+            params.push(association.eventMetadata);
+            const ids = operationIds
+              ? " AND indexed.operation_id = ANY($2::text[])"
+              : "";
+            branches.push(
+              `SELECT indexed.namespace, indexed.operation_id
+                 FROM ${tables.operationEvents} AS indexed
+                 JOIN ${tables.events} AS event
+                   ON event.id = indexed.event_id
+                  AND event.namespace = indexed.namespace
+                WHERE indexed.namespace = $1${ids}
+                  AND event.metadata @> $${params.length}::jsonb`,
+            );
+          }
+          associationQuery = `WITH associated AS MATERIALIZED (
+            ${branches.join("\n          UNION\n          ")}
+          ) `;
+          conditions.push(
+            `EXISTS (
+               SELECT 1 FROM associated
+                WHERE associated.namespace = operation.namespace
+                  AND associated.operation_id = operation.operation_id
+             )`,
+          );
+        }
+        query =
+          `${associationQuery}SELECT operation.* FROM ${tables.operations} AS operation
+          WHERE ${conditions.join(" AND ")}`;
       }
       params.push(limit);
       const result = await session.query<OperationRow>(
-        `${associationQuery}SELECT operation.* FROM ${tables.operations} AS operation
-          WHERE ${conditions.join(" AND ")}
+        `${query}
           ORDER BY operation.updated_at DESC, operation.operation_id DESC LIMIT $${params.length}`,
         params,
       );

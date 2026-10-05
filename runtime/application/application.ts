@@ -176,7 +176,7 @@ async function waitForApplicationScope(
 ): Promise<void> {
   while (true) {
     if (signal.aborted) throw signal.reason;
-    const settlement = await eventScope.events.settlement(
+    const settlement = await eventScope.events.outstanding(
       namespace,
       settlementScopeId,
     );
@@ -200,7 +200,7 @@ async function waitForApplicationScope(
       // The two checks read different tables and neither needs the other, so
       // they share a round trip.
       const [confirmed, streamsOpen] = await Promise.all([
-        eventScope.events.settlement(namespace, settlementScopeId),
+        eventScope.events.outstanding(namespace, settlementScopeId),
         eventScope.operations.hasOpenStreams(namespace, settlementScopeId),
       ]);
       if (confirmed.deadLetters > 0) {
@@ -218,7 +218,9 @@ async function waitForApplicationScope(
       namespace,
       settlementScopeId,
     }, signal);
-    if (!progressed) await sleep(25, signal);
+    // Remote-only work has no local task wake: poll at 250ms. This adds a
+    // nominal 225ms of fallback detection delay versus the old 25ms.
+    if (!progressed) await sleep(250, signal);
   }
 }
 
@@ -658,7 +660,7 @@ export async function createCopilotzApplication(
     );
     if (!record) return null;
     if (record.state === "accepted" || record.state === "running") {
-      let settlement = await boundary.scope.events.settlement(
+      let settlement = await boundary.scope.events.outstanding(
         boundary.namespace,
         boundary.operationId,
       );
@@ -671,7 +673,7 @@ export async function createCopilotzApplication(
           namespace: boundary.namespace,
           settlementScopeId: boundary.operationId,
         });
-        settlement = await boundary.scope.events.settlement(
+        settlement = await boundary.scope.events.outstanding(
           boundary.namespace,
           boundary.operationId,
         );

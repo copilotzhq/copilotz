@@ -26,16 +26,19 @@ type Fixture = {
   store: EventStore;
 };
 
-async function createFixture(): Promise<Fixture> {
-  const db = await createTestDatabase({ url: ":memory:" });
+async function createFixture(
+  url = ":memory:",
+  schema = TEST_SCHEMA,
+): Promise<Fixture> {
+  const db = await createTestDatabase({ url });
   const session = createSqlSession(db);
-  await provisionCopilotzSchema(session, TEST_SCHEMA);
+  await provisionCopilotzSchema(session, schema);
   return {
     db,
     session,
     store: createEventStore({
       session,
-      schema: TEST_SCHEMA,
+      schema,
       random: () => 0,
     }),
   };
@@ -844,6 +847,219 @@ Deno.test("A23 settlement and cancellation follow explicit scope, not shared cor
     );
   } finally {
     await closeFixture(fixture);
+  }
+});
+
+Deno.test("internal scope counts preserve every status, expired leases and namespace isolation", async () => {
+  const fixture = await createFixture();
+  const { store, session } = fixture;
+  try {
+    const scope = "shared-explicit-scope";
+    const consumers = [
+      "pending",
+      "leased",
+      "retry_wait",
+      "dead_letter",
+      "cancelled",
+      "succeeded",
+      "expired",
+      "exhausted",
+    ];
+    for (const namespace of ["tenant-a", "tenant-b"]) {
+      await store.append({
+        type: "scope.fixture",
+        namespace,
+        settlementScopeId: scope,
+        payload: {},
+      }, consumers);
+    }
+    // Set all states together so no earlier claim/recovery call terminalizes
+    // the exhausted lease before the completion query's snapshot sees it.
+    await session.query(
+      `UPDATE ${store.tables.event_deliveries}
+       SET status = CASE WHEN consumer_id IN ('expired', 'exhausted')
+                     THEN 'leased' ELSE consumer_id END,
+           attempts = CASE WHEN consumer_id = 'exhausted' THEN 3 ELSE 1 END,
+           lease_owner = CASE WHEN consumer_id IN ('leased', 'expired', 'exhausted')
+                          THEN 'gone-worker' END,
+           lease_expires_at = CASE WHEN consumer_id = 'leased'
+                               THEN NOW() + INTERVAL '1 hour'
+                               WHEN consumer_id IN ('expired', 'exhausted')
+                               THEN NOW() - INTERVAL '1 hour' END
+       WHERE settlement_scope_id = $1`,
+      [scope],
+    );
+    assertEquals(await store.scopeOutstanding("tenant-a", scope), {
+      unsettled: 4,
+      deadLetters: 2,
+      cancelled: 1,
+    });
+    // The existing query also recovers exhausted leases outside this namespace.
+    const deliveries = await store.listDeliveries({ namespace: "tenant-b" });
+    const exhausted = deliveries.find((delivery) =>
+      delivery.consumerId === "exhausted"
+    );
+    assertEquals(exhausted?.status, "dead_letter");
+    assertEquals(exhausted?.leaseOwner, undefined);
+    assertEquals(exhausted?.leaseExpiresAt, undefined);
+    assertExists(exhausted?.settledAt);
+    assertEquals(exhausted?.lastError?.name, "DeliveryLeaseExpired");
+    assertEquals(
+      deliveries.find((delivery) => delivery.consumerId === "expired")?.status,
+      "leased",
+    );
+    assertEquals(await store.scopeOutstanding("tenant-b", scope), {
+      unsettled: 4,
+      deadLetters: 2,
+      cancelled: 1,
+    });
+    assertEquals(await store.scopeSettlement("tenant-a", scope), {
+      unsettled: 4,
+      deadLetters: 2,
+      cancelled: 1,
+      succeeded: 1,
+    });
+    assertEquals(await store.scopeOutstanding("tenant-missing", scope), {
+      unsettled: 0,
+      deadLetters: 0,
+      cancelled: 0,
+    });
+    assertEquals(await store.scopeOutstanding("tenant-a", "missing-scope"), {
+      unsettled: 0,
+      deadLetters: 0,
+      cancelled: 0,
+    });
+  } finally {
+    await closeFixture(fixture);
+  }
+});
+
+Deno.test("internal scope check reads only non-success rows as successful history grows", async () => {
+  const postgresUrl = Deno.env.get("COPILOTZ_TEST_POSTGRES_URL")?.trim();
+  const schema = postgresUrl
+    ? `copilotz_scope_scale_${crypto.randomUUID().replaceAll("-", "")}`
+    : TEST_SCHEMA;
+  const fixture = await createFixture(postgresUrl || ":memory:", schema);
+  const captured: { sql: string; params: unknown[] }[] = [];
+  const instrumented: SqlSession = {
+    ...fixture.session,
+    async query<TRow extends Record<string, unknown>>(
+      sql: string,
+      params?: unknown[],
+    ) {
+      captured.push({ sql, params: [...(params ?? [])] });
+      return await fixture.session.query<TRow>(sql, params);
+    },
+  };
+  const store = createEventStore({
+    session: instrumented,
+    schema,
+  });
+  try {
+    const scope = "history-scope";
+    await store.append({
+      type: "history.fixture",
+      namespace: "tenant-a",
+      settlementScopeId: scope,
+      payload: {},
+    }, ["active"]);
+    await store.append({
+      type: "history.fixture",
+      namespace: "tenant-b",
+      settlementScopeId: scope,
+      payload: {},
+    }, ["other-active"]);
+    let previousCount = 0;
+    for (const count of [1_000, 10_000]) {
+      await fixture.session.query(
+        `INSERT INTO ${store.tables.events} (id, schema_version, type, namespace, payload, correlation_id)
+         SELECT 'history-event-' || n, 5, 'history.fixture', 'tenant-a', '{}', 'history-correlation'
+         FROM generate_series($1::integer, $2::integer) AS fixture(n)`,
+        [previousCount + 1, count],
+      );
+      await fixture.session.query(
+        `INSERT INTO ${store.tables.event_deliveries} (id, event_id, consumer_id, settlement_scope_id, status)
+         SELECT 'history-delivery-' || n, 'history-event-' || n, 'worker', $3, 'succeeded'
+         FROM generate_series($1::integer, $2::integer) AS fixture(n)`,
+        [previousCount + 1, count, scope],
+      );
+      await fixture.session.query(`ANALYZE ${store.tables.events}`);
+      await fixture.session.query(`ANALYZE ${store.tables.event_deliveries}`);
+      captured.length = 0;
+      assertEquals(await store.scopeOutstanding("tenant-a", scope), {
+        unsettled: 1,
+        deadLetters: 0,
+        cancelled: 0,
+      });
+      assertEquals(
+        captured.length,
+        1,
+        "one completion check is one SQL statement",
+      );
+      const query = captured[0];
+      type Plan = Record<string, unknown> & { Plans?: Plan[] };
+      const explained = await fixture.session.query<
+        { "QUERY PLAN": { Plan: Plan }[] }
+      >(
+        `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ${query.sql}`,
+        query.params,
+      );
+      const root = explained.rows[0]["QUERY PLAN"][0].Plan;
+      const scans: Plan[] = [];
+      const visit = (plan: Plan) => {
+        if (
+          plan["Relation Name"] === "event_deliveries" &&
+          String(plan["Node Type"]).includes("Scan")
+        ) scans.push(plan);
+        plan.Plans?.forEach(visit);
+      };
+      visit(root);
+      assert(scans.length > 0, "EXPLAIN should report delivery access");
+      for (const scan of scans) {
+        assert(
+          scan["Node Type"] !== "Seq Scan",
+          "successful history must not be sequentially scanned",
+        );
+        assert(
+          Number(scan["Actual Rows"]) <= 2,
+          "only the two namespaces' non-success rows reach delivery scans",
+        );
+        assert(
+          Number(scan["Rows Removed by Filter"] ?? 0) <= 2,
+          "successful rows must be skipped by the index",
+        );
+      }
+      const scopedScan = scans.find((scan) =>
+        scan["Index Name"] === "deliveries_settlement_scope_idx"
+      );
+      assertExists(
+        scopedScan,
+        "the existing (scope, status) index should bound settlement work",
+      );
+      assertEquals(scopedScan["Actual Rows"], 2);
+      console.log(JSON.stringify({
+        successfulHistory: count,
+        statements: captured.length,
+        deliveryRows: scans.map((scan) => scan["Actual Rows"]),
+        sharedHitBlocks: root["Shared Hit Blocks"],
+        sharedReadBlocks: root["Shared Read Blocks"],
+      }));
+      assertEquals(await store.scopeSettlement("tenant-a", scope), {
+        unsettled: 1,
+        deadLetters: 0,
+        cancelled: 0,
+        succeeded: count,
+      });
+      previousCount = count;
+    }
+  } finally {
+    try {
+      if (postgresUrl) {
+        await fixture.session.query(`DROP SCHEMA "${schema}" CASCADE`);
+      }
+    } finally {
+      await closeFixture(fixture);
+    }
   }
 });
 

@@ -11,6 +11,7 @@ import {
   type AgentAskPhase,
   agentAskResultMetadata,
   agentFailureMetadata,
+  coreAgentTurnMetadata,
   coreToolActionMessageMetadata,
   coreToolPlanMetadata,
   coreToolPlanResultMetadata,
@@ -142,6 +143,9 @@ function userTurn(message: ConversationMessage): LlmMessage {
   const name = senderName(message);
   return {
     role: "user",
+    ...(coreAgentTurnMetadata(message.metadata)?.history === "scope"
+      ? { metadata: { preserveWireBoundary: true } }
+      : {}),
     content: structuredClone(message.content),
     ...(name ? { name } : {}),
   };

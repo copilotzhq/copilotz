@@ -1,3 +1,7 @@
+import {
+  agentTurnSourceDigest,
+  resolveAgentTurnSource,
+} from "../../shared/agent-turn-source.ts";
 import { collectContextContributions } from "../../shared/contributions.ts";
 import { coreEvent } from "../../shared/events/index.ts";
 /** Routes canonical Messages into agent LLM calls. @module */
@@ -307,7 +311,37 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
                       `Message '${record.id}' sender was not found.`,
                     );
                   }
-                  const source = agentTurn?.sourceHistory;
+                  const scopedSnapshot = agentTurn?.sourceHistoryRef
+                    ? await loadCoreThreadMessageSnapshot(
+                      { collections } as typeof context,
+                      String(record.threadId),
+                      record,
+                      {
+                        historyScopeId: agentTurn.id,
+                        internalOnly: true,
+                        viewerIds: [recipientId],
+                      },
+                    )
+                    : undefined;
+                  const source = agentTurn
+                    ? await resolveAgentTurnSource(
+                      agentTurn,
+                      scopedSnapshot?.records ?? [],
+                      {
+                        namespace: context.namespace,
+                        threadId: String(record.threadId),
+                        participantId: recipientId,
+                      },
+                    )
+                    : undefined;
+                  const sourceRef = agentTurn?.sourceHistory
+                    ? {
+                      messageId: String(record.id),
+                      digest: await agentTurnSourceDigest(
+                        agentTurn.sourceHistory,
+                      ),
+                    }
+                    : agentTurn?.sourceHistoryRef;
                   if (
                     source &&
                     source.branch !==
@@ -320,7 +354,7 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
                     );
                   }
                   if (
-                    source && (agentTurn.ownerParticipantId !== recipientId ||
+                    source && (agentTurn?.ownerParticipantId !== recipientId ||
                       source.messages.some((message) =>
                         message.threadId !== String(record.threadId) ||
                         message.namespace !== context.namespace
@@ -370,30 +404,49 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
                   )
                     .filter((id): id is string => Boolean(id)).at(-1);
                   const historyPolicy = resolved?.agent.history;
-                  const snapshot = await loadCoreThreadMessageSnapshot(
-                    { collections } as typeof context,
-                    String(record.threadId),
-                    record,
-                    {
-                      ...(agentTurn
-                        ? {
-                          historyScopeId: agentTurn.id,
-                          internalOnly: agentTurn.history === "scope",
-                        }
-                        : {}),
-                      viewerIds: [recipientId],
-                      ...(afterMessageId ? { afterMessageId } : {}),
-                      ...(historyPolicy
-                        ? {
-                          createdAtOrAfter: historyStart(
-                            record.createdAt,
-                            historyPolicy.maxAgeMs,
-                          ),
-                        }
-                        : {}),
-                    },
-                  );
-                  return { snapshot, contributions, resolved };
+                  const scopedStart = historyPolicy
+                    ? historyStart(record.createdAt, historyPolicy.maxAgeMs)
+                    : undefined;
+                  const snapshot = scopedSnapshot
+                    ? {
+                      ...scopedSnapshot,
+                      records: scopedSnapshot.records.filter((item) =>
+                        !scopedStart || String(item.createdAt) >= scopedStart
+                      ),
+                      messages: scopedSnapshot.messages.filter((item) =>
+                        !scopedStart || item.createdAt >= scopedStart
+                      ),
+                    }
+                    : await loadCoreThreadMessageSnapshot(
+                      { collections } as typeof context,
+                      String(record.threadId),
+                      record,
+                      {
+                        ...(agentTurn
+                          ? {
+                            historyScopeId: agentTurn.id,
+                            internalOnly: agentTurn.history === "scope",
+                          }
+                          : {}),
+                        viewerIds: [recipientId],
+                        ...(afterMessageId ? { afterMessageId } : {}),
+                        ...(historyPolicy
+                          ? {
+                            createdAtOrAfter: historyStart(
+                              record.createdAt,
+                              historyPolicy.maxAgeMs,
+                            ),
+                          }
+                          : {}),
+                      },
+                    );
+                  return {
+                    snapshot,
+                    contributions,
+                    resolved,
+                    source,
+                    sourceRef,
+                  };
                 },
               );
               const snapshot = captured.snapshot;
@@ -491,6 +544,9 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
                 });
               };
               let request;
+              let preparedHistory:
+                readonly import("../../shared/agents/transcript.ts").LlmTranscriptEntry[] =
+                  [];
               try {
                 request = await buildCoreLlmRequest(context, {
                   agent: resolved.agent,
@@ -498,18 +554,21 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
                   thread: snapshot.thread,
                   ...(agentTurn ? { historyScopeId: agentTurn.id } : {}),
                   history: [
-                    ...(agentTurn?.sourceHistory?.messages ?? []),
+                    ...(captured.source?.messages ?? []),
                     ...snapshot.messages,
                   ],
                   messageIds: [
-                    ...(agentTurn?.sourceHistory?.messages.map((message) =>
+                    ...(captured.source?.messages.map((message) =>
                       message.id
                     ) ?? []),
                     ...snapshot.records.map((item) => String(item.id)),
                   ],
-                  ...(agentTurn?.sourceHistory
-                    ? { frozenContributions: agentTurn.sourceHistory.context }
+                  ...(captured.source
+                    ? { frozenContributions: captured.source.context }
                     : {}),
+                  onHistoryPrepared: (transcript) => {
+                    preparedHistory = transcript;
+                  },
                   tools: availableTools,
                   contributions: captured.contributions,
                   ...(hasCompaction && limit
@@ -572,7 +631,16 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
                   }
                   : {}),
                 ...(ask ? { ask: structuredClone(ask) } : {}),
-                ...(agentTurn ? { agentTurn: structuredClone(agentTurn) } : {}),
+                ...(agentTurn
+                  ? {
+                    agentTurn: agentTurn.sourceHistory
+                      ? (({ sourceHistory: _source, ...turn }) => ({
+                        ...turn,
+                        sourceHistoryRef: captured.sourceRef,
+                      }))(agentTurn)
+                      : structuredClone(agentTurn),
+                  }
+                  : {}),
                 ...(resolved.revision
                   ? { instructionRevision: resolved.revision }
                   : {}),
@@ -621,6 +689,36 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
                 );
                 continue;
               }
+              if (!agentTurn) {
+                for (
+                  const resource of Object.values(
+                    context.resources.promptContext ?? {},
+                  )
+                ) {
+                  if (
+                    !isContextResource(resource) || !resource.onHistoryPrepared
+                  ) continue;
+                  await resource.onHistoryPrepared({
+                    context,
+                    collections: context.collections,
+                    purpose: "conversation",
+                    agent: resolved.agent,
+                    participant: mapParticipantRecord(participant),
+                    thread: snapshot.thread,
+                    signal: context.signal,
+                    idempotencyKey: `history:${continuationKey}:${
+                      afterMessageId ?? "initial"
+                    }`,
+                    trigger: record,
+                    history: snapshot.messages,
+                    transcript: preparedHistory,
+                    ...(afterMessageId
+                      ? { historyAfterMessageId: afterMessageId }
+                      : {}),
+                    ...(limit ? { limitEstimatedTokens: limit } : {}),
+                  });
+                }
+              }
               return {
                 input: {
                   ...callInput,
@@ -639,7 +737,10 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
             signal: context.signal,
           });
         } catch (error) {
-          if (agentTurn?.sourceHistory && !isSettledActionError(error)) {
+          if (
+            (agentTurn?.sourceHistory || agentTurn?.sourceHistoryRef) &&
+            !isSettledActionError(error)
+          ) {
             let settled = false;
             for (
               const resource of Object.values(

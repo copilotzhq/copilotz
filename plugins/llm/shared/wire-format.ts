@@ -79,7 +79,8 @@ export function formatMessagesDetailed(
   }
 
   // Collapse consecutive messages with the same role so provider history
-  // alternates assistant/user turns (system messages stay separate).
+  // alternates assistant/user turns. Explicit private-task boundaries preserve
+  // the exact cached prefix; system messages also stay separate.
   const finalMessages = mergeConsecutiveMessages(normalizedMessages);
   assertWireMessageInvariants(finalMessages);
   const estimate = estimateChatMessages(
@@ -415,6 +416,7 @@ function mergeConsecutiveMessages(
       previous.role !== "system" &&
       message.role !== "system" &&
       previous.role === message.role &&
+      message.metadata?.preserveWireBoundary !== true &&
       (!Array.isArray(previous.toolCalls) || previous.toolCalls.length === 0) &&
       (!Array.isArray(message.toolCalls) || message.toolCalls.length === 0) &&
       !hasNativeReasoning(previous) &&
@@ -456,7 +458,8 @@ function assertWireMessageInvariants(
       // Opaque state is bound to one complete assistant turn. It cannot be
       // merged into a neighbor merely to restore role alternation.
       !hasNativeReasoning(messages[index - 1]!) &&
-      !hasNativeReasoning(message)
+      !hasNativeReasoning(message) &&
+      message.metadata?.preserveWireBoundary !== true
     ) {
       throw new LLMTranscriptError(
         `Invalid provider transcript: consecutive ${message.role} turns were not coalesced`,

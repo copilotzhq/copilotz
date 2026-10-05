@@ -84,6 +84,17 @@ export async function projectedSourceMessages(
     participantId: input.participantId,
     history: input.messages,
   }, input.byteLimit === undefined ? {} : { byteLimit: input.byteLimit });
+  return sourceMessagesFromTranscript(context, input, prepared);
+}
+
+export function sourceMessagesFromTranscript(
+  context: Pick<MemoryProcessorContext, "resources">,
+  input: Readonly<{
+    messages: readonly ConversationMessage[];
+    model?: NonNullable<AgentResource["models"]["generate"]>[number];
+  }>,
+  prepared: readonly import("@copilotz/copilotz/core").LlmTranscriptEntry[],
+): readonly MemorySourceMessage[] {
   const positions = new Map(input.messages.map((message, index) => [
     message.id,
     index,

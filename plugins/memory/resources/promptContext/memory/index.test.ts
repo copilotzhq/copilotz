@@ -238,3 +238,27 @@ Deno.test("memory settles preparation failure only for its authenticated private
   );
   assertEquals(updates.length, 1);
 });
+
+Deno.test("prepared history below the threshold performs no collection or content access", async () => {
+  const unavailable = new Proxy({}, {
+    get() {
+      throw new Error("unexpected persistence access");
+    },
+  });
+  await memoryContextResource.onHistoryPrepared!({
+    context: {
+      resources: { memory: { config: { triggerEstimatedTokens: 120_000 } } },
+      collections: unavailable,
+      content: unavailable,
+    },
+    agent: { models: { generate: [{ connection: "test", model: "test" }] } },
+    history: [],
+    transcript: [{
+      sourceId: "human",
+      message: {
+        role: "user",
+        content: [{ kind: "text", value: "A short ordinary turn." }],
+      },
+    }],
+  } as never);
+});

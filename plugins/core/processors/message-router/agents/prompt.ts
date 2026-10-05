@@ -233,6 +233,10 @@ export async function buildCoreLlmRequest(
     tools: readonly CoreToolEntry[];
     contributions?: readonly CollectedContextContribution[];
     historyByteLimit?: number;
+    onHistoryPrepared?: (
+      transcript:
+        readonly import("../../../shared/agents/transcript.ts").LlmTranscriptEntry[],
+    ) => void;
     frozenContributions?:
       readonly import("../../../shared/types.ts").FrozenContextContribution[];
   }>,
@@ -271,6 +275,7 @@ export async function buildCoreLlmRequest(
     contributions.map((item) => item.content),
     { byteLimit: input.historyByteLimit },
   );
+  input.onHistoryPrepared?.(prepared.transcript);
   const rendered: readonly RenderedContext[] = contributions.map((
     item,
     index,

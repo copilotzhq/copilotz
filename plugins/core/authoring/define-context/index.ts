@@ -33,6 +33,9 @@ export function defineContextResource(
     ...(resource.onTurnPreparationError
       ? { onTurnPreparationError: resource.onTurnPreparationError }
       : {}),
+    ...(resource.onHistoryPrepared
+      ? { onHistoryPrepared: resource.onHistoryPrepared }
+      : {}),
     ...(resource.compact ? { compact: resource.compact } : {}),
   } as const);
 }

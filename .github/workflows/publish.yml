@@ -1,12 +1,9 @@
 name: Validate and Publish
 
 on:
-  pull_request:
-    branches: [main]
   push:
-    branches: [main, "release/**"]
+    branches: [main]
     tags: ["v*"]
-  workflow_dispatch:
 
 concurrency:
   group: copilotz-${{ github.workflow }}-${{ github.ref }}
@@ -17,6 +14,7 @@ permissions:
 
 jobs:
   deno-postgres:
+    if: github.ref == 'refs/heads/main'
     name: Deno, PGlite, and PostgreSQL
     runs-on: ubuntu-latest
     services:
@@ -48,6 +46,7 @@ jobs:
         run: deno task test
 
   runtimes:
+    if: github.ref == 'refs/heads/main'
     name: Deno, Node, Bun, and browser isolate
     runs-on: ubuntu-latest
     steps:
@@ -72,6 +71,7 @@ jobs:
       - run: deno task smoke:browser
 
   cloudflare:
+    if: github.ref == 'refs/heads/main'
     name: Cloudflare Worker isolate and dry run
     runs-on: ubuntu-latest
     steps:
@@ -90,6 +90,7 @@ jobs:
       - run: deno task smoke:cloudflare-build
 
   package:
+    if: github.ref == 'refs/heads/main'
     name: Formatting and JSR dry run
     runs-on: ubuntu-latest
     steps:
@@ -104,11 +105,12 @@ jobs:
 
   publish:
     name: Publish to JSR
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    if: always() && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     needs: [deno-postgres, runtimes, cloudflare, package]
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      actions: read
       id-token: write
     steps:
       - uses: actions/checkout@v6
@@ -119,4 +121,11 @@ jobs:
         run: >-
           deno run --allow-read=deno.json scripts/validate_publish_release.ts
           "${{ github.ref_name }}" "${{ github.ref }}"
+      - name: Require successful checks for this exact main revision
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/publish.yml/runs?head_sha=${GITHUB_SHA}&event=push&per_page=100" \
+            | jq --exit-status --arg sha "$GITHUB_SHA" \
+              'any(.workflow_runs[]; .head_sha == $sha and .head_branch == "main" and .status == "completed" and .conclusion == "success")'
       - run: deno publish

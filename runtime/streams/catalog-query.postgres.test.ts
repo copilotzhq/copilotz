@@ -566,11 +566,14 @@ Deno.test({
         defaultReplayBaseline.query,
       );
       const defaultReplayPlan = await explain(database, defaultReplay.query);
-      console.log(
-        JSON.stringify({
-          defaultReplayPlan,
-          defaultReplayBaselineBuffers: bufferCount(defaultReplayBaselinePlan),
-        }),
+      assert(
+        hasIndex(defaultReplayPlan, "events_metadata_idx"),
+        "positive old replay should keep sparse metadata-index access",
+      );
+      assert(
+        bufferCount(defaultReplayPlan) <=
+          bufferCount(defaultReplayBaselinePlan) * 2,
+        "default-page old replay regressed compared to metadata-index discovery",
       );
 
       const denseReplay = await captureScenario(

@@ -1,4 +1,4 @@
-## Unreleased
+## 0.83.4 — 2026-10-05
 
 ### Improved
 

@@ -11,8 +11,8 @@
   fallback case.
 - Enumerate new operation streams incrementally and coalesce observer catalog
   checks while continuing to notify progressive byte readers.
-- Resolve a stream's source Action through a scoped invocation lookup rather than
-  fetching historical Events individually.
+- Resolve a stream's source Action through a scoped invocation lookup rather
+  than fetching historical Events individually.
 
 ## 0.83.3 — 2026-10-05
 

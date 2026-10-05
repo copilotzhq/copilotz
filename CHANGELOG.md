@@ -1,3 +1,12 @@
+## 0.83.3 — 2026-10-05
+
+### Fixed
+
+- Prepare consolidation turns whose frozen source metadata exceeds the 1 MiB SQL
+  predicate budget. Verify metadata against the existing batch read before
+  opening content, preserving snapshot validation, query counts and the normal
+  provider input prefix.
+
 ## 0.83.2 — 2026-10-04
 
 ### Fixed

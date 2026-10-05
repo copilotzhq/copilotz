@@ -92,10 +92,6 @@ function snapshotFilter(
                   field: "content",
                   jsonEquals: contentReferences(snapshot.content),
                 },
-                {
-                  field: "metadata",
-                  jsonEquals: snapshotMetadata(snapshot.metadata),
-                },
                 optionalSnapshotFilter(snapshot, "visibility"),
                 optionalSnapshotFilter(snapshot, "revision"),
               ],
@@ -153,6 +149,28 @@ function snapshotMetadata(value: unknown): unknown {
           : llmNativeReasoning,
       }),
     };
+}
+
+/** Compare persisted JSON without serializing a large frozen history again. */
+function sameMetadata(left: unknown, right: unknown): boolean {
+  if (left === right) return true;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return Array.isArray(left) && Array.isArray(right) &&
+      left.length === right.length &&
+      left.every((value, index) => sameMetadata(value, right[index]));
+  }
+  if (
+    !left || typeof left !== "object" || !right || typeof right !== "object"
+  ) {
+    return false;
+  }
+  const before = left as Record<string, unknown>;
+  const after = right as Record<string, unknown>;
+  const keys = Object.keys(before);
+  return keys.length === Object.keys(after).length &&
+    keys.every((key) =>
+      Object.hasOwn(after, key) && sameMetadata(before[key], after[key])
+    );
 }
 
 function optionalSnapshotFilter(
@@ -236,7 +254,19 @@ async function loadStored(
     if (records.length !== batchIds.length) {
       throw new Error("Message history is no longer available.");
     }
-    for (const record of records) stored.set(record.id, record);
+    for (const record of records) {
+      const snapshot = snapshots.get(record.id);
+      // Metadata is already returned by the same indexed batch read. Private
+      // turns can hold more than 1 MiB of frozen source here, beyond the SQL
+      // jsonEquals budget. Verify it locally before any Asset or Body opens.
+      if (
+        !snapshot ||
+        !sameMetadata(record.metadata, snapshotMetadata(snapshot.metadata))
+      ) {
+        throw new Error("Message history is no longer available.");
+      }
+      stored.set(record.id, record);
+    }
   }
   return stored;
 }

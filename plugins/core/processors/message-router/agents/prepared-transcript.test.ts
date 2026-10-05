@@ -588,7 +588,7 @@ Deno.test("Core resolves own native reasoning, leaves peer state unread, and cou
   }
 });
 
-Deno.test("Core rejects a changed content or visibility snapshot before opening asset bodies", async () => {
+Deno.test("Core rejects changed content, metadata, visibility or revision before opening asset bodies", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   const session = createSqlSession(db);
   const assets = createMemoryAssetRepository();
@@ -635,18 +635,17 @@ Deno.test("Core rejects a changed content or visibility snapshot before opening 
       "INSERT INTO changed_nodes VALUES ('message','tenant','message',$1::jsonb,$2::timestamptz,$2::timestamptz,'')",
       [JSON.stringify(record), date],
     );
-    let mutated = false;
+    let mutation: Readonly<{ field: string; value: unknown }>;
     const queries: CollectionQuery[] = [];
     const list = createResolvedCollectionReader(
       async (query: CollectionQuery) => {
         queries.push(query);
-        if (!mutated) {
-          mutated = true;
-          await session.query(
-            "UPDATE changed_nodes SET data = jsonb_set(jsonb_set(data, '{content}', $1::jsonb), '{visibility}', $2::jsonb)",
-            [JSON.stringify([changed]), JSON.stringify({ kind: "internal" })],
-          );
-        }
+        // Keep timestamps unchanged: full snapshot checks must catch changes
+        // even when version timestamps alone cannot distinguish the records.
+        await session.query(
+          "UPDATE changed_nodes SET data = $1::jsonb",
+          [JSON.stringify({ ...record, [mutation.field]: mutation.value })],
+        );
         return await queryCollectionRecords(
           session,
           { nodes: "changed_nodes", edges: "unused" },
@@ -675,16 +674,27 @@ Deno.test("Core rejects a changed content or visibility snapshot before opening 
     const context = {
       collections: { message: { list } as unknown as ScopedCollection },
     } as unknown as CoreProcessorContext;
-    await assertRejects(
-      () =>
-        prepareLlmTranscript(context, {
-          threadId: "thread",
-          participantId: "north",
-          history,
-        }),
-      Error,
-      "no longer available",
-    );
+    for (
+      mutation of [
+        { field: "content", value: [changed] },
+        { field: "metadata", value: { changed: true } },
+        { field: "visibility", value: { kind: "internal" } },
+        { field: "revision", value: { index: 1 } },
+      ]
+    ) {
+      queries.length = 0;
+      await assertRejects(
+        () =>
+          prepareLlmTranscript(context, {
+            threadId: "thread",
+            participantId: "north",
+            history,
+          }),
+        Error,
+        "no longer available",
+      );
+      assertEquals(queries.length, 1);
+    }
     assertEquals(readIds, []);
     assertEquals(queries.length, 1);
     const predicate = queries[0].filter as CollectionPredicate;
@@ -857,7 +867,7 @@ Deno.test("transcript preparation reads storage once per batch, sizes once, and 
           };
           const wanted = new Set(filter.and[0].in);
           return Promise.resolve(
-            records.filter((record) => wanted.has(record.id)),
+            structuredClone(records.filter((record) => wanted.has(record.id))),
           );
         },
       } as unknown as ScopedCollection,

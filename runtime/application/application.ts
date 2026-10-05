@@ -85,9 +85,9 @@ async function listAllOperationStreams(
   catalog: OperationCatalog,
   namespace: string,
   operationId: string,
+  afterStreamOrdinal?: string,
 ): Promise<readonly OperationStreamRecord[]> {
   const result: OperationStreamRecord[] = [];
-  let afterStreamOrdinal: string | undefined;
   while (true) {
     const page = await catalog.listStreams({
       namespace,
@@ -105,11 +105,15 @@ async function listAllOperationStreams(
 function sleep(ms: number, signal: AbortSignal): Promise<void> {
   if (signal.aborted) return Promise.reject(signal.reason);
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(resolve, ms);
-    signal.addEventListener("abort", () => {
+    const onAbort = () => {
       clearTimeout(timer);
       reject(signal.reason);
-    }, { once: true });
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal.addEventListener("abort", onAbort, { once: true });
   });
 }
 
@@ -848,6 +852,8 @@ export async function createCopilotzApplication(
         initial.eventPosition;
     const replayTracker = createOperationReplayCursorTracker(initial);
     const openedStreams = new Set<string>();
+    let examinedStreamOrdinal: string | undefined;
+    let iterationStarted: number | undefined;
     const payloadDetachers = new Set<(reason?: unknown) => void>();
     const abort = new AbortController();
     let outputController:
@@ -990,13 +996,25 @@ export async function createCopilotzApplication(
         void (async () => {
           try {
             while (!abort.signal.aborted) {
+              if (iterationStarted !== undefined) {
+                let remaining = 250 - (performance.now() - iterationStarted);
+                while (remaining > 0) {
+                  await sleep(remaining, abort.signal);
+                  remaining = 250 - (performance.now() - iterationStarted);
+                }
+              }
+              iterationStarted = performance.now();
               let advanced = false;
               const streams = await listAllOperationStreams(
                 boundary.scope.operations,
                 boundary.namespace,
                 boundary.operationId,
+                examinedStreamOrdinal,
               );
               for (const stream of streams) {
+                // Ordinals are allocated under the operation row lock. Advance
+                // even for consumed/skipped lanes so historic rows stay skipped.
+                examinedStreamOrdinal = stream.streamOrdinal;
                 if (openedStreams.has(stream.streamId)) {
                   continue;
                 }

@@ -164,6 +164,20 @@ export type OperationCatalog = Readonly<{
       limit?: number;
     }>,
   ): Promise<readonly Readonly<{ eventId: string; position: string }>[]>;
+  /**
+   * Finds an event in the operation by opaque subject/type coordinates. An
+   * optional authoritative deduplication identity is preferred; the earliest
+   * scoped match is the fallback for events without that identity.
+   */
+  findEventId(
+    input: Readonly<{
+      namespace: string;
+      operationId: string;
+      subjectId: string;
+      typeSuffix: string;
+      deduplicationId?: string;
+    }>,
+  ): Promise<string | undefined>;
   openStream(
     input: Readonly<{
       namespace: string;
@@ -1215,6 +1229,51 @@ export function createOperationCatalog(
         eventId: String(row.event_id),
         position: String(row.event_position),
       } as const)));
+    },
+    async findEventId(input) {
+      const namespace = requiredText(input.namespace, "Operation namespace");
+      const operationId = requiredText(input.operationId, "Operation id");
+      const subjectId = requiredText(input.subjectId, "Event subject id");
+      const typeSuffix = requiredText(input.typeSuffix, "Event type suffix");
+      const params: unknown[] = [namespace, operationId, subjectId, typeSuffix];
+      const scopedMatch = `indexed.namespace = $1 AND indexed.operation_id = $2
+          AND event.namespace = indexed.namespace
+          AND event.subject_id = $3
+          AND right(event.type, length($4::text)) = $4`;
+      // LIMIT in the correlated lookup keeps the fallback driven by this
+      // operation's index, rather than scanning namespace-wide event history.
+      const fallback = (preferred: boolean) =>
+        `SELECT indexed.event_id
+          FROM ${tables.operationEvents} AS indexed
+          JOIN LATERAL (
+            SELECT event.id FROM ${tables.events} AS event
+             WHERE event.id = indexed.event_id AND event.namespace = $1
+               AND event.subject_id = $3
+               AND right(event.type, length($4::text)) = $4
+             LIMIT 1
+          ) AS matching ON TRUE
+         WHERE indexed.namespace = $1 AND indexed.operation_id = $2
+           ${preferred ? "AND NOT EXISTS (SELECT 1 FROM preferred)" : ""}
+         ORDER BY indexed.event_position LIMIT 1`;
+      const deduplicationId = input.deduplicationId === undefined
+        ? undefined
+        : requiredText(input.deduplicationId, "Event deduplication id");
+      const query = deduplicationId === undefined ? fallback(false) : `
+        WITH preferred AS MATERIALIZED (
+          SELECT indexed.event_id
+            FROM ${tables.events} AS event
+            JOIN ${tables.operationEvents} AS indexed
+              ON indexed.event_id = event.id
+           WHERE ${scopedMatch} AND event.deduplication_id = $5
+           LIMIT 1
+        )
+        SELECT event_id FROM preferred
+        UNION ALL
+        SELECT event_id FROM (${fallback(true)}) AS fallback
+        LIMIT 1`;
+      if (deduplicationId !== undefined) params.push(deduplicationId);
+      const result = await session.query<{ event_id: string }>(query, params);
+      return result.rows[0]?.event_id;
     },
     async openStream(input) {
       const descriptor = snapshotStreamMetadata(input.descriptor);

@@ -63,6 +63,19 @@ export type ContextResource = Readonly<{
     | readonly ContextContribution[]
     | null
     | Promise<ContextContribution | readonly ContextContribution[] | null>;
+  /** Observe ordinary history after shared preparation; never re-read its bodies. */
+  onHistoryPrepared?(
+    input:
+      & ContextContributionInput
+      & Readonly<{
+        trigger: import("@copilotz/copilotz/collections").CollectionRecord;
+        history: readonly ConversationMessage[];
+        transcript:
+          readonly import("./agents/transcript.ts").LlmTranscriptEntry[];
+        historyAfterMessageId?: string;
+        limitEstimatedTokens?: number;
+      }>,
+  ): void | Promise<void>;
   /** Lets the owning contributor settle a scoped turn whose input preparation failed. */
   onTurnPreparationError?(
     input: Readonly<{

@@ -839,3 +839,22 @@ Deno.test("formatMessages counts structured tool result output toward input limi
   assertEquals(wire.includes("<tool_results>"), true);
   assertEquals(wire.includes(hugeBody), true);
 });
+
+Deno.test("a private maintenance suffix preserves the complete ordinary wire prefix", () => {
+  const messages: ChatRequest["messages"] = [{
+    role: "user",
+    speaker: "Human",
+    content: "Inspect this diagram.",
+  }];
+  const ordinary = formatMessages({ messages });
+  const maintenance = formatMessages({
+    messages: [...messages, {
+      role: "user",
+      speaker: "Human",
+      content: "Internal maintenance instructions.",
+      metadata: { preserveWireBoundary: true },
+    }],
+  });
+  assertEquals(maintenance.slice(0, ordinary.length), ordinary);
+  assertEquals(maintenance.length, ordinary.length + 1);
+});

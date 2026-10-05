@@ -546,9 +546,9 @@ Deno.test("checkpoint dispatch is a hidden ordinary Agent turn that atomically c
       .map((source) => source.id).sort();
     assertEquals(
       messageSources,
-      publicHistory.map((message) => message.id).sort(),
+      ["message:user"],
     );
-    assertEquals(sources.filter((source) => source.type === "asset").length, 2);
+    assertEquals(sources.filter((source) => source.type === "asset").length, 1);
     await assertNoDeadLetters(run);
   } finally {
     await run.close();
@@ -1865,7 +1865,10 @@ Deno.test("memory preserves typed images and the normal provider prefix with dyn
     const newest = (await checkpoints(run)).find((item: { sequence: number }) =>
       item.sequence === 2
     );
-    assertEquals(newest.sourceStartMessageId, "message:image");
+    assertEquals(
+      newest.sourceStartMessageId,
+      (await projectMessages(run.engine, NAMESPACE, "thread-a"))[1]!.id,
+    );
     assertEquals(
       maintenance!.request.instructions,
       ordinary!.request.instructions,
@@ -1947,6 +1950,14 @@ Deno.test("consolidation accepts a frozen source snapshot larger than the JSON p
     );
     const saved = await checkpoint(run);
     assertEquals(saved.status, "ready", JSON.stringify(saved.error));
+    await eventually(
+      run,
+      async () =>
+        (await collection(run, "message").list({
+          where: { historyScopeId: saved.id },
+          limit: 10,
+        })).length >= 3,
+    );
     const scoped = await collection(run, "message").list({
       where: { historyScopeId: saved.id },
       limit: 10,
@@ -1956,6 +1967,33 @@ Deno.test("consolidation accepts a frozen source snapshot larger than the JSON p
         JSON.stringify(entry.metadata).length > 1024 * 1024
       ),
       "the real maintenance Message must carry the oversized frozen snapshot",
+    );
+    const roots = scoped.filter((
+      entry: { metadata: Record<string, unknown> },
+    ) =>
+      (entry.metadata.copilotzAgentTurn as { sourceHistory?: unknown })
+        ?.sourceHistory
+    );
+    assertEquals(
+      roots.length,
+      1,
+      "only the immutable root stores the full snapshot",
+    );
+    const continuations = scoped.filter((
+      entry: { metadata: Record<string, unknown> },
+    ) =>
+      (entry.metadata.copilotzAgentTurn as { sourceHistoryRef?: unknown })
+        ?.sourceHistoryRef
+    );
+    assertEquals(
+      continuations.length,
+      2,
+      "assistant and final Tool result carry references",
+    );
+    assert(
+      continuations.every((entry: { metadata: unknown }) =>
+        JSON.stringify(entry.metadata).length < 20_000
+      ),
     );
     assertEquals(run.inputs.length, 2);
     const [ordinary, maintenance] = run.inputs;
@@ -1975,7 +2013,8 @@ Deno.test("consolidation accepts a frozen source snapshot larger than the JSON p
       NAMESPACE,
       "thread-a",
     );
-    assertEquals(saved.sourceEndMessageId, publicHistory.at(-1)!.id);
+    assertEquals(saved.sourceEndMessageId, "message:large-trigger");
+    assertEquals(publicHistory.at(-1)!.sender.id, "agent-north");
     assertEquals(
       (saved.metadata as { coverage: { endMessageId: string } }).coverage
         .endMessageId,
@@ -2044,6 +2083,91 @@ Deno.test("consolidation SQL statement budget uses batches for a 65-message sour
     );
     await assertNoDeadLetters(run);
   } finally {
+    await run.close();
+  }
+});
+
+Deno.test("ordinary preparation reserves peer-grown history before the provider limit without waiting", async () => {
+  let release!: () => void;
+  const maintenance = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const run = await fixture(async (input) => {
+    if (text(input).includes("Internal memory maintenance")) {
+      await maintenance;
+      return tool(memoryProposal());
+    }
+    return stop("Ordinary answer proceeds while memory is pending.");
+  }, {
+    inputLimit: 180_000,
+    memoryConfig: {
+      triggerEstimatedTokens: 120_000,
+      retainRecentEstimatedTokens: 8_000,
+    },
+  });
+  try {
+    await setupThread(run);
+    await collection(run, "participant").create({
+      id: "agent-south",
+      externalId: "south",
+      participantType: "agent",
+      agentId: "south",
+      metadata: {},
+    }, { namespace: NAMESPACE });
+    await collection(run, "thread").update({
+      id: "thread-a",
+      set: { participantIds: ["human-a", "agent-north", "agent-south"] },
+    }, { namespace: NAMESPACE });
+    for (let index = 0; index < 16; index++) {
+      const content = await run.engine.content.preparer.prepare(
+        "PEER_HISTORY " + "history ".repeat(3_900),
+        { namespace: NAMESPACE, idempotencyKey: `peer:${index}` },
+      );
+      await collection(run, "message").create({
+        id: `message:peer:${index}`,
+        threadId: "thread-a",
+        senderId: "agent-south",
+        recipientIds: [],
+        content,
+        metadata: {},
+      }, { namespace: NAMESPACE });
+    }
+    await createHumanMessage(run, {
+      id: "message:north-threshold",
+      text: "Please continue.",
+      recipientIds: ["agent-north"],
+    });
+    await eventually(
+      run,
+      async () =>
+        (await checkpoints(run))[0]?.status === "pending" &&
+        (await projectMessages(run.engine, NAMESPACE, "thread-a")).some((
+          message,
+        ) => message.sender.id === "agent-north"),
+    );
+    const saved = await checkpoint(run);
+    assert(
+      Number((saved.metadata as { estimatedTokens: number }).estimatedTokens) <=
+        90_000,
+    );
+    assertEquals(saved.agentId, "north");
+    const ordinary = run.inputs.find((input) =>
+      !text(input).includes("Internal memory maintenance")
+    );
+    assert(ordinary && text(ordinary).includes("PEER_HISTORY"));
+    assertEquals(
+      saved.status,
+      "pending",
+      "normal reply did not wait for consolidation",
+    );
+    release();
+    await eventually(
+      run,
+      async () => (await checkpoints(run))[0]?.status === "ready",
+    );
+    await assertNoDeadLetters(run);
+  } finally {
+    release();
     await run.close();
   }
 });

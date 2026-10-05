@@ -83,6 +83,13 @@ and authentication stay in effect. For the same Context and Model, the normal
 provider prompt prefix is reusable. The private scope is never accepted from
 HTTP history input.
 
+The immutable private root stores the frozen source once. LLM and Tool
+continuations, including bounded repair and process restarts, carry only its
+Message ID and content digest. Core resolves the root from the existing scoped
+history batch and checks its namespace, thread, scope, owner and digest. The
+maintenance suffix preserves its own wire boundary even when source history ends
+with a user turn, keeping the ordinary provider prefix intact.
+
 History and Context share batched Asset metadata and body resolution. Range
 selection estimates the typed source through the ordinary LLM wire formatter;
 binary storage bytes remain separate from model token estimates. Source bodies
@@ -90,6 +97,14 @@ are not opened again merely to construct the maintenance instruction. Resume
 preparation verifies stored Message snapshots, and checkpoint settlement still
 verifies authorized coverage. Preparation failures settle the owning private
 checkpoint instead of leaving it pending.
+
+Ordinary turn preparation checks the owning Agent's configured history threshold
+using the transcript already prepared for that turn. Peer Agent, human and Tool
+history therefore count toward that Agent's eligibility. Below the threshold,
+this check performs no SQL or additional Asset resolution. An eligible bounded
+checkpoint runs in the background while the ordinary reply proceeds; only a
+ready certified checkpoint advances the boundary. The existing message-created
+reservation path still covers history produced when an Agent finishes a turn.
 
 Core preflights the same formatted input used by execution. If necessary, it
 waits for certified compaction progress and rebuilds the request. Waiting is

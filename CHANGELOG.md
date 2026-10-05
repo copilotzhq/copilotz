@@ -1,5 +1,17 @@
 ## 0.83.3 — 2026-10-05
 
+### Improved
+
+- Run the complete release checks only on main updates. Tag publication reuses a
+  successful main run for the exact tagged revision instead of testing again.
+
+- Store each consolidation source once and pass scoped, digest-bound references
+  through LLM, Tool and repair continuations. Resolve those references from the
+  existing history batch while preserving the exact ordinary provider prefix.
+- Check each Agent's configured consolidation threshold during ordinary turn
+  preparation using its already prepared transcript, including peer history.
+  Reserve bounded background work without waiting or repeating source reads.
+
 ### Fixed
 
 - Prepare consolidation turns whose frozen source metadata exceeds the 1 MiB SQL

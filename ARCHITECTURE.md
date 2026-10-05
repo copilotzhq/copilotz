@@ -384,7 +384,12 @@ plugin may create an internal Message with an opaque transcript scope, an owner
 Agent, and an optional successful-Action completion condition. Core routes that
 Message through the exact ordinary prompt, Model, credential, Tool, Ask, and
 continuation machinery, while excluding the private scope from ordinary prompt
-and HTTP history. Core never interprets the caller's domain task.
+and HTTP history. Core never interprets the caller's domain task. A caller's
+frozen source lives once on the private root; continuations carry a scoped,
+digest-bound reference resolved from the ordinary private history batch. Context
+resources may observe an already prepared ordinary transcript for bounded
+maintenance; Core does not decide the domain threshold or re-prepare that
+history.
 
 Memory uses that cursor to dispatch consolidation to the owning Agent. Memory
 alone owns checkpoint reservation, frozen evidence, source authorization,

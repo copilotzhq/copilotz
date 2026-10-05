@@ -68,7 +68,9 @@ export type CoreAgentTurnMetadata = Readonly<{
   completeOn?: Readonly<{ action: string }>;
   /** Bounded maintenance tasks may supply their entire source in their own scope. */
   history?: "scope";
-  /** Authorized caller snapshot, replayed through ordinary input preparation. */
+  /** Continuations reference the immutable scoped root instead of copying it. */
+  sourceHistoryRef?: Readonly<{ messageId: string; digest: string }>;
+  /** Authorized caller snapshot on the root, replayed through ordinary input preparation. */
   sourceHistory?: Readonly<{
     messages: readonly ConversationMessage[];
     context: readonly FrozenContextContribution[];
@@ -340,6 +342,7 @@ const AGENT_TURN_KEYS = new Set([
   "completeOn",
   "history",
   "sourceHistory",
+  "sourceHistoryRef",
 ]);
 
 function validCoreAgentTurnMetadata(
@@ -354,6 +357,15 @@ function validCoreAgentTurnMetadata(
   ) return null;
   if (candidate.history !== undefined && candidate.history !== "scope") {
     return null;
+  }
+  if (candidate.sourceHistoryRef !== undefined) {
+    const ref = record(candidate.sourceHistoryRef);
+    if (
+      candidate.history !== "scope" || candidate.sourceHistory !== undefined ||
+      Object.keys(ref).some((key) => !["messageId", "digest"].includes(key)) ||
+      !optionalMetadataText(ref.messageId) || typeof ref.digest !== "string" ||
+      !/^sha256:[a-f0-9]{64}$/.test(ref.digest)
+    ) return null;
   }
   if (candidate.sourceHistory !== undefined) {
     const source = record(candidate.sourceHistory);

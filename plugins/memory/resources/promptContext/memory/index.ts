@@ -21,7 +21,10 @@ import {
   checkpointAccessible,
   threadMemorySpaces,
 } from "../../../shared/access.ts";
-import { certifiedHistoryBoundary } from "../../../shared/source.ts";
+import {
+  certifiedHistoryBoundary,
+  sourceMessagesFromTranscript,
+} from "../../../shared/source.ts";
 import { reserveMemoryCheckpoint } from "../../../shared/reservation.ts";
 
 export const MEMORY_RESOURCE_ID = "copilotz.long_term";
@@ -34,6 +37,36 @@ export const memoryContextResource:
     id: MEMORY_RESOURCE_ID,
     type: "context",
     purposes: ["conversation"] as const,
+    async onHistoryPrepared(input) {
+      const config = memoryConfig(input.context);
+      if (!config.enabled || input.historyScopeId) return;
+      const context = input.context as unknown as MemoryProcessorContext;
+      const sources = sourceMessagesFromTranscript(context, {
+        messages: input.history,
+        model:
+          (input.agent.models.generate ?? input.agent.models.session ?? [])[0],
+      }, input.transcript);
+      if (
+        sources.reduce((sum, item) => sum + (item.estimatedTokens ?? 0), 0) <
+          config.triggerEstimatedTokens
+      ) return;
+      await reserveMemoryCheckpoint(context, input.trigger, config, {
+        ownerParticipantId: input.participant.id,
+        ...(input.limitEstimatedTokens
+          ? {
+            maxSourceEstimatedTokens: Math.floor(
+              input.limitEstimatedTokens / 2,
+            ),
+          }
+          : {}),
+        prepared: {
+          owner: input.participant,
+          thread: input.thread,
+          messages: input.history,
+          sources,
+        },
+      });
+    },
     async onTurnPreparationError(input) {
       if (input.turn.completeOn?.action !== "consolidate_memory") return false;
       const context = input.context as unknown as MemoryProcessorContext;

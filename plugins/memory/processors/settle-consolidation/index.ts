@@ -118,6 +118,7 @@ export const settleMemoryConsolidationProcessor: Processor<
         checkpoint.id,
         turn.ownerParticipantId,
         turn.sourceHistory,
+        turn.sourceHistoryRef,
       ),
     }, context);
   },

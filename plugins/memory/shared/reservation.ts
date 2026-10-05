@@ -37,12 +37,20 @@ export async function reserveMemoryCheckpoint(
     ownerParticipantId?: string;
     force?: boolean;
     maxSourceEstimatedTokens?: number;
+    prepared?: Readonly<{
+      owner: import("@copilotz/copilotz/core").Participant;
+      thread: import("@copilotz/copilotz/core").ConversationThread;
+      messages:
+        readonly import("@copilotz/copilotz/core").ConversationMessage[];
+      sources: readonly MemorySourceMessage[];
+    }>;
   }> = {},
 ): Promise<CollectionRecord | null> {
   const ownerParticipantId = optionalText(options.ownerParticipantId) ??
     optionalText(messageRecord.senderId);
   if (!ownerParticipantId) return null;
-  const owner = await loadParticipantRecord(context, ownerParticipantId);
+  const owner = options.prepared?.owner ??
+    await loadParticipantRecord(context, ownerParticipantId);
   if (!owner || owner.participantType !== "agent") return null;
   const message = {
     ...messageRecord,
@@ -59,7 +67,8 @@ export async function reserveMemoryCheckpoint(
   );
   if (pending[0]) return pending[0];
   const spaces = await ensureWritableMemorySpace(context, message.threadId);
-  const thread = await loadThreadRecord(context, message.threadId);
+  const thread = options.prepared?.thread ??
+    await loadThreadRecord(context, message.threadId);
   const workflowInitiator = workflowMetadata(messageRecord.metadata)
     ?.initiatorParticipantId;
   const humanParticipants =
@@ -67,13 +76,16 @@ export async function reserveMemoryCheckpoint(
       participant.participantType === "human"
     ) ?? [];
   const initiatorParticipantId = workflowInitiator ??
+    humanParticipants.find((participant) =>
+      participant.id === messageRecord.senderId
+    )?.id ??
     (humanParticipants.length === 1 ? humanParticipants[0]?.id : undefined);
   if (!initiatorParticipantId) {
     throw new Error(
       "Memory maintenance requires trusted initiating human provenance.",
     );
   }
-  const previous = thread
+  const previous = !options.prepared && thread
     ? (await checkpoints(context, message.threadId, agentId, "ready")).find(
       (item) =>
         checkpointAccessible(item, spaces) && Boolean(
@@ -94,22 +106,24 @@ export async function reserveMemoryCheckpoint(
       thread,
     })
     : undefined;
-  const snapshot = await context.readSnapshot(({ collections }) =>
-    loadCoreThreadMessageSnapshot(
-      { collections } as typeof context,
-      message.threadId,
-      messageRecord,
-      {
-        ...(optionalText(messageRecord.historyScopeId)
-          ? { historyScopeId: optionalText(messageRecord.historyScopeId) }
-          : {}),
-        viewerIds: [owner.id],
-        ...(certifiedPreviousBoundary
-          ? { afterMessageId: certifiedPreviousBoundary }
-          : {}),
-      },
-    )
-  );
+  const snapshot = options.prepared
+    ? { active: true, messages: options.prepared.messages }
+    : await context.readSnapshot(({ collections }) =>
+      loadCoreThreadMessageSnapshot(
+        { collections } as typeof context,
+        message.threadId,
+        messageRecord,
+        {
+          ...(optionalText(messageRecord.historyScopeId)
+            ? { historyScopeId: optionalText(messageRecord.historyScopeId) }
+            : {}),
+          viewerIds: [owner.id],
+          ...(certifiedPreviousBoundary
+            ? { afterMessageId: certifiedPreviousBoundary }
+            : {}),
+        },
+      )
+    );
   if (!snapshot.active) return null;
   const maxSourceEstimatedTokens = options.maxSourceEstimatedTokens ??
     Math.floor(
@@ -142,7 +156,19 @@ export async function reserveMemoryCheckpoint(
   let usedBytes = 0;
   let batchSize = 16;
   let range: ReturnType<typeof selectLongTermMemoryRange> = null;
-  for (let offset = 0; offset < snapshot.messages.length;) {
+  if (options.prepared) {
+    range = selectLongTermMemoryRange({
+      messages: options.prepared.sources,
+      triggerMessageId: options.prepared.sources.at(-1)?.id ?? message.id,
+      triggerEstimatedTokens: options.force ? 0 : config.triggerEstimatedTokens,
+      retainRecentEstimatedTokens,
+      maxSourceEstimatedTokens,
+    });
+  }
+  for (
+    let offset = 0;
+    !options.prepared && offset < snapshot.messages.length;
+  ) {
     let batch: readonly MemorySourceMessage[];
     try {
       batch = await projectedSourceMessages(context, {

@@ -23,6 +23,7 @@ import type {
 } from "@copilotz/copilotz/llm";
 import { defineAction } from "@copilotz/copilotz/actions";
 import { defineTool } from "@copilotz/copilotz/core";
+import { defineContextResource } from "../../authoring/define-context/index.ts";
 import {
   createPluginRegistry,
   definePlugin,
@@ -155,6 +156,7 @@ type Fixture = Readonly<{
 async function createFixture(
   agents: readonly AgentResource[],
   handler: Handler,
+  onHistoryPrepared?: (agentId: string) => void,
 ): Promise<Fixture> {
   markExecutions.splice(0);
   const outputs: RuntimeOutputDescriptor[] = [];
@@ -170,6 +172,15 @@ async function createFixture(
       tools: { mark: markTool, publish: publishTool },
       llmConnections: {
         askModel: { adapter: "test" },
+      },
+      promptContext: {
+        preparation: defineContextResource({
+          id: "test.ask.preparation",
+          type: "context",
+          purposes: ["conversation"],
+          contribute: () => [],
+          onHistoryPrepared: (input) => onHistoryPrepared?.(input.agent.id),
+        }),
       },
     },
     adapters: { llm: { test: adapterFrom(handler) } },
@@ -1133,6 +1144,234 @@ Deno.test("an asked-Agent llm.call failure becomes a Tool Message and resumes", 
       false,
       "Ask failures resume their Tool plan instead of creating a public Agent failure Message",
     );
+  } finally {
+    await fixture.close();
+  }
+});
+
+Deno.test("temporary asked-Agent preparation errors retry before answering", async () => {
+  const calls: string[] = [];
+  let prepared = 0;
+  const fixture = await createFixture(
+    [agent("a", ["b"]), agent("b")],
+    (input) => {
+      const id = activeAgent(input);
+      calls.push(id);
+      if (calls.length === 1) {
+        return {
+          content: [],
+          toolCalls: [{
+            id: "ask-b",
+            action: "ask",
+            input: { target: "b", message: "Inspect" },
+          }],
+          attempts: [{ status: "completed" }],
+        };
+      }
+      return {
+        content: {
+          type: "text",
+          role: "body",
+          text: id === "b" ? "B answered" : "A finished",
+        },
+        attempts: [{ status: "completed" }],
+      };
+    },
+    (id) => {
+      if (id === "b" && ++prepared === 1) {
+        throw new TypeError(
+          "temporary content fetch failure",
+        );
+      }
+    },
+  );
+  try {
+    const root = await startRun(fixture);
+    await waitForRun(fixture, root, 6);
+    assertEquals(prepared, 2);
+    assertEquals(calls, ["a", "b", "a"]);
+    const messages = await projectMessages(
+      fixture.engine,
+      NAMESPACE,
+      "thread-a",
+    );
+    assertEquals(
+      messages.some((message) => message.metadata.toolStatus === "failed"),
+      false,
+    );
+  } finally {
+    await fixture.close();
+  }
+});
+
+Deno.test("exhausted preparation failure settles a parallel Ask without blocking its sibling", async () => {
+  const calls: string[] = [];
+  let failedPreparations = 0;
+  const fixture = await createFixture([
+    agent("a", ["b", "c"]),
+    agent("b"),
+    agent("c"),
+  ], (input) => {
+    const id = activeAgent(input);
+    calls.push(id);
+    if (calls.length === 1) {
+      return {
+        content: [],
+        toolCalls: ["b", "c"].map((target) => ({
+          id: `ask-${target}`,
+          action: "ask",
+          input: { target, message: "Inspect" },
+        })),
+        attempts: [{ status: "completed" }],
+      };
+    }
+    if (id === "a") {
+      assertStringIncludes(requestText(input), "preparation exploded");
+      assertStringIncludes(requestText(input), "C answered");
+    }
+    return {
+      content: {
+        type: "text",
+        role: "body",
+        text: id === "c" ? "C answered" : "A recovered",
+      },
+      attempts: [{ status: "completed" }],
+    };
+  }, (id) => {
+    if (id === "b") {
+      failedPreparations++;
+      throw new Error("preparation exploded");
+    }
+  });
+  try {
+    const root = await startRun(fixture);
+    await waitForRun(fixture, root, 8);
+    assertEquals(failedPreparations, 3);
+    assertEquals(calls, ["a", "c", "a"]);
+    const messages = await projectMessages(
+      fixture.engine,
+      NAMESPACE,
+      "thread-a",
+    );
+    const failed = messages.filter((message) =>
+      message.metadata.toolStatus === "failed"
+    );
+    assertEquals(failed.length, 1);
+    assertStringIncludes(
+      await messageText(fixture, failed[0]),
+      "AgentAskFailed",
+    );
+    assertEquals(
+      (await projectActionEvents(fixture.engine, NAMESPACE, "llm.call"))
+        .some((event) => event.metadata.agentId === "b"),
+      false,
+    );
+  } finally {
+    await fixture.close();
+  }
+});
+
+Deno.test("preparation failure after an asked-Agent Tool settles the original Ask", async () => {
+  const calls: string[] = [];
+  let prepared = 0;
+  const fixture = await createFixture([
+    agent("a", ["b"]),
+    agent("b", [], ["mark"]),
+  ], (input) => {
+    const id = activeAgent(input);
+    calls.push(id);
+    if (calls.length === 1) {
+      return {
+        content: [],
+        toolCalls: [{
+          id: "ask-b",
+          action: "ask",
+          input: { target: "b", message: "Inspect" },
+        }],
+        attempts: [{ status: "completed" }],
+      };
+    }
+    if (id === "b") {
+      return {
+        content: [],
+        toolCalls: [{
+          id: "b-mark",
+          action: "mark",
+          input: { value: "done-once" },
+        }],
+        attempts: [{ status: "completed" }],
+      };
+    }
+    assertStringIncludes(
+      requestText(input),
+      "continuation preparation exploded",
+    );
+    return {
+      content: { type: "text", role: "body", text: "A recovered" },
+      attempts: [{ status: "completed" }],
+    };
+  }, (id) => {
+    if (id === "b" && ++prepared > 1) {
+      throw new Error("continuation preparation exploded");
+    }
+  });
+  try {
+    const root = await startRun(fixture);
+    await waitForRun(fixture, root, 7);
+    assertEquals(prepared, 4);
+    assertEquals(calls, ["a", "b", "a"]);
+    assertEquals(markExecutions, ["done-once"]);
+  } finally {
+    await fixture.close();
+  }
+});
+
+Deno.test("nested Ask preparation failure preserves the durable parent cursor", async () => {
+  const calls: string[] = [];
+  let failedPreparations = 0;
+  const counts = new Map<string, number>();
+  const fixture = await createFixture([
+    agent("a", ["b"]),
+    agent("b", ["c"]),
+    agent("c"),
+  ], (input) => {
+    const id = activeAgent(input);
+    calls.push(id);
+    const count = (counts.get(id) ?? 0) + 1;
+    counts.set(id, count);
+    if (count === 1) {
+      return {
+        content: [],
+        toolCalls: [{
+          id: `ask-${id}`,
+          action: "ask",
+          input: { target: id === "a" ? "b" : "c", message: "Inspect" },
+        }],
+        attempts: [{ status: "completed" }],
+      };
+    }
+    if (id === "b") {
+      assertStringIncludes(requestText(input), "nested preparation exploded");
+    }
+    return {
+      content: {
+        type: "text",
+        role: "body",
+        text: `${id.toUpperCase()} recovered`,
+      },
+      attempts: [{ status: "completed" }],
+    };
+  }, (id) => {
+    if (id === "c") {
+      failedPreparations++;
+      throw new Error("nested preparation exploded");
+    }
+  });
+  try {
+    const root = await startRun(fixture);
+    await waitForRun(fixture, root, 9);
+    assertEquals(failedPreparations, 3);
+    assertEquals(calls, ["a", "b", "b", "a"]);
   } finally {
     await fixture.close();
   }

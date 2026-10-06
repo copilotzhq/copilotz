@@ -1,3 +1,21 @@
+## 0.84.3 — 2026-10-06
+
+### Fixed
+
+- Pass the current tenant namespace when estimating prepared memory history,
+  including unresolved attachment notices. Historical voice attachments no
+  longer prevent an ordinary Agent turn from starting; estimation still reuses
+  the normal request formatter without reading attachment bodies or extra SQL.
+- Settle exhausted Ask preparation failures through the existing owned deferred
+  Tool-plan cursor, including parallel Asks and continuations after Tools. Keep
+  transient retries, tenant/ownership checks and ordinary LLM failure handling.
+
+### Added
+
+- Optional durable Processor `onError` recovery after retries are exhausted or
+  an error is explicitly non-retryable. A handled durable failure outcome
+  acknowledges the delivery; cancellation and lease loss bypass recovery.
+
 ## 0.84.2 — Consolidation input budgets
 
 - Budget consolidation from the Agent's prepared prompt prefix and configured

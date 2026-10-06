@@ -87,6 +87,21 @@ throw markNonRetryable(new TypeError("Archive configuration is invalid."));
 The delivery then dead-letters immediately. Do not infer permanence from broad
 JavaScript classes such as `TypeError`; network APIs can throw the same class.
 
+A Processor can provide `onError(error, event, context)` to persist a domain
+failure outcome after its handler exhausts retries, or immediately for an
+explicitly non-retryable error. Return `true` only after that outcome is
+durable; the delivery then succeeds because its obligation has been handled.
+Returning `false` or throwing keeps the delivery dead-lettered. The hook runs
+under the same lease and composed context and is skipped after cancellation or
+lease loss. Use stable operation keys: a crash before delivery acknowledgement
+may replay the handler and its recovery. This hook does not apply to live stream
+handlers or failures that prevent the runtime from constructing a Processor
+context.
+
+Core uses this hook to settle an exhausted Ask preparation failure through its
+existing Tool-plan cursor. The requester receives a failed Tool result and can
+continue even when the asked Agent never reached `llm.call`.
+
 A failing `detached` Processor does not surface anywhere on its own. To log it,
 pass `onDeliveryDiagnostic` and read the `error` on a `worker_handler_settled`
 diagnostic; see

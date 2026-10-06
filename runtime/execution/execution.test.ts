@@ -21,6 +21,7 @@ import {
   defineProcessor,
   markNonRetryable,
   type PluginRegistry,
+  type Processor,
 } from "../plugins/index.ts";
 import {
   createDeliveryExecutor,
@@ -51,6 +52,7 @@ type Fixture = Readonly<{
 }>;
 async function createFixture(options?: {
   handle?: (eventId: string, idempotencyKey: string) => void | Promise<void>;
+  onError?: Processor["onError"];
 }): Promise<Fixture> {
   const db = await createTestDatabase({ url: ":memory:" });
   const session = createSqlSession(db);
@@ -67,6 +69,7 @@ async function createFixture(options?: {
   const processor = defineProcessor({
     id: "messages.observe",
     on: [{ eventType: "message.created" }],
+    ...(options?.onError ? { onError: options.onError } : {}),
     async handle(event, context) {
       if (!event.durable) {
         throw new Error("Expected a durable event.");
@@ -462,6 +465,147 @@ Deno.test("marked non-retryable Processor errors dead-letter immediately", async
     assertEquals(calls, 1);
   } finally {
     await executor.shutdown();
+    await closeFixture(fixture);
+  }
+});
+
+for (
+  const disposition of [
+    "handled",
+    "declined",
+    "rejected",
+    "non-retryable",
+  ] as const
+) {
+  Deno.test(`terminal Processor error recovery: ${disposition}`, async () => {
+    let attempts = 0, recoveries = 0;
+    const error = new TypeError("persistent preparation failure");
+    const fixture = await createFixture({
+      handle() {
+        attempts++;
+        throw disposition === "non-retryable" ? markNonRetryable(error) : error;
+      },
+      onError(cause, event, context) {
+        recoveries++;
+        assertEquals(cause, error);
+        assertEquals(event.namespace, "tenant-a");
+        assertEquals(context.signal.aborted, false);
+        if (disposition === "rejected") {
+          throw new Error("failure persistence unavailable");
+        }
+        return disposition !== "declined";
+      },
+    });
+    const committed = await appendMessage(fixture);
+    const delivery = committed.deliveries[0];
+    const executor = createDeliveryExecutor({
+      store: fixture.store,
+      registry: fixture.registry,
+      createContext: fixture.createContext,
+    });
+    try {
+      const handle = await executor.dispatchDelivery(delivery);
+      await handle.done;
+      const status =
+        disposition === "handled" || disposition === "non-retryable"
+          ? "succeeded"
+          : "dead_letter";
+      const terminal = await waitForDeliveryStatus(
+        fixture.store,
+        delivery.id,
+        status,
+      );
+      assertEquals(
+        attempts,
+        disposition === "non-retryable" ? 1 : delivery.maxAttempts,
+      );
+      assertEquals(terminal.attempts, attempts);
+      assertEquals(recoveries, 1);
+    } finally {
+      await executor.shutdown();
+      await closeFixture(fixture);
+    }
+  });
+}
+
+Deno.test("successful retry never invokes terminal Processor recovery", async () => {
+  let attempts = 0, recoveries = 0;
+  const fixture = await createFixture({
+    handle() {
+      if (++attempts === 1) throw new Error("temporary preparation failure");
+    },
+    onError() {
+      recoveries++;
+      return true;
+    },
+  });
+  const committed = await appendMessage(fixture);
+  const delivery = committed.deliveries[0];
+  const executor = createDeliveryExecutor({
+    store: fixture.store,
+    registry: fixture.registry,
+    createContext: fixture.createContext,
+  });
+  try {
+    const handle = await executor.dispatchDelivery(delivery);
+    await handle.done;
+    await waitForDeliveryStatus(fixture.store, delivery.id, "succeeded");
+    assertEquals(attempts, 2);
+    assertEquals(recoveries, 0);
+  } finally {
+    await executor.shutdown();
+    await closeFixture(fixture);
+  }
+});
+
+Deno.test("cancelled execution never invokes terminal Processor recovery", async () => {
+  const abort = new AbortController();
+  let recoveries = 0;
+  const fixture = await createFixture({
+    handle() {
+      abort.abort(new Error("execution cancelled"));
+      throw markNonRetryable(new Error("interrupted preparation"));
+    },
+    onError() {
+      recoveries++;
+      return true;
+    },
+  });
+  try {
+    const { event, deliveries } = await appendMessage(fixture);
+    const delivery = deliveries[0];
+    const workload = createDeliveryWorkload({
+      store: fixture.store,
+      registry: fixture.registry,
+      createContext: fixture.createContext,
+    });
+    await workload({
+      streamId: "cancelled-stream",
+      workload: "copilotz.delivery.v1",
+      input: new ReadableStream({
+        start(controller) {
+          controller.close();
+        },
+      }),
+      sendMetadata: async () => {},
+      metadata: {
+        schema: "copilotz.delivery.dispatch.v1",
+        databaseSchema: fixture.store.databaseSchema,
+        namespace: event.namespace,
+        eventId: event.id,
+        deliveryId: delivery.id,
+        consumerId: delivery.consumerId,
+        dispatchAttemptId: "cancelled-attempt",
+        idempotencyKey: delivery.id,
+      },
+      signal: abort.signal,
+    });
+    assertEquals(recoveries, 0);
+    assertEquals(
+      (await fixture.store.getDelivery(delivery.id))?.status,
+      "dead_letter",
+    );
+  } finally {
     await closeFixture(fixture);
   }
 });

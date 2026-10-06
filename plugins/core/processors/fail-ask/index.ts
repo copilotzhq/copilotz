@@ -1,30 +1,13 @@
 /** Settles a deferred Ask branch when the asked LLM call terminates. @module */
 
 import {
-  type AgentAskMetadata,
   CORE_LLM_CALL_METADATA_SCHEMA,
   coreLlmCallMetadata,
 } from "../../shared/workflow-metadata.ts";
 import { parseActionLifecycleEvent } from "@copilotz/copilotz/actions";
 import { defineProcessor, type Processor } from "@copilotz/copilotz/plugins";
 import type { CoreToolProcessorContext } from "../../shared/runtime-context.ts";
-import { resumeDeferredToolPlan } from "../../shared/tool-plan.ts";
-import { asRecord, optionalText } from "../../shared/helpers.ts";
-
-function askFailure(
-  error: Record<string, unknown>,
-  ask: AgentAskMetadata,
-  cancelled: boolean,
-) {
-  const cause = optionalText(error.message) ??
-    (cancelled ? "The asked agent was cancelled." : "The asked agent failed.");
-  return ({
-    name: cancelled ? "AgentAskCancelled" : "AgentAskFailed",
-    message: cancelled
-      ? `Ask to agent '${ask.askedAgentId}' was cancelled: ${cause}`
-      : `Asked agent '${ask.askedAgentId}' failed: ${cause}`,
-  } as const);
-}
+import { settleAskFailure } from "../../shared/ask-failure.ts";
 
 export const failAskProcessor: Processor<CoreToolProcessorContext> =
   defineProcessor<CoreToolProcessorContext>({
@@ -54,14 +37,14 @@ export const failAskProcessor: Processor<CoreToolProcessorContext> =
       if (!metadata) return;
       const ask = metadata.ask;
       if (!ask || ask.phase === "answer") return;
-      if (metadata.agentParticipantId !== ask.askedParticipantId) {
-        throw new Error(`Ask '${ask.askId}' failure ownership does not match.`);
-      }
-      const cancelled = lifecycle.status === "cancelled";
-      await resumeDeferredToolPlan(context, ask, {
-        status: cancelled ? "cancelled" : "failed",
-        error: askFailure(asRecord(lifecycle.error), ask, cancelled),
-      }, { ownerEventId: event.id });
+      await settleAskFailure(
+        context,
+        ask,
+        metadata.agentParticipantId,
+        lifecycle.error,
+        lifecycle.status === "cancelled",
+        event.id,
+      );
     },
   });
 

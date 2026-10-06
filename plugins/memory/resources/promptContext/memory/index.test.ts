@@ -262,3 +262,41 @@ Deno.test("prepared history below the threshold performs no collection or conten
     }],
   } as never);
 });
+
+Deno.test("ordinary history with an attachment stays below the memory trigger without persistence access", async () => {
+  const unavailable = new Proxy({}, {
+    get() {
+      throw new Error("unexpected persistence access");
+    },
+  });
+  await memoryContextResource.onHistoryPrepared!({
+    context: {
+      namespace: "tenant-a",
+      resources: {
+        memory: { config: { triggerEstimatedTokens: 120_000 } },
+        llmConnections: { test: { provider: "openai" } },
+      },
+      collections: unavailable,
+      content: unavailable,
+    },
+    agent: {
+      models: { generate: [{ connection: "test", model: "gpt-6.1-sol" }] },
+    },
+    history: [],
+    transcript: [{
+      sourceId: "human",
+      message: {
+        role: "user",
+        content: [{
+          kind: "file",
+          assetId: "voice-note",
+          role: "attachment",
+          name: "voice.webm",
+          mediaType: "audio/webm",
+          disposition: "attachment",
+          resolve: false,
+        }],
+      },
+    }],
+  } as never);
+});

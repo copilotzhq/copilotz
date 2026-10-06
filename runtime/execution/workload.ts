@@ -269,7 +269,24 @@ export function createDeliveryWorkload(
         databaseSchema: metadata.databaseSchema,
         namespace: metadata.namespace,
       });
-      await handle(processorEvent, context);
+      try {
+        await handle(processorEvent, context);
+      } catch (error) {
+        const onError = processor.onError as (
+          | ((
+            error: unknown,
+            event: typeof processorEvent,
+            executionContext: typeof context,
+          ) => boolean | Promise<boolean>)
+          | undefined
+        );
+        const terminal = isNonRetryableError(error) ||
+          delivery.attempts >= delivery.maxAttempts;
+        if (
+          abort.signal.aborted || !terminal ||
+          !await onError?.(error, processorEvent, context)
+        ) throw error;
+      }
       abort.signal.throwIfAborted();
       const settled = await store.succeedDelivery(
         delivery.id,

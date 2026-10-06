@@ -1,3 +1,14 @@
+## 0.84.2 — Consolidation input budgets
+
+- Budget consolidation from the Agent's prepared prompt prefix and configured
+  output allowance, including the maintenance instruction and source manifest.
+  Large tool proposals can receive ordinary repair feedback without immediately
+  exceeding the input limit.
+- Remove the duplicate previous-memory catalogue and the separate
+  message-created reservation processor. Threshold checks reuse ordinary
+  prepared history; consolidation keeps its typed source, normal Tools, cached
+  prefix and certified coverage checks while doing fewer database reads.
+
 ## 0.84.1 — 2026-10-06
 
 ### Fixed

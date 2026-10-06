@@ -9,10 +9,7 @@ import {
 import { defineProcessor, type Processor } from "@copilotz/copilotz/plugins";
 import { deriveWorkflowId } from "@copilotz/copilotz/events";
 import { createThreadMessage } from "../../../core/actions/create-thread-message/index.ts";
-import {
-  buildMemoryConsolidationInstruction,
-  isEditoriallyVisible,
-} from "../../authoring/consolidation/index.ts";
+import { buildMemoryConsolidationInstruction } from "../../authoring/consolidation/index.ts";
 
 import type { MemoryProcessorContext } from "../../shared/contracts.ts";
 import {
@@ -21,7 +18,6 @@ import {
 } from "../../shared/source.ts";
 import { record, requiredText } from "../../shared/input.ts";
 import { threadMemorySpaces } from "../../shared/access.ts";
-import { activeMemoryRecords, terminalStatus } from "../../shared/retrieval.ts";
 import {
   captureContextSnapshot,
   frozenSnapshot,
@@ -80,12 +76,6 @@ export const dispatchMemoryConsolidationProcessor: Processor<
       checkpoint,
       await threadMemorySpaces(context, threadId),
     );
-    const previous = (await activeMemoryRecords(
-      context,
-      spaces,
-    )).filter((item) =>
-      isEditoriallyVisible(item) && !terminalStatus(item.status)
-    ).slice(0, 100);
     const instruction = buildMemoryConsolidationInstruction({
       spaces,
       // Bodies remain typed history; the maintenance suffix carries provenance only.
@@ -96,7 +86,6 @@ export const dispatchMemoryConsolidationProcessor: Processor<
         text: "",
       })),
       kinds: memoryKinds(context),
-      previousRecords: previous,
       context: frozenSnapshot(checkpoint),
     });
     const initiatorParticipantId = requiredText(

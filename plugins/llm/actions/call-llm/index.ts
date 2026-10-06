@@ -129,6 +129,7 @@ const llmCallInputSchema = {
               promptFingerprint: { type: "string", minLength: 1 },
               calibrationKey: { type: "string", minLength: 1 },
               calibrationFactor: { type: "number", minimum: 0.5, maximum: 2 },
+              outputTokenAllowance: { type: "number", exclusiveMinimum: 0 },
             },
           },
         },
@@ -1245,6 +1246,7 @@ function normalizedPreparation(value: unknown): LlmCallPreparation {
         "status",
         "estimatedInputTokens",
         "limitEstimatedInputTokens",
+        "outputTokenAllowance",
         "promptFingerprint",
         "calibrationKey",
         "calibrationFactor",
@@ -1259,10 +1261,15 @@ function normalizedPreparation(value: unknown): LlmCallPreparation {
     }
     const estimatedInputTokens = Number(item.estimatedInputTokens);
     const limitEstimatedInputTokens = Number(item.limitEstimatedInputTokens);
+    const outputTokenAllowance = item.outputTokenAllowance === undefined
+      ? undefined
+      : Number(item.outputTokenAllowance);
     if (
       !Number.isFinite(estimatedInputTokens) || estimatedInputTokens < 0 ||
       !Number.isFinite(limitEstimatedInputTokens) ||
-      limitEstimatedInputTokens <= 0
+      limitEstimatedInputTokens <= 0 ||
+      outputTokenAllowance !== undefined &&
+        (!Number.isFinite(outputTokenAllowance) || outputTokenAllowance <= 0)
     ) {
       throw new TypeError(`${path} has an invalid token estimate or limit.`);
     }
@@ -1300,6 +1307,7 @@ function normalizedPreparation(value: unknown): LlmCallPreparation {
       status: item.status,
       estimatedInputTokens,
       limitEstimatedInputTokens,
+      ...(outputTokenAllowance === undefined ? {} : { outputTokenAllowance }),
       ...(promptFingerprint ? { promptFingerprint } : {}),
       ...(calibrationKey ? { calibrationKey } : {}),
       ...(calibrationFactor === undefined ? {} : { calibrationFactor }),
@@ -1434,6 +1442,7 @@ export async function prepareLlmCall(
           : "fit",
         estimatedInputTokens: prepared.inputTokenEstimate.estimatedTokens,
         limitEstimatedInputTokens: limit,
+        outputTokenAllowance: prepared.outputTokenAllowance,
         promptFingerprint: prepared.promptFingerprint,
         calibrationKey: prepared.inputTokenEstimate.calibrationKey,
         calibrationFactor: prepared.inputTokenEstimate.calibrationFactor,
@@ -1466,6 +1475,13 @@ export async function prepareLlmCall(
       status: tooLarge ? "too_large" : "fit",
       estimatedInputTokens,
       limitEstimatedInputTokens,
+      outputTokenAllowance:
+        typeof (options.maxCompletionTokens ?? options.maxTokens) === "number"
+          ? Math.max(
+            1,
+            Number(options.maxCompletionTokens ?? options.maxTokens),
+          )
+          : 1_000,
     });
   }
   return ({

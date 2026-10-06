@@ -488,6 +488,8 @@ export function selectLongTermMemoryRange(
     retainRecentEstimatedTokens?: number;
     /** Maximum source size passed to a single maintenance turn. */
     maxSourceEstimatedTokens?: number;
+    /** Owned per-message suffix cost; eligibility still measures history only. */
+    sourceMessageOverhead?: (message: MemorySourceMessage) => number;
   }>,
 ): SelectedMemoryRange | null {
   const triggerIndex = input.messages.findIndex((message) =>
@@ -533,7 +535,8 @@ export function selectLongTermMemoryRange(
     let boundedEnd = 0;
     let boundedTokens = 0;
     for (let index = 0; index < end; index++) {
-      boundedTokens += sourceMessageTokens(selected[index]);
+      boundedTokens += sourceMessageTokens(selected[index]) +
+        (input.sourceMessageOverhead?.(selected[index]) ?? 0);
       if (boundedTokens > maxSourceEstimatedTokens) break;
       boundedEnd = index + 1;
     }
@@ -566,12 +569,21 @@ export function selectLongTermMemoryRange(
   } as const);
 }
 
+/** Provenance manifest; source bodies are already present as typed history. */
+export function memorySourceManifestEntry(message: MemorySourceMessage) {
+  return {
+    type: "message",
+    id: message.id,
+    senderType: message.senderType,
+    senderId: message.senderId,
+  } as const;
+}
+
 export function buildMemoryConsolidationInstruction(
   input: Readonly<{
     spaces: readonly MemorySpaceDescriptor[];
     sourceMessages: readonly MemorySourceMessage[];
     kinds: readonly MemoryKindDefinition[];
-    previousRecords: readonly MemoryRecordProjection[];
     context: readonly FrozenContextContribution[];
     repair?: string;
   }>,
@@ -590,21 +602,7 @@ export function buildMemoryConsolidationInstruction(
     "Extract only durable entities, assertions, meaningful occurrences, active intents, unresolved inquiries, and reusable procedures. Every record must be self-contained and cite allowed sources. Preserve uncertainty, negation, temporal meaning, authorship, and explicit corrections. Do not turn tentative language into facts, silently overwrite conflicts, create an entity for every noun, or persist small talk, raw tool output, token deltas, and transient wording. Use the default writable memory space unless another listed writable space clearly owns the record.",
     input.repair ? `Repair required: ${input.repair}` : "",
     "Reserved source message IDs (their typed contents precede this maintenance instruction):",
-    JSON.stringify(input.sourceMessages.map((message) => ({
-      type: "message",
-      id: message.id,
-      senderType: message.senderType,
-      senderId: message.senderId,
-      text: message.text,
-      ...(message.toolPlanId ? { toolPlanId: message.toolPlanId } : {}),
-      ...(message.toolCallId ? { toolCallId: message.toolCallId } : {}),
-      ...(message.toolCalls === undefined
-        ? {}
-        : { toolCalls: message.toolCalls }),
-      ...(message.reasoning === undefined
-        ? {}
-        : { reasoning: message.reasoning }),
-    }))),
+    JSON.stringify(input.sourceMessages.map(memorySourceManifestEntry)),
     "Frozen application contributions:",
     JSON.stringify(input.context.map((item) => ({
       id: item.id,
@@ -625,16 +623,7 @@ export function buildMemoryConsolidationInstruction(
         ...(schema ? { persistedDataSchema: schema } : {}),
       })),
     ),
-    "Visible previous active memories:",
-    JSON.stringify(
-      input.previousRecords.map(({ id, form, kind, summary, status }) => ({
-        id,
-        form,
-        kind,
-        summary,
-        status,
-      })),
-    ),
+    "Use the frozen persistent memory above to reconcile earlier records. Use search_memory or inspect_memory when those Tools are granted and more detail is needed.",
   ].filter(Boolean).join("\n\n");
 }
 

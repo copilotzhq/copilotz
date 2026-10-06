@@ -157,6 +157,8 @@ async function fixture(
   options: Readonly<{
     enabled?: boolean;
     inputLimit?: number;
+    outputLimit?: number;
+    contextText?: string;
     memoryConfig?: Partial<LongTermMemoryConfig>;
     vectors?: boolean;
     statements?: { sql: string; params?: unknown[] }[];
@@ -211,9 +213,19 @@ async function fixture(
             generate: [{
               connection: "test_model",
               model: "native-memory-model",
-              ...(options.inputLimit === undefined ? {} : {
-                options: { limitEstimatedInputTokens: options.inputLimit },
-              }),
+              ...(options.inputLimit === undefined &&
+                  options.outputLimit === undefined
+                ? {}
+                : {
+                  options: {
+                    ...(options.inputLimit === undefined
+                      ? {}
+                      : { limitEstimatedInputTokens: options.inputLimit }),
+                    ...(options.outputLimit === undefined
+                      ? {}
+                      : { maxTokens: options.outputLimit }),
+                  },
+                }),
             }],
           },
           capabilities: { tools: options.tools ?? ["consolidate_memory"] },
@@ -231,7 +243,7 @@ async function fixture(
             id: "fixture-context",
             title: "Fixture context",
             role: "context",
-            content: "NATIVE_MEMORY_CONTEXT",
+            content: options.contextText ?? "NATIVE_MEMORY_CONTEXT",
           }),
         }),
       },
@@ -413,7 +425,24 @@ async function eventually(
     status: "dead_letter",
   });
   throw new Error(
-    `Memory native turn did not settle: ${JSON.stringify(deadLetters)}`,
+    `Memory native turn did not settle: ${
+      JSON.stringify({
+        deadLetters,
+        checkpoints: (await checkpoints(fixture)).map((
+          item: {
+            id: string;
+            status: string;
+            error: unknown;
+            metadata: unknown;
+          },
+        ) => ({
+          id: item.id,
+          status: item.status,
+          error: item.error,
+          metadata: item.metadata,
+        })),
+      })
+    }`,
   );
 }
 
@@ -459,7 +488,6 @@ Deno.test("memory composes Core-native dispatch and settlement without a model s
   ]);
   assertEquals(Object.keys(plugin.processors).sort(), [
     "dispatchConsolidation",
-    "reserveMemory",
     "settleConsolidation",
   ]);
 });
@@ -863,7 +891,7 @@ Deno.test("forced consolidation advances full bounded ranges across a large back
   );
   try {
     await setupThread(run);
-    for (let index = 0; index < 100; index++) {
+    for (let index = 0; index < 180; index++) {
       await createHumanMessage(run, {
         id: `message:batch:${index}`,
         text: `BATCH_${index} ${"history ".repeat(1_600)}`,
@@ -898,15 +926,19 @@ Deno.test("forced consolidation advances full bounded ranges across a large back
       (first.metadata as { estimatedTokens: number }).estimatedTokens > 50_000,
     );
     assert(
-      (first.metadata as { estimatedTokens: number }).estimatedTokens <= 90_000,
-    );
-    assert(
       (second.metadata as { estimatedTokens: number }).estimatedTokens > 50_000,
     );
-    assert(
-      (second.metadata as { estimatedTokens: number }).estimatedTokens <=
-        90_000,
-    );
+    for (const saved of [first, second]) {
+      const budget = saved.metadata as {
+        estimatedTokens: number;
+        instructionEstimatedTokens: number;
+        historyLimitEstimatedTokens: number;
+      };
+      assert(
+        budget.estimatedTokens + budget.instructionEstimatedTokens <=
+          budget.historyLimitEstimatedTokens,
+      );
+    }
     assert(first.sourceEndMessageId !== "message:batch:tail");
     assert(second.sourceEndMessageId !== "message:batch:tail");
     const maintenance = run.inputs.filter((input) =>
@@ -1176,6 +1208,98 @@ Deno.test("an unknown consolidation Tool returns feedback and settles the same c
     );
     assertEquals((await checkpoints(run)).length, 1);
     assertEquals(run.inputs.length, 3);
+    await assertNoDeadLetters(run);
+  } finally {
+    await run.close();
+  }
+});
+
+Deno.test("consolidation budgets the full prefix and a large Tool repair continuation", async () => {
+  const run = await fixture((input) => {
+    if (!text(input).includes("Internal memory maintenance")) {
+      return stop("The ordinary reply proceeds.");
+    }
+    if (
+      !JSON.stringify(input.request.messages).includes("CONTINUATION_BUDGET")
+    ) {
+      return {
+        ...tool(memoryProposal()),
+        toolCalls: [{
+          id: "large-misspelled-consolidation",
+          action: "consolid_memory",
+          input: {
+            ...memoryProposal(),
+            continuity: "CONTINUATION_BUDGET " + "durable ".repeat(4_000),
+          },
+        }],
+      };
+    }
+    assertStringIncludes(
+      JSON.stringify(input.request.messages),
+      "ToolUnavailable",
+    );
+    return tool(memoryProposal());
+  }, {
+    inputLimit: 60_000,
+    outputLimit: 10_000,
+    contextText: "NATIVE_MEMORY_CONTEXT " + "background ".repeat(3_000),
+    memoryConfig: { triggerEstimatedTokens: 20_000 },
+  });
+  try {
+    await setupThread(run);
+    for (let index = 0; index < 10; index++) {
+      await createHumanMessage(run, {
+        id: `message:continuation-budget:${index}`,
+        text: `SOURCE_${index} ` + "history ".repeat(1_600),
+      });
+    }
+    assertEquals(
+      (await checkpoints(run)).length,
+      0,
+      "message creation alone must not reserve an unbudgeted checkpoint",
+    );
+    await createHumanMessage(run, {
+      id: "message:continuation-budget:latest",
+      text: "Continue the ordinary task.",
+      recipientIds: ["agent-north"],
+    });
+    await eventually(
+      run,
+      async () => (await checkpoints(run))[0]?.status === "ready",
+    );
+    const maintenance = run.inputs.filter((input) =>
+      text(input).includes("Internal memory maintenance")
+    );
+    assertEquals(maintenance.length, 2);
+    for (const [index, input] of maintenance.entries()) {
+      const prepared = await prepareBuiltinModelTranscript(
+        {
+          provider: "openai",
+          model: input.model,
+          apiKey: "unused-test-key",
+        },
+        "generate",
+        input.options,
+        input,
+      );
+      assert(prepared.inputTokenEstimate.estimatedTokens <= 60_000);
+      if (index === 0) {
+        assert(prepared.inputTokenEstimate.estimatedTokens + 10_000 <= 60_000);
+        assertStringIncludes(text(input), "SOURCE_0");
+      }
+    }
+    const normal = run.inputs.find((input) =>
+      !text(input).includes("Internal memory maintenance")
+    )!;
+    assertEquals(
+      maintenance[0]!.request.instructions,
+      normal.request.instructions,
+    );
+    assertEquals(maintenance[0]!.request.tools, normal.request.tools);
+    assertEquals(
+      maintenance[0]!.request.messages[0],
+      normal.request.messages[0],
+    );
     await assertNoDeadLetters(run);
   } finally {
     await run.close();
@@ -2216,9 +2340,14 @@ Deno.test("ordinary preparation reserves peer-grown history before the provider 
         ) => message.sender.id === "agent-north"),
     );
     const saved = await checkpoint(run);
+    const budget = saved.metadata as {
+      estimatedTokens: number;
+      instructionEstimatedTokens: number;
+      historyLimitEstimatedTokens: number;
+    };
     assert(
-      Number((saved.metadata as { estimatedTokens: number }).estimatedTokens) <=
-        90_000,
+      budget.estimatedTokens + budget.instructionEstimatedTokens <=
+        budget.historyLimitEstimatedTokens,
     );
     assertEquals(saved.agentId, "north");
     const ordinary = run.inputs.find((input) =>

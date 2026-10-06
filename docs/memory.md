@@ -103,8 +103,20 @@ using the transcript already prepared for that turn. Peer Agent, human and Tool
 history therefore count toward that Agent's eligibility. Below the threshold,
 this check performs no SQL or additional Asset resolution. An eligible bounded
 checkpoint runs in the background while the ordinary reply proceeds; only a
-ready certified checkpoint advances the boundary. The existing message-created
-reservation path still covers history produced when an Agent finishes a turn.
+ready certified checkpoint advances the boundary. Reservation runs only from
+prepared ordinary turns or foreground compaction, so an earlier message-created
+processor cannot bypass the prepared input budget.
+
+Core measures the complete prepared prompt prefix for every Model candidate and
+subtracts that candidate's configured output allowance from its input limit.
+Memory selects a contiguous source prefix within the largest remaining budget,
+matching ordinary Model fallback admission, including its maintenance
+instruction and source-ID manifest. Existing memory is supplied through the same
+bounded persistent-memory Context as ordinary turns; maintenance does not repeat
+a separate catalogue of summaries. The source budget leaves room for one
+replayed response. Further Tool results and additional continuations still
+undergo the ordinary input-limit check; overflow fails cleanly without changing
+frozen source or certified coverage.
 
 Core preflights the same formatted input used by execution. If necessary, it
 waits for certified compaction progress and rebuilds the request. Waiting is

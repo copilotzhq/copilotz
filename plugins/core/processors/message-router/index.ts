@@ -24,6 +24,7 @@ import type {
   SnapshotCollections,
 } from "@copilotz/copilotz/collections";
 import { buildCoreLlmRequest } from "./agents/prompt.ts";
+import { historyLimitEstimatedTokens } from "./agents/history-budget.ts";
 import { isContextResource } from "../../authoring/define-context/index.ts";
 import type {
   AgentDynamicResolveContext,
@@ -512,7 +513,10 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
                   : [];
               });
               const limit = limits.length ? Math.min(...limits) : undefined;
-              const compact = async (error: ContextInputLimitError) => {
+              const compact = async (
+                error: ContextInputLimitError,
+                historyLimit: number,
+              ) => {
                 const boundaryKey = afterMessageId ?? "initial";
                 if (compactedBoundaries.has(boundaryKey)) {
                   throw new Error(
@@ -530,6 +534,7 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
                     : {}),
                   estimatedTokens: error.estimatedInputTokens,
                   limitEstimatedTokens: error.limitEstimatedInputTokens,
+                  historyLimitEstimatedTokens: historyLimit,
                 }, {
                   operationKey: `context:${continuationKey}:${boundaryKey}`,
                   signal: context.signal,
@@ -582,10 +587,28 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
                 ) {
                   throw error;
                 }
+                const prefixRequest = await buildCoreLlmRequest(context, {
+                  agent: resolved.agent,
+                  participant,
+                  thread: snapshot.thread,
+                  history: [],
+                  messageIds: [],
+                  tools: availableTools,
+                  contributions: captured.contributions,
+                });
                 await compact(
                   new ContextInputLimitError(
                     Math.max(limit + 1, Math.ceil(error.bytes / 8)),
                     limit,
+                  ),
+                  await historyLimitEstimatedTokens(
+                    {
+                      models: selection.models,
+                      mode: selection.mode,
+                      request: prefixRequest,
+                    },
+                    context.resources.llmConnections,
+                    context.namespace,
                   ),
                 );
                 continue;
@@ -686,14 +709,29 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
                     mostConstrained.estimatedInputTokens,
                     mostConstrained.limitEstimatedInputTokens,
                   ),
+                  await historyLimitEstimatedTokens(
+                    callInput,
+                    context.resources.llmConnections,
+                    context.namespace,
+                  ),
                 );
                 continue;
               }
               if (!agentTurn) {
-                for (
-                  const resource of Object.values(
-                    context.resources.promptContext ?? {},
+                const observers = Object.values(
+                  context.resources.promptContext ?? {},
+                ).filter((resource) =>
+                  isContextResource(resource) && resource.onHistoryPrepared
+                );
+                const historyLimit = observers.length
+                  ? await historyLimitEstimatedTokens(
+                    callInput,
+                    context.resources.llmConnections,
+                    context.namespace,
                   )
+                  : 0;
+                for (
+                  const resource of observers
                 ) {
                   if (
                     !isContextResource(resource) || !resource.onHistoryPrepared
@@ -716,6 +754,7 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
                       ? { historyAfterMessageId: afterMessageId }
                       : {}),
                     ...(limit ? { limitEstimatedTokens: limit } : {}),
+                    historyLimitEstimatedTokens: historyLimit,
                   });
                 }
               }

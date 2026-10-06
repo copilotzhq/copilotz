@@ -23,6 +23,7 @@ const inputSchema = {
     "triggerMessageId",
     "estimatedTokens",
     "limitEstimatedTokens",
+    "historyLimitEstimatedTokens",
   ],
   properties: {
     threadId: { type: "string", minLength: 1 },
@@ -32,6 +33,7 @@ const inputSchema = {
     historyAfterMessageId: { type: "string", minLength: 1 },
     estimatedTokens: { type: "number", minimum: 1 },
     limitEstimatedTokens: { type: "number", minimum: 1 },
+    historyLimitEstimatedTokens: { type: "number", minimum: 0 },
   },
 } as const;
 
@@ -43,6 +45,7 @@ type Input = {
   historyAfterMessageId?: string;
   estimatedTokens: number;
   limitEstimatedTokens: number;
+  historyLimitEstimatedTokens: number;
 };
 const outputSchema = {
   type: "object",

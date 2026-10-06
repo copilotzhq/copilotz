@@ -26,7 +26,6 @@
     "actions/inspect-memory/index.ts",
     "actions/invalidate-memory/index.ts",
     "actions/set-memory-status/index.ts",
-    "processors/reserve-memory/index.ts",
     "processors/dispatch-consolidation/index.ts",
     "processors/settle-consolidation/index.ts",
     "resources/memory/config/index.ts",

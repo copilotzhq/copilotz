@@ -19,7 +19,6 @@ Deno.test("maintenance instruction requires continuity even when no durable reco
     }],
     sourceMessages: [],
     kinds: [],
-    previousRecords: [],
     context: [],
   });
   assertStringIncludes(
@@ -522,13 +521,14 @@ Deno.test("maintenance instruction names the only valid action and registered ta
       reasoning: "This is durable.",
     }],
     kinds: CORE_MEMORY_KINDS,
-    previousRecords: [],
     context: [],
   });
   assertStringIncludes(instruction, "Call consolidate_memory exactly once");
   assertStringIncludes(instruction, "no_changes");
   assertStringIncludes(instruction, "assertion.state");
-  assertStringIncludes(instruction, "remember this");
-  assertStringIncludes(instruction, "This is durable.");
+  assertStringIncludes(instruction, "message-a");
+  assertEquals(instruction.includes("remember this"), false);
+  assertEquals(instruction.includes("This is durable."), false);
+  assertEquals(instruction.includes('"toolCalls"'), false);
   assertStringIncludes(instruction, "complete reserved source range");
 });

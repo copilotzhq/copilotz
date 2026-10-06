@@ -11,7 +11,10 @@ Deno.test("MCP stdio Adapter rejects a missing transport before loading the SDK"
 });
 
 Deno.test("stdio connector resolves the SDK and closes a real MCP session", async () => {
-  const serverPath = new URL("./fixtures/echo-server.ts", import.meta.url);
+  const serverPath = new URL(
+    "../../../../scripts/fixtures/mcp-echo-server.ts",
+    import.meta.url,
+  );
   const connection = await connectMcp({
     id: "echo",
     name: "Echo",

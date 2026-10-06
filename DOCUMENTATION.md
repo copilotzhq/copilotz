@@ -83,8 +83,17 @@ are exempt.
 - **Complete files** include every import and can run as shown. Name the file
   and its role (see below) in the prose that creates it.
 - **Edits** name the file, the declaration, and whether the code is inserted or
-  replaces something. If one step makes three or more changes to a file, show
-  the complete updated file instead.
+  replaces something. Three or more changes to the same file require its
+  complete updated file. One narrow exception applies: when an independently
+  optional capability chapter edits a shared host or definition module (such as
+  `agent.ts` or `assistant.ts`) and a full replacement would discard
+  contributions from earlier optional chapters, the chapter may instead give
+  exact named edits. Each edit names the file and declaration and says whether
+  it inserts or appends. The chapter says briefly why no complete file is shown,
+  keeps every existing list, map and grant, and shows the resulting baseline
+  lists. The reviewer checks the resulting composition on every supported path.
+  Don't invent wrapper or marker modules to avoid this. All other complete-file
+  rules stay the same.
 - **Additive capability edits.** Adding a capability appends to existing plugin
   lists, resource maps and grants and preserves every earlier contribution;
   never tell the reader to "replace the list". A targeted configuration change

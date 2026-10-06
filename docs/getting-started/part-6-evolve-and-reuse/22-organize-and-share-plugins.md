@@ -471,7 +471,10 @@ generated imports, identity and aliases. It does not hash leaf sources or test
 behaviour: editing the body of an existing leaf leaves the file current, which
 is why the scenarios below still run.
 
-Then run the Chapter 6 scenarios, unchanged, on both runtimes:
+For automated regression checks, first create the scenario files from
+[Chapter 6](../part-2-verify-and-recover/06-test-and-inspect.md). This
+validation step is optional and is not needed to generate or run the plugin. Its
+scenarios then run unchanged on both runtimes:
 
 ```sh
 # Deno: the scenarios import the barrel, which now re-exports generated code.
@@ -480,8 +483,9 @@ deno test -A notes.test.ts
 node --test notes.node-test.ts
 ```
 
-Both pass as before, because every observable contract is the same. Finally run
-the entrypoint:
+Those scenarios pass because every observable contract is the same. To check the
+generated plugin directly from this chapter's required starting point, run
+Chapter 5's entrypoint:
 
 ```sh
 # Deno: compose the generated plugin through composition.ts.

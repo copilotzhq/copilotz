@@ -69,7 +69,8 @@ What makes repeats safe differs by path:
 - **Scheduled claims.** A tick claims an occurrence only while it is still the
   job's expected next run time, and the claim moves that time forward from the
   check time. A second tick therefore cannot claim the same cron slot again; it
-  reports the job as skipped.
+  normally excludes that job from its due candidates. A competing tick that
+  already selected the old candidate reports a lost claim as skipped.
 - **Manual runs.** Each `runScheduledJobNow` request is its own claim. Two
   separately admitted requests for the same `scheduledFor` both append a due
   Event, even though they carry the same occurrence ID. A retry is safe only
@@ -262,37 +263,28 @@ payload: the Event describes the job record, and the occurrence is its
 
 ### Edit `composition.ts`
 
-Two changes to Chapter 7's file: insert the `digestPlugin` import and append it
-to `runtimePlugins`. `namespace` and the `file://./data` database stay. The
-complete updated file:
+Make two additive edits to Chapter 7's host composition. Keep the existing
+`namespace` and `database` declarations, including a PostgreSQL connection or a
+different local data directory you chose there.
+
+**Insert** this import after the existing `./notes-plugin.ts` import:
 
 ```ts
-// The database options type, so a mistyped option fails type-checking here
-// rather than at startup.
-import type { CopilotzOminipgOptions } from "@copilotz/copilotz";
-// The reusable Notes package. The application composes it; it does not copy it.
-import { notesPlugin } from "./notes-plugin.ts";
 // The digest reminder package, which depends on Notes and Schedules.
 import { digestPlugin } from "./digest-plugin.ts";
+```
 
-// Tenant namespace recorded on every Event and record this application owns.
-// It is the application's choice, so the plugin does not declare one. Keep it
-// unchanged between runs: operations and records are looked up within it.
-export const namespace = "team-notes";
+**Append** `digestPlugin` to `runtimePlugins`, keeping every plugin already
+there. Starting from Chapter 7 alone, the list becomes:
 
-// The database that the Notes host entrypoints open: a local PGlite database
-// stored in the `data` directory. Unlike the in-memory default, it survives
-// `close()` and process exit, so a later process finds the same notes, Events
-// and operations.
-export const database: CopilotzOminipgOptions = { url: "file://./data" };
-
-// Runtime plugins this application composes, in order. Later chapters append to
-// this list, so each Notes entrypoint gains new behaviour without dropping it.
+```ts
+// Runtime entrypoints share the Notes and digest behaviour on the same database.
 export const runtimePlugins = [notesPlugin, digestPlugin];
 ```
 
-The digest only ever passes `{ text }` to `notes.save`, so it keeps working if
-you added optional fields to notes in Chapter 18.
+The digest only ever passes `{ text }` to `notes.save`, so it also works with
+Chapter 18's optional note fields. Adding Schedules changes behaviour, not the
+host's storage choice.
 
 ### Create `clock.ts`
 
@@ -489,11 +481,11 @@ try {
 }
 ```
 
-The job, its next run time and its occurrences are stored in `./data` and
-survive `close()`. The clock does not. Scheduled times keep passing while no
-clock runs, but no occurrence is claimed or processed until the next tick, and
-that tick claims only when the stored next run time is at or before its check
-time.
+The job, its next run time and its occurrences are stored in the database
+selected in `composition.ts` and survive `close()` when that database is
+persistent. The clock does not. Scheduled times keep passing while no clock
+runs, but no occurrence is claimed or processed until the next tick, and that
+tick claims only when the stored next run time is at or before its check time.
 
 ## Check it works
 

@@ -147,8 +147,10 @@ keep them too.
 import { defineSkill } from "@copilotz/copilotz/skills";
 ```
 
-**Insert** a `skills` entry into the `agentResources` object, after
-`agents: { assistant },`:
+**Add** the `planning` entry to `agentResources.skills`, creating the map after
+the existing `agents` property when absent. Preserve every agent in that
+property and every other Skill already registered. With no other Skills, the new
+map is:
 
 ```ts
 // Skills that agents may be granted. The key must equal the `name` in the
@@ -185,9 +187,9 @@ not contain credentials, query strings or fragments.
 
 ### Grant the Skill in `assistant.ts`
 
-In `assistant.ts`, inside the `assistant` object's `capabilities`, **replace**
-only the `skills` array. Leave `tools` and `agents` exactly as they are in your
-file, including any grants from Chapters 9 or 10:
+In `assistant.ts`, **append** `planning` to `assistant.capabilities.skills`,
+keeping every existing Skill grant. Leave `tools` and `agents` unchanged. With
+no earlier Skill grants, the resulting list is:
 
 ```ts
 skills: ["planning"],

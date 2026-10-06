@@ -292,94 +292,49 @@ operation closes it too. Discovery itself times out after 30 seconds by default;
 
 ### Edit `agent.ts`
 
-`agent.ts` stays the agent harness's host module. This step makes three changes,
-so the complete file follows:
+`agent.ts` stays the agent harness's host module. These three named additions
+preserve any Skills, specialists or Memory already composed; a complete file
+replacement would discard them.
 
-1. It imports `postsApi` from `./posts-api.ts` and `notesMcp` from
-   `./notes-mcp.ts`.
-2. It inserts an `apis` map into `agentResources` with `posts: postsApi`.
-3. It inserts an `mcp` map into `agentResources` with `notes: notesMcp`.
-
-The credential check, `agentPlugins`, the `openai` connection, the clock tool
-and the `agents` map are unchanged.
+**Insert** these imports after the existing `./notes-tools.ts` import:
 
 ```ts
-// Core: conversations, agents, model calls and tools on the generic runtime.
-// It brings the LLM plugin with it.
-import { corePlugin } from "@copilotz/copilotz/core";
-// Built-in clock tool. It carries its own Action, which composition installs.
-import { getCurrentTimeToolResource } from "@copilotz/copilotz/tools/builtin";
-// The host environment supplies the model credential.
-import { env } from "node:process";
-// The pure agent definition.
-import { assistant } from "./assistant.ts";
-// The MCP resource. Importing it runs discovery against the local server.
-import { notesMcp } from "./notes-mcp.ts";
-// The Notes tool, packaged with its dependency on the Notes plugin.
-import { notesToolsPlugin } from "./notes-tools.ts";
-// The pure OpenAPI resource for the public posts API.
+// Pure OpenAPI resource; composition builds its Actions and Tools.
 import { postsApi } from "./posts-api.ts";
-
-// Fail before the application is composed when the credential is missing. MCP
-// discovery in `notes-mcp.ts` has already run, because imports are evaluated
-// first. The message names the variable, never its value.
-const apiKey = env.OPENAI_API_KEY;
-if (!apiKey) {
-  throw new Error(
-    "Set OPENAI_API_KEY in the environment before running the agent.",
-  );
-}
-
-// Plugins that the agent harness adds to an application: Core, then the Notes
-// tool. Later chapters append to this list.
-export const agentPlugins = [corePlugin, notesToolsPlugin];
-
-// Resources that Core reads when it runs an agent turn. Later chapters add
-// entries to these maps.
-export const agentResources = {
-  // Named model connections. Agents refer to them by name; only this host
-  // module holds the credential.
-  llmConnections: {
-    // The connection that `assistant.models.generate` names.
-    openai: {
-      // Core's built-in OpenAI provider.
-      provider: "openai",
-      // Credential used only for calls made through this connection.
-      auth: { apiKey },
-    },
-  },
-  // Host-chosen tools, keyed by the alias that agents grant. Registering a
-  // tool here makes it available; an agent still needs a grant to use it.
-  tools: {
-    // The built-in clock under the alias `assistant.ts` grants.
-    get_current_time: getCurrentTimeToolResource,
-  },
-  // OpenAPI resources. Each registers its operations' Actions, Tools and
-  // default HTTP binding.
-  apis: { posts: postsApi },
-  // MCP resources. Each registers its discovered tools' Actions, Tools and the
-  // connection they call through.
-  mcp: { notes: notesMcp },
-  // Agents that messages can address. The key is the composition alias;
-  // messages address the agent by its `id`.
-  agents: { assistant },
-};
+// Host module: discovers the MCP tools before composition.
+import { notesMcp } from "./notes-mcp.ts";
 ```
+
+**Add** `posts: postsApi` to `agentResources.apis`, creating that map when
+absent and keeping every existing entry. **Add** `notes: notesMcp` to
+`agentResources.mcp` in the same way. The new entries, shown with only this
+chapter's resources, are:
+
+```ts
+// API descriptions whose selected operations become Actions and Tools.
+apis: { posts: postsApi },
+// Discovered MCP descriptions whose selected tools become Actions and Tools.
+mcp: { notes: notesMcp },
+```
+
+Keep the credential check, all `agentPlugins`, and the existing connections,
+clock tool, agents, Skills and Memory configuration unchanged.
 
 ### Edit `assistant.ts`
 
-In `assistant.ts`, **replace** only the `capabilities.tools` array, appending
-the two new aliases after the existing grants:
+In `assistant.ts`, **append** `get_post` and `notes_search` to
+`assistant.capabilities.tools`, preserving every existing grant. With only
+Chapter 9 before this chapter, the resulting list is:
 
 ```ts
+// Existing Notes and clock grants, followed by the two new integration tools.
 tools: ["saveNote", "get_current_time", "get_post", "notes_search"],
 ```
 
-`saveNote`, `get_current_time` and the empty `agents` and `skills` lists stay as
-they are. Optionally, extend `instructions` with a sentence such as "Use
-get_post to look up a post by ID, and notes_search to search the team's
-reference notes." Registration made the tools available; these grants are what
-let this agent use them.
+Keep the `agents` and `skills` lists unchanged. Optionally, append a sentence to
+the existing `instructions`, such as "Use get_post to look up a post by ID, and
+notes_search to search the team's reference notes." Registration makes the tools
+available; the grants let this agent use them.
 
 ### What happens on a call
 

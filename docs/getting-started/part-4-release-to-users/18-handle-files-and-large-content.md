@@ -625,8 +625,12 @@ The `notes.file.requested` input is recorded, but no `note.created` or
 process exits with a non-zero status after closing the application, and
 `Unknown file source` appears in the error.
 
-Finally, rerun `app.ts` and your Chapter 6 tests unchanged. Text-only notes
-still save, because `body` is optional and `notes.save` never sees it.
+Finally, rerun Chapter 5's `app.ts` unchanged. Text-only notes still save,
+because `body` is optional and `notes.save` never sees it. For automated
+regression checks,
+[Chapter 6](../part-2-verify-and-recover/06-test-and-inspect.md) creates the
+scenario files; after that validation step, its tests run unchanged against this
+optional field.
 
 ## What this unlocks
 

@@ -109,10 +109,13 @@ right after `done`, so a one-shot run can end before the scoped task starts or
 finishes, and `app.close()` doesn't wait for detached work. With a persistent
 database, the pending work stays recorded for a running or restarted application
 to pick up, but running `chat.ts` many times isn't a reliable way to finish it.
-Completed consolidation needs a long-lived application or Worker that stays
-active. [Chapter 19](../part-5-operate-and-scale/19-schedule-recurring-work.md)
-and [Chapter 21](../part-5-operate-and-scale/21-deploy-and-scale.md) cover
-keeping one running.
+Completed consolidation needs a long-lived application or Worker that composes
+Core, `memoryPlugin` and these agent resources. Chapter 17's
+[`serve-agent` host](../part-4-release-to-users/17-connect-chat-and-channels.md)
+reuses `agentPlugins` and `agentResources`, so it keeps that background work
+running. A separate host must use the same persistent database, schema and
+namespace. The runtime-only hosts in Chapters 19 and 21 do not compose the agent
+harness and cannot execute its Memory work as shown.
 
 A turn whose model call would be too large is the exception: Core's foreground
 compaction can wait for a scoped checkpoint before that turn continues.
@@ -227,9 +230,8 @@ application: a new `chat.ts` process has neither the history nor its
 checkpoints, even though it uses the same thread external ID. Reusing an ID
 doesn't make anything persist.
 
-If you followed Chapter 9, `chat.ts` already passes `namespace` and `database`
-from `composition.ts`, so it uses whatever database Chapter 7 chose. Skip this
-step.
+When `chat.ts` already passes `namespace` and `database` from `composition.ts`,
+it already uses that host's database choice; no edit is needed here.
 
 Otherwise, this optional step needs `composition.ts` from Chapter 5, switched to
 a file database in Chapter 7. Make two edits to `chat.ts`, and keep its plugins

@@ -120,302 +120,147 @@ the `@team-notes/notes` ID would make composition fail instead.
 
 ### Edit `assistant.ts`
 
-`assistant.ts` stays a pure definition. This step makes two changes, shown in
-the complete file below:
+`assistant.ts` stays a pure definition. Make two additive edits to the
+`assistant` object:
 
-1. It **inserts** an `instructions` property after `role`, telling the model
-   when to save.
-2. It **replaces** the empty `tools` array inside `capabilities` with grants for
-   `saveNote` and `get_current_time`. The `agents` and `skills` lists stay
-   empty; nothing else changes.
+1. **Add** the following guidance to `instructions`, creating that property
+   after `role` when absent. When the property already has instructions, append
+   these sentences to its existing string.
+2. **Append** `saveNote` and `get_current_time` to `capabilities.tools`, keeping
+   every existing tool grant. Leave `capabilities.agents` and
+   `capabilities.skills` unchanged.
 
 ```ts
-// The Notes assistant: who it is, what it is for and which model it uses.
-// Plain data, so tests and other compositions can import it without side
-// effects. `as const` infers readonly, literal types for every value.
-export const assistant = {
-  // Stable Agent ID. Messages address the agent by this ID, and the stored
-  // conversation records it as the agent's identity.
-  id: "assistant",
-  // Name recorded for the agent's participant in the conversation.
-  name: "assistant",
-  // The agent's purpose, which Core gives the model on every turn.
-  role: "A notes assistant that helps the team capture and find notes.",
-  // Guidance on when to use the granted tools. It steers the model; it does
-  // not force a tool call.
-  instructions:
-    "When the user explicitly asks you to save or record a note, call the saveNote tool with the note text. When the user asks for the time or date, call the get_current_time tool. Do not save notes the user did not ask for.",
-  models: {
-    // Ordered model choices for generating replies; Core tries the first
-    // choice first. `connection` names an entry that the host supplies in
-    // `llmConnections`, so this file never holds a credential.
-    generate: [{ connection: "openai", model: "gpt-5.4-mini" }],
-  },
-  // What the agent may use, granted by alias. `tools` now grants the Notes
-  // tool and the built-in clock; Skills arrive in Chapter 11 and other agents
-  // in Chapter 12.
-  capabilities: {
-    tools: ["saveNote", "get_current_time"],
-    agents: [],
-    skills: [],
-  },
-} as const;
+// Guidance on when to use the new tools, in addition to existing instructions.
+instructions:
+  "When the user explicitly asks you to save or record a note, call the saveNote tool with the note text. When the user asks for the time or date, call the get_current_time tool. Do not save notes the user did not ask for.",
 ```
 
-The grants are aliases, the keys under `resources.tools`. They are not the
-Action IDs (`notes.save`) and not the presentation names (`Save note`).
+Starting from Chapter 8 alone, the resulting tool list is:
+
+```ts
+// Aliases of the Notes tool and the built-in clock.
+tools: ["saveNote", "get_current_time"],
+```
+
+These are aliases, the keys under `resources.tools`. They are not the Action IDs
+(`notes.save`) or the presentation names (`Save note`). Keep any Memory grants
+already in the list, and any Skills or specialist grants in the other lists.
 
 ### Edit `agent.ts`
 
-`agent.ts` stays the host composition module for the agent harness. This step
-makes three changes, so the complete file follows:
+`agent.ts` stays the host composition module. Shared files may already contain
+Skills, specialists or Memory, so these named edits preserve those additions
+instead of replacing the whole file.
 
-1. It imports `notesToolsPlugin` from `./notes-tools.ts`, and the built-in clock
-   tool, `getCurrentTimeToolResource`, from `@copilotz/copilotz/tools/builtin`.
-2. It appends `notesToolsPlugin` to `agentPlugins`, after `corePlugin`.
-3. It adds a `tools` map to `agentResources` with the clock under the alias
-   `get_current_time`.
-
-The credential check, the `openai` connection and the `agents` map are
-unchanged.
-
-The clock is added differently from `saveNote`. `getCurrentTimeToolResource`
-carries its own Action. When the host places it under `resources.tools`,
-composition installs that Action under the same alias and turns the entry into a
-Tool, so no plugin is needed. Only this one built-in tool is added, and only the
-assistant's grant lets the model use it.
+**Insert** these imports after the existing `corePlugin` import:
 
 ```ts
-// Core: conversations, agents, model calls and tools on the generic runtime.
-// It brings the LLM plugin with it.
-import { corePlugin } from "@copilotz/copilotz/core";
 // Built-in clock tool. It carries its own Action, which composition installs.
 import { getCurrentTimeToolResource } from "@copilotz/copilotz/tools/builtin";
-// The host environment supplies the model credential.
-import { env } from "node:process";
-// The pure agent definition.
-import { assistant } from "./assistant.ts";
 // The Notes tool, packaged with its dependency on the Notes plugin.
 import { notesToolsPlugin } from "./notes-tools.ts";
-
-// Fail before anything is composed when the credential is missing. The message
-// names the variable, never its value.
-const apiKey = env.OPENAI_API_KEY;
-if (!apiKey) {
-  throw new Error(
-    "Set OPENAI_API_KEY in the environment before running the agent.",
-  );
-}
-
-// Plugins that the agent harness adds to an application: Core, then the Notes
-// tool. Later chapters append to this list.
-export const agentPlugins = [corePlugin, notesToolsPlugin];
-
-// Resources that Core reads when it runs an agent turn. Later chapters add
-// entries to these maps.
-export const agentResources = {
-  // Named model connections. Agents refer to them by name; only this host
-  // module holds the credential.
-  llmConnections: {
-    // The connection that `assistant.models.generate` names.
-    openai: {
-      // Core's built-in OpenAI provider.
-      provider: "openai",
-      // Credential used only for calls made through this connection.
-      auth: { apiKey },
-    },
-  },
-  // Host-chosen tools, keyed by the alias that agents grant. Registering a
-  // tool here makes it available; an agent still needs a grant to use it.
-  tools: {
-    // The built-in clock under the alias `assistant.ts` grants.
-    get_current_time: getCurrentTimeToolResource,
-  },
-  // Agents that messages can address. The key is the composition alias;
-  // messages address the agent by its `id`.
-  agents: { assistant },
-};
 ```
+
+**Append** `notesToolsPlugin` to `agentPlugins`, keeping every plugin already
+there. Starting from Chapter 8 alone, the result is:
+
+```ts
+// Core and the package that presents the Notes Action to models.
+export const agentPlugins = [corePlugin, notesToolsPlugin];
+```
+
+**Add** `get_current_time: getCurrentTimeToolResource` to
+`agentResources.tools`. Create the `tools` map when absent; keep every other
+entry in it and every other resource map. The baseline map is:
+
+```ts
+// Host-chosen tools, keyed by the aliases agents grant.
+tools: {
+  // The clock's resource carries the Action to install under this alias.
+  get_current_time: getCurrentTimeToolResource,
+},
+```
+
+Keep the credential check, the `openai` connection and all entries in
+`agentResources.agents` unchanged. `getCurrentTimeToolResource` carries its own
+Action: composition installs it under the same alias and turns the resource into
+a Tool, so no additional plugin is needed. The assistant's grant controls
+whether it may use the clock.
 
 ### Edit `chat.ts`
 
-`chat.ts` stays an entrypoint. It now runs on the same host choices as `app.ts`,
-so the note the agent saves lands in the application's Notes composition. This
-step makes three changes, so the complete file follows:
+`chat.ts` stays an entrypoint. It now uses the application's Notes host choices
+and prints Notes facts alongside the reply. These named edits preserve any Skill
+or Memory diagnostics already added to the reader.
 
-1. It imports `namespace`, `database` and `runtimePlugins` from
-   `composition.ts`, and the `NoteRecord` and `SaveNoteInput` types.
-2. It passes `namespace` and `database` to `createCopilotz`, and composes
-   `plugins: [...runtimePlugins, ...agentPlugins]`: the generic runtime plugins
-   first, then the agent harness.
-3. It prints the two Notes facts, `note.created` and `notes.save.completed`, and
-   the clock's `copilotz.tools.builtin.get_current_time.completed` Event, while
-   streaming the reply as before.
-
-The message, the reply streaming and the failure handling are unchanged.
+Add the following imports after the existing `./agent.ts` import. When `chat.ts`
+already imports `database` and `namespace` from `./composition.ts`, **extend
+that import** with `runtimePlugins` instead of declaring those bindings again.
+Otherwise, **insert** the complete composition import below. Insert the new type
+imports in either case:
 
 ```ts
-// Runtime factory, and the guard that separates byte streams from Events.
-import { createCopilotz, isStreamOutput } from "@copilotz/copilotz";
-// Types of the outputs this script reads and of the Notes Event data it prints.
+// The application's own choices, shared with app.ts.
+import { database, namespace, runtimePlugins } from "./composition.ts";
+// Types of the recorded Collection and Action outcomes this reader prints.
 import type {
   ActionCompletedData,
-  ApplicationOutput,
   CollectionCreated,
-  StreamOutput,
 } from "@copilotz/copilotz";
-// Core's helper that turns a chat message into an input Event.
-import { message } from "@copilotz/copilotz/core";
-// The prompt comes from the command line; reply text goes to standard output.
-import { argv, stdout } from "node:process";
-// Host composition: Core, the Notes tool, the model connection and the
-// assistant.
-import { agentPlugins, agentResources } from "./agent.ts";
-// The application's own choices, shared with `app.ts`.
-import { database, namespace, runtimePlugins } from "./composition.ts";
-// Types of a stored note and of the Action's input, for reading results.
 import type { NoteRecord, SaveNoteInput } from "./notes-plugin.ts";
+```
 
-// Writes one content stream to the terminal while its bytes arrive, then
-// reports the stream's outcome when it did not complete.
-async function printContent(output: StreamOutput): Promise<void> {
-  // Decode UTF-8 incrementally, so characters split across chunks stay whole.
-  const text = output.payload.pipeThrough(new TextDecoderStream());
-  for await (const piece of text) stdout.write(piece);
-  stdout.write("\n");
-  // `terminal` reports how this stream ended. A failed model attempt can be
-  // followed by a retry on a new stream, so `done` stays the authority on
-  // whether the whole operation succeeded.
-  const terminal = await output.terminal;
-  if (terminal.outcome !== "completed") {
-    console.log(`[reply stream ended: ${terminal.outcome}]`);
-  }
-}
+Inside the existing `createCopilotz` options, **replace** the `namespace` value
+with the imported `namespace`, **add** `database` from the same composition when
+it is not already present, and **replace** the `plugins` value with
+`[...runtimePlugins, ...agentPlugins]`. Keep `resources: agentResources` and any
+other options unchanged. These properties now read:
 
-// Reads all of the operation's outputs in order, prints the visible reply and
-// the Notes facts, and returns whether a model call failed.
-async function printReply(
-  outputs: ReadableStream<ApplicationOutput>,
-): Promise<boolean> {
-  let modelCallFailed = false;
-  for await (const output of outputs) {
-    if (!isStreamOutput(output)) {
-      // Only recorded Events are inspected; live Events are skipped.
-      if (!output.durable) continue;
-      // The `note` Collection appends this Event when the tool's Action stores
-      // a note. Its data holds the committed record.
-      if (output.type === "note.created") {
-        const { record } = output.data as CollectionCreated<NoteRecord>;
-        console.log(
-          `event note.created note=${record.id} text=${
-            JSON.stringify(record.text)
-          }`,
-        );
-      }
-      // The `notes.save` Action appends this Event when the call succeeds,
-      // whichever caller made it.
-      if (output.type === "notes.save.completed") {
-        const { output: saved } = output.data as ActionCompletedData<
-          SaveNoteInput,
-          NoteRecord
-        >;
-        console.log(`event notes.save.completed note=${saved.id}`);
-      }
-      // The recorded lifecycle Event of a model call that ended in failure,
-      // after any retries and fallbacks inside that call. Only the flag is
-      // kept; the Event's data, which may include provider details, is not
-      // printed. Keep reading so the remaining outputs drain.
-      if (output.type === "llm.call.failed") {
-        modelCallFailed = true;
-      }
-      // The built-in clock's Action appends this Event when the model's clock
-      // tool call succeeds. Only the type is printed; the time is in the reply.
-      if (output.type === "copilotz.tools.builtin.get_current_time.completed") {
-        console.log(`event ${output.type}`);
-      }
-      // Other recorded Events: not printed in this chapter.
-      continue;
-    }
-    // The agent's visible reply text.
-    if (output.role === "content" && output.mediaType.startsWith("text/")) {
-      await printContent(output);
-      continue;
-    }
-    // Reasoning, tool-call drafts and other streams: release this observer's
-    // copy so it does not hold the operation's outputs open.
-    await output.payload.cancel();
-  }
-  return modelCallFailed;
-}
+```ts
+// Notes and the agent harness use the same namespace and database choice.
+namespace,
+database,
+// Each list keeps its existing plugins; the identical Notes dependency dedupes.
+plugins: [...runtimePlugins, ...agentPlugins],
+```
 
-// The prompt to send, with a default so the script runs without arguments.
-const prompt = argv[2] ?? "Say hello!";
+Inside `printReply`, in the `if (!isStreamOutput(output))` branch, **insert**
+this block before that branch's final `continue`. Keep its existing model
+failure check and any other Event diagnostics:
 
-// Compose the application's runtime plugins with the agent harness, on the
-// application's own namespace and database.
-const app = await createCopilotz({
-  // Tenant namespace recorded on every conversation record, note and Event.
-  namespace,
-  // The shared database choice. Closing the application releases it.
-  database,
-  // Generic runtime plugins first, then Core and the Notes tool. The Notes
-  // plugin appears in both lists as the same object and is registered once.
-  plugins: [...runtimePlugins, ...agentPlugins],
-  // The model connection, the clock tool and the assistant that Core reads.
-  resources: agentResources,
-});
-
-try {
-  // Admit one chat message. Core finds or creates the thread and the human
-  // participant from their external IDs, records the message and runs the
-  // addressed agent's turn, including any tool calls, within the same
-  // operation.
-  const handle = await app.send(message({
-    // Application-owned thread name; the same name reuses the same thread.
-    thread: { externalId: "team-notes-chat" },
-    // Application-owned identity of the human who is speaking.
-    participant: { externalId: "you", participantType: "human" },
-    // Agent IDs that should receive the message and reply.
-    recipientIds: ["assistant"],
-    // The message text.
-    content: prompt,
-  }));
-  console.log(`accepted operation ${handle.operationId}`);
-
-  // Print the reply and Notes facts while waiting for settlement. `done`
-  // resolves after the agent's turn and its tool calls finish, and Promise.all
-  // rejects as soon as either side fails.
-  const [modelCallFailed] = await Promise.all([
-    printReply(handle.outputs),
-    handle.done,
-  ]);
-  // A settled operation is not the same as a successful reply: Core records a
-  // failed model call and still settles the turn. Report it as a failure.
-  if (modelCallFailed) {
-    throw new Error(
-      `The model call failed in operation ${handle.operationId}. ` +
-        "Inspect the recorded model-call failure for details.",
+```ts
+// Only durable facts prove that a Collection write or Action call was stored.
+if (output.durable) {
+  // The committed note, whichever caller saved it.
+  if (output.type === "note.created") {
+    const { record } = output.data as CollectionCreated<NoteRecord>;
+    console.log(
+      `event note.created note=${record.id} text=${
+        JSON.stringify(record.text)
+      }`,
     );
   }
-
-  // Read the operation's recorded state back by its ID.
-  const status = await app.operationStatus({
-    operationId: handle.operationId,
-  });
-  console.log(
-    `settled operation ${handle.operationId}: ${status?.state ?? "unknown"}`,
-  );
-} finally {
-  // Stop the runtime and release its database, including after a failure.
-  await app.close();
+  // The same Action outcome runtime callers and model tools receive.
+  if (output.type === "notes.save.completed") {
+    const { output: saved } = output.data as ActionCompletedData<
+      SaveNoteInput,
+      NoteRecord
+    >;
+    console.log(`event notes.save.completed note=${saved.id}`);
+  }
+  // The clock ran; its returned time reaches the model through the tool result.
+  if (output.type === "copilotz.tools.builtin.get_current_time.completed") {
+    console.log(`event ${output.type}`);
+  }
 }
 ```
 
-`chat.ts` now uses whatever database `composition.ts` names. With Chapter 5's
-`:memory:` choice, notes and the conversation last only for one process. If you
-followed Chapter 7 and switched `composition.ts` to a file database, notes saved
-by the agent persist alongside notes saved by `app.ts`, and the
-`team-notes-chat` thread continues across runs.
+The message, reply streaming, failure handling and cleanup stay unchanged. With
+Chapter 5's `:memory:` composition, state lasts one process. Chapter 7's
+persistent database choice keeps agent-made and runtime-made notes together, and
+preserves the `team-notes-chat` thread across runs. Do not change that chosen
+database while adding tools.
 
 ### What happens on a tool call
 

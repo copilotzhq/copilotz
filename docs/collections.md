@@ -44,7 +44,7 @@ override it.
 | `schema`                                       | JSON Schema for one record, declared `as const` so `$inferSelect` and `$inferInsert` are derived from it.                                                                                        |
 | `readOnly` fields                              | Schema metadata for schema-aware input surfaces, such as `id: { type: "string", readOnly: true }`. It is not an access rule on trusted code. The runtime generates `id` when the input omits it. |
 | `timestamps`, `defaults`                       | `createdAt`/`updatedAt` are maintained for you; `defaults` fills missing fields.                                                                                                                 |
-| `indexes`                                      | A field, a compound list, or `{ fields, unique?, type? }`. Indexes speed up filters and orderings; `unique` also rejects duplicates.                                                             |
+| `indexes`                                      | A field, a compound list, or `{ fields, unique?, type? }`. Retained definition metadata; the current generic runtime does not create SQL indexes or enforce `unique` from this declaration.      |
 | `relations`                                    | `relation.belongsTo`, `relation.hasMany` or `relation.hasOne`, each naming a target Collection and foreign key. Writes project them as graph edges.                                              |
 | `commands`                                     | Named mutations. Each has `mutate({ current, input })` returning `{ set?, unset? }`, an optional `input` schema and an optional Event type.                                                      |
 | `queries`                                      | Named reads built from `filter`, `query` or `select`, with optional input and output schemas.                                                                                                    |
@@ -145,9 +145,9 @@ resolving content you would not show. See
 
 ## Reference
 
-This standalone `app.ts` extends the Chapter 4 Notes example with an index, a
-`pin` command and a filtered list. It needs `@copilotz/copilotz@^0.84.4` on Deno
-2.9+ or Node 24+, and no credential.
+This standalone `app.ts` extends the Chapter 4 Notes example with a `pin`
+command and a filtered list. It needs `@copilotz/copilotz@^0.84.4` on Deno 2.9+
+or Node 24+, and no credential.
 
 ```ts
 // Runtime factory and primitive helpers.
@@ -186,8 +186,6 @@ const note = defineCollection({
   } as const,
   // New notes start unpinned.
   defaults: { pinned: false },
-  // Speeds up the pinned-notes list.
-  indexes: ["pinned"],
   commands: {
     // A named domain change with its own Event type.
     pin: {

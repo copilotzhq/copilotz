@@ -84,9 +84,9 @@ are exempt.
   and its role (see below) in the prose that creates it.
 - **Edits** name the file, the declaration, and whether the code is inserted or
   replaces something. Three or more changes to the same file require its
-  complete updated file. One narrow exception applies: when an independently
-  optional capability chapter edits a shared host or definition module (such as
-  `agent.ts` or `assistant.ts`) and a full replacement would discard
+  complete updated file. One narrow exception applies: when a capability chapter
+  can follow independent optional branches and edits a shared module (such as
+  `agent.ts`, `assistant.ts` or `chat.ts`) and a full replacement would discard
   contributions from earlier optional chapters, the chapter may instead give
   exact named edits. Each edit names the file and declaration and says whether
   it inserts or appends. The chapter says briefly why no complete file is shown,

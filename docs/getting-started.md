@@ -79,7 +79,9 @@ Code follows a few conventions:
   shown.
 - An **Edit** step names the file and the declaration, and says whether the code
   is inserted or replaces something. If a step makes three or more changes to
-  one file, it shows the complete updated file instead.
+  one file, it normally shows the complete updated file. Shared capability files
+  use exact additive edits when a replacement would erase optional branches;
+  those steps explain what to keep and show the resulting baseline.
 - Adding a capability appends to existing plugin lists, resource maps and
   grants, so earlier work is kept.
 - Comments explain why a declaration, property or operation exists, not what the
@@ -233,9 +235,11 @@ resolves and what you have afterwards.
   · H, optional · Requires: 08. One agent is asked to be good at everything. Add
   a reviewer agent and grant which agents may ask it.
 - [Chapter 13: Remember Across Conversations](getting-started/part-3-add-agent-behavior/13-remember-across-conversations.md)
-  · H, optional · Requires: 08 (07 recommended). Every new conversation starts
-  from nothing. Add long-term memory with explicit search and consolidation
-  grants.
+  · H, optional · Requires: 08 (07 recommended). Long conversations exceed a
+  bounded history window. Preserve certified facts through consolidation and
+  grant explicit memory search. Ready checkpoints feed the same agent's later
+  turns in that thread; cross-thread retrieval requires explicit search and
+  access.
 - [Chapter 14: Test Agents Without a Provider](getting-started/part-3-add-agent-behavior/14-test-agents-without-a-provider.md)
   · H, recommended · Requires: 06, 09. Live model calls make tests slow, costly
   and unpredictable. Script the model's tool calls and assert the Action

@@ -252,7 +252,13 @@ export async function queryCollectionRecords(
       );
     }
     for (const [field, value] of Object.entries(predicate.where ?? {})) {
-      const index = params.push(value);
+      // Equality uses JSON text, so drivers must receive text for scalar
+      // booleans/numbers too. PGlite does not coerce them for a text parameter.
+      const index = params.push(
+        typeof value === "boolean" || typeof value === "number"
+          ? String(value)
+          : value,
+      );
       if (field === "id") filters.push(`id = $${index}`);
       else filters.push(`${jsonTextPath(field)} = $${index}::text`);
     }

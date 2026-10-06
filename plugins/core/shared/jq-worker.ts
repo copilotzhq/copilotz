@@ -1,9 +1,9 @@
+import { loadJq } from "../../../dependencies/jq-wasm.ts";
 export type JqWorkerRequest = { input: string; filter: string };
 export async function runJqWorker(
   input: string,
   filter: string,
 ): Promise<unknown> {
-  const { loadJq } = await import("../../../dependencies/jq-wasm.ts");
   const jq = await loadJq();
   return await jq.json(input, filter);
 }

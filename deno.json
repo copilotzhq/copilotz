@@ -72,7 +72,8 @@
     "exclude": [
       "**/*.test.ts",
       "runtime/testing",
-      "plugins/core/shared/testing"
+      "plugins/core/shared/testing",
+      "plugins/tool-mcp/adapters/stdio/fixtures"
     ]
   },
   "unstable": [

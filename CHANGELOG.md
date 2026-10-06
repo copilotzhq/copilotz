@@ -1,3 +1,14 @@
+## 0.84.1 — 2026-10-06
+
+### Fixed
+
+- Project unknown or unadvertised Tool calls through the existing
+  `ToolUnavailable` result path so Agents can correct them. Valid parallel
+  siblings still execute, while unavailable stages cannot execute even if a
+  later composition registers or grants their alias. This also lets memory
+  consolidation recover a misspelled completion Tool in its original scoped turn
+  instead of leaving its checkpoint pending after a dead-lettered result.
+
 ## 0.84.0 — 2026-10-06
 
 ### Changed

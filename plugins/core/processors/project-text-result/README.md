@@ -16,3 +16,10 @@ It is installed by Core and consumes completed `llm.call` events.
 
 Plain content becomes a canonical Message; Tool calls become an immutable plan
 whose branches are scheduled in parallel.
+
+Unknown or unadvertised Tool aliases become ordinary `ToolUnavailable` results
+through the existing stage dispatcher. They have no executable Action identity,
+so they cannot run even if composition later adds the alias. Valid siblings
+still finish, and the settled plan gives the Agent one normal continuation to
+correct its call. Dispatch also checks the current grant and definition
+identity.

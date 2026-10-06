@@ -118,7 +118,7 @@ chat readers inspect model failure separately.
 
 Prerequisites: the Notes application from
 [Persist and recover](getting-started/part-2-verify-and-recover/07-persist-and-recover.md),
-with `composition.ts` and `notes-plugin.ts`, and `@copilotz/copilotz@^0.84.4`.
+with `composition.ts` and `notes-plugin.ts`, and `@copilotz/copilotz@^0.85.0`.
 
 ### Create `operations.ts`
 

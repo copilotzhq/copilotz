@@ -335,8 +335,8 @@ previous artifact for an operator-managed rollback.
 Within one application process, selection-head scans batch up to 1,000 opaque
 keys. They run on scoped, coalesced notifications and every five seconds as a
 safety check. Only changed selections query their indexed operation
-associations. The existing metadata-search APIs below remain available for
-explicit generic queries; the conversation observation path does not use them.
+associations. Generic metadata-search APIs remain available for explicit generic
+queries; the conversation observation path does not use them.
 
 Resource checks run every 250 ms, batching only equivalent namespace, collection
 and permission predicates. An exact resource-ID equality may be factored into

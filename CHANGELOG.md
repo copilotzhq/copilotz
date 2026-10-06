@@ -64,6 +64,21 @@
 
 # Changelog
 
+## 0.84.0
+
+- Declare Skills, OpenAPI, and MCP once as resources with automatic
+  dependencies.
+- Load skill roots dynamically through the same import across runtimes, with
+  bounded app-scoped snapshots and supporting reads.
+- Replace descriptor-only API compilation with `defineApi({schema,...})`,
+  operation selection, and tool transformations.
+- Replace separate MCP preparation with one awaited `defineMcp` resource
+  constructor.
+- Keep framework dependencies external in filesystem-built plugins and generated
+  Skills packages.
+- Breaking authoring update: rebuild generated plugins and migrate consumers to
+  the documented resource API.
+
 ## 0.82.8 — 2026-10-01
 
 ### Added

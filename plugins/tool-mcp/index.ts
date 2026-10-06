@@ -1,9 +1,2 @@
-/**
- * Exposes the public MCP Tool authoring surface.
- *
- * @module
- */
-
+/** Declarative MCP resources. @module */
 export * from "./authoring/index.ts";
-
-export { mcpToolsPlugin } from "./plugin.ts";

@@ -1,5 +1,6 @@
 import type {
   ContributionActions,
+  ContributionPlugins,
   ResolvedNamespaces,
 } from "./contribution.ts";
 import type { ActionMap } from "../actions/types.ts";
@@ -52,8 +53,14 @@ export type RegistryComposition<
   TActions extends ActionMap = EmptyMap,
   TCollections extends CollectionMap = EmptyMap,
   TProcessors extends ProcessorMap = EmptyMap,
-> = ComposePlugins<TPlugins> extends
-  infer TPluginsComposition extends PluginComposition ? PluginComposition<
+> = ComposePlugins<
+  readonly [
+    ...TPlugins,
+    ...ContributionPlugins<TResources>,
+    ...ContributionPlugins<TAdapters>,
+  ]
+> extends infer TPluginsComposition extends PluginComposition
+  ? PluginComposition<
     TPluginsComposition["collections"] & TCollections,
     & TPluginsComposition["actions"]
     & TActions

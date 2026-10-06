@@ -1,3 +1,4 @@
+import { mapSkills, skillManifest } from "../../../shared/snapshots.ts";
 /** Contributes the authorized Skills catalog without loading any Skill bodies. @module */
 
 import {
@@ -8,13 +9,18 @@ import {
 import type { RuntimeContextNamespaces } from "@copilotz/copilotz/actions";
 import type { Skill } from "../../../shared/contracts.ts";
 
-function catalogEntry(skill: Skill): string {
+async function catalogEntry(
+  skill: Skill,
+  scope: object,
+  signal?: AbortSignal,
+): Promise<string> {
+  const manifest = await skillManifest(skill, { scope, signal });
   const resources = skill.files.filter((file) => file.path !== "SKILL.md");
   return [
-    `- **${skill.name}**: ${skill.description}`,
+    `- **${skill.name}**: ${manifest.description}`,
     skill.locator
       ? `  Retrieval locator: \`${skill.locator}\` (authorized file/HTTP route).`
-      : "  Retrieval route: bundled Skill reader (`load_skill`).",
+      : "  Retrieval route: Skill reader (`load_skill`).",
     resources.length
       ? skill.locator
         ? `  Supporting paths relative to that location: ${
@@ -24,6 +30,11 @@ function catalogEntry(skill: Skill): string {
           resources.map((file) => file.path).join(", ")
         }`
       : "",
+    ...(skill.dynamicFiles
+      ? [
+        "  Supporting files referenced in the instructions can be read with `read_skill_resource`.",
+      ]
+      : []),
   ].filter(Boolean).join("\n");
 }
 
@@ -32,7 +43,7 @@ export const skillsCatalog: ContextResource = defineContextResource({
   id: "copilotz.skills.catalog",
   type: "context",
   purposes: ["conversation"],
-  contribute(input: ContextContributionInput) {
+  async contribute(input: ContextContributionInput) {
     const resolver = (input.context.resources as unknown as {
       capabilities?: Readonly<
         Record<
@@ -80,7 +91,9 @@ export const skillsCatalog: ContextResource = defineContextResource({
       id: "catalog",
       title: "Available Skills",
       role: "context",
-      content: granted.map(catalogEntry).join("\n"),
+      content: (await mapSkills(granted, (skill) =>
+        catalogEntry(skill, input.context.resources, input.context.signal)))
+        .join("\n"),
     } as const;
   },
 });

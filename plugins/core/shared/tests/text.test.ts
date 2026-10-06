@@ -1,3 +1,8 @@
+import {
+  createBundledSkill as defineSkill,
+  createInlineSkill,
+} from "../../../skills/resources/skill/index.ts";
+import { skillsPlugin } from "../../../skills/plugin.ts";
 import type { EventVisibility } from "@copilotz/copilotz/core";
 import { coreEvent } from "../events/index.ts";
 import type { LlmCallInput } from "@copilotz/copilotz/llm";
@@ -31,7 +36,6 @@ import type {
 } from "@copilotz/copilotz/llm";
 import { defineAction } from "@copilotz/copilotz/actions";
 import { defineTool } from "@copilotz/copilotz/core";
-import { defineSkill, skillsPlugin } from "@copilotz/copilotz/skills";
 import {
   type CopilotzPlugin,
   createPluginRegistry,

@@ -8,8 +8,6 @@ import {
   type SkillActionContext,
   skillByName,
 } from "../../../shared/tool-context.ts";
-import { readSkillFileText } from "../../skill/index.ts";
-import { parseSkillMarkdown } from "../../../shared/parser.ts";
 export const loadSkillTool: ToolDefinition<
   ActionDefinition<unknown, unknown, SkillActionContext>
 > = defineTool<
@@ -28,26 +26,18 @@ export const loadSkillTool: ToolDefinition<
   },
   async execute(raw, context) {
     const skill = skillByName(context, record(raw).name);
-    const markdown = await readSkillFileText(
-      await skill.read("SKILL.md", { signal: context.signal }),
-      maximumTextBytes(context),
-      context.signal,
-    );
-    const parsed = parseSkillMarkdown(markdown);
-    if (
-      parsed.manifest.name !== skill.name ||
-      parsed.manifest.description !== skill.description
-    ) {
-      throw new Error(
-        `Skill '${skill.name}' catalog metadata does not match SKILL.md.`,
-      );
-    }
+    const options = {
+      signal: context.signal,
+      scope: context.resources,
+      maximumTextBytes: maximumTextBytes(context),
+    };
+    const parsed = await skill.load(options);
     return {
       name: skill.name,
-      description: skill.description,
+      description: parsed.manifest.description,
       content: parsed.body,
-      compatibility: skill.compatibility,
-      allowedTools: skill.allowedTools,
+      compatibility: parsed.manifest.compatibility,
+      allowedTools: parsed.manifest.allowedTools,
       resources: skill.files.filter((file) => file.path !== "SKILL.md"),
     };
   },

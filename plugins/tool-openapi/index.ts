@@ -1,9 +1,2 @@
-/**
- * Exposes OpenAPI Tool authoring helpers.
- *
- * @module
- */
-
+/** Declarative OpenAPI resources. @module */
 export * from "./authoring/index.ts";
-
-export { openApiToolsPlugin } from "./plugin.ts";

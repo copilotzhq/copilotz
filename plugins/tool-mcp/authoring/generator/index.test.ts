@@ -7,21 +7,32 @@ import type {
 } from "@copilotz/copilotz/content";
 import type { MCPServer } from "../contracts/index.ts";
 import {
+  type ConnectMcpRuntime,
+  defineMcp,
   type McpRuntimeConnection,
-  prepareMcpTools,
-  type PrepareMcpToolsOptions,
 } from "./index.ts";
-import { definePlugin } from "@copilotz/copilotz/plugins";
-async function prepareFixture(options: PrepareMcpToolsOptions) {
-  return definePlugin({
-    id: "test.mcp",
-    version: "1",
-    resources: { tools: await prepareMcpTools(options) },
-    adapters: {
+import { createPluginRegistry } from "@copilotz/copilotz/plugins";
+async function prepareFixture(
+  options: {
+    servers: readonly MCPServer[];
+    connect: ConnectMcpRuntime;
+    signal?: AbortSignal;
+  },
+) {
+  const resources = await Promise.all(
+    options.servers.map(({ transport, env, capabilities, ...server }) =>
+      defineMcp({
+        ...server,
+        connection: { connect: options.connect, transport, env },
+        tools: capabilities?.tools as string[] | undefined,
+        signal: options.signal,
+      })
+    ),
+  );
+  return createPluginRegistry({
+    resources: {
       mcp: Object.fromEntries(
-        options.servers.map(
-          (server) => [server.id, { connect: options.connect }],
-        ),
+        resources.map((resource, index) => [String(index), resource]),
       ),
     },
   });
@@ -136,7 +147,7 @@ Deno.test("MCP aliases use stable server IDs, honor allowlists, and reject colli
         connect,
       }),
     TypeError,
-    "alias collision 'same_server_allowed'",
+    "Action alias 'same_server_allowed'",
   );
 });
 

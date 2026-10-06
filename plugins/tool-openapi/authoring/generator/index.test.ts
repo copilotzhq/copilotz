@@ -16,18 +16,28 @@ import type {
   ContentStreamOpenInput,
 } from "@copilotz/copilotz/streams";
 import type { API } from "../contracts/index.ts";
-import {
-  compileOpenApiTools,
-  type CompileOpenApiToolsOptions,
-  defineApi,
-} from "./index.ts";
-import { definePlugin } from "@copilotz/copilotz/plugins";
+import { defineApi } from "./index.ts";
+import { contribution, createPluginRegistry } from "@copilotz/copilotz/plugins";
+type CompileOpenApiToolsOptions = {
+  apis: readonly API[] | Readonly<Record<string, API>>;
+};
 function compileFixture(options: CompileOpenApiToolsOptions) {
-  return definePlugin({
-    id: "test.openapi",
-    version: "1",
-    resources: { tools: compileOpenApiTools(options) },
-  });
+  if (!options?.apis || typeof options.apis !== "object") {
+    throw new TypeError("OpenAPI Tool plugin requires APIs.");
+  }
+  const apis = Array.isArray(options.apis)
+    ? Object.fromEntries(
+      options.apis.map((
+        api,
+        i,
+      ) => [`api${i}`, contribution in api ? api : defineApi(api)]),
+    )
+    : Object.fromEntries(
+      Object.entries(options.apis).map((
+        [alias, api],
+      ) => [alias, contribution in api ? api : defineApi(api)]),
+    );
+  return createPluginRegistry({ resources: { apis } });
 }
 
 type Executable = Readonly<{
@@ -40,7 +50,17 @@ function action(
 ): Executable {
   const value = plugin.actions[alias];
   if (!value) throw new Error(`Missing generated Action '${alias}'.`);
-  return value as unknown as Executable;
+  return {
+    execute(input, context) {
+      return (value as unknown as Executable).execute(
+        input,
+        {
+          ...context,
+          adapters: { ...plugin.adapters, ...context.adapters },
+        } as ActionContext,
+      );
+    },
+  };
 }
 
 function actionContext(
@@ -72,7 +92,7 @@ function api(
     id: "fixture-api",
     name: "Fixture API",
     baseUrl: "https://example.test",
-    openApiSchema: {
+    schema: {
       openapi: "3.1.0",
       paths: {
         "/operation": {
@@ -122,7 +142,12 @@ Deno.test("OpenAPI factory injects native Action context into request preparatio
     assertEquals(observed?.namespace, "tenant-a");
     assertEquals(observed?.databaseSchema, "tenant_a");
     assertStrictEquals(observed?.collections.records, collection as never);
-    assertEquals(Object.keys(plugin.actions), ["scoped_lookup"]);
+    assertEquals(
+      Object.keys(plugin.actions).filter((alias) =>
+        plugin.actions[alias].id.startsWith("copilotz.tools.openapi.")
+      ),
+      ["scoped_lookup"],
+    );
     assertEquals(
       (plugin.resources.tools.scoped_lookup as { action: string }).action,
       "scoped_lookup",
@@ -941,7 +966,12 @@ Deno.test("OpenAPI aliases are deterministic and collisions fail composition", (
   const normalized = compileFixture({
     apis: [api("GET /records")],
   });
-  assertEquals(Object.keys(normalized.actions), ["api_GET_records"]);
+  assertEquals(
+    Object.keys(normalized.actions).filter((alias) =>
+      normalized.actions[alias].id.startsWith("copilotz.tools.openapi.")
+    ),
+    ["api_GET_records"],
+  );
   assertThrows(
     () =>
       compileFixture({
@@ -951,7 +981,7 @@ Deno.test("OpenAPI aliases are deterministic and collisions fail composition", (
         ],
       }),
     TypeError,
-    "alias collision 'same'",
+    "alias 'same'",
   );
 });
 
@@ -960,7 +990,7 @@ Deno.test("OpenAPI alias maps are declaration maps and retain every operation al
     id: "fixture-api",
     name: "Fixture API",
     baseUrl: "https://example.test",
-    openApiSchema: {
+    schema: {
       openapi: "3.1.0",
       paths: {
         "/one": {
@@ -976,17 +1006,31 @@ Deno.test("OpenAPI alias maps are declaration maps and retain every operation al
   const mapPlugin = compileFixture({
     apis: { fixture: definition },
   });
-  assertEquals(Object.keys(mapPlugin.actions), [
-    "first_operation",
-    "second_operation",
-  ]);
-  assertEquals(Object.keys(mapPlugin.resources.tools), [
-    "first_operation",
-    "second_operation",
-  ]);
   assertEquals(
-    Object.keys(mapPlugin.actions),
-    Object.keys(arrayPlugin.actions),
+    Object.keys(mapPlugin.actions).filter((alias) =>
+      mapPlugin.actions[alias].id.startsWith("copilotz.tools.openapi.")
+    ),
+    [
+      "first_operation",
+      "second_operation",
+    ],
+  );
+  assertEquals(
+    Object.keys(mapPlugin.resources.tools).filter((alias) =>
+      mapPlugin.actions[alias]?.id.startsWith("copilotz.tools.openapi.")
+    ),
+    [
+      "first_operation",
+      "second_operation",
+    ],
+  );
+  assertEquals(
+    Object.keys(mapPlugin.actions).filter((alias) =>
+      mapPlugin.actions[alias].id.startsWith("copilotz.tools.openapi.")
+    ),
+    Object.keys(arrayPlugin.actions).filter((alias) =>
+      arrayPlugin.actions[alias].id.startsWith("copilotz.tools.openapi.")
+    ),
   );
 });
 
@@ -1003,31 +1047,24 @@ Deno.test("defineApi snapshots mutable JSON and OpenAPI maps reject unsafe decla
     id: "snapshot-api",
     name: "Snapshot API",
     baseUrl: "https://example.test",
-    openApiSchema: schema,
+    schema: schema,
     headers: { "X-Original": "yes" },
   });
   schema.paths["/status"].get.operationId = "mutated_status";
   const plugin = compileFixture({ apis: { fixture: api } });
-  assertEquals(Object.keys(plugin.actions), ["original_status"]);
-
-  assertThrows(
-    () => compileFixture({ apis: { "not-valid": api } }),
-    TypeError,
-    "invalid alias",
+  assertEquals(
+    Object.keys(plugin.actions).filter((alias) =>
+      plugin.actions[alias].id.startsWith("copilotz.tools.openapi.")
+    ),
+    ["original_status"],
   );
+
   const unsafe = Object.create(null) as Record<string, typeof api>;
   unsafe.__proto__ = api;
   assertThrows(
     () => compileFixture({ apis: unsafe }),
     TypeError,
-    "invalid alias",
-  );
-  const customPrototype = Object.create({ inherited: api });
-  customPrototype.fixture = api;
-  assertThrows(
-    () => compileFixture({ apis: customPrototype }),
-    TypeError,
-    "plain alias map",
+    "invalid key",
   );
 });
 

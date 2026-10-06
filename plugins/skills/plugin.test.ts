@@ -1,3 +1,8 @@
+import {
+  createBundledSkill as defineSkill,
+  createInlineSkill,
+} from "./resources/skill/index.ts";
+import { skillsPlugin } from "./plugin.ts";
 import { definePlugin as defineFixturePlugin } from "@copilotz/copilotz/plugins";
 import {
   assert,
@@ -9,12 +14,9 @@ import {
 
 import { createPluginRegistry } from "@copilotz/copilotz/plugins";
 import {
-  defineInlineSkill,
-  defineSkill,
   parseSkillMarkdown,
   readSkillFileText,
   SKILL_TOOL_IDS,
-  skillsPlugin,
 } from "./index.ts";
 import { skillsCatalog } from "./resources/promptContext/skillsCatalog/index.ts";
 import { readSkillResourceTool } from "./resources/tools/read-skill-resource/index.ts";
@@ -179,7 +181,7 @@ Deno.test("Skills catalog contributes only the granted metadata before a read", 
       return markdown;
     },
   });
-  const hidden = defineInlineSkill({
+  const hidden = createInlineSkill({
     markdown: markdown.replaceAll("portable-skill", "hidden-skill"),
     directoryName: "hidden-skill",
   });
@@ -485,11 +487,11 @@ Deno.test("bounded Skill text reads cancel a stalled reader promptly", async () 
 });
 
 Deno.test("skills plugins own disclosure tools and preserve stable-ID overrides", async () => {
-  const first = defineInlineSkill({
+  const first = createInlineSkill({
     markdown,
     directoryName: "portable-skill",
   });
-  const replacement = defineInlineSkill({
+  const replacement = createInlineSkill({
     markdown: markdown.replace(
       "Handles portable skill tests when validating runtime behavior.",
       "Replacement instructions for portable runtime behavior.",

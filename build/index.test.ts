@@ -64,6 +64,39 @@ Deno.test("discovery rejects duplicate aliases and missing default exports", asy
   );
 });
 
+Deno.test("filesystem convention loading installs Skill, API, and awaited MCP resource dependencies", async () => {
+  await fixture({
+    "resources/skills/planning/index.ts":
+      'import {defineSkill} from "@copilotz/copilotz/skills"; export default defineSkill({markdown:"---\\nname: planning\\ndescription: Plans work.\\n---\\nPlan."});',
+    "resources/apis/billing/index.ts":
+      'import {defineApi} from "@copilotz/copilotz/tools/openapi"; export default defineApi({id:"billing",name:"Billing",schema:{openapi:"3.0.0",servers:[{url:"https://billing.test"}],paths:{"/customers":{get:{operationId:"getCustomer"}}}}});',
+    "resources/mcp/docs/index.ts":
+      'import {defineMcp} from "@copilotz/copilotz/tools/mcp"; export default await defineMcp({id:"docs",name:"Docs",connection:{connect:async()=>({listTools:async()=>[{name:"search"}],callTool:async()=>({found:true}),close(){}})}});',
+  }, async (root) => {
+    await build(root);
+    const plugin = (await import("file://" + root + "/dist/plugin.js")).default;
+    const { corePlugin } = await import("../plugins/core/index.ts");
+    const registry = createPluginRegistry({ plugins: [corePlugin, plugin] });
+    assertEquals(typeof registry.actions.load_skill?.execute, "function");
+    assertEquals(typeof registry.actions.getCustomer?.execute, "function");
+    assertEquals(typeof registry.actions.docs_search?.execute, "function");
+    assertEquals(
+      registry.plugins.filter((p) => p.id === "@copilotz/core").length,
+      1,
+    );
+    assertEquals(
+      await registry.actions.docs_search.execute(
+        {},
+        {
+          adapters: registry.adapters,
+          signal: new AbortController().signal,
+        } as never,
+      ),
+      { found: true },
+    );
+  });
+});
+
 Deno.test("built ESM executes through a separately imported runtime", async () => {
   await fixture({
     "actions/echo/index.ts":

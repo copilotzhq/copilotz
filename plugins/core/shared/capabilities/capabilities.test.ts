@@ -1,3 +1,8 @@
+import {
+  createBundledSkill as defineSkill,
+  createInlineSkill,
+} from "../../../skills/resources/skill/index.ts";
+import { skillsPlugin } from "../../../skills/plugin.ts";
 import { definePlugin as defineFixturePlugin } from "@copilotz/copilotz/plugins";
 import { assertEquals, assertRejects } from "@std/assert";
 
@@ -7,11 +12,7 @@ import type {
   AgentCapabilitySelection,
   AgentResource,
 } from "../../authoring/define-agent/index.ts";
-import {
-  defineInlineSkill,
-  defineSkill,
-  skillsPlugin,
-} from "@copilotz/copilotz/skills";
+import {} from "@copilotz/copilotz/skills";
 import { corePlugin } from "@copilotz/copilotz/core";
 import { defineTool } from "@copilotz/copilotz/core";
 import { agentCapabilities } from "../../resources/capabilities/default/index.ts";
@@ -27,7 +28,7 @@ const clock = defineTool("clock", clockAction, {
   description: "Returns a contract time.",
 });
 
-const guide = defineInlineSkill({
+const guide = createInlineSkill({
   directoryName: "contract-guide",
   markdown: `---
 name: contract-guide

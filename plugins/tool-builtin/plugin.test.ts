@@ -1,3 +1,8 @@
+import {
+  createBundledSkill as defineSkill,
+  createInlineSkill,
+} from "../skills/resources/skill/index.ts";
+import { skillsPlugin } from "../skills/plugin.ts";
 import { storageFixture } from "../core/shared/testing/storage-plugin.ts";
 import { coreEvent } from "../core/shared/events/index.ts";
 import { definePlugin as defineFixturePlugin } from "@copilotz/copilotz/plugins";
@@ -28,7 +33,6 @@ import {
   createTestDatabase,
   type TestDatabase,
 } from "../../runtime/testing/ominipg.ts";
-import { defineInlineSkill, skillsPlugin } from "@copilotz/copilotz/skills";
 const TEST_SCHEMA = "copilotz_core_tools";
 const agent: AgentResource = {
   id: "agent-a",
@@ -45,7 +49,7 @@ const secondaryAgent: AgentResource = {
   models: {},
   instructions: "Exercise atomic thread creation.",
 };
-const skill = defineInlineSkill({
+const skill = createInlineSkill({
   directoryName: "contract-skill",
   markdown: `---
 name: contract-skill

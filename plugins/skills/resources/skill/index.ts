@@ -194,7 +194,9 @@ function fileBody(value: unknown, path: string): SkillFileBody {
 }
 
 /** Defines the portable runtime representation emitted by skill packagers. */
-export function defineSkill(input: DefineSkillInput): Skill {
+export function createBundledSkill(
+  input: DefineSkillInput,
+): Skill & SkillManifest {
   const manifest = validateSkillManifest(manifestInput(input.manifest));
   if (!Array.isArray(input.files)) {
     throw new TypeError(`Skill '${manifest.name}' files must be an array.`);
@@ -235,6 +237,24 @@ export function defineSkill(input: DefineSkillInput): Skill {
     files,
     ...(externalLocator ? { locator: externalLocator } : {}),
     read,
+    async load(options = {}) {
+      const parsed = parseSkillMarkdown(
+        await readSkillFileText(
+          await read("SKILL.md", options),
+          options.maximumTextBytes ?? 1_000_000,
+          options.signal,
+        ),
+      );
+      if (
+        parsed.manifest.name !== manifest.name ||
+        parsed.manifest.description !== manifest.description
+      ) {
+        throw new Error(
+          `Skill '${manifest.name}' catalog metadata does not match SKILL.md.`,
+        );
+      }
+      return parsed;
+    },
   } as const);
 }
 
@@ -282,12 +302,14 @@ function inlineFile(
 }
 
 /** Defines a small portable skill directly from standard Markdown and files. */
-export function defineInlineSkill(input: DefineInlineSkillInput): Skill {
+export function createInlineSkill(
+  input: DefineInlineSkillInput,
+): Skill & SkillManifest {
   const parsed = parseSkillMarkdown(input.markdown, {
     directoryName: input.directoryName,
   });
   if (Object.hasOwn(input.files ?? {}, "SKILL.md")) {
-    throw new TypeError("defineInlineSkill adds SKILL.md automatically.");
+    throw new TypeError("Inline skill definitions add SKILL.md automatically.");
   }
   const configured = Object.entries(input.files ?? {}).map(([rawPath, value]) =>
     inlineFile(normalizeSkillPath(rawPath), value)
@@ -297,7 +319,7 @@ export function defineInlineSkill(input: DefineInlineSkillInput): Skill {
     left.descriptor.path.localeCompare(right.descriptor.path)
   );
   const loaders = new Map(all.map((file) => [file.descriptor.path, file.load]));
-  return defineSkill({
+  return createBundledSkill({
     manifest: parsed.manifest,
     files: all.map((file) => file.descriptor),
     async read(path, options) {

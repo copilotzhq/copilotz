@@ -304,6 +304,8 @@ export async function build(
       "bundle",
       ...config,
       "--format=esm",
+      "--external=@copilotz/copilotz",
+      "--external=@copilotz/copilotz/*",
       "--platform=" + (options.platform ?? "browser"),
       "--output=" + temporary,
       entry,

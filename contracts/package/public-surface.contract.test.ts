@@ -142,9 +142,9 @@ Deno.test("package subpaths expose cohesive owner APIs", () => {
   assertEquals(typeof builtinTools.builtInToolsPlugin, "object");
   assertEquals(typeof denoTools.denoToolsPlugin, "object");
   assertEquals(typeof financeTools.financeToolsPlugin, "object");
-  assertFunctions(mcpTools, ["prepareMcpTools"]);
+  assertFunctions(mcpTools, ["defineMcp"]);
   assertFunctions(stdioMcpTools, ["connectMcp"]);
-  assertFunctions(openApiTools, ["compileOpenApiTools"]);
+  assertFunctions(openApiTools, ["defineApi"]);
   assertFunctions(openApiTools, ["defineApi"]);
   assertFunctions(tools, ["defineTool"]);
   assertEquals(
@@ -156,7 +156,6 @@ Deno.test("package subpaths expose cohesive owner APIs", () => {
   ]);
   assertEquals(typeof webTools.webToolsPlugin, "object");
   assertFunctions(skills, [
-    "defineInlineSkill",
     "defineSkill",
   ]);
   assertFunctions(denoSkills, ["buildOpenSkillsPlugin"]);

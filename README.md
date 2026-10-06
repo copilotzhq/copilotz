@@ -295,12 +295,12 @@ Your product may already expose an API. Other services may publish an OpenAPI
 specification or an MCP server. Copilotz can turn those declarations into
 Actions and tool presentations that agents can use.
 
-| Source                   | How it becomes a capability                                                        |
-| ------------------------ | ---------------------------------------------------------------------------------- |
-| Your code                | Define a tool directly, or give an existing Action a tool presentation             |
-| An OpenAPI specification | Generate tools with `compileOpenApiTools()`                                        |
-| An MCP server            | Discover and prepare tools with `prepareMcpTools()` before application composition |
-| Supplied tool libraries  | Import the native declarations or plugins you need                                 |
+| Source                   | How it becomes a capability                                            |
+| ------------------------ | ---------------------------------------------------------------------- |
+| Your code                | Define a tool directly, or give an existing Action a tool presentation |
+| An OpenAPI specification | Declare `defineApi({schema,...})` in `resources.apis`                  |
+| An MCP server            | Declare `await defineMcp({...})` in `resources.mcp`                    |
+| Supplied tool libraries  | Import the native declarations or plugins you need                     |
 
 Generated tools use the same Action lifecycle as your own tools. Authentication,
 request customization and runtime connections remain configurable through

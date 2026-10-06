@@ -1,186 +1,104 @@
 # Skills
 
-Copilotz uses the Agent Skills directory format as the canonical authoring
-format and a portable plugin as the runtime format. Filesystem discovery is a
-build concern, not an application capability.
-
-```text
-standard skill directories
-          │ validate + pack
-          ▼
-portable Copilotz plugin
-          │ grant-filtered metadata context + lazy skill chunks
-          ▼
-Deno / Node / Bun / browser / Cloudflare runtime
-```
-
-## Canonical source
-
-Each immediate child of a plugin's skills directory follows the open Agent
-Skills specification:
-
-```text
-plugins/support/skills/
-└── customer-support/
-    ├── SKILL.md
-    ├── references/
-    ├── scripts/
-    └── assets/
-```
-
-`SKILL.md` must contain valid YAML frontmatter. Copilotz validates the standard
-`name`, `description`, `license`, `compatibility`, `metadata`, and experimental
-`allowed-tools` fields. The name must match its directory. Put Copilotz-specific
-values under `metadata` instead of adding top-level fields.
-
-The `allowed-tools` value describes skill compatibility. It never grants a tool
-or overrides an agent/application tool policy. Packaged scripts are inert files;
-execution requires a separately installed, explicitly authorized executor.
-
-## Build a local plugin
-
-Directory enumeration belongs to the build host. The Deno adapter validates and
-packs source directories into a catalog module plus one lazy chunk per skill:
+Declare a Skill directory once. The same import works in Node, Deno, Bun,
+browsers, and Workers; readable locations depend on the host's capabilities.
 
 ```ts
-import { buildOpenSkillsPlugin } from "@copilotz/copilotz/skills/deno";
-
-await buildOpenSkillsPlugin({
-  root: "./plugins/support/skills",
-  output: "./.copilotz/plugins/support-skills",
-  id: "@acme/support-skills",
-  version: "0.1.0",
-});
-```
-
-Treat `.copilotz/` as generated build output. Do not replace `SKILL.md` with
-generated data modules or commit a duplicate module beside every source skill.
-
-The application imports the resulting ordinary plugin:
-
-```ts
-import supportSkills from "./.copilotz/plugins/support-skills/plugin.ts";
+import { defineSkill } from "@copilotz/copilotz/skills";
 import { createCopilotz } from "@copilotz/copilotz";
 
 const app = await createCopilotz({
-  plugins: [supportSkills],
-});
-```
-
-The application never calls a Deno-specific skill source. Node, Bun, browser,
-and Cloudflare builds consume the generated runtime-neutral module. Package
-authors can run the same build before publishing and export the portable plugin
-as their package's default entrypoint while retaining the standard directories
-as canonical source.
-
-The generated Skill module itself is runtime-neutral and its lazy reads are
-covered by the Deno packager test. Core collection declarations use the
-declaration-only `@copilotz/copilotz/collections/authoring` entry, so they do
-not pull the persistence kernel into browser or workerd bundles. Use the full
-`@copilotz/copilotz/collections` entry only for runtime collection operations.
-
-## Inline skills
-
-Small or generated applications can define a portable skill without any host
-adapter:
-
-```ts
-import { defineInlineSkill, skillsPlugin } from "@copilotz/copilotz/skills";
-
-const triage = defineInlineSkill({
-  directoryName: "support-triage",
-  markdown: `---
-name: support-triage
-description: Triages customer support requests and selects the next action.
----
-# Support triage
-
-Classify urgency before choosing a tool.`,
-  files: {
-    "references/severity.md": "# Severity levels\n...",
+  resources: {
+    skills: {
+      planning: defineSkill({ root: "./skills/planning/" }),
+    },
   },
 });
+```
 
-import { definePlugin } from "@copilotz/copilotz/plugins";
-export default definePlugin({
-  id: "@acme/support-skills",
-  version: "0.1.0",
-  plugins: [skillsPlugin],
-  resources: { skills: { triage } },
+The resource key must match `name` in SKILL.md front matter. Explicit agent
+`capabilities.skills` grants select skills. Declaring a resource installs the
+Skills mechanisms automatically; there is no additional feature plugin import.
+Front-matter `allowed-tools` describes compatibility and never grants authority.
+
+## Progressive loading
+
+Declarations perform no reads. During ordinary turn preparation, the catalog
+loads the front matter of authorized roots. SKILL.md metadata and instructions
+are read as one validated snapshot. The prompt contains metadata only; the agent
+calls `load_skill` to receive the body, then `read_skill_resource` for
+supporting paths referenced by those instructions. Files need no upfront
+inventory. `list_skills` uses the same metadata resolver. Scripts remain inert
+text.
+
+Missing or invalid manifests, mismatched names, and permission errors surface as
+errors. Supporting paths must remain within the root. Filesystem symlinks and
+HTTP redirects outside the root are rejected. Reads respect cancellation and a
+1,000,000-byte bound; an application may impose a smaller tool text limit with
+`resources.skillConfig.default.maximumTextBytes`.
+
+## Roots and runtimes
+
+`root` accepts a string or a URL:
+
+```ts
+// Relative filesystem root, pinned on first read per application scope.
+defineSkill({ root: "./skills/planning/" });
+// Remote root; optionally provide a custom fetch for authenticated reads.
+defineSkill({ root: "https://example.com/skills/planning/" });
+// Module-relative root in an ESM host with a suitable module URL.
+defineSkill({ root: new URL("./skills/planning/", import.meta.url) });
+```
+
+Relative filesystem paths use the host working directory. Explicit file URLs and
+absolute paths also work where filesystem access is available. The public
+entrypoint has no unconditional native imports; it obtains the filesystem
+capability when needed. Browsers read HTTP(S) roots subject to CORS and network
+permissions. Workers require an allowed I/O context for network reads. For local
+Worker bundle files, include the files in the deployment, enable the relevant
+Node filesystem compatibility, and use an explicit `/bundle/...` path when
+`import.meta.url` is unavailable. An unsupported filesystem read produces a
+clear error; a local path is never silently reinterpreted as an HTTP URL.
+
+`import.meta.url` is optional and is unavailable in CommonJS and some Worker
+module configurations. Bundling or compiling JavaScript does not automatically
+copy skill directories. Include them in a container image, Deno compiled binary,
+Worker bundle, or served browser assets as appropriate. For Deno compile, use
+`--include` for the skill directory.
+
+## Cache behavior
+
+Completed manifest/body snapshots are scoped to the application's resource
+namespace object and source. They stay fresh for five minutes, with at most 64
+entries and 4 MiB retained Markdown per scope. Expired entries reload on access;
+there is no background polling, SQL catalog, or shared request-bound pending
+I/O. Supporting files are read on demand. Unchanged metadata produces stable
+catalog text without timestamps. Failed refreshes do not silently serve expired
+data.
+
+## Inline and packaged resources
+
+For small embedded definitions, use the same constructor:
+
+```ts
+const planning = defineSkill({
+  markdown:
+    "---\nname: planning\ndescription: Plans work.\n---\nFollow the plan.",
+  files: { "references/checklist.md": "Check the acceptance criteria." },
 });
 ```
 
-`defineSkill()` is the lower-level contract used by packagers. It exposes eager
-manifest metadata, immutable file descriptors, and a lazy `read(path)` closure.
-It imports no filesystem, package-loader, or subprocess APIs. Skill factories
-live on the explicit `/skills` subpath rather than the root barrel, keeping the
-feature out of applications that do not install it.
+For frozen portable packages, `buildOpenSkillsPlugin` from
+`@copilotz/copilotz/skills/deno` packs validated directories on a Deno build
+host. The generated definitions use `defineSkill({manifest, files, read})`, with
+lazy file chunks and the consumer's selected framework import. Existing
+generated packages must be rebuilt; they must not bundle another copy of
+Copilotz.
 
-## Progressive disclosure
+## Convention loading
 
-A skills plugin contributes logical `skills` resources, a grant-filtered
-conversation-context catalog, and its associated tools. Before the first tool
-call, an agent sees only the name and description of the skills explicitly
-listed in `agent.capabilities.skills`, their declared supporting paths, and the
-route used to retrieve them. The contribution contains metadata only: it does
-not read `SKILL.md`, references, assets, or scripts.
-
-The plugin's stable use policy is a trusted `promptInstructions` resource. The
-catalog remains ordinary dynamic context so skill metadata cannot become
-application authority.
-
-- `list_skills` remains an on-demand metadata and file-descriptor API.
-- `load_skill` lazily reads and validates `SKILL.md` before returning its body.
-- `read_skill_resource` lazily reads one declared supporting text file.
-
-Agents see only skills granted through `agent.capabilities.skills`. A later
-plugin resource with the same skill name replaces an earlier one through normal
-plugin composition. Generic Copilotz installs no skills and exposes neither a
-Skills catalog nor skill tools. Granting a bundled skill automatically derives
-`list_skills`, `load_skill`, and—when supporting files exist—
-`read_skill_resource`; those mechanism tools do not need to be repeated in
-`capabilities.tools`. The Skills plugin owns that derivation; Core only asks the
-composed capability resource for the effective tools. An application resource at
-the final composition root can still replace the capability policy.
-
-The bundled reader also supports an explicit host API call with no `agentId`;
-that call is application-owned and may enumerate the registered Skills. Once
-`agentId` is present, it must identify a configured Agent and the reader
-intersects the final policy with that Agent's explicit Skill grants; unknown or
-malformed metadata fails closed.
-
-### Reading and paths
-
-Use `load_skill` before following a bundled skill. Use `read_skill_resource`
-with its skill name and one catalog-declared relative path for a reference,
-asset, or script. The plugin checks the current grant on every read, rejects
-traversal and undeclared paths, honors cancellation, and applies
-`resources.skillConfig.default.maximumTextBytes` to text results.
-
-The plugin reader is deliberately a text reader. Binary files are preserved as
-bytes in the generated package but are not converted to text or silently
-corrupted for an agent tool call. Scripts are inert text assets: reading one
-does not execute it or grant a terminal/tool capability.
-
-### External locations
-
-Some applications make a skill available through an actual `file:` or `http(s):`
-location instead of a generated bundle. Its catalog entry must name that
-reachable location; the application must separately grant a compatible file or
-HTTP tool in the environment where the agent runs. A source-tree path, a Compass
-server path, and a bundled module are not automatically reachable from a Sandbox
-or browser. Relative references are resolved by that external location's owning
-application; bundled references are always slash-separated paths relative to the
-skill directory. Skills adds no universal URI scheme, filesystem mount, or
-implicit fetch grant.
-
-### Migration
-
-Initial discovery no longer comes from Core's `AVAILABLE SKILLS` prompt branch:
-it is a plugin-owned context contribution. Existing `list_skills`, `load_skill`,
-and `read_skill_resource` calls continue to work for bundled skills. The reader
-tools remain intentionally named and separate because they preserve existing
-Action lifecycle history, grant checks, bounded reads, and cancellation behavior
-while the catalog moves into context contributions. Remove code that parses a
-Core-rendered catalog; depend on the explicit grant and normal context/tool
-composition instead.
+A conventional `resources/skills/planning/index.ts` can default-export
+`defineSkill({root})`. `copilotz build` imports that declaration and the normal
+composition path supplies its dependencies. The build-host loader never needs a
+special Skills registration rule. Runtime-loaded directory contents are not
+included automatically in the JavaScript output.

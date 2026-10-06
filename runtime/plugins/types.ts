@@ -1,5 +1,6 @@
 import {
   type ContributionActions,
+  type ContributionPlugins,
   resolveContributions,
   type ResolvedNamespaces,
 } from "./contribution.ts";
@@ -115,17 +116,24 @@ export type CompositionOfPlugin<P extends AnyCopilotzPlugin> = NonNullable<
   P[typeof pluginCompositionTypes]
 >;
 
+type IntersectCompositions<T> =
+  (T extends unknown ? (value: T) => void : never) extends
+    (value: infer I extends PluginTypeComposition) => void ? I
+    : EmptyPluginComposition;
+
 export type ComposePlugins<
   TPlugins extends readonly AnyCopilotzPlugin[],
   TAcc extends PluginTypeComposition = EmptyPluginComposition,
-> = number extends TPlugins["length"]
-  ? MergePluginCompositions<TAcc, CompositionOfPlugin<TPlugins[number]>>
-  : TPlugins extends readonly [
-    infer THead extends AnyCopilotzPlugin,
-    ...infer TTail extends readonly AnyCopilotzPlugin[],
-  ] ? ComposePlugins<
-      TTail,
-      MergePluginCompositions<TAcc, CompositionOfPlugin<THead>>
+> = TPlugins extends readonly [
+  infer THead extends AnyCopilotzPlugin,
+  ...infer TTail extends readonly AnyCopilotzPlugin[],
+] ? ComposePlugins<
+    TTail,
+    MergePluginCompositions<TAcc, CompositionOfPlugin<THead>>
+  >
+  : number extends TPlugins["length"] ? MergePluginCompositions<
+      TAcc,
+      IntersectCompositions<CompositionOfPlugin<TPlugins[number]>>
     >
   : TAcc;
 
@@ -333,7 +341,11 @@ export function definePlugin<
 ): CopilotzPlugin<
   TId,
   TVersion,
-  TPlugins,
+  readonly [
+    ...TPlugins,
+    ...ContributionPlugins<TResources>,
+    ...ContributionPlugins<TAdapters>,
+  ],
   TCollections,
   TActions & ContributionActions<TResources> & ContributionActions<TAdapters>,
   TProcessors,
@@ -365,10 +377,21 @@ export function definePlugin<
   }
 
   const resolved = resolveContributions(input);
+  for (const dependency of resolved.plugins) {
+    if (!isCopilotzPlugin(dependency)) {
+      throw new TypeError(
+        "Contributed dependencies must be created with definePlugin().",
+      );
+    }
+  }
   const plugin: CopilotzPlugin<
     TId,
     TVersion,
-    TPlugins,
+    readonly [
+      ...TPlugins,
+      ...ContributionPlugins<TResources>,
+      ...ContributionPlugins<TAdapters>,
+    ],
     TCollections,
     TActions & ContributionActions<TResources> & ContributionActions<TAdapters>,
     TProcessors,
@@ -377,7 +400,11 @@ export function definePlugin<
   > = {
     id,
     version,
-    plugins: [...plugins] as unknown as TPlugins,
+    plugins: [...plugins, ...resolved.plugins] as unknown as readonly [
+      ...TPlugins,
+      ...ContributionPlugins<TResources>,
+      ...ContributionPlugins<TAdapters>,
+    ],
     collections: validateDefinitions(
       resolved.collections,
       `Plugin '${id}' collections`,

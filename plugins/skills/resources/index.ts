@@ -5,8 +5,8 @@
  */
 
 export {
-  defineInlineSkill,
-  defineSkill,
+  createBundledSkill,
+  createInlineSkill,
   normalizeSkillPath,
   parseSkillMarkdown,
   readSkillFileText,

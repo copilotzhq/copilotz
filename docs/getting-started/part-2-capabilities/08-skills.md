@@ -8,15 +8,13 @@ status: stable
 
 # Chapter 8: Skills
 
-> **Part 2 — Capabilities to add when needed**
-
 ## The pain
 
 Adding every checklist and workflow to the assistant's permanent instructions
 makes each turn carry information it may never use. A skill gives a task a short
 catalog description and lets the assistant load its instructions when needed.
 
-## The smallest useful change
+## The solution
 
 A skill is a directory with a SKILL.md manifest and optional supporting files.
 Declare the directory and grant the skill explicitly to an agent.
@@ -51,10 +49,13 @@ import { defineSkill } from "@copilotz/copilotz/skills";
 Inside the existing `resources` object, add this sibling property:
 
 ```ts
-// Resolve the Skill directory beside assistant.ts rather than from the launch directory.
+// Register the directory under the Skills resource family.
 skills: {
-  // Composition installs the Skill readers; no separate plugin registration is needed.
-  planning: defineSkill({ root: new URL("./skills/planning/", import.meta.url) }),
+  // Match this resource key to the SKILL.md name and the Agent grant.
+  planning: defineSkill({
+    // Resolve the directory beside assistant.ts instead of from the launch directory.
+    root: new URL("./skills/planning/", import.meta.url),
+  }),
 },
 ```
 
@@ -62,41 +63,36 @@ Inside `resources.agents.assistant`, extend the existing capability grant. Keep
 the Agent's current model connection and any other capabilities:
 
 ```ts
-// Preserve the Notes tool and grant this Skill explicitly.
-capabilities: { tools: ["saveNote"], skills: ["planning"] },
+// Preserve the Agent's existing capabilities and add this Skill grant.
+capabilities: {
+  // Keep the Notes Action available; retain any other tools already granted.
+  tools: ["saveNote"],
+  // Authorize the Skill whose resource key and manifest name are planning.
+  skills: ["planning"],
+},
 ```
 
 Replace the `content` of the existing `message()` call, then run `assistant.ts`
-as before:
+with either host configured at the start of the guide:
 
 ```ts
 // Ask for the task described by the Skill's catalog entry.
 content: "Use the planning skill to plan a searchable Notes feature.",
 ```
 
+Run the existing message and output loop. It uses the same model connection as
+the earlier chapters and the two local files you created above:
+
+```sh
+# Allow Deno to read the Skill directory and call the configured model.
+deno run -A assistant.ts
+# Or run the same ESM project with Node 24+.
+node assistant.ts
+```
+
 The assistant sees the planning description, calls `load_skill` for its
 instructions, then reads `checklist.md` on demand. You do not import either
 Markdown file into the JavaScript or list supporting files in the declaration.
-
-## Breaking it down
-
-The skill key must match its SKILL.md front-matter name. No Skills plugin needs
-to be imported or registered. Authorized turn preparation loads the front-matter
-catalog; `load_skill` returns instructions and `read_skill_resource` retrieves
-root-relative supporting paths. The runtime checks the final access policy on
-every agent-bound read. Front-matter tool hints do not grant permissions.
-
-A root may be a local path, a file URL, or an HTTP(S) URL. The same Skills
-import works across runtimes. Local files need a filesystem-capable host and
-must be included in deployment. Browser roots must be served over HTTP with
-appropriate CORS. `new URL("./skills/planning/", import.meta.url)` is an
-optional ESM pattern; use an explicit deployed path or HTTP URL when module URLs
-are unsuitable.
-
-Reads are bounded and cancellable. Manifest/body snapshots are cached together
-for five minutes on access, scoped to the app and bounded by count and bytes.
-Supporting files remain dynamic and need no declared inventory. For inline
-Markdown or a frozen portable bundle, see [Skills](../../skills.md).
 
 ### Use the filesystem convention loader
 
@@ -116,12 +112,34 @@ the Skill directory and its Markdown files in the deployed artifact; JavaScript
 bundling alone does not copy them. See
 [Convention-first authoring](../../convention-authoring.md).
 
+## Breaking it down
+
+The skill key must match its SKILL.md front-matter name. No Skills plugin needs
+to be imported or registered. Authorized turn preparation loads the front-matter
+catalog; `load_skill` returns instructions and `read_skill_resource` retrieves
+root-relative supporting paths. The runtime checks the final access policy on
+every agent-bound read. The Skill grant supplies `list_skills`, `load_skill`,
+and `read_skill_resource` automatically; do not add those reader aliases to
+`capabilities.tools`. Front-matter tool hints do not grant permissions.
+
+A root may be a local path, a file URL, or an HTTP(S) URL. The same Skills
+import works across runtimes. Local files need a filesystem-capable host and
+must be included in deployment. Browser roots must be served over HTTP with
+appropriate CORS. `new URL("./skills/planning/", import.meta.url)` is an
+optional ESM pattern; use an explicit deployed path or HTTP URL when module URLs
+are unsuitable.
+
+Reads are bounded and cancellable. Manifest/body snapshots are cached together
+for five minutes on access, scoped to the app and bounded by count and bytes.
+Supporting files remain dynamic and need no declared inventory. For inline
+Markdown or a frozen portable bundle, see [Skills](../../skills.md).
+
 ## What this unlocks
 
-- The assistant discovers authorized workflows without carrying every body in
-  its permanent instructions.
-- A directory or HTTP root supplies supporting files dynamically.
-- Direct composition and filesystem-generated plugins use the same declaration.
+The assistant discovers authorized workflows without carrying every body in its
+permanent instructions. Supporting files remain dynamic under the declared root,
+and both direct composition and filesystem-generated plugins use the same
+resource declaration.
 
 ## What's next
 

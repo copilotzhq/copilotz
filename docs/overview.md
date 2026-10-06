@@ -1,117 +1,188 @@
-# Understanding Copilotz
+---
+title: "Overview"
+description: "Why Copilotz records application work as Events, Collections, Actions and Processors, how Plugins package them, where the optional agent harness fits, and which learning path to start."
+section: Start
+order: 20
+status: stable
+---
 
-Copilotz is a TypeScript framework for building applications with agents, tools
-and durable execution history. It combines a generic event runtime with an agent
-harness composed from plugins. The harness coordinates conversations, model
-calls and tool use; the runtime records what happened and manages the work
-triggered by those events.
+# Overview
 
-You can embed one agent in an existing product, build a shared workspace where
-people and agents collaborate, or use the runtime for application workflows
-without agents. This guide explains how those uses fit together and where to
-start.
+## The pain
 
-## What you can build
+A typical application handles a request by calling a function, writing a row and
+perhaps calling an outside service. That works until something goes wrong
+part-way. The process restarts after the row is written but before the follow-up
+work runs. A client retries and two notes appear instead of one. A support
+engineer asks what happened to one request and the only answer is scattered
+across logs. When an agent is added, it gets the same problems with less
+predictable input: a model decides to call a tool, and nobody can say afterwards
+which call ran, with which input, or whether it finished.
 
-An agent embedded in a product can use that product's APIs to look up a record,
-check its current state or execute an application operation. You define its
-role, model connections and allowed tools, then connect the conversation to your
-interface or a channel such as WhatsApp.
+## The problem
 
-A shared workspace can include several people and agents in the same thread.
-Messages identify their sender and recipients. An agent with a teammate grant
-can ask another agent for help, with the exchange recorded in the conversation.
-[Agent collaboration](getting-started/part-2-capabilities/09-agent-collaboration.md)
-builds this model after the first assistant.
+The missing piece is a shared contract for **ownership and history**:
 
-The underlying runtime also accepts application events and runs plugin
-processors without a conversation or an LLM. A plugin might react to a domain
-event, invoke an action and update durable state. See
-[plugins and processors](plugins-and-processors.md) for that path.
+- which code owns a piece of state, and which validated operation may change it;
+- which input started a piece of work, and which reactions it triggered;
+- whether that work finished, failed or must be retried, and how a retry finds
+  the result that was already recorded instead of doing the work twice;
+- which choices belong to a reusable package and which belong to one host, such
+  as its tenant namespace, database and credentials.
 
-## How the pieces fit together
+An agent framework alone does not answer these questions, and a database alone
+does not say why a row changed. Copilotz answers them first, in a generic
+runtime, and then builds its agent harness on the same contract.
 
-| Part             | Responsibility                                                                                                                                                     |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Your application | Supplies the product interface, business rules, identity, access policy and integrations.                                                                          |
-| Agent harness    | Uses Core and LLM plugins to coordinate participants, messages, model calls and permitted tools. Optional plugins add channels, skills, memory and other behavior. |
-| Runtime          | Persists events and state changes, dispatches processor work, records action lifecycles, and supports observation and recovery.                                    |
+## The solution
 
-Plugins connect the harness to the runtime. The same execution model records a
-model call, a tool action or an action in your own workflow. Application
-configuration chooses which plugins to install and supplies or overrides
-resources and adapters.
+Copilotz is a TypeScript runtime that records application work as durable facts.
+The same public imports run on Deno and Node. Browser and Worker hosts can use
+the runtime only within their storage and filesystem limits.
 
-The runtime defines five primitives:
+### The runtime primitives
 
-| Primitive  | Meaning                                             | Example                                               |
-| ---------- | --------------------------------------------------- | ----------------------------------------------------- |
-| Collection | Durable application state.                          | A thread or message.                                  |
-| Action     | An executable capability with a recorded lifecycle. | A model call or customer lookup.                      |
-| Processor  | Behavior triggered by an event.                     | Reacting to a new message.                            |
-| Resource   | A process-local definition or policy.               | An agent's role, model choices and capability grants. |
-| Adapter    | An interchangeable external implementation.         | A provider implementation or channel integration.     |
+| Primitive      | What it owns                                                                                                                                                              |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Event**      | An immutable fact, such as `notes.capture.requested`. Inputs admitted with `app.send` become durable Events.                                                              |
+| **Collection** | Schema-checked application state. Every change appends an Event, such as `note.created`.                                                                                  |
+| **Action**     | A named, validated operation with a recorded lifecycle (`notes.save.invoked`, `notes.save.completed`).                                                                    |
+| **Processor**  | Code that reacts to matching Events. A durable match becomes a recorded delivery that may be retried; live Event handling is best effort without that recovery guarantee. |
+| **Resource**   | A process-local definition or policy that code looks up, such as an agent's role and capability grants.                                                                   |
+| **Adapter**    | A replaceable implementation of an outside dependency, such as a model provider, file store or channel.                                                                   |
+| **Plugin**     | A named, versioned package of the above. Defining it starts nothing; an application composes it with `createCopilotz`.                                                    |
 
-You can begin with the supplied harness and ordinary agent and tool definitions.
-The [architecture guide](architecture.md) explains the runtime contracts when
-you need to write a plugin or change how execution works.
+Every input starts an **operation** that covers the deliveries, Action calls and
+Collection writes it causes under the default `inherit` settlement. The
+operation settles as completed or failed, and you can read its state back by ID.
+A Processor that explicitly detaches records its durable work separately, and
+that work does not delay the original operation; the
+[Plugins and Processors reference](plugins-and-processors.md) covers settlement
+modes. Stable **operation keys** name each Action call and write within a
+delivery, so a retried delivery gets the recorded result instead of a second
+write. An outside service that the Action calls still needs its own idempotency
+support.
 
-## An agent inside an existing product
+### One small plugin
 
-Consider a product whose APIs already read records and implement operations. An
-embedded agent could handle a user's request through this sequence:
+This example reuses `notes-plugin.ts` exactly as
+[Chapter 5](getting-started/part-1-design-and-build/05-package-a-plugin.md)
+creates it. That file is a **definition module**: it declares the `note`
+Collection, the `notes.save` Action, the `notes.capture` Processor and
+`notesPlugin`, reads no environment and opens nothing when imported. Its core
+ownership rules, in short:
 
-1. The application authenticates the incoming request, selects its namespace and
-   routes a message to the agent through a channel or Core input.
-2. The harness prepares the conversation and calls one of the agent's configured
-   models. The model can select only the tools granted to that agent.
-3. A tool invokes the product's existing API or a composed application Action.
-   The operation checks business rules and permissions, performs its work and
-   returns its result.
-4. Copilotz records the action lifecycle and conversation changes. The agent
-   uses the tool result to respond through the application's interface or
-   channel.
-5. The product verifies the resulting state and measures whether the user's
-   requested outcome was achieved.
+- `notes.capture` decides _when_ a note is saved: once per durable
+  `notes.capture.requested` Event. It calls the Action with the operation key
+  `save-request`.
+- `notes.save` decides _how_ a note is validated and stored. It writes the
+  `note` Collection with a key prefixed by its own call's operation key.
+- `notesPlugin` packages both under the stable IDs `note`, `notes.save` and
+  `notes.capture`, with no namespace or database of its own.
 
-This example uses one agent. Add another agent when the task calls for a
-separate specialist, with an explicit grant allowing the first agent to consult
-it.
+Install the package before running the entrypoint:
 
-The product's APIs remain responsible for valid transactions. An agent's tool
-grant controls which tools it may call; authentication and authorization for the
-underlying data and operations belong to your application and services.
+```sh
+# Deno: add the runtime package to deno.json.
+deno add jsr:@copilotz/copilotz@^0.84.4
+# Node 24+: add the same package from JSR.
+npx jsr add @copilotz/copilotz@^0.84.4
+```
 
-## Choosing a starting path
+`overview.ts` is an **entrypoint**. It makes the host choices, sends one input
+and reports the settled operation. Place it next to `notes-plugin.ts`:
 
-| Your starting point                                            | Read next                                                                                                                                        |
-| -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Learn agent composition, tool grants and conversation routing. | [Getting started](getting-started.md), beginning with one assistant.                                                                             |
-| Embed Copilotz in an existing server or worker.                | [Embedding](embedding-and-hypervisors.md) for the application lifecycle, and [channels](channels.md) for incoming requests and outgoing replies. |
-| Serve conversations through HTTP and a browser client.         | [Quickstart](quickstart.md#3-serve-it-over-http) and [server](server.md).                                                                        |
-| Connect a product's APIs or an MCP server as tools.            | [OpenAPI tools](../plugins/tool-openapi/README.md), [MCP tools](../plugins/tool-mcp/README.md) and [agent capabilities](agent-capabilities.md).  |
-| Add behavior or reuse it across applications.                  | [Plugins and processors](plugins-and-processors.md) and [plugin source layout](plugin-layout.md).                                                |
+```ts
+// Runtime factory: composes plugins into a running application.
+import { createCopilotz } from "@copilotz/copilotz";
+// The reusable Notes package from Chapter 5.
+import { notesPlugin } from "./notes-plugin.ts";
 
-Start with one representative task and the plugins it needs. Reuse existing
-services as tools and decide how Copilotz's conversation state and execution
-history fit alongside your product's data. The HTTP facade, chat UI and
-additional harness plugins can be added as the application needs them.
+// Host choices live here, not in the plugin. Omitting `database` uses a
+// private in-memory database that disappears when the application closes.
+const app = await createCopilotz({
+  // Tenant namespace recorded on every Event and record this run owns.
+  namespace: "team-notes",
+  // Registers the note Collection, notes.save Action and notes.capture
+  // Processor under their stable IDs.
+  plugins: [notesPlugin],
+});
 
-## What durability provides
+try {
+  // Admit one input. Copilotz stores it as a durable Event, creates a delivery
+  // for notes.capture and starts an operation covering its inherited work.
+  const handle = await app.send({
+    type: "notes.capture.requested",
+    payload: { text: "Prepare the release." },
+  });
 
-With persistent storage configured, Copilotz keeps conversation state, immutable
-events and recorded action results across process restarts. Processor delivery
-is at least once; stable operation identities let retries restore settled
-results. A tool that changes an external service must also account for retries
-at that service, for example through its idempotency support. See
-[events, deliveries and recovery](events-deliveries-recovery.md).
+  // Print each Event type while waiting. `done` rejects if the delivery, the
+  // Action call or the note write fails.
+  const printTypes = async () => {
+    for await (const output of handle.outputs) {
+      if ("type" in output) console.log(`event ${output.type}`);
+    }
+  };
+  await Promise.all([printTypes(), handle.done]);
 
-Large content can live in a BodyStore, with references held in semantic records.
-This lets storage be configured separately from the conversation and action
-model. See [content and assets](content-assets.md).
+  // Read the recorded operation state back by its ID.
+  const status = await app.operationStatus({
+    operationId: handle.operationId,
+  });
+  console.log(`operation ${status?.state ?? "unknown"}`);
+} finally {
+  // Release the runtime and its database, including after a failure.
+  await app.close();
+}
+```
 
-Execution history helps you inspect what an agent did. Your application still
-defines task completion, evaluates answer quality and measures outcomes such as
-conversion or cost per completed task. Decide whether Copilotz fits by checking
-that whole integration, including the work required to learn, extend and operate
-it.
+Run it with `deno run -A overview.ts` or `node overview.ts`. The Event lines
+include `notes.capture.requested`, `notes.save.invoked`, `note.created` and
+`notes.save.completed`, in an order you should not rely on except that
+`note.created` precedes `notes.save.completed`. The last line reports
+`operation completed`.
+
+### The optional agent harness
+
+The agent harness, imported from `@copilotz/copilotz/core`, is a set of plugins
+built on the same primitives. Threads, messages and participants are
+Collections. A model call is an Action, so it has the same recorded lifecycle as
+`notes.save`. An agent is a Resource that names its model connections and grants
+specific tools, agents and Skills. A tool can wrap an existing Action such as
+`notes.save`, so the agent reuses the validation and history you already have
+instead of a second implementation.
+
+The harness is optional. Runtime-only applications never import `/core`, and
+nothing in the runtime track depends on a model provider.
+
+### Choose a track
+
+| Track             | Start with                                                                                              | Path                                                                                                                                   |
+| ----------------- | ------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| **R** — runtime   | [Chapter 1: Send Your First Event](getting-started/part-1-design-and-build/01-send-your-first-event.md) | Chapters 1–7, then 15, 16, 18, 19, 21 and 22                                                                                           |
+| **H** — harness   | [Chapter 8: Hello Agent](getting-started/part-3-add-agent-behavior/08-hello-agent.md)                   | Setup, then Chapter 8; Chapters 9–14 add tools and behaviour; later, optionally, Chapter 17 (chat and Channels) and Chapter 20 (usage) |
+| **Fast overview** | [Quickstart](quickstart.md)                                                                             | One runtime and one agent snippet                                                                                                      |
+
+The tracks join at Chapter 9, where an agent tool wraps the Notes Action.
+
+## What this unlocks
+
+With these foundations you can:
+
+- design state and operations once, as a plugin that tests, servers, schedules
+  and agents share without copying;
+- inspect what happened to any request through its operation, Events and Action
+  lifecycle, including model and tool calls;
+- retry and recover work without duplicating recorded writes;
+- add an agent later, granting it only the operations it needs;
+- keep tenant, database and credential choices in host code, separate from
+  reusable definitions.
+
+## Next steps
+
+- Start building: [Getting Started](getting-started.md) introduces both tracks
+  and the Notes application.
+- Fastest result: [Quickstart](quickstart.md).
+- Contracts: [Architecture](architecture.md) explains how the primitives relate.
+- Packaging: [Plugins and Processors](plugins-and-processors.md) covers
+  composition, dependencies and aliases.

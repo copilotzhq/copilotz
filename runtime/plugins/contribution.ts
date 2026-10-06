@@ -1,6 +1,7 @@
 /** Generic, synchronous authoring contributions. No plugin semantics live here. @module */
 import type { ActionMap } from "../actions/types.ts";
 import type {
+  AnyCopilotzPlugin,
   CollectionMap,
   PluginNamespaceMap,
   ProcessorMap,
@@ -11,8 +12,10 @@ export const contribution = Symbol.for("copilotz.composition.contribution");
 export interface ContributionResult<
   T = unknown,
   A extends ActionMap = ActionMap,
+  P extends readonly AnyCopilotzPlugin[] = readonly [],
 > {
   value: T;
+  plugins?: P;
   actions?: A;
   collections?: CollectionMap;
   processors?: ProcessorMap;
@@ -23,22 +26,32 @@ export interface ContributionResult<
 export interface CompositionContribution<
   T = unknown,
   A extends ActionMap = ActionMap,
+  P extends readonly AnyCopilotzPlugin[] = readonly [],
 > {
   [contribution](
     location: { namespace: string; alias: string },
-  ): ContributionResult<T, A>;
+  ): ContributionResult<T, A, P>;
 }
 
 export function isContribution(
   value: unknown,
-): value is CompositionContribution {
+): value is CompositionContribution<
+  unknown,
+  ActionMap,
+  readonly AnyCopilotzPlugin[]
+> {
   return value !== null && typeof value === "object" &&
-    typeof (value as CompositionContribution)[contribution] === "function";
+    typeof (value as CompositionContribution<
+        unknown,
+        ActionMap,
+        readonly AnyCopilotzPlugin[]
+      >)[contribution] === "function";
 }
 
 export type ResolvedNamespaces<T extends PluginNamespaceMap> = {
   readonly [N in keyof T]: {
-    readonly [K in keyof T[N]]: T[N][K] extends CompositionContribution<infer V>
+    readonly [K in keyof T[N]]: T[N][K] extends
+      CompositionContribution<infer V, ActionMap, readonly AnyCopilotzPlugin[]>
       ? V
       : T[N][K];
   };
@@ -62,6 +75,7 @@ export function resolveContributions(input: {
     processors: { ...input.processors },
     resources: copy(input.resources),
     adapters: copy(input.adapters),
+    plugins: [] as AnyCopilotzPlugin[],
   };
   function merge(
     target: Record<string, unknown>,
@@ -81,6 +95,14 @@ export function resolveContributions(input: {
   for (const category of ["resources", "adapters"] as const) {
     for (const [namespace, entries] of Object.entries(output[category])) {
       for (const [alias, declaration] of Object.entries(entries)) {
+        if (
+          declaration && typeof declaration === "object" &&
+          "then" in declaration
+        ) {
+          throw new TypeError(
+            `Resource ${namespace}.${alias} is unresolved; await its declaration before composition.`,
+          );
+        }
         if (!isContribution(declaration)) continue;
         const result = declaration[contribution]({ namespace, alias });
         if (
@@ -95,6 +117,12 @@ export function resolveContributions(input: {
           throw new TypeError("Contributions must resolve to native values.");
         }
         entries[alias] = result.value;
+        if (result.plugins) {
+          if (!Array.isArray(result.plugins)) {
+            throw new TypeError("Contribution plugins must be an array.");
+          }
+          output.plugins.push(...result.plugins);
+        }
         for (const kind of ["actions", "collections", "processors"] as const) {
           merge(output[kind], result[kind] ?? {}, kind);
         }
@@ -125,7 +153,7 @@ export function resolveContributions(input: {
 }
 
 type ActionsOf<T, Alias extends PropertyKey> = T extends
-  CompositionContribution<unknown, infer A>
+  CompositionContribution<unknown, infer A, readonly AnyCopilotzPlugin[]>
   ? string extends keyof A ? { readonly [K in Alias]: A[string] } : A
   : {};
 type Intersection<T> = (T extends unknown ? (value: T) => void : never) extends
@@ -133,9 +161,20 @@ type Intersection<T> = (T extends unknown ? (value: T) => void : never) extends
 export type ContributionActions<T extends PluginNamespaceMap> =
   & Intersection<
     {
-      [N in keyof T]: {
-        [K in keyof T[N]]: ActionsOf<T[N][K], K>;
+      [N in keyof T]-?: {
+        [K in keyof T[N]]-?: ActionsOf<T[N][K], K>;
       }[keyof T[N]];
     }[keyof T]
   >
   & {};
+
+type PluginsOf<T> = T extends
+  CompositionContribution<unknown, ActionMap, infer P> ? P[number] : never;
+type NamespacePlugins<T extends PluginNamespaceMap> = {
+  [N in keyof T]-?: { [K in keyof T[N]]-?: PluginsOf<T[N][K]> }[keyof T[N]];
+}[keyof T];
+/** Dependencies supplied by resource declarations participate in normal composition. */
+export type ContributionPlugins<T extends PluginNamespaceMap> =
+  [Extract<NamespacePlugins<T>, AnyCopilotzPlugin>] extends [never]
+    ? readonly []
+    : readonly Extract<NamespacePlugins<T>, AnyCopilotzPlugin>[];

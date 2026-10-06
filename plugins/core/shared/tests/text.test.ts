@@ -1,3 +1,8 @@
+import {
+  createBundledSkill as defineSkill,
+  createInlineSkill,
+} from "../../../skills/resources/skill/index.ts";
+import { skillsPlugin } from "../../../skills/plugin.ts";
 import type { EventVisibility } from "@copilotz/copilotz/core";
 import { coreEvent } from "../events/index.ts";
 import type { LlmCallInput } from "@copilotz/copilotz/llm";
@@ -31,7 +36,6 @@ import type {
 } from "@copilotz/copilotz/llm";
 import { defineAction } from "@copilotz/copilotz/actions";
 import { defineTool } from "@copilotz/copilotz/core";
-import { defineSkill, skillsPlugin } from "@copilotz/copilotz/skills";
 import {
   type CopilotzPlugin,
   createPluginRegistry,
@@ -1376,6 +1380,130 @@ Deno.test("Core projects a public failure after a Tool continuation with a paren
     await fixture.close();
   }
 });
+for (
+  const scenario of [
+    {
+      name: "unknown root alongside an available sibling",
+      grants: ["contract_tool"],
+      calls: [
+        { id: "unknown-root", action: "contrct_tool", input: {} },
+        {
+          id: "available-sibling",
+          action: "contract_tool",
+          input: { value: "available-sibling" },
+        },
+      ],
+      executions: ["available-sibling"],
+    },
+    {
+      name: "installed but ungranted root",
+      grants: [],
+      calls: [{
+        id: "ungranted-root",
+        action: "contract_tool",
+        input: { value: "must-not-execute" },
+      }],
+      executions: [],
+    },
+    {
+      name: "unknown pipeline stage after an available root",
+      grants: ["contract_tool"],
+      calls: [{
+        id: "available-root",
+        action: "contract_tool",
+        input: { value: "available-root" },
+        pipeline: {
+          id: "available-root",
+          stages: [
+            {
+              id: "available-root",
+              type: "tool",
+              action: "contract_tool",
+              input: { value: "available-root" },
+            },
+            {
+              id: "unknown-stage",
+              type: "tool",
+              action: "contrct_tool",
+              input: {},
+            },
+          ],
+        },
+      }],
+      executions: ["available-root"],
+    },
+  ] as const
+) {
+  Deno.test(`Core returns ToolUnavailable for an ${scenario.name}`, async () => {
+    let call = 0;
+    const fixture = await createFixture(
+      (input) => {
+        call += 1;
+        if (call === 1) {
+          return {
+            result: {
+              content: [],
+              toolCalls: scenario.calls,
+              attempts: [{ status: "completed" }],
+              finishReason: "tool_calls",
+            },
+          };
+        }
+        assertEquals(call, 2);
+        assertEquals(
+          input.request.messages.filter((message) => message.role === "tool")
+            .length,
+          scenario.calls.length,
+        );
+        assertStringIncludes(inputText(input), "ToolUnavailable");
+        return {
+          result: {
+            content: { type: "text", text: "Plan repaired", role: "body" },
+            attempts: [{ status: "completed" }],
+            finishReason: "stop",
+          },
+        };
+      },
+      "generate",
+      corePlugin,
+      {
+        ...agent(),
+        capabilities: { tools: scenario.grants },
+      },
+    );
+    try {
+      const root = await startRun(fixture, "Handle an unavailable Tool call");
+      await waitForRun(fixture, root, 3 + scenario.calls.length);
+      assertEquals(call, 2, "the settled plan continues exactly once");
+      assertEquals(toolExecutions, [...scenario.executions]);
+      const messages = await projectMessages(
+        fixture.engine,
+        NAMESPACE,
+        "thread-a",
+      );
+      const failed = messages.find((message) =>
+        message.sender.participantType === "tool" &&
+        message.metadata.toolStatus === "failed"
+      );
+      assertExists(failed);
+      assertEquals(failed.metadata.copilotzToolAction, undefined);
+      assertEquals(
+        (failed.metadata.copilotzToolPlanResult as Record<string, unknown>)
+          .resultKind,
+        "unavailable",
+      );
+      const settlement = await fixture.engine.events.settlement(
+        NAMESPACE,
+        root,
+      );
+      assertEquals(settlement.deadLetters, 0);
+      assertEquals(settlement.unsettled, 0);
+    } finally {
+      await fixture.close();
+    }
+  });
+}
+
 Deno.test("Core projects invalid Tool input and lets the Agent repair it", async () => {
   let call = 0;
   const fixture = await createFixture((input) => {

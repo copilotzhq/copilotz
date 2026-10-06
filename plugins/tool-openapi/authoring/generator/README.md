@@ -1,21 +1,6 @@
-# OpenAPI Generator
+# OpenAPI resource authoring
 
-## What it is
-
-The authoring generator that converts OpenAPI operations into Copilotz Actions
-and Tool Resources.
-
-## Why it exists
-
-OpenAPI operations are created dynamically from a schema, so they have one
-implementation owner instead of a directory for every generated endpoint.
-
-## How to use it
-
-Use `defineApi` to declare an API and `compileOpenApiTools` to generate the
-corresponding plugin at composition time.
-
-## How it works
-
-The generator normalizes the schema, builds request executors and data-only Tool
-Resources, then delegates their composition to the plugin root.
+`defineApi` compiles one supplied schema into an ordinary dependency plugin,
+which contributes selected tools and the default runtime adapter.
+`transformTool` customizes a generated tool before registration. Compilation
+helpers stay internal.

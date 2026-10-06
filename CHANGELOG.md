@@ -1,3 +1,32 @@
+## 0.84.1 — 2026-10-06
+
+### Fixed
+
+- Project unknown or unadvertised Tool calls through the existing
+  `ToolUnavailable` result path so Agents can correct them. Valid parallel
+  siblings still execute, while unavailable stages cannot execute even if a
+  later composition registers or grants their alias. This also lets memory
+  consolidation recover a misspelled completion Tool in its original scoped turn
+  instead of leaving its checkpoint pending after a dead-lettered result.
+
+## 0.84.0 — 2026-10-06
+
+### Changed
+
+- Declare OpenAPI, MCP and Skills as resources. These resources install their
+  generated Actions, reader support and default adapter bindings automatically.
+  Remove the empty OpenAPI/MCP plugins, public compilers and separate Skill
+  constructors; migrate applications to `defineApi`, awaited `defineMcp`, and
+  `defineSkill`.
+- Load authorized Skill metadata lazily from filesystem or HTTP roots using the
+  same import in supported runtimes. Cache bounded app-scoped snapshots and read
+  supporting files on demand without executing scripts.
+- Compose contributed dependencies through normal plugin registration and
+  preserve root overrides, native Action IDs and inferred composition types.
+- Support these declarations in filesystem plugin generation and bundled
+  plugins, keeping framework imports external to preserve one framework
+  identity.
+
 ## 0.83.4 — 2026-10-05
 
 ### Improved
@@ -63,6 +92,21 @@
   framework or database migration.
 
 # Changelog
+
+## 0.84.0
+
+- Declare Skills, OpenAPI, and MCP once as resources with automatic
+  dependencies.
+- Load skill roots dynamically through the same import across runtimes, with
+  bounded app-scoped snapshots and supporting reads.
+- Replace descriptor-only API compilation with `defineApi({schema,...})`,
+  operation selection, and tool transformations.
+- Replace separate MCP preparation with one awaited `defineMcp` resource
+  constructor.
+- Keep framework dependencies external in filesystem-built plugins and generated
+  Skills packages.
+- Breaking authoring update: rebuild generated plugins and migrate consumers to
+  the documented resource API.
 
 ## 0.82.8 — 2026-10-01
 

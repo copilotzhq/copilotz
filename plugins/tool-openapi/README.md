@@ -1,33 +1,14 @@
-# OpenAPI Tool Plugin
+# OpenAPI
 
-## What it is
+Declare `defineApi({id,name,schema,operations?,auth?...})` under
+`resources.apis`. The resource contributes tools and its default binding
+automatically. Use `transformTool` for application execution or presentation
+customization. See
+[APIs and tools](../../docs/getting-started/part-2-capabilities/07-existing-apis-and-tools.md).
 
-A concrete plugin factory that turns an OpenAPI declaration into executable
-Actions and Tool Resources.
-
-## Why it exists
-
-It lets applications expose documented HTTP operations to agents without
-hand-writing a separate action and resource for every endpoint.
-
-## How to use it
-
-```ts
-import { openApiToolsPlugin } from "@copilotz/copilotz/tools/openapi";
-// Include openApiToolsPlugin in the final createCopilotz({ plugins: [...] }) call.
-```
-
-Run `compileOpenApiTools({ apis })` explicitly and register the resulting
-declarations in `resources.tools`. Resolve auth, request hooks, transport, and
-an optional cache through `adapters.openapi[apiId]`.
-
-## How it works
-
-`copilotz.json` declares this root. `plugin.generated.ts` contains its static
-composition and `plugin.ts` exposes its public name. Regenerate with
-`deno task build:plugins`. Actions and Processors read final context
-configuration at invocation; there is no plugin factory or runtime directory
-discovery.
-
-See [convention-first authoring](../../docs/convention-authoring.md) for the
-shared file structure, compiler, configuration locations, and migration guide.
+Use `aliases: { operationId: "applicationAlias" }` when an application's native
+Action names differ from the OpenAPI operation IDs. Request preparation,
+response mappings and `transformTool` still receive the original operation
+identity. Aliases must be unique. `transformTool` can wrap a generated executor
+or customize its schema and presentation once, without a second compiler or
+registration pass.

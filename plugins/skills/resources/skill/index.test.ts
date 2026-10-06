@@ -1,5 +1,5 @@
 import { assertEquals } from "@std/assert";
-import { defineInlineSkill } from "./index.ts";
+import { createInlineSkill as defineInlineSkill } from "./index.ts";
 
 Deno.test("defineInlineSkill creates an immutable Skill Resource", () => {
   const skill = defineInlineSkill({

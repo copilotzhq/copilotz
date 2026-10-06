@@ -1,9 +1,4 @@
-/**
- * Exposes authoring helpers that generate Tool primitives from integrations.
- *
- * @module
- */
-
-export * from "./generator/index.ts";
-
+/** OpenAPI resource authoring. @module */
+export { defineApi } from "./generator/index.ts";
+export type { DefinedApi, OpenApiRuntime } from "./generator/index.ts";
 export * from "./contracts/index.ts";

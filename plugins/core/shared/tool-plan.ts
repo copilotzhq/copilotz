@@ -75,7 +75,7 @@ export type CoreToolPlanBase = Readonly<{
   stageHistoryVisibility: readonly (readonly (
     | string
     | null
-  )[])[]; /** Definition identity snapshot for every executable stage. */
+  )[])[]; /** Definition identity snapshot; null Tool IDs cannot execute. */
   stageActionIds: readonly (readonly (string | null)[])[];
   ask?: AgentAskMetadata;
 }>;
@@ -285,7 +285,8 @@ async function loadPlan(
         !Array.isArray(row) || row.length !== stages(result[index]).length ||
         row.some((actionId: string | null, stageIndex: number) =>
           stages(result[index])[stageIndex].type === "tool"
-            ? !text(actionId, "Tool-plan stage Action definition ID")
+            ? actionId !== null &&
+              !text(actionId, "Tool-plan stage Action definition ID")
             : actionId !== null
         )
       )

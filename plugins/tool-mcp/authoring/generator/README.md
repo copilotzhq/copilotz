@@ -1,22 +1,5 @@
-# MCP Tool Generator
+# MCP resource authoring
 
-## What it is
-
-The authoring helper that discovers an MCP server's Tool descriptors and
-generates native Actions and Tool Resources.
-
-## Why it exists
-
-Generated MCP operations have no stable source directory of their own, but still
-need ordinary Copilotz lifecycle, validation, and content behavior.
-
-## How to use it
-
-Pass server declarations and a `connect` implementation to `prepareMcpTools`
-before creating the application.
-
-## How it works
-
-Discovery runs before composition. Generated aliases and Action IDs are checked
-for collisions, server allowlists are applied, and media payloads are replaced
-with materialized ContentRefs before Action completion.
+`await defineMcp` discovers one server catalog, validates selected tool names,
+closes discovery, and contributes compiled tools with their default runtime
+connection. Runtime calls do not rediscover the catalog.

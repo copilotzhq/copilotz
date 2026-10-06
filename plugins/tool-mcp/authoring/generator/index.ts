@@ -1,3 +1,9 @@
+import {
+  type CompositionContribution,
+  contribution,
+  type CopilotzPlugin,
+  definePlugin,
+} from "@copilotz/copilotz/plugins";
 /**
  * Discovers MCP Tools and authors their generated Actions and Resources.
  *
@@ -6,8 +12,8 @@
 
 import {
   type ActionContext,
+  type ActionDefinition,
   type ActionSchema,
-  type AnyActionDefinition,
   defineAction,
 } from "@copilotz/copilotz/actions";
 import {
@@ -33,19 +39,17 @@ import type {
   ConnectMcpRuntime,
   McpRuntimeConnection,
   McpToolDescriptor,
-  PrepareMcpToolsOptions,
 } from "../../shared/contracts.ts";
 
 export type {
   ConnectMcpRuntime,
   McpRuntimeConnection,
   McpToolDescriptor,
-  PrepareMcpToolsOptions,
 } from "../../shared/contracts.ts";
 
 type GeneratedMcpTool = Readonly<{
   alias: string;
-  action: AnyActionDefinition;
+  action: ActionDefinition<unknown, unknown, ActionContext>;
   tool: ToolResource;
 }>;
 
@@ -204,32 +208,62 @@ async function lowerMcpResult(
   return substitute(template);
 }
 
-function allowedToolNames(server: MCPServer): ReadonlySet<string> | undefined {
-  const configured = server.capabilities?.tools;
-  if (!Array.isArray(configured)) return undefined;
-  return new Set(
-    configured.filter((value): value is string =>
-      typeof value === "string" && Boolean(value.trim())
-    ).map((value) => value.trim()),
-  );
+async function abortable<T>(
+  task: Promise<T>,
+  signal: AbortSignal | undefined,
+  onAbort?: () => void,
+): Promise<T> {
+  if (!signal) return await task;
+  let cancel: () => void = () => {};
+  const cancelled = new Promise<never>((_resolve, reject) => {
+    cancel = () => {
+      onAbort?.();
+      reject(signal.reason ?? new DOMException("Cancelled", "AbortError"));
+    };
+    signal.addEventListener("abort", cancel, { once: true });
+    if (signal.aborted) cancel();
+  });
+  try {
+    return await Promise.race([task, cancelled]);
+  } finally {
+    signal.removeEventListener("abort", cancel);
+  }
 }
 
 async function withConnection<T>(
-  connect: PrepareMcpToolsOptions["connect"],
+  connect: ConnectMcpRuntime,
   server: MCPServer,
   signal: AbortSignal | undefined,
   operation: (connection: McpRuntimeConnection) => Promise<T>,
 ): Promise<T> {
-  const connection = await connect(server, signal);
-  let result: T;
+  signal?.throwIfAborted();
+  const connecting = connect(server, signal);
+  let connection: McpRuntimeConnection;
   try {
-    result = await operation(connection);
+    connection = await abortable(connecting, signal);
   } catch (error) {
-    await Promise.resolve(connection.close()).catch(() => undefined);
+    // A connector ignoring cancellation may finish later. Never leak that session.
+    void connecting.then((value) => value.close()).catch(() => undefined);
     throw error;
   }
-  await connection.close();
-  return result;
+  let closing: Promise<void> | undefined;
+  const close = () =>
+    closing ??= Promise.resolve().then(() => connection.close());
+  const cancel = () => {
+    void close().catch(() => undefined);
+  };
+  try {
+    const result = await abortable(
+      Promise.resolve().then(() => operation(connection)),
+      signal,
+      cancel,
+    );
+    await abortable(close(), signal);
+    return result;
+  } catch (error) {
+    await abortable(close(), signal).catch(() => undefined);
+    throw error;
+  }
 }
 
 function entryFrom(
@@ -246,10 +280,9 @@ function entryFrom(
     }`,
     inputSchema: inputSchema(descriptor.inputSchema),
     async execute(args: unknown, context: ActionContext): Promise<unknown> {
-      const capability = context.adapters.mcp?.[serverId] as {
-        connect: ConnectMcpRuntime;
-        server?: MCPServer;
-      } | undefined;
+      const capability = context.adapters.mcp?.[serverId] as
+        | McpConnection
+        | undefined;
       if (!capability?.connect) {
         throw new TypeError(
           `MCP connector is required in adapters.mcp.${serverId}.`,
@@ -257,7 +290,7 @@ function entryFrom(
       }
       const result = await withConnection(
         capability.connect,
-        capability.server ?? { id: serverId, name: serverName },
+        { ...server, transport: capability.transport, env: capability.env },
         context.signal,
         (connection) =>
           connection.callTool(toolName, record(args), context.signal),
@@ -279,59 +312,177 @@ function entryFrom(
   return ({ alias, action, tool } as const);
 }
 
-async function entriesForServer(
+async function discoverTools(
   server: MCPServer,
-  options: PrepareMcpToolsOptions,
-): Promise<readonly GeneratedMcpTool[]> {
+  connection: McpConnection,
+  selected: readonly string[] | undefined,
+  signal: AbortSignal,
+): Promise<
+  Readonly<
+    Record<
+      string,
+      ToolDefinition<ActionDefinition<unknown, unknown, ActionContext>>
+    >
+  >
+> {
   const descriptors = await withConnection(
-    options.connect,
+    connection.connect,
     server,
-    options.signal,
-    (connection) => connection.listTools(options.signal),
+    signal,
+    (client) => client.listTools(signal),
   );
-  const allowed = allowedToolNames(server);
-  return (descriptors
-    .filter((descriptor) => !allowed || allowed.has(descriptor.name))
-    .map((descriptor) => entryFrom(server, descriptor)));
-}
-
-/** Discovers all MCP Tools before registry composition. */
-export async function prepareMcpTools(
-  options: PrepareMcpToolsOptions,
-): Promise<Readonly<Record<string, ToolDefinition>>> {
-  if (typeof options?.connect !== "function") {
-    throw new TypeError("An MCP runtime connector is required.");
-  }
-  if (!Array.isArray(options.servers)) {
-    throw new TypeError("MCP Tool plugin requires a servers array.");
-  }
-  const entries: GeneratedMcpTool[] = [];
-  const aliases = new Set<string>();
-  const actionIds = new Set<string>();
-  for (const server of options.servers) {
-    for (const entry of await entriesForServer(server, options)) {
-      assertGeneratedEntryUnique(
-        aliases,
-        actionIds,
-        entry.alias,
-        entry.action.id,
-        `MCP server '${server.id}'`,
-      );
-      entries.push(entry);
+  const allowed = selected ? new Set(selected) : undefined;
+  for (const name of allowed ?? []) {
+    if (!descriptors.some((descriptor) => descriptor.name === name)) {
+      throw new TypeError(`Unknown MCP tool '${name}'.`);
     }
   }
+  const aliases = new Set<string>();
+  const actionIds = new Set<string>();
   return Object.fromEntries(
-    entries.map(
-      (entry) => [
-        entry.alias,
-        defineTool({
-          ...entry.action,
-          name: entry.tool.name,
-          description: entry.tool.description,
-          history: entry.tool.history,
-          metadata: entry.tool.metadata,
-        }),
-      ],
-    ),
+    descriptors
+      .filter((descriptor) => !allowed || allowed.has(descriptor.name))
+      .map((descriptor) => {
+        const entry = entryFrom(server, descriptor);
+        assertGeneratedEntryUnique(
+          aliases,
+          actionIds,
+          entry.alias,
+          entry.action.id,
+          `MCP server '${server.id}'`,
+        );
+        return [
+          entry.alias,
+          defineTool({
+            ...entry.action,
+            name: entry.tool.name,
+            description: entry.tool.description,
+            history: entry.tool.history,
+            metadata: entry.tool.metadata,
+          }),
+        ];
+      }),
   );
+}
+
+export type McpConnection = Readonly<{
+  connect: ConnectMcpRuntime;
+  transport?: MCPServer["transport"];
+  env?: MCPServer["env"];
+}>;
+
+/** One connection declaration is used for discovery and runtime calls. */
+export type DefineMcpInput =
+  & Omit<MCPServer, "transport" | "env" | "capabilities">
+  & Readonly<{
+    connection: McpConnection;
+    tools?: readonly string[];
+    signal?: AbortSignal;
+    timeoutMs?: number;
+  }>;
+type McpPlugin = CopilotzPlugin<
+  string,
+  "1",
+  readonly [],
+  {},
+  Readonly<Record<string, ActionDefinition<unknown, unknown, ActionContext>>>,
+  {},
+  { tools: Readonly<Record<string, ToolResource>> },
+  {
+    mcp: Readonly<
+      Record<string, McpConnection>
+    >;
+  }
+>;
+function mcpPlugin(
+  server: MCPServer,
+  connection: McpConnection,
+  tools: Readonly<
+    Record<
+      string,
+      ToolDefinition<ActionDefinition<unknown, unknown, ActionContext>>
+    >
+  >,
+): McpPlugin {
+  return definePlugin({
+    id: `copilotz.mcp.${server.id}`,
+    version: "1",
+    resources: { tools },
+    adapters: { mcp: { [server.id]: connection } },
+  });
+}
+export type DefinedMcp = CompositionContribution<
+  MCPServer,
+  {},
+  readonly [McpPlugin]
+>;
+
+/** Discover once, close the discovery connection, and return a composable resource. */
+export async function defineMcp(input: DefineMcpInput): Promise<DefinedMcp> {
+  requiredText(input.id, "MCP server id");
+  requiredText(input.name, "MCP server name");
+  if (typeof input.connection?.connect !== "function") {
+    throw new TypeError("MCP connection.connect is required.");
+  }
+  if (
+    input.tools &&
+    (!Array.isArray(input.tools) ||
+      input.tools.some((name) =>
+        typeof name !== "string" || !name.trim() || name !== name.trim()
+      ) ||
+      new Set(input.tools).size !== input.tools.length)
+  ) throw new TypeError("MCP tools must be a distinct list of tool names.");
+  const timeoutMs = input.timeoutMs ?? 30_000;
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) {
+    throw new TypeError("MCP timeoutMs must be a positive safe integer.");
+  }
+  const {
+    connection,
+    tools: selected,
+    signal: callerSignal,
+    timeoutMs: _timeout,
+    ...config
+  } = input;
+  const binding: McpConnection = Object.freeze({
+    connect: connection.connect,
+    ...(connection.transport
+      ? { transport: cloneLosslessJson(connection.transport, "MCP transport") }
+      : {}),
+    ...(connection.env
+      ? { env: cloneLosslessJson(connection.env, "MCP environment") }
+      : {}),
+  });
+  const server = Object.freeze({
+    ...cloneLosslessJson(config, "MCP declaration"),
+    transport: binding.transport,
+    env: binding.env,
+  });
+  const controller = new AbortController();
+  const cancel = () => controller.abort(callerSignal?.reason);
+  callerSignal?.addEventListener("abort", cancel, { once: true });
+  if (callerSignal?.aborted) cancel();
+  const timer = setTimeout(
+    () =>
+      controller.abort(
+        new DOMException("MCP discovery timed out.", "TimeoutError"),
+      ),
+    timeoutMs,
+  );
+  try {
+    controller.signal.throwIfAborted();
+    const tools = await discoverTools(
+      server,
+      binding,
+      selected,
+      controller.signal,
+    );
+    controller.signal.throwIfAborted();
+    const plugin = mcpPlugin(server, binding, tools);
+    return Object.freeze({
+      [contribution]: () => ({ value: server, plugins: [plugin] as const }),
+    });
+  } finally {
+    clearTimeout(timer);
+    callerSignal?.removeEventListener("abort", cancel);
+  }
 }

@@ -436,3 +436,10 @@ what happens next. Actions implement what can be done. Resources describe how
 the system should be configured. Adapters determine how interchangeable external
 boundaries are implemented. Plugins compose these pieces into higher-level
 behavior.**
+
+Resource declarations can contribute ordinary plugin dependencies. These resolve
+synchronously before owner registration; shared plugin objects register once,
+and final root namespace overlays remain authoritative. OpenAPI compilation and
+awaited MCP discovery produce complete resource dependencies. Skills
+declarations add one shared support plugin and resolve authorized root manifests
+lazily in the existing async context contribution.

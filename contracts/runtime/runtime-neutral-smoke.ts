@@ -1,3 +1,4 @@
+import { defineSkill } from "@copilotz/copilotz/skills";
 import { createMemoryAssetRepository } from "@copilotz/copilotz/content";
 import { createPluginRegistry, definePlugin } from "@copilotz/copilotz/plugins";
 import {
@@ -73,6 +74,35 @@ export async function runRuntimeNeutralSmoke(): Promise<
     throw new TypeError(
       "Runtime-smoke LLM composition must include its connection and Adapter.",
     );
+  }
+
+  let skillReads = 0;
+  const skills = createPluginRegistry({
+    resources: {
+      skills: {
+        planning: defineSkill({
+          root: "https://skills.invalid/planning/",
+          fetch: (() => {
+            skillReads++;
+            return Promise.resolve(
+              new Response(
+                "---\nname: planning\ndescription: Plans work.\n---\nPortable skill body.",
+              ),
+            );
+          }) as typeof fetch,
+        }),
+      },
+    },
+  });
+  const skill = skills.resources.skills.planning;
+  for (let index = 0; index < 2; index++) {
+    const snapshot = await skill.load({ scope: skills.resources });
+    if (snapshot.body !== "Portable skill body.") {
+      throw new Error("Portable skill instructions are incorrect.");
+    }
+  }
+  if (skillReads !== 1 || !skills.actions.read_skill_resource) {
+    throw new Error("Portable skill composition/cache failed.");
   }
 
   return ({

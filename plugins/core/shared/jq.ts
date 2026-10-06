@@ -1,9 +1,8 @@
 const MAX_JQ_BYTES = 1024 * 1024;
 const JQ_TIMEOUT_MS = 5_000;
-// Static reachability also keeps the Worker implementation in the package
-// graph; execution remains isolated in the Worker created below.
-import { runJqWorker } from "./jq-worker.ts";
-void runJqWorker;
+// Keep the worker in the published type graph without installing its message
+// handler or loading WASM in the application importing Core.
+import type { JqWorkerRequest } from "./jq-worker.ts";
 
 function serialized(value: unknown, label: string): string {
   let result: string;
@@ -81,7 +80,8 @@ export async function evaluateCoreJq(
       };
       worker.onerror = (event) =>
         fail(new Error(`jq worker failed: ${event.message}`));
-      worker.postMessage({ input: inputJson, filter });
+      const request: JqWorkerRequest = { input: inputJson, filter };
+      worker.postMessage(request);
     });
   } finally {
     worker.terminate();

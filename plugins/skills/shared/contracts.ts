@@ -31,13 +31,21 @@ export type SkillFile =
 
 export type SkillReadOptions = Readonly<{
   signal?: AbortSignal;
+  maximumTextBytes?: number;
+  /** App-owned namespace object; completed snapshots never cross app scopes. */
+  scope?: object;
 }>;
 
 /** Runtime-neutral lazy representation of one Agent Skills directory. */
 export type Skill =
-  & SkillManifest
+  & Partial<SkillManifest>
   & Readonly<{
+    name: string;
     files: readonly SkillFileDescriptor[];
+    dynamicFiles?: boolean;
+    load(
+      options?: SkillReadOptions,
+    ): Promise<import("./parser.ts").ParsedSkillMarkdown>;
     /** Optional real file/HTTP location for an externally readable Skill. */
     locator?: string;
     read(path: string, options?: SkillReadOptions): Promise<SkillFile>;

@@ -54,6 +54,7 @@ export type { NonRetryableError } from "../failure.ts";
 export { contribution } from "./contribution.ts";
 export type {
   CompositionContribution,
+  ContributionPlugins,
   ContributionResult,
   ResolvedNamespaces,
 } from "./contribution.ts";

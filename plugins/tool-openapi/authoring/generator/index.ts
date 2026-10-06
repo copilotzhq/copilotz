@@ -1,3 +1,9 @@
+import {
+  type CompositionContribution,
+  contribution,
+  type CopilotzPlugin,
+  definePlugin,
+} from "@copilotz/copilotz/plugins";
 /**
  * Generates immutable Tool Resources and executable Actions from OpenAPI
  * declarations at composition time.
@@ -11,6 +17,7 @@ import type {
   APIPrepareRequestInput,
   APIResponseAssetMapping,
   APIResponseAssetMappings,
+  ApiTool,
 } from "../contracts/index.ts";
 import {
   assetIdFromRef,
@@ -27,11 +34,11 @@ import {
   generatedActionAlias,
   generatedActionIdSegment,
 } from "@copilotz/copilotz/core";
-import type { AnyActionDefinition } from "@copilotz/copilotz/actions";
-import type { ToolDefinition, ToolResource } from "@copilotz/copilotz/core";
+import type { ActionDefinition } from "@copilotz/copilotz/actions";
+import type { ToolResource } from "@copilotz/copilotz/core";
 type OpenApiGeneratedTool = {
   alias: string;
-  action: AnyActionDefinition;
+  action: ActionDefinition<unknown, unknown, ActionContext>;
   tool: ToolResource;
 };
 export type OpenApiRuntime =
@@ -1080,10 +1087,26 @@ function createApiExecutor(
     const capability = context.adapters?.openapi?.[declaration.id] as
       | OpenApiRuntime
       | undefined;
-    const apiConfig = { ...declaration, ...capability };
+    const {
+      auth: _auth,
+      headers: _headers,
+      prepareRequest: _prepareRequest,
+      ...staticConfig
+    } = declaration;
+    const apiConfig = {
+      ...staticConfig,
+      auth: capability?.auth,
+      headers: capability?.headers,
+      prepareRequest: capability?.prepareRequest,
+    };
     const fetcher = capability?.fetch ?? fetch;
     const tokenCache = capability?.tokenCache ?? new Map<string, CachedToken>();
     const baseUrl = capability?.baseUrl ?? declaredBaseUrl;
+    if (!baseUrl) {
+      throw new TypeError(
+        `API baseUrl is required in adapters.openapi.${declaration.id}.`,
+      );
+    }
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
     let removeAbortListener: (() => void) | undefined;
     let abortReason: "timeout" | "cancelled" | undefined;
@@ -1308,12 +1331,12 @@ function createApiExecutor(
 function generateApiEntries(apiConfig: API): readonly OpenApiGeneratedTool[] {
   const entries: OpenApiGeneratedTool[] = [];
   const schema = dereferenceOpenApiLocalRefs(
-    normalizeOpenApiSchema(apiConfig.openApiSchema),
+    normalizeOpenApiSchema(apiConfig.schema),
   );
 
   // Determine base URL
-  const baseUrl = apiConfig.baseUrl ||
-    (schema.servers && schema.servers.length > 0 ? schema.servers[0].url : "");
+  const schemaBaseUrl = schema.servers?.[0]?.url ?? "";
+  const baseUrl = apiConfig.baseUrl || schemaBaseUrl;
 
   if (!baseUrl) {
     throw new Error(
@@ -1362,7 +1385,7 @@ function generateApiEntries(apiConfig: API): readonly OpenApiGeneratedTool[] {
           path,
           method,
           actionAlias,
-          baseUrl,
+          schemaBaseUrl,
           parameterMetadata,
         ),
       });
@@ -1390,14 +1413,47 @@ function generateApiEntries(apiConfig: API): readonly OpenApiGeneratedTool[] {
   return entries;
 }
 
-export type DefinedApi<TApi extends API = API> = TApi;
+type ApiPlugin = CopilotzPlugin<
+  string,
+  "1",
+  readonly [],
+  {},
+  Readonly<Record<string, ActionDefinition<unknown, unknown, ActionContext>>>,
+  {},
+  { tools: Readonly<Record<string, ToolResource>> },
+  { openapi: Readonly<Record<string, OpenApiRuntime>> }
+>;
+export type DefinedApi<TApi extends API = API> =
+  & TApi
+  & CompositionContribution<TApi, {}, readonly [ApiPlugin]>;
+
+function apiPlugin(config: API): ApiPlugin {
+  return definePlugin({
+    id: `copilotz.openapi.${config.id}`,
+    version: "1",
+    resources: { tools: compileApiTools(config) },
+    adapters: {
+      openapi: {
+        [config.id]: {
+          baseUrl: config.baseUrl,
+          auth: config.auth,
+          headers: config.headers,
+          prepareRequest: config.prepareRequest,
+        },
+      },
+    },
+  });
+}
 
 const API_CONFIG_KEYS = new Set([
   "id",
   "name",
   "externalId",
   "description",
-  "openApiSchema",
+  "schema",
+  "operations",
+  "aliases",
+  "transformTool",
   "baseUrl",
   "headers",
   "auth",
@@ -1410,13 +1466,6 @@ const API_CONFIG_KEYS = new Set([
   "historyPolicyDefaults",
   "toolPolicies",
 ]);
-const API_DECLARATION_ALIAS = /^[a-z][a-zA-Z0-9_]*$/;
-const UNSAFE_API_DECLARATION_ALIASES = new Set([
-  "__proto__",
-  "constructor",
-  "prototype",
-]);
-
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const prototype = Object.getPrototypeOf(value);
@@ -1429,20 +1478,8 @@ function snapshotApiJson<T>(value: T, label: string): T {
     : cloneLosslessJson(value, label);
 }
 
-function declarationAlias(value: string): string {
-  if (
-    !API_DECLARATION_ALIAS.test(value) ||
-    UNSAFE_API_DECLARATION_ALIASES.has(value)
-  ) {
-    throw new TypeError(`OpenAPI declaration has invalid alias '${value}'.`);
-  }
-  return value;
-}
-
 /**
- * Names an OpenAPI integration at its declaration site. It deliberately keeps
- * transport callbacks on the API definition; generated Tool Resources remain
- * data-only.
+ * Declares an OpenAPI resource and its generated tools and default runtime binding.
  */
 export function defineApi<const TApi extends API>(
   config: TApi,
@@ -1460,16 +1497,29 @@ export function defineApi<const TApi extends API>(
   if (typeof config.name !== "string" || !config.name.trim()) {
     throw new TypeError("API name is required.");
   }
-  return ({
+  if (
+    config.operations &&
+    (!Array.isArray(config.operations) ||
+      new Set(config.operations).size !== config.operations.length)
+  ) {
+    throw new TypeError(
+      "API operations must be a distinct list of operation aliases.",
+    );
+  }
+  const value = ({
     ...config,
-    ...(config.openApiSchema && typeof config.openApiSchema === "object"
+    ...(config.schema && typeof config.schema === "object"
       ? {
-        openApiSchema: snapshotApiJson(
-          config.openApiSchema,
+        schema: snapshotApiJson(
+          config.schema,
           "API OpenAPI schema",
         ),
       }
       : {}),
+    ...(config.aliases
+      ? { aliases: snapshotApiJson(config.aliases, "API aliases") }
+      : {}),
+    ...(config.operations ? { operations: [...config.operations] } : {}),
     ...(config.headers
       ? { headers: snapshotApiJson(config.headers, "API headers") }
       : {}),
@@ -1497,65 +1547,66 @@ export function defineApi<const TApi extends API>(
         toolPolicies: snapshotApiJson(config.toolPolicies, "API Tool policies"),
       }
       : {}),
-  } as const) as DefinedApi<TApi>;
+  } as const) as TApi;
+  const plugin = apiPlugin(value);
+  return Object.freeze({
+    ...value,
+    [contribution]: () => ({ value, plugins: [plugin] as const }),
+  });
 }
 
-export type OpenApiDefinitions = Readonly<Record<string, API>>;
-
-export type CompileOpenApiToolsOptions = Readonly<{
-  /** Array form retains one generated Tool per operation. */
-  apis: readonly API[] | OpenApiDefinitions;
-}>;
-
-/** Concrete plugin shape produced by OpenAPI discovery. */
-
-/** Discovers every OpenAPI operation before runtime composition. */
-export function compileOpenApiTools(
-  options: CompileOpenApiToolsOptions,
-): Readonly<Record<string, ToolDefinition>> {
-  if (!options || !options.apis || typeof options.apis !== "object") {
-    throw new TypeError("OpenAPI Tool plugin requires APIs.");
-  }
-  const entries: OpenApiGeneratedTool[] = [];
-  const aliases = new Set<string>();
-  const actionIds = new Set<string>();
-  const apiEntries = Array.isArray(options.apis)
-    ? options.apis.map((api) => [undefined, api] as const)
-    : (() => {
-      if (!isPlainRecord(options.apis)) {
-        throw new TypeError(
-          "OpenAPI APIs must be an array or plain alias map.",
-        );
+/** Compile the selected operations for one declaration; composition owns grouping. */
+function compileApiTools(api: API): Readonly<Record<string, ApiTool>> {
+  let entries = generateApiEntries(api);
+  if (api.operations) {
+    if (
+      !Array.isArray(api.operations) ||
+      new Set(api.operations).size !== api.operations.length
+    ) {
+      throw new TypeError(
+        "API operations must be a distinct list of operation aliases.",
+      );
+    }
+    const known = new Set(entries.map((entry) => entry.alias));
+    for (const name of api.operations) {
+      if (!known.has(name)) {
+        throw new TypeError(`Unknown API operation '${name}'.`);
       }
-      return Object.entries(options.apis).map(([alias, api]) =>
-        [declarationAlias(alias), api as API] as const
+    }
+    entries = entries.filter((entry) => api.operations!.includes(entry.alias));
+  }
+  const known = new Set(entries.map((entry) => entry.alias));
+  for (const [operation, alias] of Object.entries(api.aliases ?? {})) {
+    if (!known.has(operation)) {
+      throw new TypeError(`Unknown API operation '${operation}' in aliases.`);
+    }
+    if (typeof alias !== "string" || !/^[a-z][a-zA-Z0-9_]*$/.test(alias)) {
+      throw new TypeError(
+        `Invalid API Action alias in aliases.${operation}: '${alias}'.`,
       );
-    })();
-  for (const [alias, api] of apiEntries) {
-    const generated = generateApiEntries(api);
-    for (const entry of generated) {
-      assertGeneratedEntryUnique(
-        aliases,
-        actionIds,
-        entry.alias,
-        entry.action.id,
-        `OpenAPI '${api.id}'${alias === undefined ? "" : ` (${alias})`}`,
-      );
-      entries.push(entry);
     }
   }
-  return Object.fromEntries(
-    entries.map(
-      (entry) => [
-        entry.alias,
-        defineTool({
-          ...entry.action,
-          name: entry.tool.name,
-          description: entry.tool.description,
-          history: entry.tool.history,
-          metadata: entry.tool.metadata,
-        }),
-      ],
-    ),
-  );
+  const aliases = new Set<string>();
+  const ids = new Set<string>();
+  return Object.fromEntries(entries.map((entry) => {
+    const alias = api.aliases?.[entry.alias] ?? entry.alias;
+    const generated = defineTool({
+      ...entry.action,
+      name: entry.tool.name,
+      description: entry.tool.description,
+      history: entry.tool.history,
+      metadata: entry.tool.metadata,
+    });
+    const tool = api.transformTool
+      ? api.transformTool(generated, entry.alias)
+      : generated;
+    assertGeneratedEntryUnique(
+      aliases,
+      ids,
+      alias,
+      tool.action.id,
+      `OpenAPI '${api.id}'`,
+    );
+    return [alias, tool];
+  }));
 }

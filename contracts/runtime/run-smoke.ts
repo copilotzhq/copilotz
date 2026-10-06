@@ -10,3 +10,12 @@ if (
   );
 }
 console.log(JSON.stringify(result));
+
+const { readPlanningSkill } = await import("./skill-root-smoke.ts");
+const skill = await readPlanningSkill(
+  new URL("./fixtures/skills/planning/", import.meta.url),
+);
+if (skill.body !== "Portable skill body." || !skill.readers) {
+  throw new Error("Filesystem skill smoke failed.");
+}
+console.log(JSON.stringify(skill));

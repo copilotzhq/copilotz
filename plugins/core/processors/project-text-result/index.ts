@@ -2,7 +2,6 @@ import {
   snapshotRootTools,
   snapshotToolStageActionIds,
   snapshotToolStageHistory,
-  validateCoreToolPlan,
 } from "./tool-plan.ts";
 /** Projects terminal LLM output into Messages or durable Tool plans. @module */
 
@@ -22,6 +21,7 @@ import type { LlmCallOutput, LlmToolCall } from "@copilotz/copilotz/llm";
 import { defineProcessor, type Processor } from "@copilotz/copilotz/plugins";
 import type { CoreToolProcessorContext } from "../../shared/runtime-context.ts";
 import {
+  calls,
   type CoreToolPlanBase,
   createDurableToolPlan,
   dispatchInitialStages,
@@ -81,13 +81,7 @@ export const projectTextResultProcessor: Processor<
         return;
       }
     }
-    const toolCalls = rawToolCalls.length
-      ? validateCoreToolPlan(context, {
-        agentId: metadata.agentId,
-        availableToolIds: metadata.availableToolIds,
-        calls: rawToolCalls,
-      })
-      : rawToolCalls;
+    const toolCalls = rawToolCalls.length ? calls(rawToolCalls) : rawToolCalls;
     const planMessageId = await deriveWorkflowId(
       "message",
       actionRunId,
@@ -168,9 +162,21 @@ export const projectTextResultProcessor: Processor<
       responseVisibility: metadata.responseVisibility,
       parentLlmActionRunId: actionRunId,
       ...(metadata.agentTurn ? { agentTurn: metadata.agentTurn } : {}),
-      rootTools: snapshotRootTools(context, toolCalls),
-      stageHistoryVisibility: snapshotToolStageHistory(context, toolCalls),
-      stageActionIds: snapshotToolStageActionIds(context, toolCalls),
+      rootTools: snapshotRootTools(
+        context,
+        toolCalls,
+        metadata.availableToolIds,
+      ),
+      stageHistoryVisibility: snapshotToolStageHistory(
+        context,
+        toolCalls,
+        metadata.availableToolIds,
+      ),
+      stageActionIds: snapshotToolStageActionIds(
+        context,
+        toolCalls,
+        metadata.availableToolIds,
+      ),
       ...(metadata.ask ? { ask: metadata.ask } : {}),
     } as const;
     await createDurableToolPlan(context, plan, toolCalls);

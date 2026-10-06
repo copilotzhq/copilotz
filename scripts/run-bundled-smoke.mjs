@@ -11,3 +11,14 @@ if (
   );
 }
 console.log(JSON.stringify(result));
+
+const skills = await import(
+  new URL("../dist/skill-root-smoke.mjs", import.meta.url)
+);
+const skill = await skills.readPlanningSkill(
+  new URL("../contracts/runtime/fixtures/skills/planning/", import.meta.url),
+);
+if (skill.body !== "Portable skill body." || !skill.readers) {
+  throw new Error("Filesystem skill smoke failed.");
+}
+console.log(JSON.stringify(skill));

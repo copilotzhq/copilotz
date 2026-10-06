@@ -89,7 +89,7 @@ bundling.
 Generated modules contain ordinary static imports and `definePlugin`. They do
 not contain filesystem discovery or the TypeScript compiler. Keep compilation
 and native adapter imports out of deployment runtime entry points. In this
-repository, `deno task build:plugins` regenerates all 24 concrete roots and
+repository, `deno task build:plugins` regenerates all 23 concrete roots and
 `deno task check:generated` verifies them.
 
 ## Define a tool once
@@ -172,7 +172,7 @@ exposed as a reusable dependency in `registry.plugins`.
 | Finance             | `adapters.financeProviders[name]`                                                                                                         |
 | Persistent terminal | `adapters.terminal.default` (application-owned service)                                                                                   |
 | OpenAPI             | `adapters.openapi[apiId]` (`auth`, `headers`, `prepareRequest`, `baseUrl`, `fetch`, optional `tokenCache`)                                |
-| MCP                 | `adapters.mcp[serverId]` (`connect`, optional runtime `server`)                                                                           |
+| MCP                 | `adapters.mcp[serverId]` (`connect`, `transport`, `env`; same shape as the declared `connection`)                                         |
 | Server              | `resources.server.default`, constructed with `defineServerFacade`                                                                         |
 
 Channel credentials and transports are transient capabilities scoped by channel
@@ -181,16 +181,23 @@ configuration. Memory's static input schema accepts extensible kind names;
 execution validates registration and semantic data against the final ontology
 from context.
 
-OpenAPI's `compileOpenApiTools({ apis })` returns tool declarations. MCP's
-`await prepareMcpTools({ servers, connect })` performs explicit preparation and
-returns declarations; the discovery connector is closed and is not retained for
-execution. Place either result directly in `resources.tools`. Runtime MCP calls
-use the final context connector and never call `listTools`.
+`resources/apis/<alias>/index.ts` default-exports `defineApi({schema,...})`.
+`resources/mcp/<alias>/index.ts` default-exports `await defineMcp({...})` on a
+host that allows discovery during module evaluation.
+`resources/skills/<alias>/index.ts` default-exports `defineSkill({root})`. The
+generated static plugin imports each resource and ordinary composition adds its
+declared dependencies. No additional feature plugin entries are required in
+`copilotz.json`.
 
-Skill directory packing remains an explicit host operation through
-`skills/deno`. Native filesystem, process, terminal, and stdio capabilities
-remain on their explicit host subpaths. Portable plugin composition does not
-require these adapters.
+Resource contributions may supply plugin dependencies, which register before the
+resource owner. Shared plugin identity is preserved across independently built
+plugins by keeping framework imports external. Root resources and adapters apply
+last. Distinct conflicting native Actions remain errors.
+
+Skill root reads are runtime capabilities; frozen Skill packing remains a Deno
+build-host operation through `/skills/deno`. Filesystem and HTTP roots use the
+same public Skills import, while subprocess and stdio transports remain host
+capabilities. Skill directories must be included separately in deployment.
 
 ## Migration scope
 

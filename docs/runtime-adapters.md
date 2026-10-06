@@ -72,7 +72,7 @@ tool execution has a durable lifecycle, retries, and possible external effects,
 so it is never a Resource policy hook.
 
 ```ts
-import { defineTool } from "@copilotz/copilotz/tools";
+import { defineTool } from "@copilotz/copilotz/core";
 
 import { definePlugin } from "@copilotz/copilotz/plugins";
 const tools = definePlugin({
@@ -91,14 +91,17 @@ const tools = definePlugin({
 });
 ```
 
-`compileOpenApiTools` accepts either `apis: [defineApi(...)]` or an API
-declaration map such as `apis: { booking: defineApi(...) }`. Both forms generate
-every schema operation using its operation ID-derived Tool alias.
+`defineApi({schema,...})` in `resources.apis` contributes generated tools and
+its default `adapters.openapi[id]` binding. `await defineMcp({...})` in
+`resources.mcp` does the same after one discovery. No feature marker plugin or
+separate compilation call is required. Root adapter entries replace the entire
+default binding; partial overrides must explicitly retain required fields.
 
-`defineApi` names a source declaration. Explicit compilation returns Tool
-contributions for `resources.tools`. Runtime auth, headers, request hooks,
-transport, and optional cache are supplied through `adapters.openapi[apiId]`.
-The compiler does not need runtime credentials.
+`defineSkill({root})` uses the same `/skills` import in every runtime. HTTP
+reads use standard fetch; filesystem reads acquire an optional host capability
+only when used. Unsupported local reads fail clearly. Include skill files
+separately in deployment; module-relative URL resolution does not package
+assets.
 
 OpenAPI live NDJSON channels are append-only, media-stable, and materialized in
 one combined content commit. MCP result lowering accepts lossless JSON and

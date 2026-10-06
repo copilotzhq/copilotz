@@ -20,7 +20,7 @@ import type {
   SkillManifest,
 } from "../../shared/contracts.ts";
 
-const DEFAULT_RUNTIME_IMPORT = "jsr:@copilotz/copilotz@^0.65.1/skills";
+const DEFAULT_RUNTIME_IMPORT = "@copilotz/copilotz/skills";
 
 export type BuildOpenSkillsPluginOptions = Readonly<{
   /** Directory whose immediate children are Agent Skills directories. */
@@ -198,7 +198,7 @@ function pluginModule(
 ): string {
   const definitions = options.skills.map((skill) => {
     const descriptors = skill.files.map((file) => file.descriptor);
-    return `  defineSkill({
+    return `  ${JSON.stringify(skill.manifest.name)}: defineSkill({
     manifest: ${JSON.stringify(skill.manifest, null, 2)},
     files: ${JSON.stringify(descriptors, null, 2)},
     read: async (path) =>
@@ -207,20 +207,18 @@ function pluginModule(
   }),`;
   }).join("\n");
   return `import {
-  skillsPlugin,
   defineSkill,
 } from ${JSON.stringify(options.runtimeImport)};
 
-export const skills = [
+export const skills = {
 ${definitions}
-];
+};
 
 import {definePlugin} from "@copilotz/copilotz/plugins";
 export default definePlugin({
   id: ${JSON.stringify(options.id)},
   version: ${JSON.stringify(options.version)},
-  plugins: [skillsPlugin],
-  resources: {skills: Object.fromEntries(skills.map(skill => [skill.name,skill]))},
+  resources: {skills},
 });
 `;
 }

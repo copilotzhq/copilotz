@@ -27,7 +27,8 @@ function selectedSkills(
     const skill = resource as Skill;
     if (
       typeof skill.name !== "string" || skill.name !== id ||
-      typeof skill.description !== "string" || !Array.isArray(skill.files) ||
+      (!skill.dynamicFiles && typeof skill.description !== "string") ||
+      !Array.isArray(skill.files) ||
       typeof skill.read !== "function"
     ) {
       throw new TypeError(`Skill capability '${id}' is not a Skill Resource.`);
@@ -79,6 +80,7 @@ export const skillsCapabilities: AgentCapabilitiesResource = {
     append(SKILL_TOOL_IDS[1]);
     if (
       bundled.some((skill) =>
+        skill.dynamicFiles ||
         skill.files.some((file) => file.path !== "SKILL.md")
       )
     ) append(SKILL_TOOL_IDS[2]);

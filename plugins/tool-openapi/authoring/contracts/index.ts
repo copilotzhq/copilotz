@@ -6,10 +6,15 @@
 
 import type { ScopedCollection } from "@copilotz/copilotz/collections";
 import type {
+  ActionContext,
+  ActionDefinition,
   ActionInvocationMetadata,
   RuntimeIdentity,
 } from "@copilotz/copilotz/actions";
-import type { ToolHistory } from "../../../core/authoring/define-tool/index.ts";
+import type {
+  ToolDefinition,
+  ToolHistory,
+} from "../../../core/authoring/define-tool/index.ts";
 
 export type APIAuth =
   | Readonly<{
@@ -122,13 +127,23 @@ export type APIResponseAssetMappings =
   | APIResponseAssetMapping
   | readonly APIResponseAssetMapping[];
 
+export type ApiTool = ToolDefinition<
+  ActionDefinition<unknown, unknown, ActionContext>
+>;
+
 /** OpenAPI-backed Tool Resource definition owned by the Tools plugin. */
 export type API = Readonly<{
   id: string;
   name: string;
   externalId?: string | null;
   description?: string | null;
-  openApiSchema?: Readonly<Record<string, unknown>> | string | null;
+  schema: Readonly<Record<string, unknown>> | string;
+  /** Selected operation aliases; omit to expose every operation. */
+  operations?: readonly string[];
+  /** Rename generated native Action aliases without changing HTTP operation identity. */
+  aliases?: Readonly<Record<string, string>>;
+  /** Customize generated tool execution or presentation at declaration time. */
+  transformTool?: (tool: ApiTool, alias: string) => ApiTool;
   baseUrl?: string | null;
   headers?: Readonly<Record<string, string>> | null;
   auth?: APIAuth | null;

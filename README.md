@@ -55,7 +55,7 @@ With Deno:
 
 ```sh
 # Add the package and its plugin subpaths to your Deno project.
-deno add jsr:@copilotz/copilotz@^0.83.4
+deno add jsr:@copilotz/copilotz@^0.84.0
 ```
 
 Deno 2.9 delays freshly published dependencies for 24 hours. To try a new
@@ -66,7 +66,7 @@ With Node 24+:
 
 ```sh
 # Install Copilotz and configure its imports for Node.
-npx jsr add @copilotz/copilotz@^0.83.4
+npx jsr add @copilotz/copilotz@^0.84.0
 # Node needs the PGlite package for the default in-memory database.
 npm i @electric-sql/pglite
 # Use ESM so Node 24+ can execute the TypeScript example directly.
@@ -295,12 +295,12 @@ Your product may already expose an API. Other services may publish an OpenAPI
 specification or an MCP server. Copilotz can turn those declarations into
 Actions and tool presentations that agents can use.
 
-| Source                   | How it becomes a capability                                                        |
-| ------------------------ | ---------------------------------------------------------------------------------- |
-| Your code                | Define a tool directly, or give an existing Action a tool presentation             |
-| An OpenAPI specification | Generate tools with `compileOpenApiTools()`                                        |
-| An MCP server            | Discover and prepare tools with `prepareMcpTools()` before application composition |
-| Supplied tool libraries  | Import the native declarations or plugins you need                                 |
+| Source                   | How it becomes a capability                                            |
+| ------------------------ | ---------------------------------------------------------------------- |
+| Your code                | Define a tool directly, or give an existing Action a tool presentation |
+| An OpenAPI specification | Declare `defineApi({schema,...})` in `resources.apis`                  |
+| An MCP server            | Declare `await defineMcp({...})` in `resources.mcp`                    |
+| Supplied tool libraries  | Import the native declarations or plugins you need                     |
 
 Generated tools use the same Action lifecycle as your own tools. Authentication,
 request customization and runtime connections remain configurable through

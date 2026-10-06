@@ -43,7 +43,10 @@ export const readSkillResourceTool: ToolDefinition<
         `Skill resource '${path}' is binary and cannot be read as text.`,
       );
     }
-    const file = await skill.read(path, { signal: context.signal });
+    const file = await skill.read(path, {
+      signal: context.signal,
+      scope: context.resources,
+    });
     if (!isTextMediaType(file.mediaType)) {
       throw new TypeError(
         `Skill resource '${path}' is binary and cannot be read as text.`,

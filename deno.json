@@ -1,7 +1,7 @@
 {
   "name": "@copilotz/copilotz",
   "description": "Copilotz Lib",
-  "version": "0.83.4",
+  "version": "0.84.1",
   "license": "MIT",
   "exports": {
     ".": "./index.ts",
@@ -161,9 +161,9 @@
     ]
   },
   "tasks": {
-    "bundle:runtime-smoke": "deno bundle --platform=browser contracts/runtime/runtime-neutral-smoke.ts --output=dist/runtime-neutral-smoke.mjs",
+    "bundle:runtime-smoke": "deno bundle --platform=browser contracts/runtime/runtime-neutral-smoke.ts --output=dist/runtime-neutral-smoke.mjs && deno bundle --platform=browser contracts/runtime/skill-root-smoke.ts --output=dist/skill-root-smoke.mjs",
     "bundle:edge-smoke": "deno bundle --platform=browser contracts/runtime/edge-worker-smoke.ts --output=dist/edge-worker-smoke.mjs",
-    "smoke:deno": "deno run contracts/runtime/run-smoke.ts",
+    "smoke:deno": "deno run --allow-read=contracts/runtime/fixtures/skills contracts/runtime/run-smoke.ts",
     "smoke:node": "node scripts/run-bundled-smoke.mjs",
     "smoke:bun": "bun scripts/run-bundled-smoke.mjs",
     "smoke:browser": "node --experimental-vm-modules scripts/run-isolate-smoke.mjs dist/runtime-neutral-smoke.mjs core",

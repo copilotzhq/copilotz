@@ -43,6 +43,7 @@ import { consolidateMemoryAction } from "./actions/consolidate-memory/index.ts";
 import { inspectMemoryAction } from "./actions/inspect-memory/index.ts";
 import { searchMemoryAction } from "./actions/search-memory/index.ts";
 import { memoryPlugin } from "./plugin.ts";
+import { builtInToolsPlugin } from "@copilotz/copilotz/tools/builtin";
 import type { LongTermMemoryConfig } from "./resources/memory/config/index.ts";
 import { provisionVectorStorage } from "@copilotz/copilotz/persistence";
 
@@ -160,6 +161,7 @@ async function fixture(
     vectors?: boolean;
     statements?: { sql: string; params?: unknown[] }[];
     dynamicInstructions?: boolean;
+    tools?: readonly string[];
   }> = {},
 ): Promise<Fixture> {
   const db = await createTestDatabase({
@@ -214,7 +216,7 @@ async function fixture(
               }),
             }],
           },
-          capabilities: { tools: ["consolidate_memory"] },
+          capabilities: { tools: options.tools ?? ["consolidate_memory"] },
         }),
       },
       llmConnections: {
@@ -244,7 +246,9 @@ async function fixture(
         : {},
     },
   });
-  const registry = await createPluginRegistry({ plugins: [memory, app] });
+  const registry = await createPluginRegistry({
+    plugins: [memory, ...(options.tools ? [builtInToolsPlugin] : []), app],
+  });
   const engine = await createCopilotzEngine({
     session: options.statements
       ? recording(createSqlSession(db), options.statements)
@@ -1106,6 +1110,72 @@ Deno.test("invalid and omitted consolidation calls repair through ordinary Core 
     );
     assertStringIncludes(text(run.inputs[2]!), "consolidate_memory");
     assertStringIncludes(text(run.inputs[3]!), "Call consolidate_memory now");
+    await assertNoDeadLetters(run);
+  } finally {
+    await run.close();
+  }
+});
+
+Deno.test("consolidation can use another granted Tool before completing its checkpoint", async () => {
+  const run = await fixture((input, call) => {
+    if (call === 1) return stop("Initial answer.");
+    if (call === 2) {
+      assert(
+        input.request.tools?.some((tool) => tool.name === "get_current_time"),
+      );
+      return {
+        ...tool({}),
+        toolCalls: [{ id: "read-time", action: "get_current_time", input: {} }],
+      };
+    }
+    assertEquals(call, 3);
+    assert(input.request.messages.some((message) => message.role === "tool"));
+    return tool(memoryProposal());
+  }, { tools: ["get_current_time", "consolidate_memory"] });
+  try {
+    await startUserTurn(run);
+    await eventually(
+      run,
+      async () => (await checkpoints(run))[0]?.status === "ready",
+    );
+    assertEquals((await checkpoints(run)).length, 1);
+    assertEquals(run.inputs.length, 3);
+    await assertNoDeadLetters(run);
+  } finally {
+    await run.close();
+  }
+});
+
+Deno.test("an unknown consolidation Tool returns feedback and settles the same checkpoint", async () => {
+  const run = await fixture((input, call) => {
+    if (call === 1) return stop("Initial answer.");
+    if (call === 2) {
+      return {
+        ...tool(memoryProposal()),
+        toolCalls: [{
+          id: "misspelled-consolidation",
+          action: "consolid_memory",
+          input: memoryProposal(),
+        }],
+      };
+    }
+    assertEquals(call, 3);
+    assert(input.request.messages.some((message) => message.role === "tool"));
+    const feedback = JSON.stringify(
+      input.request.messages.filter((message) => message.role === "tool"),
+    );
+    assertStringIncludes(feedback, "ToolUnavailable");
+    assertStringIncludes(feedback, "consolid_memory");
+    return tool(memoryProposal());
+  });
+  try {
+    await startUserTurn(run);
+    await eventually(
+      run,
+      async () => (await checkpoints(run))[0]?.status === "ready",
+    );
+    assertEquals((await checkpoints(run)).length, 1);
+    assertEquals(run.inputs.length, 3);
     await assertNoDeadLetters(run);
   } finally {
     await run.close();

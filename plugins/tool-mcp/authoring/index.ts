@@ -1,5 +1,11 @@
-/** Exposes MCP discovery and generated Tool authoring. @module */
-
-export * from "./generator/index.ts";
-
-export * from "./contracts/index.ts";
+/** Declarative MCP resources. @module */
+export { defineMcp } from "./generator/index.ts";
+export type {
+  ConnectMcpRuntime,
+  DefinedMcp,
+  DefineMcpInput,
+  McpConnection,
+  McpRuntimeConnection,
+  McpToolDescriptor,
+} from "./generator/index.ts";
+export type { MCPServer } from "./contracts/index.ts";

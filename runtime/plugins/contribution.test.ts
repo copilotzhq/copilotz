@@ -35,6 +35,61 @@ Deno.test("root resources override dependencies without changing another app", (
   assertEquals(second.resources.policy.config.limit, 10);
 });
 
+Deno.test("contributed dependencies compose once and propagate their inferred namespace types", () => {
+  const dependency = definePlugin({
+    id: "resource-support",
+    version: "1",
+    actions: { run: execute },
+    resources: { policy: { config: { limit: 10 as const } } },
+    adapters: { remote: { default: { endpoint: "default" } } },
+  });
+  const resource = {
+    [contribution]() {
+      return { value: { name: "declared" }, plugins: [dependency] as const };
+    },
+  };
+  const first = definePlugin({
+    id: "first",
+    version: "1",
+    resources: { example: { declared: resource } },
+  });
+  const second = definePlugin({
+    id: "second",
+    version: "1",
+    resources: { example: { declared: resource } },
+  });
+  const registry = createPluginRegistry({
+    plugins: [first, second],
+    adapters: { remote: { default: { endpoint: "override" } } },
+  });
+  const typed: 10 = registry.resources.policy.config.limit;
+  assertEquals(typed, 10);
+  assertStrictEquals(registry.actions.run, execute);
+  assertEquals(registry.adapters.remote.default.endpoint, "override");
+  assertEquals(
+    registry.plugins.filter((plugin) => plugin.id === dependency.id).length,
+    1,
+  );
+  assertThrows(
+    () =>
+      definePlugin({
+        id: "invalid",
+        version: "1",
+        resources: {
+          example: {
+            invalid: {
+              [contribution]() {
+                return { value: 1, plugins: [{}] };
+              },
+            },
+          },
+        },
+      }),
+    TypeError,
+    "definePlugin",
+  );
+});
+
 Deno.test("contribution collisions and asynchronous expansion fail before execution", () => {
   assertThrows(
     () =>
@@ -89,4 +144,63 @@ Deno.test("contributions reject unsafe namespaces and nested declarations", () =
         },
       }), TypeError);
   }
+});
+
+Deno.test("root contributions preserve explicitly declared plugin Actions and resources", () => {
+  const app = definePlugin({
+    id: "app",
+    version: "1",
+    actions: { explicit: execute },
+    resources: { agents: { assistant: { role: "helper" as const } } },
+  });
+  const dependency = definePlugin({
+    id: "support",
+    version: "1",
+    actions: {
+      contributed: defineAction({
+        id: "contribution.other",
+        execute: () => "other",
+      }),
+    },
+  });
+  const resource = {
+    [contribution]() {
+      return { value: {}, plugins: [dependency] as const };
+    },
+  };
+  const registry = createPluginRegistry({
+    plugins: [app],
+    resources: { example: { declared: resource } },
+  });
+  const role: "helper" = registry.resources.agents.assistant.role;
+  assertEquals(role, "helper");
+  assertStrictEquals(registry.actions.explicit, execute);
+  assertStrictEquals(
+    registry.actions.contributed,
+    dependency.actions.contributed,
+  );
+});
+
+Deno.test("Skills at the root preserve Core and application type inference", async () => {
+  const { corePlugin } = await import("../../plugins/core/plugin.ts");
+  const { defineSkill } = await import("../../plugins/skills/index.ts");
+  const app = definePlugin({
+    id: "typed-app",
+    version: "1",
+    actions: { appAction: execute },
+    resources: { agents: { assistant: { role: "helper" as const } } },
+  });
+  const registry = createPluginRegistry({
+    plugins: [corePlugin, app],
+    resources: {
+      skills: {
+        planning: defineSkill({ root: "https://skills.test/planning/" }),
+      },
+    },
+  });
+  const role: "helper" = registry.resources.agents.assistant.role;
+  assertEquals(role, "helper");
+  assertStrictEquals(registry.actions.appAction, execute);
+  assertStrictEquals(registry.actions.ask, corePlugin.actions.ask);
+  assertEquals(registry.resources.skills.planning.name, "planning");
 });

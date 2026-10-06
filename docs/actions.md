@@ -276,10 +276,14 @@ receives the resolved shape. The durable lifecycle Events store references, not
 inline bodies. An aggregate byte budget applies per call (32 MiB by default).
 Only declared paths are interpreted.
 
-Content declarations govern Action **input**. To keep a large output, return
-generic content references, for example from `context.content.prepare`, and let
-the caller adopt them. Content declarations cannot yet be combined with secret
-schemas.
+Content declarations govern Action **input**; Action output has no content
+declaration. `context.content.prepare` returns prepared content whose byte
+bodies are not yet durable, so never return it directly as JSON output. To
+produce large content, prepare bounded content inside the Action, adopt it
+through a declared content field of a Collection, and return the stored record,
+which carries canonical content references. See
+[Content and Assets](content-assets.md) for the details. Content declarations
+cannot yet be combined with secret schemas.
 
 ### Secret fields
 
@@ -293,14 +297,19 @@ metadata yourself. Secret Actions cannot record `progress`.
 
 An application with secret Actions must configure `adapters.secrets.default`
 with a Secret Adapter that the host provides. Its `seal` and `open` methods must
-perform genuine encryption with a key the host manages. `createSecretAdapter`
-validates the adapter's shape; it is not an encryption implementation.
+perform genuine authenticated encryption with a key the host manages, binding
+the `additionalAuthenticatedData` they receive. `seal` returns the ciphertext, a
+deterministic keyed `commitment` that reveals nothing about the plaintext, and a
+secret-free `envelope` (key, version and nonce metadata) that `open` needs.
+`createSecretAdapter` validates the adapter object; it does not provide this
+cryptography.
 
 The protection covers the schema-aware Action lifecycle only. A secret sent in a
 plain `app.send` payload is stored as ordinary Event data before any Action sees
 it, and nothing erases it afterwards. Accept secrets through a schema-aware
-entry, such as a host route or an exposed Action called over HTTP, rather than
-through generic Events.
+entry, such as an Action exposed over HTTP by `serverPlugin`, whose route
+validates input against the Action's schema, rather than through generic Events
+or a custom route that forwards them to `app.send`.
 
 ## What this unlocks
 

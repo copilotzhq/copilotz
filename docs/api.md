@@ -1,188 +1,252 @@
-# API and Package Reference
+---
+title: "API"
+description: "The public createCopilotz factory, its embedded, Gateway and Worker roles, the operation methods each role returns, and the package entrypoints."
+section: Reference
+order: 30
+status: stable
+---
 
-## One application factory
+# API
 
-`createCopilotz()` is the only public application factory. Its `role` option is
-discriminated:
+## The pain
+
+Your Notes application works, and now a second program needs to drive it: a
+support script that resubmits a failed capture, a dashboard that lists recent
+operations, a deployment that splits admission from execution. Each of them
+starts by asking the same questions. Which object do I create? Which methods
+does it give me? When is the work I submitted actually finished? Guessing wrong
+is expensive: a retry without the original identity starts a second operation,
+and treating "the replay ended" as "the work succeeded" hides failures.
+
+## The problem
+
+The runtime exposes one factory and a small operation surface, but each method
+has an ownership and settlement contract that its signature does not show:
+
+- which role owns execution, the database and `close()`;
+- what an admission identity guarantees when the same input is sent twice;
+- what `done` means on a send handle versus an attachment;
+- which methods are local observation and which change durable state;
+- which entrypoint owns each family of declarations, and which ones depend on a
+  host capability.
+
+## The solution
+
+### One factory, three roles
+
+`createCopilotz(options)` from `@copilotz/copilotz` is the only application
+factory. Its `role` option selects what the returned object can do:
+
+| `role`                  | Returns                         | Owns                                         |
+| ----------------------- | ------------------------------- | -------------------------------------------- |
+| omitted or `"embedded"` | operation surface plus `fetch`  | a private in-process Gateway and Worker      |
+| `"gateway"`             | operation surface plus `fetch`  | admission and placement over `transports`    |
+| `"worker"`              | `{ ready, closed, close }` only | execution of deliveries placed on its worker |
+
+Every role accepts the same composition: `namespace`, `plugins`, `resources`,
+`adapters`, `assets` and persistence options (`database`, or a shared
+`persistence` created by `createCopilotzPersistence()`). The creator of a shared
+persistence facade closes it after closing the roles that use it. Role placement
+is covered in
+[Deploy and scale](getting-started/part-5-operate-and-scale/21-deploy-and-scale.md).
+
+A Worker result has no operation methods. Await `worker.ready` before relying on
+it, observe `worker.closed` for an unexpected stop, and call
+`worker.close(reason)` on shutdown.
+
+On every role, `close()` releases the resources that result owns locally. It
+does not drain outstanding durable work. Before closing, a host awaits the
+operations it chose to finish within its grace window; recorded deliveries that
+are still unfinished resume on the next process that opens the same database.
+See
+[Deploy and scale](getting-started/part-5-operate-and-scale/21-deploy-and-scale.md).
+
+### The operation surface
+
+The embedded and Gateway results share the public `CopilotzApplication` type
+from `@copilotz/copilotz/application`, plus `fetch`:
+
+| Method                                      | Purpose                                                                  |
+| ------------------------------------------- | ------------------------------------------------------------------------ |
+| `send(input)`                               | Admit one input envelope; returns an `ApplicationSendHandle`             |
+| `attach({ operationId, cursor? })`          | Replay recorded history and follow a durable operation                   |
+| `operationStatus({ operationId })`          | Recorded `state`, or `null` when this namespace has no such operation    |
+| `listOperations(input?)`                    | Filter by `operationIds`, `states`, `metadata`, `limit`                  |
+| `operationCheckpoint(input)`                | Opaque cursor after a history snapshot, so `attach` skips sealed streams |
+| `cancelOperation({ operationId, reason? })` | Explicit, durable cancellation                                           |
+| `maintenance(options?)`                     | Bounded delivery, Asset, Body and operation-catalog maintenance          |
+| `observe()`                                 | Live outputs of this process, independent of any one operation           |
+| `close(reason?)`                            | Idempotent shutdown of what this result owns                             |
+| `fetch(request)`                            | The `/api` boundary when `serverPlugin` is composed; otherwise `404`     |
+
+Operation `state` is one of `accepted`, `running`, `completed`, `failed` or
+`cancelled`. Every scoped method also accepts `namespace` and `databaseSchema`;
+omitting them uses the application's defaults. The result never exposes the
+engine, raw Collections, deliveries or configuration: read state through Actions
+and observation, not through internals.
+
+### Admission and settlement
+
+`send()` takes a `CopilotzInputEnvelope`: `type`, optional JSON `payload`,
+`correlationId`, `causationId`, `deduplicationId`, `metadata`, trusted
+`operationMetadata` that host policy may use for ownership, and optional
+`namespace` and `databaseSchema` that default to the application's scope. This
+is trusted ingress: the host chooses those scopes. Never let a public client
+choose the authoritative tenant or schema. It resolves once the input is durably
+admitted, with `operationId`, `eventId`, `correlationId`, `replayCursor`, an
+`outputs` stream and `done`.
+
+- **Retries.** Resend the full original request, including both `correlationId`
+  and `deduplicationId`. Omitting the correlation generates a new identity,
+  which conflicts with a reused deduplication ID. An identical second send
+  observes live outputs; `attach` replays recorded history.
+- **`send.done`** rejects when the operation fails or is cancelled.
+- **`attach.done`** resolves when the replay reaches _any_ terminal state. Check
+  the final `operation.failed` or `operation.cancelled` output, or
+  `operationStatus`, before treating an attached operation as successful.
+- **Outputs and `done` run together.** Read `outputs` concurrently with awaiting
+  `done`, and cancel byte streams you do not consume.
+- **`detach()`** stops only that local observer. `cancel()` and
+  `cancelOperation()` change durable state; network transports map a disconnect
+  to detach and reserve cancellation for an explicit, authorized Stop.
+
+`done` covers runtime settlement, not semantic success. With the optional agent
+harness, an `llm.call.failed` event can coexist with a completed operation, so
+chat readers inspect model failure separately.
+
+### Worked example: resubmit and inspect
+
+Prerequisites: the Notes application from
+[Persist and recover](getting-started/part-2-verify-and-recover/07-persist-and-recover.md),
+with `composition.ts` and `notes-plugin.ts`, and `@copilotz/copilotz@^0.84.4`.
+
+### Create `operations.ts`
+
+`operations.ts` is an **entrypoint**. It admits one capture with a stable
+identity, settles it, then reads the recorded status and recent operations. It
+imports only the runtime root and `composition.ts`; it never imports
+`@copilotz/copilotz/core`. Run it twice: the second run is a retry of the same
+request, not a second note.
 
 ```ts
-import { createCopilotz } from "@copilotz/copilotz";
+// Runtime factory and the guard that separates byte streams from Events.
+import { createCopilotz, isStreamOutput } from "@copilotz/copilotz";
+// Type of each item an operation emits.
+import type { ApplicationOutput } from "@copilotz/copilotz";
+// The host's shared choices: tenant, persistent database and plugins.
+import { database, namespace, runtimePlugins } from "./composition.ts";
 
-const embedded = await createCopilotz({ namespace: "acme", plugins });
-const gateway = await createCopilotz({
-  role: "gateway",
-  namespace: "acme",
-  plugins,
-  transports,
-  target: { workerId: "acme-worker" },
+// Prints Event types and releases byte streams this script does not read.
+async function drain(
+  outputs: ReadableStream<ApplicationOutput>,
+): Promise<void> {
+  for await (const output of outputs) {
+    if (isStreamOutput(output)) {
+      await output.payload.cancel();
+      continue;
+    }
+    console.log(`${output.durable ? "event" : "live"} ${output.type}`);
+  }
+}
+
+const app = await createCopilotz({
+  namespace,
+  database,
+  plugins: runtimePlugins,
 });
-const worker = await createCopilotz({
-  role: "worker",
-  namespace: "acme",
-  plugins,
-  id: "acme-worker",
-  transport,
-});
-```
 
-Omitting `role` selects the embedded topology. It owns a private in-process
-Gateway and Worker unless the caller injects database or dispatch
-infrastructure. Gateway and Worker options use the same plugin, resource,
-adapter, asset, and persistence configuration; `Gateway` adds dispatch/transport
-placement and `Worker` adds the Oxian worker connection options.
+try {
+  // A retry must resend this whole request, so both identities are fixed
+  // by the caller instead of generated per process.
+  const handle = await app.send({
+    type: "notes.capture.requested",
+    payload: { text: "Prepare the release." },
+    correlationId: "release-notes-1",
+    deduplicationId: "release-notes-1:capture",
+  });
+  console.log(`operation ${handle.operationId}`);
 
-## Returned role surfaces
+  // Consume outputs while waiting; `done` rejects if the operation fails.
+  await Promise.all([drain(handle.outputs), handle.done]);
 
-The embedded application exposes the generic operation surface:
+  // The durable record, independent of this process's observation.
+  const status = await app.operationStatus({
+    operationId: handle.operationId,
+  });
+  console.log(`status ${status?.state ?? "unknown"}`);
 
-```ts
-{
-  send,
-    attach,
-    operationStatus,
-    listOperations,
-    cancelOperation,
-    maintenance,
-    observe,
-    close;
+  // Recent completed operations in this namespace.
+  const recent = await app.listOperations({ states: ["completed"], limit: 5 });
+  for (const operation of recent) {
+    console.log(
+      `completed ${operation.operationId} at ${operation.completedAt}`,
+    );
+  }
+} finally {
+  // Release the database even after a failure.
+  await app.close();
 }
 ```
 
-Gateway returns that same base surface plus `fetch(request)`. Worker returns
-only `{ ready, closed, close }`. Neither result exposes configuration, database
-scopes, collections, content, events, deliveries, plugins, recovery, an Engine,
-or a shutdown alias.
+Expected facts: the first run prints `notes.capture.requested`, `note.created`,
+`notes.save.completed` and `status completed`. A second run with the same
+`./data` reports the same operation ID instead of creating another note.
 
-`send()` returns a stable operation handle:
+## Reference
 
-```ts
-type ApplicationSendHandle = Readonly<{
-  operationId: string;
-  eventId: string;
-  correlationId: string;
-  replayCursor: string;
-  outputs: ReadableStream<ApplicationOutput>;
-  done: Promise<void>;
-  detach(reason?: string): Promise<void>;
-  cancel(reason?: string): Promise<void>;
-}>;
-```
+### Generic ingress versus schema-aware HTTP
 
-`attach({ operationId, cursor })` returns another output stream and settlement
-Promise for that durable operation. Its `detach()` affects only the observer.
-Network transports must map disconnect to detach and reserve `cancelOperation()`
-for an authenticated, explicit Stop action. Opaque replay cursors combine
-durable Event positions with per-stream byte offsets.
+`app.send()` is generic, trusted, in-process ingress: it accepts any input type
+and stores its payload as given. It performs no caller authentication. `fetch`
+is different. It serves only what `serverPlugin` exposes and validates requests
+against declared Action, Collection and Channel schemas. Identity is the host's
+choice: the server's `authenticate` and `authorize` hooks are optional, and
+without them requests run in the application's default scope with no
+constraints. Enabling `serverPlugin` alone installs no login and no tenant
+isolation. The host configures both, as shown in
+[Authenticate and isolate tenants](getting-started/part-4-release-to-users/16-authenticate-and-isolate-tenants.md).
+See [HTTP server and browser client](server.md).
 
-`observe()` receives live application outputs independently of any one
-operation. Normal Events retain their immutable envelope and add deeply frozen
-resolved `data`; durable Events keep their original `payload.dataRef`.
-Progressive `stream.output` values remain subscriber-owned byte streams.
-`maintenance()` performs bounded delivery, Asset, progressive Body, and
-operation-catalog maintenance. `close()` is idempotent.
+Over HTTP, `client.operations.result` and `client.actions.invoke` return the
+target Action's output once that Action is ready. They do not wait for
+descendant work or an agent reply: `sendConversation` returns
+`{ threadId, message }` once the message is stored, which can happen before the
+model produces output. Observe the terminal operation state when you need full
+completion.
 
-## Gateway Fetch
+### Package entrypoints
 
-`gateway.fetch` serves the single `/api` boundary installed by `serverPlugin`.
-The compiler discovers exposed Actions, Collections, Channels and exact HTTP
-Adapter routes, and generates OpenAPI from that table. `coreHttpPlugin`
-contributes conversation reads, observation and ordinary mutation Actions.
-Authentication resolves trusted scope; authorization intersects constraints
-before reads or execution. See [HTTP server and browser client](server.md).
+The same public imports work on Deno and Node. Native host entrypoints use
+filesystem, subprocess, terminal or listener APIs, so browsers and Workers
+cannot use them. Portable adapters run anywhere because the host supplies their
+I/O.
 
-The Deno listener accepts any structural Fetch-capable host:
+| Entrypoint                                                                                                                                       | Contents                                                                                                     |
+| ------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------ |
+| `@copilotz/copilotz`                                                                                                                             | `createCopilotz`, persistence, Actions, Collections, Events, Processors, plugins, content, streams, `secret` |
+| `/application`                                                                                                                                   | Operation surface types only, no factory                                                                     |
+| `/actions`, `/collections`, `/collections/authoring`, `/events`, `/plugins`, `/content`, `/content/codec`, `/streams`, `/engine`, `/persistence` | Focused runtime subpaths                                                                                     |
+| `/server`, `/client`                                                                                                                             | Server plugin and Fetch facade; typed browser client                                                         |
+| `/core`, `/core/server`, `/core/client`                                                                                                          | Optional agent harness, its HTTP routes and client                                                           |
+| `/llm`, `/llm/tokens`, `/memory`, `/knowledge`, `/goals`, `/skills`, `/transcription`                                                            | Agent capabilities                                                                                           |
+| `/tools/builtin`, `/tools/openapi`, `/tools/mcp`, `/tools/web`, `/tools/finance`, `/tools/persistent-terminal`                                   | Tool integrations                                                                                            |
+| `/channels`, `/channels/core`, `/schedules`, `/schedules/core`, `/usage`, `/usage/client`, `/admin`                                              | Delivery and operations plugins                                                                              |
+| `/build`                                                                                                                                         | Filesystem authoring build                                                                                   |
+| `/core/cli`                                                                                                                                      | Portable CLI adapter; the host supplies input and output                                                     |
+| `/adapters/deno`, `/core/cli/node`, `/skills/deno`, `/tools/deno`, `/tools/mcp/stdio`, `/tools/persistent-terminal/deno`                         | Native host: listeners, terminals, local files, subprocesses                                                 |
 
-```ts
-import { listen } from "@copilotz/copilotz/adapters/deno";
+Protected Action values (`secret`, Secret Adapters) are covered in
+[Actions](actions.md).
 
-const listener = listen(gateway, { hostname: "0.0.0.0", port: 8080 });
-```
+## What this unlocks
 
-## Persistence
+You can write support scripts, dashboards and hosts against one factory, pick a
+role deliberately, retry admission without duplicating work, and tell runtime
+settlement apart from domain or model success.
 
-Import persistence contracts and Ominipg connection options from
-`@copilotz/copilotz`, including `createCopilotzPersistence()` for an application
-that deliberately shares one reconnectable database facade across several
-internal roles. The public application factory accepts that facade in its
-`persistence` option; its creator retains the final `close()` ownership.
+## Next steps
 
-## Protected Action values
-
-Use `secret(schema)` from `@copilotz/copilotz`, or add the exact raw boolean
-extension `"x-copilotz-secret": true`, at any input/output schema subtree:
-
-```ts
-import { createSecretAdapter, defineAction, secret } from "@copilotz/copilotz";
-
-const exchange = defineAction({
-  id: "myapp.auth.exchange",
-  inputSchema: {
-    type: "object",
-    properties: { code: secret({ type: "string" }) },
-    required: ["code"],
-    additionalProperties: false,
-  },
-  execute: async ({ code }) => exchangeCode(code),
-});
-
-const secretAdapter = createSecretAdapter({ seal, open });
-const app = await createCopilotz({
-  plugins: [authPlugin],
-  adapters: { secrets: { default: secretAdapter } },
-});
-```
-
-The Adapter receives bytes plus stable additional authenticated data and stays
-process-local. Its ciphertext is stored through BodyStore under an internal
-protected-value owner; plaintext never enters the Action Event Body or ordinary
-observation. The Action still receives and directly returns the hydrated value.
-Composition fails when a registered secret-bearing Action has no default Secret
-Adapter. Metadata must not contain marked input values, and secret-bearing
-Actions cannot emit progress until an inspectable progress schema exists.
-
-`resolveActionSourceData(context)` is the narrow bridge helper for an Action
-invoked from a protected durable source Event. It resolves only that exact
-causal Event in the current namespace; it is not a general Event lookup.
-
-## Runtime and plugin entrypoints
-
-Import the public runtime API from `@copilotz/copilotz`: the application factory
-and types, Actions, Collections, events, Processors, plugin authoring, content,
-streams, the Engine and persistence. For example:
-
-```ts
-// Import application authoring primitives and their types from the runtime root.
-import {
-  type ActionContext,
-  defineAction,
-  defineCollection,
-  definePlugin,
-} from "@copilotz/copilotz";
-// Import model-facing tool presentation from the harness that owns it.
-import { defineTool } from "@copilotz/copilotz/core";
-```
-
-Each plugin supplies its definitions and helpers through its own entrypoint,
-such as `/core`, `/llm`, `/knowledge`, `/memory` or `/usage`. Core's `message()`
-helper creates an input envelope for the runtime's `app.send()`; it does not
-require a channel plugin. A thread object selects create-or-reuse behavior,
-while a string references an existing thread. See
-[Message input](../plugins/core/processors/message-input/input/README.md).
-
-The existing runtime subpaths (`/actions`, `/collections`, `/content`,
-`/events`, `/plugins`, `/streams`, `/engine` and `/persistence`) remain
-available.
-
-`/application` exports generic application types only; it does not expose a
-factory or runtime authority. `/server` exports the semantic Server plugin,
-route compiler, portable Fetch façade, multipart encoder/decoder, and their
-contracts—not runtime storage or execution authority.
-
-Host-specific entrypoints are `/adapters/deno`, `/core/cli`, `/core/cli/node`,
-`/skills/deno`, `/tools/deno`, `/tools/mcp/stdio`, and
-`/tools/persistent-terminal/deno`. There are no generic `/adapters`,
-`/adapters/node`, `/domain`, or `/attachments` subpaths.
-
-This release requires a fresh v5 schema. There is no migration or compatibility
-entry point. Optional pgvector storage is explicitly provisioned through
-`provisionVectorStorage` from `@copilotz/copilotz`.
+- [Persist and recover](getting-started/part-2-verify-and-recover/07-persist-and-recover.md)
+- [Events, deliveries and recovery](events-deliveries-recovery.md)
+- [HTTP server and browser client](server.md)
+- [Deploy and scale](getting-started/part-5-operate-and-scale/21-deploy-and-scale.md)

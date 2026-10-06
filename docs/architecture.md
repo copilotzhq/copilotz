@@ -1,141 +1,226 @@
+---
+title: "Architecture"
+description: "How admitted Events, Processor deliveries, Actions, Collections and progressive Bodies fit together, and which choices belong to plugins, hosts and the runtime."
+section: Reference
+order: 20
+status: stable
+---
+
 # Architecture
 
-Copilotz separates durable meaning from execution placement. Applications send
-plugin-owned input envelopes; the runtime persists and dispatches immutable
-Events; plugin Processors react by invoking Actions or mutating Collections.
+## The pain
+
+A Notes request looks simple: accept some text, validate it, store a note. Then
+the process stops after the note is written but before the reply is sent. The
+client retries. A support engineer wants to know whether the save happened. A
+second team wants to reuse the same save logic from a schedule, an HTTP route
+and an agent tool. Each of those callers ends up guessing which code owns the
+note, whether a retry is safe, and where the history of one request lives.
+
+## The problem
+
+An application needs one contract that answers, for every piece of work:
+
+- **ownership** — which package declares the state and the operations that may
+  change it, and which host chooses the tenant, database and credentials;
+- **admission** — when an input becomes a durable fact, and how a resent input
+  finds the original instead of starting again;
+- **settlement** — which reactions belong to that input, and when the whole
+  piece of work has completed, failed or been cancelled;
+- **observation** — how a caller watches progress, or replays it later, without
+  changing the outcome.
+
+Without that contract, retries duplicate writes, observers accidentally cancel
+work, and reusable code quietly depends on one host's environment.
+
+## The solution
+
+Copilotz records work as a chain of durable facts and keeps three kinds of
+ownership apart.
 
 ```mermaid
 flowchart LR
-  app["application.send"] --> event[("Event")]
-  event --> processor["Processor"]
-  processor --> action["Action"]
-  processor --> collection["Collection"]
-  action --> event
-  collection --> event
+  send["app.send (admission)"] --> event[("Event")]
+  event --> delivery["Processor delivery"]
+  delivery --> action["Action call"]
+  delivery --> collection["Collection write"]
+  action --> collection
+  action --> lifecycle[("Action lifecycle Events")]
+  collection --> change[("Collection change Event")]
+  action --> stream["Stream / Asset body"]
+  lifecycle --> delivery
+  change --> delivery
 ```
 
-## Ownership
+### The durable path
 
-The generic runtime owns:
+1. **Admission.** `app.send` stores the input as an immutable Event and starts
+   an **operation**. A `deduplicationId` lets a client resend the complete same
+   input, including its `correlationId`, and receive the original operation.
+2. **Delivery.** Each Processor whose filter matches a durable Event gets a
+   recorded delivery. Delivery is at least once: an eligible pending or
+   retryable delivery, or one whose lease expired, may be reclaimed and run
+   again. Cancelled, dead-lettered and terminally settled work is not rerun
+   automatically. Under the default `inherit` settlement its work belongs to the
+   same operation; a Processor that declares detached settlement records
+   background work that does not hold the operation open.
+3. **Mutation.** A Processor changes state only through Actions and Collection
+   writes. An Action records `<actionId>.invoked`, then `completed`, `failed` or
+   `cancelled`. A Collection write commits the record, its change Event and the
+   deliveries that Event matches together. Stable **operation keys** name each
+   Action call and write inside a delivery, so a repeated delivery receives the
+   recorded result rather than writing twice. Calls to outside services need
+   their own idempotency key.
+4. **Bodies.** Large or binary values become immutable Assets referenced from
+   records. A progressive **Stream** is a generic byte body: readers follow its
+   bytes while it is open, and an Action or Collection adopts the sealed content
+   as the canonical value. Streams carry no thread, participant or visibility
+   meaning of their own.
 
-- Event Bodies, Events, sparse durable deliveries, and settlement scopes;
-- Collection planning, graph projection, content adoption, and replay;
-- Action lifecycle persistence and invocation identity;
-- application composition, persistence recovery, and execution transport;
-- generic progressive Bodies and stream observation.
+### Who owns what
 
-Plugins own semantic contracts and workflows. Core owns participants, threads,
-messages, Agent Resources, prompt policy, and the conversation loop. LLM owns
-`llm.call`, LLM connections, Adapter contracts, and built-in provider drivers.
-Tools, Channels, Memory, Knowledge, Skills, Schedules, Usage, and Admin own
-their respective Collections, Actions, Processors, Resources, and Adapters.
-Goals use a Core Action, context-resolved policy Resources, and an explicit
-conversation Adapter.
+| Owner                  | Owns                                                                                                                                      | Example in Notes                                         |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- |
+| **Plugin definitions** | Stable IDs and contracts: Collections, Actions, Processors, Resources, Adapters. Pure modules with no environment reads or I/O on import. | `notes-plugin.ts`: `note`, `notes.save`, `notes.capture` |
+| **Host composition**   | Namespace, database, credentials, live integrations, which plugins compose.                                                               | `composition.ts`: `team-notes`, `file://./data`          |
+| **Runtime**            | Persistence, deliveries, leases and recovery, operation settlement, Action lifecycle, content adoption, execution transport.              | Created by `createCopilotz`                              |
 
-Runtime production code never imports a concrete plugin.
+The runtime never imports a concrete plugin. The agent harness under
+`@copilotz/copilotz/core` is a set of plugins on top of the same primitives:
+threads and messages are Collections, a model call is the `llm.call` Action, and
+agents, connections, tools and Skills are Resources. Memory, Knowledge, Skills,
+Channels, Schedules and Usage are optional plugins with the same shape.
+Runtime-only applications never import `/core`.
 
-## Five plugin primitives
+### Admission, settlement and observation
 
-- Collections describe durable state.
-- Actions describe executable capabilities.
-- Processors decide when capabilities or mutations run.
-- Resources are immutable process-local semantic definitions. Their contracts
-  may include typed, read-only policy hooks.
-- Adapters are runtime-only interchangeable external or infrastructure
-  implementations.
+These are separate questions with separate public answers:
 
-Resources and Adapters compose independently. Application overlays win after
-plugin dependencies and root plugins. Plain typed values are canonical; helpers
-such as `defineAgent`, `defineLlmConnection`, and `defineTool` add validation
-and inference, not privileged object identities.
+| Question                       | Public call                            | Meaning                                                                                                                              |
+| ------------------------------ | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| Was the input accepted?        | `await app.send(input)`                | Resolves once the Event is durable; returns `operationId`, `outputs` and `done`.                                                     |
+| Did this send succeed?         | `handle.done`                          | Resolves when the operation completes; rejects when it fails.                                                                        |
+| What state is it in now?       | `app.operationStatus({ operationId })` | Recorded state, or `null` when the namespace has no such operation.                                                                  |
+| What happened, from the start? | `app.attach({ operationId })`          | Replays recorded Events, then follows. `done` resolves at **any** final state; check it.                                             |
+| What is happening anywhere?    | `app.observe()`                        | Best-effort live stream for this application, independent of any operation.                                                          |
+| Stop the work                  | `app.cancelOperation(...)`             | Explicitly requests cancellation of the operation's durable work. Dropping or detaching an observer is separate and cancels nothing. |
 
-## Durable lifecycle
+An identical resend with the same `deduplicationId` sees the live outputs of the
+original operation; `attach` replays its recorded history. Closing the
+application stops its local readers and workers; it does not cancel recorded
+work, which a later application on the same database can resume.
 
-A Collection mutation commits its projection, Event Body, immutable Event, and
-matched delivery obligations atomically. An Action emits
-`<actionId>.invoked|progress|completed|failed|cancelled`; those Events are its
-only operational record.
+Raw in-process streams are not an end-user authorization boundary: they can
+include data that a semantic plugin treats as private. An authorized server must
+filter or redact by ownership and visibility _before_ transmitting anything to
+an end user; hiding data in a UI after the bytes arrive does not protect it. See
+[Agent capabilities](agent-capabilities.md) and Chapters
+[16](getting-started/part-4-release-to-users/16-authenticate-and-isolate-tenants.md)
+and
+[17](getting-started/part-4-release-to-users/17-connect-chat-and-channels.md)
+for semantic views.
 
-Action metadata is plugin-owned, canonical JSON. It is persisted in every
-lifecycle Event Body and received as `context.action.metadata`. It is not copied
-to the generic Event envelope or inherited by nested calls.
-Runtime-authenticated Event Body references prevent public ingress from forging
-registered Action lifecycle receipts.
+### One worked example
 
-Durable Processor execution is at least once. A Processor receives the resolved
-Event first and the complete composed context second. Stable operation keys and
-Action identities make a retry restore the same mutation/result. A Processor may
-declare detached settlement for durable background work that must not block or
-fail the foreground operation.
+`architecture.ts` reuses `notes-plugin.ts` and `composition.ts` exactly as
+[Chapter 7](getting-started/part-2-verify-and-recover/07-persist-and-recover.md)
+leaves them, with `@copilotz/copilotz@^0.84.4` installed. It admits one input
+twice with the same identity, then replays the operation.
 
-## AI harness
+```ts
+// Runtime factory and the guard that separates byte streams from Events.
+import { createCopilotz, isStreamOutput } from "@copilotz/copilotz";
+// Type of each output a send handle or attachment yields.
+import type { ApplicationOutput } from "@copilotz/copilotz";
+// Host choices: tenant namespace, persistent database and composed plugins.
+import { database, namespace, runtimePlugins } from "./composition.ts";
 
-Agent, LLM connection, Tool, and Skill values are Resources. Declarative fields
-are data; Agent dynamic resolution, Context contribution, and Skill reading are
-examples of typed process-local policy hooks. Dynamic resolution sees one
-read-only durable turn snapshot and may select effective instructions and model
-routes before preparation. Hooks are neither durable Actions nor persisted
-configuration. Built-in provider credentials and transport configuration live
-only in process-local LLM connections; custom provider implementations live in
-Adapters. Core turns an Agent's ordered connection/model selections into one
-`llm.call` Action. Tool Resources map model presentation to the same Action
-aliases present under `context.actions`; there is no Tool catalog, executor,
-wrapper Action, or second validation lifecycle. Tool and OpenAPI factories are
-compiler conveniences that materialize native Actions plus those data-only Tool
-Resources.
+// Prints Event types and releases any byte stream so it cannot hold a reader.
+async function printTypes(
+  label: string,
+  outputs: ReadableStream<ApplicationOutput>,
+): Promise<void> {
+  for await (const output of outputs) {
+    if (isStreamOutput(output)) {
+      await output.payload.cancel();
+      continue;
+    }
+    console.log(`${label} ${output.durable ? "event" : "live"} ${output.type}`);
+  }
+}
 
-Multiple model-produced Tool calls form a deterministic plan. Independent root
-branches run concurrently, stages inside each pipeline run sequentially, and the
-fan-in projects results in provider order. Ask uses a native Core Action and
-durable question/answer messages; nested continuation state is stored in compact
-non-recursive metadata rather than an in-memory promise.
+const app = await createCopilotz({
+  namespace,
+  database,
+  plugins: runtimePlugins,
+});
 
-## Content and streams
+try {
+  // One complete input. Resending it unchanged, with the same correlation and
+  // deduplication IDs, must return the original operation.
+  const input = {
+    type: "notes.capture.requested",
+    payload: { text: "Review the architecture page." },
+    correlationId: "architecture-demo",
+    deduplicationId: "architecture-demo-1",
+  };
 
-Potentially large or binary values become immutable Assets referenced by
-`ContentRef`. Collection-declared content is prepared before SQL and adopted in
-the same transaction as its owning semantic record.
+  // Admission and settlement: `done` rejects if the operation fails.
+  const first = await app.send(input);
+  await Promise.all([printTypes("first", first.outputs), first.done]);
 
-A progressive Stream is a runtime Body, not a conversation primitive. Opening
-one emits a serializable `stream.output` descriptor with only namespace, content
-metadata, causation/correlation, and stream ID. Each application subscriber
-receives its own lazy byte follower. Thread, participant, routing, visibility,
-Collection, and plugin policy never enter this generic descriptor.
+  // A retried admission: same operation, no second note.
+  const retry = await app.send(input);
+  await Promise.all([printTypes("retry", retry.outputs), retry.done]);
+  console.log(`same operation: ${retry.operationId === first.operationId}`);
 
-Closing a stream seals its Body and returns `PreparedContent`; a semantic
-Collection or Action must adopt canonical content. A short-lived operation
-catalog records only descriptor, committed offset, seal state, digest, and
-retention. It never duplicates stream bytes. Exact stream/final content may
-adopt the sealed Body directly; mismatches retain a bounded observation Body.
+  // Observation after the fact: replay records nothing and reruns nothing.
+  const attachment = await app.attach({ operationId: first.operationId });
+  await Promise.all([
+    printTypes("replay", attachment.outputs),
+    attachment.done,
+  ]);
 
-## Application and execution
+  // `attach.done` resolves at any final state, so confirm the recorded one.
+  const status = await app.operationStatus({ operationId: first.operationId });
+  console.log(`operation ${status?.state ?? "unknown"}`);
+} finally {
+  // Release the database, including after a failure.
+  await app.close();
+}
+```
 
-The public embedded application owns generic durable operations: `send`,
-`attach`, status/list/cancel, bounded maintenance, live `observe`, and `close`.
-Gateway adds portable `fetch`; Worker returns `{ ready, closed, close }`. The
-root factory supports embedded, split in-process, WebSocket, and
-injected-dispatcher topologies without changing plugin contracts.
+Run it with `deno run -A architecture.ts` or `node architecture.ts`. Expect
+`same operation: true`, a replay that includes `notes.capture.requested`,
+`note.created` and `notes.save.completed`, ending with the live
+`operation.completed`, and `operation completed`. Running the script a second
+time against the same `./data` directory reuses the same deduplicated operation.
 
-`send()` subscribes before append and waits for its explicit settlement scope,
-relayed output drain, and a final settlement check. Disconnecting or detaching
-an observer never cancels that scope. `attach()` replays indexed Events and
-follows committed Body ranges from an opaque cursor, then tails database
-notifications with a bounded safety wakeup. `observe()` remains an independent
-live application-wide subscription. A transient persistence outage interrupts
-local handles but does not pretend to cancel durable deliveries; recovery and a
-new attachment resume them after reconnection.
+### Placement
 
-## Storage and replay
+`createCopilotz` runs embedded by default. The same plugins can run split into a
+gateway that admits and serves `fetch`, and workers that execute deliveries,
+sharing one persistence. Placement changes processes and transport, never plugin
+IDs or contracts;
+[Deploy and Scale](getting-started/part-5-operate-and-scale/21-deploy-and-scale.md)
+covers roles.
 
-Events and Event Bodies are immutable replay/deduplication facts. Ordinary
-maintenance compacts only settled deliveries. Graph nodes and edges are
-projections rebuilt namespace-wide from the complete registered Collection set,
-historical Asset manifests, and generic relation events.
+## What this unlocks
 
-Asset provenance is exactly the opaque identity `{ type, id }`. A Ready Asset
-node's body ID is durable liveness authority. Database, filesystem, and object
-BodyStores preserve location and bytes through replay without runtime semantic
-special cases.
+- Reuse one plugin from scripts, tests, HTTP, schedules and agents, because
+  definitions hold no host choices.
+- Retry admissions and recover crashed deliveries without duplicate writes.
+- Answer "what happened to this request?" from one operation ID.
+- Add the agent harness or other semantic plugins without changing the runtime
+  contract underneath.
+- Move from one process to gateway and workers without rewriting plugins.
 
-See [ARCHITECTURE.md](../ARCHITECTURE.md) for the full first-principles
-contract.
+## Next steps
+
+- [Events, Deliveries and Recovery](events-deliveries-recovery.md): delivery,
+  lease and settlement details.
+- [Plugins and Processors](plugins-and-processors.md): composition, dependencies
+  and settlement modes.
+- [Content and Assets](content-assets.md) and [Streams](streams.md): large and
+  progressive bodies.
+- [API Reference](api.md): every application method and option.

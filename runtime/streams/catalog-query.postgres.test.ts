@@ -210,12 +210,13 @@ function generatedFixtureSql(schema: string): readonly string[] {
        AND event_seed.event_no = 0
      )`,
     `INSERT INTO ${operationEvents} (
-       namespace, operation_id, event_id, event_position, created_at
+       namespace, operation_id, event_id, event_position, event_ordinal, created_at
      )
      SELECT
        event.namespace,
        'catalog-op-' || split_part(event.id, '-', 3),
        event.id,
+       event.position,
        event.position,
        event.created_at
      FROM ${events} AS event
@@ -692,8 +693,8 @@ Deno.test({
           FROM generate_series(52, 7499) AS seed(event_no)
           RETURNING namespace, id, position, created_at
       ) INSERT INTO ${indexedTable} (
-        namespace, operation_id, event_id, event_position, created_at
-      ) SELECT namespace, 'catalog-op-1600', id, position, created_at FROM inserted`);
+        namespace, operation_id, event_id, event_position, event_ordinal, created_at
+      ) SELECT namespace, 'catalog-op-1600', id, position, position, created_at FROM inserted`);
       const fixedWatermark = await catalog.maxEventPosition({
         namespace: SPARSE_NAMESPACE,
       });
@@ -706,8 +707,8 @@ Deno.test({
           TIMESTAMPTZ '2026-03-01 00:00:00+00')
           RETURNING namespace, id, position, created_at
       ) INSERT INTO ${indexedTable} (
-        namespace, operation_id, event_id, event_position, created_at
-      ) SELECT namespace, 'catalog-op-1592', id, position, created_at FROM inserted`);
+        namespace, operation_id, event_id, event_position, event_ordinal, created_at
+      ) SELECT namespace, 'catalog-op-1592', id, position, position, created_at FROM inserted`);
       for (const relation of [operationsTable, eventsTable, indexedTable]) {
         await database.query(`ANALYZE ${relation}`);
       }
@@ -844,8 +845,8 @@ Deno.test({
           FROM generate_series(1, 50000) AS seed(event_no)
           RETURNING namespace, id, position, created_at
       ) INSERT INTO ${indexedTable} (
-        namespace, operation_id, event_id, event_position, created_at
-      ) SELECT namespace, 'catalog-op-1598', id, position, created_at FROM inserted`);
+        namespace, operation_id, event_id, event_position, event_ordinal, created_at
+      ) SELECT namespace, 'catalog-op-1598', id, position, position, created_at FROM inserted`);
       // Simulate a fresh observer after the extra completed history: capture a
       // new fixed watermark, then make the same completed member eligible.
       const largerHistoryWatermark = await catalog.maxEventPosition({
@@ -860,8 +861,8 @@ Deno.test({
           TIMESTAMPTZ '2026-03-01 00:00:01+00')
           RETURNING namespace, id, position, created_at
       ) INSERT INTO ${indexedTable} (
-        namespace, operation_id, event_id, event_position, created_at
-      ) SELECT namespace, 'catalog-op-1592', id, position, created_at FROM inserted`);
+        namespace, operation_id, event_id, event_position, event_ordinal, created_at
+      ) SELECT namespace, 'catalog-op-1592', id, position, position, created_at FROM inserted`);
       for (const relation of [eventsTable, indexedTable]) {
         await database.query(`ANALYZE ${relation}`);
       }

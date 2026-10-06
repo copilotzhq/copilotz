@@ -11,6 +11,7 @@ import {
   MAX_FRAME_BYTES,
   OBSERVATION_FRAME_CAPACITY_CODE,
   ProtocolError,
+  RenewalObservationError,
 } from "../client/protocol.ts";
 import { decodeOperationReplayCursor } from "../runtime/streams/index.ts";
 
@@ -247,6 +248,43 @@ Deno.test("multipart rejects invalid lower JSON envelope capacities", () => {
     RangeError,
     "between 1",
   );
+});
+
+Deno.test("runtime logical capacity errors stay non-retryable through multipart and the client", async () => {
+  const { createCopilotzClient } = await import("../client/index.ts");
+  let calls = 0;
+  let detached = "";
+  const client = createCopilotzClient({
+    baseUrl: "/api",
+    fetch: (() => {
+      calls++;
+      return Promise.resolve(applicationOutputsMultipartResponse({
+        type: HTTP_OBSERVATION,
+        outputs: new ReadableStream({
+          start(controller) {
+            controller.error(
+              Object.assign(new Error("Logical output exceeds its capacity."), {
+                code: OBSERVATION_FRAME_CAPACITY_CODE,
+              }),
+            );
+          },
+        }),
+        done: Promise.resolve(),
+        cancel(reason) {
+          detached = reason ?? "";
+          return Promise.resolve();
+        },
+      }));
+    }) as typeof fetch,
+  });
+  const error = await assertRejects(
+    () => client.operations.observe({ operationIds: ["op"], onFrame() {} }),
+    ProtocolError,
+    "capacity",
+  );
+  assertEquals(error.code, OBSERVATION_FRAME_CAPACITY_CODE);
+  assertEquals(calls, 1);
+  assertEquals(detached, OBSERVATION_FRAME_CAPACITY_CODE);
 });
 
 Deno.test("multipart cursor tracks an operation lane independently of its stream identifier", async () => {
@@ -647,4 +685,525 @@ Deno.test("bootstrap drains historical terminal lanes without exhausting concurr
     decodeObservation(applicationOutputsMultipartResponse(source)),
   );
   assertEquals(frames.filter((f) => f.kind === "stream-end").length, count);
+});
+
+Deno.test("terminal checkpoints retire more than 32 sequential selected operations", async () => {
+  const outputs: ApplicationOutput[] = [];
+  for (let index = 1; index <= 100; index++) {
+    const operationId = `operation-${index}`;
+    outputs.push(
+      {
+        type: "observation.selection",
+        selectionPosition: String(index),
+        operationIds: [operationId],
+      } as unknown as ApplicationOutput,
+    );
+    outputs.push(
+      {
+        type: "operation.completed",
+        operationId,
+        durable: true,
+        position: String(index * 100),
+        replayPosition: "2",
+      } as unknown as ApplicationOutput,
+    );
+  }
+  const response = applicationOutputsMultipartResponse({
+    type: HTTP_OBSERVATION,
+    compositeCursor: true,
+    outputs: new ReadableStream({
+      start(controller) {
+        outputs.forEach((value) => controller.enqueue(value));
+        controller.close();
+      },
+    }),
+    done: Promise.resolve(),
+    cancel: () => Promise.resolve(),
+  });
+  let count = 0;
+  for await (const frame of decodeObservation(response)) {
+    if (
+      frame.kind === "output" && frame.output.type === "operation.completed"
+    ) {
+      count++;
+      assertEquals(decodeOperationReplayCursor(frame.checkpoint), {
+        selectionPosition: String(count),
+      });
+    }
+  }
+  assertEquals(count, 100);
+});
+
+Deno.test("blocked frame handler renews and resumes a partial lane from its processed checkpoint", async () => {
+  const { createCopilotzClient } = await import("../client/index.ts");
+  const bytes = new Uint8Array([1, 2, 3, 4, 5, 6]);
+  let firstOutputs!: ReadableStreamDefaultController<ApplicationOutput>;
+  let detached!: () => void;
+  const detachedPromise = new Promise<void>((resolve) => detached = resolve);
+  let releaseHandler!: () => void;
+  const blockedHandler = new Promise<void>((resolve) =>
+    releaseHandler = resolve
+  );
+  let handlerStarted!: () => void;
+  const handlerStartedPromise = new Promise<void>((resolve) =>
+    handlerStarted = resolve
+  );
+  let payloadCancelled = false;
+  let calls = 0;
+  const requested: (string | undefined)[] = [];
+  const client = createCopilotzClient({
+    baseUrl: "/api",
+    fetch: ((_url, init) => {
+      const checkpoint = JSON.parse(String(init?.body)).checkpoint as
+        | string
+        | undefined;
+      requested.push(checkpoint);
+      const first = calls++ === 0;
+      const offset =
+        decodeOperationReplayCursor(checkpoint).operationStreamPositions?.op
+          .offsets["1"] ?? 0;
+      const output = {
+        type: "stream.output",
+        namespace: "tenant",
+        operationId: "op",
+        streamId: "lane",
+        streamOrdinal: "1",
+        mediaType: "application/octet-stream",
+        kind: "file",
+        role: "content",
+        metadata: {},
+        payload: new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(
+              first ? bytes.subarray(0, 3) : bytes.subarray(offset),
+            );
+            if (!first) controller.close();
+          },
+          cancel() {
+            payloadCancelled = true;
+          },
+        }),
+        terminal: completedTerminal(bytes.length),
+      } as StreamOutput;
+      const source: HttpObservation = {
+        type: HTTP_OBSERVATION,
+        operationId: "op",
+        replayCursor: checkpoint,
+        compositeCursor: true,
+        outputs: new ReadableStream({
+          start(controller) {
+            if (first) {
+              firstOutputs = controller;
+              controller.enqueue(
+                {
+                  type: "observation.selection",
+                  selectionPosition: "1",
+                  operationIds: ["op"],
+                } as unknown as ApplicationOutput,
+              );
+            }
+            controller.enqueue(output);
+            if (!first) {
+              controller.enqueue(
+                {
+                  type: "operation.completed",
+                  operationId: "op",
+                } as unknown as ApplicationOutput,
+              );
+              controller.close();
+            }
+          },
+        }),
+        done: Promise.resolve(),
+        cancel() {
+          detached();
+          return Promise.resolve();
+        },
+      };
+      return Promise.resolve(applicationOutputsMultipartResponse(source));
+    }) as typeof fetch,
+  });
+  const received: number[] = [];
+  const observing = client.operations.observe({
+    operationIds: ["op"],
+    async onFrame(frame) {
+      if (frame.kind === "stream-chunk") {
+        received.push(...frame.bytes);
+        if (calls === 1) {
+          handlerStarted();
+          await blockedHandler;
+        }
+      }
+    },
+  });
+  await handlerStartedPromise;
+  firstOutputs.error(
+    Object.assign(new Error("slow observer queue full"), {
+      code: "observation_renewal_required",
+    }),
+  );
+  await detachedPromise;
+  assertEquals(payloadCancelled, true);
+  assertEquals(calls, 1);
+  releaseHandler();
+  const terminalCheckpoint = await observing;
+  assertEquals(calls, 2);
+  assertEquals(
+    decodeOperationReplayCursor(requested[1]).operationStreamPositions?.op
+      .offsets["1"],
+    3,
+  );
+  assertEquals(received, [...bytes]);
+  assertEquals(decodeOperationReplayCursor(terminalCheckpoint), {
+    selectionPosition: "1",
+  });
+});
+
+Deno.test("transport queue overflow detaches blocked readers and automatically reconnects every lane", async () => {
+  const { createCopilotzClient } = await import("../client/index.ts");
+  const count = 16;
+  const length = 256 * 1024;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => release = resolve);
+  let detached!: () => void;
+  const detachedPromise = new Promise<void>((resolve) => detached = resolve);
+  let calls = 0;
+  let cancelledReaders = 0;
+  const totals = Array<number>(count).fill(0);
+  const client = createCopilotzClient({
+    baseUrl: "/api",
+    fetch: ((_url, init) => {
+      const first = calls++ === 0;
+      const checkpoint = JSON.parse(String(init?.body)).checkpoint as
+        | string
+        | undefined;
+      const replay = decodeOperationReplayCursor(checkpoint);
+      const outputs = new ReadableStream<ApplicationOutput>({
+        start(controller) {
+          for (let index = 0; index < count; index++) {
+            const offset =
+              replay.operationStreamPositions?.op.offsets[String(index + 1)] ??
+                0;
+            let emitted = false;
+            controller.enqueue({
+              type: "stream.output",
+              namespace: "tenant",
+              streamId: `lane-${index}`,
+              streamOrdinal: String(index + 1),
+              mediaType: "application/octet-stream",
+              kind: "file",
+              role: "content",
+              metadata: {},
+              payload: new ReadableStream<Uint8Array>({
+                async pull(body) {
+                  if (emitted) {
+                    if (!first) body.close();
+                    return;
+                  }
+                  emitted = true;
+                  if (first) await gate;
+                  try {
+                    body.enqueue(
+                      new Uint8Array(length - offset).fill(index + 1),
+                    );
+                  } catch {
+                    /* The renewal has already detached this reader. */
+                  }
+                  if (!first) {
+                    body.close();
+                  }
+                },
+                cancel() {
+                  cancelledReaders++;
+                },
+              }),
+              terminal: completedTerminal(length),
+            } as StreamOutput);
+          }
+          controller.close();
+        },
+      });
+      return Promise.resolve(
+        applicationOutputsMultipartResponse({
+          type: HTTP_OBSERVATION,
+          operationId: "op",
+          replayCursor: checkpoint,
+          outputs,
+          done: Promise.resolve(),
+          cancel() {
+            detached();
+            return Promise.resolve();
+          },
+        }),
+      );
+    }) as typeof fetch,
+  });
+  // Build the first response without reading any network bytes, then release
+  // all lane producers together to exercise the serialized-frame budget.
+  const firstResponse = await client.http.request("/test", {
+    method: "POST",
+    body: "{}",
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  release();
+  await detachedPromise;
+  assertEquals(cancelledReaders, count);
+  let firstUsed = false;
+  const reconnecting = createCopilotzClient({
+    baseUrl: "/api",
+    fetch: (async (url, init) => {
+      if (!firstUsed) {
+        firstUsed = true;
+        return firstResponse;
+      }
+      return await client.http.request(String(url).replace("/api", ""), init);
+    }) as typeof fetch,
+  });
+  await reconnecting.operations.observe({
+    operationIds: ["op"],
+    onFrame(frame) {
+      if (frame.kind === "stream-chunk") {
+        const index = Number(frame.streamId.slice(5));
+        assertEquals(frame.bytes.every((value) => value === index + 1), true);
+        totals[index] += frame.bytes.length;
+      }
+    },
+  });
+  assertEquals(calls, 2);
+  assertEquals(totals, Array<number>(count).fill(length));
+});
+
+Deno.test("terminal frames keep a bounded tombstone until discovery covers the final selection revision", async () => {
+  const outputs = [
+    {
+      type: "observation.selection",
+      selectionPosition: "1",
+      operationIds: ["op"],
+    },
+    {
+      type: "operation.completed",
+      operationId: "op",
+      durable: true,
+      position: "999",
+      replayPosition: "2",
+      finalSelectionPosition: "5",
+    },
+    { type: "observation.selection", selectionPosition: "5", operationIds: [] },
+  ] as unknown as ApplicationOutput[];
+  const frames = await Array.fromAsync(
+    decodeObservation(
+      applicationOutputsMultipartResponse({
+        type: HTTP_OBSERVATION,
+        compositeCursor: true,
+        outputs: new ReadableStream({
+          start(controller) {
+            outputs.forEach((value) => controller.enqueue(value));
+            controller.close();
+          },
+        }),
+        done: Promise.resolve(),
+        cancel: () => Promise.resolve(),
+      }),
+    ),
+  );
+  assertEquals(decodeOperationReplayCursor(frames[1].checkpoint), {
+    selectionPosition: "1",
+    operationRetirementPositions: { op: "5" },
+  });
+  assertEquals(
+    frames[1].kind === "output" && frames[1].output.finalSelectionPosition,
+    undefined,
+  );
+  assertEquals(
+    frames[1].kind === "output" && frames[1].output.replayPosition,
+    undefined,
+  );
+  assertEquals(decodeOperationReplayCursor(frames[2].checkpoint), {
+    selectionPosition: "5",
+  });
+});
+
+Deno.test("bounded observation lifetime detaches server readers before a blocked response drains and resumes", async () => {
+  const { createCopilotzClient } = await import("../client/index.ts");
+  const bytes = new Uint8Array(1024 * 1024).fill(7);
+  let detached!: () => void;
+  const detachedPromise = new Promise<void>((resolve) => detached = resolve);
+  let payloadCancelled = false;
+  let outputController!: ReadableStreamDefaultController<ApplicationOutput>;
+  const first = applicationOutputsMultipartResponse({
+    type: HTTP_OBSERVATION,
+    operationId: "op",
+    done: Promise.resolve(),
+    outputs: new ReadableStream({
+      start(controller) {
+        outputController = controller;
+        controller.enqueue(
+          {
+            type: "stream.output",
+            namespace: "tenant",
+            streamId: "lane",
+            streamOrdinal: "1",
+            mediaType: "application/octet-stream",
+            kind: "file",
+            role: "content",
+            metadata: {},
+            payload: new ReadableStream<Uint8Array>({
+              start(body) {
+                body.enqueue(bytes);
+              },
+              cancel() {
+                payloadCancelled = true;
+              },
+            }),
+            terminal: completedTerminal(bytes.length),
+          } as StreamOutput,
+        );
+      },
+    }),
+    cancel() {
+      outputController.close();
+      detached();
+      return Promise.resolve();
+    },
+  }, { renewAfterMs: 10 });
+  // The 1 MiB chunk blocks the 256 KiB response queue. Expiry must cancel
+  // server resources without waiting for the network consumer to read it.
+  await detachedPromise;
+  assertEquals(payloadCancelled, true);
+  let calls = 0;
+  const checkpoints: (string | undefined)[] = [];
+  const client = createCopilotzClient({
+    baseUrl: "/api",
+    fetch: ((_url, init) => {
+      const checkpoint = JSON.parse(String(init?.body)).checkpoint as
+        | string
+        | undefined;
+      checkpoints.push(checkpoint);
+      if (calls++ === 0) return Promise.resolve(first);
+      const offset =
+        decodeOperationReplayCursor(checkpoint).operationStreamPositions?.op
+          .offsets["1"] ?? 0;
+      return Promise.resolve(applicationOutputsMultipartResponse({
+        type: HTTP_OBSERVATION,
+        operationId: "op",
+        replayCursor: checkpoint,
+        done: Promise.resolve(),
+        cancel: () => Promise.resolve(),
+        outputs: new ReadableStream({
+          start(controller) {
+            controller.enqueue(
+              {
+                type: "stream.output",
+                namespace: "tenant",
+                streamId: "lane",
+                streamOrdinal: "1",
+                mediaType: "application/octet-stream",
+                kind: "file",
+                role: "content",
+                metadata: {},
+                payload: new ReadableStream({
+                  start(body) {
+                    if (offset < bytes.length) {
+                      body.enqueue(bytes.subarray(offset));
+                    }
+                    body.close();
+                  },
+                }),
+                terminal: completedTerminal(bytes.length),
+              } as StreamOutput,
+            );
+            controller.close();
+          },
+        }),
+      }));
+    }) as typeof fetch,
+  });
+  let received = 0;
+  await client.operations.observe({
+    operationIds: ["op"],
+    onFrame(frame) {
+      if (frame.kind === "stream-chunk") received += frame.bytes.length;
+    },
+  });
+  assertEquals(calls, 2);
+  assertEquals(received, bytes.length);
+  assertEquals(
+    decodeOperationReplayCursor(checkpoints[1]).operationStreamPositions?.op
+      .offsets["1"],
+    bytes.length,
+  );
+});
+
+Deno.test("observation lifetime overrides can only shorten the five-minute ceiling", () => {
+  const source: HttpObservation = {
+    type: HTTP_OBSERVATION,
+    outputs: new ReadableStream(),
+    done: Promise.resolve(),
+    cancel: () => Promise.resolve(),
+  };
+  for (const renewAfterMs of [0, -1, 300001, Number.POSITIVE_INFINITY, 1.5]) {
+    assertThrows(
+      () => applicationOutputsMultipartResponse(source, { renewAfterMs }),
+      RangeError,
+      "renewAfterMs",
+    );
+  }
+});
+
+Deno.test("lifetime renewal interrupts pending lane terminals and source completion", async () => {
+  for (const lane of [false, true]) {
+    let detached = false;
+    const source: HttpObservation = {
+      type: HTTP_OBSERVATION,
+      operationId: "op",
+      done: new Promise<void>(() => {}),
+      cancel() {
+        detached = true;
+        return Promise.resolve();
+      },
+      outputs: new ReadableStream({
+        start(controller) {
+          if (lane) {
+            controller.enqueue(
+              {
+                type: "stream.output",
+                namespace: "tenant",
+                streamId: "lane",
+                streamOrdinal: "1",
+                mediaType: "text/plain",
+                kind: "text",
+                role: "content",
+                metadata: {},
+                payload: new ReadableStream({
+                  start(body) {
+                    body.close();
+                  },
+                }),
+                terminal: new Promise(() => {}),
+              } as StreamOutput,
+            );
+          }
+          controller.close();
+        },
+      }),
+    };
+    const frames: string[] = [];
+    await assertRejects(async () => {
+      for await (
+        const frame of decodeObservation(
+          applicationOutputsMultipartResponse(source, { renewAfterMs: 10 }),
+        )
+      ) {
+        frames.push(frame.kind);
+        if (frame.kind === "observation-renew") {
+          assertEquals(frame.reason, "lifetime");
+        }
+      }
+    }, RenewalObservationError);
+    assertEquals(detached, true);
+    assertEquals(
+      frames,
+      lane ? ["output", "observation-renew"] : ["observation-renew"],
+    );
+  }
 });

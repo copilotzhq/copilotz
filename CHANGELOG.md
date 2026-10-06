@@ -1,3 +1,32 @@
+## 0.85.0 — 2026-10-06
+
+### Changed
+
+- Index opaque observation selections when events commit. Conversation discovery
+  reads indexed selection counters and associations instead of historical event
+  metadata. Selection and operation-local event ordinals follow commit order.
+- Share scoped discovery, resource checks, operation event hydration and live
+  Body reads across observers within each application process. Resource checks
+  retain their existing 250 ms cadence and exact permission predicates; missed
+  notification hints recover through the five-second safety scan.
+- Bound each viewer's queues and renew observations from the last client-applied
+  checkpoint when capacity is reached or after five minutes. Completed
+  operations retire from cursors, keeping sequential work independent of session
+  length.
+- Introduce the `operation-selections-v1` cursor and an explicit operation
+  catalog upgrade. Stop old writers, run `upgradeOperationCatalog` for every
+  physical schema, then start the new version. Core hosts supply
+  `resolveCoreObservationKeys`. Existing clients must refresh history and use
+  the matching client release.
+
+### Fixed
+
+- Release observers across cancellation during setup, last-viewer disconnect,
+  reconnect races, and slow or abandoned HTTP responses. Transport interruption
+  never cancels durable operation work.
+- Read only the requested indexed BodyStore byte range while following streams,
+  avoiding repeated reads of their complete retained history.
+
 ## 0.84.3 — 2026-10-06
 
 ### Fixed

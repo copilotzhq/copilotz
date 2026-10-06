@@ -2,15 +2,18 @@
 
 import {
   decodeObservation,
-  type ObservationFrame,
+  type ObservationFrame as DecodedObservationFrame,
   ProtocolError,
+  RenewalObservationError,
   TruncatedObservationError,
 } from "./protocol.ts";
-export {
-  decodeObservation,
-  type ObservationFrame,
-  ProtocolError,
-} from "./protocol.ts";
+export { decodeObservation, ProtocolError } from "./protocol.ts";
+
+/** Domain frames delivered to application handlers; renewal is transport control. */
+export type ObservationFrame = Exclude<
+  DecodedObservationFrame,
+  { kind: "observation-renew" }
+>;
 
 export type OperationReceipt = Readonly<{
   operationId: string;
@@ -212,6 +215,11 @@ export function createCopilotzClient(options: ClientOptions): CopilotzClient {
         });
         responseReceived = true;
         for await (const frame of decodeObservation(response)) {
+          if (frame.kind === "observation-renew") {
+            checkpoint = frame.checkpoint;
+            attempt = 0;
+            continue;
+          }
           applying = true;
           await observation.onFrame(frame);
           applying = false;
@@ -233,13 +241,17 @@ export function createCopilotzClient(options: ClientOptions): CopilotzClient {
           applying || observation.signal?.aborted ||
           error instanceof CopilotzHttpError ||
           (error instanceof ProtocolError &&
-            !(error instanceof TruncatedObservationError)) ||
+            !(error instanceof TruncatedObservationError) &&
+            !(error instanceof RenewalObservationError)) ||
           (!(error instanceof TransportError) &&
             !(responseReceived && error instanceof TypeError) &&
-            !(error instanceof TruncatedObservationError)) ||
+            !(error instanceof TruncatedObservationError) &&
+            !(error instanceof RenewalObservationError)) ||
           attempt >= 3
         ) throw error;
-        await pause(100 * 2 ** attempt, observation.signal);
+        if (!(error instanceof RenewalObservationError)) {
+          await pause(100 * 2 ** attempt, observation.signal);
+        }
       }
     }
   };

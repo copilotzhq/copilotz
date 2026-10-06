@@ -1,9 +1,19 @@
 /** Browser-safe, backpressured decoding of canonical multipart frames. @module */
 
+import { MAX_LOGICAL_OUTPUT_BYTES } from "../runtime/streams/limits.ts";
+export { OBSERVATION_FRAME_CAPACITY_CODE } from "../runtime/streams/limits.ts";
+
 export type OutputDescriptor = Readonly<
   Record<string, unknown> & { type: string }
 >;
 export type ObservationFrame =
+  | Readonly<
+    {
+      kind: "observation-renew";
+      checkpoint: string;
+      reason: "capacity" | "lifetime";
+    }
+  >
   | Readonly<{ kind: "output"; output: OutputDescriptor; checkpoint: string }>
   | Readonly<{
     kind: "stream-chunk";
@@ -38,23 +48,30 @@ export class TruncatedObservationError extends ProtocolError {
   override name = "TruncatedObservationError";
 }
 
+/** A deliberate bounded-observation handoff; reconnect using the last applied frame. */
+export class RenewalObservationError extends ProtocolError {
+  override name = "RenewalObservationError";
+}
+
 const encoder = new TextEncoder();
 const decoder = new TextDecoder("utf-8", { fatal: true });
 const MAX_HEADERS = 32 * 1024;
 /** Maximum bytes in one binary stream chunk or control frame. */
 export const MAX_FRAME_BYTES = 1024 * 1024;
 /** Maximum bytes in one logical JSON output envelope. */
-export const MAX_JSON_FRAME_BYTES = 64 * 1024 * 1024;
-
-export const OBSERVATION_FRAME_CAPACITY_CODE =
-  "observation_frame_capacity_exceeded";
+export const MAX_JSON_FRAME_BYTES = MAX_LOGICAL_OUTPUT_BYTES;
 
 function object(bytes: Uint8Array): Record<string, unknown> {
-  const value = JSON.parse(decoder.decode(bytes));
+  let value: unknown;
+  try {
+    value = JSON.parse(decoder.decode(bytes));
+  } catch (cause) {
+    throw new ProtocolError("Frame contains invalid JSON or UTF-8.", { cause });
+  }
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new ProtocolError("Frame must contain a JSON object.");
   }
-  return value;
+  return value as Record<string, unknown>;
 }
 
 /** Yielding suspends parsing; the consumer controls when the next frame is read. */
@@ -94,7 +111,12 @@ export async function* decodeObservation(
     while (true) {
       await fill(index + 2);
       if (buffer[index] === 13 && buffer[index + 1] === 10) {
-        const value = decoder.decode(buffer.subarray(0, index));
+        let value: string;
+        try {
+          value = decoder.decode(buffer.subarray(0, index));
+        } catch (cause) {
+          throw new ProtocolError("Invalid header encoding.", { cause });
+        }
         buffer = buffer.subarray(index + 2);
         return value;
       }
@@ -119,14 +141,19 @@ export async function* decodeObservation(
         }
         const separator = value.indexOf(":");
         const name = value.slice(0, separator).trim();
-        if (separator < 1 || headers.has(name)) {
-          throw new ProtocolError("Invalid header.");
+        if (separator < 1) throw new ProtocolError("Invalid header.");
+        try {
+          if (headers.has(name)) throw new ProtocolError("Invalid header.");
+          headers.set(name, value.slice(separator + 1).trim());
+        } catch (cause) {
+          if (cause instanceof ProtocolError) throw cause;
+          throw new ProtocolError("Invalid header.", { cause });
         }
-        headers.set(name, value.slice(separator + 1).trim());
       }
       const kind = headers.get("x-copilotz-frame");
       const jsonKind = kind === "output" || kind === "stream-end" ||
-        kind === "stream-error" || kind === "observation-error";
+        kind === "stream-error" || kind === "observation-error" ||
+        kind === "observation-renew";
       if (!jsonKind && kind !== "stream-chunk") {
         throw new ProtocolError("Unknown frame kind.");
       }
@@ -172,6 +199,20 @@ export async function* decodeObservation(
           streams.set(id, undefined);
         }
         yield { kind, output: output as OutputDescriptor, checkpoint };
+      } else if (kind === "observation-renew") {
+        const renewal = object(bytes);
+        if (
+          renewal.type !== "observation.renew" ||
+          (renewal.reason !== "capacity" && renewal.reason !== "lifetime")
+        ) {
+          throw new ProtocolError("Invalid observation renewal.");
+        }
+        yield { kind, checkpoint, reason: renewal.reason };
+        if (await line() !== `--${boundary}--`) {
+          throw new ProtocolError("Renewal must close the response.");
+        }
+        complete = true;
+        throw new RenewalObservationError("Observation requires renewal.");
       } else if (kind === "observation-error") {
         const failure = object(bytes);
         if (
@@ -194,6 +235,9 @@ export async function* decodeObservation(
         if (kind === "stream-chunk") {
           if (expected !== undefined && expected !== offset) {
             throw new ProtocolError("Stream bytes arrived out of order.");
+          }
+          if (!Number.isSafeInteger(offset + bytes.length)) {
+            throw new ProtocolError("Stream byte offset exceeds capacity.");
           }
           streams.set(streamId, offset + bytes.length);
           yield { kind, streamId, offset, bytes, checkpoint };

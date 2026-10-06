@@ -10,6 +10,7 @@ import { createStreamOutputDescriptor } from "./observation.ts";
 import {
   createOperationCatalog,
   OPERATION_CHANGE_CHANNEL,
+  type OperationChangeDetail,
   operationStreamBodyId,
   provisionOperationCatalog,
   validateOperationCatalog,
@@ -41,13 +42,16 @@ function notificationSession(database: SqlSession): SqlSession {
     queue: Array<readonly [string, string]>,
   ) => {
     const bare = /^\s*SELECT pg_notify\(\$1, \$2\)\s*$/.test(sql);
-    const [, channel, payload] = sql.match(/pg_notify\(\$(\d+), \$(\d+)\)/) ??
+    const [, _channel, payload] = sql.match(/pg_notify\(\$(\d+), \$(\d+)\)/) ??
       [];
     const result = bare ? { rows: [{}] } : await executor.query(sql, params);
-    for (const _ of result.rows) {
+    for (const row of result.rows as Record<string, unknown>[]) {
+      const encoded = row.notification_payload ?? row.payload;
       queue.push([
-        String(params?.[Number(channel) - 1] ?? ""),
-        String(params?.[Number(payload) - 1] ?? ""),
+        OPERATION_CHANGE_CHANNEL,
+        typeof encoded === "string"
+          ? encoded
+          : String(params?.[Number(payload) - 1] ?? ""),
       ]);
     }
     return (bare ? { rows: [] } : result) as never;
@@ -103,6 +107,13 @@ Deno.test("operation catalog opens streams with exact metadata and wakes cross-c
     const writer = createOperationCatalog(notified, SCHEMA);
     const observer = createOperationCatalog(notified, SCHEMA);
     const operationId = "operation-a";
+    const hints: OperationChangeDetail[] = [];
+    const unsubscribe = await observer.onChange(
+      (_id, detail) => hints.push(detail),
+      {
+        namespace: "tenant-a",
+      },
+    );
     const watch = await observer.watch(operationId);
     const change = watch.wait({ timeoutMs: 2_000 });
     await notified.transaction((transaction) =>
@@ -117,6 +128,8 @@ Deno.test("operation catalog opens streams with exact metadata and wakes cross-c
       })
     );
     assertEquals(await change, true);
+    assertEquals(hints.at(-1)?.kind, "event");
+    assertEquals(hints.at(-1)?.namespace, "tenant-a");
 
     const descriptor = createStreamOutputDescriptor({
       id: "stream-a",
@@ -134,12 +147,24 @@ Deno.test("operation catalog opens streams with exact metadata and wakes cross-c
       descriptor,
     });
     assertExists(replayIdentity);
+    assertEquals(hints.at(-1)?.kind, "stream");
+    assertEquals(hints.at(-1)?.streamId, descriptor.streamId);
     await writer.commitStreamOffset({
       namespace: "tenant-a",
       operationId,
       streamId: descriptor.streamId,
       committedOffset: 5,
     });
+    assertEquals(hints.at(-1)?.kind, "stream-offset");
+    assertEquals(hints.at(-1)?.streamId, descriptor.streamId);
+    assertEquals(hints.at(-1)?.committedOffset, 5);
+    await writer.commitStreamOffset({
+      namespace: "tenant-a",
+      operationId,
+      streamId: descriptor.streamId,
+      committedOffset: 2,
+    });
+    assertEquals(hints.at(-1)?.committedOffset, 5);
     await writer.sealStream({
       namespace: "tenant-a",
       operationId,
@@ -153,6 +178,12 @@ Deno.test("operation catalog opens streams with exact metadata and wakes cross-c
         maintenanceVersion: 1,
       },
     });
+    assertEquals(hints.at(-1)?.kind, "stream");
+    assertEquals(hints.at(-1)?.streamId, descriptor.streamId);
+    await writer.mark("tenant-a", operationId, "running");
+    assertEquals(hints.at(-1)?.kind, "operation");
+    assertEquals(hints.at(-1)?.streamId, undefined);
+    unsubscribe();
     await writer.retainStream({
       namespace: "tenant-a",
       operationId,
@@ -567,9 +598,33 @@ Deno.test("operation catalog coalesces notification bursts into one catalog resc
   };
   const catalog = createOperationCatalog(session, "public");
   const watch = await catalog.watch("operation-burst");
-  notify({ channel: OPERATION_CHANGE_CHANNEL, payload: "operation-burst" });
-  notify({ channel: OPERATION_CHANGE_CHANNEL, payload: "operation-burst" });
-  notify({ channel: OPERATION_CHANGE_CHANNEL, payload: "operation-burst" });
+  notify({
+    channel: OPERATION_CHANGE_CHANNEL,
+    payload: JSON.stringify({
+      schema: "public",
+      namespace: "tenant-a",
+      operationId: "operation-burst",
+      selectionKeys: [],
+    }),
+  });
+  notify({
+    channel: OPERATION_CHANGE_CHANNEL,
+    payload: JSON.stringify({
+      schema: "public",
+      namespace: "tenant-a",
+      operationId: "operation-burst",
+      selectionKeys: [],
+    }),
+  });
+  notify({
+    channel: OPERATION_CHANGE_CHANNEL,
+    payload: JSON.stringify({
+      schema: "public",
+      namespace: "tenant-a",
+      operationId: "operation-burst",
+      selectionKeys: [],
+    }),
+  });
   assertEquals(await watch.wait({ timeoutMs: 100 }), true);
   assertEquals(await watch.wait({ timeoutMs: 100 }), false);
   watch.close();
@@ -603,10 +658,23 @@ Deno.test("operation catalog change listeners are safe and removable", async () 
   const removeSecond = await catalog.onChange((operationId) => {
     receivedBySecond.push(operationId);
   });
-  notify({ channel: OPERATION_CHANGE_CHANNEL, payload: "operation-change" });
   notify({
     channel: OPERATION_CHANGE_CHANNEL,
-    payload: "operation-change-failure",
+    payload: JSON.stringify({
+      schema: "public",
+      namespace: "tenant-a",
+      operationId: "operation-change",
+      selectionKeys: [],
+    }),
+  });
+  notify({
+    channel: OPERATION_CHANGE_CHANNEL,
+    payload: JSON.stringify({
+      schema: "public",
+      namespace: "tenant-a",
+      operationId: "operation-change-failure",
+      selectionKeys: [],
+    }),
   });
   assertEquals(received, ["operation-change", "operation-change-failure"]);
   assertEquals(receivedBySecond, [
@@ -616,7 +684,15 @@ Deno.test("operation catalog change listeners are safe and removable", async () 
   remove();
   removeSecond();
   remove();
-  notify({ channel: OPERATION_CHANGE_CHANNEL, payload: "after-remove" });
+  notify({
+    channel: OPERATION_CHANGE_CHANNEL,
+    payload: JSON.stringify({
+      schema: "public",
+      namespace: "tenant-a",
+      operationId: "after-remove",
+      selectionKeys: [],
+    }),
+  });
   assertEquals(received, ["operation-change", "operation-change-failure"]);
 });
 

@@ -1,3 +1,4 @@
+import { createHttpReads } from "./reads.ts";
 import { defineServerFacade as fixtureServerFacade } from "@copilotz/copilotz/server";
 import { definePlugin as defineFixturePlugin } from "@copilotz/copilotz/plugins";
 import { assert, assertEquals, assertRejects } from "@std/assert";
@@ -20,7 +21,6 @@ import {
 } from "../plugins/server/index.ts";
 import { threadCollection } from "../plugins/core/collections/thread/index.ts";
 import { participantCollection } from "../plugins/core/collections/participant/index.ts";
-import type { HttpReadServices } from "../plugins/server/authoring/http-adapter/index.ts";
 import { createCopilotzApplication } from "../runtime/application/index.ts";
 import { createTestDatabase } from "../runtime/testing/ominipg.ts";
 import { createServerFacadeFetchHandler } from "./facade.ts";
@@ -988,22 +988,12 @@ Deno.test("thread observation discovers and receives a generic metadata command 
   }, {
     identity: { deduplicationId: "seed-thread-1" },
   });
-  const read: HttpReadServices = {
-    async get(collection, id) {
-      return collection === "thread"
-        ? await thread.get({ namespace: "tenant-a" }, { id })
-        : null;
-    },
-    list() {
-      return Promise.resolve([]);
-    },
-    aggregate() {
-      return Promise.resolve([]);
-    },
-    query() {
-      return Promise.resolve([]);
-    },
-  };
+  const read = await createHttpReads(application, {
+    namespace: "tenant-a",
+    databaseSchema,
+  }, {
+    collections: { thread: { where: { id: "thread-1" } } },
+  });
   const operations = await createHttpOperations(
     application,
     {

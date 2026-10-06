@@ -1,11 +1,11 @@
 import {
   listThreadOperations,
-  operationBelongsToThread,
   threadEventWatermark,
 } from "@copilotz/copilotz/core/server";
 /** One bounded observation coordinator for operation selections and conversations. */
-import { createStreamOriginResolver } from "./stream-origin.ts";
-import type { StreamOutput } from "../runtime/streams/types.ts";
+import { coreThreadObservationKey } from "@copilotz/copilotz/core";
+import { watchSelection } from "./selection-watch.ts";
+import { watchHttpRead } from "./reads.ts";
 import type {
   ApplicationOperationAttachment,
   ApplicationOutput,
@@ -104,7 +104,10 @@ export async function createHttpOperations(
         let tracker = createOperationReplayCursorTracker(position);
         const covered = new Set(coverage.actionRunIds);
         for (
-          const operationId of await discover(threadId, position.eventPosition)
+          const operationId of await discover(
+            threadId,
+            position.selectionPosition,
+          )
         ) {
           let afterStreamOrdinal: string | undefined;
           while (true) {
@@ -157,7 +160,7 @@ export async function createHttpOperations(
       const position =
         await threadEventWatermark(runtime.operations, namespace, threadId) ??
           "0";
-      return encodeOperationReplayCursor({ eventPosition: position });
+      return encodeOperationReplayCursor({ selectionPosition: position });
     },
     async observe(
       selection: {
@@ -169,58 +172,104 @@ export async function createHttpOperations(
     ): Promise<HttpObservation> {
       const abort = new AbortController();
       const attachments = new Map<string, ApplicationOperationAttachment>();
-      const pendingOperationIds = new Set<string>();
-      let fullResyncRequested = false;
-      let removeChangeListener: (() => void) | undefined;
-      const cancelBeforeSetup = () => {
-        abort.abort(selection.signal?.reason);
+      const draining = new Set<ApplicationOperationAttachment>();
+      const attaching = new Set<string>();
+      const terminal = new Map<string, ApplicationOutput>();
+      const pumps = new Set<Promise<void>>();
+      let stopAccess: (() => void) | undefined;
+      let feed: Awaited<ReturnType<typeof watchSelection>> | undefined;
+      let wake: (() => void) | undefined;
+      let changed = true;
+      const notify = () => {
+        changed = true;
+        wake?.();
       };
-      selection.signal?.addEventListener("abort", cancelBeforeSetup, {
-        once: true,
-      });
-      if (selection.signal?.aborted) {
-        abort.abort(selection.signal.reason);
-      }
-      try {
-        if (selection.threadId) {
-          const remove = await runtime.operations.onChange(
-            (operationId) => {
-              if (abort.signal.aborted || attachments.has(operationId)) return;
-              if (fullResyncRequested) return;
-              if (pendingOperationIds.has(operationId)) return;
-              if (pendingOperationIds.size >= 32) {
-                pendingOperationIds.clear();
-                fullResyncRequested = true;
-                return;
-              }
-              pendingOperationIds.add(operationId);
-            },
-          );
-          removeChangeListener = remove;
-          if (abort.signal.aborted) {
-            removeChangeListener();
-            removeChangeListener = undefined;
+      const transport = new TransformStream<
+        ApplicationOutput,
+        ApplicationOutput
+      >(
+        undefined,
+        { highWaterMark: 1 },
+        { highWaterMark: 1 },
+      );
+      const writer = transport.writable.getWriter();
+      let detached = false;
+      let renewalFailure: unknown;
+      let renewalDraining = false;
+      const detach = async (
+        reason: unknown = "observation_detached",
+        drain = false,
+      ) => {
+        stopAccess?.();
+        feed?.close();
+        if (detached) {
+          if (!drain && renewalDraining) {
+            renewalDraining = false;
+            await Promise.allSettled(
+              [...new Set([...attachments.values(), ...draining])].map((item) =>
+                item.detach("observation_detached")
+              ),
+            );
+            await writer.abort(reason).catch(() => undefined);
           }
+          return;
         }
-      } catch (error) {
-        selection.signal?.removeEventListener("abort", cancelBeforeSetup);
-        throw error;
-      }
-      // A direct live observation also needs a durable boundary before discovery.
-      // Otherwise an operation can start and settle between two polling reads.
+        detached = true;
+        if (drain) {
+          renewalFailure = reason;
+          renewalDraining = true;
+        }
+        abort.abort(reason);
+        notify();
+        stopAccess?.();
+        feed?.close();
+        selection.signal?.removeEventListener("abort", cancelled);
+        await Promise.allSettled(
+          [...new Set([...attachments.values(), ...draining])].map((item) =>
+            item.detach(
+              drain ? "observation_renewal_draining" : "observation_detached",
+            )
+          ),
+        );
+        if (drain) await writer.close().catch(() => undefined);
+        else await writer.abort(reason).catch(() => undefined);
+      };
+      const cancelled = () => {
+        void detach(selection.signal?.reason);
+      };
+      selection.signal?.addEventListener("abort", cancelled, { once: true });
+      void writer.closed.catch((error) => detach(error));
       let checkpoint: string | undefined;
       let position: ReturnType<typeof decodeOperationReplayCursor>;
-      let ids: string[];
-      let bootstrap: {
-        streamId: string;
-        offset: number;
-        terminal: boolean;
-      }[] | undefined;
+      let ids: string[] = [];
+      let selectionPosition = "0";
+      const retired = new Map<string, string>();
+      let bootstrap:
+        | { streamId: string; offset: number; terminal: boolean }[]
+        | undefined;
       try {
+        if (selection.signal?.aborted) throw selection.signal.reason;
+        if (selection.threadId) {
+          await thread(selection.threadId);
+          feed = await watchSelection(
+            runtime.operations,
+            namespace,
+            coreThreadObservationKey(selection.threadId),
+            notify,
+          );
+          stopAccess = watchHttpRead(
+            read,
+            "thread",
+            selection.threadId,
+            (error) => {
+              void detach(error);
+            },
+          );
+        }
         checkpoint = selection.checkpoint ??
           (selection.threadId
             ? encodeOperationReplayCursor({
-              eventPosition: await threadEventWatermark(
+              selectionPosition: await threadEventWatermark(
                 runtime.operations,
                 namespace,
                 selection.threadId,
@@ -228,17 +277,28 @@ export async function createHttpOperations(
             })
             : undefined);
         position = decodeOperationReplayCursor(checkpoint);
+        selectionPosition = position.selectionPosition ?? "0";
+        for (
+          const [id, ordinal] of Object.entries(
+            position.operationRetirementPositions ?? {},
+          )
+        ) {
+          retired.set(id, ordinal);
+        }
         const cursorIds = new Set([
+          ...Object.keys(position.operationSelectionPositions ?? {}),
           ...Object.keys(position.operationEventPositions ?? {}),
           ...Object.keys(position.operationStreamPositions ?? {}),
         ]);
+        const authorizedIds = new Set([...cursorIds, ...retired.keys()]);
         ids = selection.threadId
-          ? await discover(selection.threadId, position.eventPosition)
+          ? [...cursorIds]
           : [...selection.operationIds ?? []];
         if (
           (!selection.threadId && !ids.length) || ids.length > 32 ||
-          new Set(ids).size !== ids.length ||
-          ids.some((id) => typeof id !== "string" || !id)
+          new Set(ids).size !== ids.length || ids.some((id) =>
+            typeof id !== "string" || !id
+          )
         ) {
           throw failure(
             "invalid_operation_selection",
@@ -246,43 +306,73 @@ export async function createHttpOperations(
             "Select 1 to 32 distinct operations.",
           );
         }
-        for (const id of cursorIds) {
-          await get(id);
-          if (
-            selection.threadId
-              ? !await operationBelongsToThread(
-                runtime.operations,
-                namespace,
-                id,
-                selection.threadId,
-              )
-              : !ids.includes(id)
-          ) {
+        if (selection.threadId) {
+          const members = authorizedIds.size
+            ? await listThreadOperations(runtime.operations, {
+              namespace,
+              threadId: selection.threadId,
+              operationIds: [...authorizedIds],
+              limit: 64,
+            })
+            : [];
+          const found = new Map(
+            members.map((item) => [item.operationId, item]),
+          );
+          for (const id of authorizedIds) {
+            const operation = found.get(id);
+            if (
+              !operation ||
+              !authorizedOperationMetadata(operation.metadata.operationMetadata)
+            ) {
+              throw failure(
+                "invalid_replay_cursor",
+                403,
+                "Checkpoint is outside the authorized selection.",
+              );
+            }
+          }
+          // The history boundary covers terminal work. Operations still running
+          // at that boundary must be followed even if they began earlier.
+          const active = await listThreadOperations(runtime.operations, {
+            namespace,
+            threadId: selection.threadId,
+            states: ["accepted", "running"],
+            limit: 33,
+          });
+          for (const operation of active) {
+            if (
+              !authorizedOperationMetadata(operation.metadata.operationMetadata)
+            ) {
+              throw failure(
+                "operation_not_found",
+                404,
+                "Operation was not found.",
+              );
+            }
+            if (!ids.includes(operation.operationId)) {
+              ids.push(operation.operationId);
+            }
+          }
+          if (ids.length > 32) {
             throw failure(
-              "invalid_replay_cursor",
-              403,
-              "Checkpoint is outside the authorized selection.",
+              "operation_replay_capacity_exceeded",
+              409,
+              "Observation exceeds 32 concurrent operations.",
             );
           }
-          if (!ids.includes(id)) ids.push(id);
-        }
-        if (ids.length > 32) {
-          throw failure(
-            "operation_replay_capacity_exceeded",
-            409,
-            "Observation exceeds 32 operations.",
-          );
-        }
-        if (!selection.threadId) {
+        } else {
+          for (const id of authorizedIds) {
+            if (!ids.includes(id)) {
+              throw failure(
+                "invalid_replay_cursor",
+                403,
+                "Checkpoint is outside the authorized selection.",
+              );
+            }
+          }
           for (const id of ids) await get(id);
         }
-        bootstrap = selection.threadId
-          ? [] as {
-            streamId: string;
-            offset: number;
-            terminal: boolean;
-          }[]
-          : undefined;
+        bootstrap = selection.threadId ? [] : undefined;
         if (bootstrap) {
           const tracker = createOperationReplayCursorTracker(position);
           for (const operationId of ids) {
@@ -313,151 +403,206 @@ export async function createHttpOperations(
             }
           }
         }
+        if (abort.signal.aborted) throw abort.signal.reason;
       } catch (error) {
-        removeChangeListener?.();
-        removeChangeListener = undefined;
-        selection.signal?.removeEventListener("abort", cancelBeforeSetup);
+        await detach(error);
         throw error;
       }
-      let lastFullDiscoveryAt = Date.now();
-      const transport = new TransformStream<
-        ApplicationOutput,
-        ApplicationOutput
-      >(undefined, { highWaterMark: 1 }, { highWaterMark: 1 });
-      const writer = transport.writable.getWriter();
-      const pumps = new Set<Promise<void>>();
-      const streamOrigin = createStreamOriginResolver(
-        runtime,
-        namespace,
-        abort.signal,
-      );
-      let detached = false;
-      const detach = async (reason = "observation_detached") => {
-        if (detached) return;
-        detached = true;
-        abort.abort(reason);
-        removeChangeListener?.();
-        removeChangeListener = undefined;
-        await Promise.allSettled(
-          [...attachments.values()].map((attachment) =>
-            attachment.detach(reason)
-          ),
+      const selectionFrame = async (operationIds: readonly string[]) => {
+        if (!selection.threadId) return;
+        await writer.write(
+          {
+            type: "observation.selection",
+            selectionPosition,
+            operationIds: [...operationIds],
+          } as unknown as ApplicationOutput,
         );
-        await writer.abort(reason).catch(() => undefined);
       };
-      const cancelled = () => {
-        void detach();
-      };
-      selection.signal?.addEventListener("abort", cancelled, { once: true });
-      selection.signal?.removeEventListener("abort", cancelBeforeSetup);
-      void writer.closed.catch(() => detach());
       const attach = async (id: string) => {
-        if (abort.signal.aborted) return;
-        if (attachments.has(id)) return;
-        if (attachments.size >= 32) {
-          throw failure(
-            "operation_replay_capacity_exceeded",
-            409,
-            "Observation exceeds 32 operations.",
-          );
-        }
-        const attachment = await application.attach({
-          operationId: id,
-          namespace,
-          databaseSchema,
-          cursor: checkpoint,
-        });
-        if (abort.signal.aborted) {
-          await attachment.detach("observation_detached");
+        if (abort.signal.aborted || attachments.has(id) || attaching.has(id)) {
           return;
         }
-        attachments.set(id, attachment);
-        const pump = (async () => {
-          for await (const output of attachment.outputs) {
-            if (abort.signal.aborted) break;
-            const attributed = {
-              ...(output.type === "stream.output"
-                ? await streamOrigin(id, output as StreamOutput)
-                : output),
-              operationId: id,
-              ...(selection.threadId ? { threadId: selection.threadId } : {}),
-            };
-            await writer.write(attributed);
+        attaching.add(id);
+        try {
+          const attachment = await application.attach({
+            operationId: id,
+            namespace,
+            databaseSchema,
+            cursor: checkpoint,
+          });
+          if (abort.signal.aborted) {
+            await attachment.detach();
+            return;
           }
-          await attachment.done;
-        })();
-        pumps.add(pump);
-        void pump.then(
-          () => pumps.delete(pump),
-          () => detach("observation_failed"),
-        );
+          attachments.set(id, attachment);
+          draining.add(attachment);
+          void attachment.drained.then(() => draining.delete(attachment));
+          const pump = (async () => {
+            for await (const output of attachment.outputs) {
+              if (abort.signal.aborted) break;
+              const attributed = {
+                ...output,
+                operationId: id,
+                ...(selection.threadId ? { threadId: selection.threadId } : {}),
+              };
+              if (
+                selection.threadId &&
+                [
+                  "operation.completed",
+                  "operation.failed",
+                  "operation.cancelled",
+                ].includes(output.type)
+              ) {
+                terminal.set(id, attributed);
+                notify();
+              } else await writer.write(attributed);
+            }
+            await attachment.done;
+            if (!selection.threadId) attachments.delete(id);
+          })();
+          pumps.add(pump);
+          void pump.then(
+            () => {
+              pumps.delete(pump);
+              notify();
+            },
+            (error) =>
+              detach(
+                error,
+                (error as { code?: unknown } | null)?.code ===
+                  "observation_renewal_required",
+              ),
+          );
+        } finally {
+          attaching.delete(id);
+        }
       };
       const done = (async () => {
         try {
-          if (selection.signal?.aborted) await detach();
-          for (const id of ids) {
-            if (abort.signal.aborted) return;
-            await attach(id);
-            pendingOperationIds.delete(id);
-          }
+          await selectionFrame(ids);
+          for (const id of ids) await attach(id);
           while (selection.threadId && !abort.signal.aborted) {
-            await new Promise<void>((resolve) => {
-              const finish = () => {
-                clearTimeout(timer);
-                abort.signal.removeEventListener("abort", finish);
-                resolve();
-              };
-              const timer = setTimeout(finish, 250);
-              abort.signal.addEventListener("abort", finish, { once: true });
-            });
-            if (abort.signal.aborted) break;
-            const now = Date.now();
-            const safetyResync = now - lastFullDiscoveryAt >= 5_000;
-            const operationIds = fullResyncRequested || safetyResync
-              ? undefined
-              : [...pendingOperationIds].filter((id) => !attachments.has(id));
-            pendingOperationIds.clear();
-            if (fullResyncRequested || safetyResync) {
-              fullResyncRequested = false;
-              lastFullDiscoveryAt = now;
+            if (!changed) {
+              await new Promise<void>((resolve) => {
+                wake = resolve;
+              });
+              wake = undefined;
             }
-            if (operationIds === undefined || operationIds.length > 0) {
-              if (operationIds === undefined) {
-                for (
-                  const id of await discover(
-                    selection.threadId,
-                    position.eventPosition,
+            changed = false;
+            if (abort.signal.aborted) break;
+            // Terminal replay can be forgotten only once selection discovery
+            // covers its last committed event. Refresh before draining changes.
+            if (terminal.size) await feed!.refresh();
+            let backlog = false;
+            while (!abort.signal.aborted) {
+              const page = await feed!.read(selectionPosition);
+              if (!page.length) break;
+              const newcomers: string[] = [];
+              const registered: string[] = [];
+              let consumed = 0;
+              for (const operation of page) {
+                if (
+                  !authorizedOperationMetadata(
+                    operation.metadata.operationMetadata,
                   )
-                ) await attach(id);
-              } else {
-                // Keep each hint as a single-ID lookup. Batching IDs can make
-                // the database choose a history-wide association plan.
-                for (const operationId of operationIds) {
-                  for (
-                    const id of await discover(
-                      selection.threadId,
-                      position.eventPosition,
-                      [operationId],
-                    )
-                  ) await attach(id);
+                ) {
+                  throw failure(
+                    "operation_not_found",
+                    404,
+                    "Operation was not found.",
+                  );
                 }
+                const retirement = retired.get(operation.operationId);
+                if (
+                  retirement &&
+                  BigInt(operation.changeOrdinal) <= BigInt(retirement)
+                ) {
+                  selectionPosition = operation.changeOrdinal;
+                  consumed++;
+                  continue;
+                }
+                if (!attachments.has(operation.operationId)) {
+                  if (attachments.size + newcomers.length >= 32) {
+                    backlog = true;
+                    break;
+                  }
+                  newcomers.push(operation.operationId);
+                }
+                registered.push(operation.operationId);
+                selectionPosition = operation.changeOrdinal;
+                consumed++;
               }
-            } else {
-              await thread(selection.threadId);
+              if (consumed) {
+                await selectionFrame(
+                  registered,
+                );
+                for (const [id, ordinal] of retired) {
+                  if (BigInt(ordinal) <= BigInt(selectionPosition)) {
+                    retired.delete(id);
+                  }
+                }
+                for (const id of newcomers) await attach(id);
+              }
+              if (backlog || page.length < 32) break;
+            }
+            if (terminal.size) {
+              // Indexed membership probes are small and shared live scans stay
+              // independent of historical event payload size.
+              const latest = await listThreadOperations(runtime.operations, {
+                namespace,
+                threadId: selection.threadId,
+                operationIds: [...terminal.keys()],
+                limit: 32,
+              });
+              for (const operation of latest) {
+                const output = terminal.get(operation.operationId);
+                if (!output) continue;
+                await writer.write(
+                  {
+                    ...output,
+                    finalSelectionPosition: operation.changeOrdinal,
+                  } as unknown as ApplicationOutput,
+                );
+                if (
+                  BigInt(operation.changeOrdinal) > BigInt(selectionPosition)
+                ) retired.set(operation.operationId, operation.changeOrdinal);
+                terminal.delete(operation.operationId);
+                // Terminal output production can precede payload consumption.
+                // Keep its readers alive until drained; cancellation owns both sets.
+                attachments.delete(operation.operationId);
+                if (backlog) notify();
+              }
+              if (backlog && attachments.size >= 32) {
+                throw failure(
+                  "operation_replay_capacity_exceeded",
+                  409,
+                  "Observation exceeds 32 concurrent operations. Refresh history to continue.",
+                );
+              }
             }
           }
           await Promise.all(pumps);
+          if (renewalFailure !== undefined) throw renewalFailure;
           if (!abort.signal.aborted) await writer.close();
         } catch (error) {
-          await writer.abort(error).catch(() => undefined);
-          await detach("observation_failed");
+          if (abort.signal.aborted) {
+            if (renewalFailure !== undefined) throw renewalFailure;
+            return;
+          }
+          await detach(
+            error,
+            (error as { code?: unknown } | null)?.code ===
+              "observation_renewal_required",
+          );
           throw error;
         } finally {
+          stopAccess?.();
+          feed?.close();
           selection.signal?.removeEventListener("abort", cancelled);
         }
       })();
       void done.catch(() => undefined);
-      return ({
+      return {
         type: HTTP_OBSERVATION,
         ...(bootstrap ? { bootstrap } : {}),
         outputs: transport.readable,
@@ -465,8 +610,8 @@ export async function createHttpOperations(
         replayCursor: checkpoint,
         compositeCursor: true,
         threadId: selection.threadId,
-        cancel: detach,
-      } as const);
+        cancel: (reason) => detach(reason),
+      };
     },
   } as const);
 }

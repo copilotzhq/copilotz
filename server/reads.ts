@@ -2,11 +2,33 @@
 import type { InternalCopilotzApplication } from "../runtime/application/types.ts";
 import type { CollectionQuery } from "../runtime/collections/types.ts";
 import { validateAgainstJsonSchema } from "../runtime/collections/validate.ts";
+import { observationReadPolicy, watchReadAccess } from "./read-watch.ts";
 import type { HttpReadServices } from "../plugins/server/authoring/http-adapter/index.ts";
 import type {
   ServerAuthorizedScope,
   ServerConstraints,
 } from "../plugins/server/shared/contracts.ts";
+
+type ReadWatcher = (
+  name: string,
+  id: string,
+  failed: (error: unknown) => void,
+) => () => void;
+const watchers = new WeakMap<HttpReadServices, ReadWatcher>();
+
+/** Resource checks retain the read service's enforced policy and database scope. */
+export function watchHttpRead(
+  read: HttpReadServices,
+  name: string,
+  id: string,
+  failed: (error: unknown) => void,
+): () => void {
+  const watch = watchers.get(read);
+  if (!watch) {
+    throw new Error("Observation requires a scoped HTTP read service.");
+  }
+  return watch(name, id, failed);
+}
 
 export async function createHttpReads(
   application: InternalCopilotzApplication,
@@ -122,5 +144,27 @@ export async function createHttpReads(
       return value;
     },
   } as const;
+  watchers.set(read, (name, id, failed) => {
+    const { collection, schema, policy } = definition(name);
+    const predicate = observationReadPolicy(policy, id);
+    return watchReadAccess({
+      runtime,
+      namespace: scope.namespace ?? application.config.namespace!,
+      collection: schema.name,
+      id,
+      policy: predicate,
+      failed,
+      async query(ids) {
+        const rows = await collection.aggregate({
+          filter: { field: "id", in: ids },
+          all: predicate ? [predicate] : [],
+          groupBy: ["id"],
+          metrics: { count: { op: "count" } },
+          limit: ids.length,
+        });
+        return new Set(rows.map((row) => String(row.id)));
+      },
+    });
+  });
   return read;
 }

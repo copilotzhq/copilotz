@@ -1,3 +1,4 @@
+import { coreThreadObservationMetadata } from "@copilotz/copilotz/core";
 import { constrainInput } from "./input.ts";
 import { admitHttpOperation } from "./admission.ts";
 /** Durable Action ingress and authorized result recovery. @module */
@@ -246,6 +247,9 @@ export async function actionResponse(
   const correlationId = context.serverIdentity.correlationId ??
     header(request.headers, "x-copilotz-correlation-id") ??
     `server:${requestId}`;
+  const observationThreadId =
+    context.serverConstraints.operations?.metadata?.threadId ??
+      context.operationMetadata.threadId;
   const handle = await application.sendProtected(
     {
       type: SERVER_ACTION_REQUEST_EVENT_TYPE,
@@ -269,6 +273,9 @@ export async function actionResponse(
           : {}),
       },
       metadata: {
+        ...(typeof observationThreadId === "string"
+          ? coreThreadObservationMetadata(observationThreadId)
+          : {}),
         ...({ sourceAdapter: "server" } as const),
         core: {
           visibility: { kind: "internal" },

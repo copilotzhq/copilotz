@@ -1,3 +1,4 @@
+import { coreThreadObservationMetadata } from "@copilotz/copilotz/core";
 import {
   type ActionContext,
   type ActionDefinition,
@@ -47,6 +48,7 @@ export const deleteConversation: ActionDefinition<{
       for (const id of ids) {
         await tx.collections.message.delete({ id }, {
           metadata: {
+            ...coreThreadObservationMetadata(input.threadId),
             core: {
               threadId: input.threadId,
             },
@@ -55,6 +57,7 @@ export const deleteConversation: ActionDefinition<{
       }
       await tx.collections.thread.delete({ id: input.threadId }, {
         metadata: {
+          ...coreThreadObservationMetadata(input.threadId),
           core: {
             threadId: input.threadId,
           },

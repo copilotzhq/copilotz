@@ -28,9 +28,9 @@ async function runOriginFixture(url: string) {
     ) SELECT 'other-' || n,5,'test.noise','tenant-a','test.action','other-run-' || n,
       '{}','{}','shared-correlation' FROM generate_series(1,50000) AS n`);
     await db.query(`INSERT INTO ${tables.operationEvents} (
-      namespace, operation_id, event_id, event_position, created_at
+      namespace, operation_id, event_id, event_position, event_ordinal, created_at
     ) SELECT namespace, CASE WHEN id LIKE 'other-%' THEN 'operation-other' ELSE 'operation-a' END,
-      id, position, created_at FROM ${tables.events}`);
+      id, position, position, created_at FROM ${tables.events}`);
     const executed: Array<{ sql: string; params?: unknown[] }> = [];
     const query: SqlExecutor["query"] = (sql, params) => {
       executed.push({ sql, params });
@@ -161,8 +161,8 @@ async function runOriginFixture(url: string) {
       ('late-origin',5,'test.action.invoked','tenant-a','test.action','late','{}','{}','shared-correlation'),
       ('late-origin-2',5,'test.action.invoked','tenant-a','test.action','late','{}','{}','shared-correlation')`);
     await db.query(`INSERT INTO ${tables.operationEvents} (
-      namespace, operation_id, event_id, event_position, created_at
-    ) SELECT namespace, 'operation-a', id, position, created_at
+      namespace, operation_id, event_id, event_position, event_ordinal, created_at
+    ) SELECT namespace, 'operation-a', id, position, position, created_at
         FROM ${tables.events} WHERE subject_id = 'late'`);
     assertEquals(await find("tenant-a", "operation-a", "late"), "late-origin");
     assertEquals(
@@ -182,8 +182,8 @@ async function runOriginFixture(url: string) {
       ('mismatch-canonical',5,'test.action.progress','tenant-a','test.action','mismatch','{}','{}','shared-correlation','mismatch:action:invoked'),
       ('mismatch-origin',5,'test.action.invoked','tenant-a','test.action','mismatch','{}','{}','shared-correlation',NULL)`);
     await db.query(`INSERT INTO ${tables.operationEvents} (
-      namespace, operation_id, event_id, event_position, created_at
-    ) SELECT namespace, 'operation-a', id, position, created_at
+      namespace, operation_id, event_id, event_position, event_ordinal, created_at
+    ) SELECT namespace, 'operation-a', id, position, position, created_at
         FROM ${tables.events} WHERE id IN ('late-canonical','mismatch-canonical','mismatch-origin')`);
     assertEquals(
       await find("tenant-a", "operation-a", "late"),

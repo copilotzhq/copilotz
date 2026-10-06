@@ -144,6 +144,11 @@
           "description": "Immutable facts, sparse work, settlement scopes, and reconnect behavior."
         },
         {
+          "title": "Observation Performance",
+          "slug": "observation-performance",
+          "description": "Reproducible indexed-observation benchmarks and their capacity limits."
+        },
+        {
           "title": "Content and Assets",
           "slug": "content-assets",
           "description": "Canonical refs, atomic adoption, BodyStores, and provenance."

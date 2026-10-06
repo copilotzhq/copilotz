@@ -117,7 +117,10 @@ export type ApplicationOperationAttachment = Readonly<{
   operationId: string;
   replayCursor: string;
   outputs: ReadableStream<ApplicationOutput>;
+  /** Output production finished; independent stream payloads may still be unread. */
   done: Promise<void>;
+  /** All payload readers drained or this attachment detached and released its resources. */
+  drained: Promise<void>;
   /** Stops this attachment without changing durable operation state. */
   detach(reason?: string): Promise<void>;
 }>;

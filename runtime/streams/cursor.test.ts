@@ -184,3 +184,146 @@ Deno.test("operation replay cursor reports concurrent lane capacity as a typed c
     "operation_replay_capacity_exceeded",
   );
 });
+
+Deno.test("selection registration is atomic and terminal retirement bounds sequential operations", () => {
+  const tracker = createOperationReplayCursorTracker({});
+  tracker.commit([{
+    kind: "selection",
+    position: "2",
+    operationIds: ["first", "second"],
+  }]);
+  assertEquals(
+    decodeOperationReplayCursor(tracker.cursor()).operationSelectionPositions,
+    { first: "2", second: "2" },
+  );
+  tracker.commit([{ kind: "retire", operationId: "first" }, {
+    kind: "retire",
+    operationId: "second",
+  }]);
+  for (let index = 3; index <= 1_000; index++) {
+    const operationId = `op-${index}`;
+    tracker.commit([
+      {
+        kind: "selection",
+        position: String(index),
+        operationIds: [operationId],
+      },
+      { kind: "event", operationId, position: "9" },
+      {
+        kind: "operation-stream",
+        action: "register",
+        operationId,
+        streamOrdinal: "1",
+        offset: 0,
+      },
+    ]);
+    assertThrows(
+      () => tracker.cursor([{ kind: "retire", operationId }]),
+      TypeError,
+      "unfinished lanes",
+    );
+    tracker.commit([{
+      kind: "operation-stream",
+      action: "end",
+      operationId,
+      streamOrdinal: "1",
+      offset: 9,
+    }, { kind: "retire", operationId }]);
+    assertLess(tracker.cursor().length, 100);
+  }
+  assertEquals(decodeOperationReplayCursor(tracker.cursor()), {
+    selectionPosition: "1000",
+  });
+});
+
+Deno.test("32 late terminal tombstones free selection slots before unseen history advances", () => {
+  const tracker = createOperationReplayCursorTracker({});
+  const operations = Array.from({ length: 32 }, (_, index) => `late-${index}`);
+  tracker.commit([{
+    kind: "selection",
+    position: "32",
+    operationIds: operations,
+  }]);
+  for (const [index, operationId] of operations.entries()) {
+    tracker.commit([{ kind: "event", operationId, position: "3" }, {
+      kind: "retire",
+      operationId,
+      position: String(1001 + index),
+    }]);
+  }
+  const detached = decodeOperationReplayCursor(tracker.cursor());
+  assertEquals(detached.operationSelectionPositions, undefined);
+  assertEquals(detached.operationEventPositions, undefined);
+  assertEquals(
+    Object.keys(detached.operationRetirementPositions ?? {}).length,
+    32,
+  );
+  const resumed = createOperationReplayCursorTracker(detached);
+  for (let ordinal = 33; ordinal <= 1000; ordinal++) {
+    const operationId = `history-${ordinal}`;
+    resumed.commit([{
+      kind: "selection",
+      position: String(ordinal),
+      operationIds: [operationId],
+    }, { kind: "retire", operationId, position: String(ordinal) }]);
+    assertLess(resumed.cursor().length, 1100);
+  }
+  resumed.commit([{ kind: "selection", position: "1032", operationIds: [] }]);
+  assertEquals(decodeOperationReplayCursor(resumed.cursor()), {
+    selectionPosition: "1032",
+  });
+});
+
+Deno.test("late terminal tombstones have a fixed capacity and a new revision can enroll again", () => {
+  const operations = Array.from({ length: 33 }, (_, index) => `late-${index}`);
+  const tracker = createOperationReplayCursorTracker({});
+  tracker.commit([{
+    kind: "selection",
+    position: "33",
+    operationIds: operations,
+  }]);
+  for (const operationId of operations.slice(0, 32)) {
+    tracker.commit([{ kind: "retire", operationId, position: "100" }]);
+  }
+  const error = assertThrows(() =>
+    tracker.cursor([{
+      kind: "retire",
+      operationId: operations[32],
+      position: "101",
+    }])
+  );
+  assertEquals(
+    (error as { code: string }).code,
+    "observation_renewal_required",
+  );
+  assertEquals(
+    Object.keys(
+      decodeOperationReplayCursor(tracker.cursor())
+        .operationRetirementPositions ?? {},
+    ).length,
+    32,
+  );
+  tracker.commit([{
+    kind: "selection",
+    position: "102",
+    operationIds: [operations[0]],
+  }]);
+  assertEquals(
+    decodeOperationReplayCursor(tracker.cursor()).operationSelectionPositions,
+    { [operations[32]]: "33", [operations[0]]: "102" },
+  );
+  assertEquals(
+    decodeOperationReplayCursor(tracker.cursor()).operationRetirementPositions,
+    undefined,
+  );
+});
+
+Deno.test("the global-event cursor generation is rejected before operation-local replay", () => {
+  const legacy = btoa(JSON.stringify({ kind: "operation-lanes", event: "42" }))
+    .replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
+  const error = assertThrows(
+    () => decodeOperationReplayCursor(legacy),
+    TypeError,
+  );
+  assertEquals((error as { code?: string }).code, "invalid_replay_cursor");
+});

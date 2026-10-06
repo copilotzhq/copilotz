@@ -447,6 +447,98 @@ export function createDatabaseBodyStore(
     return concatBytes(result.rows.map((row) => bytesFromSql(row.bytes)));
   };
 
+  const readPartsRange = async (
+    input: ReadBodyRangeInput,
+    onlyProgressive = false,
+  ): Promise<Uint8Array> => {
+    await ensure();
+    // The indexed predecessor finds the part covering start, including a single
+    // compacted immutable part. Only overlapping parts and requested bytes cross SQL.
+    const result = await session.query<{
+      body_state: BodyRow["state"];
+      byte_length: string | number;
+      start_offset: string | number | null;
+      part_length: string | number | null;
+      bytes: Uint8Array | ArrayBuffer | string | null;
+    }>(
+      `SELECT body.state AS body_state, body.byte_length, part.*
+         FROM ${bodies} AS body
+         LEFT JOIN LATERAL (
+         WITH anchor AS (
+         SELECT start_offset FROM ${parts}
+          WHERE body_id = body.body_id AND start_offset <= GREATEST($2::bigint, 0)
+          ORDER BY start_offset DESC LIMIT 1
+       ) SELECT start_offset, octet_length(bytes) AS part_length,
+           substring(bytes FROM (LEAST(GREATEST(GREATEST($2::bigint, 0) - start_offset, 0),
+               octet_length(bytes)) + 1)::integer
+             FOR GREATEST(LEAST(LEAST($3::bigint, body.byte_length) - start_offset, octet_length(bytes)) -
+               GREATEST(GREATEST($2::bigint, 0) - start_offset, 0), 0)::integer) AS bytes
+         FROM ${parts}
+        WHERE body_id = body.body_id AND body.state <> 'aborted'
+          AND LEAST($3::bigint, body.byte_length) > GREATEST($2::bigint, 0)
+          AND start_offset >= COALESCE((SELECT start_offset FROM anchor), GREATEST($2::bigint, 0))
+          AND start_offset < LEAST($3::bigint, body.byte_length)
+        ORDER BY start_offset ASC
+       ) AS part ON TRUE
+        WHERE body.body_id = $1
+        ORDER BY part.start_offset ASC`,
+      [input.bodyId, input.offset, input.end],
+    );
+    const head = result.rows[0];
+    if (!head) {
+      throw createContentError(
+        "asset_not_found",
+        "Database body was not found.",
+      );
+    }
+    if (
+      onlyProgressive &&
+      ["ready", "incomplete", "aborted"].includes(head.body_state)
+    ) {
+      throw createContentError(
+        "asset_conflict",
+        "Progressive body is not open.",
+      );
+    }
+    if (head.body_state === "aborted") {
+      throw createContentError(
+        "asset_not_found",
+        "Database body is not readable.",
+      );
+    }
+    const start = Math.max(0, input.offset);
+    const end = Math.min(input.end, asInteger(head.byte_length, "byte length"));
+    if (end <= start) return new Uint8Array();
+    const bytes = new Uint8Array(end - start);
+    let position = start;
+    for (const row of result.rows) {
+      if (
+        row.start_offset === null || row.part_length === null ||
+        row.bytes === null
+      ) continue;
+      const partStart = asInteger(row.start_offset, "part start offset");
+      const partLength = asInteger(row.part_length, "part byte length");
+      const from = Math.max(start, partStart);
+      const to = Math.min(end, partStart + partLength);
+      const part = bytesFromSql(row.bytes);
+      if (from !== position || to < from || part.byteLength !== to - from) {
+        throw createContentError(
+          "asset_corrupted",
+          "Database body range has missing or overlapping parts.",
+        );
+      }
+      bytes.set(part, from - start);
+      position = to;
+    }
+    if (position !== end) {
+      throw createContentError(
+        "asset_corrupted",
+        "Database body range is incomplete.",
+      );
+    }
+    return bytes;
+  };
+
   const compactParts = async (
     bodyId: string,
     bytes: Uint8Array,
@@ -714,23 +806,7 @@ export function createDatabaseBodyStore(
       });
     },
     async readRange(input) {
-      const row = await requireBody(input.bodyId);
-      if (
-        row.state === "ready" || row.state === "incomplete" ||
-        row.state === "aborted"
-      ) {
-        throw createContentError(
-          "asset_conflict",
-          "Progressive body is not open.",
-        );
-      }
-      const start = Math.max(0, input.offset);
-      const end = Math.min(
-        input.end,
-        asInteger(row.byte_length, "byte length"),
-      );
-      if (end <= start) return new Uint8Array();
-      return (await readParts(input.bodyId)).subarray(start, end);
+      return await readPartsRange(input, true);
     },
     async terminate(input) {
       await ensure();
@@ -995,20 +1071,7 @@ export function createDatabaseBodyStore(
       });
     },
     async readRange(input) {
-      const row = await requireBody(input.bodyId);
-      if (row.state === "aborted") {
-        throw createContentError(
-          "asset_not_found",
-          "Database body is not readable.",
-        );
-      }
-      const start = Math.max(0, input.offset);
-      const end = Math.min(
-        input.end,
-        asInteger(row.byte_length, "byte length"),
-      );
-      if (end <= start) return new Uint8Array();
-      return (await readParts(input.bodyId)).slice(start, end);
+      return await readPartsRange(input);
     },
     async follow(input) {
       const row = await requireBody(input.bodyId);

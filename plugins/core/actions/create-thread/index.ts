@@ -1,3 +1,4 @@
+import { coreThreadObservationMetadata } from "../../shared/events/index.ts";
 /** Defines the Core thread-creation Action. @module */
 import type { CollectionRecord } from "@copilotz/copilotz/collections";
 import {
@@ -66,6 +67,7 @@ export const createThreadAction: ActionDefinition<
         ...(threadId
           ? {
             metadata: {
+              ...coreThreadObservationMetadata(threadId),
               core: {
                 threadId,
               },

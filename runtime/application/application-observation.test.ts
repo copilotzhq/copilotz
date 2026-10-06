@@ -98,7 +98,18 @@ Deno.test("attachment pages consumed lanes once and coalesces byte notifications
     const started = performance.now();
     for (let index = 0; index < 100; index++) {
       for (const notify of notifications) {
-        notify({ channel: "copilotz_operations", payload: operationId });
+        notify({
+          channel: "copilotz_operations",
+          payload: JSON.stringify({
+            databaseSchema: schema,
+            namespace,
+            operationId,
+            selectionKeys: [],
+            kind: "stream-offset",
+            streamId: "lane-1002",
+            committedOffset: 0,
+          }),
+        });
       }
       await new Promise((resolve) => setTimeout(resolve, 5));
     }
@@ -107,18 +118,21 @@ Deno.test("attachment pages consumed lanes once and coalesces byte notifications
     await attachment.detach("test_complete");
     await attachment.done;
     assertEquals(
-      listings.slice(0, 2).map((entry) => [entry.after, entry.rows]),
+      listings.slice(0, 5).map((entry) => [entry.after, entry.rows]),
       [
-        [undefined, 1000],
+        [undefined, 250],
+        ["250", 250],
+        ["500", 250],
+        ["750", 250],
         ["1000", 2],
       ],
     );
     assertEquals(
-      listings.slice(2).every((entry) => entry.after === "1002"),
+      listings.slice(5).every((entry) => entry.after === "1002"),
       true,
     );
     assertEquals(listings.reduce((sum, entry) => sum + entry.rows, 0), 1002);
-    const iterations = [listings[0], ...listings.slice(2)];
+    const iterations = [listings[0], ...listings.slice(5)];
     for (let index = 1; index < iterations.length; index++) {
       assert(
         iterations[index].at - iterations[index - 1].at >= 230,
@@ -257,7 +271,7 @@ Deno.test("attachment final pass includes a stream committed during the terminal
     // The first event-index read marks this pass advanced. Commit the final
     // stream and terminal status after topology was read, before statusFor.
     if (
-      inject && !injected && sql.includes("SELECT event_id, event_position")
+      inject && !injected && sql.includes("SELECT event_id, event_ordinal")
     ) {
       injected = true;
       await db.query(

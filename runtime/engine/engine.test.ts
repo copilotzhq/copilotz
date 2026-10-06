@@ -223,6 +223,8 @@ Deno.test("factory engine scopes typed processor capabilities and deduplicates r
     assertEquals(tables.rows.map((row) => row.table_name), [
       "copilotz_operation_catalog_metadata",
       "copilotz_operation_events",
+      "copilotz_operation_selection_heads",
+      "copilotz_operation_selections",
       "copilotz_operation_streams",
       "copilotz_operations",
       "copilotz_schema_metadata",
@@ -504,16 +506,16 @@ Deno.test("lazy database scopes validate with read-only SQL and reject unprovisi
   try {
     observed.length = 0;
     await engine.databaseScope(tenantSchema);
-    assertEquals(observed.length, 8);
+    assertEquals(observed.length, 5);
     assertEquals(/information_schema\.columns/i.test(observed[0]), true);
     assertEquals(/copilotz_schema_metadata/i.test(observed[1]), true);
     assertEquals(
-      observed.slice(2, 6).every((sql) => /to_regclass/i.test(sql)),
+      /to_regclass/i.test(observed[2]),
       true,
     );
-    assertEquals(/information_schema\.columns/i.test(observed[6]), true);
+    assertEquals(/information_schema\.columns/i.test(observed[3]), true);
     assertEquals(
-      /copilotz_operation_catalog_metadata/i.test(observed[7]),
+      /copilotz_operation_catalog_metadata/i.test(observed[4]),
       true,
     );
     assert(

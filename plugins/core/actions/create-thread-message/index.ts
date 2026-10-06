@@ -1,3 +1,4 @@
+import { coreThreadObservationMetadata } from "../../shared/events/index.ts";
 import type { EventVisibility } from "@copilotz/copilotz/core";
 /** Defines the atomic Core thread-message Action and domain helper. @module */
 import type {
@@ -168,6 +169,7 @@ export async function ensureParticipantInTransaction(
         ...(threadId
           ? {
             metadata: {
+              ...coreThreadObservationMetadata(threadId),
               core: {
                 threadId,
               },
@@ -192,6 +194,7 @@ export async function addSenderToThreadInTransaction(
   }, {
     ...(eventMetadata ? { identity: { metadata: eventMetadata } } : {}),
     metadata: {
+      ...coreThreadObservationMetadata(threadId),
       core: {
         threadId,
       },
@@ -359,12 +362,16 @@ export async function createThreadMessage(
         participantIds: joining.sort(),
       }, {
         operationKey: `message-membership:${id}`,
-        metadata: { core: { threadId } },
+        metadata: {
+          ...coreThreadObservationMetadata(threadId),
+          core: { threadId },
+        },
       });
     }
     const options: ScopedCollectionCallOptions = {
       identity: { metadata },
       metadata: {
+        ...coreThreadObservationMetadata(threadId),
         core: {
           threadId,
           routing: {

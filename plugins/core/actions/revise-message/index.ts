@@ -1,3 +1,4 @@
+import { coreThreadObservationMetadata } from "../../shared/events/index.ts";
 import type { EventVisibility } from "@copilotz/copilotz/core";
 /** Defines the human-message revision Action. @module */
 import { decodeContent } from "@copilotz/copilotz/content";
@@ -79,6 +80,7 @@ async function revise(
       revision,
     }, {
       metadata: {
+        ...coreThreadObservationMetadata(threadId),
         core: {
           threadId,
           routing: { senderId: sender.id, recipientIds },
@@ -100,6 +102,7 @@ async function revise(
       },
     }, {
       metadata: {
+        ...coreThreadObservationMetadata(threadId),
         core: {
           threadId,
         },

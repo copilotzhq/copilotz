@@ -8,6 +8,7 @@ import {
   provisionOperationCatalog,
 } from "@copilotz/copilotz/streams";
 import { createTestDatabase } from "../../../../../../runtime/testing/ominipg.ts";
+import { resolveCoreObservationKeys } from "../../../../../core/shared/events/index.ts";
 import {
   listThreadOperations,
   operationBelongsToThread,
@@ -31,7 +32,15 @@ Deno.test("Core operation queries discover bounded thread associations", async (
       type: string,
       metadata: Readonly<Record<string, unknown>>,
     ) =>
-      (await store.append({ namespace, type, metadata, payload: {} }, []))
+      (await store.append({
+        namespace,
+        type,
+        metadata: {
+          ...metadata,
+          observationKeys: resolveCoreObservationKeys({ metadata }),
+        },
+        payload: {},
+      }, []))
         .event;
     const explicit = await append(
       "tenant",
@@ -168,7 +177,10 @@ Deno.test("Core operation queries discover bounded thread associations", async (
     );
     assertEquals(
       await threadEventWatermark(catalog, "tenant", "thread"),
-      String(active.position),
+      (await catalog.getSelectionHeads({
+        namespace: "tenant",
+        selectionKeys: ["core.thread:thread"],
+      }))[0].changeOrdinal,
     );
     const found = await listThreadOperations(catalog, {
       namespace: "tenant",
@@ -211,15 +223,20 @@ Deno.test("Core operation queries discover bounded thread associations", async (
       ),
       false,
     );
+    const oldSelection = (await catalog.listSelectionChanges({
+      namespace: "tenant",
+      selectionKey: "core.thread:thread",
+      operationIds: [finishedOld.id],
+    }))[0].changeOrdinal;
     const afterOld = await listThreadOperations(catalog, {
       namespace: "tenant",
       threadId: "thread",
-      afterPosition: String(finishedOld.position),
+      afterPosition: oldSelection,
       limit: 20,
     });
     assertEquals(
       new Set(afterOld.map((operation) => operation.operationId)),
-      new Set([explicit.id, derived.id, both.id, finishedRecent.id, active.id]),
+      new Set([finishedRecent.id, active.id]),
     );
     const completed = await listThreadOperations(catalog, {
       namespace: "tenant",
@@ -229,7 +246,7 @@ Deno.test("Core operation queries discover bounded thread associations", async (
     });
     assertEquals(
       completed.map((operation) => operation.operationId),
-      [finishedRecent.id, finishedOld.id],
+      [finishedOld.id, finishedRecent.id],
     );
     assertEquals(
       (await listThreadOperations(catalog, {
@@ -238,14 +255,14 @@ Deno.test("Core operation queries discover bounded thread associations", async (
         states: ["completed"],
         limit: 1,
       })).map((operation) => operation.operationId),
-      [finishedRecent.id],
+      [finishedOld.id],
     );
     assertEquals(
       (await listThreadOperations(catalog, {
         namespace: "tenant",
         threadId: "thread",
         states: ["completed"],
-        afterPosition: String(finishedOld.position),
+        afterPosition: oldSelection,
         limit: 20,
       })).map((operation) => operation.operationId),
       [finishedRecent.id],

@@ -1,3 +1,4 @@
+import { coreThreadObservationMetadata } from "../../../shared/events/index.ts";
 import type { EventVisibility } from "@copilotz/copilotz/core";
 /** Defines the typed Core Message input envelope helper. @module */
 import type { CopilotzInputEnvelope } from "@copilotz/copilotz/application";
@@ -44,6 +45,9 @@ export function message(input: CoreMessageInput): CoreMessageInputEnvelope {
     visibility,
     ...payload
   } = input;
+  const threadId = typeof payload.thread === "string"
+    ? payload.thread
+    : payload.thread.id;
   return ({
     type: CORE_MESSAGE_INPUT_EVENT,
     payload: {
@@ -54,11 +58,13 @@ export function message(input: CoreMessageInput): CoreMessageInputEnvelope {
     } as const,
     ...(correlationId ? { correlationId } : {}),
     ...(deduplicationId ? { deduplicationId } : {}),
-    ...(visibility
+    ...(visibility || threadId
       ? {
         metadata: {
+          ...(threadId ? coreThreadObservationMetadata(threadId) : {}),
           core: {
-            visibility,
+            ...(threadId ? { threadId } : {}),
+            ...(visibility ? { visibility } : {}),
           },
         },
       }

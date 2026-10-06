@@ -1,9 +1,9 @@
 /** Recovers transient Action context from existing Events, without changing stream storage. @module */
-import type { InternalCopilotzApplication } from "../runtime/application/types.ts";
-import type { StreamOutput } from "../runtime/streams/types.ts";
+import type { CopilotzEngineDatabaseScope } from "../engine/types.ts";
+import type { StreamOutput } from "../streams/types.ts";
 
 export function createStreamOriginResolver(
-  runtime: Pick<InternalCopilotzApplication, "events" | "operations">,
+  runtime: Pick<CopilotzEngineDatabaseScope, "events" | "operations">,
   namespace: string,
   signal: AbortSignal,
 ) {

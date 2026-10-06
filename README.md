@@ -55,7 +55,7 @@ With Deno:
 
 ```sh
 # Add the package and its plugin subpaths to your Deno project.
-deno add jsr:@copilotz/copilotz@^0.84.3
+deno add jsr:@copilotz/copilotz@^0.85.0
 ```
 
 Deno 2.9 delays freshly published dependencies for 24 hours. To try a new
@@ -66,7 +66,7 @@ With Node 24+:
 
 ```sh
 # Install Copilotz and configure its imports for Node.
-npx jsr add @copilotz/copilotz@^0.84.3
+npx jsr add @copilotz/copilotz@^0.85.0
 # Node needs the PGlite package for the default in-memory database.
 npm i @electric-sql/pglite
 # Use ESM so Node 24+ can execute the TypeScript example directly.
@@ -514,6 +514,7 @@ during development or CI. The application imports that composition at runtime.
   [Progressive streams](docs/streams.md)
 - [Execution placement](docs/embedding-and-hypervisors.md)
 - [Events, delivery and recovery](docs/events-deliveries-recovery.md)
+- [Observation performance and benchmarks](docs/observation-performance.md)
 
 **Reference and extension**
 

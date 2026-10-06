@@ -1,6 +1,6 @@
 import { snapshotStreamMetadata } from "./json.ts";
 
-export const OPERATION_REPLAY_CURSOR_FINGERPRINT = "operation-lanes";
+export const OPERATION_REPLAY_CURSOR_FINGERPRINT = "operation-selections-v1";
 export const MAX_OPERATION_CURSOR_STREAMS = 256;
 // Base64url expands this to at most ~22 KiB, leaving aggregate header room for
 // authentication cookies on managed HTTP frontends such as Cloud Run.
@@ -14,6 +14,12 @@ export type OperationStreamReplayPosition = Readonly<{
 }>;
 
 export type OperationReplayPosition = Readonly<{
+  /** Catalog selection consumed through this operation membership ordinal. */
+  selectionPosition?: string;
+  /** Selected operations that have not yet consumed their terminal output. */
+  operationSelectionPositions?: Readonly<Record<string, string>>;
+  /** Consumed terminals whose final catalog revisions are ahead of discovery. */
+  operationRetirementPositions?: Readonly<Record<string, string>>;
   eventPosition?: string;
   operationEventPositions?: Readonly<Record<string, string>>;
   operationStreamPositions?: Readonly<
@@ -22,6 +28,10 @@ export type OperationReplayPosition = Readonly<{
 }>;
 
 export type OperationReplayCursorMutation =
+  | Readonly<
+    { kind: "selection"; position: string; operationIds: readonly string[] }
+  >
+  | Readonly<{ kind: "retire"; operationId: string; position?: string }>
   | Readonly<{
     kind: "event";
     position: string;
@@ -134,9 +144,21 @@ function operationPositions(
   const result: Record<string, string> = {};
   for (const [operationId, position] of entries) {
     if (!operationId.trim() || operationId.length > 512) throw invalidCursor();
-    result[operationId] = eventPosition(position)!;
+    const resolved = eventPosition(position);
+    if (resolved === undefined) throw invalidCursor();
+    result[operationId] = resolved;
   }
   return result;
+}
+
+function retirementPositions(value: unknown): Readonly<Record<string, string>> {
+  const positions = operationPositions(value);
+  if (Object.keys(positions).length > 32) {
+    throw replayCapacity(
+      "Operation replay cursor contains too many pending retirements.",
+    );
+  }
+  return positions;
 }
 
 function ordinal(value: unknown): number {
@@ -231,6 +253,17 @@ export function encodeOperationReplayCursor(
   assertSparseCapacity(operation);
   const normalized = {
     kind: OPERATION_REPLAY_CURSOR_FINGERPRINT,
+    ...(eventPosition(position.selectionPosition)
+      ? { selection: eventPosition(position.selectionPosition) }
+      : {}),
+    ...(position.operationSelectionPositions &&
+        Object.keys(position.operationSelectionPositions).length
+      ? { members: operationPositions(position.operationSelectionPositions) }
+      : {}),
+    ...(position.operationRetirementPositions &&
+        Object.keys(position.operationRetirementPositions).length
+      ? { retired: retirementPositions(position.operationRetirementPositions) }
+      : {}),
     ...(eventPosition(position.eventPosition)
       ? { event: eventPosition(position.eventPosition) }
       : {}),
@@ -273,16 +306,35 @@ export function decodeOperationReplayCursor(
   if (
     value.kind !== OPERATION_REPLAY_CURSOR_FINGERPRINT ||
     Object.keys(value).some((key) =>
-      !["kind", "event", "operations", "lanes"].includes(key)
+      ![
+        "kind",
+        "selection",
+        "members",
+        "retired",
+        "event",
+        "operations",
+        "lanes",
+      ]
+        .includes(key)
     )
   ) {
     throw invalidCursor();
   }
+  const selection = eventPosition(value.selection);
+  const members = operationPositions(value.members);
+  const retired = retirementPositions(value.retired);
   const event = eventPosition(value.event);
   const operations = operationPositions(value.operations);
   const lanes = operationStreams(value.lanes);
   assertSparseCapacity(lanes);
   return ({
+    ...(selection ? { selectionPosition: selection } : {}),
+    ...(Object.keys(members).length
+      ? { operationSelectionPositions: members }
+      : {}),
+    ...(Object.keys(retired).length
+      ? { operationRetirementPositions: retired }
+      : {}),
     ...(event ? { eventPosition: event } : {}),
     ...(Object.keys(operations).length
       ? { operationEventPositions: operations }
@@ -300,6 +352,9 @@ function streamOrdinal(replayKey: string): number {
 
 function mutablePosition(position: OperationReplayPosition) {
   return {
+    selectionPosition: position.selectionPosition,
+    operationSelectionPositions: { ...position.operationSelectionPositions },
+    operationRetirementPositions: { ...position.operationRetirementPositions },
     eventPosition: position.eventPosition,
     operationEventPositions: { ...position.operationEventPositions },
     operationStreamPositions: Object.fromEntries(
@@ -320,6 +375,15 @@ function snapshotMutable(
   position: ReturnType<typeof mutablePosition>,
 ): OperationReplayPosition {
   return ({
+    ...(position.selectionPosition
+      ? { selectionPosition: position.selectionPosition }
+      : {}),
+    ...(Object.keys(position.operationSelectionPositions).length
+      ? { operationSelectionPositions: position.operationSelectionPositions }
+      : {}),
+    ...(Object.keys(position.operationRetirementPositions).length
+      ? { operationRetirementPositions: position.operationRetirementPositions }
+      : {}),
     ...(position.eventPosition
       ? { eventPosition: position.eventPosition }
       : {}),
@@ -336,6 +400,64 @@ function applyMutation(
   position: ReturnType<typeof mutablePosition>,
   mutation: OperationReplayCursorMutation,
 ): void {
+  if (mutation.kind === "selection") {
+    const selected = eventPosition(mutation.position);
+    if (!selected || mutation.operationIds.some((id) => !id.trim())) {
+      throw invalidCursor();
+    }
+    if (
+      !position.selectionPosition ||
+      BigInt(selected) > BigInt(position.selectionPosition)
+    ) {
+      position.selectionPosition = selected;
+    }
+    for (
+      const [operationId, retiredAt] of Object.entries(
+        position.operationRetirementPositions,
+      )
+    ) {
+      if (BigInt(retiredAt) <= BigInt(position.selectionPosition!)) {
+        delete position.operationRetirementPositions[operationId];
+      }
+    }
+    for (const operationId of mutation.operationIds) {
+      delete position.operationRetirementPositions[operationId];
+      position.operationSelectionPositions[operationId] = selected;
+    }
+    return;
+  }
+  if (mutation.kind === "retire") {
+    if (
+      Object.keys(
+        position.operationStreamPositions[mutation.operationId]?.offsets ?? {},
+      ).length
+    ) {
+      throw invalidCursor("Cannot retire an operation with unfinished lanes.");
+    }
+    if (!(mutation.operationId in position.operationSelectionPositions)) return;
+    const retiredAt = eventPosition(mutation.position);
+    if (
+      retiredAt && BigInt(retiredAt) > BigInt(position.selectionPosition ?? "0")
+    ) {
+      if (
+        !(mutation.operationId in position.operationRetirementPositions) &&
+        Object.keys(position.operationRetirementPositions).length >= 32
+      ) {
+        throw Object.assign(
+          new Error("Observation retirement budget requires renewal."),
+          {
+            status: 409,
+            code: "observation_renewal_required",
+          },
+        );
+      }
+      position.operationRetirementPositions[mutation.operationId] = retiredAt;
+    }
+    delete position.operationSelectionPositions[mutation.operationId];
+    delete position.operationEventPositions[mutation.operationId];
+    delete position.operationStreamPositions[mutation.operationId];
+    return;
+  }
   if (mutation.kind === "event") {
     if (mutation.operationId) {
       position.operationEventPositions[mutation.operationId] =

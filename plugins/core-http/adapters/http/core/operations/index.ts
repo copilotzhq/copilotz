@@ -1,12 +1,13 @@
 /** Core conversation queries over the generic operation catalog. @module */
 import type {
   OperationCatalog,
-  OperationRecord,
+  OperationSelectionChange,
   OperationState,
 } from "@copilotz/copilotz/streams";
+import { coreThreadObservationKey } from "@copilotz/copilotz/core";
 
-type OperationListCatalog = Pick<OperationCatalog, "list">;
-type OperationWatermarkCatalog = Pick<OperationCatalog, "maxEventPosition">;
+type OperationListCatalog = Pick<OperationCatalog, "listSelectionChanges">;
+type OperationWatermarkCatalog = Pick<OperationCatalog, "getSelectionHeads">;
 
 function requiredText(value: string, label: string) {
   const text = value.trim();
@@ -27,16 +28,10 @@ export async function operationBelongsToThread(
   operationIdInput: string,
   threadIdInput: string,
 ): Promise<boolean> {
-  const namespace = requiredText(namespaceInput, "Operation namespace");
-  const operationId = requiredText(operationIdInput, "Operation id");
-  const threadId = requiredText(threadIdInput, "Thread id");
-  const result = await catalog.list({
-    namespace,
-    operationIds: [operationId],
-    association: {
-      operationMetadata: { operationMetadata: { threadId } },
-      eventMetadata: { core: { threadId } },
-    },
+  const result = await catalog.listSelectionChanges({
+    namespace: requiredText(namespaceInput, "Operation namespace"),
+    operationIds: [requiredText(operationIdInput, "Operation id")],
+    selectionKey: coreThreadObservationKey(threadIdInput),
     limit: 1,
   });
   return result.length > 0;
@@ -49,24 +44,20 @@ export async function listThreadOperations(
     threadId: string;
     operationIds?: readonly string[];
     states?: readonly OperationState[];
+    /** Commit-ordered selection change ordinal, independent of global Event positions. */
     afterPosition?: string;
     limit?: number;
   },
-): Promise<readonly OperationRecord[]> {
-  const namespace = requiredText(input.namespace, "Operation namespace");
-  const threadId = requiredText(input.threadId, "Thread id");
-  if (
-    input.afterPosition && !/^(0|[1-9][0-9]*)$/.test(input.afterPosition)
-  ) throw new TypeError("Invalid event position.");
-  return await catalog.list({
-    namespace,
+): Promise<readonly OperationSelectionChange[]> {
+  if (input.afterPosition && !/^(0|[1-9][0-9]*)$/.test(input.afterPosition)) {
+    throw new TypeError("Invalid selection position.");
+  }
+  return await catalog.listSelectionChanges({
+    namespace: requiredText(input.namespace, "Operation namespace"),
+    selectionKey: coreThreadObservationKey(input.threadId),
     operationIds: input.operationIds,
     states: input.states,
-    association: {
-      operationMetadata: { operationMetadata: { threadId } },
-      eventMetadata: { core: { threadId } },
-    },
-    afterPosition: input.afterPosition || undefined,
+    afterChangeOrdinal: input.afterPosition || undefined,
     limit: boundedLimit(input.limit),
   });
 }
@@ -76,10 +67,10 @@ export async function threadEventWatermark(
   namespaceInput: string,
   threadIdInput: string,
 ): Promise<string | undefined> {
-  return await catalog.maxEventPosition({
+  const key = coreThreadObservationKey(threadIdInput);
+  const heads = await catalog.getSelectionHeads({
     namespace: requiredText(namespaceInput, "Operation namespace"),
-    eventMetadata: {
-      core: { threadId: requiredText(threadIdInput, "Thread id") },
-    },
+    selectionKeys: [key],
   });
+  return heads.find((head) => head.selectionKey === key)?.changeOrdinal;
 }

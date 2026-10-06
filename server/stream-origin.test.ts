@@ -125,7 +125,9 @@ Deno.test("replay retains a stream's source Action context when invocation prece
 });
 
 Deno.test("stream origin cache remains bounded without limiting a long run's Action count", async () => {
-  const { createStreamOriginResolver } = await import("./stream-origin.ts");
+  const { createStreamOriginResolver } = await import(
+    "../runtime/actions/stream-origin.ts"
+  );
   type Runtime = Parameters<typeof createStreamOriginResolver>[0];
   let reads = 0;
   const runtime = {
@@ -163,7 +165,9 @@ Deno.test("stream origin cache remains bounded without limiting a long run's Act
 });
 
 Deno.test("cold stream origin resolution uses canonical public data and counts every SQL read", async () => {
-  const { createStreamOriginResolver } = await import("./stream-origin.ts");
+  const { createStreamOriginResolver } = await import(
+    "../runtime/actions/stream-origin.ts"
+  );
   const { createSecretAdapter, secret } = await import(
     "../runtime/actions/index.ts"
   );
@@ -341,7 +345,9 @@ Deno.test("cold stream origin resolution uses canonical public data and counts e
 });
 
 Deno.test("stream origin ignores blank source run hints without catalog reads", async () => {
-  const { createStreamOriginResolver } = await import("./stream-origin.ts");
+  const { createStreamOriginResolver } = await import(
+    "../runtime/actions/stream-origin.ts"
+  );
   const resolve = createStreamOriginResolver(
     {
       operations: {

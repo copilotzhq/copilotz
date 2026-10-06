@@ -1,3 +1,4 @@
+import { coreThreadObservationMetadata } from "@copilotz/copilotz/core";
 /** Durable, policy-bound collection mutation ingress. @module */
 
 import type { ActionSchema } from "../runtime/actions/types.ts";
@@ -211,6 +212,9 @@ export async function collectionMutationResponse(
       }
       : {}),
   };
+  const observationThreadId =
+    context.serverConstraints.operations?.metadata?.threadId ??
+      context.operationMetadata.threadId;
   const handle = await application.sendProtected(
     {
       type: SERVER_COLLECTION_MUTATION_REQUEST_EVENT_TYPE,
@@ -228,6 +232,9 @@ export async function collectionMutationResponse(
           : {}),
       },
       metadata: {
+        ...(typeof observationThreadId === "string"
+          ? coreThreadObservationMetadata(observationThreadId)
+          : {}),
         sourceAdapter: "server",
         core: { visibility: { kind: "internal" } },
       },

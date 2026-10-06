@@ -1,3 +1,4 @@
+import { createSharedOperationReaders } from "./operation-readers.ts";
 import {
   type CopilotzPersistenceLifecycleCallbacks,
   type OpenCopilotzPersistence,
@@ -18,13 +19,11 @@ import {
 } from "../streams/index.ts";
 import type {
   OperationCatalog,
-  OperationChangeSubscription,
   OperationRecord,
   OperationStreamRecord,
 } from "../streams/index.ts";
 import type {
   ApplicationMaintenanceOptions,
-  ApplicationOperationAttachment,
   ApplicationOperationCheckpointInput,
   ApplicationOperationListInput,
   ApplicationOperationScope,
@@ -379,6 +378,9 @@ export async function createCopilotzApplication(
   let engine: CopilotzEngine;
   // Stream terminal waits outlive their observer; shutdown ends them before
   // persistence closes.
+  let operationReaders:
+    | ReturnType<typeof createSharedOperationReaders>
+    | undefined;
   const lifetime = new AbortController();
   const outputHub = createApplicationOutputHub(async (output, schema) => {
     const scoped = await openRecoveredScope(schema);
@@ -475,6 +477,7 @@ export async function createCopilotzApplication(
       // durable work.  Interrupt only this application's local observers and
       // settlement waiters; another Gateway/Worker may recover the scope.
       lifetime.abort(new Error(reason));
+      await operationReaders?.close(reason);
       interruptActiveSends(new Error(reason));
       activeSends.clear();
       const settled = await Promise.allSettled([
@@ -823,327 +826,12 @@ export async function createCopilotzApplication(
     return encodeOperationReplayCursor(checkpoint);
   };
 
-  const attach = async (
+  const attach = (
     input: Parameters<InternalCopilotzApplication["attach"]>[0],
-  ): Promise<ApplicationOperationAttachment> => {
-    const boundary = await operationBoundary(input);
-    if (
-      !await boundary.scope.operations.get(
-        boundary.namespace,
-        boundary.operationId,
-      )
-    ) {
-      throw Object.assign(new Error("Operation was not found."), {
-        status: 404,
-        code: "operation_not_found",
-      });
-    }
-    // Reconcile the initial accepted/running boundary before stream followers
-    // subscribe, so this attachment's own state transition cannot create a
-    // spurious BodyStore replay read.
-    await statusFor(boundary);
-    const initial = decodeOperationReplayCursor(input.cursor);
-    const compositeReplay = initial.operationEventPositions !== undefined;
-    const changes = await boundary.scope.operations.watch(
-      boundary.operationId,
-    );
-    let eventPosition =
-      initial.operationEventPositions?.[boundary.operationId] ??
-        initial.eventPosition;
-    const replayTracker = createOperationReplayCursorTracker(initial);
-    const openedStreams = new Set<string>();
-    let examinedStreamOrdinal: string | undefined;
-    let iterationStarted: number | undefined;
-    const payloadDetachers = new Set<(reason?: unknown) => void>();
-    const abort = new AbortController();
-    let outputController:
-      | ReadableStreamDefaultController<ApplicationOutput>
-      | undefined;
-    let resolveDone!: () => void;
-    let rejectDone!: (reason: unknown) => void;
-    const done = new Promise<void>((resolve, reject) => {
-      resolveDone = resolve;
-      rejectDone = reject;
-    });
-    void done.catch(() => undefined);
-    const replayCursor = () => {
-      const position = decodeOperationReplayCursor(replayTracker.cursor());
-      return encodeOperationReplayCursor({
-        ...(position.eventPosition
-          ? { eventPosition: position.eventPosition }
-          : {}),
-        ...(eventPosition ? { eventPosition } : {}),
-        ...(compositeReplay && position.operationEventPositions
-          ? {
-            operationEventPositions: {
-              ...position.operationEventPositions,
-              ...(eventPosition
-                ? { [boundary.operationId]: eventPosition }
-                : {}),
-            },
-          }
-          : compositeReplay && eventPosition
-          ? {
-            operationEventPositions: {
-              [boundary.operationId]: eventPosition,
-            },
-          }
-          : {}),
-        ...(position.operationStreamPositions
-          ? { operationStreamPositions: position.operationStreamPositions }
-          : {}),
-      });
-    };
-    const replayStreamPayload = (
-      stream: OperationStreamRecord,
-      fromOffset: number,
-    ): ReadableStream<Uint8Array> => {
-      let byteOffset = fromOffset;
-      let watch: Promise<OperationChangeSubscription> | undefined;
-      const streamAbort = new AbortController();
-      let finished = false;
-      const finish = (reason?: unknown) => {
-        if (finished) return;
-        finished = true;
-        payloadDetachers.delete(finish);
-        if (!streamAbort.signal.aborted) streamAbort.abort(reason);
-        void watch?.then((subscription) => subscription.close()).catch(() =>
-          undefined
-        );
-      };
-      payloadDetachers.add(finish);
-      return new ReadableStream<Uint8Array>({
-        async pull(controller) {
-          try {
-            watch ??= boundary.scope.operations.watch(boundary.operationId);
-            const changes = await watch;
-            while (!streamAbort.signal.aborted) {
-              const current = await boundary.scope.operations.getStream(
-                boundary.namespace,
-                boundary.operationId,
-                stream.streamId,
-              );
-              if (!current) {
-                throw Object.assign(
-                  new Error("Operation stream replay metadata has expired."),
-                  { status: 410, code: "operation_replay_expired" },
-                );
-              }
-              if (byteOffset > current.committedOffset) {
-                throw Object.assign(
-                  new Error("Replay cursor is ahead of the durable stream."),
-                  { status: 409, code: "replay_cursor_ahead" },
-                );
-              }
-              if (
-                current.state === "terminal" &&
-                current.availability !== "retained"
-              ) {
-                controller.close();
-                finish();
-                return;
-              }
-              if (byteOffset < current.committedOffset) {
-                const end = current.committedOffset;
-                const bytes = await boundary.scope.streams.readCommittedRange({
-                  bodyId: current.bodyId,
-                  offset: byteOffset,
-                  end,
-                });
-                if (bytes === null) {
-                  await changes.wait({
-                    timeoutMs: 5_000,
-                    signal: streamAbort.signal,
-                  });
-                  continue;
-                }
-                if (bytes.byteLength !== end - byteOffset) {
-                  throw Object.assign(
-                    new Error(
-                      "Committed operation stream bytes are unavailable.",
-                    ),
-                    { status: 503, code: "operation_stream_unavailable" },
-                  );
-                }
-                byteOffset = end;
-                controller.enqueue(bytes);
-                return;
-              }
-              if (current.state === "terminal") {
-                controller.close();
-                finish();
-                return;
-              }
-              await changes.wait({
-                timeoutMs: 5_000,
-                signal: streamAbort.signal,
-              });
-            }
-          } catch (error) {
-            const wasAborted = streamAbort.signal.aborted;
-            finish(error);
-            if (!wasAborted) throw error;
-          }
-        },
-        cancel(reason) {
-          finish(reason);
-        },
-      });
-    };
-    const outputs = new ReadableStream<ApplicationOutput>({
-      start(controller) {
-        outputController = controller;
-        void (async () => {
-          try {
-            while (!abort.signal.aborted) {
-              if (iterationStarted !== undefined) {
-                let remaining = 250 - (performance.now() - iterationStarted);
-                while (remaining > 0) {
-                  await sleep(remaining, abort.signal);
-                  remaining = 250 - (performance.now() - iterationStarted);
-                }
-              }
-              iterationStarted = performance.now();
-              let advanced = false;
-              const streams = await listAllOperationStreams(
-                boundary.scope.operations,
-                boundary.namespace,
-                boundary.operationId,
-                examinedStreamOrdinal,
-              );
-              for (const stream of streams) {
-                // Ordinals are allocated under the operation row lock. Advance
-                // even for consumed/skipped lanes so historic rows stay skipped.
-                examinedStreamOrdinal = stream.streamOrdinal;
-                if (openedStreams.has(stream.streamId)) {
-                  continue;
-                }
-                const position = replayTracker.streamPosition({
-                  operationId: boundary.operationId,
-                  streamOrdinal: stream.streamOrdinal,
-                });
-                if (position.consumed) continue;
-                const fromOffset = position.offset;
-                if (fromOffset > stream.committedOffset) {
-                  throw Object.assign(
-                    new Error("Replay cursor is ahead of the durable stream."),
-                    { status: 409, code: "replay_cursor_ahead" },
-                  );
-                }
-                openedStreams.add(stream.streamId);
-                const payload = replayStreamPayload(stream, fromOffset);
-                controller.enqueue(
-                  {
-                    ...stream.descriptor,
-                    streamOrdinal: stream.streamOrdinal,
-                    payload,
-                    terminal: optionalTerminal(
-                      boundary.scope.operations.waitForStreamTerminal(
-                        boundary.namespace,
-                        stream.streamId,
-                        { signal: lifetime.signal },
-                      ),
-                    ),
-                  } as const,
-                );
-                advanced = true;
-              }
-              while (true) {
-                const indexed = await boundary.scope.operations.listEventIds({
-                  namespace: boundary.namespace,
-                  operationId: boundary.operationId,
-                  ...(eventPosition ? { afterPosition: eventPosition } : {}),
-                  limit: 250,
-                });
-                for (const entry of indexed) {
-                  const event = await boundary.scope.events.resolve(
-                    boundary.namespace,
-                    entry.eventId,
-                  );
-                  eventPosition = entry.position;
-                  if (event) controller.enqueue(event);
-                  advanced = true;
-                }
-                if (indexed.length < 250) break;
-              }
-              const status = await statusFor(boundary);
-              if (
-                status &&
-                ["completed", "failed", "cancelled"].includes(status.state)
-              ) {
-                // One final catalog pass prevents a terminal write racing the
-                // preceding reads from being omitted.
-                if (!advanced) {
-                  const state = status.state as
-                    | "completed"
-                    | "failed"
-                    | "cancelled";
-                  const terminalOutput = {
-                    durable: false,
-                    type: `operation.${state}` as const,
-                    namespace: status.namespace,
-                    operationId: status.operationId,
-                    correlationId: status.correlationId,
-                    state,
-                    payload: { status: state } as const,
-                    data: { status: state } as const,
-                    metadata: {
-                      operationId: status.operationId,
-                      status: state,
-                    } as const,
-                    createdAt: status.completedAt ?? status.updatedAt,
-                  } as const;
-                  controller.enqueue(terminalOutput);
-                  break;
-                }
-                continue;
-              }
-              await changes.wait({ timeoutMs: 5_000, signal: abort.signal });
-            }
-            if (!abort.signal.aborted) {
-              controller.close();
-              resolveDone();
-            }
-          } catch (error) {
-            if (abort.signal.aborted) {
-              try {
-                controller.close();
-              } catch {
-                // The consumer may already have cancelled the stream.
-              }
-              resolveDone();
-              return;
-            }
-            controller.error(error);
-            rejectDone(error);
-          } finally {
-            changes.close();
-          }
-        })();
-      },
-      cancel(reason) {
-        if (!abort.signal.aborted) abort.abort(reason);
-        for (const detach of [...payloadDetachers]) detach(reason);
-        resolveDone();
-      },
-    }, { highWaterMark: 256 });
-    return ({
-      operationId: boundary.operationId,
-      replayCursor: replayCursor(),
-      outputs,
-      done,
-      async detach(reason = "application_operation_detached") {
-        if (!abort.signal.aborted) abort.abort(new Error(reason));
-        for (const detach of [...payloadDetachers]) detach(reason);
-        try {
-          outputController?.close();
-        } catch {
-          // The consumer may already have cancelled the stream.
-        }
-        resolveDone();
-        await done;
-      },
-    } as const);
+  ) => {
+    lifetime.signal.throwIfAborted();
+    operationReaders ??= createSharedOperationReaders(application);
+    return operationReaders.attach(input);
   };
 
   const pluginIds = registry.plugins.map((plugin) => plugin.id);

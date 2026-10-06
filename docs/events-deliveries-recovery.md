@@ -127,7 +127,8 @@ mutation to ordinary application code.
 Reconnect metadata is stored in operational tables alongside the Core Event
 schema. The current runtime requires a validated v5 schema. Normal engine
 startup provisions a fresh schema and its operation catalog, and rejects an
-incompatible existing schema. This release provides no data migration.
+incompatible existing schema. Version 0.85.0 provides an explicit offline
+operation-catalog upgrade; the v5 Event schema is unchanged.
 
 Hosts that set `provisionDefaultDatabaseSchema: false` must provision both the
 v5 schema and the catalog before startup. After provisioning the schema, add the
@@ -145,17 +146,67 @@ Missing catalog tables fail startup/scope opening with
 `copilotz_operation_catalog_not_provisioned`. Adding the catalog does not
 migrate a schema from an earlier release.
 
-Operation metadata queries use the runtime's existing generic indexes, including
-`events_metadata_idx` (`GIN (metadata jsonb_path_ops)`) and namespace/position
-indexes. Core supplies JSON metadata criteria through the operation catalog; SQL
-and table names stay inside the runtime. No schema version or fingerprint change
-is required for these query APIs.
+### Upgrade to indexed observations
 
-The temporary `events_core_thread_namespace_position_idx` used by older Core
-HTTP queries is not required by 0.76.0. Operators must upgrade all affected
-consumers and validate membership, discovery, watermarks and actual request
-latency before removing that index concurrently. Runtime startup does not create
-or remove indexes on an already-current schema.
+Stop all old application writers and workers before upgrading each physical
+schema. The upgrade runs in a transaction with exclusive catalog/Event table
+locks, assigns operation-local event ordinals to committed history, and builds
+selection membership. It does not rewrite Event content or Body storage. A
+failed transaction rolls back; retrying a completed upgrade validates and
+returns.
+
+```ts
+import { upgradeOperationCatalog } from "@copilotz/copilotz/streams";
+import { resolveCoreObservationKeys } from "@copilotz/copilotz/core";
+
+await upgradeOperationCatalog(sqlSession, databaseSchema, {
+  resolveObservationKeys: resolveCoreObservationKeys,
+  backfillMetadataKeys: ["observationKeys", "core", "operationMetadata"],
+});
+```
+
+The resolver is domain-owned: Core maps legacy Thread metadata to opaque keys;
+other domains supply their own resolver. Fresh Event producers declare
+`metadata.observationKeys`. Later Events inherit their operation's associations.
+Catalog SQL never interprets Core Thread metadata.
+
+Deploy matching server and client versions, refresh canonical history to obtain
+new checkpoints, and then resume traffic. The `operation-selections-v1` cursor
+rejects earlier cursor generations with `invalid_replay_cursor`; an old global
+Event position must never be interpreted as an operation-local ordinal. Do not
+restart old writers against the upgraded catalog. Keep a database backup and the
+previous artifact for an operator-managed rollback.
+
+### Observation cost and recovery
+
+Within one application process, selection-head scans batch up to 1,000 opaque
+keys. They run on scoped, coalesced notifications and every five seconds as a
+safety check. Only changed selections query their indexed operation
+associations. The existing metadata-search APIs below remain available for
+explicit generic queries; the conversation observation path does not use them.
+
+Resource checks run every 250 ms, batching only equivalent namespace, collection
+and permission predicates. An exact resource-ID equality may be factored into
+its watcher's ID set; all other predicates remain in SQL. Admission
+authorization remains the host's responsibility. This does not add a new
+participant permission revalidation policy to hosts that only supplied an ID
+predicate.
+
+Each operation has a shared event/topology reader and live Body followers.
+Historical replay remains per viewer and joins live reads without skipping
+bytes. Queues are bounded per viewer; a slow viewer renews independently. Only
+checkpoints whose frame handlers completed are used on reconnect. At most 32
+operations are attached concurrently; terminal work retires as its lanes
+complete. Retained terminal markers bridge discovery pages without replaying
+completed work.
+
+HTTP observations renew after five minutes even when no output arrives. Expiry
+immediately detaches database readers; a blocked network response cannot retain
+those readers indefinitely. The client reconnects with its last applied cursor.
+Malformed protocol frames remain errors, while planned renewal is retryable.
+There is no additional durable payload feed or external broker. Multiple server
+processes each own their coordinator; load therefore also depends on replica
+count, permission diversity, active operations and reconnect frequency.
 
 ### Generic catalog reads
 

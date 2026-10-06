@@ -22,6 +22,9 @@ import {
 } from "../client/protocol.ts";
 import { outputActionRuns } from "./output-order.ts";
 
+/** Hard ceiling for one HTTP observation, including a client that stops reading. */
+export const MAX_OBSERVATION_LIFETIME_MS = 300_000;
+
 const encoder = new TextEncoder();
 const FRAME_HEADER = "x-copilotz-frame";
 const STREAM_HEADER = "x-copilotz-stream-id";
@@ -33,7 +36,8 @@ type FrameKind =
   | "stream-chunk"
   | "stream-end"
   | "stream-error"
-  | "observation-error";
+  | "observation-error"
+  | "observation-renew";
 
 type PartOptions = Readonly<{
   streamId?: string;
@@ -115,7 +119,14 @@ function isTerminalOperationOutput(output: ApplicationOutput): boolean {
 }
 
 function descriptor(output: ApplicationOutput): unknown {
-  if (!isStreamOutput(output)) return output;
+  if (!isStreamOutput(output)) {
+    const {
+      replayPosition: _replayPosition,
+      finalSelectionPosition: _finalSelectionPosition,
+      ...value
+    } = output as unknown as Record<string, unknown>;
+    return value;
+  }
   const {
     payload: _payload,
     terminal: _terminal,
@@ -132,8 +143,10 @@ function isReplayCapacityError(error: unknown): boolean {
 
 function isFrameCapacityError(
   error: unknown,
-): error is MultipartFrameCapacityError {
-  return error instanceof MultipartFrameCapacityError;
+): error is Error & { code: typeof OBSERVATION_FRAME_CAPACITY_CODE } {
+  return error instanceof Error &&
+    (error as Error & { code?: unknown }).code ===
+      OBSERVATION_FRAME_CAPACITY_CODE;
 }
 
 /**
@@ -149,6 +162,8 @@ export function applicationOutputsMultipartResponse(
     signal?: AbortSignal;
     /** Optional lower bound for logical JSON output envelopes. */
     maxJsonFrameBytes?: number;
+    /** Renew within this many milliseconds; may only shorten the five-minute ceiling. */
+    renewAfterMs?: number;
   }> = {},
 ): Response {
   const boundary = safeHeader(
@@ -166,6 +181,15 @@ export function applicationOutputsMultipartResponse(
       `maxJsonFrameBytes must be an integer between 1 and ${MAX_JSON_FRAME_BYTES}.`,
     );
   }
+  const renewAfterMs = options.renewAfterMs ?? MAX_OBSERVATION_LIFETIME_MS;
+  if (
+    !Number.isSafeInteger(renewAfterMs) || renewAfterMs < 1 ||
+    renewAfterMs > MAX_OBSERVATION_LIFETIME_MS
+  ) {
+    throw new RangeError(
+      `renewAfterMs must be an integer between 1 and ${MAX_OBSERVATION_LIFETIME_MS}.`,
+    );
+  }
   const partOptions = { maxJsonFrameBytes } as const;
   const transport = new TransformStream<Uint8Array, Uint8Array>(undefined, {
     highWaterMark: 256 * 1024,
@@ -178,26 +202,75 @@ export function applicationOutputsMultipartResponse(
   const initial = decodeOperationReplayCursor(source.replayCursor);
   const cursorTracker = createOperationReplayCursorTracker(initial);
   let cancelled = false;
+  let releaseDetached!: () => void;
+  const detached = new Promise<void>((resolve) => releaseDetached = resolve);
+  let renewalRequested = false;
+  let renewalReason: "capacity" | "lifetime" = "capacity";
+  let renewalCleanup: Promise<unknown> | undefined;
+  let heartbeat: ReturnType<typeof setInterval> | undefined;
+  let lifetime: ReturnType<typeof setTimeout> | undefined;
+  const stopTimers = () => {
+    clearInterval(heartbeat);
+    clearTimeout(lifetime);
+  };
   const readers = new Set<ReadableStreamDefaultReader<Uint8Array>>();
   const detach = async (reason: unknown) => {
     if (cancelled) return;
     cancelled = true;
+    releaseDetached();
+    stopTimers();
     await Promise.allSettled([
       source.cancel("observation_detached"),
       ...[...readers].map((reader) => reader.cancel(reason)),
       writer.abort(reason),
     ]);
   };
+  const requestRenewal = (reason: "capacity" | "lifetime" = "capacity") => {
+    if (renewalRequested || cancelled) return;
+    renewalRequested = true;
+    renewalReason = reason;
+    cancelled = true;
+    releaseDetached();
+    stopTimers();
+    renewalCleanup = Promise.allSettled([
+      source.cancel("observation_renewal_required"),
+      ...[...readers].map((reader) =>
+        reader.cancel("observation_renewal_required")
+      ),
+    ]);
+  };
+  const renewalError = () =>
+    Object.assign(new Error("Observation requires renewal."), {
+      code: "observation_renewal_required",
+    });
+  const isRenewalError = (error: unknown) =>
+    (error as { code?: unknown } | null)?.code ===
+      "observation_renewal_required";
   const abort = () => {
     void detach(options.signal?.reason);
   };
+  const isDrainingRenewalError = (error: unknown) =>
+    isRenewalError(error) &&
+    (error as { drainObservationPrefix?: unknown }).drainObservationPrefix ===
+      true;
   if (options.signal?.aborted) abort();
   else options.signal?.addEventListener("abort", abort, { once: true });
   void writer.closed.catch(detach);
   const write = (value: Uint8Array) => writer.write(value);
   let frameTail: Promise<void> = Promise.resolve();
+  let pendingFrames = 0;
+  // A slow response can hold at most eight frame producers in addition to
+  // the transport byte queues. Overflow renews from the client-applied cursor.
+  const MAX_PENDING_FRAMES = 8;
   const serializeFrame = <T>(task: () => Promise<T>): Promise<T> => {
-    const result = frameTail.then(task, task);
+    if (pendingFrames >= MAX_PENDING_FRAMES && !renewalRequested) {
+      requestRenewal();
+      return Promise.reject(renewalError());
+    }
+    pendingFrames++;
+    const result = frameTail.then(task, task).finally(() => {
+      pendingFrames--;
+    });
     frameTail = result.then(() => undefined, () => undefined);
     return result;
   };
@@ -257,7 +330,11 @@ export function applicationOutputsMultipartResponse(
         }
       }
       if (cancelled) return;
-      const terminal = await output.terminal;
+      const terminal = await Promise.race([
+        output.terminal,
+        detached.then(() => undefined),
+      ]);
+      if (cancelled || !terminal) return;
       const streamError = streamErrorOutput(output.streamId, terminal);
       const terminalOffset = terminal.offset;
       if (streamError === null && terminalOffset !== offset) {
@@ -312,8 +389,38 @@ export function applicationOutputsMultipartResponse(
   void (async () => {
     const pumps = new Set<Promise<void>>();
     const actionPumps = new Map<string, Set<Promise<void>>>();
+    const operationPumps = new Map<string, Set<Promise<void>>>();
+    let sourcePrefixRenewal = false;
+    const waitForPumps = async (pending: Iterable<Promise<void>>) => {
+      await Promise.all([...pending].map((pump) =>
+        pump.catch((error) => {
+          if (!isRenewalError(error)) throw error;
+          sourcePrefixRenewal = true;
+        })
+      ));
+    };
+    const closeRenewal = async () => {
+      requestRenewal();
+      await renewalCleanup;
+      await frameTail;
+      await writePart((cursor) =>
+        part(
+          boundary,
+          "observation-renew",
+          encoder.encode(
+            JSON.stringify({
+              type: "observation.renew",
+              reason: renewalReason,
+            }),
+          ),
+          { ...partOptions, cursor },
+        )
+      );
+      await serializeFrame(() => write(encoder.encode(`--${boundary}--\r\n`)));
+      await writer.close();
+    };
     let heartbeatPending = false;
-    const heartbeat = setInterval(() => {
+    heartbeat = setInterval(() => {
       if (heartbeatPending || cancelled) return;
       heartbeatPending = true;
       void writePart((cursor) =>
@@ -324,10 +431,13 @@ export function applicationOutputsMultipartResponse(
           { ...partOptions, cursor },
         )
       )
-        .catch(detach).finally(() => {
+        .catch((error) =>
+          isRenewalError(error) ? requestRenewal() : detach(error)
+        ).finally(() => {
           heartbeatPending = false;
         });
     }, 15_000);
+    lifetime = setTimeout(() => requestRenewal("lifetime"), renewAfterMs);
     try {
       if (source.bootstrap) {
         for (
@@ -355,9 +465,9 @@ export function applicationOutputsMultipartResponse(
         ),
       );
       for await (const output of source.outputs) {
-        if (isTerminalOperationOutput(output)) await Promise.all(pumps);
-        else if (!isStreamOutput(output)) {
-          await Promise.all(
+        if (cancelled) break;
+        if (!isStreamOutput(output) && !isTerminalOperationOutput(output)) {
+          await waitForPumps(
             outputActionRuns(output).flatMap(
               (id) => [...(actionPumps.get(id) ?? [])],
             ),
@@ -368,27 +478,59 @@ export function applicationOutputsMultipartResponse(
             outputRecord.operationId.trim()
           ? outputRecord.operationId.trim()
           : source.operationId;
+        if (isTerminalOperationOutput(output)) {
+          await waitForPumps(
+            operationId ? operationPumps.get(operationId) ?? [] : pumps,
+          );
+          if (sourcePrefixRenewal) continue;
+        }
         const mutations: OperationReplayCursorMutation[] = [];
+        if (outputRecord.type === "observation.selection") {
+          if (
+            typeof outputRecord.selectionPosition !== "string" ||
+            !Array.isArray(outputRecord.operationIds) ||
+            outputRecord.operationIds.some((id) => typeof id !== "string")
+          ) {
+            throw new TypeError("Invalid observation selection.");
+          }
+          mutations.push({
+            kind: "selection",
+            position: outputRecord.selectionPosition,
+            operationIds: outputRecord.operationIds as string[],
+          });
+        }
+        const replayPosition = typeof outputRecord.replayPosition === "string"
+          ? outputRecord.replayPosition
+          : outputRecord.position;
         if (
           "durable" in output && output.durable === true &&
-          typeof output.position === "string"
+          typeof replayPosition === "string"
         ) {
           if (source.compositeCursor && operationId) {
             mutations.push({
               kind: "event",
               operationId,
-              position: output.position,
+              position: replayPosition,
             });
           } else {
-            mutations.push({ kind: "event", position: output.position });
+            mutations.push({ kind: "event", position: replayPosition });
             if (operationId) {
               mutations.push({
                 kind: "event",
                 operationId,
-                position: output.position,
+                position: replayPosition,
               });
             }
           }
+        }
+        if (isTerminalOperationOutput(output) && operationId) {
+          mutations.push({
+            kind: "retire",
+            operationId,
+            ...(typeof outputRecord.finalSelectionPosition === "string"
+              ? { position: outputRecord.finalSelectionPosition }
+              : {}),
+          });
         }
         let streamOffset: number | undefined;
         if (isStreamOutput(output)) {
@@ -425,6 +567,13 @@ export function applicationOutputsMultipartResponse(
         if (isStreamOutput(output)) {
           const pending = pump(output, operationId, streamOffset ?? 0);
           pumps.add(pending);
+          const operationLedger = operationId
+            ? operationPumps.get(operationId) ?? new Set<Promise<void>>()
+            : undefined;
+          if (operationId && operationLedger) {
+            operationPumps.set(operationId, operationLedger);
+            operationLedger.add(pending);
+          }
           const actionRunId = output.metadata.sourceActionRunId;
           const ledger = typeof actionRunId === "string"
             ? actionPumps.get(actionRunId) ?? new Set<Promise<void>>()
@@ -435,20 +584,51 @@ export function applicationOutputsMultipartResponse(
           }
           void pending.then(() => {
             pumps.delete(pending);
+            operationLedger?.delete(pending);
+            if (operationId && operationLedger?.size === 0) {
+              operationPumps.delete(operationId);
+            }
             ledger?.delete(pending);
             if (ledger?.size === 0 && typeof actionRunId === "string") {
               actionPumps.delete(actionRunId);
             }
-          }, detach);
+          }, (error) => {
+            // Source renewal drains its bounded logical and byte prefix before
+            // source.outputs fails. Let that failure close the observation.
+            if (isDrainingRenewalError(error)) sourcePrefixRenewal = true;
+            else if (isRenewalError(error)) requestRenewal();
+            else void detach(error);
+          });
           // Retained terminal lanes do not consume the concurrent-open cursor budget.
-          if (bootstrapTerminals.has(output.streamId)) await pending;
+          if (bootstrapTerminals.has(output.streamId)) {
+            await waitForPumps([pending]);
+          }
         }
       }
-      await Promise.all(pumps);
-      await source.done;
+      await waitForPumps(pumps);
+      if (renewalRequested) {
+        await closeRenewal();
+        return;
+      }
+      await Promise.race([source.done, detached]);
+      if (renewalRequested) {
+        await closeRenewal();
+        return;
+      }
       await serializeFrame(() => write(encoder.encode(`--${boundary}--\r\n`)));
       await writer.close();
     } catch (error) {
+      if (isRenewalError(error) || renewalRequested) {
+        try {
+          if (!renewalRequested && isDrainingRenewalError(error)) {
+            await waitForPumps(pumps);
+          }
+          await closeRenewal();
+        } catch (closeError) {
+          await writer.abort(closeError).catch(() => undefined);
+        }
+        return;
+      }
       if (isReplayCapacityError(error)) {
         await writePart((replayCursor) =>
           part(
@@ -468,6 +648,8 @@ export function applicationOutputsMultipartResponse(
           )
         ).catch(() => undefined);
         cancelled = true;
+        releaseDetached();
+        stopTimers();
         await Promise.allSettled([
           source.cancel("operation_replay_capacity_exceeded"),
           ...[...readers].map((reader) =>
@@ -482,6 +664,8 @@ export function applicationOutputsMultipartResponse(
       }
       if (isFrameCapacityError(error)) {
         cancelled = true;
+        releaseDetached();
+        stopTimers();
         const cleanup = Promise.allSettled([
           source.cancel(OBSERVATION_FRAME_CAPACITY_CODE),
           ...[...readers].map((reader) =>
@@ -516,7 +700,7 @@ export function applicationOutputsMultipartResponse(
       ).catch(() => undefined);
       await writer.abort(error).catch(() => undefined);
     } finally {
-      clearInterval(heartbeat);
+      stopTimers();
       options.signal?.removeEventListener("abort", abort);
     }
   })();

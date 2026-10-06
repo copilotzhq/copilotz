@@ -1,3 +1,4 @@
+import { coreThreadObservationMetadata } from "../../shared/events/index.ts";
 /** Defines the Core delete-thread-messages Action. @module */
 import {
   type ActionContext,
@@ -36,6 +37,7 @@ export const deleteThreadMessagesAction: ActionDefinition<
       for (const message of messages) {
         await tx.collections.message.delete({ id: message.id }, {
           metadata: {
+            ...coreThreadObservationMetadata(threadId),
             core: {
               threadId,
             },

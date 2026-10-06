@@ -27,6 +27,11 @@ export type AnyProcessor = Readonly<{
     event: ProcessorEvent,
     context: never,
   ): void | Promise<void>;
+  onError?(
+    error: unknown,
+    event: ProcessorEvent,
+    context: never,
+  ): boolean | Promise<boolean>;
 }>;
 
 export type ProcessorMap = Readonly<Record<string, AnyProcessor>>;

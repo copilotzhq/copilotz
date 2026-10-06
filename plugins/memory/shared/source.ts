@@ -88,7 +88,7 @@ export async function projectedSourceMessages(
 }
 
 export function sourceMessagesFromTranscript(
-  context: Pick<MemoryProcessorContext, "resources">,
+  context: Pick<MemoryProcessorContext, "namespace" | "resources">,
   input: Readonly<{
     messages: readonly ConversationMessage[];
     model?: NonNullable<AgentResource["models"]["generate"]>[number];
@@ -114,7 +114,7 @@ export function sourceMessagesFromTranscript(
             >[1]["provider"],
         }
         : {}),
-    });
+    }, context.namespace);
     return {
       id: sourceId,
       senderType: message.role,

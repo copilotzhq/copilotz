@@ -51,6 +51,17 @@ export type Processor<TContext extends ProcessorContext = ProcessorContext> = {
     event: ProcessorEvent,
     context: TContext,
   ): void | Promise<void>;
+  /**
+   * Handles a durable handler error once retries are exhausted (or the error
+   * is explicitly non-retryable). Return true after persisting the domain's
+   * failure outcome to acknowledge the delivery; false leaves it dead-lettered.
+   * Runs under the same lease and context, never after cancellation/lease loss.
+   */
+  onError?(
+    error: unknown,
+    event: ProcessorEvent,
+    context: TContext,
+  ): boolean | Promise<boolean>;
 };
 
 function requireClause(
@@ -102,6 +113,11 @@ export function defineProcessor<
   if (typeof processor.handle !== "function") {
     throw new TypeError(`Processor '${id}' requires a handle function.`);
   }
+  if (
+    processor.onError !== undefined && typeof processor.onError !== "function"
+  ) {
+    throw new TypeError(`Processor '${id}' onError must be a function.`);
+  }
   return ({
     ...processor,
     id,
@@ -132,7 +148,9 @@ export function isProcessor(value: unknown): value is Processor {
       Boolean(clause) && typeof clause === "object" &&
       typeof (clause as ProcessorMatchClause).eventType === "string"
     ) &&
-    typeof candidate.handle === "function";
+    typeof candidate.handle === "function" &&
+    (candidate.onError === undefined ||
+      typeof candidate.onError === "function");
 }
 
 export function withProcessorEventData<TData>(

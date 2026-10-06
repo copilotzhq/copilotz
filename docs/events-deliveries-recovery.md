@@ -1,150 +1,298 @@
+---
+title: "Events, Deliveries, and Recovery"
+description: "How an operation, its immutable Events, its at-least-once deliveries and its Action calls relate, and how to resend, observe, cancel and recover them without duplicating work."
+section: Runtime
+order: 40
+status: stable
+---
+
 # Events, Deliveries, and Recovery
 
-Copilotz persists facts and work obligations separately.
+## The pain
 
-## Immutable facts
+A client sends "capture this note" and its connection drops before it hears
+back. Did the note get saved? If the client sends again, will there be two
+notes? Meanwhile the host restarts while `notes.capture` is halfway through its
+work, and a dashboard that was following the operation simply stops. Each of
+these needs a different answer, and guessing wrong either loses work or repeats
+it.
 
-A durable Event has a database-assigned monotonic position, namespace, type,
-optional subject/thread/routing/visibility, causation, correlation,
-deduplication identity, and optional Event Body reference. Event Bodies contain
-the complete data required to replay Collection mutations and Action lifecycle
-facts.
+## The problem
 
-Common facts are:
+You need to know which identity answers which question:
 
-- `<collection>.created|updated|deleted|command`;
-- `relation.upserted|deleted`;
-- `asset.created|deleted`;
-- `<actionId>.invoked|progress|completed|failed|cancelled`.
+- what one request is, and how a retry finds it again;
+- which work is guaranteed to run, how often, and what happens when it keeps
+  failing;
+- what an observer sees live versus on replay, and what "done" means for each;
+- what stops watching and what stops the work.
 
-Events and Event Bodies are immutable. They are also retry receipts and replay
-sources, so ordinary maintenance never compacts them.
+## The solution
 
-## Sparse durable work
+Copilotz separates four things.
 
-A delivery is one obligation for `(eventId, consumerId)`. Rows exist only for
-matched durable Processors. Observation visibility, participants, and transient
-stream subscribers do not create work rows.
+| Concept               | What it is                                                                                                        | Lifetime                 |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------- | ------------------------ |
+| **Operation**         | One admitted request, created by `app.send`, with a state: active, then `completed`, `failed` or `cancelled`      | Durable, looked up by ID |
+| **Durable Event**     | An immutable fact (`notes.capture.requested`, `note.created`, `notes.save.completed`) with a database position    | Durable, never edited    |
+| **Delivery**          | One obligation for one durable Processor to handle one Event                                                      | Durable until settled    |
+| **Action invocation** | One recorded call of an Action inside a delivery, with `invoked` then `completed`, `failed` or `cancelled` Events | Durable, reused on retry |
 
-Delivery states are `pending`, `leased`, `retry_wait`, `succeeded`, `cancelled`,
-and `dead_letter`. Execution is at least once: an expired lease or retryable
-failure may run the same logical delivery again. The Gateway requeues a failed
-delivery at its persisted `availableAt` until it succeeds or exhausts its
-bounded attempts. Unknown errors are retryable by default. A Processor can
-classify a deterministic failure with `markNonRetryable(error)`; that delivery
-dead-letters on its current attempt, so an inherited `send().done` rejects
-without a pointless retry. Collection schema-validation errors carry this
-classification automatically.
+Ephemeral Events, such as stream frames, are never stored. Every Event carries a
+`correlationId`, which normally propagates from the triggering Event, and Events
+created in response to another Event carry a `causationId` pointing at it; a
+root request has none. Correlation is for attribution and observation, not
+settlement membership: detached work can keep the correlation while settling
+separately from the operation.
 
-Stable Collection operation keys and Action invocation identities are therefore
-part of plugin correctness. On retry, built-in mutations and Actions first load
-their authenticated durable result instead of repeating a settled effect.
+Ordinary `app.maintenance()` never compacts durable Events or their bodies; they
+remain the replay sources and retry receipts. It does compact settled delivery
+rows, retire expired observation-stream bytes and prune metadata for terminal
+operations past its retention settings. That retention can end operation lookup
+and attachment replay for an old operation even though its durable Events
+remain.
 
-A `detached` Processor's failure does not reach the operation that triggered it,
-so nothing reports it unless you ask. See
-[Seeing why a Processor failed](#seeing-why-a-processor-failed) to log it.
+### Admission: one request, one operation
 
-## Seeing why a Processor failed
+`app.send` records the request Event and its deliveries atomically. To make a
+client retry safe, give it an explicit `deduplicationId` **and** an explicit
+`correlationId`, and resend the complete input unchanged. A repeat returns the
+original `operationId` and `eventId` and runs no new delivery.
 
-`onDeliveryDiagnostic` is an opt-in, process-local observer of delivery timing
-(`createCopilotz`, `createCopilotzGateway`, and `createCopilotzWorker` all take
-it). When a Processor throws, its `worker_handler_settled` diagnostic carries
-the delivery's new `status` (`retry_wait` while attempts remain, then
-`dead_letter`) and an `error`:
+Both are part of the Event's identity. If you omit `correlationId`, `app.send`
+generates a new one on each call, so a resend that reuses only the
+`deduplicationId` is a different Event with a reused ID and is rejected with
+`event_deduplication_conflict`. Changing the payload or type under the same
+`deduplicationId` is rejected the same way.
+
+`deduplicationId` is admission identity only. It does not name Action calls or
+Collection writes; those use operation keys, described below.
+
+### Deliveries run at least once
+
+A delivery exists only for a matched durable Processor; observers and streams
+create no delivery. Its states are `pending`, `leased`, `retry_wait`,
+`succeeded`, `cancelled` and `dead_letter`.
+
+- **Leases and recovery.** A worker leases a delivery while it runs it. Pending
+  deliveries, deliveries waiting for a retry, and leased deliveries whose lease
+  has expired are eligible again. A worker that opens the same database, schema
+  and namespace, with the same Processor registered, can claim them once they
+  are due. There is no promise of immediate execution at startup, and
+  dead-lettered, cancelled or succeeded deliveries never rerun automatically.
+- **Bounded retries.** An unknown error is retryable: the delivery waits in
+  `retry_wait` and runs again until it succeeds or uses its attempts. Then it is
+  `dead_letter`, and an inheriting operation fails.
+- **Non-retryable failures.** Wrap a deterministic failure with
+  `markNonRetryable(error)` to dead-letter it on the current attempt. Collection
+  schema-validation errors are already marked.
+- **Recording a domain outcome.** A Processor may declare
+  `onError(error, event, context)`. It runs only for the final failure (attempts
+  used up, or non-retryable), under the same lease and context, and never after
+  cancellation or lease loss. Return `true` after you have recorded your own
+  failure outcome, for example a `failed` record; the delivery then succeeds
+  instead of dead-lettering. Return `false` to keep the failure.
+
+Because a delivery can run more than once, the effects it repeats must resolve
+to what was already stored:
+
+- An ordinary Action call from a Processor is identified by the delivery, its
+  call position in the handler, the Action ID and an optional key. Two
+  successive calls with the same key are **distinct** calls; a retried handler
+  replays the same positions and gets the recorded results back.
+- `caller.prepare` identifies a call by the delivery, the Action ID and a
+  required key, with no position, and reuses its captured input.
+- A nested call made from inside an Action is identified by the parent Action
+  run, the Action ID and its explicit key, or its call position when it has no
+  key.
+- Direct Collection writes are delivery-scoped. Inside an Action, prefix their
+  key with `context.operationKey`, as `notes.save` does with
+  `${context.operationKey}:save-note`, so two calls of the same Action in one
+  delivery cannot collide.
+
+Copilotz guarantees this only for what it records. A payment or email API call
+needs that service's own idempotency key, derived from the same stable identity.
+
+### Settlement: what `done` waits for
+
+Matched Processors **inherit** the triggering operation by default: the
+operation completes only when their deliveries settle, and fails when one
+dead-letters. A Processor with `settlement: "detached"` runs durable background
+work that keeps its causation but does not block or fail the operation.
+
+### Observing: live outputs versus replay
+
+| Handle                        | `outputs`                                                                  | `done`                                                                        |
+| ----------------------------- | -------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `app.send(input)`             | What happens while you watch. A deduplicated resend sees only live outputs | Resolves on `completed`; **rejects** when the operation fails or is cancelled |
+| `app.attach({ operationId })` | Replays recorded Events from the start, then follows until final           | Resolves when replay reaches **any** final state; check that state yourself   |
+
+A replay ends with one unstored output, `operation.completed`,
+`operation.failed` or `operation.cancelled`. `app.operationStatus` returns the
+recorded state, or `null` when the namespace has no such operation.
+
+Read `outputs` while waiting for `done`; a stream nobody reads can hold
+settlement back.
+
+### Detach versus cancel
+
+- `handle.detach()` and `attachment.detach()` stop **this observer** only. The
+  durable operation keeps running.
+- `app.close()` stops this process's observers and workers and releases the
+  resources it owns. It does not cancel durable work, and it does not wait for
+  all outstanding work to finish; unfinished deliveries stay recoverable.
+- `handle.cancel()` and `app.cancelOperation({ operationId })` record a
+  **durable** cancellation. Unfinished deliveries become `cancelled` and the
+  operation ends `cancelled`. Cancellation does not undo writes already
+  committed or external effects already made.
+
+### Reading Events safely
+
+Outputs and Processor Events are either durable or ephemeral. Check `durable`
+(or `isDurableEvent`) before using `id` or `position`: only durable Events have
+them. A position orders Events within one database; it is not a global clock,
+and it is unrelated to record IDs. Processors read the resolved body from
+`event.data`.
+
+### Example: resend safely and confirm the outcome
+
+This entrypoint saves one note under a request ID that the client chooses. Run
+it twice with the same ID and only one note exists. It uses the Notes
+`composition.ts` from
+[Chapter 7](./getting-started/part-2-verify-and-recover/07-persist-and-recover.md),
+with its persistent `database`, `namespace` and `runtimePlugins`. Create
+`capture-once.ts`:
 
 ```ts
-const app = await createCopilotz({
-  plugins,
-  onDeliveryDiagnostic(diagnostic) {
-    if (diagnostic.phase === "worker_handler_settled" && diagnostic.error) {
-      console.error(
-        `processor ${diagnostic.consumerId} ${diagnostic.status}:`,
-        `${diagnostic.error.name}: ${diagnostic.error.message}`,
-      );
+// Runtime factory and the guard that separates byte streams from Events.
+import { createCopilotz, isStreamOutput } from "@copilotz/copilotz";
+// Types of one send input and one output.
+import type {
+  ApplicationOutput,
+  ApplicationSendInput,
+} from "@copilotz/copilotz";
+// The application's shared host choices.
+import { database, namespace, runtimePlugins } from "./composition.ts";
+// Command-line arguments and the exit code, on both Deno and Node.
+import process from "node:process";
+
+const [requestId, text] = process.argv.slice(2);
+if (!requestId || !text) {
+  throw new Error("Usage: capture-once.ts <request-id> <note text>");
+}
+
+// One complete input, rebuilt identically on every attempt. Both identities
+// derive from the client's request ID, so a resend finds the same operation.
+const request: ApplicationSendInput = {
+  type: "notes.capture.requested",
+  payload: { text },
+  correlationId: `capture:${requestId}`,
+  deduplicationId: `capture:${requestId}`,
+};
+
+// Prints durable Event facts only; payloads may contain caller data.
+async function drain(outputs: ReadableStream<ApplicationOutput>) {
+  for await (const output of outputs) {
+    if (isStreamOutput(output)) {
+      // Release byte streams so they do not hold settlement open.
+      await output.payload.cancel();
+    } else if (output.durable) {
+      console.log(`event ${output.type} position=${output.position}`);
     }
-  },
+  }
+}
+
+const app = await createCopilotz({
+  namespace,
+  database,
+  plugins: runtimePlugins,
 });
+
+// Any live, replay or settlement failure makes the run unsuccessful, even if
+// the stored state later reports `completed`.
+let exitCode = 0;
+
+try {
+  // A repeat with the same input returns the original operation.
+  const handle = await app.send(request);
+  console.log(`operation ${handle.operationId}`);
+
+  // Wait for both the reader and settlement, so no drainer is left running.
+  // `send.done` rejects on failure; the message is fixed because the error
+  // may echo caller data.
+  const live = await Promise.allSettled([drain(handle.outputs), handle.done]);
+  if (live.some((result) => result.status === "rejected")) {
+    console.error("live send did not complete successfully");
+    exitCode = 1;
+  }
+
+  // Replay the recorded history. This only reads; nothing runs again.
+  const attachment = await app.attach({ operationId: handle.operationId });
+  const replay = await Promise.allSettled([
+    drain(attachment.outputs),
+    attachment.done,
+  ]);
+  if (replay.some((result) => result.status === "rejected")) {
+    console.error("replay did not complete successfully");
+    exitCode = 1;
+  }
+
+  // `attach.done` resolves for any final state, so check which one it was.
+  const status = await app.operationStatus({ operationId: handle.operationId });
+  console.log(`final state: ${status?.state ?? "unknown"}`);
+  if (status?.state !== "completed") exitCode = 1;
+} catch {
+  // Admission or attach rejected; keep the message free of caller data.
+  console.error("capture request could not be admitted or attached");
+  exitCode = 1;
+} finally {
+  // Release the database even after a failure.
+  await app.close();
+}
+
+// Set the exit code only after close, so host shutdown cannot overwrite it.
+process.exitCode = exitCode;
 ```
 
-`error` is `{ name, message }` and nothing else: the message is cut to 500
-characters, common credential shapes (bearer tokens, `key=value` and JSON
-credential fields, URL passwords, JWTs, well-known API key prefixes) are masked,
-and the stack, the `cause`, and the Event being handled are never included. A
-Processor is not schema-marked the way an Action is, so the runtime cannot know
-which of its values are secret; masking is a best-effort courtesy, not a
-guarantee. Do not put secrets in error messages, and throw your own safe message
-where an underlying error might echo request data. The diagnostic is never
-persisted and a sink that throws cannot affect delivery.
+Run it twice with the same request ID:
 
-The full, unmasked error (including its stack) is stored on the delivery row's
-`last_error`, in your own database.
-
-## Settlement scopes
-
-`application.send(input)` creates an explicit settlement scope and returns:
-
-```ts
-type ApplicationSendHandle = Readonly<{
-  operationId: string;
-  eventId: string;
-  correlationId: string;
-  replayCursor: string;
-  outputs: ReadableStream<ApplicationOutput>;
-  done: Promise<void>;
-  detach(reason?: string): Promise<void>;
-  cancel(reason?: string): Promise<void>;
-}>;
+```sh
+deno run -A capture-once.ts req-1 "Prepare the release."
+deno run -A capture-once.ts req-1 "Prepare the release."
+# Node 24+: node capture-once.ts req-1 "Prepare the release."
 ```
 
-Matched Processors inherit the triggering scope by default. A Processor with
-`settlement: "detached"` creates durable background work whose completion and
-failure do not block the foreground handle. Causation still points to the
-originating Event.
+The first run prints the live `notes.capture.requested`, `notes.save.*` and
+`note.created` Events, then the same Events again on replay. The second run
+prints the same operation ID, **no** live Events (Notes has no detached work
+that could emit late outputs), and the same replayed history with one
+`note.created`.
 
-For remote Workers, `done` also waits for output frames already in flight and
-then verifies the durable scope again. This prevents a final output from racing
-operation settlement.
+### Diagnostics are observations, not records
 
-## Recovery ownership
+`createCopilotz` accepts `onDeliveryDiagnostic(diagnostic)`, an opt-in,
+best-effort, process-local observer of delivery timing. When a Processor throws,
+the `worker_handler_settled` diagnostic carries the new delivery `status` and an
+`error` limited to `{ name, message }`. Diagnostics are never persisted, and a
+sink that throws or rejects is ignored. A synchronous sink adds latency to each
+delivery, so keep it fast. Common credential shapes in the message are masked,
+but that is a courtesy, not a redaction guarantee: do not put secrets in error
+messages.
 
-Recovery ownership, leasing, and dead-letter retry/discard remain runtime/host
-authorities. Public `maintenance()` exposes only bounded safe maintenance, and
-the operation APIs expose status, reconnect, and explicit durable cancellation;
-they do not expose delivery mutation.
+## Reference
 
-Copilotz-owned persistence reconnects, revalidates every opened v5 schema, and
-recovers durable obligations. It never replays the indeterminate SQL operation
-that detected the outage. Active `send` handles reject so callers receive an
-honest boundary; durable work remains recoverable and is not falsely marked
-cancelled.
-
-Embeddings that need operational inspection use the trusted Gateway `/v3` server
-boundary or their own internal persistence tooling rather than exposing delivery
-mutation to ordinary application code.
-
-## Additive reconnect catalog provisioning
-
-Reconnect metadata is stored in operational tables alongside the Core Event
-schema. The current runtime requires a validated v5 schema. Normal engine
-startup provisions a fresh schema and its operation catalog, and rejects an
-incompatible existing schema. Version 0.85.0 provides an explicit offline
-operation-catalog upgrade; the v5 Event schema is unchanged.
-
-Hosts that set `provisionDefaultDatabaseSchema: false` must provision both the
-v5 schema and the catalog before startup. After provisioning the schema, add the
-catalog once per physical tenant schema:
-
-```ts
-import { provisionOperationCatalog } from "@copilotz/copilotz/streams";
-
-await provisionOperationCatalog(sqlSession, databaseSchema);
-```
-
-Tenant selection on the request path only validates these tables and never runs
-DDL. Multi-schema hosts must provision each schema before routing traffic to it.
-Missing catalog tables fail startup/scope opening with
-`copilotz_operation_catalog_not_provisioned`. Adding the catalog does not
-migrate a schema from an earlier release.
+- **Schema.** Startup provisions a fresh database and validates an existing one.
+  An incompatible schema is rejected; Copilotz performs no automatic migration
+  or reset.
+- **Persistence outage.** Copilotz-owned persistence reconnects and recovers
+  durable deliveries but never replays the SQL statement that hit the outage.
+  Active `send` handles reject; their durable work stays recoverable and is not
+  marked cancelled.
+- **Ownership.** Leasing, recovery and dead-letter handling belong to the
+  runtime and host. Applications see status, attach and cancellation;
+  `app.maintenance()` performs only bounded, safe cleanup.
+- **History.** Changes made in 0.76.0 and earlier releases are listed under
+  Release history in [Upgrading](./upgrading.md).
 
 ### Upgrade to indexed observations
 
@@ -156,11 +304,16 @@ failed transaction rolls back; retrying a completed upgrade validates and
 returns.
 
 ```ts
+// Generic offline upgrade over the host-owned SQL session and physical schema.
 import { upgradeOperationCatalog } from "@copilotz/copilotz/streams";
+// Core resolves its legacy conversation associations; other domains use their own resolver.
 import { resolveCoreObservationKeys } from "@copilotz/copilotz/core";
 
+// The host migration entrypoint supplies sqlSession and databaseSchema.
 await upgradeOperationCatalog(sqlSession, databaseSchema, {
+  // Translate Core associations into opaque selection keys.
   resolveObservationKeys: resolveCoreObservationKeys,
+  // Legacy metadata fields read during this one offline backfill.
   backfillMetadataKeys: ["observationKeys", "core", "operationMetadata"],
 });
 ```
@@ -208,50 +361,25 @@ There is no additional durable payload feed or external broker. Multiple server
 processes each own their coordinator; load therefore also depends on replica
 count, permission diversity, active operations and reconnect frequency.
 
-### Generic catalog reads
+Measured capacity and the reproducible benchmark method are documented in
+[Observation performance](./observation-performance.md).
 
-`catalog.list` retains its required namespace, operation IDs, state filter,
-operation metadata filter, descending update-time/ID order and bounded limit.
-The optional association matches either operation metadata or metadata on an
-indexed event. The ordinary `metadata` filter remains an additional AND
-condition.
+## What this unlocks
 
-```ts
-const operations = await catalog.list({
-  namespace: "tenant-a",
-  association: {
-    operationMetadata: { work: { group: "batch-1" } },
-    eventMetadata: { work: { group: "batch-1" } },
-  },
-  afterPosition: "120",
-  limit: 32,
-});
-const position = await catalog.maxEventPosition({
-  namespace: "tenant-a",
-  eventMetadata: { work: { group: "batch-1" } },
-});
-```
+- Clients can retry after a lost response without creating duplicate work.
+- Restarts and lease expiry resume unfinished work, and stable keys turn
+  repeated effects into stored results.
+- Observers can disconnect and reattach from any process, and only an explicit
+  cancellation changes the work.
+- Final failures can be recorded as domain outcomes instead of silent dead
+  letters.
 
-Metadata matching uses JSON containment: strings and numbers remain distinct;
-objects can match a subset of keys. Empty association objects or supplied empty
-branches are rejected. An explicitly empty operation ID selection returns no
-records. `afterPosition` accepts an unsigned decimal event position and includes
-active operations or operations with progress beyond that position; an explicit
-state filter still applies. `maxEventPosition` returns the greatest matching
-position as a string, or `undefined`; an empty metadata object selects the
-entire namespace.
+## Next steps
 
-`OperationCatalog.session` and `OperationCatalog.tables` are removed. Consumers
-use catalog methods instead of constructing SQL against runtime tables. Plugin
-policy and authorization remain with the caller; metadata association alone is
-not an authorization decision.
-
-Replay cursors use a per-operation stream high-watermark plus sparse byte
-offsets for lanes that are still incomplete. Sequential completed lanes remain
-constant-size even for deep multi-agent runs. The current cursor envelope is
-bounded to 256 simultaneous sparse lanes/operations and 16 KiB before base64url
-encoding. A checkpoint/history request that exceeds that active window returns
-`409 operation_replay_capacity_exceeded`; an already-open feed emits the same
-condition as a `replay.capacity` frame, detaches the observer without cancelling
-the durable operation, and closes normally. Clients should refresh canonical
-history and retry until enough lanes have sealed for the checkpoint to compact.
+- [Chapter 7: Persist and Recover](./getting-started/part-2-verify-and-recover/07-persist-and-recover.md)
+  walks through replaying an operation after a restart.
+- [Actions](./actions.md) details Action invocation identity and operation keys.
+- [Plugins and Processors](./plugins-and-processors.md) covers matching,
+  settlement and `onError` declarations.
+- [Testing and Inspection](./testing-and-inspection.md) shows how to assert
+  deduplication, failures and replays.

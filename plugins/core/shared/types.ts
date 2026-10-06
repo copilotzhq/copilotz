@@ -74,6 +74,8 @@ export type ContextResource = Readonly<{
           readonly import("./agents/transcript.ts").LlmTranscriptEntry[];
         historyAfterMessageId?: string;
         limitEstimatedTokens?: number;
+        /** History capacity after the prepared prefix and one model response. */
+        historyLimitEstimatedTokens: number;
       }>,
   ): void | Promise<void>;
   /** Lets the owning contributor settle a scoped turn whose input preparation failed. */
@@ -96,6 +98,7 @@ export type ContextResource = Readonly<{
         historyAfterMessageId?: string;
         estimatedTokens: number;
         limitEstimatedTokens: number;
+        historyLimitEstimatedTokens: number;
       }>,
   ): boolean | Promise<boolean>;
 }>;

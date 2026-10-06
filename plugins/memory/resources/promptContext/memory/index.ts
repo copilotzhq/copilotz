@@ -52,13 +52,7 @@ export const memoryContextResource:
       ) return;
       await reserveMemoryCheckpoint(context, input.trigger, config, {
         ownerParticipantId: input.participant.id,
-        ...(input.limitEstimatedTokens
-          ? {
-            maxSourceEstimatedTokens: Math.floor(
-              input.limitEstimatedTokens / 2,
-            ),
-          }
-          : {}),
+        historyLimitEstimatedTokens: input.historyLimitEstimatedTokens,
         prepared: {
           owner: input.participant,
           thread: input.thread,
@@ -99,7 +93,7 @@ export const memoryContextResource:
         {
           ownerParticipantId: input.participant.id,
           force: true,
-          maxSourceEstimatedTokens: Math.floor(input.limitEstimatedTokens / 2),
+          historyLimitEstimatedTokens: input.historyLimitEstimatedTokens,
         },
       );
       if (!checkpoint) return false;

@@ -16,7 +16,9 @@ exposing private maintenance content.
 The Action verifies the Agent participant, delegates to the configured context
 resource with scoped capabilities and cancellation, and completes only after the
 resource reports progress. The router reloads history and checks its budget
-again. Background maintenance does not invoke this Action.
+again. Core supplies the history capacity remaining after the prepared prompt
+prefix and one configured model response; contributors budget their own task
+suffix within that capacity. Background maintenance does not invoke this Action.
 
 ## How to use it
 

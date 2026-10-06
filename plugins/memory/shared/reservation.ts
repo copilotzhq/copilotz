@@ -5,10 +5,13 @@ import {
   workflowMetadata,
 } from "@copilotz/copilotz/core";
 import { isContentByteLimitError } from "@copilotz/copilotz/content";
+import { estimateTextTokens } from "@copilotz/copilotz/llm/tokens";
 import type { CollectionRecord } from "@copilotz/copilotz/collections";
 
 import { loadCoreThreadMessageSnapshot } from "@copilotz/copilotz/core";
 import {
+  buildMemoryConsolidationInstruction,
+  memorySourceManifestEntry,
   type MemorySourceMessage,
   selectLongTermMemoryRange,
 } from "../authoring/consolidation/index.ts";
@@ -21,6 +24,7 @@ import {
   participantAgentId,
 } from "./access.ts";
 import { checkpoints, createCheckpoint } from "./checkpoints.ts";
+import { memoryKinds } from "./snapshot.ts";
 import {
   branchCertificate,
   certifiedHistoryBoundary,
@@ -36,7 +40,7 @@ export async function reserveMemoryCheckpoint(
   options: Readonly<{
     ownerParticipantId?: string;
     force?: boolean;
-    maxSourceEstimatedTokens?: number;
+    historyLimitEstimatedTokens: number;
     prepared?: Readonly<{
       owner: import("@copilotz/copilotz/core").Participant;
       thread: import("@copilotz/copilotz/core").ConversationThread;
@@ -44,7 +48,7 @@ export async function reserveMemoryCheckpoint(
         readonly import("@copilotz/copilotz/core").ConversationMessage[];
       sources: readonly MemorySourceMessage[];
     }>;
-  }> = {},
+  }>,
 ): Promise<CollectionRecord | null> {
   const ownerParticipantId = optionalText(options.ownerParticipantId) ??
     optionalText(messageRecord.senderId);
@@ -125,18 +129,28 @@ export async function reserveMemoryCheckpoint(
       )
     );
   if (!snapshot.active) return null;
-  const maxSourceEstimatedTokens = options.maxSourceEstimatedTokens ??
-    Math.floor(
-      Math.min(
-        ...(context.resources.agents[agentId]?.models.generate ??
-          context.resources.agents[agentId]?.models.session ?? [])
-          .map((model) =>
-            typeof model.options?.limitEstimatedInputTokens === "number"
-              ? model.options.limitEstimatedInputTokens
-              : 150_000
-          ),
-      ) / 2,
-    );
+  const instructionEstimatedTokens = estimateTextTokens(
+    buildMemoryConsolidationInstruction({
+      spaces,
+      sourceMessages: [],
+      kinds: memoryKinds(context),
+      context: [],
+    }),
+  );
+  const maxSourceEstimatedTokens = Math.max(
+    0,
+    options.historyLimitEstimatedTokens - instructionEstimatedTokens,
+  );
+  const sourceMessageOverhead = (source: MemorySourceMessage) =>
+    estimateTextTokens(JSON.stringify(memorySourceManifestEntry(source)) + ",");
+  if (maxSourceEstimatedTokens <= 0) {
+    if (options.force) {
+      throw new Error(
+        "The Agent prompt prefix and response allowance leave no room for memory source.",
+      );
+    }
+    return null;
+  }
   // Background eligibility may require seeing more source than one maintenance
   // turn can carry. The scan remains bounded, while range selection below
   // still caps the checkpoint source at maxSourceEstimatedTokens.
@@ -163,6 +177,7 @@ export async function reserveMemoryCheckpoint(
       triggerEstimatedTokens: options.force ? 0 : config.triggerEstimatedTokens,
       retainRecentEstimatedTokens,
       maxSourceEstimatedTokens,
+      sourceMessageOverhead,
     });
   }
   for (
@@ -210,6 +225,7 @@ export async function reserveMemoryCheckpoint(
       triggerEstimatedTokens: options.force ? 0 : config.triggerEstimatedTokens,
       retainRecentEstimatedTokens,
       maxSourceEstimatedTokens,
+      sourceMessageOverhead,
     });
     // Once the next source would exceed the selected budget, further reads
     // only add raw tail. The selector has already retained the configured
@@ -233,6 +249,12 @@ export async function reserveMemoryCheckpoint(
             messageRecord.id)
       ) ?? snapshot.messages.findLast((item) => item.sender.id !== owner.id),
       estimatedTokens: range.estimatedTokens,
+      historyLimitEstimatedTokens: options.historyLimitEstimatedTokens,
+      instructionEstimatedTokens: instructionEstimatedTokens +
+        range.messages.reduce(
+          (sum, source) => sum + sourceMessageOverhead(source),
+          0,
+        ),
       retainedEstimatedTokens: range.retainedEstimatedTokens,
       retainedMessageCount: range.retainedMessageCount,
       coverageCandidate: {

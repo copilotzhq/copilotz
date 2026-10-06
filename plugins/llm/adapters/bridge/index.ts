@@ -895,7 +895,7 @@ export async function prepareProviderAttemptTranscript(
   protocol: ProviderFactory,
   input: LlmAdapterCallInput,
   calibrationFactor?: number,
-): Promise<PreparedAttemptTranscript> {
+): Promise<PreparedAttemptTranscript & { outputTokenAllowance: number }> {
   const config = providerConfig(
     provider,
     input,
@@ -905,12 +905,29 @@ export async function prepareProviderAttemptTranscript(
   const nativeReasoningApi = providerAPI.replaysNativeReasoning === false
     ? undefined
     : providerAPI.nativeReasoningApi;
-  return await prepareAttemptTranscript({
+  // Use the provider's own body builder so defaults, reasoning budgets and
+  // option precedence cannot drift from what execution sends. Empty messages
+  // avoid transforming the prepared history a second time.
+  const body = providerAPI.body([], config) as Record<string, unknown>;
+  const generation = body.generationConfig as
+    | Record<string, unknown>
+    | undefined;
+  const options = body.options as Record<string, unknown> | undefined;
+  const output = body.max_output_tokens ?? body.max_completion_tokens ??
+    body.max_tokens ?? generation?.maxOutputTokens ?? options?.num_predict ??
+    config.maxCompletionTokens ?? config.maxTokens ?? 1_000;
+  const prepared = await prepareAttemptTranscript({
     request: createChatRequest(input, input.signal, nativeReasoningApi),
     config,
     calibrationFactor,
     enforceLimit: false,
   });
+  return {
+    ...prepared,
+    outputTokenAllowance: typeof output === "number" && output > 0
+      ? output
+      : 1_000,
+  };
 }
 
 /** Private bridge from the mature wire protocol runner to the final contract. */

@@ -291,6 +291,8 @@ export type LlmCallPreparationCandidate = Readonly<{
   status: "fit" | "too_large";
   estimatedInputTokens: number;
   limitEstimatedInputTokens: number;
+  /** Provider output ceiling, or the configured allowance for an uncapped transport. */
+  outputTokenAllowance?: number;
   /** Present for built-in provider transcripts prepared by the LLM bridge. */
   promptFingerprint?: string;
   calibrationKey?: string;

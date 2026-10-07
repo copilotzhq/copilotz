@@ -678,6 +678,100 @@ Deno.test("non-retryable delivery failures dead-letter on the first attempt", as
   }
 });
 
+const recoveryPostgresUrl = Deno.env.get("COPILOTZ_TEST_POSTGRES_URL")?.trim();
+for (
+  const backend of [
+    { name: "PGlite", url: ":memory:", ignore: false },
+    {
+      name: "PostgreSQL",
+      url: recoveryPostgresUrl ?? "",
+      ignore: !recoveryPostgresUrl,
+    },
+  ]
+) {
+  Deno.test({
+    name:
+      `recovery delay distinguishes empty, due, deferred and settled queues (${backend.name})`,
+    ignore: backend.ignore,
+    async fn() {
+      const schema = `recovery_delay_${
+        crypto.randomUUID().replaceAll("-", "")
+      }`;
+      const fixture = await createFixture(backend.url, schema);
+      const { store } = fixture;
+      try {
+        assertEquals(await store.nextRecoveryDelayMs(), null);
+        const committed = await store.append({
+          type: "work.created",
+          namespace: "tenant-a",
+          payload: {},
+        }, ["worker"]);
+        const id = committed.deliveries[0].id;
+        assertEquals(await store.nextRecoveryDelayMs(), 0);
+
+        assertExists(
+          await store.claimDelivery({ id, owner: "worker", leaseMs: 60_000 }),
+        );
+        const leaseDelay = await store.nextRecoveryDelayMs();
+        assert(leaseDelay !== null && leaseDelay > 0 && leaseDelay <= 60_000);
+
+        await store.failDelivery({
+          id,
+          owner: "worker",
+          error: new Error("retry later"),
+          backoffMs: 60_000,
+        });
+        const retryDelay = await store.nextRecoveryDelayMs();
+        assert(retryDelay !== null && retryDelay > 0 && retryDelay <= 60_000);
+        const tables = createCoreTableNames(schema);
+        await fixture.session.query(
+          `UPDATE ${tables.event_deliveries}
+           SET available_at = NOW() - INTERVAL '1 second' WHERE id = $1`,
+          [id],
+        );
+        assertEquals(await store.nextRecoveryDelayMs(), 0);
+        assertExists(
+          await store.claimDelivery({ id, owner: "retry", leaseMs: 60_000 }),
+        );
+        assertEquals(
+          (await store.succeedDelivery(id, "retry"))?.status,
+          "succeeded",
+        );
+        assertEquals(await store.nextRecoveryDelayMs(), null);
+
+        // Exhausted leases still terminalize in the same recovery query.
+        const exhausted = await store.append(
+          {
+            type: "work.exhausted",
+            namespace: "tenant-a",
+            payload: {},
+          },
+          ["worker"],
+          { maxAttempts: 1 },
+        );
+        const exhaustedId = exhausted.deliveries[0].id;
+        assertExists(
+          await store.claimDelivery({
+            id: exhaustedId,
+            owner: "crashed",
+            leaseMs: 0,
+          }),
+        );
+        assertEquals(await store.nextRecoveryDelayMs(), null);
+        assertEquals(
+          (await store.getDelivery(exhaustedId))?.status,
+          "dead_letter",
+        );
+      } finally {
+        if (backend.name === "PostgreSQL") {
+          await fixture.session.query(`DROP SCHEMA "${schema}" CASCADE`);
+        }
+        await closeFixture(fixture);
+      }
+    },
+  });
+}
+
 Deno.test("A21 crash recovery and concurrent claims preserve one delivery owner", async () => {
   const fixture = await createFixture();
   const { store } = fixture;

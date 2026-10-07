@@ -1249,14 +1249,15 @@ export function createEventStore(
     async nextRecoveryDelayMs() {
       const params: unknown[] = [];
       const exhausted = exhaustedLeasesCte(params);
+      // Keep an empty queue's NULL so recovery can stop; clamp due work below.
       const result = await session.query<{
         delay_ms: string | number | null;
       }>(
         `WITH ${exhausted}
-         SELECT GREATEST(0, EXTRACT(EPOCH FROM (
+         SELECT EXTRACT(EPOCH FROM (
            MIN(CASE WHEN status = 'leased' THEN lease_expires_at ELSE available_at END)
            - NOW()
-         )) * 1000) AS delay_ms
+         )) * 1000 AS delay_ms
          FROM ${tables.event_deliveries}
          WHERE status IN ('pending', 'leased', 'retry_wait')
            AND attempts < max_attempts`,

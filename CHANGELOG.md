@@ -1,3 +1,13 @@
+## 0.85.5 — 2026-10-07
+
+### Fixed
+
+- Stop continuous delivery recovery when its queue is empty. Preserve the SQL
+  aggregate's null result instead of converting it to a zero delay, which caused
+  two idle queries every second after work completed. Keep overdue work ready,
+  future retries and leases scheduled, and exhausted leases terminalized in the
+  existing query without adding SQL statements or changing delivery semantics.
+
 ## 0.85.4 — 2026-10-07
 
 ### Fixed

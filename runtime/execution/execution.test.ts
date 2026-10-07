@@ -295,6 +295,57 @@ Deno.test("recovery owner automatically reclaims a lease that expires after its 
     await closeFixture(fixture);
   }
 });
+Deno.test("continuous recovery leaves empty queues idle and cancels a settled queue's timer", async () => {
+  const fixture = await createFixture();
+  const callbacks: Array<() => void> = [];
+  const active = new Set<() => void>();
+  const executor = createDeliveryExecutor({
+    store: fixture.store,
+    registry: fixture.registry,
+    createContext: fixture.createContext,
+    workerId: "copilotz-idle-recovery-test",
+    continuousRecovery: true,
+    scheduler: {
+      schedule(callback) {
+        callbacks.push(callback);
+        active.add(callback);
+        return callback;
+      },
+      cancel(handle) {
+        active.delete(handle as () => void);
+      },
+    },
+  });
+  try {
+    await executor.dispatchRecoverable();
+    // Recovery scheduling is asynchronous after the sweep has returned.
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assertEquals(callbacks, []);
+
+    const committed = await appendMessage(fixture);
+    const id = committed.deliveries[0].id;
+    assertExists(
+      await fixture.store.claimDelivery({
+        id,
+        owner: "other",
+        leaseMs: 60_000,
+      }),
+    );
+    await executor.dispatchRecoverable();
+    const timer = await waitForScheduledCallback(callbacks);
+    assert(active.has(timer), "New recoverable work arms a timer after idle.");
+
+    await fixture.store.succeedDelivery(id, "other");
+    await executor.dispatchRecoverable();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assertEquals(active.size, 0, "An empty queue cancels the previous timer.");
+    assertEquals(callbacks.length, 1, "An empty queue never rearms recovery.");
+  } finally {
+    await executor.shutdown();
+    await closeFixture(fixture);
+  }
+});
+
 Deno.test("a filtered recovery cannot activate a cross-tenant continuous sweep", async () => {
   const fixture = await createFixture();
   const consumer = "processor:messages.observe";

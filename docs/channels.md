@@ -56,13 +56,15 @@ provider:
   settles; it rejects when the operation fails.
 - A newer `send` **supersedes** the active turn: its reader stops and durable
   cancellation is requested. The superseded `send` rejects with an `AbortError`.
-- `interrupt()` and `close()` request durable cancellation of the active turn
-  and stop its reader. They resolve when the handle's `cancel` call and the
-  reader cleanup finish, so how long they take depends on that handle. The
-  superseded or interrupted `send` rejects when it observes the abort; it does
-  not wait for durable cancellation to finish. Asynchronous ingress and egress
-  must honor their signal to stop promptly. `close()` does not drain queued
-  work, and after it `send` rejects.
+- `interrupt()` and `close()` request durable cancellation and stop the active
+  turn's reader. If its operation handle already exists, they await that
+  handle's cancellation and reader cleanup. During pending admission they can
+  return first; a late handle is cancelled when admission finishes. They do not
+  join previously superseded turns. The interrupted `send` rejects when it
+  observes the abort; asynchronous ingress and egress must honor their signal to
+  stop promptly. After `close()`, new sends reject. Session closure alone is not
+  a barrier for closing persistence while earlier sends are still pending.
+
 - If `egress` throws, the session cancels that turn and `send` rejects.
 
 The session is not a queue and not restart-durable delivery. If your protocol

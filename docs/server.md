@@ -134,11 +134,13 @@ Route `metadata` labels are trusted policy inputs that `authenticate` and
 `authorize` can read via `endpoint.metadata`; they grant nothing by themselves,
 including public-route exemptions.
 
-Every submission carries an `Idempotency-Key`. The same key with the same input
-from the same trusted identity returns the original receipt; different input
-fails with `409 idempotency_conflict`, and so does the same key from a different
-actor, without disclosing the original. Use one stable key per logical
-submission.
+Action and Collection mutation submissions carry an `Idempotency-Key`. External
+Channel webhooks instead use stable provider occurrence IDs; only
+request-observation Channels require that header. See [Channels](channels.md).
+For an Action submission, the same key with the same input from the same trusted
+identity returns the original receipt; different input fails with
+`409 idempotency_conflict`, and so does the same key from a different actor,
+without disclosing the original. Use one stable key per logical submission.
 
 Admission validates input against the target's input schema before anything
 runs. Fields marked with `secret()` from `@copilotz/copilotz/actions`, with a

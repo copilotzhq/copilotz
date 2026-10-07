@@ -162,20 +162,26 @@ Processor calling the Action lacks that provenance and produces no memory.
 
 ### Certified coverage and later prompts
 
-Later turns of the owning agent receive its ready checkpoint as context. A
-scope-compatible checkpoint without certified coverage (for example an older
-one) can still appear as context, but only a certified checkpoint lets Core trim
-raw history. Certification requires coverage that matches the agent, visibility
-scope, active branch and source range. Its `continuity` summary carries the
-current task, constraints and outstanding work forward. The first certified
-range starts at the beginning of eligible history; later ranges continue after
-the previous boundary. Certification proves source, visibility and provenance,
-not that the model's claims are true.
+Later turns of the owning agent receive the certified checkpoint's `continuity`
+summary as context. It belongs to that agent in that thread, like saved
+conversation messages: losing access to a peer's memory does not discard the
+summary or restart history consolidation. It can retain peer information already
+incorporated while access was granted. Future semantic-memory reads use current
+permissions instead of a cached copy of peer records in the checkpoint.
+
+Only certified coverage lets Core trim raw history. Certification requires
+coverage that matches the agent, visibility scope, active branch and source
+range, with a nonempty continuity summary. Uncertified checkpoints do not supply
+a cutoff or cached semantic context. The first certified range starts at the
+beginning of eligible history; later ranges continue after the previous
+boundary. Certification proves source, visibility and provenance, not that the
+model's claims are true.
 
 `maxContentEstimatedTokens` bounds the rendered semantic records in each memory
-context block. The required continuity summary is added in front of them, and
-shared peer memory (below) is rendered as its own block with its own bound, so
-the setting is not a cap on total memory text or on the prompt.
+context block. Writable memory and read-only peer memory (below) are rendered
+separately from currently readable records and relations, each with its own
+bound. The continuity summary is a separate contribution, so the setting is not
+a cap on total memory text or on the prompt.
 
 ### Background work, waits and errors
 
@@ -185,14 +191,20 @@ the setting is not a cap on total memory text or on the prompt.
   composes Core, `memoryPlugin` and the agent resources. Recovery after a
   restart additionally needs persistent storage and the same database, schema
   and namespace.
-- An existing pending checkpoint for the same agent and thread is reused. The
-  boundary advances only when a checkpoint becomes ready and certified.
+- Concurrent reservations for the same agent and thread compete for one
+  checkpoint ID derived from the allocation head captured before preparation.
+  The losing reservation joins the winner, even if their input budgets differ.
+  An existing pending automatic checkpoint is reused; an on-demand semantic
+  write does not block history maintenance. The boundary advances only when an
+  automatic checkpoint becomes ready and certified.
 - **Foreground compaction** is the exception: when a turn's formatted input
   would exceed the model's limit, Core may wait for certified progress and
-  rebuild the request. The wait is cancellable. Repeated attempts at the same
-  boundary, unavailable compaction, a failed checkpoint or an indivisible
-  oversized input end in an input-limit failure instead of silently dropping
-  history.
+  rebuild the request. The wait is cancellable. If another turn has already
+  consumed the pending range, Memory refreshes the reservation for the remaining
+  tail. Advancement follows message chronology, not opaque message IDs. A failed
+  checkpoint, unavailable compaction, repeated reservations without progress or
+  an indivisible oversized input end in an input-limit failure instead of
+  silently dropping history.
 - The checkpoint state update (a `long_term_memory.updated` Event with
   `data.record.status` `ready`) can be observed before
   `copilotz.memory.consolidation.commit.completed`, so neither Event alone shows
@@ -201,8 +213,9 @@ the setting is not a cap on total memory text or on the prompt.
 ### Scope and sharing
 
 - **Prompt context:** later turns of the same agent in the same thread use that
-  agent's scope-compatible ready checkpoint. Other agents in the thread don't
-  receive it as their own checkpoint.
+  agent's certified continuity for the active branch and visibility scope. Other
+  agents in the thread don't receive it as their own checkpoint. Current memory
+  grants control live semantic records, not ownership of this continuity.
 - **Search:** `search_memory` returns records from every memory space the caller
   can read, including spaces shared through explicit access and
   [Spaces](spaces.md) attachments. A stored fact is not necessarily private to
@@ -210,6 +223,10 @@ the setting is not a cap on total memory text or on the prompt.
 - **Shared peer memory:** when an explicit Space attachment gives a thread read
   access to a peer thread's memory space, its active records are added to
   prompts automatically as a read-only "shared space memory" block.
+- **Access removal:** detaching, moving, archiving or removing a Space stops
+  future peer-memory reads. Already incorporated conversation continuity stays
+  available, including any peer information it summarized. This is retention of
+  existing conversation context, not a grant to read new peer records.
 - Beyond such explicit access, nothing is shared across all threads, tenants or
   namespaces.
 

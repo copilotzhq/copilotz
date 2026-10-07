@@ -28,6 +28,7 @@ export type {
 } from "./shared/contracts.ts";
 export type { MessageRecord } from "./collections/index.ts";
 export {
+  compareThreadMessageRecords,
   listThreadMessageRecords,
   loadMessageRecord,
   loadParticipantRecord,

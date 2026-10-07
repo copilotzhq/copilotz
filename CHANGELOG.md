@@ -1,3 +1,21 @@
+## 0.85.3 — 2026-10-07
+
+### Fixed
+
+- Reserve automatic consolidation from one captured checkpoint sequence so
+  concurrent turns share one database-enforced checkpoint, even with different
+  source budgets. Ordinary on-demand semantic writes do not block history work.
+- Continue foreground consolidation when another turn has already consumed a
+  pending checkpoint. Check chronological boundary advancement, rather than
+  treating any different opaque Message ID as progress.
+- Keep certified continuity owned by its conversation when peer access changes.
+  Retrieve semantic records under current grants instead of copying peer memory
+  into the checkpoint. Previously learned continuity remains; future peer reads
+  stop after a Space move, detach, archive or removal.
+- Bound normal checkpoint selection to one row while preserving shared Agent
+  input preparation, provider prefix reuse, Tool continuations and source
+  guards.
+
 ## 0.85.2 — 2026-10-06
 
 ### Documentation

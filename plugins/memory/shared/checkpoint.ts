@@ -8,26 +8,18 @@ import type { CollectionRecord } from "@copilotz/copilotz/collections";
 
 import { estimateTextTokens } from "@copilotz/copilotz/llm/tokens";
 import { deriveWorkflowId } from "@copilotz/copilotz/events";
-import {
-  type MemoryRecordProjection,
-  type MemoryRecordRelation,
-  type MemorySpaceDescriptor,
-  renderLongTermMemory,
-} from "../authoring/consolidation/index.ts";
-import type { LongTermMemoryConfig } from "../resources/memory/config/index.ts";
+import type { MemorySpaceDescriptor } from "../authoring/consolidation/index.ts";
 import type {
   MemoryActionContext,
   MemoryProcessorContext,
 } from "./contracts.ts";
 import { optionalText, record, requiredText } from "./input.ts";
-import { checkpoints, createCheckpoint } from "./checkpoints.ts";
-import { checkpointAccessible, ensureWritableMemorySpace } from "./access.ts";
+import { createCheckpoint, readyCheckpoint } from "./checkpoints.ts";
+import { ensureWritableMemorySpace } from "./access.ts";
 import {
   certifiedHistoryBoundary,
   checkpointSourceMessages,
 } from "./source.ts";
-import { activeMemoryRecords } from "./retrieval.ts";
-import { recordRelations } from "../actions/consolidate-memory/proposal.ts";
 import { memoryTaskOwnsTurn } from "./task.ts";
 
 async function reserveOnDemandCheckpoint(
@@ -45,20 +37,11 @@ async function reserveOnDemandCheckpoint(
   const spaces = await ensureWritableMemorySpace(context, provenance.threadId);
   const thread = await loadThreadRecord(context, provenance.threadId);
   const previous = thread
-    ? (await checkpoints(
-      context,
-      provenance.threadId,
-      provenance.agentId,
-      "ready",
-    ))
-      .find((item) =>
-        checkpointAccessible(item, spaces) &&
-        Boolean(certifiedHistoryBoundary(item, {
-          agentId: provenance.agentId,
-          participantId: provenance.agentParticipantId,
-          thread,
-        }))
-      ) ?? null
+    ? await readyCheckpoint(context, {
+      agentId: provenance.agentId,
+      participantId: provenance.agentParticipantId,
+      thread,
+    })
     : null;
   const history = await listThreadMessageRecords(context, provenance.threadId);
   const triggerIndex = history.findIndex((message) =>
@@ -176,33 +159,19 @@ export async function prepareCheckpointSettlement(
   context: MemoryProcessorContext,
   input: Readonly<{
     checkpoint: CollectionRecord;
-    agentId: string;
-    spaces: readonly MemorySpaceDescriptor[];
-    config: LongTermMemoryConfig;
     result: Readonly<Record<string, unknown>>;
     retrievedIds?: readonly string[];
     unresolved?: readonly unknown[];
-    records?: readonly MemoryRecordProjection[];
-    relations?: readonly MemoryRecordRelation[];
   }>,
 ) {
   await checkpointSourceMessages(context, input.checkpoint);
-  const records = input.records ?? await activeMemoryRecords(
-    context,
-    input.spaces,
-  );
-  const ids = new Set(records.map((item) => item.id));
-  const relations = input.relations ?? await recordRelations(context, ids);
-  const semanticText = renderLongTermMemory({
-    records,
-    relations,
-    maxContentEstimatedTokens: input.config.maxContentEstimatedTokens,
-  });
   const continuity = requiredText(
     record(input.result).continuity,
     "Memory continuity",
   );
-  const text = `Conversation continuity:\n${continuity}\n\n${semanticText}`;
+  // Continuity belongs to the conversation. Semantic records are retrieved
+  // separately under current access, rather than copied into this artifact.
+  const text = `Conversation continuity:\n${continuity}`;
   const prepared = await context.content.prepare({
     type: "text",
     text,

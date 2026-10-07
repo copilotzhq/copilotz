@@ -5,6 +5,7 @@ import type {
   ConversationThread,
 } from "@copilotz/copilotz/core";
 import {
+  compareThreadMessageRecords,
   loadCoreThreadMessageSnapshot,
   prepareLlmTranscript,
 } from "@copilotz/copilotz/core";
@@ -14,7 +15,6 @@ import { deriveWorkflowId } from "@copilotz/copilotz/events";
 import type { MemorySourceMessage } from "../authoring/consolidation/index.ts";
 import type { MemoryProcessorContext } from "./contracts.ts";
 import { optionalText, record } from "./input.ts";
-import { checkpointAccessible, threadMemorySpaces } from "./access.ts";
 
 export class MemorySourceInvalidatedError extends Error {
   override name = "MemorySourceInvalidatedError";
@@ -53,6 +53,28 @@ export function certifiedHistoryBoundary(
     !optionalText(coverage.continuity)
   ) return undefined;
   return optionalText(coverage.endMessageId);
+}
+
+/** Equality is not progress; chronological message order determines advancement. */
+export async function historyBoundaryAdvances(
+  context: Pick<MemoryProcessorContext, "collections">,
+  threadId: string,
+  boundary: string,
+  previous?: string,
+): Promise<boolean> {
+  if (!previous) return true;
+  if (boundary === previous) return false;
+  const [next, before] = await Promise.all([
+    context.collections.message.get({ id: boundary }),
+    context.collections.message.get({ id: previous }),
+  ]);
+  if (
+    !next || !before || next.threadId !== threadId ||
+    before.threadId !== threadId
+  ) {
+    throw new Error("Certified history boundary is no longer available.");
+  }
+  return compareThreadMessageRecords(next, before) > 0;
 }
 
 function sourceBytes(content: readonly unknown[]): number {
@@ -230,10 +252,6 @@ export async function checkpointSourceMessages(
             candidate.agentParticipantId ??
               record(checkpoint.metadata).agentParticipantId,
           ) && participant.participantType === "agent"
-      ) ||
-      !checkpointAccessible(
-        checkpoint,
-        await threadMemorySpaces(scoped, String(checkpoint.threadId)),
       ) ||
       candidate.schema === "copilotz.memory.coverage.v1" &&
         (candidate.branch !== branchCertificate(snapshot.thread) ||

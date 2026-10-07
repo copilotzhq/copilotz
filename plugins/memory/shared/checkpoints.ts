@@ -3,6 +3,71 @@ import type { CollectionRecord } from "@copilotz/copilotz/collections";
 import type { MemorySpaceDescriptor } from "../authoring/consolidation/index.ts";
 import type { MemoryProcessorContext } from "./contracts.ts";
 import { optionalText, record } from "./input.ts";
+import type { ConversationThread } from "@copilotz/copilotz/core";
+import { branchCertificate, certifiedHistoryBoundary } from "./source.ts";
+
+/** Capture the allocation head before preparing source; on-demand writes never trim history. */
+export async function checkpointHead(
+  context: Pick<MemoryProcessorContext, "collections">,
+  threadId: string,
+  agentId: string,
+): Promise<CollectionRecord | null> {
+  return (await context.collections.longTermMemory.list({
+    where: { threadId, agentId },
+    filter: { not: { field: "metadata.onDemand", eq: true } },
+    order: { field: "sequence", direction: "desc" },
+    limit: 1,
+  }))[0] ?? null;
+}
+
+/** Select certified, thread-owned continuity without consulting external memory grants. */
+export async function readyCheckpoint(
+  context: Pick<MemoryProcessorContext, "collections">,
+  input: Readonly<{
+    thread: ConversationThread;
+    agentId: string;
+    participantId: string;
+    historyScopeId?: string;
+    sourceEndMessageId?: string;
+  }>,
+): Promise<CollectionRecord | null> {
+  const values = await context.collections.longTermMemory.list({
+    where: {
+      threadId: input.thread.id,
+      agentId: input.agentId,
+      status: "ready",
+      ...(input.sourceEndMessageId
+        ? { sourceEndMessageId: input.sourceEndMessageId }
+        : {}),
+    },
+    filter: {
+      and: [
+        {
+          field: "metadata.coverage.schema",
+          eq: "copilotz.memory.coverage.v1",
+        },
+        {
+          field: "metadata.coverage.agentParticipantId",
+          eq: input.participantId,
+        },
+        {
+          field: "metadata.coverage.branch",
+          eq: branchCertificate(input.thread),
+        },
+        input.historyScopeId
+          ? {
+            field: "metadata.coverage.historyScopeId",
+            eq: input.historyScopeId,
+          }
+          : { field: "metadata.coverage.historyScopeId", exists: false },
+        { not: { field: "metadata.onDemand", eq: true } },
+      ],
+    },
+    order: { field: "sequence", direction: "desc" },
+    limit: 1,
+  });
+  return values.find((value) => certifiedHistoryBoundary(value, input)) ?? null;
+}
 
 function serializedActionError(
   value: unknown,
@@ -19,31 +84,13 @@ function checkpointSequence(value: CollectionRecord | null): number {
   return Number.isSafeInteger(sequence) && sequence > 0 ? sequence : 0;
 }
 
-export async function checkpoints(
-  context: Pick<MemoryProcessorContext, "collections">,
-  threadId: string,
-  agentId: string,
-  status?: "pending" | "ready" | "failed" | "cancelled",
-) {
-  const values = await context.collections.longTermMemory.list({
-    where: { threadId, agentId, ...(status ? { status } : {}) },
-    order: { field: "sequence", direction: "desc" },
-    limit: 1_000,
-  });
-  return (values.filter((item) =>
-    item.threadId === threadId && item.agentId === agentId &&
-    (!status || item.status === status)
-  ).sort((left, right) =>
-    checkpointSequence(right) - checkpointSequence(left)
-  ));
-}
-
 /** Reserve one checkpoint; only the caller may supply certified history coverage. */
 
 export async function createCheckpoint(
   context: MemoryProcessorContext,
   input: Readonly<{
     id?: string;
+    sequence?: number;
     threadId: string;
     agentId: string;
     spaces: readonly MemorySpaceDescriptor[];
@@ -58,9 +105,9 @@ export async function createCheckpoint(
   if (!defaultSpace || !writable.length) {
     throw new Error("Thread has no default writable memory space.");
   }
-  const sequence = checkpointSequence(
-    (await checkpoints(context, threadId, agentId))[0] ?? null,
-  ) + 1;
+  const sequence = input.sequence ?? (checkpointSequence(
+    await checkpointHead(context, threadId, agentId),
+  ) + 1);
   const id = input.id ?? `memory:${threadId}:${agentId}:${sequence}`;
   try {
     return await context.collections.longTermMemory.create({
@@ -92,9 +139,7 @@ export async function createCheckpoint(
         : `checkpoint:reserve:${id}`,
     });
   } catch (error) {
-    const concurrent = input.id
-      ? await context.collections.longTermMemory.get({ id })
-      : (await checkpoints(context, threadId, agentId, "pending"))[0];
+    const concurrent = await context.collections.longTermMemory.get({ id });
     if (concurrent) return concurrent;
     throw error;
   }

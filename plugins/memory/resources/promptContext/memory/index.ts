@@ -1,6 +1,5 @@
 import { memoryConfig } from "../../memory/config/index.ts";
 /** Contributes settled memory and coordinates foreground compaction. @module */
-import type { ContentRef } from "@copilotz/copilotz/content";
 import {
   type ContextContribution,
   type ContextResource,
@@ -9,20 +8,21 @@ import {
 
 import type { MemoryProcessorContext } from "../../../shared/contracts.ts";
 import { optionalText, record } from "../../../shared/input.ts";
-import { activeMemoryRecords } from "../../../shared/retrieval.ts";
+import {
+  activeMemoryRecords,
+  recordRelations,
+} from "../../../shared/retrieval.ts";
 import {
   isEditoriallyVisible,
   renderLongTermMemory,
 } from "../../../authoring/consolidation/index.ts";
 import { memoryTaskOwnsTurn } from "../../../shared/task.ts";
 import { settleCheckpointError } from "../../../shared/checkpoints.ts";
-import { checkpoints } from "../../../shared/checkpoints.ts";
-import {
-  checkpointAccessible,
-  threadMemorySpaces,
-} from "../../../shared/access.ts";
+import { readyCheckpoint } from "../../../shared/checkpoints.ts";
+import { threadMemorySpaces } from "../../../shared/access.ts";
 import {
   certifiedHistoryBoundary,
+  historyBoundaryAdvances,
   sourceMessagesFromTranscript,
 } from "../../../shared/source.ts";
 import { reserveMemoryCheckpoint } from "../../../shared/reservation.ts";
@@ -53,6 +53,7 @@ export const memoryContextResource:
       await reserveMemoryCheckpoint(context, input.trigger, config, {
         ownerParticipantId: input.participant.id,
         historyLimitEstimatedTokens: input.historyLimitEstimatedTokens,
+        historyAfterMessageId: input.historyAfterMessageId,
         prepared: {
           owner: input.participant,
           thread: input.thread,
@@ -86,63 +87,83 @@ export const memoryContextResource:
       if (!trigger || String(trigger.threadId) !== input.thread.id) {
         return false;
       }
-      const checkpoint = await reserveMemoryCheckpoint(
-        context,
-        trigger,
-        config,
-        {
-          ownerParticipantId: input.participant.id,
-          force: true,
-          historyLimitEstimatedTokens: input.historyLimitEstimatedTokens,
-        },
-      );
-      if (!checkpoint) return false;
-      let pollDelayMs = 50;
+      const observed = new Set<string>();
       for (;;) {
-        input.signal.throwIfAborted();
-        const current = await context.collections.longTermMemory.get({
-          id: checkpoint.id,
-        });
-        if (!current) {
+        const checkpoint = await reserveMemoryCheckpoint(
+          context,
+          trigger,
+          config,
+          {
+            ownerParticipantId: input.participant.id,
+            force: true,
+            historyLimitEstimatedTokens: input.historyLimitEstimatedTokens,
+            historyAfterMessageId: input.historyAfterMessageId,
+          },
+        );
+        if (!checkpoint) return false;
+        if (observed.has(checkpoint.id)) {
           throw new Error(
-            "Memory checkpoint '" + checkpoint.id + "' disappeared.",
+            "Memory reservation did not advance the conversation history boundary.",
           );
         }
-        if (current.status === "failed" || current.status === "cancelled") {
-          const detail = optionalText(record(current.error).message);
-          throw new Error(
-            "Memory checkpoint '" + checkpoint.id + "' " + current.status +
-              (detail ? ": " + detail : "."),
-          );
-        }
-        if (current.status === "ready") {
-          const thread = await loadThreadRecord(context, input.thread.id);
-          const boundary = thread && certifiedHistoryBoundary(current, {
-            agentId: input.agent.id,
-            participantId: input.participant.id,
-            thread,
+        observed.add(checkpoint.id);
+        let pollDelayMs = 50;
+        for (;;) {
+          input.signal.throwIfAborted();
+          const current = await context.collections.longTermMemory.get({
+            id: checkpoint.id,
           });
-          if (!boundary) {
+          if (!current) {
             throw new Error(
-              "Memory checkpoint '" + checkpoint.id +
-                "' became ready without certified coverage.",
+              "Memory checkpoint '" + checkpoint.id + "' disappeared.",
             );
           }
-          return boundary !== input.historyAfterMessageId;
+          if (current.status === "failed" || current.status === "cancelled") {
+            const detail = optionalText(record(current.error).message);
+            throw new Error(
+              "Memory checkpoint '" + checkpoint.id + "' " + current.status +
+                (detail ? ": " + detail : "."),
+            );
+          }
+          if (current.status === "ready") {
+            const thread = await loadThreadRecord(context, input.thread.id);
+            const boundary = thread && certifiedHistoryBoundary(current, {
+              agentId: input.agent.id,
+              participantId: input.participant.id,
+              thread,
+            });
+            if (!boundary) {
+              throw new Error(
+                "Memory checkpoint '" + checkpoint.id +
+                  "' became ready without certified coverage.",
+              );
+            }
+            if (
+              await historyBoundaryAdvances(
+                context,
+                input.thread.id,
+                boundary,
+                input.historyAfterMessageId,
+              )
+            ) return true;
+            // Another turn may already have consumed this pending range.
+            // Refresh reservation for the remaining tail rather than failing.
+            break;
+          }
+          await new Promise<void>((resolve, reject) => {
+            const abort = () => {
+              clearTimeout(timer);
+              reject(input.signal.reason);
+            };
+            const timer = setTimeout(() => {
+              input.signal.removeEventListener("abort", abort);
+              resolve();
+            }, pollDelayMs);
+            input.signal.addEventListener("abort", abort, { once: true });
+            if (input.signal.aborted) abort();
+          });
+          pollDelayMs = Math.min(pollDelayMs * 2, 1_000);
         }
-        await new Promise<void>((resolve, reject) => {
-          const abort = () => {
-            clearTimeout(timer);
-            reject(input.signal.reason);
-          };
-          const timer = setTimeout(() => {
-            input.signal.removeEventListener("abort", abort);
-            resolve();
-          }, pollDelayMs);
-          input.signal.addEventListener("abort", abort, { once: true });
-          if (input.signal.aborted) abort();
-        });
-        pollDelayMs = Math.min(pollDelayMs * 2, 1_000);
       }
     },
     async contribute(input) {
@@ -156,62 +177,80 @@ export const memoryContextResource:
       const spaces = await threadMemorySpaces({
         collections: input.collections,
       }, input.thread.id);
-      const peers = spaces.filter((space) =>
-        space.access === "read" && space.scopeType === "thread"
-      );
-      const records = peers.length
-        ? (await activeMemoryRecords({ collections: input.collections }, peers))
+      const records = spaces.length
+        ? (await activeMemoryRecords(
+          { collections: input.collections },
+          spaces,
+        ))
           .filter(isEditoriallyVisible)
         : [];
-      const shared: ContextContribution[] = records.length
-        ? [{
-          id: `${MEMORY_RESOURCE_ID}:peers`,
-          title: "SHARED SPACE MEMORY (READ ONLY)",
-          role: "context",
-          content: renderLongTermMemory({
-            records,
-            relations: [],
-            maxContentEstimatedTokens: config.maxContentEstimatedTokens,
-          }),
-        }]
-        : [];
-      const checkpoint = (await checkpoints(
+      const shared: ContextContribution[] = [];
+      const relations = await recordRelations(
+        { collections: input.collections },
+        new Set(records.map((item) => item.id)),
+      );
+      for (const access of ["read_write", "read"] as const) {
+        const ids = new Set(
+          spaces.filter((space) => space.access === access).map((space) =>
+            space.id
+          ),
+        );
+        const selected = records.filter((item) => ids.has(item.memorySpaceId));
+        const selectedIds = new Set(selected.map((item) => item.id));
+        if (selected.length) {
+          shared.push({
+            id: `${MEMORY_RESOURCE_ID}:${
+              access === "read" ? "peers" : "records"
+            }`,
+            title: access === "read"
+              ? "SHARED SPACE MEMORY (READ ONLY)"
+              : "YOUR SEMANTIC MEMORY",
+            role: "context",
+            content: renderLongTermMemory({
+              records: selected,
+              relations: relations.filter((relation) =>
+                selectedIds.has(relation.sourceId) &&
+                selectedIds.has(relation.targetId)
+              ),
+              maxContentEstimatedTokens: config.maxContentEstimatedTokens,
+            }),
+          });
+        }
+      }
+      const checkpoint = await readyCheckpoint(
         { collections: input.collections } as Pick<
           MemoryProcessorContext,
           "collections"
         >,
-        input.thread.id,
-        input.agent.id,
-        "ready",
-      )).find((item) => checkpointAccessible(item, spaces));
-      if (
-        !checkpoint || !Array.isArray(checkpoint.content) ||
-        !checkpoint.content.length
-      ) return shared.length ? shared : null;
+        {
+          thread: input.thread,
+          agentId: input.agent.id,
+          participantId: input.participant.id,
+          historyScopeId: input.historyScopeId,
+        },
+      );
+      if (!checkpoint) return shared.length ? shared : null;
       const boundary = certifiedHistoryBoundary(checkpoint, {
         agentId: input.agent.id,
         participantId: input.participant.id,
         historyScopeId: input.historyScopeId,
         thread: input.thread,
       });
-      // A scope-incompatible checkpoint may contain private material. Do not
-      // expose it as ordinary context. A compatible but uncertified checkpoint
-      // remains useful semantic context, but cannot trim raw history.
       const coverage = record(record(checkpoint.metadata).coverage);
-      if (coverage.schema === "copilotz.memory.coverage.v1" && !boundary) {
+      if (!boundary) {
         return shared.length ? shared : null;
       }
       const own = {
         id: checkpoint.id,
         title: "YOUR PERSISTENT MEMORY",
         role: "context" as const,
-        content: checkpoint.content.length === 1
-          ? checkpoint.content[0] as ContentRef
-          : {
-            type: "json" as const,
-            value: checkpoint.content,
-            role: "memory.refs",
-          },
+        content: {
+          type: "text" as const,
+          text: `Conversation continuity:\n${optionalText(
+            coverage.continuity,
+          )!}`,
+          role: "memory.continuity",
+        },
         capturedAt: checkpoint.updatedAt,
         ...(boundary ? { historyAfterMessageId: boundary } : {}),
       };

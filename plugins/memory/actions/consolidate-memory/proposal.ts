@@ -6,18 +6,15 @@ import type {
 } from "@copilotz/copilotz/core";
 import { addFormats, Ajv } from "../../../../dependencies/ajv.ts";
 
-import type { MemoryRecordRelation } from "../../authoring/consolidation/index.ts";
 import { memoryRecordCollection } from "../../collections/memory-record/index.ts";
 import {
   defaultMemoryLifecycle,
-  MEMORY_RELATION_TYPES,
   type MemoryDraftBase,
   type MemoryForm,
   type MemoryNodeRef,
   memorySourceKey,
   type ProposedMemoryRef,
 } from "../../authoring/ontology/index.ts";
-import type { MemoryProcessorContext } from "../../shared/contracts.ts";
 import { record, requiredText } from "../../shared/input.ts";
 
 type AjvValidator = ((value: unknown) => boolean) & {
@@ -171,22 +168,4 @@ export function intentOrInquiryStatus(
       typeof draft.status === "string"
     ? draft.status
     : defaultMemoryLifecycle(form);
-}
-
-export async function recordRelations(
-  context: MemoryProcessorContext,
-  ids: ReadonlySet<string>,
-) {
-  return ((await context.collections.memoryRecord.relations.list({
-    types: MEMORY_RELATION_TYPES,
-    limit: 1_000,
-  }))
-    .filter((relation) =>
-      ids.has(relation.source.id) && ids.has(relation.target.id)
-    )
-    .map((relation): MemoryRecordRelation => ({
-      sourceId: relation.source.id,
-      targetId: relation.target.id,
-      type: relation.type,
-    })));
 }

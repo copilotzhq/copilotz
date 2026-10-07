@@ -84,11 +84,12 @@ call is about to be too large.
 
 Creating a pending checkpoint records a `long_term_memory.created` Event. The
 plugin reacts to it by sending the agent an internal, scoped task message. The
-task carries a small checkpoint reference and a maintenance instruction, not a
-copy of the history. The agent's normal history preparation supplies the source
-messages, so the scoped turn shares its preparation and its common prompt prefix
-with ordinary turns. That prefix can be cached by the provider, but no cache hit
-is guaranteed.
+initial task stores its bounded source snapshot once, with Message and Asset
+references and frozen application context. Later tool calls and continuations
+carry a small reference to that task instead of copying the snapshot again. Core
+prepares this source through the agent's normal input pipeline, preserving the
+common prompt prefix used by ordinary turns. A provider can cache that prefix,
+but no cache hit is guaranteed.
 
 The agent finishes the task by calling `consolidate_memory` with the facts it
 selected. That alias runs the `copilotz.memory.consolidation.commit` Action,
@@ -120,11 +121,12 @@ harness and cannot execute its Memory work as shown.
 A turn whose model call would be too large is the exception: Core's foreground
 compaction can wait for a scoped checkpoint before that turn continues.
 
-`consolidate_memory` is only accepted inside that trusted scoped task. Calling
-it from a plain `app.send` or from your own Processor doesn't produce memory,
-because the call lacks Core's task and tool provenance. And because the scoped
-task is a model turn, consolidation uses your provider connection and can incur
-model work. This chapter makes no claim about cost.
+`consolidate_memory` requires trusted Core tool provenance. An agent can also
+call it during an ordinary turn: Memory reserves an on-demand checkpoint and the
+agent continues after the tool result. A direct Action invocation through
+`app.send` or your own Processor lacks that provenance and is rejected. The
+background scoped task uses the same provider connection as the agent and can
+incur model work; this chapter makes no claim about cost.
 
 ### Scope
 
@@ -133,8 +135,9 @@ memories are stored in that thread's memory space. Two things read them
 differently:
 
 - **Prompt context:** later turns of the same agent in the same thread use that
-  agent's certified ready checkpoint. Other agents in the thread don't receive
-  it as their own memory.
+  agent's ready checkpoint; only certified coverage can trim raw history. Other
+  agents don't receive it as their own checkpoint. Explicit Space attachments
+  can additionally contribute read-only peer-thread memories.
 - **Search:** `search_memory` looks through memory records in every space the
   caller can access, including spaces shared with explicit access permissions.
   So a stored memory isn't necessarily private to one agent.
@@ -174,8 +177,8 @@ export const agentPlugins = [corePlugin, notesToolsPlugin, memoryPlugin];
 // Memory policy for every agent in this application.
 memory: {
   config: {
-    // Memory is on by default; set false to turn it off without removing
-    // the plugin.
+    // Automatic maintenance and prompt context are on by default. Set false
+    // to disable them; granted on-demand consolidation remains available.
     enabled: true,
     // Start a checkpoint once the prepared ordinary history reaches about
     // this many estimated tokens. This is the library default.
@@ -184,8 +187,8 @@ memory: {
     // library default is 0; this application chooses to keep the latest
     // exchange verbatim.
     retainRecentEstimatedTokens: 2000,
-    // Upper bound for the memory text rendered back into a prompt. This is
-    // the library default.
+    // Bound for rendered semantic records. Continuity and other prompt
+    // content have separate budgets. This is the library default.
     maxContentEstimatedTokens: 12000,
     // Maximum number of memories `search_memory` returns. This is the
     // library default.
@@ -211,9 +214,9 @@ after Chapter 9 it's:
 tools: ["saveNote", "get_current_time", "search_memory", "consolidate_memory"],
 ```
 
-Both grants are required. `search_memory` lets the assistant look things up in
-its memory. `consolidate_memory` is how the scoped task finishes; without it the
-task can't complete and no checkpoint becomes ready.
+This example grants both tools. `search_memory` lets the assistant look things
+up in its memory. `consolidate_memory` is required for the scoped task to
+finish; without it the task cannot commit a ready checkpoint.
 
 The aliases exist only because `memoryPlugin` is composed. If `assistant.ts`
 grants them while `agent.ts` doesn't include the plugin, composition fails

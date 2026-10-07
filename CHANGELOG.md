@@ -1790,5 +1790,7 @@ Copilotz v3 is an intentionally breaking pre-1.0 architecture release.
 - Agent `allowed*` fields, implicit all-resource inheritance, and static CLI
   agent/tool metadata.
 
-See [the v3 migration guide](docs/migration-v3.md) and
-[downstream migration matrix](docs/v3/downstream-migration.md).
+See
+[the v3 migration guide](https://github.com/copilotzhq/copilotz/blob/4a3c0b55ed857919757cc077ccbf479277d6eca8/docs/migration-v3.md)
+and
+[downstream migration matrix](https://github.com/copilotzhq/copilotz/blob/4a3c0b55ed857919757cc077ccbf479277d6eca8/docs/v3/downstream-migration.md).

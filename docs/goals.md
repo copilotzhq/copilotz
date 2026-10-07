@@ -26,8 +26,8 @@ relay can loop forever, double-send on retry or report success just because each
 send settled. The loop needs:
 
 - a hard turn limit and an explicit stop decision;
-- stable admission identities, so a retried loop re-observes earlier turns
-  instead of sending them again;
+- stable admission identities and an explicit recovery boundary for a loop
+  interrupted before its Action records a terminal outcome;
 - a way to reach the application's own `send` without the Action creating a
   second application;
 - a result that names its outcome, separate from whether the Action ran.
@@ -184,8 +184,9 @@ const startReview = defineProcessor<ReviewContext>({
       content: brief,
       policy: "review",
     };
-    // A stable key for this call within the delivery: a retry reuses the
-    // recorded Action run, and its turns reuse their deduplication IDs.
+    // A stable key for this call within the delivery lets ordinary Action
+    // replay restore a recorded terminal outcome. It does not resume a
+    // partially executed Goal; see Retries and identity below.
     const result = await context.actions.runGoal(input, {
       operationKey: "run-review",
     });
@@ -201,6 +202,7 @@ const startReview = defineProcessor<ReviewContext>({
 
 // Late binding: the adapter needs the app's `send`, but the app does not
 // exist yet. The closure reads `app` only when a Goal runs, after creation.
+// This direct adapter supports a new loop; it does not replay prior turns.
 let app: CopilotzApplication | undefined;
 const conversation: GoalConversationAdapter = {
   send(input) {
@@ -326,10 +328,22 @@ reach itself. Without `decide`, the loop runs until the limit and returns
 
 ### Retries and identity
 
-Every turn is admitted with the deduplication ID `<actionRunId>:<turn>:<phase>`.
-A retried Action run re-sends the same IDs and re-observes the recorded turns
-rather than creating new ones. There is no separate durable Goal cursor, so
-`decide` must give the same answer for the same recorded replies.
+Every turn is sent with the deduplication ID `<actionRunId>:<turn>:<phase>`.
+Ordinary Action replay restores a recorded terminal outcome without executing
+the Goal loop again.
+
+A Goal has no durable cursor or built-in resume for a partially executed loop.
+If execution re-enters before a terminal Action outcome was recorded, it starts
+from the first turn with the same deduplication IDs. The direct `app.send`
+Adapter above creates a fresh correlation ID and observes live outputs; it does
+not retrieve previous turn results, and repeat admission can fail with a
+deduplication conflict. Stable deduplication IDs alone do not make the loop
+resumable.
+
+If partial-run recovery is required, the host-supplied conversation Adapter must
+reconcile previous admissions and provide their recorded turn outputs. Keep
+`decide` deterministic over those replies as well; the example above does not
+implement that recovery behavior.
 
 ### Authorization and provenance
 

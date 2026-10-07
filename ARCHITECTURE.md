@@ -376,10 +376,13 @@ runtime primitive. A Goal policy selects a host-supplied conversation Adapter;
 its `send` capability can delegate to the same application. The Action serially
 alternates target and lead turns, waiting for each send to settle and relaying
 its final canonical Message content. Its budget counts target turns; lead turns
-occur only between them. Every send uses a deterministic identity from the
-Action run, turn and phase. An ordinary Action retry re-enters the loop and
-re-observes those recorded turns. There is no separate durable Goal cursor, so
-policy decisions must remain deterministic over the recorded replies. See
+occur only between them. Every send uses a deterministic deduplication ID from
+the Action run, turn and phase. Ordinary Action replay restores a recorded
+terminal outcome without executing the loop again. There is no durable Goal
+cursor or built-in partial-run resume: a direct application `send` Adapter does
+not replay previous turn results. A host that requires partial-run recovery must
+supply reconciliation and replay through its conversation Adapter, with
+deterministic policy decisions over the recorded replies. See
 [Goals](docs/goals.md) for the complete composition and authorization boundary.
 
 Optional semantic plugins receive no runtime back doors. The base Schedules

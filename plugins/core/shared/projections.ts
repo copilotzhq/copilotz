@@ -520,7 +520,7 @@ export async function loadThreadMessageRecordWindow(
   if (anchorActive && anchor) {
     // Anchors must pass the same storage authorization predicate as paged rows.
     const [authorized] = await messages.list({
-      where: { id: anchor.id },
+      where: { threadId: String(threadRecord.id), id: anchor.id },
       filter: threadMessageWindowFilter(base),
       limit: 1,
     });
@@ -532,6 +532,9 @@ export async function loadThreadMessageRecordWindow(
     let cursor = anchor?.id;
     while (requestedLimit === undefined || selected.length < requestedLimit) {
       const page = await messages.list({
+        // Expose the same thread constraint through the indexed text path.
+        // The complete predicate below still owns authorization and bounds.
+        where: { threadId: String(threadRecord.id) },
         filter: threadMessageWindowFilter(base),
         order: {
           field: "createdAt",

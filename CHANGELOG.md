@@ -1,3 +1,16 @@
+## 0.85.1 — 2026-10-06
+
+### Fixed
+
+- Expose the private Agent window's thread constraint through the same indexed
+  access path as public history. Keep all scope, visibility, branch, anchor and
+  cursor checks; preparing history adds no SQL statements.
+- Add explicit `provisionCoreHistoryIndexes` provisioning for the
+  namespace/collection/thread/time/ID index and its expression statistics.
+  Existing schemas can build it concurrently without changing stored Messages or
+  the v5 Event schema. Run provisioning once per physical Core schema;
+  installing the package alone does not create this index.
+
 ## 0.85.0 — 2026-10-06
 
 ### Changed

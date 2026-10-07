@@ -39,6 +39,7 @@ export {
 } from "./shared/projections.ts";
 export * from "./shared/thread-metadata.ts";
 export * from "./shared/workflow-metadata.ts";
+export { provisionCoreHistoryIndexes } from "./collections/message/storage.ts";
 export * from "./actions/index.ts";
 export * from "./authoring/index.ts";
 export * from "./resources/index.ts";

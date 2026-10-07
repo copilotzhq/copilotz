@@ -12,6 +12,29 @@ Conversation history and revisions require durable, asset-aware records.
 
 Access `message` by ID or query it by Thread and creation order.
 
+Provision the chronological history index once per physical Core schema, after
+the Event schema exists:
+
+```ts
+import { provisionCoreHistoryIndexes } from "@copilotz/copilotz/core";
+
+await provisionCoreHistoryIndexes(sqlSession, databaseSchema);
+```
+
+For an existing PostgreSQL schema, use `{ concurrently: true }` outside a
+transaction to allow writes during index construction. This explicit operation
+also runs `ANALYZE`: expression statistics keep the planner from severely
+underestimating a thread's history and sorting every Message before returning a
+page. A failed or conflicting index definition is rejected. Normal history and
+scope selection never provision indexes. Collection `indexes` declarations do
+not currently install physical indexes automatically.
+
+The index orders by namespace, Collection, `data ->> 'threadId'`, `created_at`
+and `id`; timestamp ties retain their existing ID ordering. Its namespace and
+Collection keys work with parameterized queries without relying on a partial
+index's constant type predicate. Large pages can stop an ordered scan at their
+limit; small bounded ranges may use a cheap bitmap scan and sort.
+
 ## How it works
 
 The Collection adopts declared content, records routing fields, and validates

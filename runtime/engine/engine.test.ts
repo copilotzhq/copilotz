@@ -236,6 +236,7 @@ Deno.test("factory engine scopes typed processor capabilities and deduplicates r
       "event_deliveries",
       "events",
       "nodes",
+      "open_actions",
     ]);
     const namespace = "tenant-a";
     const participants = fixture.engine.collections.get("participant");

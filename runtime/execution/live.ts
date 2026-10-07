@@ -23,6 +23,7 @@ export type LiveDispatchMetadata = Readonly<{
   eventType: string;
   correlationId: string;
   settlementScopeId?: string;
+  actionScopeId?: string;
   dispatchAttemptId: string;
   idempotencyKey: string;
 }>;
@@ -35,6 +36,7 @@ export type LiveProcessorContextBase = Readonly<{
   dispatchAttemptId: string;
   idempotencyKey: string;
   settlementScopeId?: string;
+  actionScopeId?: string;
   createMutationIdentity(
     operationKey: string,
     metadata?: Record<string, unknown>,
@@ -46,6 +48,7 @@ export type LiveMutationIdentity = Readonly<{
   correlationId: string;
   deduplicationId: string;
   settlementScopeId?: string;
+  actionScopeId?: string;
   metadata: Readonly<Record<string, unknown>>;
 }>;
 
@@ -79,6 +82,7 @@ export type InvokeLiveProcessorsOptions = Readonly<{
   resolveEvent?: LiveProcessorEventResolver;
   signal: AbortSignal;
   settlementScopeId?: string;
+  actionScopeId?: string;
   createContext: LiveProcessorContextFactory;
   createDispatchAttemptId?: () => string;
 }>;
@@ -96,6 +100,7 @@ export type LiveEventDispatcher = Readonly<{
     event: CopilotzEvent,
     databaseSchema?: string,
     settlementScopeId?: string,
+    actionScopeId?: string,
   ): Promise<LiveEventDispatchHandle>;
 }>;
 
@@ -147,6 +152,9 @@ function parseMetadata(
       value.correlationId,
       "Live correlation ID",
     ),
+    ...(typeof value.actionScopeId === "string" && value.actionScopeId.trim()
+      ? { actionScopeId: value.actionScopeId.trim() }
+      : {}),
     ...(typeof value.settlementScopeId === "string" &&
         value.settlementScopeId.trim()
       ? { settlementScopeId: value.settlementScopeId.trim() }
@@ -245,6 +253,7 @@ function mutationIdentity(
   processorId: string,
   dispatchAttemptId: string,
   settlementScopeId?: string,
+  actionScopeId?: string,
 ): LiveProcessorContextBase["createMutationIdentity"] {
   return (operationKey, metadata = {}) => {
     const key = requiredText(operationKey, "Live mutation operation key");
@@ -254,6 +263,7 @@ function mutationIdentity(
       correlationId: event.correlationId,
       deduplicationId: `live:${dispatchAttemptId}:${processorId}:${key}`,
       ...(settlementScopeId ? { settlementScopeId } : {}),
+      ...(actionScopeId ? { actionScopeId } : {}),
       metadata: {
         ...structuredClone(metadata),
         ...(causationId ? { sourceEventId: causationId } : {}),
@@ -291,6 +301,7 @@ async function runOne(
     processorId,
     dispatchAttemptId,
     idempotencyKey: `live:${dispatchAttemptId}:${processorId}`,
+    ...(options.actionScopeId ? { actionScopeId: options.actionScopeId } : {}),
     ...(options.settlementScopeId
       ? { settlementScopeId: options.settlementScopeId }
       : {}),
@@ -299,6 +310,7 @@ async function runOne(
       processorId,
       dispatchAttemptId,
       options.settlementScopeId,
+      options.actionScopeId,
     ),
   } as const;
   const context = await options.createContext(base);
@@ -371,6 +383,7 @@ export function createLiveProcessorWorkload(
         resolveEvent: options.resolveEvent,
         transients: options.transients,
         settlementScopeId: metadata.settlementScopeId,
+        actionScopeId: metadata.actionScopeId,
       },
       metadata.processorId,
       metadata.dispatchAttemptId,
@@ -403,7 +416,12 @@ export function createLiveEventDispatcher(
 
   return ({
     workload,
-    async dispatch(event, databaseSchemaInput, settlementScopeId) {
+    async dispatch(
+      event,
+      databaseSchemaInput,
+      settlementScopeId,
+      actionScopeId,
+    ) {
       const databaseSchema = requiredText(
         databaseSchemaInput ?? defaultDatabaseSchema,
         "Live database schema",
@@ -428,6 +446,7 @@ export function createLiveEventDispatcher(
             eventType: event.type,
             correlationId: event.correlationId,
             ...(settlementScopeId ? { settlementScopeId } : {}),
+            ...(actionScopeId ? { actionScopeId } : {}),
             dispatchAttemptId,
             idempotencyKey: `live:${dispatchAttemptId}:${processor.id}`,
           } as const;

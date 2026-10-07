@@ -1,3 +1,7 @@
+import {
+  createReasoningOutputReader,
+  isReasoningTag,
+} from "./reasoning-output.ts";
 import type {
   ExtractedPart,
   ProcessStreamOptions,
@@ -47,13 +51,7 @@ const STREAMING_HIDDEN_PROTOCOL_TAGS = [
   "tool_result",
   "result",
   "target_ids",
-  "mm:think",
-  "think",
-  "thought",
-  "thinking",
-  "reasoning",
   "malformed_tool_call_recovery",
-  "visible_reasoning_markup_recovery",
   "recovery_previous_response_context",
   "recovery_required_action",
   "recovery_tool_call_rules",
@@ -518,6 +516,7 @@ export async function processStream(
   // so parseToolCallsFromResponse can extract them downstream.
   let fullResponse = "";
   let reasoningResponse = "";
+  const reasoningReader = createReasoningOutputReader();
   const localStopSequences = options?.localStopSequences ??
     getLocalStopSequences(config);
   const localStopState: LocalStopState = { pending: "" };
@@ -562,11 +561,17 @@ export async function processStream(
     if (reason) finishReason = reason;
   };
 
-  const appendVisibleContent = (text: string) => {
-    if (!text) return;
+  const appendVisibleContent = (text: string, final = false) => {
     fullResponse += text;
+    const extracted = reasoningReader.write(text, final);
+    if (extracted.reasoning) {
+      reasoningResponse += extracted.reasoning;
+      if (config?.outputReasoning !== false) {
+        onChunk(extracted.reasoning, { isReasoning: true });
+      }
+    }
     const filtered = filterTaggedControlTokensStreaming(
-      text,
+      extracted.visible,
       filterState,
       options?.extractedBlockTags ?? [],
       options?.onHiddenBlockChunk,
@@ -631,22 +636,25 @@ export async function processStream(
     };
   };
 
-  const result = () => ({
-    content: options?.postProcess
-      ? options.postProcess(fullResponse)
-      : fullResponse,
-    reasoning: reasoningResponse,
-    ...(usage ? { usage } : {}),
-    ...(nativeReasoning ? { nativeReasoning } : {}),
-    finishReason,
-    stoppedByLocalStop,
-    ...(stoppedByLocalStop
-      ? { localStopReason: "local_stop_sequence" as const }
-      : {}),
-    ...(localStopState.matchedStop
-      ? { localStopSequence: localStopState.matchedStop }
-      : {}),
-  });
+  const result = () => {
+    appendVisibleContent("", true);
+    return ({
+      content: options?.postProcess
+        ? options.postProcess(fullResponse)
+        : fullResponse,
+      reasoning: reasoningResponse,
+      ...(usage ? { usage } : {}),
+      ...(nativeReasoning ? { nativeReasoning } : {}),
+      finishReason,
+      stoppedByLocalStop,
+      ...(stoppedByLocalStop
+        ? { localStopReason: "local_stop_sequence" as const }
+        : {}),
+      ...(localStopState.matchedStop
+        ? { localStopSequence: localStopState.matchedStop }
+        : {}),
+    });
+  };
 
   const localStopResult = () => {
     const finalized = options?.continueAfterLocalStop === true
@@ -706,7 +714,7 @@ export function filterTaggedControlTokensStreaming(
   const structuredTags = normalizeStructuredTagNames([
     ...COPILOTZ_CONTROL_TAGS,
     ...STREAMING_HIDDEN_PROTOCOL_TAGS,
-    ...extractedBlockTags,
+    ...extractedBlockTags.filter((tag) => !isReasoningTag(tag)),
   ]).map((name) => ({
     name,
     endTag: `</${name}>`,

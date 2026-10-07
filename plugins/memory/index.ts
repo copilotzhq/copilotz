@@ -1,71 +1,14 @@
-/**
- * Public semantic-memory plugin API.
- *
- * @module
- */
-
+/** Memory plugin: immutable notes and conversation continuity. @module */
 export {
   DEFAULT_LONG_TERM_MEMORY_CONFIG,
   type LongTermMemoryConfig,
 } from "./resources/memory/config/index.ts";
 export {
   longTermMemoryCollection,
-  memoryRecordCollection,
+  memoryNoteCollection,
   memorySpaceAccessCollection,
   memorySpaceCollection,
 } from "./collections/index.ts";
-export {
-  buildMemoryConsolidationInstruction,
-  isEditoriallyVisible,
-  parseConsolidateMemoryInput,
-  proposalDrafts,
-  renderLongTermMemory,
-  selectLongTermMemoryRange as selectEventLongTermMemoryRange,
-  stableMemoryRecordId,
-} from "./authoring/consolidation/index.ts";
-export type {
-  MemoryRecordProjection,
-  MemoryRecordRelation,
-  MemorySourceMessage,
-  MemorySpaceDescriptor,
-  RetrievedMemoryRecord,
-  SelectedMemoryRange,
-} from "./authoring/consolidation/index.ts";
-export {
-  CORE_MEMORY_KINDS,
-  defaultMemoryLifecycle,
-  defineMemoryKind,
-  MEMORY_FORMS,
-  MEMORY_LIFECYCLES,
-  MEMORY_RELATION_TYPES,
-  MEMORY_VALIDITIES,
-  memoryLifecycleAllows,
-  memorySourceKey,
-} from "./authoring/ontology/index.ts";
-export type {
-  AssertionMemoryDraft,
-  ConsolidateMemoryInput,
-  EntityMemoryDraft,
-  InquiryMemoryDraft,
-  IntentMemoryDraft,
-  MemoryDraftBase,
-  MemoryEpistemic,
-  MemoryForm,
-  MemoryKindDefinition,
-  MemoryLifecycleDraft,
-  MemoryLifecycleStatus,
-  MemoryNodeRef,
-  MemoryProvenance,
-  MemoryRecord,
-  MemoryRelationDraft,
-  MemoryRelationType,
-  MemoryTemporal,
-  MemoryValidity,
-  MemoryValidityStatus,
-  OccurrenceMemoryDraft,
-  ProcedureMemoryDraft,
-  ProposedMemoryRef,
-} from "./authoring/ontology/index.ts";
 export { CONSOLIDATE_MEMORY_ACTION_ID, memoryPlugin } from "./plugin.ts";
 export type { LongTermMemoryPlugin } from "./plugin.ts";
 export type {
@@ -77,11 +20,4 @@ export type {
   MemoryActionContext,
   MemoryProcessorContext,
 } from "./shared/contracts.ts";
-export type {
-  MemoryAdapters,
-  MemoryEmbed,
-  MemoryEmbeddingInput,
-  MemoryResources,
-  MemoryRuntimeContext,
-} from "./authoring/contracts/index.ts";
 export * from "./authoring/index.ts";

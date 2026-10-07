@@ -1,9 +1,16 @@
 /** Defines the durable Agent-to-Agent Ask Action. @module */
 
 import {
+  type ActionDeferral,
   type ActionDefinition,
+  type ActionResolution,
+  deferAction,
   defineAction,
 } from "@copilotz/copilotz/actions";
+import {
+  type ContentSequence,
+  contentSequenceSchema,
+} from "@copilotz/copilotz/content";
 import type { CollectionRecord } from "@copilotz/copilotz/collections";
 import { deriveWorkflowId } from "@copilotz/copilotz/events";
 import type { AgentResource } from "../../authoring/define-agent/index.ts";
@@ -13,6 +20,8 @@ import {
 } from "../../shared/runtime-context.ts";
 import {
   type AgentAskMetadata,
+  agentAskMetadata,
+  type AgentAskResultMetadata,
   coreToolActionMetadata,
   coreToolActionOriginFrom,
   withAgentAskMetadata,
@@ -36,7 +45,14 @@ export type AskInput = Readonly<{
   mode?: "public" | "private";
 }>;
 
-export type AskOutput = Readonly<{ status: "deferred" }>;
+export type AskResult = Readonly<
+  { content: ContentSequence; askResult: AgentAskResultMetadata }
+>;
+export type AskOutput = AskResult | ActionDeferral;
+export type AskWork = Readonly<{
+  ask: AgentAskMetadata;
+  question: Readonly<Record<string, unknown> & { id: string }>;
+}>;
 
 const askInputSchema = {
   type: "object",
@@ -66,8 +82,30 @@ const askInputSchema = {
 const askOutputSchema = {
   type: "object",
   additionalProperties: false,
-  properties: { status: { const: "deferred" } },
-  required: ["status"],
+  properties: {
+    content: contentSequenceSchema,
+    askResult: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        schema: { const: "copilotz.ask-result.v1" },
+        askId: { type: "string" },
+        status: { const: "completed" },
+        askedParticipantId: { type: "string" },
+        askedAgentId: { type: "string" },
+        answerMessageId: { type: "string" },
+      },
+      required: [
+        "schema",
+        "askId",
+        "status",
+        "askedParticipantId",
+        "askedAgentId",
+        "answerMessageId",
+      ],
+    },
+  },
+  required: ["content", "askResult"],
 } as const;
 
 function normalizedIdentity(value: string | null | undefined): string | null {
@@ -255,7 +293,7 @@ async function executeAsk(
       metadata.agentTurn,
     )
     : withAgentAskMetadata(undefined, ask);
-  await context.actions.createThreadMessage({
+  const question: AskWork["question"] = {
     id: questionMessageId,
     threadId: metadata.threadId,
     sender: askingParticipant,
@@ -274,11 +312,90 @@ async function executeAsk(
       },
     metadata: questionMetadata,
     ...(metadata.agentTurn ? { historyScopeId: metadata.agentTurn.id } : {}),
-  }, {
-    operationKey: `ask:${askId}:question`,
-    signal: context.signal,
+  };
+  return deferAction({ ask, question } satisfies AskWork);
+}
+
+async function resolveAsk(
+  _input: AskInput,
+  context: CoreActionContext,
+  resolution: ActionResolution,
+): Promise<AskResult> {
+  const work = resolution.work as AskWork;
+  const ask = work.ask;
+  if (
+    !ask || ask.toolActionRunId !== context.action.runId ||
+    ask.questionMessageId !== work.question.id
+  ) {
+    throw new Error("Ask resolver received an inconsistent handoff.");
+  }
+  const answers = await requireCollection(context, "message").list({
+    filter: {
+      and: [
+        { field: "threadId", eq: ask.origin.threadId },
+        { field: "senderId", eq: ask.askedParticipantId },
+        {
+          field: "metadata.copilotzAsk.toolActionRunId",
+          eq: context.action.runId,
+        },
+        {
+          field: "metadata.copilotzAsk.questionMessageId",
+          eq: ask.questionMessageId,
+        },
+        { field: "metadata.copilotzAsk.phase", eq: "answer" },
+      ],
+    },
+    limit: 2,
   });
-  return ({ status: "deferred" } as const);
+  const answer = answers[0];
+  const cursor = answer ? agentAskMetadata(asRecord(answer.metadata)) : null;
+  const outcome = asRecord(asRecord(answer?.metadata).copilotzAskOutcome);
+  if (
+    answers.length === 1 && cursor?.askId === ask.askId &&
+    (outcome.status === "failed" || outcome.status === "cancelled")
+  ) {
+    const cause = asRecord(outcome.error);
+    const error = new Error(
+      typeof cause.message === "string" ? cause.message : "Asked agent failed.",
+    );
+    error.name = outcome.status === "cancelled"
+      ? "AbortError"
+      : "AgentAskFailed";
+    throw error;
+  }
+  if (
+    answers.length !== 1 || !cursor || cursor.askId !== ask.askId ||
+    cursor.askedParticipantId !== ask.askedParticipantId ||
+    !Array.isArray(answer.content) || answer.content.length === 0
+  ) {
+    if (resolution.outcome !== "completed") {
+      const error = new Error(
+        `Asked turn for '${ask.askedAgentId}' ${resolution.outcome}.${
+          resolution.error ? " " + resolution.error.message : ""
+        }`,
+      );
+      error.name = resolution.outcome === "cancelled"
+        ? "AbortError"
+        : "AgentAskFailed";
+      throw error;
+    }
+    const error = new Error(
+      `Asked turn for '${ask.askedAgentId}' finished without one final answer.`,
+    );
+    error.name = "AgentAskUnanswered";
+    throw error;
+  }
+  return {
+    content: structuredClone(answer.content) as ContentSequence,
+    askResult: {
+      schema: "copilotz.ask-result.v1",
+      askId: ask.askId,
+      status: "completed",
+      askedParticipantId: ask.askedParticipantId,
+      askedAgentId: ask.askedAgentId,
+      answerMessageId: String(answer.id),
+    },
+  };
 }
 
 export const askAction: ActionDefinition<
@@ -292,6 +409,7 @@ export const askAction: ActionDefinition<
   inputSchema: askInputSchema,
   outputSchema: askOutputSchema,
   execute: executeAsk,
+  resolve: resolveAsk,
 });
 
 export default askAction;

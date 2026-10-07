@@ -1,21 +1,14 @@
 import { memoryConfig } from "../../memory/config/index.ts";
 /** Contributes settled memory and coordinates foreground compaction. @module */
 import {
-  type ContextContribution,
   type ContextResource,
   loadThreadRecord,
 } from "@copilotz/copilotz/core";
 
 import type { MemoryProcessorContext } from "../../../shared/contracts.ts";
 import { optionalText, record } from "../../../shared/input.ts";
-import {
-  activeMemoryRecords,
-  recordRelations,
-} from "../../../shared/retrieval.ts";
-import {
-  isEditoriallyVisible,
-  renderLongTermMemory,
-} from "../../../authoring/consolidation/index.ts";
+import { activeMemoryNotes } from "../../../shared/retrieval.ts";
+import { renderMemoryNotes } from "../../../authoring/notes/index.ts";
 import { memoryTaskOwnsTurn } from "../../../shared/task.ts";
 import { settleCheckpointError } from "../../../shared/checkpoints.ts";
 import { readyCheckpoint } from "../../../shared/checkpoints.ts";
@@ -173,50 +166,18 @@ export const memoryContextResource:
       // Context resources intentionally receive capabilities, not the processor object.
       const checkpointCollection = input.collections.longTermMemory;
       const accessCollection = input.collections.memorySpaceAccess;
-      if (!checkpointCollection || !accessCollection) return null;
+      if (
+        !checkpointCollection || !accessCollection ||
+        !input.collections.memoryNote
+      ) return null;
       const spaces = await threadMemorySpaces({
         collections: input.collections,
       }, input.thread.id);
-      const records = spaces.length
-        ? (await activeMemoryRecords(
-          { collections: input.collections },
-          spaces,
-        ))
-          .filter(isEditoriallyVisible)
-        : [];
-      const shared: ContextContribution[] = [];
-      const relations = await recordRelations(
+      const candidates = await activeMemoryNotes(
         { collections: input.collections },
-        new Set(records.map((item) => item.id)),
+        spaces,
+        config.retrievalLimit,
       );
-      for (const access of ["read_write", "read"] as const) {
-        const ids = new Set(
-          spaces.filter((space) => space.access === access).map((space) =>
-            space.id
-          ),
-        );
-        const selected = records.filter((item) => ids.has(item.memorySpaceId));
-        const selectedIds = new Set(selected.map((item) => item.id));
-        if (selected.length) {
-          shared.push({
-            id: `${MEMORY_RESOURCE_ID}:${
-              access === "read" ? "peers" : "records"
-            }`,
-            title: access === "read"
-              ? "SHARED SPACE MEMORY (READ ONLY)"
-              : "YOUR SEMANTIC MEMORY",
-            role: "context",
-            content: renderLongTermMemory({
-              records: selected,
-              relations: relations.filter((relation) =>
-                selectedIds.has(relation.sourceId) &&
-                selectedIds.has(relation.targetId)
-              ),
-              maxContentEstimatedTokens: config.maxContentEstimatedTokens,
-            }),
-          });
-        }
-      }
       const checkpoint = await readyCheckpoint(
         { collections: input.collections } as Pick<
           MemoryProcessorContext,
@@ -229,32 +190,39 @@ export const memoryContextResource:
           historyScopeId: input.historyScopeId,
         },
       );
-      if (!checkpoint) return shared.length ? shared : null;
-      const boundary = certifiedHistoryBoundary(checkpoint, {
+      const boundary = checkpoint && certifiedHistoryBoundary(checkpoint, {
         agentId: input.agent.id,
         participantId: input.participant.id,
         historyScopeId: input.historyScopeId,
         thread: input.thread,
       });
-      const coverage = record(record(checkpoint.metadata).coverage);
-      if (!boundary) {
-        return shared.length ? shared : null;
-      }
-      const own = {
-        id: checkpoint.id,
-        title: "YOUR PERSISTENT MEMORY",
+      const continuity = boundary
+        ? optionalText(record(record(checkpoint!.metadata).coverage).continuity)
+        : undefined;
+      const rendered = renderMemoryNotes({
+        continuity,
+        notes: candidates.notes,
+        readableScopeIds: new Set(spaces.map((space) => space.id)),
+        writableScopeIds: new Set(
+          spaces.filter((space) => space.access === "read_write").map((space) =>
+            space.id
+          ),
+        ),
+        maxEstimatedTokens: config.maxContentEstimatedTokens,
+        candidatesTruncated: candidates.truncated,
+      });
+      if (!rendered.text) return null;
+      return {
+        id: MEMORY_RESOURCE_ID,
+        title: "PERSISTENT MEMORY",
         role: "context" as const,
         content: {
           type: "text" as const,
-          text: `Conversation continuity:\n${optionalText(
-            coverage.continuity,
-          )!}`,
+          text: rendered.text,
           role: "memory.continuity",
         },
-        capturedAt: checkpoint.updatedAt,
         ...(boundary ? { historyAfterMessageId: boundary } : {}),
       };
-      return shared.length ? [own, ...shared] : own;
     },
   };
 

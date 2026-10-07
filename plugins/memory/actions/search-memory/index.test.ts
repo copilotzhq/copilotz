@@ -1,24 +1,29 @@
-import { assert, assertEquals } from "@std/assert";
-import AjvModule from "ajv";
-import { searchMemoryTool } from "../../resources/tools/search-memory/index.ts";
+import { assertEquals } from "@std/assert";
 import { searchMemoryAction } from "./index.ts";
 
-Deno.test("search action publishes a closed output schema through its Tool", () => {
-  const action = searchMemoryAction;
-  assertEquals(action.id, "copilotz.memory.search");
-  assert(action.outputSchema);
-  assert(
-    new AjvModule.default({ allErrors: true, strict: false }).compile(
-      action.outputSchema,
-    ),
-  );
-  assertEquals(
-    (action.outputSchema as { additionalProperties?: boolean })
-      .additionalProperties,
-    false,
-  );
-  assertEquals(
-    searchMemoryTool.outputSchema,
-    action.outputSchema,
-  );
+Deno.test("no readable memory space returns before embedding or vector queries", async () => {
+  let calls = 0;
+  const result = await searchMemoryAction.execute({ query: "secret" }, {
+    action: { metadata: { threadId: "thread", agentId: "agent" } },
+    collections: {
+      memorySpaceAccess: { list: () => Promise.resolve([]) },
+      thread: { get: () => Promise.resolve({ id: "thread" }) },
+    },
+    adapters: {
+      memoryEmbedding: {
+        default: () => {
+          calls++;
+          throw new Error("must not embed");
+        },
+      },
+    },
+    vectors: {
+      search: () => {
+        calls++;
+        throw new Error("must not search");
+      },
+    },
+  } as never);
+  assertEquals(result, { notes: [], returned: 0, truncated: false });
+  assertEquals(calls, 0);
 });

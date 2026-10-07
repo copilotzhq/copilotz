@@ -242,7 +242,6 @@ export type LlmMessage =
     & LlmMessageBase
     & Readonly<{
       role: "assistant";
-      reasoning?: readonly (ContentSequence[number] | ActionContentEntry)[];
       nativeReasoning?: LlmNativeReasoning;
       toolCalls?: readonly LlmToolCall[];
       /** Server-derived identity of the durable Tool plan that owns these calls. */
@@ -381,7 +380,6 @@ export type LlmAdapterMessage =
     & LlmAdapterMessageBase
     & Readonly<{
       role: "assistant";
-      reasoning?: string;
       nativeReasoning?: LlmAdapterNativeReasoning;
       toolCalls?: readonly LlmToolCall[];
       toolPlanId?: string;

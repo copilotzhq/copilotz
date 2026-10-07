@@ -8,6 +8,41 @@ status: stable
 
 # Upgrading and Data Safety
 
+## Lifecycle and plain memory notes
+
+This release changes durable Action scheduling and the Memory plugin's public
+contract. Deploy all workers together after stopping old writers and draining or
+cancelling their in-flight work. Run `upgradeActionLifecycle` from
+`@copilotz/copilotz/actions` for the existing indexed runtime schema. It refuses
+an active database and preserves historical events. Read-only operation status
+checks no longer perform recovery or settlement.
+
+Actions may return `deferAction(work)` and implement
+`resolve(input, context, resolution)`. The runtime schedules and fences their
+work without interpreting plugin metadata. A pending Ask now stays open until
+the asked turn, tools and nested Asks drain. Permanent delivery failures produce
+ordinary Action failure terminals so tool pipelines can continue through their
+normal error path.
+
+Memory's tool input is now `{continuity, remember?, retire?}`. Remove
+`resources.memory.kinds`, `defineMemoryKind`, graph/form/kind queries and grants
+for `set_memory_status` or `invalidate_memory`. Search accepts
+`{query?, limit?, includeRetired?}`; inspect accepts `{ids}`. Results return
+`notes`, with `unavailableIds` on inspect. Use explicit note replacements and
+retirements instead of domain status mutations.
+
+There is **no memory data migration**. Keep existing `long_term_memory`
+checkpoints and their continuity and history certificates unchanged. New writes
+and reads use `memory_note`; historical `memory_record` rows stay in storage
+without conversion or re-embedding. The context allowance now covers continuity
+and both own and peer notes together. Check application settings against this
+single budget.
+
+Textual reasoning is no longer replayed in model input. Compatible native
+provider reasoning state is retained intact, and provider-output reasoning
+extraction remains available for display and diagnostics. Stored messages are
+not rewritten.
+
 ## The pain
 
 Your team-notes application has been running for weeks. Its database holds
@@ -27,7 +62,7 @@ history.
 Copilotz stores three independent things, and each one evolves differently:
 
 1. **Physical schema.** The SQL tables for Events, Collections and Bodies are
-   validated against Event schema v5. Startup provisions fresh Core tables and
+   validated against Event schema v6. Startup provisions fresh Core tables and
    validates existing ones; incompatible Core schemas are rejected. Declared
    Collection indexes are provisioned separately as described below. Stored
    records are never reset or rewritten.
@@ -57,7 +92,7 @@ On Deno, edit the existing `imports` property in `deno.json`. Replace only the
 ```json
 {
   "imports": {
-    "@copilotz/copilotz": "jsr:@copilotz/copilotz@^0.85.5"
+    "@copilotz/copilotz": "jsr:@copilotz/copilotz@^0.86.0"
   }
 }
 ```
@@ -69,7 +104,7 @@ On Node:
 
 ```sh
 # Add the package from JSR and record the resolved version in the lockfile.
-npx jsr add @copilotz/copilotz@^0.85.5
+npx jsr add @copilotz/copilotz@^0.86.0
 ```
 
 Generated or bundled plugins must keep framework imports external so that they

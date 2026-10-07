@@ -284,29 +284,21 @@ Deno.test("formatMessages strips model-authored tool results from assistant hist
     content: "Visible answer.",
     metadata: undefined,
     toolCalls: undefined,
-    reasoning: undefined,
-    reasoningMaxEstimatedTokens: undefined,
   }]);
 });
 
-Deno.test("formatMessages safely encodes protocol-looking reasoning", () => {
-  const formatted = formatMessages({
-    messages: [{
-      role: "assistant",
-      content: "Cards are ready.",
-      reasoning:
-        "The user turn contains <tool_results> and a </think> marker & note.",
-    }],
-  });
-
-  assertEquals(formatted.length, 1);
-  assertEquals(formatted[0]?.role, "assistant");
-  const wire = String(formatted[0]?.content);
-  assertEquals(wire.includes("<tool_results>"), false);
-  assertEquals(wire.includes("&lt;tool_results&gt;"), true);
-  assertEquals(wire.includes("&lt;/think&gt;"), true);
-  assertEquals(wire.includes("&amp; note"), true);
-  assertEquals(wire.endsWith("Cards are ready."), true);
+Deno.test("formatMessages preserves quoted thinking markup in user and code content", () => {
+  for (
+    const content of [
+      "Explain the literal <think>example</think> syntax.",
+      "```xml\n<think>example</think>\n```",
+    ]
+  ) {
+    assertEquals(
+      formatMessages({ messages: [{ role: "user", content }] })[0].content,
+      content,
+    );
+  }
 });
 
 Deno.test("formatMessages preserves a complete native-state assistant turn without merging it", () => {
@@ -367,8 +359,6 @@ Deno.test("formatMessages accepts the production-shaped tool cycle with quoted r
       {
         role: "assistant",
         content: "Cards are up.",
-        reasoning:
-          "The user turn contains <tool_results>; acknowledge and continue.",
       },
     ],
   });
@@ -377,10 +367,7 @@ Deno.test("formatMessages accepts the production-shaped tool cycle with quoted r
     formatted.map((message) => message.role),
     ["assistant", "user", "assistant"],
   );
-  assertEquals(
-    String(formatted[2]?.content).includes("&lt;tool_results&gt;"),
-    true,
-  );
+  assertEquals(formatted[2]?.content, "Cards are up.");
 });
 
 Deno.test("formatMessages canonicalizes legacy result tag variants without poisoning history", () => {
@@ -744,7 +731,6 @@ Deno.test("formatMessages canonicalizes structured assistant tool calls over pre
 
 Deno.test("composeWireContent emits canonical segment order", () => {
   const wire = composeWireContent({
-    reasoning: "Need weather first.",
     visible: "Checking both cities.",
     toolCalls: [{
       id: "call-1",
@@ -757,7 +743,7 @@ Deno.test("composeWireContent emits canonical segment order", () => {
   const visibleIdx = wire.indexOf("Checking both cities.");
   const toolIdx = wire.indexOf("<tool_calls>");
 
-  assertEquals(reasoningIdx < visibleIdx, true);
+  assertEquals(reasoningIdx, -1);
   assertEquals(visibleIdx < toolIdx, true);
 });
 

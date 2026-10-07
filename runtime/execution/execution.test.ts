@@ -45,6 +45,8 @@ type Fixture = Readonly<{
         correlationId: string;
         deduplicationId: string;
         settlementScopeId: string;
+        actionScopeId?: string;
+        deliveryLease?: Readonly<{ deliveryId: string; owner: string }>;
         metadata: Readonly<Record<string, unknown>>;
       }>;
     }>
@@ -173,6 +175,10 @@ Deno.test("A24 private in-process Oxian recovers and executes a durable delivery
     assertEquals(result.operationStatus, "completed");
     assertEquals(result.delivery.status, "succeeded");
     assertEquals(result.delivery.attempts, 1);
+    const lease = fixture.calls[0].mutationIdentity.deliveryLease;
+    assertExists(lease);
+    assertEquals(lease.deliveryId, committed.deliveries[0].id);
+    assertEquals(lease.owner.length > 0, true);
     assertEquals(fixture.calls, [{
       eventId: committed.event.id,
       idempotencyKey: committed.deliveries[0].id,
@@ -181,6 +187,8 @@ Deno.test("A24 private in-process Oxian recovers and executes a durable delivery
         correlationId: committed.event.correlationId,
         deduplicationId: `delivery:${committed.deliveries[0].id}:effect`,
         settlementScopeId: committed.event.id,
+        actionScopeId: undefined,
+        deliveryLease: lease,
         metadata: {
           custom: "value",
           sourceEventId: committed.event.id,

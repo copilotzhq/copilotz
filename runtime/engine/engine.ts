@@ -1,3 +1,4 @@
+import { executeActionResolution } from "../actions/resolve.ts";
 import {
   provisionCollectionIndexes,
   validateCollectionIndexes,
@@ -125,6 +126,14 @@ export async function createCopilotzEngine(
     options.session,
     databaseSchema,
     {
+      onStreamTerminal: ({ namespace, operationId }) => {
+        // A terminal body may arrive after its delivery has settled. Wake the
+        // generic owner outside the writer/relay's own completion promise.
+        void (async () => {
+          await primaryRuntime!.advanceDeferred({ namespace, operationId });
+          await operationCatalog.reconcile({ namespace, operationId });
+        })().catch(() => undefined);
+      },
       beforeTerminal: ({ namespace, operationId }) =>
         executor.settleOutputs({
           databaseSchema,
@@ -166,6 +175,20 @@ export async function createCopilotzEngine(
     maxAttempts: options.maxAttempts,
     retryBaseMs: options.retryBaseMs,
     retryCapMs: options.retryCapMs,
+    lockSettlementScope: (transaction, scopeId) =>
+      operationCatalog.lockScope(transaction, scopeId),
+    onScopeCancellation: (transaction, input) => {
+      if (!primaryRuntime) throw new Error("Runtime is not initialized.");
+      return primaryRuntime.onScopeCancellation(transaction, input);
+    },
+    settleActionOwners: (transaction, delivery) => {
+      if (!primaryRuntime) {
+        throw new Error("Primary runtime is not initialized.");
+      }
+      return primaryRuntime.settleActionOwners(transaction, delivery);
+    },
+    admitOperationEventSql: (input, param) =>
+      operationCatalog.admitEventSql(input, param),
     indexOperationEvent: (transaction, input) =>
       operationCatalog.indexEvent(transaction, input),
     indexOperationEventSql: (input, param) =>
@@ -211,6 +234,8 @@ export async function createCopilotzEngine(
   };
   const createContextFor = async (
     base: EngineContextSeed,
+    actionResolution?:
+      import("../actions/invoker.ts").CreateActionCallersOptions["resolution"],
   ): Promise<ProcessorContext> => {
     const additional = base.databaseSchema === databaseSchema
       ? undefined
@@ -232,6 +257,7 @@ export async function createCopilotzEngine(
     }
     return createProcessorContext({
       base,
+      actionResolution,
       registry: options.registry,
       assets: scopedCapabilities.assets,
       preparer,
@@ -260,6 +286,7 @@ export async function createCopilotzEngine(
           databaseSchema: base.databaseSchema,
           eventHub: scopedEventHub,
           settlementScopeId: base.settlementScopeId,
+          actionScopeId: base.actionScopeId,
         });
         await dispatched.done;
       },
@@ -280,6 +307,15 @@ export async function createCopilotzEngine(
           store: scopedStore,
           actions: options.registry.actions,
           protectedValues: scopedCapabilities.protectedValues,
+          ...(base.source?.kind === "delivery" && base.executionIncarnationId
+            ? {
+              writer: {
+                kind: "delivery" as const,
+                deliveryId: base.source.id,
+                leaseOwner: base.executionIncarnationId,
+              },
+            }
+            : {}),
         }),
         load: createActionLifecycleLoader({
           store: scopedStore,
@@ -327,6 +363,8 @@ export async function createCopilotzEngine(
   };
   const createContext = async (
     base: DeliveryContextBase,
+    actionResolution?:
+      import("../actions/invoker.ts").CreateActionCallersOptions["resolution"],
   ): Promise<ProcessorContext> =>
     await createContextFor({
       databaseSchema: base.databaseSchema,
@@ -334,6 +372,7 @@ export async function createCopilotzEngine(
       signal: base.signal,
       executionIncarnationId: base.dispatchAttemptId,
       settlementScopeId: base.settlementScopeId,
+      actionScopeId: base.actionScopeId,
       idempotencyKey: base.idempotencyKey,
       createMutationIdentity: base.createMutationIdentity,
       source: {
@@ -341,7 +380,7 @@ export async function createCopilotzEngine(
         id: base.delivery.id,
         consumerId: base.delivery.consumerId,
       },
-    });
+    }, actionResolution);
   const createLiveContext = async (
     base: LiveProcessorContextBase,
   ): Promise<ProcessorContext> =>
@@ -353,6 +392,7 @@ export async function createCopilotzEngine(
       ...(base.settlementScopeId
         ? { settlementScopeId: base.settlementScopeId }
         : {}),
+      actionScopeId: base.actionScopeId,
       idempotencyKey: base.idempotencyKey,
       createMutationIdentity: base.createMutationIdentity,
       source: {
@@ -390,6 +430,33 @@ export async function createCopilotzEngine(
     defaultDatabaseSchema: databaseSchema,
     registry: options.registry,
     createContext,
+    async resolveDeferredAction(base) {
+      const runtime = base.databaseSchema === databaseSchema
+        ? primaryRuntime!
+        : (await resolveAdditionalScope(base.databaseSchema)).runtime;
+      await executeActionResolution({
+        store: runtime.store,
+        actions: options.registry.actions,
+        protectedValues: runtime.capabilities.protectedValues,
+        base,
+        createContext,
+      });
+    },
+    async onDeliverySettled(result) {
+      const runtime = result.delivery.databaseSchema === databaseSchema
+        ? primaryRuntime!
+        : (await resolveAdditionalScope(result.delivery.databaseSchema))
+          .runtime;
+      await runtime.advanceDeferred({
+        namespace: result.event.namespace,
+        operationId: result.delivery.settlementScopeId,
+      });
+      await runtime.operationCatalog.reconcile({
+        namespace: result.event.namespace,
+        operationId: result.delivery.settlementScopeId,
+      });
+      await options.execution?.onDeliverySettled?.(result);
+    },
     async onOutput(output, context) {
       if (isStreamOutputDescriptor(output)) {
         await options.publish?.(output, context);
@@ -473,6 +540,7 @@ export async function createCopilotzEngine(
       databaseSchema?: string;
       eventHub?: typeof eventHub;
       settlementScopeId?: string;
+      actionScopeId?: string;
     } = {},
   ): Promise<LiveEventDispatchHandle> => {
     const scopedDatabaseSchema = publishOptions.databaseSchema ??
@@ -509,6 +577,7 @@ export async function createCopilotzEngine(
       resolvedEvent,
       signal: abort.signal,
       settlementScopeId: publishOptions.settlementScopeId,
+      actionScopeId: publishOptions.actionScopeId,
       createContext: createLiveContext,
     }).finally(() => {
       publishOptions.signal?.removeEventListener("abort", relay);
@@ -538,8 +607,8 @@ export async function createCopilotzEngine(
       now,
       transients,
       operationCatalog,
-      publishLive: (event, settlementScopeId) =>
-        publishLive(event, { settlementScopeId }),
+      publishLive: (event, settlementScopeId, actionScopeId) =>
+        publishLive(event, { settlementScopeId, actionScopeId }),
     });
     primaryRuntime = scope;
     capabilities = scope.capabilities;
@@ -569,6 +638,17 @@ export async function createCopilotzEngine(
             options.session,
             normalized,
             {
+              onStreamTerminal: ({ namespace, operationId }) => {
+                void (async () => {
+                  const scope =
+                    (await resolveAdditionalScope(normalized)).runtime;
+                  await scope.advanceDeferred({ namespace, operationId });
+                  await scopedOperationCatalog.reconcile({
+                    namespace,
+                    operationId,
+                  });
+                })().catch(() => undefined);
+              },
               beforeTerminal: ({ namespace, operationId }) =>
                 executor.settleOutputs({
                   databaseSchema: normalized,
@@ -589,11 +669,12 @@ export async function createCopilotzEngine(
             now,
             transients: scopedTransients,
             operationCatalog: scopedOperationCatalog,
-            publishLive: (event, settlementScopeId) =>
+            publishLive: (event, settlementScopeId, actionScopeId) =>
               publishLive(event, {
                 databaseSchema: normalized,
                 eventHub: hub,
                 settlementScopeId,
+                actionScopeId,
               }),
           });
           return ({ runtime, hub } as const);

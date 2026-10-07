@@ -1,23 +1,20 @@
-/** Inspects one accessible semantic-memory record. @module */
+/** Inspects a bounded set of notes; missing and inaccessible IDs are indistinguishable. @module */
 import {
   type ActionDefinition,
   type ActionSchema,
   defineAction,
 } from "@copilotz/copilotz/actions";
-import { MEMORY_RELATION_TYPES } from "../../authoring/ontology/index.ts";
-import { memoryRecordCollection } from "../../collections/memory-record/index.ts";
 import type { MemoryActionContext } from "../../shared/contracts.ts";
 import {
   memoryActionProvenance,
   threadMemorySpaces,
 } from "../../shared/access.ts";
-import { memoryRecord } from "../../shared/retrieval.ts";
-import { record, requiredText } from "../../shared/input.ts";
+import { memoryFilter, memoryNote } from "../../shared/retrieval.ts";
+import { record } from "../../shared/input.ts";
 import {
   inspectMemoryOutputSchema,
-  PUBLIC_MEMORY_RELATION_LIMIT,
-  PUBLIC_MEMORY_SCAN_LIMIT,
-  publicMemoryDetail,
+  PUBLIC_MEMORY_RESULT_LIMIT,
+  publicMemoryNote,
 } from "../../shared/public-projection.ts";
 
 export const inspectMemoryAction: ActionDefinition<
@@ -30,78 +27,46 @@ export const inspectMemoryAction: ActionDefinition<
   id: "copilotz.memory.inspect",
   inputSchema: {
     type: "object",
-    required: ["id"],
-    properties: { id: { type: "string" } },
+    required: ["ids"],
     additionalProperties: false,
+    properties: {
+      ids: {
+        type: "array",
+        minItems: 1,
+        maxItems: PUBLIC_MEMORY_RESULT_LIMIT,
+        uniqueItems: true,
+        items: { type: "string", minLength: 1 },
+      },
+    },
   },
   outputSchema: inspectMemoryOutputSchema,
   async execute(raw, context) {
-    const id = requiredText(record(raw).id, "Memory id");
-    const item = await context.collections.memoryRecord.get({ id });
-    if (!item) throw new Error(`Memory '${id}' was not found.`);
-    const mapped = memoryRecord(item);
-    if (!mapped) throw new Error(`Memory '${id}' is not inspectable.`);
-    const spaces = new Set(
-      (await threadMemorySpaces(
-        context,
-        memoryActionProvenance(context).threadId,
-      )).map((space) => space.id),
+    const ids = record(raw).ids as string[];
+    const provenance = memoryActionProvenance(context);
+    const spaces = await threadMemorySpaces(context, provenance.threadId);
+    const values = spaces.length
+      ? await context.collections.memoryNote.list({
+        filter: { and: [memoryFilter(spaces, true), { field: "id", in: ids }] },
+        limit: ids.length,
+      })
+      : [];
+    const notes = new Map(
+      values.map((
+        value,
+      ) => [
+        value.id,
+        publicMemoryNote(
+          memoryNote(value),
+          true,
+          value.originThreadId === provenance.threadId &&
+            value.createdByAgentId === provenance.agentId,
+        ),
+      ]),
     );
-    if (!spaces.has(mapped.memorySpaceId)) {
-      throw new Error(`Memory '${id}' is not accessible from this thread.`);
-    }
-    const relations = await context.collections.memoryRecord.relations.list({
-      id,
-      direction: "both",
-      limit: PUBLIC_MEMORY_SCAN_LIMIT,
-    });
-    const candidateRecords = await context.collections.memoryRecord.list({
-      filter: { field: "memorySpaceId", in: [...spaces] },
-      limit: PUBLIC_MEMORY_SCAN_LIMIT,
-    });
-    const accessibleMemoryIds = new Set(
-      candidateRecords.filter((candidate) =>
-        spaces.has(String(candidate.memorySpaceId))
-      ).map((candidate) => candidate.id),
-    );
-    const visibleRelations = relations.filter((relation) =>
-      MEMORY_RELATION_TYPES.includes(
-        relation.type as typeof MEMORY_RELATION_TYPES[number],
-      ) &&
-      (relation.source.type !== memoryRecordCollection.name ||
-        accessibleMemoryIds.has(relation.source.id)) &&
-      (relation.target.type !== memoryRecordCollection.name ||
-        accessibleMemoryIds.has(relation.target.id))
-    );
-    const projectedRelations = visibleRelations.map((relation) => {
-      const outgoing = relation.source.type === memoryRecordCollection.name &&
-        relation.source.id === id;
-      const other = outgoing ? relation.target : relation.source;
-      return {
-        type: relation.type,
-        direction: outgoing ? "outgoing" as const : "incoming" as const,
-        other: {
-          type: other.type === memoryRecordCollection.name
-            ? "memory"
-            : other.type,
-          id: other.id,
-        },
-      };
-    });
-    const items = projectedRelations.slice(0, PUBLIC_MEMORY_RELATION_LIMIT);
     return {
-      memory: publicMemoryDetail(item, mapped),
-      relations: {
-        items: items,
-        scanned: relations.length,
-        matched: visibleRelations.length,
-        returned: items.length,
-        truncated: relations.length >= PUBLIC_MEMORY_SCAN_LIMIT ||
-          candidateRecords.length >= PUBLIC_MEMORY_SCAN_LIMIT ||
-          items.length < projectedRelations.length,
-      },
+      notes: ids.flatMap((id) => notes.has(id) ? [notes.get(id)!] : []),
+      unavailableIds: ids.filter((id) => !notes.has(id)),
     };
   },
 });
-
 export default inspectMemoryAction;

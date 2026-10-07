@@ -53,6 +53,7 @@ export type DeliveryContextBase = Readonly<{
   event: DurableEvent;
   delivery: EventDelivery;
   settlementScopeId: string;
+  actionScopeId?: string;
   signal: AbortSignal;
   idempotencyKey: string;
   dispatchAttemptId: string;
@@ -64,6 +65,8 @@ export type DeliveryMutationIdentity = Readonly<{
   correlationId: string;
   deduplicationId: string;
   settlementScopeId: string;
+  actionScopeId?: string;
+  deliveryLease?: import("../events/types.ts").DeliveryLease;
   metadata: Readonly<Record<string, unknown>>;
 }>;
 
@@ -138,6 +141,8 @@ export type CreateDeliveryWorkloadOptions = Readonly<{
   resolveStore?: (databaseSchema: string) => EventStore | Promise<EventStore>;
   registry: PluginRegistry;
   createContext: DeliveryContextFactory;
+  /** Internal runtime consumer, independent of plugin registration. */
+  resolveDeferredAction?: (base: DeliveryContextBase) => Promise<void>;
   leaseMs?: number;
   heartbeatMs?: number;
   scheduler?: DeliveryWorkloadScheduler;
@@ -177,6 +182,8 @@ export type CreateDeliveryExecutorOptions = Readonly<{
   defaultDatabaseSchema?: string;
   registry: PluginRegistry;
   createContext: DeliveryContextFactory;
+  /** Internal runtime consumer, independent of plugin registration. */
+  resolveDeferredAction?: (base: DeliveryContextBase) => Promise<void>;
   /** Dispatch to an externally hosted workload. The executor never closes it. */
   dispatcher?: DeliveryDispatcher;
   /** Bind Copilotz Workers to an application-owned in-process Hypervisor. */
@@ -207,6 +214,8 @@ export type CreateDeliveryExecutorOptions = Readonly<{
   createDispatchAttemptId?: () => string;
   /** Disabled by default; receives allowlisted process-local delivery timing. */
   onDiagnostic?: DeliveryDiagnosticSink;
+  /** Runtime settlement wake, after this execution's output relay has drained. */
+  onDeliverySettled?: (result: DeliveryExecutionResult) => void | Promise<void>;
   /** Relays generic event and stream descriptors from a remote Worker. */
   onOutput?: (
     output: RuntimeOutputDescriptor,
@@ -246,6 +255,7 @@ export type DeliveryExecutor = Readonly<{
     databaseSchema?: string;
     namespace: string;
     settlementScopeId: string;
+    actionScopeId?: string;
   }): Promise<void>;
   /**
    * Waits until some work this executor is running for the scope finishes.
@@ -256,6 +266,7 @@ export type DeliveryExecutor = Readonly<{
     databaseSchema?: string;
     namespace: string;
     settlementScopeId: string;
+    actionScopeId?: string;
   }, signal?: AbortSignal): Promise<boolean>;
   shutdown(reason?: string): Promise<void>;
 }>;

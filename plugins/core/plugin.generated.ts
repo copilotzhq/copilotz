@@ -18,19 +18,18 @@ import entry14 from "./collections/thread/index.ts";
 import entry15 from "./collections/tool-plan-branch/index.ts";
 import entry16 from "./collections/tool-plan-stage-result/index.ts";
 import entry17 from "./collections/tool-plan/index.ts";
-import entry18 from "./processors/complete-ask/index.ts";
-import entry19 from "./processors/fail-ask/index.ts";
-import entry20 from "./processors/message-input/index.ts";
-import entry21 from "./processors/message-router/index.ts";
-import entry22 from "./processors/project-agent-failure/index.ts";
-import entry23 from "./processors/project-text-result/index.ts";
-import entry24 from "./processors/project-tool-result/index.ts";
-import entry25 from "./processors/tool-plan-coordinator/index.ts";
-import entry26 from "./resources/capabilities/default/index.ts";
-import entry27 from "./resources/goals/default/index.ts";
-import entry28 from "./resources/toolResults/default/index.ts";
-import entry29 from "./resources/tools/ask/index.ts";
-import entry30 from "./resources/tools/read-tool-result/index.ts";
+import entry18 from "./processors/dispatch-ask/index.ts";
+import entry19 from "./processors/message-input/index.ts";
+import entry20 from "./processors/message-router/index.ts";
+import entry21 from "./processors/project-agent-failure/index.ts";
+import entry22 from "./processors/project-text-result/index.ts";
+import entry23 from "./processors/project-tool-result/index.ts";
+import entry24 from "./processors/tool-plan-coordinator/index.ts";
+import entry25 from "./resources/capabilities/default/index.ts";
+import entry26 from "./resources/goals/default/index.ts";
+import entry27 from "./resources/toolResults/default/index.ts";
+import entry28 from "./resources/tools/ask/index.ts";
+import entry29 from "./resources/tools/read-tool-result/index.ts";
 import { llmPlugin as dependency0 } from "../llm/plugin.ts";
 const definition = {
   id: "@copilotz/core",
@@ -59,28 +58,27 @@ const definition = {
     "spaces": entry9,
   },
   processors: {
-    "completeAsk": entry18,
-    "failAsk": entry19,
-    "messageInput": entry20,
-    "messageRouter": entry21,
-    "projectAgentFailure": entry22,
-    "projectTextResult": entry23,
-    "projectToolResult": entry24,
-    "toolPlanCoordinator": entry25,
+    "dispatchAsk": entry18,
+    "messageInput": entry19,
+    "messageRouter": entry20,
+    "projectAgentFailure": entry21,
+    "projectTextResult": entry22,
+    "projectToolResult": entry23,
+    "toolPlanCoordinator": entry24,
   },
   resources: {
     "capabilities": {
-      "default": entry26,
+      "default": entry25,
     },
     "goals": {
-      "default": entry27,
+      "default": entry26,
     },
     "toolResults": {
-      "default": entry28,
+      "default": entry27,
     },
     "tools": {
-      "ask": entry29,
-      "readToolResult": entry30,
+      "ask": entry28,
+      "readToolResult": entry29,
     },
   },
 } as const;

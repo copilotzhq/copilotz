@@ -42,8 +42,6 @@ type JsonSchema = {
 type GeneratorOptions = {
   rootName: string;
   moduleName?: string;
-  commentMaxChars: number;
-  strictAdditionalProperties: boolean;
 };
 
 type GeneratedNamedType = {
@@ -71,8 +69,6 @@ type VariantInfo = {
 const DEFAULT_OPTIONS: GeneratorOptions = {
   rootName: "ToolInput",
   moduleName: undefined,
-  commentMaxChars: 140,
-  strictAdditionalProperties: true,
 };
 
 type RendererContext = {
@@ -82,12 +78,15 @@ type RendererContext = {
   emittedAliases: Map<string, string>;
   reservedNames: Set<string>;
   refStack: Set<string>;
+  referenceTypes: Map<string, string>;
 };
 
 function generateSchema(ctx: RendererContext): string {
   const root = resolveAndMerge(ctx.schema);
   const moduleDocText = moduleDoc(root);
   const rootName = uniqueTypeName(ctx.options.rootName);
+  const namesByPath = new Map([["$", rootName]]);
+  ctx.referenceTypes.set("#", rootName);
   if (root.oneOf?.length || root.anyOf?.length) {
     // Root properties apply to every branch in JSON Schema. Include them in
     // each generated variant so a discriminated action schema remains
@@ -104,12 +103,20 @@ function generateSchema(ctx: RendererContext): string {
         : undefined,
     };
     typeFor(rootUnion, rootName, "$");
-  } else {
+  } else if (root.type === "object" || root.properties) {
     emitInterface(rootName, root, {
       path: "$",
       description: root.description ||
         "Root input object generated from JSON Schema.",
     });
+  } else {
+    const expression = typeFor(root, rootName, "$");
+    if (expression !== rootName) {
+      ctx.emittedAliases.set(
+        rootName,
+        `export type ${rootName} = ${expression};`,
+      );
+    }
   }
 
   const interfacesAndObjectTypes = Array.from(ctx.named.values()).map((
@@ -123,66 +130,7 @@ function generateSchema(ctx: RendererContext): string {
     .trim() + "\n";
 
   function moduleDoc(root: JsonSchema): string {
-    const title = ctx.options.moduleName || root.title || "Agent Tool Input";
-    const rootRequired = root.required ?? [];
-    const unionCount = countUnions(root);
-    const lines = [
-      "/**",
-      ` * ${escapeComment(title)}`,
-      " *",
-      " * Generated from JSON Schema as compact TypeScript for agent tool-call construction.",
-      " * - Required fields are non-optional; optional fields may be omitted.",
-      " * - String literals and literal unions are validity conditions.",
-      " * - `oneOf`/`anyOf` schemas become named TypeScript unions.",
-    ];
-    if (rootRequired.length > 0) {
-      lines.push(
-        ` * - Root required fields: ${
-          rootRequired.map((x) => `\`${escapeComment(x)}\``).join(", ")
-        }.`,
-      );
-    }
-    if (unionCount > 0) {
-      lines.push(
-        ` * - Detected ${unionCount} union variant${
-          unionCount === 1 ? "" : "s"
-        }.`,
-      );
-    }
-    if (root.additionalProperties === false) {
-      lines.push(" * - Root schema rejects undeclared properties.");
-    }
-    lines.push(" */");
-    return lines.join("\n");
-  }
-
-  function countUnions(
-    schema: JsonSchema | undefined,
-    seen = new Set<JsonSchema>(),
-  ): number {
-    if (!schema || seen.has(schema)) return 0;
-    seen.add(schema);
-    const s = resolveAndMerge(schema);
-    let count = (s.oneOf?.length ?? 0) + (s.anyOf?.length ?? 0);
-    for (const child of Object.values(s.properties ?? {})) {
-      count += countUnions(child, seen);
-    }
-    const items = itemsOf(s);
-    for (const item of items) count += countUnions(item, seen);
-    for (
-      const child of [
-        ...(s.oneOf ?? []),
-        ...(s.anyOf ?? []),
-        ...(s.allOf ?? []),
-      ]
-    ) count += countUnions(child, seen);
-    if (s.additionalProperties && typeof s.additionalProperties === "object") {
-      count += countUnions(s.additionalProperties, seen);
-    }
-    for (const child of Object.values(s.patternProperties ?? {})) {
-      count += countUnions(child, seen);
-    }
-    return count;
+    return jsDoc([ctx.options.moduleName || root.title]);
   }
 
   function emitInterface(
@@ -223,7 +171,7 @@ function generateSchema(ctx: RendererContext): string {
       const optional = required.has(propName) ? "" : "?";
       const childPreferredName = childTypeName(name, propName);
       const typeExpression = typeFor(
-        propSchema,
+        propSchemaRaw,
         childPreferredName,
         `${meta.path}.${propName}`,
       );
@@ -231,7 +179,6 @@ function generateSchema(ctx: RendererContext): string {
         commentPartsForProperty(
           propName,
           propSchema,
-          required.has(propName),
           typeExpression,
         ),
       );
@@ -277,6 +224,25 @@ function generateSchema(ctx: RendererContext): string {
     preferredNameRaw: string,
     path: string,
   ): string {
+    if (schemaRaw.$ref === "#" || schemaRaw.$ref?.startsWith("#/")) {
+      const { $ref, ...siblings } = schemaRaw;
+      const referenced = referenceType($ref);
+      // Descriptions/defaults annotate the use site. Structural siblings still
+      // constrain the referenced value; preserve them as an intersection.
+      const structural = Object.fromEntries(
+        Object.entries(siblings).filter(
+          ([key]) =>
+            !["title", "description", "default", "examples", "example"]
+              .includes(key),
+        ),
+      );
+      if (Object.keys(structural).length) {
+        return `(${referenced} & ${
+          typeFor(structural, `${preferredNameRaw}Constraint`, path)
+        })`;
+      }
+      return referenced;
+    }
     const schema = resolveAndMerge(schemaRaw);
     const preferredName = pascalCase(preferredNameRaw);
 
@@ -294,6 +260,35 @@ function generateSchema(ctx: RendererContext): string {
       singleTypeFor(t, schema, preferredName, path)
     );
     return unique(tsTypes).join(" | ") || "unknown";
+  }
+
+  function referenceType(ref: string): string {
+    const existing = ctx.referenceTypes.get(ref);
+    if (existing) return existing;
+    const target = ref.slice(2).split("/").reduce<unknown>(
+      (value, key) =>
+        (value as Record<string, unknown>)?.[unescapePointer(key)],
+      ctx.schema,
+    );
+    if (!target || typeof target !== "object" || Array.isArray(target)) {
+      throw new TypeError(`Tool schema reference '${ref}' does not resolve.`);
+    }
+    const name = uniqueTypeName(unescapePointer(ref.split("/").at(-1)!));
+    ctx.referenceTypes.set(ref, name);
+    namesByPath.set(ref, name);
+    const expression = typeFor(target as JsonSchema, name, ref);
+    if (expression !== name) {
+      ctx.emittedAliases.set(
+        name,
+        `${
+          jsDoc([
+            ...(constraints(target as JsonSchema)),
+            (target as JsonSchema).description,
+          ])
+        }\nexport type ${name} = ${expression};`.trim(),
+      );
+    }
+    return name;
   }
 
   function singleTypeFor(
@@ -357,13 +352,15 @@ function generateSchema(ctx: RendererContext): string {
   ): string {
     const hasNamedProps = Object.keys(schema.properties ?? {}).length > 0;
     if (hasNamedProps) {
-      if (!ctx.named.has(preferredName)) {
-        emitInterface(preferredName, schema, {
+      const name = namesByPath.get(path) ?? uniqueTypeName(preferredName);
+      namesByPath.set(path, name);
+      if (!ctx.named.has(name)) {
+        emitInterface(name, schema, {
           path,
           description: schema.description,
         });
       }
-      return preferredName;
+      return name;
     }
 
     if (
@@ -391,7 +388,7 @@ function generateSchema(ctx: RendererContext): string {
       );
       return `Record<string, ${valueType}>`;
     }
-    return ctx.options.strictAdditionalProperties
+    return schema.additionalProperties === false
       ? "Record<string, never>"
       : "Record<string, unknown>";
   }
@@ -402,7 +399,9 @@ function generateSchema(ctx: RendererContext): string {
     path: string,
     unionKind: "oneOf" | "anyOf",
   ): string {
-    const unionName = pascalCase(preferredNameRaw.replace(/Union$/, ""));
+    const unionName = namesByPath.get(path) ??
+      uniqueTypeName(preferredNameRaw.replace(/Union$/, ""));
+    namesByPath.set(path, unionName);
     const variants = variantsRaw.map((v) => resolveAndMerge(v));
     const infos = variantInfos(unionName, variants, path);
 
@@ -456,7 +455,9 @@ function generateSchema(ctx: RendererContext): string {
       );
       const title = variantTitle(conditions, index);
       const baseName = variantTypeName(unionName, conditions, index);
-      const interfaceOrTypeName = uniqueWithin(baseName, usedNames);
+      const interfaceOrTypeName = uniqueTypeName(
+        uniqueWithin(baseName, usedNames),
+      );
       const objectLike = normalizedTypes(schema).includes("object") ||
         !!schema.properties;
       const isObjectVariant = objectLike &&
@@ -575,7 +576,6 @@ function generateSchema(ctx: RendererContext): string {
   function commentPartsForProperty(
     propName: string,
     schema: JsonSchema,
-    required: boolean,
     typeExpression: string,
   ): string[] {
     const parts: string[] = [];
@@ -612,7 +612,6 @@ function generateSchema(ctx: RendererContext): string {
     if (constraintList.length) meta.push(constraintList.join(", "));
     if (meta.length) parts.push(meta.join("; "));
 
-    if (!required && !parts.length) parts.push("Optional.");
     return parts;
   }
 
@@ -700,11 +699,11 @@ function generateSchema(ctx: RendererContext): string {
     valueName: string,
     path: string,
   ): string | undefined {
+    if (schema.additionalProperties === false) return undefined;
     if (
       schema.additionalProperties === undefined ||
-      schema.additionalProperties === false
-    ) return undefined;
-    if (schema.additionalProperties === true) return `[key: string]: unknown;`;
+      schema.additionalProperties === true
+    ) return `[key: string]: unknown;`;
     const valueType = typeFor(
       schema.additionalProperties,
       valueName,
@@ -780,12 +779,6 @@ function generateSchema(ctx: RendererContext): string {
     return merged;
   }
 
-  function itemsOf(schema: JsonSchema): JsonSchema[] {
-    if (schema.prefixItems?.length) return schema.prefixItems;
-    if (Array.isArray(schema.items)) return schema.items;
-    return schema.items ? [schema.items] : [];
-  }
-
   function childTypeName(parent: string, prop: string): string {
     const propName = pascalCase(prop);
     if (parent === ctx.options.rootName) {
@@ -800,7 +793,6 @@ function generateSchema(ctx: RendererContext): string {
       ctx.reservedNames.add(base);
       return base;
     }
-    if (ctx.named.has(base) || ctx.emittedAliases.has(base)) return base;
     let i = 2;
     while (ctx.reservedNames.has(`${base}${i}`)) i++;
     const out = `${base}${i}`;
@@ -816,15 +808,7 @@ function generateSchema(ctx: RendererContext): string {
   }
 
   function compact(text: string): string {
-    const oneLine = escapeComment(text.replace(/\s+/g, " ").trim());
-    if (!oneLine) return "";
-    if (oneLine.length <= ctx.options.commentMaxChars) return oneLine;
-    const firstSentence = oneLine.match(/^(.+?[.!?])\s/)?.[1];
-    const candidate = firstSentence &&
-        firstSentence.length <= ctx.options.commentMaxChars
-      ? firstSentence
-      : oneLine;
-    return candidate.slice(0, ctx.options.commentMaxChars - 1).trimEnd() + "…";
+    return escapeComment(text.replace(/\s+/g, " ").trim());
   }
 
   function indent(text: string, spaces: number): string {
@@ -942,6 +926,7 @@ export function generateAgentTypesFromSchema(
     emittedAliases: new Map<string, string>(),
     reservedNames: new Set<string>(),
     refStack: new Set<string>(),
+    referenceTypes: new Map<string, string>(),
   };
   return generateSchema(context);
 }

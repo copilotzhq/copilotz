@@ -235,10 +235,6 @@ Deno.test("golden: own tool plan seen by its requester", () => {
     `--- user
 [Ana]: What's the weather in Tokyo?
 --- assistant
-<think>
-Need the weather tool.
-</think>
-
 Checking.
 
 <tool_calls>

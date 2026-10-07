@@ -894,7 +894,7 @@ Deno.test("chat continues after mid-stream timeout using visible context", async
   }
 });
 
-Deno.test("chat continues after provider stream error using visible and reasoning context", async () => {
+Deno.test("chat continues after provider stream error using only visible context", async () => {
   const originalFetch = globalThis.fetch;
   const encoder = new TextEncoder();
   const streamedChunks: string[] = [];
@@ -1016,7 +1016,7 @@ Deno.test("chat continues after provider stream error using visible and reasonin
     );
     assertEquals(
       retryAssistant?.content,
-      "<think>\nNeed a careful wrap.\n</think>\n\npartial answer",
+      "partial answer",
     );
     assertEquals(Boolean(retryUser), true);
   } finally {
@@ -1646,8 +1646,8 @@ Deno.test("chat accepts cleaned output after extracting reasoning markup", async
         estimateCost: false,
       },
       {},
-      (chunk) => {
-        streamed += chunk;
+      (chunk, metadata) => {
+        if (!metadata?.isReasoning) streamed += chunk;
       },
       registry,
     );
@@ -1673,7 +1673,7 @@ Deno.test("chat accepts cleaned output after extracting reasoning markup", async
   }
 });
 
-Deno.test("chat strips visible reasoning markup after exhausted recovery", async () => {
+Deno.test("chat extracts incomplete reasoning markup without an extra retry", async () => {
   const originalFetch = globalThis.fetch;
   const originalWarn = console.warn;
   let streamed = "";
@@ -1704,14 +1704,14 @@ Deno.test("chat strips visible reasoning markup after exhausted recovery", async
         estimateCost: false,
       },
       {},
-      (chunk) => {
-        streamed += chunk;
+      (chunk, metadata) => {
+        if (!metadata?.isReasoning) streamed += chunk;
       },
       registry,
     );
 
     assertEquals(response.answer, "Visible answer.");
-    assertEquals(response.reasoning, undefined);
+    assertEquals(response.reasoning, "private reasoning");
     assertEquals(streamed.includes("<think>"), false);
     assertEquals(streamed.includes("private reasoning"), false);
   } finally {
@@ -2076,7 +2076,7 @@ Deno.test("chat retries same model when output degenerates into repetition", asy
   }
 });
 
-Deno.test("chat reuses malformed-tool prefix and allowed reasoning in retry context", async () => {
+Deno.test("chat reuses the visible malformed-tool prefix without replaying reasoning", async () => {
   const originalFetch = globalThis.fetch;
   const originalWarn = console.warn;
   const seenMessages: Array<Array<{ role?: string; content?: unknown }>> = [];
@@ -2181,7 +2181,7 @@ Deno.test("chat reuses malformed-tool prefix and allowed reasoning in retry cont
     assertEquals(retryAssistant?.role, "assistant");
     assertEquals(
       retryAssistant?.content,
-      "<think>\nNeed to search.\n</think>\n\nLet me check.",
+      "Let me check.",
     );
 
     const recoveryCue = String(retryUser?.content ?? "");
@@ -2196,7 +2196,7 @@ Deno.test("chat reuses malformed-tool prefix and allowed reasoning in retry cont
   }
 });
 
-Deno.test("chat omits malformed-tool retry reasoning when reasoning history is disabled", async () => {
+Deno.test("chat omits textual reasoning from malformed-tool retry history", async () => {
   const originalFetch = globalThis.fetch;
   const originalWarn = console.warn;
   const seenMessages: Array<Array<{ role?: string; content?: unknown }>> = [];
@@ -2270,7 +2270,6 @@ Deno.test("chat omits malformed-tool retry reasoning when reasoning history is d
       {
         messages: [{ role: "user", content: "hi" }],
         tools: [searchTool],
-        reasoningHistory: { include: "none" },
       },
       {
         provider: "anthropic",

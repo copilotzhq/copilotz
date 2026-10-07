@@ -15,15 +15,8 @@ import type {
 } from "@copilotz/copilotz/content";
 import type { CollectionRecord } from "@copilotz/copilotz/collections";
 
-import {
-  defineMemoryKind,
-  type MemoryKindDefinition,
-} from "../authoring/ontology/index.ts";
 import { MEMORY_RESOURCE_ID } from "../resources/promptContext/memory/index.ts";
-import type {
-  MemoryActionContext,
-  MemoryProcessorContext,
-} from "./contracts.ts";
+import type { MemoryProcessorContext } from "./contracts.ts";
 import { optionalText, record, requiredText } from "./input.ts";
 
 function combinePrepared(values: readonly PreparedContent[]): PreparedContent {
@@ -137,12 +130,4 @@ export async function captureContextSnapshot(
     { operationKey: `checkpoint:${input.checkpoint.id}:context` },
   );
   return snapshot;
-}
-
-export function memoryKinds(
-  context: MemoryActionContext | MemoryProcessorContext,
-) {
-  return ((context.resources.memory?.kinds ?? []).filter((
-    value,
-  ): value is MemoryKindDefinition => !!value).map(defineMemoryKind));
 }

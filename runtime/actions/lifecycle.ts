@@ -1,4 +1,5 @@
 import type {
+  ActionDeferredData,
   ActionEventData,
   ActionInvokedData,
   ActionLifecycleAppender,
@@ -12,6 +13,7 @@ import { durableActionMetadata, durableActionValue } from "./value.ts";
 
 const ACTION_STATUSES = new Set<ActionStatus>([
   "invoked",
+  "deferred",
   "progress",
   "completed",
   "failed",
@@ -51,6 +53,16 @@ function eventData(input: ActionLifecycleInput): ActionEventData {
   switch (input.status) {
     case "invoked":
       return ({ ...base, status: "invoked" } as const);
+    case "deferred":
+      if (
+        !Number.isSafeInteger(input.progressIndex) || input.progressIndex < 0
+      ) throw new TypeError("Deferred progress index must be non-negative.");
+      return {
+        ...base,
+        status: "deferred",
+        work: durableActionValue(input.work),
+        progressIndex: input.progressIndex,
+      };
     case "progress": {
       if (
         !Number.isSafeInteger(input.progressIndex) || input.progressIndex < 1
@@ -94,7 +106,7 @@ export function createActionLifecycleEmitter(
   const originMetadata = structuredClone(input.metadata ?? {});
   const load = async (
     actionRunId: string,
-    suffix: "invoked" | "terminal",
+    suffix: "invoked" | "deferred" | "terminal",
   ): Promise<ActionEventData | null> => {
     const id = requireText(actionRunId, "Action run id");
     if (!input.load) return null;
@@ -128,6 +140,9 @@ export function createActionLifecycleEmitter(
             event.deduplicationId,
             "Action event deduplication id",
           ),
+          ...(optionalText(event.actionScopeId)
+            ? { actionScopeId: event.actionScopeId!.trim() }
+            : {}),
           ...(optionalText(event.settlementScopeId)
             ? { settlementScopeId: event.settlementScopeId!.trim() }
             : {}),
@@ -141,6 +156,16 @@ export function createActionLifecycleEmitter(
       if (data.status !== "invoked") {
         throw new Error(
           `Action invoked event '${data.actionRunId}' is inconsistent.`,
+        );
+      }
+      return data;
+    },
+    async deferred(actionRunId): Promise<ActionDeferredData | null> {
+      const data = await load(actionRunId, "deferred");
+      if (!data) return null;
+      if (data.status !== "deferred") {
+        throw new Error(
+          `Action deferred receipt '${actionRunId}' is inconsistent.`,
         );
       }
       return data;

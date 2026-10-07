@@ -2,6 +2,13 @@ export type {
   ActionContentDeclaration,
   ActionContentEntry,
 } from "./content.ts";
+export { deferAction } from "./deferral.ts";
+export type {
+  ActionDeferral,
+  ActionResolution,
+  ActionWorkOutcome,
+  DeferredAction,
+} from "./deferral.ts";
 export { defineAction, isActionDefinition } from "./define.ts";
 export { secret } from "./secret.ts";
 export { createSecretAdapter } from "./secret-adapter.ts";
@@ -49,6 +56,7 @@ export type {
   ActionCompletedData,
   ActionContext,
   ActionContextOf,
+  ActionDeferredData,
   ActionDefinition,
   ActionEventData,
   ActionFailedData,
@@ -94,3 +102,5 @@ export type {
   VectorTransaction,
   VectorWrite,
 } from "../vectors/index.ts";
+
+export { upgradeActionLifecycle } from "./upgrade.ts";

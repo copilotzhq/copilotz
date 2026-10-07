@@ -7,8 +7,6 @@
     "processors/project-text-result/index.ts",
     "processors/project-agent-failure/index.ts",
     "processors/project-tool-result/index.ts",
-    "processors/complete-ask/index.ts",
-    "processors/fail-ask/index.ts",
     "processors/tool-plan-coordinator/index.ts",
     "resources/tools/ask/index.ts",
     "resources/tools/read-tool-result/index.ts",
@@ -32,7 +30,8 @@
     "processors/message-input/index.ts",
     "resources/capabilities/default/index.ts",
     "actions/run-goal/index.ts",
-    "resources/goals/default/index.ts"
+    "resources/goals/default/index.ts",
+    "processors/dispatch-ask/index.ts"
   ],
   "plugins": [
     {

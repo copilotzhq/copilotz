@@ -104,6 +104,9 @@ export function createProcessorContext(
         correlationId: output.correlationId ?? options.base.event.correlationId,
         metadata: {
           ...capabilitySourceMetadata(options.base),
+          ...(options.base.actionScopeId
+            ? { sourceActionScopeId: options.base.actionScopeId }
+            : {}),
           contentStream: true,
           contentStreamSemanticId: semanticStreamId,
           ...(output.incarnationId
@@ -166,6 +169,15 @@ export function createProcessorContext(
           bodyPrefix: options.streamBodyPrefix,
         }),
         descriptor,
+        ...(options.base.source?.kind === "delivery" &&
+            options.base.executionIncarnationId
+          ? {
+            deliveryLease: {
+              deliveryId: options.base.source.id,
+              owner: options.base.executionIncarnationId,
+            },
+          }
+          : {}),
       });
       if (!replayIdentity) {
         throw new Error(
@@ -389,6 +401,9 @@ export function createProcessorContext(
           source.correlationId,
         settlementScopeId: transactionOptions.identity?.settlementScopeId ??
           source.settlementScopeId,
+        actionScopeId: transactionOptions.identity?.actionScopeId ??
+          source.actionScopeId,
+        deliveryLease: source.deliveryLease,
         deduplicationId: transactionOptions.identity?.deduplicationId ??
           source.deduplicationId,
         metadata: {
@@ -453,6 +468,7 @@ export function createProcessorContext(
       ? { causationId: options.base.event.causationId }
       : {}),
     correlationId: options.base.event.correlationId,
+    actionScopeId: options.base.actionScopeId,
     deduplicationId: processorOperationKey,
     ...(options.base.settlementScopeId
       ? { settlementScopeId: options.base.settlementScopeId }
@@ -461,6 +477,7 @@ export function createProcessorContext(
   let rootActionIndex = 0;
   const actions = createActionCallers(options.registry.actions, {
     actionLifecycle: options.actionLifecycle,
+    resolution: options.actionResolution,
     content: {
       ...content,
       // This runtime-owned key is content-addressed, not Processor-run-addressed.

@@ -67,6 +67,8 @@ export type ResolvedCopilotzEvent<TData = unknown> = CopilotzEvent & {
 };
 
 /** Input used to append one immutable semantic event. */
+export type DeliveryLease = Readonly<{ deliveryId: string; owner: string }>;
+
 export type DurableEventDraft<TPayload = unknown> = {
   type: string;
   namespace: string;
@@ -80,6 +82,10 @@ export type DurableEventDraft<TPayload = unknown> = {
   createdAt?: string;
   /** Runtime-owned completion scope inherited by this mutation's deliveries. */
   settlementScopeId?: string;
+  /** Runtime-owned work group for an outstanding deferred Action. */
+  actionScopeId?: string;
+  /** Transient write authority; never part of an immutable event or retry key. */
+  deliveryLease?: DeliveryLease;
 };
 
 export type DeliveryStatus =
@@ -98,6 +104,7 @@ export type EventDelivery = Readonly<{
   eventId: string;
   consumerId: string;
   settlementScopeId: string;
+  actionScopeId?: string;
   status: DeliveryStatus;
   attempts: number;
   maxAttempts: number;

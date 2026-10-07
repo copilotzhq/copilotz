@@ -2,6 +2,7 @@ import type {
   IncompleteBodyHead,
   ReadyBodyHead,
 } from "../content/body-store.ts";
+import type { DeliveryLease } from "../events/types.ts";
 import {
   quoteEventIdentifier,
   type SqlExecutor,
@@ -18,7 +19,7 @@ import type {
 import { snapshotStreamMetadata } from "./json.ts";
 import { isStreamOutputDescriptor } from "./observation.ts";
 
-export const OPERATION_CATALOG_FINGERPRINT = "indexed-observation-ordinals-v1";
+export const OPERATION_CATALOG_FINGERPRINT = "action-obligations-v1";
 export const OPERATION_CHANGE_CHANNEL = "copilotz_operations";
 export const DEFAULT_OPERATION_REPLAY_RETENTION_MS = 24 * 60 * 60_000;
 
@@ -67,6 +68,7 @@ export type OperationRecord = Readonly<{
   acceptedAt: string;
   updatedAt: string;
   completedAt?: string;
+  cancellationRequestedAt?: string;
 }>;
 
 export type OperationStreamRetention = "canonical" | "observation";
@@ -165,6 +167,18 @@ export type OperationCatalog = Readonly<{
       limit?: number;
     }>,
   ): Promise<readonly Readonly<{ eventId: string; eventOrdinal: string }>[]>;
+  /** Same scope lock as settlement, before new event work is admitted. */
+  admitEventSql(
+    input: Readonly<
+      {
+        namespace: string;
+        operationId: string;
+        requireScope?: boolean;
+        cancellationTerminal?: boolean;
+      }
+    >,
+    param: (value: unknown) => string,
+  ): Readonly<{ ctes: readonly string[]; gate: string; cancelled: string }>;
   indexEvent(
     transaction: SqlExecutor,
     input: OperationEventIndexInput,
@@ -197,11 +211,12 @@ export type OperationCatalog = Readonly<{
       eventMetadata?: Readonly<Record<string, unknown>>;
     }>,
   ): Promise<string | undefined>;
-  mark(
+  requestCancellation(
+    transaction: SqlExecutor,
     namespace: string,
     operationId: string,
-    state: Exclude<OperationState, "accepted">,
-  ): Promise<boolean>;
+    reason: string,
+  ): Promise<void>;
   listEventIds(
     input: Readonly<{
       namespace: string;
@@ -231,6 +246,7 @@ export type OperationCatalog = Readonly<{
       semanticStreamId: string;
       bodyId: string;
       descriptor: StreamOutputDescriptor;
+      deliveryLease?: DeliveryLease;
     }>,
   ): Promise<
     Readonly<{ replayKey: string; streamOrdinal: string }> | undefined
@@ -335,7 +351,21 @@ export type OperationCatalog = Readonly<{
       limit?: number;
     }>,
   ): Promise<readonly OperationStreamRecord[]>;
-  reconcile(input?: Readonly<{ limit?: number }>): Promise<number>;
+  /** Internal commit hooks share the operation admission lock. */
+  lockScope(transaction: SqlExecutor, operationId: string): Promise<void>;
+  failDeliveryStreams(
+    transaction: SqlExecutor,
+    input: Readonly<{
+      deliveryId: string;
+      operationId: string;
+      outcome: "failed" | "cancelled";
+    }>,
+  ): Promise<void>;
+  reconcile(
+    input?: Readonly<
+      { limit?: number; namespace?: string; operationId?: string }
+    >,
+  ): Promise<number>;
   pruneTerminalMetadata(
     input: Readonly<{ now?: Date; retentionMs: number; limit?: number }>,
   ): Promise<
@@ -432,7 +462,7 @@ async function notifyOperationChange(
   change: Pick<OperationChangeDetail, "kind" | "streamId" | "committedOffset"> =
     { kind: "operation" },
 ): Promise<void> {
-  const tables = tableNames(schema);
+  const tables = createOperationCatalogTables(schema);
   try {
     const result = await executor.query<{ payload: string }>(
       `WITH hint AS (
@@ -510,6 +540,7 @@ type OperationRow = Record<string, unknown> & {
   accepted_at: string | Date;
   updated_at: string | Date;
   completed_at: string | Date | null;
+  cancellation_requested_at: string | Date | null;
 };
 
 type StreamRow = Record<string, unknown> & {
@@ -674,7 +705,9 @@ function terminalStatus(stream: OperationStreamRecord): StreamTerminalStatus {
   } as const);
 }
 
-function tableNames(schemaName: string): OperationCatalogTables {
+export function createOperationCatalogTables(
+  schemaName: string,
+): OperationCatalogTables {
   const schema = quoteEventIdentifier(validateEventSchemaName(schemaName));
   const table = (name: string) => `${schema}.${quoteEventIdentifier(name)}`;
   return ({
@@ -700,6 +733,9 @@ function mapOperation(row: OperationRow): OperationRecord {
     acceptedAt: iso(row.accepted_at)!,
     updatedAt: iso(row.updated_at)!,
     ...(completedAt ? { completedAt } : {}),
+    ...(row.cancellation_requested_at
+      ? { cancellationRequestedAt: iso(row.cancellation_requested_at)! }
+      : {}),
   } as const);
 }
 
@@ -801,12 +837,24 @@ function observationKeys(
 }
 
 /** Additive operational tables; the Core Event schema is unchanged. */
+function lifecycleIndexStatements(
+  tables: OperationCatalogTables,
+): readonly string[] {
+  return [
+    `CREATE INDEX IF NOT EXISTS "copilotz_operations_live_idx"
+     ON ${tables.operations} (updated_at, operation_id) WHERE state IN ('accepted','running')`,
+    `CREATE INDEX IF NOT EXISTS "copilotz_operation_streams_action_scope_idx"
+     ON ${tables.operationStreams} (namespace, operation_id, ((descriptor -> 'metadata' ->> 'sourceActionScopeId')))
+     WHERE (descriptor -> 'metadata' ->> 'sourceActionScopeId') IS NOT NULL`,
+  ];
+}
+
 export async function provisionOperationCatalog(
   session: SqlSession,
   databaseSchema = "public",
 ): Promise<OperationCatalogTables> {
   const schema = validateEventSchemaName(databaseSchema);
-  const tables = tableNames(schema);
+  const tables = createOperationCatalogTables(schema);
   await session.transaction(async (transaction) => {
     await transaction.query(
       "SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))",
@@ -835,7 +883,8 @@ export async function provisionOperationCatalog(
     await transaction.query(`CREATE TABLE IF NOT EXISTS ${tables.operations} (
       operation_id TEXT PRIMARY KEY,
       namespace TEXT NOT NULL,
-      root_event_id TEXT NOT NULL UNIQUE,
+      root_event_id TEXT NOT NULL,
+      visibility TEXT NOT NULL DEFAULT 'public' CHECK (visibility IN ('public','internal')),
       correlation_id TEXT NOT NULL,
       metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
       next_stream_ordinal BIGINT NOT NULL DEFAULT 1,
@@ -844,8 +893,14 @@ export async function provisionOperationCatalog(
       state TEXT NOT NULL CHECK (state IN ('accepted','running','completed','failed','cancelled')),
       accepted_at TIMESTAMPTZ NOT NULL,
       updated_at TIMESTAMPTZ NOT NULL,
-      completed_at TIMESTAMPTZ
+      completed_at TIMESTAMPTZ,
+      cancellation_requested_at TIMESTAMPTZ,
+      cancellation_reason TEXT
     )`);
+    await transaction.query(
+      `CREATE UNIQUE INDEX IF NOT EXISTS "copilotz_operations_public_root_idx"
+       ON ${tables.operations} (root_event_id) WHERE visibility = 'public'`,
+    );
     await transaction.query(
       `CREATE INDEX IF NOT EXISTS "copilotz_operations_namespace_updated_idx"
       ON ${tables.operations} (namespace, updated_at, operation_id)`,
@@ -937,6 +992,9 @@ export async function provisionOperationCatalog(
         asset_retention, availability, namespace, operation_id, stream_id
       ) WHERE state = 'terminal'`,
     );
+    for (const statement of lifecycleIndexStatements(tables)) {
+      await transaction.query(statement);
+    }
     await transaction.query(
       `INSERT INTO ${tables.metadata} (singleton, fingerprint) VALUES (TRUE, $1)
        ON CONFLICT (singleton) DO NOTHING`,
@@ -971,7 +1029,7 @@ export async function upgradeOperationCatalog(
   }> = {},
 ): Promise<OperationCatalogTables> {
   const schema = validateEventSchemaName(databaseSchema);
-  const tables = tableNames(schema);
+  const tables = createOperationCatalogTables(schema);
   if (
     options.backfillMetadataKeys !== undefined &&
     !Array.isArray(options.backfillMetadataKeys)
@@ -1004,153 +1062,157 @@ export async function upgradeOperationCatalog(
       `SELECT fingerprint FROM ${tables.metadata} WHERE singleton = TRUE`,
     );
     if (marker.rows[0]?.fingerprint === OPERATION_CATALOG_FINGERPRINT) return;
-    if (marker.rows[0]?.fingerprint !== "retained-terminal-streams") {
+    if (
+      !["retained-terminal-streams", "indexed-observation-ordinals-v1"]
+        .includes(marker.rows[0]?.fingerprint ?? "")
+    ) {
       throw operationCatalogError(
         schema,
         "has an unsupported schema fingerprint",
         "copilotz_operation_catalog_schema_unsupported",
       );
     }
-    await transaction.query(`ALTER TABLE ${tables.operations}
+    if (marker.rows[0]?.fingerprint === "retained-terminal-streams") {
+      await transaction.query(`ALTER TABLE ${tables.operations}
       ADD COLUMN next_event_ordinal BIGINT NOT NULL DEFAULT 1,
       ADD COLUMN observation_keys TEXT[] NOT NULL DEFAULT ARRAY[]::text[]`);
-    await transaction.query(
-      `ALTER TABLE ${tables.operationEvents} ADD COLUMN event_ordinal BIGINT`,
-    );
-    await transaction.query(`WITH numbered AS (
+      await transaction.query(
+        `ALTER TABLE ${tables.operationEvents} ADD COLUMN event_ordinal BIGINT`,
+      );
+      await transaction.query(`WITH numbered AS (
       SELECT event_id, row_number() OVER (PARTITION BY namespace, operation_id ORDER BY event_position, event_id) AS ordinal
       FROM ${tables.operationEvents}
     ) UPDATE ${tables.operationEvents} AS event SET event_ordinal = numbered.ordinal
       FROM numbered WHERE event.event_id = numbered.event_id`);
-    await transaction.query(
-      `ALTER TABLE ${tables.operationEvents} ALTER COLUMN event_ordinal SET NOT NULL`,
-    );
-    await transaction.query(
-      `UPDATE ${tables.operations} AS operation SET next_event_ordinal = 1 + COALESCE((
+      await transaction.query(
+        `ALTER TABLE ${tables.operationEvents} ALTER COLUMN event_ordinal SET NOT NULL`,
+      );
+      await transaction.query(
+        `UPDATE ${tables.operations} AS operation SET next_event_ordinal = 1 + COALESCE((
       SELECT max(event_ordinal) FROM ${tables.operationEvents} AS event
       WHERE event.namespace = operation.namespace AND event.operation_id = operation.operation_id
     ), 0)`,
-    );
-    await provisionSelectionTables(transaction, tables);
-    const resolve = options.resolveObservationKeys ??
-      ((input: OperationCatalogBackfillInput) =>
-        observationKeys(input.metadata));
-    // Temporary bindings are transaction-local and disappear on commit or rollback.
-    // Metadata payloads are never copied into a second permanent event table.
-    const staging = 'pg_temp."copilotz_catalog_backfill_bindings"';
-    await transaction.query(
-      `CREATE TEMP TABLE "copilotz_catalog_backfill_bindings" (
+      );
+      await provisionSelectionTables(transaction, tables);
+      const resolve = options.resolveObservationKeys ??
+        ((input: OperationCatalogBackfillInput) =>
+          observationKeys(input.metadata));
+      // Temporary bindings are transaction-local and disappear on commit or rollback.
+      // Metadata payloads are never copied into a second permanent event table.
+      const staging = 'pg_temp."copilotz_catalog_backfill_bindings"';
+      await transaction.query(
+        `CREATE TEMP TABLE "copilotz_catalog_backfill_bindings" (
       namespace TEXT NOT NULL, selection_key TEXT NOT NULL, operation_id TEXT NOT NULL,
       PRIMARY KEY (namespace, selection_key, operation_id)
     ) ON COMMIT DROP`,
-    );
-    let afterOperationId = "";
-    while (true) {
-      const operations = await transaction.query<
-        Pick<
-          OperationRow,
-          "operation_id" | "namespace" | "root_event_id" | "metadata"
-        >
-      >(
-        `SELECT operation.operation_id, operation.namespace, operation.root_event_id,
-           ${
-          projectMetadata("operation", "$2")
-        } AS metadata FROM ${tables.operations} AS operation
-         WHERE operation.operation_id > $1 ORDER BY operation.operation_id LIMIT 500`,
-        metadataKeys === undefined
-          ? [afterOperationId]
-          : [afterOperationId, metadataKeys],
       );
-      if (!operations.rows.length) break;
-      const batch = new Map(
-        operations.rows.map((operation) => [operation.operation_id, {
-          operation,
-          metadata: snapshotStreamMetadata(operation.metadata),
-          keys: new Set<string>(),
-        }]),
-      );
-      const addKeys = async (
-        operationId: string,
-        eventId: string,
-        metadata: Readonly<Record<string, unknown>>,
-      ) => {
-        const entry = batch.get(operationId)!;
-        const resolved = await resolve({
-          namespace: entry.operation.namespace,
-          operationId,
-          eventId,
-          metadata,
-          operationMetadata: entry.metadata,
-        });
-        for (const key of observationKeys({ observationKeys: resolved })) {
-          entry.keys.add(key);
-        }
-      };
-      for (const entry of batch.values()) {
-        await addKeys(
-          entry.operation.operation_id,
-          entry.operation.root_event_id,
-          entry.metadata,
-        );
-      }
-      let afterEventPosition = "0";
-      let afterEventId = "";
+      let afterOperationId = "";
       while (true) {
-        const events = await transaction.query<{
-          operation_id: string;
-          event_id: string;
-          event_position: string;
-          metadata: unknown;
-        }>(
-          `SELECT indexed.operation_id, indexed.event_id, indexed.event_position,
+        const operations = await transaction.query<
+          Pick<
+            OperationRow,
+            "operation_id" | "namespace" | "root_event_id" | "metadata"
+          >
+        >(
+          `SELECT operation.operation_id, operation.namespace, operation.root_event_id,
+           ${
+            projectMetadata("operation", "$2")
+          } AS metadata FROM ${tables.operations} AS operation
+         WHERE operation.operation_id > $1 ORDER BY operation.operation_id LIMIT 500`,
+          metadataKeys === undefined
+            ? [afterOperationId]
+            : [afterOperationId, metadataKeys],
+        );
+        if (!operations.rows.length) break;
+        const batch = new Map(
+          operations.rows.map((operation) => [operation.operation_id, {
+            operation,
+            metadata: snapshotStreamMetadata(operation.metadata),
+            keys: new Set<string>(),
+          }]),
+        );
+        const addKeys = async (
+          operationId: string,
+          eventId: string,
+          metadata: Readonly<Record<string, unknown>>,
+        ) => {
+          const entry = batch.get(operationId)!;
+          const resolved = await resolve({
+            namespace: entry.operation.namespace,
+            operationId,
+            eventId,
+            metadata,
+            operationMetadata: entry.metadata,
+          });
+          for (const key of observationKeys({ observationKeys: resolved })) {
+            entry.keys.add(key);
+          }
+        };
+        for (const entry of batch.values()) {
+          await addKeys(
+            entry.operation.operation_id,
+            entry.operation.root_event_id,
+            entry.metadata,
+          );
+        }
+        let afterEventPosition = "0";
+        let afterEventId = "";
+        while (true) {
+          const events = await transaction.query<{
+            operation_id: string;
+            event_id: string;
+            event_position: string;
+            metadata: unknown;
+          }>(
+            `SELECT indexed.operation_id, indexed.event_id, indexed.event_position,
             ${projectMetadata("event", "$4")} AS metadata
           FROM ${tables.operationEvents} AS indexed
           JOIN ${tables.events} AS event ON event.id = indexed.event_id AND event.namespace = indexed.namespace
           WHERE indexed.operation_id = ANY($1::text[])
             AND (indexed.event_position, indexed.event_id) > ($2::bigint, $3::text)
           ORDER BY indexed.event_position, indexed.event_id LIMIT 1000`,
-          metadataKeys === undefined
-            ? [[...batch.keys()], afterEventPosition, afterEventId]
-            : [
-              [...batch.keys()],
-              afterEventPosition,
-              afterEventId,
-              metadataKeys,
-            ],
-        );
-        for (const event of events.rows) {
-          await addKeys(
-            event.operation_id,
-            event.event_id,
-            snapshotStreamMetadata(event.metadata),
+            metadataKeys === undefined
+              ? [[...batch.keys()], afterEventPosition, afterEventId]
+              : [
+                [...batch.keys()],
+                afterEventPosition,
+                afterEventId,
+                metadataKeys,
+              ],
           );
+          for (const event of events.rows) {
+            await addKeys(
+              event.operation_id,
+              event.event_id,
+              snapshotStreamMetadata(event.metadata),
+            );
+          }
+          if (events.rows.length < 1000) break;
+          afterEventPosition = String(events.rows.at(-1)!.event_position);
+          afterEventId = events.rows.at(-1)!.event_id;
         }
-        if (events.rows.length < 1000) break;
-        afterEventPosition = String(events.rows.at(-1)!.event_position);
-        afterEventId = events.rows.at(-1)!.event_id;
-      }
-      const resolved = [...batch.values()].map((entry) => ({
-        namespace: entry.operation.namespace,
-        operation_id: entry.operation.operation_id,
-        observation_keys: [...entry.keys].sort(),
-      }));
-      await transaction.query(
-        `UPDATE ${tables.operations} AS operation
+        const resolved = [...batch.values()].map((entry) => ({
+          namespace: entry.operation.namespace,
+          operation_id: entry.operation.operation_id,
+          observation_keys: [...entry.keys].sort(),
+        }));
+        await transaction.query(
+          `UPDATE ${tables.operations} AS operation
         SET observation_keys = resolved.observation_keys
         FROM jsonb_to_recordset($1::jsonb) AS resolved(namespace TEXT, operation_id TEXT, observation_keys TEXT[])
         WHERE operation.namespace = resolved.namespace AND operation.operation_id = resolved.operation_id`,
-        [JSON.stringify(resolved)],
-      );
-      await transaction.query(
-        `INSERT INTO ${staging} (namespace, selection_key, operation_id)
+          [JSON.stringify(resolved)],
+        );
+        await transaction.query(
+          `INSERT INTO ${staging} (namespace, selection_key, operation_id)
         SELECT resolved.namespace, key, resolved.operation_id
         FROM jsonb_to_recordset($1::jsonb) AS resolved(namespace TEXT, operation_id TEXT, observation_keys TEXT[]),
           LATERAL unnest(resolved.observation_keys) AS key`,
-        [JSON.stringify(resolved)],
-      );
-      afterOperationId = operations.rows.at(-1)!.operation_id;
-    }
-    await transaction.query(`WITH heads AS (
+          [JSON.stringify(resolved)],
+        );
+        afterOperationId = operations.rows.at(-1)!.operation_id;
+      }
+      await transaction.query(`WITH heads AS (
       INSERT INTO ${tables.selectionHeads} AS head (namespace, selection_key, change_ordinal)
       SELECT namespace, selection_key, count(*) FROM ${staging}
       GROUP BY namespace, selection_key ORDER BY namespace, selection_key
@@ -1167,6 +1229,19 @@ export async function upgradeOperationCatalog(
         heads.change_ordinal - numbered.allocation_count + numbered.ordinal
       FROM numbered JOIN heads USING (namespace, selection_key)
       ON CONFLICT (namespace, selection_key, operation_id) DO UPDATE SET change_ordinal = EXCLUDED.change_ordinal`);
+    }
+    await transaction.query(`ALTER TABLE ${tables.operations}
+      ADD COLUMN IF NOT EXISTS cancellation_requested_at TIMESTAMPTZ,
+      ADD COLUMN IF NOT EXISTS cancellation_reason TEXT,
+      ADD COLUMN IF NOT EXISTS visibility TEXT NOT NULL DEFAULT 'public' CHECK (visibility IN ('public','internal')),
+      DROP CONSTRAINT IF EXISTS copilotz_operations_root_event_id_key`);
+    await transaction.query(
+      `CREATE UNIQUE INDEX IF NOT EXISTS "copilotz_operations_public_root_idx"
+      ON ${tables.operations} (root_event_id) WHERE visibility = 'public'`,
+    );
+    for (const statement of lifecycleIndexStatements(tables)) {
+      await transaction.query(statement);
+    }
     await transaction.query(
       `ALTER TABLE ${tables.metadata} DROP CONSTRAINT copilotz_operation_catalog_metadata_fingerprint_check`,
     );
@@ -1187,7 +1262,7 @@ export async function validateOperationCatalog(
   databaseSchema = "public",
 ): Promise<OperationCatalogTables> {
   const schema = validateEventSchemaName(databaseSchema);
-  const tables = tableNames(schema);
+  const tables = createOperationCatalogTables(schema);
   const required = [
     ["metadata", tables.metadata],
     ["operations", tables.operations],
@@ -1220,7 +1295,7 @@ export async function validateOperationCatalog(
     `SELECT table_name, column_name FROM information_schema.columns
       WHERE table_schema = $1
         AND (
-          (table_name = 'copilotz_operations' AND column_name IN ('next_stream_ordinal', 'next_event_ordinal', 'observation_keys'))
+          (table_name = 'copilotz_operations' AND column_name IN ('next_stream_ordinal', 'next_event_ordinal', 'observation_keys', 'cancellation_requested_at', 'cancellation_reason', 'visibility'))
           OR (table_name = 'copilotz_operation_events' AND column_name = 'event_ordinal')
           OR
           (table_name = 'copilotz_operation_streams'
@@ -1238,6 +1313,9 @@ export async function validateOperationCatalog(
     !present.has("copilotz_operations.next_stream_ordinal") ||
     !present.has("copilotz_operations.next_event_ordinal") ||
     !present.has("copilotz_operations.observation_keys") ||
+    !present.has("copilotz_operations.cancellation_requested_at") ||
+    !present.has("copilotz_operations.visibility") ||
+    !present.has("copilotz_operations.cancellation_reason") ||
     !present.has("copilotz_operation_events.event_ordinal") ||
     !present.has("copilotz_operation_streams.replay_key") ||
     !present.has("copilotz_operation_streams.stream_ordinal") ||
@@ -1270,22 +1348,28 @@ export function createOperationCatalog(
   session: SqlSession,
   databaseSchema = "public",
   options: Readonly<{
+    /** Commit notification only: the caller must not wait on the current writer. */
+    onStreamTerminal?: (
+      operation: Readonly<{ namespace: string; operationId: string }>,
+    ) => void;
     /** Drains request-local/remote relay frames before a zero-settlement terminal inference. */
     beforeTerminal?: (
       operation: Readonly<{ namespace: string; operationId: string }>,
     ) => Promise<void>;
   }> = {},
 ): OperationCatalog {
-  const tables = tableNames(databaseSchema);
+  const tables = createOperationCatalogTables(databaseSchema);
   // CTEs that index one event. A root event creates its operation in the same
   // statement, which the other CTEs' snapshot cannot see, so "the operation
-  // exists" also accepts the row created here. Detached delivery settlement
-  // scopes deliberately have no operation root; they remain Core delivery
-  // mechanics and must not leak orphaned reconnect catalog rows.
+  // exists" also accepts the row created here. Detached deliveries get an
+  // internal operation: identical lifecycle rules, independent completion,
+  // and no membership in public observation selections.
   const indexEventCtes = (
     input: Omit<OperationEventIndexInput, "position">,
     param: (value: unknown) => string,
-    event: Readonly<{ position: string; requires?: string }>,
+    event: Readonly<
+      { position: string; requires?: string; deliveries?: string }
+    >,
   ): string => {
     const namespace = param(
       requiredText(input.namespace, "Operation namespace"),
@@ -1312,7 +1396,7 @@ export function createOperationCatalog(
              ${keys},2,'accepted',${createdAt},${createdAt}
              ${event.requires ? `WHERE ${event.requires}` : ""}
            ON CONFLICT (operation_id) DO NOTHING
-           RETURNING operation_id, observation_keys, 1::bigint AS event_ordinal
+           RETURNING operation_id, visibility, observation_keys, 1::bigint AS event_ordinal
          ), `
       : "";
     // UPDATE locks the current operation tuple before allocating a local ordinal.
@@ -1329,10 +1413,28 @@ export function createOperationCatalog(
         param(OPERATION_CHANGE_CHANNEL)
       }, (SELECT ${notifyPayload} FROM allocated_operation)) END`
       : "";
-    return `${created}existing_operation AS (
+    const internal = event.deliveries
+      ? `created_internal_operations AS (
+      INSERT INTO ${tables.operations} (
+        operation_id, namespace, root_event_id, correlation_id, metadata,
+        observation_keys, visibility, next_event_ordinal, state, accepted_at, updated_at,
+        completed_at, cancellation_requested_at
+      ) SELECT delivery.settlement_scope_id, ${namespace}, ${eventRef}, ${
+        param(input.correlationId)
+      }, '{}'::jsonb,
+        ARRAY[]::text[], 'internal', 1,
+        CASE WHEN delivery.status = 'cancelled' THEN 'cancelled' ELSE 'accepted' END,
+        ${createdAt}, ${createdAt},
+        CASE WHEN delivery.status = 'cancelled' THEN ${createdAt} ELSE NULL END,
+        CASE WHEN delivery.status = 'cancelled' THEN ${createdAt} ELSE NULL END
+      FROM ${event.deliveries} AS delivery WHERE delivery.settlement_scope_id <> ${operation}
+      ON CONFLICT (operation_id) DO NOTHING
+    ), `
+      : "";
+    return `${internal}${created}existing_operation AS (
         UPDATE ${tables.operations} AS operation
            SET next_event_ordinal = next_event_ordinal + 1,
-               observation_keys = ARRAY(SELECT DISTINCT key FROM unnest(operation.observation_keys || ${keys}) AS key ORDER BY key),
+               observation_keys = CASE WHEN visibility = 'internal' THEN ARRAY[]::text[] ELSE ARRAY(SELECT DISTINCT key FROM unnest(operation.observation_keys || ${keys}) AS key ORDER BY key) END,
                state = CASE WHEN state = 'accepted' AND ${
       param(!root)
     }::boolean THEN 'running' ELSE state END,
@@ -1341,7 +1443,7 @@ export function createOperationCatalog(
            AND NOT EXISTS (SELECT 1 FROM ${tables.operationEvents} WHERE event_id = ${eventRef})
            ${root ? "AND NOT EXISTS (SELECT 1 FROM created_operation)" : ""}
            ${requirements}
-         RETURNING operation_id, observation_keys, next_event_ordinal - 1 AS event_ordinal
+         RETURNING operation_id, visibility, observation_keys, next_event_ordinal - 1 AS event_ordinal
       ), allocated_operation AS (
         SELECT * FROM existing_operation ${
       root ? "UNION ALL SELECT * FROM created_operation" : ""
@@ -1454,6 +1556,31 @@ export function createOperationCatalog(
         },
       } as const);
     },
+    admitEventSql(input, param) {
+      const namespace = param(
+        requiredText(input.namespace, "Operation namespace"),
+      );
+      const operation = param(requiredText(input.operationId, "Operation id"));
+      const target = `namespace = ${namespace} AND operation_id = ${operation}`;
+      return {
+        ctes: [`admitted_operation AS MATERIALIZED (
+          SELECT operation_id, cancellation_requested_at FROM ${tables.operations}
+          WHERE ${target} AND state IN ('accepted','running')
+            AND (cancellation_requested_at IS NULL OR ${
+          input.cancellationTerminal === true ? "TRUE" : "FALSE"
+        }) FOR UPDATE
+        )`],
+        // Ordinary direct mutations may start outside an operation. A
+        // deferred handoff requires a managed scope, including internal ones.
+        cancelled:
+          "EXISTS (SELECT 1 FROM admitted_operation WHERE cancellation_requested_at IS NOT NULL)",
+        gate: `(${
+          input.requireScope !== true
+            ? `NOT EXISTS (SELECT 1 FROM ${tables.operations} WHERE ${target}) OR `
+            : ""
+        }EXISTS (SELECT 1 FROM admitted_operation))`,
+      };
+    },
     async indexEvent(transaction, input) {
       if (!/^(0|[1-9][0-9]*)$/.test(input.position)) {
         throw new TypeError("Operation event position is invalid.");
@@ -1472,6 +1599,7 @@ export function createOperationCatalog(
       return indexEventCtes(input, param, {
         position: "(SELECT position FROM inserted_event)",
         requires: "EXISTS (SELECT 1 FROM inserted_event)",
+        deliveries: "inserted_deliveries",
       });
     },
     async getSelectionHeads(input) {
@@ -1597,7 +1725,10 @@ export function createOperationCatalog(
     async list(input) {
       const namespace = requiredText(input.namespace, "Operation namespace");
       const limit = boundedLimit(input.limit);
-      const conditions = ["operation.namespace = $1"];
+      const conditions = [
+        "operation.namespace = $1",
+        "operation.visibility = 'public'",
+      ];
       const params: unknown[] = [namespace];
       let operationIds: readonly string[] | undefined;
       if (input.operationIds !== undefined) {
@@ -1812,54 +1943,19 @@ export function createOperationCatalog(
         ? undefined
         : String(position);
     },
-    async mark(namespaceInput, operationIdInput, state) {
-      const namespace = requiredText(namespaceInput, "Operation namespace");
-      const operationId = requiredText(operationIdInput, "Operation id");
-      const update = (executor: SqlExecutor) =>
-        executor.query<{ operation_id: string }>(
-          `UPDATE ${tables.operations}
-           SET state = $3, updated_at = NOW(),
-               completed_at = CASE WHEN $3 IN ('completed','failed','cancelled')
-                 THEN COALESCE(completed_at, NOW()) ELSE completed_at END
-         WHERE namespace = $1 AND operation_id = $2
-           AND state NOT IN ('completed','failed','cancelled')
-           AND state IS DISTINCT FROM $3
-           AND (
-             $3 = 'cancelled'
-             OR $3 = 'running'
-             OR NOT EXISTS (
-               SELECT 1 FROM ${tables.operationStreams} AS stream
-                WHERE stream.namespace = $1
-                  AND stream.operation_id = $2
-                  AND stream.state IN ('open','terminating')
-             )
-           )
-         RETURNING operation_id`,
-          [namespace, operationId, state],
-        );
-      const result = state === "cancelled"
-        ? await session.transaction(async (transaction) => {
-          await transaction.query(
-            `UPDATE ${tables.operationStreams}
-                SET state = 'terminating', outcome = 'cancelled',
-                    capture = 'truncated', availability = 'retained',
-                    updated_at = NOW()
-              WHERE namespace = $1 AND operation_id = $2 AND state = 'open'`,
-            [namespace, operationId],
-          );
-          return await update(transaction);
-        })
-        : await update(session);
-      if (result.rows.length > 0) {
-        await notifyOperationChange(
-          session,
-          session,
-          databaseSchema,
-          namespace,
-          operationId,
-        );
-      }
-      return result.rows.length > 0;
+    async requestCancellation(transaction, namespace, operationId, reason) {
+      await transaction.query(
+        `UPDATE ${tables.operations} SET cancellation_requested_at = COALESCE(cancellation_requested_at, NOW()),
+          cancellation_reason = COALESCE(cancellation_reason, $3), updated_at = NOW()
+         WHERE namespace = $1 AND operation_id = $2 AND state IN ('accepted','running')`,
+        [namespace, operationId, reason],
+      );
+      await transaction.query(
+        `UPDATE ${tables.operationStreams}
+         SET state = 'terminating', outcome = 'cancelled', capture = 'truncated', updated_at = NOW()
+         WHERE namespace = $1 AND operation_id = $2 AND state = 'open'`,
+        [namespace, operationId],
+      );
     },
     async listEventIds(input) {
       const namespace = requiredText(input.namespace, "Operation namespace");
@@ -1951,11 +2047,33 @@ export function createOperationCatalog(
         }>(
           `SELECT next_stream_ordinal FROM ${tables.operations}
             WHERE namespace = $1 AND operation_id = $2
-              AND state IN ('accepted','running')
+              AND state IN ('accepted','running') AND cancellation_requested_at IS NULL
             LIMIT 1 FOR UPDATE`,
           [namespace, operationId],
         );
         if (!operation.rows[0]) return undefined;
+        const actionScopeId = descriptor.metadata?.sourceActionScopeId;
+        if (typeof actionScopeId === "string") {
+          const group = await transaction.query(
+            `SELECT action_run_id FROM ${
+              quoteEventIdentifier(databaseSchema)
+            }."open_actions"
+             WHERE namespace = $1 AND action_run_id = $2 AND state = 'deferred' FOR UPDATE`,
+            [namespace, actionScopeId],
+          );
+          if (!group.rows.length) return undefined;
+        }
+        if (input.deliveryLease) {
+          const owner = await transaction.query(
+            `SELECT id FROM ${
+              quoteEventIdentifier(databaseSchema)
+            }."event_deliveries"
+             WHERE id = $1 AND status = 'leased' AND lease_owner = $2
+               AND lease_expires_at > NOW() FOR UPDATE`,
+            [input.deliveryLease.deliveryId, input.deliveryLease.owner],
+          );
+          if (!owner.rows.length) return undefined;
+        }
         // A durable delivery retry must never append a restarted provider's
         // bytes to the previous execution. Opening the new physical lane
         // atomically closes any still-open incarnation of the same semantic
@@ -2123,6 +2241,7 @@ export function createOperationCatalog(
           { kind: "stream", streamId: input.streamId },
         );
       }
+      if (result.rows.length > 0) options.onStreamTerminal?.(input);
       return result.rows.length > 0;
     },
     async beginStreamTerminalization(input) {
@@ -2208,6 +2327,7 @@ export function createOperationCatalog(
           { kind: "stream", streamId: input.streamId },
         );
       }
+      if (result.rows.length > 0) options.onStreamTerminal?.(input);
       return result.rows.length > 0;
     },
     async markStreamUnavailable(input) {
@@ -2247,6 +2367,7 @@ export function createOperationCatalog(
           { kind: "stream", streamId: input.streamId },
         );
       }
+      if (result.rows.length > 0) options.onStreamTerminal?.(input);
       return result.rows.length > 0;
     },
     async discardStream(input) {
@@ -2267,6 +2388,7 @@ export function createOperationCatalog(
           { kind: "stream", streamId: input.streamId },
         );
       }
+      if (result.rows.length > 0) options.onStreamTerminal?.(input);
       return result.rows.length > 0;
     },
     async retainStream(input) {
@@ -2470,35 +2592,54 @@ export function createOperationCatalog(
       );
       return (result.rows.map(mapStream));
     },
+    async lockScope(transaction, operationId) {
+      await transaction.query(
+        `SELECT operation_id FROM ${tables.operations}
+        WHERE operation_id = $1 FOR UPDATE`,
+        [operationId],
+      );
+    },
+    async failDeliveryStreams(transaction, input) {
+      await transaction.query(
+        `UPDATE ${tables.operationStreams}
+        SET state = 'terminating', outcome = $3, capture = 'truncated', updated_at = NOW()
+        WHERE operation_id = $1 AND state = 'open'
+          AND descriptor -> 'metadata' ->> 'sourceDeliveryId' = $2`,
+        [input.operationId, input.deliveryId, input.outcome],
+      );
+    },
     async reconcile(input = {}) {
-      const terminalizable = await session.query<{
-        operation_id: string;
-        namespace: string;
-      }>(
-        `SELECT operation.operation_id, operation.namespace
-           FROM ${tables.operations} AS operation
-          WHERE operation.state IN ('accepted','running')
-            AND NOT EXISTS (
-              SELECT 1 FROM ${tables.operationStreams} AS open_stream
-               WHERE open_stream.namespace = operation.namespace
-                 AND open_stream.operation_id = operation.operation_id
-                 AND open_stream.state IN ('open','terminating')
-            )
-            AND NOT EXISTS (
-              SELECT 1
-                FROM ${tables.operationEvents} AS active_index
-                JOIN ${
-          quoteEventIdentifier(databaseSchema)
-        }."event_deliveries" AS active_delivery
-                  ON active_delivery.event_id = active_index.event_id
-                 AND active_delivery.settlement_scope_id = operation.operation_id
-                 AND active_delivery.status IN ('pending','leased','retry_wait')
-               WHERE active_index.namespace = operation.namespace
-                 AND active_index.operation_id = operation.operation_id
-            )
-          ORDER BY operation.updated_at, operation.operation_id
-          LIMIT $1`,
-        [boundedLimit(input.limit)],
+      const deliveries = `${
+        quoteEventIdentifier(databaseSchema)
+      }."event_deliveries"`;
+      const actions = `${quoteEventIdentifier(databaseSchema)}."open_actions"`;
+      const drained = `NOT EXISTS (
+        SELECT 1 FROM ${actions} AS action
+        WHERE action.namespace = operation.namespace AND action.scope_id = operation.operation_id
+      ) AND NOT EXISTS (
+        SELECT 1 FROM ${tables.operationStreams} AS stream
+        WHERE stream.namespace = operation.namespace AND stream.operation_id = operation.operation_id
+          AND stream.state IN ('open','terminating')
+      ) AND NOT EXISTS (
+        SELECT 1 FROM ${deliveries} AS delivery
+        JOIN ${tables.events} AS event ON event.id = delivery.event_id
+        WHERE delivery.settlement_scope_id = operation.operation_id AND event.namespace = operation.namespace
+          AND delivery.status IN ('pending','leased','retry_wait')
+      )`;
+      const terminalizable = await session.query<
+        { operation_id: string; namespace: string }
+      >(
+        `SELECT operation.operation_id, operation.namespace FROM ${tables.operations} AS operation
+         WHERE operation.state IN ('accepted','running')
+           AND ($2::text IS NULL OR operation.namespace = $2)
+           AND ($3::text IS NULL OR operation.operation_id = $3)
+           AND ${drained}
+         ORDER BY operation.updated_at, operation.operation_id LIMIT $1`,
+        [
+          boundedLimit(input.limit),
+          input.namespace ?? null,
+          input.operationId ?? null,
+        ],
       );
       for (const operation of terminalizable.rows) {
         await options.beforeTerminal?.({
@@ -2506,84 +2647,43 @@ export function createOperationCatalog(
           operationId: operation.operation_id,
         });
       }
-      if (terminalizable.rows.length === 0) return 0;
-      const drainedOperationIds = terminalizable.rows.map((operation) =>
+      if (!terminalizable.rows.length) return 0;
+      const ids = terminalizable.rows.map((operation) =>
         operation.operation_id
       );
-      const result = await session.query<
-        { operation_id: string; namespace: string }
-      >(
-        `WITH candidates AS (
-           SELECT operation.operation_id, operation.namespace
-           FROM ${tables.operations} AS operation
-           WHERE operation.state IN ('accepted','running')
-             AND operation.operation_id = ANY($1::text[])
-             AND NOT EXISTS (
-               SELECT 1 FROM ${tables.operationStreams} AS open_stream
-                WHERE open_stream.namespace = operation.namespace
-                  AND open_stream.operation_id = operation.operation_id
-                  AND open_stream.state IN ('open','terminating')
-             )
-             AND NOT EXISTS (
-               SELECT 1
-               FROM ${tables.operationEvents} AS active_index
-               JOIN ${
-          quoteEventIdentifier(databaseSchema)
-        }."event_deliveries" AS active_delivery
-                 ON active_delivery.event_id = active_index.event_id
-                AND active_delivery.settlement_scope_id = operation.operation_id
-                AND active_delivery.status IN ('pending','leased','retry_wait')
-               WHERE active_index.namespace = operation.namespace
-                 AND active_index.operation_id = operation.operation_id
-             )
-         ), totals AS (
-           SELECT candidate.operation_id, candidate.namespace,
-             COUNT(delivery.id) FILTER (
-               WHERE delivery.status IN ('pending','leased','retry_wait')
-                 AND delivery.settlement_scope_id = candidate.operation_id
-             ) AS unsettled,
-             COUNT(delivery.id) FILTER (
-               WHERE delivery.status = 'dead_letter'
-                 AND delivery.settlement_scope_id = candidate.operation_id
-             ) AS failed,
-             COUNT(delivery.id) FILTER (
-               WHERE delivery.status = 'cancelled'
-                 AND delivery.settlement_scope_id = candidate.operation_id
-             ) AS cancelled
-           FROM candidates AS candidate
-           LEFT JOIN ${tables.operationEvents} AS indexed
-             ON indexed.namespace = candidate.namespace
-            AND indexed.operation_id = candidate.operation_id
-           LEFT JOIN ${
-          quoteEventIdentifier(databaseSchema)
-        }."event_deliveries" AS delivery
-             ON delivery.event_id = indexed.event_id
-           GROUP BY candidate.operation_id, candidate.namespace
-         )
-         UPDATE ${tables.operations} AS operation
-         SET state = CASE
-               WHEN totals.failed > 0 THEN 'failed'
-               WHEN totals.cancelled > 0 THEN 'cancelled'
-               WHEN totals.unsettled > 0 THEN 'running'
-               ELSE 'completed'
-             END,
-             updated_at = NOW(),
-             completed_at = CASE
-               WHEN totals.unsettled = 0 THEN COALESCE(operation.completed_at, NOW())
-               ELSE operation.completed_at
-             END
-         FROM totals
-         WHERE operation.operation_id = totals.operation_id
-           AND operation.namespace = totals.namespace
-           AND operation.state IS DISTINCT FROM CASE
-               WHEN totals.failed > 0 THEN 'failed'
-               WHEN totals.cancelled > 0 THEN 'cancelled'
-               WHEN totals.unsettled > 0 THEN 'running'
-               ELSE 'completed'
-             END
-         RETURNING operation.operation_id, operation.namespace`,
-        [drainedOperationIds],
-      );
+      const result = await session.transaction(async (transaction) => {
+        // Event, stream and Action admission holds the same row lock. Read
+        // obligations in a fresh statement AFTER the lock, including the
+        // initial delivery of an internal operation (whose source event is
+        // indexed only in its original operation).
+        await transaction.query(
+          `SELECT operation_id FROM ${tables.operations}
+           WHERE operation_id = ANY($1::text[]) ORDER BY operation_id FOR UPDATE`,
+          [ids],
+        );
+        return await transaction.query<
+          { operation_id: string; namespace: string }
+        >(
+          `WITH drained AS MATERIALIZED (
+            SELECT operation.operation_id, operation.namespace,
+              CASE WHEN operation.cancellation_requested_at IS NOT NULL THEN 'cancelled'
+                WHEN EXISTS (
+                  SELECT 1 FROM ${deliveries} AS delivery
+                  JOIN ${tables.events} AS event ON event.id = delivery.event_id
+                  WHERE delivery.settlement_scope_id = operation.operation_id
+                    AND event.namespace = operation.namespace AND delivery.status IN ('dead_letter','cancelled')
+                ) THEN 'failed' ELSE 'completed' END AS outcome
+            FROM ${tables.operations} AS operation
+            WHERE operation.operation_id = ANY($1::text[])
+              AND operation.state IN ('accepted','running') AND ${drained}
+          ) UPDATE ${tables.operations} AS operation
+            SET state = drained.outcome, updated_at = NOW(),
+              completed_at = COALESCE(operation.completed_at, NOW())
+            FROM drained WHERE operation.operation_id = drained.operation_id
+            RETURNING operation.operation_id, operation.namespace`,
+          [ids],
+        );
+      });
       for (const row of result.rows) {
         await notifyOperationChange(
           session,

@@ -79,6 +79,8 @@ export type EngineContextSeed = Readonly<{
   /** Unique dispatcher execution attempt; never exposed on ProcessorContext. */
   executionIncarnationId?: string;
   settlementScopeId?: string;
+  /** Runtime-owned work group for an outstanding deferred Action. */
+  actionScopeId?: string;
   idempotencyKey: string;
   createMutationIdentity: EngineMutationIdentityFactory;
   source?: EngineContextSource;
@@ -283,6 +285,8 @@ export type CopilotzEngine = Readonly<{
       eventId?: string;
       consumerId?: string;
       settlementScopeId?: string;
+      /** Runtime-owned work group for an outstanding deferred Action. */
+      actionScopeId?: string;
       status?: EventDelivery["status"];
       limit?: number;
     }): Promise<readonly EventDelivery[]>;
@@ -331,6 +335,8 @@ export type CreateProcessorContextOptions = Readonly<{
   publishOutput?: (output: RuntimeOutputDescriptor) => Promise<void>;
   publishLocalStream?: (output: StreamOutput) => Promise<void>;
   actionLifecycle: ActionLifecycleEmitter;
+  actionResolution?:
+    import("../actions/invoker.ts").CreateActionCallersOptions["resolution"];
   now?: () => Date;
   streamBodyStore: BodyStore;
   streamBodyPrefix: string;

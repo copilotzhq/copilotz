@@ -49,8 +49,8 @@ composed, it:
 
 - records **checkpoints** in its `long_term_memory` Collection, each covering a
   bounded range of one agent's history in one thread;
-- adds the `search_memory` and `consolidate_memory` tools, along with a few
-  inspection tools, to the composed resources;
+- adds the `search_memory` and `consolidate_memory` tools, along with inspection
+  tools, to the composed resources;
 - adds the agent's ready memory to later prompts as context, and lets Core leave
   out raw history that a certified checkpoint already covers.
 
@@ -190,7 +190,7 @@ memory: {
     // Bound for rendered semantic records. Continuity and other prompt
     // content have separate budgets. This is the library default.
     maxContentEstimatedTokens: 12000,
-    // Candidate records retrieved per proposed fact during consolidation.
+    // Recent active prompt candidates per own/peer group during consolidation.
     // search_memory has its own limit input. This is the library default.
     retrievalLimit: 20,
   },
@@ -335,3 +335,11 @@ scoped task has finished.
   and the full tool set.
 - Reference: [Knowledge](../../knowledge.md) and [Spaces](../../spaces.md) for
   complete examples of indexed sources and owned content.
+
+## Note format
+
+New memory uses immutable plain notes and one continuity summary. The agent
+calls `consolidate_memory({continuity, remember?, retire?})`; it corrects a note
+with a new note’s `replaces` IDs. No ontology or memory kinds are configured.
+See [Memory](../../memory.md) for source handles, sharing, retirement and the
+single context budget. Existing checkpoints remain usable without conversion.

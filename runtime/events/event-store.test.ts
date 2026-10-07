@@ -20,6 +20,57 @@ import {
 
 const TEST_SCHEMA = "copilotz_event_native";
 
+Deno.test("status reads leave final-attempt expiry to explicit recovery and schedule its wake", async () => {
+  const fixture = await createFixture();
+  try {
+    const root = await fixture.store.append(
+      { type: "test.expiry", namespace: "tenant-a", payload: {} },
+      ["worker"],
+      { maxAttempts: 1 },
+    );
+    const id = root.deliveries[0].id;
+    await fixture.store.claimDelivery({ id, owner: "crashed", leaseMs: 0 });
+    const statements: string[] = [];
+    const reads = createEventStore({
+      schema: TEST_SCHEMA,
+      session: {
+        ...fixture.session,
+        query(sql, params) {
+          statements.push(sql);
+          return fixture.session.query(sql, params);
+        },
+      },
+    });
+    assertEquals(await reads.scopeOutstanding("tenant-a", root.event.id), {
+      unsettled: 1,
+      deadLetters: 0,
+      cancelled: 0,
+    });
+    assertEquals(await reads.scopeSettlement("tenant-a", root.event.id), {
+      unsettled: 1,
+      deadLetters: 0,
+      cancelled: 0,
+      succeeded: 0,
+    });
+    assertEquals(await reads.nextRecoveryDelayMs(), 0);
+    assertEquals(await reads.listRecoverable(), []);
+    assertEquals(statements.length, 4);
+    assertEquals(
+      statements.some((sql) => /\b(UPDATE|INSERT|DELETE)\b/.test(sql)),
+      false,
+    );
+    assertEquals((await reads.getDelivery(id))?.status, "leased");
+    assertEquals((await reads.recoverExpiredDeliveries()).map((d) => d.id), [
+      id,
+    ]);
+    assertEquals(await reads.recoverExpiredDeliveries(), []);
+    assertEquals((await reads.getDelivery(id))?.status, "dead_letter");
+    assertEquals(await reads.nextRecoveryDelayMs(), null);
+  } finally {
+    await closeFixture(fixture);
+  }
+});
+
 type Fixture = {
   db: TestDatabase;
   session: SqlSession;
@@ -66,7 +117,7 @@ async function failThreeTimes(
   }
 }
 
-Deno.test("A20 clean v5 baseline contains the marker and no body-reference table", async () => {
+Deno.test("A20 clean v6 baseline contains the marker and no body-reference table", async () => {
   const fixture = await createFixture();
   try {
     const result = await fixture.session.query<{ table_name: string }>(
@@ -84,6 +135,7 @@ Deno.test("A20 clean v5 baseline contains the marker and no body-reference table
         "event_deliveries",
         "events",
         "nodes",
+        "open_actions",
       ],
     );
 
@@ -145,17 +197,17 @@ Deno.test("normal provisioning refuses a released v3 schema without writing curr
   }
 });
 
-Deno.test("atomic provisioning creates and validates a fresh v5 marker", async () => {
+Deno.test("atomic provisioning creates and validates a fresh v6 marker", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   const session = createSqlSession(db);
   const schema = "copilotz_fresh_v4_marker";
   try {
-    assertEquals((await provisionCopilotzSchema(session, schema)).version, 5);
+    assertEquals((await provisionCopilotzSchema(session, schema)).version, 6);
     const marker = await session.query<{ version: number }>(
       `SELECT version FROM "${schema}"."copilotz_schema_metadata"`,
     );
-    assertEquals(marker.rows, [{ version: 5 }]);
-    assertEquals((await provisionCopilotzSchema(session, schema)).version, 5);
+    assertEquals(marker.rows, [{ version: 6 }]);
+    assertEquals((await provisionCopilotzSchema(session, schema)).version, 6);
   } finally {
     await db.close();
   }
@@ -739,7 +791,7 @@ for (
         );
         assertEquals(await store.nextRecoveryDelayMs(), null);
 
-        // Exhausted leases still terminalize in the same recovery query.
+        // Scheduling is pure; the explicit sweep terminalizes exhausted leases.
         const exhausted = await store.append(
           {
             type: "work.exhausted",
@@ -757,6 +809,9 @@ for (
             leaseMs: 0,
           }),
         );
+        assertEquals(await store.nextRecoveryDelayMs(), 0);
+        assertEquals((await store.getDelivery(exhaustedId))?.status, "leased");
+        await store.recoverExpiredDeliveries();
         assertEquals(await store.nextRecoveryDelayMs(), null);
         assertEquals(
           (await store.getDelivery(exhaustedId))?.status,
@@ -845,7 +900,7 @@ Deno.test("A21 crash recovery and concurrent claims preserve one delivery owner"
     const exhaustedId = exhausted.deliveries[0].id;
     await store.claimDelivery({ id: exhaustedId, owner: "gone-1", leaseMs: 0 });
     await store.claimDelivery({ id: exhaustedId, owner: "gone-2", leaseMs: 0 });
-    await store.listRecoverable();
+    await store.recoverExpiredDeliveries();
     assertEquals((await store.getDelivery(exhaustedId))?.status, "dead_letter");
 
     const source = await store.append({
@@ -984,32 +1039,25 @@ Deno.test("internal scope counts preserve every status, expired leases and names
       [scope],
     );
     assertEquals(await store.scopeOutstanding("tenant-a", scope), {
-      unsettled: 4,
-      deadLetters: 2,
+      unsettled: 5,
+      deadLetters: 1,
       cancelled: 1,
     });
-    // The existing query also recovers exhausted leases outside this namespace.
+    // Reads must not expire leases, even in another namespace.
     const deliveries = await store.listDeliveries({ namespace: "tenant-b" });
     const exhausted = deliveries.find((delivery) =>
       delivery.consumerId === "exhausted"
     );
-    assertEquals(exhausted?.status, "dead_letter");
-    assertEquals(exhausted?.leaseOwner, undefined);
-    assertEquals(exhausted?.leaseExpiresAt, undefined);
-    assertExists(exhausted?.settledAt);
-    assertEquals(exhausted?.lastError?.name, "DeliveryLeaseExpired");
-    assertEquals(
-      deliveries.find((delivery) => delivery.consumerId === "expired")?.status,
-      "leased",
-    );
+    assertEquals(exhausted?.status, "leased");
+    assertEquals(exhausted?.leaseOwner, "gone-worker");
     assertEquals(await store.scopeOutstanding("tenant-b", scope), {
-      unsettled: 4,
-      deadLetters: 2,
+      unsettled: 5,
+      deadLetters: 1,
       cancelled: 1,
     });
     assertEquals(await store.scopeSettlement("tenant-a", scope), {
-      unsettled: 4,
-      deadLetters: 2,
+      unsettled: 5,
+      deadLetters: 1,
       cancelled: 1,
       succeeded: 1,
     });

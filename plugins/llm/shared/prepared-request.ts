@@ -128,19 +128,6 @@ function projectPreparedMessage(
     return ({
       role: message.role,
       ...common,
-      ...(message.reasoning?.length
-        ? {
-          reasoning: message.reasoning.map((entry) => {
-            const ref = entry as PreparedEntry;
-            if (
-              ref.kind !== "text" || typeof ref.value !== "string"
-            ) {
-              throw new TypeError("LLM reasoning must contain prepared text.");
-            }
-            return ref.value;
-          }).join("\n"),
-        }
-        : {}),
       ...(message.toolCalls
         ? { toolCalls: structuredClone(message.toolCalls) }
         : {}),

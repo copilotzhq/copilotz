@@ -24,7 +24,6 @@ import {
   createCheckpoint,
   readyCheckpoint,
 } from "./checkpoints.ts";
-import { memoryKinds } from "./snapshot.ts";
 import {
   branchCertificate,
   certifiedHistoryBoundary,
@@ -171,7 +170,6 @@ export async function reserveMemoryCheckpoint(
     buildMemoryConsolidationInstruction({
       spaces,
       sourceMessages: [],
-      kinds: memoryKinds(context),
       context: [],
     }),
   );
@@ -252,8 +250,7 @@ export async function reserveMemoryCheckpoint(
     sources.push(...batch);
     usedBytes += batch.reduce(
       (total, source) =>
-        total + (source.sourceBytes ?? encoder.encode(source.text).byteLength) +
-        encoder.encode(source.reasoning ?? "").byteLength,
+        total + (source.sourceBytes ?? encoder.encode(source.text).byteLength),
       0,
     );
     offset += batchSize;

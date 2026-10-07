@@ -1,164 +1,49 @@
-import type { ToolDefinition, ToolSystemPromptVariant } from "./types.ts";
+import type { ToolDefinition } from "./types.ts";
 
-// =============================================================================
-// STANDARDIZED TOOL CALLING FUNCTIONS
-// =============================================================================
+/** The single Copilotz tool grammar, including executable examples. */
+export const TOOL_PROTOCOL = String
+  .raw`Call tools using one <tool_calls> block. A tool stage is {"name":"tool_name","arguments":{...}}; arguments must be an object. Use tool names and arguments from the catalog.
 
-export function generateToolSystemPrompt(
-  tools: ToolDefinition[],
-  variant: ToolSystemPromptVariant = "useful-visible-contract",
-): string {
-  return generateToolSystemPromptVariant(tools, variant);
-}
+Write each chain on one line; lines run independently in parallel. Within a chain, | runs stages sequentially. The previous stage's result is deep-merged into the next tool's arguments: objects merge recursively; explicit arguments replace other values, including arrays. Insert {"jq":"filter"} to reshape a result into one arguments object before the next tool.
 
-function renderToolCatalog(tools: ToolDefinition[]): string {
-  return tools.map((tool) => {
-    const { name, description, inputTypes } = tool.function;
-    return [
-      `### ${name}`,
-      "",
-      description,
-      "",
-      "```typescript",
-      inputTypes.trim(),
-      "```",
-    ].join("\n");
-  }).join("\n\n");
-}
+Results arrive in <tool_results> on your next turn. Use those results before answering questions that depend on them; never write tool results yourself. Visible text may accompany tool calls. Without a tool call, your turn ends.
 
-export function generateToolSystemPromptVariant(
-  tools: ToolDefinition[],
-  variant: ToolSystemPromptVariant = "baseline",
-): string {
-  const toolCatalog = renderToolCatalog(tools);
-  const runLifecycleRule =
-    "A response without a tool call ends the current run. Never promise a future action unless its tool call is included in that same response. If you cannot call the tool now, state the blocker instead of promising the action.";
+Examples below assume get_location returns {latitude, longitude} and get_weather accepts those coordinates plus units and returns {temperature, condition}. Use the actual catalog in your task.
 
-  if (variant === "strict-minimal") {
-    return `
-=== TOOL USAGE ===
-
-You have access to tools. Copilotz, not the provider, executes tools.
-
-When a tool is needed, emit exactly one <tool_calls> block. Optional visible text may appear before or after it. Inside the block, emit one JSON object per line:
-{ "name": "tool_name", "arguments": { ... } }
-
-Rules:
-- Each object must have exactly "name" and "arguments".
-- "arguments" must be a JSON object.
-- New lines run in parallel; stages joined by | run sequentially.
-- For parallel calls, write each complete JSON object on its own line. Do not wrap calls in an array or put commas between objects. Array-valued arguments inside an object are allowed.
-- Use { "jq": "filter" } to reshape a prior stage's JSON before the next tool.
-- Use only tool names from the catalog.
-- Do not use provider-native tool syntax or any non-Copilotz tool format.
-- Do not emit <tool_results>; Copilotz provides tool results as external input in a later user turn.
-- ${runLifecycleRule}
-
-Example:
-Sure — checking that now.
-
+Single call:
 <tool_calls>
-{ "name": "tool_name", "arguments": { "key": "value" } }
+{"name":"get_weather","arguments":{"latitude":51.51,"longitude":-0.13,"units":"celsius"}}
 </tool_calls>
 
-Parallel example (use only tools and arguments from your actual catalog):
+Sequential calls (location output supplies weather coordinates):
 <tool_calls>
-{"name":"tool_name","arguments":{"key":"first"}}
-{"name":"tool_name","arguments":{"key":"second"}}
+{"name":"get_location","arguments":{"city":"London"}} | {"name":"get_weather","arguments":{"units":"celsius"}}
 </tool_calls>
-These are two independent calls. There is no surrounding array and no comma between the lines.
 
-=== TOOL CATALOG (read-only) ===
+Sequential calls with a jq transformation:
+<tool_calls>
+{"name":"get_weather","arguments":{"latitude":51.51,"longitude":-0.13,"units":"celsius"}} | {"jq":"{text: (.temperature | tostring) + \" C, \" + .condition}"} | {"name":"save_note","arguments":{"title":"London weather"}}
+</tool_calls>
 
-${toolCatalog}`;
-  }
+Parallel calls:
+<tool_calls>
+{"name":"get_location","arguments":{"city":"London"}}
+{"name":"get_location","arguments":{"city":"Tokyo"}}
+</tool_calls>
 
-  const extraRules: string[] = [runLifecycleRule];
-  if (variant === "tool-only-turn") {
-    extraRules.push(
-      "When calling tools, emit only the <tool_calls> block in that assistant message. Do not add acknowledgements, explanations, markdown, or filler text before or after the block.",
-    );
-  }
-  if (variant === "tool-call-contract") {
-    extraRules.push(
-      "If you call tools, the assistant message must contain only the <tool_calls> block. Do not include acknowledgements, status updates, summaries, markdown, or final answers in that same assistant message.",
-    );
-    extraRules.push(
-      "Only include visible text before a tool call when the user explicitly asks you to explain before acting.",
-    );
-    extraRules.push(
-      "If the user asks you to use a tool, call the tool before answering even when you already know the answer. Never include the final answer in the same assistant message as a tool call.",
-    );
-  }
-  if (variant === "useful-visible-contract") {
-    extraRules.push(
-      'Visible text accompanying a tool call is allowed only when it is useful to the user, such as a brief requested explanation. Merely saying which tools you will call is not useful. Do not emit generic acknowledgements, status narration, or filler such as "Sure", "I\'ll call the tool", or "running that now".',
-    );
-    extraRules.push(
-      "When a tool result is needed before answering, do not include the final answer in the same assistant message as the tool call. Wait for it will be provided as <tool_results> in next turn, then answer from those results.",
-    );
-  }
-  if (variant === "lifecycle-explicit") {
-    extraRules.push(
-      "Tool-calling is a loop: you emit <tool_calls>, Copilotz executes those calls, Copilotz later inserts <tool_results>, and you then use those results to continue or answer. Do not invent tool results yourself.",
-    );
-  }
-  const ruleOne = variant === "baseline" || variant === "no-visible-ack"
-    ? "You may talk to the human normally and call tools in the same response. Visible text may appear before or after <tool_calls>."
-    : "You may answer the human normally when no tool is needed. When a tool is needed, include <tool_calls> in the same response; unless a later rule requires tool-only output, visible text may appear before or after it.";
-  const extraRuleText = extraRules.length > 0
-    ? "\n" +
-      extraRules.map((rule, index) => `${4 + index}. ${rule}`).join("\n") +
-      "\n"
-    : "";
-  const exampleRuleNumber = 4 + extraRules.length;
-  const nextRuleNumber = exampleRuleNumber + 1;
+Mixed parallel and sequential calls:
+<tool_calls>
+{"name":"get_location","arguments":{"city":"London"}} | {"name":"get_weather","arguments":{"units":"celsius"}} | {"jq":"{text: (.temperature | tostring) + \" C, \" + .condition}"} | {"name":"save_note","arguments":{"title":"London weather"}}
+{"name":"get_location","arguments":{"city":"Tokyo"}} | {"name":"get_weather","arguments":{"units":"celsius"}}
+</tool_calls>`;
 
-  return `
-
-=== THINKING ===
-
-Your previous thinking traces may appear as <think> ... </think> blocks. Do not include them in your response.
-
-=== RESPONSE STRUCTURE ===
-
-When a response includes visible text and tool calls, the visible text may appear before or after the single <tool_calls> ... </tool_calls> block.
-Copilotz inserts <tool_results> later in user turns; never emit tool results yourself.
-If no visible reply is needed, respond with <no_response/>.
-
-=== TOOL USAGE ===
-
-In this environment you have access to a set of tools you can use to answer the user's question.
-
-=== RULES ===
-
-1. ${ruleOne}
-2. To call a tool, emit one JSON object per line between a single <tool_calls> ... </tool_calls> block.
-   - Each object has exactly two keys: "name" (string) and "arguments" (object). No other keys.
-   - "arguments" is a JSON object and may contain nested objects/arrays.
-   - New lines run in parallel.
-   - Join JSON stages with | on the same line to run them sequentially.
-   - A transform stage has exactly one key: { "jq": "filter" }.
-   - A piped object is deep-merged into the next tool's arguments; explicit arguments in the later stage win.
-   - If a piped value is not an object, use jq to shape it into one before the next tool.
-3. Use ONLY this <tool_calls> JSON format for tool calls.
-${extraRuleText}${exampleRuleNumber}. 
-
-##### Example (note the nested arguments object):
-
->
-> Sure. Let me check the weather in New York and Tokyo for today.
->
-> <tool_calls>
-> { "name": "get_weather", "arguments": { "city": "New York", "config": { "units": "celsius" } } }
-> { "name": "get_weather", "arguments": { "city": "Tokyo", "config": { "units": "celsius" } } }
-> </tool_calls>
->
-
-${nextRuleNumber}. Tool outputs may appear later as <tool_results> blocks in user turns. Treat them as returned execution results and never generate <tool_results>, <tool_result>, <result>, <target_ids>, or <continue_after_tool_results> yourself.
-${nextRuleNumber + 1}
-
-=== TOOL CATALOG (read-only) ===
-
-${toolCatalog}`;
+export function generateToolSystemPrompt(tools: ToolDefinition[]): string {
+  const catalog = tools.map(({ function: tool }) =>
+    [
+      `### ${tool.name}`,
+      tool.description,
+      "```typescript\n" + tool.inputTypes.trim() + "\n```",
+    ].join("\n\n")
+  ).join("\n\n");
+  return `${TOOL_PROTOCOL}\n\n=== TOOL CATALOG ===\n\n${catalog}`;
 }

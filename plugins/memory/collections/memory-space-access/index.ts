@@ -29,6 +29,34 @@ export const memorySpaceAccessCollection: CollectionDefinition<typeof schema> =
       "access",
       "defaultWrite",
     ], "memorySpaceId"],
+    commands: {
+      authorizeWrite: {
+        input: {
+          type: "object",
+          additionalProperties: false,
+          required: ["threadId", "memorySpaceId"],
+          properties: {
+            threadId: { type: "string" },
+            memorySpaceId: { type: "string" },
+          },
+        },
+        mutate({ current, input }) {
+          const requested = input as {
+            threadId: string;
+            memorySpaceId: string;
+          };
+          if (
+            current.threadId !== requested.threadId ||
+            current.memorySpaceId !== requested.memorySpaceId ||
+            current.access !== "read_write"
+          ) {
+            throw new Error("The memory write grant is no longer available.");
+          }
+          // The transaction checks this row's current version along with notes.
+          return { set: {} };
+        },
+      },
+    },
     relations: {
       thread: relation.belongsTo(
         "thread",

@@ -1,12 +1,13 @@
 import type { SqlExecutor, SqlSession } from "./session.ts";
 
-export const EVENT_SCHEMA_VERSION = 5;
+export const EVENT_SCHEMA_VERSION = 6;
 
 export type CoreTableName =
   | "nodes"
   | "edges"
   | "events"
   | "event_bodies"
+  | "open_actions"
   | "event_deliveries"
   | "copilotz_schema_metadata";
 
@@ -33,6 +34,7 @@ export function createCoreTableNames(schemaName = "public"): Readonly<
     events: table("events"),
     event_bodies: table("event_bodies"),
     event_deliveries: table("event_deliveries"),
+    open_actions: table("open_actions"),
     copilotz_schema_metadata: table("copilotz_schema_metadata"),
   } as const);
 }
@@ -84,11 +86,23 @@ const CORE_SCHEMA_COLUMNS = {
     "digest",
     "created_at",
   ] as const,
+  open_actions: [
+    "namespace",
+    "action_run_id",
+    "action_id",
+    "scope_id",
+    "invoked_event_id",
+    "state",
+    "owner_delivery_id",
+    "action_scope_id",
+    "deferred_event_id",
+  ],
   event_deliveries: [
     "id",
     "event_id",
     "consumer_id",
     "settlement_scope_id",
+    "action_scope_id",
     "status",
     "attempts",
     "max_attempts",
@@ -131,6 +145,7 @@ export async function validateCopilotzSchema(
           'events',
           'event_bodies',
           'event_deliveries',
+          'open_actions',
           'copilotz_schema_metadata'
         )`,
     [schema],
@@ -267,6 +282,37 @@ export async function provisionCopilotzSchema(
   });
 }
 
+/** Shared DDL for fresh provisioning and the explicit offline lifecycle upgrade. */
+export function createActionObligationStatements(
+  schemaName: string,
+): readonly string[] {
+  const tables = createCoreTableNames(schemaName);
+  return [
+    `CREATE TABLE IF NOT EXISTS ${tables.open_actions} (
+      namespace TEXT NOT NULL,
+      action_run_id TEXT NOT NULL,
+      action_id TEXT NOT NULL,
+      scope_id TEXT NOT NULL,
+      invoked_event_id TEXT NOT NULL REFERENCES ${tables.events}(id),
+      state TEXT NOT NULL CHECK (state IN ('invoked', 'deferred', 'resolving')),
+      owner_delivery_id TEXT,
+      action_scope_id TEXT,
+      deferred_event_id TEXT REFERENCES ${tables.events}(id),
+      PRIMARY KEY (namespace, action_run_id)
+    )`,
+    `CREATE INDEX IF NOT EXISTS "event_deliveries_action_scope_idx"
+      ON ${tables.event_deliveries} (settlement_scope_id, action_scope_id, status) WHERE action_scope_id IS NOT NULL`,
+    `CREATE INDEX IF NOT EXISTS "open_actions_group_idx"
+      ON ${tables.open_actions} (namespace, action_scope_id) WHERE action_scope_id IS NOT NULL`,
+    `CREATE INDEX IF NOT EXISTS "open_actions_deferred_idx"
+      ON ${tables.open_actions} (namespace, scope_id, action_run_id) WHERE state = 'deferred'`,
+    `CREATE INDEX IF NOT EXISTS "open_actions_scope_idx"
+      ON ${tables.open_actions} (namespace, scope_id)`,
+    `CREATE INDEX IF NOT EXISTS "open_actions_delivery_idx"
+      ON ${tables.open_actions} (owner_delivery_id) WHERE owner_delivery_id IS NOT NULL`,
+  ];
+}
+
 /** Fresh runtime tables. Only atomic provisioning writes the ready marker. */
 export function createCoreSchemaStatements(
   schemaName = "public",
@@ -370,6 +416,7 @@ export function createCoreSchemaStatements(
       event_id TEXT NOT NULL REFERENCES ${tables.events}(id) ON DELETE CASCADE,
       consumer_id TEXT NOT NULL,
       settlement_scope_id TEXT NOT NULL,
+      action_scope_id TEXT,
       status TEXT NOT NULL CHECK (status IN (
         'pending', 'leased', 'retry_wait', 'succeeded', 'cancelled', 'dead_letter'
       )),
@@ -423,6 +470,7 @@ export function createCoreSchemaStatements(
       WHERE settlement_scope_id IS NULL`,
     `ALTER TABLE ${tables.event_deliveries}
       ALTER COLUMN settlement_scope_id SET NOT NULL`,
+    ...createActionObligationStatements(schemaId),
     `CREATE INDEX IF NOT EXISTS "deliveries_available_idx"
       ON ${tables.event_deliveries}
         (status, available_at, priority DESC, created_at, id)

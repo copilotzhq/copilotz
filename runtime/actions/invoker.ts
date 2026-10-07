@@ -1,4 +1,9 @@
 import {
+  type ActionResolution,
+  deferredAction,
+  isActionDeferral,
+} from "./deferral.ts";
+import {
   actionContentDeclaration,
   prepareActionContentInput,
 } from "./content.ts";
@@ -30,6 +35,7 @@ import type {
 import { actionDefinitionHasSecrets } from "./protected-lifecycle.ts";
 import { splitSecretActionValue } from "./secret.ts";
 import type {
+  ActionDeferredData,
   ActionEventData,
   ActionInvokedData,
   ActionLifecycleEmitter,
@@ -99,6 +105,15 @@ export type ActionInvocationFrame = Readonly<{
 
 export type CreateActionCallersOptions = Readonly<{
   actionLifecycle: ActionLifecycleEmitter;
+  /** Runtime-only resolver delivery; never exposed through ActionCallOptions. */
+  resolution?: Readonly<
+    {
+      receipt: ActionDeferredData;
+      outcome: ActionResolution["outcome"];
+      error?: ActionResolution["error"];
+      causationId?: string;
+    }
+  >;
   content?: RuntimeContent;
   createInvocationKey?: (actionId: string) => string;
   /** Stable root scope for deferred Action captures in one processor run. */
@@ -141,6 +156,7 @@ function mergeIdentity(
     correlationId: child.correlationId ?? parent.correlationId,
     deduplicationId: child.deduplicationId ?? parent.deduplicationId,
     settlementScopeId: child.settlementScopeId ?? parent.settlementScopeId,
+    actionScopeId: child.actionScopeId ?? parent.actionScopeId,
   } as const);
 }
 
@@ -157,17 +173,19 @@ export function actionTransactionIdentity(
   const correlationId = transaction?.correlationId ?? action?.correlationId;
   const settlementScopeId = transaction?.settlementScopeId ??
     action?.settlementScopeId;
+  const actionScopeId = transaction?.actionScopeId ?? action?.actionScopeId;
   const deduplicationId = transaction?.deduplicationId;
   const metadata = transaction?.metadata;
   if (
     !causationId && !correlationId && !settlementScopeId &&
-    !deduplicationId && !metadata
+    !deduplicationId && !metadata && !actionScopeId
   ) return undefined;
   return ({
     ...(causationId ? { causationId } : {}),
     ...(correlationId ? { correlationId } : {}),
     ...(deduplicationId ? { deduplicationId } : {}),
     ...(settlementScopeId ? { settlementScopeId } : {}),
+    ...(actionScopeId ? { actionScopeId } : {}),
     ...(metadata ? { metadata } : {}),
   } as const);
 }
@@ -300,12 +318,21 @@ function createFrame(
   invoker: CreateActionCallersOptions,
   prepared = false,
 ): ActionInvocationFrame {
-  const metadata = durableActionMetadata(options.metadata ?? {});
+  const resolution =
+    !parent && invoker.resolution?.receipt.actionId === action.id
+      ? invoker.resolution
+      : undefined;
+  const metadata = durableActionMetadata(
+    resolution?.receipt.metadata ?? options.metadata ?? {},
+  );
   const explicitKey = options.operationKey?.trim() || undefined;
-  const identity = mergeIdentity(
+  const inheritedIdentity = mergeIdentity(
     parent?.identity ?? invoker.identity,
     options.identity,
   );
+  const identity = resolution
+    ? { ...inheritedIdentity, causationId: resolution.causationId }
+    : inheritedIdentity;
   const signal = mergeSignal(parent?.signal ?? invoker.signal, options.signal);
   const hostInvocationKey = parent || prepared
     ? undefined
@@ -323,24 +350,29 @@ function createFrame(
     hostInvocationKey ??
     identityInvocationKey ?? explicitKey ?? `invocation:${crypto.randomUUID()}`;
   const localKey = explicitKey ?? String(parent?.nextActionIndex() ?? 1);
-  const actionRunId = parent
-    ? `${parent.actionRunId}/action:${action.id}:${localKey}`
-    : preparedInvocationScope
-    ? explicitKey
-      ? `${preparedInvocationScope}:action:${action.id}:${explicitKey}`
-      : `${preparedInvocationScope}:action:${action.id}`
-    : hostInvocationKey
-    ? explicitKey ? `${hostInvocationKey}:${explicitKey}` : hostInvocationKey
-    : identityInvocationKey
-    ? `${rootKey}/action:${action.id}:${localKey}`
-    : `${rootKey}/action:${action.id}`;
+  const actionRunId = resolution?.receipt.actionRunId ??
+    (parent
+      ? `${parent.operationKey}/action:${action.id}:${localKey}`
+      : preparedInvocationScope
+      ? explicitKey
+        ? `${preparedInvocationScope}:action:${action.id}:${explicitKey}`
+        : `${preparedInvocationScope}:action:${action.id}`
+      : hostInvocationKey
+      ? explicitKey ? `${hostInvocationKey}:${explicitKey}` : hostInvocationKey
+      : identityInvocationKey
+      ? `${rootKey}/action:${action.id}:${localKey}`
+      : `${rootKey}/action:${action.id}`);
   let actionIndex = 0;
   return ({
     actionId: action.id,
     actionRunId,
     rootKey,
-    operationKey: actionRunId,
-    ...(parent ? { parentActionRunId: parent.actionRunId } : {}),
+    operationKey: resolution ? `${actionRunId}/resolve` : actionRunId,
+    ...(parent
+      ? { parentActionRunId: parent.actionRunId }
+      : resolution?.receipt.parentActionRunId
+      ? { parentActionRunId: resolution.receipt.parentActionRunId }
+      : {}),
     metadata,
     ...(identity ? { identity } : {}),
     signal,
@@ -359,6 +391,7 @@ function lifecycleCommon(
       ? { parentActionRunId: frame.parentActionRunId }
       : {}),
     metadata: frame.metadata,
+    actionScopeId: frame.identity?.actionScopeId,
     input,
     ...(frame.identity?.causationId
       ? { causationId: frame.identity.causationId }
@@ -511,17 +544,32 @@ function actionCaller(
     // unique, so inserting it either wins the run or reports an earlier
     // receipt. Only then are the receipts read, and a run seen for the first
     // time reads nothing.
+    const resolution =
+      !parent && invoker.resolution?.receipt.actionRunId === frame.actionRunId
+        ? invoker.resolution
+        : undefined;
+    if (resolution) {
+      validateReceipt(resolution.receipt, frame, durableInput);
+      const terminal = await loadTerminal(
+        invoker.actionLifecycle,
+        frame,
+        durableInput,
+      );
+      if (terminal) return restoreTerminal(terminal);
+    }
     let claimError: unknown;
-    let claimed = false;
+    let claimed = Boolean(resolution);
     try {
-      const receipt = await invoker.actionLifecycle.emit({
-        ...lifecycleCommon(frame, durableInput),
-        status: "invoked",
-        deduplicationId: `${frame.actionRunId}:action:invoked`,
-      });
-      claimed =
-        (receipt as { deduplicated?: unknown } | undefined)?.deduplicated ===
-          false;
+      if (!resolution) {
+        const receipt = await invoker.actionLifecycle.emit({
+          ...lifecycleCommon(frame, durableInput),
+          status: "invoked",
+          deduplicationId: `${frame.actionRunId}:action:invoked`,
+        });
+        claimed =
+          (receipt as { deduplicated?: unknown } | undefined)?.deduplicated ===
+            false;
+      }
     } catch (error) {
       claimError = error;
     }
@@ -559,9 +607,18 @@ function actionCaller(
         );
       }
       if (!invoked && claimError !== undefined) throw claimError;
+      const deferred = await invoker.actionLifecycle.deferred?.(
+        frame.actionRunId,
+      );
+      if (deferred) {
+        validateReceipt(deferred, frame, durableInput);
+        return deferredAction(frame.actionRunId);
+      }
+      // A receipt permits replay only when the current lease still owns the Action.
+      if (claimError !== undefined) throw claimError;
     }
 
-    let progressIndex = 0;
+    let progressIndex = resolution?.receipt.progressIndex ?? 0;
     let progressTail: Promise<void> = Promise.resolve();
     const progress = (value: unknown): Promise<void> => {
       if (actionDefinitionHasSecrets(action)) {
@@ -597,12 +654,36 @@ function actionCaller(
 
     try {
       throwIfAborted(frame.signal);
-      const output = await action.execute(
-        executionInput as never,
-        context as never,
-      );
+      const output = resolution
+        ? await action.resolve!(
+          executionInput as never,
+          context as never,
+          {
+            work: resolution.receipt.work,
+            outcome: resolution.outcome,
+            ...(resolution.error ? { error: resolution.error } : {}),
+          } as never,
+        )
+        : await action.execute(executionInput as never, context as never);
       await progressTail;
       throwIfAborted(frame.signal);
+      if (isActionDeferral(output)) {
+        if (resolution || !action.resolve) {
+          throw new TypeError(
+            "An Action deferral requires resolve and cannot defer again during resolution.",
+          );
+        }
+        assertMetadataIsSecretFree({ work: output.work }, inputSecrets);
+        await invoker.actionLifecycle.emit({
+          ...lifecycleCommon(frame, durableInput),
+          actionScopeId: frame.actionRunId,
+          status: "deferred",
+          work: output.work,
+          progressIndex,
+          deduplicationId: `${frame.actionRunId}:action:deferred`,
+        });
+        return deferredAction(frame.actionRunId);
+      }
       if (action.outputSchema) {
         validateAgainstJsonSchema(
           action.outputSchema,

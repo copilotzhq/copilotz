@@ -398,6 +398,7 @@ export type CollectionTransactionResult<T> = Readonly<{
   operationKey: string;
   namespace: string;
   settlementScopeId: string;
+  actionScopeId?: string;
   correlationId: string;
   writes: readonly CollectionWrite<CollectionRecord>[];
   dispatch: EventDispatchReport;
@@ -860,6 +861,8 @@ export function createCollectionKernel(
     rootIdentity: string;
     namespace: string;
     settlementScopeId: string;
+    actionScopeId?: string;
+    deliveryLease?: CollectionMutationIdentity["deliveryLease"];
     correlationId: string;
     causationId?: string;
     metadata: Record<string, unknown>;
@@ -984,6 +987,8 @@ export function createCollectionKernel(
       identity: {
         settlementScopeId: inherited?.settlementScopeId ??
           scope.settlementScopeId,
+        actionScopeId: inherited?.actionScopeId ?? scope.actionScopeId,
+        deliveryLease: scope.deliveryLease ?? inherited?.deliveryLease,
         correlationId: inherited?.correlationId ?? scope.correlationId,
         ...(inherited?.causationId ?? scope.causationId
           ? { causationId: inherited?.causationId ?? scope.causationId }
@@ -1500,6 +1505,8 @@ export function createCollectionKernel(
         correlationId: identity?.correlationId,
         deduplicationId: identity?.deduplicationId,
         settlementScopeId: identity?.settlementScopeId,
+        actionScopeId: identity?.actionScopeId,
+        deliveryLease: identity?.deliveryLease,
       };
       // A plan records the state it was made against, so its scope condition
       // is decided now; the commit only confirms that state is still current.
@@ -2690,6 +2697,8 @@ export function createCollectionKernel(
         operationKey,
       namespace,
       settlementScopeId,
+      actionScopeId: transactionIdentity?.actionScopeId,
+      deliveryLease: transactionIdentity?.deliveryLease,
       correlationId,
       causationId: transactionIdentity?.causationId,
       metadata: structuredClone(transactionIdentity?.metadata ?? {}),
@@ -2779,6 +2788,8 @@ export function createCollectionKernel(
           correlationId: identity?.correlationId ?? scope.correlationId,
           settlementScopeId: identity?.settlementScopeId ??
             scope.settlementScopeId,
+          actionScopeId: identity?.actionScopeId ?? scope.actionScopeId,
+          deliveryLease: scope.deliveryLease ?? identity?.deliveryLease,
           deduplicationId,
           metadata: structuredClone({
             ...scope.metadata,
@@ -3180,6 +3191,8 @@ export function createCollectionKernel(
                         correlationId: identity.correlationId,
                         deduplicationId,
                         settlementScopeId: identity.settlementScopeId,
+                        actionScopeId: identity.actionScopeId,
+                        deliveryLease: identity.deliveryLease,
                       },
                       transaction,
                       dispatch: false,
@@ -3390,6 +3403,7 @@ export function createCollectionKernel(
       operationKey,
       namespace,
       settlementScopeId,
+      actionScopeId: transactionIdentity?.actionScopeId,
       correlationId,
       writes: writes.slice(),
       dispatch: {

@@ -1,3 +1,4 @@
+import { extractReasoningOutput } from "./reasoning-output.ts";
 import type { ToolInvocation, ToolPipelineStage } from "./types.ts";
 import {
   COPILOTZ_CONTROL_TAGS,
@@ -17,9 +18,6 @@ const TOOL_INTENT_MARKER_PATTERN =
 const MALFORMED_TOOL_INTENT_MARKER_PATTERN =
   /<\/?(?:[a-z0-9_]+:)?(?:tool_call|function_call|function_calls|invoke|parameter|tool_use|tool)\b/i;
 
-const REASONING_MARKUP_PATTERN =
-  /<\/?(?:mm:)?(?:think|thought|thinking|reasoning)\b/i;
-
 const ORPHANED_TOOL_RESULT_TERMINAL_PATTERN =
   /"tool_call_id"\s*:\s*"[^"]+"\s*,\s*"status"\s*:\s*"(?:completed|failed|expired|overwritten)"\s*}\s*$/i;
 
@@ -27,7 +25,7 @@ const ORPHANED_TOOL_RESULT_EVIDENCE_PATTERN =
   /"(?:output|success|error|stoppedEarly|sessionSummary)"\s*:/gi;
 
 const USER_FACING_PROTOCOL_MARKER_PATTERN =
-  /<\/?(?:[a-z0-9_]+:)?(?:tool_call|tool_calls|function_call|function_calls|invoke|parameter|tool_use|tool|tool_result|tool_results|result|continue_after_tool_results|target_ids|think|thought|thinking|reasoning|malformed_tool_call_recovery|visible_reasoning_markup_recovery|recovery_previous_response_context|recovery_required_action|recovery_tool_call_rules|recovery_problem)\b/i;
+  /<\/?(?:[a-z0-9_]+:)?(?:tool_call|tool_calls|function_call|function_calls|invoke|parameter|tool_use|tool|tool_result|tool_results|result|continue_after_tool_results|target_ids|malformed_tool_call_recovery|recovery_previous_response_context|recovery_required_action|recovery_tool_call_rules|recovery_problem)\b/i;
 
 function isPlainJsonObject(value: unknown): value is Record<string, unknown> {
   return Boolean(
@@ -219,7 +217,7 @@ export function stripStructuralLeakTokens(text: string): string {
  * on the malformed-tool-call path, so protocol markup never reaches the user.
  */
 export function sanitizeUserFacingText(text: string): string {
-  let out = text
+  let out = extractReasoningOutput(text).visible
     .replace(/<message_timestamp\b[^>]*\/\s*>/gi, "")
     .replace(
       /<message_timestamp\b[^>]*>[\s\S]*?(?:<\/message_timestamp>|$)/gi,
@@ -237,21 +235,13 @@ export function sanitizeUserFacingText(text: string): string {
       "",
     )
     .replace(
-      /<(?:mm:)?(?:think|thought|thinking|reasoning)\b[^>]*>[\s\S]*?(?:<\/(?:mm:)?(?:think|thought|thinking|reasoning)>|$)/gi,
-      "",
-    )
-    .replace(
       /<malformed_tool_call_recovery\b[\s\S]*?(?:<\/malformed_tool_call_recovery>|$)/gi,
-      "",
-    )
-    .replace(
-      /<visible_reasoning_markup_recovery\b[\s\S]*?(?:<\/visible_reasoning_markup_recovery>|$)/gi,
       "",
     );
   // Remove any residual stray dialect tags (open or close) that survived,
   // e.g. mismatched </tool_calls>, dangling <invoke ...> / <parameter ...>.
   out = out.replace(
-    /<\/?(?:[a-z0-9_]+:)?(?:tool_call|tool_calls|function_call|function_calls|invoke|parameter|tool_use|tool|tool_result|tool_results|result|continue_after_tool_results|target_ids|think|thought|thinking|reasoning|malformed_tool_call_recovery|visible_reasoning_markup_recovery|recovery_previous_response_context|recovery_required_action|recovery_tool_call_rules|recovery_problem|message_timestamp)(?:\b[^>]*)?>/gi,
+    /<\/?(?:[a-z0-9_]+:)?(?:tool_call|tool_calls|function_call|function_calls|invoke|parameter|tool_use|tool|tool_result|tool_results|result|continue_after_tool_results|target_ids|malformed_tool_call_recovery|recovery_previous_response_context|recovery_required_action|recovery_tool_call_rules|recovery_problem|message_timestamp)(?:\b[^>]*)?>/gi,
     "",
   );
   const firstProtocolMarker = out.search(USER_FACING_PROTOCOL_MARKER_PATTERN);
@@ -285,10 +275,6 @@ export function responseHasMalformedToolCallIntent(
 ): boolean {
   if (!MALFORMED_TOOL_INTENT_MARKER_PATTERN.test(text)) return false;
   return knownToolNames.length > 0;
-}
-
-export function responseHasReasoningMarkup(text: string): boolean {
-  return REASONING_MARKUP_PATTERN.test(text);
 }
 
 /**

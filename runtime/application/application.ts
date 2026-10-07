@@ -179,43 +179,20 @@ async function waitForApplicationScope(
 ): Promise<void> {
   while (true) {
     if (signal.aborted) throw signal.reason;
-    const settlement = await eventScope.events.outstanding(
+    const operation = await eventScope.operations.get(
       namespace,
       settlementScopeId,
     );
-    if (settlement.deadLetters > 0) {
+    if (!operation) {
+      throw new Error(`Operation '${settlementScopeId}' was not found.`);
+    }
+    if (operation.state === "failed") {
       throw await deadLetterError(eventScope, namespace, settlementScopeId);
     }
-    if (settlement.cancelled > 0) {
-      throw new Error(
-        `Settlement scope '${settlementScopeId}' was cancelled.`,
-      );
+    if (operation.state === "cancelled") {
+      throw new Error(`Settlement scope '${settlementScopeId}' was cancelled.`);
     }
-    if (settlement.unsettled === 0) {
-      // A remote Worker commits its final delivery before every framed output
-      // necessarily reaches this application. Drain the generic causal output
-      // relay, then recheck in case a relayed event created more durable work.
-      await execution.settleOutputs({
-        databaseSchema,
-        namespace,
-        settlementScopeId,
-      });
-      // The two checks read different tables and neither needs the other, so
-      // they share a round trip.
-      const [confirmed, streamsOpen] = await Promise.all([
-        eventScope.events.outstanding(namespace, settlementScopeId),
-        eventScope.operations.hasOpenStreams(namespace, settlementScopeId),
-      ]);
-      if (confirmed.deadLetters > 0) {
-        throw await deadLetterError(eventScope, namespace, settlementScopeId);
-      }
-      if (confirmed.cancelled > 0) {
-        throw new Error(
-          `Settlement scope '${settlementScopeId}' was cancelled.`,
-        );
-      }
-      if (confirmed.unsettled === 0 && !streamsOpen) return;
-    }
+    if (operation.state === "completed") return;
     const progressed = await execution.awaitScopeProgress({
       databaseSchema,
       namespace,
@@ -551,7 +528,18 @@ export async function createCopilotzApplication(
     const abort = new AbortController();
     const settlementScopeId = committed.settlementScopeId;
     const eventScope = await openRecoveredScope(inputDatabaseSchema);
-    let explicitlyCancelled = false;
+    // Root admission with no consumers has no delivery completion to wake
+    // settlement. This is part of send, never of a status read.
+    if (
+      !committed.deliveries.some((delivery) =>
+        delivery.settlementScopeId === settlementScopeId
+      )
+    ) {
+      await eventScope.operations.reconcile({
+        namespace: inputNamespace,
+        operationId: settlementScopeId,
+      });
+    }
     const done = waitForApplicationScope(
       eventScope,
       engine.execution,
@@ -559,28 +547,7 @@ export async function createCopilotzApplication(
       inputNamespace,
       settlementScopeId,
       abort.signal,
-    ).then(async () => {
-      await eventScope.operations.mark(
-        inputNamespace,
-        committed.event.id,
-        "completed",
-      );
-    }).catch(async (error) => {
-      if (explicitlyCancelled) {
-        await eventScope.operations.mark(
-          inputNamespace,
-          committed.event.id,
-          "cancelled",
-        );
-      } else if (!abort.signal.aborted) {
-        await eventScope.operations.mark(
-          inputNamespace,
-          committed.event.id,
-          "failed",
-        );
-      }
-      throw error;
-    }).finally(() => {
+    ).finally(() => {
       subscription.close();
       activeSends.delete(sendHandle);
     });
@@ -603,18 +570,16 @@ export async function createCopilotzApplication(
         await done.catch(() => undefined);
       },
       async cancel(reason = "application_send_cancelled") {
-        explicitlyCancelled = true;
         if (!abort.signal.aborted) abort.abort(new Error(reason));
         await (await openRecoveredScope(inputDatabaseSchema)).events.cancel(
           inputNamespace,
           settlementScopeId,
           reason,
         );
-        await eventScope.operations.mark(
-          inputNamespace,
-          committed.event.id,
-          "cancelled",
-        );
+        await eventScope.operations.reconcile({
+          namespace: inputNamespace,
+          operationId: settlementScopeId,
+        });
         await done.catch(() => undefined);
       },
     } as const;
@@ -661,52 +626,11 @@ export async function createCopilotzApplication(
   const statusFor = async (
     boundary: Awaited<ReturnType<typeof operationBoundary>>,
   ): Promise<ApplicationOperationStatus | null> => {
-    let record = await boundary.scope.operations.get(
+    const record = await boundary.scope.operations.get(
       boundary.namespace,
       boundary.operationId,
     );
-    if (!record) return null;
-    if (record.state === "accepted" || record.state === "running") {
-      let settlement = await boundary.scope.events.outstanding(
-        boundary.namespace,
-        boundary.operationId,
-      );
-      if (
-        settlement.unsettled === 0 && settlement.deadLetters === 0 &&
-        settlement.cancelled === 0
-      ) {
-        await engine.execution.settleOutputs({
-          databaseSchema: boundary.databaseSchema,
-          namespace: boundary.namespace,
-          settlementScopeId: boundary.operationId,
-        });
-        settlement = await boundary.scope.events.outstanding(
-          boundary.namespace,
-          boundary.operationId,
-        );
-      }
-      const hasOpenStreams = await boundary.scope.operations.hasOpenStreams(
-        boundary.namespace,
-        boundary.operationId,
-      );
-      const state = settlement.deadLetters > 0
-        ? hasOpenStreams ? "running" : "failed"
-        : settlement.cancelled > 0
-        ? hasOpenStreams ? "running" : "cancelled"
-        : settlement.unsettled > 0 || hasOpenStreams
-        ? "running"
-        : "completed";
-      await boundary.scope.operations.mark(
-        boundary.namespace,
-        boundary.operationId,
-        state,
-      );
-      record = await boundary.scope.operations.get(
-        boundary.namespace,
-        boundary.operationId,
-      ) ?? record;
-    }
-    return projectOperationStatus(record);
+    return record ? projectOperationStatus(record) : null;
   };
 
   const operationStatus = async (input: ApplicationOperationScope) =>
@@ -720,7 +644,6 @@ export async function createCopilotzApplication(
     const requestedDatabaseSchema = input.databaseSchema?.trim() ||
       databaseSchema;
     const scope = await openRecoveredScope(requestedDatabaseSchema);
-    await scope.operations.reconcile({ limit: input.limit });
     const records = await scope.operations.list({
       namespace: operationNamespace,
       operationIds: input.operationIds,
@@ -749,11 +672,10 @@ export async function createCopilotzApplication(
       boundary.operationId,
       reason,
     );
-    await boundary.scope.operations.mark(
-      boundary.namespace,
-      boundary.operationId,
-      "cancelled",
-    );
+    await boundary.scope.operations.reconcile({
+      namespace: boundary.namespace,
+      operationId: boundary.operationId,
+    });
     return await statusFor(boundary);
   };
 

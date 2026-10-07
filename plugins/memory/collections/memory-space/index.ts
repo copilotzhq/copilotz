@@ -34,10 +34,10 @@ export const memorySpaceCollection: CollectionDefinition<typeof schema> =
     ]],
     relations: {
       thread: relation.belongsTo("thread", "threadId", MEMORY_EDGE.usesSpace),
-      records: relation.hasMany(
-        "memory_record",
+      notes: relation.hasMany(
+        "memory_note",
         "memorySpaceId",
-        MEMORY_EDGE.hasRecord,
+        "has_memory_note",
       ),
     },
   });

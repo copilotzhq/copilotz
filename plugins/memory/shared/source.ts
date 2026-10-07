@@ -148,10 +148,7 @@ export function sourceMessagesFromTranscript(
             part.text
           ).join("\n")
       ).join("\n"),
-      sourceBytes: sourceBytes(message.content) +
-        (message.role === "assistant"
-          ? sourceBytes(message.reasoning ?? [])
-          : 0),
+      sourceBytes: sourceBytes(message.content),
       estimatedTokens: formatted.estimate.estimatedTokens,
       ...((message.role === "assistant" || message.role === "tool") &&
           message.toolPlanId

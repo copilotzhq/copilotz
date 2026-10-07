@@ -8,7 +8,7 @@ export const inspectMemoryTool: ToolResource<"inspect_memory"> = defineTool(
   {
     name: "Inspect Memory",
     description:
-      "Inspect one accessible semantic memory, its provenance, time, and graph relations.",
+      "Inspect accessible notes by their IDs, including full text, checkpoint lineage and retirement details.",
   },
 );
 

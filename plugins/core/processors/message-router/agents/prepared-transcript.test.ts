@@ -542,10 +542,8 @@ Deno.test("Core resolves own native reasoning, leaves peer state unread, and cou
     assertEquals(transcript.length, 3);
     assertEquals(transcript[0].role, "assistant");
     if (transcript[0].role === "assistant") {
-      assertEquals(transcript[0].reasoning, [{
-        ...reasoning,
-        value: "own previous thought",
-      }]);
+      assertEquals("reasoning" in transcript[0], false);
+      assertEquals(readIds.includes("reasoning"), false);
       assertEquals<unknown>(transcript[0].nativeReasoning, {
         schema: "copilotz.llm-native-reasoning.v1",
         adapter: "adapter",
@@ -905,14 +903,15 @@ Deno.test("transcript preparation reads storage once per batch, sizes once, and 
   assertEquals(calls.list, 2, "25 messages are two batches of at most 20");
   assertEquals(calls.sizes, 1, "every Asset row is read once");
   assertEquals(calls.opened.length, 1, "every body is opened in one pass");
-  assertEquals(calls.opened[0].length, 26, "25 bodies and one reasoning");
+  assertEquals(
+    calls.opened[0].length,
+    25,
+    "25 bodies; textual reasoning is never opened",
+  );
   const own = prompt[24];
   assertEquals(own.role, "assistant");
   if (own.role === "assistant") {
-    assertEquals(own.reasoning, [{
-      ...thought,
-      value: "own previous thought",
-    }]);
+    assertEquals("reasoning" in own, false);
   }
   assertEquals("reasoning" in prompt[0], false);
 
@@ -938,12 +937,12 @@ Deno.test("transcript preparation reads storage once per batch, sizes once, and 
     1,
     "history and context share body resolution",
   );
-  assertEquals(calls.opened[0].length, 27);
+  assertEquals(calls.opened[0].length, 26);
 
   // A history over budget is refused from the sizes alone: no body is opened.
   calls.opened.length = 0;
   await assertRejects(
-    () => prepareLlmTranscript(context, input, { byteLimit: 20 }),
+    () => prepareLlmTranscript(context, input, { byteLimit: 4 }),
     RangeError,
     "byte budget",
   );

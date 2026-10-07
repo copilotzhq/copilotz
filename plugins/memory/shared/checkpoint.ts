@@ -16,10 +16,8 @@ import type {
 import { optionalText, record, requiredText } from "./input.ts";
 import { createCheckpoint, readyCheckpoint } from "./checkpoints.ts";
 import { ensureWritableMemorySpace } from "./access.ts";
-import {
-  certifiedHistoryBoundary,
-  checkpointSourceMessages,
-} from "./source.ts";
+import { certifiedHistoryBoundary } from "./source.ts";
+import { memoryContinuityText } from "../authoring/notes/index.ts";
 import { memoryTaskOwnsTurn } from "./task.ts";
 
 async function reserveOnDemandCheckpoint(
@@ -57,10 +55,11 @@ async function reserveOnDemandCheckpoint(
       thread,
     })
     : undefined;
-  const start = after
-    ? history.findIndex((message) => message.id === after) + 1
-    : 0;
-  if (start < 0 || start > triggerIndex) {
+  const boundaryIndex = after
+    ? history.findIndex((message) => message.id === after)
+    : -1;
+  const start = boundaryIndex + 1;
+  if ((after && boundaryIndex < 0) || start > triggerIndex) {
     throw new Error("Memory Tool has no unconsolidated source range.");
   }
   const range = history.slice(start, triggerIndex + 1);
@@ -160,18 +159,16 @@ export async function prepareCheckpointSettlement(
   input: Readonly<{
     checkpoint: CollectionRecord;
     result: Readonly<Record<string, unknown>>;
-    retrievedIds?: readonly string[];
-    unresolved?: readonly unknown[];
+    continuity: string;
   }>,
 ) {
-  await checkpointSourceMessages(context, input.checkpoint);
   const continuity = requiredText(
-    record(input.result).continuity,
+    input.continuity,
     "Memory continuity",
   );
-  // Continuity belongs to the conversation. Semantic records are retrieved
+  // Continuity belongs to the conversation. Durable notes are retrieved
   // separately under current access, rather than copied into this artifact.
-  const text = `Conversation continuity:\n${continuity}`;
+  const text = memoryContinuityText(continuity);
   const prepared = await context.content.prepare({
     type: "text",
     text,
@@ -194,34 +191,13 @@ export async function prepareCheckpointSettlement(
           ? {
             coverage: {
               ...record(record(input.checkpoint.metadata).coverageCandidate),
-              continuity: requiredText(
-                record(input.result).continuity,
-                "Memory continuity",
-              ),
+              continuity,
             },
           }
           : {}),
-        processorVersion: "v4",
-        memoryOntologyVersion: "1",
+        processorVersion: "v5",
         result: input.result,
-        continuity: optionalText(record(input.result).continuity),
-        retrievedMemoryIds: input.retrievedIds ?? [],
-        unresolvedReconciliations: input.unresolved ?? [],
       },
     },
   };
-}
-
-export async function settleCheckpoint(
-  context: MemoryProcessorContext,
-  input: Parameters<typeof prepareCheckpointSettlement>[1],
-) {
-  const settlement = await prepareCheckpointSettlement(context, input);
-  await context.transaction(async (tx) => {
-    await tx.collections.longTermMemory.commands.completeConsolidation({
-      id: input.checkpoint.id,
-      ...settlement.patch,
-      content: settlement.content,
-    }, { operationKey: `memory-checkpoint:ready:${input.checkpoint.id}` });
-  });
 }

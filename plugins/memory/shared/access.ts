@@ -27,20 +27,40 @@ export async function threadMemorySpaces(
       after,
       limit: 200,
     });
+    const ids = [
+      ...new Set(
+        grants.flatMap((grant) =>
+          optionalText(grant.memorySpaceId) ? [String(grant.memorySpaceId)] : []
+        ),
+      ),
+    ];
+    const grantedSpaces = new Map(
+      (ids.length
+        ? await collections.memorySpace.list({
+          filter: { field: "id", in: ids },
+          limit: ids.length,
+        })
+        : []).map((space) => [space.id, space]),
+    );
     for (const grant of grants) {
       const id = optionalText(grant.memorySpaceId);
       if (!id) continue;
-      const space = await collections.memorySpace.get({ id });
+      const space = grantedSpaces.get(id);
       if (!space) continue;
       const access = grant.access === "read_write" ? "read_write" : "read";
       const previous = spaces.get(id);
-      if (previous?.access === "read_write") continue;
+      if (
+        previous?.access === "read_write" &&
+        (previous.defaultWrite || access !== "read_write" ||
+          grant.defaultWrite !== true)
+      ) continue;
       spaces.set(id, {
         id,
         name: optionalText(space.name) ?? `memory:${id}`,
         description: optionalText(space.description) ?? null,
         scopeType: optionalText(space.scopeType) ?? "custom",
         access,
+        ...(access === "read_write" ? { writeGrantId: grant.id } : {}),
         defaultWrite: access === "read_write" && grant.defaultWrite === true,
       });
     }
@@ -59,13 +79,24 @@ export async function threadMemorySpaces(
         after: peerAfter,
         limit: 200,
       });
+      const ids = peers.filter((peer) => peer.id !== threadId).map((peer) =>
+        `memory-space:thread:${peer.id}`
+      );
+      const producers = new Map(
+        (ids.length
+          ? await collections.memorySpace.list({
+            filter: { field: "id", in: ids },
+            limit: ids.length,
+          })
+          : []).map((space) => [space.id, space]),
+      );
       for (const peer of peers) {
         if (
           peer.id === threadId
         ) continue;
         // Only the peer's producer scope is shared, never its consumer grants.
         const id = `memory-space:thread:${peer.id}`;
-        const producer = await collections.memorySpace.get({ id });
+        const producer = producers.get(id);
         if (
           !producer || producer.scopeType !== "thread" ||
           producer.scopeId !== peer.id || spaces.has(id)
@@ -83,7 +114,8 @@ export async function threadMemorySpaces(
     } while (peerAfter);
   }
   const ordered = [...spaces.values()].sort((a, b) =>
-    Number(b.defaultWrite) - Number(a.defaultWrite) || a.id.localeCompare(b.id)
+    Number(b.defaultWrite) - Number(a.defaultWrite) ||
+    (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
   );
   const defaultSpace = ordered.find((s) => s.defaultWrite) ??
     ordered.find((s) => s.access === "read_write");

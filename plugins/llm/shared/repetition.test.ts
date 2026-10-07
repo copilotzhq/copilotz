@@ -30,3 +30,28 @@ Deno.test("detectDegenerateRepetition ignores normal repeated domain terms", () 
 
   assertEquals(detectDegenerateRepetition(answer), null);
 });
+
+Deno.test("detectDegenerateRepetition catches the observed punctuation-only loop", () => {
+  const prefix = "The response is ";
+  const detected = detectDegenerateRepetition(prefix + '"}'.repeat(256));
+  assertEquals(detected?.startIndex, prefix.length);
+  assertEquals(detected?.endIndex, prefix.length + 512);
+});
+
+Deno.test("punctuation detection ignores normal JSON and Markdown dividers", () => {
+  for (
+    const text of [
+      JSON.stringify({
+        rows: Array.from(
+          { length: 300 },
+          (_, id) => ({ id, value: `row ${id}` }),
+        ),
+      }),
+      "-".repeat(300),
+      "=".repeat(300),
+      '"}'.repeat(12),
+    ]
+  ) {
+    assertEquals(detectDegenerateRepetition(text), null);
+  }
+});

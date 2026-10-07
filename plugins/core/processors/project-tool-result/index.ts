@@ -5,7 +5,6 @@ import { defineProcessor, type Processor } from "@copilotz/copilotz/plugins";
 import type { CoreToolProcessorContext } from "../../shared/runtime-context.ts";
 import { CORE_TOOL_ACTION_METADATA_SCHEMA } from "../../shared/workflow-metadata.ts";
 import { projectAndAdvanceToolPlan } from "../../shared/tool-plan.ts";
-import { asRecord } from "../../shared/helpers.ts";
 
 export const projectToolResultProcessor: Processor<
   CoreToolProcessorContext
@@ -22,11 +21,6 @@ export const projectToolResultProcessor: Processor<
     if (!event.durable) return;
     const parsed = coreToolTerminal(event);
     if (!parsed) return;
-    if (
-      parsed.metadata.action === "ask" &&
-      parsed.terminal.status === "completed" &&
-      asRecord(parsed.terminal.output).status === "deferred"
-    ) return;
     await projectAndAdvanceToolPlan(
       context,
       parsed.metadata,

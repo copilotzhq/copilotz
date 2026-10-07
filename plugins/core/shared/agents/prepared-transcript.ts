@@ -207,7 +207,7 @@ function byteBudget(limit: number | undefined) {
 
 /**
  * The reference lists of a stored message that a prompt may open: its body,
- * and for the speaking Agent its readable and provider-native reasoning.
+ * and for the speaking Agent its provider-native state.
  * Entries are replaced in place once resolved.
  */
 function referenceLists(
@@ -218,7 +218,7 @@ function referenceLists(
   const nativeBlocks = nativeReasoningBlocks(metadata?.llmNativeReasoning);
   return [
     record.content,
-    ...(ownAssistant ? [metadata?.llmReasoning, nativeBlocks] : []),
+    ...(ownAssistant ? [nativeBlocks] : []),
   ].filter((list): list is unknown[] => Array.isArray(list));
 }
 
@@ -304,9 +304,6 @@ function withBodies(
   return {
     ...message,
     content,
-    ...(Array.isArray(metadata.llmReasoning)
-      ? { reasoning: metadata.llmReasoning as LlmMessage["content"] }
-      : {}),
     ...(nativeReasoningBlocks(metadata.llmNativeReasoning)
       ? {
         nativeReasoning: metadata.llmNativeReasoning as Extract<
@@ -336,8 +333,8 @@ async function prepareTranscript(
       snapshots.get(entry.sourceId)?.sender.participantType === "tool"
     ).map((entry) => entry.sourceId),
   );
-  // Only the speaking Agent may receive its opaque provider state or readable
-  // reasoning. Peer assistant turns remain ordinary user-visible history.
+  // Only the speaking Agent may receive its opaque provider state.
+  // Peer assistant turns remain ordinary user-visible history.
   const ownAssistantIds = new Set(
     entries.filter((entry) =>
       entry.message.role === "assistant" &&

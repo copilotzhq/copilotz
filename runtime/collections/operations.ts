@@ -139,6 +139,8 @@ export function createCollectionOperations(
           inherited?.deduplicationId,
         settlementScopeId: explicit?.settlementScopeId ??
           inherited?.settlementScopeId,
+        actionScopeId: explicit?.actionScopeId ?? inherited?.actionScopeId,
+        deliveryLease: inherited?.deliveryLease ?? explicit?.deliveryLease,
         metadata: { ...inherited?.metadata, ...explicit?.metadata },
       }
       : undefined;

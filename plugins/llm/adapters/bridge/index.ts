@@ -84,7 +84,6 @@ const SAFE_PROVIDER_OPTIONS = new Set([
   "stopSequences",
   "streamIdleTimeoutMs",
   "temperature",
-  "toolSystemPromptVariant",
   "topK",
   "topP",
   "totalTimeoutMs",
@@ -309,7 +308,6 @@ function adapterMessageToChatMessage(
     return {
       role: "assistant",
       ...common,
-      ...(message.reasoning ? { reasoning: message.reasoning } : {}),
       ...(message.nativeReasoning && nativeReplay &&
           message.nativeReasoning.adapter === nativeReplay.adapter &&
           message.nativeReasoning.model === nativeReplay.model &&
@@ -436,7 +434,6 @@ type PreflightConfig =
     ProviderConfig,
     | "model"
     | "limitEstimatedInputTokens"
-    | "toolSystemPromptVariant"
     | "reasoningEffort"
   >
   & Partial<Pick<ProviderConfig, "provider">>;

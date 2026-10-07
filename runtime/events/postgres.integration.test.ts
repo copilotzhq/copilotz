@@ -12,7 +12,7 @@ function schemaName(): string {
 }
 Deno.test({
   name:
-    "PostgreSQL keeps the six-table baseline and atomic event/delivery semantics",
+    "PostgreSQL keeps the Action-obligation baseline and atomic event/delivery semantics",
   ignore: !POSTGRES_URL,
   sanitizeOps: false,
   sanitizeResources: false,
@@ -39,6 +39,7 @@ Deno.test({
         "event_deliveries",
         "events",
         "nodes",
+        "open_actions",
       ]);
       const store = createEventStore({
         session,

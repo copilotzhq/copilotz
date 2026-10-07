@@ -7,7 +7,6 @@ import type {
   WireChatMessage,
 } from "./types.ts";
 import { LLMTranscriptError } from "./errors.ts";
-import { estimateTextTokens } from "../authoring/token-estimation/index.ts";
 import { type ChatTokenEstimate, estimateChatMessages } from "./chat-tokens.ts";
 import {
   escapeRegex,
@@ -44,10 +43,7 @@ export function formatMessagesDetailed(
 
   // Add tool definitions to system prompt if tools are provided
   if (tools && tools.length > 0) {
-    const toolSystemPrompt = generateToolSystemPrompt(
-      tools,
-      config?.toolSystemPromptVariant,
-    );
+    const toolSystemPrompt = generateToolSystemPrompt(tools);
     systemContent = isEmptyContent(systemContent)
       ? toolSystemPrompt
       : mergeMessageContent(toolSystemPrompt, systemContent);
@@ -128,7 +124,6 @@ function mergeMessageContent(
 }
 
 const WIRE_STRIP_TAG_NAMES = [
-  "redacted_thinking",
   "tool_calls",
   "tool_results",
   "tool_result",
@@ -137,8 +132,6 @@ const WIRE_STRIP_TAG_NAMES = [
 ] as const;
 
 export type ComposeWireContentInput = {
-  reasoning?: string;
-  reasoningMaxEstimatedTokens?: number;
   noResponse?: boolean;
   visible?: string;
   toolCalls?: ToolInvocation[];
@@ -172,49 +165,11 @@ function hasNoResponseMarker(text: string): boolean {
   return /<no_response\s*\/>|<no_response>\s*<\/no_response>/i.test(text);
 }
 
-function truncateReasoningForWire(
-  reasoning: string,
-  maxEstimatedTokens?: number,
-): string {
-  if (
-    typeof maxEstimatedTokens !== "number" ||
-    maxEstimatedTokens === 0 ||
-    estimateTextTokens(reasoning) <= maxEstimatedTokens
-  ) {
-    return reasoning;
-  }
-  if (maxEstimatedTokens < 12) return "[reasoning truncated]";
-  let suffixLength = Math.max(0, maxEstimatedTokens * 4 - 96);
-  while (suffixLength > 0) {
-    const omitted = Math.max(0, reasoning.length - suffixLength);
-    const candidate = `[reasoning truncated: ${omitted} chars omitted]\n${
-      reasoning.slice(-suffixLength)
-    }`;
-    if (estimateTextTokens(candidate) <= maxEstimatedTokens) return candidate;
-    suffixLength = Math.floor(suffixLength * 0.88);
-  }
-  return "[reasoning truncated]";
-}
-
 function escapeWireTextPayload(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
-}
-
-export function buildRedactedThinkingBlock(
-  reasoning: string,
-  maxEstimatedTokens?: number,
-): string {
-  const trimmed = reasoning.trim();
-  if (!trimmed) return "";
-  // Reasoning is payload inside an XML-like protocol envelope. Encode it
-  // before applying the wire budget so arbitrary model text cannot close the
-  // thinking block or impersonate a control segment.
-  const escaped = escapeWireTextPayload(trimmed);
-  const capped = truncateReasoningForWire(escaped, maxEstimatedTokens);
-  return `<think>\n${capped}\n</think>`;
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(
+    />/g,
+    "&gt;",
+  );
 }
 
 export function stripWireProtocolFromText(text: string): string {
@@ -248,17 +203,6 @@ function stringifyWireJson(value: unknown): string {
 export function composeWireContent(input: ComposeWireContentInput): string {
   const parts: string[] = [];
 
-  if (
-    typeof input.reasoning === "string" && input.reasoning.trim().length > 0
-  ) {
-    parts.push(
-      buildRedactedThinkingBlock(
-        input.reasoning,
-        input.reasoningMaxEstimatedTokens,
-      ),
-    );
-  }
-
   if (input.noResponse) {
     parts.push(NO_RESPONSE_SELF_CLOSING_TAG);
   }
@@ -288,8 +232,6 @@ function collectWireSegmentsFromMessage(
   const rawText = contentToText(message.content);
   const visible = stripWireProtocolFromText(rawText);
   return {
-    reasoning: message.reasoning,
-    reasoningMaxEstimatedTokens: message.reasoningMaxEstimatedTokens,
     noResponse: hasNoResponseMarker(rawText),
     visible: visible || undefined,
     toolCalls,
@@ -302,15 +244,13 @@ function shouldMaterializeWireContent(message: ChatMessage): boolean {
 
   const toolCalls = Array.isArray(message.toolCalls) &&
     message.toolCalls.length > 0;
-  const reasoning = typeof message.reasoning === "string" &&
-    message.reasoning.trim().length > 0;
   const rawText = contentToText(message.content);
   const hasProtocolTags =
-    /<\/?(redacted_thinking|tool_calls|tool_results?|result|continue_after_tool_results|no_response)\b/i
+    /<\/?(tool_calls|tool_results?|result|continue_after_tool_results|no_response)\b/i
       .test(rawText);
 
   if (message.role === "assistant" || message.role === "user") {
-    return toolCalls || reasoning || hasProtocolTags;
+    return toolCalls || hasProtocolTags;
   }
 
   return false;
@@ -373,8 +313,6 @@ function materializeWireContent(message: ChatMessage): WireChatMessage {
         ? message.metadata
         : undefined,
       toolCalls: undefined,
-      reasoning: undefined,
-      reasoningMaxEstimatedTokens: undefined,
     };
   } catch (error) {
     if (error instanceof LLMTranscriptError) throw error;
@@ -431,10 +369,6 @@ function mergeConsecutiveMessages(
         content: mergeMessageContent(previous.content, message.content),
         speaker: sameSender ? previous.speaker : undefined,
         metadata: sameSender ? previous.metadata : undefined,
-        reasoning: sameSender ? previous.reasoning : undefined,
-        reasoningMaxEstimatedTokens: sameSender
-          ? previous.reasoningMaxEstimatedTokens
-          : undefined,
         toolCalls: undefined,
       };
       continue;

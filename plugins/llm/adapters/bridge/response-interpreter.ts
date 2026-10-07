@@ -1,3 +1,4 @@
+import { isReasoningTag } from "../../shared/reasoning-output.ts";
 import type {
   ProviderFinishReason,
   ToolInvocation,
@@ -9,18 +10,10 @@ import {
   parseToolCallsFromResponse,
   responseHasMalformedToolCallIntent,
   responseHasOrphanedToolResult,
-  responseHasReasoningMarkup,
   responseHasToolIntent,
   sanitizeUserFacingText,
   stripStructuralLeakTokens,
 } from "../../shared/wire-parse.ts";
-
-export const REASONING_HISTORY_TAGS = [
-  "think",
-  "thought",
-  "thinking",
-  "reasoning",
-] as const;
 
 const INTENTIONAL_EMPTY_PATTERN =
   /<(no_response|continue_after_tool_results)[\s/>]/;
@@ -29,7 +22,6 @@ export type AssistantSemanticIssue =
   | { kind: "orphaned_tool_result" }
   | { kind: "malformed_tool_call" }
   | { kind: "degenerate_repetition"; startIndex: number }
-  | { kind: "visible_reasoning_markup" }
   | { kind: "empty_response" };
 
 export interface ParsedAssistantResponse {
@@ -63,9 +55,7 @@ export function parseAssistantResponse(
   }
 
   const visibleExtractedBlockTags = extractedBlockTags.filter((tag) =>
-    !REASONING_HISTORY_TAGS.includes(
-      tag.toLowerCase() as typeof REASONING_HISTORY_TAGS[number],
-    )
+    !isReasoningTag(tag)
   );
   if (extractedBlockTags.length > 0) {
     const parsed = parseTaggedBlocksFromResponse(
@@ -146,15 +136,6 @@ export function interpretAssistantResponse(args: {
         kind: "degenerate_repetition",
         startIndex: repetition.startIndex,
       },
-    };
-  }
-
-  // This is intentionally evaluated after extraction/sanitization.
-  if (responseHasReasoningMarkup(currentAttempt.cleanResponse)) {
-    return {
-      parsed,
-      currentAttempt,
-      issue: { kind: "visible_reasoning_markup" },
     };
   }
 

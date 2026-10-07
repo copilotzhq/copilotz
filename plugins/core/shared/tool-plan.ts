@@ -23,7 +23,6 @@ import { toolsForAgent } from "./helpers.ts";
 import { createThreadMessage } from "../actions/create-thread-message/index.ts";
 import {
   type AgentAskMetadata,
-  agentAskMetadata,
   type AgentAskResultMetadata,
   agentAskResultMetadata,
   CORE_TOOL_ACTION_METADATA_SCHEMA,
@@ -1436,87 +1435,5 @@ export async function projectDurableToolPlan(
       id: currentPlan.id,
       owner: event.id,
     }, { operationKey: `tool-plan:${currentPlan.id}:projected:${event.id}` })
-  );
-}
-async function parentAskForResume(
-  context: CoreToolProcessorContext,
-  ask: AgentAskMetadata,
-): Promise<AgentAskMetadata | undefined> {
-  const owns = (value: AgentAskMetadata) =>
-    value.origin.action === "ask" &&
-    value.origin.agentId === value.askingAgentId &&
-    value.origin.agentParticipantId === value.askingParticipantId &&
-    (value.toolCallId === undefined ||
-      value.origin.toolCallId === value.toolCallId);
-  if (!owns(ask)) {
-    throw new Error(`Ask '${ask.askId}' does not own its Tool-plan origin.`);
-  }
-  if (!ask.parentAskId && !ask.parentQuestionMessageId) {
-    if (ask.depth !== 1) {
-      throw new Error(`Ask '${ask.askId}' has no durable parent cursor.`);
-    }
-    return undefined;
-  }
-  if (!ask.parentAskId || !ask.parentQuestionMessageId || ask.depth <= 1) {
-    throw new Error(`Ask '${ask.askId}' has an incomplete parent cursor.`);
-  }
-  const message = await context.collections.message?.get({
-    id: ask.parentQuestionMessageId,
-  });
-  if (!message) {
-    throw new Error(
-      `Parent ask question Message '${ask.parentQuestionMessageId}' was not found.`,
-    );
-  }
-  const parent = message ? agentAskMetadata(message.metadata) : null;
-  const recipients = Array.isArray(message.recipientIds)
-    ? message.recipientIds
-    : [];
-  if (
-    !parent || !owns(parent) || parent.phase !== "question" ||
-    String(message.id) !== ask.parentQuestionMessageId ||
-    String(message.threadId) !== ask.origin.threadId ||
-    String(message.senderId) !== parent.askingParticipantId ||
-    !recipients.includes(parent.askedParticipantId) ||
-    parent.askId !== ask.parentAskId ||
-    parent.questionMessageId !== ask.parentQuestionMessageId ||
-    parent.askedParticipantId !== ask.askingParticipantId ||
-    parent.askedAgentId !== ask.askingAgentId ||
-    parent.depth + 1 !== ask.depth ||
-    parent.origin.threadId !== ask.origin.threadId ||
-    parent.origin.toolCallId !== parent.toolCallId
-  ) throw new Error(`Ask '${ask.askId}' has a forged parent cursor.`);
-  return parent;
-}
-/** A deferred ask settles its owning action only after the asked agent's final ContentSequence arrives. */
-export async function resumeDeferredToolPlan(
-  context: CoreToolProcessorContext,
-  ask: AgentAskMetadata,
-  terminal: Omit<ToolTerminal, "actionRunId">,
-  continuation: ToolPlanContinuation,
-): Promise<void> {
-  const parent = await parentAskForResume(context, ask);
-  await projectAndAdvanceToolPlan(
-    context,
-    defineCoreToolActionMetadata({
-      ...ask.origin,
-      ...(parent ? { ask: parent } : {}),
-    }),
-    {
-      ...terminal,
-      askResult: terminal.askResult ?? {
-        schema: "copilotz.ask-result.v1",
-        askId: ask.askId,
-        status: terminal.status,
-        askedParticipantId: ask.askedParticipantId,
-        askedAgentId: ask.askedAgentId,
-      },
-      actionRunId: ask.toolActionRunId,
-      sourceAction: {
-        stageIndex: ask.origin.stageIndex,
-        actionRunId: ask.toolActionRunId,
-      },
-    },
-    continuation,
   );
 }

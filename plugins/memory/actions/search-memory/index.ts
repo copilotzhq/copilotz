@@ -1,17 +1,14 @@
-import { loadThreadRecord } from "@copilotz/copilotz/core";
-import { memoryFilter, vectorSimilarity } from "../../shared/retrieval.ts";
-/** Searches accessible semantic-memory records. @module */
+/** Searches notes through bounded, authorized database queries. @module */
 import {
   type ActionDefinition,
   type ActionSchema,
   defineAction,
 } from "@copilotz/copilotz/actions";
-import { isEditoriallyVisible } from "../../authoring/consolidation/index.ts";
-import { MEMORY_FORMS } from "../../authoring/ontology/index.ts";
+import { loadThreadRecord } from "@copilotz/copilotz/core";
 import {
-  lexicalScore,
-  memoryRecord,
-  terminalStatus,
+  memoryFilter,
+  memoryNote,
+  vectorSimilarity,
 } from "../../shared/retrieval.ts";
 import type { MemoryActionContext } from "../../shared/contracts.ts";
 import {
@@ -21,8 +18,7 @@ import {
 import { optionalText, positiveInteger, record } from "../../shared/input.ts";
 import {
   PUBLIC_MEMORY_RESULT_LIMIT,
-  PUBLIC_MEMORY_SCAN_LIMIT,
-  publicMemorySummary,
+  publicMemoryNote,
   searchMemoryOutputSchema,
 } from "../../shared/public-projection.ts";
 
@@ -39,35 +35,35 @@ export const searchMemoryAction: ActionDefinition<
     additionalProperties: false,
     properties: {
       query: { type: "string" },
-      form: { enum: MEMORY_FORMS },
-      kind: { type: "string" },
-      status: { type: "string" },
-      includeHistory: { type: "boolean" },
-      limit: { type: "integer", minimum: 1, maximum: 100 },
+      includeRetired: { type: "boolean" },
+      limit: {
+        type: "integer",
+        minimum: 1,
+        maximum: PUBLIC_MEMORY_RESULT_LIMIT,
+      },
     },
   },
   outputSchema: searchMemoryOutputSchema,
   async execute(raw, context) {
     const input = record(raw);
-    const spaces = await threadMemorySpaces(
-      context,
-      memoryActionProvenance(context).threadId,
+    const provenance = memoryActionProvenance(context);
+    const spaces = await threadMemorySpaces(context, provenance.threadId);
+    if (!spaces.length) return { notes: [], returned: 0, truncated: false };
+    const filter = memoryFilter(spaces, input.includeRetired === true);
+    const query = optionalText(input.query);
+    const limit = Math.min(
+      positiveInteger(input.limit, 20),
+      PUBLIC_MEMORY_RESULT_LIMIT,
     );
-    const readable = new Set(spaces.map((space) => space.id));
-    const query = optionalText(input.query) ?? "";
     const embed = context.adapters.memoryEmbedding?.default;
     if (query && embed) {
       const profile = context.resources.memory?.embeddingProfile;
-      if (!profile) {
-        throw new Error(
-          "Memory embedding requires resources.memory.embeddingProfile.",
-        );
-      }
-      const provenance = memoryActionProvenance(context);
       const agent = context.resources.agents[provenance.agentId];
       const thread = await loadThreadRecord(context, provenance.threadId);
-      if (!agent || !thread) {
-        throw new Error("Memory search requires a current agent and thread.");
+      if (!profile || !agent || !thread) {
+        throw new Error(
+          "Memory search requires an embedding profile, agent and current thread.",
+        );
       }
       const values = await embed([query], {
         agent,
@@ -75,76 +71,34 @@ export const searchMemoryAction: ActionDefinition<
         context,
         checkpointId: `search:${context.operationKey}`,
       });
-      const limit = Math.min(
-        positiveInteger(input.limit, 20),
-        PUBLIC_MEMORY_RESULT_LIMIT,
-      );
       const matches = await context.vectors.search({
-        ownerType: "memory_record",
-        field: "summary",
+        ownerType: "memory_note",
+        field: "text",
         profile,
         values: values[0],
-        filter: memoryFilter(spaces, input),
+        filter,
         limit: limit + 1,
       });
-      const memories = matches.slice(0, limit).flatMap(
-        ({ record: raw, distance }) => {
-          const mapped = memoryRecord(raw);
-          return mapped
-            ? [
-              publicMemorySummary(
-                raw,
-                mapped,
-                vectorSimilarity(profile.metric, distance),
-              ),
-            ]
-            : [];
-        },
-      );
+      const notes = matches.slice(0, limit).map(({ record, distance }) => ({
+        ...publicMemoryNote(memoryNote(record)),
+        similarity: vectorSimilarity(profile.metric, distance),
+      }));
       return {
-        memories,
-        scanned: matches.length,
-        matched: matches.length,
-        returned: memories.length,
+        notes,
+        returned: notes.length,
         truncated: matches.length > limit,
       };
     }
-    const values = await context.collections.memoryRecord.list({
-      filter: { field: "memorySpaceId", in: [...readable] },
-      limit: PUBLIC_MEMORY_SCAN_LIMIT,
+    const values = await context.collections.memoryNote.list({
+      filter,
+      ...(query ? { text: query } : {}),
+      order: { field: "createdAt", direction: "asc" },
+      limit: limit + 1,
     });
-
-    let scanned = 0;
-    const matched = values.flatMap((item) => {
-      const mapped = memoryRecord(item);
-      if (!mapped || !readable.has(mapped.memorySpaceId)) return [];
-      scanned++;
-      if (
-        input.form && mapped.form !== input.form ||
-        input.kind && mapped.kind !== input.kind ||
-        input.status && mapped.status !== input.status
-      ) return [];
-      if (
-        input.includeHistory !== true &&
-        (!isEditoriallyVisible(mapped) || terminalStatus(mapped.status))
-      ) return [];
-      const similarity = query ? lexicalScore(query, mapped.summary) : 1;
-      return [publicMemorySummary(item, mapped, similarity)];
-    }).sort((left, right) => right.similarity - left.similarity);
-    const limit = Math.min(
-      positiveInteger(input.limit, 20),
-      PUBLIC_MEMORY_RESULT_LIMIT,
+    const notes = values.slice(0, limit).map((value) =>
+      publicMemoryNote(memoryNote(value))
     );
-    const memories = matched.slice(0, limit);
-    return {
-      memories: memories,
-      scanned,
-      matched: matched.length,
-      returned: memories.length,
-      truncated: values.length >= PUBLIC_MEMORY_SCAN_LIMIT ||
-        memories.length < matched.length,
-    };
+    return { notes, returned: notes.length, truncated: values.length > limit };
   },
 });
-
 export default searchMemoryAction;

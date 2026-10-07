@@ -4,7 +4,7 @@ Declare `defineApi({id,name,schema,operations?,auth?...})` under
 `resources.apis`. The resource contributes tools and its default binding
 automatically. Use `transformTool` for application execution or presentation
 customization. See
-[APIs and tools](../../docs/getting-started/part-2-capabilities/07-existing-apis-and-tools.md).
+[APIs and tools](../../docs/getting-started/part-3-add-agent-behavior/10-connect-apis-and-mcp.md).
 
 Use `aliases: { operationId: "applicationAlias" }` when an application's native
 Action names differ from the OpenAPI operation IDs. Request preparation,

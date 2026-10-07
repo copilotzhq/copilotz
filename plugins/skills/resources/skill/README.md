@@ -11,8 +11,9 @@ every file.
 
 ## How to use it
 
-Use `defineSkill` for an external loader or `defineInlineSkill` for embedded
-content.
+Use `defineSkill` from `@copilotz/copilotz/skills`: pass `root` for a local or
+HTTP(S) directory, or `markdown` and an optional `files` map for embedded
+content. Register the result under `resources.skills` using the manifest name.
 
 ## How it works
 

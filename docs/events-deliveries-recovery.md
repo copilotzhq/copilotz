@@ -307,25 +307,38 @@ explicit provisioning, never request-time DDL.
 ### Upgrade to indexed observations
 
 Stop all old application writers and workers before upgrading each physical
-schema. The upgrade runs in a transaction with exclusive catalog/Event table
-locks, assigns operation-local event ordinals to committed history, and builds
-selection membership. It does not rewrite Event content or Body storage. A
-failed transaction rolls back; retrying a completed upgrade validates and
-returns.
+schema. This helper supports the legacy `retained-terminal-streams` catalog or
+validates an already-current `indexed-observation-ordinals-v1` catalog; it is
+not a general migration from arbitrary older releases. It takes exclusive
+catalog/Event table locks, assigns operation-local Event ordinals to committed
+history, and builds selection membership. It does not rewrite Event content or
+Body storage. Failed transactions roll back; final validation happens after
+commit. Even an already-current upgrade takes these locks: use
+`validateOperationCatalog` for a read-only readiness check.
+
+Create `upgrade-core-catalog.ts` as an offline host helper. The caller supplies
+a SQL session with real transaction support and the physical schema; see
+[Upgrading](./upgrading.md) for the operator procedure.
 
 ```ts
-// Generic offline upgrade over the host-owned SQL session and physical schema.
+// The host owns the connection and its transaction implementation.
+import type { SqlSession } from "@copilotz/copilotz/events";
+// Explicit catalog upgrade; no application traffic may run this helper.
 import { upgradeOperationCatalog } from "@copilotz/copilotz/streams";
-// Core resolves its legacy conversation associations; other domains use their own resolver.
+// Core resolves its legacy conversation associations.
 import { resolveCoreObservationKeys } from "@copilotz/copilotz/core";
 
-// The host migration entrypoint supplies sqlSession and databaseSchema.
-await upgradeOperationCatalog(sqlSession, databaseSchema, {
-  // Translate Core associations into opaque selection keys.
-  resolveObservationKeys: resolveCoreObservationKeys,
-  // Legacy metadata fields read during this one offline backfill.
-  backfillMetadataKeys: ["observationKeys", "core", "operationMetadata"],
-});
+export async function upgradeCoreCatalog(
+  session: SqlSession,
+  physicalSchema: string,
+) {
+  return await upgradeOperationCatalog(session, physicalSchema, {
+    // Translate Core associations into opaque selection keys.
+    resolveObservationKeys: resolveCoreObservationKeys,
+    // Legacy metadata fields read during this one offline backfill.
+    backfillMetadataKeys: ["observationKeys", "core", "operationMetadata"],
+  });
+}
 ```
 
 The resolver is domain-owned: Core maps legacy Thread metadata to opaque keys;

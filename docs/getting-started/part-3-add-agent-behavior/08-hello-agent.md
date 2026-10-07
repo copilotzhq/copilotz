@@ -215,8 +215,12 @@ import { agentPlugins, agentResources } from "./agent.ts";
 // reports the stream's outcome when it did not complete.
 async function printContent(output: StreamOutput): Promise<void> {
   // Decode UTF-8 incrementally, so characters split across chunks stay whole.
-  const text = output.payload.pipeThrough(new TextDecoderStream());
-  for await (const piece of text) stdout.write(piece);
+  const decoder = new TextDecoder();
+  for await (const chunk of output.payload) {
+    stdout.write(decoder.decode(chunk, { stream: true }));
+  }
+  // Flush any bytes buffered at the end of the stream.
+  stdout.write(decoder.decode());
   stdout.write("\n");
   // `terminal` reports how this stream ended. A failed model attempt can be
   // followed by a retry on a new stream, so `done` stays the authority on
@@ -288,13 +292,15 @@ try {
   }));
   console.log(`accepted operation ${handle.operationId}`);
 
-  // Print the reply while waiting for settlement. `done` resolves after the
-  // agent's turn finishes, and Promise.all rejects as soon as either side
-  // fails.
-  const [modelCallFailed] = await Promise.all([
+  // Wait for both the output reader and operation settlement before closing,
+  // even when either fails, so cleanup cannot race the reader.
+  const [drained, settled] = await Promise.allSettled([
     printReply(handle.outputs),
     handle.done,
   ]);
+  if (drained.status === "rejected") throw drained.reason;
+  if (settled.status === "rejected") throw settled.reason;
+  const modelCallFailed = drained.value;
   // A settled operation is not the same as a successful reply: Core records a
   // failed model call and still settles the turn. Report it as a failure.
   if (modelCallFailed) {

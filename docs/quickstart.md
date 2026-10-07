@@ -157,10 +157,12 @@ async function printReply(
       output.role === "content" && output.mediaType.startsWith("text/")
     ) {
       // Decode UTF-8 incrementally, so characters split across chunks stay whole.
-      const text = output.payload.pipeThrough(new TextDecoderStream());
-      for await (const piece of text) {
-        stdout.write(piece);
+      const decoder = new TextDecoder();
+      for await (const chunk of output.payload) {
+        stdout.write(decoder.decode(chunk, { stream: true }));
       }
+      // Flush any bytes buffered at the end of the stream.
+      stdout.write(decoder.decode());
       stdout.write("\n");
     } else {
       // Reasoning and other streams: release them so outputs can close.
@@ -194,11 +196,15 @@ try {
   }));
   console.log(`accepted operation ${handle.operationId}`);
 
-  // Observe the reply while waiting for settlement; either failure rejects.
-  const [modelCallFailed] = await Promise.all([
+  // Wait for both the output reader and operation settlement before closing,
+  // even when either fails, so cleanup cannot race the reader.
+  const [drained, settled] = await Promise.allSettled([
     printReply(handle.outputs),
     handle.done,
   ]);
+  if (drained.status === "rejected") throw drained.reason;
+  if (settled.status === "rejected") throw settled.reason;
+  const modelCallFailed = drained.value;
   // Core records a failed model call and still settles the turn, so `done`
   // alone does not prove the agent replied.
   if (modelCallFailed) {

@@ -59,7 +59,7 @@ entrypoint. On Node, serve `app.fetch` with a Fetch bridge such as
 ### Serve on Deno with `listen`
 
 This example uses the files from Chapter 15: `composition.ts` and the pure
-`server.ts` factory. It assumes the `@copilotz/copilotz` import (`^0.85.3`) from
+`server.ts` factory. It assumes the `@copilotz/copilotz` import (`^0.85.4`) from
 that chapter. Create `serve-listen.ts` as a Deno-only alternative to `serve.ts`:
 
 ```ts

@@ -189,7 +189,7 @@ resolving content you would not show. See
 ## Reference
 
 This standalone `app.ts` extends the Chapter 4 Notes example with a `pin`
-command and a filtered list. It needs `@copilotz/copilotz@^0.85.3` on Deno 2.9+
+command and a filtered list. It needs `@copilotz/copilotz@^0.85.4` on Deno 2.9+
 or Node 24+, and no credential.
 
 ```ts

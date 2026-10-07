@@ -93,7 +93,7 @@ and catalog changes with [Upgrading](upgrading.md).
 This needs `notes-plugin.ts` from
 [Chapter 5](getting-started/part-1-design-and-build/05-package-a-plugin.md) and
 the project setup from [Getting Started](getting-started.md#before-you-start)
-with `@copilotz/copilotz@^0.85.3`.
+with `@copilotz/copilotz@^0.85.4`.
 
 `topology.ts` runs a Gateway and a Worker in one process over an explicit
 in-process transport, sharing one persistence the host owns. It is the same file

@@ -1,230 +1,316 @@
-# HTTP server and browser client
+---
+title: "HTTP Server and Client"
+description: "Serve chosen Actions, Collections and Channels through one Fetch handler with trusted identity, explicit authorization, idempotent submission and a portable client."
+section: Deliver
+order: 10
+status: stable
+---
 
-`serverPlugin` installs one compiled Fetch boundary at `/api`. Compose it in the
-Gateway and Worker alongside the same Actions, Collections, Channels, and
-application HTTP Adapters. The host serves `gateway.fetch`; the plugin does not
-start a listener. Gateway and Worker share persistence and Asset storage.
+# HTTP Server and Client
+
+## The pain
+
+Your Notes application works in-process, but a browser, a mobile app or another
+service needs to save notes too. Writing your own handlers means re-deciding, in
+every route, who the caller is, which tenant they touch, what a retried POST
+does, which operations they may read back and how a long-running result is
+streamed. Each hand-written route is another place where a request body can pick
+someone else's namespace or a lost response saves a note twice.
+
+## The problem
+
+You need one HTTP contract that:
+
+- publishes only the Actions, Collections and Channels you choose;
+- takes actor and tenant from host verification, never from the request;
+- authorizes every matched route, including fixed operation and Asset routes;
+- maps a retried submission to the original operation;
+- runs on any Fetch host (Deno, Node, Workers) and has a matching client.
+
+## The solution
+
+Compose `serverPlugin` with a facade declared by `defineServerFacade` under
+`resources.server.default`. The application from `createCopilotz` then exposes
+`app.fetch(request)`, a standard Fetch handler. The host owns the listener;
+`createCopilotzClient` from `@copilotz/copilotz/client` calls it.
+
+### Install
+
+Copilotz is published on JSR. Set up the project as in the
+[Quickstart](quickstart.md):
+
+```sh
+# Deno: add Copilotz with import mappings for its plugin subpaths.
+deno add jsr:@copilotz/copilotz@^0.85.1
+```
+
+Deno 2.9 holds back versions published in the last 24 hours by default; for a
+fresh release add the Copilotz-only `minimumDependencyAge` exception from the
+[Deno setup](getting-started.md#deno).
+
+```sh
+# Node: create package.json and treat .ts files as ES modules.
+npm init -y
+npm pkg set type=module
+# Install Copilotz from JSR, and PGlite, the database the runtime opens.
+npx jsr add @copilotz/copilotz@^0.85.1
+npm i @electric-sql/pglite
+```
+
+Only a Node host that opens a real listener also needs
+`npm i @hono/node-server@2.1.3`. The worked example below needs no listener.
+
+### Exposure, authentication, authorization
+
+The facade separates three decisions:
+
+| Option         | Decides                                                       |
+| -------------- | ------------------------------------------------------------- |
+| `expose`       | which Action, Collection and Channel **families** get routes  |
+| `authenticate` | the trusted scope for a request, or a `Response` to reject it |
+| `authorize`    | per-route constraints, or a `Response` (such as 403) to deny  |
+
+`expose.actions`, `expose.collections` and `expose.channels` each accept `true`,
+`false` or `{ include, exclude }` patterns over stable IDs. Omitting `expose`
+publishes every registered Action, Collection read and Channel, so list what you
+mean. For Collections, `true` or patterns expose **reads only**; write routes
+(create, update, delete, commands) need an explicit `operations` entry, such as
+`collections: { include: ["note"], operations: { include: ["create"] } }` (or
+`operations: true`), and then a matching `collectionMutations` constraint from
+`authorize`. `expose` never removes the facade's fixed routes: operation
+status/result/cancel/observe, Assets and `GET <basePath>/openapi.json` always
+exist. `authenticate` and `authorize` run for those as well, so deny the ones
+you do not support. `basePath` defaults to `/api`; `maxAssetUploadBytes`
+defaults to 20 MiB.
+
+`authenticate` returns a `ServerAuthorizedScope`: `actor`, `namespace`, optional
+`databaseSchema`, trusted `operationMetadata` recorded on every operation the
+request starts, and host-only `context` for your policy. A namespace is a
+tenant, not an actor authorization: two users of the same tenant can still read
+each other's operations unless `authorize` constrains them.
+
+`authorize` receives the matched `endpoint` (`kind` is `action`, `operation`,
+`collection`, `channel`, `asset`, `agents`, `http` or `openapi`; `id` is the
+stable ID) and the scope. It returns `ServerConstraints`:
+
+- `operations: { metadata }` — operations whose metadata does not match are
+  treated as not found (404) for get, result, cancel and observe;
+- `input` — exact values enforced on Action input;
+- `collections` — read filters per Collection;
+- `collectionMutations` — explicit write policy; read filters never authorize
+  writes.
+
+Pairing `operationMetadata: { initiatorUserId }` in the scope with
+`operations: { metadata: { initiatorUserId } }` in every relevant constraint is
+what gives each actor ownership of their operations. Default to deny for
+endpoint kinds you have no policy for.
+
+Both callbacks are optional by type, and that is all "optional" means: without
+them the facade adds no actor, ownership or membership policy of its own. Core
+thread routes additionally require a trusted actor where membership applies, so
+a Core-serving facade must authenticate.
+
+### Routes and identity
+
+Action IDs keep their stable identity in the path: dots become segments, so
+`notes.save` is `POST /api/actions/notes/save`. Submissions answer `202` with a
+receipt (`operationId`, `correlationId`, `status`, `acceptedAt`, and optional
+`checkpoint`/`thread`).
+
+Application-specific endpoints come from `createHttpAdapter({ routes })` in
+`@copilotz/copilotz/server`, registered as
+`adapters: { http: { <alias>: ... } }`. Each route has an `id`, `method` and a
+`path` relative to `basePath`, and exactly one of:
+
+- `action` — a stable Action ID (not a caller alias), optionally with an
+  `input(context)` mapper. It is independent of `expose.actions` and answers
+  `202` with a receipt like any submission.
+- `handler(context)` — your code; its return value is normally answered with
+  `200`. `context.invoke(actionId, input, options)` runs an Action and waits for
+  its result; there is no submit variant. `context.read` offers
+  constraint-enforced Collection reads.
+
+Route `metadata` labels are trusted policy inputs that `authenticate` and
+`authorize` can read via `endpoint.metadata`; they grant nothing by themselves,
+including public-route exemptions.
+
+Every submission carries an `Idempotency-Key`. The same key with the same input
+from the same trusted identity returns the original receipt; different input
+fails with `409 idempotency_conflict`, and so does the same key from a different
+actor, without disclosing the original. Use one stable key per logical
+submission.
+
+Admission validates input against the target's input schema before anything
+runs. Fields marked with `secret()` from `@copilotz/copilotz/actions`, with a
+secrets adapter registered, are kept out of recorded history and observation
+(only an authorized result read returns plaintext output). Any other input is
+ordinary recorded business data, so never send credentials in unmarked fields.
+Large or binary content belongs in Assets; see
+[Content and Assets](content-assets.md).
+
+### Results and observation
+
+`client.operations.result(id)` returns the target Action's output once that
+Action and its own streams are complete. It does not wait for descendant work:
+for a Core `sendConversation`, it returns `{ threadId, message }` possibly
+before any model output, and the enclosing operation may still fail later. When
+you need full completion, observe the operation until a terminal status and
+handle semantic failures such as `llm.call.failed` yourself.
+`client.actions.invoke` is submit plus `result`, with the same boundary.
+
+`client.operations.observe({ operationIds, onFrame })` streams multipart frames
+for 1–32 concurrently selected operations and resolves with a checkpoint for
+resuming. Each observation response has a bounded lifetime (at most five minutes
+by default) and may also renew under load; the client follows these renewal
+frames transparently. Exhausted replay capacity is different: the client rejects
+with `operation_replay_capacity_exceeded`, and you must bootstrap from a fresh
+history read. See [Observation performance](observation-performance.md). A
+well-formed closing boundary without a terminal descriptor is not proof that the
+operation finished. Old cursor generations are rejected after the explicit
+offline catalog upgrade in [Upgrading](upgrading.md).
+
+Raw operation observation and raw thread observation have no history privacy
+filter. An authorized observer receives every stream, including private Ask
+answers. Treat both as trusted diagnostic surfaces; end-user views should read
+Core's normal, visibility-filtered history (`core.threads.messages`) and deny
+raw observation where private data must not reach that user. Hiding bytes in
+browser JavaScript is not a confidentiality boundary.
+
+### Core routes
+
+Thread, message and agent routes belong to `coreHttpPlugin` from
+`@copilotz/copilotz/core/server`, a separate optional plugin. Add it to
+`plugins`, then authorize its route IDs (such as `core.threads.messages`) and
+enforce thread membership as
+[Chapter 17](getting-started/part-4-release-to-users/17-connect-chat-and-channels.md)
+shows. Runtime-only applications never need it.
+
+### Worked example: call the facade without a listener
+
+This check reuses the accepted `notes-plugin.ts`, `auth.ts` and `server.ts` from
+[Chapter 16](getting-started/part-4-release-to-users/16-authenticate-and-isolate-tenants.md)
+unchanged. It injects `app.fetch` into the client, so it opens no port, needs no
+credential and uses the private in-memory database. Create `server-check.ts`:
 
 ```ts
-import { createCopilotz } from "@copilotz/copilotz";
-import { defineServerFacade, serverPlugin } from "@copilotz/copilotz/server";
-import { corePlugin } from "@copilotz/copilotz/core";
-import { coreHttpPlugin } from "@copilotz/copilotz/core/server";
+// Public HTTP client and its error type.
+import {
+  CopilotzHttpError,
+  createCopilotzClient,
+} from "@copilotz/copilotz/client";
+// The pure server factory and principal type from Chapter 16.
+import { createServerApp } from "./server.ts";
+import type { Principal } from "./server.ts";
 
-const application = await createCopilotz({
-  plugins: [corePlugin, coreHttpPlugin, serverPlugin],
-  resources: {
-    server: {
-      default: defineServerFacade({
-        authenticate: authenticateRequest,
-        authorize: authorizeRequest,
-      }),
-    },
+// Two verified users in the same tenant; only Ada may save notes.
+const users: Record<string, Principal> = {
+  "token-ada": {
+    actorId: "ada",
+    namespace: "team-notes",
+    allowedActionIds: ["notes.save"],
   },
+  "token-bob": {
+    actorId: "bob",
+    namespace: "team-notes",
+    allowedActionIds: [],
+  },
+};
+
+// No database option: a private in-memory database for this check.
+const app = await createServerApp({
+  // Stand-in for host verification: an exact bearer-token lookup.
+  resolvePrincipal: (request) =>
+    users[request.headers.get("authorization")?.replace("Bearer ", "") ?? ""],
 });
-```
 
-Authentication receives the matched endpoint and bounded lookup services. It
-returns trusted actor, namespace, and database scope, or a Response.
-Deliberately public OAuth and webhook endpoints declare their policy on exact
-route descriptors. Authorization receives trusted scope and bounded read
-services. Its Collection predicates are intersected with requested filters
-before pagination, and its Action input constraints are enforced before durable
-submission. Client IDs and cursors never confer authority. Without these
-callbacks the facade exposes the selected primitives in the application's
-default scope; use explicit policy for multi-user applications.
+// Builds a client that calls `app.fetch` directly. The URL only needs to be
+// absolute; no request leaves the process.
+const clientFor = (token: string) =>
+  createCopilotzClient({
+    baseUrl: "http://notes.invalid/api",
+    getRequestHeaders: () => ({ authorization: `Bearer ${token}` }),
+    fetch: (input, init) => app.fetch(new Request(input, init)),
+  });
 
-`createHttpAdapter({ routes })` contributes application-owned endpoints. Each
-route declares method, path, schemas, and either an Action binding or a handler.
-Handlers receive scoped reads, content, operation observation, and Action
-submission/invocation services. Route collisions fail composition. The compiler
-produces both the route table and OpenAPI; applications do not maintain a second
-router or inventory.
-
-## Canonical endpoints
-
-All paths below are relative to `/api`.
-
-| Capability                             | Method and path                                                 |
-| -------------------------------------- | --------------------------------------------------------------- |
-| Submit an Action                       | `POST /actions/myapp/stable/action-id`                          |
-| Submit Channel input                   | `POST /channels/:alias`                                         |
-| Operation status and result            | `GET /operations/:id`, `GET /operations/:id/result`             |
-| Durable cancellation                   | `DELETE /operations/:id`                                        |
-| Observe selected operations            | `POST /operations/observe`                                      |
-| Core conversation reads                | `GET /threads`, `GET /threads/:id`, `GET /threads/:id/messages` |
-| Core conversation observation          | `POST /threads/:id/observe`                                     |
-| Collections, named queries, and Assets | Compiled under `/collections` and `/assets`                     |
-| Route specification                    | `GET /openapi.json`                                             |
-
-Action IDs retain their stable identity; dots become path separators. Core
-mutations are ordinary Actions with IDs under `copilotz.core.conversation`.
-There are no versioned aliases, override paths, compatibility transports, or
-catch-all Adapter dispatchers.
-
-Action and request-observed Channel submissions return **202 operation
-receipts**. Every submission has a stable `Idempotency-Key`: identical retries
-recover the same operation, and conflicting input returns 409. Provider
-acknowledgements, reads, raw uploads, and OAuth responses retain their
-appropriate status codes. Asset uploads default to 20 MiB; `maxAssetUploadBytes`
-can lower that bound. `Content-Type` supplies media type and
-`Content-Disposition` supplies filename.
-
-### Collection mutations
-
-Collection reads remain available through the existing collection exposure. A
-collection write is compiled only when its operation is explicitly included in
-`expose.collections.operations`; the default exposure never adds writes. The
-operation names are `create`, `update`, `delete`, and `command:<name>`.
-
-```ts
-defineServerFacade({
-  expose: {
-    collections: {
-      include: ["teamProfile"],
-      operations: {
-        include: ["create", "update", "delete", "command:archive"],
-      },
-    },
-  },
-  authorize(_request, context) {
-    return {
-      collectionMutations: {
-        teamProfile: {
-          create: { fields: ["name", "description"] },
-          update: {
-            fields: ["name", "description"],
-            filter: { where: { tenantId: context.scope.namespace } },
-          },
-          commands: { archive: { fields: [] } },
-        },
-      },
-    };
-  },
-});
-```
-
-Mutation constraints are separate from read filters. `fields` limits caller
-supplied fields, `input` enforces exact values, and `filter` scopes the existing
-record and, when applicable, the resulting record. Mutations use the durable
-collection event path and a stable idempotency key, so retries replay one
-request. Each mutation returns a 202 receipt; use `operations.result` for its
-record result.
-
-## Browser usage
-
-```ts
-import { createCopilotzClient } from "@copilotz/copilotz/client";
-import { createCoreClient } from "@copilotz/copilotz/core/client";
-
-const client = createCopilotzClient({ baseUrl: "/api", getRequestHeaders });
-const core = createCoreClient(client);
-const receipt = await core.threads.send({
-  externalThreadId: crypto.randomUUID(),
-  content: "Hello",
-  recipientIds: ["support"],
-}, { idempotencyKey: crypto.randomUUID() });
-const result = await client.operations.result(receipt.operationId);
-```
-
-Use `threadId` for an existing canonical conversation and `externalThreadId` for
-a new one. The authenticated server supplies the sender. `client.actions.invoke`
-uses the same submit, settlement, and result path as `submit`; it adds no
-executor. Generic inputs/results remain schema-validated values, while Core
-reads and conversation inputs have concrete types. Both client exports are
-browser-safe.
-
-Observation uses Fetch-streamed multipart: canonical output descriptors, raw
-progressive bytes, terminal stream outcomes, operation lifecycle outputs, and
-heartbeat/control frames. Selections and checkpoints are JSON request bodies.
-The client awaits `onFrame` before advancing its checkpoint. Retry resumes only
-successfully applied frames. Aborting observation detaches the connection; only
-the explicit operation cancellation endpoint stops durable work.
-
-Binary chunks and protocol control frames are bounded at 1 MiB. Resolved JSON
-output envelopes are bounded separately at 64 MiB so completed text can exceed
-one stream chunk. An oversized envelope produces a non-retryable `ProtocolError`
-with code `observation_frame_capacity_exceeded`; it keeps the last successful
-checkpoint and detaches the observer without cancelling durable work.
-
-A result waits for its own Action's streams; operation completion waits for all
-remaining streams. Observation bounds are 32 operations and 256 streams, with
-explicit capacity errors requiring a fresh history bootstrap. Core captures a
-conservative durable boundary before history, discovers overlapping operations,
-and replays them using canonical identities. No stream is treated as consumed
-merely because an operation has settled.
-
-Secret-marked inputs are encrypted before the existing durable Action ingress.
-Observations retain redacted values. Authorized result reads hydrate protected
-results and text/JSON content references nested in completed Action output;
-durable event bodies retain descriptor-only references, and binary references
-remain descriptor-only at this boundary. Result reads set `Cache-Control` to
-`no-store`; generated OpenAPI removes examples and defaults from secret-marked
-schema nodes. HTTP adds no storage format, database migration, output log, or
-execution lifecycle.
-
-### Conversation membership and recipients
-
-`core.threads.send` accepts `participantIds` for the agents enrolled in a
-conversation and `recipientIds` for the agents addressed by this message. For
-example, `participantIds: ["north", "west"]` and `recipientIds: ["north"]` allow
-North to ask West without asking both agents to answer the user message.
-Membership selections resolve only to registered agents in the authenticated
-scope. Existing authorized threads enroll missing selections before delivery;
-this neither removes existing participants nor rewrites conversation history.
-
-### Shared rooms: several people in one conversation
-
-By default a caller reads and writes only threads they participate in. To let
-several people share a room, grant access from `authorize`:
-
-```ts
-defineServerFacade({
-  async authorize(request, { params, scope, read }) {
-    const body = request.method === "POST"
-      ? await request.json().catch(() => null)
-      : null;
-    const threadId = params.id ?? body?.threadId;
-    if (threadId && !(await mayJoin(scope.actor, threadId, read))) {
-      return new Response(null, { status: 403 });
+// Runs one call and reports its HTTP status instead of throwing.
+async function status(call: () => Promise<unknown>): Promise<string> {
+  try {
+    await call();
+    return "ok";
+  } catch (error) {
+    if (error instanceof CopilotzHttpError) {
+      return `${error.status} ${error.code}`;
     }
-    return {
-      // Replace the default "participant only" read filter with your policy.
-      collections: {
-        thread: roomsFor(scope.actor),
-        message: {},
-        participant: {},
-      },
-      // Lets this caller post in the room before they are a participant.
-      ...(threadId
-        ? { actionMetadata: { coreConversationAccess: { threadId } } }
-        : {}),
-    };
-  },
-});
+    throw error;
+  }
+}
+
+try {
+  const ada = clientFor("token-ada");
+  const bob = clientFor("token-bob");
+  const key = { idempotencyKey: "server-check-001" };
+
+  // Submit, then retry the same logical submission with the same key.
+  const first = await ada.actions.submit("notes.save", { text: "Hi" }, key);
+  const retry = await ada.actions.submit("notes.save", { text: "Hi" }, key);
+  console.log("same operation:", first.operationId === retry.operationId);
+  console.log("result:", await ada.operations.result(first.operationId));
+
+  // Same key, different input.
+  console.log(
+    "conflict:",
+    await status(() => ada.actions.submit("notes.save", { text: "No" }, key)),
+  );
+  // Same tenant, different actor: not authorized for the Action...
+  console.log(
+    "bob save:",
+    await status(() => bob.actions.submit("notes.save", { text: "Hi" }, key)),
+  );
+  // ...and cannot see Ada's operation.
+  console.log(
+    "bob read:",
+    await status(() => bob.operations.get(first.operationId)),
+  );
+  // No credential at all.
+  console.log(
+    "anonymous:",
+    await status(() => clientFor("nobody").operations.get(first.operationId)),
+  );
+} finally {
+  // Release the in-memory database even if a check throws.
+  await app.close();
+}
 ```
 
-When `authorize` returns a `thread` collection filter, it replaces Core's
-default membership filter for thread reads. Once you return `collections`, list
-every collection the routes read: the conversation routes also read `message`
-and `participant`, and a collection left out is denied. `coreConversationAccess`
-authorizes conversation writes to that one thread. A caller who posts there is
-enrolled as a human participant, so later reads also match by membership. Keep
-both decisions in your policy: Core never grants access on a client-supplied
-thread ID alone.
+Run it with `deno run -A server-check.ts` (the in-memory database reads its
+engine assets from Deno's module cache) or `node server-check.ts`. Expected
+facts (IDs differ):
 
-### Message content access
+```text
+same operation: true
+result: { id: "…", text: "Hi", … }
+conflict: 409 idempotency_conflict
+bob save: 403 forbidden
+bob read: 404 …
+anonymous: 401 unauthorized
+```
 
-Use `core.messages.asset(threadId, messageId, assetId, { signal })` to read a
-conversation Asset. It returns the raw Fetch Response from
-`GET /api/threads/:id/messages/:messageId/assets/:assetId`. Core checks the
-authorized thread, message visibility, and the exact reference in canonical
-message content or reasoning before reading bytes in the authenticated scope.
-History filters participant-private messages before pagination. Internal and
-private history-scope messages are not exposed through this boundary.
+To serve the same app for real, use `serve.ts` (`Deno.serve` with
+`server.shutdown()` on signals) or `serve-node.ts` (`@hono/node-server` with
+`listener.close()`) from
+[Chapter 15](getting-started/part-4-release-to-users/15-expose-an-http-api.md),
+and close the app after the listener finishes.
 
-Content becomes readable as soon as the authorized message exists; it does not
-depend on an asynchronous access projection. A bare Asset identifier conveys no
-message authority. Applications retain their own policy for generic Asset reads.
-Existing Asset bytes, message records, and retained revisions are reused without
-a migration.
+## What this unlocks
+
+- One Fetch handler for Deno, Node and Workers, with tests that need no socket.
+- Exposure, identity and ownership as separate, reviewable decisions.
+- Safe client retries through idempotency keys and receipts.
+- Browser and service callers sharing one public client.
+
+## Next steps
+
+- [Chapter 15: Expose an HTTP API](getting-started/part-4-release-to-users/15-expose-an-http-api.md)
+- [Chapter 16: Authenticate and Isolate Tenants](getting-started/part-4-release-to-users/16-authenticate-and-isolate-tenants.md)
+- [Channels](channels.md) for inbound adapters and chat delivery.
+- [Content and Assets](content-assets.md) for uploads and large inputs.

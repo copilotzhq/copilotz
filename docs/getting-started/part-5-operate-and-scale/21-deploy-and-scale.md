@@ -249,7 +249,10 @@ These conditions are what make a deployment recoverable:
   does not move existing bodies out of the database.
 - **Schema.** Startup validates the stored schema. Copilotz never runs a
   destructive or automatic data migration; plan upgrades with the
-  [Upgrading reference](../../upgrading.md).
+  [Upgrading reference](../../upgrading.md). Core applications can also install
+  the explicit chronological history index once per physical schema; see
+  [History Performance](../../history-performance.md). This provisioning is
+  separate from the observation-catalog upgrade and is never request-time DDL.
 - **Runtime assets.** Skill roots and local MCP server fixtures resolved with
   `import.meta.url` must be copied into the build next to the modules that
   reference them, or served over HTTP. Browsers and Workers-style runtimes

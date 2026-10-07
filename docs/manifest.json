@@ -4,84 +4,119 @@
       "title": "Getting Started",
       "items": [
         {
-          "title": "Introduction",
+          "title": "Getting Started Guide",
           "slug": "getting-started",
-          "description": "A progressive Notes application: six foundation chapters and optional capabilities."
+          "description": "Build one Notes application on the runtime, then add optional agent, delivery and operations capabilities."
         },
         {
-          "title": "Ch 1: Hello Agent",
-          "slug": "getting-started/part-1-foundations/01-hello-agent",
-          "description": "Run one assistant, send a message and read its reply."
+          "title": "Ch 1: Send Your First Event",
+          "slug": "getting-started/part-1-design-and-build/01-send-your-first-event",
+          "description": "Send a named input, read the durable Event and wait for settlement."
         },
         {
-          "title": "Ch 2: Your First Tool",
-          "slug": "getting-started/part-1-foundations/02-your-first-tool",
-          "description": "Give the assistant one explicit, executable capability."
+          "title": "Ch 2: React With a Processor",
+          "slug": "getting-started/part-1-design-and-build/02-react-with-a-processor",
+          "description": "Run a Processor for every matching Event using its resolved data."
         },
         {
-          "title": "Ch 3: Application Data and Actions",
-          "slug": "getting-started/part-1-foundations/03-application-data-and-actions",
-          "description": "Store notes and share one operation across agents and application callers."
+          "title": "Ch 3: Keep State in a Collection",
+          "slug": "getting-started/part-1-design-and-build/03-keep-state-in-a-collection",
+          "description": "Store notes as schema-checked records and read the facts each write appends."
         },
         {
-          "title": "Ch 4: Processors and Lifecycles",
-          "slug": "getting-started/part-1-foundations/04-processors-and-lifecycles",
-          "description": "React to recorded changes and trace application execution."
+          "title": "Ch 4: Share Operations as Actions",
+          "slug": "getting-started/part-1-design-and-build/04-share-operations-as-actions",
+          "description": "Move the note write into a validated, recorded notes.save Action."
         },
         {
-          "title": "Ch 5: Reusable Plugins",
-          "slug": "getting-started/part-1-foundations/05-reusable-plugins",
-          "description": "Package behavior once and compose it across applications."
+          "title": "Ch 5: Package a Plugin",
+          "slug": "getting-started/part-1-design-and-build/05-package-a-plugin",
+          "description": "Bundle the Notes primitives into a plugin and keep host choices in one composition."
         },
         {
-          "title": "Ch 6: Persistence and Recovery",
-          "slug": "getting-started/part-1-foundations/06-persistence-and-recovery",
-          "description": "Keep state across restarts and understand retry boundaries."
+          "title": "Ch 6: Test and Inspect",
+          "slug": "getting-started/part-2-verify-and-recover/06-test-and-inspect",
+          "description": "Test the plugin in isolated in-memory apps on Deno and Node and read diagnostics."
         },
         {
-          "title": "Ch 7: Existing APIs and Tools",
-          "slug": "getting-started/part-2-capabilities/07-existing-apis-and-tools",
-          "description": "Choose native, OpenAPI or MCP integration when a task needs it."
+          "title": "Ch 7: Persist and Recover",
+          "slug": "getting-started/part-2-verify-and-recover/07-persist-and-recover",
+          "description": "Keep notes on disk, reopen in a new process and replay an earlier operation."
         },
         {
-          "title": "Ch 8: Skills",
-          "slug": "getting-started/part-2-capabilities/08-skills",
-          "description": "Package reusable instructions and grant access explicitly."
+          "title": "Ch 8: Hello Agent",
+          "slug": "getting-started/part-3-add-agent-behavior/08-hello-agent",
+          "description": "Optional: compose the Core harness with one model and stream an agent reply."
         },
         {
-          "title": "Ch 9: Agent Collaboration",
-          "slug": "getting-started/part-2-capabilities/09-agent-collaboration",
-          "description": "Add a specialist, establish membership and enable public questions."
+          "title": "Ch 9: Grant Tools",
+          "slug": "getting-started/part-3-add-agent-behavior/09-grant-tools",
+          "description": "Optional: present notes.save and a clock to the assistant as granted tools."
         },
         {
-          "title": "Ch 10: Memory and Knowledge",
-          "slug": "getting-started/part-2-capabilities/10-memory-and-knowledge",
-          "description": "Distinguish conversation history, long-term memory and document retrieval."
+          "title": "Ch 10: Connect Existing APIs and MCP Servers",
+          "slug": "getting-started/part-3-add-agent-behavior/10-connect-apis-and-mcp",
+          "description": "Optional: turn OpenAPI and MCP resources into grantable Actions and Tools."
         },
         {
-          "title": "Ch 11: HTTP and Client",
-          "slug": "getting-started/part-3-production/11-http-and-client",
-          "description": "Expose application Actions behind policy and call them from a typed client."
+          "title": "Ch 11: Package Instructions as Skills",
+          "slug": "getting-started/part-3-add-agent-behavior/11-package-skills",
+          "description": "Optional: move reusable instructions into a Skill loaded only when needed."
         },
         {
-          "title": "Ch 12: Interfaces and Channels",
-          "slug": "getting-started/part-3-production/12-interfaces-and-channels",
-          "description": "Connect a chat interface or another conversation transport."
+          "title": "Ch 12: Collaborate With Specialists",
+          "slug": "getting-started/part-3-add-agent-behavior/12-collaborate-with-specialists",
+          "description": "Optional: add a reviewer agent and let the assistant ask it questions."
         },
         {
-          "title": "Ch 13: Content and Usage",
-          "slug": "getting-started/part-3-production/13-content-and-usage",
-          "description": "Separate large bodies from records and account for model work."
+          "title": "Ch 13: Remember Across Conversations",
+          "slug": "getting-started/part-3-add-agent-behavior/13-remember-across-conversations",
+          "description": "Optional: keep curated, provenance-aware memory beside conversation history."
         },
         {
-          "title": "Ch 14: Tenants and Access",
-          "slug": "getting-started/part-3-production/14-tenants-and-access",
-          "description": "Choose data scope from authenticated identity and enforce access policy."
+          "title": "Ch 14: Test Agents Without a Provider",
+          "slug": "getting-started/part-3-add-agent-behavior/14-test-agents-without-a-provider",
+          "description": "Optional: check the agent harness deterministically with a scripted LLM Adapter."
         },
         {
-          "title": "Ch 15: Deployment and Next Steps",
-          "slug": "getting-started/part-3-production/15-deployment-and-next-steps",
-          "description": "Start embedded and choose Gateway/Worker placement when needed."
+          "title": "Ch 15: Expose an HTTP API",
+          "slug": "getting-started/part-4-release-to-users/15-expose-an-http-api",
+          "description": "Serve notes.save through an explicit Fetch boundary with a host-owned listener."
+        },
+        {
+          "title": "Ch 16: Authenticate and Isolate Tenants",
+          "slug": "getting-started/part-4-release-to-users/16-authenticate-and-isolate-tenants",
+          "description": "Map verified principals to tenants and owners, and authorize each request."
+        },
+        {
+          "title": "Ch 17: Connect Chat and Channels",
+          "slug": "getting-started/part-4-release-to-users/17-connect-chat-and-channels",
+          "description": "Put the assistant behind the authenticated HTTP boundary with Core routes."
+        },
+        {
+          "title": "Ch 18: Handle Files and Large Content",
+          "slug": "getting-started/part-4-release-to-users/18-handle-files-and-large-content",
+          "description": "Store file bytes once as a scoped Asset referenced by a note."
+        },
+        {
+          "title": "Ch 19: Schedule Recurring Work",
+          "slug": "getting-started/part-5-operate-and-scale/19-schedule-recurring-work",
+          "description": "Turn host clock ticks into durable occurrences that save digest notes."
+        },
+        {
+          "title": "Ch 20: Measure Model and Tool Usage",
+          "slug": "getting-started/part-5-operate-and-scale/20-measure-usage",
+          "description": "Optional: record a Usage ledger row per model attempt and tool call, and read analytics."
+        },
+        {
+          "title": "Ch 21: Deploy and Scale",
+          "slug": "getting-started/part-5-operate-and-scale/21-deploy-and-scale",
+          "description": "Split the app into a Gateway and Worker sharing persistence and transport."
+        },
+        {
+          "title": "Ch 22: Organize, Share and Evolve Plugins",
+          "slug": "getting-started/part-6-evolve-and-reuse/22-organize-and-share-plugins",
+          "description": "Move declarations into per-primitive files and generate a static plugin module."
         }
       ]
     },
@@ -91,37 +126,17 @@
         {
           "title": "Documentation",
           "slug": "README",
-          "description": "Where to start and how the guides are organized."
+          "description": "Where to start and how the guides and references are organized."
         },
         {
-          "title": "Understanding Copilotz",
+          "title": "Overview",
           "slug": "overview",
-          "description": "What you can build, how the runtime and harness fit together, and choosing an integration path."
+          "description": "Why Copilotz records work as Events, Collections, Actions and Processors, and which path to start."
         },
         {
           "title": "Quickstart",
           "slug": "quickstart",
-          "description": "Choose the next step in the progressive getting-started guide."
-        },
-        {
-          "title": "Convention-first authoring",
-          "slug": "convention-authoring",
-          "description": "Static declarations, build-time discovery, ESM generation, and final-context configuration."
-        },
-        {
-          "title": "Architecture",
-          "slug": "architecture",
-          "description": "Plugin ownership, durable lifecycle, content, streams, and execution."
-        },
-        {
-          "title": "API Reference",
-          "slug": "api",
-          "description": "Application factory, runtime root exports and plugin entrypoints."
-        },
-        {
-          "title": "Goal Runner",
-          "slug": "goals",
-          "description": "Minimal target/lead loops over settled Core sends."
+          "description": "Run one complete runtime program and one optional agent program on Deno or Node."
         }
       ]
     },
@@ -131,88 +146,179 @@
         {
           "title": "Plugins and Processors",
           "slug": "plugins-and-processors",
-          "description": "Compose the five plugin primitives and retry-safe orchestration."
+          "description": "Compose plugins and write retry-safe Processors."
         },
         {
-          "title": "Plugin Source Layout",
-          "slug": "plugin-layout",
-          "description": "Concrete plugin ownership, primitive directories, and authoring helpers."
+          "title": "Collections",
+          "slug": "collections",
+          "description": "Schema-checked state, retry-safe writes, commands, queries and transactions."
+        },
+        {
+          "title": "Actions",
+          "slug": "actions",
+          "description": "Validated, recorded operations, typed callers and operation keys."
         },
         {
           "title": "Events, Deliveries, and Recovery",
           "slug": "events-deliveries-recovery",
-          "description": "Immutable facts, sparse work, settlement scopes, and reconnect behavior."
-        },
-        {
-          "title": "Observation Performance",
-          "slug": "observation-performance",
-          "description": "Reproducible indexed-observation benchmarks and their capacity limits."
+          "description": "Operations, Events, deliveries, resend, observation, cancellation and recovery."
         },
         {
           "title": "Content and Assets",
           "slug": "content-assets",
-          "description": "Canonical refs, atomic adoption, BodyStores, and provenance."
+          "description": "Namespace-scoped Assets, content references and budgeted reads."
         },
         {
-          "title": "Progressive Streams",
+          "title": "Streams",
           "slug": "streams",
-          "description": "Generic stream.output observation and subscriber-owned byte followers."
-        },
-        {
-          "title": "Embedding, Gateways, and Workers",
-          "slug": "embedding-and-hypervisors",
-          "description": "Embedded, split, remote, and injected-dispatcher placement."
-        },
-        {
-          "title": "Server Fa\u00e7ade",
-          "slug": "server",
-          "description": "Automatic primitive routes, guards, OpenAPI, and lossless multipart outputs."
-        },
-        {
-          "title": "Host Capability Adapters",
-          "slug": "runtime-adapters",
-          "description": "Deno, Node CLI, MCP stdio, and host-owned capabilities."
+          "description": "Progressive bytes from Actions, stream.output payloads, replay and retention."
         }
       ]
     },
     {
-      "title": "Semantic Plugins",
+      "title": "Agent Harness",
       "items": [
         {
-          "title": "Channels",
-          "slug": "channels",
-          "description": "Ingress and egress mapping, optional HTTP, durable delivery and live sessions."
+          "title": "Models",
+          "slug": "models",
+          "description": "Named LLM connections, fallback, request options and custom LLM Adapters."
         },
         {
           "title": "Agent Capabilities",
           "slug": "agent-capabilities",
-          "description": "Exact alias grants and derived Core/Skills mechanisms."
+          "description": "Agents as resources and exact grants for tools, specialists and Skills."
         },
         {
-          "title": "Multi-Agent Ask",
-          "slug": "multi-agent-ask",
-          "description": "Durable public questions, nested cursors, and plan resumption."
-        },
-        {
-          "title": "Semantic Memory",
-          "slug": "memory",
-          "description": "Plugin-owned consolidation, ontology, tools, and recovery."
+          "title": "APIs and MCP",
+          "slug": "integrations",
+          "description": "OpenAPI and MCP resources as Actions and grantable Tools."
         },
         {
           "title": "Skills",
           "slug": "skills",
-          "description": "Portable Agent Skills resources and build-time directory packing."
+          "description": "Skill roots, grants, lazy loading, caching, limits and host requirements."
         },
         {
-          "title": "Shared Spaces",
+          "title": "Multi-Agent Collaboration",
+          "slug": "multi-agent-ask",
+          "description": "Thread enrollment, ask grants, private visibility and continuations."
+        },
+        {
+          "title": "Memory",
+          "slug": "memory",
+          "description": "Curated, provenance-aware long-term memory with bounded consolidation."
+        },
+        {
+          "title": "Knowledge",
+          "slug": "knowledge",
+          "description": "Index documents with a host-chosen embedding provider and scoped retrieval."
+        },
+        {
+          "title": "Spaces",
           "slug": "spaces",
-          "description": "Core ownership, attachments, lifecycle and read-only peer memory."
+          "description": "Owned Spaces, members, atomic moves and what membership authorizes."
+        },
+        {
+          "title": "Goals",
+          "slug": "goals",
+          "description": "Bounded two-agent loops with Core's runGoal Action."
         }
       ]
     },
     {
-      "title": "Migration",
-      "items": []
+      "title": "Deliver",
+      "items": [
+        {
+          "title": "HTTP Server and Client",
+          "slug": "server",
+          "description": "One Fetch handler with trusted identity, explicit authorization and a portable client."
+        },
+        {
+          "title": "Channels",
+          "slug": "channels",
+          "description": "Provider ingress, eligible egress and interruptible live sessions."
+        }
+      ]
+    },
+    {
+      "title": "Operate",
+      "items": [
+        {
+          "title": "Testing and Inspection",
+          "slug": "testing-and-inspection",
+          "description": "Isolated in-memory tests, public inspection APIs and opt-in diagnostics."
+        },
+        {
+          "title": "Schedules",
+          "slug": "schedules",
+          "description": "Durable recurring jobs driven by host-owned time."
+        },
+        {
+          "title": "Usage",
+          "slug": "usage",
+          "description": "Ledger rows per model request and tool execution, pricing and analytics."
+        },
+        {
+          "title": "Deployment Topologies",
+          "slug": "embedding-and-hypervisors",
+          "description": "Embedded processes or Gateways and Workers with shared persistence."
+        },
+        {
+          "title": "Runtimes and Host Capabilities",
+          "slug": "runtime-adapters",
+          "description": "Feature support per host and host-specific entrypoints."
+        },
+        {
+          "title": "Observation Performance",
+          "slug": "observation-performance",
+          "description": "Measured database cost of operation observation and benchmark limits."
+        },
+        {
+          "title": "History Performance",
+          "slug": "history-performance",
+          "description": "Provision and verify the indexed PostgreSQL path for Message history."
+        }
+      ]
+    },
+    {
+      "title": "Evolve",
+      "items": [
+        {
+          "title": "Filesystem Plugin Authoring",
+          "slug": "convention-authoring",
+          "description": "One declaration per directory, copilotz.json and the Deno build command."
+        },
+        {
+          "title": "Upgrading and Data Safety",
+          "slug": "upgrading",
+          "description": "Version pins, stable identities, schema evolution and offline upgrades."
+        }
+      ]
+    },
+    {
+      "title": "Reference",
+      "items": [
+        {
+          "title": "Architecture",
+          "slug": "architecture",
+          "description": "How Events, deliveries, Actions, Collections and Bodies fit together."
+        },
+        {
+          "title": "API",
+          "slug": "api",
+          "description": "createCopilotz, its roles, operation methods and package entrypoints."
+        }
+      ]
+    },
+    {
+      "title": "Contributors",
+      "items": [
+        {
+          "title": "Contributing to Built-In Plugins",
+          "slug": "plugin-layout",
+          "description": "Built-in plugin layout, generated indexes, boundaries and repository checks."
+        }
+      ]
     }
   ]
 }

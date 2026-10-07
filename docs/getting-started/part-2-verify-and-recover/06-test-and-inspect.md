@@ -106,9 +106,10 @@ kinds of waiting and working:
 | `worker_handler_settled`                    | The handler finished. `status` says how it ended; `error` says why it failed.  |
 
 On `worker_handler_settled`, `status` is `succeeded` when the handler returned.
-When the handler threw, `status` is `retry_wait` (the delivery will be tried
-again) or `dead_letter` (it will not), and `error` holds the error's `name` and
-a message of at most 500 characters.
+When the handler threw, `status` is usually `retry_wait` (the delivery will be
+tried again) or `dead_letter` (it will not), and `error` holds the error's
+`name` and a message truncated to 500 characters, plus an ellipsis when
+truncated.
 
 Diagnostics are observations, not records:
 

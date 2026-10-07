@@ -66,18 +66,18 @@ See
 The embedded and Gateway results share the public `CopilotzApplication` type
 from `@copilotz/copilotz/application`, plus `fetch`:
 
-| Method                                      | Purpose                                                                  |
-| ------------------------------------------- | ------------------------------------------------------------------------ |
-| `send(input)`                               | Admit one input envelope; returns an `ApplicationSendHandle`             |
-| `attach({ operationId, cursor? })`          | Replay recorded history and follow a durable operation                   |
-| `operationStatus({ operationId })`          | Recorded `state`, or `null` when this namespace has no such operation    |
-| `listOperations(input?)`                    | Filter by `operationIds`, `states`, `metadata`, `limit`                  |
-| `operationCheckpoint(input)`                | Opaque cursor after a history snapshot, so `attach` skips sealed streams |
-| `cancelOperation({ operationId, reason? })` | Explicit, durable cancellation                                           |
-| `maintenance(options?)`                     | Bounded delivery, Asset, Body and operation-catalog maintenance          |
-| `observe()`                                 | Live outputs of this process, independent of any one operation           |
-| `close(reason?)`                            | Idempotent shutdown of what this result owns                             |
-| `fetch(request)`                            | The `/api` boundary when `serverPlugin` is composed; otherwise `404`     |
+| Method                                      | Purpose                                                                              |
+| ------------------------------------------- | ------------------------------------------------------------------------------------ |
+| `send(input)`                               | Admit one input envelope; returns an `ApplicationSendHandle`                         |
+| `attach({ operationId, cursor? })`          | Replay recorded history and follow a durable operation                               |
+| `operationStatus({ operationId })`          | Recorded `state`, or `null` when this namespace has no such operation                |
+| `listOperations(input?)`                    | Filter by `operationIds`, `states`, `metadata`, `limit`                              |
+| `operationCheckpoint(input)`                | Keeps the supplied Event baseline and skips sealed streams; does not take a snapshot |
+| `cancelOperation({ operationId, reason? })` | Explicit, durable cancellation                                                       |
+| `maintenance(options?)`                     | Bounded delivery, Asset, Body and operation-catalog maintenance                      |
+| `observe()`                                 | Live outputs of this process, independent of any one operation                       |
+| `close(reason?)`                            | Idempotent shutdown of what this result owns                                         |
+| `fetch(request)`                            | The `/api` boundary when `serverPlugin` is composed; otherwise `404`                 |
 
 Operation `state` is one of `accepted`, `running`, `completed`, `failed` or
 `cancelled`. Every scoped method also accepts `namespace` and `databaseSchema`;

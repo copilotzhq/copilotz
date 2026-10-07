@@ -1,3 +1,17 @@
+## 0.85.2 — 2026-10-06
+
+### Documentation
+
+- Organize the guide into six lifecycle parts and 22 progressive chapters, with
+  separate paths for the durable runtime and optional agent harness.
+- Rewrite subsystem references around application problems, complete examples,
+  precise contracts, and focused next steps. Document declarative API, MCP and
+  Skill resources, including filesystem plugin generation.
+- Verify runnable examples on Deno and Node, including scripted agent failures,
+  HTTP access, output cleanup, and the published integration boundaries.
+- Clarify database provisioning, observation and history performance evidence,
+  deployment ownership, host capability limits, and upgrade procedures.
+
 ## 0.85.1 — 2026-10-06
 
 ### Fixed

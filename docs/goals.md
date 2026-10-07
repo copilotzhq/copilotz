@@ -2,7 +2,7 @@
 title: "Goals"
 description: "Run a bounded back-and-forth between two Agents with Core's runGoal Action: policy, conversation Adapter, turn limits, retries and what the result does and does not prove."
 section: Agent Harness
-order: 70
+order: 90
 status: stable
 ---
 

@@ -2,7 +2,7 @@
 title: "Deployment Topologies"
 description: "Place the same plugins in one embedded process, or split them into a Gateway and Workers that share persistence and an admitted transport."
 section: Operate
-order: 70
+order: 40
 status: stable
 ---
 

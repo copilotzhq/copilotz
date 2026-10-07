@@ -2,7 +2,7 @@
 title: "API"
 description: "The public createCopilotz factory, its embedded, Gateway and Worker roles, the operation methods each role returns, and the package entrypoints."
 section: Reference
-order: 30
+order: 20
 status: stable
 ---
 

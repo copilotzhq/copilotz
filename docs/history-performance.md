@@ -2,7 +2,7 @@
 title: History Performance
 description: Provision and verify the indexed PostgreSQL access path for Core Message history.
 section: Operate
-order: 50
+order: 70
 status: stable
 ---
 

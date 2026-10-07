@@ -2,7 +2,7 @@
 title: "Skills"
 description: "Declare reusable agent instructions as a Skill root, grant them by name, and understand lazy loading, caching, limits, containment and host deployment requirements."
 section: Agent Harness
-order: 50
+order: 40
 status: stable
 ---
 

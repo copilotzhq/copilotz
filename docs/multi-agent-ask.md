@@ -2,7 +2,7 @@
 title: "Multi-Agent Collaboration"
 description: "Enroll agents in a thread, grant who may consult whom, and understand how Core's ask tool records questions, answers, private visibility, failures and continuations."
 section: Agent Harness
-order: 40
+order: 50
 status: stable
 ---
 

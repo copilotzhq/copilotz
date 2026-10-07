@@ -2,7 +2,7 @@
 title: "Knowledge"
 description: "Index documents into searchable chunks with an embedding provider the host chooses, and retrieve them with explicit scope selectors."
 section: Agent Harness
-order: 65
+order: 70
 status: stable
 ---
 

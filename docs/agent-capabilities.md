@@ -2,7 +2,7 @@
 title: "Agent Capabilities"
 description: "Declare Agents as plain resources, grant tools, specialists and Skills by exact name, and understand which framework mechanisms Core and Skills derive from those grants."
 section: Agent Harness
-order: 30
+order: 20
 status: stable
 ---
 

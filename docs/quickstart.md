@@ -2,7 +2,7 @@
 title: "Quickstart"
 description: "Run one complete runtime program that records an Event, and one optional agent program that streams a model reply, on Deno or Node."
 section: Start
-order: 10
+order: 30
 status: stable
 ---
 

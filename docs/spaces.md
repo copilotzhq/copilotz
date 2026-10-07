@@ -2,7 +2,7 @@
 title: "Spaces"
 description: "Group threads and other records under an owned Space with members, move them atomically, and understand what Space membership does and does not authorize."
 section: Agent Harness
-order: 67
+order: 80
 status: stable
 ---
 

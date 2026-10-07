@@ -2,7 +2,7 @@
 title: "Architecture"
 description: "How admitted Events, Processor deliveries, Actions, Collections and progressive Bodies fit together, and which choices belong to plugins, hosts and the runtime."
 section: Reference
-order: 20
+order: 10
 status: stable
 ---
 

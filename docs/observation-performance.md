@@ -2,7 +2,7 @@
 title: "Observation Performance"
 description: "Measured database cost of idle and active operation observation in Copilotz 0.85.0, how the observation path keeps it low, and what the local benchmark does not prove."
 section: Operate
-order: 40
+order: 60
 status: stable
 ---
 

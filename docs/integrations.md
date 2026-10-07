@@ -2,7 +2,7 @@
 title: "APIs and MCP"
 description: "Declare OpenAPI and MCP resources that become ordinary Actions and grantable Tools, and keep credentials and subprocesses in the host."
 section: Agent Harness
-order: 20
+order: 30
 status: stable
 ---
 

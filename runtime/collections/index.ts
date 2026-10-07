@@ -1,3 +1,7 @@
+export {
+  provisionCollectionIndexes,
+  validateCollectionIndexes,
+} from "./indexes.ts";
 export { defineCollection, relation } from "./definition.ts";
 export type {
   CollectionCommandDefinition,

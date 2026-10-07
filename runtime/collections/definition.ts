@@ -11,7 +11,7 @@ export type CollectionIndex =
   | Readonly<{
     fields: string | readonly string[];
     unique?: boolean;
-    type?: "btree" | "gin" | "gist" | "brin";
+    type?: "btree" | "gin" | "brin";
   }>;
 
 export type CollectionRelation = Readonly<{

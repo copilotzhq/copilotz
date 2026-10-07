@@ -11,6 +11,7 @@ import { createTestDomainContext } from "../../core/shared/testing/context.ts";
 import { memoryPlugin } from "../plugin.ts";
 import { ensureWritableMemorySpace } from "./access.ts";
 import { reserveMemoryCheckpoint } from "./reservation.ts";
+import { checkpointHead, readyCheckpoint } from "./checkpoints.ts";
 
 async function concurrentReservations(url: string) {
   const db = await createTestDatabase({ url, pgPoolMax: 8 });
@@ -181,6 +182,45 @@ async function concurrentReservations(url: string) {
     });
     assertEquals((await reserve(44))!.id, third!.id);
     assertEquals((await c.longTermMemory.list()).length, 4);
+    // Regression: 0.85.3 silently ordered IDs and selected :9 over :40.
+    // Creation order deliberately differs from sequence order as well.
+    for (const sequence of [9, 10, 40, 100, 99]) {
+      await c.longTermMemory.create({
+        ...third!,
+        id: `memory:${thread.id}:west:${sequence}`,
+        sequence,
+        status: "ready",
+        metadata: {
+          ...metadata,
+          coverage: {
+            ...(metadata.coverageCandidate as object),
+            continuity: `Continuity ${sequence}`,
+          },
+        },
+      });
+    }
+    assertEquals(
+      (await checkpointHead(contexts[0] as never, thread.id, "west"))!.sequence,
+      100,
+    );
+    assertEquals(
+      (await readyCheckpoint(contexts[0] as never, {
+        thread,
+        agentId: "west",
+        participantId: owner.id,
+      }))!.sequence,
+      100,
+    );
+    assertEquals((await reserve(45))!.sequence, 100);
+    await c.longTermMemory.update({
+      id: `memory:${thread.id}:west:100`,
+      set: { status: "failed" },
+    });
+    const next = await Promise.all(
+      Array.from({ length: 32 }, (_, caller) => reserve(caller)),
+    );
+    assertEquals(new Set(next.map((row) => row!.id)).size, 1);
+    assertEquals(next[0]!.sequence, 101);
   } finally {
     for (const engine of engines) await engine.shutdown();
     await db.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);

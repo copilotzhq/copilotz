@@ -122,6 +122,7 @@ export function isCollectionNoop<TRecord>(
 }
 
 export type CollectionQueryOrder = Readonly<{
+  /** Built-in id/timestamps or a declared scalar field path; unsupported fields fail. */
   field: string;
   direction?: "asc" | "desc";
 }>;

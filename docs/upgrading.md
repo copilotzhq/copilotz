@@ -27,9 +27,10 @@ history.
 Copilotz stores three independent things, and each one evolves differently:
 
 1. **Physical schema.** The SQL tables for Events, Collections and Bodies are
-   validated against Event schema v5. Startup provisions a fresh schema and
-   validates an existing one. It never migrates or resets it; an incompatible
-   schema is rejected.
+   validated against Event schema v5. Startup provisions fresh Core tables and
+   validates existing ones; incompatible Core schemas are rejected. Declared
+   Collection indexes are provisioned separately as described below. Stored
+   records are never reset or rewritten.
 2. **Durable identities.** Plugin IDs, Collection names, Action IDs, Processor
    IDs, retry keys and call order are recorded in Events and deliveries. They
    behave like primary keys, not like labels.
@@ -106,8 +107,16 @@ All namespaces in one physical schema share the same tables. A namespace
 isolates data, not physical-schema changes; separate physical schemas are
 upgraded separately.
 
-Collection `indexes` are retained definition metadata only. The generic runtime
-does not create SQL indexes or enforce uniqueness from them.
+Collection `indexes` are physical database declarations. Before serving this
+release on an existing tenant schema or with validation-only startup, run
+`provisionCollectionIndexes(session, schemaName, definitions)` with the complete
+composed Collection definitions. Default database provisioning performs this
+step automatically. It adds indexes and enforces declared uniqueness, but never
+rewrites rows or drops old indexes. Resolve any duplicate-key violation through
+an explicit data correction; provisioning does not choose which record to keep.
+For populated PostgreSQL schemas, use the provisioning option
+`{ concurrently: true }` from one standalone host operation to avoid blocking
+normal writes. See [Collections](./collections.md#provision-declared-indexes).
 
 ### Test against disposable data only
 

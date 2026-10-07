@@ -1,3 +1,4 @@
+import { type CollectionField, collectionField } from "./field.ts";
 import { compileCollectionPredicate } from "./predicate.ts";
 import type { SqlExecutor } from "../events/index.ts";
 import type { CollectionDefinition } from "./definition.ts";
@@ -30,21 +31,24 @@ function jsonTextPath(field: string): string {
   return `data #>> '{${parts.join(",")}}'`;
 }
 
-type CollectionOrder = Readonly<{
-  field: "id" | "created_at" | "updated_at";
-  direction: "ASC" | "DESC";
-}>;
+type CollectionOrder =
+  & CollectionField
+  & Readonly<{
+    direction: "ASC" | "DESC";
+  }>;
 
-function collectionOrder(query: CollectionQuery): CollectionOrder {
-  const field = query.order?.field === "createdAt"
-    ? "created_at"
-    : query.order?.field === "updatedAt"
-    ? "updated_at"
-    : "id";
-  return ({
-    field,
-    direction: query.order?.direction === "desc" ? "DESC" : "ASC",
-  } as const);
+function collectionOrder(
+  query: CollectionQuery,
+  definition: CollectionDefinition,
+): CollectionOrder {
+  const direction = query.order?.direction ?? "asc";
+  if (direction !== "asc" && direction !== "desc") {
+    throw new TypeError(`Invalid collection order direction '${direction}'.`);
+  }
+  return {
+    ...collectionField(definition, query.order?.field ?? "id"),
+    direction: direction === "desc" ? "DESC" : "ASC",
+  };
 }
 
 function cursorValue(value: string | undefined): string | undefined {
@@ -54,7 +58,7 @@ function cursorValue(value: string | undefined): string | undefined {
 
 type CursorAnchorRow = Readonly<{
   id: string;
-  order_value?: string;
+  order_value?: string | null;
 }>;
 
 async function resolveCursorAnchor(
@@ -73,7 +77,9 @@ async function resolveCursorAnchor(
   // decoding timestamptz as a JavaScript Date would truncate them.
   const result = await executor.query<CursorAnchorRow>(
     `SELECT id${
-      order.field === "id" ? "" : `, ${order.field}::text AS order_value`
+      order.expression === "id"
+        ? ""
+        : `, (${order.expression})::text AS order_value`
     }
        FROM ${table}
       WHERE ${filters.join(" AND ")} AND id = $${params.length}
@@ -98,19 +104,20 @@ function cursorFilter(
   const followsRequestedOrder = boundary === "after";
   const greaterThan = (order.direction === "ASC") === followsRequestedOrder;
   const operator = greaterThan ? ">" : "<";
-  if (order.field === "id") {
+  if (order.expression === "id") {
     return `id ${operator} $${params.push(anchor.id)}`;
   }
-  if (anchor.order_value === undefined || anchor.order_value === null) {
-    throw new Error(
-      `Collection cursor '${anchor.id}' has no '${order.field}' ordering value.`,
-    );
+  const idIndex = params.push(anchor.id);
+  // Match PostgreSQL's default null placement: ASC NULLS LAST / DESC NULLS FIRST.
+  // A cursor at a null key still has a deterministic position through its id.
+  if (anchor.order_value == null) {
+    return `(((${order.expression}) IS NULL AND id ${operator} $${idIndex})` +
+      (greaterThan ? ")" : ` OR (${order.expression}) IS NOT NULL)`);
   }
   const valueIndex = params.push(anchor.order_value);
-  const idIndex = params.push(anchor.id);
-  return `(${order.field} ${operator} $${valueIndex}::timestamptz OR ` +
-    `(${order.field} = $${valueIndex}::timestamptz AND ` +
-    `id ${operator} $${idIndex}))`;
+  return `((${order.expression}) ${operator} $${valueIndex}::${order.cast} OR ` +
+    `((${order.expression}) = $${valueIndex}::${order.cast} AND id ${operator} $${idIndex})` +
+    (greaterThan ? ` OR (${order.expression}) IS NULL)` : ")");
 }
 
 export async function getCollectionRecord(
@@ -275,7 +282,7 @@ export async function queryCollectionRecords(
     const index = params.push(`%${query.text.trim()}%`);
     filters.push(`content ILIKE $${index}`);
   }
-  const order = collectionOrder(query);
+  const order = collectionOrder(query, definition);
   const scopeFilters = [...filters];
   const scopeParams = [...params];
   for (
@@ -299,9 +306,9 @@ export async function queryCollectionRecords(
     filters.push(cursorFilter(params, order, boundary, anchor));
   }
   const limit = boundedLimit(query.limit);
-  const orderBy = order.field === "id"
+  const orderBy = order.expression === "id"
     ? `id ${order.direction}`
-    : `${order.field} ${order.direction}, id ${order.direction}`;
+    : `(${order.expression}) ${order.direction}, id ${order.direction}`;
   const result = await executor.query<NodeRow>(
     `SELECT * FROM ${tables.nodes}
      WHERE ${filters.join(" AND ")}

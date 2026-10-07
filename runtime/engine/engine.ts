@@ -1,3 +1,7 @@
+import {
+  provisionCollectionIndexes,
+  validateCollectionIndexes,
+} from "../collections/indexes.ts";
 import { isStreamOutputDescriptor } from "../streams/index.ts";
 import {
   createActionLifecycleAppender,
@@ -102,6 +106,20 @@ export async function createCopilotzEngine(
     await validateOperationCatalog(options.session, databaseSchema);
   } else {
     await provisionOperationCatalog(options.session, databaseSchema);
+  }
+  const definitions = Object.values(options.registry.collections);
+  if (options.provisionDefaultDatabaseSchema === false) {
+    await validateCollectionIndexes(
+      options.session,
+      databaseSchema,
+      definitions,
+    );
+  } else {
+    await provisionCollectionIndexes(
+      options.session,
+      databaseSchema,
+      definitions,
+    );
   }
   const operationCatalog = createOperationCatalog(
     options.session,
@@ -542,6 +560,11 @@ export async function createCopilotzEngine(
           // acquire DDL locks or implicitly create tenant infrastructure.
           await validateCopilotzSchema(options.session, normalized);
           await validateOperationCatalog(options.session, normalized);
+          await validateCollectionIndexes(
+            options.session,
+            normalized,
+            definitions,
+          );
           const scopedOperationCatalog = createOperationCatalog(
             options.session,
             normalized,

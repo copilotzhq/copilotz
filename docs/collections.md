@@ -38,21 +38,58 @@ override it.
 
 ### Declaration
 
-| Property                                       | Purpose                                                                                                                                                                                          |
-| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `name`                                         | Stable name. It prefixes lifecycle Event types (`note.created`), so keep it once records are stored.                                                                                             |
-| `schema`                                       | JSON Schema for one record, declared `as const` so `$inferSelect` and `$inferInsert` are derived from it.                                                                                        |
-| `readOnly` fields                              | Schema metadata for schema-aware input surfaces, such as `id: { type: "string", readOnly: true }`. It is not an access rule on trusted code. The runtime generates `id` when the input omits it. |
-| `timestamps`, `defaults`                       | `createdAt`/`updatedAt` are maintained for you; `defaults` fills missing fields.                                                                                                                 |
-| `indexes`                                      | A field, a compound list, or `{ fields, unique?, type? }`. Retained definition metadata; the current generic runtime does not create SQL indexes or enforce `unique` from this declaration.      |
-| `relations`                                    | `relation.belongsTo`, `relation.hasMany` or `relation.hasOne`, each naming a target Collection and foreign key. Writes project them as graph edges.                                              |
-| `commands`                                     | Named mutations. Each has `mutate({ current, input })` returning `{ set?, unset? }`, an optional `input` schema and an optional Event type.                                                      |
-| `queries`                                      | Named reads built from `filter`, `query` or `select`, with optional input and output schemas.                                                                                                    |
-| `content`, `search`                            | Fields stored as content references, and full-text search fields. See [Content and Assets](content-assets.md).                                                                                   |
-| `beforeCreate`, `beforeUpdate`, `beforeDelete` | Synchronous hooks for last-moment normalisation or rejection.                                                                                                                                    |
+| Property                                       | Purpose                                                                                                                                                                                                        |
+| ---------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `name`                                         | Stable name. It prefixes lifecycle Event types (`note.created`), so keep it once records are stored.                                                                                                           |
+| `schema`                                       | JSON Schema for one record, declared `as const` so `$inferSelect` and `$inferInsert` are derived from it.                                                                                                      |
+| `readOnly` fields                              | Schema metadata for schema-aware input surfaces, such as `id: { type: "string", readOnly: true }`. It is not an access rule on trusted code. The runtime generates `id` when the input omits it.               |
+| `timestamps`, `defaults`                       | `createdAt`/`updatedAt` are maintained for you; `defaults` fills missing fields.                                                                                                                               |
+| `indexes`                                      | A field, a compound list, or `{ fields, unique?, type? }`. Provisioned as physical, Collection-scoped SQL indexes. B-tree is the default; `unique` is enforced per namespace. GIN and BRIN are also supported. |
+| `relations`                                    | `relation.belongsTo`, `relation.hasMany` or `relation.hasOne`, each naming a target Collection and foreign key. Writes project them as graph edges.                                                            |
+| `commands`                                     | Named mutations. Each has `mutate({ current, input })` returning `{ set?, unset? }`, an optional `input` schema and an optional Event type.                                                                    |
+| `queries`                                      | Named reads built from `filter`, `query` or `select`, with optional input and output schemas.                                                                                                                  |
+| `content`, `search`                            | Fields stored as content references, and full-text search fields. See [Content and Assets](content-assets.md).                                                                                                 |
+| `beforeCreate`, `beforeUpdate`, `beforeDelete` | Synchronous hooks for last-moment normalisation or rejection.                                                                                                                                                  |
 
 Command and query names cannot reuse method names such as `create`, `list` or
 `query`.
+
+### Provision declared indexes
+
+The default application database provisioning creates declared indexes before
+execution begins. An index is scoped to its Collection's physical `nodes` rows;
+B-tree and BRIN keys include the namespace. A unique B-tree index enforces
+uniqueness within each namespace, with PostgreSQL's default distinct-null
+semantics. GIN indexes target JSON field values and support containment; they do
+not enforce uniqueness. GiST is unsupported because it requires explicit
+operator classes/extensions rather than a generic field declaration.
+
+For an existing schema or a separately provisioned tenant schema, call
+`provisionCollectionIndexes(session, schemaName, definitions)` from
+`@copilotz/copilotz/collections` during an explicit host provisioning step,
+after Core schema provisioning and before serving the new composition.
+`definitions` is the complete array of composed Collection definitions,
+including plugin Collections. `validateCollectionIndexes` has the same arguments
+and only reads the database. Validation-only startup and tenant scope selection
+require these indexes and never create them during a request.
+
+Provisioning is additive and idempotent: unchanged declarations reuse their
+indexes; changed declarations produce new indexes. It never drops obsolete or
+operator-created indexes or rewrites records. Adding a unique declaration fails
+if existing rows violate it. By default, index creation runs in a serialized DDL
+transaction and can block writes while building. For populated PostgreSQL
+schemas, pass a fourth argument `{ concurrently: true }` from a standalone
+provisioning operation to build without blocking normal writes. Run one
+provisioner per schema and supply a session outside any transaction. Concurrent
+builds commit individually; a failed build can leave an invalid index, which
+validation rejects for explicit repair. Removed declarations leave their old
+indexes, including unique constraints, in place until an explicit operator
+cleanup.
+
+Ordering and scalar index creation share the same SQL field expressions. A
+compound index should put equality-filter fields before the ordered field. The
+database planner still decides whether to use it: `limit: 1` bounds results, not
+the amount of scanning, so inspect execution plans for important queries.
 
 ### Lifecycle Events
 
@@ -97,10 +134,16 @@ trusted namespace. A `list` query combines these parts with AND:
   caller-supplied `or`/`not`.
 
 `order: { field, direction }`, `limit`, and `after`/`before` cursors page the
-result. `limit` defaults to 100 and larger values are clamped to 1,000; a
-non-positive or fractional limit is an error. `include` loads declared
-relations. Word search uses `search(query)` with `text`, and needs fields
-declared in `search: { enabled: true, fields }`.
+result. Ordering supports built-in IDs and timestamps, plus declared scalar
+fields and nested paths. Numbers sort numerically; strings sort as text;
+booleans sort false before true. A field must declare one scalar type,
+optionally nullable (homogeneous `enum` and `const` are supported too).
+Undeclared, ambiguous, object, and array order fields are rejected. Equal values
+use `id` as a deterministic tie-breaker. Missing/null values sort last ascending
+and first descending; cursors follow exactly that order. `limit` defaults to 100
+and larger values are clamped to 1,000; a non-positive or fractional limit is an
+error. `include` loads declared relations. Word search uses `search(query)` with
+`text`, and needs fields declared in `search: { enabled: true, fields }`.
 
 A `filter` predicate is `{ and: [...] }`, `{ or: [...] }`, `{ not: p }`, or a
 field test with exactly one operator: `eq`, `ne`, `in`, `jsonEquals`, `trimEq`,

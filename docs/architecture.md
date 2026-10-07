@@ -167,19 +167,31 @@ try {
 
   // Admission and settlement: `done` rejects if the operation fails.
   const first = await app.send(input);
-  await Promise.all([printTypes("first", first.outputs), first.done]);
+  const [firstDrained, firstSettled] = await Promise.allSettled([
+    printTypes("first", first.outputs),
+    first.done,
+  ]);
+  if (firstDrained.status === "rejected") throw firstDrained.reason;
+  if (firstSettled.status === "rejected") throw firstSettled.reason;
 
   // A retried admission: same operation, no second note.
   const retry = await app.send(input);
-  await Promise.all([printTypes("retry", retry.outputs), retry.done]);
+  const [retryDrained, retrySettled] = await Promise.allSettled([
+    printTypes("retry", retry.outputs),
+    retry.done,
+  ]);
+  if (retryDrained.status === "rejected") throw retryDrained.reason;
+  if (retrySettled.status === "rejected") throw retrySettled.reason;
   console.log(`same operation: ${retry.operationId === first.operationId}`);
 
   // Observation after the fact: replay records nothing and reruns nothing.
   const attachment = await app.attach({ operationId: first.operationId });
-  await Promise.all([
+  const [replayDrained, replaySettled] = await Promise.allSettled([
     printTypes("replay", attachment.outputs),
     attachment.done,
   ]);
+  if (replayDrained.status === "rejected") throw replayDrained.reason;
+  if (replaySettled.status === "rejected") throw replaySettled.reason;
 
   // `attach.done` resolves at any final state, so confirm the recorded one.
   const status = await app.operationStatus({ operationId: first.operationId });

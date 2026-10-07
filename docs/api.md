@@ -167,7 +167,12 @@ try {
   console.log(`operation ${handle.operationId}`);
 
   // Consume outputs while waiting; `done` rejects if the operation fails.
-  await Promise.all([drain(handle.outputs), handle.done]);
+  const [drained, settled] = await Promise.allSettled([
+    drain(handle.outputs),
+    handle.done,
+  ]);
+  if (drained.status === "rejected") throw drained.reason;
+  if (settled.status === "rejected") throw settled.reason;
 
   // The durable record, independent of this process's observation.
   const status = await app.operationStatus({

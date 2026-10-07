@@ -216,9 +216,14 @@ try {
   // Replay the operation's recorded Events from its start. If it is still
   // running, keep following it until it reaches a final state.
   const attachment = await app.attach({ operationId });
-  // Read outputs while waiting for `done`, so the replay can make progress;
-  // Promise.all rejects as soon as either side fails.
-  await Promise.all([printReplay(attachment.outputs), attachment.done]);
+  // Read outputs while waiting for `done`, so the replay can make progress.
+  // Wait for both before cleanup, even if either fails.
+  const [drained, settled] = await Promise.allSettled([
+    printReplay(attachment.outputs),
+    attachment.done,
+  ]);
+  if (drained.status === "rejected") throw drained.reason;
+  if (settled.status === "rejected") throw settled.reason;
 
   // Read the state again after the replay ended.
   const after = await app.operationStatus({ operationId });

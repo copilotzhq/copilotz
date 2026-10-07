@@ -131,8 +131,13 @@ try {
   );
 
   // Read outputs while waiting for settlement. `outputs` closes when the
-  // operation settles, and Promise.all rejects as soon as either side fails.
-  await Promise.all([printOutputs(handle.outputs), handle.done]);
+  // operation settles. Wait for both before cleanup, even if either fails.
+  const [drained, settled] = await Promise.allSettled([
+    printOutputs(handle.outputs),
+    handle.done,
+  ]);
+  if (drained.status === "rejected") throw drained.reason;
+  if (settled.status === "rejected") throw settled.reason;
 
   // Read the operation's recorded state back from the runtime by its ID.
   const status = await app.operationStatus({

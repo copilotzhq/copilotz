@@ -123,7 +123,12 @@ try {
       if ("type" in output) console.log(`event ${output.type}`);
     }
   };
-  await Promise.all([printTypes(), handle.done]);
+  const [drained, settled] = await Promise.allSettled([
+    printTypes(),
+    handle.done,
+  ]);
+  if (drained.status === "rejected") throw drained.reason;
+  if (settled.status === "rejected") throw settled.reason;
 
   // Read the recorded operation state back by its ID.
   const status = await app.operationStatus({

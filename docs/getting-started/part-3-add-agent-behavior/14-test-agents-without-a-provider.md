@@ -280,9 +280,15 @@ async function runTurn(text: string, log: ScriptLog) {
       recipientIds: ["assistant"],
       content: `Save a note saying ${text}`,
     }));
-    // Promise.all rejects as soon as either side fails, so a failure can't
-    // leave the test waiting on the other side.
-    const [seen] = await Promise.all([observe(handle.outputs), handle.done]);
+    // Wait for both the reader and settlement before cleanup, even if either
+    // fails, so closing the database cannot race the reader.
+    const [drained, settled] = await Promise.allSettled([
+      observe(handle.outputs),
+      handle.done,
+    ]);
+    if (drained.status === "rejected") throw drained.reason;
+    if (settled.status === "rejected") throw settled.reason;
+    const seen = drained.value;
     const status = await app.operationStatus({
       operationId: handle.operationId,
     });

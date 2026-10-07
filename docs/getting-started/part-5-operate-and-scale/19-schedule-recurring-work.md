@@ -436,10 +436,13 @@ async function run(
   input: Parameters<typeof app.send>[0],
 ): Promise<string> {
   const handle = await app.send(input);
-  const [failed] = await Promise.all([
+  const [drained, settled] = await Promise.allSettled([
     printOutputs(handle.outputs),
     handle.done,
   ]);
+  if (drained.status === "rejected") throw drained.reason;
+  if (settled.status === "rejected") throw settled.reason;
+  const failed = drained.value;
   if (failed > 0) {
     throw new Error(
       `Operation ${handle.operationId}: ${failed} job(s) failed.`,

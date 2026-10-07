@@ -90,8 +90,13 @@ try {
   });
   console.log(`accepted operation ${handle.operationId}`);
 
-  // Observe outputs while waiting for settlement; either failure rejects.
-  await Promise.all([printEvents(handle.outputs), handle.done]);
+  // Wait for the reader and settlement before cleanup, even if either fails.
+  const [drained, settled] = await Promise.allSettled([
+    printEvents(handle.outputs),
+    handle.done,
+  ]);
+  if (drained.status === "rejected") throw drained.reason;
+  if (settled.status === "rejected") throw settled.reason;
 
   const status = await app.operationStatus({
     operationId: handle.operationId,

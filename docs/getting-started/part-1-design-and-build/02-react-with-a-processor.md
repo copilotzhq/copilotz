@@ -169,9 +169,14 @@ try {
   );
 
   // Read outputs while waiting for settlement. `done` resolves only after the
-  // inherited Processor delivery succeeds, and Promise.all rejects as soon as
-  // either side fails.
-  await Promise.all([printOutputs(handle.outputs), handle.done]);
+  // inherited Processor delivery succeeds. Wait for both the reader and
+  // settlement before cleanup, even if either fails.
+  const [drained, settled] = await Promise.allSettled([
+    printOutputs(handle.outputs),
+    handle.done,
+  ]);
+  if (drained.status === "rejected") throw drained.reason;
+  if (settled.status === "rejected") throw settled.reason;
 
   // Read the operation's recorded state back from the runtime by its ID.
   const status = await app.operationStatus({

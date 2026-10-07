@@ -335,9 +335,14 @@ try {
   );
 
   // Read outputs while waiting for settlement. `done` resolves only after the
-  // Processor delivery, its Action call and the note write succeed, and
-  // Promise.all rejects as soon as either side fails.
-  await Promise.all([printOutputs(handle.outputs), handle.done]);
+  // Processor delivery, its Action call and the note write succeed. Wait for
+  // both the reader and settlement before cleanup, even if either fails.
+  const [drained, settled] = await Promise.allSettled([
+    printOutputs(handle.outputs),
+    handle.done,
+  ]);
+  if (drained.status === "rejected") throw drained.reason;
+  if (settled.status === "rejected") throw settled.reason;
 
   // Read the operation's recorded state back from the runtime by its ID.
   const status = await app.operationStatus({

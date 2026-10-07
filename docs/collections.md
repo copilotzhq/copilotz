@@ -288,7 +288,9 @@ try {
       if (!isStreamOutput(output) && output.durable) console.log(output.type);
     }
   };
-  await Promise.all([print(), handle.done]);
+  const [drained, settled] = await Promise.allSettled([print(), handle.done]);
+  if (drained.status === "rejected") throw drained.reason;
+  if (settled.status === "rejected") throw settled.reason;
 } finally {
   await app.close();
 }

@@ -158,8 +158,13 @@ try {
         type: "notes.capture.requested",
         payload: { text: argv[2] ?? "Prepare the release." },
       });
-      // Read outputs while waiting for settlement; either failure rejects.
-      await Promise.all([printOutputs(handle.outputs), handle.done]);
+      // Wait for the reader and settlement before cleanup, even if either fails.
+      const [drained, settled] = await Promise.allSettled([
+        printOutputs(handle.outputs),
+        handle.done,
+      ]);
+      if (drained.status === "rejected") throw drained.reason;
+      if (settled.status === "rejected") throw settled.reason;
 
       // The Gateway reads the outcome back from shared persistence.
       const status = await gateway.operationStatus({

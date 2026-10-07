@@ -123,7 +123,7 @@ Diagnostics are observations, not records:
 
 This scenario reuses `notes-plugin.ts` from
 [Chapter 5](getting-started/part-1-design-and-build/05-package-a-plugin.md). It
-needs `@copilotz/copilotz` `^0.85.1`, installed as in the
+needs `@copilotz/copilotz` `^0.85.2`, installed as in the
 [Quickstart](quickstart.md) (JSR on Deno; on Node, the JSR package plus its
 PGlite dependency). It uses no credential, no network and no persistent
 database.

@@ -65,11 +65,11 @@ Deno 2.9+ or Node 24+, set up as in the [Quickstart](quickstart.md):
 
 ```sh
 # Deno
-deno add jsr:@copilotz/copilotz@^0.85.1
+deno add jsr:@copilotz/copilotz@^0.85.2
 # Node: ES modules, Copilotz from JSR, and PGlite, the database the runtime opens.
 npm init -y
 npm pkg set type=module
-npx jsr add @copilotz/copilotz@^0.85.1
+npx jsr add @copilotz/copilotz@^0.85.2
 npm i @electric-sql/pglite
 ```
 

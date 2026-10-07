@@ -46,7 +46,7 @@ enable and no compile or preparation step: the resource is the integration.
 `defineApi` validates and snapshots its declaration. It reads no environment and
 makes no request, so the module stays a pure definition that tests and shared
 plugins may import. The examples assume Deno 2.9+ or Node 24+ and
-`@copilotz/copilotz@^0.85.1`; the API resource needs no other package. This is
+`@copilotz/copilotz@^0.85.2`; the API resource needs no other package. This is
 `posts-api.ts` from
 [Chapter 10](./getting-started/part-3-add-agent-behavior/10-connect-apis-and-mcp.md#create-posts-apits):
 

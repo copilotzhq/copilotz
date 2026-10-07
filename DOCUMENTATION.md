@@ -159,7 +159,7 @@ current signatures accept.
 ## Versions and installs
 
 - Installation examples use one caret range for the planned release (currently
-  `^0.85.1`). All subpaths come from the same package version.
+  `^0.85.2`). All subpaths come from the same package version.
 - Before release, recheck that range against the `version` in `deno.json` and
   the published registry. Never publish an example pinned ahead of an available
   release.

@@ -248,9 +248,11 @@ or vice versa; check content access on its own route.
   attached to the same _active_ Space can read each other's memories, read only.
   Peer access comes from attached threads, not from `memberIds`: removing a
   member does not by itself stop their thread reading peers; detaching or moving
-  it does. Detach, move, archive and remove affect later reads only; text
-  already sent to a model cannot be recalled. Explicit Memory grants are
-  separate and unaffected. See [Memory](memory.md).
+  it does. Detach, move, archive and remove stop future peer-memory reads. Each
+  thread retains its own certified conversation continuity, including peer
+  information already summarized, like saved messages; it does not restart
+  consolidation when a peer leaves. Explicit Memory grants are separate and
+  unaffected. See [Memory](memory.md).
 - **Knowledge.** The built-in `document` Collection does not declare the Space
   relation, so documents cannot be attached. Knowledge's `knowledgeSpaceIds` are
   a metadata filter for search, not Space ownership. See

@@ -10,11 +10,7 @@ import { createTestDatabase } from "../../../runtime/testing/ominipg.ts";
 import { createTestDomainContext } from "../../core/shared/testing/context.ts";
 import { materializeBuiltinModel } from "../../llm/adapters/builtin/index.ts";
 import { memoryPlugin } from "../plugin.ts";
-import {
-  checkpointAccessible,
-  ensureWritableMemorySpace,
-  threadMemorySpaces,
-} from "./access.ts";
+import { ensureWritableMemorySpace, threadMemorySpaces } from "./access.ts";
 import { activeMemoryRecords, candidateRecords } from "./retrieval.ts";
 import { memoryContextResource } from "../resources/promptContext/memory/index.ts";
 import type { MemoryProcessorContext } from "./contracts.ts";
@@ -161,7 +157,7 @@ Deno.test("Space memory is read-only, isolated and revocable across all consumer
     assertEquals(await search("a"), ["fact-a", "fact-b"]);
     assertEquals(await search("b"), ["fact-a", "fact-b"]);
     assertEquals(await search("c"), ["fact-c"]);
-    let spaces = await threadMemorySpaces(context, "a");
+    const spaces = await threadMemorySpaces(context, "a");
     assertEquals(spaces.map((s) => [s.id, s.access, s.defaultWrite]), [[
       scope("a"),
       "read_write",
@@ -207,7 +203,6 @@ Deno.test("Space memory is read-only, isolated and revocable across all consumer
       updatedAt: "2026-09-15T00:00:00Z",
       readMemorySpaceIds: [scope("a"), scope("b")],
     };
-    assert(checkpointAccessible(checkpoint, spaces));
     await c.longTermMemory.create({
       id: "old",
       threadId: "a",
@@ -220,6 +215,16 @@ Deno.test("Space memory is read-only, isolated and revocable across all consumer
       sourceEndMessageId: "m",
       readMemorySpaceIds: checkpoint.readMemorySpaceIds,
       content: [{ type: "text", text: "STALE_SHARED_SECRET" }],
+      metadata: {
+        coverage: {
+          schema: "copilotz.memory.coverage.v1",
+          agentParticipantId: "reader",
+          branch: "public",
+          startMessageId: "m",
+          endMessageId: "m",
+          continuity: "THREAD_OWNED_CONTINUITY",
+        },
+      },
     });
     for (const operation of ["archive", "restore"] as const) {
       await context.actions.spaces({ operation, spaceId: "one" });
@@ -228,19 +233,20 @@ Deno.test("Space memory is read-only, isolated and revocable across all consumer
         operation === "archive" ? ["fact-a"] : ["fact-a", "fact-b"],
       );
       if (operation === "archive") {
-        assertEquals(await prompt(), null);
-        assert(
-          !checkpointAccessible(
-            checkpoint,
-            await threadMemorySpaces(context, "a"),
-          ),
-        );
+        const rendered = JSON.stringify(await prompt());
+        assertStringIncludes(rendered, "THREAD_OWNED_CONTINUITY");
+        assert(!rendered.includes("secret-b"));
+        assert(!rendered.includes("STALE_SHARED_SECRET"));
       }
     }
     await attach("b", "two");
     assertEquals(await search("a"), ["fact-a"]);
     assertEquals(await search("b"), ["fact-b", "fact-c"]);
-    assertEquals(await prompt(), null);
+    assertStringIncludes(
+      JSON.stringify(await prompt()),
+      "THREAD_OWNED_CONTINUITY",
+    );
+    assert(!JSON.stringify(await prompt()).includes("secret-b"));
     await attach("b", "one");
     await context.actions.spaces({
       operation: "detach",
@@ -250,11 +256,28 @@ Deno.test("Space memory is read-only, isolated and revocable across all consumer
     });
     assertEquals(await search("a"), ["fact-a"]);
     assertEquals(await search("b"), ["fact-b"]);
+    assertStringIncludes(
+      JSON.stringify(await prompt()),
+      "THREAD_OWNED_CONTINUITY",
+    );
+    assert(!JSON.stringify(await prompt()).includes("secret-b"));
     if (liveModel) assert(!(await liveRecall()).includes("secret-b"));
     await attach("b", "one");
     await context.actions.spaces({ operation: "remove", spaceId: "one" });
     assertEquals(await search("a"), ["fact-a"]);
     assertEquals(await search("b"), ["fact-b"]);
+    const finalPrompt = await prompt();
+    assertStringIncludes(
+      JSON.stringify(finalPrompt),
+      "THREAD_OWNED_CONTINUITY",
+    );
+    assert(!JSON.stringify(finalPrompt).includes("secret-b"));
+    assertEquals(
+      (Array.isArray(finalPrompt) ? finalPrompt : [finalPrompt]).find((entry) =>
+        entry?.id === "old"
+      )?.historyAfterMessageId,
+      "m",
+    );
     assertEquals(
       await c.memoryRecord.list({ order: { field: "id" } }),
       original,

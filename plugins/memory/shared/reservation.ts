@@ -18,16 +18,17 @@ import {
 import type { LongTermMemoryConfig } from "../resources/memory/config/index.ts";
 import type { MemoryProcessorContext } from "./contracts.ts";
 import { optionalText } from "./input.ts";
+import { ensureWritableMemorySpace, participantAgentId } from "./access.ts";
 import {
-  checkpointAccessible,
-  ensureWritableMemorySpace,
-  participantAgentId,
-} from "./access.ts";
-import { checkpoints, createCheckpoint } from "./checkpoints.ts";
+  checkpointHead,
+  createCheckpoint,
+  readyCheckpoint,
+} from "./checkpoints.ts";
 import { memoryKinds } from "./snapshot.ts";
 import {
   branchCertificate,
   certifiedHistoryBoundary,
+  historyBoundaryAdvances,
   projectedSourceMessages,
   rangeMessages,
   sourceRangeFingerprint,
@@ -41,6 +42,7 @@ export async function reserveMemoryCheckpoint(
     ownerParticipantId?: string;
     force?: boolean;
     historyLimitEstimatedTokens: number;
+    historyAfterMessageId?: string;
     prepared?: Readonly<{
       owner: import("@copilotz/copilotz/core").Participant;
       thread: import("@copilotz/copilotz/core").ConversationThread;
@@ -63,13 +65,21 @@ export async function reserveMemoryCheckpoint(
   } as const;
   const agentId = participantAgentId(owner);
   if (!context.resources.agents[agentId]) return null;
-  const pending = await checkpoints(
-    context,
-    message.threadId,
-    agentId,
-    "pending",
-  );
-  if (pending[0]) return pending[0];
+  // The next ID is fixed by this read, not a second sequence read after source
+  // preparation. Concurrent callers therefore compete for the same record.
+  const head = await checkpointHead(context, message.threadId, agentId);
+  if (head?.status === "pending") return head;
+  if (
+    options.prepared && head?.status === "ready" &&
+    options.prepared.messages.some((item) =>
+      item.id === certifiedHistoryBoundary(head, {
+        agentId,
+        participantId: owner.id,
+        thread: options.prepared!.thread,
+        historyScopeId: optionalText(messageRecord.historyScopeId),
+      })
+    )
+  ) return head;
   const spaces = await ensureWritableMemorySpace(context, message.threadId);
   const thread = options.prepared?.thread ??
     await loadThreadRecord(context, message.threadId);
@@ -89,20 +99,15 @@ export async function reserveMemoryCheckpoint(
       "Memory maintenance requires trusted initiating human provenance.",
     );
   }
-  const previous = !options.prepared && thread
-    ? (await checkpoints(context, message.threadId, agentId, "ready")).find(
-      (item) =>
-        checkpointAccessible(item, spaces) && Boolean(
-          certifiedHistoryBoundary(item, {
-            agentId,
-            participantId: owner.id,
-            historyScopeId: optionalText(messageRecord.historyScopeId),
-            thread,
-          }),
-        ),
-    ) ?? null
+  let previous = !options.prepared && thread
+    ? await readyCheckpoint(context, {
+      agentId,
+      participantId: owner.id,
+      historyScopeId: optionalText(messageRecord.historyScopeId),
+      thread,
+    })
     : null;
-  const certifiedPreviousBoundary = previous && thread
+  let certifiedPreviousBoundary = previous && thread
     ? certifiedHistoryBoundary(previous, {
       agentId,
       participantId: owner.id,
@@ -110,6 +115,39 @@ export async function reserveMemoryCheckpoint(
       thread,
     })
     : undefined;
+  if (options.force && previous && certifiedPreviousBoundary && thread) {
+    if (
+      await historyBoundaryAdvances(
+        context,
+        message.threadId,
+        certifiedPreviousBoundary,
+        options.historyAfterMessageId,
+      )
+    ) return previous;
+    if (
+      options.historyAfterMessageId &&
+      options.historyAfterMessageId !== certifiedPreviousBoundary
+    ) {
+      // Old releases could restart from an earlier range. A later cutoff is
+      // usable only when a matching owned certificate still exists.
+      previous = await readyCheckpoint(context, {
+        thread,
+        agentId,
+        participantId: owner.id,
+        historyScopeId: optionalText(messageRecord.historyScopeId),
+        sourceEndMessageId: options.historyAfterMessageId,
+      });
+      if (!previous) {
+        throw new Error("Compaction history boundary is no longer certified.");
+      }
+      certifiedPreviousBoundary = certifiedHistoryBoundary(previous, {
+        thread,
+        agentId,
+        participantId: owner.id,
+        historyScopeId: optionalText(messageRecord.historyScopeId),
+      });
+    }
+  }
   const snapshot = options.prepared
     ? { active: true, messages: options.prepared.messages }
     : await context.readSnapshot(({ collections }) =>
@@ -235,6 +273,7 @@ export async function reserveMemoryCheckpoint(
   }
   if (!range) return null;
   return await createCheckpoint(context, {
+    sequence: Number(head?.sequence ?? 0) + 1,
     threadId: message.threadId,
     agentId,
     spaces,

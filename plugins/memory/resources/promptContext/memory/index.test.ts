@@ -50,6 +50,7 @@ Deno.test("memory context selects the newest ready checkpoint visible to this th
       memorySpaceAccess: {
         list: () => Promise.resolve([{ memorySpaceId: "shared" }]),
       },
+      memoryRecord: { list: () => Promise.resolve([]) },
       longTermMemory: {
         // Deliberately return all states: the resource itself must never expose
         // pending or failed checkpoints as a history boundary.
@@ -180,6 +181,74 @@ Deno.test("pending compaction aborts without advancing its checkpoint", async ()
   );
   assertEquals(reads, 1);
   assertEquals(pending.status, "pending");
+});
+
+Deno.test("foreground compaction skips an already-consumed pending checkpoint", async () => {
+  const participant = {
+    id: "west-participant",
+    participantType: "agent",
+    agentId: "west",
+    externalId: "west",
+  };
+  const checkpoint = (id: string, end: string) => ({
+    id,
+    threadId: "thread",
+    agentId: "west",
+    status: "pending",
+    metadata: {
+      coverage: {
+        schema: "copilotz.memory.coverage.v1",
+        agentParticipantId: participant.id,
+        branch: "public",
+        startMessageId: "start",
+        endMessageId: end,
+        continuity: "Owned continuity",
+      },
+    },
+  });
+  const old = checkpoint("duplicate", "covered");
+  const next = checkpoint("successor", "later");
+  let reservations = 0;
+  const context = {
+    resources: { agents: { west: { id: "west" } } },
+    collections: {
+      message: {
+        get: ({ id }: { id: string }) =>
+          Promise.resolve({
+            id,
+            threadId: "thread",
+            senderId: "human",
+            createdAt: id === "later"
+              ? "2026-10-02T00:00:00Z"
+              : "2026-10-01T00:00:00Z",
+          }),
+      },
+      participant: { get: () => Promise.resolve(participant) },
+      thread: {
+        get: () =>
+          Promise.resolve({ id: "thread", participantIds: [participant.id] }),
+      },
+      longTermMemory: {
+        list: () => Promise.resolve([++reservations === 1 ? old : next]),
+        get: ({ id }: { id: string }) =>
+          Promise.resolve({ ...(id === old.id ? old : next), status: "ready" }),
+      },
+    },
+  };
+  assertEquals(
+    await memoryContextResource.compact!({
+      context,
+      agent: { id: "west" },
+      participant,
+      thread: { id: "thread" },
+      triggerMessageId: "trigger",
+      historyAfterMessageId: "covered",
+      historyLimitEstimatedTokens: 80_000,
+      signal: new AbortController().signal,
+    } as never),
+    true,
+  );
+  assertEquals(reservations, 2);
 });
 
 Deno.test("memory settles preparation failure only for its authenticated private task", async () => {

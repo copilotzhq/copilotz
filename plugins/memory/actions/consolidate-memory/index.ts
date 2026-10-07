@@ -44,7 +44,6 @@ import {
   assertedBy,
   draftData,
   intentOrInquiryStatus,
-  recordRelations,
   resolveRef,
   sourceCatalog,
   stableJson,
@@ -218,11 +217,6 @@ export const consolidateMemoryAction: ActionDefinition<
         context,
         spaces,
       );
-      const currentRecordIds = new Set(currentRecords.map((item) => item.id));
-      const currentRelations = await recordRelations(
-        context,
-        currentRecordIds,
-      );
       const visible = currentRecords.filter((item) =>
         isEditoriallyVisible(item) && !terminalStatus(item.status)
       );
@@ -254,9 +248,6 @@ export const consolidateMemoryAction: ActionDefinition<
         };
         await settleCheckpoint(context, {
           checkpoint,
-          agentId,
-          spaces,
-          config,
           result,
         });
         return result;
@@ -610,41 +601,11 @@ export const consolidateMemoryAction: ActionDefinition<
         })),
       ];
       const relationWrites = [...stagedRelations.values()];
-      const projectedIds = new Set(projectedRecords.keys());
-      const projectedRelationMap = new Map(
-        currentRelations.map((relation) =>
-          [
-            `${relation.sourceId}\0${relation.type}\0${relation.targetId}`,
-            relation,
-          ] as const
-        ),
-      );
-      for (const relation of relationWrites) {
-        if (
-          relation.source.type !== memoryRecordCollection.name ||
-          relation.target.type !== memoryRecordCollection.name ||
-          !projectedIds.has(relation.source.id) ||
-          !projectedIds.has(relation.target.id)
-        ) continue;
-        projectedRelationMap.set(
-          `${relation.source.id}\0${relation.type}\0${relation.target.id}`,
-          {
-            sourceId: relation.source.id,
-            targetId: relation.target.id,
-            type: relation.type,
-          },
-        );
-      }
       const settlement = await prepareCheckpointSettlement(context, {
         checkpoint,
-        agentId,
-        spaces,
-        config,
         result,
         retrievedIds: [...retrievedIds],
         unresolved,
-        records: [...projectedRecords.values()],
-        relations: [...projectedRelationMap.values()],
       });
       await commitMemoryConsolidation(context, {
         checkpointId,

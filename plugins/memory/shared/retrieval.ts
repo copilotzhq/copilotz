@@ -8,9 +8,14 @@ import type {
 
 import type {
   MemoryRecordProjection,
+  MemoryRecordRelation,
   MemorySpaceDescriptor,
 } from "../authoring/consolidation/index.ts";
-import { MEMORY_FORMS, type MemoryForm } from "../authoring/ontology/index.ts";
+import {
+  MEMORY_FORMS,
+  MEMORY_RELATION_TYPES,
+  type MemoryForm,
+} from "../authoring/ontology/index.ts";
 import type { MemoryEmbed } from "../authoring/contracts/index.ts";
 import type { MemoryProcessorContext } from "./contracts.ts";
 import { optionalText, record } from "./input.ts";
@@ -67,6 +72,24 @@ export function terminalStatus(status: string): boolean {
     "merged",
     "archived",
   ].includes(status);
+}
+
+/** One bounded read; only relations whose endpoints are currently readable survive. */
+export async function recordRelations(
+  context: { collections: SnapshotCollections },
+  ids: ReadonlySet<string>,
+): Promise<readonly MemoryRecordRelation[]> {
+  if (!ids.size) return [];
+  return (await context.collections.memoryRecord.relations.list({
+    types: MEMORY_RELATION_TYPES,
+    limit: 1_000,
+  })).filter((relation) =>
+    ids.has(relation.source.id) && ids.has(relation.target.id)
+  ).map((relation) => ({
+    sourceId: relation.source.id,
+    targetId: relation.target.id,
+    type: relation.type,
+  }));
 }
 
 export function finiteEmbedding(value: unknown): value is readonly number[] {

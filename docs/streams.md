@@ -306,7 +306,7 @@ payload stream, fed through a bounded queue.
 
 Observation Bodies and their replay metadata become eligible for expiry 24 hours
 after the operation settles. Expiry happens when maintenance runs:
-`app.maintain(...)` accepts `operationRetentionMs` to change that grace, and
+`app.maintenance(...)` accepts `operationRetentionMs` to change that grace, and
 `null` disables it. Canonical adoption keeps the Body under Asset ownership even
 after replay metadata expires.
 

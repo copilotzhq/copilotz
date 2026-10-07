@@ -51,6 +51,10 @@ export const longTermMemoryCollection: CollectionDefinition<typeof schema> =
     indexes: ["threadId", "memorySpaceId", "defaultWriteMemorySpaceId", [
       "threadId",
       "agentId",
+      "sequence",
+    ], [
+      "threadId",
+      "agentId",
       "status",
       "sequence",
     ], ["memorySpaceId", "status", "sequence"]],

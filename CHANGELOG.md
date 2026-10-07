@@ -1,3 +1,18 @@
+## 0.85.4 — 2026-10-07
+
+### Fixed
+
+- Honor declared scalar Collection ordering in SQL, including numeric sequence
+  fields, stable ID ties, nulls and precision-preserving keyset cursors. Reject
+  unsupported order fields rather than silently sorting by ID.
+- Materialize declared B-tree, GIN and BRIN Collection indexes during explicit
+  provisioning, with namespace-scoped B-tree uniqueness, idempotent reuse and
+  read-only validation for request-path tenant selection. Existing tenant
+  schemas must provision the composed declarations before this release serves
+  them; duplicate unique keys fail visibly without rewriting records.
+- Select the latest Memory checkpoint across sequence digit boundaries and add
+  the matching compound index for automatic reservation.
+
 ## 0.85.3 — 2026-10-07
 
 ### Fixed

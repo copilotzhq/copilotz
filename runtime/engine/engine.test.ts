@@ -19,7 +19,10 @@ import { type CopilotzEngine, createCopilotzEngine } from "./index.ts";
 import { createTestDatabase, type TestDatabase } from "../testing/ominipg.ts";
 import { createHypervisor } from "../../dependencies/oxian-hypervisor.ts";
 import { createWorker } from "../../dependencies/oxian-worker.ts";
-import { defineCollection } from "../collections/index.ts";
+import {
+  defineCollection,
+  provisionCollectionIndexes,
+} from "../collections/index.ts";
 import { type ActionCaller, defineAction } from "../actions/index.ts";
 import type { ContentRef } from "../content/index.ts";
 import {
@@ -435,6 +438,11 @@ Deno.test("one engine isolates lazy physical-schema repository scopes", async ()
   try {
     await provisionCopilotzSchema(session, "copilotz_scope_b");
     await provisionOperationCatalog(session, "copilotz_scope_b");
+    await provisionCollectionIndexes(
+      session,
+      "copilotz_scope_b",
+      Object.values(registry.collections),
+    );
     const first = await engine.databaseScope("copilotz_scope_a");
     const second = await engine.databaseScope("copilotz_scope_b");
     await first.collections.withScope({ namespace: "tenant" }).thread
@@ -485,11 +493,24 @@ Deno.test("one engine isolates lazy physical-schema repository scopes", async ()
 });
 Deno.test("lazy database scopes validate with read-only SQL and reject unprovisioned schemas", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
-  const registry = await createPluginRegistry();
+  const registry = await createPluginRegistry({
+    collections: {
+      indexed: defineCollection({
+        name: "indexed",
+        schema: { type: "object", properties: { rank: { type: "number" } } },
+        indexes: ["rank"],
+      }),
+    },
+  });
   const defaultSchema = "copilotz_scope_validation_default";
   const tenantSchema = "copilotz_scope_validation_tenant";
   await provisionCopilotzSchema(db, tenantSchema);
   await provisionOperationCatalog(db, tenantSchema);
+  await provisionCollectionIndexes(
+    db,
+    tenantSchema,
+    Object.values(registry.collections),
+  );
   const observed: string[] = [];
   const session: SqlSession = {
     query(sql, params) {
@@ -506,7 +527,8 @@ Deno.test("lazy database scopes validate with read-only SQL and reject unprovisi
   try {
     observed.length = 0;
     await engine.databaseScope(tenantSchema);
-    assertEquals(observed.length, 5);
+    assertEquals(observed.length, 6);
+    assert(/pg_index/.test(observed[5]));
     assertEquals(/information_schema\.columns/i.test(observed[0]), true);
     assertEquals(/copilotz_schema_metadata/i.test(observed[1]), true);
     assertEquals(

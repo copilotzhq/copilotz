@@ -41,7 +41,7 @@ Copilotz is published on JSR. Set up the project as in the
 
 ```sh
 # Deno: add Copilotz with import mappings for its plugin subpaths.
-deno add jsr:@copilotz/copilotz@^0.85.3
+deno add jsr:@copilotz/copilotz@^0.85.4
 ```
 
 Deno 2.9 holds back versions published in the last 24 hours by default; for a
@@ -53,7 +53,7 @@ fresh release add the Copilotz-only `minimumDependencyAge` exception from the
 npm init -y
 npm pkg set type=module
 # Install Copilotz from JSR, and PGlite, the database the runtime opens.
-npx jsr add @copilotz/copilotz@^0.85.3
+npx jsr add @copilotz/copilotz@^0.85.4
 npm i @electric-sql/pglite
 ```
 

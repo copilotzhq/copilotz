@@ -190,8 +190,8 @@ memory: {
     // Bound for rendered semantic records. Continuity and other prompt
     // content have separate budgets. This is the library default.
     maxContentEstimatedTokens: 12000,
-    // Maximum number of memories `search_memory` returns. This is the
-    // library default.
+    // Candidate records retrieved per proposed fact during consolidation.
+    // search_memory has its own limit input. This is the library default.
     retrievalLimit: 20,
   },
 },

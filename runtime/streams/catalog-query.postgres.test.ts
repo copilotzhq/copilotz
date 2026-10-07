@@ -221,9 +221,15 @@ function generatedFixtureSql(schema: string): readonly string[] {
        event.created_at
      FROM ${events} AS event
      WHERE event.id LIKE 'catalog-event-%'`,
-    `ANALYZE ${events}`,
-    `ANALYZE ${operations}`,
-    `ANALYZE ${operationEvents}`,
+    // The sparse tag is present on only 200 of 239,200 rows. Use a sample
+    // large enough to cover this synthetic fixture so randomized ANALYZE
+    // samples do not change the plan under test between CI runs.
+    `ALTER TABLE ${events} ALTER COLUMN metadata SET STATISTICS 1000`,
+    // Flush GIN pending lists and mark the bulk-loaded catalog visible before
+    // comparing plans. Autovacuum timing must not decide benchmark inputs.
+    `VACUUM (ANALYZE) ${events}`,
+    `VACUUM (ANALYZE) ${operations}`,
+    `VACUUM (ANALYZE) ${operationEvents}`,
   ];
 }
 
@@ -493,7 +499,13 @@ Deno.test({
       assert(
         !hasSequentialScan(sparsePlan, "events") &&
           !hasSequentialScan(sparsePlan, "copilotz_operation_events"),
-        "sparse association performed an unrelated event/progress scan",
+        "sparse association performed an unrelated event/progress scan: " +
+          JSON.stringify(
+            sparseNodes.filter((node) =>
+              node["Node Type"] === "Seq Scan" &&
+              Number(node["Actual Loops"] ?? 0) > 0
+            ),
+          ),
       );
       assert(
         !hasSequentialScan(watermarkPlan, "events"),

@@ -3,7 +3,6 @@ import {
   resolveAgentTurnSource,
 } from "../../shared/agent-turn-source.ts";
 import { collectContextContributions } from "../../shared/contributions.ts";
-import { settleAskFailure } from "../../shared/ask-failure.ts";
 import { coreEvent } from "../../shared/events/index.ts";
 /** Routes canonical Messages into agent LLM calls. @module */
 import { ContextInputLimitError, prepareLlmCall } from "@copilotz/copilotz/llm";
@@ -41,7 +40,6 @@ import {
 import {
   coreAgent,
   type CoreProcessorContext,
-  type CoreToolProcessorContext,
 } from "../../shared/runtime-context.ts";
 import {
   mapMessageRecord,
@@ -243,28 +241,6 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
   defineProcessor<CoreProcessorContext>({
     id: "copilotz.core.message-to-llm-call",
     on: [{ eventType: "message.created" }],
-    async onError(error, event, context) {
-      if (!event.durable) return false;
-      const record = collectionEventRecord(event);
-      const toolAction = coreToolActionMessageMetadata(record.metadata);
-      const branchResult = coreToolPlanResultMetadata(record.metadata);
-      const ask = agentAskMetadata(record.metadata) ??
-        toolAction?.ask ?? branchResult?.ask;
-      if (
-        !ask || ask.phase !== "question" ||
-        ask.origin.threadId !== String(record.threadId) ||
-        !stringArray(record.recipientIds).includes(ask.askedParticipantId)
-      ) return false;
-      await settleAskFailure(
-        context as unknown as CoreToolProcessorContext,
-        ask,
-        ask.askedParticipantId,
-        error,
-        false,
-        event.id,
-      );
-      return true;
-    },
     async handle(event, context) {
       if (!coreEvent(event).routing?.recipientIds?.length) {
         return;

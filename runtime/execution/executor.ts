@@ -87,6 +87,7 @@ export function createDeliveryExecutor(
     resolveStore: options.resolveStore,
     registry: options.registry,
     createContext: options.createContext,
+    resolveDeferredAction: options.resolveDeferredAction,
     leaseMs: options.leaseMs,
     heartbeatMs: options.heartbeatMs,
     scheduler: options.scheduler,
@@ -222,7 +223,10 @@ export function createDeliveryExecutor(
 
   let closed = false;
   const active = new Map<string, DeliveryExecutionHandle>();
-  const activeOutputScopes = new Map<string, Set<Promise<unknown>>>();
+  const activeOutputScopes = new Map<
+    string,
+    Map<Promise<unknown>, EventDelivery>
+  >();
   const dispatchTasks = new Map<string, Promise<DeliveryExecutionHandle>>();
   const scheduled = new Map<string, string | EventDelivery>();
   const retryTimers = new Map<
@@ -281,8 +285,9 @@ export function createDeliveryExecutor(
       event.namespace,
       delivery.settlementScopeId,
     );
-    const tasks = activeOutputScopes.get(key) ?? new Set<Promise<unknown>>();
-    tasks.add(task);
+    const tasks = activeOutputScopes.get(key) ??
+      new Map<Promise<unknown>, EventDelivery>();
+    tasks.set(task, delivery);
     activeOutputScopes.set(key, tasks);
     void task.finally(() => {
       tasks.delete(task);
@@ -471,6 +476,11 @@ export function createDeliveryExecutor(
       } as const);
     })();
     trackOutputScope(delivery, event, done);
+    // Do not include this callback in `done`: settlement drains that promise.
+    // Maintenance retries missed wakes after a crash or temporary failure.
+    void done.then((result) => options.onDeliverySettled?.(result)).catch(() =>
+      undefined
+    );
 
     return ({
       deliveryId: delivery.id,
@@ -658,6 +668,10 @@ export function createDeliveryExecutor(
     try {
       const store = await resolveStore(databaseSchema);
       const { databaseSchema: _databaseSchema, ...filters } = listOptions;
+      await store.recoverExpiredDeliveries({
+        namespace: filters.namespace,
+        limit: filters.limit,
+      });
       const deliveries = await store.listRecoverable(filters);
       for (const delivery of deliveries) {
         reportDeliveryDiagnostic(options.onDiagnostic, {
@@ -774,16 +788,34 @@ export function createDeliveryExecutor(
     dispatchDelivery,
     dispatchRecoverable,
     async settleOutputs(scope) {
+      const databaseSchema = scope.databaseSchema?.trim() ||
+        defaultDatabaseSchema;
       const key = outputScopeKey(
-        scope.databaseSchema?.trim() || defaultDatabaseSchema,
+        databaseSchema,
         scope.namespace,
         scope.settlementScopeId,
       );
-      while (true) {
-        const tasks = [...(activeOutputScopes.get(key) ?? [])];
-        if (tasks.length === 0) return;
-        await Promise.allSettled(tasks);
-      }
+      const tasks = [...(activeOutputScopes.get(key) ?? [])];
+      if (tasks.length === 0) return;
+      const store = await resolveStore(databaseSchema);
+      const deliveries = await store.listDeliveries({
+        ids: tasks.map(([, delivery]) => delivery.id),
+        limit: tasks.length,
+      });
+      const current = new Map(
+        deliveries.map((delivery) => [delivery.id, delivery]),
+      );
+      // Only the successful attempt can still have final output to relay. A
+      // cancelled or expired worker may never return; it no longer owns work
+      // and must not prevent settlement. The catalog rechecks durable work
+      // under the admission lock after this drain.
+      await Promise.allSettled(
+        tasks.filter(([, original]) => {
+          const delivery = current.get(original.id);
+          return delivery?.status === "succeeded" &&
+            delivery.attempts === original.attempts + 1;
+        }).map(([task]) => task),
+      );
     },
     awaitScopeProgress(scope, signal) {
       const tasks = activeOutputScopes.get(outputScopeKey(
@@ -802,7 +834,7 @@ export function createDeliveryExecutor(
         // poll interval instead of replacing it.
         const timer = setTimeout(finish, SCOPE_PROGRESS_POLL_MS);
         signal?.addEventListener("abort", finish, { once: true });
-        for (const task of tasks) void task.then(finish, finish);
+        for (const task of tasks.keys()) void task.then(finish, finish);
       });
     },
     async shutdown(reason = "copilotz_delivery_executor_shutdown") {

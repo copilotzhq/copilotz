@@ -2060,7 +2060,7 @@ Deno.test("invalid dynamic Agent instruction output fails before llm.call", asyn
     await fixture.close();
   }
 });
-Deno.test("Core replays persisted own reasoning through prepared LLM input and resolves lifecycle delivery", async () => {
+Deno.test("Core retains reasoning for diagnostics without replaying it in prepared history", async () => {
   const fixture = await createFixture(() => ({
     result: {
       content: { type: "text", text: "Answer", role: "body" },
@@ -2087,7 +2087,7 @@ Deno.test("Core replays persisted own reasoning through prepared LLM input and r
     );
     assertExists(previous);
     if (previous.role === "assistant") {
-      assertEquals(previous.reasoning, "Remember the earlier derivation.");
+      assertEquals(Object.hasOwn(previous, "reasoning"), false);
     }
     const lifecycle = await projectActionEvents(
       fixture.engine,
@@ -2097,15 +2097,15 @@ Deno.test("Core replays persisted own reasoning through prepared LLM input and r
     const inputs = lifecycle.filter((event) => event.status === "invoked").map((
       event,
     ) => event.input as LlmCallInput);
-    const reasoning = inputs.flatMap((input) =>
-      input.request.messages.flatMap((message) =>
-        message.role === "assistant" ? message.reasoning ?? [] : []
-      )
-    );
-    assertEquals(reasoning.length, 1);
-    assertEquals("value" in reasoning[0], true);
     assertEquals(
       JSON.stringify(inputs).includes("Remember the earlier derivation."),
+      false,
+    );
+    assertEquals(
+      lifecycle.some((event) =>
+        event.status === "completed" &&
+        JSON.stringify(event).includes("reasoning")
+      ),
       true,
     );
     const rawLifecycle = await fixture.engine.events.list({

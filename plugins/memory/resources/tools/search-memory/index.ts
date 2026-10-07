@@ -8,7 +8,7 @@ export const searchMemoryTool: ToolResource<"search_memory"> = defineTool(
   {
     name: "Search Memory",
     description:
-      "Search accessible semantic memory by meaning, form, kind, and lifecycle status.",
+      "Search accessible memory notes. Active notes are returned by default; includeRetired also searches their audit history.",
   },
 );
 

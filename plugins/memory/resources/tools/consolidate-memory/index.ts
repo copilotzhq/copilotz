@@ -7,7 +7,7 @@ export const consolidateMemoryTool: ToolResource<"consolidate_memory"> =
   defineTool("consolidate_memory", consolidateMemoryAction, {
     name: "Consolidate Memory",
     description:
-      "Persist a provenance-aware semantic memory consolidation from the current trusted Agent turn. The input schema documents every registered kind and its semantics. Use localId for references inside one payload, canonical memoryId values from memory context/search/inspection for existing memories, omit spaceId to use the trusted default, and never invent evidence IDs. Use outcome=no_changes when nothing durable changed.",
+      "Save replacement conversation continuity and optional durable notes. Correct active notes with replaces; retire wrong or irrelevant notes with a reason. Writes use the current trusted scope. Optional sources must be supplied evidence handles. Continuity alone is valid when no notes need changing.",
     history: { visibility: "requester_only" },
   });
 export { CONSOLIDATE_MEMORY_ACTION_ID };

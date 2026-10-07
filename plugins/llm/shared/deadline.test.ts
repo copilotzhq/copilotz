@@ -88,7 +88,7 @@ Deno.test("absolute attempt timeout continues from continuous reasoning", async 
   }
 });
 
-Deno.test("same-model transport fallback preserves continuation", async () => {
+Deno.test("same-model transport fallback preserves the recovery cue without textual reasoning", async () => {
   const originalFetch = globalThis.fetch;
   const seenMessages: unknown[][] = [];
   let calls = 0;
@@ -151,8 +151,8 @@ Deno.test("same-model transport fallback preserves continuation", async () => {
       ["retry_same", "fallback", "accept"],
     );
     const fallbackPrompt = JSON.stringify(seenMessages[2]);
-    assertEquals(fallbackPrompt.includes("<think>"), true);
-    assertEquals(fallbackPrompt.includes("working"), true);
+    assertEquals(fallbackPrompt.includes("<think>"), false);
+    assertEquals(fallbackPrompt.includes("working"), false);
     assertEquals(fallbackPrompt.includes("<recovery_cue>"), true);
   } finally {
     globalThis.fetch = originalFetch;

@@ -1,6 +1,7 @@
 import { assert, assertEquals, assertRejects } from "@std/assert";
 import { isNonRetryableError } from "../failure.ts";
 import { defineAction } from "./define.ts";
+import { type ActionDeferral, deferAction } from "./deferral.ts";
 import {
   createActionCallers,
   isActionInputValidationError,
@@ -8,6 +9,7 @@ import {
 import type {
   ActionCompletedData,
   ActionContext,
+  ActionDeferredData,
   ActionFailedData,
   ActionInvokedData,
   ActionLifecycleEmitter,
@@ -21,6 +23,7 @@ function recordingLifecycle(
   emitted: ActionLifecycleInput[];
 }> {
   const invoked = new Map<string, ActionInvokedData>();
+  const deferred = new Map<string, ActionDeferredData>();
   const terminal = new Map<
     string,
     ActionCompletedData | ActionFailedData
@@ -46,9 +49,12 @@ function recordingLifecycle(
         terminal.set(input.actionRunId, input);
       }
       emitted.push(input);
+      if (input.status === "deferred") deferred.set(input.actionRunId, input);
       return Promise.resolve({ deduplicated: false } as never);
     },
     invoked: (actionRunId) => Promise.resolve(invoked.get(actionRunId) ?? null),
+    deferred: (actionRunId) =>
+      Promise.resolve(deferred.get(actionRunId) ?? null),
     terminal: (actionRunId) =>
       Promise.resolve(terminal.get(actionRunId) ?? null),
   };
@@ -716,4 +722,73 @@ Deno.test("prepared Action requires a stable non-empty operation key", async () 
     TypeError,
     "operationKey",
   );
+});
+
+Deno.test("a nested deferred call returns its receipt without handing its command to the parent", async () => {
+  const recorded = recordingLifecycle();
+  let calls = 0;
+  const child = defineAction<unknown, number | ActionDeferral>({
+    id: "test.deferred-child",
+    execute() {
+      calls++;
+      return deferAction({ opaque: "child-work" });
+    },
+    resolve() {
+      return 7;
+    },
+  });
+  const parent = defineAction({
+    id: "test.parent",
+    execute(_input: unknown, context: ActionContext) {
+      return context.actions.child({});
+    },
+  });
+  const actions = createActionCallers({ child, parent }, {
+    actionLifecycle: recorded.lifecycle,
+    signal: new AbortController().signal,
+    createInvocationKey: (id) => `stable:${id}`,
+    createContext: invocationContext,
+  });
+  const result = await actions.parent({});
+  const handoffs = recorded.emitted.filter((event) =>
+    event.status === "deferred"
+  );
+  assertEquals(handoffs.length, 1);
+  assertEquals(handoffs[0].actionId, child.id);
+  assertEquals(result, {
+    status: "deferred",
+    actionRunId: handoffs[0].actionRunId,
+  });
+  assertEquals(recorded.emitted.at(-1)?.status, "completed");
+  assertEquals(recorded.emitted.at(-1)?.actionId, parent.id);
+  assertEquals(calls, 1);
+});
+
+Deno.test("deferred Action retry returns the same receipt without executing or exposing work again", async () => {
+  const recorded = recordingLifecycle();
+  let calls = 0;
+  const work = defineAction<unknown, number | ActionDeferral>({
+    id: "test.deferred",
+    execute() {
+      calls++;
+      return deferAction({ private: "work" });
+    },
+    resolve() {
+      return 7;
+    },
+  });
+  const actions = createActionCallers({ work }, {
+    actionLifecycle: recorded.lifecycle,
+    signal: new AbortController().signal,
+    createInvocationKey: () => "stable",
+    createContext: invocationContext,
+  });
+  const first = await actions.work({});
+  assertEquals(first, { status: "deferred", actionRunId: "stable" });
+  assertEquals(await actions.work({}), first);
+  assertEquals(calls, 1);
+  assertEquals(recorded.emitted.map((event) => event.status), [
+    "invoked",
+    "deferred",
+  ]);
 });

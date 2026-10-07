@@ -1,14 +1,13 @@
 import { assertEquals } from "@std/assert";
 import {
   interpretAssistantResponse,
-  REASONING_HISTORY_TAGS,
 } from "../adapters/bridge/response-interpreter.ts";
 
 Deno.test("interpreter accepts an answer after extracted thinking markup", () => {
   const result = interpretAssistantResponse({
     fullContent: "<think>private chain</think>Final answer",
     currentAttemptContent: "<think>private chain</think>Final answer",
-    extractedBlockTags: [...REASONING_HISTORY_TAGS],
+    extractedBlockTags: [],
     knownToolNames: [],
     finishReason: "stop",
   });
@@ -21,7 +20,7 @@ Deno.test("interpreter classifies thinking-only output as empty, not leaked", ()
   const result = interpretAssistantResponse({
     fullContent: "<thought>private chain</thought>",
     currentAttemptContent: "<thought>private chain</thought>",
-    extractedBlockTags: [...REASONING_HISTORY_TAGS],
+    extractedBlockTags: [],
     knownToolNames: [],
     finishReason: "stop",
   });
@@ -36,7 +35,7 @@ Deno.test("interpreter keeps canonical tool calls as intentional output", () => 
       '<tool_calls>\n{"name":"search","arguments":{"q":"x"}}\n</tool_calls>',
     currentAttemptContent:
       '<tool_calls>\n{"name":"search","arguments":{"q":"x"}}\n</tool_calls>',
-    extractedBlockTags: [...REASONING_HISTORY_TAGS],
+    extractedBlockTags: [],
     knownToolNames: ["search"],
     finishReason: "tool_calls",
   });
@@ -55,7 +54,7 @@ Deno.test("interpreter strips an imitated timestamp while preserving a later too
   const result = interpretAssistantResponse({
     fullContent: response,
     currentAttemptContent: response,
-    extractedBlockTags: [...REASONING_HISTORY_TAGS],
+    extractedBlockTags: [],
     knownToolNames: ["terminal"],
     finishReason: "tool_calls",
   });

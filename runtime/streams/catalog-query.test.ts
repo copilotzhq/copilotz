@@ -215,7 +215,10 @@ async function runQueryFixture(url: string): Promise<void> {
     );
 
     assertEquals(
-      await catalog.mark("tenant-a", both.event.id, "completed"),
+      (await catalog.reconcile({
+        namespace: "tenant-a",
+        operationId: both.event.id,
+      })) > 0,
       true,
     );
     const beforeBothProgress = (BigInt(bothProgress.event.position) - 1n)

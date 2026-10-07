@@ -1108,7 +1108,6 @@ function normalizedMessage(value: unknown, index: number): LlmMessage {
     ? new Set([
       ...commonKeys,
       "toolCalls",
-      "reasoning",
       "nativeReasoning",
       "toolPlanId",
     ])
@@ -1143,14 +1142,6 @@ function normalizedMessage(value: unknown, index: number): LlmMessage {
       ...(record.toolPlanId === undefined ? {} : {
         toolPlanId: requiredText(record.toolPlanId, `${path}.toolPlanId`),
       }),
-      ...(record.reasoning !== undefined
-        ? {
-          reasoning: normalizedPreparedSequence(
-            record.reasoning,
-            `${path}.reasoning`,
-          ),
-        }
-        : {}),
       ...(record.nativeReasoning !== undefined
         ? {
           nativeReasoning: normalizedNativeReasoning(

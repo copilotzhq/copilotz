@@ -1,3 +1,4 @@
+import type { AskResult } from "../../actions/ask/index.ts";
 import type { CoreToolProcessorContext } from "../../shared/runtime-context.ts";
 import { parseActionLifecycleEvent } from "@copilotz/copilotz/actions";
 import type { Processor } from "@copilotz/copilotz/plugins";
@@ -47,7 +48,12 @@ export function coreToolTerminal(
         },
         status: "completed",
         input: lifecycle.input,
-        output: lifecycle.output,
+        output: metadata.action === "ask"
+          ? (lifecycle.output as AskResult).content
+          : lifecycle.output,
+        ...(metadata.action === "ask"
+          ? { askResult: (lifecycle.output as AskResult).askResult }
+          : {}),
       }
       : {
         actionRunId: text(lifecycle.actionRunId, "Tool Action run ID"),

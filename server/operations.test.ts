@@ -743,7 +743,12 @@ async function observationFixture(options: { suppressHints?: boolean } = {}) {
           operationMetadata: metadata,
         },
       });
-      await operations.mark("tenant", root.event.id, state);
+      if (state === "completed") {
+        await operations.reconcile({
+          namespace: "tenant",
+          operationId: root.event.id,
+        });
+      }
       return root.event.id;
     },
     async stream(operationId: string, bytes: Uint8Array) {
@@ -796,7 +801,7 @@ async function observationFixture(options: { suppressHints?: boolean } = {}) {
         streamId,
         body,
       });
-      await operations.mark("tenant", operationId, "completed");
+      await operations.reconcile({ namespace: "tenant", operationId });
       return streamId;
     },
     async close() {
@@ -1426,7 +1431,7 @@ for (
       if (byteLength) {
         await f.stream(operationId, new Uint8Array(byteLength).fill(7));
       }
-      await f.operations.mark("tenant", operationId, "completed");
+      await f.operations.reconcile({ namespace: "tenant", operationId });
       const api = await f.create();
       const checkpoints: (string | undefined)[] = [];
       const received: string[] = [];

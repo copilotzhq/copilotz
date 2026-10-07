@@ -1,3 +1,4 @@
+import { ACTION_RESOLVER_CONSUMER } from "../actions/deferred-work.ts";
 import type { EventDelivery } from "../events/index.ts";
 import { isNonRetryableError } from "../failure.ts";
 import { readViews } from "../collections/read-view.ts";
@@ -205,10 +206,13 @@ export function createDeliveryWorkload(
       if (event.namespace !== metadata.namespace) {
         throw new TypeError("Invalid delivery dispatch: namespace mismatch.");
       }
-      const processor = options.registry.processorForConsumer(
-        delivery.consumerId,
-      );
-      if (!processor) {
+      const resolver = delivery.consumerId === ACTION_RESOLVER_CONSUMER
+        ? options.resolveDeferredAction
+        : undefined;
+      const processor = resolver
+        ? undefined
+        : options.registry.processorForConsumer(delivery.consumerId);
+      if (!resolver && !processor) {
         throw new Error(
           `No processor is registered for consumer '${delivery.consumerId}'.`,
         );
@@ -230,6 +234,11 @@ export function createDeliveryWorkload(
             correlationId: event.correlationId,
             deduplicationId: `delivery:${delivery.id}:${key}`,
             settlementScopeId: delivery.settlementScopeId,
+            actionScopeId: delivery.actionScopeId,
+            deliveryLease: {
+              deliveryId: delivery.id,
+              owner: metadata.dispatchAttemptId,
+            },
             metadata: {
               ...structuredClone(mutationMetadata),
               sourceEventId: event.id,
@@ -244,20 +253,12 @@ export function createDeliveryWorkload(
         event,
         delivery,
         settlementScopeId: delivery.settlementScopeId,
+        actionScopeId: delivery.actionScopeId,
         signal: abort.signal,
         idempotencyKey: delivery.id,
         dispatchAttemptId: metadata.dispatchAttemptId,
         createMutationIdentity,
       } as const;
-      const context = await options.createContext(base);
-      abort.signal.throwIfAborted();
-      const processorEvent = await resolveProcessorEvent(store, event, {
-        getMany: (refs) => context.content.resolveMany(refs),
-      });
-      const handle = processor.handle as (
-        event: typeof processorEvent,
-        executionContext: typeof context,
-      ) => void | Promise<void>;
       reportDeliveryDiagnostic(options.onDiagnostic, {
         phase: "worker_handler_started",
         timestampMs: Date.now(),
@@ -269,23 +270,37 @@ export function createDeliveryWorkload(
         databaseSchema: metadata.databaseSchema,
         namespace: metadata.namespace,
       });
-      try {
-        await handle(processorEvent, context);
-      } catch (error) {
-        const onError = processor.onError as (
-          | ((
-            error: unknown,
-            event: typeof processorEvent,
-            executionContext: typeof context,
-          ) => boolean | Promise<boolean>)
-          | undefined
-        );
-        const terminal = isNonRetryableError(error) ||
-          delivery.attempts >= delivery.maxAttempts;
-        if (
-          abort.signal.aborted || !terminal ||
-          !await onError?.(error, processorEvent, context)
-        ) throw error;
+      abort.signal.throwIfAborted();
+      if (resolver) {
+        await resolver(base);
+      } else {
+        const context = await options.createContext(base);
+        abort.signal.throwIfAborted();
+        const processorEvent = await resolveProcessorEvent(store, event, {
+          getMany: (refs) => context.content.resolveMany(refs),
+        });
+        const handle = processor!.handle as (
+          event: typeof processorEvent,
+          executionContext: typeof context,
+        ) => void | Promise<void>;
+        try {
+          await handle(processorEvent, context);
+        } catch (error) {
+          const onError = processor!.onError as (
+            | ((
+              error: unknown,
+              event: typeof processorEvent,
+              executionContext: typeof context,
+            ) => boolean | Promise<boolean>)
+            | undefined
+          );
+          const terminal = isNonRetryableError(error) ||
+            delivery.attempts >= delivery.maxAttempts;
+          if (
+            abort.signal.aborted || !terminal ||
+            !await onError?.(error, processorEvent, context)
+          ) throw error;
+        }
       }
       abort.signal.throwIfAborted();
       const settled = await store.succeedDelivery(

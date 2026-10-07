@@ -1,4 +1,5 @@
 import { assert, assertEquals, assertThrows } from "@std/assert";
+import { deferAction } from "./deferral.ts";
 import { defineAction, isActionDefinition } from "./define.ts";
 import type {
   ActionCaller,
@@ -165,4 +166,32 @@ Deno.test("semantic contexts retain exact Action caller inputs", () => {
     void context.actions.search(42);
   };
   assertEquals(typeof accepts, "function");
+});
+
+Deno.test("deferred Actions infer only the terminal output from their resolver", () => {
+  const action = defineAction({
+    id: "test.deferred-inferred",
+    execute(input: { question: string }) {
+      return deferAction(input);
+    },
+    resolve(input, _context, resolution) {
+      return resolution.outcome === "completed" ? input.question : "failed";
+    },
+  });
+  const input: ActionInput<typeof action> = { question: "hello" };
+  const output: ActionOutput<typeof action> = "hello";
+  // @ts-expect-error A deferral request is not a terminal Action output.
+  const invalid: ActionOutput<typeof action> = deferAction({});
+  void invalid;
+  assertEquals(input.question, output);
+  const explicit = defineAction<{ question: string }, string>({
+    id: "test.deferred-explicit",
+    execute(input) {
+      return deferAction(input);
+    },
+    resolve(input) {
+      return input.question;
+    },
+  });
+  assert(isActionDefinition(explicit));
 });

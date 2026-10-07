@@ -1,4 +1,10 @@
 import {
+  actionOwnershipStatement,
+  type ActionWriter,
+  combineActionStatements,
+} from "./ownership.ts";
+import type { SqlExecutor } from "../events/session.ts";
+import {
   composeActionInputRetention,
   planActionInputRetention,
   retainActionInputContent,
@@ -35,6 +41,8 @@ type ActionLifecyclePersistenceOptions = Readonly<{
   store?: LifecycleStore;
   actions?: Readonly<Record<string, AnyActionDefinition>>;
   protectedValues?: ProtectedValueRuntime;
+  writer?: ActionWriter;
+  transaction?: SqlExecutor;
 }>;
 
 async function rawEventBody(
@@ -54,17 +62,25 @@ async function invokedInputRef(
   data: ActionEventData,
 ) {
   if (data.status === "invoked" || !options.store) return undefined;
-  const event = await options.store.getEventByDeduplicationId(
-    namespace,
-    `${data.actionRunId}:action:invoked`,
-  );
-  if (!event) {
+  const deduplicationId = `${data.actionRunId}:action:invoked`;
+  const executor = options.transaction ?? options.store.session;
+  const receipt = options.transaction
+    ? (await executor.query<{ payload: unknown }>(
+      `SELECT payload FROM ${options.store.tables.events} WHERE namespace = $1 AND deduplication_id = $2`,
+      [namespace, deduplicationId],
+    )).rows[0]
+    : await options.store.getEventByDeduplicationId(namespace, deduplicationId);
+  if (!receipt) {
     throw new Error(
       `Protected Action invoked receipt '${data.actionRunId}' is missing.`,
     );
   }
   const body = protectedActionLifecycleBody(
-    await rawEventBody(options.store, event),
+    await readEventBody(
+      { transaction: executor, tables: options.store.tables },
+      namespace,
+      eventDataRef(receipt.payload),
+    ),
   );
   return body?.protected.input;
 }
@@ -126,15 +142,33 @@ export function createActionLifecycleAppender(
     const inStatement = retention !== undefined && tables !== undefined &&
       prepared.prepared.length === 0;
     return await options.coordinator.commitMutation({
+      admission: {
+        openActionGroup: data.status === "deferred",
+        cancellation: options.writer?.kind === "cancellation",
+      },
       draft: { ...draft, payload },
       matchData: prepared.publicData,
       body: { id: payload.dataRef.eventBodyId, json: prepared.body },
-      ...(inStatement
+      ...(tables
         ? {
           statement: (param: (value: unknown) => string) =>
-            composeActionInputRetention(retention, tables, param),
+            combineActionStatements([
+              actionOwnershipStatement(
+                { draft, data },
+                options.writer,
+                tables,
+                param,
+              ),
+              ...(inStatement
+                ? [composeActionInputRetention(retention!, tables, param)]
+                : []),
+            ]),
         }
-        : retention || prepared.prepared.length > 0
+        : {}),
+      ...(options.transaction
+        ? { transaction: options.transaction, dispatch: false }
+        : {}),
+      ...(!inStatement && (retention || prepared.prepared.length > 0)
         ? {
           mutate: async (context) => {
             if (retention) await retainActionInputContent(context, retention);

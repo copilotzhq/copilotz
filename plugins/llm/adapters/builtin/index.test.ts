@@ -465,7 +465,7 @@ Deno.test("built-in HTTP providers reject unsupported live-session mode explicit
   await assertRejects(() => collectFrames(streamedInput.frames));
 });
 
-Deno.test("prepared assistant reasoning reaches the provider through existing escaped think formatting", async () => {
+Deno.test("legacy textual reasoning never reaches the provider input", async () => {
   const originalFetch = globalThis.fetch;
   let body = "";
   globalThis.fetch = (_input, init) => {
@@ -484,16 +484,19 @@ Deno.test("prepared assistant reasoning reaches the provider through existing es
           {
             role: "assistant",
             content: [{ type: "text", text: "answer" }],
-            reasoning: "Check <bounds> carefully.",
+            ...({ reasoning: "Check <bounds> carefully." } as Record<
+              string,
+              unknown
+            >),
           },
           { role: "user", content: [{ type: "text", text: "continue" }] },
         ],
       },
     }));
     await Promise.all([collectFrames(invocation.frames), invocation.result]);
-    assertStringIncludes(body, "<think>");
-    assertStringIncludes(body, "Check &lt;bounds&gt; carefully.");
-    assertStringIncludes(body, "</think>");
+    assertEquals(body.includes("<think>"), false);
+    assertEquals(body.includes("Check"), false);
+    assertStringIncludes(body, "answer");
   } finally {
     globalThis.fetch = originalFetch;
   }

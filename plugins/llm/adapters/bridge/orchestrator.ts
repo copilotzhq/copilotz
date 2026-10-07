@@ -19,10 +19,7 @@ import {
   composeWireContent,
   createMockResponse,
 } from "../../shared/wire-format.ts";
-import {
-  sanitizeUserFacingText,
-  stripStructuralLeakTokens,
-} from "../../shared/wire-parse.ts";
+import { sanitizeUserFacingText } from "../../shared/wire-parse.ts";
 import {
   classifyLLMError,
   getErrorMessage,
@@ -35,10 +32,7 @@ import {
   LLMStreamTimeoutError,
 } from "../../shared/errors.ts";
 import { runProviderAttempt } from "./attempt-runner.ts";
-import {
-  interpretAssistantResponse,
-  REASONING_HISTORY_TAGS,
-} from "./response-interpreter.ts";
+import { interpretAssistantResponse } from "./response-interpreter.ts";
 import {
   decideRecovery,
   recoveryActionOf,
@@ -60,11 +54,8 @@ const RECOVERABLE_FINISH_REASONS: ReadonlySet<ProviderFinishReason> = new Set([
   "content_filter",
 ]);
 
-const DEFAULT_REASONING_HISTORY_MAX_ESTIMATED_TOKENS = 750;
 const RECOVERY_PROTOCOL_MARKER_PATTERN =
   /<\/?(?:[a-z0-9_]+:)?(?:tool_call|tool_calls|function_call|function_calls|invoke|parameter|tool_use|tool|tool_result|tool_results|result|continue_after_tool_results|target_ids)\b/i;
-const VISIBLE_REASONING_BLOCK_PATTERN =
-  /<(?:mm:)?(?:think|thought|thinking|reasoning)\b[^>]*>([\s\S]*?)(?:<\/(?:mm:)?(?:think|thought|thinking|reasoning)>|$)/gi;
 function buildRecoveryCue(reason: string | null): string {
   switch (reason) {
     case "length":
@@ -99,26 +90,6 @@ If you did not intend to call a tool, continue from the previous assistant messa
   }
 }
 
-function normalizeReasoningHistoryOptions(
-  options: ChatRequest["reasoningHistory"] | undefined,
-): Required<NonNullable<ChatRequest["reasoningHistory"]>> {
-  return {
-    include: options?.include ?? "self",
-    maxEstimatedTokens: typeof options?.maxEstimatedTokens === "number"
-      ? options.maxEstimatedTokens
-      : DEFAULT_REASONING_HISTORY_MAX_ESTIMATED_TOKENS,
-  };
-}
-
-function extractVisibleReasoningMarkup(response: string): string[] {
-  const parts: string[] = [];
-  for (const match of response.matchAll(VISIBLE_REASONING_BLOCK_PATTERN)) {
-    const value = match[1]?.trim();
-    if (value) parts.push(stripStructuralLeakTokens(value));
-  }
-  return parts.filter((part) => part.trim().length > 0);
-}
-
 function getSafeVisiblePrefixBeforeProtocol(response: string): string {
   const markerIndex = response.search(RECOVERY_PROTOCOL_MARKER_PATTERN);
   const prefix = markerIndex === -1 ? response : response.slice(0, markerIndex);
@@ -128,23 +99,11 @@ function getSafeVisiblePrefixBeforeProtocol(response: string): string {
 function buildRecoveryAssistantContext(
   existingContext: string,
   visiblePrefix: string,
-  reasoning: string | undefined,
-  options: ChatRequest["reasoningHistory"] | undefined,
 ): string {
-  const reasoningHistory = normalizeReasoningHistoryOptions(options);
-  const trimmedReasoning = reasoning?.trim();
   const attemptContext = composeWireContent({
-    reasoning: reasoningHistory.include !== "none" &&
-        typeof trimmedReasoning === "string" &&
-        trimmedReasoning.length > 0
-      ? trimmedReasoning
-      : undefined,
-    reasoningMaxEstimatedTokens: reasoningHistory.maxEstimatedTokens,
     visible: visiblePrefix.trim() || undefined,
   });
-  return [existingContext.trim(), attemptContext].filter((part) =>
-    part.length > 0
-  ).join("\n\n");
+  return [existingContext.trim(), attemptContext].filter(Boolean).join("\n\n");
 }
 
 function joinRecoveredContent(prefix: string, continuation: string): string {
@@ -355,7 +314,6 @@ function toUsageStatusReason(
     case "content_filter":
     case "empty_response":
     case "malformed_tool_call":
-    case "visible_reasoning_markup":
     case "degenerate_repetition":
       return reason;
     default:
@@ -422,7 +380,6 @@ export async function chat(
     );
   const extractedBlockTags = [
     ...(request.extractTags ?? []),
-    ...REASONING_HISTORY_TAGS,
   ];
   const attempts: LLMProviderAttempt[] = [];
   const usageAttempts: LLMUsageAttempt[] = [];
@@ -446,8 +403,6 @@ export async function chat(
       ? buildRecoveryAssistantContext(
         "",
         initialContinuationAnswer,
-        initialContinuationReasoning,
-        request.reasoningHistory,
       )
       : "",
     recoveryReasoning: initialContinuationReasoning,
@@ -764,11 +719,6 @@ export async function chat(
           nextRecoveryContext = buildRecoveryAssistantContext(
             prefixBeforeAttempt,
             getSafeVisiblePrefixBeforeProtocol(streamResult.content),
-            mergeReasoningParts(
-              streamResult.reasoning,
-              extractVisibleReasoningMarkup(streamResult.content),
-            ),
-            request.reasoningHistory,
           );
         } else if (issue?.kind === "degenerate_repetition") {
           nextRecoveryContext = buildRecoveryAssistantContext(
@@ -776,8 +726,6 @@ export async function chat(
             sanitizeUserFacingText(
               streamResult.content.slice(0, issue.startIndex),
             ),
-            streamResult.reasoning,
-            request.reasoningHistory,
           );
         }
 
@@ -793,7 +741,6 @@ export async function chat(
             );
             fragmentReasoning = mergeReasoningParts(
               streamResult.reasoning,
-              extractVisibleReasoningMarkup(streamResult.content),
             );
           } else if (issue?.kind === "degenerate_repetition") {
             fragmentAnswer = sanitizeUserFacingText(
@@ -1056,8 +1003,6 @@ export async function chat(
         state.recoveryContext = buildRecoveryAssistantContext(
           prefixBeforeAttempt,
           sanitizeUserFacingText(capture.visibleOutput),
-          capture.reasoningOutput,
-          request.reasoningHistory,
         );
         state.streamContinuationUsed = true;
         state.forceRecoveryCue = true;

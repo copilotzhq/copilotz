@@ -61,13 +61,6 @@ export interface ChatMessage {
   toolPlanId?: string;
   // Prefer passing tool calls explicitly for assistant messages
   toolCalls?: ToolInvocation[];
-  /**
-   * Persisted reasoning materialized as `<think>` during wire
-   * composition. Not sent to providers until {@link formatMessages} runs.
-   */
-  reasoning?: string;
-  /** Character cap when materializing {@link reasoning}. */
-  reasoningMaxEstimatedTokens?: number;
   /** Provider-native reasoning state; never materialized into Copilotz text. */
   nativeReasoning?: LlmAdapterNativeReasoning;
 }
@@ -109,15 +102,6 @@ export interface LLMRuntimeDiagnostics {
   credentialSource?: LLMCredentialSource;
 }
 
-export type ToolSystemPromptVariant =
-  | "baseline"
-  | "no-visible-ack"
-  | "tool-only-turn"
-  | "useful-visible-contract"
-  | "tool-call-contract"
-  | "lifecycle-explicit"
-  | "strict-minimal";
-
 export interface ProviderConfigBase {
   // Provider selection
   provider?: ProviderName;
@@ -125,8 +109,6 @@ export interface ProviderConfigBase {
   runtimeDiagnostics?: LLMRuntimeDiagnostics;
   /** Internal-only resolved ChatGPT Codex request identity. */
   executionIdentity?: { cacheKey: string };
-  /** Explicit prompt protocol selection; defaults to the useful-visible contract. */
-  toolSystemPromptVariant?: ToolSystemPromptVariant;
 
   // Model configuration
   model?: string;
@@ -294,15 +276,6 @@ export interface ChatRequest {
    * Used only for content-free cache diagnostics.
    */
   debugPromptPrefixMessageCount?: number;
-  /**
-   * Controls whether reasoning from an interrupted/recovered same-agent attempt
-   * is included in the synthetic retry context. Defaults to the framework
-   * history policy: `{ include: "self", maxEstimatedTokens: 750 }`.
-   */
-  reasoningHistory?: {
-    include?: "none" | "self" | "all";
-    maxEstimatedTokens?: number;
-  };
   /**
    * Internal durable checkpoint used only when a logical LLM event is replayed
    * after losing its in-memory provider attempt.
@@ -527,7 +500,6 @@ export type TokenUsageStatusReason =
   | "empty_response"
   | "malformed_tool_call"
   | "orphaned_tool_result"
-  | "visible_reasoning_markup"
   | "degenerate_repetition";
 
 export type LLMRecoveryAction =

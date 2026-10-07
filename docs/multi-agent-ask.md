@@ -129,15 +129,18 @@ mode:
 1. Core resolves `target` by stable agent ID first, then by name, and rejects an
    unknown or ambiguous target, a self-ask, an ungranted target, or a target
    that isn't a participant in the thread.
-2. It records the question as a message from the asking agent's participant to
-   the asked one, with ask provenance metadata (ask ID, both agents and
-   participants, mode, depth and the originating tool call). The Action result
-   is only `{ status: "deferred" }`, recorded as `copilotz.core.ask.completed`;
-   a rejection is recorded as `copilotz.core.ask.failed`.
+2. The Action atomically hands off the question as opaque work with
+   `deferAction`. Its durable state is `copilotz.core.ask.deferred`; the worker
+   is released while the Action remains open. Core's dispatcher records the
+   question with the Ask ID, participants, mode, depth and originating tool
+   call.
 3. The asked agent runs an ordinary turn with its own models and grants. It may
-   use its tools and ask further agents it has been granted.
-4. When its answer settles, Core resumes the asking agent's pending tool plan
-   with that answer as the tool result, and the asker continues its turn.
+   use tools and ask further agents. Inherited deliveries and nested Actions
+   belong to that deferred invocation; explicitly detached work does not.
+4. Once that work drains, the runtime invokes Core's resolver. Core finds the
+   exact answer, or an explicit failure, and produces the ordinary
+   `copilotz.core.ask.completed`, `.failed` or `.cancelled` terminal. The normal
+   tool-plan path delivers the result and continues the asker.
 
 The asking agent receives the answer through this continuation, independently of
 what shared history shows. Several top-level tool calls produced in one model
@@ -173,7 +176,7 @@ private answers, don't give that user raw operation observation.
   fly.
 - If the asked agent fails or is cancelled, Core records the failure and still
   resumes the asker with a labelled tool result (`AgentAskFailed` or
-  `AgentAskCancelled`), so the asker can explain or recover.
+  `AbortError`), so the asker can explain or recover.
 - Nesting is limited to depth 8. Each nested ask records a reference to its
   parent question, and resuming reloads that recorded parent instead of an
   in-memory stack. Pending asks can continue after a restart only with a

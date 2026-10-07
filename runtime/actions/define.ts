@@ -6,9 +6,11 @@ import { actionDefinitionHasSecrets } from "./protected-lifecycle.ts";
 import type {
   ActionContext,
   ActionDefinition,
+  ActionDefinition as Definition,
   ActionSchema,
   AnyActionDefinition,
 } from "./types.ts";
+import type { ActionDeferral, ActionResolution } from "./deferral.ts";
 import { snapshotActionSchema } from "./secret.ts";
 
 const ACTION_KEYS = new Set([
@@ -17,6 +19,7 @@ const ACTION_KEYS = new Set([
   "inputSchema",
   "outputSchema",
   "execute",
+  "resolve",
 ]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -52,7 +55,8 @@ export function isActionDefinition(
     Object.keys(value).some((key) => !ACTION_KEYS.has(key)) ||
     typeof value.id !== "string" || !value.id.trim() ||
     !/^[a-z][a-z0-9_.-]*$/i.test(value.id.trim()) ||
-    typeof value.execute !== "function"
+    typeof value.execute !== "function" ||
+    (value.resolve !== undefined && typeof value.resolve !== "function")
   ) return false;
   try {
     if (value.content !== undefined) actionContentDeclaration(value.content);
@@ -79,7 +83,67 @@ export function defineAction<
     execute(
       input: TInput,
       context: TContext,
+    ):
+      | NoInfer<TOutput>
+      | ActionDeferral
+      | Promise<NoInfer<TOutput> | ActionDeferral>;
+    resolve(
+      input: TInput,
+      context: TContext,
+      resolution: ActionResolution,
     ): TOutput | Promise<TOutput>;
+  }>,
+): ActionDefinition<
+  TInput,
+  Awaited<TOutput> | ActionDeferral,
+  TContext,
+  TInputSchema,
+  TOutputSchema
+>;
+
+export function defineAction<
+  TInput = unknown,
+  TOutput = unknown,
+  TContext = ActionContext,
+  const TInputSchema extends ActionSchema | undefined = undefined,
+  const TOutputSchema extends ActionSchema | undefined = undefined,
+>(
+  definition: Readonly<{
+    id: string;
+    content?: ActionContentDeclaration;
+    inputSchema?: TInputSchema;
+    outputSchema?: TOutputSchema;
+    execute(
+      input: TInput,
+      context: TContext,
+    ): TOutput | Promise<TOutput>;
+    resolve?: Definition<TInput, TOutput, TContext>["resolve"];
+  }>,
+): ActionDefinition<
+  TInput,
+  Awaited<TOutput>,
+  TContext,
+  TInputSchema,
+  TOutputSchema
+>;
+
+export function defineAction<
+  TInput = unknown,
+  TOutput = unknown,
+  TContext = ActionContext,
+  const TInputSchema extends ActionSchema | undefined = undefined,
+  const TOutputSchema extends ActionSchema | undefined = undefined,
+>(
+  definition: Readonly<{
+    id: string;
+    content?: ActionContentDeclaration;
+    inputSchema?: TInputSchema;
+    outputSchema?: TOutputSchema;
+    execute(
+      input: TInput,
+      context: TContext,
+    ): TOutput | Promise<TOutput>;
+    resolve?: Definition<TInput, TOutput, TContext>["resolve"];
   }>,
 ): ActionDefinition<
   TInput,
@@ -98,6 +162,11 @@ export function defineAction<
   }
   if (typeof definition.execute !== "function") {
     throw new TypeError(`Action '${id}' requires execute.`);
+  }
+  if (
+    definition.resolve !== undefined && typeof definition.resolve !== "function"
+  ) {
+    throw new TypeError(`Action '${id}' resolve must be a function.`);
   }
   const inputSchema = optionalSchema(
     id,
@@ -131,6 +200,7 @@ export function defineAction<
     ...(inputSchema ? { inputSchema } : {}),
     ...(outputSchema ? { outputSchema } : {}),
     execute: definition.execute,
+    ...(definition.resolve ? { resolve: definition.resolve } : {}),
   } as const) as ActionDefinition<
     TInput,
     Awaited<TOutput>,

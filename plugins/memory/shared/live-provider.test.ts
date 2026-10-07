@@ -12,7 +12,10 @@ import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 import { defineAgent, loadThreadRecord } from "@copilotz/copilotz/core";
 import { createPluginRegistry } from "@copilotz/copilotz/plugins";
 import { validateCollectionIndexes } from "@copilotz/copilotz/collections";
-import type { StreamOutput } from "@copilotz/copilotz/streams";
+import {
+  isStreamOutputDescriptor,
+  type StreamOutputDescriptor,
+} from "@copilotz/copilotz/streams";
 import { createCopilotzEngine } from "../../../runtime/engine/index.ts";
 import { createTestDatabase } from "../../../runtime/testing/ominipg.ts";
 import { createTestDomainContext } from "../../core/shared/testing/context.ts";
@@ -39,7 +42,7 @@ Deno.test({
     const threadId = "development-fixture";
     const participantId = "agent-north";
     const inputs: { maintenance: boolean; body: string; status: number }[] = [];
-    const streams: StreamOutput[] = [];
+    const streams: StreamOutputDescriptor[] = [];
     const originalFetch = globalThis.fetch;
     globalThis.fetch = async (input, init) => {
       const request = new Request(input, init);
@@ -77,7 +80,7 @@ Deno.test({
             name: "North",
             role: "assistant",
             instructions:
-              "You are North in a synthetic integration test. Follow internal memory maintenance instructions. All fixture facts are ephemeral: consolidate continuity with outcome no_changes and no semantic records. Preserve the exact release code from existing continuity and the exact launch color from history in any replacement continuity. For ordinary questions answer concisely with the requested facts. Do not call tools during ordinary replies.",
+              "You are North in a synthetic integration test. Follow internal memory maintenance instructions. All fixture facts are ephemeral: call consolidate_memory with continuity only; omit remember and retire. Preserve the exact release code from existing continuity and the exact launch color from history in any replacement continuity. For ordinary questions answer concisely with the requested facts. Do not call tools during ordinary replies.",
             models: {
               generate: [{
                 connection: "openai_service",
@@ -130,8 +133,8 @@ Deno.test({
         defaultDatabaseSchema: schema,
         provisionDefaultDatabaseSchema: false,
         retryBaseMs: 0,
-        publishLocalStream: (output) => {
-          streams.push(output);
+        publish: (output) => {
+          if (isStreamOutputDescriptor(output)) streams.push(output);
         },
       });
       const context = createTestDomainContext(engine, namespace);
@@ -340,9 +343,16 @@ Deno.test({
       );
       let streamedBytes = 0;
       for (const stream of streams) {
-        streamedBytes +=
-          (await new Response(stream.payload).arrayBuffer()).byteLength;
-        assertEquals((await stream.terminal).outcome, "completed");
+        streamedBytes += (await new Response(
+          await engine.streams.follow(namespace, { id: stream.streamId }),
+        ).arrayBuffer()).byteLength;
+        assertEquals(
+          (await engine.operations.waitForStreamTerminal(
+            namespace,
+            stream.streamId,
+          )).outcome,
+          "completed",
+        );
       }
       assert(streamedBytes > 0);
       console.log(JSON.stringify({

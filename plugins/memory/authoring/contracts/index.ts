@@ -12,7 +12,6 @@ import type {
 } from "@copilotz/copilotz/core";
 import type { ProcessorContext } from "@copilotz/copilotz/plugins";
 
-import type { MemoryKindDefinition } from "../ontology/index.ts";
 import type { LongTermMemoryConfig } from "../../resources/memory/config/index.ts";
 
 export type MemoryResources =
@@ -22,7 +21,6 @@ export type MemoryResources =
     memory: Readonly<
       {
         config?: Partial<LongTermMemoryConfig> & { enabled?: boolean };
-        kinds?: readonly MemoryKindDefinition[];
         embeddingProfile?: VectorProfile;
       }
     >;

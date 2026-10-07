@@ -151,12 +151,11 @@ function userTurn(message: ConversationMessage): LlmMessage {
   };
 }
 
-/** The viewer's own turn, with its tool calls and reasoning. */
+/** The viewer's own turn, with its tool calls and provider-native state. */
 function ownAssistantTurn(message: ConversationMessage): LlmMessage {
   const name = senderName(message);
   const toolCalls = embeddedToolCalls(message.metadata.llmToolCalls);
   const planId = toolPlanId(message);
-  const reasoning = message.metadata.llmReasoning;
   const native = nativeReasoning(message.metadata.llmNativeReasoning);
   return {
     role: "assistant",
@@ -164,9 +163,6 @@ function ownAssistantTurn(message: ConversationMessage): LlmMessage {
     ...(name ? { name } : {}),
     ...(toolCalls.length ? { toolCalls } : {}),
     ...(planId && toolCalls.length ? { toolPlanId: planId } : {}),
-    ...(Array.isArray(reasoning)
-      ? { reasoning: reasoning as NonNullable<AssistantMessage["reasoning"]> }
-      : {}),
     ...(native ? { nativeReasoning: native } : {}),
   };
 }

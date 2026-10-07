@@ -1261,7 +1261,10 @@ Deno.test("maintenance reconciles physical stream crash windows before terminali
       appendId: "incomplete-crash:1",
       bytes: incompleteBytes,
     });
-    assertEquals(await catalog.mark(NAMESPACE, operationId, "failed"), false);
+    assertEquals(
+      (await catalog.reconcile({ namespace: NAMESPACE, operationId })) > 0,
+      false,
+    );
     const activeOperationId = "stream-reconcile-active-operation";
     await db.transaction((transaction) =>
       catalog.indexEvent(transaction, {

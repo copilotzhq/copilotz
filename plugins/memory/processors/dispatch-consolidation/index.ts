@@ -1,3 +1,4 @@
+import { visibleMemorySources } from "../../shared/evidence.ts";
 import { memoryConfig } from "../../resources/memory/config/index.ts";
 /** Dispatches a scoped Core Agent turn for a reserved checkpoint. @module */
 import {
@@ -21,7 +22,6 @@ import { threadMemorySpaces } from "../../shared/access.ts";
 import {
   captureContextSnapshot,
   frozenSnapshot,
-  memoryKinds,
 } from "../../shared/snapshot.ts";
 import { settleCheckpointError } from "../../shared/checkpoints.ts";
 import { activeSpacesForCheckpoint } from "../../shared/checkpoint.ts";
@@ -79,13 +79,14 @@ export const dispatchMemoryConsolidationProcessor: Processor<
     const instruction = buildMemoryConsolidationInstruction({
       spaces,
       // Bodies remain typed history; the maintenance suffix carries provenance only.
-      sourceMessages: messages.map((message) => ({
+      sourceMessages: visibleMemorySources(messages, participant.id).map((
+        message,
+      ) => ({
         id: message.id,
         senderType: message.sender.participantType,
         senderId: message.sender.id,
         text: "",
       })),
-      kinds: memoryKinds(context),
       context: frozenSnapshot(checkpoint),
     });
     const initiatorParticipantId = requiredText(

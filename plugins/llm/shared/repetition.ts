@@ -151,6 +151,42 @@ function refineRepetitionStart(
   return bestStart;
 }
 
+/** Catch the punctuation-only provider failure that word tokenization misses. */
+function punctuationLoop(
+  text: string,
+  maxTailChars: number,
+): DegenerateRepetitionDetection | null {
+  const tail = text.slice(-maxTailChars);
+  // Require quotes mixed with JSON delimiters; ordinary separators and code
+  // indentation are not evidence of a broken generation.
+  const match = /["'{}\[\],:;\\]+$/.exec(tail);
+  if (
+    !match || match[0].length < 192 || !/["']/.test(match[0]) ||
+    !/[{}\[\]]/.test(match[0])
+  ) return null;
+  for (let size = 1; size <= 8; size++) {
+    const pattern = match[0].slice(-size);
+    let start = match[0].length - size;
+    while (start >= size && match[0].slice(start - size, start) === pattern) {
+      start -= size;
+    }
+    if (match[0].length - start < Math.max(192, size * 24)) continue;
+    return {
+      startIndex: text.length - match[0].length + start,
+      endIndex: text.length,
+      reason: "low_entropy_periodic_tail",
+      periodTokens: [pattern],
+      scores: {
+        normalizedEntropy: 0,
+        uniqueRatio: size / (match[0].length - start),
+        topTokenRatio: 1,
+        periodicity: 1,
+      },
+    };
+  }
+  return null;
+}
+
 export function detectDegenerateRepetition(
   text: string,
   customOptions: DegenerateRepetitionOptions = {},
@@ -161,6 +197,8 @@ export function detectDegenerateRepetition(
     windowSizes: customOptions.windowSizes ??
       DEFAULT_REPETITION_OPTIONS.windowSizes,
   };
+  const punctuation = punctuationLoop(text, options.maxTailChars);
+  if (punctuation) return punctuation;
   const tokens = tokenizeRepetitionTail(text, options.maxTailChars);
   if (tokens.length < options.minWindowTokens) return null;
 

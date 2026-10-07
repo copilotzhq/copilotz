@@ -1,12 +1,14 @@
-# Semantic memory
+# Conversation memory
 
 ## What it is
 
-A durable semantic-memory plugin for Copilotz conversations.
+A durable memory plugin with conversation continuity and immutable plain-text
+notes.
 
 ## Why it exists
 
-It consolidates conversation evidence into queryable, provenance-aware records.
+It preserves conversation continuity and keeps searchable notes with optional
+source references.
 
 ## How to use it
 
@@ -15,9 +17,11 @@ import { memoryPlugin } from "@copilotz/copilotz/memory";
 // Include memoryPlugin in the final createCopilotz({ plugins: [...] }) call.
 ```
 
-Configure `resources.memory.config` and `resources.memory.kinds`; supply
-embedding through `adapters.memoryEmbedding.default`. Custom kinds are validated
-from the final context.
+Configure `resources.memory.config`; optionally supply embeddings through
+`adapters.memoryEmbedding.default`. The agent writes
+`{ continuity, remember?, retire? }` through `consolidate_memory`, and reads
+notes through `search_memory` and `inspect_memory`. Existing checkpoints stay
+stored without conversion.
 
 ## How it works
 

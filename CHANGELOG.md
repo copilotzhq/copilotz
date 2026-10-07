@@ -1,3 +1,28 @@
+## 0.86.0 — 2026-10-07
+
+### Changed
+
+- Defer Actions atomically with `deferAction(work)` and a terminal `resolve`
+  handler. Core Ask uses this generic lifecycle through nested turns and tools;
+  the runtime has no agent or conversation semantics.
+- Settle operations only after inherited deliveries, Actions and streams drain.
+  Status reads are read-only. Permanent delivery failure and exhausted leases
+  emit fenced Action terminals so dependent tool plans can continue.
+- Replace Memory's typed graph with immutable plain-text notes and conversation
+  continuity: `{continuity, remember?, retire?}`. Preserve existing checkpoints,
+  snapshots and certified history boundaries without migration or re-embedding.
+  Only new notes use `memory_note`; old graph records remain stored unchanged.
+- Use one concise tool protocol with executable parallel/sequential examples,
+  compact schema declarations, and a shared context budget for continuity and
+  notes. Remove textual reasoning replay while preserving compatible native
+  provider state and output-only reasoning extraction.
+
+### Upgrade
+
+- Stop old workers and drain their work before the explicit v5-to-v6
+  `upgradeActionLifecycle` schema upgrade. Refactor removed memory kind/status
+  APIs and update every worker together. See `docs/upgrading.md`.
+
 ## 0.85.5 — 2026-10-07
 
 ### Fixed

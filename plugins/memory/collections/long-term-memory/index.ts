@@ -4,7 +4,6 @@ import {
   defineCollection,
   relation,
 } from "@copilotz/copilotz/collections";
-import { MEMORY_EDGE } from "../../shared/relations.ts";
 const schema = {
   type: "object",
   properties: {
@@ -60,10 +59,10 @@ export const longTermMemoryCollection: CollectionDefinition<typeof schema> =
     ], ["memorySpaceId", "status", "sequence"]],
     relations: {
       thread: relation.belongsTo("thread", "threadId", "has_long_term_memory"),
-      memoryRecords: relation.hasMany(
-        "memory_record",
+      memoryNotes: relation.hasMany(
+        "memory_note",
         "consolidationId",
-        MEMORY_EDGE.includesRecord,
+        "includes_memory_note",
       ),
     },
     content: { fields: ["content", "contextSnapshotContent"] },

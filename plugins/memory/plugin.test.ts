@@ -42,6 +42,7 @@ import AjvModule from "ajv";
 import { consolidateMemoryAction } from "./actions/consolidate-memory/index.ts";
 import { inspectMemoryAction } from "./actions/inspect-memory/index.ts";
 import { searchMemoryAction } from "./actions/search-memory/index.ts";
+import { toolSourceHandle } from "./shared/evidence.ts";
 import { memoryPlugin } from "./plugin.ts";
 import { builtInToolsPlugin } from "@copilotz/copilotz/tools/builtin";
 import type { LongTermMemoryConfig } from "./resources/memory/config/index.ts";
@@ -106,16 +107,12 @@ function adapter(script: Script, inputs: LlmAdapterCallInput[]): LlmAdapter {
   });
 }
 
-function memoryProposal() {
+function memoryProposal(sources?: string[]) {
   return {
-    outcome: "changes",
     continuity: "Compass remains the active project for the next turn.",
-    entities: [{
-      localId: "compass",
-      kind: "entity.project",
-      summary: "Compass is the active project.",
-      name: "Compass",
-      // Deliberately omitted: sources default to the checkpoint's trusted range.
+    remember: [{
+      text: "Compass is the active project.",
+      ...(sources ? { sources } : {}),
     }],
   };
 }
@@ -481,10 +478,8 @@ Deno.test("memory composes Core-native dispatch and settlement without a model s
   assertEquals(Object.keys(plugin.actions).sort(), [
     "consolidate_memory",
     "inspect_memory",
-    "invalidate_memory",
     "list_knowledge_spaces",
     "search_memory",
-    "set_memory_status",
   ]);
   assertEquals(Object.keys(plugin.processors).sort(), [
     "dispatchConsolidation",
@@ -494,7 +489,9 @@ Deno.test("memory composes Core-native dispatch and settlement without a model s
 
 Deno.test("checkpoint dispatch is a hidden ordinary Agent turn that atomically commits trusted memory", async () => {
   const run = await fixture((_input, call) =>
-    call === 1 ? stop("I will remember that.") : tool(memoryProposal())
+    call === 1
+      ? stop("I will remember that.")
+      : tool(memoryProposal(["message:message:user"]))
   );
   try {
     await startUserTurn(run);
@@ -560,13 +557,14 @@ Deno.test("checkpoint dispatch is a hidden ordinary Agent turn that atomically c
     assertConsolidationLifecycleOutput(
       (savedCheckpoint.metadata as { result?: unknown }).result,
     );
-    const records = await collection(run, "memory_record").list({
+    const records = await collection(run, "memory_note").list({
       limit: 10,
     });
     assertEquals(records.length, 1);
-    const sources = (records[0]!.provenance as {
-      sources: readonly { type: string; id: string }[];
-    }).sources;
+    const sources = records[0]!.sources as readonly {
+      type: string;
+      id: string;
+    }[];
     const publicHistory = await projectMessages(
       run.engine,
       NAMESPACE,
@@ -580,7 +578,7 @@ Deno.test("checkpoint dispatch is a hidden ordinary Agent turn that atomically c
       messageSources,
       ["message:user"],
     );
-    assertEquals(sources.filter((source) => source.type === "asset").length, 1);
+    assertEquals(sources.filter((source) => source.type === "asset").length, 0);
     await assertNoDeadLetters(run);
   } finally {
     await run.close();
@@ -590,7 +588,6 @@ Deno.test("checkpoint dispatch is a hidden ordinary Agent turn that atomically c
 Deno.test("a no_changes maintenance Action completes with schema-valid continuity", async () => {
   const run = await fixture((_input, call) =>
     call === 1 ? stop("I will remember that.") : tool({
-      outcome: "no_changes",
       continuity:
         "Continue the Compass conversation; no durable memory record changed and no user answer is pending.",
     })
@@ -1121,9 +1118,9 @@ Deno.test("invalid and omitted consolidation calls repair through ordinary Core 
     if (call === 1) return stop("Initial answer.");
     if (call === 2) {
       return tool({
-        outcome: "changes",
         continuity: "The user still expects a normal answer about Compass.",
-      }); // Invalid: no draft.
+        remember: [{ text: "" }],
+      }); // Invalid: an empty note.
     }
     if (call === 3) return stop("I forgot the requested tool."); // Memory emits one repair Message.
     return tool(memoryProposal());
@@ -1161,8 +1158,13 @@ Deno.test("consolidation can use another granted Tool before completing its chec
       };
     }
     assertEquals(call, 3);
-    assert(input.request.messages.some((message) => message.role === "tool"));
-    return tool(memoryProposal());
+    const result = input.request.messages.find((message) =>
+      message.role === "tool"
+    );
+    assert(result?.role === "tool" && result.toolPlanId);
+    return tool(
+      memoryProposal([toolSourceHandle(result.toolPlanId, result.toolCallId)]),
+    );
   }, { tools: ["get_current_time", "consolidate_memory"] });
   try {
     await startUserTurn(run);
@@ -1172,6 +1174,13 @@ Deno.test("consolidation can use another granted Tool before completing its chec
     );
     assertEquals((await checkpoints(run)).length, 1);
     assertEquals(run.inputs.length, 3);
+    const notes = await collection(run, "memory_note").list({});
+    assertEquals(notes[0].sources.length, 1);
+    const source = await collection(run, "message").get({
+      id: notes[0].sources[0].id,
+    });
+    assertEquals(source.metadata.toolStatus, "completed");
+    assertEquals(source.historyScopeId, (await checkpoints(run))[0].id);
     await assertNoDeadLetters(run);
   } finally {
     await run.close();
@@ -1439,15 +1448,11 @@ Deno.test("invalid on-demand consolidation settles its own checkpoint as failed"
     (_input, call) =>
       call === 1
         ? tool({
-          outcome: "changes",
           continuity:
             "The requested work continues, but this evidence is invalid.",
-          entities: [{
-            localId: "unauthorized",
-            kind: "entity.project",
-            summary: "This draft cites evidence outside the checkpoint.",
-            name: "Unauthorized",
-            sources: [{ type: "message", id: "message-not-authorized" }],
+          remember: [{
+            text: "This draft cites evidence outside the checkpoint.",
+            sources: ["message:message-not-authorized"],
           }],
         })
         : stop("Continue normally."),
@@ -1463,390 +1468,10 @@ Deno.test("invalid on-demand consolidation settles its own checkpoint as failed"
     assertEquals(saved.status, "failed");
     assert(saved.error);
     assertEquals(
-      await collection(run, "memory_record").list({ limit: 10 }),
+      await collection(run, "memory_note").list({ limit: 10 }),
       [],
     );
     await assertNoDeadLetters(run);
-  } finally {
-    await run.close();
-  }
-});
-
-Deno.test("invalidate_memory retracts editorially without changing lifecycle", async () => {
-  const run = await fixture(() => stop("No routing needed."), {
-    enabled: false,
-  });
-  try {
-    await startUserTurn(run);
-    const spaces = collection(run, "memory_space");
-    const grants = collection(run, "memory_space_access");
-    const checkpoints = collection(run, "long_term_memory");
-    const records = collection(run, "memory_record");
-    await spaces.create({
-      id: "space-a",
-      name: "Space A",
-      scopeType: "thread",
-      scopeId: "thread-a",
-      threadId: "thread-a",
-      access: "read_write",
-      defaultWrite: true,
-      metadata: {},
-    });
-    await grants.create({
-      id: "grant-a",
-      threadId: "thread-a",
-      memorySpaceId: "space-a",
-      access: "read_write",
-      defaultWrite: true,
-      metadata: {},
-    });
-    await checkpoints.create({
-      id: "checkpoint-a",
-      threadId: "thread-a",
-      schemaVersion: "4",
-      strategy: "semantic_graph",
-      status: "ready",
-      sequence: 1,
-      agentId: "north",
-      sourceStartMessageId: "message:user",
-      sourceEndMessageId: "message:user",
-      content: [],
-      contextSnapshotContent: [],
-      contextSnapshot: null,
-
-      contentHash: null,
-      tokenEstimate: null,
-      error: null,
-      metadata: {},
-    });
-    await records.create({
-      id: "occurrence-a",
-      memorySpaceId: "space-a",
-      consolidationId: "checkpoint-a",
-      createdByAgentId: "north",
-      originThreadId: "thread-a",
-      form: "occurrence",
-      kind: "occurrence.event",
-      summary: "The original event happened.",
-      status: "happened",
-      validity: {
-        status: "valid",
-        sources: Array.from({ length: 55 }, (_, index) => ({
-          type: "message",
-          id: `validity-source-${index}`,
-        })),
-      },
-      content: [],
-      temporal: { recordedAt: "2026-08-31T00:00:00.000Z" },
-      epistemic: { basis: "observed", stance: "affirmed" },
-      provenance: {
-        sources: Array.from({ length: 55 }, (_, index) => ({
-          type: "message",
-          id: `provenance-source-${index}`,
-        })),
-        recordedBy: { type: "agent", id: "north" },
-        consolidationId: "internal-checkpoint-token",
-      },
-      data: { publicField: "public-value" },
-
-      metadata: { storageSecret: "internal-metadata-token" },
-    });
-    for (let index = 0; index < 51; index++) {
-      await records.create({
-        id: `occurrence-related-${index}`,
-        memorySpaceId: "space-a",
-        consolidationId: "checkpoint-a",
-        createdByAgentId: "north",
-        originThreadId: "internal-origin-thread-token",
-        form: "occurrence",
-        kind: "occurrence.event",
-        summary: `Related accessible event ${index}.`,
-        status: "happened",
-        validity: { status: "valid" },
-        content: [],
-        temporal: { recordedAt: "2026-08-31T00:00:00.000Z" },
-        epistemic: null,
-        provenance: {
-          sources: [],
-          recordedBy: { type: "agent", id: "north" },
-          consolidationId: "checkpoint-a",
-        },
-        data: {},
-
-        metadata: {},
-      });
-    }
-    await spaces.create({
-      id: "space-other",
-      name: "Other Space",
-      scopeType: "global",
-      scopeId: "other-scope",
-      threadId: null,
-      access: "read_write",
-      defaultWrite: true,
-      metadata: {},
-    });
-    await records.create({
-      id: "occurrence-other-space",
-      memorySpaceId: "space-other",
-      consolidationId: "checkpoint-a",
-      createdByAgentId: "north",
-      originThreadId: "thread-a",
-      form: "occurrence",
-      kind: "occurrence.event",
-      summary: "An inaccessible event.",
-      status: "happened",
-      validity: { status: "valid" },
-      content: [],
-      temporal: { recordedAt: "2026-08-31T00:00:00.000Z" },
-      epistemic: null,
-      provenance: { sources: [], recordedBy: { type: "agent", id: "north" } },
-      data: {},
-
-      metadata: {},
-    });
-    for (let index = 0; index < 51; index++) {
-      await run.engine.collections.transaction({
-        operationKey: `memory-public-relation-${index}`,
-        namespace: NAMESPACE,
-        execute: ({ relations }) =>
-          relations.upsert({
-            id: `memory-public-relation-${index}`,
-            type: "supports",
-            source: { type: "memory_record", id: "occurrence-a" },
-            target: {
-              type: "memory_record",
-              id: `occurrence-related-${index}`,
-            },
-            metadata: { storageSecret: "internal-relation-token" },
-          }),
-      });
-    }
-    await run.engine.collections.transaction({
-      operationKey: "memory-inaccessible-relation",
-      namespace: NAMESPACE,
-      execute: ({ relations }) =>
-        relations.upsert({
-          id: "memory-inaccessible-relation",
-          type: "supports",
-          source: { type: "memory_record", id: "occurrence-a" },
-          target: { type: "memory_record", id: "occurrence-other-space" },
-          metadata: { storageSecret: "internal-cross-space-token" },
-        }),
-    });
-    const context = createTestDomainContext(run.engine, NAMESPACE, {
-      now: () => new Date("2026-08-31T01:00:00.000Z"),
-    });
-    const metadata = {
-      schema: "copilotz.core.tool-action.v1",
-      planId: "invalidate-plan",
-      planMessageId: "message:user",
-      planIndex: 0,
-      stageIndex: 0,
-      stageCount: 1,
-      planSize: 1,
-      toolCallId: "invalidate-call",
-      action: "invalidate_memory",
-      threadId: "thread-a",
-      triggerMessageId: "message:user",
-      agentId: "north",
-      agentParticipantId: "agent-north",
-      initiatorParticipantId: "human-a",
-      availableToolIds: [
-        "invalidate_memory",
-        "search_memory",
-        "inspect_memory",
-      ],
-      responseVisibility: { kind: "public" },
-      parentLlmActionRunId: "invalidate-llm",
-    };
-    const result = await context.actions.invalidate_memory({
-      id: "occurrence-a",
-      disposition: "retracted",
-      reason: "The source was incorrect.",
-    }, { operationKey: "invalidate-once", metadata });
-    const invalidated = result as {
-      memory: {
-        status: string;
-        validity: { status: string; sources: unknown };
-      };
-    };
-    assertEquals(invalidated.memory.status, "happened");
-    assertEquals(invalidated.memory.validity.status, "retracted");
-    assertEquals(invalidated.memory.validity.sources, [{
-      type: "message",
-      id: "message:user",
-    }]);
-    const saved = await records.get({ id: "occurrence-a" });
-    assertEquals(saved?.status, "happened");
-    assertEquals((saved?.validity as { status: string }).status, "retracted");
-    const normal = await context.actions.search_memory({
-      form: "occurrence",
-      limit: 1,
-    }, {
-      operationKey: "search-normal",
-      metadata: { ...metadata, action: "search_memory" },
-    });
-    const historical = await context.actions.search_memory({
-      form: "occurrence",
-      includeHistory: true,
-      limit: 100,
-    }, {
-      operationKey: "search-history",
-      metadata: { ...metadata, action: "search_memory" },
-    });
-    const normalOutput = normal as {
-      memories: Array<{ id: string }>;
-      scanned: number;
-      matched: number;
-      returned: number;
-      truncated: boolean;
-    };
-    const historicalOutput = historical as typeof normalOutput;
-    assertEquals(normalOutput.scanned, 52);
-    assertEquals(normalOutput.matched, 51);
-    assertEquals(normalOutput.returned, 1);
-    assertEquals(normalOutput.truncated, true);
-    assertEquals(
-      normalOutput.memories.some((item) => item.id === "occurrence-a"),
-      false,
-    );
-    assertEquals(historicalOutput.scanned, 52);
-    assertEquals(historicalOutput.matched, 52);
-    assertEquals(historicalOutput.returned, 52);
-    assertEquals(historicalOutput.truncated, false);
-    assertEquals(
-      historicalOutput.memories.some((item) =>
-        item.id === "occurrence-other-space"
-      ),
-      false,
-    );
-    const inspected = await context.actions.inspect_memory({
-      id: "occurrence-a",
-    }, {
-      operationKey: "inspect-retracted",
-      metadata: { ...metadata, action: "inspect_memory" },
-    });
-    const inspectedOutput = inspected as {
-      memory: {
-        validity: {
-          status: string;
-          sources: {
-            items: Array<{ type: string; id: string }>;
-            total: number;
-            returned: number;
-            truncated: boolean;
-          };
-        };
-        provenance: {
-          sources: {
-            items: Array<{ type: string; id: string }>;
-            total: number;
-            returned: number;
-            truncated: boolean;
-          };
-        };
-      };
-      relations: {
-        items: Array<{ other: { id: string } }>;
-        scanned: number;
-        matched: number;
-        returned: number;
-        truncated: boolean;
-      };
-    };
-    assertEquals(inspectedOutput.memory.validity.status, "retracted");
-    assertEquals(inspectedOutput.memory.provenance.sources, {
-      items: Array.from({ length: 50 }, (_, index) => ({
-        type: "message",
-        id: `provenance-source-${index}`,
-      })),
-      total: 55,
-      returned: 50,
-      truncated: true,
-    });
-    assertEquals(
-      inspectedOutput.relations.scanned > inspectedOutput.relations.matched,
-      true,
-    );
-    assertEquals(inspectedOutput.relations.matched, 51);
-    assertEquals(inspectedOutput.relations.returned, 50);
-    assertEquals(inspectedOutput.relations.truncated, true);
-    assertEquals(
-      inspectedOutput.relations.items.some((relation) =>
-        relation.other.id === "occurrence-other-space"
-      ),
-      false,
-    );
-    const serializedSearch = JSON.stringify(historical);
-    const serializedInspect = JSON.stringify(inspected);
-    for (
-      const forbidden of [
-        "embedding",
-        "namespace",
-        "memorySpaceId",
-        "originThreadId",
-        "consolidationId",
-        "createdByAgentId",
-        "metadata",
-        "internal-checkpoint-token",
-        "internal-origin-thread-token",
-        "internal-metadata-token",
-        "internal-relation-token",
-        "internal-cross-space-token",
-        "0.123456789",
-      ]
-    ) {
-      assertEquals(serializedSearch.includes(forbidden), false, forbidden);
-      assertEquals(serializedInspect.includes(forbidden), false, forbidden);
-    }
-    const searchValidate = new AjvModule.default({
-      allErrors: true,
-      strict: false,
-    }).compile(searchMemoryAction.outputSchema!);
-    const inspectValidate = new AjvModule.default({
-      allErrors: true,
-      strict: false,
-    }).compile(inspectMemoryAction.outputSchema!);
-    assert(searchValidate(normal), JSON.stringify(searchValidate.errors));
-    assert(searchValidate(historical), JSON.stringify(searchValidate.errors));
-    assert(inspectValidate(inspected), JSON.stringify(inspectValidate.errors));
-
-    // An identical retry is idempotent: it preserves the original validity
-    // payload (including changedAt) rather than producing a new write.
-    const retry = await context.actions.invalidate_memory({
-      id: "occurrence-a",
-      disposition: "retracted",
-      reason: "The source was incorrect.",
-    }, { operationKey: "invalidate-retry", metadata });
-    assertEquals(
-      (retry as { memory: { validity: unknown } }).memory.validity,
-      (invalidated as { memory: { validity: unknown } }).memory.validity,
-    );
-    await assertRejects(
-      () =>
-        context.actions.invalidate_memory({
-          id: "occurrence-a",
-          disposition: "archived",
-          reason: "A conflicting disposition.",
-        }, { operationKey: "invalidate-conflict", metadata }),
-      Error,
-      "different editorial disposition",
-    );
-
-    // A record outside the thread's read-write spaces cannot be altered.
-    // The space exists to satisfy the collection relation, but no access
-    // grant connects it to thread-a.
-    await assertRejects(
-      () =>
-        context.actions.invalidate_memory({
-          id: "occurrence-other-space",
-          disposition: "retracted",
-          reason: "No authority over this record.",
-        }, { operationKey: "invalidate-unauthorized", metadata }),
-      Error,
-      "not writable from this thread",
-    );
   } finally {
     await run.close();
   }
@@ -1891,31 +1516,21 @@ Deno.test("consolidation cannot change the lifecycle of a readable Space peer", 
       sourceStartMessageId: "peer-message",
       sourceEndMessageId: "peer-message",
     });
-    const peer = await c.memoryRecord.create({
+    const peer = await c.memoryNote.create({
       id: "peer-record",
       memorySpaceId: "memory-space:thread:peer-thread",
       consolidationId: "peer-checkpoint",
       createdByAgentId: "other-agent",
       originThreadId: "peer-thread",
-      form: "assertion",
-      kind: "assertion.state",
-      summary: "Peer owns this fact",
-      status: "current",
-      validity: { status: "valid" },
-      temporal: {},
-      provenance: {},
-      data: {},
+      text: "Peer owns this fact",
+      sources: [],
+      retirement: null,
     });
     await assertRejects(
       () =>
         context.actions.consolidate_memory({
-          outcome: "changes",
           continuity: "Keep the peer's fact intact.",
-          lifecycle: [{
-            target: { memoryId: "peer-record" },
-            status: "retracted",
-            sources: [{ type: "message", id: "message:user" }],
-          }],
+          retire: [{ id: "peer-record", reason: "incorrect" }],
         }, {
           metadata: {
             schema: "copilotz.core.tool-action.v1",
@@ -1938,9 +1553,9 @@ Deno.test("consolidation cannot change the lifecycle of a readable Space peer", 
           },
         }),
       Error,
-      "read-only peer",
+      "not active in the writable scope",
     );
-    assertEquals(await c.memoryRecord.get({ id: "peer-record" }), peer);
+    assertEquals(await c.memoryNote.get({ id: "peer-record" }), peer);
   } finally {
     await run.close();
   }
@@ -1957,7 +1572,7 @@ Deno.test("Memory consolidation and public search use persisted pgvector project
       run,
       async () => (await checkpoints(run))[0]?.status === "ready",
     );
-    const records = await collection(run, "memory_record").list({ limit: 100 });
+    const records = await collection(run, "memory_note").list({ limit: 100 });
     assertEquals(records.length, 1);
     assertEquals("embedding" in records[0], false);
     const persisted = await run.db.query<{ type: string; count: string }>(
@@ -1971,9 +1586,9 @@ Deno.test("Memory consolidation and public search use persisted pgvector project
     }, {
       operationKey: "vector-search",
       metadata: { threadId: "thread-a", agentId: "north" },
-    }) as { memories: Array<{ id: string; similarity: number }> };
-    assertEquals(result.memories.map((x) => x.id), [records[0].id]);
-    assertEquals(result.memories[0].similarity, 1);
+    }) as { notes: Array<{ id: string; similarity: number }> };
+    assertEquals(result.notes.map((x) => x.id), [records[0].id]);
+    assertEquals(result.notes[0].similarity, 1);
     await run.engine.collections.rebuild(NAMESPACE);
     const replayed = await context.actions.search_memory({
       query: "Compass",
@@ -1982,7 +1597,7 @@ Deno.test("Memory consolidation and public search use persisted pgvector project
       operationKey: "vector-search-after-replay",
       metadata: { threadId: "thread-a", agentId: "north" },
     }) as typeof result;
-    assertEquals(replayed.memories, result.memories);
+    assertEquals(replayed.notes, result.notes);
     for (
       const grant of await context.collections.memorySpaceAccess.list({
         where: { threadId: "thread-a" },
@@ -1997,7 +1612,7 @@ Deno.test("Memory consolidation and public search use persisted pgvector project
       operationKey: "vector-search-revoked",
       metadata: { threadId: "thread-a", agentId: "north" },
     }) as typeof result;
-    assertEquals(revoked.memories, []);
+    assertEquals(revoked.notes, []);
   } finally {
     await run.close();
   }

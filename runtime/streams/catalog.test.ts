@@ -180,10 +180,6 @@ Deno.test("operation catalog opens streams with exact metadata and wakes cross-c
     });
     assertEquals(hints.at(-1)?.kind, "stream");
     assertEquals(hints.at(-1)?.streamId, descriptor.streamId);
-    await writer.mark("tenant-a", operationId, "running");
-    assertEquals(hints.at(-1)?.kind, "operation");
-    assertEquals(hints.at(-1)?.streamId, undefined);
-    unsubscribe();
     await writer.retainStream({
       namespace: "tenant-a",
       operationId,
@@ -213,7 +209,10 @@ Deno.test("operation catalog opens streams with exact metadata and wakes cross-c
       }),
       [],
     );
-    await writer.mark("tenant-a", operationId, "completed");
+    await writer.reconcile({ namespace: "tenant-a", operationId });
+    assertEquals(hints.at(-1)?.kind, "operation");
+    assertEquals(hints.at(-1)?.streamId, undefined);
+    unsubscribe();
     assertEquals(
       await writer.openStream({
         namespace: "tenant-a",
@@ -396,11 +395,10 @@ Deno.test("a recovered execution supersedes its old physical lane without byte s
       true,
     );
     assertEquals(
-      await catalog.mark(
-        "tenant-a",
-        "operation-incarnation",
-        "completed",
-      ),
+      (await catalog.reconcile({
+        namespace: "tenant-a",
+        operationId: "operation-incarnation",
+      })) > 0,
       false,
     );
     assertEquals(
@@ -469,7 +467,7 @@ Deno.test("operation stream terminalization is crash-resumable and retains gener
       "terminating",
     );
     assertEquals(
-      await catalog.mark("tenant-a", operationId, "completed"),
+      (await catalog.reconcile({ namespace: "tenant-a", operationId })) > 0,
       false,
     );
 
@@ -519,7 +517,7 @@ Deno.test("operation stream terminalization is crash-resumable and retains gener
       "cannot reopen after terminalization began",
     );
     assertEquals(
-      await catalog.mark("tenant-a", operationId, "completed"),
+      (await catalog.reconcile({ namespace: "tenant-a", operationId })) > 0,
       true,
     );
   } finally {
@@ -888,7 +886,7 @@ Deno.test("terminal metadata pruning removes replay rows but never observation o
             }),
         });
       }
-      await catalog.mark("tenant-a", operationId, "completed");
+      (await catalog.reconcile({ namespace: "tenant-a", operationId })) > 0;
     };
     await createOperation("operation-prune-a", "canonical");
     await createOperation("operation-prune-b", "observation");

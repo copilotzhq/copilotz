@@ -158,6 +158,7 @@ function systemPrompt(
   ].filter(Boolean);
   const publicMetadata = getPublicThreadMetadata(input.thread.metadata);
   const sections = [
+    "If no visible reply is needed, respond with <no_response/>.",
     input.promptInstructions.length
       ? [
         "## SHARED INSTRUCTIONS",

@@ -253,6 +253,8 @@ Deno.test("Action lifecycle receipt deduplication identities are reserved", () =
   for (
     const id of [
       "run-1:action:invoked",
+      "run-1:action:deferred",
+      "run-1:action:resolve",
       "run-1:action:terminal",
       "run-1:action:progress:1",
       "nested:run:action:progress:42",

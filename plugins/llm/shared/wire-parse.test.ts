@@ -4,7 +4,6 @@ import {
   parseToolCallsFromResponse,
   responseHasMalformedToolCallIntent,
   responseHasOrphanedToolResult,
-  responseHasReasoningMarkup,
   responseHasToolIntent,
   sanitizeUserFacingText,
 } from "./wire-parse.ts";
@@ -253,15 +252,6 @@ Deno.test("responseHasMalformedToolCallIntent detects non-canonical tool syntax"
     responseHasMalformedToolCallIntent('<invoke name="sandbox_session">', []),
     false,
   );
-});
-
-Deno.test("responseHasReasoningMarkup detects visible thinking tags", () => {
-  assertEquals(
-    responseHasReasoningMarkup("answer <think>private</think>"),
-    true,
-  );
-  assertEquals(responseHasReasoningMarkup("answer </mm:think>"), true);
-  assertEquals(responseHasReasoningMarkup("plain answer"), false);
 });
 
 Deno.test("responseHasOrphanedToolResult detects production-shaped tagless result tails", () => {

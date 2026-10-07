@@ -44,13 +44,14 @@ Deno.test("memory context selects the newest ready checkpoint visible to this th
       },
       space: { get: () => Promise.resolve(null) },
       memorySpace: {
+        list: () => Promise.resolve([{ id: "shared", scopeType: "custom" }]),
         get: ({ id }: { id: string }) =>
           Promise.resolve({ id, scopeType: "custom" }),
       },
       memorySpaceAccess: {
         list: () => Promise.resolve([{ memorySpaceId: "shared" }]),
       },
-      memoryRecord: { list: () => Promise.resolve([]) },
+      memoryNote: { list: () => Promise.resolve([]) },
       longTermMemory: {
         // Deliberately return all states: the resource itself must never expose
         // pending or failed checkpoints as a history boundary.
@@ -121,7 +122,7 @@ Deno.test("memory context selects the newest ready checkpoint visible to this th
       historyAfterMessageId: selected.historyAfterMessageId,
     },
     {
-      id: "shared-ready",
+      id: "copilotz.long_term",
       historyAfterMessageId: "m1",
     },
   );

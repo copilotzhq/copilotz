@@ -5,6 +5,7 @@ import type {
   EventDispatchReport,
   EventSubject,
 } from "../events/index.ts";
+import type { DeliveryLease } from "../events/types.ts";
 import type { AssetManifestEntry } from "../content/index.ts";
 
 export type CollectionEventOperation = "create" | "update" | "delete";
@@ -77,6 +78,9 @@ export type CollectionMutationIdentity = Readonly<{
   correlationId?: string;
   deduplicationId?: string;
   settlementScopeId?: string;
+  /** Runtime-owned work group for an outstanding deferred Action. */
+  actionScopeId?: string;
+  deliveryLease?: DeliveryLease;
   metadata?: Record<string, unknown>;
 }>;
 

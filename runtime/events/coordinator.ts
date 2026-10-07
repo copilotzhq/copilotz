@@ -46,6 +46,7 @@ export type EventPublisher = (
   context?: Readonly<{
     databaseSchema?: string;
     settlementScopeId?: string;
+    actionScopeId?: string;
   }>,
 ) => void | Promise<void>;
 
@@ -154,6 +155,7 @@ export function createEventCoordinator(
       priority: mutation.priority,
       maxAttempts: mutation.maxAttempts,
       transaction: mutation.transaction,
+      admission: mutation.admission,
       consumers,
     });
 
@@ -168,6 +170,7 @@ export function createEventCoordinator(
       try {
         await options.publish?.(committed.event, {
           settlementScopeId: committed.settlementScopeId,
+          actionScopeId: committed.actionScopeId,
         });
       } catch (error) {
         publishError = error;
@@ -189,6 +192,7 @@ export function createEventCoordinator(
       try {
         await options.publish?.(result.event, {
           settlementScopeId: result.settlementScopeId,
+          actionScopeId: result.actionScopeId,
         });
       } catch {
         // Publication cannot roll back already committed domain state.

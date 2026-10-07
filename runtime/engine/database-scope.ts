@@ -1,3 +1,8 @@
+import { advanceDeferredActions } from "../actions/deferred-work.ts";
+import {
+  cancelScopeActions,
+  recoverDeliveryActions,
+} from "../actions/recovery.ts";
 import {
   planActionInputRetention,
   retainActionInputContent,
@@ -96,6 +101,17 @@ export type DatabaseScopeRuntime = Readonly<{
   streamBodyStore: BodyStore;
   transients: TransientProcessorSet;
   operationCatalog: OperationCatalog;
+  onScopeCancellation: NonNullable<
+    Parameters<typeof createEventStore>[0]["onScopeCancellation"]
+  >;
+  advanceDeferred(
+    input?: Readonly<
+      { namespace?: string; operationId?: string; limit?: number }
+    >,
+  ): Promise<void>;
+  settleActionOwners: NonNullable<
+    Parameters<typeof createEventStore>[0]["settleActionOwners"]
+  >;
 }>;
 
 export type CreateDatabaseScopeOptions = Readonly<{
@@ -109,6 +125,7 @@ export type CreateDatabaseScopeOptions = Readonly<{
   publishLive(
     event: CopilotzEvent,
     settlementScopeId?: string,
+    actionScopeId?: string,
   ): Promise<LiveEventDispatchHandle>;
   store?: EventStore;
   transients: TransientProcessorSet;
@@ -127,7 +144,7 @@ export function createDatabaseScope(
   options: CreateDatabaseScopeOptions,
 ): DatabaseScopeRuntime {
   const { databaseSchema, engine } = options;
-  const store = options.store ?? createEventStore({
+  const store: EventStore = options.store ?? createEventStore({
     session: engine.session,
     schema: databaseSchema,
     createId: engine.createId,
@@ -137,6 +154,14 @@ export function createDatabaseScope(
     maxAttempts: engine.maxAttempts,
     retryBaseMs: engine.retryBaseMs,
     retryCapMs: engine.retryCapMs,
+    lockSettlementScope: (transaction, scopeId) =>
+      options.operationCatalog.lockScope(transaction, scopeId),
+    onScopeCancellation: (transaction, input) =>
+      onScopeCancellation(transaction, input),
+    settleActionOwners: (transaction, delivery) =>
+      settleActionOwners(transaction, delivery),
+    admitOperationEventSql: (input, param) =>
+      options.operationCatalog.admitEventSql(input, param),
     indexOperationEvent: (transaction, input) =>
       options.operationCatalog.indexEvent(transaction, input),
     indexOperationEventSql: (input, param) =>
@@ -155,11 +180,66 @@ export function createDatabaseScope(
       const dispatched = await options.publishLive(
         event,
         context?.settlementScopeId,
+        context?.actionScopeId,
       );
       await dispatched.done;
     },
     onDispatchFailure: engine.onDispatchFailure,
   });
+  const onScopeCancellation: DatabaseScopeRuntime["onScopeCancellation"] = (
+    transaction,
+    input,
+  ) =>
+    cancelScopeActions(
+      {
+        store,
+        coordinator,
+        catalog: options.operationCatalog,
+        actions: options.registry.actions,
+        protectedValues,
+      },
+      transaction,
+      input,
+    );
+  const settleActionOwners: DatabaseScopeRuntime["settleActionOwners"] = (
+    transaction,
+    delivery,
+  ) => settleDelivery(transaction, delivery);
+  const settleDelivery: DatabaseScopeRuntime["settleActionOwners"] = async (
+    transaction,
+    delivery,
+  ) => {
+    const recovered = await recoverDeliveryActions(
+      {
+        store,
+        coordinator,
+        catalog: options.operationCatalog,
+        actions: options.registry.actions,
+        protectedValues,
+      },
+      transaction,
+      delivery,
+    );
+    const advanced = await advanceDeferredActions(
+      { store, coordinator, catalog: options.operationCatalog },
+      { operationId: delivery.settlementScopeId },
+      transaction,
+    );
+    return async () => {
+      await recovered();
+      await advanced();
+    };
+  };
+  const advanceDeferred: DatabaseScopeRuntime["advanceDeferred"] = async (
+    input = {},
+  ) => {
+    const flush = await advanceDeferredActions({
+      store,
+      coordinator,
+      catalog: options.operationCatalog,
+    }, input);
+    await flush();
+  };
   const assets = createDatabaseAssetRepository({
     coordinator,
     session: engine.session,
@@ -611,6 +691,7 @@ export function createDatabaseScope(
     if (
       openStreams.length < (maintenanceOptions.limit ?? 1_000)
     ) openStreamReconcileAfter = undefined;
+    await advanceDeferred({ limit: maintenanceOptions.limit });
     const reconciled = await options.operationCatalog.reconcile({
       limit: maintenanceOptions.limit,
     });
@@ -759,5 +840,8 @@ export function createDatabaseScope(
     streamBodyStore,
     transients: options.transients,
     operationCatalog: options.operationCatalog,
+    settleActionOwners,
+    advanceDeferred,
+    onScopeCancellation,
   } as const);
 }

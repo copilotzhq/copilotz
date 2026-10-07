@@ -113,6 +113,7 @@ caller's `done` waits for them:
 | Event            | Data                                                         |
 | ---------------- | ------------------------------------------------------------ |
 | `<id>.invoked`   | `actionRunId`, `actionId`, `metadata`, `input`               |
+| `<id>.deferred`  | the same, plus opaque `work`; the Action remains open        |
 | `<id>.progress`  | the same, plus `progressIndex` and `progress` (zero or more) |
 | `<id>.completed` | the same, plus `output`                                      |
 | `<id>.failed`    | the same, plus `error: { name, message }`                    |
@@ -145,6 +146,71 @@ The types `ActionInvokedData`, `ActionProgressData`, `ActionCompletedData` and
   after a recorded failure needs a new invocation. A later ordinary call in the
   same handler already is one; a prepared or nested retry needs a new explicit
   key.
+- **Exhausted deliveries settle their open Actions.** Permanent failure or the
+  final expired lease records a failed terminal and its consumer deliveries in
+  the same transaction. The operation remains open until those continuations
+  drain. A worker whose lease was lost cannot publish a late terminal.
+
+### Deferred work
+
+An Action can release its worker while its work continues through ordinary
+Processors. Return `deferAction(work)` from `execute` and provide `resolve`:
+
+```ts
+import { deferAction, defineAction } from "@copilotz/copilotz/actions";
+
+export const buildReport = defineAction<{ reportId: string }, string>({
+  id: "reports.build",
+  execute(input) {
+    return deferAction({ reportId: input.reportId });
+  },
+  async resolve(input, context, resolution) {
+    if (resolution.outcome !== "completed") {
+      throw new Error("Report preparation failed.");
+    }
+    const report = await context.collections.report.get({ id: input.reportId });
+    if (!report || typeof report.url !== "string") {
+      throw new Error("Report is unavailable.");
+    }
+    return report.url;
+  },
+});
+```
+
+A Processor subscribed to `reports.build.deferred` reads the opaque `work`
+payload and prepares the report. The handoff receipt and those deliveries commit
+atomically. The caller immediately receives
+`{ status: "deferred", actionRunId }`; the eventual result is the ordinary
+`reports.build.completed` or `.failed` receipt. Subscribe to that terminal to
+continue work requiring the result. Returning another Action's pending receipt
+does not defer the parent Action.
+
+`resolve` runs under a recoverable delivery after the handoff's inherited
+deliveries, nested deferred Actions and streams drain. It receives the original
+input, Action identity and metadata. Its `resolution.work` is the JSON snapshot
+captured at handoff; `resolution.outcome` describes mechanical work completion,
+failure or cancellation. The Action interprets its domain result. A caught tool
+error does not itself mean every enclosing Action failed.
+
+A failed or cancelled stream has a final work outcome even while recovery is
+freezing its retained prefix. It does not hold the resolver open. The operation
+still waits for the physical stream terminal before publishing its own terminal
+status. After a writer crash, run maintenance to finish that cleanup once its
+writer lease expires. An actual delivery dead letter remains visible in the
+operation's transport outcome, even when an Action handles the error and the
+conversation continues.
+
+Deferral requires a durable delivery owner. A resolver must finish through a
+normal terminal; it cannot defer again. Explicit operation cancellation closes
+outstanding Actions and fences new work. Disconnecting an observer only stops
+observation.
+
+The runtime owns delivery leases, work ownership and settlement. Plugins own the
+meaning of the work and its output. For example, Core uses this mechanism for
+Ask, but the runtime has no knowledge of agents, conversations or answers.
+
+Detached Processors use the same lifecycle in an internal operation. Their work
+does not hold the foreground operation open or appear in its observation feed.
 
 ### Typing callers
 

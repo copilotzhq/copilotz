@@ -29,10 +29,6 @@ export type MemoryActionCallers = Readonly<{
   ): Promise<unknown>;
   search_memory(input: unknown, options?: ActionCallOptions): Promise<unknown>;
   inspect_memory(input: unknown, options?: ActionCallOptions): Promise<unknown>;
-  set_memory_status(
-    input: unknown,
-    options?: ActionCallOptions,
-  ): Promise<unknown>;
 }>;
 
 export type MemoryActionContext = ActionContext<

@@ -42,9 +42,10 @@ Memory is also not the only layer beside history. Keep these apart:
 
 The **Memory plugin** (`memoryPlugin` from `@copilotz/copilotz/memory`) adds the
 curated layer on top of Core. It contributes its own Collections (including
-`long_term_memory` for checkpoints and memory records/spaces), the Actions and
-Tools listed below, and the Processors that run consolidation. It requires Core;
-runtime-only applications without Core and an agent cannot run it.
+`long_term_memory` for checkpoints and immutable notes and memory spaces), the
+Actions and Tools listed below, and the Processors that run consolidation. It
+requires Core; runtime-only applications without Core and an agent cannot run
+it.
 
 ### Compose it in the host
 
@@ -73,11 +74,10 @@ memory: {
     // Recent history kept raw outside the checkpoint. The library default is
     // 0; this application keeps about the latest exchange verbatim.
     retainRecentEstimatedTokens: 2000,
-    // Bound for rendered semantic memory records in a context block (not the
-    // whole prompt or the continuity summary). Library default.
+    // One shared allowance for continuity, own notes, peer notes and framing.
     maxContentEstimatedTokens: 12000,
-    // Candidate records retrieved per proposed fact during consolidation.
-    // Library default; search_memory has its own limit input.
+    // Recent active candidates per own/peer group for prompt context.
+    // search_memory has its own limit input.
     retrievalLimit: 20,
   },
 },
@@ -147,12 +147,15 @@ Consolidation is a model turn on your connection and can incur model cost.
 The agent finishes by calling `consolidate_memory`. That alias runs the Action
 `copilotz.memory.consolidation.commit` (exported as
 `CONSOLIDATE_MEMORY_ACTION_ID`), which validates the proposal: shape, permitted
-memory kinds, each fact's provenance and scope, and that the source range is
-still certified. Valid facts, relations and the **ready** checkpoint commit
-together. If the maintenance call fails or is cancelled, the checkpoint becomes
-`failed` or `cancelled`. If source messages were edited or deleted after
-reservation, certification fails and that maintenance doesn't apply. Source
-messages are never modified.
+source handles, active replacement/retirement targets, write permission, and
+that the source range is still certified. Immutable notes, retirements,
+continuity and the **ready** checkpoint commit together. Conflicts return
+bounded feedback through the ordinary tool continuation so the agent can repair
+the proposal. A failed proposal never advances the saved history boundary. If
+the maintenance call fails or is cancelled, the checkpoint becomes `failed` or
+`cancelled`. If source messages were edited or deleted after reservation,
+certification fails and that maintenance doesn't apply. Source messages are
+never modified.
 
 A granted agent may also call `consolidate_memory` during an **ordinary** turn.
 Memory then derives an on-demand checkpoint from Core's trusted tool provenance,
@@ -177,11 +180,77 @@ beginning of eligible history; later ranges continue after the previous
 boundary. Certification proves source, visibility and provenance, not that the
 model's claims are true.
 
-`maxContentEstimatedTokens` bounds the rendered semantic records in each memory
-context block. Writable memory and read-only peer memory (below) are rendered
-separately from currently readable records and relations, each with its own
-bound. The continuity summary is a separate contribution, so the setting is not
-a cap on total memory text or on the prompt.
+`maxContentEstimatedTokens` is one allowance for continuity, own notes, peer
+notes and framing. Continuity comes first. The plugin selects recent active
+notes (own scope before peers), then renders the selection chronologically with
+stable IDs. Notes that do not fit are omitted whole, with a disclosure and
+`search_memory` available to retrieve them. It never clips a procedure or note.
+An oversized continuity proposal must be repaired before it can commit. If the
+configured allowance is reduced below an already saved summary, its continuity
+is kept intact and no extra notes are added. The model's overall input budget
+still applies; the new allowance governs future checkpoint writes.
+
+### Plain notes and explicit corrections
+
+The agent-facing write contract has three fields:
+
+```json
+{
+  "continuity": "Release v2 is deployed. Next: verify invoice exports; Ana has not confirmed the VAT fix.",
+  "remember": [
+    {
+      "text": "Ana requested VAT-inclusive invoice exports on 2026-10-04. Verification is still pending.",
+      "replaces": ["old-note-id"],
+      "sources": ["message:source-message-id"]
+    }
+  ],
+  "retire": [
+    { "id": "obsolete-note-id", "reason": "This assumption was disproved." }
+  ]
+}
+```
+
+`continuity` replaces the whole previously compacted prefix, including its
+earlier summary. `remember` and `retire` are optional; `{continuity}` alone is
+valid. Notes can contain prose, dates, uncertainty, attribution or multiline
+procedures. The plugin does not infer typed entities, tasks, kinds, validity
+windows or graph relations. Put structured business objects in application
+collections.
+
+Text and identity are immutable. To correct a note, create a new one with
+`replaces`; the prior note is retired with a replacement link. Retirement hides
+it from ordinary context and retains its audit. It is not physical erasure.
+Completion usually warrants a replacement recording the result.
+
+Exact text reuse applies only to active notes in the same writable space, with
+no whitespace normalization, semantic deduplication or cross-space merging.
+Optional validated sources are appended. A retired note is never reactivated.
+The plugin chooses the checkpoint's default writable space; the model cannot
+select another destination. Peer notes cannot be replaced or retired.
+
+### Sources and audiences
+
+Optional source handles come from the visible prepared history, frozen
+application evidence, or a successful tool result received in the owning turn. A
+tool result can be cited as `tool:["plan-id","call-id"]`, using the exact
+`tool_plan_id` and `tool_call_id` from its result. Unknown or ambiguous handles
+are rejected. Reasoning is not evidence. A note without sources has checkpoint
+lineage, which is not proof of its claim.
+
+A note is agent-authored output published to readers of its writable space.
+Validating an authorized source pointer does not establish that it supports the
+note, or prevent a model from paraphrasing private inputs. Configure Space
+sharing accordingly; source access and write access are enforced independently.
+Inspecting another originating agent/thread's note withholds source pointers
+(`sourcesWithheld: true`) while retaining note text and lineage. A pointer never
+grants access to the source body; its originating reader must enforce access.
+Exact-text reuse across authors does not append the new author's private source
+pointers to the original note.
+
+Existing `long_term_memory` checkpoints, continuity, source references and saved
+history boundaries stay in place. Newly written notes use `memory_note`. Old
+`memory_record` graph rows remain stored but are not converted or returned by
+the new note APIs. No memory data migration or re-embedding is performed.
 
 ### Background work, waits and errors
 
@@ -216,13 +285,13 @@ a cap on total memory text or on the prompt.
   agent's certified continuity for the active branch and visibility scope. Other
   agents in the thread don't receive it as their own checkpoint. Current memory
   grants control live semantic records, not ownership of this continuity.
-- **Search:** `search_memory` returns records from every memory space the caller
+- **Search:** `search_memory` returns notes from every memory space the caller
   can read, including spaces shared through explicit access and
   [Spaces](spaces.md) attachments. A stored fact is not necessarily private to
   one agent.
 - **Shared peer memory:** when an explicit Space attachment gives a thread read
-  access to a peer thread's memory space, its active records are added to
-  prompts automatically as a read-only "shared space memory" block.
+  access to a peer thread's memory space, its active notes join the same bounded
+  memory contribution as read-only peer notes.
 - **Access removal:** detaching, moving, archiving or removing a Space stops
   future peer-memory reads. Already incorporated conversation continuity stays
   available, including any peer information it summarized. This is retention of
@@ -238,28 +307,25 @@ participant view.
 
 | Tool alias              | Purpose                                                                     |
 | ----------------------- | --------------------------------------------------------------------------- |
-| `search_memory`         | Search readable memory records                                              |
+| `search_memory`         | Search readable active notes (or include retired audit)                     |
 | `consolidate_memory`    | Finish a maintenance turn, or consolidate on demand during an ordinary turn |
-| `inspect_memory`        | Inspect a memory record and its relations                                   |
-| `set_memory_status`     | Change a record's lifecycle status                                          |
+| `inspect_memory`        | Inspect notes by ID with lineage and permitted source pointers              |
 | `list_knowledge_spaces` | List memory spaces the caller can read                                      |
 
 Every alias must be granted explicitly in `capabilities.tools`. `search_memory`
 has a separate `limit` input: it defaults to 20 and accepts up to 100 results.
-`retrievalLimit` below configures consolidation candidate matching, not that
-search limit.
+`retrievalLimit` below bounds prompt candidates per own/peer group, not the
+search limit. `inspect_memory({ids})` accepts up to 100 IDs; inaccessible and
+missing IDs both appear in `unavailableIds`. `invalidate_memory` and
+`set_memory_status` are removed; use explicit retirement or replacement.
 
 | `resources.memory.config`     | Default | Meaning                                                                   |
 | ----------------------------- | ------- | ------------------------------------------------------------------------- |
 | `enabled`                     | `true`  | Automatic maintenance and memory prompt context; granted tools still work |
 | `triggerEstimatedTokens`      | 20000   | Prepared history size that reserves a checkpoint                          |
 | `retainRecentEstimatedTokens` | 0       | Recent history kept raw                                                   |
-| `maxContentEstimatedTokens`   | 12000   | Bound on rendered semantic records per memory context block               |
-| `retrievalLimit`              | 20      | Candidate records per proposed fact during consolidation                  |
-
-Records use the forms `entity`, `assertion`, `occurrence`, `intent`, `inquiry`
-and `procedure`. Custom kinds use `defineMemoryKind` and compose under
-`resources.memory.kinds`.
+| `maxContentEstimatedTokens`   | 12000   | Shared continuity, notes and framing allowance                            |
+| `retrievalLimit`              | 20      | Recent active prompt candidates per own/peer group                        |
 
 **Vector retrieval (optional).** Supply an embedding function as
 `adapters.memoryEmbedding.default` and declare
@@ -268,9 +334,11 @@ and `procedure`. Custom kinds use `defineMemoryKind` and compose under
 vectors the adapter actually returns. The host provisions vector storage
 explicitly with `provisionVectorStorage` from `@copilotz/copilotz/persistence`
 after the base schema; PostgreSQL needs pgvector, and PGlite needs the `vector`
-extension. Search uses exact distance ordering (no HNSW index), and profiles
-never mix. Without an embedder, search uses a bounded lexical path; a configured
-embedder that fails raises an error rather than falling back to lexical search.
+extension. New notes are embedded in one batch only when an embedder is
+configured. Exact reuse and retirements do not request embeddings. Search uses
+exact distance ordering (no HNSW index), and profiles never mix. Without an
+embedder, search uses a bounded lexical path; a configured embedder that fails
+raises an error rather than falling back to lexical search.
 [Knowledge](knowledge.md) has a separate embedding and retrieval implementation;
 its adapter and storage configuration are not interchangeable with Memory's.
 

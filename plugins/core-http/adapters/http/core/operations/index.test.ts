@@ -98,8 +98,14 @@ Deno.test("Core operation queries discover bounded thread associations", async (
         core: { operationMetadata: { threadId: "thread" } },
       },
     );
-    await catalog.mark("tenant", finishedOld.id, "completed");
-    await catalog.mark("tenant", finishedRecent.id, "completed");
+    await catalog.reconcile({
+      namespace: "tenant",
+      operationId: finishedOld.id,
+    });
+    await catalog.reconcile({
+      namespace: "tenant",
+      operationId: finishedRecent.id,
+    });
     await db.query(
       `UPDATE "${schema}"."copilotz_operations"
           SET updated_at = CASE operation_id

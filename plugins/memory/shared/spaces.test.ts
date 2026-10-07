@@ -1,9 +1,4 @@
-import {
-  assert,
-  assertEquals,
-  assertRejects,
-  assertStringIncludes,
-} from "@std/assert";
+import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 import { createPluginRegistry } from "@copilotz/copilotz/plugins";
 import { createCopilotzEngine } from "../../../runtime/engine/index.ts";
 import { createTestDatabase } from "../../../runtime/testing/ominipg.ts";
@@ -11,7 +6,7 @@ import { createTestDomainContext } from "../../core/shared/testing/context.ts";
 import { materializeBuiltinModel } from "../../llm/adapters/builtin/index.ts";
 import { memoryPlugin } from "../plugin.ts";
 import { ensureWritableMemorySpace, threadMemorySpaces } from "./access.ts";
-import { activeMemoryRecords, candidateRecords } from "./retrieval.ts";
+import { activeMemoryNotes } from "./retrieval.ts";
 import { memoryContextResource } from "../resources/promptContext/memory/index.ts";
 import type { MemoryProcessorContext } from "./contracts.ts";
 
@@ -40,8 +35,8 @@ Deno.test("Space memory is read-only, isolated and revocable across all consumer
   const search = async (threadId: string) => {
     const result = await context.actions.search_memory({ query: "remember" }, {
       metadata: { threadId, agentId: "reader" },
-    }) as { memories: { id: string }[] };
-    return result.memories.map((m) => m.id).sort();
+    }) as { notes: { id: string }[] };
+    return result.notes.map((m) => m.id).sort();
   };
   const resource = memoryContextResource;
   const prompt = () =>
@@ -133,23 +128,18 @@ Deno.test("Space memory is read-only, isolated and revocable across all consumer
         sourceEndMessageId: "m",
         readMemorySpaceIds: [scope(id)],
       });
-      await c.memoryRecord.create({
+      await c.memoryNote.create({
         id: `fact-${id}`,
         memorySpaceId: scope(id),
         consolidationId: `checkpoint-${id}`,
         createdByAgentId: `writer-${id}`,
         originThreadId: id,
-        form: "assertion",
-        kind: "assertion.state",
-        status: "current",
-        summary: `remember secret-${id}`,
-        validity: { status: "valid" },
-        temporal: {},
-        provenance: { sources: [] },
-        data: { text: `secret-${id}` },
+        text: `remember secret-${id}`,
+        sources: [],
+        retirement: null,
       });
     }
-    const original = await c.memoryRecord.list({ order: { field: "id" } });
+    const original = await c.memoryNote.list({ order: { field: "id" } });
     assertEquals(await search("a"), ["fact-a"]);
     await attach("a", "one");
     await attach("b", "one");
@@ -163,19 +153,8 @@ Deno.test("Space memory is read-only, isolated and revocable across all consumer
       "read_write",
       true,
     ], [scope("b"), "read", false]]);
-    const visible = await activeMemoryRecords(context, spaces);
-    assertEquals(visible.map((r) => r.id).sort(), ["fact-a", "fact-b"]);
-    const candidates = await candidateRecords(memoryContext, {
-      query: "remember",
-      form: "assertion",
-      kind: "assertion.state",
-      spaces,
-      agent: { id: "reader" } as never,
-      threadId: "a",
-      checkpointId: "test",
-      limit: 10,
-    });
-    assertEquals(candidates.map((c) => c.record.id).sort(), [
+    const visible = await activeMemoryNotes(context, spaces, 20);
+    assertEquals(visible.notes.map((note) => note.id).sort(), [
       "fact-a",
       "fact-b",
     ]);
@@ -186,16 +165,15 @@ Deno.test("Space memory is read-only, isolated and revocable across all consumer
       assert(!answer.includes("secret-c"));
     }
     assert(!JSON.stringify(await prompt()).includes("secret-c"));
-    await assertRejects(() =>
-      context.actions.set_memory_status({ id: "fact-b", status: "archived" }, {
-        metadata: { threadId: "a", agentId: "reader" },
-      })
-    );
-    await assertRejects(() =>
-      context.actions.inspect_memory({ id: "fact-c" }, {
-        metadata: { threadId: "a", agentId: "reader" },
-      })
-    );
+    const inaccessible = await context.actions.inspect_memory({
+      ids: ["fact-c", "missing"],
+    }, {
+      metadata: { threadId: "a", agentId: "reader" },
+    });
+    assertEquals(inaccessible, {
+      notes: [],
+      unavailableIds: ["fact-c", "missing"],
+    });
     const checkpoint = {
       id: "old",
       namespace: "tenant",
@@ -274,12 +252,12 @@ Deno.test("Space memory is read-only, isolated and revocable across all consumer
     assert(!JSON.stringify(finalPrompt).includes("secret-b"));
     assertEquals(
       (Array.isArray(finalPrompt) ? finalPrompt : [finalPrompt]).find((entry) =>
-        entry?.id === "old"
+        entry?.id === "copilotz.long_term"
       )?.historyAfterMessageId,
       "m",
     );
     assertEquals(
-      await c.memoryRecord.list({ order: { field: "id" } }),
+      await c.memoryNote.list({ order: { field: "id" } }),
       original,
     );
     assertEquals((await c.memorySpaceAccess.list()).length, 3);

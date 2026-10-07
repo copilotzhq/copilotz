@@ -6,7 +6,9 @@ import { defineProcessor, type Processor } from "@copilotz/copilotz/plugins";
 import {
   CORE_LLM_CALL_METADATA_SCHEMA,
   coreLlmCallMetadata,
+  withAgentAskMetadata,
   withAgentFailureMetadata,
+  withCoreAgentTurnMetadata,
   withWorkflowMetadata,
 } from "../../shared/workflow-metadata.ts";
 import type { CoreToolProcessorContext } from "../../shared/runtime-context.ts";
@@ -40,7 +42,9 @@ export const projectAgentFailureProcessor: Processor<CoreToolProcessorContext> =
         (lifecycle.status !== "failed" && lifecycle.status !== "cancelled")
       ) return;
       const metadata = coreLlmCallMetadata(lifecycle.metadata);
-      if (!metadata || isPrivateOrDelegated(metadata)) return;
+      if (!metadata || (!metadata.ask && isPrivateOrDelegated(metadata))) {
+        return;
+      }
       const participant = await loadParticipant(
         context,
         metadata.agentParticipantId,
@@ -59,6 +63,33 @@ export const projectAgentFailureProcessor: Processor<CoreToolProcessorContext> =
         lifecycle.actionRunId,
         "agent-failure",
       );
+      if (metadata.ask) {
+        const ask = metadata.ask;
+        const resultMetadata = withAgentAskMetadata({
+          copilotzAskOutcome: {
+            status: lifecycle.status,
+            error: lifecycle.error,
+          },
+        }, { ...ask, phase: "answer", answerAttemptId: lifecycle.actionRunId });
+        await createMessage({
+          id,
+          threadId: metadata.threadId,
+          sender: participant,
+          recipientIds: [],
+          content: [],
+          visibility: { kind: "internal" },
+          metadata: metadata.agentTurn
+            ? withCoreAgentTurnMetadata(resultMetadata, metadata.agentTurn)
+            : resultMetadata,
+          ...(metadata.agentTurn
+            ? { historyScopeId: metadata.agentTurn.id }
+            : {}),
+        }, {
+          operationKey: "project:asked-agent-failure",
+          signal: context.signal,
+        });
+        return;
+      }
       const failureMetadata = withWorkflowMetadata(
         withAgentFailureMetadata(undefined, {
           schema: "copilotz.agent-failure",

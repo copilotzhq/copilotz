@@ -1,54 +1,21 @@
-/** Public authoring declarations for semantic-memory integrations. @module */
-
+/** Public memory notes, range selection and configuration contracts. @module */
 export {
   buildMemoryConsolidationInstruction,
-  isEditoriallyVisible,
-  parseConsolidateMemoryInput,
-  proposalDrafts,
-  renderLongTermMemory,
+  memorySourceHandle,
   selectLongTermMemoryRange as selectEventLongTermMemoryRange,
-  stableMemoryRecordId,
 } from "./consolidation/index.ts";
 export type {
-  MemoryRecordProjection,
-  MemoryRecordRelation,
   MemorySourceMessage,
   MemorySpaceDescriptor,
-  RetrievedMemoryRecord,
   SelectedMemoryRange,
 } from "./consolidation/index.ts";
 export {
-  CORE_MEMORY_KINDS,
-  defaultMemoryLifecycle,
-  defineMemoryKind,
-  MEMORY_FORMS,
-  MEMORY_LIFECYCLES,
-  MEMORY_RELATION_TYPES,
-  memoryLifecycleAllows,
-  memorySourceKey,
-} from "./ontology/index.ts";
-export type {
-  AssertionMemoryDraft,
-  ConsolidateMemoryInput,
-  EntityMemoryDraft,
-  InquiryMemoryDraft,
-  IntentMemoryDraft,
-  MemoryDraftBase,
-  MemoryEpistemic,
-  MemoryForm,
-  MemoryKindDefinition,
-  MemoryLifecycleDraft,
-  MemoryLifecycleStatus,
-  MemoryNodeRef,
-  MemoryProvenance,
-  MemoryRecord,
-  MemoryRelationDraft,
-  MemoryRelationType,
-  MemoryTemporal,
-  OccurrenceMemoryDraft,
-  ProcedureMemoryDraft,
-  ProposedMemoryRef,
-} from "./ontology/index.ts";
+  MemoryProposalConflict,
+  memoryProposalSchema,
+  prepareMemoryProposal,
+  renderMemoryNotes,
+} from "./notes/index.ts";
+export type { MemoryNote, MemoryProposal } from "./notes/index.ts";
 export type {
   MemoryAdapters,
   MemoryEmbed,

@@ -1,3 +1,8 @@
+import type {
+  ActionDeferral,
+  ActionResolution,
+  DeferredAction,
+} from "./deferral.ts";
 import type { VectorReader, VectorTransaction } from "../vectors/index.ts";
 import type { ActionContentDeclaration } from "./content.ts";
 import type { ExtendedJSONSchema } from "../../dependencies/json-schema-to-ts.ts";
@@ -102,6 +107,8 @@ export type RuntimeIdentity = Readonly<{
   correlationId?: string;
   deduplicationId?: string;
   settlementScopeId?: string;
+  /** Runtime-owned work group for an outstanding deferred Action. */
+  actionScopeId?: string;
 }>;
 
 /** Caller-owned, JSON-safe data carried by one Action invocation. */
@@ -246,6 +253,13 @@ export type ActionDefinition<
     input: TInput,
     context: TContext,
   ): TOutput | Promise<TOutput>;
+  resolve?(
+    input: TInput,
+    context: TContext,
+    resolution: ActionResolution,
+  ):
+    | Exclude<TOutput, ActionDeferral>
+    | Promise<Exclude<TOutput, ActionDeferral>>;
   readonly [actionDefinitionTypes]?: Readonly<{
     input: TInput;
     output: TOutput;
@@ -259,6 +273,7 @@ export type AnyActionDefinition = Readonly<{
   inputSchema?: ActionSchema;
   outputSchema?: ActionSchema;
   execute: (...args: never[]) => unknown;
+  resolve?: (...args: never[]) => unknown;
   readonly [actionDefinitionTypes]?: Readonly<{
     input: unknown;
     output: unknown;
@@ -276,9 +291,12 @@ export type ActionInput<A extends AnyActionDefinition> = ActionDefinitionTypes<
   A
 >["input"];
 
-export type ActionOutput<A extends AnyActionDefinition> = ActionDefinitionTypes<
-  A
->["output"];
+type ActionCallResult<T> = T extends ActionDeferral ? DeferredAction : T;
+export type ActionOutput<A extends AnyActionDefinition> = ActionCallResult<
+  ActionDefinitionTypes<
+    A
+  >["output"]
+>;
 
 export type ActionContextOf<A extends AnyActionDefinition> =
   ActionDefinitionTypes<A>["context"];
@@ -310,6 +328,7 @@ export type ActionCallers<TActions extends ActionMap = ActionMap> = Readonly<
 
 export type ActionStatus =
   | "invoked"
+  | "deferred"
   | "progress"
   | "completed"
   | "failed"
@@ -331,6 +350,10 @@ type ActionEventBase<I> = Readonly<{
 export type ActionInvokedData<I = unknown> =
   & ActionEventBase<I>
   & Readonly<{ status: "invoked" }>;
+
+export type ActionDeferredData<I = unknown> =
+  & ActionEventBase<I>
+  & Readonly<{ status: "deferred"; work: unknown; progressIndex: number }>;
 
 export type ActionCompletedData<I = unknown, O = unknown> =
   & ActionEventBase<I>
@@ -356,6 +379,7 @@ export type ActionFailedData<I = unknown> =
 
 export type ActionEventData<I = unknown, O = unknown, P = unknown> =
   | ActionInvokedData<I>
+  | ActionDeferredData<I>
   | ActionProgressData<I, P>
   | ActionCompletedData<I, O>
   | ActionFailedData<I>;
@@ -365,6 +389,8 @@ type ActionLifecycleEnvelope = Readonly<{
   correlationId?: string;
   deduplicationId: string;
   settlementScopeId?: string;
+  /** Runtime-owned work group for an outstanding deferred Action. */
+  actionScopeId?: string;
 }>;
 
 export type ActionLifecycleInput<I = unknown, O = unknown, P = unknown> =
@@ -381,6 +407,7 @@ export type ActionLifecycleEmitter = Readonly<{
     input: ActionLifecycleInput<I, O, P>,
   ): Promise<CoordinatedMutationResult<void> | DurableEvent>;
   invoked(actionRunId: string): Promise<ActionInvokedData | null>;
+  deferred?(actionRunId: string): Promise<ActionDeferredData | null>;
   terminal(
     actionRunId: string,
   ): Promise<ActionCompletedData | ActionFailedData | null>;

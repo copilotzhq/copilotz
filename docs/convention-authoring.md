@@ -1,268 +1,267 @@
-# Convention-first authoring
+---
+title: "Filesystem Plugin Authoring"
+description: "Lay out plugin declarations one per directory, describe the plugin in copilotz.json, and generate a static, deterministic plugin module with the Deno build command."
+section: Evolve
+order: 10
+status: stable
+---
 
-Copilotz plugins are static declarations. Configuration belongs to the final
-application context. The library uses the same authoring format as application
-plugins; there are no `createXPlugin(options)` compatibility wrappers.
+# Filesystem Plugin Authoring
 
-## File structure
+## The pain
+
+A plugin that started as one `definePlugin` call keeps growing. Each new
+Collection, Action or Processor has to be added by hand to the plugin's
+`collections`, `actions` or `processors` map. Forgetting that line leaves a
+declaration that exists in the source but is never registered, and nothing
+complains until a caller finds `context.actions.saveNote` missing.
+
+## The problem
+
+You want one file per primitive and no hand-maintained registration list. But
+the application must not scan directories when it starts: it runs on Node, Deno,
+in bundles and on hosts without a filesystem, and evaluating whatever modules
+happen to be on disk is not a safe way to compose a plugin. Moving files must
+also leave every stored identity unchanged: Collection names, Action and
+Processor IDs, schemas and operation keys are already part of recorded Events.
+
+What is missing is a contract that says which files are declarations, how their
+registration names are chosen, and where discovery happens.
+
+## The solution
+
+Discovery happens once, on a **build host** with Deno 2.9 or later. The Copilotz
+build command reads conventional `index.ts` files as source text, without
+executing them, and writes `plugin.generated.ts`: an ordinary module with sorted
+static imports and one `definePlugin` call. Applications import that module. At
+run time nothing is discovered, so the generated plugin runs on every host where
+a hand-written plugin runs.
+
+[Chapter 22](getting-started/part-6-evolve-and-reuse/22-organize-and-share-plugins.md)
+applies this to the Notes plugin step by step. This reference uses the same
+`notes/` root and states the rules behind it.
+
+### Layout
 
 ```text
-my-plugin/
-  copilotz.json
-  collections/ticket/index.ts
-  actions/close-ticket/index.ts
-  processors/notify-owner/index.ts
-  resources/tools/search-tickets/index.ts
-  resources/support/config/index.ts
-  adapters/ticketStore/default/index.ts
-  shared/queries.ts
-  plugin.generated.ts
+notes/
+  copilotz.json                        plugin id, version and options
+  collections/note/index.ts            default-exports defineCollection(...)
+  actions/save-note/index.ts           default-exports defineAction(...)
+  processors/capture-note/index.ts     default-exports defineProcessor(...)
+  shared/                              helpers reused by several leaves; never an entry
+  plugin.generated.ts                  written by the build command; commit it
+  dist/plugin.js                       optional bundle from a full build
 ```
 
-Each discovered `index.ts` has a default export. Collections, Actions, and
-Processors have one alias segment; Resources and Adapters have a namespace and
-an alias. A helper used by one primitive stays inside that primitive module. Use
-`shared/` only for code reused across different primitives; public authoring
-APIs live in `authoring/`. Tests and README files are not discovered. Symlink
-directories are not traversed.
+A **leaf** is an `index.ts` file at an exact depth with a default export:
 
-Import runtime primitives such as `defineCollection`, `relation`, `defineAction`
-and `definePlugin` from `@copilotz/copilotz`. Import plugin-owned definitions
-and helpers from that plugin's entrypoint, such as `defineTool` from
-`@copilotz/copilotz/core`. The existing narrow runtime subpaths remain available
-for source modules that need a smaller import graph.
+| Category    | Path                                    | Registered as                     |
+| ----------- | --------------------------------------- | --------------------------------- |
+| Collections | `collections/<name>/index.ts`           | `collections[<alias>]`            |
+| Actions     | `actions/<name>/index.ts`               | `actions[<alias>]`                |
+| Processors  | `processors/<name>/index.ts`            | `processors[<alias>]`             |
+| Resources   | `resources/<namespace>/<name>/index.ts` | `resources[<namespace>][<alias>]` |
+| Adapters    | `adapters/<namespace>/<name>/index.ts`  | `adapters[<namespace>][<alias>]`  |
 
-Directory names become camelCase aliases: `close-ticket` becomes `closeTicket`.
-Aliases are local registration names; stable Action IDs and Collection names
-remain explicit inside their declarations. Explicit aliases are useful for
-model-facing names such as `search_tickets`:
+Rules that follow from the build command:
+
+- The alias is the leaf's directory name with `-x` turned into `X`: `save-note`
+  becomes `saveNote`. Aliases must match `^[a-z][a-zA-Z0-9_]*$`.
+- Only the leaf alias is camel-cased. A resource or adapter **namespace** is
+  used as written and must already match the same pattern, so
+  `resources/my-policy/` is rejected; an `aliases` entry cannot rename it.
+- `index.ts` files at any other depth are ignored, so a helper module at
+  `actions/save-note/format/index.ts` is not an entry.
+- Directories named `shared`, `authoring`, `node_modules`, `dist` and `.git` are
+  skipped. A directory named `internal` or `dependencies` is an error in scanned
+  directories: use primitive-local helpers, `shared/`, or manifest `plugins`.
+  Symlinked directories are not followed.
+- A leaf without a default export, an invalid alias or namespace, and two leaves
+  with the same category, namespace and alias each stop the build with the
+  offending path.
+
+Aliases are local registration names only. Stable identities stay written inside
+each declaration, so renaming a directory changes how callers reach a primitive,
+not what is stored.
+
+### `copilotz.json`
+
+The manifest is read only by the build command. Chapter 22 needs just the first
+two fields:
 
 ```json
 {
-  "id": "acme.support",
-  "version": "1.0.0",
-  "plugins": [{ "from": "@copilotz/copilotz/core", "export": "corePlugin" }],
-  "aliases": {
-    "resources/tools/search-tickets/index.ts": "search_tickets"
-  }
+  "id": "@team-notes/notes",
+  "version": "1.0.0"
 }
 ```
 
-An optional `include` array lists exact entry paths. Omit it to discover every
-conventional entry. Use it to deliberately select capabilities; nothing scans
-arbitrary exports or infers dependencies from imports. Dependencies are explicit
-manifest `plugins` imports. Each entry has a `from` module specifier and an
-`export` name (use `default` for default exports). There are no dependency
-forwarding modules. `shared/` is excluded from discovery.
-
-## Build on the development or CI host
-
-Install the CLI using the package version selected by your project:
-
-```sh
-deno install -g -A -n copilotz jsr:@copilotz/copilotz/build
-copilotz build ./my-plugin
-# Multiple explicit roots are generated before their dependency graphs are checked:
-copilotz build ./shared-plugin ./application-plugin
-```
-
-The compiler requires Deno 2.9 or later on the build host. It has no Browser or
-Cloudflare compiler entry point. The default output is portable ESM at
-`dist/plugin.js`. Use `--platform=deno` only for plugins that explicitly import
-native capabilities. The platform flag describes the output target, not where
-compilation runs.
-
-- `--source-only`: write the static TypeScript composition entry, without
-  bundling.
-- `--check`: fail when `plugin.generated.ts` differs from the current
-  declarations.
-- `--output=path`: choose the ESM output file.
-
-Discovery parses source syntax without executing it, sorts paths
-deterministically, and reports missing default exports, invalid aliases, and
-alias collisions with source paths. Build then type-checks and imports the
-generated declaration in a read-only validation process, validates the
-dependency graph and native identities, and bundles ESM. Validation does not
-start an application. The existing bundle is replaced only after successful
-bundling.
-
-Generated modules contain ordinary static imports and `definePlugin`. They do
-not contain filesystem discovery or the TypeScript compiler. Keep compilation
-and native adapter imports out of deployment runtime entry points. In this
-repository, `deno task build:plugins` regenerates all 23 concrete roots and
-`deno task check:generated` verifies them.
-
-## Define a tool once
-
-```ts
-// resources/tools/search-tickets/index.ts
-import { defineTool } from "@copilotz/copilotz/core";
-
-export default defineTool({
-  id: "acme.support.search",
-  name: "Search tickets",
-  description: "Find tickets matching a query.",
-  inputSchema: {
-    type: "object",
-    properties: { query: { type: "string" } },
-    required: ["query"],
-  },
-  execute(input: { query: string }, context) {
-    const store = context.adapters.ticketStore.default as {
-      search(query: string): Promise<unknown>;
-    };
-    return store.search(input.query);
-  },
-});
-```
-
-Object-form `defineTool` is a synchronous Composition Contribution. Registering
-it in `resources.tools.search` contributes the native `actions.search` and a
-data-only Tool Resource whose `action` is `search`. No tool-plugin wrapper is
-needed. You can select individual library tools by importing their declarations
-and placing only those declarations in `resources.tools`.
-
-A custom compound authoring helper can implement the exported `contribution`
-symbol. It returns a native `value` plus optional Actions, Collections,
-Processors, Resources, or Adapters. Expansion rejects promises, conflicting
-aliases, nested contributions, and unsafe namespace keys. It copies registration
-containers so a declaration can be reused by different applications. The runtime
-knows this generic protocol; it has no special cases for Tools, Memory, or
-providers.
-
-## Compose configuration last
-
-```ts
-import { createCopilotz } from "@copilotz/copilotz";
-import { corePlugin } from "@copilotz/copilotz/core";
-import { memoryPlugin } from "@copilotz/copilotz/memory";
-import { getCurrentTimeToolResource } from "@copilotz/copilotz/tools/builtin";
-import supportPlugin from "./my-plugin/plugin.generated.ts";
-
-const application = await createCopilotz({
-  plugins: [corePlugin, memoryPlugin, supportPlugin],
-  resources: {
-    memory: { config: { enabled: true, retrievalLimit: 12 } },
-    tools: { clock: getCurrentTimeToolResource },
-  },
-  adapters: {
-    ticketStore: { default: ticketStore },
-    memoryEmbedding: { default: embedMemory },
-  },
-});
-```
-
-`createCopilotz` creates the final root declaration after its dependencies. It
-accepts native `collections`, `actions`, `processors`, `resources`, and
-`adapters`. Actions and Processors receive the composed context at invocation.
-Root Resource and Adapter aliases override dependency values; duplicate native
-Action IDs or aliases remain errors. The internal application root is not
-exposed as a reusable dependency in `registry.plugins`.
-
-## Library configuration locations
-
-| Capability          | Final context configuration                                                                                                               |
-| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| Memory              | `resources.memory.config`, `resources.memory.kinds`, `adapters.memoryEmbedding.default`                                                   |
-| Knowledge           | `resources.knowledge.config` (`embedding`, `chunking`), `adapters.embedding`, `adapters.knowledge.loader`, `adapters.knowledge.extractor` |
-| Usage               | `resources.usage.config.enabled`, `adapters.usage.hooks` (`resolveCost`, `onRecord`)                                                      |
-| Channels            | `resources.channels[alias]`, `adapters.channels[alias]`, `adapters.channelProviders[alias]`                                               |
-| Skills              | `resources.skills[name]`, `resources.skillConfig.default.maximumTextBytes`                                                                |
-| Clock/wait          | `adapters.clock.default` (`now`, `sleep`)                                                                                                 |
-| Finance             | `adapters.financeProviders[name]`                                                                                                         |
-| Persistent terminal | `adapters.terminal.default` (application-owned service)                                                                                   |
-| OpenAPI             | `adapters.openapi[apiId]` (`auth`, `headers`, `prepareRequest`, `baseUrl`, `fetch`, optional `tokenCache`)                                |
-| MCP                 | `adapters.mcp[serverId]` (`connect`, `transport`, `env`; same shape as the declared `connection`)                                         |
-| Server              | `resources.server.default`, constructed with `defineServerFacade`                                                                         |
-
-Channel credentials and transports are transient capabilities scoped by channel
-alias. Binding the same static adapter to two aliases does not share
-configuration. Memory's static input schema accepts extensible kind names;
-execution validates registration and semantic data against the final ontology
-from context.
-
-`resources/apis/<alias>/index.ts` default-exports `defineApi({schema,...})`.
-`resources/mcp/<alias>/index.ts` default-exports `await defineMcp({...})` on a
-host that allows discovery during module evaluation.
-`resources/skills/<alias>/index.ts` default-exports `defineSkill({root})`. The
-generated static plugin imports each resource and ordinary composition adds its
-declared dependencies. No additional feature plugin entries are required in
-`copilotz.json`.
-
-Resource contributions may supply plugin dependencies, which register before the
-resource owner. Shared plugin identity is preserved across independently built
-plugins by keeping framework imports external. Root resources and adapters apply
-last. Distinct conflicting native Actions remain errors.
-
-Skill root reads are runtime capabilities; frozen Skill packing remains a Deno
-build-host operation through `/skills/deno`. Filesystem and HTTP roots use the
-same public Skills import, while subprocess and stdio transports remain host
-capabilities. Skill directories must be included separately in deployment.
-
-## Migration scope
-
-This is a breaking library refactor. Replace plugin factories with static
-imports, move configuration to the locations above, and explicitly select
-optional tools. No legacy factory aliases remain. Compass, Mobizap, and Pricing
-Agent migrations belong to their separate milestones.
-
-## Runnable agent example
-
-The
-[support example](https://github.com/copilotzhq/copilotz/tree/main/contracts/authoring)
-contains a Core dependency, Agent and LLM connection Resources, a deterministic
-LLM Adapter, and a bootstrap Processor. It builds the plugin, imports its ESM
-output into `createCopilotz`, creates a conversation, and verifies a streamed
-agent reply. No provider credentials are required. Run it from this repository:
-
-```sh
-# Build and verify the repository's deterministic generated-plugin example.
-deno task smoke:authoring
-```
-
-For an empty application outside the checkout, copy that example's source files
-and create `deno.json` with these package imports (use the released version):
+Every supported field:
 
 ```jsonc
 {
-  // Pin the runtime and plugin entrypoints to the same released package version.
-  "imports": {
-    // Public application and runtime authoring API.
-    "@copilotz/copilotz": "jsr:@copilotz/copilotz@0.83.2",
-    // The example's agent harness and tool helpers.
-    "@copilotz/copilotz/core": "jsr:@copilotz/copilotz@0.83.2/core",
-    // Narrow compatibility imports used by the generated authoring fixture.
-    "@copilotz/copilotz/actions": "jsr:@copilotz/copilotz@0.83.2/actions",
-    "@copilotz/copilotz/plugins": "jsr:@copilotz/copilotz@0.83.2/plugins",
-    // Model connection contracts and the deterministic test adapter's types.
-    "@copilotz/copilotz/llm": "jsr:@copilotz/copilotz@0.83.2/llm"
-  }
+  // Required. Become the generated definePlugin's id and version.
+  "id": "@team-notes/notes",
+  "version": "1.0.0",
+  // Optional. Exact entry paths to register; omit to register every
+  // conventional entry. Not globs; each path must be discovered or the build fails.
+  "include": [
+    "collections/note/index.ts",
+    "actions/save-note/index.ts",
+    "processors/capture-note/index.ts"
+  ],
+  // Optional. Exact entry path to explicit alias, for example a model-facing
+  // snake_case name or a pinned old alias after a directory rename.
+  "aliases": { "actions/save-note/index.ts": "saveNote" },
+  // Optional. Plugin dependencies, emitted as static imports. Notes is
+  // self-contained, so its dependency list is empty.
+  "plugins": []
 }
 ```
 
-```sh
-# Discover source declarations on the build host and emit a static ESM plugin.
-deno run -A jsr:@copilotz/copilotz@0.83.2/build build .
-# Import the generated plugin and verify its mocked agent reply.
-deno run -A run.ts
+Each dependency entry supplies `from` (its module specifier) and `export` (the
+exported binding name, or `"default"`). For example, a separate plugin root
+beside `notes/` can list
+`{ "from": "../notes/plugin.generated.ts", "export":
+"default" }` in its own
+manifest. Notes itself depends on nothing. Dependencies are never inferred from
+imports.
+
+### A leaf
+
+Leaves are pure definitions: no environment reads, connections or other I/O at
+the top level, because every test and application that imports the generated
+plugin imports them too. This is Chapter 22's `notes/collections/note/index.ts`,
+unchanged:
+
+```ts
+// Declares a Collection. Leaf files import the same portable runtime package
+// as Chapter 5, never the agent harness.
+import { defineCollection } from "@copilotz/copilotz";
+
+// Application state for captured notes, moved unchanged from Chapter 5. The
+// build command registers the default export under this directory's alias,
+// `note`.
+const note = defineCollection({
+  // Stable name. It prefixes the Event types this Collection appends, such as
+  // `note.created`, so keep it once records are stored.
+  name: "note",
+  // JSON Schema for one stored record. `as const` lets the record types be
+  // derived from it.
+  schema: {
+    type: "object",
+    properties: {
+      // Record identity. The runtime assigns it when the writer omits it.
+      id: { type: "string", readOnly: true },
+      // The note itself, as the user captured it.
+      text: { type: "string" },
+    },
+    // A note without text is rejected before it is stored.
+    required: ["text"],
+  } as const,
+});
+
+// Shape of one stored note, derived from the Collection's schema. A named
+// export next to the default one; discovery only looks at the default.
+export type NoteRecord = typeof note.$inferSelect;
+
+// The discovered declaration.
+export default note;
 ```
 
-Expected output: `Hello from the generated support plugin.` Replace the demo LLM
-Adapter with your chosen connection/provider configuration when integrating the
-application. Keep credentials in the final application context.
+The `saveNote` Action and `captureNote` Processor leaves, and the barrel that
+keeps `./notes-plugin.ts` imports working, are in Chapter 22.
 
-Deno 2.9 waits 24 hours before resolving newly published package versions by
-default. Wait for that window, or set `"minimumDependencyAge": 0` in the
-consumer's `deno.json` when an explicit trusted release policy permits it.
+### Build commands
 
-## Documentation examples
+The command is the `build` export of the package and its first argument is the
+literal word `build`. Run it from the project directory:
 
-New documentation snippets must explain their purpose inside the code. Comment
-each section, declaration, function and meaningful configuration property,
-including schemas, capability grants and cleanup. Shell blocks explain each
-command. Use `jsonc` when JSON configuration needs comments.
+```sh
+# Write notes/plugin.generated.ts only. Leaves are read as text, not imported.
+deno run -A jsr:@copilotz/copilotz@^0.85.2/build build notes --source-only
+# Fail without writing if the committed plugin.generated.ts is stale.
+deno run -A jsr:@copilotz/copilotz@^0.85.2/build build notes --check
+# Full build: generate, type-check, validate in a read-only child, bundle.
+deno run -A jsr:@copilotz/copilotz@^0.85.2/build build notes
+```
 
-Name complete example files and their dependencies. Label a configuration
-excerpt with its exact insertion or replacement point; do not present an
-isolated object property as a runnable program. Introduce one new concern at a
-time and verify examples against the exported API before publishing them.
+| Option                     | Effect                                                                                    |
+| -------------------------- | ----------------------------------------------------------------------------------------- |
+| roots (positional)         | One or more plugin roots; `.` when omitted. All are generated before any is validated.    |
+| `--source-only`            | Write `plugin.generated.ts` and stop.                                                     |
+| `--check`                  | Compare `plugin.generated.ts` with the exact generator output; write nothing.             |
+| `--output=path`            | Bundle path instead of `<root>/dist/plugin.js`. Only with a single root.                  |
+| `--platform=browser\|deno` | Bundle target, `browser` by default. Use `deno` only for leaves importing native modules. |
+
+What each mode proves:
+
+- **Generation is deterministic.** Paths are sorted, so the same sources and
+  manifest always produce the same file. `--check` therefore detects added,
+  removed or renamed entries and manifest changes. It does not hash leaf bodies
+  or test behaviour; keep your scenarios for that.
+- **A full build** writes `plugin.generated.ts` first, then type-checks it,
+  imports it in a child process that has only read permission to validate the
+  composed plugin graph, and bundles it. Only the final bundle replacement is
+  atomic. If a later step fails, the new generated source can sit next to the
+  previous `dist/plugin.js`, so treat a generated file's presence as
+  "generated", not "validated".
+- **`--source-only`** neither rebuilds nor invalidates an existing bundle.
+- The bundle marks `@copilotz/copilotz` and all its subpaths as external. A
+  built plugin never carries a second framework copy, so plugin identity and
+  dependency checks use the application's own framework module.
+
+A code formatter may rewrap the generated file; `--check` compares exact text,
+so exclude generated modules from formatting or regenerate after formatting.
+
+### Integration resource leaves
+
+Declarative integration resources are ordinary resource leaves. When the
+generated plugin is composed, each one contributes its own Actions, Tools and
+plugin dependencies, so `copilotz.json` lists no extra feature plugins:
+
+| Leaf                                | Default export           | Notes                                                   |
+| ----------------------------------- | ------------------------ | ------------------------------------------------------- |
+| `resources/apis/<alias>/index.ts`   | `defineApi({...})`       | Pure definition; credentials stay in host adapters.     |
+| `resources/skills/<alias>/index.ts` | `defineSkill({ root })`  | Alias equals the `SKILL.md` name; root module-relative. |
+| `resources/mcp/<alias>/index.ts`    | `await defineMcp({...})` | Connects to a live server on import: host-only root.    |
+
+Keep these in a **separate plugin root** from runtime-only definitions such as
+Notes. API, Skill and MCP resources bring in the agent harness, while Notes
+stays importable by tests and servers without it.
+
+A Skill leaf reads files at run time from its `root`. Neither the build command
+nor a bundler copies `SKILL.md` or its supporting files, and the runtime never
+scans directories for them: package and deploy them explicitly, and check that
+`import.meta.url` still points next to them after bundling.
+
+An MCP leaf performs discovery while its module is evaluated, so importing the
+generated plugin connects. Keep it in its own root imported only by host
+composition, as `notes-mcp.ts` was in
+[Chapter 10](getting-started/part-3-add-agent-behavior/10-connect-apis-and-mcp.md),
+and generate that root with `--source-only`. A full build's validation child has
+read permission only; the `-A` you pass is not forwarded, so a leaf that spawns
+a server or opens a network connection at the top level can fail validation.
+
+## What this unlocks
+
+- Adding a primitive means creating a directory and regenerating, with a
+  `--check` guard in CI instead of a registration list to review.
+- The generated plugin is plain TypeScript with static imports, so it runs on
+  Deno, Node and in bundles with no build tooling at run time.
+- Independently built plugins share one framework identity because the framework
+  stays external.
+- Integrations get the same layout while live connections stay a host choice.
+
+## Next steps
+
+- Tutorial:
+  [Chapter 22](getting-started/part-6-evolve-and-reuse/22-organize-and-share-plugins.md)
+  moves Notes into leaves, adds the barrel and shares the package.
+- Reference: [Plugins and Processors](plugins-and-processors.md) explains
+  composition, dependencies and alias conflicts.
+- Reference: [Integrations](integrations.md) covers API and MCP resources and
+  their host adapters.
+- Contributors: documentation conventions live in
+  [DOCUMENTATION.md](https://github.com/copilotzhq/copilotz/blob/main/DOCUMENTATION.md).

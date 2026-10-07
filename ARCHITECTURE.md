@@ -1,10 +1,10 @@
 # Copilotz Architecture — 30,000-Foot View
 
-Copilotz is an event-driven runtime for building AI harnesses from small,
-composable primitives. Rather than embedding agent behavior, model providers,
-tools, and application state into a single execution loop, the runtime separates
-them into independent components that communicate through events and
-well-defined runtime interfaces.
+Copilotz is an event-driven runtime for applications and optional AI harnesses
+built from small, composable primitives. Rather than embedding agent behavior,
+model providers, tools, and application state into a single execution loop, the
+runtime separates them into independent components that communicate through
+events and well-defined runtime interfaces.
 
 At the center of the architecture is the **runtime**. The runtime owns the event
 lifecycle, maintains the registries contributed by plugins, exposes shared
@@ -16,7 +16,15 @@ system observes what has happened and decides what should happen next.
 Authoring uses static plugin declarations and a build-host compiler. The same
 conventions apply to built-in plugins and application packages. `createCopilotz`
 composes the final root, including Resources and Adapters, before starting the
-application. See [convention-first authoring](docs/convention-authoring.md).
+application. See [Filesystem Plugin Authoring](docs/convention-authoring.md).
+The public factory supports embedded, Gateway and Worker roles: Gateways admit
+and dispatch; Workers execute. A Worker exposes only readiness, closure and
+shutdown, while application handles expose operations and the HTTP facade.
+Injected persistence and dispatchers remain host-owned.
+
+This file is the contributor architecture contract. Application developers can
+start with [Architecture](docs/architecture.md); documentation changes follow
+[DOCUMENTATION.md](DOCUMENTATION.md).
 
 The runtime is extended through **plugins**. A plugin is a package of
 capabilities that contributes some combination of five primitives:
@@ -299,13 +307,15 @@ Adapters own interchangeable custom external or infrastructural implementations.
 A semantic Resource may instead carry process-local credentials and transport
 policy for a built-in implementation. Neither is a policy hook. Semantic helpers
 such as `defineAgent`, `defineLlmConnection`, `defineContextResource`,
-`defineSkill`, and `defineApi` validate and freeze their corresponding Resource
-definition; they do not create a privileged runtime representation. In contrast,
-`createToolsPlugin` and `createOpenApiToolsPlugin` are explicit compilers: each
-creates one or more native Actions plus matching data-only Tool Resources. The
-compiled maps remain inspectable, and there is still only one Action lifecycle
-and one executor. Generic runtime code never invents or interprets semantic
-hooks.
+`defineSkill`, `defineApi`, and awaited `defineMcp` produce declarative
+Resources rather than a privileged runtime representation. Resource declarations
+may contribute ordinary plugin dependencies during composition. API and MCP
+resources contribute native Actions, matching data-only Tool Resources and
+default adapter bindings; Skill declarations contribute their reader support.
+Applications register the declaration in its resource namespace without a
+separate feature marker or compiler call. The resulting maps remain inspectable,
+and there is still only one Action lifecycle and one executor. Generic runtime
+code never invents or interprets semantic hooks.
 
 Both actions and processors may consume the composed resources and adapters
 through their declared context interfaces. Their architectural roles still guide
@@ -326,22 +336,23 @@ Core installs a default connection, client, or credential.
 
 Core exposes an LLM tool by mapping a data-only Tool Resource to an existing
 Action alias. An object-form `defineTool({ ... execute })` is authoring sugar:
-`createToolsPlugin` compiles `execute` into that native Action and publishes a
-separate data-only Tool Resource under the same alias. Core invokes the Action
-directly, so its ordinary durable lifecycle is the only tool-execution
-lifecycle. Core marks these calls with plugin-owned Action metadata whose
-discriminator is `schema: "copilotz.core.tool-action.v1"`; lifecycle Processors
-match that durable body data. Multiple tool calls from one LLM result form one
-deterministic durable plan. Top-level calls are ordered parallel branches. A
-branch may contain a pipeline: Tool stages and deterministic `jq` transforms
-execute sequentially, with each Tool result transformed and merged into the next
-Tool's explicit input. Branch roots execute concurrently through their ordinary
-Actions, while Core persists each branch/stage cursor and a retry-stable fan-in
-barrier. Each branch projects only its final value or failure, associated with
-the root provider Tool-call ID; intermediate stage lifecycles remain durable but
-do not manufacture unmatched transcript calls. Branch results are projected in
-deterministic provider order regardless of completion order, and the completed
-plan produces exactly one subsequent LLM continuation.
+the declaration contributes its native Action during ordinary plugin composition
+and publishes a separate data-only Tool Resource under the same alias. Core
+invokes the Action directly, so its ordinary durable lifecycle is the only
+tool-execution lifecycle. Core marks these calls with plugin-owned Action
+metadata whose discriminator is `schema: "copilotz.core.tool-action.v1"`;
+lifecycle Processors match that durable body data. Multiple tool calls from one
+LLM result form one deterministic durable plan. Top-level calls are ordered
+parallel branches. A branch may contain a pipeline: Tool stages and
+deterministic `jq` transforms execute sequentially, with each Tool result
+transformed and merged into the next Tool's explicit input. Branch roots execute
+concurrently through their ordinary Actions, while Core persists each
+branch/stage cursor and a retry-stable fan-in barrier. Each branch projects only
+its final value or failure, associated with the root provider Tool-call ID;
+intermediate stage lifecycles remain durable but do not manufacture unmatched
+transcript calls. Branch results are projected in deterministic provider order
+regardless of completion order, and the completed plan produces exactly one
+subsequent LLM continuation.
 
 A Core-owned ask Action durably creates its question and completes normally with
 the plugin-owned semantic output `{ status: "deferred" }`. That Action terminal
@@ -360,13 +371,16 @@ execution path. Memory, knowledge, schedules, channels, concrete tools, usage
 accounting, and admin behavior remain optional first-party plugins rather than
 hidden Core behavior.
 
-Goals are a Core authoring helper over this existing application boundary, not a
-plugin primitive or durable workflow of their own. `runGoal` serially alternates
-ordinary `send()` operations between explicit target and lead threads. Each
-`send().done` is the complete causal-turn barrier; the next turn receives the
-exact canonical Message ContentRefs observed from the settled scope. Messages
-and Action lifecycles remain durable and restart-visible, while the local loop
-deliberately does not auto-resume after process loss.
+Goals use Core's ordinary `runGoal` Action (`copilotz.core.goal.run`), not a new
+runtime primitive. A Goal policy selects a host-supplied conversation Adapter;
+its `send` capability can delegate to the same application. The Action serially
+alternates target and lead turns, waiting for each send to settle and relaying
+its final canonical Message content. Its budget counts target turns; lead turns
+occur only between them. Every send uses a deterministic identity from the
+Action run, turn and phase. An ordinary Action retry re-enters the loop and
+re-observes those recorded turns. There is no separate durable Goal cursor, so
+policy decisions must remain deterministic over the recorded replies. See
+[Goals](docs/goals.md) for the complete composition and authorization boundary.
 
 Optional semantic plugins receive no runtime back doors. The base Schedules
 plugin, for example, owns only timing/status, opaque JSON payload, optional
@@ -439,7 +453,11 @@ behavior.**
 
 Resource declarations can contribute ordinary plugin dependencies. These resolve
 synchronously before owner registration; shared plugin objects register once,
-and final root namespace overlays remain authoritative. OpenAPI compilation and
-awaited MCP discovery produce complete resource dependencies. Skills
-declarations add one shared support plugin and resolve authorized root manifests
-lazily in the existing async context contribution.
+and final root namespace overlays remain authoritative. `defineApi` and awaited
+`defineMcp` produce complete resource dependencies before owner registration.
+`defineSkill` uses the same public import across supported runtimes and resolves
+authorized root manifests lazily in the existing async context contribution.
+HTTP roots use Fetch; local roots acquire filesystem access only when read.
+Skill declarations add shared reader support, while instruction bodies and
+supporting files load on demand from a bounded snapshot. Neither declaration nor
+module-relative URL resolution packages those files for deployment.

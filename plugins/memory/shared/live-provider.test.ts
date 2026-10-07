@@ -2,7 +2,7 @@
  * Opt-in live-provider regression, disabled in normal test runs.
  * With OPENAI_API_KEY already in the environment, run:
  * COPILOTZ_LIVE_MEMORY_TEST=1 COPILOTZ_LIVE_TEST_DATABASE_URL=<local PostgreSQL URL>
- * deno test -A plugins/memory/live-provider.test.ts
+ * deno test -A plugins/memory/shared/live-provider.test.ts
  *
  * Uses synthetic history, a fresh temporary schema, and at most eight provider
  * requests. Only loopback PostgreSQL is accepted. COPILOTZ_LIVE_TEST_MODEL may
@@ -13,12 +13,12 @@ import { defineAgent, loadThreadRecord } from "@copilotz/copilotz/core";
 import { createPluginRegistry } from "@copilotz/copilotz/plugins";
 import { validateCollectionIndexes } from "@copilotz/copilotz/collections";
 import type { StreamOutput } from "@copilotz/copilotz/streams";
-import { createCopilotzEngine } from "../../runtime/engine/index.ts";
-import { createTestDatabase } from "../../runtime/testing/ominipg.ts";
-import { createTestDomainContext } from "../core/shared/testing/context.ts";
-import { projectMessages } from "../core/shared/testing/projections.ts";
-import { memoryPlugin } from "./plugin.ts";
-import { checkpointHead, readyCheckpoint } from "./shared/checkpoints.ts";
+import { createCopilotzEngine } from "../../../runtime/engine/index.ts";
+import { createTestDatabase } from "../../../runtime/testing/ominipg.ts";
+import { createTestDomainContext } from "../../core/shared/testing/context.ts";
+import { projectMessages } from "../../core/shared/testing/projections.ts";
+import { memoryPlugin } from "../plugin.ts";
+import { checkpointHead, readyCheckpoint } from "./checkpoints.ts";
 
 Deno.test({
   name:

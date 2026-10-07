@@ -254,8 +254,8 @@ after the base schema; PostgreSQL needs pgvector, and PGlite needs the `vector`
 extension. Search uses exact distance ordering (no HNSW index), and profiles
 never mix. Without an embedder, search uses a bounded lexical path; a configured
 embedder that fails raises an error rather than falling back to lexical search.
-[Knowledge](knowledge.md) covers general vector setup, which uses its own
-adapter map.
+[Knowledge](knowledge.md) has a separate embedding and retrieval implementation;
+its adapter and storage configuration are not interchangeable with Memory's.
 
 ## What this unlocks
 

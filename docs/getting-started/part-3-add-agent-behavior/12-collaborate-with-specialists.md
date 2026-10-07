@@ -31,8 +31,8 @@ different place:
 1. **The specialist exists.** The host composes a `reviewer` Agent resource, so
    Core knows its role and model.
 2. **The assistant may consult it.** The assistant's own definition grants the
-   `reviewer` alias in `capabilities.agents`. Without that grant, the assistant
-   can't ask anyone.
+   `reviewer` Agent ID in `capabilities.agents`. Without that grant, the
+   assistant can't ask anyone.
 3. **The reviewer takes part in this conversation.** It's enrolled as a
    participant in the thread. An agent can only ask another agent that's in the
    same thread.
@@ -107,8 +107,9 @@ still empty:
 agents: ["reviewer"],
 ```
 
-The grant names the reviewer's **composition alias**, which is its key in
-`agentResources.agents`. It doesn't give the assistant access to the reviewer's
+The grant names the reviewer's stable **Agent ID**, `reviewer`. Its key in
+`agentResources.agents` happens to use the same spelling here; changing that key
+does not change the grant. The grant does not give the assistant the reviewer's
 own grants. Each agent's turn runs with its own declared capabilities, and the
 reviewer still has no application grants.
 

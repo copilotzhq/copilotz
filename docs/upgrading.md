@@ -56,7 +56,7 @@ On Deno, edit the existing `imports` property in `deno.json`. Replace only the
 ```json
 {
   "imports": {
-    "@copilotz/copilotz": "jsr:@copilotz/copilotz@^0.85.2"
+    "@copilotz/copilotz": "jsr:@copilotz/copilotz@^0.85.3"
   }
 }
 ```
@@ -68,7 +68,7 @@ On Node:
 
 ```sh
 # Add the package from JSR and record the resolved version in the lockfile.
-npx jsr add @copilotz/copilotz@^0.85.2
+npx jsr add @copilotz/copilotz@^0.85.3
 ```
 
 Generated or bundled plugins must keep framework imports external so that they

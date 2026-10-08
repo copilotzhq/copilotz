@@ -80,7 +80,7 @@ deno add npm:@modelcontextprotocol/sdk@1.29.0 npm:zod@3.25.76
 npm install @modelcontextprotocol/sdk@1.29.0 zod@3.25.76
 ```
 
-`@copilotz/copilotz` stays at `^0.86.1` from earlier chapters. The client side
+`@copilotz/copilotz` stays at `^0.86.2` from earlier chapters. The client side
 of MCP comes with Copilotz; these packages are only for the server you write.
 
 ### Create `posts-api.ts`

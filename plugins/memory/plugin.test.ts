@@ -154,6 +154,7 @@ async function fixture(
   options: Readonly<{
     enabled?: boolean;
     inputLimit?: number;
+    fallbackInputLimit?: number;
     outputLimit?: number;
     contextText?: string;
     memoryConfig?: Partial<LongTermMemoryConfig>;
@@ -207,23 +208,35 @@ async function fixture(
             }
             : {}),
           models: {
-            generate: [{
-              connection: "test_model",
-              model: "native-memory-model",
-              ...(options.inputLimit === undefined &&
-                  options.outputLimit === undefined
-                ? {}
-                : {
-                  options: {
-                    ...(options.inputLimit === undefined
-                      ? {}
-                      : { limitEstimatedInputTokens: options.inputLimit }),
-                    ...(options.outputLimit === undefined
-                      ? {}
-                      : { maxTokens: options.outputLimit }),
-                  },
-                }),
-            }],
+            generate: [
+              {
+                connection: "test_model",
+                model: "native-memory-model",
+                ...(options.inputLimit === undefined &&
+                    options.outputLimit === undefined
+                  ? {}
+                  : {
+                    options: {
+                      ...(options.inputLimit === undefined
+                        ? {}
+                        : { limitEstimatedInputTokens: options.inputLimit }),
+                      ...(options.outputLimit === undefined
+                        ? {}
+                        : { maxTokens: options.outputLimit }),
+                    },
+                  }),
+              },
+              ...(options.fallbackInputLimit === undefined ? [] : [{
+                connection: "test_model",
+                model: "fallback-memory-model",
+                options: {
+                  limitEstimatedInputTokens: options.fallbackInputLimit,
+                  ...(options.outputLimit === undefined
+                    ? {}
+                    : { maxTokens: options.outputLimit }),
+                },
+              }]),
+            ],
           },
           capabilities: { tools: options.tools ?? ["consolidate_memory"] },
         }),
@@ -806,66 +819,158 @@ Deno.test("an open Ask plan cannot pin the consolidation boundary", async () => 
   }
 });
 
-Deno.test("an oversized normal request compacts a bounded prefix before retrying with continuity and its latest tail", async () => {
+for (const fallbackInputLimit of [undefined, 120_000]) {
+  Deno.test(`an oversized preferred model compacts before replying${fallbackInputLimit ? " even when a fallback fits" : ""}`, async () => {
+    const run = await fixture(
+      (input) =>
+        text(input).includes("Internal memory maintenance")
+          ? tool(memoryProposal())
+          : stop("The compacted normal request can continue."),
+      {
+        inputLimit: 40_000,
+        fallbackInputLimit,
+        memoryConfig: { triggerEstimatedTokens: 999_999 },
+      },
+    );
+    try {
+      await setupThread(run);
+      for (let index = 0; index < 26; index++) {
+        await createHumanMessage(run, {
+          id: `message:old:${index}`,
+          text: `OLD_${index} ${"history ".repeat(1_600)}`,
+        });
+      }
+      await createHumanMessage(run, {
+        id: "message:latest",
+        text: "LATEST_TAIL continue the active task.",
+        recipientIds: ["agent-north"],
+      });
+      await eventually(
+        run,
+        async () => {
+          const values = await checkpoints(run);
+          return (values.some((item: { status: string }) =>
+            item.status === "ready"
+          ) &&
+            run.inputs.some((input) =>
+              !text(input).includes("Internal memory maintenance")
+            )) ||
+            values.some((item: { status: string }) =>
+              item.status === "failed" || item.status === "cancelled"
+            );
+        },
+      );
+
+      const saved = (await checkpoints(run)).find((item: { status: string }) =>
+        item.status === "ready"
+      );
+      assert(saved);
+      const maintenanceInputs = run.inputs.filter((input) =>
+        text(input).includes("Internal memory maintenance")
+      );
+      assert(maintenanceInputs.length >= 1);
+      const maintenance = text(maintenanceInputs[0]!);
+      assertStringIncludes(maintenance, "OLD_0");
+      assert(!maintenance.includes("LATEST_TAIL"));
+      const retriedInput = run.inputs.find((input) =>
+        !text(input).includes("Internal memory maintenance")
+      )!;
+      const retried = text(retriedInput);
+      assertEquals(retriedInput.model, "native-memory-model");
+      assertEquals(
+        run.inputs.some((input) => input.model === "fallback-memory-model"),
+        false,
+      );
+      assertStringIncludes(
+        retriedInput.request.instructions ?? "",
+        "Compass remains the active project",
+      );
+      assertStringIncludes(retried, "LATEST_TAIL");
+      assert(!retried.includes("OLD_0"));
+      assertEquals(saved.sourceStartMessageId, "message:old:0");
+      assert(saved.sourceEndMessageId !== "message:latest");
+      await assertNoDeadLetters(run);
+    } finally {
+      await run.close();
+    }
+  });
+}
+
+Deno.test("a smaller fallback does not force compaction when the preferred model fits", async () => {
   const run = await fixture(
-    (input) =>
-      text(input).includes("Internal memory maintenance")
-        ? tool(memoryProposal())
-        : stop("The compacted normal request can continue."),
-    { inputLimit: 40_000 },
+    () => stop("The preferred model can accept the ordinary history."),
+    {
+      inputLimit: 180_000,
+      fallbackInputLimit: 40_000,
+      memoryConfig: { triggerEstimatedTokens: 999_999 },
+    },
   );
   try {
     await setupThread(run);
-    for (let index = 0; index < 26; index++) {
+    for (let index = 0; index < 8; index++) {
       await createHumanMessage(run, {
-        id: `message:old:${index}`,
-        text: `OLD_${index} ${"history ".repeat(1_600)}`,
+        id: `message:large:${index}`,
+        text: `LARGE_${index} ${"history ".repeat(6_400)}`,
       });
     }
     await createHumanMessage(run, {
-      id: "message:latest",
-      text: "LATEST_TAIL continue the active task.",
+      id: "message:preferred-fits",
+      text: "Keep the full history when it fits the preferred model.",
       recipientIds: ["agent-north"],
     });
     await eventually(
       run,
-      async () => {
-        const values = await checkpoints(run);
-        return (values.some((item: { status: string }) =>
-          item.status === "ready"
-        ) &&
-          run.inputs.some((input) =>
-            !text(input).includes("Internal memory maintenance")
-          )) ||
-          values.some((item: { status: string }) =>
-            item.status === "failed" || item.status === "cancelled"
-          );
-      },
+      async () =>
+        (await projectMessages(run.engine, NAMESPACE, "thread-a")).some((
+          message,
+        ) => message.sender.id === "agent-north"),
     );
+    assertEquals(run.inputs.map((input) => input.model), [
+      "native-memory-model",
+    ]);
+    assertStringIncludes(text(run.inputs[0]!), "LARGE_0");
+    assertStringIncludes(text(run.inputs[0]!), "LARGE_7");
+    assertEquals(await checkpoints(run), []);
+    await assertNoDeadLetters(run);
+  } finally {
+    await run.close();
+  }
+});
 
-    const saved = (await checkpoints(run)).find((item: { status: string }) =>
-      item.status === "ready"
+Deno.test("a fitting preferred model still falls back after a provider failure without compaction", async () => {
+  const run = await fixture(
+    (input) => {
+      if (input.model === "native-memory-model") {
+        throw new Error("Provider unavailable");
+      }
+      return stop("The fallback can answer after a provider failure.");
+    },
+    {
+      inputLimit: 180_000,
+      fallbackInputLimit: 120_000,
+      memoryConfig: { triggerEstimatedTokens: 999_999 },
+    },
+  );
+  try {
+    await setupThread(run);
+    await createHumanMessage(run, {
+      id: "message:provider-failure",
+      text:
+        "Continue using the configured fallback if the provider is unavailable.",
+      recipientIds: ["agent-north"],
+    });
+    await eventually(
+      run,
+      async () =>
+        (await projectMessages(run.engine, NAMESPACE, "thread-a")).some((
+          message,
+        ) => message.sender.id === "agent-north"),
     );
-    assert(saved);
-    const maintenanceInputs = run.inputs.filter((input) =>
-      text(input).includes("Internal memory maintenance")
-    );
-    assert(maintenanceInputs.length >= 1);
-    const maintenance = text(maintenanceInputs[0]!);
-    assertStringIncludes(maintenance, "OLD_0");
-    assert(!maintenance.includes("LATEST_TAIL"));
-    const retriedInput = run.inputs.find((input) =>
-      !text(input).includes("Internal memory maintenance")
-    )!;
-    const retried = text(retriedInput);
-    assertStringIncludes(
-      retriedInput.request.instructions ?? "",
-      "Compass remains the active project",
-    );
-    assertStringIncludes(retried, "LATEST_TAIL");
-    assert(!retried.includes("OLD_0"));
-    assertEquals(saved.sourceStartMessageId, "message:old:0");
-    assert(saved.sourceEndMessageId !== "message:latest");
+    assertEquals(run.inputs.map((input) => input.model), [
+      "native-memory-model",
+      "fallback-memory-model",
+    ]);
+    assertEquals(await checkpoints(run), []);
     await assertNoDeadLetters(run);
   } finally {
     await run.close();

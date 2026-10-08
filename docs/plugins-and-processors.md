@@ -113,9 +113,9 @@ unchanged; place it in the same directory. Install the runtime package first:
 
 ```sh
 # Deno
-deno add jsr:@copilotz/copilotz@^0.86.0
+deno add jsr:@copilotz/copilotz@^0.86.1
 # Node 24+
-npx jsr add @copilotz/copilotz@^0.86.0
+npx jsr add @copilotz/copilotz@^0.86.1
 ```
 
 Create `notes-import-plugin.ts`. It is a pure definition module: no environment,

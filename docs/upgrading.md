@@ -8,7 +8,15 @@ status: stable
 
 # Upgrading and Data Safety
 
-## Lifecycle and plain memory notes
+## 0.86.1: native-state memory budgets
+
+Memory consolidation now counts compatible native provider state using the same
+wire protocol as LLM admission. A history with large encrypted reasoning blocks
+triggers consolidation earlier and is reserved in smaller contiguous ranges. The
+ordinary Agent prompt prefix, tool catalog, stored snapshots and native blocks
+are preserved. This patch needs no database or memory migration.
+
+## 0.86.0: lifecycle and plain memory notes
 
 This release changes durable Action scheduling and the Memory plugin's public
 contract. Deploy all workers together after stopping old writers and draining or
@@ -92,7 +100,7 @@ On Deno, edit the existing `imports` property in `deno.json`. Replace only the
 ```json
 {
   "imports": {
-    "@copilotz/copilotz": "jsr:@copilotz/copilotz@^0.86.0"
+    "@copilotz/copilotz": "jsr:@copilotz/copilotz@^0.86.1"
   }
 }
 ```
@@ -104,7 +112,7 @@ On Node:
 
 ```sh
 # Add the package from JSR and record the resolved version in the lockfile.
-npx jsr add @copilotz/copilotz@^0.86.0
+npx jsr add @copilotz/copilotz@^0.86.1
 ```
 
 Generated or bundled plugins must keep framework imports external so that they

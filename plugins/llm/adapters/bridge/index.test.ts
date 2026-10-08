@@ -1,4 +1,5 @@
 import { assert, assertEquals, assertThrows } from "@std/assert";
+import { prepareLlmCall } from "../../actions/call-llm/index.ts";
 import { ContextInputLimitError } from "../../shared/errors.ts";
 import {
   createProviderAdapter,
@@ -9,6 +10,110 @@ import {
 } from "./index.ts";
 import type { ChatMessage, ProviderFactory } from "../../shared/types.ts";
 import type { LlmJsonObject } from "../../shared/contracts.ts";
+
+Deno.test("wire preflight and candidate admission replay and measure the same native state", async () => {
+  const native = {
+    schema: "copilotz.llm-native-reasoning.v1" as const,
+    adapter: "openai",
+    api: "openai.responses",
+    model: "gpt-6-luna",
+    blocks: [{
+      assetId: "reasoning",
+      kind: "json" as const,
+      role: "reasoning",
+      mediaType: "application/json",
+      value: { type: "reasoning", encrypted_content: "x".repeat(20_000) },
+    }],
+  };
+  for (
+    const item of [
+      { provider: "openai", model: "gpt-6-luna", options: {}, native },
+      {
+        provider: "openai",
+        model: "gpt-6-luna",
+        options: { openaiApi: "chat_completions" },
+        native,
+      },
+      {
+        provider: "openai",
+        model: "gpt-6-luna",
+        options: {},
+        native: { ...native, model: "gpt-6-sol" },
+      },
+      {
+        provider: "openai",
+        model: "gpt-6-luna",
+        options: {},
+        native: { ...native, api: "other.api" },
+      },
+      {
+        provider: "openai",
+        model: "gpt-6-luna",
+        options: {},
+        native: { ...native, adapter: "gemini" },
+      },
+      {
+        provider: "gemini",
+        model: "gemini-3.8-flash",
+        options: {},
+        native: {
+          ...native,
+          adapter: "gemini",
+          model: "gemini-3.8-flash",
+          api: "gemini.generateContent",
+        },
+      },
+      {
+        provider: "groq",
+        model: "llama",
+        options: {},
+        native: {
+          ...native,
+          adapter: "groq",
+          model: "llama",
+          api: "groq.chat.completions",
+        },
+      },
+    ] as const
+  ) {
+    const request = {
+      messages: [{
+        role: "assistant" as const,
+        content: [],
+        nativeReasoning: item.native,
+      }],
+    };
+    const config = {
+      provider: item.provider,
+      model: item.model,
+      ...item.options,
+    };
+    const formatted = formatLlmRequestForWire(request, config, "tenant");
+    const prepared = await prepareLlmCall({
+      mode: "generate",
+      models: [{
+        connection: "test",
+        model: item.model,
+        options: item.options as LlmJsonObject,
+      }],
+      request,
+    }, {
+      test: { provider: item.provider, auth: { apiKey: "unused-test-key" } },
+    }, "tenant");
+    assertEquals(
+      formatted.estimate.estimatedTokens,
+      prepared.candidates[0].estimatedInputTokens,
+    );
+    const replays = item.provider === "gemini" ||
+      item.native === native && item.provider === "openai" &&
+        !("openaiApi" in item.options);
+    assertEquals(
+      formatted.messages.some((message) => Boolean(message.nativeReasoning)),
+      replays,
+    );
+    assertEquals(formatted.estimate.estimatedTokens > 10_000, replays);
+  }
+});
 
 Deno.test("bridge renders action schemas as TypeScript tool input types", () => {
   const tool = toolDefinition({

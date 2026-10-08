@@ -37,7 +37,7 @@ and runs `execute`.
 ### A complete Action
 
 `save-note.ts` is a pure definition module: no environment reads and no
-top-level I/O. It needs only `@copilotz/copilotz@^0.86.1`. It declares the
+top-level I/O. It needs only `@copilotz/copilotz@^0.86.2`. It declares the
 `note` Collection it writes, so the file stands alone.
 
 ```ts

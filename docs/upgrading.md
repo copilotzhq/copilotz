@@ -8,6 +8,15 @@ status: stable
 
 # Upgrading and Data Safety
 
+## 0.86.2: preferred-model consolidation
+
+Core now consolidates ordinary history when the first configured model exceeds
+its input budget, even if a fallback fits. History capacity follows that
+preferred model's prefix, input limit and output allowance. Provider failures
+still use the configured fallback order; scoped maintenance turns retain their
+own LLM admission behavior. Existing snapshots remain usable without a database
+or memory migration.
+
 ## 0.86.1: native-state memory budgets
 
 Memory consolidation now counts compatible native provider state using the same
@@ -100,7 +109,7 @@ On Deno, edit the existing `imports` property in `deno.json`. Replace only the
 ```json
 {
   "imports": {
-    "@copilotz/copilotz": "jsr:@copilotz/copilotz@^0.86.1"
+    "@copilotz/copilotz": "jsr:@copilotz/copilotz@^0.86.2"
   }
 }
 ```
@@ -112,7 +121,7 @@ On Node:
 
 ```sh
 # Add the package from JSR and record the resolved version in the lockfile.
-npx jsr add @copilotz/copilotz@^0.86.1
+npx jsr add @copilotz/copilotz@^0.86.2
 ```
 
 Generated or bundled plugins must keep framework imports external so that they

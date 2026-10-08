@@ -1,3 +1,12 @@
+## 0.86.2 — 2026-10-08
+
+- Consolidate ordinary history when the preferred model exceeds its input
+  budget, even when a fallback model could accept the request.
+- Bound history sources and the preparation byte guard by the preferred model,
+  so fallback capacity cannot inflate or unnecessarily constrain consolidation.
+- Preserve provider-failure fallback order and existing snapshots; no database
+  or memory migration is needed.
+
 ## 0.86.1 — 2026-10-07
 
 - Include compatible native provider state in shared wire preflight so memory

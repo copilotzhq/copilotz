@@ -118,18 +118,24 @@ different agents or threads own separate work.
 The configured trigger measures history only. The source of one checkpoint is
 bounded separately against the model's total input:
 
-1. For each model candidate, Core measures the full prompt prefix (instructions,
-   context, tool schemas) and subtracts the candidate's output allowance (1000
-   estimated tokens when the model doesn't configure one) from its input limit.
-2. Using the largest remaining candidate budget, Memory subtracts its own
-   maintenance instruction and source manifest, and selects a contiguous source
-   range within what remains.
+1. For the preferred model (the first candidate), Core measures the full prompt
+   prefix (instructions, context, tool schemas) and subtracts its output
+   allowance (1000 estimated tokens when the model doesn't configure one) from
+   its input limit.
+2. Using that preferred-model budget, Memory subtracts its own maintenance
+   instruction and source manifest, and selects a contiguous source range within
+   what remains.
 3. The most recent `retainRecentEstimatedTokens` stay raw. Eligible history that
    doesn't fit one bounded range remains raw tail for a later checkpoint.
 
 These are estimates, not provider tokens. The trigger is not a hard context
 limit: a low value doesn't guarantee the whole prompt fits, and a high one
 doesn't stop Core from compacting a call that is about to be too large.
+
+If the preferred model's prepared request exceeds its input limit, Core waits
+for bounded consolidation and prepares the request again before calling it. A
+fitting fallback does not suppress this check; fallbacks remain available when
+provider calls fail.
 
 ### How the scoped maintenance turn runs
 

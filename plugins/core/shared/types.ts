@@ -74,7 +74,7 @@ export type ContextResource = Readonly<{
           readonly import("./agents/transcript.ts").LlmTranscriptEntry[];
         historyAfterMessageId?: string;
         limitEstimatedTokens?: number;
-        /** History capacity after the prepared prefix and one model response. */
+        /** Preferred-model history capacity after its prefix and one response. */
         historyLimitEstimatedTokens: number;
       }>,
   ): void | Promise<void>;

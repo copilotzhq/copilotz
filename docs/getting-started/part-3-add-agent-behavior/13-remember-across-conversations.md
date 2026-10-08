@@ -64,9 +64,9 @@ checkpoint. The turn itself continues as usual.
 
 The checkpoint's source is bounded twice:
 
-- Core works out how much history fits in the agent's model after the normal
-  prompt prefix, the tool schemas and an output allowance (1000 estimated tokens
-  when the model doesn't configure one).
+- Core works out how much history fits in the agent's preferred model (the first
+  configured candidate) after the normal prompt prefix, the tool schemas and an
+  output allowance (1000 estimated tokens when the model doesn't configure one).
 - The plugin subtracts the size of its own maintenance instruction and source
   manifest from that, and selects source messages within what remains.
 
@@ -118,8 +118,11 @@ running. A separate host must use the same persistent database, schema and
 namespace. The runtime-only hosts in Chapters 19 and 21 do not compose the agent
 harness and cannot execute its Memory work as shown.
 
-A turn whose model call would be too large is the exception: Core's foreground
-compaction can wait for a scoped checkpoint before that turn continues.
+A turn whose preferred model call would be too large is the exception: Core's
+foreground compaction waits for a scoped checkpoint before that turn continues,
+even if a fallback model could accept the request. It then prepares the request
+again for the preferred model. Provider failures can still use the configured
+fallbacks.
 
 `consolidate_memory` requires trusted Core tool provenance. An agent can also
 call it during an ordinary turn: Memory reserves an on-demand checkpoint and the

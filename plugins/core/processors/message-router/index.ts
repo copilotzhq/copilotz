@@ -504,15 +504,13 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
                   .some((resource) =>
                     isContextResource(resource) && resource.compact
                   );
-              const limits = selection.models.flatMap((model) => {
-                const configured = model.options?.limitEstimatedInputTokens;
-                if (configured === undefined) return [150_000];
-                return typeof configured === "number" &&
-                    Number.isFinite(configured) && configured > 0
-                  ? [configured]
-                  : [];
-              });
-              const limit = limits.length ? Math.min(...limits) : undefined;
+              const configuredLimit =
+                selection.models[0].options?.limitEstimatedInputTokens ??
+                  150_000;
+              const limit = typeof configuredLimit === "number" &&
+                  Number.isFinite(configuredLimit) && configuredLimit > 0
+                ? configuredLimit
+                : undefined;
               const compact = async (
                 error: ContextInputLimitError,
                 historyLimit: number,
@@ -689,25 +687,13 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
                 context.resources.llmConnections,
                 context.namespace,
               );
-              const oversized = preparation.candidates.filter((candidate) =>
-                candidate.status === "too_large"
-              );
-              if (
-                hasCompaction &&
-                oversized.length === preparation.candidates.length
-              ) {
-                const mostConstrained = oversized.reduce((current, candidate) =>
-                  candidate.estimatedInputTokens /
-                        candidate.limitEstimatedInputTokens >
-                      current.estimatedInputTokens /
-                        current.limitEstimatedInputTokens
-                    ? candidate
-                    : current
-                );
+              // Compact for the preferred model before considering fallbacks.
+              const preferred = preparation.candidates[0]!;
+              if (hasCompaction && preferred.status === "too_large") {
                 await compact(
                   new ContextInputLimitError(
-                    mostConstrained.estimatedInputTokens,
-                    mostConstrained.limitEstimatedInputTokens,
+                    preferred.estimatedInputTokens,
+                    preferred.limitEstimatedInputTokens,
                   ),
                   await historyLimitEstimatedTokens(
                     callInput,

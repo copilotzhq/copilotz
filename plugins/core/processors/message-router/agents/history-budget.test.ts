@@ -1,7 +1,7 @@
 import { assert, assertEquals } from "@std/assert";
 import { historyLimitEstimatedTokens } from "./history-budget.ts";
 
-Deno.test("history capacity uses a viable model without being disabled by a smaller fallback", async () => {
+Deno.test("history capacity follows the preferred model regardless of fallback capacity", async () => {
   const connections = { test: { adapter: "test" } };
   const request = { instructions: "prefix ".repeat(2_000), messages: [] };
   const first = {
@@ -51,7 +51,7 @@ Deno.test("history capacity uses a viable model without being disabled by a smal
     connections,
     "test",
   );
-  assertEquals(larger - single, 70_000);
+  assertEquals(larger, single);
   assertEquals(
     await historyLimitEstimatedTokens(
       {

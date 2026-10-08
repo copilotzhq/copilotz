@@ -74,6 +74,14 @@ documented limits; Copilotz does not read a provider's advertised context
 window. A custom adapter receives the same `options` object and decides what, if
 anything, to send to its own transport.
 
+When a Context resource supports compaction, Core consolidates ordinary history
+if the first candidate is `too_large`, then prepares the request again for that
+preferred model. A fitting fallback does not bypass this maintenance. History
+budgets follow the first candidate's prefix, input limit and output allowance;
+fallbacks remain available for provider failures. Without a compaction resource,
+or within a scoped maintenance turn, LLM admission can still skip an oversized
+candidate and try the next one.
+
 The model input limit is **not** the memory consolidation trigger. Memory has
 its own `triggerEstimatedTokens` setting (default 20,000) in its resource
 configuration, checked when ordinary turn history is prepared. Changing one does

@@ -1,4 +1,4 @@
-/** History capacity after the ordinary prompt prefix and one model response. @module */
+/** Preferred-model history capacity after its prompt prefix and one response. @module */
 import { type LlmCallInput, prepareLlmCall } from "@copilotz/copilotz/llm";
 
 export async function historyLimitEstimatedTokens(
@@ -9,17 +9,19 @@ export async function historyLimitEstimatedTokens(
   const prefix = await prepareLlmCall(
     {
       ...input,
+      models: [input.models[0]],
       request: { ...input.request, messages: [] },
     },
     connections,
     namespace,
   );
+  const preferred = prefix.candidates[0]!;
   return Math.max(
     0,
-    Math.floor(Math.max(...prefix.candidates.map((candidate) => {
-      return candidate.limitEstimatedInputTokens -
-        candidate.estimatedInputTokens -
-        (candidate.outputTokenAllowance ?? 1_000);
-    }))),
+    Math.floor(
+      preferred.limitEstimatedInputTokens -
+        preferred.estimatedInputTokens -
+        (preferred.outputTokenAllowance ?? 1_000),
+    ),
   );
 }

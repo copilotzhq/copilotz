@@ -1,5 +1,9 @@
-import { assert, assertEquals, assertRejects } from "@std/assert";
-import { preflightLlmRequest, prepareLlmCall } from "@copilotz/copilotz/llm";
+import { assert, assertEquals, assertRejects, assertThrows } from "@std/assert";
+import {
+  ContextInputLimitError,
+  preflightLlmRequest,
+  prepareLlmCall,
+} from "@copilotz/copilotz/llm";
 import type { LlmCallInput } from "@copilotz/copilotz/llm";
 import { messageRouterProcessor } from "./index.ts";
 Deno.test("Message Router owns its identity", () =>
@@ -32,12 +36,12 @@ Deno.test("LLM preparation counts provider-native state and preserves fitting fa
     }],
   } as unknown as LlmCallInput["request"];
   const limitEstimatedInputTokens = 1_000;
-  const generic = preflightLlmRequest(request, {
-    provider: "openai",
-    model: "gpt-4o-mini",
-    limitEstimatedInputTokens,
-  }, "tenant-a");
-  assert(generic.estimatedInputTokens < limitEstimatedInputTokens);
+  const measured = assertThrows(() =>
+    preflightLlmRequest(request, {
+      provider: "openai",
+      model: "gpt-4o-mini",
+      limitEstimatedInputTokens,
+    }, "tenant-a"), ContextInputLimitError);
 
   const preparation = await prepareLlmCall({
     mode: "generate",
@@ -63,6 +67,20 @@ Deno.test("LLM preparation counts provider-native state and preserves fitting fa
   ]);
   assert(
     preparation.candidates[0]!.estimatedInputTokens > limitEstimatedInputTokens,
+  );
+  assertEquals(
+    measured.estimatedInputTokens,
+    preparation.candidates[0].estimatedInputTokens,
+  );
+  const chat = preflightLlmRequest(request, {
+    provider: "openai",
+    model: "gpt-4o-mini",
+    openaiApi: "chat_completions",
+    limitEstimatedInputTokens,
+  }, "tenant-a");
+  assertEquals(
+    chat.estimatedInputTokens,
+    preparation.candidates[1].estimatedInputTokens,
   );
 });
 

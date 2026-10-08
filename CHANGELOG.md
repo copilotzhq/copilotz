@@ -1,3 +1,12 @@
+## 0.86.1 — 2026-10-07
+
+- Include compatible native provider state in shared wire preflight so memory
+  thresholds and source ranges count the same reasoning blocks as LLM admission.
+- Reuse the built-in protocol registry for formatting and execution, including
+  API overrides and providers that do not replay native state.
+- Preserve existing prompt prefixes, native blocks and memory snapshots; no
+  database or memory migration is needed.
+
 ## 0.86.0 — 2026-10-07
 
 ### Changed

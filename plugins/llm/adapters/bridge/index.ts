@@ -1,6 +1,7 @@
 /** Provider-wire to LLM Adapter bridge. @module */
 
 import { projectPreparedRequest } from "../../shared/prepared-request.ts";
+import { builtinProviders } from "../builtin/providers.ts";
 import { generateAgentTypesFromSchema } from "../../shared/schema-to-agent-types.ts";
 
 import { bytesToBase64, toDataUrl } from "@copilotz/copilotz/content";
@@ -13,6 +14,7 @@ import {
   type LlmAdapterContentPart,
   type LlmAdapterFrame,
   type LlmAdapterResult,
+  type LlmBuiltinProvider,
   type LlmBuiltinProviderConfiguration,
   type LlmJsonObject,
   type LlmJsonValue,
@@ -435,6 +437,8 @@ type PreflightConfig =
     | "model"
     | "limitEstimatedInputTokens"
     | "reasoningEffort"
+    | "openaiApi"
+    | "baseUrl"
   >
   & Partial<Pick<ProviderConfig, "provider">>;
 
@@ -453,13 +457,26 @@ export function formatLlmRequestForWire(
     estimate: ChatTokenEstimate;
   }
 > {
+  const resolved = toLLMConfig(config);
+  const protocol =
+    config.provider && Object.hasOwn(builtinProviders, config.provider)
+      ? builtinProviders[config.provider as LlmBuiltinProvider](resolved)
+      : undefined;
+  const nativeReasoningApi = protocol?.replaysNativeReasoning === false
+    ? undefined
+    : protocol?.nativeReasoningApi;
+  const replay = config.provider && config.model && nativeReasoningApi
+    ? { adapter: config.provider, model: config.model, api: nativeReasoningApi }
+    : undefined;
   const chatRequest = createChatRequest(
     {
-      request: projectPreparedRequest(request, namespace),
+      adapter: config.provider,
+      providerModel: config.model,
+      request: projectPreparedRequest(request, namespace, replay),
     } as LlmAdapterCallInput,
     new AbortController().signal,
+    nativeReasoningApi,
   );
-  const resolved = toLLMConfig(config);
   return {
     config: resolved,
     ...formatMessagesDetailed({

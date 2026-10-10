@@ -4,18 +4,20 @@ import { definePlugin as defineFixturePlugin } from "@copilotz/copilotz/plugins"
 import { assert, assertEquals, assertRejects } from "@std/assert";
 import { createCopilotz } from "../index.ts";
 import {
+  ActionError,
   createSecretAdapter,
   defineAction,
   secret,
   type SecretAdapter,
 } from "@copilotz/copilotz/actions";
-import { defineCollection } from "@copilotz/copilotz/collections";
+import { defineCollection, relation } from "@copilotz/copilotz/collections";
 import { definePlugin } from "@copilotz/copilotz/plugins";
 import {
   createCoreTableNames,
   provisionCopilotzSchema,
 } from "../runtime/events/index.ts";
 import {
+  createHttpAdapter,
   type ServerEndpointDescriptor,
   serverPlugin,
 } from "../plugins/server/index.ts";
@@ -1032,5 +1034,315 @@ Deno.test("thread observation discovers and receives a generic metadata command 
     await observation.done.catch(() => undefined);
     await reader.cancel().catch(() => undefined);
     await application.close();
+  }
+});
+
+Deno.test("HTTP invoke and generic Action results disclose only caller-safe failures, including replay", async () => {
+  let calls = 0;
+  const board = defineAction({
+    id: "errors.board",
+    inputSchema: {
+      type: "object",
+      properties: { safe: { type: "boolean" } },
+      required: ["safe"],
+    } as const,
+    execute(input: { safe: boolean }) {
+      calls++;
+      if (input.safe) {
+        throw new ActionError("Card 'x' is not on this board.", {
+          code: "card_not_on_board",
+          status: 409,
+        });
+      }
+      // A status and code alone do not grant permission to disclose an error.
+      throw Object.assign(new Error("private implementation detail"), {
+        code: "private_code",
+        status: 400,
+      });
+    },
+  });
+  const app = await createCopilotz({
+    namespace: "http-action-errors",
+    plugins: [serverPlugin],
+    actions: { board },
+    adapters: {
+      http: {
+        errors: createHttpAdapter({
+          routes: [{
+            id: "errors.route",
+            method: "POST",
+            path: "/board",
+            async handler(context) {
+              try {
+                await context.invoke("errors.board", context.input);
+              } catch (error) {
+                const failure = error as Error & {
+                  code: string;
+                  status: number;
+                };
+                return {
+                  name: failure.name,
+                  message: failure.message,
+                  code: failure.code,
+                  status: failure.status,
+                };
+              }
+              throw new Error("Expected an Action rejection.");
+            },
+          }],
+        }),
+      },
+    },
+  });
+  const client = browser(app.fetch);
+  try {
+    for (const safe of [false, true]) {
+      const expected = safe
+        ? {
+          message: "Card 'x' is not on this board.",
+          code: "card_not_on_board",
+        }
+        : { message: "Action execution failed.", code: "action_failed" };
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const response = await app.fetch(
+          new Request("https://test/api/board", {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "idempotency-key": `route-${safe}`,
+            },
+            body: JSON.stringify({ safe }),
+          }),
+        );
+        assertEquals(response.status, 200);
+        assertEquals(await response.json(), {
+          data: {
+            ...expected,
+            name: safe ? "ActionError" : "Error",
+            status: safe ? 409 : 422,
+          },
+        });
+
+        const receipt = await client.actions.submit("errors.board", { safe }, {
+          idempotencyKey: `generic-${safe}`,
+        });
+        const failure = await assertRejects(
+          () => client.operations.result(receipt.operationId),
+          CopilotzHttpError,
+          expected.message,
+        );
+        assertEquals(failure.code, expected.code);
+        assertEquals(failure.status, safe ? 409 : 422);
+        const result = await app.fetch(
+          new Request(
+            `https://test/api/operations/${receipt.operationId}/result`,
+          ),
+        );
+        assertEquals(result.status, safe ? 409 : 422);
+        assertEquals(await result.json(), { error: expected });
+      }
+    }
+    assertEquals(calls, 4);
+  } finally {
+    await app.close();
+  }
+});
+
+Deno.test("HTTP Collection mutations disclose schema and relation validation but redact unexpected errors", async () => {
+  const app = await createCopilotz({
+    namespace: "http-collection-errors",
+    plugins: [serverPlugin],
+    collections: {
+      space: defineCollection({ name: "space", schema: { type: "object" } }),
+      card: defineCollection({
+        name: "card",
+        schema: {
+          type: "object",
+          properties: {
+            spaceId: { type: "string" },
+            title: { type: "string" },
+          },
+          required: ["spaceId", "title"],
+        } as const,
+        relations: { space: relation.belongsTo("space", "spaceId") },
+        commands: {
+          crash: {
+            mutate() {
+              throw Object.assign(new Error("private mutation detail"), {
+                code: "private_mutation",
+                retryable: false,
+              });
+            },
+          },
+        },
+      }),
+    },
+    resources: {
+      server: {
+        default: fixtureServerFacade({
+          expose: {
+            collections: {
+              include: ["card"],
+              operations: { include: ["create", "update", "command:crash"] },
+            },
+          },
+          authorize: () => ({
+            collectionMutations: {
+              card: { create: {}, update: {}, commands: { crash: {} } },
+            },
+          }),
+        }),
+      },
+    },
+  });
+  const client = browser(app.fetch);
+  try {
+    const schemaError = await assertRejects(
+      () =>
+        client.collections.create("card", { title: 42, spaceId: "nowhere" }, {
+          idempotencyKey: "schema",
+        }),
+      CopilotzHttpError,
+      "schema validation",
+    );
+    assertEquals(schemaError.code, "collection_validation_failed");
+    assertEquals(schemaError.status, 422);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const receipt = await client.collections.create("card", {
+        title: "card",
+        spaceId: "nowhere",
+      }, { idempotencyKey: "relation" });
+      const error = await assertRejects(
+        () => client.operations.result(receipt.operationId),
+        CopilotzHttpError,
+        "Relation 'space' references missing space 'nowhere'.",
+      );
+      assertEquals(error.code, "collection_validation_failed");
+      assertEquals(error.status, 422);
+      assert(!error.message.includes("Settlement scope"));
+      assert(!error.message.includes("dead-lettered"));
+    }
+    // A final-record rejection happens after admission, unlike input validation.
+    await app.collections.space.create({ id: "exists" });
+    const stored = await app.collections.card.create({
+      title: "card",
+      spaceId: "exists",
+    });
+    const update = await client.collections.update("card", stored.id, {
+      unset: ["title"],
+    }, { idempotencyKey: "final-schema" });
+    const finalError = await assertRejects(
+      () => client.operations.result(update.operationId),
+      CopilotzHttpError,
+      "schema validation",
+    );
+    assertEquals(finalError.code, "collection_validation_failed");
+    const crash = await client.collections.command(
+      "card",
+      stored.id,
+      "crash",
+      {},
+      { idempotencyKey: "unexpected" },
+    );
+    const unexpected = await assertRejects(
+      () => client.operations.result(crash.operationId),
+      CopilotzHttpError,
+      "Collection mutation did not complete.",
+    );
+    assertEquals(unexpected.code, "collection_mutation_failed");
+    const hostError = await assertRejects(
+      () => app.collections.card.commands.crash({ id: stored.id }),
+      Error,
+      "private mutation detail",
+    );
+    assertEquals(
+      (hostError as Error & { code: string }).code,
+      "private_mutation",
+    );
+  } finally {
+    await app.close();
+  }
+});
+
+Deno.test("host and HTTP Action failures never copy protected error text into ingress Events", async () => {
+  for (const direction of ["input", "output"] as const) {
+    const inputSchema = {
+      type: "object",
+      properties: {
+        credential: direction === "input"
+          ? secret({ type: "string" } as const)
+          : { type: "string" } as const,
+      },
+      required: ["credential"],
+    } as const;
+    const app = await createCopilotz({
+      namespace: `protected-errors-${direction}`,
+      plugins: [serverPlugin],
+      adapters: { secrets: { default: await facadeSecretAdapter() } },
+      actions: {
+        fail: defineAction({
+          id: "errors.secret",
+          inputSchema,
+          ...(direction === "output"
+            ? { outputSchema: secret({ type: "string" } as const) }
+            : {}),
+          execute(input: { credential: string }): never {
+            const error = new ActionError(`Private ${input.credential}`, {
+              code: input.credential,
+            });
+            error.name = input.credential;
+            throw error;
+          },
+        }),
+      },
+    });
+    const input = {
+      credential: direction === "input" ? SECRET_INPUT : "ordinary input",
+    };
+    const client = browser(app.fetch);
+    try {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const host = await assertRejects(
+          () => app.actions.fail(input, { idempotencyKey: "protected" }),
+          Error,
+          "Action execution failed.",
+        );
+        assertEquals(host.name, "Error");
+        assertEquals((host as Error & { code?: string }).code, undefined);
+        const http = await assertRejects(
+          () =>
+            client.actions.invoke("errors.secret", input, {
+              idempotencyKey: "protected",
+            }),
+          CopilotzHttpError,
+          "Action execution failed.",
+        );
+        assertEquals(http.code, "action_failed");
+      }
+      for (const operation of await app.listOperations()) {
+        const history = await app.attach({
+          operationId: operation.operationId,
+        });
+        const failures: unknown[] = [];
+        for await (const event of history.outputs) {
+          if (event.type === "errors.secret.failed") {
+            failures.push((event as { data: { error: unknown } }).data.error);
+          }
+          const encoded = JSON.stringify(event);
+          assert(!encoded.includes(SECRET_INPUT));
+          assert(!encoded.includes(`Private ${input.credential}`));
+          if (event.type === "copilotz.server.internal.invoke.completed") {
+            assert(!encoded.includes(`"name":"${input.credential}"`));
+          }
+        }
+        await history.done;
+        assertEquals(failures, [{
+          name: "Error",
+          message: "Action execution failed.",
+        }]);
+      }
+    } finally {
+      await app.close();
+    }
   }
 });

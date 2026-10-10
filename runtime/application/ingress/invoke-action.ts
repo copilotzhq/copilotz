@@ -24,11 +24,9 @@ export type ServerInvokeActionOutput =
     error: Readonly<{ name: string; message: string }>;
   }>;
 
-function safeError(
-  error: unknown,
-): Readonly<{ name: string; message: string }> {
+function safeError(): Readonly<{ name: string; message: string }> {
   return ({
-    name: error instanceof Error && error.name.trim() ? error.name : "Error",
+    name: "Error",
     message: "Action execution failed.",
   } as const);
 }
@@ -132,7 +130,7 @@ export const serverInvokeAction: ActionDefinition<
       if (context.signal.aborted) throw error;
       return ({
         status: "failed" as const,
-        error: safeError(error),
+        error: safeError(),
       } as const);
     }
   },

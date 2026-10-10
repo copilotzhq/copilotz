@@ -8,6 +8,15 @@ status: stable
 
 # Upgrading and Data Safety
 
+## 0.87.2: readable Action and write errors
+
+Trusted host calls now reject with the Action's own error name, message and
+code, including on replay, and Collection writes rejected by their schema or a
+missing related record reject with a plain message and the code
+`collection_validation_failed`. Over HTTP, unknown Action errors stay redacted;
+throw `ActionError(message, { code, status? })` from an Action to let callers
+see a deliberate refusal. No data migration is needed.
+
 ## 0.87.0: Actions and Collections from the host
 
 `createCopilotz` results gain `actions` and `collections`, matching the

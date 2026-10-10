@@ -41,7 +41,7 @@ Copilotz is published on JSR. Set up the project as in the
 
 ```sh
 # Deno: add Copilotz with import mappings for its plugin subpaths.
-deno add jsr:@copilotz/copilotz@^0.87.1
+deno add jsr:@copilotz/copilotz@^0.87.2
 ```
 
 Deno 2.9 holds back versions published in the last 24 hours by default; for a
@@ -53,7 +53,7 @@ fresh release add the Copilotz-only `minimumDependencyAge` exception from the
 npm init -y
 npm pkg set type=module
 # Install Copilotz from JSR, and PGlite, the database the runtime opens.
-npx jsr add @copilotz/copilotz@^0.87.1
+npx jsr add @copilotz/copilotz@^0.87.2
 npm i @electric-sql/pglite
 ```
 
@@ -159,6 +159,24 @@ before any model output, and the enclosing operation may still fail later. When
 you need full completion, observe the operation until a terminal status and
 handle semantic failures such as `llm.call.failed` yourself.
 `client.actions.invoke` is submit plus `result`, with the same boundary.
+
+Action submissions still return `202` receipts. A failed Action's result read
+returns `422` with an `error` body containing code `action_failed` and message
+`Action execution failed.`, unless the Action threw a
+[caller-safe `ActionError`](actions.md#caller-safe-errors). That error's message
+and code pass through with its chosen 4xx status (default `422`), including on
+replay. A custom route's `context.invoke` rejects with the same message, code
+and status; the handler can catch it or let the HTTP facade return that error
+body. Adding a code or HTTP status to an ordinary Error does not grant message
+disclosure. Secret-marked Action schemas retain generic errors even for
+`ActionError`.
+
+Collection mutation schema and missing-relation failures return `422` with code
+`collection_validation_failed` and a plain validation message. Input schema
+errors can reject submission; final-record and relation errors reject the
+recorded result read. Unexpected mutation execution failures remain
+`collection_mutation_failed` / `Collection mutation did not complete.`. Error
+reporting does not bypass authentication, authorization or result-read scope.
 
 `client.operations.observe({ operationIds, onFrame })` streams multipart frames
 for 1–32 concurrently selected operations and resolves with a checkpoint for

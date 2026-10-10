@@ -1,5 +1,6 @@
 import { addFormats, Ajv } from "../../dependencies/ajv.ts";
 import { markNonRetryable } from "../failure.ts";
+import { createCollectionValidationError } from "./errors.ts";
 
 type JsonSchema = Record<string, unknown>;
 type AjvValidator = ((value: unknown) => boolean) & {
@@ -60,5 +61,21 @@ export function validateCollectionRecord(
   record: Readonly<Record<string, unknown>>,
   label: string,
 ): void {
-  validateAgainstJsonSchema(schema, record, label);
+  validateCollectionInput(schema, record, label);
+}
+
+/** Classifies value validation only; invalid schemas remain internal failures. */
+export function validateCollectionInput(
+  schema: object,
+  value: unknown,
+  label: string,
+): void {
+  try {
+    validateAgainstJsonSchema(schema, value, label);
+  } catch (error) {
+    if (isJsonSchemaValidationError(error)) {
+      throw createCollectionValidationError(error.message);
+    }
+    throw error;
+  }
 }

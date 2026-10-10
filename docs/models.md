@@ -87,6 +87,16 @@ its own `triggerEstimatedTokens` setting (default 20,000) in its resource
 configuration, checked when ordinary turn history is prepared. Changing one does
 not change the other; see [Memory](memory.md).
 
+Native reasoning is carried unchanged for compatible models. Its token estimate
+uses the producing attempt's `reasoningTokens`, saved alongside the native
+state, when available. This requires no historical usage lookup. Older OpenAI
+Responses state uses an encrypted-payload byte heuristic; other formats retain a
+conservative fallback until a suitable estimate is validated. These values are
+heuristics, including usage-based replay estimates, and feed the same local
+request calibration used by ordinary turns and consolidation. They do not count
+encrypted JSON as visible text or alter the provider payload. Actual payload
+bytes are tracked separately for memory-source loading limits.
+
 ### Named connections on the host
 
 `resources.llmConnections` maps each connection name to exactly one of two
@@ -163,7 +173,7 @@ succeeds produces no `llm.call.failed` Event.
 ### Example: fall back from an outage
 
 Two files, no credential, network or cost. They need Deno 2.9+ or Node 24+ with
-`@copilotz/copilotz` `^0.87.1` installed as in
+`@copilotz/copilotz` `^0.87.2` installed as in
 [setup](getting-started.md#before-you-start).
 
 Create `scripted-models.ts`, a pure module with two custom adapters:

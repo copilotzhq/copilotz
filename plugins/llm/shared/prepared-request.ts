@@ -122,6 +122,9 @@ function projectPreparedMessage(
           api: native.api,
           model: native.model,
           blocks: blocks,
+          ...(native.reasoningTokens === undefined
+            ? {}
+            : { reasoningTokens: native.reasoningTokens }),
         } as const) as LlmAdapterNativeReasoning;
       })()
       : undefined;

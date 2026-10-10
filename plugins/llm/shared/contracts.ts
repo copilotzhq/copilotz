@@ -218,6 +218,8 @@ export type LlmNativeReasoning = Readonly<{
   api: string;
   model: string;
   blocks: ContentSequence;
+  /** Producing attempt's reasoning usage; a replay estimate, not an exact input count. */
+  reasoningTokens?: number;
 }>;
 
 /** Resolved native state passed to an LLM Adapter. */
@@ -227,6 +229,8 @@ export type LlmAdapterNativeReasoning = Readonly<{
   api: string;
   model: string;
   blocks: readonly LlmJsonObject[];
+  /** Producing attempt's reasoning usage, carried without a historical usage lookup. */
+  reasoningTokens?: number;
 }>;
 
 type LlmMessageBase = Readonly<{

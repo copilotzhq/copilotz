@@ -8,7 +8,7 @@ status: stable
 
 # Upgrading and Data Safety
 
-## 0.87.1: readable Action and write errors
+## 0.87.2: readable Action and write errors
 
 Trusted host calls now reject with the Action's own error name, message and
 code, including on replay, and Collection writes rejected by their schema or a

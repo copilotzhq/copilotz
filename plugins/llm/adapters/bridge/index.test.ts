@@ -17,6 +17,7 @@ Deno.test("wire preflight and candidate admission replay and measure the same na
     adapter: "openai",
     api: "openai.responses",
     model: "gpt-6-luna",
+    reasoningTokens: 12_000,
     blocks: [{
       assetId: "reasoning",
       kind: "json" as const,

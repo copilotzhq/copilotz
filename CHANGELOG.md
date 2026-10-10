@@ -1,3 +1,16 @@
+## 0.87.1 — 2026-10-10
+
+- Carry the producing attempt's reasoning-token usage with native state so
+  ordinary turns and memory consolidation can estimate replay without querying
+  historical usage. Existing snapshots require no migration.
+- Estimate historical OpenAI encrypted payloads with a measured byte heuristic
+  instead of treating their entire JSON representation as text. Native replay
+  estimates remain heuristic and use the existing request calibration. The
+  public API pilot does not establish exact ChatGPT replay cost; other native
+  formats retain their conservative fallback when usage metadata is absent.
+- Include hydrated native state in memory source byte accounting while
+  preserving signed blocks, prompt content, and consolidation tools.
+
 ## 0.87.0 — 2026-10-10
 
 - Add trusted host `app.actions.<alias>` and `app.collections.<alias>` APIs to

@@ -14,6 +14,91 @@ import {
   sourceMessagesFromTranscript,
 } from "./source.ts";
 
+Deno.test("historical encrypted first message fits consolidation without losing native state", async () => {
+  const model = {
+    connection: "openai",
+    model: "gpt-6-luna",
+    options: { limitEstimatedInputTokens: 180_000 },
+  };
+  const connections = {
+    openai: {
+      provider: "openai" as const,
+      auth: { apiKey: "unused-test-key" },
+    },
+  };
+  const message = {
+    role: "assistant" as const,
+    content: [{
+      assetId: "visible",
+      kind: "text" as const,
+      mediaType: "text/plain",
+      role: "body",
+      value: "x".repeat(503),
+    }],
+    nativeReasoning: {
+      schema: "copilotz.llm-native-reasoning.v1" as const,
+      adapter: "openai",
+      api: "openai.responses",
+      model: model.model,
+      blocks: Array.from({ length: 229 }, (_, i) => ({
+        assetId: `native:${i}`,
+        kind: "json" as const,
+        mediaType: "application/json",
+        role: "reasoning",
+        value: {
+          type: "reasoning",
+          id: `reasoning:${i}`,
+          encrypted_content: "x".repeat(1_440),
+        },
+      })),
+    },
+  };
+  const before = structuredClone(message);
+  const sources = sourceMessagesFromTranscript(
+    {
+      namespace: "tenant",
+      resources: { llmConnections: connections },
+    } as never,
+    { messages: [], model },
+    [{ sourceId: "first", message }],
+  );
+  assert(
+    JSON.stringify(message.nativeReasoning.blocks.map((b) => b.value)).length /
+        2 > 129_988,
+  );
+  const range = selectLongTermMemoryRange({
+    messages: sources,
+    triggerMessageId: "first",
+    triggerEstimatedTokens: 0,
+    retainRecentEstimatedTokens: 0,
+    maxSourceEstimatedTokens: 129_988,
+  });
+  assert(range);
+  assertEquals(range.sourceEndMessageId, "first");
+  assert(sources[0].estimatedTokens! < 25_000);
+  assert(sources[0].sourceBytes! > 330_000);
+  const request = { messages: [message] };
+  const prepared = await prepareLlmCall(
+    { mode: "generate", models: [model], request },
+    connections,
+    "tenant",
+  );
+  const wire = formatLlmRequestForWire(request, {
+    provider: "openai",
+    model: model.model,
+  }, "tenant");
+  assertEquals(
+    sources[0].estimatedTokens,
+    prepared.candidates[0].estimatedInputTokens,
+  );
+  assertEquals(
+    wire.estimate.estimatedTokens,
+    prepared.candidates[0].estimatedInputTokens,
+  );
+  assertEquals(prepared.candidates[0].status, "fit");
+  assertEquals(message, before);
+});
+
 Deno.test("native state triggers consolidation and bounds a whole-turn source without database reads", async () => {
   const model = {
     connection: "openai",
@@ -47,6 +132,7 @@ Deno.test("native state triggers consolidation and bounds a whole-turn source wi
         adapter: "openai",
         api: "openai.responses",
         model: model.model,
+        reasoningTokens: 22_500,
         blocks: [{
           assetId: `reasoning:${index}`,
           kind: "json" as const,

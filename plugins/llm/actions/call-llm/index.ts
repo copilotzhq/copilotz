@@ -1044,6 +1044,7 @@ function normalizedNativeReasoning(
       "api",
       "model",
       "blocks",
+      "reasoningTokens",
     ]),
     path,
   );
@@ -1068,6 +1069,7 @@ function normalizedNativeReasoning(
     api: requiredText(record.api, `${path}.api`),
     model: requiredText(record.model, `${path}.model`),
     blocks: blocks as ContentSequence,
+    ...normalizedUsage({ reasoningTokens: record.reasoningTokens }, path),
   } as const);
 }
 
@@ -2618,6 +2620,8 @@ function outputFor(
   attempts: readonly LlmAttemptUsage[],
 ): LlmCallOutput {
   const usage = aggregateUsage(attempts);
+  // Earlier failed/fallback attempts did not produce these native blocks.
+  const reasoningTokens = result.attempts.at(-1)?.usage?.reasoningTokens;
   return ({
     adapter: selected.adapterAlias,
     connection: selected.alias,
@@ -2633,6 +2637,7 @@ function outputFor(
           api: result.nativeReasoning.api,
           model: selected.selection.model,
           blocks: nativeReasoning,
+          ...(reasoningTokens === undefined ? {} : { reasoningTokens }),
         },
       }
       : {}),

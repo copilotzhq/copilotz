@@ -20,7 +20,16 @@ application. See [Filesystem Plugin Authoring](docs/convention-authoring.md).
 The public factory supports embedded, Gateway and Worker roles: Gateways admit
 and dispatch; Workers execute. A Worker exposes only readiness, closure and
 shutdown, while application handles expose operations and the HTTP facade.
-Injected persistence and dispatchers remain host-owned.
+Injected persistence and dispatchers remain host-owned. Trusted host handles
+also admit Actions with `actions.<alias>` and Collection mutations with
+`collections.<alias>.create/update/delete/commands.<name>`; Collection reads use
+`collections.<alias>.get/list/aggregate/queries`. Host mutations and Actions use
+`idempotencyKey` to admit their own operation; the matching `context` calls use
+`operationKey` within the current delivery and operation. The application owns
+the generic protected ingress protocol and outcome recovery shared with HTTP.
+Historical Server Event, Action and consumer identities remain stable for
+replay. The optional Server plugin owns exposure and authorization, not a second
+executor.
 
 This file is the contributor architecture contract. Application developers can
 start with [Architecture](docs/architecture.md); documentation changes follow

@@ -1,3 +1,15 @@
+## Unreleased
+
+- Add trusted host `app.actions.<alias>` and `app.collections.<alias>` APIs to
+  embedded and Gateway applications, with enumerable caller-facing aliases and
+  composed Action/Collection types. Run Actions and Collection mutations as
+  recorded operations using `idempotencyKey`; matching `context` calls use
+  `operationKey` within the current delivery and operation. Read Collections
+  directly in the selected namespace and database schema. Named commands use
+  `commands.<name>({ id, ...input }, options)`, as in `ScopedCollection`.
+- Share protected admission, durable execution and recorded result recovery with
+  HTTP, preserving existing Server identities and authorization behavior.
+
 ## 0.86.3 — 2026-10-09
 
 - Preserve initiating participant and origin Message through Tools, nested Asks,

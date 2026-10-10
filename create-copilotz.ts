@@ -10,6 +10,7 @@ import type {
   CreateCopilotzWorkerOptions as RuntimeWorkerOptions,
 } from "./runtime/application/index.ts";
 import type { CopilotzApplication } from "./runtime/application/types.ts";
+import type { RegistryComposition } from "./runtime/plugins/index.ts";
 import type { InternalCopilotzGateway } from "./runtime/application/gateway.ts";
 
 type EmbeddedOptions = RuntimeEmbeddedOptions & Readonly<{ role?: "embedded" }>;
@@ -28,14 +29,32 @@ export type CreateCopilotzOptions =
   | GatewayOptions
   | WorkerOptions;
 
-type GatewayApplication =
-  & CopilotzApplication
+/** Reuse the registry's dependency and contribution composition at the public boundary. */
+type CompositionOptions = Pick<
+  RuntimeEmbeddedOptions,
+  "plugins" | "resources" | "adapters" | "actions" | "collections"
+>;
+type CompositionOption<T, K extends keyof CompositionOptions, Fallback> =
+  K extends keyof T ? NonNullable<T[K]> : Fallback;
+type ApplicationComposition<T extends CompositionOptions> = RegistryComposition<
+  CompositionOption<T, "plugins", readonly []>,
+  CompositionOption<T, "resources", {}>,
+  CompositionOption<T, "adapters", {}>,
+  CompositionOption<T, "actions", {}>,
+  CompositionOption<T, "collections", {}>
+>;
+type GatewayApplication<T extends CompositionOptions = CompositionOptions> =
+  & CopilotzApplication<
+    ApplicationComposition<T>["actions"],
+    ApplicationComposition<T>["collections"]
+  >
   & Readonly<{
     fetch(request: Request): Promise<Response>;
   }>;
 
 /** The embedded default serves the same `/api` facade as a Gateway. */
-type EmbeddedApplication = GatewayApplication;
+type EmbeddedApplication<T extends CompositionOptions = CompositionOptions> =
+  GatewayApplication<T>;
 
 type WorkerFactoryResult = Readonly<{
   ready: Promise<void>;
@@ -55,15 +74,15 @@ function serverFetch(
       Promise.resolve(new Response(null, { status: 404 }));
 }
 
-export function createCopilotz(
-  options: GatewayOptions,
-): Promise<GatewayApplication>;
+export function createCopilotz<const T extends GatewayOptions>(
+  options: T,
+): Promise<GatewayApplication<T>>;
 export function createCopilotz(
   options: WorkerOptions,
 ): Promise<WorkerFactoryResult>;
-export function createCopilotz(
-  options?: EmbeddedOptions,
-): Promise<EmbeddedApplication>;
+export function createCopilotz<const T extends EmbeddedOptions = {}>(
+  options?: T,
+): Promise<EmbeddedApplication<T>>;
 /** Composes exactly the plugins, resources, and adapters supplied by the caller. */
 export async function createCopilotz(
   options: CreateCopilotzOptions = {},
@@ -89,6 +108,8 @@ export async function createCopilotz(
       gateway.installFetchFallback(fetch);
       return ({
         send: gateway.send,
+        actions: gateway.actions,
+        collections: gateway.collections,
         attach: gateway.attach,
         operationStatus: gateway.operationStatus,
         listOperations: gateway.listOperations,

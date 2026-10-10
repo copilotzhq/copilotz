@@ -66,24 +66,116 @@ See
 The embedded and Gateway results share the public `CopilotzApplication` type
 from `@copilotz/copilotz/application`, plus `fetch`:
 
-| Method                                      | Purpose                                                                              |
-| ------------------------------------------- | ------------------------------------------------------------------------------------ |
-| `send(input)`                               | Admit one input envelope; returns an `ApplicationSendHandle`                         |
-| `attach({ operationId, cursor? })`          | Replay recorded history and follow a durable operation                               |
-| `operationStatus({ operationId })`          | Recorded `state`, or `null` when this namespace has no such operation                |
-| `listOperations(input?)`                    | Filter by `operationIds`, `states`, `metadata`, `limit`                              |
-| `operationCheckpoint(input)`                | Keeps the supplied Event baseline and skips sealed streams; does not take a snapshot |
-| `cancelOperation({ operationId, reason? })` | Explicit, durable cancellation                                                       |
-| `maintenance(options?)`                     | Bounded delivery, Asset, Body and operation-catalog maintenance                      |
-| `observe()`                                 | Live outputs of this process, independent of any one operation                       |
-| `close(reason?)`                            | Idempotent shutdown of what this result owns                                         |
-| `fetch(request)`                            | The `/api` boundary when `serverPlugin` is composed; otherwise `404`                 |
+| Method                                                   | Purpose                                                                              |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| `actions.<alias>(input, options?)`                       | Admit an Action, wait for settlement and return its recorded output                  |
+| `collections.<alias>.get/list/queries/aggregate(...)`    | Read Collections without admitting an operation                                      |
+| `collections.<alias>.create/update/delete/commands(...)` | Admit one Collection mutation, wait and return its recorded result                   |
+| `send(input)`                                            | Admit one input envelope; returns an `ApplicationSendHandle`                         |
+| `attach({ operationId, cursor? })`                       | Replay recorded history and follow a durable operation                               |
+| `operationStatus({ operationId })`                       | Recorded `state`, or `null` when this namespace has no such operation                |
+| `listOperations(input?)`                                 | Filter by `operationIds`, `states`, `metadata`, `limit`                              |
+| `operationCheckpoint(input)`                             | Keeps the supplied Event baseline and skips sealed streams; does not take a snapshot |
+| `cancelOperation({ operationId, reason? })`              | Explicit, durable cancellation                                                       |
+| `maintenance(options?)`                                  | Bounded delivery, Asset, Body and operation-catalog maintenance                      |
+| `observe()`                                              | Live outputs of this process, independent of any one operation                       |
+| `close(reason?)`                                         | Idempotent shutdown of what this result owns                                         |
+| `fetch(request)`                                         | The `/api` boundary when `serverPlugin` is composed; otherwise `404`                 |
 
 Operation `state` is one of `accepted`, `running`, `completed`, `failed` or
 `cancelled`. Every scoped method also accepts `namespace` and `databaseSchema`;
 omitting them uses the application's defaults. The result never exposes the
-engine, raw Collections, deliveries or configuration: read state through Actions
-and observation, not through internals.
+engine, raw Collections, deliveries or configuration. Use `collections.<alias>`
+reads for Collection state and `attach` or `observe` for Events.
+
+### Trusted host calls
+
+Use `app.actions.<alias>` when a script, test, seed or admin task already knows
+which Action to run. Use `app.collections.<alias>` for a direct Collection
+mutation; put business rules or multi-record transactions in an Action and call
+that Action instead. Prefer `send` plus a Processor when the input is an Event
+that plugins should react to, or when the caller needs an admission handle and
+its progressive outputs.
+
+| Call                                                                    | Result                                               |
+| ----------------------------------------------------------------------- | ---------------------------------------------------- |
+| `app.actions.<alias>(input, options?)`                                  | Recorded Action output                               |
+| `app.collections.<name>.get({ id }, options?)`                          | Record or `null`                                     |
+| `app.collections.<name>.list(query?, options?)`                         | Records matching a Collection query                  |
+| `app.collections.<name>.queries.<query>(input?, options?)`              | Named query results, with declared schema validation |
+| `app.collections.<name>.aggregate(query, options?)`                     | Aggregate rows                                       |
+| `app.collections.<name>.create(input, options?)`                        | Stored record                                        |
+| `app.collections.<name>.update({ id, set?, unset? }, options?)`         | Stored record                                        |
+| `app.collections.<name>.delete({ id }, options?)`                       | `{ id, deleted: true }`                              |
+| `app.collections.<name>.commands.<command>({ id, ...input }, options?)` | Stored record                                        |
+| `app.collections.<name>.search(query, options?)`                        | Records matching a Collection search                 |
+| `app.collections.<name>.relations.list(query?, options?)`               | Collection graph relations                           |
+
+`app.actions` and `app.collections` are plain, enumerable maps with no inherited
+properties. `Object.keys` lists the registered caller-facing aliases, matching
+`context.actions` and `context.collections`. Stable Action IDs and Collection
+storage names are not additional keys. Internal Actions such as `serverInvoke`
+are excluded. Unknown aliases, commands and queries are absent properties;
+attempting to call them throws a `TypeError` without admitting an operation.
+Each Collection also exposes the scoped `definition` descriptor.
+
+The factory preserves composed Action inputs/outputs and Collection aliases,
+insert types and record types, including plugin dependencies and contributions.
+Get/list/search also preserve the Collection content-selection overloads.
+Widened composition declarations retain dynamic entries. Named commands and
+queries remain dynamic because `defineCollection` erases their literal names and
+input/output types; their schemas are checked at runtime. Collection insert
+types use `$inferInsert`, whose required fields are not relaxed by runtime
+`defaults`.
+
+The method shapes match calls inside Actions and Processors. The operation
+boundary differs: `context.collections.note.create(input, { operationKey })`
+writes within the current delivery and operation; the host's
+`app.collections.note.create(input, { idempotencyKey })` admits its own recorded
+operation. Likewise, `context.actions.saveNote(input, { operationKey })` runs
+within the current delivery, while
+`app.actions.saveNote(input, { idempotencyKey })` admits a new operation.
+
+Every call accepts `namespace` and `databaseSchema` in its final options. They
+default to the application's scope; a namespace is required. Reads also accept
+Collection read options, including content resolution and cancellation; named
+queries, aggregates and relation reads accept a `signal`. These are ordinary
+Collection reads, with the same query language and limits, and create no
+operations.
+
+Action and mutation options also accept `idempotencyKey`, `correlationId`,
+`causationId`, Event `metadata` and trusted `operationMetadata`. Actions add
+`actionMetadata`, delivered to `context.action.metadata` with the same ingress
+provenance as an HTTP route call. Action metadata and Event metadata are
+separate. These methods are trusted, like `send`: no HTTP `authorize` or
+exposure policy applies and `serverPlugin` is not required.
+
+An omitted key starts fresh work. With a key, the default correlation is stable;
+repeat the same call and options to restore its recorded result, even after a
+restart. Reusing a key with changed input or metadata rejects. Keys are shared
+across host Action and mutation calls within one namespace and physical schema,
+so use a distinct key for each intended operation. HTTP keys and host keys have
+separate admission identities.
+
+Actions and mutations each admit **one recorded operation**, using the same
+protected ingress, delivery execution and result recovery as HTTP. Invalid
+Action input is rejected before admission and before any `<id>.*` lifecycle
+Event. Collection input and the final stored record are schema-checked; a failed
+mutation appends no Collection change Event. Successful writes append the
+Collection's usual Events, including command Events, inside the admitted
+operation.
+
+The returned Promise waits for inherited work to settle, then reads the
+immutable result; it does not return `operationId`, `outputs` or `done`. Target
+Action failure rejects, including on replay. To inspect an operation, supply
+distinctive `operationMetadata`, find it with `listOperations({ metadata })`,
+then use `attach` or `operationStatus`. Use `observe()` for live application
+outputs.
+
+Both embedded and Gateway handles provide these methods. A Gateway admits and
+reads; Workers execute its Action and mutation deliveries through the usual
+transport. The Worker factory result remains `ready`, `closed` and `close` and
+does not admit work, just as it has no `send`.
 
 ### Admission and settlement
 

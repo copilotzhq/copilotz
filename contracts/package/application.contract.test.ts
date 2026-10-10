@@ -7,9 +7,11 @@ Deno.test("root createCopilotz exposes one causal send handle without queue stat
   const copilotz = await createCopilotz({ namespace: NAMESPACE });
   try {
     assertEquals(Object.keys(copilotz).sort(), [
+      "actions",
       "attach",
       "cancelOperation",
       "close",
+      "collections",
       "fetch",
       "listOperations",
       "maintenance",

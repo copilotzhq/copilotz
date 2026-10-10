@@ -12,7 +12,25 @@ import type {
 import type { CopilotzPersistenceOptions } from "@copilotz/copilotz/persistence";
 import type { BodyStorageOptions } from "../content/index.ts";
 import type { ApplicationOutput } from "../streams/index.ts";
-import type { ActionSchema } from "../actions/index.ts";
+import type {
+  ActionInput,
+  ActionInvocationMetadata,
+  ActionMap,
+  ActionOutput,
+  ActionSchema,
+} from "../actions/index.ts";
+import type {
+  CollectionAggregateQuery,
+  CollectionAggregateRow,
+  CollectionContentOptions,
+  CollectionQuery,
+  CollectionRecord,
+  ResolvedCollectionContent,
+  ResolvedCollectionFields,
+  ScopedCollection,
+  ScopedCollectionReadOptions,
+  ScopedCollectionUpdateInput,
+} from "../collections/index.ts";
 import type { CopilotzEngineMaintenanceResult } from "../engine/index.ts";
 import type { OperationState } from "../streams/catalog.ts";
 import type { DeliveryDiagnosticSink } from "../execution/index.ts";
@@ -162,8 +180,151 @@ export type ApplicationMaintenanceOptions = Readonly<{
 
 export type CopilotzApplicationObservation = ReadableStream<ApplicationOutput>;
 
+/** Trusted persistence scope; defaults to the application's configured scope. */
+export type ApplicationScope = Readonly<
+  { namespace?: string; databaseSchema?: string }
+>;
+
+export type ApplicationCallOptions =
+  & ApplicationScope
+  & Readonly<{
+    idempotencyKey?: string;
+    correlationId?: string;
+    causationId?: string;
+    metadata?: Record<string, unknown>;
+    operationMetadata?: Record<string, unknown>;
+  }>;
+
+export type ApplicationActionOptions =
+  & ApplicationCallOptions
+  & Readonly<{ actionMetadata?: ActionInvocationMetadata }>;
+
+export type ApplicationReadOptions<
+  C extends CollectionContentOptions = CollectionContentOptions,
+> = ApplicationScope & ScopedCollectionReadOptions<C>;
+
+type ApplicationUnresolvedReadOptions =
+  & ApplicationScope
+  & Pick<ScopedCollectionReadOptions, "signal">;
+
+/** Each Action caller admits one operation and returns its recorded output. */
+export type ApplicationActions<TActions extends ActionMap = ActionMap> =
+  Readonly<
+    {
+      [K in keyof TActions as K extends "serverInvoke" ? never : K]: (
+        input: ActionInput<TActions[K]>,
+        options?: ApplicationActionOptions,
+      ) => Promise<ActionOutput<TActions[K]>>;
+    }
+  >;
+
+/** ScopedCollection shapes with host admission options on mutations. */
+export type ApplicationCollection<
+  TSelect extends CollectionRecord = CollectionRecord,
+  TInsert extends object = Record<string, unknown>,
+> = Readonly<{
+  definition: ScopedCollection<TSelect, TInsert>["definition"];
+  create(input: TInsert, options?: ApplicationCallOptions): Promise<TSelect>;
+  update(
+    input: ScopedCollectionUpdateInput<TSelect>,
+    options?: ApplicationCallOptions,
+  ): Promise<TSelect>;
+  delete(
+    input: Readonly<{ id: string }>,
+    options?: ApplicationCallOptions,
+  ): Promise<Readonly<{ id: string; deleted: true }>>;
+  get<const Fields extends readonly string[]>(
+    input: Readonly<{ id: string }>,
+    options: ApplicationReadOptions & {
+      content: { fields: Fields; byteLimit?: number };
+    },
+  ): Promise<ResolvedCollectionFields<TSelect | null, Fields[number]>>;
+  get(
+    input: Readonly<{ id: string }>,
+    options?: ApplicationReadOptions<false>,
+  ): Promise<TSelect | null>;
+  get(
+    input: Readonly<{ id: string }>,
+    options?: ApplicationReadOptions,
+  ): Promise<ResolvedCollectionContent<TSelect | null>>;
+  list<const Fields extends readonly string[]>(
+    query: CollectionQuery | undefined,
+    options: ApplicationReadOptions & {
+      content: { fields: Fields; byteLimit?: number };
+    },
+  ): Promise<ResolvedCollectionFields<readonly TSelect[], Fields[number]>>;
+  list(
+    query?: CollectionQuery,
+    options?: ApplicationReadOptions<false>,
+  ): Promise<readonly TSelect[]>;
+  list(
+    query: CollectionQuery | undefined,
+    options?: ApplicationReadOptions,
+  ): Promise<ResolvedCollectionContent<readonly TSelect[]>>;
+  search<const Fields extends readonly string[]>(
+    query: CollectionQuery,
+    options: ApplicationReadOptions & {
+      content: { fields: Fields; byteLimit?: number };
+    },
+  ): Promise<ResolvedCollectionFields<readonly TSelect[], Fields[number]>>;
+  search(
+    query: CollectionQuery,
+    options?: ApplicationReadOptions<false>,
+  ): Promise<readonly TSelect[]>;
+  search(
+    query: CollectionQuery,
+    options?: ApplicationReadOptions,
+  ): Promise<ResolvedCollectionContent<readonly TSelect[]>>;
+  aggregate(
+    query: CollectionAggregateQuery,
+    options?: ApplicationUnresolvedReadOptions,
+  ): Promise<readonly CollectionAggregateRow[]>;
+  relations: Readonly<{
+    list(
+      query?: Parameters<ScopedCollection["relations"]["list"]>[0],
+      options?: ApplicationUnresolvedReadOptions,
+    ): ReturnType<ScopedCollection["relations"]["list"]>;
+  }>;
+  queries: Readonly<
+    Record<
+      string,
+      (
+        input?: Readonly<Record<string, unknown>>,
+        options?: ApplicationUnresolvedReadOptions,
+      ) => Promise<readonly Record<string, unknown>[]>
+    >
+  >;
+  commands: Readonly<
+    Record<
+      string,
+      (
+        input: Readonly<Record<string, unknown> & { id: string }>,
+        options?: ApplicationCallOptions,
+      ) => Promise<TSelect>
+    >
+  >;
+}>;
+
+export type ApplicationCollections<
+  TCollections extends CollectionMap = CollectionMap,
+> = string extends keyof TCollections
+  ? Readonly<Record<string, ApplicationCollection>>
+  : Readonly<
+    {
+      [K in keyof TCollections]: ApplicationCollection<
+        TCollections[K]["$inferSelect"] & CollectionRecord,
+        Extract<TCollections[K]["$inferInsert"], object>
+      >;
+    }
+  >;
+
 /** The complete runtime-neutral application surface exposed to callers. */
-export type CopilotzApplication = Readonly<{
+export type CopilotzApplication<
+  TActions extends ActionMap = ActionMap,
+  TCollections extends CollectionMap = CollectionMap,
+> = Readonly<{
+  actions: ApplicationActions<TActions>;
+  collections: ApplicationCollections<TCollections>;
   send(input: ApplicationSendInput): Promise<ApplicationSendHandle>;
   attach(
     input: ApplicationOperationAttachInput,
@@ -189,9 +350,10 @@ export type CopilotzApplication = Readonly<{
 
 /** Internal composition result used only while assembling runtime roles. */
 export type InternalCopilotzApplication =
-  & CopilotzApplication
+  & Omit<CopilotzApplication, "actions" | "collections">
   & Omit<CopilotzEngine, "connect" | "run">
   & Readonly<{
+    host: Pick<CopilotzApplication, "actions" | "collections">;
     config: CopilotzApplicationConfig;
     engine: CopilotzEngine;
     /** Package-owned bridge ingress; never exposed on CopilotzApplication. */

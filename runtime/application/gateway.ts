@@ -64,6 +64,8 @@ export type InternalCopilotzGateway = Readonly<{
   transports: readonly HypervisorTransport[];
   hypervisor?: Hypervisor;
   send(input: ApplicationSendInput): Promise<ApplicationSendHandle>;
+  actions: CopilotzApplication["actions"];
+  collections: CopilotzApplication["collections"];
   attach: CopilotzApplication["attach"];
   operationStatus: CopilotzApplication["operationStatus"];
   listOperations: CopilotzApplication["listOperations"];
@@ -210,6 +212,8 @@ export async function createCopilotzGateway(
       await persistence.recovery?.admit();
       return await application!.send(input);
     },
+    actions: application.host.actions,
+    collections: application.host.collections,
     attach: (input) => application!.attach(input),
     operationStatus: (input) => application!.operationStatus(input),
     listOperations: (input) => application!.listOperations(input),

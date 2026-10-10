@@ -180,11 +180,11 @@ literal word `build`. Run it from the project directory:
 
 ```sh
 # Write notes/plugin.generated.ts only. Leaves are read as text, not imported.
-deno run -A jsr:@copilotz/copilotz@^0.86.3/build build notes --source-only
+deno run -A jsr:@copilotz/copilotz@^0.87.0/build build notes --source-only
 # Fail without writing if the committed plugin.generated.ts is stale.
-deno run -A jsr:@copilotz/copilotz@^0.86.3/build build notes --check
+deno run -A jsr:@copilotz/copilotz@^0.87.0/build build notes --check
 # Full build: generate, type-check, validate in a read-only child, bundle.
-deno run -A jsr:@copilotz/copilotz@^0.86.3/build build notes
+deno run -A jsr:@copilotz/copilotz@^0.87.0/build build notes
 ```
 
 | Option                     | Effect                                                                                    |

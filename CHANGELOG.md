@@ -1,4 +1,4 @@
-## Unreleased
+## 0.87.0 — 2026-10-10
 
 - Add trusted host `app.actions.<alias>` and `app.collections.<alias>` APIs to
   embedded and Gateway applications, with enumerable caller-facing aliases and

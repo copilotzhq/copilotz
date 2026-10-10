@@ -34,7 +34,12 @@ export type TokenEstimatePart =
     pageHeight?: number;
   }
   | { type: "protocol"; tokens: number }
-  | { type: "unknown"; tokens?: number; byteLength?: number };
+  | {
+    type: "unknown";
+    tokens?: number;
+    byteLength?: number;
+    confidence?: TokenEstimateConfidence;
+  };
 
 export interface TokenEstimateOptions {
   provider?: string;
@@ -391,7 +396,8 @@ function estimatePart(
           explicit ??
             ((finiteNonNegative(part.byteLength) ?? 0) / 4),
         ),
-        confidence: explicit !== undefined ? "exact" : "heuristic",
+        confidence: part.confidence ??
+          (explicit !== undefined ? "exact" : "heuristic"),
       };
     }
   }

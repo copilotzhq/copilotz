@@ -54,22 +54,41 @@ export function contentToTokenEstimateParts(
 }
 
 /**
- * Native provider state remains opaque to the text protocol, but it still
- * occupies provider input context. Account for its canonical JSON at a
- * deliberately conservative two bytes per token, plus one protocol unit per
- * block. The estimate never edits a signed block or splits its enclosing
- * assistant turn.
+ * Native state is not text. Prefer the producing attempt's usage, otherwise
+ * estimate its opaque format locally. Keep every estimate heuristic: generated
+ * reasoning usage and encrypted byte size are both proxies for replay cost.
+ * The OpenAI fallback is a rounded pilot fit (30 Responses API samples), not a
+ * tokenizer or a guarantee for other transports. No signed block is modified.
  */
 function nativeReasoningTokenEstimateParts(
   message: ChatMessage,
 ): TokenEstimatePart[] {
   const native = message.nativeReasoning;
   if (!native?.blocks.length) return [];
-  const serialized = JSON.stringify(native.blocks);
-  const bytes = new TextEncoder().encode(serialized).byteLength;
+  const hint = native.reasoningTokens;
+  const encoder = new TextEncoder();
+  let tokens: number;
+  if (typeof hint === "number" && Number.isFinite(hint) && hint >= 0) {
+    tokens = Math.ceil(hint);
+  } else if (native.api === "openai.responses") {
+    // Estimate encrypted payload only; visible messages, summaries, IDs and
+    // JSON packaging are not an additional text transcript for the model.
+    tokens = native.blocks.reduce((sum, block) => {
+      if (block.type === "message") return sum;
+      const encrypted = block.encrypted_content;
+      return sum +
+        (typeof encrypted === "string"
+          ? Math.max(0, encoder.encode(encrypted).byteLength / 15 - 25)
+          : encoder.encode(JSON.stringify(block)).byteLength / 2);
+    }, 0);
+  } else {
+    // Preserve the conservative fallback for formats without a validated fit.
+    // In particular, the Gemini pilot did not justify a new historical ratio.
+    tokens = encoder.encode(JSON.stringify(native.blocks)).byteLength / 2;
+  }
   return [
-    { type: "protocol", tokens: 4 + native.blocks.length },
-    { type: "unknown", tokens: Math.ceil(bytes / 2) },
+    { type: "protocol", tokens: 4 + 2 * native.blocks.length },
+    { type: "unknown", tokens: Math.ceil(tokens), confidence: "heuristic" },
   ];
 }
 

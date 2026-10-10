@@ -3212,7 +3212,10 @@ Deno.test("llm.call replays matching custom native state and assetizes accepted 
             value: { opaque: "next" },
           }],
         },
-        attempts: [{ status: "completed" }],
+        attempts: [
+          { status: "failed", usage: { reasoningTokens: 9_000 } },
+          { status: "completed", usage: { reasoningTokens: 0 } },
+        ],
       });
     },
   };
@@ -3240,6 +3243,7 @@ Deno.test("llm.call replays matching custom native state and assetizes accepted 
           api: "custom.api",
           model: "custom-model",
           blocks: [block],
+          reasoningTokens: 123,
         },
       }],
     },
@@ -3254,17 +3258,20 @@ Deno.test("llm.call replays matching custom native state and assetizes accepted 
       api: "custom.api",
       model: "custom-model",
       blocks: [{ opaque: "previous" }],
+      reasoningTokens: 123,
     },
   });
   assertEquals(test.prepared.map((entry) => entry.operationKey), [
     "attempt:0:content",
     "attempt:0:native-reasoning",
   ]);
+  assertEquals(output.usage?.reasoningTokens, 9_000);
   assertEquals(output.nativeReasoning, {
     schema: "copilotz.llm-native-reasoning.v1",
     adapter: "custom",
     api: "custom.api",
     model: "custom-model",
+    reasoningTokens: 0,
     blocks: [
       ref("prepared:attempt:0:native-reasoning:0", "json", "application/json"),
     ],

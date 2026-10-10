@@ -164,6 +164,44 @@ Prefer this API for scripts and tests that name a capability directly. Prefer
 handles. See [Trusted host calls](api.md#trusted-host-calls) for scoping, return
 types and Gateway/Worker behavior.
 
+### Caller-safe errors
+
+Throw `ActionError` when an Action deliberately refuses a request and its
+message is safe for a person using the HTTP API. It is exported from
+`@copilotz/copilotz` and `@copilotz/copilotz/actions`. Supply a non-empty
+message and `code`; `status` defaults to `422` and must be an integer from `400`
+to `499`. Setting `code` or `status` on an ordinary Error does not make it
+caller-safe.
+
+For example, `board-errors.ts` is a pure helper module that a board Action can
+import when its Collection lookup finds that a card belongs to another board:
+
+```ts
+// Public error type shared by Action authors and HTTP result recovery.
+import { ActionError } from "@copilotz/copilotz/actions";
+
+// Refuse the operation with a message the application permits callers to see.
+export function cardNotOnBoard(cardId: string): never {
+  throw new ActionError(`Card '${cardId}' is not on this board.`, {
+    code: "card_not_on_board",
+    status: 409,
+  });
+}
+```
+
+HTTP route handlers' `context.invoke` rejects with that message and code. The
+generic Action result endpoint returns `{ error: { code, message } }` with the
+chosen 4xx status. These fields survive recorded replay. Unknown Action errors
+remain `action_failed` / `Action execution failed.` over HTTP. Trusted
+`app.actions` calls receive the recorded name, message and optional string code
+of ordinary errors as well. Restored errors do not promise the original custom
+subclass or stack.
+
+An Action with secret-marked input or output keeps its bounded, generic recorded
+error, even when it throws `ActionError`. Never put credentials in caller-safe
+messages or codes. This helper controls disclosure, not delivery retry policy;
+use `markNonRetryable` separately where that policy is needed.
+
 ### Lifecycle
 
 Each accepted call appends these Events to the caller's operation, so the
@@ -175,11 +213,13 @@ caller's `done` waits for them:
 | `<id>.deferred`  | the same, plus opaque `work`; the Action remains open        |
 | `<id>.progress`  | the same, plus `progressIndex` and `progress` (zero or more) |
 | `<id>.completed` | the same, plus `output`                                      |
-| `<id>.failed`    | the same, plus `error: { name, message }`                    |
+| `<id>.failed`    | the same, plus `error: { name, message, code? }`             |
 | `<id>.cancelled` | as `failed`, when the call's signal aborts                   |
 
 The types `ActionInvokedData`, `ActionProgressData`, `ActionCompletedData` and
-`ActionFailedData` describe these payloads. Rules worth knowing:
+`ActionFailedData` describe these payloads. Caller-safe errors also record
+`callerSafe: true` and their 4xx `status`; older errors without those fields
+remain valid. Rules worth knowing:
 
 - **Invalid input is rejected before the lifecycle.** The call throws a
   non-retryable error, `execute` does not run, and no `<id>.*` Event is written.
@@ -414,11 +454,12 @@ cannot yet be combined with secret schemas.
 
 Mark a schema property with `"x-copilotz-secret": true` in `inputSchema` or
 `outputSchema`. Public lifecycle data then holds placeholders instead of those
-values, and the runtime stores them separately as sealed protected values. Known
-protected strings are redacted from recorded errors, and metadata that contains
-a protected input value is rejected. That check compares against the protected
-values only; it does not detect secrets in general, so keep secrets out of
-metadata yourself. Secret Actions cannot record `progress`.
+values, and the runtime stores them separately as sealed protected values.
+Actions with secret-marked input or output record bounded, generic errors
+without application messages or codes. Metadata that contains a protected input
+value is rejected. That check compares against the protected values only; it
+does not detect secrets in general, so keep secrets out of metadata yourself.
+Secret Actions cannot record `progress`.
 
 An application with secret Actions must configure `adapters.secrets.default`
 with a Secret Adapter that the host provides. Its `seal` and `open` methods must

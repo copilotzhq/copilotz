@@ -13,6 +13,7 @@ import {
   validateAgainstJsonSchema,
 } from "../collections/validate.ts";
 import { markNonRetryable } from "../failure.ts";
+import { ActionError } from "./errors.ts";
 import {
   durableActionMetadata,
   durableActionValue,
@@ -212,9 +213,16 @@ function safeError(
     return result;
   };
   if (error instanceof Error) {
+    const code = (error as Error & { code?: unknown }).code;
     return ({
-      name: error.name || "Error",
+      name: redact(error.name || "Error"),
       message: redact(error.message || error.name || "Action failed."),
+      ...(typeof code === "string" && code.trim()
+        ? { code: redact(code) }
+        : {}),
+      ...(error instanceof ActionError
+        ? { callerSafe: true as const, status: error.status }
+        : {}),
     } as const);
   }
   return ({ name: "Error", message: redact(String(error)) } as const);
@@ -291,8 +299,16 @@ function restoredActionError(
   status: "failed" | "cancelled",
   serialized: SerializedActionError,
 ): Error {
-  const error = new Error(serialized.message);
+  const error = serialized.callerSafe
+    ? new ActionError(serialized.message, {
+      code: serialized.code!,
+      status: serialized.status,
+    })
+    : new Error(serialized.message);
   error.name = status === "cancelled" ? "AbortError" : serialized.name;
+  if (serialized.code !== undefined) {
+    Object.assign(error, { code: serialized.code });
+  }
   return error;
 }
 

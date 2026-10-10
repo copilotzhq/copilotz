@@ -167,10 +167,24 @@ operation.
 
 The returned Promise waits for inherited work to settle, then reads the
 immutable result; it does not return `operationId`, `outputs` or `done`. Target
-Action failure rejects, including on replay. To inspect an operation, supply
-distinctive `operationMetadata`, find it with `listOperations({ metadata })`,
-then use `attach` or `operationStatus`. Use `observe()` for live application
-outputs.
+Action failure rejects with the target's recorded error `name`, `message` and
+optional string `code`, including on replay by `idempotencyKey`. Collection
+mutation failures likewise expose the target error instead of settlement or
+dead-letter diagnostics. Schema and missing-relation rejections use the name
+`CollectionValidationError` and code `collection_validation_failed`, with the
+plain validation message. Errors restored from storage need not retain their
+original JavaScript subclass or stack.
+
+Secret protection also applies to host calls: an Action declaring
+`x-copilotz-secret` in its input or output schema records a bounded, generic
+failure, so its host error and replay remain generic. Throwing
+[`ActionError`](actions.md#caller-safe-errors) does not bypass that protection.
+For ordinary Actions, that helper is needed only when the message should also
+reach HTTP callers; trusted hosts receive ordinary recorded errors too.
+
+To inspect an operation, supply distinctive `operationMetadata`, find it with
+`listOperations({ metadata })`, then use `attach` or `operationStatus`. Use
+`observe()` for live application outputs.
 
 Both embedded and Gateway handles provide these methods. A Gateway admits and
 reads; Workers execute its Action and mutation deliveries through the usual

@@ -308,3 +308,45 @@ Deno.test("Action receipt loading rejects public inline dedup poisoning", async 
     "not an authoritative Action lifecycle Event",
   );
 });
+
+Deno.test("Action lifecycle accepts old errors and validates optional caller-safe error fields", () => {
+  const base = completedEvent();
+  const failed = (error: unknown) => {
+    const { output: _output, ...data } = base.data;
+    return {
+      ...base,
+      type: "search.query.failed",
+      metadata: { ...base.metadata, actionStatus: "failed" },
+      data: { ...data, status: "failed", error },
+    };
+  };
+  const ordinary = { name: "Error", message: "failure" };
+  const publicError = {
+    ...ordinary,
+    code: "refused",
+    callerSafe: true,
+    status: 422,
+  };
+  for (
+    const error of [
+      ordinary,
+      { ...ordinary, code: "internal_code" },
+      publicError,
+    ]
+  ) {
+    const event = failed(error);
+    assertEquals<unknown>(parseActionLifecycleEvent(event), event.data);
+  }
+  for (
+    const error of [
+      { ...ordinary, status: 422 },
+      { ...ordinary, callerSafe: true, status: 422 },
+      { ...publicError, callerSafe: false },
+      { ...publicError, status: 500 },
+      { ...publicError, status: 200 },
+      { ...publicError, status: 422.5 },
+      { ...publicError, code: "" },
+      { ...publicError, stack: "private" },
+    ]
+  ) assertEquals(parseActionLifecycleEvent(failed(error)), null);
+});

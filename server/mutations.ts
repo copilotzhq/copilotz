@@ -4,7 +4,8 @@ import { coreThreadObservationMetadata } from "@copilotz/copilotz/core";
 import type { ActionSchema } from "../runtime/actions/types.ts";
 import { admitCollectionMutationRequest } from "../runtime/application/ingress/admit.ts";
 import { collectionMutationResult as recordedCollectionMutationResult } from "../runtime/application/ingress/result.ts";
-import { validateAgainstJsonSchema } from "../runtime/collections/validate.ts";
+import { validateCollectionInput } from "../runtime/collections/validate.ts";
+import { isCollectionValidationError } from "../runtime/collections/errors.ts";
 import type { ScopedCollection } from "../runtime/collections/index.ts";
 import type { InternalCopilotzApplication } from "../runtime/application/types.ts";
 import {
@@ -163,17 +164,16 @@ export async function collectionMutationResponse(
   const input = request.body === undefined ? {} : request.body;
   if (endpoint.inputSchema) {
     try {
-      validateAgainstJsonSchema(
+      validateCollectionInput(
         endpoint.inputSchema,
         input,
         "Collection mutation input",
       );
-    } catch {
-      throw appError(
-        400,
-        "invalid_input",
-        "Request does not match the collection mutation schema.",
-      );
+    } catch (error) {
+      if (isCollectionValidationError(error)) {
+        throw Object.assign(error, { status: 422 });
+      }
+      throw error;
     }
   }
   const policy = collectionMutationPolicy(context, endpoint);

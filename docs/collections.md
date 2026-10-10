@@ -72,6 +72,15 @@ Each mutation call admits its own operation, validates the schema, and appends
 the ordinary Collection Event inside that operation. A repeated key restores
 that immutable result even if later operations updated or deleted the record.
 
+A schema or missing-relation rejection has name `CollectionValidationError`,
+code `collection_validation_failed` and the plain validation message. Host
+mutation calls reject with that error, including replay of an admitted failure;
+HTTP submissions or result reads return the message and code with status `422`.
+Invalid input can reject before admission. A final-record or relation rejection
+admits an operation but commits no Collection change Event. Unexpected mutation
+errors preserve their recorded name, message and optional string code for the
+trusted host; HTTP keeps those execution failures generic.
+
 Inside an Action or Processor,
 `context.collections.note.create(input, { operationKey })` writes within the
 current delivery and operation. On the host,

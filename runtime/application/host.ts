@@ -5,7 +5,10 @@ import type {
   CollectionRecord,
 } from "../collections/index.ts";
 import type { PluginRegistry } from "../plugins/index.ts";
-import { validateAgainstJsonSchema } from "../collections/validate.ts";
+import {
+  validateAgainstJsonSchema,
+  validateCollectionInput,
+} from "../collections/validate.ts";
 import { isStreamOutput } from "../streams/index.ts";
 import type {
   ApplicationActions,
@@ -99,14 +102,15 @@ export function createHostServices(
     })();
     try {
       const settled = await Promise.allSettled([handle.done, drained]);
-      for (const value of settled) {
-        if (value.status === "rejected") throw value.reason;
-      }
       const recorded = await recordedOperationResult(
         application(),
         boundary,
         handle.operationId,
+        "host",
       );
+      for (const value of settled) {
+        if (value.status === "rejected") throw value.reason;
+      }
       if (recorded.pending) {
         throw new Error("Operation result is not yet recorded.");
       }
@@ -142,7 +146,7 @@ export function createHostServices(
       : undefined;
     input = structuredClone(input);
     if (inputSchema && typeof inputSchema === "object") {
-      validateAgainstJsonSchema(
+      validateCollectionInput(
         inputSchema,
         input,
         "Collection mutation input",

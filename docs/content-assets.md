@@ -160,7 +160,7 @@ This builds on the files from
 [Chapter 18](getting-started/part-4-release-to-users/18-handle-files-and-large-content.md):
 `notes-plugin.ts` with its declared `body` field, and `notes-files.ts` with
 `notesFilesPlugin` and the `NoteFileReader` contract. It needs Deno 2.9+ or Node
-24+ and `@copilotz/copilotz@^0.87.0`; no credential or file access.
+24+ and `@copilotz/copilotz@^0.87.1`; no credential or file access.
 
 Create `body-report.ts`, a pure definition module. Whenever a note with a body
 is created, an Action reads that body back with a bounded Collection read and

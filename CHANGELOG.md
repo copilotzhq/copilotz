@@ -1,4 +1,4 @@
-## Unreleased
+## 0.87.1 — 2026-10-10
 
 - Preserve Action failure names, messages and codes for trusted host calls and
   recorded replay, using the existing lifecycle secret protection.

@@ -25,7 +25,7 @@ Use Deno 2.9+ or Node 24+, in a new project directory.
 
 ```sh
 # Deno: add Copilotz with import mappings for its plugin subpaths.
-deno add jsr:@copilotz/copilotz@^0.87.0
+deno add jsr:@copilotz/copilotz@^0.87.1
 ```
 
 Deno 2.9 holds back versions published in the last 24 hours by default. If the
@@ -37,7 +37,7 @@ exception shown in the [Deno setup](docs/getting-started.md#deno).
 npm init -y
 npm pkg set type=module
 # Install Copilotz from JSR, and PGlite, the database the runtime opens.
-npx jsr add @copilotz/copilotz@^0.87.0
+npx jsr add @copilotz/copilotz@^0.87.1
 npm i @electric-sql/pglite
 ```
 

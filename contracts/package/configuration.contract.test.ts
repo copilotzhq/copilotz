@@ -92,9 +92,11 @@ Deno.test("package configuration composes plugins, resources, persistence, and e
   const application = await createCopilotz(validConfiguration);
   try {
     assertEquals(Object.keys(application).sort(), [
+      "actions",
       "attach",
       "cancelOperation",
       "close",
+      "collections",
       "fetch",
       "listOperations",
       "maintenance",

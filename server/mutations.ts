@@ -2,6 +2,8 @@ import { coreThreadObservationMetadata } from "@copilotz/copilotz/core";
 /** Durable, policy-bound collection mutation ingress. @module */
 
 import type { ActionSchema } from "../runtime/actions/types.ts";
+import { admitCollectionMutationRequest } from "../runtime/application/ingress/admit.ts";
+import { collectionMutationResult as recordedCollectionMutationResult } from "../runtime/application/ingress/result.ts";
 import { validateAgainstJsonSchema } from "../runtime/collections/validate.ts";
 import type { ScopedCollection } from "../runtime/collections/index.ts";
 import type { InternalCopilotzApplication } from "../runtime/application/types.ts";
@@ -10,7 +12,6 @@ import {
   SERVER_COLLECTION_MUTATION_REQUEST_SCHEMA,
   type ServerCollectionMutationPolicy,
   type ServerCollectionMutationRequest,
-  serverCollectionMutationRequestSchema,
   type ServerEndpointDescriptor,
 } from "../plugins/server/shared/contracts.ts";
 import type { HttpRequest, HttpResponse } from "./http-types.ts";
@@ -215,35 +216,29 @@ export async function collectionMutationResponse(
   const observationThreadId =
     context.serverConstraints.operations?.metadata?.threadId ??
       context.operationMetadata.threadId;
-  const handle = await application.sendProtected(
-    {
-      type: SERVER_COLLECTION_MUTATION_REQUEST_EVENT_TYPE,
-      payload,
-      namespace: context.namespace,
-      databaseSchema: context.databaseSchema,
-      correlationId: context.serverIdentity.correlationId ?? `server:${id}`,
-      causationId: context.serverIdentity.causationId,
-      deduplicationId: context.serverIdentity.deduplicationId ?? id,
-      operationMetadata: {
-        ...context.operationMetadata,
-        ...(context.serverConstraints.operations?.metadata ?? {}),
-        ...(context.serverScope.actor
-          ? { actorId: context.serverScope.actor.id }
-          : {}),
-      },
-      metadata: {
-        ...(typeof observationThreadId === "string"
-          ? coreThreadObservationMetadata(observationThreadId)
-          : {}),
-        sourceAdapter: "server",
-        core: { visibility: { kind: "internal" } },
-      },
+  const handle = await admitCollectionMutationRequest(application, {
+    type: SERVER_COLLECTION_MUTATION_REQUEST_EVENT_TYPE,
+    payload,
+    namespace: context.namespace,
+    databaseSchema: context.databaseSchema,
+    correlationId: context.serverIdentity.correlationId ?? `server:${id}`,
+    causationId: context.serverIdentity.causationId,
+    deduplicationId: context.serverIdentity.deduplicationId ?? id,
+    operationMetadata: {
+      ...context.operationMetadata,
+      ...(context.serverConstraints.operations?.metadata ?? {}),
+      ...(context.serverScope.actor
+        ? { actorId: context.serverScope.actor.id }
+        : {}),
     },
-    serverCollectionMutationRequestSchema(
-      endpoint.inputSchema as ActionSchema | undefined,
-    ),
-    `server:${id}`,
-  ).catch((error) => {
+    metadata: {
+      ...(typeof observationThreadId === "string"
+        ? coreThreadObservationMetadata(observationThreadId)
+        : {}),
+      sourceAdapter: "server",
+      core: { visibility: { kind: "internal" } },
+    },
+  }, endpoint.inputSchema as ActionSchema | undefined).catch((error) => {
     if (error?.code === "event_deduplication_conflict") {
       throw appError(
         409,
@@ -276,70 +271,10 @@ export async function collectionMutationResult(
   context: FacadeContext,
   operationId: string,
 ): Promise<HttpResponse | undefined> {
-  const status = await application.operationStatus({
+  const result = await recordedCollectionMutationResult(
+    application,
+    context,
     operationId,
-    namespace: context.namespace,
-    databaseSchema: context.databaseSchema,
-  });
-  if (!status) {
-    throw appError(404, "operation_not_found", "Operation was not found.");
-  }
-  const scope = context.databaseSchema &&
-      context.databaseSchema !== application.config.databaseSchema
-    ? await application.databaseScope(context.databaseSchema)
-    : application;
-  const root = await scope.events.resolve(status.namespace, operationId);
-  if (root?.type !== SERVER_COLLECTION_MUTATION_REQUEST_EVENT_TYPE) {
-    return undefined;
-  }
-  const request = root.data as ServerCollectionMutationRequest;
-  if (status.state === "accepted" || status.state === "running") {
-    return { status: 202, data: { status: status.state } };
-  }
-  if (status.state !== "completed") {
-    throw appError(
-      422,
-      "collection_mutation_failed",
-      "Collection mutation did not complete.",
-    );
-  }
-  const definition = application.plugins.collections[request.collectionAlias];
-  if (!definition) {
-    throw appError(
-      500,
-      "collection_mutation_missing",
-      "Collection mutation target is unavailable.",
-    );
-  }
-  let afterPosition: string | undefined;
-  while (true) {
-    const events = await scope.events.list({
-      namespace: status.namespace,
-      correlationId: root.correlationId,
-      ...(afterPosition ? { afterPosition } : {}),
-      limit: 1000,
-    });
-    for (const event of events) {
-      const metadata = event.metadata.copilotzServer;
-      if (
-        event.subject?.type !== definition.name || !metadata ||
-        typeof metadata !== "object" ||
-        (metadata as Record<string, unknown>).requestId !== request.requestId
-      ) continue;
-      const body = record(
-        (await scope.events.resolve(status.namespace, event.id))?.data,
-      );
-      if (request.operation === "delete") {
-        return { status: 200, data: { id: request.id, deleted: true } };
-      }
-      return { status: 200, data: body.record };
-    }
-    if (events.length < 1000) break;
-    afterPosition = events.at(-1)?.position;
-  }
-  throw appError(
-    409,
-    "collection_mutation_not_completed",
-    "Collection mutation result is unavailable.",
   );
+  return result && { status: result.pending ? 202 : 200, data: result.value };
 }

@@ -30,14 +30,14 @@ Shared behaviour needs one owner with a contract that holds for every caller:
 ## The solution
 
 `defineAction` declares a named operation. An Action never subscribes to Events
-and never runs on its own; a Processor, another Action, a tool or an exposed
-route calls it through the runtime, which validates the input, records the call
-and runs `execute`.
+and never runs on its own; a trusted host, Processor, another Action, tool or
+exposed route calls it through the runtime, which validates the input, records
+the call and runs `execute`.
 
 ### A complete Action
 
 `save-note.ts` is a pure definition module: no environment reads and no
-top-level I/O. It needs only `@copilotz/copilotz@^0.86.3`. It declares the
+top-level I/O. It needs only `@copilotz/copilotz@^0.87.0`. It declares the
 `note` Collection it writes, so the file stands alone.
 
 ```ts
@@ -104,6 +104,65 @@ definition has a readonly TypeScript type but is not frozen at run time.
 Register it under an alias in `createCopilotz({ actions: { saveNote } })` or in
 a plugin's `actions` map. Callers use the alias (`saveNote`); the records use
 the `id` (`notes.save`).
+
+### Call from a host
+
+`app.actions.saveNote({ text }, options)` starts a new recorded operation and
+returns the Action output after inherited work settles. The alias is `saveNote`;
+the durable Events still use `notes.save.invoked` and `notes.save.completed` (or
+`failed`/`cancelled`). Invalid input is rejected before those Events exist. An
+identical `idempotencyKey` restores the recorded output or failure without
+executing the Action again.
+
+Inside an Action or Processor,
+`context.actions.saveNote(input, { operationKey })` runs within the current
+delivery and operation. The host call uses `idempotencyKey` because it admits
+its own operation. `app.actions` is an enumerable map of the same caller-facing
+aliases, with composed input and output types; internal ingress Actions are
+excluded.
+
+Create `run-note.ts` as an **entrypoint**, alongside the `save-note.ts`
+definition above. It takes note text from the command line and needs no Server
+plugin, Processor or HTTP listener:
+
+```ts
+import { argv } from "node:process";
+import { createCopilotz } from "@copilotz/copilotz";
+import { note, saveNote } from "./save-note.ts";
+
+// Host composition selects the namespace and registers the reusable definitions.
+const app = await createCopilotz({
+  namespace: "notes-admin",
+  collections: { note },
+  actions: { saveNote },
+});
+try {
+  // Input comes from the host. Reuse a key only for the same intended call.
+  const text = argv.slice(2).join(" ");
+  if (!text) throw new Error("Pass note text as a command-line argument.");
+  const result = await app.actions.saveNote({ text }, {
+    idempotencyKey: "admin-note-1",
+    actionMetadata: { origin: "admin-script" },
+  });
+  console.log("Saved:", result);
+} finally {
+  // Also release the application after a validation or execution failure.
+  await app.close();
+}
+```
+
+Run `deno run -A run-note.ts "Review the draft"` or
+`node run-note.ts "Review the draft"`. Expect `Saved:` and the stored note. The
+default database is private and in-memory; durable retries across process
+restarts require the same persistent database. Inside the Action,
+`context.action.metadata.origin` is `"admin-script"`. As with HTTP route
+invocation, the runtime adds reserved `copilotzServer` ingress provenance;
+caller metadata is otherwise preserved and is not inherited by nested Actions.
+
+Prefer this API for scripts and tests that name a capability directly. Prefer
+`app.send` plus a Processor for Event-driven orchestration and admission
+handles. See [Trusted host calls](api.md#trusted-host-calls) for scoping, return
+types and Gateway/Worker behavior.
 
 ### Lifecycle
 

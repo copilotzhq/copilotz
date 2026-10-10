@@ -257,7 +257,7 @@ project directory, naming the plugin root:
 ```sh
 # Discover notes/**/index.ts as source text and write notes/plugin.generated.ts.
 # -A lets the command read the plugin root and write the generated file.
-deno run -A jsr:@copilotz/copilotz@^0.86.3/build build notes --source-only
+deno run -A jsr:@copilotz/copilotz@^0.87.0/build build notes --source-only
 ```
 
 `--source-only` writes the TypeScript module and stops. Without it, the command
@@ -413,8 +413,8 @@ and license to yours:
   // own range resolves to the same version shares one module; different
   // installed framework versions are not guaranteed to be deduplicated.
   "imports": {
-    "@copilotz/copilotz": "jsr:@copilotz/copilotz@^0.86.3",
-    "@copilotz/copilotz/plugins": "jsr:@copilotz/copilotz@^0.86.3/plugins"
+    "@copilotz/copilotz": "jsr:@copilotz/copilotz@^0.87.0",
+    "@copilotz/copilotz/plugins": "jsr:@copilotz/copilotz@^0.87.0/plugins"
   }
 }
 ```
@@ -457,9 +457,9 @@ sources:
 
 ```sh
 # Write notes/plugin.generated.ts from the leaves and copilotz.json.
-deno run -A jsr:@copilotz/copilotz@^0.86.3/build build notes --source-only
+deno run -A jsr:@copilotz/copilotz@^0.87.0/build build notes --source-only
 # Fail, without writing, if the committed generated file is stale.
-deno run -A jsr:@copilotz/copilotz@^0.86.3/build build notes --check
+deno run -A jsr:@copilotz/copilotz@^0.87.0/build build notes --check
 ```
 
 The generated file should list `note`, `saveNote` and `captureNote` with the

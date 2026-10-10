@@ -57,7 +57,11 @@ separate.
 This map describes the current implementation.
 
 - Public application composition: `create-copilotz.ts`; generic application
-  contracts: `runtime/application/public.ts`
+  contracts: `runtime/application/public.ts`; trusted host `app.actions` and
+  `app.collections` bindings: `runtime/application/host.ts` (host Actions and
+  mutations admit operations with `idempotencyKey`; matching `context` calls use
+  `operationKey` within the current delivery and operation); shared host/HTTP
+  durable ingress: `runtime/application/ingress/`
 - Action definition, lifecycle, and invocation: `runtime/actions/`
 - Canonical graph Collections and mutation planning: `runtime/collections/`
 - Canonical content/assets: `runtime/content/`

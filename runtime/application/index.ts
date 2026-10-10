@@ -2,6 +2,11 @@ export { createCopilotzApplication } from "./application.ts";
 export { createCopilotzGateway } from "./gateway.ts";
 export { createCopilotzWorker } from "./worker.ts";
 export type {
+  ApplicationActionOptions,
+  ApplicationActions,
+  ApplicationCallOptions,
+  ApplicationCollection,
+  ApplicationCollections,
   ApplicationMaintenanceOptions,
   ApplicationOperationAttachInput,
   ApplicationOperationAttachment,
@@ -9,6 +14,8 @@ export type {
   ApplicationOperationScope,
   ApplicationOperationStatus,
   ApplicationOutput,
+  ApplicationReadOptions,
+  ApplicationScope,
   ApplicationSendHandle,
   ApplicationSendInput,
   CopilotzApplication,

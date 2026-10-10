@@ -76,11 +76,11 @@ Prerequisites: Deno 2.9+ or Node 24+, set up as in the
 
 ```sh
 # Deno
-deno add jsr:@copilotz/copilotz@^0.86.3
+deno add jsr:@copilotz/copilotz@^0.87.0
 # Node: ES modules, Copilotz from JSR, and PGlite, the database the runtime opens.
 npm init -y
 npm pkg set type=module
-npx jsr add @copilotz/copilotz@^0.86.3
+npx jsr add @copilotz/copilotz@^0.87.0
 npm i @electric-sql/pglite
 ```
 

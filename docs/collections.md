@@ -33,8 +33,8 @@ Application state needs one owner that:
 A **Collection** is a named, JSON-Schema-checked set of records. Define it with
 `defineCollection`, register it in `createCopilotz` (or a plugin), and use it
 from Actions and Processors through `context.collections.<alias>`. The trusted
-namespace always comes from the running context; no read or write option can
-override it.
+namespace inside plugin code always comes from the running context. Trusted host
+code can select a scope through the application methods below.
 
 ### Declaration
 
@@ -53,6 +53,47 @@ override it.
 
 Command and query names cannot reuse method names such as `create`, `list` or
 `query`.
+
+### Read and write from a host
+
+Outside an Action or Processor, use `app.collections.<alias>`. This plain,
+enumerable map uses the same registered aliases as `context.collections` and
+works on embedded and Gateway handles without a Server plugin or HTTP policy.
+
+For a registered `note` Collection,
+`await app.collections.note.create({ text }, { idempotencyKey: "seed-note-1" })`
+returns the stored record. Update with
+`app.collections.note.update({ id, set: { text } }, options)`, delete with
+`app.collections.note.delete({ id }, options)`, and run a named command with
+`app.collections.note.commands.pin({ id, ...input }, options)`. Commands use the
+same `commands.<name>` shape as `ScopedCollection`. Delete returns
+`{ id, deleted: true }`; the other mutations return the recorded stored record.
+Each mutation call admits its own operation, validates the schema, and appends
+the ordinary Collection Event inside that operation. A repeated key restores
+that immutable result even if later operations updated or deleted the record.
+
+Inside an Action or Processor,
+`context.collections.note.create(input, { operationKey })` writes within the
+current delivery and operation. On the host,
+`app.collections.note.create(input, { idempotencyKey })` admits a new recorded
+operation. The same distinction applies to `context.actions` and `app.actions`.
+
+Read using `app.collections.note.get({ id })`,
+`app.collections.note.list(query)`, `app.collections.note.queries.recent(input)`
+or `app.collections.note.aggregate(query)`. `search`, `relations.list` and the
+`definition` descriptor also match the scoped Collection surface. Reads create
+no operations. All methods accept trusted `namespace` and `databaseSchema` in
+the final options; omitted values use the application's defaults.
+Get/list/search accept Collection content and cancellation options; named
+queries, aggregates and relation reads accept cancellation via `signal`.
+
+Use direct host mutations for seeds, tests and admin changes. Use an Action for
+business rules or an atomic multi-record transaction, then call
+`app.actions.<alias>(input, options)`. Use `app.send` plus a Processor when the
+input should trigger Event-driven orchestration. Separate host write calls are
+separate operations, not one transaction. See
+[Trusted host calls](api.md#trusted-host-calls) for complete signatures,
+idempotency and settlement behavior.
 
 ### Provision declared indexes
 
@@ -189,7 +230,7 @@ resolving content you would not show. See
 ## Reference
 
 This standalone `app.ts` extends the Chapter 4 Notes example with a `pin`
-command and a filtered list. It needs `@copilotz/copilotz@^0.86.3` on Deno 2.9+
+command and a filtered list. It needs `@copilotz/copilotz@^0.87.0` on Deno 2.9+
 or Node 24+, and no credential.
 
 ```ts

@@ -160,6 +160,8 @@ export async function createCopilotz(
     async send(input: Parameters<CopilotzApplication["send"]>[0]) {
       return await gateway!.send(input);
     },
+    actions: gateway.actions,
+    collections: gateway.collections,
     attach: (input) => gateway!.attach(input),
     operationStatus: (input) => gateway!.operationStatus(input),
     listOperations: (input) => gateway!.listOperations(input),

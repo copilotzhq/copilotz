@@ -1,3 +1,5 @@
+import { createHostServices } from "./host.ts";
+import { withApplicationIngress } from "./ingress/registry.ts";
 import { createSharedOperationReaders } from "./operation-readers.ts";
 import {
   type CopilotzPersistenceLifecycleCallbacks,
@@ -342,14 +344,14 @@ export async function createCopilotzApplication(
     options.databaseSchema,
     "Database schema",
   ) ?? "public";
-  const registry = createPluginRegistry({
+  const registry = withApplicationIngress(createPluginRegistry({
     plugins: options.plugins,
     collections: options.collections,
     actions: options.actions,
     processors: options.processors,
     resources: options.resources,
     adapters: options.adapters,
-  });
+  }));
   const configuredPublish = options.engine?.publish;
 
   let engine: CopilotzEngine;
@@ -764,6 +766,7 @@ export async function createCopilotzApplication(
   } = engine;
   const application: InternalCopilotzApplication = {
     ...publicEngine,
+    host: createHostServices(() => application, registry),
     config: {
       ...(namespace ? { namespace } : {}),
       databaseSchema,

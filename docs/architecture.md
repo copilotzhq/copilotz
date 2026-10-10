@@ -56,7 +56,15 @@ flowchart LR
 
 1. **Admission.** `app.send` stores the input as an immutable Event and starts
    an **operation**. A `deduplicationId` lets a client resend the complete same
-   input, including its `correlationId`, and receive the original operation.
+   input, including its `correlationId`, and receive the original operation. A
+   trusted host can also call `app.actions.<alias>(input, options)` or mutate
+   through `app.collections.<alias>.create/update/delete` or `commands.<name>`.
+   Both use the same durable ingress as HTTP, with an optional `idempotencyKey`,
+   and return the recorded result after settlement. Reads through
+   `app.collections.<alias>.get/list/aggregate/queries` create no operation.
+   Within an Action or Processor, the matching `context.actions` and
+   `context.collections` calls use `operationKey` within the current delivery
+   and operation; host Action and mutation calls admit their own.
 2. **Delivery.** Each Processor whose filter matches a durable Event gets a
    recorded delivery. Delivery is at least once: an eligible pending or
    retryable delivery, or one whose lease expired, may be reclaimed and run
@@ -124,7 +132,7 @@ for semantic views.
 
 `architecture.ts` reuses `notes-plugin.ts` and `composition.ts` exactly as
 [Chapter 7](getting-started/part-2-verify-and-recover/07-persist-and-recover.md)
-leaves them, with `@copilotz/copilotz@^0.86.3` installed. It admits one input
+leaves them, with `@copilotz/copilotz@^0.87.0` installed. It admits one input
 twice with the same identity, then replays the operation.
 
 ```ts
@@ -212,8 +220,10 @@ time against the same `./data` directory reuses the same deduplicated operation.
 
 `createCopilotz` runs embedded by default. The same plugins can run split into a
 gateway that admits and serves `fetch`, and workers that execute deliveries,
-sharing one persistence. Placement changes processes and transport, never plugin
-IDs or contracts;
+sharing one persistence. Embedded and Gateway handles expose `actions` and
+`collections` alongside `send`; Worker handles remain lifecycle-only. Host calls
+require no Server plugin or `authorize` policy. Placement changes processes and
+transport, never plugin IDs or contracts;
 [Deploy and Scale](getting-started/part-5-operate-and-scale/21-deploy-and-scale.md)
 covers roles.
 

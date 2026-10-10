@@ -8,6 +8,18 @@ status: stable
 
 # Upgrading and Data Safety
 
+## 0.87.0: Actions and Collections from the host
+
+`createCopilotz` results gain `actions` and `collections`, matching the
+`context.actions` and `context.collections` that Actions and Processors use.
+Scripts, tests and seeds can now run an Action or write a record as its own
+recorded operation, with an optional `idempotencyKey`, instead of sending an
+Event to a Processor. The additions are additive: no data migration, and code
+that annotates a result as `CopilotzApplication` keeps compiling, since its new
+type parameters default to dynamic maps. HTTP ingress for Actions and Collection
+mutations now shares its admission path with these host calls; routes,
+identities and authorization are unchanged.
+
 ## 0.86.3: workflow origins and memory ownership
 
 Memory maintenance no longer requires a human initiator. Core carries the

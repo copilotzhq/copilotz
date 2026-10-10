@@ -72,7 +72,7 @@ stay as they are.
 | `agent.test.ts`      | Deno wrappers                   |
 | `agent.node-test.ts` | `node:test` wrappers            |
 
-No new package is needed. `@copilotz/copilotz` `^0.86.3` already provides
+No new package is needed. `@copilotz/copilotz` `^0.87.0` already provides
 `/core` and `/llm`.
 
 ### The script protocol

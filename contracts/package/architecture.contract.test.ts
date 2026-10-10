@@ -157,9 +157,11 @@ Deno.test("createCopilotz returns one application", async () => {
     assertEquals(Object.getPrototypeOf(application), Object.prototype);
 
     assertEquals(Object.keys(application).sort(), [
+      "actions",
       "attach",
       "cancelOperation",
       "close",
+      "collections",
       "fetch",
       "listOperations",
       "maintenance",
@@ -168,6 +170,8 @@ Deno.test("createCopilotz returns one application", async () => {
       "operationStatus",
       "send",
     ]);
+    assertEquals(Object.keys(application.actions), []);
+    assertEquals(Object.keys(application.collections), []);
     for (const member of ["send", "observe", "close"] as const) {
       assertEquals(typeof application[member], "function", member);
     }
@@ -176,7 +180,6 @@ Deno.test("createCopilotz returns one application", async () => {
         "config",
         "databaseScope",
         "events",
-        "collections",
         "content",
         "deliveries",
         "plugins",

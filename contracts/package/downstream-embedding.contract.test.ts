@@ -141,9 +141,11 @@ Deno.test("downstream app embeds Copilotz with app-owned database, Hypervisor, a
   try {
     await worker.ready;
     assertEquals(Object.keys(application).sort(), [
+      "actions",
       "attach",
       "cancelOperation",
       "close",
+      "collections",
       "fetch",
       "listOperations",
       "maintenance",

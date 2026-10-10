@@ -268,6 +268,16 @@ function projectMessage(
   // Failure receipts are for the human-facing timeline. Replaying one would
   // turn a transient provider failure into an instruction-bearing fact.
   if (agentFailureMetadata(message.metadata)) return null;
+  // An application-owned scoped continuation is input to the Agent, even when
+  // the Agent owns the stored Message. Ownership does not make it model output.
+  const task = coreAgentTurnMetadata(message.metadata);
+  if (
+    task?.ownerParticipantId === viewerId &&
+    record(message.visibility).kind === "internal" &&
+    workflowMetadata(message.metadata)?.kind === "continuation"
+  ) {
+    return { message: userTurn(message) };
+  }
   switch (message.sender.participantType) {
     case "agent": {
       const turn = projectAgentMessage(message, viewerId);

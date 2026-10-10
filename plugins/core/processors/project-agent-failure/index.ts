@@ -105,6 +105,9 @@ export const projectAgentFailureProcessor: Processor<CoreToolProcessorContext> =
           sourceMessageId: metadata.triggerMessageId,
           agentParticipantId: metadata.agentParticipantId,
           initiatorParticipantId: metadata.initiatorParticipantId,
+          ...(metadata.originMessageId
+            ? { originMessageId: metadata.originMessageId }
+            : {}),
         },
       );
       await createMessage({

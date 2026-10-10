@@ -63,6 +63,7 @@ export type CoreToolPlanBase = Readonly<{
   agentId: string;
   agentParticipantId: string;
   initiatorParticipantId: string;
+  originMessageId?: string;
   availableToolIds: readonly string[];
   responseVisibility: EventVisibility;
   parentLlmActionRunId:
@@ -241,6 +242,7 @@ export function toolActionMetadataAt(
     agentId: plan.agentId,
     agentParticipantId: plan.agentParticipantId,
     initiatorParticipantId: plan.initiatorParticipantId,
+    ...(plan.originMessageId ? { originMessageId: plan.originMessageId } : {}),
     availableToolIds: plan.availableToolIds,
     responseVisibility: plan.responseVisibility,
     parentLlmActionRunId: plan.parentLlmActionRunId,
@@ -1367,6 +1369,9 @@ export async function projectDurableToolPlan(
       sourceMessageId: base.planMessageId,
       agentParticipantId: base.agentParticipantId,
       initiatorParticipantId: base.initiatorParticipantId,
+      ...(base.originMessageId
+        ? { originMessageId: base.originMessageId }
+        : {}),
     });
     if (base.agentTurn) {
       branchMetadata = withCoreAgentTurnMetadata(

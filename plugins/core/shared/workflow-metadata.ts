@@ -87,7 +87,10 @@ export type CoreLlmCallMetadata = Readonly<{
   triggerMessageId: string;
   agentId: string;
   agentParticipantId: string;
+  /** Participant that started the workflow; may be human, agent or job. */
   initiatorParticipantId: string;
+  /** Stable initiating Message, retained across Tools and nested Asks. */
+  originMessageId?: string;
   availableToolIds: readonly string[];
   /** Audience baseline for the projected assistant response. */
   responseVisibility: EventVisibility;
@@ -139,7 +142,10 @@ export type CoreToolActionOrigin = Readonly<{
   triggerMessageId: string;
   agentId: string;
   agentParticipantId: string;
+  /** Participant that started the workflow; may be human, agent or job. */
   initiatorParticipantId: string;
+  /** Stable initiating Message, retained across Tools and nested Asks. */
+  originMessageId?: string;
   availableToolIds: readonly string[];
   /** Original response audience retained across every Tool continuation. */
   responseVisibility: EventVisibility;
@@ -242,7 +248,8 @@ export type WorkflowMetadata = Readonly<{
     | "agent_failure"
     | "tool_result"
     | "provider_attempt"
-    | "realtime_message";
+    | "realtime_message"
+    | "continuation";
   continuation?: "text" | "realtime" | "none";
   realtimeStreamId?: string;
   llmAttemptId?: string;
@@ -252,6 +259,7 @@ export type WorkflowMetadata = Readonly<{
   agentId?: string;
   agentParticipantId?: string;
   initiatorParticipantId?: string;
+  originMessageId?: string;
 }>;
 
 function record(value: unknown): Record<string, unknown> {
@@ -279,9 +287,14 @@ export function workflowMetadata(value: unknown): WorkflowMetadata | null {
   const candidate = record(outer[WORKFLOW_METADATA_KEY]);
   const kind = candidate.kind;
   if (
+    candidate.originMessageId !== undefined &&
+    !optionalMetadataText(candidate.originMessageId)
+  ) return null;
+  if (
     kind !== "agent_output" && kind !== "agent_failure" &&
     kind !== "tool_result" &&
-    kind !== "provider_attempt" && kind !== "realtime_message"
+    kind !== "provider_attempt" && kind !== "realtime_message" &&
+    kind !== "continuation"
   ) return null;
   if (
     candidate.agentId !== undefined &&
@@ -634,6 +647,7 @@ const CORE_LLM_CALL_KEYS = new Set([
   "agentId",
   "agentParticipantId",
   "initiatorParticipantId",
+  "originMessageId",
   "availableToolIds",
   "responseVisibility",
   "parentActionRunId",
@@ -649,6 +663,10 @@ export function coreLlmCallMetadata(
 ): CoreLlmCallMetadata | null {
   const candidate = record(value);
   if (candidate.schema !== CORE_LLM_CALL_METADATA_SCHEMA) return null;
+  if (
+    candidate.originMessageId !== undefined &&
+    !optionalMetadataText(candidate.originMessageId)
+  ) return null;
   if (
     Reflect.ownKeys(candidate).some((key) =>
       typeof key !== "string" || !CORE_LLM_CALL_KEYS.has(key)
@@ -783,6 +801,7 @@ const TOOL_ACTION_ORIGIN_KEYS = new Set([
   "agentId",
   "agentParticipantId",
   "initiatorParticipantId",
+  "originMessageId",
   "availableToolIds",
   "responseVisibility",
   "parentLlmActionRunId",
@@ -793,6 +812,10 @@ function validToolActionOrigin(
   candidate: Record<string, unknown>,
 ): CoreToolActionOrigin | null {
   if (candidate.schema !== CORE_TOOL_ACTION_METADATA_SCHEMA) return null;
+  if (
+    candidate.originMessageId !== undefined &&
+    !optionalMetadataText(candidate.originMessageId)
+  ) return null;
   const required = [
     "planId",
     "planMessageId",
@@ -960,4 +983,20 @@ export function providerAttemptEventMetadata(value: unknown): boolean {
 export function textWorkflowAttemptEventMetadata(value: unknown): boolean {
   const kind = workflowMetadata(value)?.kind;
   return kind !== "provider_attempt";
+}
+
+/** Reads causal attribution without interpreting it as resource authorization. */
+export function coreMessageOrigin(
+  message: Readonly<{ id: string; senderId: string; metadata?: unknown }>,
+): Readonly<{ initiatorParticipantId: string; originMessageId: string }> {
+  const tool = coreToolResultOrigin(message.metadata);
+  const ask = agentAskMetadata(message.metadata);
+  const workflow = workflowMetadata(message.metadata);
+  return {
+    initiatorParticipantId: tool?.initiatorParticipantId ??
+      ask?.origin.initiatorParticipantId ?? workflow?.initiatorParticipantId ??
+      message.senderId,
+    originMessageId: tool?.originMessageId ?? ask?.origin.originMessageId ??
+      workflow?.originMessageId ?? message.id,
+  };
 }

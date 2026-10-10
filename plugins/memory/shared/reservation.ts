@@ -1,5 +1,6 @@
 /** Bounded checkpoint reservation shared by background and foreground compaction. @module */
 import {
+  coreMessageOrigin,
   loadParticipantRecord,
   loadThreadRecord,
   workflowMetadata,
@@ -82,22 +83,11 @@ export async function reserveMemoryCheckpoint(
   const spaces = await ensureWritableMemorySpace(context, message.threadId);
   const thread = options.prepared?.thread ??
     await loadThreadRecord(context, message.threadId);
-  const workflowInitiator = workflowMetadata(messageRecord.metadata)
-    ?.initiatorParticipantId;
-  const humanParticipants =
-    thread?.participants.filter((participant) =>
-      participant.participantType === "human"
-    ) ?? [];
-  const initiatorParticipantId = workflowInitiator ??
-    humanParticipants.find((participant) =>
-      participant.id === messageRecord.senderId
-    )?.id ??
-    (humanParticipants.length === 1 ? humanParticipants[0]?.id : undefined);
-  if (!initiatorParticipantId) {
-    throw new Error(
-      "Memory maintenance requires trusted initiating human provenance.",
-    );
-  }
+  const origin = coreMessageOrigin({
+    id: messageRecord.id,
+    senderId: String(messageRecord.senderId),
+    metadata: messageRecord.metadata,
+  });
   let previous = !options.prepared && thread
     ? await readyCheckpoint(context, {
       agentId,
@@ -278,7 +268,7 @@ export async function reserveMemoryCheckpoint(
     sourceEndMessageId: range.sourceEndMessageId,
     metadata: {
       agentParticipantId: owner.id,
-      initiatorParticipantId,
+      ...origin,
       preparationTrigger: snapshot.messages.find((item) =>
         item.id ===
           (workflowMetadata(messageRecord.metadata)?.sourceMessageId ??

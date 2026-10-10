@@ -518,6 +518,7 @@ Deno.test("Core invokes llm.call with explicit model selections and connections"
       agentId: "north",
       agentParticipantId: "agent-north",
       initiatorParticipantId: "user-a",
+      originMessageId: "message:user",
       availableToolIds: ["contract_tool", "readToolResult"],
       responseVisibility: { kind: "public" },
       llmSession: {
@@ -874,6 +875,7 @@ Deno.test("Core projects one ordinary LLM failure and never replays it into a la
       sourceMessageId: "message:user",
       agentParticipantId: "agent-north",
       initiatorParticipantId: "user-a",
+      originMessageId: "message:user",
     });
     await fixture.engine.recover({ namespace: NAMESPACE });
     assertEquals(
@@ -1270,6 +1272,7 @@ Deno.test("Core invokes and projects an Action-backed Tool plan", async () => {
         "agentParticipantId",
         "availableToolIds",
         "initiatorParticipantId",
+        "originMessageId",
         "parentLlmActionRunId",
         "planId",
         "planIndex",

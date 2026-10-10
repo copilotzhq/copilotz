@@ -8,6 +8,15 @@ status: stable
 
 # Upgrading and Data Safety
 
+## 0.86.3: workflow origins and memory ownership
+
+Memory maintenance no longer requires a human initiator. Core carries the
+initiating participant and optional stable origin Message through continuations;
+applications may use that reference instead of walking historical Tool plans.
+Keep application permission checks against current resource state. Update
+services that parse Core Tool metadata before producers emit `originMessageId`.
+Existing checkpoints and snapshots need no migration.
+
 ## 0.86.2: preferred-model consolidation
 
 Core now consolidates ordinary history when the first configured model exceeds
@@ -109,7 +118,7 @@ On Deno, edit the existing `imports` property in `deno.json`. Replace only the
 ```json
 {
   "imports": {
-    "@copilotz/copilotz": "jsr:@copilotz/copilotz@^0.86.2"
+    "@copilotz/copilotz": "jsr:@copilotz/copilotz@^0.86.3"
   }
 }
 ```
@@ -121,7 +130,7 @@ On Node:
 
 ```sh
 # Add the package from JSR and record the resolved version in the lockfile.
-npx jsr add @copilotz/copilotz@^0.86.2
+npx jsr add @copilotz/copilotz@^0.86.3
 ```
 
 Generated or bundled plugins must keep framework imports external so that they

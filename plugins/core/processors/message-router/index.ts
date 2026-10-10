@@ -13,6 +13,7 @@ import {
   CORE_LLM_CALL_METADATA_SCHEMA,
   coreAgentTurnMetadata,
   coreLlmStreamMetadata,
+  coreMessageOrigin,
   coreToolActionMessageMetadata,
   coreToolPlanResultMetadata,
   defineCoreLlmCallMetadata,
@@ -522,20 +523,19 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
                   );
                 }
                 compactedBoundaries.add(boundaryKey);
-                await context.actions.compactContext({
-                  threadId: snapshot.thread.id,
-                  agentId: resolved.agent.id,
-                  participantId: String(participant.id),
-                  triggerMessageId: String(record.id),
-                  ...(afterMessageId
-                    ? { historyAfterMessageId: afterMessageId }
-                    : {}),
-                  estimatedTokens: error.estimatedInputTokens,
-                  limitEstimatedTokens: error.limitEstimatedInputTokens,
-                  historyLimitEstimatedTokens: historyLimit,
-                }, {
-                  operationKey: `context:${continuationKey}:${boundaryKey}`,
-                  signal: context.signal,
+                await context.actions.compactContext.prepare(() => ({
+                  input: {
+                    threadId: snapshot.thread.id,
+                    agentId: resolved.agent.id,
+                    participantId: String(participant.id),
+                    triggerMessageId: String(record.id),
+                    ...(afterMessageId
+                      ? { historyAfterMessageId: afterMessageId }
+                      : {}),
+                    estimatedTokens: error.estimatedInputTokens,
+                    limitEstimatedTokens: error.limitEstimatedInputTokens,
+                    historyLimitEstimatedTokens: historyLimit,
+                  },
                   metadata: {
                     schema: "copilotz.core.context-compaction.v1",
                     threadId: snapshot.thread.id,
@@ -544,6 +544,9 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
                     agentParticipantId: String(participant.id),
                     triggerMessageId: String(record.id),
                   },
+                }), {
+                  operationKey: `context:${continuationKey}:${boundaryKey}`,
+                  signal: context.signal,
                 });
               };
               let request;
@@ -636,10 +639,11 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
                 triggerMessageId: String(record.id),
                 agentId,
                 agentParticipantId: String(participant.id),
-                initiatorParticipantId: toolCursor?.initiatorParticipantId ??
-                  ask?.origin.initiatorParticipantId ??
-                  workflow?.initiatorParticipantId ??
-                  String(sender.id),
+                ...coreMessageOrigin({
+                  id: String(record.id),
+                  senderId: String(sender.id),
+                  metadata: record.metadata,
+                }),
                 availableToolIds,
                 responseVisibility: structuredClone(
                   toolCursor?.responseVisibility ?? coreEvent(event).visibility,

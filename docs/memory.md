@@ -365,3 +365,20 @@ its adapter and storage configuration are not interchangeable with Memory's.
 - [Spaces](spaces.md) and [Knowledge](knowledge.md) for shared content and
   indexed sources.
 - [Testing and inspection](testing-and-inspection.md) for scripted checks.
+
+## Maintenance ownership
+
+Consolidation belongs to the Agent and its checkpoint, independent of whether a
+human, another Agent, or a scheduled job initiated the conversation turn.
+Internal maintenance and repair messages use the owning Agent as sender, while
+Core retains `initiatorParticipantId` and `originMessageId` as workflow
+provenance. These fields do not grant access: source visibility and checkpoint
+ownership remain enforced. Maintenance requests enter the ordinary input
+preparation path as user-role input, with the same source prefix and tools as
+before. Exhausted dispatch or repair processor errors fail the checkpoint and
+release its waiters.
+
+Applications may use Core's stable `originMessageId` to load the initiating
+record directly instead of walking Tool/Ask history. The application must still
+validate its current resource permissions; provenance is not an authorization
+grant.

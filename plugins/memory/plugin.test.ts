@@ -159,6 +159,7 @@ async function fixture(
     contextText?: string;
     memoryConfig?: Partial<LongTermMemoryConfig>;
     vectors?: boolean;
+    dispatchErrors?: { attempts: number };
     statements?: { sql: string; params?: unknown[] }[];
     dynamicInstructions?: boolean;
     tools?: readonly string[];
@@ -175,7 +176,21 @@ async function fixture(
     retainRecentEstimatedTokens: 0,
     ...options.memoryConfig,
   };
-  const memory = memoryPlugin;
+  const memory = options.dispatchErrors
+    ? definePlugin({
+      ...memoryPlugin,
+      processors: {
+        ...memoryPlugin.processors,
+        dispatchConsolidation: {
+          ...memoryPlugin.processors.dispatchConsolidation,
+          handle() {
+            options.dispatchErrors!.attempts++;
+            throw new Error("dispatch preparation unavailable");
+          },
+        },
+      },
+    })
+    : memoryPlugin;
   const app = definePlugin({
     id: "test.memory-native-agent-turn",
     version: "1.0.0",
@@ -2087,6 +2102,74 @@ Deno.test("ordinary preparation reserves peer-grown history before the provider 
     await assertNoDeadLetters(run);
   } finally {
     release();
+    await run.close();
+  }
+});
+
+for (const participantType of ["agent", "job"] as const) {
+  Deno.test(`memory maintenance and repair work for a ${participantType} initiator without humans`, async () => {
+    const run = await fixture((_input, call) =>
+      call <= 2 ? stop("continue") : tool(memoryProposal())
+    );
+    try {
+      await setupThread(run);
+      await collection(run, "participant").update({
+        id: "human-a",
+        set: { participantType },
+      });
+      await createHumanMessage(run, {
+        id: "message:nonhuman",
+        text: "Remember Compass.",
+        recipientIds: ["agent-north"],
+      });
+      await eventually(
+        run,
+        async () => (await checkpoints(run))[0]?.status === "ready",
+      );
+      const saved = await checkpoint(run);
+      assertEquals(
+        (saved.metadata as Record<string, unknown>).initiatorParticipantId,
+        "human-a",
+      );
+      assertEquals(
+        (saved.metadata as Record<string, unknown>).originMessageId,
+        "message:nonhuman",
+      );
+      assertEquals(run.inputs.length, 3);
+      assertEquals(
+        run.inputs[1].request.instructions,
+        run.inputs[0].request.instructions,
+      );
+      assertEquals(run.inputs[1].request.messages.at(-1)?.role, "user");
+      await assertNoDeadLetters(run);
+    } finally {
+      await run.close();
+    }
+  });
+}
+
+Deno.test("terminal dispatch failure settles its checkpoint after retries", async () => {
+  const dispatchErrors = { attempts: 0 };
+  const run = await fixture(() => stop("ordinary turn completes"), {
+    dispatchErrors,
+  });
+  try {
+    await startUserTurn(run);
+    await eventually(
+      run,
+      async () => (await checkpoints(run))[0]?.status === "failed",
+    );
+    const saved = await checkpoint(run);
+    assertStringIncludes(
+      JSON.stringify(saved.error),
+      "dispatch preparation unavailable",
+    );
+    assert(
+      dispatchErrors.attempts > 1,
+      "Transient failures retain delivery retries",
+    );
+    await assertNoDeadLetters(run);
+  } finally {
     await run.close();
   }
 });

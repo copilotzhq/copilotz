@@ -471,6 +471,7 @@ Deno.test("an ask resumes through durable llm.call metadata", async () => {
     );
     assertExists(askedInvocation);
     assertEquals(askedInvocation.metadata.initiatorParticipantId, "user-a");
+    assertEquals(askedInvocation.metadata.originMessageId, "message:user");
     const askedCompletion = lifecycle.find((event) =>
       event.status === "completed" && event.metadata.agentId === "b"
     );
@@ -563,6 +564,7 @@ Deno.test("asked Agent Tool Actions retain the root human initiator", async () =
     assertEquals(askedAgentInvocations.length, 2);
     for (const invocation of askedAgentInvocations) {
       assertEquals(invocation.metadata.initiatorParticipantId, "user-a");
+      assertEquals(invocation.metadata.originMessageId, "message:user");
     }
     const toolLifecycle = await projectActionEvents(
       fixture.engine,
@@ -578,6 +580,7 @@ Deno.test("asked Agent Tool Actions retain the root human initiator", async () =
     assertEquals(provenance.agentId, "b");
     assertEquals(provenance.agentParticipantId, "agent-b");
     assertEquals(provenance.initiatorParticipantId, "user-a");
+    assertEquals(provenance.originMessageId, "message:user");
   } finally {
     await fixture.close();
   }

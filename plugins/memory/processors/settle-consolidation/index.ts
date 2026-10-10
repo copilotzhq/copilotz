@@ -96,10 +96,10 @@ export const settleMemoryConsolidationProcessor: Processor<
     );
     const sender = await loadParticipantRecord(
       context,
-      metadata.initiatorParticipantId,
+      turn.ownerParticipantId,
     );
-    if (!sender || sender.participantType !== "human") {
-      throw new Error("Memory repair initiator is unavailable.");
+    if (!sender || sender.participantType !== "agent") {
+      throw new Error("Memory repair owner is unavailable.");
     }
     await createThreadMessage({
       id: repairId,
@@ -119,8 +119,29 @@ export const settleMemoryConsolidationProcessor: Processor<
         turn.ownerParticipantId,
         turn.sourceHistory,
         turn.sourceHistoryRef,
+        {
+          initiatorParticipantId: metadata.initiatorParticipantId,
+          ...(metadata.originMessageId
+            ? { originMessageId: metadata.originMessageId }
+            : {}),
+        },
       ),
     }, context);
+  },
+  async onError(error, event, context) {
+    const lifecycle = parseActionLifecycleEvent(event, {
+      actionId: "llm.call",
+      statuses: ["completed", "failed", "cancelled"],
+      requireRoot: true,
+    });
+    const metadata = lifecycle && coreLlmCallMetadata(lifecycle.metadata);
+    const turn = metadata?.agentTurn;
+    if (
+      !turn || turn.completeOn?.action !== "consolidate_memory" ||
+      !await memoryTaskOwnsTurn(context, turn, metadata.triggerMessageId)
+    ) return false;
+    await settleCheckpointError(context, turn.id, "failed", error);
+    return true;
   },
 });
 

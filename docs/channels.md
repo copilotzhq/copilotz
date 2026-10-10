@@ -76,7 +76,7 @@ delivered cannot be retracted.
 This uses the Notes application from
 [Chapter 5](getting-started/part-1-design-and-build/05-package-a-plugin.md): its
 `composition.ts` and `notes-plugin.ts` must exist, with
-`@copilotz/copilotz@^0.87.0` installed. No provider or credential is involved;
+`@copilotz/copilotz@^0.87.1` installed. No provider or credential is involved;
 the script plays the provider. Create `channel-session.ts`:
 
 ```ts

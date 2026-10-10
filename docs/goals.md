@@ -56,8 +56,8 @@ target input. With `N` maximum turns there are at most `N` target turns and
 
 Before you start, use Deno 2.9+ or Node 24+ in a project set up as in the
 [Quickstart install](quickstart.md#install): on Deno,
-`deno add jsr:@copilotz/copilotz@^0.87.0`; on Node, an ES module project
-(`npm pkg set type=module`) with `npx jsr add @copilotz/copilotz@^0.87.0` and
+`deno add jsr:@copilotz/copilotz@^0.87.1`; on Node, an ES module project
+(`npm pkg set type=module`) with `npx jsr add @copilotz/copilotz@^0.87.1` and
 `npm i @electric-sql/pglite`. No credentials are needed: a scripted LLM Adapter
 answers every call, so no provider is contacted.
 

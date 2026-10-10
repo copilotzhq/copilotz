@@ -135,7 +135,7 @@ work succeeded; that is your Processor's own delivery.
 Before you start, build `notes-plugin.ts` and `digest-plugin.ts` from
 [Chapter 19: Schedule Recurring Work](./getting-started/part-5-operate-and-scale/19-schedule-recurring-work.md).
 This probe reuses them unchanged. You also need Deno 2.9+, or Node 24+ with
-`@copilotz/copilotz@^0.86.2` and its PGlite dependency installed as shown in the
+`@copilotz/copilotz@^0.86.3` and its PGlite dependency installed as shown in the
 [Quickstart](./quickstart.md).
 
 The probe adds one small pause Action. It then sends ticks with explicit check

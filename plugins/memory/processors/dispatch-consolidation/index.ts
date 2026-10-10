@@ -89,17 +89,6 @@ export const dispatchMemoryConsolidationProcessor: Processor<
       })),
       context: frozenSnapshot(checkpoint),
     });
-    const initiatorParticipantId = requiredText(
-      record(checkpoint.metadata).initiatorParticipantId,
-      "Memory initiating human participant id",
-    );
-    const initiator = await loadParticipantRecord(
-      context,
-      initiatorParticipantId,
-    );
-    if (!initiator || initiator.participantType !== "human") {
-      throw new Error("Memory initiating human participant is unavailable.");
-    }
     const id = await deriveWorkflowId(
       "message",
       "memory-agent-turn",
@@ -108,25 +97,48 @@ export const dispatchMemoryConsolidationProcessor: Processor<
     await createThreadMessage({
       id,
       threadId,
-      sender: initiator,
+      sender: participant,
       recipientIds: [participant.id],
       visibility: { kind: "internal" },
       historyScopeId: checkpoint.id,
       content: [
         { type: "text", role: "memory.task", text: instruction },
       ],
-      metadata: memoryTaskMetadata(checkpoint.id, participant.id, {
-        messages,
-        context: frozenSnapshot(checkpoint),
-        branch: JSON.stringify(thread.activeMessageBranch ?? null),
-        ...(record(checkpoint.metadata).preparationTrigger
-          ? {
-            trigger: record(checkpoint.metadata)
-              .preparationTrigger as ConversationMessage,
-          }
-          : {}),
-      }),
+      metadata: memoryTaskMetadata(
+        checkpoint.id,
+        participant.id,
+        {
+          messages,
+          context: frozenSnapshot(checkpoint),
+          branch: JSON.stringify(thread.activeMessageBranch ?? null),
+          ...(record(checkpoint.metadata).preparationTrigger
+            ? {
+              trigger: record(checkpoint.metadata)
+                .preparationTrigger as ConversationMessage,
+            }
+            : {}),
+        },
+        undefined,
+        {
+          initiatorParticipantId: String(
+            record(checkpoint.metadata).initiatorParticipantId ??
+              participant.id,
+          ),
+          ...(record(checkpoint.metadata).originMessageId
+            ? {
+              originMessageId: String(
+                record(checkpoint.metadata).originMessageId,
+              ),
+            }
+            : {}),
+        },
+      ),
     }, context);
+  },
+  async onError(error, event, context) {
+    if (!event.durable || !event.subject?.id) return false;
+    await settleCheckpointError(context, event.subject.id, "failed", error);
+    return true;
   },
 });
 

@@ -125,6 +125,9 @@ export const projectTextResultProcessor: Processor<
         agentId: metadata.agentId,
         agentParticipantId: participant.id,
         initiatorParticipantId: metadata.initiatorParticipantId,
+        ...(metadata.originMessageId
+          ? { originMessageId: metadata.originMessageId }
+          : {}),
       },
     );
     const scopedMessageMetadata = metadata.agentTurn
@@ -158,6 +161,9 @@ export const projectTextResultProcessor: Processor<
       agentId: metadata.agentId,
       agentParticipantId: metadata.agentParticipantId,
       initiatorParticipantId: metadata.initiatorParticipantId,
+      ...(metadata.originMessageId
+        ? { originMessageId: metadata.originMessageId }
+        : {}),
       availableToolIds: metadata.availableToolIds,
       responseVisibility: metadata.responseVisibility,
       parentLlmActionRunId: actionRunId,

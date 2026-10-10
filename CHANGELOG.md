@@ -1,3 +1,14 @@
+## 0.86.3 — 2026-10-09
+
+- Preserve initiating participant and origin Message through Tools, nested Asks,
+  and application continuations without reconstructing execution history.
+- Run memory maintenance and repair for human, agent, and scheduled-job origins
+  using the owning Agent, with ordinary input preparation and unchanged prompt
+  prefixes. Terminal dispatch failures settle their checkpoint instead of
+  leaving consolidation pending.
+- Prepare context-compaction Action input durably so retries reuse the original
+  token estimates instead of conflicting with an existing receipt.
+
 ## 0.86.2 — 2026-10-08
 
 - Consolidate ordinary history when the preferred model exceeds its input

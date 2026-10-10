@@ -3,6 +3,7 @@ import {
   type CoreAgentTurnMetadata,
   coreAgentTurnMetadata,
   withCoreAgentTurnMetadata,
+  withWorkflowMetadata,
 } from "@copilotz/copilotz/core";
 import { deriveWorkflowId } from "@copilotz/copilotz/events";
 import type {
@@ -24,18 +25,24 @@ export function memoryTaskMetadata(
   ownerParticipantId: string,
   sourceHistory?: CoreAgentTurnMetadata["sourceHistory"],
   sourceHistoryRef?: CoreAgentTurnMetadata["sourceHistoryRef"],
+  origin?: Readonly<
+    { initiatorParticipantId: string; originMessageId?: string }
+  >,
 ) {
-  return withCoreAgentTurnMetadata({
-    [MEMORY_TASK_METADATA_KEY]: { checkpointId },
-  }, {
-    schema: "copilotz.core.agent-turn.v1",
-    id: checkpointId,
-    ownerParticipantId,
-    completeOn: { action: "consolidate_memory" },
-    history: "scope",
-    ...(sourceHistory ? { sourceHistory } : {}),
-    ...(sourceHistoryRef ? { sourceHistoryRef } : {}),
-  });
+  return withCoreAgentTurnMetadata(
+    withWorkflowMetadata({
+      [MEMORY_TASK_METADATA_KEY]: { checkpointId },
+    }, { kind: "continuation", ...origin }),
+    {
+      schema: "copilotz.core.agent-turn.v1",
+      id: checkpointId,
+      ownerParticipantId,
+      completeOn: { action: "consolidate_memory" },
+      history: "scope",
+      ...(sourceHistory ? { sourceHistory } : {}),
+      ...(sourceHistoryRef ? { sourceHistoryRef } : {}),
+    },
+  );
 }
 
 /**

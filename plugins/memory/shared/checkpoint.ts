@@ -74,6 +74,9 @@ async function reserveOnDemandCheckpoint(
     metadata: {
       agentParticipantId: provenance.agentParticipantId,
       initiatorParticipantId: provenance.initiatorParticipantId,
+      ...(provenance.originMessageId
+        ? { originMessageId: provenance.originMessageId }
+        : {}),
       onDemand: true,
     },
   });

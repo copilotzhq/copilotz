@@ -240,9 +240,19 @@ export function parseActionLifecycleEvent(
   if (actionStatus === "failed" || actionStatus === "cancelled") {
     const error = dataRecord(lifecycle.error);
     if (
-      !error || !hasExactKeys(error, ["message", "name"]) ||
+      !error || !hasExactKeys(error, [
+        "message",
+        "name",
+        ...(error.code !== undefined ? ["code"] : []),
+        ...(error.callerSafe === true ? ["callerSafe", "status"] : []),
+      ]) ||
       !nonEmptyText(error.name) || error.name !== error.name.trim() ||
-      !nonEmptyText(error.message) || error.message !== error.message.trim()
+      !nonEmptyText(error.message) || error.message !== error.message.trim() ||
+      (error.code !== undefined &&
+        (!nonEmptyText(error.code) || error.code !== error.code.trim())) ||
+      (error.callerSafe === true &&
+        (!nonEmptyText(error.code) || !Number.isInteger(error.status) ||
+          Number(error.status) < 400 || Number(error.status) > 499))
     ) return null;
   }
 

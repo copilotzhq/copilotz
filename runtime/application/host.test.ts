@@ -10,6 +10,7 @@ import {
   defineCollection,
   definePlugin,
   isStreamOutput,
+  relation,
 } from "../../index.ts";
 import { createTestDatabase } from "../testing/ominipg.ts";
 
@@ -66,7 +67,12 @@ function fixture() {
     async execute(input: { value: string }, context: ActionContext) {
       calls++;
       metadata.push(context.action.metadata);
-      if (input.value === "fail") throw new Error("fixture failure");
+      if (input.value === "fail") {
+        throw Object.assign(new Error("Card 'x' is not on this board."), {
+          name: "BoardError",
+          code: "card_not_on_board",
+        });
+      }
       return { echoed: input.value, namespace: context.namespace };
     },
   });
@@ -241,10 +247,15 @@ Deno.test("host Action call restores a recorded failure without executing again"
   const app = await createCopilotz({ namespace: "host", plugins: [f.plugin] });
   try {
     for (let i = 0; i < 2; i++) {
-      await assertRejects(
+      const error = await assertRejects(
         () => app.actions.echo({ value: "fail" }, { idempotencyKey: "failed" }),
         Error,
-        "Action execution failed",
+        "Card 'x' is not on this board.",
+      );
+      assertEquals(error.name, "BoardError");
+      assertEquals(
+        (error as Error & { code: string }).code,
+        "card_not_on_board",
       );
     }
     assertEquals(f.calls(), 1);
@@ -416,11 +427,17 @@ Deno.test("host writes and named reads enforce schemas and reject unknown target
     assertEquals(await app.listOperations(), []);
     const stored = await app.collections.notes.create({ text: "kept" });
     // Patch validation alone cannot catch a missing required field in the final record.
-    await assertRejects(
+    const finalRecordError = await assertRejects(
       () => app.collections.notes.update({ id: stored.id, unset: ["text"] }),
       Error,
       "schema validation",
     );
+    assertEquals(
+      (finalRecordError as Error & { code: string }).code,
+      "collection_validation_failed",
+    );
+    assert(!finalRecordError.message.includes("Settlement scope"));
+    assert(!finalRecordError.message.includes("dead-lettered"));
     assertEquals(await app.collections.notes.get({ id: stored.id }), stored);
     const failed = (await app.listOperations()).find((operation) =>
       operation.state === "failed"
@@ -737,5 +754,72 @@ Deno.test("host reads forward content selection and cancellation in the selected
     assertEquals(await app.listOperations(), []);
   } finally {
     await app.close();
+  }
+});
+
+Deno.test("host Collection validation failures are plain, coded and replayable after restart", async () => {
+  const database = await createTestDatabase({ url: ":memory:" });
+  const options = {
+    namespace: "host-validation",
+    database,
+    collections: {
+      space: defineCollection({ name: "space", schema: { type: "object" } }),
+      card: defineCollection({
+        name: "card",
+        schema: {
+          type: "object",
+          properties: {
+            spaceId: { type: "string" },
+            title: { type: "string" },
+          },
+          required: ["spaceId", "title"],
+        } as const,
+        relations: { space: relation.belongsTo("space", "spaceId") },
+      }),
+    },
+  };
+  let app = await createCopilotz(options);
+  try {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      for (
+        const [key, input, message] of [
+          ["schema", { spaceId: "nowhere", title: 42 }, "schema validation"],
+          [
+            "relation",
+            { spaceId: "nowhere", title: "card" },
+            "Relation 'space' references missing space 'nowhere'.",
+          ],
+        ] as const
+      ) {
+        const error = await assertRejects(
+          () => app.collections.card.create(input, { idempotencyKey: key }),
+          TypeError,
+          message,
+        );
+        assertEquals(error.name, "CollectionValidationError");
+        assertEquals(
+          (error as Error & { code: string }).code,
+          "collection_validation_failed",
+        );
+        assert(!error.message.includes("Settlement scope"));
+        assert(!error.message.includes("dead-lettered"));
+      }
+      assertEquals(await app.collections.card.list(), []);
+      const operations = await app.listOperations();
+      assertEquals(operations.length, 1);
+      assertEquals(
+        (await history(app, operations[0].operationId)).filter((event) =>
+          event.type === "card.created"
+        ),
+        [],
+      );
+      if (attempt === 0) {
+        await app.close();
+        app = await createCopilotz(options);
+      }
+    }
+  } finally {
+    await app.close();
+    await database.close();
   }
 });

@@ -1,5 +1,8 @@
-/** Restores admitted outcomes from immutable lifecycle and mutation Events. @module */
-import type { ActionEventData } from "../../actions/index.ts";
+/** Restores admitted outcomes from lifecycle Events and retained mutation failures. @module */
+import type {
+  ActionEventData,
+  SerializedActionError,
+} from "../../actions/index.ts";
 import type {
   ApplicationScope,
   InternalCopilotzApplication,
@@ -24,19 +27,23 @@ function record(value: unknown): Record<string, unknown> {
 function text(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
+type TargetIdentity = Readonly<
+  { wrapperActionRunId: string; targetActionRunId: string }
+>;
 type ServerInvokeTerminal =
-  | Readonly<{
-    status: "completed";
-    wrapperActionRunId: string;
-    targetActionRunId: string;
-  }>
-  | Readonly<{
-    status: "failed";
-    error: Readonly<{
-      name: string;
-      message: string;
-    }>;
-  }>;
+  & TargetIdentity
+  & (
+    | Readonly<{
+      status: "completed";
+    }>
+    | Readonly<{
+      status: "failed";
+      error: Readonly<{
+        name: string;
+        message: string;
+      }>;
+    }>
+  );
 function actionTerminal(
   output: unknown,
   requestId: string,
@@ -75,9 +82,14 @@ function actionTerminal(
     } as const);
   }
   if (result.status === "failed") {
+    const wrapperActionRunId = text(data.actionRunId);
+    if (!wrapperActionRunId) return undefined;
     const error = record(result.error);
     return ({
       status: "failed",
+      wrapperActionRunId,
+      targetActionRunId:
+        `${wrapperActionRunId}/action:${targetActionId}:target`,
       error: {
         name: text(error.name) ?? "Error",
         message: text(error.message) ?? "Action execution failed.",
@@ -140,9 +152,7 @@ async function recoverTargetActionTerminal(
   context: ApplicationScope,
   requestEventId: string,
   targetActionId: string,
-  terminal: Extract<ServerInvokeTerminal, {
-    status: "completed";
-  }>,
+  terminal: TargetIdentity,
 ): Promise<ActionEventData | undefined> {
   const namespace = context.namespace ?? application.config.namespace;
   if (!namespace) {
@@ -204,6 +214,7 @@ export async function collectionMutationResult(
   application: InternalCopilotzApplication,
   context: ApplicationScope,
   operationId: string,
+  audience: "http" | "host" = "http",
 ): Promise<RecordedOperationResult | undefined> {
   const status = await application.operationStatus({
     operationId,
@@ -230,6 +241,34 @@ export async function collectionMutationResult(
     };
   }
   if (status.state !== "completed") {
+    // Dead letters are retained by delivery compaction. Read only the target
+    // mutation delivery, never a descendant or another correlated request.
+    const [delivery] = await scope.deliveries.list({
+      namespace: status.namespace,
+      eventId: operationId,
+      consumerId: "processor:copilotz.server.collection-mutation-request",
+      status: "dead_letter",
+      limit: 1,
+    });
+    const error = delivery?.lastError;
+    if (error && typeof error.message === "string") {
+      if (
+        error.code === "collection_validation_failed" &&
+        error.name === "CollectionValidationError"
+      ) {
+        throw Object.assign(new TypeError(error.message), {
+          name: error.name,
+          code: error.code,
+          status: 422,
+        });
+      }
+      if (audience === "host") {
+        throw Object.assign(new Error(error.message), {
+          name: text(error.name) ?? "Error",
+          ...(typeof error.code === "string" ? { code: error.code } : {}),
+        });
+      }
+    }
     throw appError(
       422,
       "collection_mutation_failed",
@@ -284,6 +323,7 @@ export async function recordedOperationResult(
   application: InternalCopilotzApplication,
   context: ApplicationScope,
   operationId: string,
+  audience: "http" | "host" = "http",
 ): Promise<RecordedOperationResult> {
   const status = await application.operationStatus({
     operationId,
@@ -307,6 +347,7 @@ export async function recordedOperationResult(
     application,
     context,
     operationId,
+    audience,
   );
   if (collectionResult) return collectionResult;
   if (event?.type !== SERVER_ACTION_REQUEST_EVENT_TYPE) {
@@ -341,9 +382,6 @@ export async function recordedOperationResult(
     }
     throw appError(409, "action_not_completed", "Action did not complete.");
   }
-  if (terminal.status === "failed") {
-    throw appError(422, "action_failed", terminal.error.message);
-  }
   const target = await recoverTargetActionTerminal(
     application,
     context,
@@ -351,6 +389,13 @@ export async function recordedOperationResult(
     action.id,
     terminal,
   );
+  if (target?.status === "failed" || target?.status === "cancelled") {
+    throw actionFailure(target.error, audience);
+  }
+  if (terminal.status === "failed") {
+    // Older wrapper receipts and failures before target invocation still work.
+    throw actionFailure(terminal.error, audience);
+  }
   if (!target || target.status !== "completed") {
     throw appError(409, "action_not_completed", "Action did not complete.");
   }
@@ -380,4 +425,25 @@ export async function recordedOperationResult(
     pending: false,
     value: target.output,
   };
+}
+
+function actionFailure(
+  error: SerializedActionError,
+  audience: "http" | "host",
+): Error {
+  if (audience === "host") {
+    return Object.assign(new Error(error.message), {
+      name: error.name,
+      ...(error.code === undefined ? {} : { code: error.code }),
+    });
+  }
+  if (error.callerSafe === true) {
+    return Object.assign(
+      appError(error.status ?? 422, error.code!, error.message),
+      {
+        name: error.name,
+      },
+    );
+  }
+  return appError(422, "action_failed", "Action execution failed.");
 }

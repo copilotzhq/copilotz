@@ -34,7 +34,22 @@ function optionalText(value: string | undefined): string | undefined {
 function safeError(error: SerializedActionError): SerializedActionError {
   const name = requireText(error.name, "Action error name");
   const message = requireText(error.message, "Action error message");
-  return ({ name, message } as const);
+  const code = optionalText(error.code);
+  if (
+    error.callerSafe &&
+    (!code || !Number.isInteger(error.status) || error.status! < 400 ||
+      error.status! > 499)
+  ) {
+    throw new TypeError(
+      "Caller-safe Action errors require a code and 4xx status.",
+    );
+  }
+  return {
+    name,
+    message,
+    ...(code ? { code } : {}),
+    ...(error.callerSafe ? { callerSafe: true, status: error.status } : {}),
+  };
 }
 
 function eventData(input: ActionLifecycleInput): ActionEventData {

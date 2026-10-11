@@ -1,5 +1,6 @@
 import { assert, assertEquals, assertRejects } from "@std/assert";
 import { isNonRetryableError } from "../failure.ts";
+import { ActionError } from "./errors.ts";
 import { defineAction } from "./define.ts";
 import { type ActionDeferral, deferAction } from "./deferral.ts";
 import {
@@ -791,4 +792,44 @@ Deno.test("deferred Action retry returns the same receipt without executing or e
     "invoked",
     "deferred",
   ]);
+});
+
+Deno.test("Action replay preserves error codes and caller-safe classification", async () => {
+  const { lifecycle, emitted } = recordingLifecycle();
+  let calls = 0;
+  const fail = defineAction({
+    id: "test.public.failure",
+    execute(): never {
+      calls++;
+      throw new ActionError("Card 'x' is not on this board.", {
+        code: "card_not_on_board",
+      });
+    },
+  });
+  const actions = createActionCallers({ fail }, {
+    signal: new AbortController().signal,
+    actionLifecycle: lifecycle,
+    createInvocationKey: () => "public-failure",
+    createContext: invocationContext,
+  });
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const error = await assertRejects(
+      () => actions.fail({}),
+      ActionError,
+      "Card 'x' is not on this board.",
+    );
+    assertEquals(error.code, "card_not_on_board");
+    assertEquals(error.status, 422);
+  }
+  assertEquals(calls, 1);
+  const terminal = emitted.find((event) =>
+    event.status === "failed"
+  ) as ActionFailedData;
+  assertEquals(terminal.error, {
+    name: "ActionError",
+    message: "Card 'x' is not on this board.",
+    code: "card_not_on_board",
+    callerSafe: true,
+    status: 422,
+  });
 });

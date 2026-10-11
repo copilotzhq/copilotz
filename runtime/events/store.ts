@@ -565,9 +565,11 @@ function serializeError(
   retryable?: boolean,
 ): Record<string, unknown> {
   if (error instanceof Error) {
+    const code = (error as Error & { code?: unknown }).code;
     return {
       name: error.name,
       message: error.message,
+      ...(typeof code === "string" && code.trim() ? { code } : {}),
       ...(error.stack ? { stack: error.stack } : {}),
       ...(retryable === undefined ? {} : { retryable }),
     };

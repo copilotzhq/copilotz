@@ -173,7 +173,7 @@ succeeds produces no `llm.call.failed` Event.
 ### Example: fall back from an outage
 
 Two files, no credential, network or cost. They need Deno 2.9+ or Node 24+ with
-`@copilotz/copilotz` `^0.87.1` installed as in
+`@copilotz/copilotz` `^0.87.2` installed as in
 [setup](getting-started.md#before-you-start).
 
 Create `scripted-models.ts`, a pure module with two custom adapters:

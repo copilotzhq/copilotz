@@ -1,3 +1,4 @@
+import { createCollectionValidationError } from "./errors.ts";
 import { getPath } from "./content-path.ts";
 import type { EventMutationContext, SqlExecutor } from "../events/index.ts";
 import type { CollectionDefinition } from "./definition.ts";
@@ -755,7 +756,7 @@ export function composeCollectionProjection(
         return new Error(`Unknown ${projection.type} '${projection.id}'.`);
       }
       if (report.relation) {
-        return new Error(
+        return createCollectionValidationError(
           `Relation '${report.relation.relation}' references missing ${report.relation.relatedType} '${report.relation.relatedId}'.`,
         );
       }

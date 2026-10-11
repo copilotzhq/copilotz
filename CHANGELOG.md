@@ -1,3 +1,13 @@
+## 0.87.2 — 2026-10-10
+
+- Preserve Action failure names, messages and codes for trusted host calls and
+  recorded replay, using the existing lifecycle secret protection.
+- Add `ActionError(message, { code, status? })` for deliberate caller-safe HTTP
+  failures. Custom routes' `context.invoke` and generic Action results expose
+  those messages and codes with a 4xx status; unknown errors remain redacted.
+- Report Collection schema and missing-relation rejections with plain messages
+  and `collection_validation_failed`, without settlement/dead-letter wrapping.
+
 ## 0.87.1 — 2026-10-10
 
 - Carry the producing attempt's reasoning-token usage with native state so

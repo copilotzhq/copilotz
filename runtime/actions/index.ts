@@ -11,6 +11,7 @@ export type {
 } from "./deferral.ts";
 export { defineAction, isActionDefinition } from "./define.ts";
 export { secret } from "./secret.ts";
+export { ActionError } from "./errors.ts";
 export { createSecretAdapter } from "./secret-adapter.ts";
 export type {
   SecretAdapter,

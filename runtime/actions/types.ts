@@ -337,6 +337,9 @@ export type ActionStatus =
 export type SerializedActionError = Readonly<{
   name: string;
   message: string;
+  code?: string;
+  callerSafe?: true;
+  status?: number;
 }>;
 
 type ActionEventBase<I> = Readonly<{

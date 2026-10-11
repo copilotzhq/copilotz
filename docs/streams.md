@@ -35,7 +35,7 @@ item to every observer of the operation: `app.send(...)` handles,
 `app.attach(...)` handles and HTTP operation observers. Each observer gets its
 own byte reader; subscribers never share one `ReadableStream`.
 
-The example below needs only `@copilotz/copilotz@^0.87.1` on Deno 2.9+ or Node
+The example below needs only `@copilotz/copilotz@^0.87.2` on Deno 2.9+ or Node
 24+. It needs no credential and no agent harness. Save it as `stream-draft.ts`:
 
 ```ts

@@ -103,21 +103,6 @@ async function listAllOperationStreams(
   return result;
 }
 
-function sleep(ms: number, signal: AbortSignal): Promise<void> {
-  if (signal.aborted) return Promise.reject(signal.reason);
-  return new Promise((resolve, reject) => {
-    const onAbort = () => {
-      clearTimeout(timer);
-      reject(signal.reason);
-    };
-    const timer = setTimeout(() => {
-      signal.removeEventListener("abort", onAbort);
-      resolve();
-    }, ms);
-    signal.addEventListener("abort", onAbort, { once: true });
-  });
-}
-
 /** A terminal status the observer may never await must not reject unhandled. */
 function optionalTerminal<T>(terminal: Promise<T>): Promise<T> {
   terminal.catch(() => undefined);
@@ -170,39 +155,44 @@ async function deadLetterError(
 
 async function waitForApplicationScope(
   eventScope: Pick<CopilotzEngine, "events" | "deliveries" | "operations">,
-  execution: Pick<
-    CopilotzEngine["execution"],
-    "settleOutputs" | "awaitScopeProgress"
-  >,
-  databaseSchema: string,
   namespace: string,
   settlementScopeId: string,
   signal: AbortSignal,
 ): Promise<void> {
-  while (true) {
-    if (signal.aborted) throw signal.reason;
-    const operation = await eventScope.operations.get(
-      namespace,
-      settlementScopeId,
-    );
-    if (!operation) {
-      throw new Error(`Operation '${settlementScopeId}' was not found.`);
+  // Subscribe before reading state so a commit between the read and wait is
+  // retained by the watch. Output completion alone is too early: the owner
+  // reconciles durable settlement only after the output relay has drained.
+  const watch = await eventScope.operations.watch(settlementScopeId, {
+    namespace,
+    // Event and stream-byte hints cannot terminalize the operation. Avoid a
+    // status query per output frame while waiting for the settlement owner.
+    kind: "operation",
+  });
+  try {
+    while (true) {
+      signal.throwIfAborted();
+      const operation = await eventScope.operations.get(
+        namespace,
+        settlementScopeId,
+      );
+      if (!operation) {
+        throw new Error(`Operation '${settlementScopeId}' was not found.`);
+      }
+      if (operation.state === "failed") {
+        throw await deadLetterError(eventScope, namespace, settlementScopeId);
+      }
+      if (operation.state === "cancelled") {
+        throw new Error(
+          `Settlement scope '${settlementScopeId}' was cancelled.`,
+        );
+      }
+      if (operation.state === "completed") return;
+      // Notifications are hints, never settlement authority. Keep the existing
+      // bounded poll for remote writers, missed hints and notification outages.
+      await watch.wait({ timeoutMs: 250, signal });
     }
-    if (operation.state === "failed") {
-      throw await deadLetterError(eventScope, namespace, settlementScopeId);
-    }
-    if (operation.state === "cancelled") {
-      throw new Error(`Settlement scope '${settlementScopeId}' was cancelled.`);
-    }
-    if (operation.state === "completed") return;
-    const progressed = await execution.awaitScopeProgress({
-      databaseSchema,
-      namespace,
-      settlementScopeId,
-    }, signal);
-    // Remote-only work has no local task wake: poll at 250ms. This adds a
-    // nominal 225ms of fallback detection delay versus the old 25ms.
-    if (!progressed) await sleep(250, signal);
+  } finally {
+    watch.close();
   }
 }
 
@@ -544,8 +534,6 @@ export async function createCopilotzApplication(
     }
     const done = waitForApplicationScope(
       eventScope,
-      engine.execution,
-      inputDatabaseSchema,
       inputNamespace,
       settlementScopeId,
       abort.signal,

@@ -1,3 +1,23 @@
+## 0.87.3 — 2026-10-11
+
+- Cut fixed overhead from host `app.actions` calls and `app.send` settlement
+  from ~300 ms to ~30–45 ms (p50, PGlite and PostgreSQL). Settlement now
+  subscribes to operation-change hints before reading durable status, so a
+  commit between the read and the wait no longer falls back to the 250 ms poll;
+  it also ignores Event and stream-byte hints that cannot settle an operation.
+  Durable status remains the only settlement authority.
+- Retry a delivery whose immediate placement was rejected (for example at
+  worker capacity) through the local queue, which wakes when capacity frees,
+  instead of waiting for the next recovery sweep. The delivery stays durable and
+  recoverable either way.
+- Recover host Action results from the request Event's position, filtering
+  terminal Events by Action metadata instead of rescanning the correlation.
+- Oxian advances to `0.21.2`, whose Workers release their execution slot before
+  reporting completion, so an immediate redispatch no longer hits
+  `worker_capacity`.
+- Add `scripts/benchmarks/action-overhead.ts` for host, Processor and send
+  latency across PGlite and PostgreSQL.
+
 ## 0.87.2 — 2026-10-10
 
 - Preserve Action failure names, messages and codes for trusted host calls and

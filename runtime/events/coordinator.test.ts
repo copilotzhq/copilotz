@@ -227,3 +227,61 @@ Deno.test("A55 event coordinator remains factory-first and runtime-neutral", asy
   assert(!/\bclass\s+\w+/.test(source));
   assert(!/runtime\/cli|server\//.test(source));
 });
+
+Deno.test("a rejected placement is retried from the queue without a recovery sweep", async () => {
+  const fixture = await createStore();
+  const handled = Promise.withResolvers<void>();
+  let calls = 0;
+  const registry = await createPluginRegistry({
+    plugins: [definePlugin({
+      id: "placement-retry",
+      version: "1",
+      processors: {
+        observe: defineProcessor({
+          id: "placement-retry.observe",
+          on: [{ eventType: "placement.request" }],
+          handle() {
+            calls++;
+            handled.resolve();
+          },
+        }),
+      },
+    })],
+  });
+  const executor = createDeliveryExecutor({
+    store: fixture.store,
+    registry,
+    createContext: createTestProcessorContext,
+  });
+  const coordinator = createEventCoordinator({
+    store: fixture.store,
+    registry,
+    executor: {
+      ...executor,
+      dispatchDelivery: () => Promise.reject(new Error("capacity occupied")),
+    },
+  });
+  const deadline = setTimeout(
+    () => handled.reject(new Error("Queue did not retry")),
+    5_000,
+  );
+  try {
+    const result = await coordinator.append({
+      type: "placement.request",
+      namespace: "tenant-a",
+      payload: {},
+    });
+    assertEquals(result.dispatch.failures.length, 1);
+    await handled.promise;
+    // Joining the active attempt waits for the durable lease settlement too.
+    const execution = await executor.dispatchDelivery(result.deliveries[0]);
+    const outcome = await execution.done;
+    assertEquals(outcome.delivery.status, "succeeded");
+    assertEquals(outcome.delivery.attempts, 1);
+    assertEquals(calls, 1);
+  } finally {
+    clearTimeout(deadline);
+    await executor.shutdown();
+    await fixture.db.close();
+  }
+});

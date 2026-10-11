@@ -1,4 +1,5 @@
 /** Restores admitted outcomes from lifecycle Events and retained mutation failures. @module */
+import type { DurableEvent } from "../../events/index.ts";
 import type {
   ActionEventData,
   SerializedActionError,
@@ -101,7 +102,7 @@ function actionTerminal(
 async function recoverActionTerminal(
   application: InternalCopilotzApplication,
   context: ApplicationScope,
-  eventId: string,
+  requestEvent: DurableEvent,
   requestId: string,
   targetActionId: string,
 ): Promise<ServerInvokeTerminal | undefined> {
@@ -114,15 +115,15 @@ async function recoverActionTerminal(
   const scope = databaseSchema === application.config.databaseSchema
     ? application
     : await application.databaseScope(databaseSchema);
-  const requestEvent = await scope.events.get(namespace, eventId);
-  if (!requestEvent) {
-    return undefined;
-  }
-  let afterPosition: string | undefined;
+  let afterPosition: string | undefined = requestEvent.position;
   while (true) {
     const events = await scope.events.list({
       namespace,
       correlationId: requestEvent.correlationId,
+      metadata: {
+        actionId: SERVER_INVOKE_ACTION_ID,
+        actionStatus: "completed",
+      },
       ...(afterPosition ? { afterPosition } : {}),
       limit: 1000,
     });
@@ -150,7 +151,7 @@ async function recoverActionTerminal(
 async function recoverTargetActionTerminal(
   application: InternalCopilotzApplication,
   context: ApplicationScope,
-  requestEventId: string,
+  requestEvent: DurableEvent,
   targetActionId: string,
   terminal: TargetIdentity,
 ): Promise<ActionEventData | undefined> {
@@ -163,22 +164,22 @@ async function recoverTargetActionTerminal(
   const scope = databaseSchema === application.config.databaseSchema
     ? application
     : await application.databaseScope(databaseSchema);
-  const requestEvent = await scope.events.get(namespace, requestEventId);
-  if (!requestEvent) {
-    return undefined;
-  }
-  let afterPosition: string | undefined;
+  let afterPosition: string | undefined = requestEvent.position;
   while (true) {
     const events = await scope.events.list({
       namespace,
       correlationId: requestEvent.correlationId,
+      metadata: { actionId: targetActionId },
       ...(afterPosition ? { afterPosition } : {}),
       limit: 1000,
     });
     for (const event of events) {
       if (
         event.subject?.id !== terminal.targetActionRunId ||
-        event.subject.type !== targetActionId
+        event.subject.type !== targetActionId ||
+        !["completed", "failed", "cancelled"].some((status) =>
+          event.type === `${targetActionId}.${status}`
+        )
       ) {
         continue;
       }
@@ -343,14 +344,16 @@ export async function recordedOperationResult(
     ? await application.databaseScope(context.databaseSchema)
     : application;
   const event = await scoped.events.resolve(status.namespace, operationId);
-  const collectionResult = await collectionMutationResult(
-    application,
-    context,
-    operationId,
-    audience,
-  );
-  if (collectionResult) return collectionResult;
-  if (event?.type !== SERVER_ACTION_REQUEST_EVENT_TYPE) {
+  if (event?.type === SERVER_COLLECTION_MUTATION_REQUEST_EVENT_TYPE) {
+    const collectionResult = await collectionMutationResult(
+      application,
+      context,
+      operationId,
+      audience,
+    );
+    if (collectionResult) return collectionResult;
+  }
+  if (event?.type !== SERVER_ACTION_REQUEST_EVENT_TYPE || !event.durable) {
     if (status.state === "accepted" || status.state === "running") {
       return pending();
     }
@@ -372,7 +375,7 @@ export async function recordedOperationResult(
   const terminal = await recoverActionTerminal(
     application,
     context,
-    operationId,
+    event,
     request.requestId,
     action.id,
   );
@@ -385,7 +388,7 @@ export async function recordedOperationResult(
   const target = await recoverTargetActionTerminal(
     application,
     context,
-    operationId,
+    event,
     action.id,
     terminal,
   );

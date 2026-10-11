@@ -129,6 +129,15 @@ export function createEventCoordinator(
       } as const;
       failures.push(failure);
       reportFailure(failure);
+      // Placement did not claim the delivery. Retry through the local queue,
+      // which wakes when capacity frees, instead of waiting for recovery's
+      // next persisted deadline (possibly an unrelated active lease).
+      try {
+        options.executor.scheduleDelivery(actionable[index]);
+      } catch {
+        // The executor is shutting down. The delivery is already durable and
+        // recovery remains its contract; never fail the committed event here.
+      }
     });
     return ({
       handles: handles,

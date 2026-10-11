@@ -135,7 +135,11 @@ export type OperationCatalog = Readonly<{
   databaseSchema: string;
   watch(
     operationId: string,
-    options?: Readonly<{ namespace?: string }>,
+    options?: Readonly<{
+      namespace?: string;
+      /** Filter known hints; legacy hints without a kind still wake the reader. */
+      kind?: OperationChangeDetail["kind"];
+    }>,
   ): Promise<OperationChangeSubscription>;
   /** Scoped best-effort hints; bounded catalog scans remain authoritative. */
   onChange(
@@ -1498,6 +1502,13 @@ export function createOperationCatalog(
     },
     async watch(operationIdInput, options = {}) {
       const operationId = requiredText(operationIdInput, "Operation id");
+      const kind = options.kind;
+      if (
+        kind !== undefined &&
+        !["event", "operation", "stream", "stream-offset"].includes(kind)
+      ) {
+        throw new TypeError("Unknown operation watch hint kind.");
+      }
       const namespace = options.namespace === undefined
         ? undefined
         : requiredText(options.namespace, "Operation namespace");
@@ -1511,7 +1522,9 @@ export function createOperationCatalog(
       ) => {
         if (
           closed || changedOperationId !== operationId ||
-          (namespace !== undefined && namespace !== detail.namespace)
+          (namespace !== undefined && namespace !== detail.namespace) ||
+          (kind !== undefined && detail.kind !== undefined &&
+            kind !== detail.kind)
         ) return;
         pending = 1;
         resolveWaiting?.(true);

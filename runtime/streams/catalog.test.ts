@@ -921,3 +921,45 @@ Deno.test("operation catalog watch uses a bounded fallback without notification 
     await database.close();
   }
 });
+
+Deno.test("settlement watches ignore byte and Event hints but retain legacy wakes", async () => {
+  let notify!: (notification: { channel: string; payload?: string }) => void;
+  const session: SqlSession = {
+    query: () => Promise.resolve({ rows: [] }),
+    transaction: (operation) => operation(session),
+    listen(_channel, handler) {
+      notify = handler;
+      return Promise.resolve({ close: () => Promise.resolve() });
+    },
+  };
+  const catalog = createOperationCatalog(session, "public");
+  const watch = await catalog.watch("operation", {
+    namespace: "tenant-a",
+    kind: "operation",
+  });
+  const hint = (kind?: string, namespace = "tenant-a") =>
+    notify({
+      channel: OPERATION_CHANGE_CHANNEL,
+      payload: JSON.stringify({
+        schema: "public",
+        namespace,
+        operationId: "operation",
+        selectionKeys: [],
+        kind,
+      }),
+    });
+  try {
+    hint("event");
+    hint("stream");
+    for (let i = 0; i < 1000; i++) hint("stream-offset");
+    hint("operation", "tenant-b");
+    // An aborted wait returns immediately unless a hint was incorrectly queued.
+    assertEquals(await watch.wait({ signal: AbortSignal.abort() }), false);
+    hint("operation");
+    assertEquals(await watch.wait({ signal: AbortSignal.abort() }), true);
+    hint();
+    assertEquals(await watch.wait({ signal: AbortSignal.abort() }), true);
+  } finally {
+    watch.close();
+  }
+});

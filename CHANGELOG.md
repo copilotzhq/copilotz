@@ -6,9 +6,9 @@
   commit between the read and the wait no longer falls back to the 250 ms poll;
   it also ignores Event and stream-byte hints that cannot settle an operation.
   Durable status remains the only settlement authority.
-- Retry a delivery whose immediate placement was rejected (for example at
-  worker capacity) through the local queue, which wakes when capacity frees,
-  instead of waiting for the next recovery sweep. The delivery stays durable and
+- Retry a delivery whose immediate placement was rejected (for example at worker
+  capacity) through the local queue, which wakes when capacity frees, instead of
+  waiting for the next recovery sweep. The delivery stays durable and
   recoverable either way.
 - Recover host Action results from the request Event's position, filtering
   terminal Events by Action metadata instead of rescanning the correlation.

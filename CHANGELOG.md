@@ -13,6 +13,8 @@
   and verification-only replay helpers.
 - Core Goal Action, goal policies/resources, goal-turn progress, and the
   `/goals` package export.
+- Filesystem body storage, its configuration/location types, and the Deno asset
+  filesystem adapter; memory, database, S3, and native GCS stores remain.
 
 ## 0.87.3 — 2026-10-11
 

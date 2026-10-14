@@ -14,7 +14,6 @@ import {
   createMemoryBodyStore,
   digestContent,
 } from "../content/index.ts";
-import { denoAssetFilesystem } from "../adapters/deno/assets.ts";
 
 async function readEventBody(
   db: Awaited<ReturnType<typeof createTestDatabase>>,
@@ -581,30 +580,6 @@ Deno.test("custom collection content materializes and links atomically with data
   await runCollectionContentContract({
     schema: "collection_content_contract",
   });
-});
-
-Deno.test("custom collection content materializes and links atomically with filesystem bodies", async () => {
-  const root = await Deno.makeTempDir({
-    prefix: "copilotz-collection-content-",
-  });
-  try {
-    await runCollectionContentContract({
-      schema: "collection_content_filesystem_contract",
-      assets: {
-        storage: {
-          type: "filesystem",
-          config: {
-            backendId: "filesystem:collection-content",
-            prefix: "collection-content",
-            protectionMs: 5_000,
-            access: denoAssetFilesystem(root),
-          },
-        },
-      },
-    });
-  } finally {
-    await Deno.remove(root, { recursive: true });
-  }
 });
 
 Deno.test("custom collection content materializes and links atomically with object bodies", async () => {

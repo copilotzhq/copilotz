@@ -40,16 +40,16 @@ Copilotz keeps that split visible in its import paths:
 - **Host-specific entrypoints.** Each one names the host it needs. Import these
   only from host modules and entrypoints, never from pure definitions.
 
-| Entrypoint                        | Host            | Provides                                                                                         |
-| --------------------------------- | --------------- | ------------------------------------------------------------------------------------------------ |
-| `/adapters/deno`                  | Deno            | `listen` (HTTP or a caller-owned Hypervisor) and `denoAssetFilesystem` (filesystem asset access) |
-| `/core/cli`                       | any             | A portable interactive CLI. You inject its input and output                                      |
-| `/core/cli/node`                  | Node-compatible | The same CLI wired to readline, stdin and stdout                                                 |
-| `/skills/deno`                    | Deno            | A build-time packer that turns a local Skill directory into a bundle                             |
-| `/tools/deno`                     | Deno            | Workspace and process Actions and Tools                                                          |
-| `/tools/mcp/stdio`                | subprocess host | `connectMcp`, which runs a local MCP server through the official MCP SDK                         |
-| `/tools/persistent-terminal/deno` | Deno            | The persistent-terminal service                                                                  |
-| `/build`                          | Deno            | The filesystem-authoring build                                                                   |
+| Entrypoint                        | Host            | Provides                                                                 |
+| --------------------------------- | --------------- | ------------------------------------------------------------------------ |
+| `/adapters/deno`                  | Deno            | `listen` (HTTP or a caller-owned Hypervisor)                             |
+| `/core/cli`                       | any             | A portable interactive CLI. You inject its input and output              |
+| `/core/cli/node`                  | Node-compatible | The same CLI wired to readline, stdin and stdout                         |
+| `/skills/deno`                    | Deno            | A build-time packer that turns a local Skill directory into a bundle     |
+| `/tools/deno`                     | Deno            | Workspace and process Actions and Tools                                  |
+| `/tools/mcp/stdio`                | subprocess host | `connectMcp`, which runs a local MCP server through the official MCP SDK |
+| `/tools/persistent-terminal/deno` | Deno            | The persistent-terminal service                                          |
+| `/build`                          | Deno            | The filesystem-authoring build                                           |
 
 Copilotz has no generic `/adapters` entrypoint and no `/adapters/node`
 entrypoint. On Node, serve `app.fetch` with a Fetch bridge such as
@@ -129,7 +129,6 @@ Pass it as `listen({ hypervisor })`, as described in
 | Full database-backed application (`app.send`)           | yes                      | yes                           | not validated            | not validated     | not validated            |
 | HTTP serving                                            | `listen` or `Deno.serve` | Fetch bridge over `app.fetch` | the host's Fetch serving | not a server host | the host's Fetch serving |
 | Local filesystem Skill roots                            | yes                      | yes                           | yes                      | no                | no                       |
-| Filesystem asset backend                                | `denoAssetFilesystem`    | supply your own access        | supply your own access   | no                | no                       |
 | Subprocesses (MCP stdio, `/tools/deno`)                 | yes                      | MCP stdio                     | MCP stdio, not validated | no                | no                       |
 | PGlite (`file://`, `:memory:`)                          | yes                      | yes                           | not validated            | not validated     | not validated            |
 | PostgreSQL                                              | yes                      | not validated                 | not validated            | no                | not validated            |
@@ -142,16 +141,6 @@ documentation does not establish that combination. It might work, but you have
 to validate the database and runtime integration yourself. On Bun and Workers,
 the HTTP row only says that the host can serve a Fetch handler. It does not
 promise that an exported `app.fetch` works with a database there.
-
-### Assets on the filesystem
-
-`denoAssetFilesystem(root)` returns filesystem _access_, not a complete body
-store. To use it, set `assets.storage` to
-`{ type: "filesystem", config: { backendId, access } }`. The `config` object can
-also take `prefix` and `protectionMs`. Locks are held per process, even when
-`root` is a mounted shared directory. This backend is not cluster-safe fencing.
-Multi-host deployments need an object store or a custom backend. See
-[Content and Assets](content-assets.md).
 
 ### Skills across hosts
 

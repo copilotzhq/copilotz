@@ -64,9 +64,6 @@ function bodyLocation(
       ...(head.etag ? { etag: head.etag } : {}),
     };
   }
-  if (store.kind === "filesystem") {
-    return { kind: "filesystem", backendId: store.backendId, key: head.bodyId };
-  }
   if (store.kind === "database") return { kind: "database", key: head.bodyId };
   return { kind: "memory", backendId: store.backendId, key: head.bodyId };
 }

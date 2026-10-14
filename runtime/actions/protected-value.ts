@@ -151,7 +151,7 @@ function reference(value: unknown): ProtectedValueRef {
     Reflect.ownKeys(input).some((key) =>
       typeof key !== "string" || !exact.has(key)
     ) || input.schema !== PROTECTED_VALUE_REF_SCHEMA ||
-    (input.storeKind !== "memory" && input.storeKind !== "filesystem" &&
+    (input.storeKind !== "memory" &&
       input.storeKind !== "object" && input.storeKind !== "database") ||
     input.mediaType !== PROTECTED_VALUE_MEDIA_TYPE ||
     !Number.isSafeInteger(input.byteLength) || Number(input.byteLength) < 0 ||

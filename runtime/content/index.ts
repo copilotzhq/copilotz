@@ -2,7 +2,6 @@ export { digestContent } from "./digest.ts";
 export {
   assetBodyKey,
   assetBodySchemaPrefix,
-  createFilesystemBodyStore,
   createFixedBodyStoreAdapter,
   createMemoryBodyStore,
   DEFAULT_MAX_DATABASE_ASSET_BYTES,
@@ -16,7 +15,6 @@ export type {
   ActiveMutableBodyHead,
   AppendBodyInput,
   AppendResult,
-  BodyFilesystemAccess,
   BodyMaintenanceDeleteInput,
   BodyMaintenanceListInput,
   BodyProtection,

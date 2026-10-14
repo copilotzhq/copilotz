@@ -214,10 +214,6 @@ guarantee that protocol sets `readyGarbageCollection: false`; its `put` remains
 immutable and integrity-checking but need not renew protection. The built-in S3
 Adapter follows this conservative model.
 
-The filesystem Adapter is crash-durable through its atomic manifest/tombstone
-protocol, but its declared coordination reach is one process. Its Ready-GC
-guarantee therefore applies only within that deployment reach.
-
 Body liveness uses one schema-wide advisory read/write barrier. Asset adoption
 holds the shared side through graph commit; physical Body deletion holds the
 exclusive side while it rechecks the indexed Ready Asset nodes. The graph

@@ -274,12 +274,6 @@ function location(value: unknown, assetId: string): AssetBodyLocation {
     };
   }
   if (
-    fields.kind === "filesystem" && typeof fields.backendId === "string" &&
-    typeof fields.key === "string"
-  ) {
-    return { kind: "filesystem", backendId: fields.backendId, key: fields.key };
-  }
-  if (
     fields.kind === "object" && typeof fields.backendId === "string" &&
     typeof fields.key === "string"
   ) {
@@ -864,12 +858,6 @@ export function createDatabaseAssetRepository(
           backendId: configuredWriter.backendId,
           key: bodyId,
           ...(head.etag ? { etag: head.etag } : {}),
-        }
-        : configuredWriter.kind === "filesystem"
-        ? {
-          kind: "filesystem",
-          backendId: configuredWriter.backendId,
-          key: bodyId,
         }
         : {
           kind: "memory",

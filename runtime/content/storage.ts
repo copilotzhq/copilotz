@@ -1,6 +1,5 @@
 import {
   bodyProtectionMs,
-  createFilesystemBodyStore,
   createFixedBodyStoreAdapter,
   createMemoryBodyStore,
   DEFAULT_MAX_DATABASE_ASSET_BYTES,
@@ -95,18 +94,6 @@ export function createBodyStorageRuntime(
     prefix = config.config?.prefix ?? "";
     deployment = {
       durability: "ephemeral",
-      reach: "process",
-      minimumProtectionMs,
-      readyGarbageCollection: true,
-    };
-  } else if (config.type === "filesystem") {
-    const minimumProtectionMs = bodyProtectionMs(
-      config.config.protectionMs,
-    );
-    writer = createFilesystemBodyStore(config.config);
-    prefix = config.config.prefix ?? "";
-    deployment = {
-      durability: "durable",
       reach: "process",
       minimumProtectionMs,
       readyGarbageCollection: true,

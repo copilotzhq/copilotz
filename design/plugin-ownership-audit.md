@@ -19,8 +19,7 @@ Actions and one HTTP Adapter. Conversation association criteria stay with the
 Adapter; generic operation/event queries run through the runtime catalog API.
 Core alone installs no HTTP routes. The browser conversation client and CLI are
 Adapters; the client/server history codec is shared. Agent capability resolution
-is a static context-resolved Resource. Goal execution is an Action with a policy
-Resource and explicit conversation Adapter.
+is a static context-resolved Resource.
 
 Message Router owns contribution preparation/rendering. Project Text Result owns
 initial tool-plan validation and snapshots; Project Tool Result owns terminal

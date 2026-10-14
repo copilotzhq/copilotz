@@ -11,6 +11,8 @@
   `collectionMutations.*.input` remains supported.
 - Collection projection verification and namespace rebuild APIs, coordination,
   and verification-only replay helpers.
+- Core Goal Action, goal policies/resources, goal-turn progress, and the
+  `/goals` package export.
 
 ## 0.87.3 — 2026-10-11
 

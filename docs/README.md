@@ -68,8 +68,8 @@ Each page below is the main reference for its topic.
 - [Integrations](integrations.md): native tools, OpenAPI and MCP.
 - [Skills](skills.md), [Agents asking agents](multi-agent-ask.md) and
   [Semantic memory](memory.md).
-- [Knowledge](knowledge.md), [Shared Spaces](spaces.md) and [Goals](goals.md):
-  optional semantic features.
+- [Knowledge](knowledge.md) and [Shared Spaces](spaces.md): optional semantic
+  features.
 
 ### Deliver
 

@@ -1,4 +1,4 @@
-## Unreleased
+## 0.88.0 — 2026-10-14
 
 ### Fixed
 
@@ -16,7 +16,7 @@
   old writers and run `upgradeActionLifecycle` for each physical schema before
   starting the new runtime. The v6 upgrade preserves in-flight Actions and
   immutable history; the older v5 cutover still requires drained workflows. See
-  [the upgrade guide](docs/upgrading.md#unreleased-durable-compaction-waits).
+  [the upgrade guide](docs/upgrading.md#0880-durable-compaction-waits).
 
 ### Removed
 

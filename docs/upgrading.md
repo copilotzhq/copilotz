@@ -8,7 +8,7 @@ status: stable
 
 # Upgrading and Data Safety
 
-## Unreleased: durable compaction waits
+## 0.88.0: durable compaction waits
 
 Foreground memory compaction now records a durable wait and releases its worker
 slot. Checkpoint completion wakes the original recipient through Core's ordinary

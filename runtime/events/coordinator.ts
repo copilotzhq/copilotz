@@ -67,7 +67,7 @@ export type EventCoordinator = Readonly<{
   ): Promise<EventDispatchReport>;
   append(
     draft: DurableEventDraft,
-    options?: { priority?: number; maxAttempts?: number },
+    options?: { maxAttempts?: number },
   ): Promise<CoordinatedMutationResult<void>>;
   recover(options?: {
     databaseSchema?: string;
@@ -161,7 +161,6 @@ export function createEventCoordinator(
       statement: mutation.statement,
       mutate: mutation.mutate,
       recoverDuplicate: mutation.recoverDuplicate,
-      priority: mutation.priority,
       maxAttempts: mutation.maxAttempts,
       transaction: mutation.transaction,
       admission: mutation.admission,
@@ -216,7 +215,6 @@ export function createEventCoordinator(
     append(draft, appendOptions = {}) {
       return commitMutation({
         draft,
-        priority: appendOptions.priority,
         maxAttempts: appendOptions.maxAttempts,
       });
     },

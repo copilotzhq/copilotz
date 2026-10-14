@@ -612,7 +612,7 @@ Deno.test("an event with only a body commits as one statement and dedupes on ret
   }
 });
 
-Deno.test("A22 delivery claims retry three times, dead-letter, retry, and discard", async () => {
+Deno.test("A22 delivery claims retry three times and retain dead-letter state", async () => {
   const fixture = await createFixture();
   const store = createEventStore({
     session: fixture.session,
@@ -682,11 +682,8 @@ Deno.test("A22 delivery claims retry three times, dead-letter, retry, and discar
       { unsettled: 0, deadLetters: 1, cancelled: 0, succeeded: 0 },
     );
 
-    assertEquals(await store.retryDeadLetter(id), true);
-    assertEquals((await store.getDelivery(id))?.attempts, 0);
-    await failThreeTimes(store, id);
-    assertEquals(await store.discardDeadLetter(id), true);
-    assertEquals((await store.getDelivery(id))?.status, "cancelled");
+    assertEquals((await store.getDelivery(id))?.status, "dead_letter");
+    assertEquals((await store.getDelivery(id))?.attempts, 3);
   } finally {
     await closeFixture(fixture);
   }
@@ -827,6 +824,58 @@ for (
   });
 }
 
+Deno.test("delivery recovery and claims order by availability, creation time, then ID", async () => {
+  const fixture = await createFixture();
+  const { store, session } = fixture;
+  try {
+    const ids: string[] = [];
+    for (let index = 0; index < 4; index++) {
+      const committed = await store.append({
+        type: "queue.ordered",
+        namespace: "tenant-a",
+        payload: { index },
+      }, ["worker"]);
+      ids.push(committed.deliveries[0].id);
+    }
+    ids.sort();
+    const expected = [ids[3], ids[2], ids[0], ids[1]];
+    for (const [index, id] of expected.entries()) {
+      await session.query(
+        `UPDATE ${store.tables.event_deliveries}
+         SET available_at = $2, created_at = $3 WHERE id = $1`,
+        [
+          id,
+          index === 0 ? "2000-01-01T00:00:00Z" : "2000-01-02T00:00:00Z",
+          index === 0
+            ? "2000-01-04T00:00:00Z"
+            : index === 1
+            ? "2000-01-01T00:00:00Z"
+            : "2000-01-02T00:00:00Z",
+        ],
+      );
+    }
+    assertEquals(
+      (await store.listRecoverable({ namespace: "tenant-a" })).map((row) =>
+        row.id
+      ),
+      expected,
+    );
+    for (const id of expected) {
+      assertEquals(
+        (await store.claimNext({
+          owner: "ordered-worker",
+          namespace: "tenant-a",
+          consumerIds: ["worker"],
+          leaseMs: 60_000,
+        }))?.id,
+        id,
+      );
+    }
+  } finally {
+    await closeFixture(fixture);
+  }
+});
+
 Deno.test("A21 crash recovery and concurrent claims preserve one delivery owner", async () => {
   const fixture = await createFixture();
   const { store } = fixture;
@@ -852,23 +901,33 @@ Deno.test("A21 crash recovery and concurrent claims preserve one delivery owner"
     assertExists(owner);
     assertEquals((await store.succeedDelivery(id, owner))?.status, "succeeded");
 
-    const high = await store.append(
+    const firstQueued = await store.append(
       {
-        type: "priority.high",
+        type: "queue.first",
         namespace: "tenant-a",
         payload: {},
       },
       ["worker"],
-      { priority: 10 },
     );
-    await store.append(
+    const secondQueued = await store.append(
       {
-        type: "priority.low",
+        type: "queue.second",
         namespace: "tenant-a",
         payload: {},
       },
       ["worker"],
-      { priority: 1 },
+    );
+    // ULIDs share a millisecond, so id order is not insertion order.
+    // Pin the timestamps the queue actually sorts on.
+    await fixture.session.query(
+      `UPDATE ${store.tables.event_deliveries}
+       SET available_at = $2, created_at = $2 WHERE id = $1`,
+      [firstQueued.deliveries[0].id, "2000-01-01T00:00:00Z"],
+    );
+    await fixture.session.query(
+      `UPDATE ${store.tables.event_deliveries}
+       SET available_at = $2, created_at = $2 WHERE id = $1`,
+      [secondQueued.deliveries[0].id, "2000-01-02T00:00:00Z"],
     );
     assertEquals(
       (await store.claimNext({
@@ -877,11 +936,11 @@ Deno.test("A21 crash recovery and concurrent claims preserve one delivery owner"
         consumerIds: ["worker"],
         leaseMs: 0,
       }))?.id,
-      high.deliveries[0].id,
+      firstQueued.deliveries[0].id,
     );
     assertEquals(
       (await store.claimDelivery({
-        id: high.deliveries[0].id,
+        id: firstQueued.deliveries[0].id,
         owner: "replacement",
         leaseMs: 60_000,
       }))?.attempts,

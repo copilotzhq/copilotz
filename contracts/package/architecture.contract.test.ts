@@ -67,7 +67,7 @@ Deno.test("package root is a runtime-neutral composition barrel", async () => {
   );
   assert(!/\bclass\s+\w+/.test(source));
   assert(
-    !/plugins\/(?:admin|channels|core(?:-schedules)?|goals|knowledge|llm|memory|schedules|skills|tools|usage)/
+    !/plugins\/(?:admin|channels|core(?:-schedules)?|knowledge|llm|memory|schedules|skills|tools|usage)/
       .test(source),
   );
 });
@@ -118,7 +118,6 @@ Deno.test("retired runtime and v1 server modules are deleted", async () => {
       "../../runtime/features/index.ts",
       "../../runtime/admin/index.ts",
       "../../runtime/channels/index.ts",
-      "../../runtime/goals/index.ts",
       "../../runtime/knowledge/index.ts",
       "../../runtime/memory/index.ts",
       "../../runtime/schedules/index.ts",

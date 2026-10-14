@@ -1,4 +1,3 @@
-import { constrainInput } from "./input.ts";
 import { handleChannel } from "./channels.ts";
 import type { FacadeContext } from "./context.ts";
 /** Compiled Fetch facade over composed Copilotz primitives. @module */
@@ -424,7 +423,6 @@ export function createServerFacadeFetchHandler(
         );
         return await handleChannel(scoped, context.namespace!, {
           ...request,
-          body: constrainInput(request.body, context.serverConstraints.input),
           context: { ...admitted, actor: context.serverScope.actor },
         }, [endpoint.id]);
       }

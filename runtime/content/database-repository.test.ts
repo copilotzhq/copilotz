@@ -1,7 +1,6 @@
 import { assert, assertEquals, assertRejects } from "@std/assert";
 
 import { createTestDatabase, type TestDatabase } from "../testing/ominipg.ts";
-import { rebuildNamespaceProjections } from "../collections/index.ts";
 import { createTestProcessorContext } from "../testing/processor-context.ts";
 import {
   createCoreSchemaStatements,
@@ -396,22 +395,6 @@ Deno.test("standalone materialization emits its replayable Asset lifecycle", asy
       ["asset.created"],
     );
 
-    await fixture.session.query(
-      `DELETE FROM ${fixture.store.tables.nodes} WHERE namespace = $1`,
-      ["tenant-a"],
-    );
-    assertEquals(
-      await fixture.assets.get("tenant-a", "asset-materialized"),
-      null,
-    );
-    await fixture.session.transaction((transaction) =>
-      rebuildNamespaceProjections(
-        transaction,
-        fixture.store,
-        [],
-        "tenant-a",
-      )
-    );
     assertEquals(
       new TextDecoder().decode(
         (await fixture.assets.read("tenant-a", "asset-materialized")).bytes,
@@ -669,14 +652,9 @@ Deno.test("database asset policy stores large durable content through BodyStore"
 
 Deno.test("object-backed assets persist provenance paths and keep bodies outside graph nodes", async () => {
   const memory = createMemoryBodyStore({ backendId: "gcs:assets" });
-  let puts = 0;
   const objectStore = Object.freeze({
     ...memory,
     kind: "object" as const,
-    async put(input: Parameters<typeof memory.put>[0]) {
-      puts++;
-      return await memory.put(input);
-    },
   });
   const fixture = await createFixture({
     storage: {
@@ -718,30 +696,6 @@ Deno.test("object-backed assets persist provenance paths and keep bodies outside
     assertEquals(Object.hasOwn(row.rows[0].data as object, "body"), false);
     assertEquals(JSON.stringify(row.rows[0].data).includes("gcs:assets"), true);
     assertEquals(JSON.stringify(row.rows[0].data).includes("secret"), false);
-    const putsBeforeReplay = puts;
-    await fixture.session.query(
-      `DELETE FROM ${fixture.store.tables.nodes} WHERE namespace = $1`,
-      ["tenant-a"],
-    );
-    await fixture.session.transaction((transaction) =>
-      rebuildNamespaceProjections(
-        transaction,
-        fixture.store,
-        [],
-        "tenant-a",
-      )
-    );
-    assertEquals(
-      puts,
-      putsBeforeReplay,
-      "asset.created replay must not rewrite",
-    );
-    const replayed = await fixture.assets.get("tenant-a", asset.id);
-    assertEquals(replayed?.location, asset.location);
-    assertEquals(
-      replayed?.location.kind === "object" ? replayed.location.key : undefined,
-      asset.location.kind === "object" ? asset.location.key : undefined,
-    );
     const missingReader = createDatabaseAssetRepository({
       coordinator: fixture.coordinator,
       session: fixture.session,
@@ -755,7 +709,7 @@ Deno.test("object-backed assets persist provenance paths and keep bodies outside
     assertEquals(
       (missingReaderError as ContentError).code,
       "asset_storage_unavailable",
-      "replay does not invent a missing object reader",
+      "reading requires a configured object reader",
     );
     const mismatchedReader = createMemoryBodyStore({ backendId: "gcs:assets" });
     const bodyId = asset.location.kind === "object" ? asset.location.key : "";
@@ -779,7 +733,7 @@ Deno.test("object-backed assets persist provenance paths and keep bodies outside
     assertEquals(
       (mismatchedReaderError as ContentError).code,
       "asset_corrupted",
-      "replay readers verify bytes against the immutable manifest",
+      "readers verify bytes against the immutable manifest",
     );
     assertEquals(
       new TextDecoder().decode(

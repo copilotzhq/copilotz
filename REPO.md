@@ -90,8 +90,6 @@ This map describes the current implementation.
   `plugins/skills/`
 - Schedules: `plugins/schedules/` and `plugins/schedule-core/`; Usage ledger,
   aggregate analytics, HTTP adapter, and browser-safe client: `plugins/usage/`
-- Goal Action: `plugins/core/actions/run-goal/`; default policy:
-  `plugins/core/resources/goals/default/`
 - Channel family barrel: `plugins/channels/`; concrete Channel plugins and
   transports: `plugins/channel-*/`
 - Semantic memory plugin: `plugins/memory/`
@@ -120,7 +118,7 @@ This map describes the current implementation.
 - Raw media/token frames are never persisted as events.
 - Collection-declared content is assetized by the Collection kernel.
 - Streams, Bodies, Assets, Event Bodies, and durable delivery are runtime
-  mechanisms; messages, agents, tools, goals, and similar concepts are not.
+  mechanisms; messages, agents, tools, and similar concepts are not.
 - Injected sessions, shared persistence, Hypervisors and dispatchers remain
   host-owned.
 - The runtime never scans application resource directories. The Deno build host

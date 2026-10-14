@@ -24,8 +24,8 @@ Deno.test("Core ownership catches hidden instances without rejecting declaration
   );
   assertEquals(
     coreOwnershipErrors(
-      "plugins/core/resources/goals/default/index.ts",
-      "const policy={maxTurns:20};export default policy;",
+      "plugins/core/resources/toolResults/default/index.ts",
+      "const policy={maxTokens:2000};export default policy;",
     ),
     [],
   );

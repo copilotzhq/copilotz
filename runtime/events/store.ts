@@ -50,7 +50,6 @@ type DeliveryRow = Record<string, unknown> & {
   status: DeliveryStatus;
   attempts: number;
   max_attempts: number;
-  priority: number;
   available_at: string | Date;
   lease_owner: string | null;
   lease_expires_at: string | Date | null;
@@ -93,7 +92,6 @@ export type EventStatement<T> = Readonly<{
 export type CommitEventMutationOptions<T> = {
   draft: DurableEventDraft;
   consumers: readonly DurableConsumerObligation[];
-  priority?: number;
   maxAttempts?: number;
   /** Runtime-owned lifecycle admission, never derived from event metadata. */
   admission?: Readonly<{ openActionGroup?: boolean; cancellation?: boolean }>;
@@ -211,7 +209,7 @@ export type EventStore = {
   append(
     draft: DurableEventDraft,
     consumerIds?: readonly string[],
-    options?: { priority?: number; maxAttempts?: number },
+    options?: { maxAttempts?: number },
   ): Promise<CommitEventMutationResult<void>>;
   getEvent(id: string): Promise<DurableEvent | null>;
   /** The body of an event this store just committed, if it still holds it. */
@@ -294,8 +292,6 @@ export type EventStore = {
     settlementScopeId: string,
     reason?: string,
   ): Promise<number>;
-  retryDeadLetter(id: string): Promise<boolean>;
-  discardDeadLetter(id: string): Promise<boolean>;
   compactDeliveries(options?: {
     retentionMs?: number | null;
     now?: Date;
@@ -406,7 +402,6 @@ function mapDelivery(row: DeliveryRow, databaseSchema: string): EventDelivery {
     status: row.status,
     attempts: Number(row.attempts),
     maxAttempts: Number(row.max_attempts),
-    priority: Number(row.priority),
     availableAt: iso(row.available_at)!,
     ...(row.lease_owner ? { leaseOwner: String(row.lease_owner) } : {}),
     ...(row.lease_expires_at
@@ -691,7 +686,6 @@ export function createEventStore(
       defaultMaxAttempts,
       1,
     );
-    const priority = boundedInteger(mutation.priority, 0, -2147483648);
     const normalized = { ...mutation, draft };
 
     const body = mutation.body
@@ -803,14 +797,11 @@ export function createEventStore(
            INSERT INTO ${tables.event_deliveries} (
              id, event_id, consumer_id, settlement_scope_id, action_scope_id,
              status, attempts, max_attempts,
-             priority, available_at, created_at, updated_at, settled_at
+             available_at, created_at, updated_at, settled_at
            )
            SELECT delivery.id, inserted_event.id, delivery.consumer_id,
                   delivery.scope_id, delivery.action_scope_id, CASE WHEN ${cancelled} THEN 'cancelled' ELSE 'pending' END, 0, ${
           param(maxAttempts)
-        },
-                  ${
-          param(priority)
         }, NOW(), NOW(), NOW(), CASE WHEN ${cancelled} THEN NOW() ELSE NULL END
            FROM inserted_event, unnest(
              ${param(deliveryRows.map((row) => row.id))}::text[],
@@ -1080,56 +1071,6 @@ export function createEventStore(
     return settled;
   };
 
-  const reviseDeadLetter = async (
-    id: string,
-    status: "pending" | "cancelled",
-  ): Promise<boolean> => {
-    const current = await getDelivery(id);
-    if (!current || current.status !== "dead_letter") return false;
-    const event = await getEvent(current.eventId);
-    if (!event) return false;
-    const result = await commitDeliverySettlement(
-      current,
-      async (transaction) => {
-        const params: unknown[] = [];
-        const param = (value: unknown) => `$${params.push(value)}`;
-        const admission = options.admitOperationEventSql?.({
-          namespace: event.namespace,
-          operationId: current.settlementScopeId,
-        }, param);
-        const group = current.actionScopeId;
-        const allowedGroup = group
-          ? `EXISTS (SELECT 1 FROM ${tables.open_actions}
-        WHERE namespace = ${param(event.namespace)} AND action_run_id = ${
-            param(group)
-          }
-          AND scope_id = ${
-            param(current.settlementScopeId)
-          } AND state = 'deferred')`
-          : "TRUE";
-        const changed = await transaction.query<DeliveryRow>(
-          `${admission?.ctes.length ? `WITH ${admission.ctes.join(", ")}` : ""}
-         UPDATE ${tables.event_deliveries} SET status = ${param(status)},
-           ${
-            status === "pending"
-              ? "attempts = 0, available_at = NOW(), lease_owner = NULL, lease_expires_at = NULL, last_error = NULL, settled_at = NULL,"
-              : "settled_at = NOW(),"
-          }
-           updated_at = NOW()
-         WHERE id = ${param(id)} AND status = 'dead_letter'
-           AND (${
-            admission?.gate ?? "TRUE"
-          }) AND (${allowedGroup}) RETURNING *`,
-          params,
-        );
-        return changed.rows[0]
-          ? mapDelivery(changed.rows[0], databaseSchema)
-          : null;
-      },
-    );
-    return result !== null;
-  };
-
   const settleDelivery = async (
     id: string,
     status: Extract<DeliveryStatus, "succeeded" | "cancelled">,
@@ -1186,7 +1127,7 @@ export function createEventStore(
       `SELECT d.* FROM ${tables.event_deliveries} d
        JOIN ${tables.events} e ON e.id = d.event_id
        WHERE ${conditions.join(" AND ")}
-       ORDER BY d.priority DESC, d.available_at, d.created_at, d.id
+       ORDER BY d.available_at, d.created_at, d.id
        LIMIT $${params.length}`,
       params,
     );
@@ -1222,7 +1163,7 @@ export function createEventStore(
         SELECT d.id FROM ${tables.event_deliveries} d
         JOIN ${tables.events} e ON e.id = d.event_id
         WHERE ${conditions.join(" AND ")}
-        ORDER BY d.priority DESC, d.available_at, d.created_at, d.id
+        ORDER BY d.available_at, d.created_at, d.id
         FOR UPDATE OF d SKIP LOCKED
         LIMIT 1
       )
@@ -1251,7 +1192,6 @@ export function createEventStore(
           consumerId,
           settlement: "inherit",
         })),
-        priority: appendOptions.priority,
         maxAttempts: appendOptions.maxAttempts,
       });
     },
@@ -1553,8 +1493,6 @@ export function createEventStore(
       await afterCommit!?.();
       return result;
     },
-    retryDeadLetter: (id) => reviseDeadLetter(id, "pending"),
-    discardDeadLetter: (id) => reviseDeadLetter(id, "cancelled"),
     async compactDeliveries(compactOptions = {}) {
       if (compactOptions.retentionMs === null) {
         return { deliveries: 0 };

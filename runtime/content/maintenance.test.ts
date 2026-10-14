@@ -1,17 +1,12 @@
 import { assertEquals } from "@std/assert";
 
-import { denoAssetFilesystem } from "../adapters/deno/assets.ts";
-import {
-  createFilesystemBodyStore,
-  createMemoryBodyStore,
-} from "./body-store.ts";
+import { createMemoryBodyStore } from "./body-store.ts";
 import type {
   ActiveMutableBodyHead,
   BodyMaintenanceDeleteInput,
   BodyStore,
 } from "./body-store.ts";
 import { maintainProgressiveBodies } from "./maintenance.ts";
-import { createProgressiveBodyWriter } from "./progressive.ts";
 
 Deno.test("progressive body maintenance fences and terminates expired writers without semantic lookup", async () => {
   const store = createMemoryBodyStore({ protectionMs: 0 });
@@ -224,108 +219,4 @@ Deno.test("progressive maintenance retries fenced abort cleanup", async () => {
     errors: [],
   });
   assertEquals(deleted, 1);
-});
-
-Deno.test("filesystem progressive maintenance discovers crash staging after reopen", async () => {
-  const root = await Deno.makeTempDir({
-    prefix: "copilotz-progressive-maintenance-",
-  });
-  try {
-    const first = createFilesystemBodyStore({
-      backendId: "filesystem:maintenance-writer",
-      protectionMs: 0,
-      access: denoAssetFilesystem(root),
-    });
-    const writer = await first.reserve({
-      bodyId: "content-streams/tenant-a/filesystem-crash",
-      mediaType: "text/plain",
-    });
-    await first.append({
-      writer,
-      expectedOffset: 0,
-      appendId: "partial",
-      bytes: new TextEncoder().encode("partial"),
-    });
-
-    const recovered = createFilesystemBodyStore({
-      backendId: "filesystem:maintenance-recovered",
-      protectionMs: 0,
-      access: denoAssetFilesystem(root),
-    });
-    assertEquals(await maintainProgressiveBodies(recovered), {
-      examined: 1,
-      aborted: 0,
-      sealed: 0,
-      terminated: 1,
-      deferred: 0,
-      errors: [],
-    });
-    assertEquals(
-      (await recovered.head({ bodyId: writer.bodyId }))?.state,
-      "incomplete",
-    );
-    assertEquals(await maintainProgressiveBodies(recovered), {
-      examined: 0,
-      aborted: 0,
-      sealed: 0,
-      terminated: 0,
-      deferred: 0,
-      errors: [],
-    });
-  } finally {
-    await Deno.remove(root, { recursive: true });
-  }
-});
-
-Deno.test("filesystem Ready seal survives cleanup failure and leaves retryable staging", async () => {
-  const root = await Deno.makeTempDir({
-    prefix: "copilotz-progressive-seal-cleanup-",
-  });
-  try {
-    const access = denoAssetFilesystem(root);
-    let cleanupAttempts = 0;
-    const store = createFilesystemBodyStore({
-      backendId: "filesystem:cleanup-retry",
-      protectionMs: 0,
-      access: {
-        ...access,
-        async cleanupProgressive(bodyId) {
-          cleanupAttempts++;
-          if (cleanupAttempts === 1) {
-            throw new Error("simulated cleanup interruption");
-          }
-          await access.cleanupProgressive!(bodyId);
-        },
-      },
-    });
-    const writer = await createProgressiveBodyWriter(store, {
-      bodyId: "content-streams/tenant-a/seal-cleanup",
-      mediaType: "text/plain",
-    });
-    await writer.write(new TextEncoder().encode("complete"));
-    const ready = await writer.finalize();
-    assertEquals(ready.state, "ready");
-    assertEquals(cleanupAttempts, 1);
-
-    assertEquals(await maintainProgressiveBodies(store), {
-      examined: 1,
-      aborted: 0,
-      sealed: 1,
-      terminated: 0,
-      deferred: 0,
-      errors: [],
-    });
-    assertEquals(cleanupAttempts, 2);
-    assertEquals((await store.head({ bodyId: writer.bodyId }))?.state, "ready");
-    assertEquals(await maintainProgressiveBodies(store), {
-      examined: 0,
-      aborted: 0,
-      sealed: 0,
-      terminated: 0,
-      deferred: 0,
-      errors: [],
-    });
-  } finally {
-    await Deno.remove(root, { recursive: true });
-  }
 });

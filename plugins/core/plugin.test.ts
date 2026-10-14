@@ -5,7 +5,6 @@ import { CORE_COLLECTION_NAMES, corePlugin } from "./index.ts";
 
 const CORE_ACTION_IDS = [
   "copilotz.core.spaces",
-  "copilotz.core.goal.run",
   "copilotz.core.thread.create",
   "copilotz.core.thread.addParticipant",
   "copilotz.core.thread.deleteMessages",

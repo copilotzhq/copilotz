@@ -274,13 +274,6 @@ Deno.test("each collection write is one statement that projects its relations", 
       { source: "f1", target: "d2", type: "has_projection_doc" },
       { source: "f1", target: "d3", type: "has_projection_doc" },
     ]);
-
-    // Rebuild replays the same events through the same projector.
-    await fixture.runtime.rebuild(namespace);
-    assertEquals(await graph(fixture, namespace), projected);
-    assertEquals(await fixture.runtime.verify(docDefinition, namespace), {
-      ok: true,
-    });
   } finally {
     await fixture.executor.shutdown();
     await fixture.db.close();
@@ -432,9 +425,6 @@ Deno.test({
           type: "has_projection_doc",
         }],
       );
-      assertEquals(await fixture.runtime.verify(docDefinition, namespace), {
-        ok: true,
-      });
 
       const { nodes } = fixture.store.tables;
       // The update plans against the committed record, then waits on the row

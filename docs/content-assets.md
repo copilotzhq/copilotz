@@ -145,8 +145,8 @@ substitute for application access checks.
 ### Where bodies live
 
 By default, body bytes live in the application's database, next to their Asset
-metadata. A reference does not imply cloud storage. Filesystem, S3-compatible
-and Google Cloud Storage body stores are explicit host choices, covered in
+metadata. A reference does not imply cloud storage. Memory, S3-compatible and
+Google Cloud Storage body stores are explicit host choices, covered in
 [Runtime adapters](runtime-adapters.md); credentials and physical keys never
 appear in a `ContentRef`.
 

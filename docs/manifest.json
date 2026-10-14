@@ -217,11 +217,6 @@
           "title": "Spaces",
           "slug": "spaces",
           "description": "Owned Spaces, members, atomic moves and what membership authorizes."
-        },
-        {
-          "title": "Goals",
-          "slug": "goals",
-          "description": "Bounded two-agent loops with Core's runGoal Action."
         }
       ]
     },

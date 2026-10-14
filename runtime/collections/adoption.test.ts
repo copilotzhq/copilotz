@@ -266,15 +266,6 @@ async function adoptionScenarios(url: string) {
       1,
       "both notes reference one asset",
     );
-
-    // Rebuilding from events reproduces the same graph.
-    const graph = () =>
-      db.query(
-        `SELECT id, type, data FROM "${schema}".nodes ORDER BY id`,
-      ).then((result) => result.rows);
-    const projected = await graph();
-    await measured.collections.rebuild(namespace);
-    assertEquals(await graph(), projected);
   } finally {
     await db.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
     await db.close();

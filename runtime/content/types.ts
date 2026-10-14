@@ -54,11 +54,6 @@ export type AssetBodyLocation =
     key?: string;
   }
   | {
-    kind: "filesystem";
-    backendId: string;
-    key: string;
-  }
-  | {
     kind: "object";
     backendId: string;
     key: string;

@@ -95,7 +95,6 @@ stable ID) and the scope. It returns `ServerConstraints`:
 
 - `operations: { metadata }` — operations whose metadata does not match are
   treated as not found (404) for get, result, cancel and observe;
-- `input` — exact values enforced on Action input;
 - `collections` — read filters per Collection;
 - `collectionMutations` — explicit write policy; read filters never authorize
   writes.

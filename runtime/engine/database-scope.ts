@@ -4,11 +4,6 @@ import {
   recoverDeliveryActions,
 } from "../actions/recovery.ts";
 import {
-  planActionInputRetention,
-  retainActionInputContent,
-} from "../actions/content-retention.ts";
-import type { ActionEventData } from "../actions/types.ts";
-import {
   assetBodySchemaPrefix,
   type BodyStore,
   type ContentPreparer,
@@ -33,18 +28,15 @@ import {
 } from "../actions/index.ts";
 import {
   createProtectedValueRuntime,
-  PROTECTED_VALUE_NODE_TYPE,
   type ProtectedValueRuntime,
 } from "../actions/protected-value.ts";
 import {
   actionDefinitionById,
   hydrateActionLifecycleBody,
-  protectedActionLifecycleRefs,
   publicActionLifecycleData,
 } from "../actions/protected-lifecycle.ts";
 import {
   prepareProtectedEventBody,
-  protectedEventRefs,
   resolveProtectedEventData,
   samePreparedProtectedEventBody,
 } from "../actions/protected-event.ts";
@@ -285,37 +277,6 @@ export function createDatabaseScope(
     contentResolver: resolver,
     createId: engine.createId,
     now: options.now,
-    runtimeProjections: {
-      nodeTypes: [
-        "@copilotz/action-content",
-        ...(protectedValues ? [PROTECTED_VALUE_NODE_TYPE] : []),
-      ] as const,
-      async projectBody(context, namespace, body, event) {
-        if (protectedValues) {
-          for (
-            const ref of [
-              ...protectedActionLifecycleRefs(body),
-              ...protectedEventRefs(body),
-            ]
-          ) {
-            await protectedValues.project(context, namespace, ref);
-          }
-        }
-        const data = body as ActionEventData;
-        if (data?.status !== "invoked") return;
-        const action = Object.values(options.registry.actions).find((action) =>
-          action.id === data.actionId
-        );
-        if (action?.content && event.type === `${action.id}.invoked`) {
-          const retention = await planActionInputRetention(
-            namespace,
-            action,
-            data,
-          );
-          if (retention) await retainActionInputContent(context, retention);
-        }
-      },
-    } as const,
   });
   for (const resource of Object.values(options.registry.collections)) {
     if (isKernelCollection(resource)) collections.bind(resource);
@@ -513,20 +474,6 @@ export function createDatabaseScope(
   const deliveries: CopilotzEngineDatabaseScope["deliveries"] = {
     get: deliveryInNamespace,
     list: (listOptions) => store.listDeliveries(listOptions),
-    async retry(namespace, id) {
-      if (!await deliveryInNamespace(namespace, id)) return false;
-      const retried = await store.retryDeadLetter(id);
-      if (retried) {
-        await options.executor.dispatchDelivery(id, { databaseSchema }).catch(
-          () => undefined,
-        );
-      }
-      return retried;
-    },
-    async discard(namespace, id) {
-      if (!await deliveryInNamespace(namespace, id)) return false;
-      return await store.discardDeadLetter(id);
-    },
   } as const;
   const recover: CopilotzEngineDatabaseScope["recover"] = (recovery = {}) =>
     coordinator.recover({ ...recovery, databaseSchema });

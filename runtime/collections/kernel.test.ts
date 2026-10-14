@@ -152,28 +152,6 @@ const jobNoteDefinition = defineCollection({
   },
 });
 
-const projectionScaleDefinition = defineCollection({
-  name: "projection_scale",
-  schema: {
-    type: "object",
-    additionalProperties: false,
-    properties: {
-      id: { type: "string" },
-      namespace: { type: "string" },
-      sequence: { type: "integer" },
-      createdAt: { type: "string" },
-      updatedAt: { type: "string" },
-    },
-    required: [
-      "id",
-      "namespace",
-      "sequence",
-      "createdAt",
-      "updatedAt",
-    ],
-  } as const,
-});
-
 const timestampOrderDefinition = defineCollection({
   name: "timestamp_order",
   timestamps: { createdAt: "createdOn", updatedAt: "changedOn" },
@@ -822,24 +800,11 @@ async function runKernelSuite(url: string, schema: string): Promise<void> {
     const found = await jobs.search("tenant-a", { text: "Priority" });
     assertEquals(found.map((row) => row.id), ["job-a"]);
 
-    assertEquals(await runtime.verify(jobDefinition, "tenant-a"), { ok: true });
-    await session.query(
-      `UPDATE ${tables.nodes}
-       SET data = jsonb_set(data, '{title}', '"tampered"')
-       WHERE id = $1 AND type = 'job'`,
-      ["job-a"],
-    );
-    const tampered = await runtime.verify(jobDefinition, "tenant-a");
-    assertEquals(tampered.ok, false);
-    await runtime.rebuild("tenant-a");
-    assertEquals(await runtime.verify(jobDefinition, "tenant-a"), { ok: true });
     assertEquals(
       (await jobs.get("job-a", "tenant-a"))?.title,
       "Priority inbox",
     );
-    assertEquals(await runtime.verify(jobNoteDefinition, "tenant-a"), {
-      ok: true,
-    });
+
     assertEquals(
       await count(
         session,
@@ -866,7 +831,6 @@ async function runKernelSuite(url: string, schema: string): Promise<void> {
     await settle(deleted);
     assertEquals(deleted.event.eventType, "job.deleted");
     assertEquals(await jobs.get("job-a", "tenant-a"), null);
-    assertEquals(await runtime.verify(jobDefinition, "tenant-a"), { ok: true });
   } finally {
     await closeFixture(fixture);
   }
@@ -876,7 +840,7 @@ Deno.test("collection kernel on PGlite", async () => {
   await runKernelSuite(":memory:", "copilotz_collection_kernel");
 });
 
-Deno.test("namespace rebuild preserves durable Collection timestamp order", async () => {
+Deno.test("Collection writes preserve durable timestamp order", async () => {
   const times = [
     "2026-08-17T21:00:00.000Z",
     "2026-08-17T21:01:00.000Z",
@@ -886,7 +850,7 @@ Deno.test("namespace rebuild preserves durable Collection timestamp order", asyn
   let clock = 0;
   const fixture = await createFixture(
     ":memory:",
-    "copilotz_collection_timestamp_rebuild",
+    "copilotz_collection_timestamp_order",
     () => new Date(times[Math.min(clock++, times.length - 1)]),
   );
   const records = fixture.runtime.bind(timestampOrderDefinition);
@@ -928,12 +892,6 @@ Deno.test("namespace rebuild preserves durable Collection timestamp order", asyn
       { id: "a", createdAt: times[1], updatedAt: times[3] },
       { id: "z", createdAt: times[0], updatedAt: times[2] },
     ];
-    assertEquals(await storedTimes(), expectedTimes);
-    assertEquals(await orderedIds("createdAt"), ["z", "a"]);
-    assertEquals(await orderedIds("updatedAt"), ["z", "a"]);
-
-    await fixture.runtime.rebuild(namespace);
-
     assertEquals(await storedTimes(), expectedTimes);
     assertEquals(await orderedIds("createdAt"), ["z", "a"]);
     assertEquals(await orderedIds("updatedAt"), ["z", "a"]);
@@ -1234,44 +1192,6 @@ Deno.test("conditional collection writes recheck current and planned scope in th
     assertEquals(
       outcomes.filter((item) => item.status === "rejected").length,
       1,
-    );
-  } finally {
-    await closeFixture(fixture);
-  }
-});
-
-Deno.test("collection verification scans every projection page", async () => {
-  const fixture = await createFixture(
-    ":memory:",
-    "copilotz_collection_projection_pages",
-  );
-  fixture.runtime.bind(projectionScaleDefinition);
-  try {
-    await fixture.runtime.transaction({
-      operationKey: "projection-scale:create",
-      namespace: "tenant-scale",
-      async execute({ collections }) {
-        for (let sequence = 0; sequence < 1_001; sequence += 1) {
-          await collections.projection_scale.create({
-            id: `projection-${sequence.toString().padStart(4, "0")}`,
-            sequence,
-          });
-        }
-      },
-    });
-
-    assertEquals(
-      await count(
-        fixture.session,
-        `SELECT count(*)::int AS n FROM ${fixture.store.tables.nodes}
-         WHERE namespace = $1 AND type = $2`,
-        ["tenant-scale", "projection_scale"],
-      ),
-      1_001,
-    );
-    assertEquals(
-      await fixture.runtime.verify(projectionScaleDefinition, "tenant-scale"),
-      { ok: true },
     );
   } finally {
     await closeFixture(fixture);

@@ -1,11 +1,9 @@
 import { assertEquals, assertRejects } from "@std/assert";
 
-import { denoAssetFilesystem } from "../adapters/deno/assets.ts";
 import { createTestDatabase } from "../testing/ominipg.ts";
 import {
   type BodyStore,
   createDatabaseBodyStore,
-  createFilesystemBodyStore,
   createMemoryBodyStore,
   createS3BodyStore,
   digestContent,
@@ -56,18 +54,6 @@ async function withStore(
   } finally {
     await handle.close?.();
   }
-}
-
-async function createFilesystemHandle() {
-  const root = await Deno.makeTempDir({ prefix: "copilotz-progressive-" });
-  return {
-    store: createFilesystemBodyStore({
-      backendId: "filesystem:progressive",
-      protectionMs: 0,
-      access: denoAssetFilesystem(root),
-    }),
-    close: () => Deno.remove(root, { recursive: true }),
-  };
 }
 
 async function createDatabaseHandle() {
@@ -521,11 +507,7 @@ Deno.test("writer backpressures when a live memory follower lags the bound", asy
   await reader.cancel();
 });
 
-Deno.test("filesystem, database, and S3 progressive writers finalize a checksummed body", async () => {
-  await withStore(
-    createFilesystemHandle,
-    (store) => assertContract(store, "stream/fs"),
-  );
+Deno.test("database and S3 progressive writers finalize a checksummed body", async () => {
   await withStore(
     createDatabaseHandle,
     (store) => assertContract(store, "stream/db"),
@@ -536,11 +518,7 @@ Deno.test("filesystem, database, and S3 progressive writers finalize a checksumm
   );
 });
 
-Deno.test("filesystem, database, and S3 stores retain immutable incomplete prefixes", async () => {
-  await withStore(
-    createFilesystemHandle,
-    (store) => assertTerminateContract(store, "stream/incomplete-fs"),
-  );
+Deno.test("database and S3 stores retain immutable incomplete prefixes", async () => {
   await withStore(
     createDatabaseHandle,
     (store) => assertTerminateContract(store, "stream/incomplete-db"),
@@ -552,7 +530,7 @@ Deno.test("filesystem, database, and S3 stores retain immutable incomplete prefi
 });
 
 Deno.test("a slow follower does not block other followers on durable stores", async () => {
-  await withStore(createFilesystemHandle, async (store) => {
+  await withStore(createDatabaseHandle, async (store) => {
     const writer = await createProgressiveBodyWriter(store, {
       bodyId: "stream/slow",
       mediaType: "text/plain",
@@ -571,55 +549,27 @@ Deno.test("a slow follower does not block other followers on durable stores", as
     const fast = await openProgressiveBodyFollower(store, {
       bodyId: "stream/slow",
     });
-    const pending = readAll(fast.body);
+    const fastReader = fast.body.getReader();
+    const readPrefix = async (
+      reader: ReadableStreamDefaultReader<Uint8Array>,
+    ) => {
+      let text = "";
+      while (text.length < 8) {
+        const chunk = await reader.read();
+        assertEquals(chunk.done, false);
+        text += decoder.decode(chunk.value);
+      }
+      return text;
+    };
+    // The fast follower drains committed bytes while the slow follower is idle.
+    assertEquals(await readPrefix(fastReader), "abcdefgh");
+    assertEquals(await readPrefix(slowReader), "abcdefgh");
     await writer.finalize();
-    assertEquals(decoder.decode(await pending), "abcdefgh");
-    const first = await slowReader.read();
-    assertEquals(decoder.decode(first.value), "abcdefgh");
-    await slowReader.cancel();
+    assertEquals((await fastReader.read()).done, true);
+    assertEquals((await slowReader.read()).done, true);
+    fastReader.releaseLock();
+    slowReader.releaseLock();
   });
-});
-
-Deno.test("durable stores recover a prefix after the writer process is gone", async () => {
-  const root = await Deno.makeTempDir({
-    prefix: "copilotz-progressive-crash-",
-  });
-  try {
-    const first = createFilesystemBodyStore({
-      backendId: "filesystem:crash",
-      protectionMs: 0,
-      access: denoAssetFilesystem(root),
-    });
-    const writer = await createProgressiveBodyWriter(first, {
-      bodyId: "stream/crash",
-      mediaType: "text/plain",
-    });
-    await writer.write(encoder.encode("hel"));
-    const recovered = createFilesystemBodyStore({
-      backendId: "filesystem:crash",
-      protectionMs: 0,
-      access: denoAssetFilesystem(root),
-    });
-    const resumed = await createProgressiveBodyWriter(recovered, {
-      bodyId: "stream/crash",
-      mediaType: "text/plain",
-      takeover: true,
-    });
-    const follower = await openProgressiveBodyFollower(recovered, {
-      bodyId: "stream/crash",
-    });
-    const pending = readAll(follower.body);
-    await resumed.write(encoder.encode("lo"));
-    const head = await resumed.finalize();
-    assertEquals(decoder.decode(await pending), "hello");
-    assertEquals(head.digest, await digestContent(encoder.encode("hello")));
-    assertEquals(
-      await readBodyBytes(recovered, { bodyId: "stream/crash" }),
-      encoder.encode("hello"),
-    );
-  } finally {
-    await Deno.remove(root, { recursive: true });
-  }
 });
 
 Deno.test("database BodyStore recovers a prefix from durable staging", async () => {

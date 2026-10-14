@@ -29,8 +29,6 @@
     "collections/thread/index.ts",
     "processors/message-input/index.ts",
     "resources/capabilities/default/index.ts",
-    "actions/run-goal/index.ts",
-    "resources/goals/default/index.ts",
     "processors/dispatch-ask/index.ts"
   ],
   "plugins": [

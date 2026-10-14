@@ -33,7 +33,6 @@ import * as coreCli from "@copilotz/copilotz/core/cli";
 import * as llm from "@copilotz/copilotz/llm";
 import * as llmTokens from "@copilotz/copilotz/llm/tokens";
 import * as coreSchedules from "@copilotz/copilotz/schedules/core";
-import * as goals from "@copilotz/copilotz/goals";
 import * as schedules from "@copilotz/copilotz/schedules";
 import * as usage from "@copilotz/copilotz/usage";
 import type {
@@ -88,7 +87,6 @@ Deno.test("package root exposes runtime APIs without feature plugins", () => {
       "knowledgePlugin",
       "memoryPlugin",
       "corePlugin",
-      "createGoalRuntime",
       "usagePlugin",
       "schedulesPlugin",
       "coreSchedulesPlugin",
@@ -196,21 +194,8 @@ Deno.test("package subpaths expose cohesive owner APIs", () => {
   ) assertEquals(removed in llm, false, removed);
   assertEquals(typeof llm.callLlmAction, "object");
   assertEquals(typeof llm.llmPlugin, "object");
-  assertEquals(typeof goals.runGoalAction, "object");
-  assertEquals("runGoal" in goals, false);
   assertEquals(typeof core.agentCapabilities.resolve, "function");
   assertEquals("createAgentCapabilityResolver" in core, false);
-  for (
-    const removed of [
-      "createGoalsPlugin",
-      "defineGoal",
-      "startGoal",
-      "cancelGoal",
-      "goalResult",
-      "goalCollection",
-      "createGoalRuntime",
-    ]
-  ) assertEquals(removed in goals, false, removed);
   assertEquals(typeof usage.usagePlugin, "object");
   assertEquals(typeof usage.usageCollection, "object");
   assertFunctions(schedules, [

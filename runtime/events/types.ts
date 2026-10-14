@@ -108,7 +108,6 @@ export type EventDelivery = Readonly<{
   status: DeliveryStatus;
   attempts: number;
   maxAttempts: number;
-  priority: number;
   availableAt: string;
   leaseOwner?: string;
   leaseExpiresAt?: string;

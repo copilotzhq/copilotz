@@ -73,5 +73,3 @@ export {
   collectContextContributions,
   type CollectedContextContribution,
 } from "./shared/contributions.ts";
-
-export * from "./actions/run-goal/index.ts";

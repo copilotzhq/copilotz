@@ -110,7 +110,6 @@ async function concurrentContent(url: string) {
     }
     await Promise.all([0, 1, 2].map((index) => write(index, false)));
     assertEquals((await notes.list({})).length, 3);
-    await engines[0].collections.rebuild("tenant");
     assertEquals(await notes.list({}, { content: true }), records);
 
     // A genuine record conflict still rolls back every earlier write in the plan.

@@ -214,17 +214,13 @@ guarantee that protocol sets `readyGarbageCollection: false`; its `put` remains
 immutable and integrity-checking but need not renew protection. The built-in S3
 Adapter follows this conservative model.
 
-The filesystem Adapter is crash-durable through its atomic manifest/tombstone
-protocol, but its declared coordination reach is one process. Its Ready-GC
-guarantee therefore applies only within that deployment reach.
-
 Body liveness uses one schema-wide advisory read/write barrier. Asset adoption
-and projection rebuild hold the shared side through graph commit; physical Body
-deletion holds the exclusive side while it rechecks the indexed Ready Asset
-nodes. The graph transaction validates the captured protection deadline but
-performs no external BodyStore I/O. A Ready Asset node's indexed `bodyId` is the
-sole durable liveness authority. Collections have no `bodyRefs` declaration, and
-no `body_references` table exists.
+holds the shared side through graph commit; physical Body deletion holds the
+exclusive side while it rechecks the indexed Ready Asset nodes. The graph
+transaction validates the captured protection deadline but performs no external
+BodyStore I/O. A Ready Asset node's indexed `bodyId` is the sole durable
+liveness authority. Collections have no `bodyRefs` declaration, and no
+`body_references` table exists.
 
 Asset provenance is runtime-neutral. It is one opaque provenance identity
 `{ type, id }`; semantic plugins may use values such as `thread`, while
@@ -271,9 +267,8 @@ hidden partial-savepoint semantics.
 Graph relations that are not owned by a single Collection mutation use the same
 planner through `transaction.relations.upsert(...)`. Each upsert emits a generic
 durable `relation.upserted` Event whose metadata-only body contains the complete
-normalized relation. Replay therefore rebuilds edges from immutable event data;
-it does not inspect current graph state or hide the relation inside an arbitrary
-Collection event.
+normalized relation. The relation is not hidden inside an arbitrary Collection
+event.
 
 A durable Event and its optional Event Body are one immutable source fact. The
 Event row is also the deduplication record used to restore a completed call, so
@@ -281,16 +276,6 @@ neither half is compacted independently or removed by ordinary maintenance. Only
 settled delivery obligations are compactable. Event retention can change only
 with an explicit snapshot and deduplication-receipt model that preserves replay
 and retry semantics; the current architecture has no such second model.
-
-Graph nodes and edges are projections of those facts. Projection rebuild is
-therefore one namespace-wide reduction over the complete registered Collection
-set, never a destructive rebuild of one Collection in isolation. It folds every
-Collection Event Body and every historical Asset manifest, reconstructs Assets
-and nodes before their derived edges, and replaces the namespace's complete
-authoritative edge set. Generic relation events are folded in global Event
-order: deleting either endpoint retires the relation, recreating that endpoint
-does not resurrect it, and a later `relation.upserted` Event is required to make
-it live again.
 
 Resources are immutable process-local semantic definitions. Their declarative
 fields are ordinary typed data; a semantic Resource may additionally retain a
@@ -379,20 +364,6 @@ context, Core wrapper Action, or second validation/lifecycle path. The composed
 execution path. Memory, knowledge, schedules, channels, concrete tools, usage
 accounting, and admin behavior remain optional first-party plugins rather than
 hidden Core behavior.
-
-Goals use Core's ordinary `runGoal` Action (`copilotz.core.goal.run`), not a new
-runtime primitive. A Goal policy selects a host-supplied conversation Adapter;
-its `send` capability can delegate to the same application. The Action serially
-alternates target and lead turns, waiting for each send to settle and relaying
-its final canonical Message content. Its budget counts target turns; lead turns
-occur only between them. Every send uses a deterministic deduplication ID from
-the Action run, turn and phase. Ordinary Action replay restores a recorded
-terminal outcome without executing the loop again. There is no durable Goal
-cursor or built-in partial-run resume: a direct application `send` Adapter does
-not replay previous turn results. A host that requires partial-run recovery must
-supply reconciliation and replay through its conversation Adapter, with
-deterministic policy decisions over the recorded replies. See
-[Goals](docs/goals.md) for the complete composition and authorization boundary.
 
 Optional semantic plugins receive no runtime back doors. The base Schedules
 plugin, for example, owns only timing/status, opaque JSON payload, optional

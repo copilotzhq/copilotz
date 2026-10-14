@@ -6,7 +6,7 @@ import { createPluginRegistry } from "../../../../runtime/plugins/index.ts";
 import { createTestDatabase } from "../../../../runtime/testing/ominipg.ts";
 import {} from "../../plugin.ts";
 import { createTestDomainContext } from "../testing/context.ts";
-Deno.test("thread replay does not derive mutable state from related Events", async () => {
+Deno.test("thread writes do not derive mutable state from related Events", async () => {
   const namespace = "tenant-thread-replay-cursor";
   const db = await createTestDatabase({ url: ":memory:" });
   const engine = await createCopilotzEngine({
@@ -47,10 +47,6 @@ Deno.test("thread replay does not derive mutable state from related Events", asy
     const before = await domain.collections.thread.get({ id: "thread-a" });
     assertEquals(before?.lastEventId, undefined);
     assertEquals(before?.lastEventPosition, undefined);
-    await engine.collections.rebuild(namespace);
-    const rebuilt = await domain.collections.thread.get({ id: "thread-a" });
-    assertEquals(rebuilt?.lastEventId, undefined);
-    assertEquals(rebuilt?.lastEventPosition, undefined);
   } finally {
     await engine.shutdown();
     await db.close();

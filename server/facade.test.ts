@@ -453,7 +453,7 @@ Deno.test("authorization predicates intersect requested collection filters befor
                       },
                     },
                   }
-                  : { input: { value: "allowed" } };
+                  : {};
               },
               expose: {
                 actions: { include: ["test.server.*"] },
@@ -522,20 +522,6 @@ Deno.test("authorization predicates intersect requested collection filters befor
       () => client.collections.get("serverNotes", "a"),
       CopilotzHttpError,
     );
-    assertEquals(
-      await client.actions.invoke("test.server.echo", {}, {
-        idempotencyKey: "enforced",
-      }),
-      { echoed: "allowed" },
-    );
-    await assertRejects(
-      () =>
-        client.actions.submit("test.server.echo", { value: "forged" }, {
-          idempotencyKey: "forged",
-        }),
-      CopilotzHttpError,
-    );
-    assert(endpoints.some((value) => value.kind === "action"));
     assert(endpoints.some((value) => value.kind === "collection"));
   } finally {
     await application.close();

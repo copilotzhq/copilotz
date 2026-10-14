@@ -1,8 +1,6 @@
 import { assertEquals, assertRejects, assertThrows } from "@std/assert";
 
-import { denoAssetFilesystem } from "../adapters/deno/assets.ts";
 import {
-  createFilesystemBodyStore,
   createMemoryBodyStore,
   readBodyBytes,
   readBodyRange,
@@ -227,49 +225,4 @@ Deno.test("memory settlement freezes synchronously across digest awaits", async 
   );
   await assertRejects(() => terminating.seal({ writer: terminateWriter }));
   assertEquals((await incompletePromise).state, "incomplete");
-});
-
-Deno.test("filesystem store instances serialize settlement against late appends", async () => {
-  const root = await Deno.makeTempDir({ prefix: "copilotz-body-fence-" });
-  try {
-    const first = createFilesystemBodyStore({
-      backendId: "filesystem:fence-first",
-      protectionMs: 0,
-      access: denoAssetFilesystem(root),
-    });
-    const second = createFilesystemBodyStore({
-      backendId: "filesystem:fence-second",
-      protectionMs: 0,
-      access: denoAssetFilesystem(root),
-    });
-    const writer = await first.reserve({
-      bodyId: "bodies/filesystem-race",
-      mediaType: "text/plain",
-    });
-    const bytes = encoder.encode("committed");
-    await first.append({
-      writer,
-      expectedOffset: 0,
-      appendId: "prefix",
-      bytes,
-    });
-
-    const incompletePromise = first.terminate!({ writer });
-    const lateAppendResult = assertRejects(() =>
-      second.append({
-        writer,
-        expectedOffset: bytes.byteLength,
-        appendId: "too-late",
-        bytes: encoder.encode("late"),
-      })
-    );
-    assertEquals((await incompletePromise).state, "incomplete");
-    await lateAppendResult;
-    assertEquals(
-      await readBodyBytes(first, { bodyId: writer.bodyId }),
-      bytes,
-    );
-  } finally {
-    await Deno.remove(root, { recursive: true });
-  }
 });

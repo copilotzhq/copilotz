@@ -513,20 +513,6 @@ export function createDatabaseScope(
   const deliveries: CopilotzEngineDatabaseScope["deliveries"] = {
     get: deliveryInNamespace,
     list: (listOptions) => store.listDeliveries(listOptions),
-    async retry(namespace, id) {
-      if (!await deliveryInNamespace(namespace, id)) return false;
-      const retried = await store.retryDeadLetter(id);
-      if (retried) {
-        await options.executor.dispatchDelivery(id, { databaseSchema }).catch(
-          () => undefined,
-        );
-      }
-      return retried;
-    },
-    async discard(namespace, id) {
-      if (!await deliveryInNamespace(namespace, id)) return false;
-      return await store.discardDeadLetter(id);
-    },
   } as const;
   const recover: CopilotzEngineDatabaseScope["recover"] = (recovery = {}) =>
     coordinator.recover({ ...recovery, databaseSchema });

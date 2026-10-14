@@ -292,8 +292,6 @@ export type EventStore = {
     settlementScopeId: string,
     reason?: string,
   ): Promise<number>;
-  retryDeadLetter(id: string): Promise<boolean>;
-  discardDeadLetter(id: string): Promise<boolean>;
   compactDeliveries(options?: {
     retentionMs?: number | null;
     now?: Date;
@@ -1073,56 +1071,6 @@ export function createEventStore(
     return settled;
   };
 
-  const reviseDeadLetter = async (
-    id: string,
-    status: "pending" | "cancelled",
-  ): Promise<boolean> => {
-    const current = await getDelivery(id);
-    if (!current || current.status !== "dead_letter") return false;
-    const event = await getEvent(current.eventId);
-    if (!event) return false;
-    const result = await commitDeliverySettlement(
-      current,
-      async (transaction) => {
-        const params: unknown[] = [];
-        const param = (value: unknown) => `$${params.push(value)}`;
-        const admission = options.admitOperationEventSql?.({
-          namespace: event.namespace,
-          operationId: current.settlementScopeId,
-        }, param);
-        const group = current.actionScopeId;
-        const allowedGroup = group
-          ? `EXISTS (SELECT 1 FROM ${tables.open_actions}
-        WHERE namespace = ${param(event.namespace)} AND action_run_id = ${
-            param(group)
-          }
-          AND scope_id = ${
-            param(current.settlementScopeId)
-          } AND state = 'deferred')`
-          : "TRUE";
-        const changed = await transaction.query<DeliveryRow>(
-          `${admission?.ctes.length ? `WITH ${admission.ctes.join(", ")}` : ""}
-         UPDATE ${tables.event_deliveries} SET status = ${param(status)},
-           ${
-            status === "pending"
-              ? "attempts = 0, available_at = NOW(), lease_owner = NULL, lease_expires_at = NULL, last_error = NULL, settled_at = NULL,"
-              : "settled_at = NOW(),"
-          }
-           updated_at = NOW()
-         WHERE id = ${param(id)} AND status = 'dead_letter'
-           AND (${
-            admission?.gate ?? "TRUE"
-          }) AND (${allowedGroup}) RETURNING *`,
-          params,
-        );
-        return changed.rows[0]
-          ? mapDelivery(changed.rows[0], databaseSchema)
-          : null;
-      },
-    );
-    return result !== null;
-  };
-
   const settleDelivery = async (
     id: string,
     status: Extract<DeliveryStatus, "succeeded" | "cancelled">,
@@ -1545,8 +1493,6 @@ export function createEventStore(
       await afterCommit!?.();
       return result;
     },
-    retryDeadLetter: (id) => reviseDeadLetter(id, "pending"),
-    discardDeadLetter: (id) => reviseDeadLetter(id, "cancelled"),
     async compactDeliveries(compactOptions = {}) {
       if (compactOptions.retentionMs === null) {
         return { deliveries: 0 };

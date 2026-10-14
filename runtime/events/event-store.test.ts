@@ -612,7 +612,7 @@ Deno.test("an event with only a body commits as one statement and dedupes on ret
   }
 });
 
-Deno.test("A22 delivery claims retry three times, dead-letter, retry, and discard", async () => {
+Deno.test("A22 delivery claims retry three times and retain dead-letter state", async () => {
   const fixture = await createFixture();
   const store = createEventStore({
     session: fixture.session,
@@ -682,11 +682,8 @@ Deno.test("A22 delivery claims retry three times, dead-letter, retry, and discar
       { unsettled: 0, deadLetters: 1, cancelled: 0, succeeded: 0 },
     );
 
-    assertEquals(await store.retryDeadLetter(id), true);
-    assertEquals((await store.getDelivery(id))?.attempts, 0);
-    await failThreeTimes(store, id);
-    assertEquals(await store.discardDeadLetter(id), true);
-    assertEquals((await store.getDelivery(id))?.status, "cancelled");
+    assertEquals((await store.getDelivery(id))?.status, "dead_letter");
+    assertEquals((await store.getDelivery(id))?.attempts, 3);
   } finally {
     await closeFixture(fixture);
   }

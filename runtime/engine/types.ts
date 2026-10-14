@@ -290,8 +290,6 @@ export type CopilotzEngine = Readonly<{
       status?: EventDelivery["status"];
       limit?: number;
     }): Promise<readonly EventDelivery[]>;
-    retry(namespace: string, id: string): Promise<boolean>;
-    discard(namespace: string, id: string): Promise<boolean>;
   }>;
   recover(options?: {
     namespace?: string;

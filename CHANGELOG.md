@@ -5,6 +5,8 @@
 - Delivery priority options and ordering; the `event_deliveries.priority` column
   remains in the schema but is no longer used; its index definitions are
   unchanged.
+- Administrative dead-letter retry and discard APIs; dead-letter state and
+  automatic delivery retries remain.
 
 ## 0.87.3 — 2026-10-11
 

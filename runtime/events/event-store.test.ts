@@ -909,13 +909,25 @@ Deno.test("A21 crash recovery and concurrent claims preserve one delivery owner"
       },
       ["worker"],
     );
-    await store.append(
+    const secondQueued = await store.append(
       {
         type: "queue.second",
         namespace: "tenant-a",
         payload: {},
       },
       ["worker"],
+    );
+    // ULIDs share a millisecond, so id order is not insertion order.
+    // Pin the timestamps the queue actually sorts on.
+    await fixture.session.query(
+      `UPDATE ${store.tables.event_deliveries}
+       SET available_at = $2, created_at = $2 WHERE id = $1`,
+      [firstQueued.deliveries[0].id, "2000-01-01T00:00:00Z"],
+    );
+    await fixture.session.query(
+      `UPDATE ${store.tables.event_deliveries}
+       SET available_at = $2, created_at = $2 WHERE id = $1`,
+      [secondQueued.deliveries[0].id, "2000-01-02T00:00:00Z"],
     );
     assertEquals(
       (await store.claimNext({

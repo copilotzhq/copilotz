@@ -181,7 +181,6 @@ Deno.test("protected Action lifecycle encrypts at rest and redacts ordinary obse
       now: new Date("2100-01-01T00:00:00.000Z"),
     });
     assertEquals(maintenance.assets.orphanedBodiesDeleted, 0);
-    await application.collections.rebuild(NAMESPACE);
 
     const tables = createCoreTableNames(SCHEMA);
     const eventBodies = await db.query<{ body: unknown }>(

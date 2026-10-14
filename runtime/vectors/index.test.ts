@@ -157,7 +157,7 @@ for (
         `SELECT count(*)::text AS count FROM ${vectorTable(schema)}`,
       );
       assertEquals(count.rows[0].count, "3");
-      await kernel.rebuild("tenant-a");
+
       assertEquals(
         (await kernel.vectors("tenant-a").search(query)).map((x) =>
           x.record.id

@@ -69,10 +69,6 @@ import {
 import { readViewKey, readViews } from "./read-view.ts";
 import { aggregateCollectionRecords } from "./aggregate.ts";
 import { queryCollectionRecords, queryCollectionRelations } from "./query.ts";
-import {
-  rebuildNamespaceProjections,
-  verifyCollectionProjections,
-} from "./replay.ts";
 import type {
   CollectionAggregateQuery,
   CollectionAggregateRow,
@@ -106,15 +102,6 @@ export type CreateCollectionRuntimeOptions = Readonly<{
   contentResolver?: ContentResolver;
   createId?: () => string;
   now?: () => Date;
-  runtimeProjections?: Readonly<{
-    nodeTypes: readonly string[];
-    projectBody(
-      context: EventMutationContext,
-      namespace: string,
-      body: unknown,
-      event: import("../events/types.ts").DurableEvent,
-    ): Promise<void>;
-  }>;
 }>;
 
 /** Internal content-adoption seam used only by the Collection kernel. */
@@ -429,11 +416,6 @@ export type CollectionKernel = Readonly<{
       context: Readonly<{ collections: SnapshotCollections }>,
     ) => T | Promise<T>,
   ): Promise<T>;
-  verify(
-    definition: CollectionDefinition,
-    namespace: string,
-  ): Promise<Readonly<{ ok: true } | { ok: false; reason: string }>>;
-  rebuild(namespace: string): Promise<void>;
 }>;
 
 type PreparedWrite = Readonly<{
@@ -3527,33 +3509,6 @@ export function createCollectionKernel(
     transaction,
     withScope,
     readSnapshot,
-    verify: (definition, namespace) =>
-      options.session.transaction(async (transaction) => {
-        await transaction.query(
-          `LOCK TABLE ${tables.nodes}, ${tables.edges} IN SHARE MODE`,
-        );
-        return await verifyCollectionProjections(
-          transaction,
-          options.eventStore,
-          definition,
-          namespace,
-        );
-      }),
-    async rebuild(namespace) {
-      try {
-        await options.session.transaction((transaction) =>
-          rebuildNamespaceProjections(
-            transaction,
-            options.eventStore,
-            [...bound.values()].map((collection) => collection.definition),
-            requireText(namespace, "Namespace"),
-            options.runtimeProjections,
-          )
-        );
-      } finally {
-        readViews.invalidateAll();
-      }
-    },
   } as const;
   return runtime;
 }
@@ -3599,7 +3554,5 @@ export function createCollectionRuntime(
     withScope: kernel.withScope,
     readSnapshot: kernel.readSnapshot,
     transaction: kernel.transaction,
-    verify: kernel.verify,
-    rebuild: kernel.rebuild,
   } as const) as CollectionRuntime;
 }

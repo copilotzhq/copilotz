@@ -39,12 +39,7 @@ export type {
   SnapshotCollections,
   TransactionCollection,
 } from "./kernel.ts";
-export {
-  foldCollectionBodies,
-  isCollectionEvent,
-  rebuildNamespaceProjections,
-  verifyCollectionProjections,
-} from "./replay.ts";
+export { isCollectionEvent } from "./replay.ts";
 export { isCollectionNoop } from "./types.ts";
 export type {
   CollectionAggregateGroup,

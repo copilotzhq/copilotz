@@ -1709,15 +1709,6 @@ Deno.test("Memory consolidation and public search use persisted pgvector project
     }) as { notes: Array<{ id: string; similarity: number }> };
     assertEquals(result.notes.map((x) => x.id), [records[0].id]);
     assertEquals(result.notes[0].similarity, 1);
-    await run.engine.collections.rebuild(NAMESPACE);
-    const replayed = await context.actions.search_memory({
-      query: "Compass",
-      limit: 5,
-    }, {
-      operationKey: "vector-search-after-replay",
-      metadata: { threadId: "thread-a", agentId: "north" },
-    }) as typeof result;
-    assertEquals(replayed.notes, result.notes);
     for (
       const grant of await context.collections.memorySpaceAccess.list({
         where: { threadId: "thread-a" },

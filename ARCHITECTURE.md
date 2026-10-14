@@ -219,12 +219,12 @@ protocol, but its declared coordination reach is one process. Its Ready-GC
 guarantee therefore applies only within that deployment reach.
 
 Body liveness uses one schema-wide advisory read/write barrier. Asset adoption
-and projection rebuild hold the shared side through graph commit; physical Body
-deletion holds the exclusive side while it rechecks the indexed Ready Asset
-nodes. The graph transaction validates the captured protection deadline but
-performs no external BodyStore I/O. A Ready Asset node's indexed `bodyId` is the
-sole durable liveness authority. Collections have no `bodyRefs` declaration, and
-no `body_references` table exists.
+holds the shared side through graph commit; physical Body deletion holds the
+exclusive side while it rechecks the indexed Ready Asset nodes. The graph
+transaction validates the captured protection deadline but performs no external
+BodyStore I/O. A Ready Asset node's indexed `bodyId` is the sole durable
+liveness authority. Collections have no `bodyRefs` declaration, and no
+`body_references` table exists.
 
 Asset provenance is runtime-neutral. It is one opaque provenance identity
 `{ type, id }`; semantic plugins may use values such as `thread`, while
@@ -271,9 +271,8 @@ hidden partial-savepoint semantics.
 Graph relations that are not owned by a single Collection mutation use the same
 planner through `transaction.relations.upsert(...)`. Each upsert emits a generic
 durable `relation.upserted` Event whose metadata-only body contains the complete
-normalized relation. Replay therefore rebuilds edges from immutable event data;
-it does not inspect current graph state or hide the relation inside an arbitrary
-Collection event.
+normalized relation. The relation is not hidden inside an arbitrary Collection
+event.
 
 A durable Event and its optional Event Body are one immutable source fact. The
 Event row is also the deduplication record used to restore a completed call, so
@@ -281,16 +280,6 @@ neither half is compacted independently or removed by ordinary maintenance. Only
 settled delivery obligations are compactable. Event retention can change only
 with an explicit snapshot and deduplication-receipt model that preserves replay
 and retry semantics; the current architecture has no such second model.
-
-Graph nodes and edges are projections of those facts. Projection rebuild is
-therefore one namespace-wide reduction over the complete registered Collection
-set, never a destructive rebuild of one Collection in isolation. It folds every
-Collection Event Body and every historical Asset manifest, reconstructs Assets
-and nodes before their derived edges, and replaces the namespace's complete
-authoritative edge set. Generic relation events are folded in global Event
-order: deleting either endpoint retires the relation, recreating that endpoint
-does not resurrect it, and a later `relation.upserted` Event is required to make
-it live again.
 
 Resources are immutable process-local semantic definitions. Their declarative
 fields are ordinary typed data; a semantic Resource may additionally retain a

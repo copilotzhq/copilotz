@@ -5,7 +5,7 @@ import { createCoreTableNames } from "../events/index.ts";
 import { definePlugin, defineProcessor } from "../plugins/index.ts";
 import { defineAction } from "./define.ts";
 
-Deno.test("declared Action content persists references and retains Assets across PGlite rebuild", async () => {
+Deno.test("declared Action content persists references and retains Assets in PGlite", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   const schema = "action_content_test";
   const namespace = "tenant";
@@ -91,8 +91,7 @@ Deno.test("declared Action content persists references and retains Assets across
       );
     const before = await owners();
     assertEquals(before.rows.length, 2);
-    await app.collections.rebuild(namespace);
-    assertEquals((await owners()).rows, before.rows);
+
     const assets = await db.query(
       `SELECT id FROM ${tables.nodes} WHERE type='asset'`,
     );

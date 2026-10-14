@@ -240,10 +240,6 @@ async function runSuite(url: string, schema: string): Promise<void> {
       ),
       1,
     );
-    assertEquals(await runtime.verify(jobDefinition, "tenant-a"), { ok: true });
-    assertEquals(await runtime.verify(jobNoteDefinition, "tenant-a"), {
-      ok: true,
-    });
 
     const retried = await runtime.transaction({
       operationKey: "job:with-note",
@@ -656,17 +652,12 @@ async function runSuite(url: string, schema: string): Promise<void> {
       ),
       1,
     );
-    await session.query(
-      `DELETE FROM ${tables.edges} WHERE namespace = $1 AND id = $2`,
-      ["tenant-a", "relation-generic"],
-    );
-    await runtime.rebuild("tenant-a");
-    const rebuiltRelation = await session.query<{ metadata: unknown }>(
+    const storedRelation = await session.query<{ metadata: unknown }>(
       `SELECT data -> 'metadata' AS metadata FROM ${tables.edges}
        WHERE namespace = $1 AND id = $2`,
       ["tenant-a", "relation-generic"],
     );
-    assertEquals(rebuiltRelation.rows[0]?.metadata, { version: 2 });
+    assertEquals(storedRelation.rows[0]?.metadata, { version: 2 });
 
     await assertRejects(
       () =>
@@ -694,7 +685,7 @@ async function runSuite(url: string, schema: string): Promise<void> {
       externalId: "ext-relation-target-third",
       title: "Third target lifecycle",
     }, { namespace: "tenant-a" });
-    await runtime.rebuild("tenant-a");
+
     assertEquals(
       await count(
         session,
@@ -717,7 +708,7 @@ async function runSuite(url: string, schema: string): Promise<void> {
         }),
     });
     assertEquals(revivedRelation.value, { id: "relation-generic" });
-    await runtime.rebuild("tenant-a");
+
     assertEquals(
       await count(
         session,
@@ -786,7 +777,7 @@ async function runSuite(url: string, schema: string): Promise<void> {
       "After asset-named command",
       { namespace: "tenant-a" },
     );
-    await runtime.rebuild("tenant-a");
+
     assertEquals(
       (await jobs.get("job-reserved-event-names", "tenant-a"))?.title,
       "After asset-named command",

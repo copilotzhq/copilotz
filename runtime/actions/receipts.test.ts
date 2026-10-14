@@ -191,16 +191,6 @@ async function receiptScenarios(url: string) {
           WHERE n.type = '@copilotz/action-content'`,
       );
       assertEquals(owned.rows.length, 1);
-      await app.collections.rebuild(namespace);
-      assertEquals(
-        (await db.query(
-          `SELECT e.target_node_id AS target FROM "${schema}".edges e
-             JOIN "${schema}".nodes n ON n.id = e.source_node_id
-            WHERE n.type = '@copilotz/action-content'`,
-        )).rows,
-        owned.rows,
-        "rebuild reproduces the retention the statement wrote",
-      );
     }
 
     // The retention fragment on its own, against every way it can refuse.
@@ -340,8 +330,7 @@ async function receiptScenarios(url: string) {
     );
     assertEquals(await eventsWith("run-taken:action:invoked"), 0);
 
-    // The statement writes the same rows as retention in code, which rebuild
-    // still uses.
+    // The statement writes the same rows as the transactional retention path.
     const legacyPlan = retentionPlan({
       actionRunId: "run-legacy",
       ownerId: "action-content:owner-legacy",

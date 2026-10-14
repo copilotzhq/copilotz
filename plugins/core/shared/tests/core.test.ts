@@ -287,9 +287,7 @@ async function runCoreSuite(url: string, schema: string): Promise<void> {
       (await participants.list(NAMESPACE)).map((row) => row.id).sort(),
       ["participant-agent", "participant-human"],
     );
-    assertEquals(await runtime.verify(participantCollection, NAMESPACE), {
-      ok: true,
-    });
+
     const original = await messages.create({
       id: "message-1",
       threadId: "thread-a",
@@ -373,27 +371,6 @@ async function runCoreSuite(url: string, schema: string): Promise<void> {
       revisionIndex: 1,
     });
     assertEquals(active.map((row) => row.id), ["message-1-rev"]);
-    assertEquals(await runtime.verify(messageCollection, NAMESPACE), {
-      ok: true,
-    });
-    await session.query(
-      `UPDATE ${tables.nodes}
-       SET data = jsonb_set(data, '{senderId}', '"tampered"')
-       WHERE id = $1 AND type = 'message'`,
-      ["message-1"],
-    );
-    const tampered = await runtime.verify(messageCollection, NAMESPACE);
-    assertEquals(tampered.ok, false);
-    await runtime.rebuild(NAMESPACE);
-    assertEquals(await runtime.verify(messageCollection, NAMESPACE), {
-      ok: true,
-    });
-    assertEquals(await runtime.verify(threadCollection, NAMESPACE), {
-      ok: true,
-    });
-    assertEquals(await runtime.verify(participantCollection, NAMESPACE), {
-      ok: true,
-    });
     assertEquals(
       (await messages.get("message-1", NAMESPACE))?.senderId,
       "participant-human",

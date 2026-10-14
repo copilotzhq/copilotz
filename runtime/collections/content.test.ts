@@ -77,7 +77,6 @@ async function runCollectionContentContract(
   input: Readonly<{
     schema: string;
     assets?: BodyStorageOptions;
-    puts?: () => number;
     reads?: () => number;
   }>,
 ): Promise<void> {
@@ -521,25 +520,11 @@ async function runCollectionContentContract(
     assertExists(
       await engine.content.assets.get("tenant-a", first.content[0].assetId),
     );
-    const putsBeforeReplay = input.puts?.();
-    await db.query(
-      `DELETE FROM "${input.schema}"."nodes"
-       WHERE namespace = $1`,
-      ["tenant-a"],
-    );
-    await engine.collections.rebuild("tenant-a");
-    if (putsBeforeReplay !== undefined) {
-      assertEquals(
-        input.puts?.(),
-        putsBeforeReplay,
-        "projection replay must not rewrite external Bodies",
-      );
-    }
-    const rebuilt = await scoped.contract_content_owner.get({
+    const stored = await scoped.contract_content_owner.get({
       id: "content-owner",
     });
-    assertEquals(rebuilt?.body, third.content);
-    const replayLinks = await db.query<{
+    assertEquals(stored?.body, third.content);
+    const storedLinks = await db.query<{
       source_node_id: string;
       target_node_id: string;
     }>(
@@ -548,11 +533,11 @@ async function runCollectionContentContract(
        WHERE namespace = $1 AND source_node_id = $2 AND type = 'has_asset'`,
       ["tenant-a", "content-owner"],
     );
-    assertEquals(replayLinks.rows, [{
+    assertEquals(storedLinks.rows, [{
       source_node_id: "content-owner",
       target_node_id: third.content[0].assetId,
     }]);
-    const replayPins = await db.query<{ id: string }>(
+    const storedPins = await db.query<{ id: string }>(
       `SELECT id
        FROM "${input.schema}"."nodes"
        WHERE namespace = $1 AND type = 'asset'
@@ -560,21 +545,21 @@ async function runCollectionContentContract(
          AND data ->> 'bodyId' = $2`,
       ["tenant-a", commandAssets[0].bodyId],
     );
-    assertEquals(replayPins.rows, [{ id: third.content[0].assetId }]);
-    const replayAsset = await engine.content.assets.get(
+    assertEquals(storedPins.rows, [{ id: third.content[0].assetId }]);
+    const storedAsset = await engine.content.assets.get(
       "tenant-a",
       third.content[0].assetId,
     );
-    assertExists(replayAsset);
+    assertExists(storedAsset);
     assertEquals(
-      replayAsset.location,
+      storedAsset.location,
       commandAssets[0].location,
-      "replay preserves the manifest body location exactly",
+      "the projection preserves the manifest body location exactly",
     );
     assertEquals(
-      "key" in replayAsset.location ? replayAsset.location.key : undefined,
+      "key" in storedAsset.location ? storedAsset.location.key : undefined,
       commandAssets[0].bodyId,
-      "replay preserves the manifest body identity exactly",
+      "the projection preserves the manifest body identity exactly",
     );
     assertEquals(
       new TextDecoder().decode(
@@ -584,7 +569,7 @@ async function runCollectionContentContract(
         )).bytes,
       ),
       "third body",
-      "replay reads the original external body without rewriting it",
+      "the stored Asset resolves the original external body",
     );
   } finally {
     await engine.shutdown();
@@ -622,19 +607,14 @@ Deno.test("custom collection content materializes and links atomically with file
   }
 });
 
-Deno.test("custom collection replay preserves object Bodies without rewriting them", async () => {
+Deno.test("custom collection content materializes and links atomically with object bodies", async () => {
   const memory = createMemoryBodyStore({
     backendId: "object:collection-content",
   });
-  let puts = 0;
   let reads = 0;
   const objectStore = {
     ...memory,
     kind: "object" as const,
-    async put(input: Parameters<typeof memory.put>[0]) {
-      puts++;
-      return await memory.put(input);
-    },
     async read(input: Parameters<typeof memory.read>[0]) {
       reads++;
       return await memory.read(input);
@@ -657,7 +637,6 @@ Deno.test("custom collection replay preserves object Bodies without rewriting th
         },
       },
     },
-    puts: () => puts,
     reads: () => reads,
   });
 });
@@ -744,7 +723,7 @@ Deno.test("collection source content is prepared atomically and reused across tr
       await scoped.contract_content_owner.get({ id: "rolled-back" }),
       null,
     );
-    await engine.collections.rebuild("tenant-a");
+
     assertEquals(
       (await scoped.contract_content_owner.get({ id: "two" }, {
         content: true,

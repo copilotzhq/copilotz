@@ -9,6 +9,8 @@
   automatic delivery retries remain.
 - Top-level `ServerConstraints.input` and its Action/channel enforcement;
   `collectionMutations.*.input` remains supported.
+- Collection projection verification and namespace rebuild APIs, coordination,
+  and verification-only replay helpers.
 
 ## 0.87.3 — 2026-10-11
 

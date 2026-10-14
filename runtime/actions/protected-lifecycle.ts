@@ -110,16 +110,6 @@ export function publicActionLifecycleData(value: unknown): unknown {
   return protectedActionLifecycleBody(value)?.data ?? value;
 }
 
-export function protectedActionLifecycleRefs(
-  value: unknown,
-): readonly ProtectedValueRef[] {
-  const body = protectedActionLifecycleBody(value);
-  if (!body) return ([] as const);
-  return ([body.protected.input, body.protected.output].filter(
-    (ref): ref is ProtectedValueRef => ref !== undefined,
-  ));
-}
-
 function coordinates(
   namespace: string,
   data: ActionEventData,

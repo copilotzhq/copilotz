@@ -1,5 +1,4 @@
 import { coreThreadObservationMetadata } from "@copilotz/copilotz/core";
-import { constrainInput } from "./input.ts";
 import { admitHttpOperation } from "./admission.ts";
 /** Durable Action ingress and authorized result recovery. @module */
 import { validateAgainstJsonSchema } from "../runtime/collections/validate.ts";
@@ -34,10 +33,7 @@ export async function actionResponse(
   request: HttpRequest,
   context: FacadeContext,
 ): Promise<HttpResponse> {
-  const input = constrainInput(
-    request.body === undefined ? {} : request.body,
-    context.serverConstraints.input,
-  );
+  const input = request.body === undefined ? {} : request.body;
   if (endpoint.inputSchema) {
     try {
       validateAgainstJsonSchema(endpoint.inputSchema, input, "Action input");

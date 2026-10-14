@@ -113,7 +113,6 @@ export type ServerAuthenticate = (
 export type ServerConstraints = Readonly<{
   /** Host-selected conversation group for bounded HTTP admission. */
   admission?: Readonly<{ key: string; threadId?: string }>;
-  input?: Readonly<Record<string, unknown>>;
   actionMetadata?: ActionInvocationMetadata;
   collections?: Readonly<
     Record<string, import("@copilotz/copilotz/collections").CollectionFilter>

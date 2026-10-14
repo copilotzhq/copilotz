@@ -7,6 +7,8 @@
   unchanged.
 - Administrative dead-letter retry and discard APIs; dead-letter state and
   automatic delivery retries remain.
+- Top-level `ServerConstraints.input` and its Action/channel enforcement;
+  `collectionMutations.*.input` remains supported.
 
 ## 0.87.3 — 2026-10-11
 

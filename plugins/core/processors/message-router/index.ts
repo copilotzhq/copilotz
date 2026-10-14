@@ -4,6 +4,7 @@ import {
 } from "../../shared/agent-turn-source.ts";
 import { collectContextContributions } from "../../shared/contributions.ts";
 import { coreEvent } from "../../shared/events/index.ts";
+import { ContextCompactionDeferredError } from "../../shared/context-compaction.ts";
 /** Routes canonical Messages into agent LLM calls. @module */
 import { ContextInputLimitError, prepareLlmCall } from "@copilotz/copilotz/llm";
 import { isContentByteLimitError } from "@copilotz/copilotz/content";
@@ -280,7 +281,16 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
       ) {
         return;
       }
-      for (const recipientId of new Set(stringArray(record.recipientIds))) {
+      const routedRecipients = new Set(
+        stringArray(coreEvent(event).routing?.recipientIds),
+      );
+      for (
+        const recipientId of new Set(
+          stringArray(record.recipientIds).filter(
+            (id) => routedRecipients.has(id),
+          ),
+        )
+      ) {
         const continuationKey = workflow?.kind === "tool_result"
           ? `${requiredText(toolCursor?.planId, "Tool plan id")}:${recipientId}`
           : `${record.id}:${recipientId}`;
@@ -503,7 +513,9 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
               const hasCompaction = !agentTurn &&
                 Object.values(context.resources.promptContext ?? {})
                   .some((resource) =>
-                    isContextResource(resource) && resource.compact
+                    isContextResource(resource) &&
+                    (resource.compact ||
+                      (resource.reserveCompact && resource.checkCompact))
                   );
               const configuredLimit =
                 selection.models[0].options?.limitEstimatedInputTokens ??
@@ -523,31 +535,42 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
                   );
                 }
                 compactedBoundaries.add(boundaryKey);
-                await context.actions.compactContext.prepare(() => ({
-                  input: {
-                    threadId: snapshot.thread.id,
-                    agentId: resolved.agent.id,
-                    participantId: String(participant.id),
-                    triggerMessageId: String(record.id),
-                    ...(afterMessageId
-                      ? { historyAfterMessageId: afterMessageId }
-                      : {}),
-                    estimatedTokens: error.estimatedInputTokens,
-                    limitEstimatedTokens: error.limitEstimatedInputTokens,
-                    historyLimitEstimatedTokens: historyLimit,
+                const result = await context.actions.compactContext.prepare(
+                  () => ({
+                    input: {
+                      threadId: snapshot.thread.id,
+                      agentId: resolved.agent.id,
+                      participantId: String(participant.id),
+                      triggerMessageId: String(record.id),
+                      triggerEventId: event.id,
+                      ...(event.correlationId
+                        ? { routeCorrelationId: event.correlationId }
+                        : {}),
+                      ...(afterMessageId
+                        ? { historyAfterMessageId: afterMessageId }
+                        : {}),
+                      estimatedTokens: error.estimatedInputTokens,
+                      limitEstimatedTokens: error.limitEstimatedInputTokens,
+                      historyLimitEstimatedTokens: historyLimit,
+                    },
+                    metadata: {
+                      schema: "copilotz.core.context-compaction.v1",
+                      threadId: snapshot.thread.id,
+                      agentId: resolved.agent.id,
+                      agentName: resolved.agent.name,
+                      agentParticipantId: String(participant.id),
+                      triggerMessageId: String(record.id),
+                    },
+                  }),
+                  {
+                    operationKey: `context:${continuationKey}:${boundaryKey}`,
+                    signal: context.signal,
                   },
-                  metadata: {
-                    schema: "copilotz.core.context-compaction.v1",
-                    threadId: snapshot.thread.id,
-                    agentId: resolved.agent.id,
-                    agentName: resolved.agent.name,
-                    agentParticipantId: String(participant.id),
-                    triggerMessageId: String(record.id),
-                  },
-                }), {
-                  operationKey: `context:${continuationKey}:${boundaryKey}`,
-                  signal: context.signal,
-                });
+                );
+                if (
+                  result && typeof result === "object" &&
+                  (result as { status?: unknown }).status === "deferred"
+                ) throw new ContextCompactionDeferredError();
               };
               let request;
               let preparedHistory:
@@ -766,6 +789,7 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
             signal: context.signal,
           });
         } catch (error) {
+          if (error instanceof ContextCompactionDeferredError) continue;
           if (
             (agentTurn?.sourceHistory || agentTurn?.sourceHistoryRef) &&
             !isSettledActionError(error)

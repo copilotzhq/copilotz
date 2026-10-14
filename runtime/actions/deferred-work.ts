@@ -12,6 +12,8 @@ export const ACTION_RESOLVER_EVENT = "copilotz.action.resolve";
 export type ActionResolutionRequest = Readonly<{
   actionRunId: string;
   actionId: string;
+  resolveGeneration: number;
+  waitExpired?: true;
   outcome: ActionWorkOutcome;
   error?: Readonly<{ name: string; message: string }>;
 }>;
@@ -23,9 +25,10 @@ type DeferredWorkOptions = Readonly<{
 }>;
 
 /**
- * A deferred receipt owns its descendant work. When that work drains, transfer
- * ownership to exactly one resolver delivery in the same transaction. No timer,
- * history scan, or plugin-owned completion registry participates in settlement.
+ * A deferred receipt owns its descendant work. When that work drains and any
+ * registered wait is signaled or expired, transfer ownership to exactly one
+ * resolver delivery in the same transaction. Expiry is checked during ordinary
+ * settlement/recovery sweeps; it does not keep a worker or in-process timer alive.
  * A failed/cancelled stream's outcome is final before its retained prefix is
  * physically frozen. It cannot delay the resolver; the operation still waits
  * for that transport cleanup before publishing its own terminal state.
@@ -54,7 +57,7 @@ export async function advanceDeferredActions(
     WHERE stream.namespace = action.namespace AND stream.operation_id = action.scope_id
       AND stream.descriptor -> 'metadata' ->> 'sourceActionScopeId' = action.action_run_id
       AND (stream.state = 'open' OR (stream.state = 'terminating' AND stream.outcome = 'completed'))
-  )`;
+  ) AND (action.wait_key IS NULL OR action.wait_signaled OR action.wait_expires_at <= NOW())`;
   const committed: Awaited<ReturnType<typeof store.commitMutation>>[] = [];
   const executor = transaction ?? store.session;
   const candidates = await executor.query<
@@ -86,10 +89,15 @@ export async function advanceDeferredActions(
         correlation_id: string;
         metadata: Record<string, unknown>;
         outcome: ActionWorkOutcome;
+        resolve_generation: number;
+        wait_expired: boolean;
         error: { name?: string; message?: string } | null;
       }>(
         `SELECT action.action_run_id, action.action_id, action.action_scope_id,
            action.deferred_event_id, event.correlation_id, event.metadata,
+           action.resolve_generation,
+           (action.wait_key IS NOT NULL AND NOT action.wait_signaled
+             AND action.wait_expires_at <= NOW()) AS wait_expired,
            (SELECT jsonb_build_object('name', delivery.last_error ->> 'name', 'message', delivery.last_error ->> 'message')
             FROM ${tables.event_deliveries} AS delivery
             WHERE delivery.settlement_scope_id = action.scope_id AND delivery.action_scope_id = action.action_run_id
@@ -125,6 +133,8 @@ export async function advanceDeferredActions(
       const request: ActionResolutionRequest = {
         actionId: row.action_id,
         actionRunId: row.action_run_id,
+        resolveGeneration: Number(row.resolve_generation),
+        ...(row.wait_expired ? { waitExpired: true } : {}),
         outcome: row.outcome,
         ...(row.error
           ? {
@@ -135,7 +145,9 @@ export async function advanceDeferredActions(
           }
           : {}),
       };
-      const deduplicationId = `${row.action_run_id}:action:resolve`;
+      const deduplicationId = Number(row.resolve_generation) === 0
+        ? `${row.action_run_id}:action:resolve`
+        : `${row.action_run_id}:action:resolve:${row.resolve_generation}`;
       const bodyId = `event-body:${candidate.namespace}:${deduplicationId}`;
       const { actionId: _actionId, actionStatus: _actionStatus, ...metadata } =
         row.metadata;

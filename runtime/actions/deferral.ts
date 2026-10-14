@@ -42,6 +42,8 @@ export type ActionResolution = Readonly<
   {
     work: unknown;
     outcome: ActionWorkOutcome;
+    /** True when a durable wait's bounded recovery interval elapsed. */
+    waitExpired?: boolean;
     error?: Readonly<{ name: string; message: string }>;
   }
 >;

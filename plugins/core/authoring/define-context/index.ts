@@ -37,6 +37,13 @@ export function defineContextResource(
       ? { onHistoryPrepared: resource.onHistoryPrepared }
       : {}),
     ...(resource.compact ? { compact: resource.compact } : {}),
+    ...(resource.reserveCompact
+      ? { reserveCompact: resource.reserveCompact }
+      : {}),
+    ...(resource.checkCompact ? { checkCompact: resource.checkCompact } : {}),
+    ...(resource.recoverCompact
+      ? { recoverCompact: resource.recoverCompact }
+      : {}),
   } as const);
 }
 

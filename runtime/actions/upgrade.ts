@@ -14,9 +14,10 @@ import {
 } from "../streams/catalog.ts";
 
 /**
- * Offline v5 -> v6 upgrade. Stop old writers and drain plugin workflows before
- * calling this. No lifecycle receipt or domain record is rewritten. Plugin
- * cutover audits (for example old Core Ask branches) run in their own layer.
+ * Offline v5/v6 -> v7 upgrade. Stop old writers before calling this. The v5
+ * Action lifecycle cutover still requires drained workflows. The additive v6
+ * wait columns preserve open Actions and initialize them as unsignaled. No
+ * lifecycle receipt or domain record is rewritten.
  */
 export async function upgradeActionLifecycle(
   session: SqlSession,
@@ -57,6 +58,25 @@ export async function upgradeActionLifecycle(
       return;
     }
     if (
+      Number(marker?.version) === 6 &&
+      marker?.fingerprint === OPERATION_CATALOG_FINGERPRINT
+    ) {
+      await transaction.query(
+        `ALTER TABLE ${core.open_actions}
+           ADD COLUMN IF NOT EXISTS wait_key TEXT,
+           ADD COLUMN IF NOT EXISTS wait_signaled BOOLEAN NOT NULL DEFAULT FALSE,
+           ADD COLUMN IF NOT EXISTS wait_expires_at TIMESTAMPTZ,
+           ADD COLUMN IF NOT EXISTS resolve_generation INTEGER NOT NULL DEFAULT 0`,
+      );
+      await transaction.query(
+        `UPDATE ${core.copilotz_schema_metadata} SET version = $1 WHERE singleton`,
+        [EVENT_SCHEMA_VERSION],
+      );
+      await validateCopilotzSchema(transaction, schema);
+      await validateOperationCatalog(joined, schema);
+      return;
+    }
+    if (
       Number(marker?.version) !== 5 ||
       !["indexed-observation-ordinals-v1", OPERATION_CATALOG_FINGERPRINT]
         .includes(marker?.fingerprint ?? "")
@@ -85,6 +105,13 @@ export async function upgradeActionLifecycle(
     for (const statement of createActionObligationStatements(schema)) {
       await transaction.query(statement);
     }
+    await transaction.query(
+      `ALTER TABLE ${core.open_actions}
+         ADD COLUMN IF NOT EXISTS wait_key TEXT,
+         ADD COLUMN IF NOT EXISTS wait_signaled BOOLEAN NOT NULL DEFAULT FALSE,
+         ADD COLUMN IF NOT EXISTS wait_expires_at TIMESTAMPTZ,
+         ADD COLUMN IF NOT EXISTS resolve_generation INTEGER NOT NULL DEFAULT 0`,
+    );
     await upgradeOperationCatalog(joined, schema);
     await transaction.query(
       `UPDATE ${core.copilotz_schema_metadata} SET version = $1 WHERE singleton`,

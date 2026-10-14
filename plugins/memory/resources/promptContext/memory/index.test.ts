@@ -184,6 +184,42 @@ Deno.test("pending compaction aborts without advancing its checkpoint", async ()
   assertEquals(pending.status, "pending");
 });
 
+Deno.test("memory requests repair for a pending checkpoint with no producer", async () => {
+  const checkpoint = {
+    id: "legacy-job-checkpoint",
+    status: "pending",
+    metadata: { initiatorParticipantId: "scheduled-job-participant" },
+  };
+  let producer: { historyScopeId: string } | null = null;
+  const requests: { checkpointId: string }[] = [];
+  const context = {
+    collections: {
+      longTermMemory: {
+        get: () => Promise.resolve(checkpoint),
+      },
+      message: { get: () => Promise.resolve(producer) },
+    },
+    actions: {
+      request_memory_checkpoint_recovery: (input: { checkpointId: string }) => {
+        requests.push(input);
+        return Promise.resolve({ checkpointId: input.checkpointId });
+      },
+    },
+  };
+  const input = { context } as never;
+  await memoryContextResource.recoverCompact!(
+    input,
+    checkpoint.id,
+  );
+  assertEquals(requests, [{ checkpointId: checkpoint.id }]);
+
+  // A pending checkpoint with its expected producer is healthy regardless of
+  // age. The recovery request processor rechecks this same condition.
+  producer = { historyScopeId: checkpoint.id };
+  await memoryContextResource.recoverCompact!(input, checkpoint.id);
+  assertEquals(requests.length, 1);
+});
+
 Deno.test("foreground compaction skips an already-consumed pending checkpoint", async () => {
   const participant = {
     id: "west-participant",
@@ -270,6 +306,7 @@ Deno.test("memory settles preparation failure only for its authenticated private
   const updates: unknown[] = [];
   const context = {
     signal: new AbortController().signal,
+    signalDeferredWait: () => Promise.resolve(),
     collections: {
       message: { get: () => Promise.resolve(task) },
       longTermMemory: {

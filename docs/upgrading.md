@@ -8,6 +8,52 @@ status: stable
 
 # Upgrading and Data Safety
 
+## Unreleased: durable compaction waits
+
+Foreground memory compaction now records a durable wait and releases its worker
+slot. Checkpoint completion wakes the original recipient through Core's ordinary
+response pipeline. A bounded recovery interval rechecks pending checkpoints; a
+missing deterministic maintenance Message is dispatched independently of the
+waiting user operation. Existing healthy producers are retained, and checkpoint
+age alone is not a failure condition. History is never truncated to bypass an
+unfinished checkpoint.
+
+This change requires **Event schema v7**. Its additional `open_actions` columns
+record the wait key, signal, recovery deadline, and resolver generation.
+Existing v6 Actions keep their owners and immutable lifecycle receipts. An
+existing generation-zero resolver remains valid. The upgrade does not convert or
+erase Messages, memory summaries, source certificates, or other domain records.
+
+Deploy with a coordinated maintenance window:
+
+1. Build and validate the intended release, retain a database backup, and
+   inventory every physical schema used by gateways and workers. Rehearse the
+   upgrade on a representative copy first.
+2. Stop admission and **all old writers**, including scheduled invocations and
+   background workers. A traffic split is insufficient if old instances still
+   execute background work. Schema-v6 runtimes reject the v7 marker on startup.
+3. With the new package, call `upgradeActionLifecycle(session, schema)` from
+   `@copilotz/copilotz/actions` for each physical schema. Each call is atomic
+   and repeatable. The v6-to-v7 path preserves in-flight Actions; upgrading from
+   v5 still requires draining or cancelling its old workflows first.
+4. Validate every schema before starting new writers. Keep writers stopped if
+   one schema fails: successful upgrades of other schemas are not rolled back by
+   a later failure. A failed individual upgrade rolls back its DDL and marker.
+5. Start only compatible workers and gateways, restore admission, and verify a
+   pending compaction yields capacity, a fresh turn runs, and checkpoint
+   completion resumes its original response. Then restore contained schedules.
+
+Do not roll back by changing the version marker or deleting wait columns after
+new writers have started. Old workers cannot interpret new waits and resolver
+generations. Use a compatible forward fix, or stop all writers and follow a
+reviewed database-and-application restore plan. Startup does not run this
+upgrade implicitly.
+
+The scheduled-job initiator and terminal-dispatch fixes shipped in 0.86.3 remain
+in place. They prevent new instances of the former human-only dispatch failure;
+the recovery above additionally handles orphaned reservations left by older
+runtimes when those checkpoints are encountered by foreground compaction.
+
 ## 0.87.3: readable Action and write errors
 
 Trusted host calls now reject with the Action's own error name, message and
@@ -109,7 +155,7 @@ history.
 Copilotz stores three independent things, and each one evolves differently:
 
 1. **Physical schema.** The SQL tables for Events, Collections and Bodies are
-   validated against Event schema v6. Startup provisions fresh Core tables and
+   validated against Event schema v7. Startup provisions fresh Core tables and
    validates existing ones; incompatible Core schemas are rejected. Declared
    Collection indexes are provisioned separately as described below. Stored
    records are never reset or rewritten.
@@ -274,11 +320,11 @@ separate procedure, described in
 
 ### Upgrade layers
 
-| Layer              | Current state                                  | How it is applied                                             |
-| ------------------ | ---------------------------------------------- | ------------------------------------------------------------- |
-| Event schema       | v5, unchanged by the catalog upgrade           | Provisioned when fresh, validated when existing               |
-| Operation catalog  | `indexed-observation-ordinals-v1` since 0.85.0 | Provision fresh; upgrade the supported legacy catalog offline |
-| Core history index | Optional since 0.85.1                          | `provisionCoreHistoryIndexes`, once per physical Core schema  |
+| Layer              | Current state                        | How it is applied                                                   |
+| ------------------ | ------------------------------------ | ------------------------------------------------------------------- |
+| Event schema       | v7, durable Action waits             | Provision fresh; explicitly upgrade supported v5/v6 schemas offline |
+| Operation catalog  | `action-obligations-v1` since 0.86.0 | Provision fresh; upgrade the supported legacy catalog offline       |
+| Core history index | Optional since 0.85.1                | `provisionCoreHistoryIndexes`, once per physical Core schema        |
 
 - `upgradeOperationCatalog` always takes exclusive catalog and Event locks, even
   when the catalog is already current. Use `validateOperationCatalog` for a

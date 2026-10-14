@@ -275,7 +275,7 @@ export function isReservedActionLifecycleDeduplicationId(
   deduplicationId: string | undefined,
 ): boolean {
   const normalized = deduplicationId?.trim() ?? "";
-  return /^.+:action:(?:invoked|deferred|resolve|terminal|progress:[1-9][0-9]*)$/
+  return /^.+:action:(?:invoked|deferred|resolve(?::[1-9][0-9]*)?|terminal|progress:[1-9][0-9]*)$/
     .test(
       normalized,
     );

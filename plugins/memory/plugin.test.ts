@@ -21,6 +21,9 @@ import {
   createPluginRegistry,
   definePlugin,
 } from "../../runtime/plugins/index.ts";
+import type { ProcessorEvent } from "../../runtime/plugins/processor.ts";
+import type { MemoryProcessorContext } from "./shared/contracts.ts";
+import { recoverMemoryConsolidationProcessor } from "./processors/recover-consolidation/index.ts";
 import { estimateTextTokens } from "@copilotz/copilotz/llm/tokens";
 import {
   type CopilotzEngine,
@@ -157,9 +160,18 @@ async function fixture(
     fallbackInputLimit?: number;
     outputLimit?: number;
     contextText?: string;
+    maintenanceContextText?: string;
+    compactedContext?: { value: boolean };
     memoryConfig?: Partial<LongTermMemoryConfig>;
     vectors?: boolean;
     dispatchErrors?: { attempts: number };
+    skipDispatch?: boolean;
+    executionCapacity?: number;
+    duplicateRecoveryDispatch?: boolean;
+    snapshotCaptureGate?: Readonly<{
+      wait: Promise<void>;
+      arrive(): void;
+    }>;
     statements?: { sql: string; params?: unknown[] }[];
     dynamicInstructions?: boolean;
     tools?: readonly string[];
@@ -176,18 +188,41 @@ async function fixture(
     retainRecentEstimatedTokens: 0,
     ...options.memoryConfig,
   };
-  const memory = options.dispatchErrors
+  const memory = options.dispatchErrors || options.skipDispatch ||
+      options.duplicateRecoveryDispatch
     ? definePlugin({
       ...memoryPlugin,
       processors: {
         ...memoryPlugin.processors,
-        dispatchConsolidation: {
-          ...memoryPlugin.processors.dispatchConsolidation,
-          handle() {
-            options.dispatchErrors!.attempts++;
-            throw new Error("dispatch preparation unavailable");
-          },
-        },
+        ...(options.dispatchErrors || options.skipDispatch
+          ? {
+            dispatchConsolidation: {
+              ...memoryPlugin.processors.dispatchConsolidation,
+              handle() {
+                if (options.dispatchErrors) {
+                  options.dispatchErrors.attempts++;
+                  throw new Error("dispatch preparation unavailable");
+                }
+              },
+            },
+          }
+          : {}),
+        ...(options.duplicateRecoveryDispatch
+          ? {
+            recoverConsolidation: {
+              ...memoryPlugin.processors.recoverConsolidation,
+              async handle(
+                event: ProcessorEvent,
+                context: MemoryProcessorContext,
+              ) {
+                await Promise.all([
+                  recoverMemoryConsolidationProcessor.handle(event, context),
+                  recoverMemoryConsolidationProcessor.handle(event, context),
+                ]);
+              },
+            },
+          }
+          : {}),
       },
     })
     : memoryPlugin;
@@ -264,12 +299,22 @@ async function fixture(
           id: "fixture.context",
           type: "context",
           purposes: ["conversation"],
-          contribute: () => ({
-            id: "fixture-context",
-            title: "Fixture context",
-            role: "context",
-            content: options.contextText ?? "NATIVE_MEMORY_CONTEXT",
-          }),
+          async contribute(input) {
+            if (input.sourceRange && options.snapshotCaptureGate) {
+              options.snapshotCaptureGate.arrive();
+              await options.snapshotCaptureGate.wait;
+            }
+            return {
+              id: "fixture-context",
+              title: "Fixture context",
+              role: "context",
+              content: input.historyScopeId || input.sourceRange ||
+                  options.compactedContext?.value
+                ? options.maintenanceContextText ?? options.contextText ??
+                  "NATIVE_MEMORY_CONTEXT"
+                : options.contextText ?? "NATIVE_MEMORY_CONTEXT",
+            };
+          },
         }),
       },
     },
@@ -294,6 +339,9 @@ async function fixture(
     defaultDatabaseSchema: SCHEMA,
     retryBaseMs: 0,
     random: () => 0,
+    ...(options.executionCapacity
+      ? { execution: { capacity: options.executionCapacity } }
+      : {}),
   });
   if (options.vectors) await provisionVectorStorage(db, SCHEMA);
   return Object.freeze({
@@ -353,6 +401,7 @@ async function createHumanMessage(
     {
       id: string;
       text: string;
+      senderId?: string;
       recipientIds?: readonly string[];
       metadata?: Readonly<Record<string, unknown>>;
     }
@@ -366,7 +415,7 @@ async function createHumanMessage(
   const created = await messages.create({
     id: input.id,
     threadId: "thread-a",
-    senderId: "human-a",
+    senderId: input.senderId ?? "human-a",
     recipientIds: input.recipientIds ?? [],
     content,
     metadata: input.metadata ?? {},
@@ -376,7 +425,7 @@ async function createHumanMessage(
       core: {
         threadId: "thread-a",
         routing: {
-          senderId: "human-a",
+          senderId: input.senderId ?? "human-a",
           recipientIds: input.recipientIds ?? [],
         },
       },
@@ -507,10 +556,12 @@ Deno.test("memory composes Core-native dispatch and settlement without a model s
     "consolidate_memory",
     "inspect_memory",
     "list_knowledge_spaces",
+    "request_memory_checkpoint_recovery",
     "search_memory",
   ]);
   assertEquals(Object.keys(plugin.processors).sort(), [
     "dispatchConsolidation",
+    "recoverConsolidation",
     "settleConsolidation",
   ]);
 });
@@ -2098,7 +2149,7 @@ Deno.test("ordinary preparation reserves peer-grown history before the provider 
 });
 
 for (const participantType of ["agent", "job"] as const) {
-  Deno.test(`memory maintenance and repair work for a ${participantType} initiator without humans`, async () => {
+  Deno.test(`memory maintenance accepts a ${participantType} initiator without humans`, async () => {
     const run = await fixture((_input, call) =>
       call <= 2 ? stop("continue") : tool(memoryProposal())
     );
@@ -2138,6 +2189,119 @@ for (const participantType of ["agent", "job"] as const) {
     }
   });
 }
+
+Deno.test("a pending job-origin checkpoint without a task is repaired and resumed", async () => {
+  const compactedContext = { value: true };
+  let releaseSnapshotCapture!: () => void;
+  let snapshotCaptureArrivals = 0;
+  const snapshotCaptureGate = {
+    wait: new Promise<void>((resolve) => {
+      releaseSnapshotCapture = resolve;
+    }),
+    arrive() {
+      snapshotCaptureArrivals += 1;
+      if (snapshotCaptureArrivals === 2) releaseSnapshotCapture();
+    },
+  };
+  const run = await fixture((input) => {
+    if (text(input).includes("Internal memory maintenance")) {
+      compactedContext.value = true;
+      return tool(memoryProposal());
+    }
+    return stop("The original scheduled request is resumed.");
+  }, {
+    enabled: true,
+    inputLimit: 40_000,
+    outputLimit: 512,
+    contextText: "oversized context ".repeat(30_000),
+    maintenanceContextText: "small maintenance context",
+    compactedContext,
+    skipDispatch: true,
+    executionCapacity: 1,
+    duplicateRecoveryDispatch: true,
+    snapshotCaptureGate,
+    memoryConfig: {
+      triggerEstimatedTokens: 1_000_000,
+      retainRecentEstimatedTokens: 0,
+    },
+  });
+  try {
+    await setupThread(run);
+    await createHumanMessage(run, {
+      id: "message:recovery-seed",
+      text: "A prior turn makes bounded checkpoint history eligible.",
+      recipientIds: ["agent-north"],
+    });
+    await eventually(run, async () => {
+      const messages = await projectMessages(run.engine, NAMESPACE, "thread-a");
+      return messages.filter((message) => message.sender.id === "agent-north")
+        .length === 1;
+    });
+    await collection(run, "participant").update({
+      id: "human-a",
+      set: { participantType: "job" },
+    }, { namespace: NAMESPACE });
+    run.setMemoryConfig({ triggerEstimatedTokens: 1 });
+    await createHumanMessage(run, {
+      id: "message:scheduled-job-trigger",
+      text: "Continue the scheduled Compass maintenance.",
+      recipientIds: ["agent-north"],
+    });
+
+    await eventually(run, async () => {
+      const messages = await projectMessages(run.engine, NAMESPACE, "thread-a");
+      return messages.filter((message) => message.sender.id === "agent-north")
+        .length === 2;
+    });
+    const reservation = (await checkpoints(run))[0];
+    assertEquals(reservation?.status, "pending");
+
+    // The first job-origin turn creates a pending checkpoint while producer
+    // dispatch is disabled, matching the legacy orphan. A later oversized
+    // foreground turn encounters that checkpoint and must repair it without
+    // holding the only worker slot.
+    compactedContext.value = false;
+    run.setMemoryConfig({ triggerEstimatedTokens: 1_000_000 });
+    await createHumanMessage(run, {
+      id: "message:scheduled-job-followup",
+      text: "Continue the scheduled maintenance.",
+      recipientIds: ["agent-north"],
+    });
+
+    await eventually(run, async () => {
+      const saved = (await checkpoints(run))[0];
+      const messages = await projectMessages(run.engine, NAMESPACE, "thread-a");
+      return saved?.status === "ready" &&
+        messages.filter((message) => message.sender.id === "agent-north")
+            .length >= 3;
+    });
+
+    const saved = await checkpoint(run);
+    assertEquals(
+      (saved.metadata as Record<string, unknown>).initiatorParticipantId,
+      "human-a",
+    );
+    const { deriveWorkflowId } = await import("@copilotz/copilotz/events");
+    const taskId = await deriveWorkflowId(
+      "message",
+      "memory-agent-turn",
+      saved.id,
+    );
+    const task = await collection(run, "message").get({ id: taskId });
+    assert(
+      task,
+      "orphan repair must create the deterministic maintenance task",
+    );
+    assertEquals(task.historyScopeId, saved.id);
+    assertEquals(snapshotCaptureArrivals, 2);
+    assert(compactedContext.value);
+    assertEquals(run.inputs.length, 4);
+    await assertNoDeadLetters(run);
+  } finally {
+    releaseSnapshotCapture();
+    await run.close();
+  }
+});
 
 Deno.test("terminal dispatch failure settles its checkpoint after retries", async () => {
   const dispatchErrors = { attempts: 0 };

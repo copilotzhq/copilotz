@@ -111,6 +111,7 @@ export type CreateActionCallersOptions = Readonly<{
     {
       receipt: ActionDeferredData;
       outcome: ActionResolution["outcome"];
+      waitExpired?: boolean;
       error?: ActionResolution["error"];
       causationId?: string;
     }
@@ -121,6 +122,7 @@ export type CreateActionCallersOptions = Readonly<{
   invocationScope?: string;
   identity?: RuntimeIdentity;
   signal: AbortSignal;
+  rearmDeferredAction?(actionRunId: string): Promise<void>;
   createContext(
     input: Readonly<{
       frame: ActionInvocationFrame;
@@ -677,6 +679,7 @@ function actionCaller(
           {
             work: resolution.receipt.work,
             outcome: resolution.outcome,
+            ...(resolution.waitExpired ? { waitExpired: true } : {}),
             ...(resolution.error ? { error: resolution.error } : {}),
           } as never,
         )
@@ -684,12 +687,31 @@ function actionCaller(
       await progressTail;
       throwIfAborted(frame.signal);
       if (isActionDeferral(output)) {
-        if (resolution || !action.resolve) {
+        if (!action.resolve) {
           throw new TypeError(
-            "An Action deferral requires resolve and cannot defer again during resolution.",
+            "An Action deferral requires a resolver.",
           );
         }
         assertMetadataIsSecretFree({ work: output.work }, inputSecrets);
+        if (resolution) {
+          if (progressIndex !== resolution.receipt.progressIndex) {
+            throw new TypeError(
+              "A resolving Action cannot re-arm after publishing progress.",
+            );
+          }
+          if (!sameActionValue(output.work, resolution.receipt.work)) {
+            throw new TypeError(
+              "A resolving Action may only re-arm its existing deferred work.",
+            );
+          }
+          if (!invoker.rearmDeferredAction) {
+            throw new Error(
+              "Durable Action rearming requires a delivery runtime.",
+            );
+          }
+          await invoker.rearmDeferredAction(frame.actionRunId);
+          return deferredAction(frame.actionRunId);
+        }
         await invoker.actionLifecycle.emit({
           ...lifecycleCommon(frame, durableInput),
           actionScopeId: frame.actionRunId,

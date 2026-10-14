@@ -3,6 +3,7 @@ import type { VectorWrite } from "@copilotz/copilotz/actions";
 import type { PreparedContent } from "@copilotz/copilotz/content";
 import type { prepareMemoryProposal } from "../../authoring/notes/index.ts";
 import type { MemoryActionContext } from "../../shared/contracts.ts";
+import { memoryCheckpointWaitKey } from "../../shared/checkpoints.ts";
 
 export async function commitMemoryConsolidation(
   context: MemoryActionContext,
@@ -80,4 +81,5 @@ export async function commitMemoryConsolidation(
       content: input.checkpointContent,
     }, { operationKey: `memory-checkpoint:ready:${input.checkpointId}` });
   }, { operationKey: `memory:${input.checkpointId}:commit` });
+  await context.signalDeferredWait(memoryCheckpointWaitKey(input.checkpointId));
 }

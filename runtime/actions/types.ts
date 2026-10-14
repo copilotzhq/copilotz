@@ -197,6 +197,8 @@ export interface RuntimeContext<
       }>,
     ) => T | Promise<T>,
   ): Promise<T>;
+  /** Wake exact-key durable Action waiters in this runtime namespace. */
+  signalDeferredWait(waitKey: string): Promise<number>;
 }
 
 /** Runtime context for one Action invocation and its durable lifecycle. */
@@ -214,6 +216,11 @@ export interface ActionContext<
   }>;
   /** Persists one self-contained `<actionId>.progress` lifecycle Event. */
   progress(value: unknown): Promise<void>;
+  /** Register an exact-key wake condition before returning deferAction(). */
+  registerDeferredWait(
+    waitKey: string,
+    options?: Readonly<{ timeoutMs?: number }>,
+  ): Promise<void>;
 }
 
 type ActionSchemaExtensions = Readonly<{
@@ -259,7 +266,8 @@ export type ActionDefinition<
     resolution: ActionResolution,
   ):
     | Exclude<TOutput, ActionDeferral>
-    | Promise<Exclude<TOutput, ActionDeferral>>;
+    | ActionDeferral
+    | Promise<Exclude<TOutput, ActionDeferral> | ActionDeferral>;
   readonly [actionDefinitionTypes]?: Readonly<{
     input: TInput;
     output: TOutput;

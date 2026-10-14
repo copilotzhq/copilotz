@@ -6,6 +6,12 @@ import { optionalText, record } from "./input.ts";
 import type { ConversationThread } from "@copilotz/copilotz/core";
 import { branchCertificate, certifiedHistoryBoundary } from "./source.ts";
 
+export function memoryCheckpointWaitKey(checkpointId: string): string {
+  const id = checkpointId.trim();
+  if (!id) throw new TypeError("Memory checkpoint id must be non-empty.");
+  return `memory.checkpoint:${id}`;
+}
+
 /** Capture the allocation head before preparing source; on-demand writes never trim history. */
 export async function checkpointHead(
   context: Pick<MemoryProcessorContext, "collections">,
@@ -159,20 +165,52 @@ export async function settleCheckpointError(
   const message = error instanceof Error
     ? error.message
     : durable?.message ?? String(error);
-  const checkpoint = await context.collections.longTermMemory
-    .get({ id: checkpointId });
-  if (!checkpoint || checkpoint.status !== "pending") return;
-  await context.collections.longTermMemory.update(
-    {
-      id: checkpointId,
-      set: {
-        status,
-        error: {
-          name,
-          message,
+  let attempt = 0;
+  for (;;) {
+    const checkpoint = await context.collections.longTermMemory
+      .get({ id: checkpointId });
+    if (!checkpoint || checkpoint.status !== "pending") return;
+    try {
+      await context.collections.longTermMemory.update(
+        {
+          id: checkpointId,
+          set: {
+            status,
+            error: {
+              name,
+              message,
+            },
+          },
         },
-      },
-    },
-    { operationKey: `checkpoint:${checkpointId}:${status}` },
-  );
+        {
+          operationKey: `checkpoint:${checkpointId}:${status}:${attempt++}`,
+          condition: {
+            current: {
+              where: {
+                status: "pending",
+                updatedAt: checkpoint.updatedAt,
+              },
+            },
+          },
+        },
+      );
+      await context.signalDeferredWait(memoryCheckpointWaitKey(checkpointId));
+      return;
+    } catch (failure) {
+      // A successful consolidator may have settled after our read. If another
+      // pending mutation merely raced this write, retry against its latest
+      // version; never overwrite a terminal checkpoint.
+      const latest = await context.collections.longTermMemory
+        .get({ id: checkpointId });
+      if (!latest || latest.status !== "pending") return;
+      const conditionalConflict = Boolean(
+        failure && typeof failure === "object" &&
+          (failure as { code?: unknown }).code ===
+            "collection_mutation_condition_failed",
+      );
+      if (!conditionalConflict && latest.updatedAt === checkpoint.updatedAt) {
+        throw failure;
+      }
+    }
+  }
 }

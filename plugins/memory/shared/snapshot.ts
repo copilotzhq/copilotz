@@ -73,61 +73,104 @@ export async function captureContextSnapshot(
     rangeMessages: readonly ConversationMessage[];
   }>,
 ) {
-  const existing = frozenSnapshot(input.checkpoint);
-  if (existing.length || Array.isArray(input.checkpoint.contextSnapshot)) {
-    return existing;
-  }
-  const contributed = await collectContextContributions(context, {
-    purpose: "conversation",
-    agent: input.agent,
-    participant: input.participant,
-    thread: input.thread,
-    sourceRange: {
-      startMessageId: requiredText(
-        input.checkpoint.sourceStartMessageId,
-        "Memory source start",
-      ),
-      endMessageId: requiredText(
-        input.checkpoint.sourceEndMessageId,
-        "Memory source end",
-      ),
-      messages: input.rangeMessages,
-    },
-  });
-  const capturedAt = new Date().toISOString();
-  const prepared = await Promise.all(
-    contributed.map((item) =>
-      context.content.prepare(item.content, {
-        operationKey:
-          `context:${input.checkpoint.id}:${item.resourceId}:${item.id}`,
-      })
-    ),
-  );
-  const snapshot = contributed.map((item, index) => ({
-    id: item.id,
-    resourceId: item.resourceId,
-    title: item.title,
-    role: item.role,
-    content: prepared[index].content,
-    ...(item.source ? { source: structuredClone(item.source) } : {}),
-    capturedAt: item.capturedAt ?? capturedAt,
-    ...(item.resourceId === MEMORY_RESOURCE_ID && item.historyAfterMessageId
-      ? { historyAfterMessageId: item.historyAfterMessageId }
-      : {}),
-  } as const));
-  await context.collections.longTermMemory.update(
-    {
-      id: input.checkpoint.id,
-      set: {
-        contextSnapshotContent: combinePrepared(prepared),
-        contextSnapshot: snapshot,
-        metadata: {
-          ...record(input.checkpoint.metadata),
-          contextCapturedAt: capturedAt,
-        },
+  let checkpoint = input.checkpoint;
+  for (;;) {
+    context.signal.throwIfAborted();
+    const existing = frozenSnapshot(checkpoint);
+    if (existing.length || Array.isArray(checkpoint.contextSnapshot)) {
+      return existing;
+    }
+    const contributed = await collectContextContributions(context, {
+      purpose: "conversation",
+      agent: input.agent,
+      participant: input.participant,
+      thread: input.thread,
+      sourceRange: {
+        startMessageId: requiredText(
+          checkpoint.sourceStartMessageId,
+          "Memory source start",
+        ),
+        endMessageId: requiredText(
+          checkpoint.sourceEndMessageId,
+          "Memory source end",
+        ),
+        messages: input.rangeMessages,
       },
-    },
-    { operationKey: `checkpoint:${input.checkpoint.id}:context` },
-  );
-  return snapshot;
+    });
+    const capturedAt = new Date().toISOString();
+    const prepared = await Promise.all(
+      contributed.map((item) =>
+        context.content.prepare(item.content, {
+          operationKey:
+            `context:${checkpoint.id}:${item.resourceId}:${item.id}`,
+        })
+      ),
+    );
+    const snapshot = contributed.map((item, index) => ({
+      id: item.id,
+      resourceId: item.resourceId,
+      title: item.title,
+      role: item.role,
+      content: prepared[index].content,
+      ...(item.source ? { source: structuredClone(item.source) } : {}),
+      capturedAt: item.capturedAt ?? capturedAt,
+      ...(item.resourceId === MEMORY_RESOURCE_ID && item.historyAfterMessageId
+        ? { historyAfterMessageId: item.historyAfterMessageId }
+        : {}),
+    } as const));
+    try {
+      await context.collections.longTermMemory.update(
+        {
+          id: checkpoint.id,
+          set: {
+            contextSnapshotContent: combinePrepared(prepared),
+            contextSnapshot: snapshot,
+            metadata: {
+              ...record(checkpoint.metadata),
+              contextCapturedAt: capturedAt,
+            },
+          },
+        },
+        {
+          operationKey: `checkpoint:${checkpoint.id}:context`,
+          condition: {
+            current: {
+              where: {
+                status: "pending",
+                // Keep the compare-and-set predicate scalar and bounded. The
+                // mutation timestamp fences every concurrent checkpoint write
+                // without copying the potentially large source metadata.
+                updatedAt: checkpoint.updatedAt,
+              },
+              filter: {
+                or: [
+                  { field: "contextSnapshot", isNull: true },
+                  { field: "contextSnapshot", exists: false },
+                ],
+              },
+            },
+          },
+        },
+      );
+      return snapshot;
+    } catch (error) {
+      const conditionalConflict = Boolean(
+        error && typeof error === "object" &&
+          (error as { code?: unknown }).code ===
+            "collection_mutation_condition_failed",
+      );
+      const latest = await context.collections.longTermMemory.get({
+        id: checkpoint.id,
+      });
+      if (!latest) return ([] as const);
+      if (latest.status !== "pending") return frozenSnapshot(latest);
+      if (Array.isArray(latest.contextSnapshot)) {
+        return frozenSnapshot(latest);
+      }
+      if (!conditionalConflict && latest.updatedAt === checkpoint.updatedAt) {
+        throw error;
+      }
+      checkpoint = latest;
+    }
+  }
 }

@@ -299,10 +299,32 @@ writer lease expires. An actual delivery dead letter remains visible in the
 operation's transport outcome, even when an Action handles the error and the
 conversation continues.
 
-Deferral requires a durable delivery owner. A resolver must finish through a
-normal terminal; it cannot defer again. Explicit operation cancellation closes
-outstanding Actions and fences new work. Disconnecting an observer only stops
-observation.
+Deferral requires a durable delivery owner. Explicit operation cancellation
+closes outstanding Actions and fences new work. Disconnecting an observer only
+stops observation.
+
+An Action waiting for independently owned work can call
+`context.registerDeferredWait(key, { timeoutMs })` before returning
+`deferAction(work)`. Re-read the durable result **after registration**: a
+producer may have completed just before registration. If it is already terminal,
+handle that result immediately. Otherwise, the worker slot is released while the
+Action remains open. A producer calls `context.signalDeferredWait(key)` after
+committing its result. Keys are exact and isolated by physical schema and
+namespace; a signal is a wake-up hint, so the resolver must still check the
+durable domain result.
+
+The optional timeout makes the wait eligible for a recovery check during runtime
+maintenance. It does not fail the work or retain a sleeping worker. The resolver
+receives `resolution.waitExpired` and can request an idempotent repair when the
+producer is missing. A healthy pending result can register a fresh wait, re-read
+its state, and return `deferAction(resolution.work)` again. Rearming preserves
+the original work exactly and fences previous resolver generations. A resolver
+that rearms must not publish new progress; progress remains supported when the
+resolver returns a terminal result. A resolver without a registered wait must
+finish normally.
+
+Direct host contexts cannot register durable waits. Their signal method returns
+zero because those contexts do not own a durable waiting runtime.
 
 The runtime owns delivery leases, work ownership and settlement. Plugins own the
 meaning of the work and its output. For example, Core uses this mechanism for

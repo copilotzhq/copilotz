@@ -1,3 +1,11 @@
+## Unreleased
+
+### Removed
+
+- Delivery priority options and ordering; the `event_deliveries.priority` column
+  remains in the schema but is no longer used; its index definitions are
+  unchanged.
+
 ## 0.87.3 — 2026-10-11
 
 - Cut fixed overhead from host `app.actions` calls and `app.send` settlement

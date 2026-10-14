@@ -223,7 +223,7 @@ export type CopilotzEngine = Readonly<{
   events: Readonly<{
     append(
       draft: DurableEventDraft,
-      options?: { priority?: number; maxAttempts?: number },
+      options?: { maxAttempts?: number },
     ): Promise<CoordinatedMutationResult<void>>;
     /** Internal bridge ingress that seals schema-marked values before commit. */
     appendProtected(

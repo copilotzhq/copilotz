@@ -37,6 +37,7 @@ import type {
 import { defineAction } from "@copilotz/copilotz/actions";
 import { defineTool } from "@copilotz/copilotz/core";
 import {
+  type AnyProcessor,
   type CopilotzPlugin,
   createPluginRegistry,
   definePlugin,
@@ -155,6 +156,13 @@ type Fixture = Readonly<{
   inputs: readonly LlmAdapterCallInput[];
   close(): Promise<void>;
 }>;
+type TextFixtureOptions = Readonly<{
+  databaseUrl?: string;
+  databaseSchema?: string;
+  executionCapacity?: number;
+  processors?: Readonly<Record<string, AnyProcessor>>;
+  additionalAgents?: readonly AgentResource[];
+}>;
 async function createFixture(
   handler: AdapterHandler,
   mode: LlmMode = "generate",
@@ -172,9 +180,12 @@ async function createFixture(
     primaryModel: { adapter: "test" },
     backupModel: { adapter: "test" },
   },
+  fixtureOptions: TextFixtureOptions = {},
 ): Promise<Fixture> {
   toolExecutions.splice(0);
-  const db = await createTestDatabase({ url: ":memory:" });
+  const db = await createTestDatabase({
+    url: fixtureOptions.databaseUrl ?? ":memory:",
+  });
   const inputs: LlmAdapterCallInput[] = [];
   const llm = adapterFrom(async (input) => {
     inputs.push(input);
@@ -183,9 +194,13 @@ async function createFixture(
   const app = definePlugin({
     id: `test.core-llm.${mode}`,
     version: "1.0.0",
+    processors: fixtureOptions.processors ?? {},
     actions: { contract_tool: contractToolAction },
     resources: {
-      agents: { north: agentResource },
+      agents: Object.fromEntries([
+        agentResource,
+        ...(fixtureOptions.additionalAgents ?? []),
+      ].map((resource) => [resource.id, resource])),
       tools: { contract_tool: contractTool },
       llmConnections,
       promptInstructions: promptResources.promptInstructions ?? {},
@@ -199,9 +214,12 @@ async function createFixture(
   const engine = await createCopilotzEngine({
     session: createSqlSession(db),
     registry,
-    defaultDatabaseSchema: TEST_SCHEMA,
+    defaultDatabaseSchema: fixtureOptions.databaseSchema ?? TEST_SCHEMA,
     retryBaseMs: 0,
     random: () => 0,
+    ...(fixtureOptions.executionCapacity
+      ? { execution: { capacity: fixtureOptions.executionCapacity } }
+      : {}),
   });
   return Object.freeze({
     db,
@@ -209,6 +227,16 @@ async function createFixture(
     inputs,
     async close() {
       await engine.shutdown();
+      if (
+        /^postgres(?:ql)?:\/\//.test(fixtureOptions.databaseUrl ?? "") &&
+        /^core_compact_wait_[a-f0-9]+$/.test(
+          fixtureOptions.databaseSchema ?? "",
+        )
+      ) {
+        await db.query(
+          `DROP SCHEMA IF EXISTS "${fixtureOptions.databaseSchema}" CASCADE`,
+        );
+      }
       await db.close();
     },
   });
@@ -231,41 +259,66 @@ async function startRun(
       action: string;
     }>;
   }>,
+  route: Readonly<{
+    recipientIds?: readonly string[];
+    threadId?: string;
+    messageId?: string;
+  }> = {},
 ): Promise<string> {
-  await collection(fixture.engine, "participant").create({
-    namespace: NAMESPACE,
-  }, {
-    id: "user-a",
-    externalId: "user-a",
-    participantType: "human",
-    metadata: { locale: "pt-BR" },
-  }, {});
-  await collection(fixture.engine, "participant").create({
-    namespace: NAMESPACE,
-  }, {
-    id: "agent-north",
-    externalId: "north",
-    participantType: "agent",
-    agentId: "north",
-    name: "North",
-    metadata: {},
-  }, {});
-  await collection(fixture.engine, "thread").create({ namespace: NAMESPACE }, {
-    id: "thread-a",
-    participantIds: ["user-a", "agent-north"],
-    metadata: {},
-  }, { identity: { deduplicationId: "thread-a:create" } });
+  const threadId = route.threadId ?? "thread-a";
+  const messageId = route.messageId ?? "message:user";
+  const participants = collection(fixture.engine, "participant");
+  if (!await participants.get({ namespace: NAMESPACE }, { id: "user-a" })) {
+    await participants.create({ namespace: NAMESPACE }, {
+      id: "user-a",
+      externalId: "user-a",
+      participantType: "human",
+      metadata: { locale: "pt-BR" },
+    }, {});
+  }
+  const recipients = route.recipientIds ?? ["agent-north"];
+  for (const participantId of new Set(["agent-north", ...recipients])) {
+    const agentId = participantId.replace(/^agent-/, "");
+    if (
+      !await participants.get({ namespace: NAMESPACE }, { id: participantId })
+    ) {
+      await participants.create({ namespace: NAMESPACE }, {
+        id: participantId,
+        externalId: agentId,
+        participantType: "agent",
+        agentId,
+        name: agentId[0]?.toUpperCase() + agentId.slice(1),
+        metadata: {},
+      }, {});
+    }
+  }
+  if (
+    !await collection(fixture.engine, "thread").get(
+      { namespace: NAMESPACE },
+      { id: threadId },
+    )
+  ) {
+    await collection(fixture.engine, "thread").create(
+      { namespace: NAMESPACE },
+      {
+        id: threadId,
+        participantIds: ["user-a", ...new Set(["agent-north", ...recipients])],
+        metadata: {},
+      },
+      { identity: { deduplicationId: `${threadId}:create` } },
+    );
+  }
   const content = await fixture.engine.content.preparer.prepare(text, {
     namespace: NAMESPACE,
-    idempotencyKey: "message:user:content",
+    idempotencyKey: `${messageId}:content`,
   });
   const created = await collection(fixture.engine, "message").create({
     namespace: NAMESPACE,
   }, {
-    id: "message:user",
-    threadId: "thread-a",
+    id: messageId,
+    threadId,
     senderId: "user-a",
-    recipientIds: ["agent-north"],
+    recipientIds: [...recipients],
     content,
     visibility: visibility ?? { kind: "public" },
     metadata: agentTurn
@@ -278,12 +331,12 @@ async function startRun(
   }, {
     identity: {
       correlationId: "core-run",
-      deduplicationId: "message:user:create",
+      deduplicationId: `${messageId}:create`,
     },
     metadata: {
       core: {
-        threadId: "thread-a",
-        routing: { senderId: "user-a", recipientIds: ["agent-north"] },
+        threadId,
+        routing: { senderId: "user-a", recipientIds: [...recipients] },
         ...(visibility ? { visibility } : {}),
       },
     },
@@ -304,6 +357,8 @@ async function continueRun(
   fixture: Fixture,
   id: string,
   text: string,
+  recipientIds: readonly string[] = ["agent-north"],
+  threadId = "thread-a",
 ): Promise<string> {
   const content = await fixture.engine.content.preparer.prepare(text, {
     namespace: NAMESPACE,
@@ -313,9 +368,9 @@ async function continueRun(
     namespace: NAMESPACE,
   }, {
     id,
-    threadId: "thread-a",
+    threadId,
     senderId: "user-a",
-    recipientIds: ["agent-north"],
+    recipientIds: [...recipientIds],
     content,
     metadata: {},
   }, {
@@ -325,8 +380,8 @@ async function continueRun(
     },
     metadata: {
       core: {
-        threadId: "thread-a",
-        routing: { senderId: "user-a", recipientIds: ["agent-north"] },
+        threadId,
+        routing: { senderId: "user-a", recipientIds: [...recipientIds] },
       },
     },
   });
@@ -346,6 +401,7 @@ async function waitForRun(
   fixture: Fixture,
   rootEventId: string,
   expectedMessages: number,
+  threadId = "thread-a",
 ): Promise<void> {
   const deadline = Date.now() + 10000;
   while (Date.now() < deadline) {
@@ -356,7 +412,7 @@ async function waitForRun(
     const messages = await projectMessages(
       fixture.engine,
       NAMESPACE,
-      "thread-a",
+      threadId,
     );
     if (
       settlement.unsettled === 0 && settlement.deadLetters === 0 &&
@@ -404,6 +460,41 @@ async function waitForSettlement(fixture: Fixture, rootEventId: string) {
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   throw new Error("Core turn did not settle.");
+}
+async function waitForMessages(
+  fixture: Fixture,
+  expected: number,
+  threadId = "thread-a",
+) {
+  const deadline = Date.now() + 10000;
+  while (Date.now() < deadline) {
+    const messages = await projectMessages(
+      fixture.engine,
+      NAMESPACE,
+      threadId,
+    );
+    if (messages.length >= expected) return messages;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`Core turn did not produce at least ${expected} Messages.`);
+}
+async function waitForActionStatus(
+  fixture: Fixture,
+  actionId: string,
+  status: "deferred" | "completed" | "failed" | "cancelled",
+) {
+  const deadline = Date.now() + 10000;
+  while (Date.now() < deadline) {
+    const lifecycle = await projectActionEvents(
+      fixture.engine,
+      NAMESPACE,
+      actionId,
+    );
+    const matching = lifecycle.find((event) => event.status === status);
+    if (matching) return matching;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error(`Action '${actionId}' did not reach ${status}.`);
 }
 async function messageText(
   fixture: Fixture,
@@ -614,6 +705,178 @@ Deno.test("Core compacts an exact LLM preparation overflow before llm.call", asy
     await fixture.close();
   }
 });
+for (const cancelWaiting of [false, true]) {
+  Deno.test(
+    cancelWaiting
+      ? "cancelling a pending compaction prevents a later wake from resuming it"
+      : "a pending compaction yields its slot and resumes only its recipient",
+    async () => {
+      const waitKey = "test.compaction:checkpoint-a";
+      let largeNorthContextCount = 0;
+      let checkpointReady = false;
+      let releaseCount = 0;
+      const contributedAgents: string[] = [];
+      const context = defineContextResource({
+        id: "test.pending-compaction-context",
+        type: "context",
+        purposes: ["conversation"],
+        contribute(input) {
+          contributedAgents.push(input.agent.id);
+          const oversized = input.agent.id === "north" && !checkpointReady &&
+            largeNorthContextCount++ === 0;
+          return {
+            id: "pending-checkpoint-context",
+            title: "PENDING CHECKPOINT CONTEXT",
+            role: "context",
+            content: oversized ? "context ".repeat(2_000) : "ready",
+          };
+        },
+        async reserveCompact() {
+          return {
+            status: "pending",
+            checkpointId: "checkpoint-a",
+            waitKey,
+          };
+        },
+        async checkCompact() {
+          return checkpointReady
+            ? { status: "ready", advances: true }
+            : { status: "pending" };
+        },
+      });
+      const releaseCheckpoint = defineProcessor<CoreProcessorContext>({
+        id: "test.pending-compaction.release",
+        on: [{ eventType: "test.compaction.checkpoint-ready" }],
+        async handle(_event, processorContext) {
+          releaseCount += 1;
+          checkpointReady = true;
+          await processorContext.signalDeferredWait(waitKey);
+        },
+      });
+      const compactableNorth = {
+        ...agent(),
+        models: {
+          generate: [{
+            connection: "primaryModel",
+            model: "generate-provider-model",
+            options: { limitEstimatedInputTokens: 2_500 },
+          }] as const,
+        },
+      } satisfies AgentResource;
+      const databaseUrl = (() => {
+        try {
+          return Deno.env.get("COPILOTZ_TEST_POSTGRES_URL") ?? ":memory:";
+        } catch {
+          return ":memory:";
+        }
+      })();
+      const databaseSchema = `core_compact_wait_${
+        crypto.randomUUID().replaceAll("-", "")
+      }`;
+      const fixture = await createFixture(
+        () => ({
+          result: {
+            content: { type: "text", role: "body", text: "Answer" },
+            attempts: [{ status: "completed" }],
+            finishReason: "stop",
+          },
+        }),
+        "generate",
+        corePlugin,
+        compactableNorth,
+        { promptContext: { pending: context } },
+        undefined,
+        {
+          databaseUrl,
+          databaseSchema,
+          executionCapacity: 1,
+          processors: { releaseCheckpoint },
+          additionalAgents: [{ ...agent(), id: "south", name: "South" }],
+        },
+      );
+      try {
+        const original = await startRun(
+          fixture,
+          "Original question",
+          undefined,
+          undefined,
+          { recipientIds: ["agent-north", "agent-south"] },
+        );
+        await waitForActionStatus(
+          fixture,
+          "copilotz.core.context.compact",
+          "deferred",
+        );
+        await waitForMessages(fixture, 2); // The second recipient still runs.
+
+        const fresh = await startRun(
+          fixture,
+          "Fresh question",
+          undefined,
+          undefined,
+          { threadId: "thread-b", messageId: "message:fresh-root" },
+        );
+        await waitForRun(fixture, fresh, 2, "thread-b");
+
+        assertEquals(checkpointReady, false);
+        assertEquals(fixture.inputs.length, 2); // South and the fresh north root.
+
+        if (cancelWaiting) {
+          await fixture.engine.events.cancel(
+            NAMESPACE,
+            original,
+            "user cancellation",
+          );
+          await waitForActionStatus(
+            fixture,
+            "copilotz.core.context.compact",
+            "cancelled",
+          );
+        }
+
+        const ready = await fixture.engine.events.append({
+          type: "test.compaction.checkpoint-ready",
+          namespace: NAMESPACE,
+          subject: { type: "memory-checkpoint", id: "checkpoint-a" },
+          payload: { checkpointId: "checkpoint-a" },
+          deduplicationId: "test:checkpoint-a:ready",
+        });
+        await waitForSettlement(fixture, ready.event.id);
+        await waitForRun(fixture, original, cancelWaiting ? 2 : 3);
+        assertEquals(releaseCount, 1);
+
+        const messages = await projectMessages(
+          fixture.engine,
+          NAMESPACE,
+          "thread-a",
+        );
+        const agentReplies = messages.filter((message) =>
+          message.sender.participantType === "agent"
+        );
+        assertEquals(
+          agentReplies.map((message) => message.sender.id).sort(),
+          cancelWaiting ? ["agent-south"] : ["agent-north", "agent-south"],
+        );
+        assertEquals(
+          contributedAgents.filter((agentId) => agentId === "south").length,
+          1,
+          "the resumed route must not re-run the original message's other recipient",
+        );
+        assertEquals(fixture.inputs.length, cancelWaiting ? 2 : 3);
+        assertEquals(
+          (await projectActionEvents(
+            fixture.engine,
+            NAMESPACE,
+            "copilotz.core.context.compact",
+          )).map((event) => event.status),
+          ["invoked", "deferred", cancelWaiting ? "cancelled" : "completed"],
+        );
+      } finally {
+        await fixture.close();
+      }
+    },
+  );
+}
 Deno.test("Core pins built-in transcript calibration through llm.call execution", async () => {
   const calibrationKey = tokenCalibrationKey(
     "openai",

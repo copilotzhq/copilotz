@@ -91,7 +91,7 @@ export function defineAction<
       input: TInput,
       context: TContext,
       resolution: ActionResolution,
-    ): TOutput | Promise<TOutput>;
+    ): TOutput | ActionDeferral | Promise<TOutput | ActionDeferral>;
   }>,
 ): ActionDefinition<
   TInput,

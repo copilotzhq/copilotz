@@ -4,6 +4,7 @@ import {
   type ContextResource,
   loadThreadRecord,
 } from "@copilotz/copilotz/core";
+import { deriveWorkflowId } from "@copilotz/copilotz/events";
 
 import type { MemoryProcessorContext } from "../../../shared/contracts.ts";
 import { optionalText, record } from "../../../shared/input.ts";
@@ -19,6 +20,7 @@ import {
   sourceMessagesFromTranscript,
 } from "../../../shared/source.ts";
 import { reserveMemoryCheckpoint } from "../../../shared/reservation.ts";
+import { memoryCheckpointWaitKey } from "../../../shared/checkpoints.ts";
 
 export const MEMORY_RESOURCE_ID = "copilotz.long_term";
 
@@ -68,6 +70,138 @@ export const memoryContextResource:
         input.error,
       );
       return true;
+    },
+    async reserveCompact(input) {
+      const config = memoryConfig(input.context);
+      if (!config.enabled || input.historyScopeId) return { status: "none" };
+      const context = input.context as unknown as MemoryProcessorContext;
+      const trigger = await context.collections.message.get({
+        id: input.triggerMessageId,
+      });
+      if (!trigger || String(trigger.threadId) !== input.thread.id) {
+        return { status: "none" };
+      }
+      const observed = new Set<string>();
+      for (;;) {
+        const checkpoint = await reserveMemoryCheckpoint(
+          context,
+          trigger,
+          config,
+          {
+            ownerParticipantId: input.participant.id,
+            force: true,
+            historyLimitEstimatedTokens: input.historyLimitEstimatedTokens,
+            historyAfterMessageId: input.historyAfterMessageId,
+          },
+        );
+        if (!checkpoint) return { status: "none" };
+        if (observed.has(checkpoint.id)) {
+          throw new Error(
+            "Memory reservation did not advance the conversation history boundary.",
+          );
+        }
+        observed.add(checkpoint.id);
+        if (checkpoint.status === "pending") {
+          return {
+            status: "pending",
+            checkpointId: checkpoint.id,
+            waitKey: memoryCheckpointWaitKey(checkpoint.id),
+          };
+        }
+        if (checkpoint.status !== "ready") continue;
+        const boundary = certifiedHistoryBoundary(checkpoint, {
+          agentId: input.agent.id,
+          participantId: input.participant.id,
+          thread: input.thread,
+        });
+        if (!boundary) {
+          throw new Error(
+            `Memory checkpoint '${checkpoint.id}' became ready without certified coverage.`,
+          );
+        }
+        if (
+          await historyBoundaryAdvances(
+            context,
+            input.thread.id,
+            boundary,
+            input.historyAfterMessageId,
+          )
+        ) return { status: "ready" };
+        // Another turn consumed the same certificate. Reserve the next tail.
+      }
+    },
+    async checkCompact(input, checkpointId) {
+      const context = input.context as unknown as MemoryProcessorContext;
+      const checkpoint = await context.collections.longTermMemory.get({
+        id: checkpointId,
+      });
+      if (!checkpoint) return { status: "missing" };
+      if (checkpoint.status === "pending") return { status: "pending" };
+      if (checkpoint.status === "failed" || checkpoint.status === "cancelled") {
+        const detail = optionalText(record(checkpoint.error).message);
+        return {
+          status: checkpoint.status,
+          ...(detail ? { message: detail } : {}),
+        };
+      }
+      if (checkpoint.status !== "ready") return { status: "pending" };
+      const thread = await loadThreadRecord(context, input.thread.id);
+      const boundary = thread && certifiedHistoryBoundary(checkpoint, {
+        agentId: input.agent.id,
+        participantId: input.participant.id,
+        thread,
+      });
+      if (!boundary) {
+        return {
+          status: "failed",
+          message: "checkpoint became ready without certified coverage",
+        };
+      }
+      return {
+        status: "ready",
+        advances: await historyBoundaryAdvances(
+          context,
+          input.thread.id,
+          boundary,
+          input.historyAfterMessageId,
+        ),
+      };
+    },
+    async recoverCompact(input, checkpointId) {
+      const context = input.context as unknown as MemoryProcessorContext;
+      const checkpoint = await context.collections.longTermMemory.get({
+        id: checkpointId,
+      });
+      if (!checkpoint || checkpoint.status !== "pending") return;
+      if (record(checkpoint.metadata).onDemand === true) return;
+      const producerId = await deriveWorkflowId(
+        "message",
+        "memory-agent-turn",
+        checkpointId,
+      );
+      const producer = await context.collections.message.get({
+        id: producerId,
+      });
+      if (producer) {
+        if (String(producer.historyScopeId) !== checkpointId) {
+          throw new Error(
+            "Memory checkpoint producer identity is inconsistent.",
+          );
+        }
+        return;
+      }
+      // Recovery is requested as an independent durable root. Its processor
+      // must not inherit the waiting foreground Action's scope or cancellation.
+      const requestRecovery = context.actions
+        .request_memory_checkpoint_recovery;
+      if (typeof requestRecovery !== "function") {
+        throw new Error("Memory checkpoint recovery Action is unavailable.");
+      }
+      const requestId = crypto.randomUUID();
+      await requestRecovery({ checkpointId }, {
+        operationKey: `memory:${checkpointId}:producer-recovery:${requestId}`,
+        signal: context.signal,
+      });
     },
     async compact(input) {
       const config = memoryConfig(input.context);

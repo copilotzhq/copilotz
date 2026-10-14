@@ -833,3 +833,83 @@ Deno.test("Action replay preserves error codes and caller-safe classification", 
     status: 422,
   });
 });
+
+for (
+  const mode of [
+    "rearm",
+    "changed-work",
+    "progress-rearm",
+    "progress-terminal",
+  ] as const
+) {
+  Deno.test(`resolver handoff contract: ${mode}`, async () => {
+    const recorded = recordingLifecycle();
+    let rearms = 0;
+    const work = defineAction<{ id: string }, number | ActionDeferral>({
+      id: "test.rearming-work",
+      execute(input) {
+        return deferAction({ id: input.id });
+      },
+      async resolve(_input, context, resolution) {
+        if (mode.startsWith("progress-")) {
+          await context.progress("Checked producer");
+        }
+        if (mode === "progress-terminal") return 7;
+        return deferAction(
+          mode === "changed-work" ? { id: "changed" } : resolution.work,
+        );
+      },
+    });
+    const original = createActionCallers({ work }, {
+      actionLifecycle: recorded.lifecycle,
+      signal: new AbortController().signal,
+      createInvocationKey: () => "stable-wait",
+      createContext: invocationContext,
+    });
+    await original.work({ id: "checkpoint" });
+    const receipt = recorded.emitted.find((event) =>
+      event.status === "deferred"
+    );
+    assert(receipt?.status === "deferred");
+    const resolving = createActionCallers({ work }, {
+      actionLifecycle: recorded.lifecycle,
+      signal: new AbortController().signal,
+      resolution: { receipt, outcome: "completed" },
+      rearmDeferredAction: () => {
+        rearms++;
+        return Promise.resolve();
+      },
+      createContext: invocationContext,
+    });
+    if (mode === "changed-work" || mode === "progress-rearm") {
+      await assertRejects(
+        () => resolving.work({ id: "checkpoint" }),
+        TypeError,
+        mode === "changed-work"
+          ? "existing deferred work"
+          : "after publishing progress",
+      );
+      assertEquals(rearms, 0);
+      assertEquals(recorded.emitted.at(-1)?.status, "failed");
+    } else if (mode === "rearm") {
+      assertEquals(await resolving.work({ id: "checkpoint" }), {
+        status: "deferred",
+        actionRunId: "stable-wait",
+      });
+      assertEquals(rearms, 1);
+      assertEquals(recorded.emitted.map((event) => event.status), [
+        "invoked",
+        "deferred",
+      ]);
+    } else {
+      assertEquals(await resolving.work({ id: "checkpoint" }), 7);
+      assertEquals(rearms, 0);
+      assertEquals(recorded.emitted.map((event) => event.status), [
+        "invoked",
+        "deferred",
+        "progress",
+        "completed",
+      ]);
+    }
+  });
+}

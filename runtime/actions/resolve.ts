@@ -37,24 +37,40 @@ export async function executeActionResolution(
   const request = raw as {
     actionRunId?: unknown;
     actionId?: unknown;
+    resolveGeneration?: unknown;
+    waitExpired?: unknown;
     outcome?: unknown;
     error?: unknown;
   };
   if (
     !request || typeof request.actionRunId !== "string" ||
     typeof request.actionId !== "string" ||
+    (request.resolveGeneration !== undefined &&
+      (!Number.isSafeInteger(request.resolveGeneration) ||
+        Number(request.resolveGeneration) < 0)) ||
+    (request.waitExpired !== undefined && request.waitExpired !== true) ||
     !["completed", "failed", "cancelled"].includes(String(request.outcome))
   ) {
     throw new TypeError("Invalid Action resolution request.");
   }
   const load = createActionLifecycleLoader(options);
   const owner = await store.session.query<
-    { deferred_event_id: string; causation_id: string | null }
+    {
+      deferred_event_id: string;
+      causation_id: string | null;
+      resolve_generation: number;
+    }
   >(
-    `SELECT action.deferred_event_id, invoked.causation_id FROM ${store.tables.open_actions} AS action
+    `SELECT action.deferred_event_id, invoked.causation_id, action.resolve_generation FROM ${store.tables.open_actions} AS action
      JOIN ${store.tables.events} AS invoked ON invoked.id = action.invoked_event_id
-     WHERE action.namespace = $1 AND action.action_run_id = $2 AND action.state = 'resolving' AND action.owner_delivery_id = $3`,
-    [base.event.namespace, request.actionRunId, base.delivery.id],
+     WHERE action.namespace = $1 AND action.action_run_id = $2 AND action.state = 'resolving' AND action.owner_delivery_id = $3
+       AND action.resolve_generation = $4`,
+    [
+      base.event.namespace,
+      request.actionRunId,
+      base.delivery.id,
+      request.resolveGeneration ?? 0,
+    ],
   );
   if (!owner.rows.length) {
     const terminal = await load(
@@ -83,6 +99,7 @@ export async function executeActionResolution(
   const context = await options.createContext(base, {
     receipt,
     outcome: request.outcome as "completed" | "failed" | "cancelled",
+    ...(request.waitExpired ? { waitExpired: true } : {}),
     causationId: owner.rows[0].causation_id ?? undefined,
     ...(request.error
       ? { error: request.error as { name: string; message: string } }

@@ -32,6 +32,7 @@ Deno.test("core plugin is direct static plugin composition", () => {
     Object.keys(registry.processors).sort(),
     [
       "messageRouter",
+      "resumeCompactionRoute",
       "messageInput",
       "projectTextResult",
       "projectAgentFailure",

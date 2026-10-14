@@ -135,7 +135,8 @@ function isActionEventData(value: unknown): value is ActionEventData {
   const candidate = value as Partial<ActionEventData>;
   return typeof candidate.actionId === "string" &&
     typeof candidate.actionRunId === "string" &&
-    (candidate.status === "invoked" || candidate.status === "completed" ||
+    (candidate.status === "invoked" || candidate.status === "deferred" ||
+      candidate.status === "completed" ||
       candidate.status === "failed" || candidate.status === "cancelled") &&
     "input" in candidate;
 }

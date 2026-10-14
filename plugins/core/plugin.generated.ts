@@ -23,11 +23,12 @@ import entry19 from "./processors/message-router/index.ts";
 import entry20 from "./processors/project-agent-failure/index.ts";
 import entry21 from "./processors/project-text-result/index.ts";
 import entry22 from "./processors/project-tool-result/index.ts";
-import entry23 from "./processors/tool-plan-coordinator/index.ts";
-import entry24 from "./resources/capabilities/default/index.ts";
-import entry25 from "./resources/toolResults/default/index.ts";
-import entry26 from "./resources/tools/ask/index.ts";
-import entry27 from "./resources/tools/read-tool-result/index.ts";
+import entry23 from "./processors/resume-compaction-route/index.ts";
+import entry24 from "./processors/tool-plan-coordinator/index.ts";
+import entry25 from "./resources/capabilities/default/index.ts";
+import entry26 from "./resources/toolResults/default/index.ts";
+import entry27 from "./resources/tools/ask/index.ts";
+import entry28 from "./resources/tools/read-tool-result/index.ts";
 import { llmPlugin as dependency0 } from "../llm/plugin.ts";
 const definition = {
   id: "@copilotz/core",
@@ -61,18 +62,19 @@ const definition = {
     "projectAgentFailure": entry20,
     "projectTextResult": entry21,
     "projectToolResult": entry22,
-    "toolPlanCoordinator": entry23,
+    "resumeCompactionRoute": entry23,
+    "toolPlanCoordinator": entry24,
   },
   resources: {
     "capabilities": {
-      "default": entry24,
-    },
-    "toolResults": {
       "default": entry25,
     },
+    "toolResults": {
+      "default": entry26,
+    },
     "tools": {
-      "ask": entry26,
-      "readToolResult": entry27,
+      "ask": entry27,
+      "readToolResult": entry28,
     },
   },
 } as const;

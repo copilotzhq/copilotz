@@ -4,6 +4,7 @@
   "include": [
     "actions/compact-context/index.ts",
     "processors/message-router/index.ts",
+    "processors/resume-compaction-route/index.ts",
     "processors/project-text-result/index.ts",
     "processors/project-agent-failure/index.ts",
     "processors/project-tool-result/index.ts",

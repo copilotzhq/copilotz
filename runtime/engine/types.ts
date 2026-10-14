@@ -339,6 +339,15 @@ export type CreateProcessorContextOptions = Readonly<{
   streamBodyStore: BodyStore;
   streamBodyPrefix: string;
   operationCatalog: OperationCatalog;
+  deferredWaits?: Readonly<{
+    signal(waitKey: string): Promise<number>;
+    registerAction(
+      actionRunId: string,
+      waitKey: string,
+      timeoutMs?: number,
+    ): Promise<void>;
+    rearmAction(actionRunId: string): Promise<void>;
+  }>;
   protectedEventResolver?: ProtectedEventResolver;
 }>;
 

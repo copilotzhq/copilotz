@@ -1,4 +1,22 @@
-## Unreleased
+## 0.88.0 — 2026-10-14
+
+### Fixed
+
+- Foreground memory compaction releases its worker slot while a checkpoint is
+  pending. Durable wake-ups resume the original recipient through Core's normal
+  response pipeline; unrelated turns and maintenance can execute with one slot.
+- Recover historical pending checkpoints whose deterministic maintenance Message
+  was never created. Recovery runs independently of waiting user operations.
+  Late failures cannot overwrite a concurrently completed checkpoint, and
+  elapsed time alone does not mark healthy maintenance as failed.
+
+### Upgrade required
+
+- Event schema v7 adds durable Action wait state and resolver generations. Stop
+  old writers and run `upgradeActionLifecycle` for each physical schema before
+  starting the new runtime. The v6 upgrade preserves in-flight Actions and
+  immutable history; the older v5 cutover still requires drained workflows. See
+  [the upgrade guide](docs/upgrading.md#0880-durable-compaction-waits).
 
 ### Removed
 

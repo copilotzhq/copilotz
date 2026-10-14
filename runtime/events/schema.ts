@@ -1,6 +1,6 @@
 import type { SqlExecutor, SqlSession } from "./session.ts";
 
-export const EVENT_SCHEMA_VERSION = 6;
+export const EVENT_SCHEMA_VERSION = 7;
 
 export type CoreTableName =
   | "nodes"
@@ -96,6 +96,10 @@ const CORE_SCHEMA_COLUMNS = {
     "owner_delivery_id",
     "action_scope_id",
     "deferred_event_id",
+    "wait_key",
+    "wait_signaled",
+    "wait_expires_at",
+    "resolve_generation",
   ],
   event_deliveries: [
     "id",
@@ -298,6 +302,10 @@ export function createActionObligationStatements(
       owner_delivery_id TEXT,
       action_scope_id TEXT,
       deferred_event_id TEXT REFERENCES ${tables.events}(id),
+      wait_key TEXT,
+      wait_signaled BOOLEAN NOT NULL DEFAULT FALSE,
+      wait_expires_at TIMESTAMPTZ,
+      resolve_generation INTEGER NOT NULL DEFAULT 0 CHECK (resolve_generation >= 0),
       PRIMARY KEY (namespace, action_run_id)
     )`,
     `CREATE INDEX IF NOT EXISTS "event_deliveries_action_scope_idx"

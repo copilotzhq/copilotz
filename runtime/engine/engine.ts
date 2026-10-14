@@ -1,5 +1,10 @@
 import { executeActionResolution } from "../actions/resolve.ts";
 import {
+  rearmDeferredAction,
+  registerDeferredWait,
+  signalDeferredWait,
+} from "../actions/deferred-wait.ts";
+import {
   provisionCollectionIndexes,
   validateCollectionIndexes,
 } from "../collections/indexes.ts";
@@ -258,6 +263,60 @@ export async function createCopilotzEngine(
     return createProcessorContext({
       base,
       actionResolution,
+      deferredWaits: {
+        signal: (waitKey) =>
+          signalDeferredWait(
+            {
+              store: scopedStore,
+              coordinator: scopedCoordinator,
+              catalog: scopedOperationCatalog,
+            },
+            base.event.namespace,
+            waitKey,
+          ),
+        registerAction: (actionRunId, waitKey, timeoutMs) => {
+          if (
+            base.source?.kind !== "delivery" || !base.settlementScopeId ||
+            !base.executionIncarnationId
+          ) {
+            throw new Error("Durable Action waits require a leased delivery.");
+          }
+          return registerDeferredWait({
+            store: scopedStore,
+            coordinator: scopedCoordinator,
+            catalog: scopedOperationCatalog,
+          }, {
+            namespace: base.event.namespace,
+            actionRunId,
+            operationId: base.settlementScopeId,
+            deliveryId: base.source.id,
+            leaseOwner: base.executionIncarnationId,
+            waitKey,
+            ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+          });
+        },
+        rearmAction: (actionRunId) => {
+          if (
+            base.source?.kind !== "delivery" || !base.settlementScopeId ||
+            !base.executionIncarnationId
+          ) {
+            throw new Error(
+              "Durable Action rearming requires a leased delivery.",
+            );
+          }
+          return rearmDeferredAction({
+            store: scopedStore,
+            coordinator: scopedCoordinator,
+            catalog: scopedOperationCatalog,
+          }, {
+            namespace: base.event.namespace,
+            actionRunId,
+            operationId: base.settlementScopeId,
+            deliveryId: base.source.id,
+            leaseOwner: base.executionIncarnationId,
+          });
+        },
+      },
       registry: options.registry,
       assets: scopedCapabilities.assets,
       preparer,

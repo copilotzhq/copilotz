@@ -12,6 +12,46 @@ import type { ContentInput, ContentRef } from "@copilotz/copilotz/content";
 
 export type ContextPurpose = "conversation";
 
+export type CompactContextInput =
+  & ContextContributionInput
+  & Readonly<{
+    /** Trusted scoped runtime capability for bounded maintenance only. */
+    context: ProcessorContext;
+    triggerMessageId: string;
+    /** Original durable route identity used if maintenance must resume it. */
+    triggerEventId?: string;
+    historyAfterMessageId?: string;
+    estimatedTokens: number;
+    limitEstimatedTokens: number;
+    historyLimitEstimatedTokens: number;
+  }>;
+
+export type CompactCheckpointState =
+  | Readonly<{ status: "pending" }>
+  | Readonly<{ status: "ready"; advances: boolean }>
+  | Readonly<{
+    status: "failed";
+    message?: string;
+  }>
+  | Readonly<{
+    status: "cancelled";
+    message?: string;
+  }>
+  | Readonly<{
+    status: "missing";
+    message?: string;
+  }>;
+
+export type CompactReservation =
+  | Readonly<{ status: "none" }>
+  | Readonly<{ status: "ready" }>
+  | Readonly<{
+    status: "pending";
+    checkpointId: string;
+    /** Exact key passed to registerDeferredWait and signalDeferredWait. */
+    waitKey: string;
+  }>;
+
 export type ContextSourceRef =
   | Readonly<{ type: "message"; id: string }>
   | Readonly<{ type: "asset"; id: string }>
@@ -87,20 +127,19 @@ export type ContextResource = Readonly<{
       error: unknown;
     }>,
   ): boolean | Promise<boolean>;
-  /** Optional bounded maintenance hook; true means a ready certified boundary advanced. */
-  compact?(
-    input:
-      & ContextContributionInput
-      & Readonly<{
-        /** Trusted scoped runtime capability for bounded maintenance only. */
-        context: ProcessorContext;
-        triggerMessageId: string;
-        historyAfterMessageId?: string;
-        estimatedTokens: number;
-        limitEstimatedTokens: number;
-        historyLimitEstimatedTokens: number;
-      }>,
-  ): boolean | Promise<boolean>;
+  /** Backwards-compatible synchronous maintenance hook. */
+  compact?(input: CompactContextInput): boolean | Promise<boolean>;
+  /** Non-blocking durable maintenance hooks for runtime-owned continuations. */
+  reserveCompact?(input: CompactContextInput): Promise<CompactReservation>;
+  checkCompact?(
+    input: CompactContextInput,
+    checkpointId: string,
+  ): Promise<CompactCheckpointState>;
+  /** Re-dispatch only when a pending checkpoint has no deterministic producer. */
+  recoverCompact?(
+    input: CompactContextInput,
+    checkpointId: string,
+  ): Promise<void>;
 }>;
 
 export type FrozenContextContribution = Readonly<{

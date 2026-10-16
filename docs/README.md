@@ -52,8 +52,8 @@ Each page below is the main reference for its topic.
 
 ### Runtime
 
-- [Plugins and Processors](plugins-and-processors.md): the six plugin
-  primitives and orchestration that is safe to retry.
+- [Plugins and Processors](plugins-and-processors.md): the six plugin primitives
+  and orchestration that is safe to retry.
 - [View foundation](views.md): experimental scoped one-shot text rendering.
 - [Collections](collections.md) and [Actions](actions.md): application state and
   the operations that share it.
@@ -102,6 +102,9 @@ Each page below is the main reference for its topic.
 - [API and package reference](api.md).
 
 ### Contributors
+
+- [Owner runtime integration](design/owner-runtime-integration.md): internal
+  transaction and connected-execution progress, scope and remaining evidence.
 
 - [Contributing to Built-In Plugins](plugin-layout.md): primitive ownership,
   generated composition and repository checks.

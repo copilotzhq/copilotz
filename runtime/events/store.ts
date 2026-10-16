@@ -12,6 +12,7 @@ import {
   type CoreTableName,
   createCoreTableNames,
   EVENT_SCHEMA_VERSION,
+  quoteEventIdentifier,
 } from "./schema.ts";
 import type { SqlExecutor, SqlSession } from "./session.ts";
 import type {
@@ -127,7 +128,17 @@ export type CommitEventMutationResult<T> = Readonly<{
   deduplicated: boolean;
 }>;
 
+/** Internal command-local insertion authority; never sourced from event metadata. */
+export type OwnerEventCommitContext = Readonly<{
+  transaction: SqlExecutor;
+  ownerId: string;
+  epoch: number;
+  holderId: string;
+  commandTime: string;
+}>;
+
 export type CreateEventStoreOptions = {
+  ownerCommit?: OwnerEventCommitContext;
   session: SqlSession;
   schema?: string;
   createId?: () => string;
@@ -364,6 +375,8 @@ function mapEvent(row: EventRow): DurableEvent {
     durable: true,
     id: String(row.id),
     position: String(row.position),
+    ...(row.owner_id == null ? {} : { ownerId: String(row.owner_id) }),
+    ...(row.seq == null ? {} : { seq: String(row.seq) }),
     schemaVersion: Number(row.schema_version),
     type: String(row.type),
     namespace: String(row.namespace),
@@ -667,6 +680,12 @@ export function createEventStore(
   const commitMutation = async <T>(
     mutation: CommitEventMutationOptions<T>,
   ): Promise<CommitEventMutationResult<T>> => {
+    const owner = options.ownerCommit;
+    if (owner && mutation.transaction !== owner.transaction) {
+      throw new Error(
+        "Owner event writes must join their command transaction.",
+      );
+    }
     validateDraft(mutation.draft);
     const draft = {
       ...mutation.draft,
@@ -679,8 +698,13 @@ export function createEventStore(
     const eventId = createId();
     const settlementScopeId = draft.settlementScopeId?.trim() || eventId;
     const correlationId = draft.correlationId ?? eventId;
-    const createdAt = (draft.createdAt ? new Date(draft.createdAt) : now())
-      .toISOString();
+    const createdAt =
+      (owner
+        ? new Date(owner.commandTime)
+        : draft.createdAt
+        ? new Date(draft.createdAt)
+        : now())
+        .toISOString();
     const maxAttempts = boundedInteger(
       mutation.maxAttempts,
       defaultMaxAttempts,
@@ -741,6 +765,12 @@ export function createEventStore(
           ? `detached:${eventId}:${consumer.consumerId}`
           : settlementScopeId,
       }));
+      const commandTimestamp = owner
+        ? `${param(owner.commandTime)}::timestamptz`
+        : "NOW()";
+      const sequenceGate = owner
+        ? `EXISTS (SELECT 1 FROM owner_event_sequence)`
+        : "TRUE";
       const values = [
         param(eventId),
         param(EVENT_SCHEMA_VERSION),
@@ -755,6 +785,12 @@ export function createEventStore(
         param(correlationId),
         param(draft.deduplicationId ?? null),
         `${param(createdAt)}::timestamptz`,
+        ...(owner
+          ? [
+            param(owner.ownerId),
+            "(SELECT last_seq FROM owner_event_sequence)",
+          ]
+          : []),
       ].join(", ");
       const ctes = [
         ...admission?.ctes ?? [],
@@ -771,7 +807,9 @@ export function createEventStore(
           ? [`event_delivery_admission AS MATERIALIZED (
           SELECT id FROM ${tables.event_deliveries}
           WHERE id = ${param(lease.deliveryId)} AND status = 'leased'
-            AND lease_owner = ${param(lease.owner)} AND lease_expires_at > NOW()
+            AND lease_owner = ${
+            param(lease.owner)
+          } AND lease_expires_at > ${commandTimestamp}
             AND EXISTS (SELECT 1 FROM event_group_admission) FOR UPDATE
         )`]
           : []),
@@ -779,14 +817,32 @@ export function createEventStore(
           lease ? "event_delivery_admission" : "event_group_admission"
         })`,
         ...statement?.ctes ?? [],
+        ...(owner
+          ? [`owner_event_sequence AS (
+          UPDATE ${quoteEventIdentifier(databaseSchema)}."owner_epochs"
+          SET last_seq = last_seq + 1
+          WHERE owner = ${param(owner.ownerId)} AND epoch = ${
+            param(owner.epoch)
+          }
+            AND holder = ${param(owner.holderId)} AND (${insertGate || "TRUE"})
+            AND NOT EXISTS (
+              SELECT 1 FROM ${tables.events}
+              WHERE namespace = ${param(draft.namespace)}
+                AND deduplication_id = ${param(draft.deduplicationId ?? null)}
+            )
+          RETURNING last_seq
+        )`]
+          : []),
         `inserted_event AS (
            INSERT INTO ${tables.events} (
              id, schema_version, type, namespace,
              subject_type, subject_id, payload, delta,
-             metadata, causation_id, correlation_id, deduplication_id, created_at
+             metadata, causation_id, correlation_id, deduplication_id, created_at${
+          owner ? ", owner_id, seq" : ""
+        }
            ) ${
           insertGate
-            ? `SELECT ${values} WHERE ${insertGate}`
+            ? `SELECT ${values} WHERE (${insertGate}) AND ${sequenceGate}`
             : `VALUES (${values})`
         }
            ON CONFLICT (namespace, deduplication_id)
@@ -802,7 +858,7 @@ export function createEventStore(
            SELECT delivery.id, inserted_event.id, delivery.consumer_id,
                   delivery.scope_id, delivery.action_scope_id, CASE WHEN ${cancelled} THEN 'cancelled' ELSE 'pending' END, 0, ${
           param(maxAttempts)
-        }, NOW(), NOW(), NOW(), CASE WHEN ${cancelled} THEN NOW() ELSE NULL END
+        }, ${commandTimestamp}, ${commandTimestamp}, ${commandTimestamp}, CASE WHEN ${cancelled} THEN ${commandTimestamp} ELSE NULL END
            FROM inserted_event, unnest(
              ${param(deliveryRows.map((row) => row.id))}::text[],
              ${param(deliveryRows.map((row) => row.consumerId))}::text[],

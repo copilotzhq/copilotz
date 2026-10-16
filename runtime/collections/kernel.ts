@@ -26,6 +26,7 @@ import { ulid } from "../../dependencies/ulid.ts";
 import { createAsyncContextStorage } from "../../dependencies/async-hooks.ts";
 import {
   type CoordinatedMutationResult,
+  createEventStore,
   deriveWorkflowId,
   type DurableEvent,
   type EventCoordinator,
@@ -94,6 +95,13 @@ import {
   validateCollectionRecord,
 } from "./validate.ts";
 
+/** Internal owner transaction seam; its caller owns commit, rollback, and callback gating. */
+export type CollectionCommitContext = Readonly<{
+  transaction: SqlExecutor;
+  pending: CoordinatedMutationResult<unknown>[];
+  afterCommit(callback: () => void | Promise<void>): void;
+}>;
+
 export type CreateCollectionRuntimeOptions = Readonly<{
   coordinator: EventCoordinator;
   session: SqlSession;
@@ -102,6 +110,7 @@ export type CreateCollectionRuntimeOptions = Readonly<{
   contentResolver?: ContentResolver;
   createId?: () => string;
   now?: () => Date;
+  commitContext?: CollectionCommitContext;
 }>;
 
 /** Internal content-adoption seam used only by the Collection kernel. */
@@ -789,6 +798,17 @@ export function createCollectionKernel(
   const createId = options.createId ?? ulid;
   const now = options.now ?? (() => new Date());
   const tables = options.eventStore.tables;
+  const commitContext = options.commitContext;
+  // Replay lookups must see this command's writes without leaving its executor.
+  const replayStore = commitContext
+    ? createEventStore({
+      schema: options.eventStore.databaseSchema,
+      session: {
+        query: (sql, params) => commitContext.transaction.query(sql, params),
+        transaction: (operation) => operation(commitContext.transaction),
+      },
+    })
+    : options.eventStore;
   const bound = new Map<string, BoundCollection>();
   const operations = new Map<string, CollectionOperations>();
   type TransactionBinding = Readonly<{
@@ -941,7 +961,7 @@ export function createCollectionKernel(
 
   const executor = (): SqlExecutor => {
     const snapshot = activeSnapshot();
-    if (!snapshot) return options.session;
+    if (!snapshot) return commitContext?.transaction ?? options.session;
     if (snapshot.state !== "open") {
       throw new Error("Read snapshot access has already closed.");
     }
@@ -1653,7 +1673,7 @@ export function createCollectionKernel(
       );
       const deduplicationId = scoped.identity?.deduplicationId?.trim();
       if (!deduplicationId) return null;
-      const event = await options.eventStore.getEventByDeduplicationId(
+      const event = await replayStore.getEventByDeduplicationId(
         scoped.namespace,
         deduplicationId,
       );
@@ -1667,7 +1687,7 @@ export function createCollectionKernel(
         );
       }
       const body = await readEventBody<CollectionEventBody<CollectionRecord>>(
-        { transaction: options.session, tables },
+        { transaction: executor(), tables },
         scoped.namespace,
         eventDataRef(event.payload),
       );
@@ -1704,22 +1724,68 @@ export function createCollectionKernel(
         pending: CoordinatedMutationResult<unknown>[];
       }>,
     ) => {
+      const joinedPending = commitContext && !execution
+        ? [] as CoordinatedMutationResult<unknown>[]
+        : undefined;
+      let resolved = planned;
+      let result: CollectionMutation<TSelect>;
       try {
-        return await commit(
-          planned.eventType,
-          planned.id,
-          planned.operation,
-          planned.writeOptions,
-          planned.plan,
-          planned.matchData,
-          execution,
+        if (joinedPending && options.assets && planned.plan.content.length) {
+          const replacements = await options.assets.reconcileMaterializations(
+            commitContext!.transaction,
+            planned.plan.content,
+          );
+          const plan = reconcileCollectionContent(
+            planned.plan,
+            definition.content?.fields ?? [],
+            replacements,
+          );
+          resolved = {
+            ...planned,
+            plan,
+            matchData: planned.matchData === undefined
+              ? undefined
+              : plan.write.body,
+          };
+        }
+        result = await commit(
+          resolved.eventType,
+          resolved.id,
+          resolved.operation,
+          resolved.writeOptions,
+          resolved.plan,
+          resolved.matchData,
+          execution ?? (joinedPending
+            ? {
+              transaction: commitContext!.transaction,
+              pending: joinedPending,
+            }
+            : undefined),
+          // Owner writes reconcile and adopt in their existing transaction.
+          joinedPending ? false : undefined,
         );
       } finally {
         // Also when refused: a compare-and-set retry must read the row again.
-        readViews.invalidate(
-          rowKey(planned.writeOptions.namespace.trim(), planned.id),
-        );
+        const invalidate = () =>
+          readViews.invalidate(
+            rowKey(planned.writeOptions.namespace.trim(), planned.id),
+          );
+        if (commitContext) {
+          // Explicit plans share publishCommitted's invalidateAll callback;
+          // one callback per row would exhaust the owner's command budget.
+          if (!execution) commitContext.afterCommit(invalidate);
+        } else invalidate();
       }
+      if (joinedPending) {
+        commitContext!.pending.push(...joinedPending);
+        commitContext!.afterCommit(async () => {
+          options.assets?.publishMaterializations(resolved.plan.content);
+          for (const item of joinedPending) {
+            await options.coordinator.flushCommitted(item);
+          }
+        });
+      }
+      return result;
     };
 
     // A retry commits as a duplicate of its first attempt, so the transaction
@@ -1835,7 +1901,7 @@ export function createCollectionKernel(
       const key = recordKey(id);
       if (scope?.records.has(key)) return scope.records.get(key) ?? null;
       const record = await loadCollectionRecord(
-        options.session,
+        executor(),
         tables,
         namespace,
         name,
@@ -2374,7 +2440,7 @@ export function createCollectionKernel(
       ns: string,
       recordId: string,
     ): Promise<CollectionRecord | null> => {
-      const memo = activeSnapshot() || activeScope()
+      const memo = commitContext || activeSnapshot() || activeScope()
         ? undefined
         : readViews.memo();
       if (!memo) return await loadBatched(executor(), ns, recordId);
@@ -3074,7 +3140,7 @@ export function createCollectionKernel(
               const identity = writeOptions.identity!;
               const deduplicationId = identity.deduplicationId!;
               const bodyId = `event-body:${namespace}:${deduplicationId}`;
-              const replay = await options.eventStore.getEventByDeduplicationId(
+              const replay = await replayStore.getEventByDeduplicationId(
                 namespace,
                 deduplicationId,
               );
@@ -3091,7 +3157,7 @@ export function createCollectionKernel(
                   );
                 }
                 body = await readEventBody<GraphRelationEventBody>(
-                  { transaction: options.session, tables },
+                  { transaction: executor(), tables },
                   namespace,
                   eventDataRef(replay.payload),
                 );
@@ -3124,7 +3190,7 @@ export function createCollectionKernel(
                   : endpointWasInvalidated
                   ? null
                   : await loadGraphRelation(
-                    options.session,
+                    executor(),
                     tables,
                     namespace,
                     relationId,
@@ -3337,7 +3403,7 @@ export function createCollectionKernel(
     for (const plan of orderedPlans) assertProtection(plan);
     // A lone collection write commits atomically on its own.
     const [only] = orderedPlans;
-    if (orderedPlans.length === 1 && only.commitAlone) {
+    if (!commitContext && orderedPlans.length === 1 && only.commitAlone) {
       const write = await only.commitAlone();
       return ({
         value,
@@ -3349,36 +3415,45 @@ export function createCollectionKernel(
         dispatch: write.dispatch,
       } as const);
     }
-    try {
-      await options.session.transaction(async (transaction) => {
-        replacements = options.assets
-          ? await options.assets.reconcileMaterializations(transaction, [
-            ...new Set([...scope.assets.values()].map((asset) => asset.plan)),
-          ])
-          : new Map<string, AssetManifestEntry>();
-        for (const plan of orderedPlans) {
-          assertProtection(plan);
-          const write = await plan.commit(transaction, pending, replacements);
-          if (write) writes.push(write);
-        }
+    const commitPlans = async (transaction: SqlExecutor): Promise<void> => {
+      replacements = options.assets
+        ? await options.assets.reconcileMaterializations(transaction, [
+          ...new Set([...scope.assets.values()].map((asset) => asset.plan)),
+        ])
+        : new Map<string, AssetManifestEntry>();
+      for (const plan of orderedPlans) {
+        assertProtection(plan);
+        const write = await plan.commit(transaction, pending, replacements);
+        if (write) writes.push(write);
+      }
+    };
+    if (commitContext) await commitPlans(commitContext.transaction);
+    else await options.session.transaction(commitPlans);
+
+    const publishCommitted = async (): Promise<EventDispatchReport[]> => {
+      readViews.invalidateAll();
+      if (options.assets) {
+        options.assets.publishMaterializations(
+          orderedPlans.flatMap((plan) =>
+            plan.materializations?.(replacements) ?? []
+          ),
+        );
+      }
+      const reports: EventDispatchReport[] = [];
+      for (const committed of pending) {
+        reports.push(await options.coordinator.flushCommitted(committed));
+      }
+      return reports;
+    };
+    let reports: EventDispatchReport[];
+    if (commitContext) {
+      commitContext.pending.push(...pending);
+      commitContext.afterCommit(async () => {
+        await publishCommitted();
       });
-    } catch (error) {
-      throw error;
-    }
-
-    // The writes became visible together, after their statements returned.
-    readViews.invalidateAll();
-    if (options.assets) {
-      options.assets.publishMaterializations(
-        orderedPlans.flatMap((plan) =>
-          plan.materializations?.(replacements) ?? []
-        ),
-      );
-    }
-
-    const reports: EventDispatchReport[] = [];
-    for (const committed of pending) {
-      reports.push(await options.coordinator.flushCommitted(committed));
+      reports = [];
+    } else {
+      reports = await publishCommitted();
     }
     return ({
       value,
@@ -3410,6 +3485,11 @@ export function createCollectionKernel(
       context: Readonly<{ collections: SnapshotCollections }>,
     ) => T | Promise<T>,
   ): Promise<T> => {
+    if (commitContext) {
+      throw new Error(
+        "Read snapshots are not allowed inside a Collection commit context.",
+      );
+    }
     if (activeSnapshot()) {
       throw new Error("Nested read snapshots are not supported.");
     }
@@ -3493,7 +3573,7 @@ export function createCollectionKernel(
     vectors: (namespace: string) => ({
       search: (input) =>
         searchVectors(
-          options.session,
+          executor(),
           options.eventStore.databaseSchema,
           namespace,
           input,

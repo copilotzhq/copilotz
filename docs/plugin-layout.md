@@ -76,14 +76,14 @@ Each concrete root contains exactly these required files:
 | `index.ts`            | Public barrel: plugin, intentionally public primitives, types, authoring |
 
 Only these other entries may sit at the root: `plugin.test.ts`, `actions/`,
-`collections/`, `processors/`, `resources/`, `adapters/`, `shared/` and
-`authoring/`. Plugin `internal/` and `dependencies/` folders are rejected.
+`collections/`, `processors/`, `resources/`, `adapters/`, `views/`, `shared/`
+and `authoring/`. Plugin `internal/` and `dependencies/` folders are rejected.
 
 ### Where code lives
 
-- **Collections, Actions, Processors:** `<category>/<alias>/index.ts`. The leaf
-  module calls its own `defineCollection`, `defineAction` or `defineProcessor`
-  and default-exports the result.
+- **Collections, Actions, Processors, Views:** `<category>/<alias>/index.ts`.
+  The leaf module calls its own `defineCollection`, `defineAction`,
+  `defineProcessor` or `defineView` and default-exports the result.
 - **Resources and Adapters:** `<category>/<namespace>/<alias>/index.ts`. They
   also default-export the instance they own.
 - **Helpers used by one primitive:** inside that primitive's directory. For
@@ -143,6 +143,13 @@ A root that depends on another plugin declares it with
 `"plugins": [{ "from": "...", "export": "..." }]` in this file. Do not express
 the dependency through an import inside a leaf.
 
+A View uses the same explicit leaf convention, for example
+`views/usage-summary/index.ts`, and appears under `views.usageSummary` in the
+generated composition. Import `defineView` from `@copilotz/copilotz/views` and
+keep any renderer-specific code in the View leaf or its private helpers. This
+foundation still emits `plugin.generated.ts`; host-role-specific outputs and
+renderer-capability import-graph enforcement are later build work.
+
 The generator turns that manifest into a static composition. Primitive keys come
 from the directory alias in camelCase:
 
@@ -184,8 +191,8 @@ public.
 ### Import boundaries
 
 - Plugin code imports the framework through the public package aliases, such as
-  `@copilotz/copilotz/plugins` and `@copilotz/copilotz/actions`. Never use a
-  relative path into `runtime/`.
+  `@copilotz/copilotz/plugins`, `@copilotz/copilotz/actions` and
+  `@copilotz/copilotz/views`. Never use a relative path into `runtime/`.
 - Every `@copilotz/copilotz/...` self-import must map to a declared package
   export in `deno.json`.
 - `runtime/` production code must never import a concrete plugin, directly or
@@ -197,14 +204,14 @@ public.
 
 Run all of them with `deno task check`. Each one has a narrow job:
 
-| Task                   | What it guarantees                                                                                                                                                                                                          | What it does not cover                                       |
-| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
-| `check:plugin-layout`  | Each listed concrete root has the five required files and only allowed root entries. Each Collection/Action/Processor leaf textually contains its own `define*` call. `plugin.generated.ts` matches freshly generated text. | Import boundaries, runtime behaviour, leaf READMEs           |
-| `check:generated`      | Every `plugins/*` directory that has a `copilotz.json` is up to date with the compiler (`build:plugins` regenerates them)                                                                                                   | Whether the composition is correct                           |
-| `check:boundaries`     | No relative plugin→runtime imports, no unmapped self-imports, runtime never reaches a concrete plugin, no hidden `createCorePlugin` factory or exported `PLUGIN_RESOURCE_TYPES`                                             | Folder layout                                                |
-| `check:surface`        | Package exports are files, self-import mappings mirror exports, exports type-check, release lint rules, no inline external specifiers, every production module is reachable from an export, no unused dependency wrappers   | Plugin semantics                                             |
-| `check:core-ownership` | In Core and Core HTTP, checked top-level primitive instances stay out of `authoring/`, Resource/Adapter modules default-export, and audited helpers stay with their owning Processor                                        | Ownership of other semantic helpers, which is still reviewed |
-| `check:forbidden`      | Removed or forbidden symbols do not reappear                                                                                                                                                                                | Anything else                                                |
+| Task                   | What it guarantees                                                                                                                                                                                                               | What it does not cover                                       |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| `check:plugin-layout`  | Each listed concrete root has the five required files and only allowed root entries. Each Collection/Action/Processor/View leaf textually contains its own `define*` call. `plugin.generated.ts` matches freshly generated text. | Import boundaries, runtime behaviour, leaf READMEs           |
+| `check:generated`      | Every `plugins/*` directory that has a `copilotz.json` is up to date with the compiler (`build:plugins` regenerates them)                                                                                                        | Whether the composition is correct                           |
+| `check:boundaries`     | No relative plugin→runtime imports, no unmapped self-imports, runtime never reaches a concrete plugin, no hidden `createCorePlugin` factory or exported `PLUGIN_RESOURCE_TYPES`                                                  | Folder layout                                                |
+| `check:surface`        | Package exports are files, self-import mappings mirror exports, exports type-check, release lint rules, no inline external specifiers, every production module is reachable from an export, no unused dependency wrappers        | Plugin semantics                                             |
+| `check:core-ownership` | In Core and Core HTTP, checked top-level primitive instances (including Views) stay out of `authoring/`, Resource/Adapter modules default-export, and audited helpers stay with their owning Processor                           | Ownership of other semantic helpers, which is still reviewed |
+| `check:forbidden`      | Removed or forbidden symbols do not reappear                                                                                                                                                                                     | Anything else                                                |
 
 These checks enforce structure. Behaviour comes from functional tests: leaf
 `index.test.ts` files and the root `plugin.test.ts`. A module that only forwards

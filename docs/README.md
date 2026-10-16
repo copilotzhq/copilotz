@@ -52,8 +52,9 @@ Each page below is the main reference for its topic.
 
 ### Runtime
 
-- [Plugins and Processors](plugins-and-processors.md): the five plugin
+- [Plugins and Processors](plugins-and-processors.md): the six plugin
   primitives and orchestration that is safe to retry.
+- [View foundation](views.md): experimental scoped one-shot text rendering.
 - [Collections](collections.md) and [Actions](actions.md): application state and
   the operations that share it.
 - [Events, deliveries and recovery](events-deliveries-recovery.md): immutable

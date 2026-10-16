@@ -32,7 +32,13 @@ export type CreateCopilotzOptions =
 /** Reuse the registry's dependency and contribution composition at the public boundary. */
 type CompositionOptions = Pick<
   RuntimeEmbeddedOptions,
-  "plugins" | "resources" | "adapters" | "actions" | "collections"
+  | "plugins"
+  | "resources"
+  | "adapters"
+  | "actions"
+  | "collections"
+  | "processors"
+  | "views"
 >;
 type CompositionOption<T, K extends keyof CompositionOptions, Fallback> =
   K extends keyof T ? NonNullable<T[K]> : Fallback;
@@ -41,7 +47,9 @@ type ApplicationComposition<T extends CompositionOptions> = RegistryComposition<
   CompositionOption<T, "resources", {}>,
   CompositionOption<T, "adapters", {}>,
   CompositionOption<T, "actions", {}>,
-  CompositionOption<T, "collections", {}>
+  CompositionOption<T, "collections", {}>,
+  CompositionOption<T, "processors", {}>,
+  CompositionOption<T, "views", {}>
 >;
 type GatewayApplication<T extends CompositionOptions = CompositionOptions> =
   & CopilotzApplication<

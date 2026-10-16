@@ -36,7 +36,7 @@ start with [Architecture](docs/architecture.md); documentation changes follow
 [DOCUMENTATION.md](DOCUMENTATION.md).
 
 The runtime is extended through **plugins**. A plugin is a package of
-capabilities that contributes some combination of five primitives:
+capabilities that contributes some combination of six primitives:
 
 - **Collections** represent state and provide the operations for mutating and
   querying that state.
@@ -52,6 +52,9 @@ capabilities that contributes some combination of five primitives:
 - **Adapters** provide interchangeable implementations for variable external or
   infrastructural boundaries, such as different LLM providers, storage systems,
   search engines, or execution environments.
+- **Views** select a presentation by data kind, mode and renderer. The bounded
+  [V1 foundation](docs/views.md) supports pure one-shot text rendering; live UI
+  and owner context/channel integration remain later slices.
 
 These primitives deliberately operate at different levels of abstraction.
 **Collections describe what is**, **actions describe what the system can do**,
@@ -139,7 +142,7 @@ is propagated immediately and records only accounting already reported by the
 provider.
 
 The runtime acts as the **composition boundary** for all of this. When plugins
-are installed, their collections, actions, processors, resources, and adapters
+are installed, their collections, actions, processors, resources, adapters, and views
 are registered with the runtime. Resources and adapters remain separate
 composition categories: resources are available under `context.resources`, while
 adapters are available under `context.adapters`. Actions and processors declare

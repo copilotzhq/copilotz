@@ -1,9 +1,13 @@
+import { readFile } from "node:fs/promises";
 import {
-  assert,
-  assertEquals,
-  assertStrictEquals,
-  assertThrows,
-} from "@std/assert";
+  deepStrictEqual as assertEquals,
+  ok as assert,
+  strictEqual as assertStrictEquals,
+  throws,
+} from "node:assert/strict";
+import { test } from "node:test";
+
+import { defineView } from "../views/index.ts";
 import { defineAction } from "../actions/define.ts";
 import { defineCollection } from "../collections/definition.ts";
 import {
@@ -14,6 +18,16 @@ import {
   defineProcessor,
   type ProcessorMatchClause,
 } from "./index.ts";
+
+function assertThrows(
+  fn: () => unknown,
+  constructor: new (message?: string) => Error,
+  message?: string,
+): void {
+  throws(fn, (error: unknown) =>
+    error instanceof constructor &&
+    (message === undefined || error.message.includes(message)));
+}
 
 function action(id: string) {
   return defineAction({
@@ -44,11 +58,18 @@ function processor(id: string, eventType = "message.created") {
   });
 }
 
-Deno.test("plugin definitions use direct identity and five keyed primitive maps", () => {
+test("plugin definitions use direct identity and six keyed primitive maps", () => {
   const model = { adapter: "openai", model: "gpt-5" };
   const adapter = { call: () => "ok" };
   const search = action("search.query");
   const documents = collection("document");
+  const documentContext = defineView({
+    id: "search.document-context",
+    shows: "document",
+    renderer: "text",
+    modes: ["context"],
+    render: (item: { title: string }) => item.title,
+  });
   const indexDocument = processor("search.index", "document.created");
   const plugin = definePlugin({
     id: "@acme/search",
@@ -56,6 +77,7 @@ Deno.test("plugin definitions use direct identity and five keyed primitive maps"
     collections: { documents },
     actions: { search },
     processors: { indexDocument },
+    views: { documentContext },
     resources: { models: { default: model } },
     adapters: { llm: { openai: adapter } },
   });
@@ -65,13 +87,14 @@ Deno.test("plugin definitions use direct identity and five keyed primitive maps"
   assertStrictEquals(plugin.collections.documents, documents);
   assertStrictEquals(plugin.actions.search, search);
   assertStrictEquals(plugin.processors.indexDocument, indexDocument);
+  assertStrictEquals(plugin.views.documentContext, documentContext);
   assertStrictEquals(plugin.resources.models.default, model);
   assertStrictEquals(plugin.adapters.llm.openai, adapter);
   assertEquals("manifest" in plugin, false);
   assertEquals("context" in plugin, false);
 });
 
-Deno.test("dependencies compose once before dependents and root plugins", () => {
+test("dependencies compose once before dependents and root plugins", () => {
   const base = definePlugin({
     id: "acme.base",
     version: "1.0.0",
@@ -100,7 +123,7 @@ Deno.test("dependencies compose once before dependents and root plugins", () => 
   assertEquals(registry.resources.agents.researcher, { name: "Researcher" });
 });
 
-Deno.test("same plugin object is idempotent while duplicate plugin identities fail", () => {
+test("same plugin object is idempotent while duplicate plugin identities fail", () => {
   const shared = definePlugin({ id: "acme.shared", version: "1.0.0" });
   const registry = createPluginRegistry({ plugins: [shared, shared] });
   assertEquals(registry.plugins, [shared]);
@@ -124,7 +147,7 @@ Deno.test("same plugin object is idempotent while duplicate plugin identities fa
   );
 });
 
-Deno.test("Resources and Adapters overlay independently and application values are final", () => {
+test("Resources and Adapters overlay independently and application values are final", () => {
   const dependencyResource = { source: "dependency" };
   const pluginResource = { source: "plugin" };
   const applicationResource = { source: "application" };
@@ -158,7 +181,7 @@ Deno.test("Resources and Adapters overlay independently and application values a
   );
 });
 
-Deno.test("registry preserves inferred overlay types", () => {
+test("registry preserves inferred overlay types", () => {
   const dependency = definePlugin({
     id: "acme.typed-dependency",
     version: "1.0.0",
@@ -181,7 +204,7 @@ Deno.test("registry preserves inferred overlay types", () => {
   assertEquals([fallback, selected], ["fallback-model", "application-model"]);
 });
 
-Deno.test("executable aliases and stable IDs are unique", () => {
+test("executable aliases and stable IDs are unique", () => {
   const firstAction = action("search.first");
   const secondAction = action("search.second");
   const aliasA = definePlugin({
@@ -249,7 +272,7 @@ Deno.test("executable aliases and stable IDs are unique", () => {
   );
 });
 
-Deno.test("legacy fields and non-property aliases are rejected", () => {
+test("legacy fields and non-property aliases are rejected", () => {
   assertThrows(
     () =>
       definePlugin(
@@ -274,7 +297,7 @@ Deno.test("legacy fields and non-property aliases are rejected", () => {
   );
 });
 
-Deno.test("processor matching and durable consumer identity use direct registries", () => {
+test("processor matching and durable consumer identity use direct registries", () => {
   const observer = defineProcessor({
     id: "memory.observe",
     on: [{ eventType: "message.created", namespace: "tenant-a" }],
@@ -305,7 +328,7 @@ Deno.test("processor matching and durable consumer identity use direct registrie
   );
 });
 
-Deno.test("static wildcard processors require a semantic structural guard", () => {
+test("static wildcard processors require a semantic structural guard", () => {
   const guarded = [
     defineProcessor({
       id: "audit.by-subject",
@@ -381,7 +404,7 @@ Deno.test("static wildcard processors require a semantic structural guard", () =
   }
 });
 
-Deno.test("guarded durable wildcards match hydrated Action lifecycle data", () => {
+test("guarded durable wildcards match hydrated Action lifecycle data", () => {
   const completed = defineProcessor({
     id: "audit.action-completed",
     on: [{
@@ -456,7 +479,7 @@ Deno.test("guarded durable wildcards match hydrated Action lifecycle data", () =
   );
 });
 
-Deno.test("transient processors retain unrestricted wildcard observation", () => {
+test("transient processors retain unrestricted wildcard observation", () => {
   const wildcard = defineProcessor({
     id: "audit.all-transient",
     on: [{ eventType: "*" }],
@@ -480,14 +503,218 @@ Deno.test("transient processors retain unrestricted wildcard observation", () =>
   assertEquals(transients.match(event), [wildcard]);
 });
 
-Deno.test("plugin composition core stays runtime-neutral", async () => {
+test("plugin composition core stays runtime-neutral", async () => {
   for (
     const module of ["index.ts", "processor.ts", "registry.ts", "types.ts"]
   ) {
-    const source = await Deno.readTextFile(new URL(module, import.meta.url));
+    const source = await readFile(new URL(module, import.meta.url), "utf8");
     assert(!/\bDeno\b|\bBun\b|\bprocess\b/.test(source));
     assert(!/from\s+["']node:/.test(source));
     assert(!/loaders\/resources|runtime\/cli|server\//.test(source));
     assert(!/manifest|provides|PluginResourceType/.test(source));
+  }
+});
+
+test("Views compose across dependencies and application maps with exact inference", () => {
+  const board = defineView({
+    id: "board.context",
+    shows: "board",
+    renderer: "text",
+    modes: ["context"],
+    render: (item: { title: string }) => item.title,
+  });
+  const summary = defineView({
+    id: "board.summary",
+    shows: { list: "board" },
+    renderer: "text",
+    modes: ["context"],
+    render: (items: readonly { title: string }[]) => items.length,
+  });
+  const dependency = definePlugin({
+    id: "base",
+    version: "1",
+    views: { board },
+  });
+  const child = definePlugin({
+    id: "child",
+    version: "1",
+    plugins: [dependency],
+  });
+  const registry = createPluginRegistry({
+    plugins: [child],
+    views: { summary },
+  });
+  const typedBoard: typeof board = registry.views.board;
+  const typedSummary: typeof summary = registry.views.summary;
+  assertStrictEquals(typedBoard, board);
+  assertStrictEquals(typedSummary, summary);
+  assertStrictEquals(registry.resolveView("board", "context", "text"), board);
+  assertStrictEquals(
+    registry.resolveView({ list: "board" }, "context", "text"),
+    summary,
+  );
+  assertStrictEquals(
+    registry.resolveView("missing", "context", "text"),
+    undefined,
+  );
+  assertEquals(definePlugin({ id: "empty", version: "1" }).views, {});
+});
+
+test("View aliases and IDs cannot be overridden even by a preference", () => {
+  const first = defineView({
+    id: "board.first",
+    shows: "board",
+    renderer: "text",
+    modes: ["context"],
+    render: () => "first",
+  });
+  const second = defineView({
+    ...first,
+    id: "board.second",
+    render: () => "second",
+  });
+  const root = definePlugin({
+    id: "root",
+    version: "1",
+    views: { board: first },
+  });
+  const resources = {
+    views: {
+      prefer: [{
+        shows: "board",
+        mode: "context",
+        renderer: "text",
+        view: "board.second",
+      }],
+    },
+  };
+  assertThrows(
+    () =>
+      createPluginRegistry({
+        plugins: [root],
+        views: { board: second },
+        resources,
+      }),
+    TypeError,
+    "View alias 'board'",
+  );
+  assertThrows(
+    () => createPluginRegistry({ plugins: [root], views: { other: first } }),
+    TypeError,
+    "View id 'board.first'",
+  );
+});
+
+test("View resolution validates overlapping modes and the final Resource preference", () => {
+  const first = defineView({
+    id: "board.first",
+    shows: "board",
+    renderer: "text",
+    modes: ["context", "summary"],
+    render: () => "first",
+  });
+  const second = defineView({
+    ...first,
+    id: "board.second",
+    modes: ["context"],
+    render: () => "second",
+  });
+  const preference = (
+    view: string,
+  ) => [{ shows: "board", mode: "context", renderer: "text", view }];
+  const dependency = definePlugin({
+    id: "dependency",
+    version: "1",
+    views: { first, second },
+    resources: { views: { prefer: preference(first.id) } },
+  });
+  const registry = createPluginRegistry({
+    plugins: [dependency],
+    resources: { views: { prefer: preference(second.id) } },
+  });
+  assertStrictEquals(registry.resolveView("board", "context", "text"), second);
+  assertStrictEquals(registry.resolveView("board", "summary", "text"), first);
+  assertThrows(
+    () => createPluginRegistry({ views: { first, second } }),
+    TypeError,
+    "Ambiguous",
+  );
+  assertThrows(
+    () =>
+      createPluginRegistry({
+        plugins: [dependency],
+        resources: { views: { prefer: preference("missing.view") } },
+      }),
+    TypeError,
+    "matching candidate",
+  );
+  assertThrows(
+    () =>
+      createPluginRegistry({
+        views: { first },
+        resources: { views: { prefer: "board.first" } },
+      }),
+    TypeError,
+    "preference array",
+  );
+  assertThrows(
+    () =>
+      createPluginRegistry({
+        views: { first },
+        resources: {
+          views: {
+            prefer: [{
+              shows: "board",
+              mode: "context",
+              renderer: "react",
+              view: first.id,
+            }],
+          },
+        },
+      }),
+    TypeError,
+    "matching candidate",
+  );
+});
+
+test("invalid View maps, aliases, and definitions fail at plugin authoring", () => {
+  const base = { id: "invalid", version: "1" };
+  for (
+    const views of [[], null, { bad: {} }, {
+      "bad-alias": defineView({
+        id: "valid",
+        shows: "board",
+        renderer: "text",
+        modes: ["context"],
+        render: () => "",
+      }),
+    }]
+  ) {
+    assertThrows(
+      () =>
+        definePlugin(
+          { ...base, views } as unknown as Parameters<typeof definePlugin>[0],
+        ),
+      TypeError,
+      "views",
+    );
+  }
+});
+
+test("older branded five-map plugins without a Views property still compose", () => {
+  const legacy = definePlugin({
+    id: "legacy.five",
+    version: "1",
+    actions: { old: action("legacy.old") },
+  });
+  // Older definePlugin versions use the same marker and expose only five maps.
+  Reflect.deleteProperty(legacy, "views");
+  const registry = createPluginRegistry({ plugins: [legacy] });
+  assertEquals(registry.actions.old.id, "legacy.old");
+  assertEquals(registry.views, {});
+  assertEquals(registry.resolveView("missing", "context", "text"), undefined);
+  for (const invalid of [null, [], "invalid"]) {
+    Reflect.set(legacy, "views", invalid);
+    assertThrows(() => createPluginRegistry({ plugins: [legacy] }), TypeError);
   }
 });

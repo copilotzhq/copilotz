@@ -32,7 +32,7 @@ Reuse needs a composition contract and reactions need a delivery contract:
 
 A **Plugin**, declared with `definePlugin`, is plain data: an `id`, a `version`,
 optional dependency `plugins` and keyed maps of `collections`, `actions`,
-`processors`, `resources` and `adapters`. Defining one opens nothing.
+`processors`, `resources`, `adapters` and `views`. Defining one opens nothing.
 `createCopilotz({ plugins })` registers its contents.
 
 A **Processor**, declared with `defineProcessor`, is a subscription: its `on`
@@ -42,11 +42,14 @@ that delivery settles. Live Events are handled best effort: nothing is recorded,
 retried or recovered, so durable side effects belong behind the `event.durable`
 guard.
 
+The [View foundation](views.md) adds scoped one-shot text presentation. Its
+renderer/projection plumbing is experimental; live rendering is not included.
+
 ### Composition rules
 
 - **Dependencies first.** Each plugin's `plugins` are registered before its own
   maps, depth first. The application's own `collections`, `actions`,
-  `processors`, `resources` and `adapters` passed to `createCopilotz` act as a
+  `processors`, `resources`, `adapters` and `views` passed to `createCopilotz` act as a
   final root plugin registered after every listed plugin.
 - **Same object, registered once.** When several plugins depend on the same
   plugin object, it is registered once. A _different_ object with the same
@@ -54,9 +57,9 @@ guard.
   `Plugin '<id>' was declared more than once.` Dependency cycles also fail.
 - **Aliases and IDs are both unique.** Map keys are aliases. Each alias may
   appear once per kind across the whole composition, and each stable ID
-  (Collection `name`, Action `id`, Processor `id`) may be exposed under only one
+  (Collection `name`, Action `id`, Processor `id`, View `id`) may be exposed under only one
   alias. The application's root maps take part in the same checks: they cannot
-  replace a plugin's Collection, Action or Processor. Declaring a root Action
+  replace a plugin's Collection, Action, Processor or View. Declaring a root Action
   under an alias a plugin already uses fails with
   `Action alias '<alias>' is declared by more than one plugin.`
 - **Resources and adapters overlay.** `resources` and `adapters` are

@@ -44,11 +44,16 @@ factory. Its `role` option selects what the returned object can do:
 | `"worker"`              | `{ ready, closed, close }` only | execution of deliveries placed on its worker |
 
 Every role accepts the same composition: `namespace`, `plugins`, `resources`,
-`adapters`, `assets` and persistence options (`database`, or a shared
-`persistence` created by `createCopilotzPersistence()`). The creator of a shared
-persistence facade closes it after closing the roles that use it. Role placement
-is covered in
+`adapters`, direct `collections`, `actions`, `processors`, `views`, `assets` and
+persistence options (`database`, or a shared `persistence` created by
+`createCopilotzPersistence()`). The creator of a shared persistence facade
+closes it after closing the roles that use it. Role placement is covered in
 [Deploy and scale](getting-started/part-5-operate-and-scale/21-deploy-and-scale.md).
+
+The experimental [View foundation](views.md) is available from the root and
+`@copilotz/copilotz/views`. Composition accepts Views in every role; actual
+rendering uses an explicitly supplied one-shot renderer and authorized
+projector.
 
 A Worker result has no operation methods. Await `worker.ready` before relying on
 it, observe `worker.closed` for an unexpected stop, and call

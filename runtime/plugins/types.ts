@@ -1,10 +1,12 @@
 import {
   type ContributionActions,
   type ContributionPlugins,
+  type ContributionViews,
   resolveContributions,
   type ResolvedNamespaces,
 } from "./contribution.ts";
 import type { ActionMap, AnyActionDefinition } from "../actions/types.ts";
+import { isViewDefinition, type ViewMap } from "../views/index.ts";
 import { isActionDefinition } from "../actions/define.ts";
 import type { CollectionDefinition } from "../collections/definition.ts";
 import { isProcessor } from "./processor.ts";
@@ -76,15 +78,18 @@ export type PluginTypeComposition<
   TProcessors extends object = ProcessorMap,
   TResources extends PluginResources = PluginResources,
   TAdapters extends PluginAdapters = PluginAdapters,
+  TViews extends ViewMap = ViewMap,
 > = Readonly<{
   collections: TCollections;
   actions: TActions;
   processors: TProcessors;
   resources: TResources;
   adapters: TAdapters;
+  views: TViews;
 }>;
 
 type EmptyPluginComposition = PluginTypeComposition<
+  EmptyMap,
   EmptyMap,
   EmptyMap,
   EmptyMap,
@@ -100,7 +105,8 @@ export type MergePluginCompositions<
   Simplify<A["actions"] & B["actions"]>,
   Simplify<A["processors"] & B["processors"]>,
   OverlayPluginNamespaces<A["resources"], B["resources"]>,
-  OverlayPluginNamespaces<A["adapters"], B["adapters"]>
+  OverlayPluginNamespaces<A["adapters"], B["adapters"]>,
+  Simplify<A["views"] & B["views"]>
 >;
 
 declare const pluginCompositionTypes: unique symbol;
@@ -114,6 +120,7 @@ export interface AnyCopilotzPlugin {
   readonly processors: ProcessorMap;
   readonly resources: PluginResources;
   readonly adapters: PluginAdapters;
+  readonly views: ViewMap;
   readonly [pluginCompositionTypes]?: PluginTypeComposition;
 }
 
@@ -151,6 +158,7 @@ export interface CopilotzPlugin<
   TProcessors extends ProcessorMap = ProcessorMap,
   TResources extends PluginResources = PluginResources,
   TAdapters extends PluginAdapters = PluginAdapters,
+  TViews extends ViewMap = ViewMap,
 > {
   readonly id: TId;
   readonly version: TVersion;
@@ -160,6 +168,7 @@ export interface CopilotzPlugin<
   readonly processors: TProcessors;
   readonly resources: TResources;
   readonly adapters: TAdapters;
+  readonly views: TViews;
   readonly [pluginCompositionTypes]?: MergePluginCompositions<
     ComposePlugins<TPlugins>,
     PluginTypeComposition<
@@ -167,7 +176,8 @@ export interface CopilotzPlugin<
       TActions,
       TProcessors,
       TResources,
-      TAdapters
+      TAdapters,
+      TViews
     >
   >;
 }
@@ -181,6 +191,7 @@ export type DefinePluginInput<
   TProcessors extends ProcessorMap = ProcessorMap,
   TResources extends PluginResources = PluginResources,
   TAdapters extends PluginAdapters = PluginAdapters,
+  TViews extends ViewMap = ViewMap,
 > = Readonly<{
   id: TId;
   version: TVersion;
@@ -190,6 +201,7 @@ export type DefinePluginInput<
   processors?: TProcessors;
   resources?: TResources;
   adapters?: TAdapters;
+  views?: TViews;
 }>;
 
 /** The resolved public type of a static plugin declaration. */
@@ -203,7 +215,8 @@ export type DefinedPlugin<T extends DefinePluginInput> = ReturnType<
     T extends { actions: infer A extends ActionMap } ? A : EmptyMap,
     T extends { processors: infer P extends ProcessorMap } ? P : EmptyMap,
     T extends { resources: infer R extends PluginResources } ? R : EmptyMap,
-    T extends { adapters: infer A extends PluginAdapters } ? A : EmptyMap
+    T extends { adapters: infer A extends PluginAdapters } ? A : EmptyMap,
+    T extends { views: infer V extends ViewMap } ? V : EmptyMap
   >
 >;
 
@@ -218,6 +231,7 @@ const PLUGIN_KEYS = new Set([
   "processors",
   "resources",
   "adapters",
+  "views",
 ]);
 const pluginMarker = Symbol.for("copilotz.plugin");
 
@@ -332,6 +346,7 @@ export function definePlugin<
   const TProcessors extends ProcessorMap = EmptyMap,
   const TResources extends PluginResources = EmptyMap,
   const TAdapters extends PluginAdapters = EmptyMap,
+  const TViews extends ViewMap = EmptyMap,
 >(
   input: DefinePluginInput<
     TId,
@@ -341,7 +356,8 @@ export function definePlugin<
     TActions,
     TProcessors,
     TResources,
-    TAdapters
+    TAdapters,
+    TViews
   >,
 ): CopilotzPlugin<
   TId,
@@ -355,7 +371,8 @@ export function definePlugin<
   TActions & ContributionActions<TResources> & ContributionActions<TAdapters>,
   TProcessors,
   ResolvedNamespaces<TResources>,
-  ResolvedNamespaces<TAdapters>
+  ResolvedNamespaces<TAdapters>,
+  TViews & ContributionViews<TResources> & ContributionViews<TAdapters>
 > {
   if (!isRecord(input)) {
     throw new TypeError("Plugin definition must be an object.");
@@ -381,6 +398,9 @@ export function definePlugin<
     }
   }
 
+  if (input.views !== undefined && !isRecord(input.views)) {
+    throw new TypeError(`Plugin '${id}' views must be an alias map.`);
+  }
   const resolved = resolveContributions(input);
   for (const dependency of resolved.plugins) {
     if (!isCopilotzPlugin(dependency)) {
@@ -401,7 +421,8 @@ export function definePlugin<
     TActions & ContributionActions<TResources> & ContributionActions<TAdapters>,
     TProcessors,
     ResolvedNamespaces<TResources>,
-    ResolvedNamespaces<TAdapters>
+    ResolvedNamespaces<TAdapters>,
+    TViews & ContributionViews<TResources> & ContributionViews<TAdapters>
   > = {
     id,
     version,
@@ -428,6 +449,11 @@ export function definePlugin<
       `Plugin '${id}' processors`,
       isProcessor,
     ) as TProcessors,
+    views: validateDefinitions(
+      resolved.views,
+      `Plugin '${id}' views`,
+      isViewDefinition,
+    ) as TViews & ContributionViews<TResources> & ContributionViews<TAdapters>,
     resources: validateNamespaces(
       resolved.resources as ResolvedNamespaces<TResources>,
       `Plugin '${id}' resources`,

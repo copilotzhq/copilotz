@@ -149,6 +149,11 @@
           "description": "Compose plugins and write retry-safe Processors."
         },
         {
+          "title": "View foundation",
+          "slug": "views",
+          "description": "Experimental scoped one-shot text rendering and composition resolution."
+        },
+        {
           "title": "Collections",
           "slug": "collections",
           "description": "Schema-checked state, retry-safe writes, commands, queries and transactions."

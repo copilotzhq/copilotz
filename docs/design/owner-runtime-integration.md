@@ -499,3 +499,15 @@ SQL. Unknown binds stop the owner, and unresolved retirement stays visible and
 charged for authoritative recovery. Nineteen independently reviewed table/port
 cases and six unchanged architecture checks pass. Actual transport drop-Start
 and assembled owner-host readiness remain the next integration proofs.
+
+### Restricted effect transport
+
+Current parent-bound effect settlement and safe effect-state routes are distinct
+from privileged begin/ordinary commands. They accept only fixed registered
+kinds, revalidate current SQL authority, and grant no parentless mutation or
+arbitrary projection. Each worker effect port captures its own WorkContext. The
+retained malformed-kind regression failed before strict type validation and now
+passes; independent connection coverage is 39 cases plus the original
+reproducer. Two wrapper lifecycle cases also pass. The expanded worker closure
+and effect-aware retry gate are a separate pending checkpoint; provider
+conversion remains open.

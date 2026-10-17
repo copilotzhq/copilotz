@@ -472,6 +472,7 @@ async function fixture(
       },
       handlers: {
         "execution.complete": () => null,
+        "effect.confirm": () => null,
         "action.admit": () => ({ eventId: "safe-root" }),
         async put(intent, ctx) {
           await ctx.tx.query(
@@ -1606,6 +1607,155 @@ test("root boundary rejects forged provenance and changed absence restrictions a
     assert.equal(
       (await db.query("SELECT 1 FROM owner_receipts WHERE kind='action.admit'"))
         .rows.length,
+      0,
+    );
+  });
+});
+
+test("restricted effect routes preserve settlement without granting begin or arbitrary reads", async () => {
+  const calls: unknown[] = [];
+  const owner = recordingBoundary({
+    execute: (who, command) => {
+      calls.push([who, command]);
+      return Promise.resolve({ status: "committed", result: null });
+    },
+    project: (who, kind, input) => {
+      calls.push([who, kind, input]);
+      return Promise.resolve({ status: "begun" });
+    },
+  });
+  const port = admission(owner, {
+    resolveAssignment: () => ({
+      ownerId: "tenant",
+      ctxGranted: false,
+      settlementGranted: true,
+      caller,
+    }),
+  });
+  const settleContext = context({ workload: "copilotz.owner.effect-settle" });
+  const stateContext = context({ workload: "copilotz.owner.effect-state" });
+  assert.equal(await port.admit(context()), undefined);
+  assert.equal(
+    await port.admit(context({ workload: "copilotz.owner.project" })),
+    undefined,
+  );
+  assert.equal(
+    await port.admitUnassigned({ ...settleContext, parent: undefined }),
+    undefined,
+  );
+  assert.equal(
+    await port.admitUnassigned({ ...stateContext, parent: undefined }),
+    undefined,
+  );
+  const settle = await port.admit(settleContext);
+  const inspect = await port.admit(stateContext);
+  assert(settle);
+  assert(inspect);
+  const signal = new AbortController().signal;
+  for (
+    const payload of [
+      { ...request, kind: ["effect.confirm"] },
+      { ...request, kind: "effect.begin" },
+      { ...request, kind: "execution.complete" },
+      { ...request, kind: "effect.confirm", domain: "incarnation" },
+      { ...request, kind: "effect.notStarted", other: true },
+    ]
+  ) {
+    assert.equal(
+      decode(await settle({ input: stream(payload), signal })).ok,
+      false,
+    );
+  }
+  assert.equal(calls.length, 0);
+  for (const kind of ["effect.confirm", "effect.notStarted"]) {
+    const command = { ...request, kind };
+    assert.equal(
+      decode(await settle({ input: stream(command), signal })).ok,
+      true,
+    );
+  }
+  const input = {
+    namespace: "space",
+    actionRunId: "run",
+    step: "send",
+    kind: "execution.input",
+  };
+  await inspect({ input: stream(input), signal });
+  assert.deepEqual(calls[2], [caller, "effect.state", input]);
+});
+
+test("restricted effect client selects only fixed routes and keeps unknown outcomes", async () => {
+  const workloads: string[] = [];
+  const client = createOwnerConnection({
+    ownerId: "tenant",
+    callHost(input) {
+      workloads.push(input.workload);
+      return Promise.resolve({
+        output: stream({
+          ok: false,
+          outcome: "unknown",
+          code: "owner_commit_unknown",
+        }),
+        completed: Promise.resolve(),
+        cancel: () => Promise.resolve(),
+      });
+    },
+  });
+  await assert.rejects(
+    client.effectSettle({ ...request, kind: "effect.begin" }),
+    /restricted effect/,
+  );
+  await assert.rejects(
+    client.effectSettle({ ...request, kind: "effect.confirm" }),
+    (error) =>
+      error instanceof OwnerCallRejected && error.outcome === "unknown",
+  );
+  await assert.rejects(
+    client.effectState({
+      namespace: "space",
+      actionRunId: "run",
+      step: "send",
+    }),
+    (error) =>
+      error instanceof OwnerCallRejected && error.outcome === "unknown",
+  );
+  assert.deepEqual(workloads, [
+    "copilotz.owner.effect-settle",
+    "copilotz.owner.effect-state",
+  ]);
+});
+
+test("restricted effect settlement revalidates SQL authority after admission", async () => {
+  await fixture(async (owner, db) => {
+    const port = admission(owner, {
+      resolveAssignment: () => ({
+        ownerId: "tenant",
+        ctxGranted: false,
+        settlementGranted: true,
+        caller,
+      }),
+    });
+    const handler = await port.admit(
+      context({ workload: "copilotz.owner.effect-settle" }),
+    );
+    assert(handler);
+    let controller!: ReadableStreamDefaultController<Uint8Array>;
+    const pending = handler({
+      input: new ReadableStream({
+        start(value) {
+          controller = value;
+        },
+      }),
+      signal: new AbortController().signal,
+    });
+    await db.query("UPDATE grants SET allowed=FALSE");
+    controller.enqueue(
+      encoder.encode(JSON.stringify({ ...request, kind: "effect.confirm" })),
+    );
+    controller.close();
+    assert.equal(decode(await pending).ok, false);
+    assert.equal(
+      (await db.query("SELECT 1 FROM owner_receipts")).rows.length,
       0,
     );
   });

@@ -97,11 +97,25 @@ export function createOwnerConnectedWorker(
           const connection = createOwnerConnection({ ownerId, callHost });
           const execution = createRegisteredActionWorker({
             registry,
-            owner: createRegisteredOwnerExecutionPort({
-              ownerId,
-              namespace,
-              port: connection,
-            }),
+            owner: {
+              ...createRegisteredOwnerExecutionPort({
+                ownerId,
+                namespace,
+                port: connection,
+              }),
+              effects: {
+                execute: connection.execute,
+                settle: connection.effectSettle,
+                project(kind, input, callOptions) {
+                  if (kind !== "effect.state") {
+                    return Promise.reject(
+                      new TypeError("Unsupported effect projection."),
+                    );
+                  }
+                  return connection.effectState(input, callOptions);
+                },
+              },
+            },
             createCapabilities,
             maxAssignments: 1,
           });

@@ -13,6 +13,8 @@ import type {
 } from "./boundary.ts";
 import { assertJsonValue } from "../json.ts";
 
+const EFFECT_SETTLE = "copilotz.owner.effect-settle";
+const EFFECT_STATE = "copilotz.owner.effect-state";
 const ACTION = "copilotz.owner.action";
 const ACTION_RESULT = "copilotz.owner.action-result";
 const COMMAND = "copilotz.owner.command";
@@ -36,6 +38,15 @@ const ERROR_CODES = new Set([
   "owner_commit_unknown",
   "persistence_indeterminate",
   "owner_call_rejected",
+  "effect_authority_refused",
+  "effect_binding_invalid",
+  "effect_transition_conflict",
+  "effect_evidence_refused",
+  "effect_outcome_invalid",
+  "effect_state_invalid",
+  "effect_step_limit",
+  "effect_data_invalid",
+  "effect_indeterminate",
 ]);
 type JsonObject = Readonly<Record<string, OwnerJson>>;
 
@@ -209,7 +220,9 @@ export function createOwnerWorkerCallAdmission(
       context.workload !== COMMAND && context.workload !== RECEIPT &&
       context.workload !== PROJECT && context.workload !== COMPLETE &&
       context.workload !== READY && context.workload !== ACTION &&
-      context.workload !== ACTION_RESULT
+      context.workload !== ACTION_RESULT &&
+      context.workload !== EFFECT_SETTLE &&
+      context.workload !== EFFECT_STATE
     ) {
       return undefined;
     }
@@ -249,7 +262,11 @@ export function createOwnerWorkerCallAdmission(
       ingressRoute && (!ingress || !currentOwner() || context.signal.aborted)
     ) return undefined;
     const isCompletion = context.workload === COMPLETE;
-    const isCommand = context.workload === COMMAND || isCompletion;
+    const isEffectSettlement = context.workload === EFFECT_SETTLE;
+    const isEffectState = context.workload === EFFECT_STATE;
+    const isSettlement = isCompletion || isEffectSettlement || isEffectState;
+    const isCommand = context.workload === COMMAND || isCompletion ||
+      isEffectSettlement;
     const isAssigned = context.workload !== RECEIPT && !isReadiness &&
       !ingressRoute;
     if (isAssigned && !context.parent) return undefined;
@@ -259,7 +276,7 @@ export function createOwnerWorkerCallAdmission(
     if (
       isAssigned &&
       (!assignment || assignment.ownerId !== ownerId ||
-        (isCompletion
+        (isSettlement
           ? assignment.settlementGranted !== true
           : assignment.ctxGranted !== true))
     ) return undefined;
@@ -324,6 +341,20 @@ export function createOwnerWorkerCallAdmission(
             throw new TypeError("Invalid restricted completion command.");
           }
         }
+        if (isEffectSettlement) {
+          const command = object(payload);
+          if (
+            typeof command.kind !== "string" ||
+            !["effect.confirm", "effect.notStarted"].includes(command.kind) ||
+            command.domain !== "logical" || typeof command.key !== "string" ||
+            !Object.hasOwn(command, "intent") ||
+            Object.keys(command).some((key) =>
+              !["kind", "domain", "key", "intent"].includes(key)
+            )
+          ) {
+            throw new TypeError("Invalid restricted effect settlement.");
+          }
+        }
         if (context.workload === ACTION) {
           const command = object(payload);
           if (
@@ -345,6 +376,13 @@ export function createOwnerWorkerCallAdmission(
           ? await owner.project(
             admitted,
             "action.result",
+            payload as OwnerJson,
+            { signal },
+          )
+          : isEffectState
+          ? await owner.project(
+            admitted,
+            "effect.state",
             payload as OwnerJson,
             { signal },
           )
@@ -373,7 +411,8 @@ export function createOwnerWorkerCallAdmission(
           : await owner.readReceipt(admitted, receiptIdentity(payload));
         committed = isCommand || context.workload === ACTION;
         if (
-          context.workload === PROJECT || context.workload === ACTION_RESULT
+          context.workload === PROJECT || context.workload === ACTION_RESULT ||
+          isEffectState
         ) {
           signal.throwIfAborted();
           context.signal.throwIfAborted();
@@ -553,6 +592,28 @@ export function createOwnerConnection(
         throw new TypeError("Invalid restricted completion command.");
       }
       return await call(COMPLETE, command, callOptions) as OwnerCommandOutcome;
+    },
+    async effectSettle(
+      command: OwnerCommand,
+      callOptions?: Readonly<{ signal?: AbortSignal; deadlineAtMs?: number }>,
+    ): Promise<OwnerCommandOutcome> {
+      if (
+        !["effect.confirm", "effect.notStarted"].includes(command.kind) ||
+        command.domain !== "logical"
+      ) {
+        throw new TypeError("Invalid restricted effect settlement.");
+      }
+      return await call(
+        EFFECT_SETTLE,
+        command,
+        callOptions,
+      ) as OwnerCommandOutcome;
+    },
+    async effectState(
+      reference: OwnerJson,
+      callOptions?: Readonly<{ signal?: AbortSignal; deadlineAtMs?: number }>,
+    ): Promise<OwnerJson> {
+      return await call(EFFECT_STATE, reference, callOptions) as OwnerJson;
     },
     async project(
       kind: string,

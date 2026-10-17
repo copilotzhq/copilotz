@@ -38,6 +38,7 @@ export type TelegramTransport = Readonly<{
     config: TelegramConfig,
     method: string,
     body: Readonly<Record<string, unknown>>,
+    options?: Readonly<{ signal?: AbortSignal }>,
   ): Promise<unknown>;
   download(
     config: TelegramConfig,

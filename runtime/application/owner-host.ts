@@ -1,10 +1,16 @@
-/** Private fresh-schema ordinary Action/Processor host. Every worker, including embedded
- * workers, uses the same Oxian transport. Restart/takeover, streams,
- * protected/content/deferred Actions and general reads are deliberately refused. */
+/** Private ordinary Action/Processor host. Every worker, including embedded
+ * workers, uses the same Oxian transport. Resume supports only the bounded
+ * event-only pending/terminal proof; lost/retried attempts, graph/content state,
+ * streams and protected/deferred histories remain explicit startup blockers. */
 import type {
   Hypervisor,
   HypervisorOptions,
 } from "../../dependencies/oxian-hypervisor.ts";
+import { defineCollection } from "../collections/definition.ts";
+import {
+  provisionCollectionIndexes,
+  validateCollectionIndexes,
+} from "../collections/indexes.ts";
 import { actionDefinitionHasSecrets } from "../actions/secret.ts";
 import {
   createCoreTableNames,
@@ -95,6 +101,13 @@ import {
   OWNER_OPERATION_READINESS,
   OWNER_OPERATION_SETTLEMENT,
 } from "../owner/settlement.ts";
+import {
+  createOwnerStartupProof,
+  OWNER_STARTUP_PROOF,
+  OWNER_STARTUP_REPAIR,
+  ownerStartupRepairKey,
+} from "../owner/startup.ts";
+import { ownerPrincipalIdentity } from "../owner/principal.ts";
 import {
   createOwnerDispatchBridge,
   type OwnerDispatchAdmissions,
@@ -206,7 +219,16 @@ export type OwnerHostOptions = Readonly<{
   holderId: string;
   schema: string;
   session: SqlSession;
-  initialization: "fresh";
+  initialization:
+    | "fresh"
+    | Readonly<{
+      mode: "resume";
+      /** CAS expectation for the PRIOR durable epoch, not the acquired successor. */
+      expectedEpoch: number;
+      maxItems?: number;
+      maxBytes?: number;
+      maxPasses?: number;
+    }>;
   registry: PluginRegistry;
   policy: OwnerHostPolicy;
   transport: Omit<HypervisorOptions, "workerCalls">;
@@ -299,10 +321,34 @@ export async function createOwnerHost(options: OwnerHostOptions) {
   for (const value of [options.ownerId, options.holderId, options.schema]) {
     text(value);
   }
-  if (options.initialization !== "fresh") {
-    throw new TypeError(
-      "Owner host restart/takeover requires concrete recovery integration.",
-    );
+  const initialization = options.initialization === "fresh"
+    ? "fresh"
+    : copy(options.initialization);
+  if (initialization !== "fresh") {
+    if (
+      !initialization || typeof initialization !== "object" ||
+      Array.isArray(initialization) || initialization.mode !== "resume" ||
+      Object.keys(initialization).some((key) =>
+        !["mode", "expectedEpoch", "maxItems", "maxBytes", "maxPasses"]
+          .includes(key)
+      ) ||
+      (["maxItems", "maxBytes", "maxPasses"] as const).some((key) =>
+        Object.hasOwn(initialization, key) &&
+        typeof initialization[key] !== "number"
+      ) ||
+      !Number.isSafeInteger(initialization.expectedEpoch) ||
+      initialization.expectedEpoch < 1 ||
+      initialization.expectedEpoch >= Number.MAX_SAFE_INTEGER ||
+      !Number.isSafeInteger(initialization.maxItems ?? 1000) ||
+      (initialization.maxItems ?? 1000) < 1 ||
+      (initialization.maxItems ?? 1000) > 10_000 ||
+      !Number.isSafeInteger(initialization.maxBytes ?? 8 * 1024 * 1024) ||
+      (initialization.maxBytes ?? 8 * 1024 * 1024) < 1024 ||
+      (initialization.maxBytes ?? 8 * 1024 * 1024) > 32 * 1024 * 1024 ||
+      !Number.isSafeInteger(initialization.maxPasses ?? 4) ||
+      (initialization.maxPasses ?? 4) < 1 ||
+      (initialization.maxPasses ?? 4) > 16
+    ) throw new TypeError("Invalid owner host resume options.");
   }
   for (
     const name of [
@@ -347,16 +393,44 @@ export async function createOwnerHost(options: OwnerHostOptions) {
   if (maxActive > maxPending) {
     throw new TypeError("Active capacity exceeds pending capacity.");
   }
-  const { session, schema, ownerId, holderId, registry, policy } = options;
+  const {
+    session,
+    schema,
+    ownerId,
+    holderId,
+    registry,
+    createTransport,
+    now,
+    onError,
+    leaseMs,
+  } = options;
+  const policy = { ...options.policy };
+  const transportOptions = { ...options.transport };
+  // Only declarative fields used by the index planner cross initialization awaits.
+  const collectionDefinitions = Object.values(
+    registry.collections,
+  ).map((definition) =>
+    defineCollection(copy({
+      name: definition.name,
+      schema: definition.schema,
+      ...(definition.indexes ? { indexes: definition.indexes } : {}),
+    }))
+  );
   const tables = createCoreTableNames(schema);
   const ownerTables = ownerTableNames(schema);
   const operationTables = createOperationCatalogTables(schema);
   const assignmentTable = `${quoteEventIdentifier(schema)}."owner_assignments"`;
   // Explicit fresh provisioning may prepare tables, but NEVER establishes readiness.
-  await provisionCopilotzSchema(session, schema);
-  await provisionOperationCatalog(session, schema);
-  await provisionOwnerCommandSchema(session, schema);
-  await provisionOwnerAssignments(session, schema);
+  if (initialization === "fresh") {
+    await provisionCopilotzSchema(session, schema);
+    await provisionOperationCatalog(session, schema);
+    await provisionOwnerCommandSchema(session, schema);
+    await provisionOwnerAssignments(session, schema);
+  } else {
+    // Existing schemas are validated, never repaired or provisioned by resume.
+    await validateSchemas(session);
+    await validateCollectionIndexes(session, schema, collectionDefinitions);
+  }
   const catalog = createOperationCatalog(session, schema);
   const abort = new AbortController();
   let notifyStopped!: () => void;
@@ -372,7 +446,22 @@ export async function createOwnerHost(options: OwnerHostOptions) {
   let settlementPump: Promise<void> | undefined;
   let alarmTimer: ReturnType<typeof setTimeout> | undefined;
   let alarmPass: Promise<void> | undefined;
-  const controlTokens = new Set<string>();
+  type ControlPurpose =
+    | "runtime"
+    | "fresh"
+    | "schema"
+    | "startup"
+    | "startup-settlement";
+  const controlTokens = new Map<
+    string,
+    { purpose: ControlPurpose; target?: OperationSettlementScope }
+  >();
+  const freshKey = JSON.stringify([
+    "host.initialize-fresh",
+    ownerId,
+    holderId,
+    crypto.randomUUID(),
+  ]);
   type IngressWitness = {
     token: string;
     context: OwnerWorkerCallContext;
@@ -390,7 +479,7 @@ export async function createOwnerHost(options: OwnerHostOptions) {
   >();
   function report(error: unknown) {
     try {
-      options.onError?.(error);
+      onError?.(error);
     } catch { /* diagnostics cannot change durability */ }
   }
   function stop(error?: unknown) {
@@ -418,9 +507,14 @@ export async function createOwnerHost(options: OwnerHostOptions) {
   }
   async function control<T>(
     run: (caller: OwnerCaller) => Promise<T>,
+    purpose: ControlPurpose = "runtime",
+    target?: OperationSettlementScope,
   ): Promise<T> {
     const token = crypto.randomUUID();
-    controlTokens.add(token);
+    controlTokens.set(token, {
+      purpose,
+      ...(target ? { target: copy(target) } : {}),
+    });
     try {
       return await run({
         principal: {
@@ -436,7 +530,10 @@ export async function createOwnerHost(options: OwnerHostOptions) {
       controlTokens.delete(token);
     }
   }
-  function assertControl(caller: OwnerCaller) {
+  function assertControl(
+    caller: OwnerCaller,
+    purpose: ControlPurpose = "runtime",
+  ) {
     if (
       caller.principal.kind !== "owner-control" ||
       caller.principal.ownerId !== ownerId ||
@@ -444,7 +541,7 @@ export async function createOwnerHost(options: OwnerHostOptions) {
       caller.principal.epoch !== owner.epoch ||
       caller.ownerEpoch !== owner.epoch ||
       typeof caller.hostControl !== "string" ||
-      !controlTokens.has(caller.hostControl)
+      controlTokens.get(caller.hostControl)?.purpose !== purpose
     ) unavailable();
   }
   const bridge = createOwnerDispatchBridge({
@@ -790,9 +887,14 @@ export async function createOwnerHost(options: OwnerHostOptions) {
     session,
     catalog,
     maxConcurrentChecks: maxActive,
-    authorizeControl(_tx, caller) {
-      assertControl(caller);
-      return ready();
+    authorizeControl(_tx, caller, target) {
+      if (ready()) {
+        assertControl(caller);
+        return true;
+      }
+      assertControl(caller, "startup-settlement");
+      return !closed && !abort.signal.aborted && owner.state === "acquired" &&
+        same(controlTokens.get(caller.hostControl as string)?.target, target);
     },
     // This host has no stream/output relay capability. Ordinary Action results
     // are persisted JSON projected through action.result, never transport output.
@@ -830,7 +932,7 @@ export async function createOwnerHost(options: OwnerHostOptions) {
     registry,
     catalog,
     executor,
-    leaseMs: options.leaseMs,
+    leaseMs,
     scheduleSettlement: settlement.schedule,
     resolveAssignment: resolveExecution,
     authorizeInput: (tx, assignment, value, time) =>
@@ -842,7 +944,7 @@ export async function createOwnerHost(options: OwnerHostOptions) {
     session,
     registry,
     catalog,
-    leaseMs: options.leaseMs,
+    leaseMs,
     resolveAssignment: resolveProcessor,
     authorizeEvent(tx, assignment, event, data, time) {
       if (!policy.processorEvent) {
@@ -1002,15 +1104,131 @@ export async function createOwnerHost(options: OwnerHostOptions) {
       return scope;
     },
   });
+  const startup = createOwnerStartupProof({
+    ownerId,
+    schema,
+    registry,
+    ...(initialization === "fresh" ? {} : {
+      maxItems: initialization.maxItems,
+      maxBytes: initialization.maxBytes,
+    }),
+    authorizeControl(_tx, caller) {
+      assertControl(caller, "startup");
+      return !initialized && !closed && !abort.signal.aborted;
+    },
+  });
+  async function validateSchemas(tx: SqlExecutor) {
+    await validateCopilotzSchema(tx, schema);
+    await validateOperationCatalog({
+      query: tx.query.bind(tx),
+      transaction(): never {
+        throw new Error("Nested validation transactions are forbidden.");
+      },
+    }, schema);
+    await validateOwnerCommandSchema(tx, schema, ownerId);
+    await validateOwnerAssignments(tx, schema);
+  }
+  async function assertFreshEmpty(tx: SqlExecutor, committed: boolean) {
+    if (owner.epoch !== 1) {
+      unavailable("Fresh host cannot take over an existing epoch.");
+    }
+    for (
+      const table of [
+        tables.nodes,
+        tables.edges,
+        tables.events,
+        tables.event_bodies,
+        tables.event_deliveries,
+        tables.open_actions,
+        operationTables.operations,
+        operationTables.operationEvents,
+        operationTables.operationStreams,
+        operationTables.selectionHeads,
+        operationTables.selectionOperations,
+        assignmentTable,
+        ownerTables.alarms,
+      ]
+    ) {
+      if ((await tx.query(`SELECT 1 FROM ${table} LIMIT 1`)).rows.length) {
+        unavailable("Fresh owner host requires empty tables.");
+      }
+    }
+    for (const name of ["content_bodies", "content_body_parts"]) {
+      if (
+        (await tx.query<{ relation: string | null }>(
+          "SELECT to_regclass($1)::text AS relation",
+          [`${quoteEventIdentifier(schema)}.${quoteEventIdentifier(name)}`],
+        )).rows[0]?.relation
+      ) {
+        unavailable(
+          "Fresh owner host does not support retained content storage.",
+        );
+      }
+    }
+    if (!committed) {
+      for (const table of [ownerTables.receipts, ownerTables.receiptReaders]) {
+        if ((await tx.query(`SELECT 1 FROM ${table} LIMIT 1`)).rows.length) {
+          unavailable("Fresh owner host requires empty tables.");
+        }
+      }
+      return;
+    }
+    const principal = ownerPrincipalIdentity({
+      kind: "owner-control",
+      ownerId,
+      epoch: owner.epoch,
+      holderId,
+    });
+    const predicate =
+      `owner=$1 AND domain='occurrence' AND key=$2 AND principal_kind=$3 AND principal_id=$4`;
+    const params = [ownerId, freshKey, principal.kind, principal.id];
+    for (
+      const [table, extra] of [[
+        ownerTables.receipts,
+        ` AND kind='host.initialize-fresh' AND intent='null'::jsonb AND result='null'::jsonb`,
+      ], [ownerTables.receiptReaders, ""]]
+    ) {
+      if (
+        (await tx.query(
+          `SELECT 1 FROM ${table} WHERE NOT (${predicate}${extra}) LIMIT 1`,
+          params,
+        )).rows.length ||
+        !(await tx.query(
+          `SELECT 1 FROM ${table} WHERE ${predicate}${extra} LIMIT 1`,
+          params,
+        )).rows.length
+      ) {
+        unavailable("Fresh initialization receipt history is incompatible.");
+      }
+    }
+  }
   const owner: OwnerCommandBoundary = createOwnerCommandBoundary({
     session,
     schema,
     ownerId,
     holderId,
-    now: options.now,
+    now,
     maxQueue: maxPending,
     maxPostCommitGroups: maxPending,
     handlers: {
+      ...startup.handlers,
+      "host.initialize-fresh": async (_input, context) => {
+        // Joining the command transaction does not open a nested transaction.
+        await provisionCollectionIndexes(
+          {
+            query: context.tx.query.bind(context.tx),
+            transaction: (run) => run(context.tx),
+          },
+          schema,
+          collectionDefinitions,
+        );
+        await validateCollectionIndexes(
+          context.tx,
+          schema,
+          collectionDefinitions,
+        );
+        return null;
+      },
       ...bridge.assignmentHandlers,
       ...Object.fromEntries(
         Object.entries(execution.handlers).map((
@@ -1092,6 +1310,7 @@ export async function createOwnerHost(options: OwnerHostOptions) {
       },
     },
     projections: {
+      ...startup.projections,
       ...execution.projections,
       ...processor.projections,
       [OWNER_CHILD_ACTION_RESULT]: child.projection,
@@ -1127,43 +1346,15 @@ export async function createOwnerHost(options: OwnerHostOptions) {
           },
         };
       },
-      "host.initialize": async (_input, context) => {
-        await validateCopilotzSchema(context.tx, schema);
-        await validateOperationCatalog({
-          query: context.tx.query.bind(context.tx),
-          transaction() {
-            throw new Error("Nested validation transactions are forbidden.");
-          },
-        }, schema);
-        await validateOwnerCommandSchema(context.tx, schema, ownerId);
-        await validateOwnerAssignments(context.tx, schema);
-        if (owner.epoch !== 1) {
-          unavailable(
-            "Fresh host cannot take over an existing epoch.",
-          );
-        }
-        for (
-          const table of [
-            tables.nodes,
-            tables.edges,
-            tables.events,
-            tables.event_deliveries,
-            tables.open_actions,
-            operationTables.operations,
-            operationTables.operationStreams,
-            assignmentTable,
-            ownerTables.receipts,
-            ownerTables.alarms,
-          ]
-        ) {
-          if (
-            (await context.tx.query(`SELECT 1 FROM ${table} LIMIT 1`)).rows
-              .length
-          ) {
-            unavailable(
-              "Fresh owner host requires empty tables; restart reconciliation is not implemented.",
-            );
-          }
+      "host.schema-ready": async (_input, context) => {
+        await validateSchemas(context.tx);
+        await validateCollectionIndexes(
+          context.tx,
+          schema,
+          collectionDefinitions,
+        );
+        if (initialization === "fresh") {
+          await assertFreshEmpty(context.tx, true);
         }
         return null;
       },
@@ -1233,8 +1424,41 @@ export async function createOwnerHost(options: OwnerHostOptions) {
       [OWNER_CHILD_ACTION_ADMISSION]: child.inputDefinition,
     },
     async authorize(tx, caller, command, time, normalized) {
+      if (command.kind === "host.initialize-fresh") {
+        assertControl(caller, "fresh");
+        if (
+          initialization !== "fresh" || initialized ||
+          command.domain !== "occurrence" || command.key !== freshKey ||
+          command.intent !== null
+        ) unavailable();
+        await validateSchemas(tx);
+        // Runs before receipt lookup, so a duplicate cannot bypass emptiness.
+        await assertFreshEmpty(tx, false);
+        return;
+      }
+      if (command.kind === "host.schema-ready") {
+        assertControl(caller, "schema");
+        if (initialized || command.intent !== null) unavailable();
+        return;
+      }
+      if (
+        command.kind === OWNER_STARTUP_REPAIR ||
+        command.kind === OWNER_STARTUP_PROOF
+      ) {
+        if (initialization === "fresh" || initialized) unavailable();
+        return await startup.authorize(tx, caller, command, time);
+      }
+      if (
+        !ready() &&
+        (command.kind === OWNER_OPERATION_SETTLEMENT ||
+          command.kind === OWNER_OPERATION_READINESS)
+      ) {
+        assertControl(caller, "startup-settlement");
+        return await settlement.authorize(tx, caller, command, time);
+      }
       if (command.kind.startsWith("host.")) {
         assertControl(caller);
+        if (!ready()) unavailable();
         return;
       }
       if (!ready()) unavailable();
@@ -1700,11 +1924,77 @@ export async function createOwnerHost(options: OwnerHostOptions) {
     admitUnassigned: trackAdmission(wrapped.admitUnassigned!),
   };
 
+  async function schemaProof() {
+    await control(
+      (caller) => owner.project(caller, "host.schema-ready", null),
+      "schema",
+    );
+  }
+  async function resumeProof() {
+    await control(
+      (caller) => owner.project(caller, OWNER_STARTUP_PROOF, null),
+      "startup",
+    );
+  }
   try {
-    await owner.acquire(0);
-    await control((caller) => owner.project(caller, "host.initialize", null));
-    transport = options.createTransport({
-      ...options.transport,
+    await owner.acquire(
+      initialization === "fresh" ? 0 : initialization.expectedEpoch,
+    );
+    if (initialization === "fresh") {
+      await control(
+        (caller) =>
+          owner.execute(caller, {
+            kind: "host.initialize-fresh",
+            domain: "occurrence",
+            key: freshKey,
+            intent: null,
+          }),
+        "fresh",
+      );
+    } else {
+      let proved = false;
+      for (let pass = 0; pass < (initialization.maxPasses ?? 4); pass++) {
+        const occurrence = crypto.randomUUID();
+        const repaired = await control((caller) =>
+          owner.execute(caller, {
+            kind: OWNER_STARTUP_REPAIR,
+            domain: "occurrence",
+            key: ownerStartupRepairKey(ownerId, owner.epoch!, occurrence),
+            intent: { occurrence },
+          }), "startup");
+        const plan = repaired.result as {
+          blockers: unknown[];
+          settlements: OperationSettlementScope[];
+        };
+        if (plan.blockers.length) {
+          unavailable("Owner resume has unresolved durable startup blockers.");
+        }
+        for (const target of plan.settlements) {
+          await control(
+            (caller) =>
+              settlement.run({
+                boundary: owner,
+                caller,
+                target,
+                occurrence: crypto.randomUUID(),
+                signal: abort.signal,
+              }),
+            "startup-settlement",
+            target,
+          );
+        }
+        if (plan.settlements.length) continue;
+        await resumeProof();
+        proved = true;
+        break;
+      }
+      if (!proved) {
+        unavailable("Owner resume exceeded its bounded startup passes.");
+      }
+    }
+    await schemaProof();
+    transport = createTransport({
+      ...transportOptions,
       workerCalls: {
         ...workerCalls,
         maxConcurrent: maxPending,
@@ -1717,11 +2007,21 @@ export async function createOwnerHost(options: OwnerHostOptions) {
         queueMicrotask(pump);
       },
     });
+    // Transport callbacks remain denied until a second committed current proof.
+    await schemaProof();
+    if (initialization !== "fresh") await resumeProof();
+    if (owner.state !== "acquired" || abort.signal.aborted || closed) {
+      unavailable();
+    }
     initialized = true;
     armAlarm();
   } catch (error) {
     stop(error);
-    await transport?.shutdown("owner initialization failed");
+    try {
+      await transport?.shutdown("owner initialization failed");
+    } catch (cleanupError) {
+      report(cleanupError);
+    }
     throw error;
   }
   return {

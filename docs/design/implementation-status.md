@@ -1,6 +1,6 @@
 # Owner, worker and Views implementation checklist
 
-Updated: 17 October 2026, 12:53 UTC.
+Updated: 17 October 2026, 13:04 UTC.
 
 This is the maintained coordination checklist for
 [Copilotz PR #93](https://github.com/copilotzhq/copilotz/pull/93). It tracks
@@ -10,13 +10,13 @@ production-ready. All changes remain draft: **no merge or publication**.
 
 ## Current work
 
-| Task                                         | Status               | Next acceptance gate                                                                               |
-| -------------------------------------------- | -------------------- | -------------------------------------------------------------------------------------------------- |
-| Local Processor bound owner adapter          | Reviewed checkpoint  | Reviewed: independent 30 pure and seven real PostgreSQL cases; 83-case compatibility passed        |
-| Local Processor one-attempt execution driver | Reviewed checkpoint  | 18 direct tests, 21 independent cases and 19 kernel compatibility cases; connect the bound adapter |
-| Faster test orchestration                    | Ready for comparison | Resume equivalent same-source benchmark after committing the reviewed identity correction          |
-| Reference-test reliability                   | Reviewed correction  | 137 affected cases, independent 29-case check and three complete pipeline repeats passed           |
-| Local Processor host generations             | Designing            | Known ended-attempt receipt, predecessor revocation/drain, exact retry wake and shared capacity    |
+| Task                                         | Status                  | Next acceptance gate                                                                               |
+| -------------------------------------------- | ----------------------- | -------------------------------------------------------------------------------------------------- |
+| Local Processor bound owner adapter          | Reviewed checkpoint     | Reviewed: independent 30 pure and seven real PostgreSQL cases; 83-case compatibility passed        |
+| Local Processor one-attempt execution driver | Reviewed checkpoint     | Driver and bound adapter reviewed; connect the generation-aware host next                          |
+| Faster test orchestration                    | Representative measured | 16 files: 15.4% faster, 7.7% higher peak RSS; reordered files require broader isolation validation |
+| Reference-test reliability                   | Reviewed correction     | 137 affected cases, independent 29-case check and three complete pipeline repeats passed           |
+| Local Processor host generations             | Designing               | Known ended-attempt receipt, predecessor revocation/drain, exact retry wake and shared capacity    |
 
 ## 1. Programming model and composition
 
@@ -120,7 +120,10 @@ production-ready. All changes remain draft: **no merge or publication**.
 - [x] Correct the reference-test Action identity defect, independently reviewed;
       137 affected cases passed, ten PostgreSQL-only skips, plus three complete
       seven-case pipeline repeats; preserve the original failed repeat
-- [ ] Measure batched/per-file coverage equivalence, speed and resource bounds
+- [x] Measure a frozen 16-file representative pair: 115 tests plus eight steps
+      pass in both modes; grouped run 15.4% faster with 7.7% higher peak RSS
+- [ ] Establish full-suite order/isolation equivalence and resource bounds;
+      retain the representative orchestrator's file-order comparison failure
 - [ ] Adopt faster developer/PR feedback and complete regression workflows after
       evidence
 - [ ] Validate each newer increment and rerun the complete gate at coherent

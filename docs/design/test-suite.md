@@ -24,10 +24,46 @@ against corrected code. Inter-command source verification and separate service,
 connected, static, and matrix stages are not included in these numbers.
 
 Batching aims to amortize repeated process/type-graph preparation while keeping
-file execution serial. No measured speedup is claimed yet. In particular,
-process memory, worker teardown, file isolation, and retained test/backend
-coverage must be established in a released benchmark lane before adopting the
-candidate as an authoritative gate.
+file execution serial. One representative timing result is recorded below; it is
+not a full-suite speed or equivalence claim. In particular, process memory,
+worker teardown, file isolation, and retained test/backend coverage must be
+established in a released benchmark lane before adopting the candidate as an
+authoritative gate.
+
+## First corrected-source representative measurement
+
+A frozen 16-file comparison on tree `d1c8152ad49214cb6b02e43d372c32ccd4e67854`
+ran with the same source, reviewed runner, runtime binaries, configuration and
+initial dependency-cache contents in both modes. Each mode used its own
+disposable PostgreSQL database. Both test processes passed **115 tests and eight
+nested steps**.
+
+| Measurement       | Per-file reference | One grouped batch |
+| ----------------- | -----------------: | ----------------: |
+| Command wall time |          208.436 s |         176.251 s |
+| `wait4` peak RSS  |      3,122,800 KiB |     3,362,652 KiB |
+
+This one grouped run was **32.2 seconds (15.4%) faster**, with **7.7% higher
+per-process peak RSS**. The comparison was reference-first, not randomized or
+repeated; it does not establish a guaranteed improvement or extrapolate to the
+complete suite. Matching dependency-cache contents does not reset the OS page
+cache. Summed sampled RSS is a different metric and can double-count shared
+pages.
+
+The comparison orchestrator correctly retained a nonzero outcome: its exact
+ordered inventory differed because Deno ran files in a different order in the
+grouped invocation. A separate post-run audit found identical multisets of all
+16 file headings and 123 path/name/status records, with each individual file's
+case/step order unchanged. That audit does not rewrite the original comparison
+failure or prove full-suite isolation. The installed-runtime probe also shows
+that CWD and environment mutations can cross file boundaries despite fresh
+module/global state.
+
+Both modes exported their database evidence, dropped their own database and
+stopped the service. No test sessions or known child processes remained. The
+candidate therefore stays experimental. Broader order-sensitive fixtures,
+resource bounds and complete retained-suite coverage must be validated before
+changing the release gate. Daily scoped checks remain the practical fast loop.
 
 ## Daily workflow
 
@@ -57,7 +93,8 @@ node scripts/test-suite.mjs --output /tmp/copilotz-suite-001
 
 `--batch-size 1` is the per-file reference mode; values 1–128 are accepted.
 There is no `--parallel`, `--filter`, `--no-check`, or generic process timeout.
-Explicit file paths are sorted and partitioned exactly once. All seven roots are
+Explicit file paths are sorted and partitioned exactly once. This controls batch
+membership, not Deno's execution order within a batch. All seven roots are
 required: `contracts/package`, `runtime`, `plugins`, `server`, `client`,
 `scripts`, `build`. Discovery accepts `test.*`, `*.test.*`, and `*_test.*` for
 the retained JavaScript/TypeScript extensions, including zero-case fixture

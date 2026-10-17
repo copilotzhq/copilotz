@@ -49,7 +49,7 @@ The runner:
    implementation/typing modules resolve their worker dependency to the selected
    public worker entry; legacy runtime workers retain their published
    dependency. No global package override or repository-local link is created
-4. Runs these exact fifteen files (92 declared cases) serially with type
+4. Runs these exact sixteen files (122 declared cases) serially with type
    checking, including in-process and Node WebSocket transports:
    - `runtime/owner/connected.integration.test.ts`
    - `runtime/owner/execution.connected.test.ts`
@@ -59,6 +59,7 @@ The runner:
    - `runtime/application/owner-host.processor.test.ts`
    - `runtime/application/owner-host.capacity.test.ts`
    - `runtime/application/owner-host.recovery.test.ts`
+   - `runtime/application/owner-host.terminal-recovery.test.ts`
    - `runtime/application/owner-host.startup.test.ts`
    - `runtime/application/owner-host.preparation.test.ts`
    - `runtime/application/owner-host.preparation-restart.test.ts`
@@ -67,10 +68,12 @@ The runner:
    - `runtime/application/owner-composition.restart.test.ts`
    - `build/role-bundle.connected.test.ts`
 
-   The selected source enables 72 opt-in cases; the other 20 cases are
+   The selected source enables 76 opt-in cases; the other 46 cases are
    unconditional. The local-host file covers private fresh local Actions, and
    the preparation-restart file covers closed prepared context over both
-   transports. The imported preparation fixture declares no cases of its own
+   transports. The terminal-recovery file covers private exact-target resume
+   cleanup and real continuation/cancellation over both transports. The imported
+   preparation fixture declares no cases of its own
 
    It then removes its temporary config on success, test failure, startup error
    or handled interruption. Child exit failures and termination remain nonzero.

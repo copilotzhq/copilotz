@@ -84,6 +84,7 @@ async function fixture(
         "runtime/application/owner-host.processor.test.ts",
         "runtime/application/owner-host.capacity.test.ts",
         "runtime/application/owner-host.recovery.test.ts",
+        "runtime/application/owner-host.terminal-recovery.test.ts",
         "runtime/application/owner-host.startup.test.ts",
         "runtime/application/owner-host.preparation.test.ts",
         "runtime/application/owner-host.preparation-restart.test.ts",
@@ -166,7 +167,7 @@ test("setup resolves relative paths and scoped sibling imports without changing 
       pathToFileURL(root + sep).href,
     );
     assert.equal(Object.hasOwn(plan.config.imports, "ws"), false);
-    assert.equal(plan.testFiles.length, 15);
+    assert.equal(plan.testFiles.length, 16);
     assert.equal(
       plan.config
         .scopes[
@@ -366,6 +367,10 @@ test("runner selects exact source, uses argument arrays and cleans config after 
           join(root, "runtime/application/owner-host.processor.test.ts"),
           join(root, "runtime/application/owner-host.capacity.test.ts"),
           join(root, "runtime/application/owner-host.recovery.test.ts"),
+          join(
+            root,
+            "runtime/application/owner-host.terminal-recovery.test.ts",
+          ),
           join(root, "runtime/application/owner-host.startup.test.ts"),
           join(root, "runtime/application/owner-host.preparation.test.ts"),
           join(

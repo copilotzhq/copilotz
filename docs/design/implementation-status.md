@@ -1,6 +1,6 @@
 # Owner, worker and Views implementation checklist
 
-Updated: 17 October 2026, 18:41 UTC.
+Updated: 17 October 2026, 19:08 UTC.
 
 This is the maintained coordination checklist for
 [Copilotz PR #93](https://github.com/copilotzhq/copilotz/pull/93). It tracks
@@ -10,15 +10,16 @@ production-ready. All changes remain draft: **no merge or publication**.
 
 ## Current work
 
-| Task                                | Status                          | Next acceptance gate                                                                               |
-| ----------------------------------- | ------------------------------- | -------------------------------------------------------------------------------------------------- |
-| Local Processor bound owner adapter | Reviewed checkpoint             | Reviewed: independent 30 pure and seven real PostgreSQL cases; 83-case compatibility passed        |
-| Local nested Action authority       | Reviewed checkpoint             | Independent 144 pure and 114 PostgreSQL cases; private fresh same-owner mixed placement complete   |
-| Local Action effect capabilities    | Authority prerequisite reviewed | Extend the existing bound local port and shared effect policy to local placement                   |
-| Faster test orchestration           | Representative measured         | 16 files: 15.4% faster, 7.7% higher peak RSS; reordered files require broader isolation validation |
-| Reference-test reliability          | Reviewed correction             | 137 affected cases, independent 29-case check and three complete pipeline repeats passed           |
-| Local Processor host generations    | Reviewed checkpoint             | PostgreSQL 14 host plus two caller-facing helper cases pass; fresh same-owner retry scope complete |
-| Architecture cleanup                | In progress                     | Shared local-port bookkeeping consolidated; migrate callers and retire superseded paths next       |
+| Task                                | Status                  | Next acceptance gate                                                                               |
+| ----------------------------------- | ----------------------- | -------------------------------------------------------------------------------------------------- |
+| Local Processor bound owner adapter | Reviewed checkpoint     | Reviewed: independent 30 pure and seven real PostgreSQL cases; 83-case compatibility passed        |
+| Local nested Action authority       | Reviewed checkpoint     | Independent 144 pure and 114 PostgreSQL cases; private fresh same-owner mixed placement complete   |
+| Local Action effect capabilities    | Reviewed checkpoint     | Private fresh local effects: 300 PostgreSQL-gate cases, 71 pure and 12 role-bundle cases pass      |
+| Local named preparation / Views     | Next implementation     | Prepared-command lifetime fence, then local parent/control-start and shared capture parity         |
+| Faster test orchestration           | Representative measured | 16 files: 15.4% faster, 7.7% higher peak RSS; reordered files require broader isolation validation |
+| Reference-test reliability          | Reviewed correction     | 137 affected cases, independent 29-case check and three complete pipeline repeats passed           |
+| Local Processor host generations    | Reviewed checkpoint     | PostgreSQL 14 host plus two caller-facing helper cases pass; fresh same-owner retry scope complete |
+| Architecture cleanup                | In progress             | Shared local-port bookkeeping consolidated; migrate callers and retire superseded paths next       |
 
 The approved [lease-free owner attempt contract](owner-attempt-authority.md) is
 implemented and independently checked in this scoped checkpoint. Both placements
@@ -53,10 +54,19 @@ existing owner recovery writer in the same fenced transaction; live writes keep
 their exact attempt restriction. Original failures and corrections are retained.
 These are scoped gates, not a new full-suite acceptance.
 
-Next is private local effect parity through the existing port/client/receipt
-protocol. Quiet-writer content protection, open-history takeover and public
-local placement remain separate gates. Every slice must name what it simplifies
-and eliminates before adding machinery.
+[Private local Action effects](owner-local-effects.md) are now independently
+reviewed. Local and worker effects share the owner protocol and policy; local
+calls use the existing raw-call tracker and exact private attempt. Validation
+passes 300 cases in PostgreSQL gates (canonical 192, core 77, related 31), plus
+71 pure port/driver and 12 role-bundle cases. Unknown outcomes, denied grants,
+held replies and same-attempt reconciliation preserve their distinct semantics.
+This does not activate Processor effects or retained local-history recovery.
+
+Next is local named preparation and the View-to-child flow, beginning with the
+prepared command's final private lifetime fence. Quiet-writer content
+protection, open-history takeover and public local placement remain separate
+gates. Every slice must name what it simplifies and eliminates before adding
+machinery.
 
 ## 1. Programming model and composition
 
@@ -121,7 +131,10 @@ and eliminates before adding machinery.
 - [x] Current effect authority after awaited policies and receipt reads, exact
       captured lifecycle equality, private effect/Collection boundary fences,
       and same-transaction terminal abandoned-obligation cleanup
-- [ ] Local Action effect capability parity
+- [x] Private fresh local Action effect capability parity through the shared
+      protocol/policy and bound raw-call tracker, including same-attempt
+      declared reconciliation without resending; retained local history remains
+      separate
 - [ ] Public local placement activation and complete parity matrix
 
 ## 3. Recovery and continuations

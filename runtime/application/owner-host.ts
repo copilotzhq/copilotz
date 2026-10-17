@@ -231,14 +231,14 @@ export type OwnerHostPolicy = Readonly<{
   ): void | Promise<void>;
   effectOutcome(
     tx: SqlExecutor,
-    assignment: OwnerWorkerExecutionAssignment,
+    assignment: OwnerExecutionAssignment,
     ref: OwnerEffectReference,
     value: OwnerJson,
     time: string,
   ): boolean | Promise<boolean>;
   effectNotStarted(
     tx: SqlExecutor,
-    assignment: OwnerWorkerExecutionAssignment,
+    assignment: OwnerExecutionAssignment,
     ref: OwnerEffectReference,
     evidence: OwnerEffectEvidence,
     time: string,
@@ -1460,11 +1460,9 @@ export async function createOwnerHost(
     mode: "begin" | "settlement",
     time: string,
   ) {
-    const assignment = workerAssignment(
-      mode === "begin"
-        ? await execution.authorizeLive(tx, caller, time)
-        : await execution.authorizeSettlement(tx, caller, time),
-    );
+    const assignment = mode === "begin"
+      ? await execution.authorizeLive(tx, caller, time)
+      : await execution.authorizeSettlement(tx, caller, time);
     if (
       assignment.namespace !== ref.namespace ||
       assignment.invocation.actionRunId !== ref.actionRunId
@@ -1475,7 +1473,13 @@ export async function createOwnerHost(
     ownerId,
     schema,
     isCurrentEffect(caller, ref) {
-      if (!ready() || caller.principal.kind !== "worker") return false;
+      if (!ready()) return false;
+      if (caller.principal.kind === "owner-local") {
+        const actual = local?.current(caller);
+        return !!actual && ready() && actual.namespace === ref.namespace &&
+          actual.actionRunId === ref.actionRunId;
+      }
+      if (caller.principal.kind !== "worker") return false;
       const actual = bridge.currentStarted(caller);
       return !!actual && !("kind" in actual) && ready() &&
         actual.namespace === ref.namespace &&

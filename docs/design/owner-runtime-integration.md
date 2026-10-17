@@ -614,7 +614,7 @@ admission and result projection is charged through the parent's raw-call
 tracker, below cancellation/timeout races. The parent remains charged while it
 waits; unresolved raw work delays shutdown. Unknown admission cannot become a
 retry or terminal receipt, and revocation cannot expose a late result. Local
-EventStore mutations derive their `localAttempt` from the verified binding.
+EventStore mutations derive their `ownerAttempt` from the verified binding.
 
 The existing aggregate capacity guard remains in force: fresh child admission at
 full capacity refuses before creating a child event or receipt. It does not park
@@ -626,10 +626,12 @@ child work. Timing out before an admission reply remains an unknown outcome,
 distinct from a known capacity refusal.
 
 Local named preparation is rejected both at the bound capability and the owner
-entry; local effects remain unavailable. Ordinary children retain the shared
-ContentRef/protected-format refusal without adopting a broader reserved-key
-policy. This is private same-owner capability parity, not a public configuration
-or restart migration.
+entry. Private local Action effects now reuse the shared owner protocol and
+policy, with the same exact-attempt and raw-call drain checks; local effect
+activation does not enable Processor effects or retained local history. Ordinary
+children retain the shared ContentRef/protected-format refusal without adopting
+a broader reserved-key policy. This is private same-owner capability parity, not
+a public configuration or restart migration.
 
 ### Fresh ordinary Action owner host
 

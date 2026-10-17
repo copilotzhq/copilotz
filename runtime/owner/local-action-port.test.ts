@@ -12,6 +12,11 @@ import type { RegisteredLocalActionReference } from "../execution/registered-loc
 import { ownerCompletionKey } from "../execution/owner-port.ts";
 import { ownerLocalActionStartKey } from "./execution.ts";
 import { createOwnerLocalActionPort } from "./local-action-port.ts";
+import {
+  createOwnerEffectClient,
+  ownerEffectKey,
+  type OwnerEffectOperation,
+} from "./effects-client.ts";
 
 const ref = (): RegisteredLocalActionReference => ({
   placement: "owner-local",
@@ -784,3 +789,236 @@ for (const phase of ["start", "terminal"] as const) {
     assert.equal(drained, true);
   });
 }
+
+const effectRef = () => ({
+  namespace: "space",
+  actionRunId: "run",
+  step: "send",
+});
+function effectCommand(operation: OwnerEffectOperation): OwnerCommand {
+  return {
+    kind: `effect.${operation}`,
+    domain: "logical",
+    key: ownerEffectKey("owner", effectRef(), operation),
+    intent: {
+      ...effectRef(),
+      ...(operation === "confirm"
+        ? { outcome: { sent: true } }
+        : operation === "notStarted"
+        ? { evidence: { source: "fixture", reference: "no-start" } }
+        : {}),
+    },
+  };
+}
+function effectFixture() {
+  const f = fixture();
+  const execute = f.boundary.execute, project = f.boundary.project;
+  f.boundary.execute = (who, command, options) => {
+    if (command.kind === "owner.local-start") {
+      return execute(who, command, options);
+    }
+    f.calls.push({ who, command, signal: options?.signal });
+    return Promise.resolve({
+      status: "committed",
+      result: {
+        ...effectRef(),
+        status: command.kind === "effect.begin"
+          ? "begun"
+          : command.kind === "effect.confirm"
+          ? "confirmed"
+          : "not_started",
+        ...(command.kind === "effect.confirm"
+          ? { outcome: { sent: true } }
+          : {}),
+      },
+    });
+  };
+  f.boundary.project = (who, kind, input, options) => {
+    if (kind !== "effect.state") return project(who, kind, input, options);
+    f.calls.push({ who, command: { kind, input }, signal: options?.signal });
+    return Promise.resolve({
+      ...effectRef(),
+      status: "confirmed",
+      outcome: { sent: true },
+    });
+  };
+  return f;
+}
+
+test("local effect routes use the exact local caller and preserve separate settlement", async () => {
+  const f = effectFixture(), port = f.create();
+  assert.ok(port.effects);
+  const client = createOwnerEffectClient({
+    ownerId: "owner",
+    ...effectRef(),
+    port: port.effects,
+  });
+  await assert.rejects(client.begin("send"), /closed/);
+  assert.equal(f.calls.length, 0);
+  await port.start();
+  assert.deepEqual(await client.begin("send"), { status: "proceed" });
+  await client.confirm("send", { sent: true });
+  await client.notStarted("send", { source: "fixture", reference: "no-start" });
+  assert.deepEqual(await client.inspect("send"), {
+    status: "replay",
+    outcome: { sent: true },
+  });
+  for (const call of f.calls.slice(1)) {
+    assert.deepEqual(call.who, f.localCaller);
+  }
+  port.sealInvocationCalls();
+  await assert.rejects(client.begin("send"), /closed/);
+  await client.confirm("send", { sent: true });
+  await port.complete(completion);
+  await assert.rejects(client.confirm("send", { sent: true }), /closed/);
+});
+
+test("local effects refuse foreign references, keys and routes before owner submission", async () => {
+  const f = effectFixture(), port = f.create();
+  await port.start();
+  const original = effectCommand("begin");
+  for (
+    const value of [
+      { ...original, kind: "collections" },
+      { ...original, domain: "occurrence" },
+      { ...original, key: "other" },
+      { ...original, intent: { ...effectRef(), actionRunId: "other" } },
+      { ...original, intent: { ...effectRef(), namespace: "other" } },
+      { ...original, intent: { ...effectRef(), workerId: "forged" } },
+    ]
+  ) {
+    await assert.rejects(async () =>
+      await port.effects!.execute(value as OwnerCommand)
+    );
+  }
+  await assert.rejects(async () => await port.effects!.settle(original));
+  await assert.rejects(port.effects!.project("execution.input", effectRef()));
+  let getters = 0;
+  const accessor = Object.defineProperty(effectCommand("confirm"), "kind", {
+    enumerable: true,
+    get() {
+      getters++;
+      return "effect.confirm";
+    },
+  });
+  await assert.rejects(async () => await port.effects!.settle(accessor));
+  assert.equal(getters, 0);
+  assert.equal(f.calls.length, 1);
+});
+
+test("held local effect begin shares raw capacity and cannot expose proceed after sealing", async () => {
+  const raw = gate<OwnerCommandOutcome>(), f = effectFixture();
+  const execute = f.boundary.execute;
+  f.boundary.execute = (who, command, options) =>
+    command.kind === "effect.begin"
+      ? raw.promise
+      : execute(who, command, options);
+  f.options.maxPendingCalls = 1;
+  const port = f.create();
+  await port.start();
+  let exposed = false;
+  const pending = port.effects!.execute(effectCommand("begin")).then(
+    (value) => {
+      exposed = true;
+      return value;
+    },
+  );
+  void pending.catch(() => undefined);
+  await assert.rejects(port.project(), /admission_refused/);
+  port.sealInvocationCalls();
+  let drained = false;
+  const drain = port.drainRawCalls().then(() => {
+    drained = true;
+  });
+  await tick();
+  assert.equal(drained, false);
+  assert.equal(exposed, false);
+  await assert.rejects(port.complete(completion), /completion_refused/);
+  raw.resolve({
+    status: "committed",
+    result: { ...effectRef(), status: "begun" },
+  });
+  await assert.rejects(pending, /closed/);
+  await drain;
+  assert.equal(exposed, false);
+  assert.equal(drained, true);
+});
+
+for (const operation of ["begin", "confirm", "notStarted"] as const) {
+  test(`local effect ${operation} unknown result quarantines without a retry`, async () => {
+    const f = effectFixture();
+    const execute = f.boundary.execute;
+    let submissions = 0;
+    f.boundary.execute = (who, command, options) => {
+      if (command.kind === `effect.${operation}`) {
+        submissions++;
+        return Promise.reject(
+          Object.assign(new Error("lost effect COMMIT reply"), {
+            outcome: "unknown",
+          }),
+        );
+      }
+      return execute(who, command, options);
+    };
+    const port = f.create();
+    await port.start();
+    const send = () =>
+      operation === "begin"
+        ? port.effects!.execute(effectCommand(operation))
+        : port.effects!.settle(effectCommand(operation));
+    await assert.rejects(send(), /indeterminate/);
+    await assert.rejects(send(), /indeterminate/);
+    await assert.rejects(port.settlementState(), /indeterminate/);
+    await port.drainRawCalls();
+    assert.equal(submissions, 1);
+  });
+}
+
+for (const kind of ["begin", "confirm", "state"] as const) {
+  test(`malformed local effect ${kind} reply quarantines its exact attempt`, async () => {
+    const f = effectFixture(), execute = f.boundary.execute;
+    const malformed = {
+      ...effectRef(),
+      actionRunId: "foreign",
+      status: "begun",
+    };
+    f.boundary.execute = (who, command, options) =>
+      command.kind.startsWith("effect.")
+        ? Promise.resolve({ status: "committed", result: malformed })
+        : execute(who, command, options);
+    f.boundary.project = () => Promise.resolve(malformed);
+    const port = f.create();
+    await port.start();
+    await assert.rejects(
+      kind === "state"
+        ? port.effects!.project("effect.state", effectRef())
+        : kind === "begin"
+        ? port.effects!.execute(effectCommand("begin"))
+        : port.effects!.settle(effectCommand("confirm")),
+      /indeterminate/,
+    );
+    await assert.rejects(port.settlementState(), /indeterminate/);
+  });
+}
+
+test("local effect settlement cannot start while terminal completion is pending", async () => {
+  const raw = gate<OwnerCommandOutcome>(), f = effectFixture();
+  f.boundary.executeInput = () => raw.promise;
+  const port = f.create();
+  await port.start();
+  port.sealInvocationCalls();
+  const pending = port.complete(completion);
+  await assert.rejects(
+    port.effects!.settle(effectCommand("confirm")),
+    /closed/,
+  );
+  await assert.rejects(
+    port.effects!.project("effect.state", effectRef()),
+    /closed/,
+  );
+  raw.resolve({
+    status: "committed",
+    result: { reference: ref(), status: "completed" },
+  });
+  await pending;
+});

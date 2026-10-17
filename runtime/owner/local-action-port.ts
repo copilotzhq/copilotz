@@ -3,6 +3,14 @@
 import { assertJsonValue } from "../json.ts";
 import { createLocalPortCalls } from "./local-port-calls.ts";
 import {
+  intent as effectIntent,
+  ownerEffectKey,
+  type OwnerEffectOperation,
+  type OwnerEffectPort,
+  type OwnerEffectReference,
+  record as effectRecord,
+} from "./effects-client.ts";
+import {
   createLocalChildActionCall,
   type LocalChildActionOptions,
 } from "./local-child-action-port.ts";
@@ -181,7 +189,98 @@ export function createOwnerLocalActionPort(
     signal: loss.signal,
     maxPendingCalls: limit,
   });
+  const effectReference = (
+    value: unknown,
+    operation?: OwnerEffectOperation,
+  ) => {
+    const data = effectIntent(value, operation);
+    if (
+      data.ref.namespace !== reference.namespace ||
+      data.ref.actionRunId !== reference.actionRunId
+    ) {
+      throw failure("owner_local_port_effect_refused");
+    }
+    return data.ref;
+  };
+  const effectAccess = (begin: boolean) => {
+    if (begin) invocation();
+    else settlement();
+    if (completionSubmitted) throw failure("owner_local_port_effect_closed");
+  };
+  const effectCommand = async (
+    command: OwnerCommand,
+    operation: OwnerEffectOperation,
+    callOptions: Parameters<OwnerEffectPort["execute"]>[1],
+  ): Promise<OwnerCommandOutcome> => {
+    effectAccess(operation === "begin");
+    const value = object(command, ["kind", "domain", "key", "intent"]);
+    const target = effectReference(value.intent, operation);
+    if (
+      value.kind !== `effect.${operation}` || value.domain !== "logical" ||
+      value.key !== ownerEffectKey(reference.ownerId, target, operation)
+    ) {
+      throw failure("owner_local_port_effect_refused");
+    }
+    const result = await calls.run(
+      (execution) =>
+        execute(copy(localCaller), value as OwnerCommand, execution),
+      callOptions,
+    );
+    effectAccess(operation === "begin");
+    try {
+      const known = outcome(result);
+      const record = effectRecord(known.result, target);
+      if (
+        record.status !==
+          (operation === "begin"
+            ? "begun"
+            : operation === "confirm"
+            ? "confirmed"
+            : "not_started")
+      ) {
+        throw failure("owner_local_port_effect_outcome_invalid");
+      }
+      return known;
+    } catch (error) {
+      throw quarantine(error);
+    }
+  };
+  const effects: OwnerEffectPort = {
+    execute: (command, callOptions) =>
+      effectCommand(command, "begin", callOptions),
+    settle(command, callOptions) {
+      const value = object(command, ["kind", "domain", "key", "intent"]);
+      if (
+        value.kind !== "effect.confirm" && value.kind !== "effect.notStarted"
+      ) {
+        throw failure("owner_local_port_effect_refused");
+      }
+      const operation = value.kind === "effect.confirm"
+        ? "confirm"
+        : "notStarted";
+      return effectCommand(value as OwnerCommand, operation, callOptions);
+    },
+    async project(kind, input, callOptions) {
+      effectAccess(false);
+      if (kind !== "effect.state") {
+        throw failure("owner_local_port_effect_refused");
+      }
+      const target: OwnerEffectReference = effectReference(input);
+      const result = await calls.run(
+        (execution) =>
+          project(copy(localCaller), kind, copy(target), execution),
+        callOptions,
+      );
+      effectAccess(false);
+      try {
+        return effectRecord(result, target);
+      } catch (error) {
+        throw quarantine(error);
+      }
+    },
+  };
   return {
+    effects,
     ...(children
       ? {
         invokeAction: createLocalChildActionCall({

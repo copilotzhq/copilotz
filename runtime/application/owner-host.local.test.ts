@@ -1033,7 +1033,7 @@ test(
 );
 
 test(
-  "local host leaves effects and named preparation unavailable",
+  "local host leaves named preparation unavailable",
   { skip: !sourceRoot, timeout: 30_000 },
   async () => {
     let childCalls = 0;
@@ -1045,13 +1045,11 @@ test(
           inputSchema: { type: "string" } as const,
           async execute(kind: string, ctx: ActionContext) {
             try {
-              if (kind === "effect") {
-                await ctx.effect.begin("send");
-              } else {await ctx.actions.child.prepareNamed({
-                  preparation: "notes.context",
-                  recordId: "record",
-                  mode: "context",
-                }, { operationKey: "prepared" });}
+              await ctx.actions.child.prepareNamed({
+                preparation: "notes.context",
+                recordId: "record",
+                mode: "context",
+              }, { operationKey: "prepared" });
             } catch {
               observed.push(kind);
             }
@@ -1069,19 +1067,19 @@ test(
     });
     const f = await fixture({ registry });
     try {
-      for (const kind of ["effect", "preparation"]) {
+      for (const kind of ["preparation"]) {
         await assert.rejects(
           f.facade.actions.work(kind, { operationKey: kind }),
         );
         await eventually(() => f.host.snapshot().active === 0);
       }
-      assert.deepEqual(observed, ["effect", "preparation"]);
+      assert.deepEqual(observed, ["preparation"]);
       assert.equal(childCalls, 0);
       assert.equal(f.counts().workerActionFactories, 0);
       const deliveries = (await f.db.query(
         "SELECT consumer_id,status,attempts FROM event_deliveries",
       )).rows;
-      assert.equal(deliveries.length, 2);
+      assert.equal(deliveries.length, 1);
       assert.ok(
         deliveries.every((row) =>
           row.consumer_id === "registered:fixture.local" &&
@@ -2651,4 +2649,595 @@ for (const placement of ["owner-local", "worker"] as const) {
       }
     },
   );
+}
+
+for (const mode of ["in-process", "websocket"] as const) {
+  for (const scenario of ["confirmed", "not-started", "ctx-revoked"] as const) {
+    test(`local host shared effects ${mode}: ${scenario}`, {
+      skip: !sourceRoot,
+      timeout: 30_000,
+    }, async () => {
+      let ctxGranted = true;
+      let sends = 0;
+      let outcomeChecks = 0;
+      let evidenceChecks = 0;
+      const f = await fixture({
+        mode,
+        registry: ordinaryRegistry(async (_value, ctx) => {
+          assert.deepEqual(await ctx.effect.begin("send"), {
+            status: "proceed",
+          });
+          if (scenario === "not-started") {
+            await ctx.effect.notStarted("send", {
+              source: "fixture",
+              reference: "verified-no-start",
+            });
+            assert.deepEqual(await ctx.effect.inspect("send"), {
+              status: "not_started",
+            });
+            assert.deepEqual(await ctx.effect.begin("send"), {
+              status: "not_started",
+            });
+          } else {
+            sends++;
+            if (scenario === "ctx-revoked") {
+              ctxGranted = false;
+              await assert.rejects(ctx.effect.begin("forbidden"));
+              await assert.rejects(
+                ctx.transaction(({ collections }) =>
+                  collections.notes.create({
+                    id: "forbidden",
+                    title: "denied",
+                  }), { operationKey: "forbidden" }),
+              );
+            }
+            await ctx.effect.confirm("send", { sent: true });
+            assert.deepEqual(await ctx.effect.inspect("send"), {
+              status: "replay",
+              outcome: { sent: true },
+            });
+            if (scenario !== "ctx-revoked") {
+              assert.deepEqual(await ctx.effect.begin("send"), {
+                status: "replay",
+                outcome: { sent: true },
+              });
+            }
+          }
+          return "done";
+        }),
+        local: localOptions({
+          policy: {
+            grants: () => ({ ctx: ctxGranted, settlement: true }),
+            input() {},
+            collections: () => ({}),
+          },
+        }),
+        policy: {
+          effectOutcome(_tx, assignment, ref, value) {
+            outcomeChecks++;
+            assert.equal(assignment.placement, "owner-local");
+            assert.equal(Object.hasOwn(assignment, "workerId"), false);
+            assert.equal(ref.actionRunId, assignment.invocation.actionRunId);
+            assert.deepEqual(value, { sent: true });
+            return true;
+          },
+          effectNotStarted(_tx, assignment, ref, proof) {
+            evidenceChecks++;
+            assert.equal(assignment.placement, "owner-local");
+            assert.equal(ref.actionRunId, assignment.invocation.actionRunId);
+            return proof.source === "fixture" &&
+              proof.reference === "verified-no-start";
+          },
+        },
+      });
+      try {
+        if (scenario === "ctx-revoked") {
+          // A caught rejected ctx call still fails the invocation, but the
+          // already-started effect must retain its narrow settlement route.
+          await assert.rejects(
+            f.facade.actions.work("effect", { operationKey: "effect" }),
+          );
+        } else {
+          assert.equal(
+            await f.facade.actions.work("effect", { operationKey: "effect" }),
+            "done",
+          );
+        }
+        await eventually(() => f.host.snapshot().active === 0);
+        assert.equal(sends, scenario === "not-started" ? 0 : 1);
+        assert.equal(outcomeChecks, scenario === "not-started" ? 0 : 1);
+        assert.equal(evidenceChecks, scenario === "not-started" ? 1 : 0);
+        assert.equal(f.counts().workerActionFactories, 0);
+        assert.deepEqual(
+          (await f.db.query(
+            "SELECT kind FROM owner_receipts WHERE kind LIKE 'effect.%' ORDER BY kind",
+          )).rows,
+          [{ kind: "effect.begin" }, {
+            kind: scenario === "not-started"
+              ? "effect.notStarted"
+              : "effect.confirm",
+          }],
+        );
+        assert.equal(
+          (await f.db.query("SELECT id FROM nodes WHERE id='forbidden'"))
+            .rows.length,
+          0,
+        );
+        assert.equal(f.host.snapshot().ready, true);
+        assert.deepEqual(f.errors, []);
+      } finally {
+        await f.close();
+      }
+    });
+  }
+}
+
+for (const mode of ["in-process", "websocket"] as const) {
+  for (const stage of ["begin", "confirm", "notStarted"] as const) {
+    for (const durability of ["committed", "aborted"] as const) {
+      test(`local host effect unknown ${mode}: ${stage} ${durability}`, {
+        skip: !sourceRoot,
+        timeout: 30_000,
+      }, async () => {
+        let injected = 0, factories = 0, sends = 0;
+        const kind = `effect.${stage}`;
+        const f = await fixture({
+          mode,
+          registry: ordinaryRegistry(async (_value, ctx) => {
+            assert.deepEqual(await ctx.effect.begin("send"), {
+              status: "proceed",
+            });
+            if (stage === "notStarted") {
+              await ctx.effect.notStarted("send", {
+                source: "fixture",
+                reference: "no-start",
+              });
+            } else {
+              sends++;
+              await ctx.effect.confirm("send", { sent: true });
+            }
+            return "done";
+          }),
+          local: localOptions({
+            createCapabilities() {
+              factories++;
+              return { resources: {}, adapters: {} };
+            },
+          }),
+          policy: { effectOutcome: () => true, effectNotStarted: () => true },
+          session(db) {
+            return {
+              query: db.query.bind(db),
+              async transaction(run) {
+                let selected = false;
+                const unknown = () =>
+                  Object.assign(
+                    new Error(`unknown effect ${stage} ${durability}`),
+                    { code: "persistence_indeterminate" },
+                  );
+                const result = await db.transaction(async (tx) => {
+                  const value = await run({
+                    async query<TRow extends Record<string, unknown>>(
+                      sql: string,
+                      values?: unknown[],
+                    ) {
+                      const result = await tx.query<TRow>(sql, values);
+                      if (
+                        !injected &&
+                        sql.startsWith(
+                          'INSERT INTO "public"."owner_receipts"(',
+                        ) && values?.[5] === kind
+                      ) {
+                        selected = true;
+                        injected++;
+                      }
+                      return result;
+                    },
+                  });
+                  if (selected && durability === "aborted") throw unknown();
+                  return value;
+                });
+                if (selected && durability === "committed") throw unknown();
+                return result;
+              },
+            };
+          },
+        });
+        try {
+          const result = outcome(
+            f.facade.actions.work("uncertain", { operationKey: "uncertain" }),
+          );
+          await eventually(() => injected === 1 && !f.host.snapshot().ready);
+          await f.host.stopped;
+          await f.host.close();
+          assert.ok((await result).error);
+          assert.equal(factories, 1);
+          assert.equal(sends, stage === "confirm" ? 1 : 0);
+          assert.equal(f.counts().workerActionFactories, 0);
+          assert.equal(f.host.snapshot().recoveryRequired, true);
+          assert.equal(f.host.snapshot().active, 1);
+          assert.deepEqual(
+            (await f.db.query(
+              "SELECT status,attempts,lease_expires_at FROM event_deliveries WHERE consumer_id='registered:fixture.local'",
+            )).rows,
+            [{ status: "leased", attempts: 1, lease_expires_at: null }],
+          );
+          assert.equal(
+            (await f.db.query("SELECT kind FROM owner_receipts WHERE kind=$1", [
+              kind,
+            ])).rows.length,
+            durability === "committed" ? 1 : 0,
+          );
+          assert.equal(
+            (await f.db.query(
+              "SELECT kind FROM owner_receipts WHERE kind='execution.complete'",
+            )).rows.length,
+            0,
+          );
+          await f.host.wake();
+          assert.equal(factories, 1);
+          assert.equal(injected, 1);
+          assert.equal(sends, stage === "confirm" ? 1 : 0);
+        } finally {
+          await f.close();
+        }
+      });
+    }
+  }
+}
+
+for (const mode of ["in-process", "websocket"] as const) {
+  for (const policy of ["outcome", "no-start"] as const) {
+    test(`local host rejected effect policy ${mode}: ${policy}`, {
+      skip: !sourceRoot,
+      timeout: 30_000,
+    }, async () => {
+      let sends = 0;
+      const f = await fixture({
+        mode,
+        registry: ordinaryRegistry(async (_value, ctx) => {
+          assert.deepEqual(await ctx.effect.begin("send"), {
+            status: "proceed",
+          });
+          if (policy === "outcome") {
+            sends++;
+            await assert.rejects(ctx.effect.confirm("send", { sent: true }));
+          } else {await assert.rejects(
+              ctx.effect.notStarted("send", {
+                source: "unverified",
+                reference: "no-start",
+              }),
+            );}
+          assert.deepEqual(await ctx.effect.inspect("send"), {
+            status: "indeterminate",
+          });
+          return "caught policy refusal is not success";
+        }),
+      });
+      try {
+        await assert.rejects(
+          f.facade.actions.work("policy", { operationKey: "policy" }),
+        );
+        await eventually(() => f.host.snapshot().active === 0);
+        assert.equal(sends, policy === "outcome" ? 1 : 0);
+        assert.deepEqual(
+          (await f.db.query(
+            "SELECT kind,result->>'status' AS status FROM owner_receipts WHERE kind LIKE 'effect.%'",
+          )).rows,
+          [{ kind: "effect.begin", status: "begun" }],
+        );
+        assert.equal(f.host.snapshot().ready, true);
+        assert.equal(f.host.snapshot().recoveryRequired, false);
+      } finally {
+        await f.close();
+      }
+    });
+  }
+}
+
+for (const mode of ["in-process", "websocket"] as const) {
+  for (const revoke of [false, true]) {
+    test(
+      `local host held committed effect begin ${mode}: ${
+        revoke ? "revoked" : "released"
+      }`,
+      { skip: !sourceRoot, timeout: 30_000 },
+      async () => {
+        const reached = deferred(), release = deferred();
+        let held = false, sends = 0;
+        const f = await fixture({
+          mode,
+          registry: ordinaryRegistry(async (_value, ctx) => {
+            assert.deepEqual(await ctx.effect.begin("send"), {
+              status: "proceed",
+            });
+            sends++;
+            await ctx.effect.confirm("send", { sent: true });
+            return "done";
+          }),
+          policy: { effectOutcome: () => true },
+          session(db) {
+            return {
+              query: db.query.bind(db),
+              async transaction(run) {
+                let selected = false;
+                const value = await db.transaction(async (tx) =>
+                  await run({
+                    async query<TRow extends Record<string, unknown>>(
+                      sql: string,
+                      values?: unknown[],
+                    ) {
+                      const result = await tx.query<TRow>(sql, values);
+                      if (
+                        !held &&
+                        sql.startsWith(
+                          'INSERT INTO "public"."owner_receipts"(',
+                        ) && values?.[5] === "effect.begin"
+                      ) selected = true;
+                      return result;
+                    },
+                  })
+                );
+                // DB COMMIT is complete, but this transaction reply hold blocks the
+                // owner command pump. The test observes raw SQL, not a concurrent
+                // owner command or caller-facing reply scan.
+                if (selected && !held) {
+                  held = true;
+                  reached.resolve();
+                  await release.promise;
+                }
+                return value;
+              },
+            };
+          },
+        });
+        try {
+          const pending = outcome(
+            f.facade.actions.work("held", { operationKey: "held" }),
+          );
+          await reached.promise;
+          assert.equal(sends, 0);
+          assert.equal(
+            (await f.db.query(
+              "SELECT kind FROM owner_receipts WHERE kind='effect.begin'",
+            )).rows.length,
+            1,
+          );
+          assert.equal(f.host.snapshot().active, 1);
+          if (revoke) {
+            let closed = false;
+            const closing = f.host.close().then(() => {
+              closed = true;
+            });
+            await eventually(() => !f.host.snapshot().ready);
+            assert.equal(
+              closed,
+              false,
+              "close must wait for the raw committed reply",
+            );
+            assert.equal(sends, 0);
+            release.resolve();
+            await closing;
+            assert.ok((await pending).error);
+            assert.equal(sends, 0);
+            assert.equal(f.host.snapshot().active, 1);
+            assert.equal(
+              (await f.db.query(
+                "SELECT kind FROM owner_receipts WHERE kind='effect.confirm' OR kind='execution.complete'",
+              )).rows.length,
+              0,
+            );
+          } else {
+            release.resolve();
+            assert.equal((await pending).value, "done");
+            await eventually(() => f.host.snapshot().active === 0);
+            assert.equal(sends, 1);
+          }
+        } finally {
+          release.resolve();
+          await f.close();
+        }
+      },
+    );
+  }
+}
+
+for (const mode of ["in-process", "websocket"] as const) {
+  test(`local host repeated unresolved begin stays indeterminate ${mode}`, {
+    skip: !sourceRoot,
+    timeout: 30_000,
+  }, async () => {
+    let sends = 0;
+    const f = await fixture({
+      mode,
+      registry: ordinaryRegistry(async (_value, ctx) => {
+        assert.deepEqual(await ctx.effect.begin("send"), { status: "proceed" });
+        sends++;
+        await assert.rejects(ctx.effect.begin("send"));
+        return "caught indeterminate cannot certify success";
+      }),
+    });
+    try {
+      const pending = outcome(
+        f.facade.actions.work("unresolved", { operationKey: "unresolved" }),
+      );
+      await eventually(() => f.host.snapshot().recoveryRequired);
+      await f.host.close();
+      assert.ok((await pending).error);
+      assert.equal(sends, 1);
+      assert.equal(f.host.snapshot().active, 1);
+      assert.deepEqual(
+        (await f.db.query(
+          "SELECT kind FROM owner_receipts WHERE kind LIKE 'effect.%'",
+        )).rows,
+        [{ kind: "effect.begin" }],
+      );
+      assert.equal(
+        (await f.db.query(
+          "SELECT kind FROM owner_receipts WHERE kind='execution.complete'",
+        )).rows.length,
+        0,
+      );
+    } finally {
+      await f.close();
+    }
+  });
+}
+
+for (const mode of ["in-process", "websocket"] as const) {
+  for (const stage of ["outcome", "no-start"] as const) {
+    test(
+      `local host effect policy cannot retain revoked settlement ${mode}: ${stage}`,
+      { skip: !sourceRoot, timeout: 30_000 },
+      async () => {
+        let settlementGranted = true, sends = 0;
+        const f = await fixture({
+          mode,
+          registry: ordinaryRegistry(async (_value, ctx) => {
+            assert.deepEqual(await ctx.effect.begin("send"), {
+              status: "proceed",
+            });
+            if (stage === "outcome") {
+              sends++;
+              await ctx.effect.confirm("send", { sent: true });
+            } else {await ctx.effect.notStarted("send", {
+                source: "fixture",
+                reference: "no-start",
+              });}
+            return "stale settlement must not succeed";
+          }),
+          local: localOptions({
+            policy: {
+              grants: () => ({ ctx: true, settlement: settlementGranted }),
+              input() {},
+              collections: () => ({}),
+            },
+          }),
+          policy: {
+            effectOutcome() {
+              settlementGranted = false;
+              return true;
+            },
+            effectNotStarted() {
+              settlementGranted = false;
+              return true;
+            },
+          },
+        });
+        try {
+          const pending = outcome(
+            f.facade.actions.work("revoked", { operationKey: "revoked" }),
+          );
+          await eventually(() => f.host.snapshot().recoveryRequired);
+          await f.host.close();
+          assert.ok((await pending).error);
+          assert.equal(settlementGranted, false);
+          assert.equal(sends, stage === "outcome" ? 1 : 0);
+          assert.equal(f.host.snapshot().active, 1);
+          assert.deepEqual(
+            (await f.db.query(
+              "SELECT kind,result->>'status' AS status FROM owner_receipts WHERE kind LIKE 'effect.%'",
+            )).rows,
+            [{ kind: "effect.begin", status: "begun" }],
+          );
+          assert.equal(
+            (await f.db.query(
+              "SELECT kind FROM owner_receipts WHERE kind='execution.complete'",
+            )).rows.length,
+            0,
+          );
+        } finally {
+          await f.close();
+        }
+      },
+    );
+  }
+}
+
+for (const mode of ["in-process", "websocket"] as const) {
+  for (const recovered of ["confirmed", "not_started"] as const) {
+    test(`same-attempt local effect reconciliation ${mode}: ${recovered}`, {
+      skip: !sourceRoot,
+      timeout: 30_000,
+    }, async () => {
+      let sends = 0, reconciliations = 0;
+      const replay = recovered === "confirmed"
+        ? { status: "replay", outcome: { sent: true } }
+        : { status: "not_started" };
+      const registry = createPluginRegistry({
+        actions: {
+          work: defineAction({
+            id: "fixture.local",
+            inputSchema: { type: "string" } as const,
+            async execute(_value: string, ctx: ActionContext) {
+              assert.deepEqual(await ctx.effect.begin("send"), {
+                status: "proceed",
+              });
+              if (recovered === "confirmed") sends++;
+              assert.deepEqual(await ctx.effect.begin("send"), replay);
+              assert.deepEqual(await ctx.effect.begin("send"), replay);
+              return "done";
+            },
+            async reconcile(step, ctx) {
+              reconciliations++;
+              assert.equal(step, "send");
+              assert.deepEqual(await ctx.effect.inspect(step), {
+                status: "indeterminate",
+              });
+              return recovered === "confirmed"
+                ? { status: "confirmed" as const, outcome: { sent: true } }
+                : {
+                  status: "not_started" as const,
+                  evidence: {
+                    source: "fixture",
+                    reference: "verified-no-start",
+                  },
+                };
+            },
+          }),
+        },
+      });
+      const f = await fixture({
+        mode,
+        registry,
+        policy: {
+          effectOutcome(_tx, assignment, _ref, value) {
+            assert.equal(assignment.placement, "owner-local");
+            return JSON.stringify(value) === JSON.stringify({ sent: true });
+          },
+          effectNotStarted(_tx, assignment, _ref, proof) {
+            assert.equal(assignment.placement, "owner-local");
+            return proof.source === "fixture" &&
+              proof.reference === "verified-no-start";
+          },
+        },
+      });
+      try {
+        assert.equal(
+          await f.facade.actions.work("reconcile", {
+            operationKey: "reconcile",
+          }),
+          "done",
+        );
+        await eventually(() => f.host.snapshot().active === 0);
+        assert.equal(sends, recovered === "confirmed" ? 1 : 0);
+        assert.equal(reconciliations, 1);
+        assert.equal(f.counts().workerActionFactories, 0);
+        assert.deepEqual(
+          (await f.db.query(
+            "SELECT kind FROM owner_receipts WHERE kind LIKE 'effect.%' ORDER BY kind",
+          )).rows,
+          [{ kind: "effect.begin" }, {
+            kind: recovered === "confirmed"
+              ? "effect.confirm"
+              : "effect.notStarted",
+          }],
+        );
+        assert.equal(f.host.snapshot().ready, true);
+        assert.deepEqual(f.errors, []);
+      } finally {
+        await f.close();
+      }
+    });
+  }
 }

@@ -52,8 +52,10 @@ export type OwnerConnectionOptions =
   }>;
 /** Single-owner storage with explicit fresh or bounded resume initialization.
  * Resume validates supported ordinary pending/terminal history and registered
- * Collection graph within the configured namespace; unresolved execution,
- * prepared/content/stream history and owner-local recovery remain unsupported.
+ * Collection graph within the configured namespace. Matching preparation config
+ * also supports closed ordinary-record prepared children of root ordinary Actions.
+ * Unresolved execution, open/nested/Processor-parent prepared history, content,
+ * streams and owner-local recovery remain unsupported.
  * This starts an embedded leased worker, not F5 owner-local execution.
  * The injected SQL session remains caller-owned, including on close/failure. */
 export type OwnerStorageOptions =

@@ -680,11 +680,17 @@ input/result permission is revoked.
 
 This initial host registration supports ordinary records and ordinary mapped
 input only. ContentRefs, protected formats, default channel rendering and full
-content catalog integration still require their separate conversion. Prepared
-retained histories remain outside the startup proof's supported subset; enabling
-this option does not make their restart recovery ready. Parent and child need
-available execution capacity; exhaustion refuses boundedly rather than granting
-extra capacity or bypassing policy.
+content catalog integration still require their separate conversion. Bounded
+resume supports a closed ordinary-record prepared child of a closed, root,
+non-prepared ordinary Action when the registered preparation/source/target/mode
+and complete lifecycle/receipt evidence match. Startup preserves the original
+capture without rerendering or inventing a live caller for source authorization.
+Root terminal replay still requires current root-result permission; a new live
+preparation, child input or child result still requires its current
+original-value permission. Pending/open prepared work, nested or Processor
+parents, prepared ancestry and content/protected captures remain unsupported.
+Parent and child need available execution capacity; exhaustion refuses boundedly
+rather than granting extra capacity or bypassing policy.
 
 A local timeout stops waiting, not an already-admitted child. A possibly
 committed admission remains unknown and is never automatically retried; its

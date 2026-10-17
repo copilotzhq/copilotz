@@ -3,8 +3,9 @@
  * can select genuine owner-local execution without changing public composition.
  * Resume requires bounded compatible
  * event history and, when declared, ordinary Collection namespace coverage.
- * Lost/retried attempts, prepared/content state, streams and protected/deferred
- * histories remain explicit startup blockers. */
+ * Closed ordinary-record prepared children of root ordinary Actions require
+ * matching preparation registration. Lost/retried or open prepared work,
+ * prepared ancestry, content, streams and protected/deferred history stay blocked. */
 import type {
   Hypervisor,
   HypervisorOptions,
@@ -120,6 +121,7 @@ import {
   createOwnerPreparationRecordSource,
   type OwnerPreparationRecordSourceOptions,
 } from "../owner/preparation-record-source.ts";
+import type { OwnerPreparedHistoryRegistration } from "../owner/startup-prepared.ts";
 import type { OwnerPreparationResourcesOptions } from "../owner/preparation-resources.ts";
 import { ownerPrincipalIdentity } from "../owner/principal.ts";
 import {
@@ -1098,6 +1100,7 @@ export async function createOwnerHost(
     shutdown: () => Promise.resolve(),
   };
   let preparations: ReturnType<typeof createOwnerPreparations> | undefined;
+  let preparedHistory: readonly OwnerPreparedHistoryRegistration[] | undefined;
   function authorizePreparedInput(
     tx: SqlExecutor,
     context: OwnerPreparedInputContext,
@@ -1239,6 +1242,18 @@ export async function createOwnerHost(
       renderTimeoutMs: preparation.renderTimeoutMs,
       maxBytes: preparation.maxBytes,
     });
+    const sources = new Map(
+      source.historySources().map((value) => [value.name, value]),
+    );
+    preparedHistory = preparations.historyRegistrations().map(
+      ({ source, ...value }) => {
+        const registeredSource = sources.get(source);
+        if (!registeredSource) {
+          throw new TypeError("Preparation source is not registered.");
+        }
+        return { ...value, source: registeredSource };
+      },
+    );
   }
   async function effectAssignment(
     tx: SqlExecutor,
@@ -1340,6 +1355,9 @@ export async function createOwnerHost(
     ownerId,
     schema,
     registry,
+    ...(initialization === "fresh" || preparedHistory === undefined
+      ? {}
+      : { prepared: preparedHistory }),
     ...(initialization === "fresh" || namespaceInventory === undefined
       ? {}
       : { namespaces: namespaceInventory }),

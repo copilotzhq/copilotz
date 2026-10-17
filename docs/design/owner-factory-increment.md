@@ -44,11 +44,18 @@ read.
 
 The currently supported resume histories are never-started pending ordinary
 Action/Processor deliveries and exact canonical ordinary terminal histories,
-including ordinary Collection records and declared relation edges. Retry-wait,
-lost/leased executions, open Actions, unresolved effects, owner-local attempt
-history, prepared/protected/content/deferred/stream history, unsupported graph
-kinds and unindexed direct Collection history remain explicit blockers. Nothing
-is inferred safe merely because an effect receipt or reservation is absent.
+including ordinary Collection records and declared relation edges. With matching
+preparation configuration, closed ordinary-record prepared children of closed,
+root, non-prepared ordinary Actions are also supported. Startup proves their
+bidirectional receipt/lifecycle identity without rerendering or invoking a
+source policy as a fabricated live caller. Original captured bytes stay
+unchanged; actual root-result replay and subsequent live prepared access retain
+their respective current authorization gates. Retry-wait, lost/leased
+executions, open Actions, unresolved effects, owner-local attempt history,
+pending/open prepared work, nested or Processor preparation parents, prepared
+ancestry, protected/content/deferred/stream history, unsupported graph kinds and
+unindexed direct Collection history remain explicit blockers. Nothing is
+inferred safe merely because an effect receipt or reservation is absent.
 
 Optional resume budgets are `maxItems` (default 1,000; maximum 10,000),
 `maxBytes` (default 8 MiB; maximum 32 MiB), and `maxPasses` (default 4; maximum

@@ -1,7 +1,6 @@
-/** Internal draft ordinary projection descriptor. No public barrel export.
- * This is prepared for a behavior-preserving reducer extraction; until the
- * reducer is rewired and its duplicate implementation removed, equivalence is
- * a separate review gate. It grants no validation, authority or readiness.
+/** Internal shared ordinary projection descriptor. No public barrel export.
+ * The Collection reducer and private startup graph predicate share this exact
+ * derivation. Callers own input validation; this grants no authority or readiness.
  */
 import type { CollectionDefinition } from "./definition.ts";
 

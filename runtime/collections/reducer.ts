@@ -6,6 +6,16 @@ import type { CollectionEventBody, CollectionRecord } from "./types.ts";
 import type { AssetManifestEntry, ContentRef } from "../content/index.ts";
 import { assetNodeData } from "../content/asset-node.ts";
 import { sameValue } from "./equal.ts";
+import {
+  type CollectionOrdinaryProjection,
+  describeCollectionOrdinaryProjection,
+  edgeId,
+} from "./ordinary-projection.ts";
+export {
+  edgeId,
+  identitySource,
+  searchContent,
+} from "./ordinary-projection.ts";
 
 export type NodeRow = Record<string, unknown> & {
   id: string;
@@ -17,12 +27,6 @@ export type NodeRow = Record<string, unknown> & {
   source_type?: string | null;
   source_id?: string | null;
 };
-
-function requireText(value: string, name: string): string {
-  const normalized = value.trim();
-  if (!normalized) throw new TypeError(`${name} must be non-empty.`);
-  return normalized;
-}
 
 function record(value: unknown): Record<string, unknown> {
   if (typeof value === "string") {
@@ -44,76 +48,6 @@ export function mapNode(row: NodeRow): CollectionRecord {
     id: row.id,
     namespace: row.namespace,
   } as const) as CollectionRecord;
-}
-
-export function searchContent(
-  definition: CollectionDefinition,
-  value: Record<string, unknown>,
-): string | null {
-  if (!definition.search?.enabled) return null;
-  const parts = definition.search.fields.map((field) => value[field]).filter(
-    (item) => typeof item === "string" && item.trim(),
-  );
-  return parts.length ? parts.join("\n") : null;
-}
-
-export function edgeId(
-  namespace: string,
-  type: string,
-  sourceId: string,
-  targetId: string,
-): string {
-  return `relation:${JSON.stringify([namespace, type, sourceId, targetId])}`;
-}
-
-export function identitySource(
-  definition: CollectionDefinition,
-  record: Record<string, unknown>,
-): Readonly<{ sourceType: string | null; sourceId: string | null }> {
-  const identity = definition.identity;
-  if (!identity) return { sourceType: null, sourceId: null };
-  const raw = record[identity.sourceField];
-  const sourceId = typeof raw === "string" && raw.trim() ? raw.trim() : null;
-  if (!sourceId) return { sourceType: null, sourceId: null };
-  return { sourceType: identity.sourceType, sourceId };
-}
-
-function recordTimestamp(
-  definition: CollectionDefinition,
-  value: Record<string, unknown>,
-  timestamp: "createdAt" | "updatedAt",
-): string | null {
-  const field = definition.timestamps?.[timestamp] ?? timestamp;
-  const raw = value[field];
-  if (raw === undefined || raw === null || raw === "") return null;
-  if (
-    typeof raw !== "string" ||
-    !raw.trim() ||
-    Number.isNaN(new Date(raw).getTime())
-  ) {
-    throw new TypeError(
-      `Collection '${definition.name}' timestamp field '${field}' must be a valid timestamp.`,
-    );
-  }
-  return raw;
-}
-
-function relatedIds(
-  value: Record<string, unknown>,
-  foreignKey: string,
-  relationName: string,
-): string[] {
-  const raw = value[foreignKey];
-  if (raw === null || raw === undefined || raw === "") return [];
-  const values = Array.isArray(raw) ? raw : [raw];
-  return values.map((item, index) =>
-    requireText(
-      String(item),
-      `Relation '${relationName}' foreign key${
-        Array.isArray(raw) ? ` [${index}]` : ""
-      }`,
-    )
-  );
 }
 
 function contentRefs(value: unknown): readonly ContentRef[] {
@@ -172,26 +106,6 @@ type ManifestAsset = Readonly<{
   created_at: string;
 }>;
 
-type RelationTarget = Readonly<{
-  ord: number;
-  relation: string;
-  related_type: string;
-  related_id: string;
-}>;
-
-type RelationEdge = Readonly<{
-  id: string;
-  source_id: string;
-  target_id: string;
-  edge_type: string;
-}>;
-
-type RelationKey = Readonly<{
-  edge_type: string;
-  related_type: string;
-  self_is_source: boolean;
-}>;
-
 type AssetLink = Readonly<{ id: string; media_type: string; edge_id: string }>;
 
 /** The graph rows one Collection event body projects to. */
@@ -201,18 +115,10 @@ type CollectionProjection = Readonly<{
   type: string;
   operation: CollectionEventBody<CollectionRecord>["operation"];
   manifest: readonly ManifestAsset[];
-  node?: Readonly<{
-    name: string;
-    content: string | null;
-    data: string;
-    sourceType: string | null;
-    sourceId: string | null;
-    createdAt: string | null;
-    updatedAt: string | null;
-  }>;
-  targets: readonly RelationTarget[];
-  keys: readonly RelationKey[];
-  edges: readonly RelationEdge[];
+  node?: CollectionOrdinaryProjection["node"];
+  targets: CollectionOrdinaryProjection["targets"];
+  keys: CollectionOrdinaryProjection["keys"];
+  edges: CollectionOrdinaryProjection["edges"];
   /** Declared content links, sorted by Asset id; absent without content. */
   assets?: readonly AssetLink[];
 }>;
@@ -271,79 +177,10 @@ function collectionProjection(
     return { ...base, targets: [], keys: [], edges: [] };
   }
   const value = body.record;
-  const identity = identitySource(definition, value);
-  const node = {
-    name: String(value.name ?? id),
-    content: searchContent(definition, value),
-    data: JSON.stringify(value),
-    sourceType: identity.sourceType,
-    sourceId: identity.sourceId,
-    createdAt: recordTimestamp(definition, value, "createdAt"),
-    updatedAt: recordTimestamp(definition, value, "updatedAt"),
-  } as const;
-
-  const targets: RelationTarget[] = [];
-  // Relations that share an edge type, direction, and related Collection
-  // resolve to the edge set of the last one, as sequential syncing did.
-  const edgeSets = new Map<
-    string,
-    Readonly<{ key: RelationKey; edges: readonly RelationEdge[] }>
-  >();
-  for (
-    const [relationName, relation] of Object.entries(definition.relations ?? {})
-  ) {
-    const invert = relation.edge === "child-to-parent";
-    const edgeType = relation.edgeType ?? (
-      relation.type === "belongsTo"
-        ? `has_${definition.name}`
-        : `has_${relation.collection}`
-    );
-    let ids: readonly string[];
-    let selfIsSource: boolean;
-    if (relation.type === "belongsTo") {
-      const [parentId] = relatedIds(value, relation.foreignKey, relationName);
-      ids = parentId ? [parentId] : [];
-      selfIsSource = invert;
-    } else if (relation.type === "hasMany" || relation.type === "hasOne") {
-      if (
-        relation.type === "hasMany" &&
-        !Array.isArray(value[relation.foreignKey])
-      ) {
-        continue;
-      }
-      if (relation.type === "hasOne" && !(relation.foreignKey in value)) {
-        continue;
-      }
-      ids = relatedIds(value, relation.foreignKey, relationName);
-      selfIsSource = !invert;
-    } else {
-      continue;
-    }
-    const key = {
-      edge_type: edgeType,
-      related_type: relation.collection,
-      self_is_source: selfIsSource,
-    } as const;
-    const edges = new Map<string, RelationEdge>();
-    for (const relatedId of ids) {
-      targets.push({
-        ord: targets.length,
-        relation: relationName,
-        related_type: relation.collection,
-        related_id: relatedId,
-      });
-      const source = selfIsSource ? id : relatedId;
-      const target = selfIsSource ? relatedId : id;
-      const edge = edgeId(namespace, edgeType, source, target);
-      edges.set(edge, {
-        id: edge,
-        source_id: source,
-        target_id: target,
-        edge_type: edgeType,
-      });
-    }
-    edgeSets.set(JSON.stringify(key), { key, edges: [...edges.values()] });
-  }
+  const { node, targets, keys, edges } = describeCollectionOrdinaryProjection(
+    definition,
+    value,
+  );
 
   const assets = definition.content?.fields.length
     ? [...declaredContentRefs(definition, value)].sort(([left], [right]) =>
@@ -355,18 +192,12 @@ function collectionProjection(
     }))
     : undefined;
 
-  const edges = new Map(
-    [...edgeSets.values()].flatMap((set) => set.edges).map((edge) => [
-      edge.id,
-      edge,
-    ]),
-  );
   return {
     ...base,
     node,
     targets,
-    keys: [...edgeSets.values()].map((set) => set.key),
-    edges: [...edges.values()],
+    keys,
+    edges,
     ...(assets ? { assets } : {}),
   };
 }

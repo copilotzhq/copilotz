@@ -14,6 +14,8 @@ import {
 } from "./protected-value.ts";
 import { durableActionValue, sameActionValue } from "./value.ts";
 
+export { actionDefinitionHasSecrets } from "./secret.ts";
+
 export const PROTECTED_ACTION_LIFECYCLE_SCHEMA =
   "copilotz.action.lifecycle.protected.v1" as const;
 
@@ -56,13 +58,6 @@ export function actionDefinitionById(
     );
   }
   return definition;
-}
-
-export function actionDefinitionHasSecrets(
-  action: AnyActionDefinition,
-): boolean {
-  return actionSchemaHasSecrets(action.inputSchema) ||
-    actionSchemaHasSecrets(action.outputSchema);
 }
 
 /** Whether the Action's input carries values that are stored sealed. */

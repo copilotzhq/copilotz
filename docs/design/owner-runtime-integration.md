@@ -336,3 +336,13 @@ actual-table recovery cases cover rollback of bodies/receipts/readers, alarms,
 authority, duplicates and unknown outcomes;20 focused and41 legacy tests pass
 (two legacy PostgreSQL opt-ins ignored). Full catalog reconciliation,
 effect-aware replay, continuation discovery and alarm readiness remain open.
+
+### Pure authoring import prerequisite
+
+Action definition validation now obtains its unchanged secret-schema predicate
+from the pure secret module; protected lifecycle keeps the same re-export. An
+emitted-ESM closure test proves ordinary definition imports do not evaluate
+persistence/body-store code, including the distinction between erased type
+imports and retained empty runtime imports. Nineteen focused authoring/protected
+lifecycle tests pass. The role-specific whole-application bundle and public
+factory mapping remain separate integration work.

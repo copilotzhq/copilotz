@@ -1,4 +1,12 @@
-import type { ActionSchema } from "./types.ts";
+import type { ActionSchema, AnyActionDefinition } from "./types.ts";
+
+/** Schema inspection is authoring-only; it never opens protected values. */
+export function actionDefinitionHasSecrets(
+  action: AnyActionDefinition,
+): boolean {
+  return actionSchemaHasSecrets(action.inputSchema) ||
+    actionSchemaHasSecrets(action.outputSchema);
+}
 
 const SECRET_MARKER = "x-copilotz-secret";
 const REDACTED_SECRET_VALUE = { "$copilotz-secret": true } as const;

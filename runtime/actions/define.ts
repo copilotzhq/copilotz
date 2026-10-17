@@ -2,7 +2,6 @@ import {
   type ActionContentDeclaration,
   actionContentDeclaration,
 } from "./content.ts";
-import { actionDefinitionHasSecrets } from "./protected-lifecycle.ts";
 import type {
   ActionContext,
   ActionDefinition,
@@ -11,7 +10,7 @@ import type {
   AnyActionDefinition,
 } from "./types.ts";
 import type { ActionDeferral, ActionResolution } from "./deferral.ts";
-import { snapshotActionSchema } from "./secret.ts";
+import { actionDefinitionHasSecrets, snapshotActionSchema } from "./secret.ts";
 
 const ACTION_KEYS = new Set([
   "id",

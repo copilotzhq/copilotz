@@ -1687,6 +1687,7 @@ export async function createOwnerHost(
     currentAuthorizationKinds: [
       OWNER_CHILD_ACTION_ADMISSION,
       OWNER_CHILD_ACTION_RESULT,
+      ...(preparations ? [OWNER_CHILD_ACTION_PREPARATION] : []),
       "effect.begin",
       "effect.confirm",
       "effect.notStarted",
@@ -1695,7 +1696,8 @@ export async function createOwnerHost(
     ],
     isCurrentAuthorization(tx, caller, command, time) {
       return command.kind === OWNER_CHILD_ACTION_ADMISSION ||
-          command.kind === OWNER_CHILD_ACTION_RESULT
+          command.kind === OWNER_CHILD_ACTION_RESULT ||
+          command.kind === OWNER_CHILD_ACTION_PREPARATION
         ? child.isCurrentAuthorization(tx, caller, command, time)
         : command.kind.startsWith("effect.")
         ? effects.isCurrentAuthorization(tx, caller, command, time)

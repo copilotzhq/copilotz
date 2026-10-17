@@ -80,13 +80,14 @@ export type OwnerPreparationRegistration = Readonly<{
 /** Transaction-local methods implemented by the actual child admission module.
  * They recheck the current parent/target and share its ordinary append path. */
 export type PreparationChildAdmission = Readonly<{
-  authorizeTarget(
+  authorizePreparedTarget(
     tx: SqlExecutor,
     caller: OwnerCaller,
     parent: OwnerChildActionParentReference,
     actionAlias: string,
     operationKey: string,
     time: string,
+    command: OwnerCommand,
   ): Promise<Readonly<{ parent: OwnerChildActionParent; actionId: string }>>;
   inspectPrepared(
     tx: SqlExecutor,
@@ -213,7 +214,9 @@ export function createOwnerPreparations(
     authorizeOriginal: options.source.authorizeOriginal.bind(options.source),
   };
   const children = {
-    authorizeTarget: options.children.authorizeTarget.bind(options.children),
+    authorizePreparedTarget: options.children.authorizePreparedTarget.bind(
+      options.children,
+    ),
     inspectPrepared: options.children.inspectPrepared.bind(options.children),
     admitPrepared: options.children.admitPrepared.bind(options.children),
   };
@@ -495,13 +498,14 @@ export function createOwnerPreparations(
         registered.source !== input.source
       ) fail();
       const target = structuredClone(
-        await children.authorizeTarget(
+        await children.authorizePreparedTarget(
           tx,
           structuredClone(caller),
           structuredClone(input.parent),
           registered.actionAlias,
           childKey(input.preparation, input.operationKey),
           commandTime,
+          structuredClone(command),
         ),
       );
       if (
@@ -562,13 +566,14 @@ export function createOwnerPreparations(
         // Original source/resource permission does not substitute for the live
         // parent assignment. Recheck it after awaited duplicate policy work.
         const final = structuredClone(
-          await children.authorizeTarget(
+          await children.authorizePreparedTarget(
             tx,
             structuredClone(caller),
             structuredClone(input.parent),
             registered.actionAlias,
             childKey(input.preparation, input.operationKey),
             commandTime,
+            structuredClone(command),
           ),
         );
         if (

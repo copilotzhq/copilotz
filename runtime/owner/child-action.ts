@@ -26,6 +26,7 @@ import {
   type OwnerChildActionReference,
   parseOwnerChildActionParentReference,
 } from "../execution/child-action-port.ts";
+import { OWNER_CHILD_ACTION_PREPARATION } from "../execution/preparation-call.ts";
 import { assertJsonValue } from "../json.ts";
 import { isOwnerProtectedSchemaFamily } from "./ordinary-value.ts";
 import type { PluginRegistry } from "../plugins/registry.ts";
@@ -1014,7 +1015,40 @@ export function createOwnerChildActions(
     return { parent: detached, actionId: action.id };
   }
   return {
-    authorizeTarget,
+    async authorizePreparedTarget(
+      tx: SqlExecutor,
+      caller: OwnerCaller,
+      ref: OwnerChildActionParentReference,
+      actionAlias: string,
+      operationKey: string,
+      time: string,
+      command: OwnerCommand,
+    ) {
+      authorizationProofs.delete(tx);
+      const captured = structuredClone({ caller, ref, command });
+      if (
+        captured.command.kind !== OWNER_CHILD_ACTION_PREPARATION ||
+        captured.command.domain !== "logical"
+      ) refuse();
+      const target = await authorizeTarget(
+        tx,
+        captured.caller,
+        captured.ref,
+        actionAlias,
+        operationKey,
+        time,
+      );
+      const proof = parentProofs.get(target.parent);
+      if (!proof) refuse();
+      bindAuthorization(
+        tx,
+        captured.caller,
+        captured.command,
+        time,
+        proof.binding,
+      );
+      return target;
+    },
     async inspectPrepared(
       tx: SqlExecutor,
       caller: OwnerCaller,

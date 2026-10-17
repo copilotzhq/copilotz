@@ -98,6 +98,9 @@ async function initializeFixture(
   await provisionOperationCatalog(db, "public");
   await provisionOwnerCommandSchema(db, "public");
   const state = {
+    live: true,
+    afterQuery: undefined as undefined | ((sql: string) => void),
+    afterTransaction: undefined as undefined | (() => void),
     allowed: true,
     originalAllowed: true,
     resourceAllowed: true,
@@ -129,14 +132,18 @@ async function initializeFixture(
     async transaction(run) {
       state.inTransaction = true;
       try {
-        return await db.transaction(async (tx) => {
+        const outcome = await db.transaction(async (tx) => {
           const result = await run({
-            query(sql, params) {
+            async query<
+              TRow extends Record<string, unknown> = Record<string, unknown>,
+            >(sql: string, params?: unknown[]) {
               if (state.revokeOnRead && params?.includes(state.revokeOnRead)) {
                 state.originalAllowed = false;
                 state.revokeOnRead = undefined;
               }
-              return tx.query(sql, params);
+              const result = await tx.query<TRow>(sql, params);
+              state.afterQuery?.(sql);
+              return result;
             },
           });
           if (state.rollBack) {
@@ -145,6 +152,8 @@ async function initializeFixture(
           }
           return result;
         });
+        state.afterTransaction?.();
+        return outcome;
       } finally {
         state.inTransaction = false;
       }
@@ -249,7 +258,7 @@ async function initializeFixture(
       catalog,
       isCurrentParent(who, binding) {
         const a = assignments.get(String(who.assignmentId));
-        return state.ctx && !!a && binding.kind === "action" &&
+        return state.live && state.ctx && !!a && binding.kind === "action" &&
           who.principal.kind === "worker" &&
           who.principal.workerId === a.workerId &&
           who.sessionId === a.sessionId &&
@@ -354,9 +363,14 @@ async function initializeFixture(
     currentAuthorizationKinds: [
       OWNER_CHILD_ACTION_ADMISSION,
       OWNER_CHILD_ACTION_RESULT,
+      OWNER_CHILD_ACTION_PREPARATION,
     ],
     isCurrentAuthorization: (tx, who, command, time) =>
-      [OWNER_CHILD_ACTION_ADMISSION, OWNER_CHILD_ACTION_RESULT].includes(
+      [
+          OWNER_CHILD_ACTION_ADMISSION,
+          OWNER_CHILD_ACTION_RESULT,
+          OWNER_CHILD_ACTION_PREPARATION,
+        ].includes(
           command.kind,
         )
         ? child.isCurrentAuthorization(tx, who, command, time)

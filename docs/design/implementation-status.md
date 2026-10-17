@@ -1,6 +1,6 @@
 # Owner, worker and Views implementation checklist
 
-Updated: 17 October 2026, 19:08 UTC.
+Updated: 17 October 2026, 19:35 UTC.
 
 This is the maintained coordination checklist for
 [Copilotz PR #93](https://github.com/copilotzhq/copilotz/pull/93). It tracks
@@ -15,7 +15,7 @@ production-ready. All changes remain draft: **no merge or publication**.
 | Local Processor bound owner adapter | Reviewed checkpoint     | Reviewed: independent 30 pure and seven real PostgreSQL cases; 83-case compatibility passed        |
 | Local nested Action authority       | Reviewed checkpoint     | Independent 144 pure and 114 PostgreSQL cases; private fresh same-owner mixed placement complete   |
 | Local Action effect capabilities    | Reviewed checkpoint     | Private fresh local effects: 300 PostgreSQL-gate cases, 71 pure and 12 role-bundle cases pass      |
-| Local named preparation / Views     | Next implementation     | Prepared-command lifetime fence, then local parent/control-start and shared capture parity         |
+| Local named preparation / Views     | In progress             | Prepared lifetime fence reviewed; local parent/control-start and shared View capture next          |
 | Faster test orchestration           | Representative measured | 16 files: 15.4% faster, 7.7% higher peak RSS; reordered files require broader isolation validation |
 | Reference-test reliability          | Reviewed correction     | 137 affected cases, independent 29-case check and three complete pipeline repeats passed           |
 | Local Processor host generations    | Reviewed checkpoint     | PostgreSQL 14 host plus two caller-facing helper cases pass; fresh same-owner retry scope complete |
@@ -62,11 +62,17 @@ passes 300 cases in PostgreSQL gates (canonical 192, core 77, related 31), plus
 held replies and same-attempt reconciliation preserve their distinct semantics.
 This does not activate Processor effects or retained local-history recovery.
 
-Next is local named preparation and the View-to-child flow, beginning with the
-prepared command's final private lifetime fence. Quiet-writer content
-protection, open-history takeover and public local placement remain separate
-gates. Every slice must name what it simplifies and eliminates before adding
-machinery.
+The [prepared-command lifetime fence](owner-prepared-authority.md) now reuses
+the child proof map and existing boundary checks. Root-executed gates pass 393
+cases under PostgreSQL configuration (preparation 87, core 114, canonical 192),
+plus 12 role-bundle and 21 PGlite source-fixture cases, with independent source
+and evidence review. The initial mock typecheck, fixture JSON encoding and
+unconditional registration failures are retained alongside their corrections.
+
+Next is local named preparation and the View-to-child flow using that fence.
+Quiet-writer content protection, open-history takeover and public local
+placement remain separate gates. Every slice must name what it simplifies and
+eliminates before adding machinery.
 
 ## 1. Programming model and composition
 
@@ -135,6 +141,9 @@ machinery.
       protocol/policy and bound raw-call tracker, including same-attempt
       declared reconciliation without resending; retained local history remains
       separate
+- [x] Prepared child admission uses the existing final private lifetime fence,
+      including duplicate receipt access and post-COMMIT reply suppression;
+      configured and unconfigured hosts both pass the complete canonical gate
 - [ ] Public local placement activation and complete parity matrix
 
 ## 3. Recovery and continuations

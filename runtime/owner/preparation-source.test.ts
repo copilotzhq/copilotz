@@ -39,6 +39,17 @@ type FixtureOptions = Partial<
 >;
 async function fixture(options: FixtureOptions = {}) {
   const db = await createTestDatabase();
+  try {
+    return await initializeFixture(db, options);
+  } catch (error) {
+    await db.close();
+    throw error;
+  }
+}
+async function initializeFixture(
+  db: Awaited<ReturnType<typeof createTestDatabase>>,
+  options: FixtureOptions,
+) {
   for (const sql of createCoreSchemaStatements("public")) await db.query(sql);
   await provisionOwnerCommandSchema(db, "public");
   const store = createDatabaseBodyStore({ session: db, schema: "public" });
@@ -136,7 +147,7 @@ async function fixture(options: FixtureOptions = {}) {
   const setContent = async (refs: OwnerJson[], id = "message-1") => {
     await db.query(
       "UPDATE nodes SET data=jsonb_set(data,'{content}',$2::jsonb) WHERE id=$1",
-      [id, refs],
+      [id, JSON.stringify(refs)],
     );
   };
   await setContent([ref]);

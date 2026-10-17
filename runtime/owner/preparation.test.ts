@@ -499,3 +499,98 @@ test("named preparation refuses mapper-generated protected families before child
     await f.close();
   }
 });
+
+for (
+  const stage of [
+    "duplicate-read",
+    "receipt-insert",
+    "reader-insert",
+    "savepoint",
+    "commit-reply",
+  ] as const
+) {
+  test(`prepared admission fences private parent loss after ${stage}`, async () => {
+    const f = await fixture();
+    try {
+      if (stage === "duplicate-read") await f.prepare();
+      const snapshot = async () => {
+        const tables = (await f.db.query<{ table_name: string }>(
+          "SELECT table_name FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE' ORDER BY table_name",
+        )).rows;
+        const result: Record<string, unknown> = {};
+        for (const { table_name } of tables) {
+          const name = `"${table_name.replaceAll('"', '""')}"`;
+          result[table_name] = (await f.db.query(
+            `SELECT row_to_json(t) AS data FROM ${name} t ORDER BY row_to_json(t)::text`,
+          )).rows;
+        }
+        return result;
+      };
+      const before = await snapshot();
+      const scheduled = structuredClone(f.state.scheduled);
+      let reached = false, reads = 0;
+      const lose = () => {
+        reached = true;
+        f.state.live = false;
+      };
+      f.state.afterQuery = (sql) => {
+        if (
+          stage === "duplicate-read" &&
+          sql.includes("SELECT kind,intent,result") && ++reads === 2
+        ) lose();
+        if (
+          stage === "receipt-insert" && /INSERT INTO .*owner_receipts/.test(sql)
+        ) lose();
+        if (
+          stage === "reader-insert" &&
+          /INSERT INTO .*owner_receipt_readers/.test(sql)
+        ) lose();
+        if (stage === "savepoint" && sql.startsWith("RELEASE SAVEPOINT")) {
+          lose();
+        }
+      };
+      if (stage === "commit-reply") f.state.afterTransaction = lose;
+      await assert.rejects(
+        f.prepare(),
+        (error: unknown) =>
+          (error as { code?: string }).code ===
+            (stage === "savepoint"
+              ? "ActionOwnershipLost"
+              : "owner_authorization_lost"),
+      );
+      assert.equal(reached, true);
+      assert.equal(f.state.ctx, true);
+      assert.equal(f.state.originalAllowed, true);
+      if (stage !== "commit-reply") {
+        assert.deepEqual(await snapshot(), before);
+        assert.deepEqual(f.state.scheduled, scheduled);
+      } else {
+        assert.equal(
+          (await f.db.query(
+            "SELECT id FROM events WHERE type='copilotz.owner.action.requested'",
+          )).rows.length,
+          2,
+        );
+        const receipts =
+          (await f.db.query<{ result: OwnerChildActionReference }>(
+            "SELECT result FROM owner_receipts WHERE owner=$1 AND domain='logical' AND key=$2 AND kind=$3",
+            [ownerId, f.request().key, OWNER_CHILD_ACTION_PREPARATION],
+          )).rows;
+        assert.equal(receipts.length, 1);
+        const readers = (await f.db.query(
+          "SELECT principal_kind,principal_id FROM owner_receipt_readers WHERE owner=$1 AND domain='logical' AND key=$2",
+          [ownerId, f.request().key],
+        )).rows;
+        assert.deepEqual(readers, [{
+          principal_kind: "worker",
+          principal_id: JSON.stringify([f.parent.workerId]),
+        }]);
+        assert.deepEqual(f.state.scheduled, [...scheduled, receipts[0].result]);
+        assert.equal(f.state.rendered, 1);
+        assert.equal(f.state.mapped, 1);
+      }
+    } finally {
+      await f.close();
+    }
+  });
+}

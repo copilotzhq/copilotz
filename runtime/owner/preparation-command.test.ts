@@ -16,7 +16,7 @@ function commands(actionId = "fixture.send") {
       actions: { send: defineAction({ id: actionId, execute: unavailable }) },
     }),
     children: {
-      authorizeTarget: unavailable,
+      authorizePreparedTarget: unavailable,
       inspectPrepared: unavailable,
       admitPrepared: unavailable,
     },
@@ -143,7 +143,7 @@ test("named preparation normalization refuses caller output, renderer/resource a
 test("named preparation snapshots callback identity and detaches normalized callback arguments", async () => {
   let original = 0;
   const children = {
-    authorizeTarget(
+    authorizePreparedTarget(
       _tx: unknown,
       _caller: unknown,
       parent: { operationKey: string },
@@ -186,7 +186,7 @@ test("named preparation snapshots callback identity and detaches normalized call
     authorizeResource: unavailable,
   });
   const normalized = await c.inputDefinition.normalize(input());
-  children.authorizeTarget = () => {
+  children.authorizePreparedTarget = () => {
     throw new Error("replacement callback invoked");
   };
   await c.authorize(
@@ -227,7 +227,7 @@ test("named preparation refuses a captured namespace different from its current 
       },
     }),
     children: {
-      authorizeTarget: () =>
+      authorizePreparedTarget: () =>
         Promise.resolve({
           parent: { namespace: "space", operationKey: "parent" },
           actionId: "fixture.send",

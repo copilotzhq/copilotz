@@ -48,7 +48,7 @@ function fixture() {
     registry,
     source,
     children: {
-      authorizeTarget: unavailable,
+      authorizePreparedTarget: unavailable,
       inspectPrepared: unavailable,
       admitPrepared: unavailable,
     },
@@ -101,7 +101,7 @@ test("preparation history capture does not invoke resource accessors", () => {
         projections: { "preparation.source": unavailable },
       },
       children: {
-        authorizeTarget: unavailable,
+        authorizePreparedTarget: unavailable,
         inspectPrepared: unavailable,
         admitPrepared: unavailable,
       },

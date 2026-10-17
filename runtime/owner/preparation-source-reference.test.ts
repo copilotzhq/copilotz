@@ -15,13 +15,23 @@ import {
 } from "./preparation-source.ts";
 import type { PreparationSourceReference } from "./preparation-capture.ts";
 
-async function fixture(
-  options: {
-    omitReferencePolicy?: boolean;
-    referencePolicy?: OwnerPreparationSourceOptions["authorizeReference"];
-  } = {},
-) {
+type FixtureOptions = {
+  omitReferencePolicy?: boolean;
+  referencePolicy?: OwnerPreparationSourceOptions["authorizeReference"];
+};
+async function fixture(options: FixtureOptions = {}) {
   const db = await createTestDatabase({ pgliteMemoryProfile: "low-memory" });
+  try {
+    return await initializeFixture(db, options);
+  } catch (error) {
+    await db.close();
+    throw error;
+  }
+}
+async function initializeFixture(
+  db: Awaited<ReturnType<typeof createTestDatabase>>,
+  options: FixtureOptions,
+) {
   for (const sql of createCoreSchemaStatements("public")) await db.query(sql);
   await provisionOwnerCommandSchema(db, "public");
   const store = createDatabaseBodyStore({ session: db, schema: "public" });
@@ -151,7 +161,7 @@ async function fixture(
   const ref = await add("asset-1", "original text");
   await db.query(
     "UPDATE nodes SET data=jsonb_set(data,'{content}',$1::jsonb) WHERE id='message-1'",
-    [[ref]],
+    [JSON.stringify([ref])],
   );
   const capture = async () =>
     await boundary.project(caller, "capture", {
@@ -263,7 +273,7 @@ test("original preparation refs refuse deleted original assets even when replace
     const replacement = await f.add("asset-2", "replacement text");
     await f.db.query(
       "UPDATE nodes SET data=jsonb_set(data,'{content}',$1::jsonb) WHERE id='message-1'",
-      [[replacement]],
+      [JSON.stringify([replacement])],
     );
     await f.db.query("DELETE FROM nodes WHERE id='asset-1'");
     await assert.rejects(f.verify(reference), /content_missing/);

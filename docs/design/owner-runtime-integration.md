@@ -132,8 +132,9 @@ prepares output; the renderer itself does not deliver it.
   conservative unknown outcomes after possible execution
 - Real sibling Oxian in-process and WebSocket tests; normal test runs skip these
   two opt-in cases unless `COPILOTZ_OXIAN_SOURCE_ROOT` selects that checkout.
-  The temporary Deno import map must additionally resolve `ws` to the sibling's
-  declared `npm:ws@8.22.0`; it does not change production dependencies
+  The [portable sibling fixture runner](owner-connected-testing.md) validates an
+  explicit checkout and derives its scoped dependencies without changing
+  production pins or requiring a machine-specific test configuration
 - Private Context-resource-to-View bindings with mandatory authorized projection
   and an input hook inside the actual `callLlm.prepare` capture callback. An
   invoked receipt replay skips projection and rendering even after source data,

@@ -3,8 +3,7 @@
  * storage. It does not exercise a public Action or callLlm adapter. */
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { pathToFileURL } from "node:url";
-import { resolve } from "node:path";
+import { resolveOxianSource } from "../../scripts/test-owner-connected.mjs";
 import { createTestDatabase } from "../testing/ominipg.ts";
 import { createCoreSchemaStatements } from "../events/schema.ts";
 import { createEventStore } from "../events/store.ts";
@@ -71,12 +70,27 @@ for (const transportKind of ["in-process", "websocket"]) {
       timeout: 30_000,
     },
     async () => {
-      const source = (path: string) => pathToFileURL(resolve(root!, path)).href;
+      const { entrypoints } = await resolveOxianSource(root!);
       const { createHypervisor } = await import(
-        source("src/hypervisor/hypervisor.ts")
+        entrypoints["./hypervisor"]
       );
-      const { createWorker } = await import(source("src/worker/worker.ts"));
-      const { serve } = await import(source("src/adapters/node/server.ts"));
+      const { createWorker } = await import(entrypoints["./worker"]);
+      const { serve } = await import(entrypoints["./adapters/node"]);
+      assert.equal(
+        typeof createHypervisor,
+        "function",
+        "Oxian hypervisor export is unavailable",
+      );
+      assert.equal(
+        typeof createWorker,
+        "function",
+        "Oxian worker export is unavailable",
+      );
+      assert.equal(
+        typeof serve,
+        "function",
+        "Oxian Node server export is unavailable",
+      );
       const db = await createTestDatabase({
         pgliteMemoryProfile: "low-memory",
       });
@@ -331,6 +345,11 @@ for (const transportKind of ["in-process", "websocket"]) {
       });
       try {
         await worker.ready;
+        assert.equal(
+          typeof worker.callHost,
+          "function",
+          "Selected Oxian source lacks reverse worker calls",
+        );
         let committedResult: unknown;
         for (const status of ["committed", "duplicate"]) {
           gateNextCommit = status === "committed";

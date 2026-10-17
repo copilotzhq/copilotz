@@ -1,11 +1,15 @@
 import { coreEvent } from "../core/shared/events/index.ts";
-import { assertEquals, assertThrows } from "@std/assert";
+import { assertEquals, assertStrictEquals, assertThrows } from "@std/assert";
 import * as channelPublic from "./index.ts";
 import { channelIngress } from "../channel-core/authoring/channel-ingress/index.ts";
 import { channelsPlugin } from "../channel-core/plugin.ts";
 import { defineChannelResource } from "../channel-core/authoring/channel-resource/index.ts";
 import { discordChannelPlugin } from "../channel-discord/index.ts";
-import { telegramChannelPlugin } from "../channel-telegram/index.ts";
+import {
+  TELEGRAM_SEND_TEXT_ACTION_ID,
+  telegramChannelPlugin,
+  telegramSendTextAction,
+} from "../channel-telegram/index.ts";
 import { webChannelPlugin } from "../channel-web/index.ts";
 import { whatsappChannelPlugin } from "../channel-whatsapp/index.ts";
 import { zendeskChannelPlugin } from "../channel-zendesk/index.ts";
@@ -106,6 +110,7 @@ Deno.test("Channel exports expose transport helpers and Resource/Adapter composi
       "CHANNEL_EGRESS_ACTION_ID",
       "CHANNEL_INGRESS_ACTION_ID",
       "CHANNEL_INGRESS_INPUT_EVENT",
+      "TELEGRAM_SEND_TEXT_ACTION_ID",
       "buildWhatsAppMediaCarouselMessage",
       "buildWhatsAppReplyButtonsMessage",
       "channelBindingCollection",
@@ -124,6 +129,7 @@ Deno.test("Channel exports expose transport helpers and Resource/Adapter composi
       "telegramChannelAdapter",
       "telegramChannelPlugin",
       "telegramChannelResource",
+      "telegramSendTextAction",
       "createTelegramTransport",
       "webChannelAdapter",
       "webChannelPlugin",
@@ -146,6 +152,18 @@ Deno.test("Channel exports expose transport helpers and Resource/Adapter composi
       "verifyWhatsAppSignature",
       "whatsappHeader",
     ].sort(),
+  );
+  assertEquals(
+    channelPublic.TELEGRAM_SEND_TEXT_ACTION_ID,
+    TELEGRAM_SEND_TEXT_ACTION_ID,
+  );
+  assertStrictEquals(
+    channelPublic.telegramSendTextAction,
+    telegramSendTextAction,
+  );
+  assertEquals(
+    channelPublic.telegramSendTextAction.id,
+    TELEGRAM_SEND_TEXT_ACTION_ID,
   );
   const providers = [
     webChannelPlugin,

@@ -73,7 +73,7 @@ An uncertain commit stops the holder. A successor reacquires through the locking
 epoch row and resolves receipts before accepting new commands. Reconnecting a
 SQL session does not make the previous epoch ready again.
 
-### Compatibility question under review
+### Approved transaction replay contract
 
 The legacy local Collection transaction API recomputes callback return values
 and supports some partial-plan retries under one operation key. A whole-command
@@ -81,8 +81,18 @@ owner receipt instead requires compatibility of the entire ordered intent and a
 durable operation result. The existing implementation remains untouched while
 the internal command boundary is built. Before public integration, both
 in-process and connected owner paths must use the same canonical-plan replay
-rules; treatment of callback return values awaits a separate compatibility
-decision. Closures and arbitrary callback returns are never wire payloads.
+rules. The approved contract keeps callback return values as local computation;
+the owner records canonical ordered operations and their durable outcome.
+Same-key retries with a changed whole plan fail in both placements. Closures and
+arbitrary callback returns are never wire payloads.
+
+An internal shared planner now implements this separation for the bounded JSON
+Collection subset. It reruns the local callback on replay, returns only stable
+ID references during planning, drains outstanding registrations, and submits
+only registered operation data. It never executes Collection mutate functions on
+the caller. Reads, write options, content, relations and vectors fail explicitly
+until their owner-bound capability paths exist. This planner does not yet
+migrate the public context or choose the factory API.
 
 ## Connected execution and Views
 
@@ -156,6 +166,8 @@ Current owner-checkpoint verification:
 
 - Owner boundary, private connection, Collection command and event sequence: 49
   passed
+- Shared callback planner: nine tests cover local non-JSON returns, canonical
+  replay on direct/encoded ports, stable references, failures and lifetime
 - Actual sibling in-process and WebSocket Collection/Processor/View fixtures:
   two passed, including captured-text replay and commit-gated output
 - Owner kernel, Context View capture, plugin boundary/layout and selected
@@ -166,10 +178,10 @@ Current owner-checkpoint verification:
 
 Current owner-checkpoint verification also exposes an intentional unfinished
 integration gate: `deno task check` fails package reachability for the internal
-`runtime/owner/{boundary,collections,connection,schema}.ts` modules. They are
-not wired into the exported production graph yet. The checker remains unchanged;
-no provisional public export is added merely to bypass that gate. This draft is
-not release-ready.
+`runtime/owner/{boundary,collections,connection,schema,transaction}.ts` modules.
+They are not wired into the exported production graph yet. The checker remains
+unchanged; no provisional public export is added merely to bypass that gate.
+This draft is not release-ready.
 
 Required for the owner slice:
 

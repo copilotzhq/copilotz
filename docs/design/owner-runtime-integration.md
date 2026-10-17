@@ -371,3 +371,17 @@ rollback, bounds, cancellation and owner stop during normalization. The stopped
 owner lifetime gap was reproduced before fixing. Existing boundary/connection
 compatibility passes59 cases. Root admission and its public transport remain
 separate integration work.
+
+### Registered root admission prerequisite
+
+Named Action admission derives its versioned canonical digest from the entire
+normalized input/metadata/provenance payload, then persists only safe refs in
+receipts and the original input in the existing body/event/delivery path.
+Current host policy must validate trusted provenance and scope before every
+receipt lookup, including compatible replay. Fourteen actual-table tests prove
+canonical replay/conflict, atomic bounded admission (default128 pending rows),
+rollback, original capture and outer-commit scheduling. Normal three-attempt
+policy remains unchanged. Protected/content/deferred Actions and data that the
+legacy content canonicalizer would alter are explicitly refused in this subset.
+The trusted constraints absent-key codec and admission-group policy remain
+integration work. Public scheduling is not enabled before effect-aware recovery.

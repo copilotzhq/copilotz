@@ -72,7 +72,7 @@ caller-facing reply. A true caller-facing held-reply alarm case and an actual
 sub-millisecond host scheduling probe remain additional evidence gates.
 Independent PostgreSQL 17.11 validation passes the same thirteen host cases plus
 three pure cases, with zero failures or skips. All thirteen disposable databases
-were exported and dropped and the service stopped. The isolated 1,595-file
+were created, tested and dropped and the service stopped. The isolated 1,595-file
 source snapshot and seven worktree overlay hashes stayed unchanged; source lint
 and formatting checks passed.
 

@@ -289,3 +289,23 @@ all user execution on that session's result. The data-only execution mapper is
 per immutable authenticated parent assignment and privately binds its successful
 claim reference before allowing completion; it cannot be rebound to another
 assignment or complete using an old delivery/attempt reference.
+
+### Named owner Action execution
+
+The internal execution adapter now implements actual fenced claim, authorized
+input projection and status-independent logical terminal completion using the
+existing delivery, Action lifecycle, open-Action and operation-scope tables. It
+revalidates the host-owned assignment/session/attempt before receipt lookup,
+uses the command timestamp, preserves cancellation precedence, and records only
+safe reference outcomes for recovery. Captured ordinary input is read only after
+current authorization; unsupported protected/content/deferred forms refuse.
+Failure codes are allowlisted so arbitrary worker strings cannot become safe
+receipt output. Claim and terminal publication wait for outer durability.
+
+Table-backed tests exercise a registered Action's owner Collection transaction
+and a real existing Processor observer, rollback, lost completion reply, stale
+assignment/lease/epoch, revoked input policy with restricted completion, and
+competing terminal outcomes. The Processor in this fixture still uses the legacy
+executor. Owner-only general Processor execution, lease renewal for long
+Actions, complete readiness/recovery, and the common public factory remain
+separate gates.

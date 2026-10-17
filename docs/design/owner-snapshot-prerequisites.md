@@ -45,6 +45,30 @@ CI node-modules mode resolves them without source/test weakening; Drizzle passes
 in the final coherent group. These are scoped checks, not a new complete
 Copilotz acceptance or a package-publication claim.
 
+## Pooled timeout progress
+
+A subsequent scoped correction keeps PostgreSQL request waiting within the
+existing named transaction or default/unlaned group. An unrelated timed-out pool
+checkout cannot block the transaction that must continue or end to release its
+connection. PGlite retains the whole-session gate. No extra pool, connection
+budget, checkout rejection policy, public API or lane registry is added.
+
+The plain routing envelope is captured before waiting, so caller mutation cannot
+change the admitted lane. UNLISTEN can complete independently after its own
+subscription's raw work drains; new LISTEN retains default admission. The
+listener hub still holds its shared connection after unsubscribe, so capacity
+accounting must retain that charge. Encoding errors create no raw waiter/timer.
+
+Independent gates pass 77 Ominipg cases with actual PostgreSQL enabled, 31
+Copilotz cases plus five steps, four cleanup-fault probes and one
+listener-retention diagnostic. The static task passes, source hashes remain
+unchanged, and both disposable databases were exported/dropped with services
+stopped. Wording-only corrections then pass ten focused cases with two explicit
+PostgreSQL skips; no behavioral change is hidden in that correction. Earlier
+terminal-only, mutable-envelope, unsubscribe-progress and encoding failures
+remain preserved. This does not establish reserved snapshot/control capacity or
+activate owner snapshots.
+
 ## Remaining backend and authority gates
 
 A read-only REPEATABLE READ snapshot owns a separate transaction outside the

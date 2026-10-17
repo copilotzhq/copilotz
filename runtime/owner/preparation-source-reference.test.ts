@@ -180,6 +180,7 @@ test("original preparation refs survive current field/title changes without repr
   const f = await fixture();
   try {
     const first = await f.capture();
+    assert("path" in first.reference.source);
     assert.equal(first.reference.source.path, "content");
     assert.equal(first.reference.content[0].ref.assetId, "asset-1");
     assert.equal(
@@ -388,6 +389,25 @@ test("capture rechecks original permission at output with detached policy facts"
     assert.equal(checks, 2);
     assert.ok(f.state.bodyReads > 0);
     assert.deepEqual(references[0], references[1]);
+  } finally {
+    await f.close();
+  }
+});
+
+test("database-content source explicitly refuses ordinary-record provenance", async () => {
+  const f = await fixture();
+  try {
+    const original = (await f.capture()).reference;
+    assert("path" in original.source);
+    const { path: _path, ...source } = original.source;
+    const record = {
+      ...original,
+      source: { ...source, selection: "record" as const },
+      content: [],
+    };
+    const before = f.state.bodyReads;
+    await assert.rejects(f.verify(record), /preparation_forbidden/);
+    assert.equal(f.state.bodyReads, before);
   } finally {
     await f.close();
   }

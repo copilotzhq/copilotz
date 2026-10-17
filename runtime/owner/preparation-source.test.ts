@@ -562,3 +562,35 @@ test("preparation reader rejects actual protected envelope schema markers withou
     await f.close();
   }
 });
+
+test("preparation reader refuses reserved protected families in decoded bodies and projected fields", async () => {
+  let projected: OwnerJson = { title: "Visible" };
+  const f = await fixture({ projectRecord: () => projected });
+  try {
+    const markers: OwnerJson[] = [
+      { schema: "copilotz.action.lifecycle.protected.v2" },
+      { schema: "copilotz.action.protected-value.malformed" },
+      { schema: "copilotz.action.protected-value-aad.v2" },
+      { schema: "copilotz.event.protected-value" },
+      { schema: ["copilotz.action.protected-value.v2"] },
+      { ownerNodeId: "protected-owner" },
+      { "x-copilotz-secret": false },
+    ];
+    for (const [index, nested] of markers.entries()) {
+      const ref = await f.add(
+        `protected-family-${index}`,
+        JSON.stringify({ nested }),
+        "json",
+      );
+      await f.setContent([ref]);
+      await assert.rejects(f.read(), /preparation_unsupported/);
+    }
+    await f.setContent([f.ref]);
+    for (const nested of markers) {
+      projected = { nested };
+      await assert.rejects(f.read(), /preparation_unsupported/);
+    }
+  } finally {
+    await f.close();
+  }
+});

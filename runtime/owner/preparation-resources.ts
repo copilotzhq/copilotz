@@ -1,6 +1,7 @@
 /** Private ordinary Resource projection for named preparation. Resource policy
  * owns authorization of each original identity/version, including on replay.
  * It is not a resolver for worker-authored resource names or values. */
+import { assertOwnerOrdinaryValue } from "./ordinary-value.ts";
 import { digestContent } from "../content/digest.ts";
 import { assertJsonValue } from "../json.ts";
 import type { PluginRegistry } from "../plugins/registry.ts";
@@ -76,28 +77,19 @@ function snapshot(value: unknown, maxBytes: number): OwnerJson {
   return structuredClone(value) as OwnerJson;
 }
 function ordinary(value: OwnerJson): void {
-  if (!value || typeof value !== "object") return;
-  if (!Array.isArray(value)) {
-    const schema = (value as Record<string, OwnerJson>).schema;
+  try {
+    assertOwnerOrdinaryValue(value);
+  } catch (error) {
     if (
-      [
-        "copilotz.event.protected-value.v1",
-        "copilotz.action.lifecycle.protected.v1",
-        "copilotz.action.protected-value.v1",
-      ].includes(String(schema))
-    ) fail("preparation_unsupported");
-    if (
-      [
-        "assetId",
-        "bodyId",
-        "location",
-        "$copilotz-secret",
-        "$copilotz-protected",
-      ].some((name) => Object.hasOwn(value, name))
-    ) fail("preparation_unsupported");
+      error && typeof error === "object" && "code" in error &&
+      error.code === "ordinary_value_unsupported"
+    ) {
+      fail("preparation_unsupported");
+    }
+    throw error;
   }
-  for (const child of Object.values(value)) ordinary(child);
 }
+
 function canonical(value: OwnerJson): string {
   if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
   if (value && typeof value === "object") {

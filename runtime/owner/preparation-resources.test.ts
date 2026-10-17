@@ -215,3 +215,21 @@ test("preparation resources retain original signal and command time across async
   );
   assert.deepEqual(times, [originalTime, originalTime]);
 });
+
+test("preparation resources refuse unknown protected families and partial owner references", async () => {
+  const markers: OwnerJson[] = [
+    { schema: "copilotz.action.lifecycle.protected.v2" },
+    { schema: "copilotz.action.protected-value.malformed" },
+    { schema: "copilotz.event.protected-value" },
+    { schema: ["copilotz.action.protected-value.v2"] },
+    { ownerNodeId: "protected-owner" },
+    { "x-copilotz-secret": false },
+  ];
+  for (const nested of markers) {
+    const f = fixture({ projectResource: () => ({ nested }) });
+    await assert.rejects(
+      f.helper.capture(tx, context()),
+      /preparation_unsupported/,
+    );
+  }
+});

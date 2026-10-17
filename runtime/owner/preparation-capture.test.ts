@@ -172,3 +172,34 @@ test("preparation metadata selector refuses own accessors without invoking them"
   );
   assert.equal(reads, 0);
 });
+
+test("ordinary-record provenance is explicit, detached and cannot adopt content provenance", () => {
+  const content = capture().source;
+  const before = JSON.stringify(content);
+  assert.equal(
+    JSON.stringify(parsePreparationSourceReference(content)),
+    before,
+  );
+  const { path: _path, ...source } = content.source;
+  const record = {
+    source: { ...source, selection: "record" },
+    audience: "context",
+    content: [],
+  };
+  const parsed = parsePreparationSourceReference(record);
+  record.source.recordId = "changed";
+  assert.equal(parsed.source.recordId, "message-1");
+  for (
+    const invalid of [
+      { ...record, source: { ...record.source, path: "content" } },
+      { ...record, source: { ...record.source, selection: "unknown" } },
+      { ...record, content: content.content },
+      { ...record, source },
+    ]
+  ) {
+    assert.throws(
+      () => parsePreparationSourceReference(invalid),
+      /preparation_capture_invalid/,
+    );
+  }
+});

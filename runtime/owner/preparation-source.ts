@@ -2,13 +2,12 @@
  * layout. This neither captures a preparation nor implements F9 current-copy
  * migration. It is only a fixed owner projection over registered source fields.
  * Policy callbacks are trusted, transaction-local reads, never remote code. */
+import { assertOwnerOrdinaryValue } from "./ordinary-value.ts";
 import type { CollectionDefinition } from "../collections/definition.ts";
 import { declaredCollectionJsonField } from "../collections/field.ts";
 import { getPath } from "../collections/content-path.ts";
 import { validateAgainstJsonSchema } from "../collections/validate.ts";
 import { actionSchemaHasSecrets } from "../actions/secret.ts";
-import { PROTECTED_ACTION_LIFECYCLE_SCHEMA } from "../actions/protected-lifecycle.ts";
-import { PROTECTED_VALUE_REF_SCHEMA } from "../actions/protected-value.ts";
 import { createDatabaseBodyStore } from "../content/database-body-store.ts";
 import { digestContent } from "../content/digest.ts";
 import { contentRefSchema } from "../content/schema.ts";
@@ -147,29 +146,19 @@ function snapshot(value: unknown, maxBytes: number): OwnerJson {
   return structuredClone(value) as OwnerJson;
 }
 function plain(value: OwnerJson): void {
-  if (!value || typeof value !== "object") return;
-  if (!Array.isArray(value)) {
-    const schema = (value as Record<string, OwnerJson>).schema;
+  try {
+    assertOwnerOrdinaryValue(value);
+  } catch (error) {
     if (
-      schema === PROTECTED_ACTION_LIFECYCLE_SCHEMA ||
-      schema === PROTECTED_VALUE_REF_SCHEMA
+      error && typeof error === "object" && "code" in error &&
+      error.code === "ordinary_value_unsupported"
     ) {
       fail("preparation_unsupported");
     }
-    for (
-      const key of [
-        "assetId",
-        "bodyId",
-        "location",
-        "$copilotz-secret",
-        "$copilotz-protected",
-      ]
-    ) {
-      if (Object.hasOwn(value, key)) fail("preparation_unsupported");
-    }
+    throw error;
   }
-  for (const child of Object.values(value)) plain(child);
 }
+
 function limit(value: number | undefined, fallback: number): number {
   const result = value ?? fallback;
   if (!Number.isSafeInteger(result) || result < 1 || result > fallback) {
@@ -510,6 +499,7 @@ export function createOwnerPreparationSource(
         caller: structuredClone(originalContext.caller),
       };
       const captured = parsePreparationSourceReference(input);
+      if ("selection" in captured.source) fail("preparation_forbidden");
       const source = sources.get(captured.source.name);
       if (
         !source || source.kind !== captured.source.kind ||

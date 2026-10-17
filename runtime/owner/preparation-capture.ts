@@ -18,15 +18,19 @@ export type PreparationContentReference = Readonly<{
   version: Readonly<{ byteLength: number; digest: string }>;
 }>;
 export type PreparationSourceReference = Readonly<{
-  source: Readonly<{
-    name: string;
-    kind: string;
-    path: string;
-    recordId: string;
-    namespace: string;
-    /** Digest of the original authorized projection, never the raw record. */
-    digest: string;
-  }>;
+  source: Readonly<
+    & {
+      name: string;
+      kind: string;
+      recordId: string;
+      namespace: string;
+      /** Digest of the original authorized projection, never the raw record. */
+      digest: string;
+    }
+    & ({ path: string } | {
+      selection: "record";
+    })
+  >;
   audience: string;
   content: readonly PreparationContentReference[];
 }>;
@@ -95,20 +99,27 @@ export function parsePreparationSourceReference(
   value: unknown,
 ): PreparationSourceReference {
   const data = exact(detached(value), ["source", "audience", "content"]);
+  const record = !!data.source && typeof data.source === "object" &&
+    Object.hasOwn(data.source, "selection");
   const source = exact(data.source, [
     "name",
     "kind",
-    "path",
+    record ? "selection" : "path",
     "recordId",
     "namespace",
     "digest",
   ]);
-  for (const key of ["name", "kind", "path", "recordId", "namespace"]) {
+  if (record && source.selection !== "record") invalid();
+  for (const key of ["name", "kind", "recordId", "namespace"]) {
     text(source[key]);
   }
+  if (!record) text(source.path);
   digest(source.digest);
   text(data.audience);
-  if (!Array.isArray(data.content) || data.content.length > 100) invalid();
+  if (
+    !Array.isArray(data.content) || data.content.length > 100 ||
+    (record && data.content.length !== 0)
+  ) invalid();
   let bytes = 0;
   for (const value of data.content) {
     const item = exact(value, ["ref", "version"]);

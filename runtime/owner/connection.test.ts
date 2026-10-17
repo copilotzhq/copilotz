@@ -85,6 +85,7 @@ function recordingBoundary(
     epoch: 1,
     acquire: () => Promise.resolve(1),
     stop() {},
+    project: () => Promise.reject(new Error("Unused projection capability")),
     execute: () =>
       Promise.resolve({ status: "committed", result: { recordIds: ["note"] } }),
     readReceipt: () =>

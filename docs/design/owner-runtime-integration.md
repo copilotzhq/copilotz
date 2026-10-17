@@ -218,3 +218,19 @@ worker must additionally supply owner-bound capabilities, named owner
 preparation, claim/lease/settlement authority and explicit refusals for
 capabilities that have not been converted. This extraction alone does not
 establish that worker or public embedded/connected parity.
+
+### Ephemeral current-authorized projections
+
+The internal owner boundary also accepts named trusted projection handlers. They
+share command queue bounds, the exact owner fence, current authorization,
+cancellation and output gating, but do not write receipts or receive mutation or
+publication helpers. Handler SQL is trusted core implementation, not a sandbox
+or an automatically read-only SQL executor; registered projection handlers must
+not perform business writes.
+
+A durable claim records safe job/delivery references. Input hydration is a
+separate current-authorized projection, never parentless receipt recovery.
+Cancellation or owner retirement while COMMIT is in flight suppresses projected
+output, even after its handler has finished. Durable mutation receipt semantics
+are unchanged. Transport delivery and full claim/attempt integration remain
+separate acceptance gates.

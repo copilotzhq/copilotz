@@ -954,3 +954,194 @@ test("receipt authentication is read-only and per-command timestamps can cross a
     assert.deepEqual(await nodeIds(db), ["before"]);
   });
 });
+
+test("current-authorized projections never persist inputs or output in receipts", async () => {
+  await fixture(async (db) => {
+    let status = "active";
+    let reads = 0;
+    const owner = createOwnerCommandBoundary(options(db, {
+      authorize(_tx, who) {
+        if (who.authenticated !== true || status !== "active") {
+          throw new Error("projection authority expired");
+        }
+      },
+      projections: {
+        input: async (input, context) => {
+          assert.deepEqual(Object.keys(context).sort(), [
+            "caller",
+            "commandTime",
+            "signal",
+            "tx",
+          ]);
+          reads++;
+          const count = await context.tx.query<{ count: number }>(
+            "SELECT COUNT(*)::int AS count FROM public.nodes",
+          );
+          return { input, visible: "authorized", count: count.rows[0].count };
+        },
+      },
+    }));
+    await owner.acquire(0);
+    assert.deepEqual(await owner.project(caller(), "input", { ref: "job" }), {
+      input: { ref: "job" },
+      visible: "authorized",
+      count: 0,
+    });
+    assert.equal(
+      (await db.query("SELECT * FROM public.owner_receipts")).rows.length,
+      0,
+    );
+    assert.equal(
+      (await db.query("SELECT * FROM public.events")).rows.length,
+      0,
+    );
+    assert.deepEqual(await nodeIds(db), []);
+    for (status of ["revoked", "expired", "settled"]) {
+      await assert.rejects(
+        owner.project(caller(), "input", { ref: "job" }),
+        /authority expired/,
+      );
+    }
+    assert.equal(reads, 1);
+    status = "active";
+    await assert.rejects(
+      owner.project(caller(0), "input", null),
+      errorCode("ActionOwnershipLost"),
+    );
+    await assert.rejects(
+      owner.execute(caller(), command("wrong", null, "input")),
+      errorCode("owner_command_invalid"),
+    );
+  });
+});
+
+test("projection output waits for outer commit and disappears on indeterminate completion", async () => {
+  await fixture(async (db) => {
+    const entered = deferred();
+    const release = deferred();
+    let gate = false;
+    let lose = false;
+    const session: SqlSession = {
+      query: (sql, params) => db.query(sql, params),
+      async transaction(run) {
+        const result = await db.transaction(async (tx) => {
+          const result = await run(tx);
+          if (gate) {
+            entered.resolve();
+            await release.promise;
+          }
+          return result;
+        });
+        if (lose) {
+          throw Object.assign(new Error("lost completion"), {
+            indeterminate: true,
+          });
+        }
+        return result;
+      },
+    };
+    const owner = createOwnerCommandBoundary(
+      options(session, {
+        projections: {
+          input: () => ({ privateValue: "only-current-authority" }),
+        },
+      }),
+    );
+    await owner.acquire(0);
+    gate = true;
+    let leaked = false;
+    const result = owner.project(caller(), "input", null).then((value) => {
+      leaked = true;
+      return value;
+    });
+    await entered.promise;
+    assert.equal(leaked, false);
+    lose = true;
+    release.resolve();
+    await assert.rejects(result, /lost completion/);
+    assert.equal(leaked, false);
+    assert.equal(owner.state, "stopped");
+    assert.equal(
+      (await db.query("SELECT * FROM public.owner_receipts")).rows.length,
+      0,
+    );
+  });
+});
+
+test("cancelled projections revoke their context without leaking results", async () => {
+  await fixture(async (db) => {
+    const entered = deferred();
+    const release = deferred();
+    let captured: SqlExecutor | undefined;
+    const owner = createOwnerCommandBoundary(options(db, {
+      projections: {
+        input: async (_input, context) => {
+          captured = context.tx;
+          entered.resolve();
+          await release.promise;
+          return { value: "never delivered" };
+        },
+      },
+    }));
+    await owner.acquire(0);
+    const abort = new AbortController();
+    const result = owner.project(caller(), "input", null, {
+      signal: abort.signal,
+    });
+    const rejection = assert.rejects(result, /cancel projection/);
+    await entered.promise;
+    abort.abort(new Error("cancel projection"));
+    release.resolve();
+    await rejection;
+    await assert.rejects(
+      captured!.query("SELECT 1"),
+      errorCode("owner_command_closed"),
+    );
+    assert.equal(
+      (await db.query("SELECT * FROM public.owner_receipts")).rows.length,
+      0,
+    );
+  });
+});
+
+for (const retire of ["abort", "stop"] as const) {
+  test(`projection ${retire} during COMMIT suppresses ephemeral output`, async () => {
+    await fixture(async (db) => {
+      const entered = deferred();
+      const release = deferred();
+      let gated = false;
+      const session: SqlSession = {
+        query: (sql, params) => db.query(sql, params),
+        transaction: (run) =>
+          db.transaction(async (tx) => {
+            const value = await run(tx);
+            if (gated) {
+              entered.resolve();
+              await release.promise;
+            }
+            return value;
+          }),
+      };
+      const owner = createOwnerCommandBoundary(
+        options(session, {
+          projections: { input: () => ({ privateValue: "revoked input" }) },
+        }),
+      );
+      await owner.acquire(0);
+      gated = true;
+      const abort = new AbortController();
+      const result = owner.project(caller(), "input", null, {
+        signal: abort.signal,
+      });
+      await entered.promise;
+      if (retire === "abort") abort.abort(new Error("assignment revoked"));
+      else owner.stop(new Error("assignment revoked"));
+      release.resolve();
+      await assert.rejects(result, /assignment revoked|stopped/);
+      assert.equal(
+        (await db.query("SELECT * FROM public.owner_receipts")).rows.length,
+        0,
+      );
+    });
+  });
+}

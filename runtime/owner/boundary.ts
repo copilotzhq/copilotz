@@ -38,6 +38,14 @@ export type OwnerCommandHandler = (
   intent: OwnerJson,
   context: OwnerCommandContext,
 ) => OwnerJson | Promise<OwnerJson>;
+/** Trusted core read handler, not a SQL sandbox. It must perform no business
+ * writes. No mutation context, publication hook or durable receipt is supplied. */
+export type OwnerProjectionHandler = (
+  input: OwnerJson,
+  context: Readonly<
+    Pick<OwnerCommandContext, "tx" | "caller" | "commandTime" | "signal">
+  >,
+) => OwnerJson | Promise<OwnerJson>;
 export type OwnerCommandOutcome = Readonly<
   { status: "committed" | "duplicate"; result: OwnerJson }
 >;
@@ -50,6 +58,7 @@ export type OwnerCommandBoundaryOptions = Readonly<{
   ownerId: string;
   holderId: string;
   handlers: Readonly<Record<string, OwnerCommandHandler>>;
+  projections?: Readonly<Record<string, OwnerProjectionHandler>>;
   /** Revalidate current assignment/session/execution authority under the owner
    * lock. Bind key to its stable invocation and semantic target (e.g. namespace)
    * on every call, including receipt duplicates; transient fences are not intent. */
@@ -80,6 +89,12 @@ export type OwnerCommandBoundary = Readonly<{
     command: OwnerCommand,
     options?: OwnerCommandExecuteOptions,
   ): Promise<OwnerCommandOutcome>;
+  project(
+    caller: OwnerCaller,
+    kind: string,
+    input: OwnerJson,
+    options?: OwnerCommandExecuteOptions,
+  ): Promise<OwnerJson>;
   readReceipt(
     caller: OwnerCaller,
     identity: Readonly<{ domain: OwnerIdentityDomain; key: string }>,
@@ -88,6 +103,7 @@ export type OwnerCommandBoundary = Readonly<{
 }>;
 
 type Pending = {
+  projection: boolean;
   caller: OwnerCaller;
   command: OwnerCommand;
   canonical: string;
@@ -279,8 +295,17 @@ export function createOwnerCommandBoundary(
   }
   const tables = ownerTableNames(schema);
   const handlers = new Map(Object.entries(options.handlers));
+  const projections = new Map(Object.entries(options.projections ?? {}));
+  if (
+    [...projections.values()].some((handler) => typeof handler !== "function")
+  ) {
+    throw new TypeError("Owner projections must be functions.");
+  }
   if ([...handlers.values()].some((handler) => typeof handler !== "function")) {
     throw new TypeError("Owner handlers must be functions.");
+  }
+  if ([...projections.keys()].some((kind) => handlers.has(kind))) {
+    throw new TypeError("Owner command and projection names must be distinct.");
   }
   const maxGroup = options.maxGroup ?? 32;
   const maxQueue = options.maxQueue ?? 128;
@@ -359,7 +384,17 @@ export function createOwnerCommandBoundary(
       outstanding--;
       item.pending.removeAbort?.();
       if (item.failed) item.pending.reject(item.error);
-      else item.pending.resolve(item.outcome!);
+      else if (item.pending.projection) {
+        // Ephemeral authorized data has no durable delivery entitlement. The
+        // assignment may end while COMMIT is in flight, after its savepoint.
+        try {
+          assertAcquired();
+          checkPendingAbort(item.pending);
+          item.pending.resolve(item.outcome!);
+        } catch (error) {
+          item.pending.reject(error);
+        }
+      } else item.pending.resolve(item.outcome!);
       if (!item.callbacks.length) postCommitReserved--;
       else publications.push(item.callbacks);
     }
@@ -449,18 +484,20 @@ export function createOwnerCommandBoundary(
                   commandTime,
                 );
                 checkPendingAbort(pending);
-                const receipt = await tx.query<
-                  { kind: string; intent: OwnerJson; result: OwnerJson }
-                >(
-                  `SELECT kind,intent,result FROM ${tables.receipts}
+                const receipt = pending.projection
+                  ? { rows: [] }
+                  : await tx.query<
+                    { kind: string; intent: OwnerJson; result: OwnerJson }
+                  >(
+                    `SELECT kind,intent,result FROM ${tables.receipts}
                 WHERE owner=$1 AND worker_id=$2 AND domain=$3 AND key=$4`,
-                  [
-                    ownerId,
-                    pending.caller.workerId,
-                    pending.command.domain,
-                    pending.command.key,
-                  ],
-                );
+                    [
+                      ownerId,
+                      pending.caller.workerId,
+                      pending.command.domain,
+                      pending.command.key,
+                    ],
+                  );
                 let outcome: OwnerCommandOutcome;
                 if (receipt.rows.length) {
                   const existing = receipt.rows[0];
@@ -499,6 +536,9 @@ export function createOwnerCommandBoundary(
                       commandTime,
                     },
                     afterCommit(callback) {
+                      if (pending.projection) {
+                        throw new TypeError("Projections cannot publish.");
+                      }
                       if (!active) {
                         throw failure(
                           "owner_command_closed",
@@ -521,24 +561,36 @@ export function createOwnerCommandBoundary(
                   };
                   checkPendingAbort(pending);
                   const result = copyJson(
-                    await handlers.get(pending.command.kind)!(
-                      copyJson(pending.command.intent),
-                      context,
-                    ),
+                    pending.projection
+                      ? await projections.get(pending.command.kind)!(
+                        copyJson(pending.command.intent),
+                        {
+                          tx,
+                          caller: copyCaller(pending.caller),
+                          commandTime,
+                          signal: pending.handlerSignal,
+                        },
+                      )
+                      : await handlers.get(pending.command.kind)!(
+                        copyJson(pending.command.intent),
+                        context,
+                      ),
                   );
                   checkPendingAbort(pending);
-                  await tx.query(
-                    `INSERT INTO ${tables.receipts}(owner,worker_id,domain,key,kind,intent,result) VALUES($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb)`,
-                    [
-                      ownerId,
-                      pending.caller.workerId,
-                      pending.command.domain,
-                      pending.command.key,
-                      pending.command.kind,
-                      canonicalJson(pending.command.intent),
-                      canonicalJson(result),
-                    ],
-                  );
+                  if (!pending.projection) {
+                    await tx.query(
+                      `INSERT INTO ${tables.receipts}(owner,worker_id,domain,key,kind,intent,result) VALUES($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb)`,
+                      [
+                        ownerId,
+                        pending.caller.workerId,
+                        pending.command.domain,
+                        pending.command.key,
+                        pending.command.kind,
+                        canonicalJson(pending.command.intent),
+                        canonicalJson(result),
+                      ],
+                    );
+                  }
                   outcome = { status: "committed", result };
                 }
                 checkPendingAbort(pending);
@@ -614,6 +666,93 @@ export function createOwnerCommandBoundary(
       }
     } finally {
       pumping = false;
+    }
+  }
+  function enqueue(
+    caller: OwnerCaller,
+    command: OwnerCommand,
+    execution: OwnerCommandExecuteOptions = {},
+    projection = false,
+  ): Promise<OwnerCommandOutcome> {
+    const sourceSignal = execution.signal;
+    try {
+      assertAcquired();
+      checkAbort(sourceSignal);
+      nonempty(caller.workerId, "workerId");
+      safeEpoch(caller.ownerEpoch);
+      nonempty(command.kind, "kind");
+      nonempty(command.key, "key");
+      domain(command.domain);
+      if (!(projection ? projections : handlers).has(command.kind)) {
+        throw failure(
+          "owner_command_invalid",
+          "Command kind is not registered.",
+        );
+      }
+      const authenticated = copyCaller(caller);
+      const copied: OwnerCommand = {
+        kind: command.kind,
+        domain: command.domain,
+        key: command.key,
+        intent: copyJson(command.intent),
+      };
+      const canonical = canonicalJson({
+        kind: copied.kind,
+        intent: copied.intent,
+      });
+      if (
+        outstanding >= maxQueue || postCommitReserved >= maxPostCommitGroups
+      ) {
+        throw failure(
+          "owner_admission_refused",
+          "Owner command queue is at capacity.",
+        );
+      }
+      return new Promise<OwnerCommandOutcome>((resolve, reject) => {
+        outstanding++;
+        postCommitReserved++;
+        const handlerController = new AbortController();
+        const pending: Pending = {
+          projection,
+          caller: authenticated,
+          command: copied,
+          canonical,
+          aborted: false,
+          handlerSignal: handlerController.signal,
+          abortHandler: (reason) => handlerController.abort(reason),
+          resolve,
+          reject,
+        };
+        queue.push(pending);
+        if (sourceSignal) {
+          const signal = sourceSignal;
+          const onAbort = () => {
+            pending.aborted = true;
+            pending.abortReason = signal.reason ??
+              new DOMException("Owner command aborted.", "AbortError");
+            pending.abortHandler(pending.abortReason);
+            const index = queue.indexOf(pending);
+            if (index < 0) return; // The active group's savepoint checks own cancellation.
+            queue.splice(index, 1);
+            outstanding--;
+            postCommitReserved--;
+            pending.removeAbort?.();
+            reject(pending.abortReason);
+          };
+          signal.addEventListener("abort", onAbort, { once: true });
+          pending.removeAbort = () =>
+            signal.removeEventListener("abort", onAbort);
+          if (signal.aborted) onAbort();
+        }
+        if (!pumping) {
+          pumping = true;
+          queueMicrotask(() => {
+            void pump();
+          });
+        }
+      });
+    } catch (error) {
+      return Promise.reject(error);
     }
   }
   return {
@@ -694,86 +833,21 @@ export function createOwnerCommandBoundary(
         acquiring = false;
       }
     },
-    execute(caller, command, execution = {}) {
-      const sourceSignal = execution.signal;
-      try {
-        assertAcquired();
-        checkAbort(sourceSignal);
-        nonempty(caller.workerId, "workerId");
-        safeEpoch(caller.ownerEpoch);
-        nonempty(command.kind, "kind");
-        nonempty(command.key, "key");
-        domain(command.domain);
-        if (!handlers.has(command.kind)) {
-          throw failure(
-            "owner_command_invalid",
-            "Command kind is not registered.",
-          );
-        }
-        const authenticated = copyCaller(caller);
-        const copied: OwnerCommand = {
-          kind: command.kind,
-          domain: command.domain,
-          key: command.key,
-          intent: copyJson(command.intent),
-        };
-        const canonical = canonicalJson({
-          kind: copied.kind,
-          intent: copied.intent,
-        });
-        if (
-          outstanding >= maxQueue || postCommitReserved >= maxPostCommitGroups
-        ) {
-          throw failure(
-            "owner_admission_refused",
-            "Owner command queue is at capacity.",
-          );
-        }
-        return new Promise<OwnerCommandOutcome>((resolve, reject) => {
-          outstanding++;
-          postCommitReserved++;
-          const handlerController = new AbortController();
-          const pending: Pending = {
-            caller: authenticated,
-            command: copied,
-            canonical,
-            aborted: false,
-            handlerSignal: handlerController.signal,
-            abortHandler: (reason) => handlerController.abort(reason),
-            resolve,
-            reject,
-          };
-          queue.push(pending);
-          if (sourceSignal) {
-            const signal = sourceSignal;
-            const onAbort = () => {
-              pending.aborted = true;
-              pending.abortReason = signal.reason ??
-                new DOMException("Owner command aborted.", "AbortError");
-              pending.abortHandler(pending.abortReason);
-              const index = queue.indexOf(pending);
-              if (index < 0) return; // The active group's savepoint checks own cancellation.
-              queue.splice(index, 1);
-              outstanding--;
-              postCommitReserved--;
-              pending.removeAbort?.();
-              reject(pending.abortReason);
-            };
-            signal.addEventListener("abort", onAbort, { once: true });
-            pending.removeAbort = () =>
-              signal.removeEventListener("abort", onAbort);
-            if (signal.aborted) onAbort();
-          }
-          if (!pumping) {
-            pumping = true;
-            queueMicrotask(() => {
-              void pump();
-            });
-          }
-        });
-      } catch (error) {
-        return Promise.reject(error);
-      }
+    execute: (caller, command, execution) =>
+      enqueue(caller, command, execution),
+    async project(caller, kind, input, execution) {
+      const outcome = await enqueue(
+        caller,
+        {
+          kind,
+          domain: "occurrence",
+          key: crypto.randomUUID(),
+          intent: input,
+        },
+        execution,
+        true,
+      );
+      return outcome.result;
     },
     async readReceipt(caller, identity) {
       nonempty(caller.workerId, "workerId");

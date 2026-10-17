@@ -29,7 +29,9 @@ export async function createOwnerStorageApplication<
   };
   const ownerId = storage.ownerId;
   const registry = validateOwnerComposition(captured);
-  const host = await createOwnerHost({ ...storage, registry });
+  const host = await createOwnerHost({ ...storage, registry }, [
+    captured.namespace,
+  ]);
   try {
     const worker = composeOwnerWorker(
       captured,

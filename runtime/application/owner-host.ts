@@ -1,7 +1,8 @@
 /** Private ordinary Action/Processor host. Every worker, including embedded
- * workers, uses the same Oxian transport. Resume supports only the bounded
- * event-only pending/terminal proof; lost/retried attempts, graph/content state,
- * streams and protected/deferred histories remain explicit startup blockers. */
+ * workers, uses the same Oxian transport. Resume requires bounded compatible
+ * event history and, when declared, ordinary Collection namespace coverage.
+ * Lost/retried attempts, prepared/content state, streams and protected/deferred
+ * histories remain explicit startup blockers. */
 import type {
   Hypervisor,
   HypervisorOptions,
@@ -107,6 +108,17 @@ import {
   OWNER_STARTUP_REPAIR,
   ownerStartupRepairKey,
 } from "../owner/startup.ts";
+import {
+  createOwnerPreparations,
+  OWNER_CHILD_ACTION_PREPARATION,
+  type OwnerPreparationRegistration,
+  type OwnerPreparedInputContext,
+} from "../owner/preparation.ts";
+import {
+  createOwnerPreparationRecordSource,
+  type OwnerPreparationRecordSourceOptions,
+} from "../owner/preparation-record-source.ts";
+import type { OwnerPreparationResourcesOptions } from "../owner/preparation-resources.ts";
 import { ownerPrincipalIdentity } from "../owner/principal.ts";
 import {
   createOwnerDispatchBridge,
@@ -214,6 +226,22 @@ export type OwnerHostTransportOptions =
         { maxConcurrent: number; maxPerConnection: number; timeoutMs: number }
       >;
   }>;
+/** Owner-only ordinary-record preparation configuration. Registered callbacks
+ * remain in this host; workers send only the fixed named request. Original
+ * projection/resource permission is required on capture and every reuse.
+ * Prepared retained histories remain outside the startup proof's subset. */
+export type OwnerHostPreparationOptions = Readonly<{
+  records: Omit<
+    OwnerPreparationRecordSourceOptions,
+    "ownerId" | "schema" | "registry"
+  >;
+  registrations: Readonly<Record<string, OwnerPreparationRegistration>>;
+  projectResource: OwnerPreparationResourcesOptions["projectResource"];
+  authorizeResource: OwnerPreparationResourcesOptions["authorizeResource"];
+  maxPendingRenders?: number;
+  renderTimeoutMs?: number;
+  maxBytes?: number;
+}>;
 export type OwnerHostOptions = Readonly<{
   ownerId: string;
   holderId: string;
@@ -231,6 +259,7 @@ export type OwnerHostOptions = Readonly<{
     }>;
   registry: PluginRegistry;
   policy: OwnerHostPolicy;
+  preparation?: OwnerHostPreparationOptions;
   transport: Omit<HypervisorOptions, "workerCalls">;
   createTransport(
     options: OwnerHostTransportOptions,
@@ -317,7 +346,10 @@ function provenance(scope: OwnerHostIngressScope): JsonObject {
 }
 /** Returned value is only transport ingress and lifecycle. No database session,
  * boundary, raw dispatcher, assignment authority or readiness setter escapes. */
-export async function createOwnerHost(options: OwnerHostOptions) {
+export async function createOwnerHost(
+  options: OwnerHostOptions,
+  namespaceInventory?: readonly string[],
+) {
   for (const value of [options.ownerId, options.holderId, options.schema]) {
     text(value);
   }
@@ -387,6 +419,55 @@ export async function createOwnerHost(options: OwnerHostOptions) {
       );
     }
   }
+  const preparation = options.preparation;
+  if (Object.hasOwn(options, "preparation")) {
+    if (
+      !preparation || typeof preparation !== "object" ||
+      Array.isArray(preparation) ||
+      Object.keys(preparation).some((key) =>
+        ![
+          "records",
+          "registrations",
+          "projectResource",
+          "authorizeResource",
+          "maxPendingRenders",
+          "renderTimeoutMs",
+          "maxBytes",
+        ].includes(key)
+      ) ||
+      !preparation.records || typeof preparation.records !== "object" ||
+      Array.isArray(preparation.records) ||
+      Object.keys(preparation.records).some((key) =>
+        ![
+          "sources",
+          "authorize",
+          "projectRecord",
+          "authorizeReference",
+          "maxBytes",
+        ].includes(key)
+      ) ||
+      !preparation.registrations ||
+      typeof preparation.registrations !== "object" ||
+      Array.isArray(preparation.registrations) ||
+      typeof preparation.projectResource !== "function" ||
+      typeof preparation.authorizeResource !== "function"
+    ) throw new TypeError("Invalid owner preparation options.");
+    for (
+      const key of ["maxPendingRenders", "renderTimeoutMs", "maxBytes"] as const
+    ) {
+      if (
+        Object.hasOwn(preparation, key) && typeof preparation[key] !== "number"
+      ) {
+        throw new TypeError("Invalid owner preparation budget.");
+      }
+    }
+    if (
+      Object.hasOwn(preparation.records, "maxBytes") &&
+      typeof preparation.records.maxBytes !== "number"
+    ) {
+      throw new TypeError("Invalid owner preparation record budget.");
+    }
+  }
   const maxPending = limit(options.maxPending ?? 128);
   const maxActive = limit(options.maxActive ?? 16);
   const dispatchWaitMs = limit(options.dispatchWaitMs ?? 10_000);
@@ -420,17 +501,6 @@ export async function createOwnerHost(options: OwnerHostOptions) {
   const ownerTables = ownerTableNames(schema);
   const operationTables = createOperationCatalogTables(schema);
   const assignmentTable = `${quoteEventIdentifier(schema)}."owner_assignments"`;
-  // Explicit fresh provisioning may prepare tables, but NEVER establishes readiness.
-  if (initialization === "fresh") {
-    await provisionCopilotzSchema(session, schema);
-    await provisionOperationCatalog(session, schema);
-    await provisionOwnerCommandSchema(session, schema);
-    await provisionOwnerAssignments(session, schema);
-  } else {
-    // Existing schemas are validated, never repaired or provisioned by resume.
-    await validateSchemas(session);
-    await validateCollectionIndexes(session, schema, collectionDefinitions);
-  }
   const catalog = createOperationCatalog(session, schema);
   const abort = new AbortController();
   let notifyStopped!: () => void;
@@ -925,6 +995,16 @@ export async function createOwnerHost(options: OwnerHostOptions) {
     awaitScopeProgress: () => Promise.resolve(false),
     shutdown: () => Promise.resolve(),
   };
+  let preparations: ReturnType<typeof createOwnerPreparations> | undefined;
+  function authorizePreparedInput(
+    tx: SqlExecutor,
+    context: OwnerPreparedInputContext,
+  ) {
+    if (!preparations) unavailable("Prepared input authority is unavailable.");
+    // Execution/child modules own their current assignment checks. Calling
+    // authorizeLive here would recursively reenter this prepared-input gate.
+    return preparations.authorizeCaptured(tx, context);
+  }
   const execution = createOwnerExecutionCommands({
     ownerId,
     schema,
@@ -935,6 +1015,7 @@ export async function createOwnerHost(options: OwnerHostOptions) {
     leaseMs,
     scheduleSettlement: settlement.schedule,
     resolveAssignment: resolveExecution,
+    authorizePreparedInput,
     authorizeInput: (tx, assignment, value, time) =>
       policy.input(tx, copy(workerAssignment(assignment)), copy(value), time),
   });
@@ -984,6 +1065,7 @@ export async function createOwnerHost(options: OwnerHostOptions) {
     registry,
     catalog,
     maxPendingDeliveries: maxPending,
+    authorizePreparedInput,
     async resolveParent(tx, caller, time) {
       const current = await bridge.resolveStarted(tx, caller);
       if (!current) return undefined;
@@ -1008,6 +1090,27 @@ export async function createOwnerHost(options: OwnerHostOptions) {
     },
     schedule: (reference) => enqueue(reference),
   });
+  if (preparation) {
+    const source = createOwnerPreparationRecordSource({
+      ...preparation.records,
+      ownerId,
+      schema,
+      registry,
+    });
+    preparations = createOwnerPreparations({
+      ownerId,
+      schema,
+      registry,
+      children: child,
+      source,
+      preparations: preparation.registrations,
+      projectResource: preparation.projectResource,
+      authorizeResource: preparation.authorizeResource,
+      maxPendingRenders: preparation.maxPendingRenders,
+      renderTimeoutMs: preparation.renderTimeoutMs,
+      maxBytes: preparation.maxBytes,
+    });
+  }
   async function effectAssignment(
     tx: SqlExecutor,
     caller: OwnerCaller,
@@ -1108,6 +1211,9 @@ export async function createOwnerHost(options: OwnerHostOptions) {
     ownerId,
     schema,
     registry,
+    ...(initialization === "fresh" || namespaceInventory === undefined
+      ? {}
+      : { namespaces: namespaceInventory }),
     ...(initialization === "fresh" ? {} : {
       maxItems: initialization.maxItems,
       maxBytes: initialization.maxBytes,
@@ -1254,6 +1360,18 @@ export async function createOwnerHost(options: OwnerHostOptions) {
           return await child.handler(intent, context);
         },
       ),
+      ...(preparations
+        ? {
+          [OWNER_CHILD_ACTION_PREPARATION]: withDeliveryAlarms(
+            async (intent, context) => {
+              if (active.size >= maxActive) {
+                unavailable("Child Action execution capacity is full.");
+              }
+              return await preparations!.handler(intent, context);
+            },
+          ),
+        }
+        : {}),
       [OWNER_ACTION_ADMISSION]: async (intent, context) => {
         const ref = await admission.handler(intent, context);
         await context.tx.query(
@@ -1422,6 +1540,9 @@ export async function createOwnerHost(options: OwnerHostOptions) {
       ...execution.inputDefinitions,
       [OWNER_ACTION_ADMISSION]: admission.inputDefinition,
       [OWNER_CHILD_ACTION_ADMISSION]: child.inputDefinition,
+      ...(preparations
+        ? { [OWNER_CHILD_ACTION_PREPARATION]: preparations.inputDefinition }
+        : {}),
     },
     async authorize(tx, caller, command, time, normalized) {
       if (command.kind === "host.initialize-fresh") {
@@ -1522,6 +1643,16 @@ export async function createOwnerHost(options: OwnerHostOptions) {
       }
       if (command.kind === result.kind) {
         return await result.authorize(tx, caller, command, time);
+      }
+      if (command.kind === OWNER_CHILD_ACTION_PREPARATION) {
+        if (!preparations) unavailable("Named preparation is unavailable.");
+        return await preparations.authorize(
+          tx,
+          caller,
+          command,
+          time,
+          normalized,
+        );
       }
       if (
         command.kind === OWNER_CHILD_ACTION_ADMISSION ||
@@ -1937,6 +2068,17 @@ export async function createOwnerHost(options: OwnerHostOptions) {
     );
   }
   try {
+    // Explicit fresh provisioning may prepare tables, but NEVER establishes readiness.
+    if (initialization === "fresh") {
+      await provisionCopilotzSchema(session, schema);
+      await provisionOperationCatalog(session, schema);
+      await provisionOwnerCommandSchema(session, schema);
+      await provisionOwnerAssignments(session, schema);
+    } else {
+      // Existing schemas are validated, never repaired or provisioned by resume.
+      await validateSchemas(session);
+      await validateCollectionIndexes(session, schema, collectionDefinitions);
+    }
     await owner.acquire(
       initialization === "fresh" ? 0 : initialization.expectedEpoch,
     );

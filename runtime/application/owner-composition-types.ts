@@ -50,8 +50,11 @@ export type OwnerConnectionOptions =
     owner: Readonly<{ id: string }>;
     storage?: never;
   }>;
-/** Fresh, single-owner schema only. This starts an embedded leased worker;
- * restart/takeover and F5 owner-local/no-wall-clock execution are not supported.
+/** Single-owner storage with explicit fresh or bounded resume initialization.
+ * Resume validates supported ordinary pending/terminal history and registered
+ * Collection graph within the configured namespace; unresolved execution,
+ * prepared/content/stream history and owner-local recovery remain unsupported.
+ * This starts an embedded leased worker, not F5 owner-local execution.
  * The injected SQL session remains caller-owned, including on close/failure. */
 export type OwnerStorageOptions =
   & OwnerComposition

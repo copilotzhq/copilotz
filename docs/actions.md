@@ -659,11 +659,32 @@ The returned promise resolves to the child Action's normal output. Existing
 
 This requires a live parent-bound preparation capability and owner registration.
 Root ingress, legacy hosts and drivers without that capability refuse with
-`action_prepare_unavailable` before admission. The private connected plumbing
-and named owner command are implemented; activation of registrations in the
-production owner host is a separate integration step. This API alone does not
-activate default channel rendering, protected-value delivery or full content
-catalog support.
+`action_prepare_unavailable` before admission. A storage-backed owner can opt in
+through `storage.preparation`: `records` registers ordinary Collection aliases
+and their current record/projection/original-version policies; `registrations`
+binds each preparation name to a source, target Action alias, View `shows`,
+allowed modes and a pure text-to-input mapper. `projectResource` and
+`authorizeResource` explicitly govern any registered resources. This
+configuration belongs to the owner and never crosses the worker connection.
+
+The source can be written through normal owner-backed `ctx.transaction` calls.
+The first preparation selects the View (or the normal generic fallback over its
+authorized ordinary projection), renders once and captures the mapped input in
+the child's existing requested-event body. Compatible reuse reauthorizes that
+ORIGINAL projection and resource version without reading today's values into the
+capture or rerendering. Current record visibility alone is insufficient:
+`records.authorizeReference` must permit the entire original projected value for
+the current audience and purpose. Child claim/input, mutation and result release
+retain that permission gate. Safe terminal settlement remains possible after
+input/result permission is revoked.
+
+This initial host registration supports ordinary records and ordinary mapped
+input only. ContentRefs, protected formats, default channel rendering and full
+content catalog integration still require their separate conversion. Prepared
+retained histories remain outside the startup proof's supported subset; enabling
+this option does not make their restart recovery ready. Parent and child need
+available execution capacity; exhaustion refuses boundedly rather than granting
+extra capacity or bypassing policy.
 
 A local timeout stops waiting, not an already-admitted child. A possibly
 committed admission remains unknown and is never automatically retried; its

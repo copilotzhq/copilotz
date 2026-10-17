@@ -11,10 +11,55 @@ there is no automatic fallback from an unavailable owner to legacy persistence.
 ## Placement and prerequisites
 
 The storage placement requires an explicit SQL session, schema, owner ID, holder
-ID, `initialization: "fresh"`, current trusted host policies, and compatible
-transport factories. It provisions only an empty single-owner schema. It refuses
-restart, takeover and populated-schema activation. The SQL session remains
-caller-owned after close or failed startup.
+ID, initialization mode, current trusted host policies, and compatible transport
+factories. The SQL session remains caller-owned after close or failed startup.
+
+- `initialization: "fresh"` requires complete current business-state emptiness
+  inside the acquired owner fence. It provisions base schemas and declared
+  Collection indexes, then validates them before readiness. Restart inventory
+  budgets do not impose a separate limit on fresh registry size.
+- `initialization: { mode: "resume", expectedEpoch: 1 }` means that **1 is the
+  expected prior durable epoch**, not the acquired successor epoch. Acquisition
+  compares that expectation and fences the previous owner; a successful takeover
+  in this example acquires epoch 2. Use the actual expected prior epoch rather
+  than assuming every restart follows epoch 1.
+
+Resume validates all retained schemas and indexes without provisioning missing
+pieces or performing a migration. Bounded repair passes establish required
+alarms, retire only proven prior reservations, and settle supported closed
+operations. Independent receipt-free current proofs run before and after
+transport construction. Ingress and dispatch remain unavailable until the final
+proof commits under the acquired epoch. Unknown acquisition/repair/proof
+outcomes stop that startup instance; construction failures close created
+transports.
+
+The existing public `namespace` is forwarded as trusted graph coverage. It is
+captured before asynchronous startup work and is never inferred from stored
+rows, plugin registration or request metadata. Every retained graph row must
+belong to that namespace and match the registered ordinary Collection
+projection, including identity, search text, timestamps and supported declared
+relation edges. This is present-state compatibility, not historical
+authorization. Current policy still runs on every subsequent command and result
+read.
+
+The currently supported resume histories are never-started pending ordinary
+Action/Processor deliveries and exact canonical ordinary terminal histories,
+including ordinary Collection records and declared relation edges. Retry-wait,
+lost/leased executions, open Actions, unresolved effects, owner-local attempt
+history, prepared/protected/content/deferred/stream history, unsupported graph
+kinds and unindexed direct Collection history remain explicit blockers. Nothing
+is inferred safe merely because an effect receipt or reservation is absent.
+
+Optional resume budgets are `maxItems` (default 1,000; maximum 10,000),
+`maxBytes` (default 8 MiB; maximum 32 MiB), and `maxPasses` (default 4; maximum
+16). Omit an optional field to use its default; null, undefined and other
+malformed numeric values refuse before SQL. Items/bytes are shared across
+captured graph configuration, raw graph/history inventory and derived graph
+state. Overflow refuses rather than truncating proof. Physical catalog checks
+have a separate fixed metadata envelope: 1,000 aggregate rows, 8,192-byte
+expression/predicate caps and a bounded declared-index reread. These are
+retained-evidence bounds, not total process-memory or SQL-work limits; arbitrary
+concurrent DDL remains outside the owner contract.
 
 Storage starts a leased embedded worker through the same transport and
 owner-backed execution machinery as a connected worker. It does not implement
@@ -38,7 +83,7 @@ Given a declared `notesPlugin` and host-supplied storage/worker configuration:
 const embedded = await createCopilotz({
   namespace: "space",
   plugins: [notesPlugin],
-  storage, // Explicit fresh storage and current policy, described above
+  storage, // Explicit fresh/resume storage and current policy, described above
   worker: embeddedWorker, // Explicit compatible factory and connection
 });
 await embedded.ready;
@@ -85,10 +130,17 @@ reference in the error rather than claiming cancellation or silently
 resubmitting.
 
 `ready` describes the first current owner protocol handshake after the declared
-fresh host checks. Every subsequent call checks the current session again.
-Session replacement revokes outstanding waits and gates new calls on the new
-handshake. Readiness does not certify restart recovery or perpetual
-availability.
+fresh or supported resume checks. Every subsequent call checks the current
+session again. Session replacement revokes outstanding waits and gates new calls
+on the new handshake. Readiness does not certify recovery of the explicitly
+unsupported histories above or perpetual availability.
+
+The retained public acceptance fixture exercises the same whole plugin over
+in-process and WebSocket workers: root Action → Collection write → Processor →
+child Action. It closes a settled owner, resumes twice, verifies terminal replay
+adds no events or claims, preserves same-key changed-input conflicts, and runs
+new work under the successor epoch. Records are produced through public Action
+calls, not inserted as restart fixture state.
 
 For storage placement, fatal owner retirement and worker closure both trigger
 cleanup. `closed` resolves only after worker and host cleanup finish; a nonfatal

@@ -31,12 +31,15 @@ import {
   type OwnerCaller,
   type OwnerCommand,
   type OwnerCommandContext,
+  type OwnerJson,
 } from "./boundary.ts";
 import { createOwnerCollectionCommand } from "./collections.ts";
 import {
   createOwnerExecutionCommands,
   type OwnerExecutionAssignment,
 } from "./execution.ts";
+import { createOwnerEffectCommands } from "./effects.ts";
+import { createOwnerEffectClient } from "./effects-client.ts";
 import { provisionOwnerCommandSchema } from "./schema.ts";
 
 export const start = "2020-01-01T00:00:00.000Z";
@@ -89,6 +92,13 @@ export async function fixture(
   input: {
     action?: AnyActionDefinition;
     inline?: boolean;
+    sourceInput?: OwnerJson;
+    inputPolicy?: Parameters<
+      typeof createOwnerExecutionCommands
+    >[0]["authorizeInput"];
+    allowRecovery?: Parameters<
+      typeof createOwnerExecutionCommands
+    >[0]["allowRecovery"];
     now?(): string;
     afterAction?(ctx: ActionContext): void | Promise<void>;
     scheduleSettlement?(
@@ -252,6 +262,7 @@ export async function fixture(
     catalog,
     executor,
     leaseMs: 1000,
+    allowRecovery: input.allowRecovery,
     scheduleSettlement: input.scheduleSettlement,
     publish: (event) => {
       state.publications.push(event.type);
@@ -276,7 +287,7 @@ export async function fixture(
         }
         : undefined;
     },
-    async authorizeInput(tx, assignment) {
+    async authorizeInput(tx, assignment, value, time) {
       state.projections++;
       const row = (await tx.query(
         "SELECT input_granted FROM fixture_assignments WHERE assignment_id=$1 AND session_id=$2 AND live=TRUE",
@@ -285,7 +296,23 @@ export async function fixture(
       if (row?.input_granted !== true) {
         throw new Error("input authorization revoked");
       }
+      await input.inputPolicy?.(tx, assignment, value, time);
     },
+  });
+  const effects = createOwnerEffectCommands({
+    ownerId: "owner",
+    schema: "public",
+    async authorizeEffect(tx, caller, ref, mode, time) {
+      const a = mode === "begin"
+        ? await execution.authorizeLive(tx, caller, time)
+        : await execution.authorizeSettlement(tx, caller, time);
+      return ref.namespace === a.namespace &&
+        ref.actionRunId === a.invocation.actionRunId;
+    },
+    validateOutcome: () => true,
+    verifyNotStarted: (_tx, _caller, _ref, evidence) =>
+      evidence.source === "fixture" &&
+      evidence.reference === "verified-no-start",
   });
   const collection = createOwnerCollectionCommand({
     session,
@@ -307,8 +334,12 @@ export async function fixture(
     ownerId: "owner",
     holderId: "holder",
     now: () => input.now?.() ?? state.time,
-    handlers: { ...execution.handlers, collections: collection },
-    projections: execution.projections,
+    handlers: {
+      ...execution.handlers,
+      ...effects.handlers,
+      collections: collection,
+    },
+    projections: { ...execution.projections, ...effects.projections },
     async authorize(tx, caller, command, time) {
       state.commitKind = command.kind;
       if (command.kind === "collections") {
@@ -318,6 +349,8 @@ export async function fixture(
           command.key.startsWith(`${assignment.invocation.operationKey}/`),
           "Collection key is invocation-bound",
         );
+      } else if (command.kind.startsWith("effect.")) {
+        await effects.authorize(tx, caller, command, time);
       } else await execution.authorize(tx, caller, command, time);
     },
     async authenticateReceipt(tx, caller) {
@@ -359,7 +392,12 @@ export async function fixture(
         },
         deduplicationId: "source",
       },
-      ...(input.inline ? {} : { body: { id: "source-input", json: "world" } }),
+      ...(input.inline ? {} : {
+        body: {
+          id: "source-input",
+          json: input.sourceInput === undefined ? "world" : input.sourceInput,
+        },
+      }),
       consumers: [{
         consumerId: "registered:fixture.work",
         settlement: "inherit",
@@ -406,8 +444,20 @@ export async function fixture(
     dispatchAttemptId: binding.dispatchAttemptId,
     sourceEventId: source.event.id,
   });
-  const createPort = (authenticated = caller()) =>
-    createRegisteredOwnerExecutionPort({
+  const effectPort = (authenticated = caller()) => ({
+    execute: (command: OwnerCommand, options = {}) =>
+      boundary.execute(authenticated, command, options),
+    settle: (command: OwnerCommand, options = {}) =>
+      boundary.execute(authenticated, command, options),
+    project: (
+      kind: string,
+      value: import("./boundary.ts").OwnerJson,
+      options = {},
+    ) => boundary.project(authenticated, kind, value, options),
+  });
+  const createPort = (authenticated = caller()) => ({
+    effects: effectPort(authenticated),
+    ...createRegisteredOwnerExecutionPort({
       ownerId: "owner",
       namespace: "space",
       port: {
@@ -436,7 +486,8 @@ export async function fixture(
         readReceipt: (identity) =>
           boundary.readReceipt(authenticated, identity),
       },
-    });
+    }),
+  });
   const ports = new Map<string, ReturnType<typeof createPort>>();
   const port = (authenticated = caller()) => {
     const key = JSON.stringify(authenticated);
@@ -486,6 +537,13 @@ export async function fixture(
     caller,
     port,
     freshPort: createPort,
+    effects: (authenticated = caller()) =>
+      createOwnerEffectClient({
+        ownerId: "owner",
+        namespace: "space",
+        actionRunId: "run",
+        port: effectPort(authenticated),
+      }),
     worker,
     hint,
     claimCommand,

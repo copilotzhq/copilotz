@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createActionEffectCapability } from "./effects.ts";
+import { createActionEffectController } from "./effects.ts";
 import type { ActionContext, ActionReconcileResult } from "./types.ts";
 import type { OwnerEffectState } from "../owner/effects-client.ts";
 
@@ -24,7 +24,7 @@ function fixture(input: {
   let authorized = true;
   const control = new AbortController();
   const context = { signal: control.signal } as ActionContext;
-  const effect = createActionEffectCapability({
+  const controller = createActionEffectController({
     signal: control.signal,
     check() {
       if (!authorized) throw new Error("revoked");
@@ -57,9 +57,11 @@ function fixture(input: {
       },
     },
   });
+  const effect = controller.effect;
   Object.assign(context, { effect });
   return {
     effect,
+    recover: controller.recover,
     control,
     revoke() {
       authorized = false;
@@ -247,4 +249,25 @@ test("concurrent cross-step reconciliation cycles refuse instead of deadlocking"
   } finally {
     clearTimeout(timer);
   }
+});
+
+test("preflight recovery never begins or grants proceed and leaves closed steps closed", async () => {
+  for (
+    const state of [{ status: "indeterminate" }, {
+      status: "replay",
+      outcome: null,
+    }, { status: "not_started" }] as const
+  ) {
+    const f = fixture({
+      state,
+      reconcile: () => Promise.resolve({ status: "confirmed", outcome: null }),
+    });
+    assert.equal(await f.recover("send"), undefined);
+    assert.equal(f.stats().begins, 0);
+  }
+  const absent = fixture();
+  await assert.rejects(absent.recover("missing"), {
+    code: "effect_indeterminate",
+  });
+  assert.equal(absent.stats().begins, 0);
 });

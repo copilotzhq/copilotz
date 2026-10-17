@@ -14,7 +14,11 @@ import type {
 } from "../owner/boundary.ts";
 import type { OwnerEffectPort } from "../owner/effects-client.ts";
 import { createOwnerEffectClient } from "../owner/effects-client.ts";
-import { createActionEffectCapability } from "../actions/effects.ts";
+import { createActionEffectController } from "../actions/effects.ts";
+
+import { createExecutionHeartbeat } from "./execution-heartbeat.ts";
+import { readExecutionRecovery } from "./recovery.ts";
+import type { RegisteredExecutionRecovery } from "./recovery.ts";
 
 /** Host-derived live assignment identity. These hints never grant authority. */
 export type RegisteredWorkerAssignment = Readonly<{
@@ -49,6 +53,7 @@ export type RegisteredExecutionRenewal =
 /** Authorized ordinary data, read only after a known durable claim. */
 export type RegisteredExecutionProjection = Readonly<{
   actionId: string;
+  recovery?: RegisteredExecutionRecovery;
   lease: RegisteredExecutionLease;
   input: OwnerJson;
   namespace: string;
@@ -239,10 +244,7 @@ function sameIdentity(left: unknown, right: unknown): boolean {
   return normalize(left) === normalize(right);
 }
 
-/** Ordinary function lifetime only; open response-body renewal is unsupported.
- * One serial heartbeat loop. Stop never starts another call and drains the
- * current call before settlement. A timed-out call stays ambiguous even if its
- * eventual reply succeeds; no late result can reopen the capability scope. */
+/** Ordinary function lifetime only; open response-body renewal is unsupported. */
 function executionHeartbeat(input: {
   port: RegisteredOwnerExecutionPort;
   reference: RegisteredExecutionReference;
@@ -250,106 +252,26 @@ function executionHeartbeat(input: {
   started: number;
   fail(error: unknown): void;
 }) {
-  let stopped = false;
-  let wake: (() => void) | undefined;
-  let deadline = 0;
-  let next = 0;
-  const lost = () =>
-    Object.assign(failure("registered_worker_renewal_unknown"), {
-      indeterminate: true,
-    });
-  const update = (lease: RegisteredExecutionLease, started: number) => {
-    if (
-      !lease || Object.keys(lease).length !== 2 ||
-      !Number.isSafeInteger(lease.remainingMs) || lease.remainingMs <= 0 ||
-      !Number.isSafeInteger(lease.renewAfterMs) || lease.renewAfterMs <= 0 ||
-      lease.renewAfterMs >= lease.remainingMs
-    ) {
-      throw failure("registered_worker_lease_invalid");
-    }
-    deadline = started + lease.remainingMs;
-    next = Math.min(started + lease.renewAfterMs, deadline);
-    if (deadline <= performance.now()) throw lost();
-  };
-  update(input.lease, input.started);
-  const loop = (async () => {
-    try {
-      while (!stopped) {
-        await new Promise<void>((resolve) => {
-          const timer = setTimeout(
-            resolve,
-            Math.max(0, Math.min(2_147_483_647, next - performance.now())),
-          );
-          wake = () => {
-            clearTimeout(timer);
-            resolve();
-          };
-        });
-        wake = undefined;
-        if (stopped) return;
-        const started = performance.now();
-        const budget = deadline - started;
-        if (budget <= 0) throw lost();
-        const control = new AbortController();
-        let timer: ReturnType<typeof setTimeout> | undefined;
-        let timeoutFailure: ReturnType<typeof lost> | undefined;
-        try {
-          const result = await Promise.race([
-            input.port.renew(snapshot(input.reference), {
-              signal: control.signal,
-            }),
-            new Promise<never>((_, reject) => {
-              timer = setTimeout(() => {
-                // Latch uncertainty before abort listeners can settle the call.
-                timeoutFailure = lost();
-                reject(timeoutFailure);
-                control.abort(timeoutFailure);
-              }, Math.min(2_147_483_647, budget));
-            }),
-          ]);
-          if (timeoutFailure) throw timeoutFailure;
-          // Duplicate receipts carry old timing and cannot extend a local budget.
-          if (result.status !== "committed") throw lost();
-          const actual = reference({
-            executionId: result.result.executionId,
-            deliveryId: result.result.deliveryId,
-            dispatchAttemptId: result.result.dispatchAttemptId,
-          });
-          if (
-            Object.keys(actual).some((key) =>
-              actual[key as keyof typeof actual] !==
-                input.reference[key as keyof typeof actual]
-            )
-          ) {
-            throw failure("registered_worker_reference_invalid");
-          }
-          if (performance.now() >= deadline) throw lost();
-          update(snapshot(result.result.lease), started);
-        } catch (error) {
-          throw timeoutFailure ?? error;
-        } finally {
-          clearTimeout(timer);
-        }
+  return createExecutionHeartbeat({
+    ...input,
+    renew: (ref, options) => input.port.renew(snapshot(ref), options),
+    validate(result, expected) {
+      const actual = reference({
+        executionId: result.executionId,
+        deliveryId: result.deliveryId,
+        dispatchAttemptId: result.dispatchAttemptId,
+      });
+      if (
+        Object.keys(actual).some((key) =>
+          actual[key as keyof typeof actual] !==
+            expected[key as keyof typeof actual]
+        )
+      ) {
+        throw failure("registered_worker_reference_invalid");
       }
-    } catch (error) {
-      stopped = true;
-      input.fail(error);
-    }
-  })();
-  return {
-    check() {
-      if (!stopped && performance.now() >= deadline) throw lost();
+      snapshot(result.lease);
     },
-    requestStop() {
-      stopped = true;
-      wake?.();
-    },
-    async stop() {
-      stopped = true;
-      wake?.();
-      await loop;
-    },
-  };
+  });
 }
 
 /** One bounded worker lifetime. Entries, including uncertain outcomes, are never
@@ -554,6 +476,13 @@ export function createRegisteredActionWorker(
             "Action input",
           );
         }
+        const recovery = projection.recovery === undefined
+          ? undefined
+          : readExecutionRecovery(projection.recovery);
+        if (recovery?.status === "blocked") {
+          effectIndeterminate = true;
+          throw failure("effect_indeterminate");
+        }
         const capabilities = await createCapabilities({
           registry,
           reference: snapshot(ref),
@@ -566,8 +495,8 @@ export function createRegisteredActionWorker(
           capabilityFailure = true;
           throw failure("action_effect_unavailable");
         };
-        const effect = port.effects
-          ? createActionEffectCapability({
+        const effects = port.effects
+          ? createActionEffectController({
             client: createOwnerEffectClient({
               ownerId: projection.ownerId,
               namespace: projection.namespace,
@@ -587,14 +516,14 @@ export function createRegisteredActionWorker(
                 | Promise<ActionReconcileResult>)
               | undefined,
           })
-          : {
+          : undefined;
+        const context = createActionInvocationContext({
+          effect: effects?.effect ?? {
             begin: absentEffect,
             inspect: absentEffect,
             confirm: absentEffect,
             notStarted: absentEffect,
-          };
-        const context = createActionInvocationContext({
-          effect,
+          },
           host: {
             namespace: projection.namespace,
             databaseSchema: projection.databaseSchema,
@@ -634,6 +563,18 @@ export function createRegisteredActionWorker(
         });
         let output: unknown;
         try {
+          for (const item of recovery?.effects ?? []) {
+            if (item.status !== "begun") continue;
+            if (!effects) {
+              effectIndeterminate = true;
+              throw failure("effect_indeterminate");
+            }
+            await effects.recover(item.step);
+          }
+          // A caught/unawaited reconciliation failure cannot reopen execution.
+          await Promise.all(pending);
+          if (hasPendingFailure) throw pendingFailure;
+          check();
           output = await (action.execute as (
             input: unknown,
             context: ActionContext,

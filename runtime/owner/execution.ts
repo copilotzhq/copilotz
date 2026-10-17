@@ -34,6 +34,10 @@ import {
   ownerRenewalKey,
 } from "../execution/owner-port.ts";
 import { assertJsonValue } from "../json.ts";
+import { readExecutionClaim } from "../execution/recovery.ts";
+import type { RegisteredExecutionRecovery } from "../execution/recovery.ts";
+import { readOwnerEffectInventory } from "./effects.ts";
+import { ownerTableNames } from "./schema.ts";
 import type { PluginRegistry } from "../plugins/registry.ts";
 import {
   createOperationCatalogTables,
@@ -185,6 +189,16 @@ export function createOwnerExecutionCommands(
       | OwnerExecutionAssignment
       | undefined
       | Promise<OwnerExecutionAssignment | undefined>;
+    /** Transitional, SQL-only assertion that this registered Action and its
+     * adapters use the effect protocol. No caller data may establish this fact.
+     * Defaults to refusal for a lost prior attempt, even with no effect receipts.
+     * Rechecked on recovery projection and every ordinary mutation. */
+    allowRecovery?(
+      tx: SqlExecutor,
+      assignment: OwnerExecutionAssignment,
+      actionId: string,
+      commandTime: string,
+    ): boolean | Promise<boolean>;
     /** Mandatory current input policy. Called before capture and each projection.
      * It may inspect current policy through tx; it must perform no external I/O.
      * This subset returns the complete ordinary captured input only when allowed. */
@@ -204,6 +218,13 @@ export function createOwnerExecutionCommands(
     command: OwnerCommand,
     commandTime: string,
   ): Promise<void>;
+  /** Narrow current-attempt settlement capability, including after ctx
+   * revocation. The caller must separately bind the effect reference. */
+  authorizeSettlement(
+    tx: SqlExecutor,
+    caller: OwnerCaller,
+    commandTime: string,
+  ): Promise<OwnerExecutionAssignment>;
   /** Composition seam for separately key-bound owner Collection commands. */
   authorizeLive(
     tx: SqlExecutor,
@@ -344,6 +365,88 @@ export function createOwnerExecutionCommands(
       cancelled,
       correlationId: source.correlation_id,
     };
+  }
+  const inventory = (tx: SqlExecutor, state: Authorized) =>
+    readOwnerEffectInventory(tx, {
+      ownerId: options.ownerId,
+      schema: options.schema,
+      namespace: state.assignment.namespace,
+      actionRunId: state.assignment.invocation.actionRunId,
+    });
+  const indeterminate = (): never => {
+    throw Object.assign(new Error("External effect recovery is unresolved."), {
+      code: "effect_indeterminate",
+    });
+  };
+  async function recovery(
+    tx: SqlExecutor,
+    state: Authorized,
+    commandTime: string,
+  ): Promise<RegisteredExecutionRecovery | undefined> {
+    const a = state.assignment;
+    const rows = await tx.query<
+      { worker_id: string; kind: string; intent: unknown; result: unknown }
+    >(
+      `SELECT worker_id,kind,intent,result FROM ${
+        ownerTableNames(options.schema).receipts
+      }
+       WHERE owner=$1 AND domain='incarnation' AND key=$2`,
+      [
+        options.ownerId,
+        ownerClaimKey(options.ownerId, a.assignmentId, a.sessionId),
+      ],
+    );
+    const row = rows.rows[0];
+    if (
+      rows.rows.length !== 1 || row.kind !== "execution.claim" ||
+      row.worker_id !== a.workerId
+    ) {
+      refuse("Execution has no exact durable claim.");
+    }
+    const intent = object(row.intent, ["assignmentId", "sessionId"]);
+    if (
+      intent.assignmentId !== a.assignmentId || intent.sessionId !== a.sessionId
+    ) {
+      refuse("Execution claim binding changed.");
+    }
+    const captured = readExecutionClaim(row.result);
+    checkReference(captured.reference, a);
+    if (state.delivery.attempts > 1 && !captured.recovery) {
+      return indeterminate();
+    }
+    if (state.delivery.attempts === 1 && captured.recovery) {
+      return indeterminate();
+    }
+    if (!captured.recovery) return undefined;
+    const permitted = captured.recovery.status === "eligible" &&
+      await options.allowRecovery?.(
+          tx,
+          structuredClone(a),
+          state.action.id,
+          commandTime,
+        ) === true;
+    return { ...captured.recovery, status: permitted ? "eligible" : "blocked" };
+  }
+  async function recoveryBarrier(
+    tx: SqlExecutor,
+    state: Authorized,
+    commandTime: string,
+  ) {
+    const captured = await recovery(tx, state, commandTime);
+    if (!captured) return;
+    if (captured.status !== "eligible") return indeterminate();
+    const now = new Map(
+      (await inventory(tx, state)).map((
+        effect,
+      ) => [effect.step, effect.status]),
+    );
+    for (const effect of captured.effects) {
+      const status = now.get(effect.step);
+      if (
+        !status || status === "begun" ||
+        (effect.status !== "begun" && status !== effect.status)
+      ) return indeterminate();
+    }
   }
   function requireAuthorized(tx: SqlExecutor): Authorized {
     const result = authorized.get(tx);
@@ -494,8 +597,8 @@ export function createOwnerExecutionCommands(
     }
     await options.authorizeInput(
       context.tx,
-      state.assignment,
-      input,
+      structuredClone(state.assignment),
+      json(input),
       context.commandTime,
     );
     if (state.action.inputSchema) {
@@ -520,7 +623,24 @@ export function createOwnerExecutionCommands(
       });
     }
     await schedule(delivery.settlementScopeId);
-    return json(reference(state.assignment));
+    const recovery: RegisteredExecutionRecovery | undefined =
+      delivery.attempts > 1
+        ? {
+          status: await options.allowRecovery?.(
+              context.tx,
+              structuredClone(state.assignment),
+              state.action.id,
+              context.commandTime,
+            ) === true
+            ? "eligible"
+            : "blocked",
+          effects: await inventory(context.tx, state),
+        }
+        : undefined;
+    return json({
+      ...reference(state.assignment),
+      ...(recovery ? { recovery } : {}),
+    });
   };
   function leaseTiming(expiresAt: string, commandTime: string) {
     const remainingMs = Date.parse(expiresAt) - Date.parse(commandTime);
@@ -560,6 +680,16 @@ export function createOwnerExecutionCommands(
     const data = completion((intent as { completion: OwnerJson }).completion);
     const captured = await invoked(context.tx, state);
     if (!captured) refuse("Execution has no captured invocation.");
+    if (data.status === "completed") {
+      await recoveryBarrier(context.tx, state, context.commandTime);
+      if (
+        (await inventory(context.tx, state)).some((effect) =>
+          effect.status === "begun"
+        )
+      ) {
+        return indeterminate();
+      }
+    }
     if (data.status === "completed" && state.action.outputSchema) {
       validateAgainstJsonSchema(
         state.action.outputSchema,
@@ -617,11 +747,13 @@ export function createOwnerExecutionCommands(
     const input = json(captured.input);
     await options.authorizeInput(
       context.tx,
-      state.assignment,
-      input,
+      structuredClone(state.assignment),
+      json(input),
       context.commandTime,
     );
+    const barrier = await recovery(context.tx, state, context.commandTime);
     return json({
+      ...(barrier ? { recovery: barrier } : {}),
       actionId: captured.actionId,
       lease: leaseTiming(state.delivery.leaseExpiresAt!, context.commandTime),
       input,
@@ -702,8 +834,17 @@ export function createOwnerExecutionCommands(
       } else checkReference(command.intent, a);
       authorized.set(tx, state);
     },
+    async authorizeSettlement(tx, caller, commandTime) {
+      const state = await current(tx, caller, commandTime, "complete");
+      if (!await invoked(tx, state)) {
+        refuse("Execution has no captured invocation.");
+      }
+      return state.assignment;
+    },
     async authorizeLive(tx, caller, commandTime) {
-      return (await current(tx, caller, commandTime, "mutation")).assignment;
+      const state = await current(tx, caller, commandTime, "mutation");
+      await recoveryBarrier(tx, state, commandTime);
+      return state.assignment;
     },
   };
 }

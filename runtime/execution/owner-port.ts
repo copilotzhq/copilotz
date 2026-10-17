@@ -14,6 +14,8 @@ import type {
   RegisteredOwnerExecutionPort,
 } from "./registered-worker.ts";
 
+import { readExecutionClaim } from "./recovery.ts";
+
 export const ownerClaimKey = (
   ownerId: string,
   assignmentId: string,
@@ -172,7 +174,7 @@ export function createRegisteredOwnerExecutionPort(
       );
       if (prior) {
         if (prior.kind !== "execution.claim") return refuse();
-        const ref = reference(prior.result);
+        const ref = readExecutionClaim(prior.result).reference;
         if (!await readCompletion(ref, callOptions)) return refuse();
         return { status: "duplicate", result: ref };
       }
@@ -184,7 +186,7 @@ export function createRegisteredOwnerExecutionPort(
         key,
         intent: { assignmentId, sessionId },
       }, callOptions);
-      const ref = reference(outcome.result);
+      const ref = readExecutionClaim(outcome.result).reference;
       if (outcome.status === "committed") claimed = ref;
       return { status: outcome.status, result: { ...ref } };
     },

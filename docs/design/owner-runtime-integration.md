@@ -522,3 +522,19 @@ and independently authorized in SQL before replay. Unsupported call-option
 fields refuse rather than disappear. All 41 connection tests pass independently.
 Actual host policy normalization and the common public facade remain separate
 work.
+
+### Remaining-attempt effect recovery
+
+Retry claims capture a bounded immutable inventory of prior effect obligations.
+Before ordinary execution resumes, declared reconciliation runs outside SQL;
+owner projection, mutations and successful completion remain fenced behind that
+barrier. Confirmed outcomes replay without permission to send again, and closed
+or unresolved steps cannot manufacture proceed. Trusted retry eligibility
+defaults to refusal for unconverted implementations. Callback arguments are
+detached from private assignment/input snapshots, with the reproduced mutation
+regression retained. Independent review passed 64 cases plus 38 final
+owner/isolation cases; local focused70, compatibility50 and
+architecture/closure7 batches passed. The shared heartbeat extraction preserves
+existing Action behavior. Exhausted recovery, provider conversion,
+index/query-plan scaling evidence and full startup recovery remain separate
+work; the default three-attempt policy is unchanged.

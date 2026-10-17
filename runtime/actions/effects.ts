@@ -20,21 +20,26 @@ function unknownOutcome(error: unknown): boolean {
     );
 }
 
-export function createActionEffectCapability(
-  options: Readonly<{
-    client: ReturnType<typeof createOwnerEffectClient>;
-    signal: AbortSignal;
-    /** Private invocation/lease check; not derived from the exposed ctx.signal. */
-    check(): void;
-    context(): ActionContext;
-    /** Register every call in the host's private pending/uncertainty drain. */
-    track<T>(start: () => Promise<T>): Promise<T>;
-    reconcile?(
-      step: string,
-      context: ActionContext,
-    ): ActionReconcileResult | Promise<ActionReconcileResult>;
-  }>,
-): ActionEffect {
+type ActionEffectControllerOptions = Readonly<{
+  client: ReturnType<typeof createOwnerEffectClient>;
+  signal: AbortSignal;
+  /** Private invocation/lease check; not derived from the exposed ctx.signal. */
+  check(): void;
+  context(): ActionContext;
+  /** Register every call in the host's private pending/uncertainty drain. */
+  track<T>(start: () => Promise<T>): Promise<T>;
+  reconcile?(
+    step: string,
+    context: ActionContext,
+  ): ActionReconcileResult | Promise<ActionReconcileResult>;
+}>;
+
+export function createActionEffectController(
+  options: ActionEffectControllerOptions,
+): Readonly<{
+  effect: ActionEffect;
+  recover(step: string): Promise<void>;
+}> {
   const reconciliations = new Map<string, Promise<void>>();
   const check = (signal: AbortSignal) => {
     options.check();
@@ -50,6 +55,76 @@ export function createActionEffectCapability(
   };
   const indeterminate = (): never =>
     fail("effect_indeterminate", "External effect requires reconciliation.");
+  const reconcileStep = async (
+    step: string,
+    active: { signal: AbortSignal },
+    ancestors: ReadonlySet<string>,
+    onRecursive: () => void,
+  ): Promise<
+    Exclude<ActionEffectBegin, { status: "proceed" | "not_started" }> | {
+      status: "not_started";
+    }
+  > => {
+    if (!options.reconcile) return indeterminate();
+    let pending = reconciliations.get(step);
+    // Two concurrent hooks must not wait on each other's recovery. Only
+    // ordinary execution callers may join an existing reconciliation.
+    if (pending && ancestors.size) {
+      onRecursive();
+      return indeterminate();
+    }
+    if (!pending) {
+      // Publish before invoking any application callback, including sync hooks.
+      pending = Promise.resolve().then(async () => {
+        check(active.signal);
+        const current = await options.client.inspect(step, active);
+        check(active.signal);
+        if (
+          current.status === "replay" || current.status === "not_started"
+        ) {
+          return;
+        }
+        if (current.status !== "indeterminate") return indeterminate();
+        let recursive = false;
+        const effect = create(new Set([...ancestors, step]), () => {
+          recursive = true;
+          onRecursive();
+        });
+        const context = { ...options.context(), effect };
+        let result: ActionReconcileResult;
+        try {
+          result = copy(await options.reconcile!(step, context));
+        } catch (error) {
+          // Transport ambiguity from nested owner calls must stay unknown.
+          if (unknownOutcome(error)) throw error;
+          return indeterminate();
+        }
+        check(active.signal);
+        if (recursive || !result || typeof result !== "object") {
+          return indeterminate();
+        }
+        const keys = Object.keys(result).sort().join(",");
+        if (result.status === "confirmed" && keys === "outcome,status") {
+          await options.client.confirm(step, result.outcome, active);
+        } else if (
+          result.status === "not_started" && keys === "evidence,status"
+        ) {
+          await options.client.notStarted(step, result.evidence, active);
+        } else return indeterminate();
+        check(active.signal);
+      });
+      reconciliations.set(step, pending);
+    }
+    await pending;
+    check(active.signal);
+    // No cached outcome hydration: every recipient uses current authorization.
+    const current = await options.client.inspect(step, active);
+    check(active.signal);
+    if (current.status === "replay" || current.status === "not_started") {
+      return current;
+    }
+    return indeterminate();
+  };
   const create = (
     ancestors: ReadonlySet<string>,
     onRecursive: () => void,
@@ -65,65 +140,7 @@ export function createActionEffectCapability(
         const begun = await options.client.begin(step, active);
         check(active.signal);
         if (begun.status !== "indeterminate") return begun;
-        if (!options.reconcile) return indeterminate();
-        let pending = reconciliations.get(step);
-        // Two concurrent hooks must not wait on each other's recovery. Only
-        // ordinary execution callers may join an existing reconciliation.
-        if (pending && ancestors.size) {
-          onRecursive();
-          return indeterminate();
-        }
-        if (!pending) {
-          // Publish before invoking any application callback, including sync hooks.
-          pending = Promise.resolve().then(async () => {
-            check(active.signal);
-            const current = await options.client.inspect(step, active);
-            check(active.signal);
-            if (
-              current.status === "replay" || current.status === "not_started"
-            ) {
-              return;
-            }
-            if (current.status !== "indeterminate") return indeterminate();
-            let recursive = false;
-            const effect = create(new Set([...ancestors, step]), () => {
-              recursive = true;
-              onRecursive();
-            });
-            const context = { ...options.context(), effect };
-            let result: ActionReconcileResult;
-            try {
-              result = copy(await options.reconcile!(step, context));
-            } catch (error) {
-              // Transport ambiguity from nested owner calls must stay unknown.
-              if (unknownOutcome(error)) throw error;
-              return indeterminate();
-            }
-            check(active.signal);
-            if (recursive || !result || typeof result !== "object") {
-              return indeterminate();
-            }
-            const keys = Object.keys(result).sort().join(",");
-            if (result.status === "confirmed" && keys === "outcome,status") {
-              await options.client.confirm(step, result.outcome, active);
-            } else if (
-              result.status === "not_started" && keys === "evidence,status"
-            ) {
-              await options.client.notStarted(step, result.evidence, active);
-            } else return indeterminate();
-            check(active.signal);
-          });
-          reconciliations.set(step, pending);
-        }
-        await pending;
-        check(active.signal);
-        // No cached outcome hydration: every recipient uses current authorization.
-        const current = await options.client.inspect(step, active);
-        check(active.signal);
-        if (current.status === "replay" || current.status === "not_started") {
-          return current;
-        }
-        return indeterminate();
+        return await reconcileStep(step, active, ancestors, onRecursive);
       }),
     inspect: (step, callOptions) =>
       options.track(async () => {
@@ -145,5 +162,24 @@ export function createActionEffectCapability(
         check(active.signal);
       }),
   });
-  return create(new Set(), () => {});
+  return {
+    effect: create(new Set(), () => {}),
+    recover: (step) =>
+      options.track(async () => {
+        const active = scope(step);
+        const current = await options.client.inspect(step, active);
+        check(active.signal);
+        if (
+          current.status === "replay" || current.status === "not_started"
+        ) return;
+        if (current.status !== "indeterminate") return indeterminate();
+        await reconcileStep(step, active, new Set(), () => {});
+      }),
+  };
+}
+
+export function createActionEffectCapability(
+  options: ActionEffectControllerOptions,
+): ActionEffect {
+  return createActionEffectController(options).effect;
 }

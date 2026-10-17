@@ -1063,3 +1063,62 @@ test("local renewal timeout stays unknown when transport synchronously rejects a
   });
   assert.equal(f.state.completions.length, 0);
 });
+
+test("recovery preflight ambiguity refuses execute and terminal even for unawaited nested settlement", async () => {
+  for (const unawaited of [false, true]) {
+    const effects = effectPort("begun");
+    const unknown = Object.assign(new Error("lost recovery confirmation"), {
+      outcome: "unknown",
+    });
+    let executed = false;
+    const f = fixture({
+      port: {
+        effects: { ...effects.port, settle: () => Promise.reject(unknown) },
+      },
+      action: defineAction({
+        id: "fixture.action",
+        execute: () => {
+          executed = true;
+          return null;
+        },
+        reconcile: (_step: string, ctx: ActionContext) => {
+          if (unawaited) void ctx.effect.confirm("send", null).catch(() => {});
+          return { status: "confirmed", outcome: null };
+        },
+      }) as AnyActionDefinition,
+    });
+    f.projection.recovery = {
+      status: "eligible",
+      effects: [{ step: "send", status: "begun" }],
+    };
+    await assert.rejects(f.worker.execute(hint), (error) => error === unknown);
+    assert.equal(executed, false);
+    assert.deepEqual(f.state.completions, []);
+    assert.equal(effects.stats.begins, 0);
+  }
+});
+
+test("blocked recovery refuses before capability creation and forged barrier payload fails closed", async () => {
+  for (
+    const barrier of [{ status: "blocked", effects: [] }, {
+      status: "eligible",
+      effects: [{ step: "send", status: "begun", outcome: "secret" }],
+    }]
+  ) {
+    let executed = false;
+    const f = fixture({
+      action: action(() => {
+        executed = true;
+        return null;
+      }),
+    });
+    f.projection.recovery = barrier as never;
+    const result = await f.worker.execute(hint);
+    assert.equal(result.status, "executed");
+    if (result.status === "executed") {
+      assert.equal(result.completion.status, "failed");
+    }
+    assert.equal(f.state.capabilities, 0);
+    assert.equal(executed, false);
+  }
+});

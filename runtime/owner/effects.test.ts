@@ -551,3 +551,33 @@ test("missing or false authority, outcome and evidence validators fail closed", 
     await f.close();
   }
 });
+
+test("owner enforces the inventory step bound before a fresh begin but permits existing recovery", async () => {
+  const f = await fixture();
+  try {
+    for (let index = 0; index < 100; index++) {
+      assert.deepEqual(await f.client().begin(`step-${index}`), {
+        status: "proceed",
+      });
+    }
+    await assert.rejects(f.client().begin("overflow"), {
+      code: "effect_step_limit",
+    });
+    assert.deepEqual(await f.client().begin("step-0"), {
+      status: "indeterminate",
+    });
+    await f.client().confirm("step-0", safeOutcome);
+    assert.deepEqual(await f.client().begin("step-0"), {
+      status: "replay",
+      outcome: safeOutcome,
+    });
+    assert.equal(
+      (await f.db.query(
+        "SELECT key FROM owner_receipts WHERE kind='effect.begin'",
+      )).rows.length,
+      100,
+    );
+  } finally {
+    await f.close();
+  }
+});

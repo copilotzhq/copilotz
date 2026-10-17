@@ -12,6 +12,8 @@ test("registered Action worker runtime closure excludes database and body-store 
     "dependencies/oxian-worker.ts",
     "runtime/owner/connection.ts",
     "runtime/execution/owner-port.ts",
+    "runtime/execution/recovery.ts",
+    "runtime/execution/execution-heartbeat.ts",
     "runtime/actions/execution-context.ts",
     "runtime/actions/effects.ts",
     "runtime/owner/effects-client.ts",

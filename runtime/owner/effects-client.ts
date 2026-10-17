@@ -9,6 +9,13 @@ import type {
   OwnerJson,
 } from "./boundary.ts";
 
+/** One live Action's bounded effect protocol surface. Enforced by the owner. */
+export const OWNER_EFFECT_STEP_LIMIT = 100;
+export type OwnerEffectStateReference = Readonly<{
+  step: string;
+  status: "begun" | "confirmed" | "not_started";
+}>;
+
 export type OwnerEffectReference = Readonly<{
   namespace: string;
   actionRunId: string;

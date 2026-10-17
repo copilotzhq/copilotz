@@ -604,12 +604,31 @@ terminal. Effect calls join the worker's bounded pending-call drain, including
 calls the Action forgot to await. Await them in application code so the provider
 result and errors can be handled explicitly.
 
-This API does not by itself make expired Action replay safe. Recovery must
-inspect unfinished logical effects before rerunning an Action, and actual
-external-effect adapters must adopt this protocol. Absence of an effect receipt
-is not proof that arbitrary Action code was side-effect-free. The delivery
-default remains three attempts; recording a failed Action terminal does not
-authorize rerunning it.
+The internal registered-owner path now gates a lost attempt while delivery
+attempts remain. Its immutable claim captures bounded effect step/state
+references without hydrating outcomes. Every previously begun step must be
+confirmed or independently verified not-started before business execution or new
+mutation can resume. The worker performs declared reconciliation first; the
+owner independently enforces the same barrier, so a worker cannot bypass it. A
+newly begun effect after recovery must also settle before successful Action
+completion. Failure or cancellation never proves an external effect was absent
+and does not erase its begun evidence.
+
+This transitional path requires an internal, current host assertion that the
+registered Action and its adapters have been converted to the effect protocol.
+It defaults to refusal (`effect_indeterminate`), including when no receipt
+exists. It is not a public retry policy or an author-supplied safety flag.
+Actual external-effect adapters still need conversion. Exhausted-attempt
+recovery still needs effect-aware failure classification and evidence retention
+in the existing fenced terminal path; it must not receive additional mutation
+attempts. The delivery default remains three attempts; recording a failed Action
+terminal does not authorize rerunning it.
+
+A run is limited to 100 distinct effect steps; the owner enforces this before a
+fresh begin. The inventory returns only bounded safe references and refuses
+malformed or oversized history. This bounds returned data, not database work:
+the exact-key-prefix query still needs an indexed query-plan and scale proof
+against large owner receipt histories before production readiness.
 
 ## What this unlocks
 

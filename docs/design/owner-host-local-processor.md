@@ -30,10 +30,10 @@ exact operation must still be accepted/running with no cancellation request.
 Changes roll back the command, receipt and alarm together.
 
 SQL determines due time. Delivery alarm selection retains timestamp text and
-uses a SQL comparison instead of rounding through JavaScript milliseconds.
-A due retry alarm is retained while its predecessor still occupies capacity; a
-generation's release notification only requests another durable scan. It is not eligibility
-or authority and is not counted as active shutdown work.
+uses a SQL comparison instead of rounding through JavaScript milliseconds. A due
+retry alarm is retained while its predecessor still occupies capacity; a
+generation's release notification only requests another durable scan. It is not
+eligibility or authority and is not counted as active shutdown work.
 
 ## Collections, capacity and shutdown
 
@@ -72,9 +72,9 @@ caller-facing reply. A true caller-facing held-reply alarm case and an actual
 sub-millisecond host scheduling probe remain additional evidence gates.
 Independent PostgreSQL 17.11 validation passes the same thirteen host cases plus
 three pure cases, with zero failures or skips. All thirteen disposable databases
-were created, tested and dropped and the service stopped. The isolated 1,595-file
-source snapshot and seven worktree overlay hashes stayed unchanged; source lint
-and formatting checks passed.
+were created, tested and dropped and the service stopped. The isolated
+1,595-file source snapshot and seven worktree overlay hashes stayed unchanged;
+source lint and formatting checks passed.
 
 ## Remaining scope
 
@@ -83,3 +83,12 @@ effects, named preparation, public placement selection and full capability
 parity remain open. Completing those replacements must retire the superseded
 public runtime paths under the [cleanup plan](refactor-cleanup.md); this private
 host increment does not close that broader migration.
+
+The supplementary frozen test/runner checkpoint passes all fourteen host cases
+and both caller-facing helper cases on PostgreSQL 17.11, with zero
+skips/failures. All sixteen disposable databases were dropped and the service
+stopped; no dump or export was performed. The 1,597-file isolated source
+snapshot, four overlay hashes, configs and sibling sources stayed unchanged.
+Runner setup tests pass 11/11; lint/format pass on the four changed files. The
+expanded canonical runner now declares seventeen files and 136 cases; its
+combined run is still pending.

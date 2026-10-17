@@ -45,7 +45,8 @@ const cases: readonly {
     | "unknown-completion"
     | "held-start"
     | "mixed-capacity"
-    | "close-held-factory";
+    | "close-held-factory"
+    | "submillisecond";
 }[] = [
   ...(["worker", "owner-local"] as const).flatMap((placement) =>
     (["in-process", "websocket"] as const).map((mode) => ({ placement, mode }))
@@ -60,6 +61,7 @@ const cases: readonly {
     "held-start",
     "mixed-capacity",
     "close-held-factory",
+    "submillisecond",
   ] as const)
     .map((fault) => ({
       placement: "owner-local" as const,
@@ -90,7 +92,7 @@ for (const { placement, mode, fault } of cases) {
       let replyInjected = false;
       const session: SqlSession =
         fault === "held-completion" || fault === "unknown-completion" ||
-          fault === "held-start"
+          fault === "held-start" || fault === "submillisecond"
           ? {
             query: db.query.bind(db),
             async transaction(run) {
@@ -101,9 +103,16 @@ for (const { placement, mode, fault } of cases) {
                     sql: string,
                     values?: unknown[],
                   ) {
-                    const result = await tx.query<TRow>(sql, values);
+                    // Fix only this probe's retry backoff; retain SQL's
+                    // fractional command timestamp rather than injecting a
+                    // different persisted timestamp after the receipt.
+                    const args = fault === "submillisecond" &&
+                        sql.includes("SET status = CASE WHEN $5") && values
+                      ? [...values.slice(0, 2), 1000, ...values.slice(3)]
+                      : values;
+                    const result = await tx.query<TRow>(sql, args);
                     if (
-                      !replyInjected &&
+                      fault !== "submillisecond" && !replyInjected &&
                       sql.startsWith(
                         'INSERT INTO "public"."owner_receipts"(',
                       ) &&
@@ -145,6 +154,7 @@ for (const { placement, mode, fault } of cases) {
       let policyDenials = 0;
       let firstStarted = false;
       let time = Date.now();
+      let microsecond = 1;
       let retryCalls = 0;
       let localActionFactories = 0,
         localProcessorFactories = 0,
@@ -381,7 +391,13 @@ for (const { placement, mode, fault } of cases) {
           maxActive: fault === "mixed-capacity" ? 1 : 4,
           maxPending: 32,
           leaseMs: 3000,
-          now: () => new Date(time).toISOString(),
+          now: () =>
+            fault === "submillisecond"
+              ? new Date(time).toISOString().replace(
+                "Z",
+                `${String(microsecond).padStart(3, "0")}Z`,
+              )
+              : new Date(time).toISOString(),
           onError: (error) => errors.push(error),
           transport: {
             transports: mode === "in-process"
@@ -804,7 +820,7 @@ for (const { placement, mode, fault } of cases) {
             attempts: number;
             max_attempts: number;
           }
-        >("SELECT id,available_at,attempts,max_attempts FROM event_deliveries WHERE consumer_id='processor:fixture.follow' AND status='retry_wait'"))
+        >("SELECT id,available_at::text AS available_at,attempts,max_attempts FROM event_deliveries WHERE consumer_id='processor:fixture.follow' AND status='retry_wait'"))
           .rows[0];
         assert.equal(host.snapshot().ready, true);
         assert.equal(retry.attempts, 1);
@@ -819,6 +835,39 @@ for (const { placement, mode, fault } of cases) {
           new Date(alarm.due_at).getTime(),
           new Date(retry.available_at).getTime(),
         );
+        if (fault === "submillisecond") {
+          assert.match(retry.available_at, /\.\d{3}001(?:Z|[+-])/);
+          time = new Date(retry.available_at).getTime();
+          microsecond = 0;
+          await host.wake();
+          assert.equal(retryCalls, 1);
+          // An unrelated ordinary command also runs withDeliveryAlarms.
+          // At this clock value the retry is exactly one microsecond early.
+          assert.equal(
+            await facade.actions.root("nested", {
+              operationKey: "precision-probe",
+            }),
+            "root:child:nested",
+          );
+          await eventually(() => host.snapshot().active === 0);
+          assert.equal(host.snapshot().ready, true);
+          assert.equal(retryCalls, 1);
+          assert.equal(
+            (await db.query(
+              "SELECT attempts FROM event_deliveries WHERE id=$1",
+              [retry.id],
+            )).rows[0].attempts,
+            1,
+          );
+          microsecond = 1;
+          await host.wake();
+          await eventually(() => observed.includes("retry"));
+          assert.equal(retryCalls, 2);
+          await eventually(() => host.snapshot().active === 0);
+          assert.equal(host.snapshot().ready, true);
+          assert.deepEqual(errors, []);
+          return;
+        }
         time = new Date(retry.available_at).getTime() + 1;
         await host.wake();
         if (fault === "predecessor-grant" || fault === "predecessor-event") {

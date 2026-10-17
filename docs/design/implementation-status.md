@@ -1,6 +1,6 @@
 # Owner, worker and Views implementation checklist
 
-Updated: 17 October 2026, 14:13 UTC.
+Updated: 17 October 2026, 14:27 UTC.
 
 This is the maintained coordination checklist for
 [Copilotz PR #93](https://github.com/copilotzhq/copilotz/pull/93). It tracks
@@ -13,10 +13,10 @@ production-ready. All changes remain draft: **no merge or publication**.
 | Task                                         | Status                  | Next acceptance gate                                                                               |
 | -------------------------------------------- | ----------------------- | -------------------------------------------------------------------------------------------------- |
 | Local Processor bound owner adapter          | Reviewed checkpoint     | Reviewed: independent 30 pure and seven real PostgreSQL cases; 83-case compatibility passed        |
-| Local Processor one-attempt execution driver | Reviewed checkpoint     | Driver and bound adapter reviewed; connect the generation-aware host next                          |
+| Local nested Action authority                | Inspecting shared boundary | Generalize existing parent checks; preserve logical identity, current policy and raw-call drain |
 | Faster test orchestration                    | Representative measured | 16 files: 15.4% faster, 7.7% higher peak RSS; reordered files require broader isolation validation |
 | Reference-test reliability                   | Reviewed correction     | 137 affected cases, independent 29-case check and three complete pipeline repeats passed           |
-| Local Processor host generations             | Reviewed private host   | 13 PostgreSQL host plus three pure cases pass; caller-facing reply and precision probes remain |
+| Local Processor host generations             | Reviewed checkpoint     | PostgreSQL 14 host plus two caller-facing helper cases pass; fresh same-owner retry scope complete |
 | Architecture cleanup                         | In progress             | Shared local-port bookkeeping consolidated; migrate callers and retire superseded paths next       |
 
 ## 1. Programming model and composition
@@ -50,11 +50,11 @@ production-ready. All changes remain draft: **no merge or publication**.
       validation
 - [x] Local Processor bound owner adapter and actual lifecycle integration,
       including Collection writes/replay and unknown outcomes
-- [ ] Generation-aware local Processor retry lifecycle and alarms; the private
-      [generation ledger](owner-local-processor-placement.md) is reviewed and
-      [actual host wiring](owner-host-local-processor.md) passes 13 host plus
-      three pure cases on PGlite and independent PostgreSQL; the documented
-      caller-facing held-reply/sub-millisecond evidence gates remain open
+- [x] Private fresh same-owner local Processor retry lifecycle and alarms;
+      [actual host wiring](owner-host-local-processor.md), caller-facing held
+      replies and sub-millisecond eligibility are independently verified on
+      PostgreSQL: 14 host plus two helper cases, alongside the pure controller
+      and adapter evidence; restart/public placement remain separate gates
 - [x] Correct the analogous local Action receipt-hook reentrant-drain gap; both
       causal regressions retained, 124 compatibility cases and independent
       114-case pure review passed; separately fix Action controller revocation

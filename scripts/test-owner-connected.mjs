@@ -193,6 +193,7 @@ export async function prepareOwnerConnectedTest(
     "runtime/application/owner-host.test.ts",
     "runtime/application/owner-host.local.test.ts",
     "runtime/application/owner-host.processor.test.ts",
+    "runtime/application/owner-host-local-processor.integration.test.ts",
     "runtime/application/owner-host.capacity.test.ts",
     "runtime/application/owner-host.recovery.test.ts",
     "runtime/application/owner-host.terminal-recovery.test.ts",

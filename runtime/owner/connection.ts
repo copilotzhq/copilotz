@@ -18,6 +18,7 @@ const EFFECT_STATE = "copilotz.owner.effect-state";
 const ACTION = "copilotz.owner.action";
 const ACTION_CALL = "copilotz.owner.action-call";
 const CHILD_ACTION = "copilotz.owner.child-action";
+const CHILD_PREPARATION = "copilotz.owner.child-prepare";
 const CHILD_RESULT = "copilotz.owner.child-result";
 const ACTION_RESULT = "copilotz.owner.action-result";
 const COMMAND = "copilotz.owner.command";
@@ -257,6 +258,7 @@ export function createOwnerWorkerCallAdmission(
       context.workload !== ACTION_RESULT && context.workload !== ACTION_CALL &&
       context.workload !== EFFECT_SETTLE &&
       context.workload !== EFFECT_STATE && context.workload !== CHILD_ACTION &&
+      context.workload !== CHILD_PREPARATION &&
       context.workload !== CHILD_RESULT
     ) {
       return undefined;
@@ -431,10 +433,16 @@ export function createOwnerWorkerCallAdmission(
           encode(payload); // Bound the derived command as well as the wire request.
           payload = structuredClone(payload);
         }
-        if (context.workload === CHILD_ACTION) {
+        if (
+          context.workload === CHILD_ACTION ||
+          context.workload === CHILD_PREPARATION
+        ) {
           const command = object(payload);
+          const kind = context.workload === CHILD_ACTION
+            ? "action.child-admit"
+            : "action.child-prepare";
           if (
-            command.kind !== "action.child-admit" ||
+            command.kind !== kind ||
             command.domain !== "logical" ||
             typeof command.key !== "string" || !command.key.trim() ||
             !Object.hasOwn(command, "input") ||
@@ -461,6 +469,7 @@ export function createOwnerWorkerCallAdmission(
         const result =
           context.workload === ACTION || context.workload === ACTION_CALL ||
             context.workload === CHILD_ACTION ||
+            context.workload === CHILD_PREPARATION ||
             (isCompletion && object(payload).kind === "execution.complete")
             ? await owner.executeInput(admitted, payload as OwnerInputCommand, {
               signal,
@@ -510,7 +519,9 @@ export function createOwnerWorkerCallAdmission(
             })()
             : await owner.readReceipt(admitted, receiptIdentity(payload));
         committed = isCommand || context.workload === ACTION ||
-          context.workload === ACTION_CALL || context.workload === CHILD_ACTION;
+          context.workload === ACTION_CALL ||
+          context.workload === CHILD_ACTION ||
+          context.workload === CHILD_PREPARATION;
         if (
           context.workload === PROJECT || context.workload === ACTION_RESULT ||
           isEffectState || context.workload === CHILD_RESULT
@@ -691,6 +702,22 @@ export function createOwnerConnection(
       }
       return await call(
         CHILD_ACTION,
+        command,
+        callOptions,
+      ) as OwnerCommandOutcome;
+    },
+    /** Registered owner preparation only; no rendered input or factory crosses the wire. */
+    async prepareChildAction(
+      command: OwnerInputCommand,
+      callOptions?: Readonly<{ signal?: AbortSignal; deadlineAtMs?: number }>,
+    ): Promise<OwnerCommandOutcome> {
+      if (
+        command.kind !== "action.child-prepare" || command.domain !== "logical"
+      ) {
+        throw new TypeError("Invalid child Action preparation request.");
+      }
+      return await call(
+        CHILD_PREPARATION,
         command,
         callOptions,
       ) as OwnerCommandOutcome;

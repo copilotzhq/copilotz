@@ -2067,3 +2067,170 @@ test("restricted Processor completion admits only its exact incarnation kind pai
   );
   assert.equal(writes, 1);
 });
+
+test("named preparation route requires parent ctx and admits only its fixed input command", async () => {
+  const calls: unknown[] = [];
+  const owner = recordingBoundary({
+    executeInput: (who, command) => {
+      calls.push([who, command]);
+      return Promise.resolve({
+        status: "committed",
+        result: { eventId: "child" },
+      });
+    },
+  });
+  const workload = "copilotz.owner.child-prepare";
+  const host = admission(owner);
+  assert.equal(await host.admitUnassigned(context({ workload })), undefined);
+  assert.equal(
+    await host.admit(context({ workload, parent: undefined })),
+    undefined,
+  );
+  for (
+    const assignment of [
+      undefined,
+      { ownerId: "tenant", caller, ctxGranted: false, settlementGranted: true },
+      { ownerId: "another", caller, ctxGranted: true },
+      {
+        ownerId: "tenant",
+        caller: {
+          ...caller,
+          principal: { kind: "worker" as const, workerId: "forged" },
+        },
+        ctxGranted: true,
+      },
+    ]
+  ) {
+    assert.equal(
+      await admission(owner, { resolveAssignment: () => assignment }).admit(
+        context({ workload }),
+      ),
+      undefined,
+    );
+  }
+  const handler = await host.admit(context({ workload }));
+  assert(handler, "the fixed parent-bound preparation route is available");
+  const command = {
+    kind: "action.child-prepare",
+    domain: "logical",
+    key: "capture",
+    input: {
+      parent: {
+        deliveryId: "d",
+        dispatchAttemptId: "a",
+        operationKey: "parent",
+      },
+      preparation: "channel.text",
+      operationKey: "reply",
+      recordId: "message",
+      hints: { mode: "channel", renderer: "text" },
+    },
+  };
+  const signal = new AbortController().signal;
+  for (
+    const bad of [
+      { ...command, kind: "action.child-admit" },
+      { ...command, kind: ["action.child-prepare"] },
+      { ...command, domain: "incarnation" },
+      { ...command, key: "" },
+      { kind: command.kind, domain: command.domain, key: command.key },
+      { ...command, intent: {} },
+      { ...command, caller },
+    ]
+  ) {
+    assert.equal(
+      decode(await handler({ input: stream(bad), signal })).ok,
+      false,
+    );
+  }
+  assert.equal(calls.length, 0);
+  assert.deepEqual(decode(await handler({ input: stream(command), signal })), {
+    ok: true,
+    value: { status: "committed", result: { eventId: "child" } },
+  });
+  assert.deepEqual(calls, [[caller, command]]);
+});
+
+test("named preparation client uses the fixed route and preserves unknown completion without retry", async () => {
+  let calls = 0;
+  let cancels = 0;
+  const command: OwnerInputCommand = {
+    kind: "action.child-prepare",
+    domain: "logical",
+    key: "capture",
+    input: { preparation: "channel.text" },
+  };
+  const client = createOwnerConnection({
+    ownerId: "tenant",
+    callHost: (input) => {
+      calls++;
+      assert.equal(input.workload, "copilotz.owner.child-prepare");
+      assert.deepEqual(input.metadata, { ownerId: "tenant" });
+      assert.deepEqual(decode(input.body as Uint8Array), command);
+      assert.equal(input.deadlineAtMs, 1234);
+      return Promise.resolve({
+        output: stream({
+          ok: false,
+          outcome: "unknown",
+          code: "owner_commit_unknown",
+        }),
+        completed: Promise.resolve(),
+        cancel() {
+          cancels++;
+          return Promise.resolve();
+        },
+      });
+    },
+  });
+  for (
+    const bad of [
+      { ...command, kind: "action.child-admit" },
+      { ...command, domain: "incarnation" as const },
+    ]
+  ) {
+    await assert.rejects(
+      client.prepareChildAction(bad),
+      /Invalid child Action preparation/,
+    );
+  }
+  assert.equal(calls, 0);
+  await assert.rejects(
+    client.prepareChildAction(command, { deadlineAtMs: 1234 }),
+    (error) =>
+      error instanceof OwnerCallRejected && error.outcome === "unknown",
+  );
+  assert.equal(calls, 1);
+  assert.equal(cancels, 0);
+});
+
+test("named preparation post-commit reply failure stays unknown", async () => {
+  let calls = 0;
+  const owner = recordingBoundary({
+    executeInput() {
+      calls++;
+      return Promise.resolve({
+        status: "committed",
+        result: "x".repeat(1_100_001),
+      });
+    },
+  });
+  const handler = await admission(owner).admit(
+    context({ workload: "copilotz.owner.child-prepare" }),
+  );
+  assert(handler);
+  assert.deepEqual(
+    decode(
+      await handler({
+        input: stream({
+          kind: "action.child-prepare",
+          domain: "logical",
+          key: "capture",
+          input: null,
+        }),
+        signal: new AbortController().signal,
+      }),
+    ),
+    { ok: false, outcome: "unknown", code: "owner_call_rejected" },
+  );
+  assert.equal(calls, 1);
+});

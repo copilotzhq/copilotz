@@ -325,3 +325,14 @@ with separate lifecycle, source-import-closure and runner setup checks.
 This remains internal composition. Its Processor observer uses the legacy
 executor. Public common factory/facade, owner-only Processors, general lease
 renewal, full readiness/recovery and HTTP ingress still have separate gates.
+
+### Bounded expired-delivery recovery checkpoint
+
+Owner-mode expired-delivery recovery now uses the fenced command executor and
+captured time, including body-bearing terminal events. Up to100 scanned rows
+share one ordered afterCommit publication callback, avoiding the command's
+callback limit while still attempting later publications after one failure. Nine
+actual-table recovery cases cover rollback of bodies/receipts/readers, alarms,
+authority, duplicates and unknown outcomes;20 focused and41 legacy tests pass
+(two legacy PostgreSQL opt-ins ignored). Full catalog reconciliation,
+effect-aware replay, continuation discovery and alarm readiness remain open.

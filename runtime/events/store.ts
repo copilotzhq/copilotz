@@ -318,6 +318,7 @@ export type EventStore = {
 const DEFAULT_COMPACTION_LIMIT = 100;
 const MAX_COMPACTION_LIMIT = 1_000;
 const RECENT_EVENT_LIMIT = 256;
+const OWNER_RECOVERY_BATCH_LIMIT = 100;
 
 function iso(value: string | Date | null | undefined): string | undefined {
   if (value == null) return undefined;
@@ -640,15 +641,10 @@ export function createEventStore(
   const indexOperationEventSql = options.indexOperationEventSql;
   const commandTimestamp = (params: unknown[]): string =>
     owner ? `$${params.push(owner.commandTime)}::timestamptz` : "NOW()";
-  const deliveryMutationExecutor = async (
-    attempt: string | undefined,
-  ): Promise<SqlExecutor> => {
+  const ownerDeliveryExecutor = async (): Promise<SqlExecutor> => {
     if (!owner) return session;
     if (typeof owner.afterCommit !== "function") {
       return ownerUnsupported("delivery mutations without afterCommit");
-    }
-    if (typeof attempt !== "string" || !attempt.trim()) {
-      return ownerUnsupported("delivery mutations without an attempt token");
     }
     const fence = await owner.transaction.query(
       `SELECT owner FROM ${quoteEventIdentifier(databaseSchema)}."owner_epochs"
@@ -662,6 +658,14 @@ export function createEventStore(
       });
     }
     return owner.transaction;
+  };
+  const deliveryMutationExecutor = (
+    attempt: string | undefined,
+  ): Promise<SqlExecutor> => {
+    if (owner && (typeof attempt !== "string" || !attempt.trim())) {
+      return ownerUnsupported("delivery mutations without an attempt token");
+    }
+    return ownerDeliveryExecutor();
   };
 
   const deliveriesForEvent = async (
@@ -920,7 +924,7 @@ export function createEventStore(
                   ${param(EVENT_BODY_SCHEMA_VERSION)}, ${
           param(body.body)
         }::jsonb,
-                  ${param(body.digest)}, NOW()
+                  ${param(body.digest)}, ${commandTimestamp}
            FROM inserted_event
            ${
           tolerant ? "ON CONFLICT (namespace, event_body_id) DO NOTHING" : ""
@@ -1151,6 +1155,7 @@ export function createEventStore(
   const commitDeliverySettlement = async (
     current: EventDelivery,
     update: (transaction: SqlExecutor) => Promise<EventDelivery | null>,
+    schedulePublication = owner?.afterCommit,
   ): Promise<EventDelivery | null> => {
     if (owner) {
       await options.lockSettlementScope?.(
@@ -1166,7 +1171,7 @@ export function createEventStore(
           owner.transaction,
           result,
         );
-        if (publish) owner.afterCommit!(publish);
+        if (publish) schedulePublication!(publish);
       }
       return result;
     }
@@ -1486,42 +1491,74 @@ export function createEventStore(
     },
     listRecoverable,
     async recoverExpiredDeliveries(recovery = {}) {
-      if (owner) return ownerUnsupported("expired-delivery recovery");
-      const candidates = await session.query<DeliveryRow>(
+      // Recovery belongs to the fenced owner, not an expired execution attempt.
+      // Keep selection and settlement on this command's executor and clock.
+      const executor = await ownerDeliveryExecutor();
+      const limit = boundedInteger(recovery.limit, 100, 1);
+      const params: unknown[] = [
+        recovery.namespace ?? null,
+        owner ? Math.min(limit, OWNER_RECOVERY_BATCH_LIMIT) : limit,
+      ];
+      const timestamp = commandTimestamp(params);
+      const candidates = await executor.query<DeliveryRow>(
         `SELECT d.* FROM ${tables.event_deliveries} AS d
          JOIN ${tables.events} AS e ON e.id = d.event_id
-         WHERE d.status = 'leased' AND d.lease_expires_at <= NOW()
+         WHERE d.status = 'leased' AND d.lease_expires_at <= ${timestamp}
            AND d.attempts >= d.max_attempts
            AND ($1::text IS NULL OR e.namespace = $1)
          ORDER BY d.lease_expires_at, d.id LIMIT $2`,
-        [recovery.namespace ?? null, boundedInteger(recovery.limit, 100, 1)],
+        params,
       );
       const recovered: EventDelivery[] = [];
+      const publications: Array<() => void | Promise<void>> = [];
       for (const row of candidates.rows) {
         const delivery = await commitDeliverySettlement(
           mapDelivery(row, databaseSchema),
           async (transaction) => {
+            const params: unknown[] = [
+              row.id,
+              JSON.stringify({
+                name: "DeliveryLeaseExpired",
+                message: "The delivery lease expired after its final attempt.",
+              }),
+            ];
+            const timestamp = commandTimestamp(params);
             const result = await transaction.query<DeliveryRow>(
               `UPDATE ${tables.event_deliveries}
              SET status = 'dead_letter', lease_owner = NULL, lease_expires_at = NULL,
-               last_error = $2::jsonb, updated_at = NOW(), settled_at = NOW()
-             WHERE id = $1 AND status = 'leased' AND lease_expires_at <= NOW()
+               last_error = $2::jsonb, updated_at = ${timestamp}, settled_at = ${timestamp}
+             WHERE id = $1 AND status = 'leased' AND lease_expires_at <= ${timestamp}
                AND attempts >= max_attempts RETURNING *`,
-              [
-                row.id,
-                JSON.stringify({
-                  name: "DeliveryLeaseExpired",
-                  message:
-                    "The delivery lease expired after its final attempt.",
-                }),
-              ],
+              params,
             );
             return result.rows[0]
               ? mapDelivery(result.rows[0], databaseSchema)
               : null;
           },
+          owner ? (publish) => publications.push(publish) : undefined,
         );
         if (delivery) recovered.push(delivery);
+      }
+      if (publications.length) {
+        // One bounded batch uses one boundary slot; the default scan can be
+        // larger than its per-command publication cap. Keep callbacks ordered
+        // and attempt all of them even when an earlier publication fails.
+        owner!.afterCommit!(async () => {
+          const errors: unknown[] = [];
+          for (const publish of publications) {
+            try {
+              await publish();
+            } catch (error) {
+              errors.push(error);
+            }
+          }
+          if (errors.length) {
+            throw new AggregateError(
+              errors,
+              "Delivery recovery publication failed.",
+            );
+          }
+        });
       }
       return recovered;
     },

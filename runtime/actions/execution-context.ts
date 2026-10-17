@@ -3,6 +3,7 @@ import type { ContentStreamRuntime } from "../streams/index.ts";
 import type { ActionInvocationFrame } from "./invoker.ts";
 import type {
   ActionContext,
+  ActionEffect,
   ActionTransactionOptions,
   RuntimeActionCallers,
   RuntimeContext,
@@ -39,6 +40,7 @@ export function createActionInvocationContext(
     host: ActionInvocationHost;
     frame: ActionInvocationFrame;
     actions: RuntimeActionCallers;
+    effect?: ActionEffect;
     progress(value: unknown): Promise<void>;
     registerDeferredWait(
       waitKey: string,
@@ -47,6 +49,14 @@ export function createActionInvocationContext(
   }>,
 ): ActionContext {
   const { frame, host } = options;
+  const unavailableEffect = (): never => {
+    throw Object.assign(
+      new Error("This Action host has no owner effect capability."),
+      {
+        code: "action_effect_unavailable",
+      },
+    );
+  };
   let transactionIndex = 0;
   const streams: ContentStreamRuntime = {
     ...host.streams,
@@ -94,6 +104,12 @@ export function createActionInvocationContext(
     operationKey: frame.operationKey,
     identity: { ...(frame.identity ?? {}) } as const,
     actions: options.actions,
+    effect: options.effect ?? {
+      begin: unavailableEffect,
+      inspect: unavailableEffect,
+      confirm: unavailableEffect,
+      notStarted: unavailableEffect,
+    },
     content,
     streams,
     signal: frame.signal,

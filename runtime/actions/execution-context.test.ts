@@ -65,6 +65,12 @@ test("execution context preserves capability composition and compatibility expor
   assert.equal(context.actions, nested);
   assert.equal(context.signal, abort.signal);
   assert.equal(context.action.parentRunId, "parent");
+  assert.throws(() => context.effect.begin("step"), {
+    code: "action_effect_unavailable",
+  });
+  assert.throws(() => context.effect.confirm("step", "result"), {
+    code: "action_effect_unavailable",
+  });
   assert.deepEqual(await resolveActionSourceData(context), {
     hidden: "authorized",
   });

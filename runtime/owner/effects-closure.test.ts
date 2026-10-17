@@ -26,6 +26,7 @@ test("emitted effect client closure includes JSON validation only, with no owner
       compilerOptions: {
         module: ts.ModuleKind.ESNext,
         target: ts.ScriptTarget.ES2022,
+        verbatimModuleSyntax: true,
       },
     }).outputText;
     const tree = ts.createSourceFile(

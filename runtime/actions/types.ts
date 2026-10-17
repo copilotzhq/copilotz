@@ -114,6 +114,54 @@ export type RuntimeIdentity = Readonly<{
 /** Caller-owned, JSON-safe data carried by one Action invocation. */
 export type ActionInvocationMetadata = Readonly<Record<string, unknown>>;
 
+/** Safe durable effect outcomes. Protected values must use owner-approved
+ * references; this shape alone is not permission to publish or hydrate them. */
+export type ActionEffectOutcome =
+  | null
+  | boolean
+  | number
+  | string
+  | readonly ActionEffectOutcome[]
+  | { readonly [key: string]: ActionEffectOutcome };
+/** Opaque evidence verified against current owner dispatch facts. */
+export type ActionEffectEvidence = Readonly<
+  { source: string; reference: string }
+>;
+export type ActionEffectOptions = Readonly<{ signal?: AbortSignal }>;
+export type ActionEffectState =
+  | Readonly<{ status: "none" | "indeterminate" | "not_started" }>
+  | Readonly<{ status: "replay"; outcome: ActionEffectOutcome }>;
+export type ActionEffectBegin =
+  | Readonly<{ status: "proceed" | "not_started" }>
+  | Readonly<{ status: "replay"; outcome: ActionEffectOutcome }>;
+export type ActionReconcileResult =
+  | Readonly<{ status: "confirmed"; outcome: ActionEffectOutcome }>
+  | Readonly<{ status: "not_started"; evidence: ActionEffectEvidence }>
+  | Readonly<{ status: "indeterminate" }>;
+/** Invocation-bound effect capability. Only a fresh begin's proceed permits one
+ * external dispatch. A closed step is never reopened; use a new deterministic
+ * step after owner-verified not_started when another dispatch is intended. */
+export type ActionEffect = Readonly<{
+  begin(
+    step: string,
+    options?: ActionEffectOptions,
+  ): Promise<ActionEffectBegin>;
+  inspect(
+    step: string,
+    options?: ActionEffectOptions,
+  ): Promise<ActionEffectState>;
+  confirm(
+    step: string,
+    outcome: ActionEffectOutcome,
+    options?: ActionEffectOptions,
+  ): Promise<void>;
+  notStarted(
+    step: string,
+    evidence: ActionEffectEvidence,
+    options?: ActionEffectOptions,
+  ): Promise<void>;
+}>;
+
 export type ActionCallOptions = Readonly<{
   operationKey?: string;
   identity?: RuntimeIdentity;
@@ -208,6 +256,8 @@ export interface ActionContext<
   TActions extends RuntimeActionCallerMap = RuntimeActionCallers,
   TCollections extends RuntimeCollections = RuntimeCollections,
 > extends RuntimeContext<TResources, TAdapters, TActions, TCollections> {
+  /** Requires an owner-bound host; unavailable legacy hosts fail explicitly. */
+  readonly effect: ActionEffect;
   readonly action: Readonly<{
     id: string;
     runId: string;
@@ -260,6 +310,12 @@ export type ActionDefinition<
     input: TInput,
     context: TContext,
   ): TOutput | Promise<TOutput>;
+  /** Query the provider outside the owner transaction. Runtime records the
+   * explicit result; reconciliation can never grant another send permission. */
+  reconcile?(
+    step: string,
+    context: TContext,
+  ): ActionReconcileResult | Promise<ActionReconcileResult>;
   resolve?(
     input: TInput,
     context: TContext,
@@ -281,6 +337,7 @@ export type AnyActionDefinition = Readonly<{
   inputSchema?: ActionSchema;
   outputSchema?: ActionSchema;
   execute: (...args: never[]) => unknown;
+  reconcile?: (...args: never[]) => unknown;
   resolve?: (...args: never[]) => unknown;
   readonly [actionDefinitionTypes]?: Readonly<{
     input: unknown;

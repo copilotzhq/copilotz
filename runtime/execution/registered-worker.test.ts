@@ -10,6 +10,10 @@ import { definePlugin } from "../plugins/types.ts";
 import { defineProcessor } from "../plugins/processor.ts";
 import { defineView } from "../views/index.ts";
 import type { OwnerCommand } from "../owner/boundary.ts";
+import type {
+  OwnerEffectPort,
+  OwnerEffectRecord,
+} from "../owner/effects-client.ts";
 import {
   createRegisteredActionWorker,
   type RegisteredExecutionCompletion,
@@ -189,6 +193,260 @@ function fixture(
   });
   return { worker, state, port, registry, projection };
 }
+
+/** Deliberately named-port unit fixture. Owner SQL authority is tested separately. */
+function effectPort(initial: "none" | "begun" = "none") {
+  const reference = { namespace: "space", actionRunId: "run", step: "send" };
+  let value: OwnerEffectRecord = { ...reference, status: initial };
+  const stats = { begins: 0, settlements: 0 };
+  const port: OwnerEffectPort = {
+    execute(command) {
+      assert.equal(command.kind, "effect.begin");
+      assert.deepEqual(command.intent, reference);
+      stats.begins++;
+      const fresh = value.status === "none";
+      if (fresh) value = { ...reference, status: "begun" };
+      return Promise.resolve({
+        status: fresh ? "committed" : "duplicate",
+        result: { ...reference, status: "begun" },
+      });
+    },
+    settle(command) {
+      stats.settlements++;
+      const intent = command.intent as Record<
+        string,
+        import("../owner/boundary.ts").OwnerJson
+      >;
+      value = command.kind === "effect.confirm"
+        ? { ...reference, status: "confirmed", outcome: intent.outcome }
+        : { ...reference, status: "not_started" };
+      return Promise.resolve({
+        status: "committed",
+        result: structuredClone(value),
+      });
+    },
+    project() {
+      return Promise.resolve(structuredClone(value));
+    },
+  };
+  return { port, stats };
+}
+
+test("registered Action ctx.effect sends only on fresh begin then replays its confirmed outcome", async () => {
+  const effects = effectPort();
+  let sends = 0;
+  const f = fixture({
+    port: { effects: effects.port },
+    action: action(async (_input, ctx) => {
+      const permission = await ctx.effect.begin("send");
+      assert.equal(permission.status, "proceed");
+      sends++;
+      await ctx.effect.confirm("send", { providerReference: "safe" });
+      const replay = await ctx.effect.begin("send");
+      assert.equal(replay.status, "replay");
+      return replay;
+    }),
+  });
+  await f.worker.execute(hint);
+  assert.equal(sends, 1);
+  assert.deepEqual(f.state.completions, [{
+    status: "completed",
+    output: {
+      status: "replay",
+      outcome: { providerReference: "safe" },
+    },
+  }]);
+});
+
+test("registered Action declaration reconciles a begun step without another provider dispatch", async () => {
+  const effects = effectPort("begun");
+  let queries = 0;
+  const f = fixture({
+    port: { effects: effects.port },
+    action: defineAction({
+      id: "effect.action",
+      async execute(_input: unknown, ctx: ActionContext) {
+        const values = await Promise.all([
+          ctx.effect.begin("send"),
+          ctx.effect.begin("send"),
+        ]);
+        assert.ok(values.every((value) => value.status === "replay"));
+        return values[0];
+      },
+      reconcile(step, ctx) {
+        queries++;
+        assert.equal(step, "send");
+        assert.equal(ctx.action.runId, "run");
+        return {
+          status: "confirmed",
+          outcome: { providerReference: "already-sent" },
+        };
+      },
+    }),
+  });
+  await f.worker.execute(hint);
+  assert.equal(queries, 1);
+  assert.equal(effects.stats.settlements, 1);
+  assert.equal(f.state.completions[0].status, "completed");
+});
+
+test("caught unavailable and indeterminate effect errors cannot become successful Action terminals", async () => {
+  for (const available of [false, true]) {
+    const effects = effectPort("begun");
+    const f = fixture({
+      port: available ? { effects: effects.port } : {},
+      action: action(async (_input, ctx) => {
+        await assert.rejects(async () => await ctx.effect.begin("send"), {
+          code: available
+            ? "effect_indeterminate"
+            : "action_effect_unavailable",
+        });
+        return "must not complete";
+      }),
+    });
+    await f.worker.execute(hint);
+    assert.deepEqual(f.state.completions, [{
+      status: "failed",
+      code: available
+        ? "effect_indeterminate"
+        : "action_capability_unsupported",
+    }]);
+  }
+});
+
+test("swallowed lost begin or confirm response leaves Action terminal unresolved", async () => {
+  for (const operation of ["begin", "confirm"] as const) {
+    const effects = effectPort();
+    const unknown = Object.assign(new Error("lost"), { indeterminate: true });
+    const port = {
+      ...effects.port,
+      [operation === "begin" ? "execute" : "settle"]: () =>
+        Promise.reject(unknown),
+    };
+    const f = fixture({
+      port: { effects: port },
+      action: action(async (_input, ctx) => {
+        try {
+          await ctx.effect.begin("send");
+          await ctx.effect.confirm("send", "safe");
+        } catch {
+          /* Business code cannot turn ambiguous mutation into success. */
+        }
+        return "caught";
+      }),
+    });
+    await assert.rejects(f.worker.execute(hint), (error) => error === unknown);
+    assert.deepEqual(f.state.completions, []);
+  }
+});
+
+test("unawaited effect call drains before completion and captured capability closes afterwards", async () => {
+  const effects = effectPort();
+  const entered = deferred();
+  const gate = deferred();
+  let context!: ActionContext;
+  const f = fixture({
+    port: {
+      effects: {
+        ...effects.port,
+        async settle(command, options) {
+          entered.resolve();
+          await gate.promise;
+          return effects.port.settle(command, options);
+        },
+      },
+    },
+    action: action(async (_input, ctx) => {
+      context = ctx;
+      await ctx.effect.begin("send");
+      void ctx.effect.confirm("send", "safe");
+      return "ordinary";
+    }),
+  });
+  const running = f.worker.execute(hint);
+  await entered.promise;
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(f.state.completions, []);
+  gate.resolve();
+  await running;
+  await assert.rejects(async () => await context.effect.begin("send"), {
+    code: "registered_worker_context_closed",
+  });
+  assert.equal(effects.stats.begins, 1);
+});
+
+test("private cancellation fences late reconciliation despite exposed signal tampering", async () => {
+  const effects = effectPort("begun");
+  const entered = deferred();
+  const gate = deferred();
+  const control = new AbortController();
+  const f = fixture({
+    port: { effects: effects.port },
+    action: defineAction({
+      id: "effect.cancel",
+      execute(_input: unknown, ctx: ActionContext) {
+        return ctx.effect.begin("send");
+      },
+      async reconcile(_step, ctx) {
+        Object.defineProperty(ctx.signal, "aborted", { value: false });
+        ctx.signal.dispatchEvent(new Event("abort"));
+        entered.resolve();
+        await gate.promise;
+        return { status: "confirmed", outcome: "late" };
+      },
+    }),
+  });
+  const running = f.worker.execute(hint, { signal: control.signal });
+  await entered.promise;
+  control.abort();
+  gate.resolve();
+  await running;
+  assert.equal(effects.stats.settlements, 0);
+  assert.deepEqual(f.state.completions, [{
+    status: "cancelled",
+    code: "action_cancelled",
+  }]);
+});
+
+test("unawaited settlement inside reconciliation stays in the private uncertainty drain", async () => {
+  const effects = effectPort("begun");
+  const gate = deferred();
+  const entered = deferred();
+  const unknown = Object.assign(new Error("lost nested settlement"), {
+    indeterminate: true,
+  });
+  const f = fixture({
+    port: {
+      effects: {
+        ...effects.port,
+        async settle() {
+          entered.resolve();
+          await gate.promise;
+          throw unknown;
+        },
+      },
+    },
+    action: defineAction({
+      id: "effect.nested",
+      async execute(_input: unknown, ctx: ActionContext) {
+        try {
+          await ctx.effect.begin("send");
+        } catch { /* Must remain latched. */ }
+        return "must not complete";
+      },
+      reconcile(step, ctx) {
+        void ctx.effect.confirm(step, "safe");
+        return { status: "indeterminate" };
+      },
+    }),
+  });
+  const running = f.worker.execute(hint);
+  await entered.promise;
+  assert.deepEqual(f.state.completions, []);
+  gate.resolve();
+  await assert.rejects(running, (error) => error === unknown);
+  assert.deepEqual(f.state.completions, []);
+});
 
 test("whole-plugin registered Action uses selected Resources/Adapters and the shared planner without opening persistence", async () => {
   const f = fixture();

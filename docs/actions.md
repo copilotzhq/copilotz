@@ -449,9 +449,13 @@ effects.
   delivery. Prefix their keys with `context.operationKey`, as `saveNote` does.
 - **`context.content.prepare`** keys are prefixed with the Action call
   automatically; pass a short local key.
-- **External effects** (email, payments, third-party APIs) are outside the
-  runtime's records. Give each one the provider's own idempotency key, derived
-  from `context.operationKey`, so a re-run `execute` cannot repeat the effect.
+- **External effects on legacy hosts** (email, payments, third-party APIs) are
+  not covered by Action lifecycle receipts. A stable provider idempotency key
+  derived from `context.operationKey` can help only to the extent guaranteed by
+  that provider's actual contract. It does not make arbitrary Action replay
+  safe. The owner refactor uses the
+  [effect protocol below](#owner-bound-external-effects-refactor-preview) to
+  distinguish first dispatch, uncertainty and confirmed outcomes.
 
 ### Content declarations
 
@@ -498,6 +502,114 @@ it, and nothing erases it afterwards. Accept secrets through a schema-aware
 entry, such as an Action exposed over HTTP by `serverPlugin`, whose route
 validates input against the Action's schema, rather than through generic Events
 or a custom route that forwards them to `app.send`.
+
+## Owner-bound external effects (refactor preview)
+
+The owner-backed registered Action worker exposes `context.effect`. This is an
+internal execution seam in the owner refactor, not a claim that the existing
+public application factory or all provider adapters already use it. Legacy hosts
+that have no owner effect port throw `action_effect_unavailable` when it is
+used; they do not create a local substitute receipt store.
+
+An effect step is a stable name within the Action run, independent of delivery
+attempt, worker, connection and owner epoch:
+
+- `await context.effect.begin(step)` returns `proceed` only for a fresh, known
+  committed begin whose transport completed. Only that result permits one
+  provider dispatch
+- A confirmed step returns `replay` with its safe durable outcome. It never
+  grants another dispatch
+- A begun step invokes the Action's declared `reconcile(step, context)` outside
+  the owner transaction. Missing or unresolved reconciliation fails with the
+  fixed `effect_indeterminate` code
+- `confirm(step, outcome)` records an outcome through the restricted settlement
+  port. Use public data or an owner-approved durable reference, never protected
+  plaintext
+- `notStarted(step, { source, reference })` requires evidence independently
+  verified by the owner against dispatch facts. A provider lookup returning
+  nothing, worker prose, or a guessed receipt ID is not such proof. That step
+  remains closed; a deliberately retried dispatch needs a new deterministic step
+- `inspect(step)` reads freshly authorized state and never grants dispatch
+
+`reconcile` returns exactly one of:
+
+```ts
+{ status: "confirmed", outcome: safeOutcome }
+{ status: "not_started", evidence: { source, reference } }
+{ status: "indeterminate" }
+```
+
+The runtime records the explicit result through current owner authority, then
+returns replay or closed state. Reconciliation runs at most once per live
+attempt/step; concurrent recovery coalesces, but fresh `begin` calls never share
+one `proceed` permission. Calling `context.effect.begin` recursively for the
+same step inside its reconciliation is refused. Use the context passed to that
+hook; calling a captured earlier context recursively is not a supported pattern.
+Manual `confirm` and `notStarted` remain available in ordinary execution;
+conflicting settlement is refused by the owner.
+
+For example, a provider adapter can query by the same stable request identity
+that it uses to send. The adapter below is supplied by the application's trusted
+resource composition; it is not implemented by `defineAction`:
+
+```ts
+import { defineAction } from "@copilotz/copilotz";
+import type { ActionContext } from "@copilotz/copilotz";
+
+interface MessageContext extends ActionContext {
+  readonly resources: {
+    readonly provider: {
+      send(
+        request: { id: string; text: string; signal: AbortSignal },
+      ): Promise<{ messageId: string }>;
+      lookup(
+        id: string,
+        signal: AbortSignal,
+      ): Promise<{ messageId: string } | undefined>;
+    };
+  };
+}
+
+export const sendMessage = defineAction({
+  id: "messages.send",
+  async execute(input: { text: string }, context: MessageContext) {
+    const step = "send:v1";
+    const begun = await context.effect.begin(step);
+    if (begun.status === "replay") return begun.outcome;
+    if (begun.status !== "proceed") throw new Error("Effect step is closed");
+    const outcome = await context.resources.provider.send({
+      id: `${context.action.runId}/${step}`,
+      text: input.text,
+      signal: context.signal,
+    });
+    await context.effect.confirm(step, outcome);
+    return outcome;
+  },
+  async reconcile(step, context) {
+    const outcome = await context.resources.provider.lookup(
+      `${context.action.runId}/${step}`,
+      context.signal,
+    );
+    return outcome
+      ? { status: "confirmed", outcome }
+      : { status: "indeterminate" };
+  },
+});
+```
+
+Cancellation, a lost lease and the end of the invocation close its capabilities.
+A lost begin or settlement reply remains unknown even if application code
+catches its error; it cannot be converted into an ordinary successful or failed
+terminal. Effect calls join the worker's bounded pending-call drain, including
+calls the Action forgot to await. Await them in application code so the provider
+result and errors can be handled explicitly.
+
+This API does not by itself make expired Action replay safe. Recovery must
+inspect unfinished logical effects before rerunning an Action, and actual
+external-effect adapters must adopt this protocol. Absence of an effect receipt
+is not proof that arbitrary Action code was side-effect-free. The delivery
+default remains three attempts; recording a failed Action terminal does not
+authorize rerunning it.
 
 ## What this unlocks
 

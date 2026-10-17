@@ -13,6 +13,8 @@ test("registered Action worker runtime closure excludes database and body-store 
     "runtime/owner/connection.ts",
     "runtime/execution/owner-port.ts",
     "runtime/actions/execution-context.ts",
+    "runtime/actions/effects.ts",
+    "runtime/owner/effects-client.ts",
     "runtime/actions/secret.ts",
     "runtime/actions/deferral.ts",
     "runtime/actions/value.ts",
@@ -45,9 +47,16 @@ test("registered Action worker runtime closure excludes database and body-store 
       allowed.has(path),
       `Registered worker reached unexpected runtime implementation: ${path}`,
     );
+    const emitted = ts.transpileModule(await readFile(file, "utf8"), {
+      compilerOptions: {
+        module: ts.ModuleKind.ESNext,
+        target: ts.ScriptTarget.ESNext,
+        verbatimModuleSyntax: true,
+      },
+    }).outputText;
     const tree = ts.createSourceFile(
       path,
-      await readFile(file, "utf8"),
+      emitted,
       ts.ScriptTarget.Latest,
       true,
     );

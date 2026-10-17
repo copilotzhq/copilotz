@@ -12,6 +12,9 @@ import type {
   OwnerCommandOutcome,
   OwnerJson,
 } from "../owner/boundary.ts";
+import type { OwnerEffectPort } from "../owner/effects-client.ts";
+import { createOwnerEffectClient } from "../owner/effects-client.ts";
+import { createActionEffectCapability } from "../actions/effects.ts";
 
 /** Host-derived live assignment identity. These hints never grant authority. */
 export type RegisteredWorkerAssignment = Readonly<{
@@ -65,6 +68,9 @@ export type RegisteredExecutionProjection = Readonly<{
  * Claim/completion receipts contain references only; project rechecks the exact
  * current assignment, session, epoch and live lease before exposing input. */
 export type RegisteredOwnerExecutionPort = Readonly<{
+  /** Separately admitted effect routes, bound to this live assignment. Missing
+   * capability refuses ctx.effect; never substitutes worker-local receipts. */
+  effects?: OwnerEffectPort;
   claim(
     assignment: RegisteredWorkerAssignment,
     options: OwnerCommandExecuteOptions,
@@ -144,6 +150,7 @@ import { actionSchemaHasSecrets } from "../actions/secret.ts";
 import { isActionDeferral } from "../actions/deferral.ts";
 import type {
   ActionContext,
+  ActionReconcileResult,
   ActionTransactionOptions,
   RuntimeContext,
 } from "../actions/types.ts";
@@ -447,11 +454,38 @@ export function createRegisteredActionWorker(
       const pending: Promise<unknown>[] = [];
       let pendingFailure: unknown;
       let hasPendingFailure = false;
+      let effectIndeterminate = false;
       const unsupported = (): never => {
         capabilityFailure = true;
         throw failure("registered_worker_capability_unsupported");
       };
       const unavailable = () => new Proxy({}, { get: unsupported });
+      const track = <T>(start: () => Promise<T>): Promise<T> => {
+        check();
+        if (!registrationOpen) {
+          throw failure("registered_worker_context_closed");
+        }
+        if (pending.length >= 100) return unsupported();
+        let promise: Promise<T>;
+        try {
+          promise = start();
+        } catch (error) {
+          promise = Promise.reject(error);
+        }
+        pending.push(promise.catch((error) => {
+          if (
+            error && typeof error === "object" && "code" in error &&
+            error.code === "effect_indeterminate"
+          ) {
+            effectIndeterminate = true;
+          }
+          if (!hasPendingFailure || unknownOutcome(error)) {
+            hasPendingFailure = true;
+            pendingFailure = error;
+          }
+        }));
+        return promise;
+      };
       const planner = createOwnerTransactionPlanner({
         collections: registry.collections,
         identity: {
@@ -483,25 +517,20 @@ export function createRegisteredActionWorker(
             ),
           )
         ) return unsupported();
-        const promise = planner({
-          operationKey: transactionOptions.operationKey ?? "",
-          signal: transactionOptions.signal
-            ? AbortSignal.any([control.signal, transactionOptions.signal])
-            : control.signal,
-          execute: (context) =>
-            callback({
-              ...context,
-              relations: unavailable(),
-              vectors: unavailable(),
-            }),
-        }).then(({ value }) => value);
-        pending.push(promise.catch((error) => {
-          if (!hasPendingFailure || unknownOutcome(error)) {
-            hasPendingFailure = true;
-            pendingFailure = error;
-          }
-        }));
-        return promise;
+        return track(() =>
+          planner({
+            operationKey: transactionOptions.operationKey ?? "",
+            signal: transactionOptions.signal
+              ? AbortSignal.any([control.signal, transactionOptions.signal])
+              : control.signal,
+            execute: (context) =>
+              callback({
+                ...context,
+                relations: unavailable(),
+                vectors: unavailable(),
+              }),
+          }).then(({ value }) => value)
+        );
       };
       let completion: RegisteredExecutionCompletion;
       try {
@@ -533,7 +562,39 @@ export function createRegisteredActionWorker(
         });
         check();
         const nested = Object.assign(unsupported, { prepare: unsupported });
+        const absentEffect = (): never => {
+          capabilityFailure = true;
+          throw failure("action_effect_unavailable");
+        };
+        const effect = port.effects
+          ? createActionEffectCapability({
+            client: createOwnerEffectClient({
+              ownerId: projection.ownerId,
+              namespace: projection.namespace,
+              actionRunId: projection.invocation.actionRunId,
+              port: port.effects,
+            }),
+            signal: control.signal,
+            check,
+            track,
+            context: () => context,
+            reconcile: action.reconcile as
+              | ((
+                step: string,
+                context: ActionContext,
+              ) =>
+                | ActionReconcileResult
+                | Promise<ActionReconcileResult>)
+              | undefined,
+          })
+          : {
+            begin: absentEffect,
+            inspect: absentEffect,
+            confirm: absentEffect,
+            notStarted: absentEffect,
+          };
         const context = createActionInvocationContext({
+          effect,
           host: {
             namespace: projection.namespace,
             databaseSchema: projection.databaseSchema,
@@ -609,6 +670,8 @@ export function createRegisteredActionWorker(
             status: "failed",
             code: capabilityFailure
               ? "action_capability_unsupported"
+              : effectIndeterminate
+              ? "effect_indeterminate"
               : "action_failed",
           };
       } finally {

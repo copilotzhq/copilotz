@@ -462,3 +462,15 @@ settlement13 and execution settlement6 cases pass, with earlier remaining
 execution24 and legacy17 evidence. Actual host alarm recovery, retained relay
 reservations and readiness composition remain required; result projection does
 not substitute for this terminalization.
+
+### Action effect capabilities and declared reconciliation
+
+Action definitions can declare reconciliation with explicit confirmed,
+not-started-evidence or indeterminate outcomes. The invocation-bound effect
+capability uses named owner ports, drains pending calls before terminal
+settlement, refuses missing capabilities and cyclic reconciliation dependencies,
+and never reissues proceed from a repeated step. Pure client/worker import
+closure remains database-free. The reviewed checkpoint passes72 focused cases,8
+native Node pure cases and46 independent cases. Restricted transport effect
+routes, provider conversion and effect-aware owner recovery remain required
+before general retry.

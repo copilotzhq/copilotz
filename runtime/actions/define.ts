@@ -19,6 +19,7 @@ const ACTION_KEYS = new Set([
   "outputSchema",
   "execute",
   "resolve",
+  "reconcile",
 ]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -55,7 +56,8 @@ export function isActionDefinition(
     typeof value.id !== "string" || !value.id.trim() ||
     !/^[a-z][a-z0-9_.-]*$/i.test(value.id.trim()) ||
     typeof value.execute !== "function" ||
-    (value.resolve !== undefined && typeof value.resolve !== "function")
+    (value.resolve !== undefined && typeof value.resolve !== "function") ||
+    (value.reconcile !== undefined && typeof value.reconcile !== "function")
   ) return false;
   try {
     if (value.content !== undefined) actionContentDeclaration(value.content);
@@ -79,6 +81,7 @@ export function defineAction<
     content?: ActionContentDeclaration;
     inputSchema?: TInputSchema;
     outputSchema?: TOutputSchema;
+    reconcile?: Definition<TInput, TOutput, TContext>["reconcile"];
     execute(
       input: TInput,
       context: TContext,
@@ -112,6 +115,7 @@ export function defineAction<
     content?: ActionContentDeclaration;
     inputSchema?: TInputSchema;
     outputSchema?: TOutputSchema;
+    reconcile?: Definition<TInput, TOutput, TContext>["reconcile"];
     execute(
       input: TInput,
       context: TContext,
@@ -138,6 +142,7 @@ export function defineAction<
     content?: ActionContentDeclaration;
     inputSchema?: TInputSchema;
     outputSchema?: TOutputSchema;
+    reconcile?: Definition<TInput, TOutput, TContext>["reconcile"];
     execute(
       input: TInput,
       context: TContext,
@@ -166,6 +171,12 @@ export function defineAction<
     definition.resolve !== undefined && typeof definition.resolve !== "function"
   ) {
     throw new TypeError(`Action '${id}' resolve must be a function.`);
+  }
+  if (
+    definition.reconcile !== undefined &&
+    typeof definition.reconcile !== "function"
+  ) {
+    throw new TypeError(`Action '${id}' reconcile must be a function.`);
   }
   const inputSchema = optionalSchema(
     id,
@@ -200,6 +211,7 @@ export function defineAction<
     ...(outputSchema ? { outputSchema } : {}),
     execute: definition.execute,
     ...(definition.resolve ? { resolve: definition.resolve } : {}),
+    ...(definition.reconcile ? { reconcile: definition.reconcile } : {}),
   } as const) as ActionDefinition<
     TInput,
     Awaited<TOutput>,

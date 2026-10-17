@@ -587,3 +587,12 @@ recovery review, local20 recovery/compatibility and32 execution/architecture
 cases pass. Startup/takeover composition and declared awaitOperation
 continuations are still open; ordinary failure-consumer delivery is not a
 substitute for resume.
+
+### Collection-created detached operations
+
+Private owner Collection composition can attach the existing operation catalog
+hooks, with schema equality checked up front. Real Collection events now admit
+and index detached Processor scopes in the same outer transaction. The retained
+regression proves the actual parent event/catalog relationship and complete
+rollback; no operation row is fabricated by the fixture. Four independently
+reviewed Collection cases pass. Host Processor routing remains a separate step.

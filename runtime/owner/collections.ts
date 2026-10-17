@@ -14,6 +14,7 @@ import { deriveWorkflowId } from "../events/index.ts";
 import type { DeliveryExecutor } from "../execution/types.ts";
 import type { PluginRegistry } from "../plugins/index.ts";
 import { assertJsonValue } from "../json.ts";
+import type { OperationCatalog } from "../streams/catalog.ts";
 import type { OwnerCommandContext, OwnerCommandHandler } from "./boundary.ts";
 
 export type OwnerCollectionOperation = Readonly<{
@@ -49,6 +50,9 @@ export function createOwnerCollectionCommand(
     registry: PluginRegistry;
     collections: Readonly<Record<string, CollectionDefinition>>;
     executor: DeliveryExecutor;
+    /** Private owner composition: operation admission/indexing shares the same
+     * transaction as Collection events, including detached Processor scopes. */
+    catalog?: OperationCatalog;
     scope(
       context: OwnerCommandContext,
       intent: OwnerCollectionIntent,
@@ -57,6 +61,9 @@ export function createOwnerCollectionCommand(
     maxOperations?: number;
   }>,
 ): OwnerCommandHandler {
+  if (options.catalog && options.catalog.databaseSchema !== options.schema) {
+    throw new TypeError("Collection catalog schema does not match.");
+  }
   const limit = options.maxOperations ?? 100;
   if (!Number.isSafeInteger(limit) || limit < 1) {
     throw new TypeError("maxOperations must be positive.");
@@ -116,6 +123,14 @@ export function createOwnerCollectionCommand(
       session: options.session,
       schema: options.schema,
       ownerCommit: context.ownerCommit,
+      ...(options.catalog
+        ? {
+          lockSettlementScope: options.catalog.lockScope,
+          admitOperationEventSql: options.catalog.admitEventSql,
+          indexOperationEvent: options.catalog.indexEvent,
+          indexOperationEventSql: options.catalog.indexEventSql,
+        }
+        : {}),
     });
     const coordinator = createEventCoordinator({
       store,

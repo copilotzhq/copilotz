@@ -1,0 +1,186 @@
+/** Private provenance for an input retained by the existing child Action
+ * lifecycle. These facts establish no authority on their own: every use must
+ * reauthorize the original source, audience, content and resource identities. */
+import { assertJsonValue } from "../json.ts";
+import { viewShowsKey } from "../views/definition.ts";
+import type { ViewShows } from "../views/definition.ts";
+import type { PreparedViewSelection } from "./preparation-render.ts";
+
+export const OWNER_PREPARATION_SCHEMA = "copilotz.owner.preparation.v1";
+export const OWNER_PREPARATION_METADATA = "preparation";
+export type PreparationContentReference = Readonly<{
+  ref: Readonly<{
+    assetId: string;
+    kind: "text" | "json";
+    role: string;
+    mediaType: string;
+  }>;
+  version: Readonly<{ byteLength: number; digest: string }>;
+}>;
+export type PreparationSourceReference = Readonly<{
+  source: Readonly<{
+    name: string;
+    kind: string;
+    path: string;
+    recordId: string;
+    namespace: string;
+    /** Digest of the original authorized projection, never the raw record. */
+    digest: string;
+  }>;
+  audience: string;
+  content: readonly PreparationContentReference[];
+}>;
+export type PreparationResourceReference = Readonly<{
+  namespace: string;
+  alias: string;
+  /** Digest of the original authorized ordinary resource projection only. */
+  digest: string;
+}>;
+export type OwnerPreparationCapture = Readonly<{
+  schema: typeof OWNER_PREPARATION_SCHEMA;
+  preparation: string;
+  source: PreparationSourceReference;
+  resources: readonly PreparationResourceReference[];
+  view: Readonly<{
+    shows: ViewShows;
+    hints: Readonly<{ mode: string; renderer: "text" }>;
+    selection: PreparedViewSelection;
+  }>;
+}>;
+function invalid(): never {
+  throw Object.assign(new Error("preparation_capture_invalid"), {
+    code: "preparation_capture_invalid",
+  });
+}
+function exact(
+  value: unknown,
+  keys: readonly string[],
+): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) invalid();
+  const data = value as Record<string, unknown>;
+  if (
+    Object.keys(data).length !== keys.length ||
+    keys.some((key) => !Object.hasOwn(data, key))
+  ) invalid();
+  return data;
+}
+function text(value: unknown): asserts value is string {
+  if (
+    typeof value !== "string" || !value || value !== value.trim() ||
+    value.length > 512 ||
+    [...value].some((character) =>
+      character.charCodeAt(0) <= 31 || character.charCodeAt(0) === 127
+    )
+  ) invalid();
+}
+function digest(value: unknown): void {
+  if (typeof value !== "string" || !/^sha256:[a-f0-9]{64}$/.test(value)) {
+    invalid();
+  }
+}
+function detached(value: unknown): unknown {
+  try {
+    assertJsonValue(value, { maxDepth: 16, maxNodes: 5000 });
+    if (new TextEncoder().encode(JSON.stringify(value)).byteLength > 65_536) {
+      invalid();
+    }
+    return structuredClone(value);
+  } catch {
+    invalid();
+  }
+}
+/** Strict source facts parser shared by fresh capture and original-ref checks.
+ * It never accepts physical locators or hydrated values. */
+export function parsePreparationSourceReference(
+  value: unknown,
+): PreparationSourceReference {
+  const data = exact(detached(value), ["source", "audience", "content"]);
+  const source = exact(data.source, [
+    "name",
+    "kind",
+    "path",
+    "recordId",
+    "namespace",
+    "digest",
+  ]);
+  for (const key of ["name", "kind", "path", "recordId", "namespace"]) {
+    text(source[key]);
+  }
+  digest(source.digest);
+  text(data.audience);
+  if (!Array.isArray(data.content) || data.content.length > 100) invalid();
+  let bytes = 0;
+  for (const value of data.content) {
+    const item = exact(value, ["ref", "version"]);
+    const ref = exact(item.ref, ["assetId", "kind", "role", "mediaType"]);
+    for (const value of Object.values(ref)) text(value);
+    if (ref.kind !== "text" && ref.kind !== "json") invalid();
+    const version = exact(item.version, ["byteLength", "digest"]);
+    if (
+      !Number.isSafeInteger(version.byteLength) ||
+      Number(version.byteLength) < 0
+    ) invalid();
+    digest(version.digest);
+    bytes += Number(version.byteLength);
+    if (bytes > 1_048_576) invalid();
+  }
+  return data as PreparationSourceReference;
+}
+export function parseOwnerPreparationCapture(
+  value: unknown,
+): OwnerPreparationCapture {
+  const data = exact(detached(value), [
+    "schema",
+    "preparation",
+    "source",
+    "resources",
+    "view",
+  ]);
+  if (data.schema !== OWNER_PREPARATION_SCHEMA) invalid();
+  text(data.preparation);
+  parsePreparationSourceReference(data.source);
+  if (!Array.isArray(data.resources) || data.resources.length > 32) invalid();
+  const seen = new Set<string>();
+  for (const value of data.resources) {
+    const resource = exact(value, ["namespace", "alias", "digest"]);
+    text(resource.namespace);
+    text(resource.alias);
+    digest(resource.digest);
+    const key = JSON.stringify([resource.namespace, resource.alias]);
+    if (seen.has(key)) invalid();
+    seen.add(key);
+  }
+  const view = exact(data.view, ["shows", "hints", "selection"]);
+  try {
+    viewShowsKey(view.shows as ViewShows);
+  } catch {
+    invalid();
+  }
+  text(
+    typeof view.shows === "string"
+      ? view.shows
+      : Object.values(view.shows as object)[0],
+  );
+  const hints = exact(view.hints, ["mode", "renderer"]);
+  text(hints.mode);
+  if (hints.renderer !== "text") invalid();
+  const selection = view.selection as { kind?: unknown } | null;
+  if (selection?.kind === "generic") exact(selection, ["kind"]);
+  else if (selection?.kind === "registered") {
+    text(exact(selection, ["kind", "id"]).id);
+  } else invalid();
+  return data as OwnerPreparationCapture;
+}
+/** Absence preserves ordinary child admission; any present value must parse.
+ * A caller must never use truthiness to decide whether a guard is required. */
+export function preparationCaptureFromMetadata(
+  metadata: Readonly<Record<string, unknown>>,
+): OwnerPreparationCapture | undefined {
+  const descriptor = Object.getOwnPropertyDescriptor(
+    metadata,
+    OWNER_PREPARATION_METADATA,
+  );
+  if (!descriptor) return undefined;
+  if (!("value" in descriptor) || !descriptor.enumerable) invalid();
+  return parseOwnerPreparationCapture(descriptor.value);
+}

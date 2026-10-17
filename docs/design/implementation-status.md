@@ -1,6 +1,6 @@
 # Owner, worker and Views implementation checklist
 
-Updated: 17 October 2026, 12:03 UTC.
+Updated: 17 October 2026, 12:16 UTC.
 
 This is the maintained coordination checklist for
 [Copilotz PR #93](https://github.com/copilotzhq/copilotz/pull/93). It tracks
@@ -10,13 +10,13 @@ production-ready. All changes remain draft: **no merge or publication**.
 
 ## Current work
 
-| Task                                         | Status                                       | Next acceptance gate                                                                            |
-| -------------------------------------------- | -------------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| Local Processor durable commands             | Reviewed checkpoint                          | Integrate with the driver and bound owner adapter                                               |
-| Local Processor one-attempt execution driver | In progress                                  | Independent review, failure/lifetime cases, then bound owner adapter                            |
-| Faster test orchestration                    | Experimental runner implemented and reviewed | Equivalent same-source benchmark; not yet the authoritative gate                                |
-| Reference-test reliability                   | Investigating                                | Diagnose the repeat PGlite unavailable-root terminal-cursor failure before comparing speed      |
-| Local Processor host generations             | Next                                         | Known ended-attempt receipt, predecessor revocation/drain, exact retry wake and shared capacity |
+| Task                                         | Status                                | Next acceptance gate                                                                               |
+| -------------------------------------------- | ------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| Local Processor bound owner adapter          | In progress                           | Exact attempt binding, raw-call accounting and real owner lifecycle tests                          |
+| Local Processor one-attempt execution driver | Reviewed checkpoint                   | 18 direct tests, 21 independent cases and 19 kernel compatibility cases; connect the bound adapter |
+| Faster test orchestration                    | Waiting on reference-test reliability | Experimental runner reviewed; measure equivalent same-source speed only after reference is stable  |
+| Reference-test reliability                   | Investigating                         | Diagnose the repeat PGlite unavailable-root terminal-cursor failure before comparing speed         |
+| Local Processor host generations             | Next                                  | Known ended-attempt receipt, predecessor revocation/drain, exact retry wake and shared capacity    |
 
 ## 1. Programming model and composition
 
@@ -45,7 +45,10 @@ production-ready. All changes remain draft: **no merge or publication**.
       authority and NULL lease
 - [x] Private local Processor command prerequisite, independently checked on
       PGlite and PostgreSQL
-- [ ] Local Processor driver, bound adapter and generation-aware retry lifecycle
+- [x] Private one-attempt local Processor driver with strict receipt/lifetime
+      validation
+- [ ] Local Processor bound owner adapter and actual lifecycle integration
+- [ ] Generation-aware local Processor retry lifecycle and alarms
 - [ ] Local nested Action authority and mixed parent/child placement
 - [ ] Local Action effect capability parity
 - [ ] Public local placement activation and complete parity matrix

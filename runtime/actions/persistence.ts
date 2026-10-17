@@ -2,8 +2,10 @@ import {
   actionOwnershipStatement,
   type ActionWriter,
   combineActionStatements,
+  validateOwnerLocalActionAuthority,
 } from "./ownership.ts";
 import type { SqlExecutor } from "../events/session.ts";
+import type { OwnerEventCommitContext } from "../events/store.ts";
 import {
   composeActionInputRetention,
   planActionInputRetention,
@@ -43,6 +45,10 @@ type ActionLifecyclePersistenceOptions = Readonly<{
   protectedValues?: ProtectedValueRuntime;
   writer?: ActionWriter;
   transaction?: SqlExecutor;
+  /** Explicit owner-local command authority; never taken from lifecycle data. */
+  ownerAuthority?: OwnerEventCommitContext;
+  /** Required for owner-local writers and checked against the actual tables. */
+  schema?: string;
 }>;
 
 async function rawEventBody(
@@ -94,7 +100,63 @@ export function createActionLifecycleAppender(
     }>
     & ActionLifecyclePersistenceOptions,
 ): ActionLifecycleAppender {
-  const commandTime = options.commandTime;
+  // Preparation may await protected storage. Caller-owned mutable references
+  // must not change the authority, transaction or table binding across it.
+  const commitMutation = options.coordinator.commitMutation.bind(
+    options.coordinator,
+  );
+  const protectedValues = options.protectedValues
+    ? {
+      prepare: options.protectedValues.prepare.bind(options.protectedValues),
+      adopt: options.protectedValues.adopt.bind(options.protectedValues),
+      open: options.protectedValues.open.bind(options.protectedValues),
+      project: options.protectedValues.project.bind(options.protectedValues),
+    }
+    : undefined;
+  const ownerAuthority = options.ownerAuthority
+    ? {
+      ...options.ownerAuthority,
+      localAttempt: options.ownerAuthority.localAttempt
+        ? { ...options.ownerAuthority.localAttempt }
+        : undefined,
+    }
+    : undefined;
+  options = {
+    ...options,
+    writer: options.writer ? { ...options.writer } : undefined,
+    ownerAuthority,
+    protectedValues,
+    store: options.store
+      ? { ...options.store, tables: { ...options.store.tables } }
+      : undefined,
+  };
+  const localOwner = options.writer?.kind === "owner-local"
+    ? { authority: ownerAuthority!, schema: options.schema! }
+    : undefined;
+  if (options.writer?.kind === "owner-local") {
+    if (
+      !options.store || !ownerAuthority || !options.transaction ||
+      options.transaction !== ownerAuthority.transaction
+    ) {
+      throw new TypeError(
+        "Owner-local Actions require a store, authority and matching command transaction.",
+      );
+    }
+    validateOwnerLocalActionAuthority(
+      options.writer,
+      localOwner,
+      options.store.tables,
+    );
+    if (
+      options.commandTime !== undefined &&
+      options.commandTime !== ownerAuthority.commandTime
+    ) {
+      throw new TypeError("Owner-local Action command timestamps must match.");
+    }
+  }
+  const commandTime = options.commandTime !== undefined
+    ? options.commandTime
+    : localOwner?.authority.commandTime;
   if (
     commandTime !== undefined &&
     (typeof commandTime !== "string" ||
@@ -153,7 +215,7 @@ export function createActionLifecycleAppender(
     // values must be adopted in code beside them.
     const inStatement = retention !== undefined && tables !== undefined &&
       prepared.prepared.length === 0;
-    return await options.coordinator.commitMutation({
+    return await commitMutation({
       admission: {
         openActionGroup: data.status === "deferred",
         cancellation: options.writer?.kind === "cancellation",
@@ -163,14 +225,15 @@ export function createActionLifecycleAppender(
       body: { id: payload.dataRef.eventBodyId, json: prepared.body },
       ...(tables
         ? {
-          statement: (param: (value: unknown) => string) =>
+          statement: (param, actualTables) =>
             combineActionStatements([
               actionOwnershipStatement(
                 { draft, data },
                 options.writer,
-                tables,
+                localOwner ? actualTables : tables,
                 param,
                 commandTime,
+                localOwner,
               ),
               ...(inStatement
                 ? [composeActionInputRetention(retention!, tables, param)]

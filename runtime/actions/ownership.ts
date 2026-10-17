@@ -1,12 +1,68 @@
-import type { CoreTableName } from "../events/schema.ts";
-import type { EventStatement } from "../events/store.ts";
+import {
+  type CoreTableName,
+  createCoreTableNames,
+  quoteEventIdentifier,
+} from "../events/schema.ts";
+import type {
+  EventStatement,
+  OwnerEventCommitContext,
+} from "../events/store.ts";
 import type { ActionLifecycleAppendInput } from "./types.ts";
 
 /** Execution authority is transient; retry receipts keep their original bytes. */
 export type ActionWriter =
   | Readonly<{ kind: "delivery"; deliveryId: string; leaseOwner: string }>
+  | Readonly<{ kind: "owner-local"; deliveryId: string; attemptId: string }>
   | Readonly<{ kind: "recovery"; deliveryId: string }>
   | Readonly<{ kind: "cancellation"; namespace: string; operationId: string }>;
+
+/** Internal command authority, never inferred from a delivery's NULL deadline. */
+export type OwnerLocalActionAuthority = Readonly<{
+  authority: OwnerEventCommitContext;
+  schema: string;
+}>;
+
+/** Validate both the supplied store and the insertion's actual table binding. */
+export function validateOwnerLocalActionAuthority(
+  writer: Extract<ActionWriter, { kind: "owner-local" }>,
+  owner: OwnerLocalActionAuthority | undefined,
+  tables: Readonly<Record<CoreTableName, string>>,
+): asserts owner is OwnerLocalActionAuthority {
+  const authority = owner?.authority;
+  const attempt = authority?.localAttempt;
+  if (
+    !owner || !authority || !attempt ||
+    !Number.isSafeInteger(authority.epoch) || authority.epoch < 1 ||
+    [authority.ownerId, authority.holderId, writer.deliveryId, writer.attemptId]
+      .some((value) =>
+        typeof value !== "string" || !value.trim() || value !== value.trim() ||
+        value.length > 1024
+      ) ||
+    attempt.deliveryId !== writer.deliveryId ||
+    attempt.attemptId !== writer.attemptId
+  ) throw new TypeError("Invalid owner-local Action authority.");
+  if (
+    typeof authority.commandTime !== "string" ||
+    !Number.isFinite(Date.parse(authority.commandTime))
+  ) {
+    throw new TypeError(
+      "Owner-local Action commandTime must be a valid timestamp.",
+    );
+  }
+  if (typeof owner.schema !== "string") {
+    throw new TypeError("Owner-local Actions require an explicit schema.");
+  }
+  const expected = createCoreTableNames(owner.schema);
+  if (
+    (Object.keys(expected) as CoreTableName[]).some((name) =>
+      tables[name] !== expected[name]
+    )
+  ) {
+    throw new TypeError(
+      "Owner-local Action schema must match the Event Store.",
+    );
+  }
+}
 
 export class ActionOwnershipLost extends Error {
   constructor(runId: string) {
@@ -23,7 +79,11 @@ export function actionOwnershipStatement(
   param: (value: unknown) => string,
   /** Trusted boundary-captured clock, never a worker-supplied value. */
   commandTime?: string,
+  localOwner?: OwnerLocalActionAuthority,
 ): EventStatement<void> {
+  if (writer?.kind === "owner-local") {
+    validateOwnerLocalActionAuthority(writer, localOwner, tables);
+  }
   if (
     commandTime !== undefined &&
     (typeof commandTime !== "string" ||
@@ -58,6 +118,18 @@ export function actionOwnershipStatement(
     ? "NULL::text"
     : param(writer?.deliveryId ?? null);
   const ctes: string[] = [];
+  if (writer.kind === "owner-local") {
+    const { authority, schema } = localOwner!;
+    // Take the epoch lock before the delivery lock. A NULL lease is only the
+    // representation of local liveness; this exact command grants authority.
+    ctes.push(`action_owner_epoch AS MATERIALIZED (
+      SELECT owner FROM ${quoteEventIdentifier(schema)}."owner_epochs"
+      WHERE owner = ${param(authority.ownerId)} AND epoch = ${
+      param(authority.epoch)
+    } AND holder = ${param(authority.holderId)}
+      FOR UPDATE
+    )`);
+  }
   if (writer && writer.kind !== "cancellation") {
     ctes.push(`action_writer AS MATERIALIZED (
       SELECT id FROM ${tables.event_deliveries}
@@ -70,6 +142,10 @@ export function actionOwnershipStatement(
             ? "NOW()"
             : `${param(commandTime)}::timestamptz`
         }`
+        : writer.kind === "owner-local"
+        ? `status = 'leased' AND lease_owner = ${param(writer.attemptId)}
+          AND lease_expires_at IS NULL
+          AND EXISTS (SELECT 1 FROM action_owner_epoch)`
         : "status IN ('dead_letter', 'cancelled', 'succeeded')"
     }
       FOR UPDATE

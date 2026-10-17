@@ -247,3 +247,20 @@ invocation identity, not the current execution worker. Exact
 attempt/session/epoch checks still gate commands independently of logical
 replay. The private schema validator rejects the older worker-partitioned
 receipt key; this is fresh-schema support, not an existing-data migration.
+
+### Registered Action worker prerequisite
+
+The private registered worker holds the complete plugin registry and executes a
+registered ordinary-JSON Action using capability-only context assembly and the
+shared transaction planner. Named owner ports require a durable claim before
+current-authorized input projection; completion and recovery return safe
+references. Captured capability signals expire on every exit before settlement,
+unsupported capabilities remain latched failures even if Action code catches
+them, and an ambiguous completion never automatically reexecutes business code.
+An executable import-closure contract excludes database/persistence runtimes.
+
+This bounded prerequisite does not yet compose the actual owner lifecycle ports,
+Processor dispatch, public factory or default HTTP execution. Its capacity is a
+worker-lifetime assignment bound including completed entries and ambiguous
+attempts; a full instance requires host-coordinated recovery/replacement, rather
+than silently recycling unresolved execution identities.

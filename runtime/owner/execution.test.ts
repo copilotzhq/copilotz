@@ -1124,7 +1124,7 @@ test("revoked captured Action input refuses new effect begin while restricted se
       collections: f.registry.collections,
       identity: {
         ownerId: "owner",
-        workerId: f.caller().workerId,
+        workerId: f.caller().principal.workerId,
         invocationId: "run",
       },
       execute: (command, options) =>

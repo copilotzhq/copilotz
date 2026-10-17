@@ -138,7 +138,12 @@ test("owner Collection catalog commits actual detached Processor scope and rolls
           },
         },
         authorize(_tx, caller) {
-          assert.equal(caller.workerId, "fixture");
+          assert.equal(
+            caller.principal.kind === "worker"
+              ? caller.principal.workerId
+              : undefined,
+            "fixture",
+          );
         },
         authenticateReceipt() {
           throw new Error("Receipt lookup is not part of this fixture.");
@@ -148,7 +153,7 @@ test("owner Collection catalog commits actual detached Processor scope and rolls
     let ownerEpoch = await boundary.acquire(0);
     const create = (id: string) =>
       boundary!.execute({
-        workerId: "fixture",
+        principal: { kind: "worker" as const, workerId: "fixture" },
         ownerEpoch,
       }, {
         kind: "collections",

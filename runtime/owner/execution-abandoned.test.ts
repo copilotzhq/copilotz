@@ -79,7 +79,7 @@ test("normal delivery settlement retains and classifies abandoned nested Action 
         deduplicationId: "nested:action:invoked",
       });
       await tx.query(
-        "INSERT INTO owner_receipts(owner,worker_id,domain,key,kind,intent,result) VALUES('owner','worker','logical',$1,'effect.begin',$2::jsonb,$3::jsonb)",
+        "INSERT INTO owner_receipts(owner,principal_kind,principal_id,domain,key,kind,intent,result) VALUES('owner','worker','[\"worker\"]','logical',$1,'effect.begin',$2::jsonb,$3::jsonb)",
         [
           ownerEffectKey("owner", effect, "begin"),
           JSON.stringify(effect),

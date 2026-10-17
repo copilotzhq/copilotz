@@ -2,6 +2,12 @@
  * Acquisition alone does not establish readiness. */
 import type { SqlExecutor, SqlSession } from "../events/session.ts";
 import { ownerTableNames, validateOwnerCommandSchema } from "./schema.ts";
+import {
+  assertOwnerPrincipalFence,
+  type OwnerPrincipal,
+  ownerPrincipalIdentity,
+} from "./principal.ts";
+export type { OwnerPrincipal } from "./principal.ts";
 
 export type OwnerJson =
   | null
@@ -16,7 +22,7 @@ export type OwnerCommand = Readonly<
 >;
 /** Structured JSON binding supplied by the trusted host, separately from command data. */
 export type OwnerCaller = Readonly<
-  { workerId: string; ownerEpoch: number; [binding: string]: unknown }
+  { principal: OwnerPrincipal; ownerEpoch: number; [binding: string]: unknown }
 >;
 export type OwnerCommitContext = Readonly<{
   transaction: SqlExecutor;
@@ -507,12 +513,18 @@ export function createOwnerCommandBoundary(
                     "Command clock must return a valid timestamp.",
                   );
                 }
-                if (pending.caller.ownerEpoch !== epoch) {
-                  throw failure(
-                    "ActionOwnershipLost",
-                    "Caller owner epoch is stale.",
-                  );
-                }
+                assertOwnerPrincipalFence(
+                  pending.caller.principal,
+                  pending.caller.ownerEpoch,
+                  {
+                    ownerId,
+                    epoch: epoch!,
+                    holderId,
+                  },
+                );
+                const principal = ownerPrincipalIdentity(
+                  pending.caller.principal,
+                );
                 let normalizedInput: OwnerJson | undefined;
                 if (pending.inputCommand) {
                   checkPendingAbort(pending);
@@ -651,10 +663,11 @@ export function createOwnerCommandBoundary(
                   checkPendingAbort(pending);
                   if (!pending.projection) {
                     await tx.query(
-                      `INSERT INTO ${tables.receipts}(owner,worker_id,domain,key,kind,intent,result) VALUES($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb)`,
+                      `INSERT INTO ${tables.receipts}(owner,principal_kind,principal_id,domain,key,kind,intent,result) VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb)`,
                       [
                         ownerId,
-                        pending.caller.workerId,
+                        principal.kind,
+                        principal.id,
                         pending.command.domain,
                         pending.command.key,
                         pending.command.kind,
@@ -666,15 +679,16 @@ export function createOwnerCommandBoundary(
                   outcome = { status: "committed", result };
                 }
                 if (!pending.projection) {
-                  // Only an authorized compatible execution/replay grants this
-                  // stable worker narrow receipt recovery across owner epochs.
+                  // Compatible authorized replay associates only this exact tagged
+                  // principal. Generic cross-epoch reads remain worker-only.
                   await tx.query(
-                    `INSERT INTO ${tables.receiptReaders}(owner,domain,key,worker_id) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING`,
+                    `INSERT INTO ${tables.receiptReaders}(owner,domain,key,principal_kind,principal_id) VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING`,
                     [
                       ownerId,
                       pending.command.domain,
                       pending.command.key,
-                      pending.caller.workerId,
+                      principal.kind,
+                      principal.id,
                     ],
                   );
                 }
@@ -764,7 +778,6 @@ export function createOwnerCommandBoundary(
     try {
       assertAcquired();
       checkAbort(sourceSignal);
-      nonempty(caller.workerId, "workerId");
       safeEpoch(caller.ownerEpoch);
       nonempty(command.kind, "kind");
       nonempty(command.key, "key");
@@ -783,6 +796,13 @@ export function createOwnerCommandBoundary(
       }
       const rawInput = inputCommand ? copyJson(command.intent) : undefined;
       const authenticated = copyCaller(caller);
+      if (Object.hasOwn(authenticated, "workerId")) {
+        throw failure(
+          "owner_command_invalid",
+          "Legacy caller workerId is unsupported.",
+        );
+      }
+      ownerPrincipalIdentity(authenticated.principal);
       const copied: OwnerCommand = {
         kind: command.kind,
         domain: command.domain,
@@ -959,10 +979,23 @@ export function createOwnerCommandBoundary(
       return outcome.result;
     },
     async readReceipt(caller, identity) {
-      nonempty(caller.workerId, "workerId");
       domain(identity.domain);
       nonempty(identity.key, "key");
       const authenticated = copyCaller(caller);
+      if (Object.hasOwn(authenticated, "workerId")) {
+        throw failure(
+          "owner_command_invalid",
+          "Legacy caller workerId is unsupported.",
+        );
+      }
+      safeEpoch(authenticated.ownerEpoch);
+      const principal = ownerPrincipalIdentity(authenticated.principal);
+      if (principal.kind !== "worker") {
+        throw failure(
+          "owner_receipt_principal_refused",
+          "Generic receipt recovery is worker-only.",
+        );
+      }
       const identityCopy = { ...identity };
       return await session.transaction(async (tx) => {
         await tx.query("SET TRANSACTION READ ONLY");
@@ -971,10 +1004,11 @@ export function createOwnerCommandBoundary(
         const found = await tx.query<
           { kind: string; intent: OwnerJson; result: OwnerJson }
         >(
-          `SELECT r.kind,r.intent,r.result FROM ${tables.receipts} r JOIN ${tables.receiptReaders} a USING(owner,domain,key) WHERE r.owner=$1 AND a.worker_id=$2 AND r.domain=$3 AND r.key=$4`,
+          `SELECT r.kind,r.intent,r.result FROM ${tables.receipts} r JOIN ${tables.receiptReaders} a USING(owner,domain,key) WHERE r.owner=$1 AND a.principal_kind=$2 AND a.principal_id=$3 AND r.domain=$4 AND r.key=$5`,
           [
             ownerId,
-            authenticated.workerId,
+            principal.kind,
+            principal.id,
             identityCopy.domain,
             identityCopy.key,
           ],

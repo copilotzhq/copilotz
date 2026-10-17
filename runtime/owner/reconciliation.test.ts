@@ -42,7 +42,12 @@ import {
 
 const start = "2020-01-01T00:00:00.000Z";
 const host = (epoch: number): OwnerCaller => ({
-  workerId: "host",
+  principal: {
+    kind: "owner-control",
+    ownerId: "owner",
+    epoch,
+    holderId: epoch === 1 ? "first" : epoch === 2 ? "second" : "third",
+  },
   ownerEpoch: epoch,
   control: true,
 });
@@ -178,7 +183,8 @@ async function fixture(
       authorizeControl: (_tx, caller) => {
         const permitted = state.authorized && caller.control === true;
         if (state.mutateCaller) {
-          Object.assign(caller, { ownerEpoch: 999, workerId: "mutated" });
+          Object.assign(caller, { ownerEpoch: 999 });
+          Object.assign(caller.principal, { holderId: "mutated" });
         }
         return permitted;
       },
@@ -301,7 +307,12 @@ async function fixture(
         ? { kind: "processor" as const, processorId: "observe" }
         : { actionId: "work", executionId: id }),
     };
-    const caller: OwnerCaller = { ...binding, ownerEpoch: 1 };
+    const { workerId, ...callerBinding } = binding;
+    const caller: OwnerCaller = {
+      ...callerBinding,
+      principal: { kind: "worker", workerId },
+      ownerEpoch: 1,
+    };
     const selected: OwnerReconciliationTarget = {
       kind: "delivery",
       namespace,
@@ -628,7 +639,10 @@ test("current epoch reservations are never retired and untrusted target coordina
     await f.takeover();
     await assert.rejects(
       f.second.execute(
-        { workerId: "worker", ownerEpoch: 2 },
+        {
+          principal: { kind: "worker" as const, workerId: "worker" },
+          ownerEpoch: 2,
+        },
         f.command(work.selected),
       ),
       /control refused/,
@@ -734,6 +748,30 @@ test("bounded alarm refusal rolls back retirement and postcommit scheduling refu
     assert.equal(
       (await f.db.query("SELECT * FROM owner_alarms")).rows.length,
       1,
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+test("reconciliation requires tagged control even with permissive host policy", async () => {
+  const f = await fixture();
+  try {
+    const reconciliation = createOwnerReconciliation({
+      ...f.reconciliationOptions,
+      authorizeControl: () => true,
+    });
+    await assert.rejects(
+      reconciliation.authorize(f.db, {
+        principal: { kind: "worker", workerId: "owner:owner" },
+        ownerEpoch: 1,
+      }, {
+        kind: OWNER_RECONCILIATION_INVENTORY,
+        domain: "occurrence",
+        key: "read",
+        intent: { cursor: null },
+      }, start),
+      { code: "owner_reconciliation_refused" },
     );
   } finally {
     await f.close();

@@ -208,15 +208,26 @@ for (const mode of ["direct", "encoded"] as const) {
         }),
       },
       authorize(_tx, caller, command) {
-        assert.ok(["worker", "replacement"].includes(caller.workerId));
+        assert.ok(
+          ["worker", "replacement"].includes(
+            caller.principal.kind === "worker" ? caller.principal.workerId : "",
+          ),
+        );
         assert.ok(command.key.startsWith("invocation:"));
       },
       authenticateReceipt(_tx, caller) {
-        assert.ok(["worker", "replacement"].includes(caller.workerId));
+        assert.ok(
+          ["worker", "replacement"].includes(
+            caller.principal.kind === "worker" ? caller.principal.workerId : "",
+          ),
+        );
       },
     });
     const ownerEpoch = await boundary.acquire(0);
-    const caller = { workerId: "worker", ownerEpoch };
+    const caller = {
+      principal: { kind: "worker" as const, workerId: "worker" },
+      ownerEpoch,
+    };
     const admission = createOwnerWorkerCallAdmission({
       resolveOwner: () => boundary,
       resolveAssignment: () => ({ ownerId: "owner", ctxGranted: true, caller }),
@@ -231,7 +242,7 @@ for (const mode of ["direct", "encoded"] as const) {
           signal,
           fence: {
             identity: {
-              workerId: caller.workerId,
+              workerId: caller.principal.workerId,
               attemptId: "attempt",
               epoch: 1,
             },
@@ -303,7 +314,7 @@ for (const mode of ["direct", "encoded"] as const) {
       assert.equal(callbacks, 2);
       const eventsBeforeReplacement =
         (await db.query("SELECT id,seq FROM events ORDER BY seq")).rows;
-      caller.workerId = "replacement";
+      caller.principal.workerId = "replacement";
       transaction = createOwnerTransactionPlanner({
         collections: { notes },
         identity: { ...identity, workerId: "replacement" },

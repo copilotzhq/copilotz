@@ -584,6 +584,7 @@ export function createOwnerReconciliation(
     projections: { [OWNER_RECONCILIATION_INVENTORY]: projection },
     async authorize(tx, caller, command, commandTime) {
       authorized.delete(tx);
+      if (caller.principal.kind !== "owner-control") return refuse();
       const epoch = caller.ownerEpoch;
       if (!Number.isSafeInteger(epoch) || epoch < 1) return refuse();
       let after: OwnerReconciliationTarget | null = null;

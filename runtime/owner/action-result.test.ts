@@ -55,7 +55,7 @@ const provenance = {
   route: "fixture.root",
 };
 const ingress = (): OwnerCaller => ({
-  workerId: "ingress",
+  principal: { kind: "worker" as const, workerId: "ingress" },
   ownerEpoch: 1,
   sessionId: "ingress-session",
   authenticated: true,
@@ -267,7 +267,10 @@ async function setup() {
     catalog,
     executor,
     resolveAssignment(_tx, who) {
-      return state.reference && who.workerId === "worker"
+      return state.reference &&
+          (who.principal.kind === "worker"
+              ? who.principal.workerId
+              : undefined) === "worker"
         ? assignment()
         : undefined;
     },
@@ -286,7 +289,12 @@ async function setup() {
         assert.equal(time, now);
         const row = (await tx.query(
           "SELECT * FROM fixture_ingress WHERE worker_id=$1 AND session_id=$2",
-          [who.workerId, who.sessionId],
+          [
+            who.principal.kind === "worker"
+              ? who.principal.workerId
+              : undefined,
+            who.sessionId,
+          ],
         )).rows[0];
         if (
           !row?.live || who.authenticated !== true ||
@@ -296,7 +304,7 @@ async function setup() {
         }
         state.authorizedExecutors.add(tx);
         // Mutation must not retarget the privately captured reference/caller.
-        Object.assign(who, { workerId: "poisoned" });
+        Object.assign(who.principal, { workerId: "poisoned" });
         Object.assign(ref, { eventId: "poisoned" });
       },
       async authorizeIngress(tx, who, admitted, time) {
@@ -305,7 +313,12 @@ async function setup() {
         assert.ok(state.authorizedExecutors.has(tx));
         const row = (await tx.query(
           "SELECT * FROM fixture_ingress WHERE worker_id=$1 AND session_id=$2",
-          [who.workerId, who.sessionId],
+          [
+            who.principal.kind === "worker"
+              ? who.principal.workerId
+              : undefined,
+            who.sessionId,
+          ],
         )).rows[0];
         if (
           !row?.live || !row.result_granted ||
@@ -343,7 +356,10 @@ async function setup() {
       if (command.kind === OWNER_ACTION_ADMISSION) {
         validateOwnerActionAdmissionIdentity(ownerId, command, normalized);
         assert.equal(who.authenticated, true);
-        assert.equal(who.workerId, "ingress");
+        assert.equal(
+          who.principal.kind === "worker" ? who.principal.workerId : undefined,
+          "ingress",
+        );
         assert.deepEqual(normalized.provenance, provenance);
         assert.deepEqual(normalized.metadata, metadata);
         return;
@@ -351,7 +367,11 @@ async function setup() {
       return await execution.authorize(tx, who, command, time, normalized);
     },
     authenticateReceipt(_tx, who) {
-      if (!["ingress", "worker"].includes(who.workerId)) {
+      if (
+        !["ingress", "worker"].includes(
+          who.principal.kind === "worker" ? who.principal.workerId : "",
+        )
+      ) {
         throw new Error("receipt denied");
       }
     },
@@ -380,7 +400,7 @@ async function setup() {
   state.reference = await admit();
   const ref = state.reference;
   const workerCaller = (): OwnerCaller => ({
-    workerId: "worker",
+    principal: { kind: "worker" as const, workerId: "worker" },
     ownerEpoch: 1,
     assignmentId: "assignment",
     sessionId: "worker-session",

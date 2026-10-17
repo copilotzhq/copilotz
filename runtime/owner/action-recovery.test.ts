@@ -30,6 +30,7 @@ import {
 async function recoveryFixture(
   effect: "none" | "begun" | "confirmed" | "not_started" = "none",
   cancelled = false,
+  allowWorkerControl = false,
 ) {
   const f = await fixture();
   await f.port().claim(f.hint(), {});
@@ -146,7 +147,8 @@ async function recoveryFixture(
     registry,
     executor,
     authorizeControl: (_tx, caller, namespace) =>
-      state.authorized && caller.workerId === "owner-control" &&
+      state.authorized &&
+      (allowWorkerControl || caller.principal.kind === "owner-control") &&
       namespace === "space",
     async scheduleSettlement(context, scope) {
       await settlement.schedule(context, scope);
@@ -169,13 +171,18 @@ async function recoveryFixture(
         state.errors.push(error);
       },
       authenticateReceipt: (_tx, caller) => {
-        assert.equal(caller.workerId, "owner-control");
+        assert.fail("Owner control has no generic receipt read capability");
       },
     });
   let boundary = makeBoundary("recovery-2");
   await boundary.acquire(1);
   const caller = () => ({
-    workerId: "owner-control",
+    principal: {
+      kind: "owner-control" as const,
+      ownerId: "owner",
+      epoch: boundary.epoch!,
+      holderId: `recovery-${boundary.epoch!}`,
+    },
     ownerEpoch: boundary.epoch!,
   });
   const command = (occurrence = "tick-1") => ({
@@ -369,7 +376,7 @@ test("recovery reauthorizes host control and epoch before duplicates; workers ca
   try {
     await assert.rejects(
       f.recoveryBoundary.execute(
-        { ...f.caller(), workerId: "worker" },
+        { ...f.caller(), principal: { kind: "worker", workerId: "worker" } },
         f.command(),
       ),
       { code: "ActionOwnershipLost" },
@@ -400,11 +407,20 @@ test("unknown recovery commit stays unknown, successor receipts resolve either d
       assert.deepEqual(f.state.wakes, []);
       if (rollback) assert.deepEqual(await snapshot(f.db), before);
       await f.successor();
-      const receipt = await f.recoveryBoundary.readReceipt(f.caller(), {
-        domain: "occurrence",
-        key: f.command().key,
-      });
-      assert.equal(Boolean(receipt), !rollback);
+      await assert.rejects(
+        f.recoveryBoundary.readReceipt(f.caller(), {
+          domain: "occurrence",
+          key: f.command().key,
+        }),
+        { code: "owner_receipt_principal_refused" },
+      );
+      // Fixture-only SQL observes commit fate; successor recovery is a separately
+      // authorized named command, never a generic control receipt read.
+      const receipt = await f.db.query(
+        "SELECT 1 FROM owner_receipts WHERE owner='owner' AND domain='occurrence' AND key=$1",
+        [f.command().key],
+      );
+      assert.equal(Boolean(receipt.rows.length), !rollback);
       if (rollback) await f.recover();
       else assert.equal((await f.recover()).status, "duplicate");
       assert.equal((await f.terminal())?.status, "failed");
@@ -432,7 +448,7 @@ test("malformed or oversized effect inventory refuses the entire recovery comman
             step: `extra-${i}`,
           };
           await f.db.query(
-            "INSERT INTO owner_receipts(owner,worker_id,domain,key,kind,intent,result) VALUES('owner','worker','logical',$1,'effect.begin',$2::jsonb,$3::jsonb)",
+            "INSERT INTO owner_receipts(owner,principal_kind,principal_id,domain,key,kind,intent,result) VALUES('owner','worker','[\"worker\"]','logical',$1,'effect.begin',$2::jsonb,$3::jsonb)",
             [
               ownerEffectKey("owner", ref, "begin"),
               JSON.stringify(ref),
@@ -494,6 +510,26 @@ test("failed wake does not starve other scopes and closed registration cannot ad
       /registration is closed/,
     );
     assert.equal(f.state.wakes.length, 2);
+  } finally {
+    await f.close();
+  }
+});
+
+test("Action recovery requires tagged control even with permissive host policy", async () => {
+  const f = await recoveryFixture("none", false, true);
+  try {
+    await assert.rejects(
+      f.recovery.authorize(
+        f.db,
+        {
+          principal: { kind: "worker", workerId: "owner:owner" },
+          ownerEpoch: 2,
+        },
+        f.command(),
+        at(500),
+      ),
+      { code: "ActionOwnershipLost" },
+    );
   } finally {
     await f.close();
   }

@@ -30,8 +30,13 @@ export async function validateOwnerCommandSchema(
   ownerId?: string,
 ): Promise<void> {
   validateEventSchemaName(schema);
-  const { rows } = await tx.query<{ table_name: string; column_name: string }>(
-    `SELECT table_name, column_name FROM information_schema.columns
+  const { rows } = await tx.query<{
+    table_name: string;
+    column_name: string;
+    data_type: string;
+    is_nullable: string;
+  }>(
+    `SELECT table_name, column_name, data_type, is_nullable FROM information_schema.columns
      WHERE table_schema = $1 AND table_name IN ('owner_epochs','owner_receipts','owner_receipt_readers','owner_alarms','events')`,
     [schema],
   );
@@ -44,7 +49,8 @@ export async function validateOwnerCommandSchema(
     "owner_epochs.holder",
     "owner_epochs.last_seq",
     "owner_receipts.owner",
-    "owner_receipts.worker_id",
+    "owner_receipts.principal_kind",
+    "owner_receipts.principal_id",
     "owner_receipts.domain",
     "owner_receipts.key",
     "owner_receipts.kind",
@@ -53,13 +59,46 @@ export async function validateOwnerCommandSchema(
     "owner_receipt_readers.owner",
     "owner_receipt_readers.domain",
     "owner_receipt_readers.key",
-    "owner_receipt_readers.worker_id",
+    "owner_receipt_readers.principal_kind",
+    "owner_receipt_readers.principal_id",
     "owner_alarms.owner",
     "owner_alarms.name",
     "owner_alarms.due_at",
     "events.owner_id",
     "events.seq",
   ];
+  const principalTables = ["owner_receipts", "owner_receipt_readers"];
+  const principalChecks = await tx.query<{
+    table_name: string;
+    constraint_name: string;
+    expression: string;
+    validated: boolean;
+  }>(
+    `SELECT tab.relname AS table_name, c.conname AS constraint_name,
+       pg_catalog.pg_get_expr(c.conbin,c.conrelid) AS expression, c.convalidated AS validated
+     FROM pg_catalog.pg_constraint c
+     JOIN pg_catalog.pg_class tab ON tab.oid=c.conrelid
+     JOIN pg_catalog.pg_namespace ns ON ns.oid=tab.relnamespace
+     WHERE ns.nspname=$1 AND tab.relname IN ('owner_receipts','owner_receipt_readers') AND c.contype='c'`,
+    [schema],
+  );
+  // This internal fresh schema intentionally accepts only the exact generated
+  // constraint, rather than guessing whether a weakened expression is equivalent.
+  const principalExpression =
+    "((principal_kind = ANY (ARRAY['worker'::text, 'owner-control'::text, 'owner-local'::text])) AND ((length(principal_id) >= 1) AND (length(principal_id) <= 8192)))";
+  const validPrincipals = principalTables.every((table) =>
+    ["principal_kind", "principal_id"].every((column) =>
+      rows.some((row) =>
+        row.table_name === table && row.column_name === column &&
+        row.data_type === "text" && row.is_nullable === "NO"
+      )
+    ) && principalChecks.rows.some((row) =>
+      row.table_name === table &&
+      row.constraint_name === `${table}_principal_check` &&
+      row.validated === true &&
+      row.expression.replace(/\s+/g, " ").trim() === principalExpression
+    )
+  );
   const constraint = await tx.query<{ constraint_name: string }>(
     `SELECT constraint_name FROM information_schema.table_constraints
      WHERE table_schema=$1 AND table_name='events' AND constraint_name='copilotz_owner_events_required' AND constraint_type='CHECK'`,
@@ -77,7 +116,8 @@ export async function validateOwnerCommandSchema(
     [schema],
   );
   if (
-    required.some((name) => !actual.has(name)) || !constraint.rows.length ||
+    required.some((name) => !actual.has(name)) || !validPrincipals ||
+    !constraint.rows.length ||
     !singleton.rows.length
   ) {
     throw Object.assign(
@@ -120,7 +160,8 @@ export async function validateOwnerCommandSchema(
       "owner",
       "domain",
       "key",
-      "worker_id",
+      "principal_kind",
+      "principal_id",
     ]) ||
     !keys.rows.some((row) =>
       row.table_name === "owner_receipt_readers" && row.kind === "f" &&
@@ -189,14 +230,20 @@ export async function provisionOwnerCommandSchema(
       `CREATE UNIQUE INDEX IF NOT EXISTS "owner_epochs_single_owner_idx" ON ${tables.epochs}((true))`,
     );
     await tx.query(`CREATE TABLE IF NOT EXISTS ${tables.receipts} (
-      owner TEXT NOT NULL REFERENCES ${tables.epochs}(owner), worker_id TEXT NOT NULL,
+      owner TEXT NOT NULL REFERENCES ${tables.epochs}(owner),
+      principal_kind TEXT NOT NULL, principal_id TEXT NOT NULL,
+      CONSTRAINT owner_receipts_principal_check CHECK (
+        principal_kind IN ('worker','owner-control','owner-local') AND length(principal_id) BETWEEN 1 AND 8192),
       domain TEXT NOT NULL CHECK(domain IN ('logical','incarnation','occurrence')),
       key TEXT NOT NULL, kind TEXT NOT NULL, intent JSONB NOT NULL, result JSONB NOT NULL,
       PRIMARY KEY(owner,domain,key)
     )`);
     await tx.query(`CREATE TABLE IF NOT EXISTS ${tables.receiptReaders} (
-      owner TEXT NOT NULL, domain TEXT NOT NULL, key TEXT NOT NULL, worker_id TEXT NOT NULL,
-      PRIMARY KEY(owner,domain,key,worker_id),
+      owner TEXT NOT NULL, domain TEXT NOT NULL, key TEXT NOT NULL,
+      principal_kind TEXT NOT NULL, principal_id TEXT NOT NULL,
+      CONSTRAINT owner_receipt_readers_principal_check CHECK (
+        principal_kind IN ('worker','owner-control','owner-local') AND length(principal_id) BETWEEN 1 AND 8192),
+      PRIMARY KEY(owner,domain,key,principal_kind,principal_id),
       FOREIGN KEY(owner,domain,key) REFERENCES ${tables.receipts}(owner,domain,key) ON DELETE CASCADE
     )`);
     await tx.query(`CREATE TABLE IF NOT EXISTS ${tables.alarms} (

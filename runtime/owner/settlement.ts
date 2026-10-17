@@ -550,6 +550,9 @@ export function createOwnerOperationSettlement(
       command: OwnerCommand,
       commandTime: string,
     ) {
+      if (caller.principal.kind !== "owner-control") {
+        refuse("Operation settlement requires owner control.");
+      }
       let target: OperationSettlementScope;
       if (command.kind === OWNER_OPERATION_READINESS) {
         target = scope(command.intent);
@@ -574,7 +577,12 @@ export function createOwnerOperationSettlement(
         }
       } else throw new TypeError("Unknown operation settlement command.");
       if (
-        await options.authorizeControl(tx, caller, target, commandTime) !== true
+        await options.authorizeControl(
+          tx,
+          structuredClone(caller),
+          target,
+          commandTime,
+        ) !== true
       ) refuse("Operation settlement control authority was revoked.");
       authorized.set(tx, { kind: command.kind, target });
     },

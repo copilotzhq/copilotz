@@ -70,7 +70,7 @@ async function snapshot(db: SqlExecutor) {
     receipts: (await db.query("SELECT * FROM owner_receipts ORDER BY key"))
       .rows,
     readers: (await db.query(
-      "SELECT * FROM owner_receipt_readers ORDER BY owner,domain,key,worker_id",
+      "SELECT * FROM owner_receipt_readers ORDER BY owner,domain,key,principal_kind,principal_id",
     )).rows,
     alarms: (await db.query("SELECT * FROM owner_alarms ORDER BY name")).rows,
     epochs: (await db.query("SELECT * FROM owner_epochs")).rows,
@@ -243,10 +243,20 @@ async function createFixture() {
         true,
         "current recovery authority revoked",
       );
-      assert.equal(caller.workerId, "owner-host");
+      assert.equal(
+        caller.principal.kind === "worker"
+          ? caller.principal.workerId
+          : undefined,
+        "owner-host",
+      );
     },
     authenticateReceipt(_tx, caller) {
-      assert.equal(caller.workerId, "owner-host");
+      assert.equal(
+        caller.principal.kind === "worker"
+          ? caller.principal.workerId
+          : undefined,
+        "owner-host",
+      );
     },
     handlers: { recover },
     onPostCommitError(error) {
@@ -286,7 +296,10 @@ async function createFixture() {
     });
   }
   const call = (key: string, intent: OwnerJson = {}) =>
-    boundary.execute({ workerId: "owner-host", ownerEpoch: 1 }, {
+    boundary.execute({
+      principal: { kind: "worker" as const, workerId: "owner-host" },
+      ownerEpoch: 1,
+    }, {
       kind: "recover",
       domain: "occurrence",
       key,

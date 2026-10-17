@@ -61,7 +61,9 @@ async function fixture(options: FixtureOptions = {}) {
     authorize(_tx, context) {
       policyCalls++;
       if (
-        !allowed || context.caller.workerId !== "worker" ||
+        !allowed || (context.caller.principal.kind === "worker"
+            ? context.caller.principal.workerId
+            : undefined) !== "worker" ||
         context.caller.ownerId !== "tenant"
       ) {
         throw Object.assign(new Error("scope refused"), {
@@ -87,7 +89,11 @@ async function fixture(options: FixtureOptions = {}) {
     },
   });
   const epoch = await boundary.acquire(0);
-  const caller = { workerId: "worker", ownerEpoch: epoch, ownerId: "tenant" };
+  const caller = {
+    principal: { kind: "worker" as const, workerId: "worker" },
+    ownerEpoch: epoch,
+    ownerId: "tenant",
+  };
   const add = async (
     id: string,
     value: string | Uint8Array,

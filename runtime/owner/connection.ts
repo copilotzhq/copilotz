@@ -320,12 +320,17 @@ export function createOwnerWorkerCallAdmission(
           ? assignment.settlementGranted !== true
           : assignment.ctxGranted !== true))
     ) return undefined;
-    const caller = isAssigned
-      ? assignment!.caller
-      : ingressRoute
-      ? ingress!
-      : { workerId: context.fence.identity.workerId, ownerEpoch: 0 };
-    if (!caller || caller.workerId !== context.fence.identity.workerId) {
+    const caller = isAssigned ? assignment!.caller : ingressRoute ? ingress! : {
+      principal: {
+        kind: "worker" as const,
+        workerId: context.fence.identity.workerId,
+      },
+      ownerEpoch: 0,
+    };
+    if (
+      !caller || caller.principal.kind !== "worker" ||
+      caller.principal.workerId !== context.fence.identity.workerId
+    ) {
       return undefined;
     }
     assertJsonValue(caller, { maxDepth: 32, maxNodes: 10_000 });

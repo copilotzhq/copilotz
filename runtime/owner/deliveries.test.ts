@@ -174,11 +174,21 @@ async function createFixture() {
     now: () => state.time,
     authorize(_tx, caller) {
       assert.equal(state.authorized, true, "current assignment revoked");
-      assert.equal(caller.workerId, "worker");
+      assert.equal(
+        caller.principal.kind === "worker"
+          ? caller.principal.workerId
+          : undefined,
+        "worker",
+      );
       assert.equal(caller.dispatchAttemptId, state.attempt);
     },
     authenticateReceipt(_tx, caller) {
-      assert.equal(caller.workerId, "worker");
+      assert.equal(
+        caller.principal.kind === "worker"
+          ? caller.principal.workerId
+          : undefined,
+        "worker",
+      );
     },
     onPostCommitError: (error) => state.publicationErrors.push(error),
     handlers: {
@@ -273,7 +283,7 @@ async function createFixture() {
     extra: Record<string, OwnerJson> = {},
   ) =>
     boundary.execute({
-      workerId: "worker",
+      principal: { kind: "worker" as const, workerId: "worker" },
       ownerEpoch: 1,
       dispatchAttemptId: state.attempt,
     }, {

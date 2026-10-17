@@ -204,7 +204,7 @@ export async function commitProxy(value: string) {
 }
 
 export const caller = (ownerEpoch: number) => ({
-  workerId: "worker",
+  principal: { kind: "worker" as const, workerId: "worker" },
   ownerEpoch,
 });
 export const command = (key: string, id = key): OwnerCommand => ({
@@ -294,10 +294,16 @@ export async function ownerFixture(
     ownerId: "tenant",
     holderId,
     authorize(_tx, who) {
-      assert.equal(who.workerId, "worker");
+      assert.equal(
+        who.principal.kind === "worker" ? who.principal.workerId : undefined,
+        "worker",
+      );
     },
     authenticateReceipt(_tx, who) {
-      assert.equal(who.workerId, "worker");
+      assert.equal(
+        who.principal.kind === "worker" ? who.principal.workerId : undefined,
+        "worker",
+      );
     },
     handlers: {
       async collections(intent, ctx) {

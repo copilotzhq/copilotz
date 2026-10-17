@@ -169,7 +169,9 @@ export async function processorFixture(input: {
       return state.live && assignment &&
           caller.assignmentId === assignment.assignmentId &&
           caller.sessionId === assignment.sessionId &&
-          caller.workerId === assignment.workerId
+          (caller.principal.kind === "worker"
+              ? caller.principal.workerId
+              : undefined) === assignment.workerId
         ? {
           ...assignment,
           ctxGranted: state.ctx,
@@ -312,14 +314,19 @@ export async function processorFixture(input: {
       } else await processorCommands.authorize(tx, caller, command, time);
     },
     authenticateReceipt(_tx, caller) {
-      if (!state.receipt || caller.workerId !== "worker") {
+      if (
+        !state.receipt ||
+        (caller.principal.kind === "worker"
+            ? caller.principal.workerId
+            : undefined) !== "worker"
+      ) {
         throw new Error("receipt refused");
       }
     },
   });
   await boundary.acquire(0);
   const seeded = await boundary.execute({
-    workerId: "host",
+    principal: { kind: "worker" as const, workerId: "host" },
     ownerEpoch: 1,
     host: true,
   }, { kind: "seed", domain: "logical", key: "seed", intent: null });
@@ -339,7 +346,7 @@ export async function processorFixture(input: {
     settlementGranted: true,
   };
   const caller = (): OwnerCaller => ({
-    workerId: assignment.workerId,
+    principal: { kind: "worker" as const, workerId: assignment.workerId },
     ownerEpoch: 1,
     assignmentId: assignment.assignmentId,
     sessionId: assignment.sessionId,

@@ -59,8 +59,8 @@ async function snapshot(db: SqlExecutor, schema: string) {
     receipts: await rows("owner_receipts", "key", "key"),
     readers: await rows(
       "owner_receipt_readers",
-      "key,worker_id",
-      "key,worker_id",
+      "key,principal_kind,principal_id",
+      "key,principal_kind,principal_id",
     ),
     alarms: await rows("owner_alarms", "name", "name"),
     events: await rows("events", "subject_id,seq::text", "seq"),
@@ -78,7 +78,11 @@ function expectedSnapshot(ids: string[]) {
   return {
     nodes: [...ids].sort().map((id) => ({ id, title: id })),
     receipts: [...ids].sort().map((key) => ({ key })),
-    readers: [...ids].sort().map((key) => ({ key, worker_id: "worker" })),
+    readers: [...ids].sort().map((key) => ({
+      key,
+      principal_kind: "worker",
+      principal_id: '["worker"]',
+    })),
     alarms: [...ids].sort().map((name) => ({ name })),
     events: ids.map((subject_id, index) => ({
       subject_id,

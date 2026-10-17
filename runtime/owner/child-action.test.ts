@@ -237,20 +237,22 @@ async function setup(maxPendingDeliveries = 128) {
     },
   });
   await boundary.acquire(0);
-  const rootRef =
-    (await boundary.executeInput({ workerId: "ingress", ownerEpoch: 1 }, {
-      kind: OWNER_ACTION_ADMISSION,
-      domain: "logical",
-      key: ownerActionAdmissionKey(ownerId, namespace, "root"),
-      input: {
-        namespace,
-        actionAlias: "parent",
-        requestId: "root",
-        input: { private: "parent-input" },
-        metadata: { principal: "original-principal" },
-        provenance: {},
-      },
-    })).result as OwnerChildActionReference;
+  const rootRef = (await boundary.executeInput({
+    principal: { kind: "worker" as const, workerId: "ingress" },
+    ownerEpoch: 1,
+  }, {
+    kind: OWNER_ACTION_ADMISSION,
+    domain: "logical",
+    key: ownerActionAdmissionKey(ownerId, namespace, "root"),
+    input: {
+      namespace,
+      actionAlias: "parent",
+      requestId: "root",
+      input: { private: "parent-input" },
+      metadata: { principal: "original-principal" },
+      provenance: {},
+    },
+  })).result as OwnerChildActionReference;
   function assign(
     ref: OwnerChildActionReference,
     id: string,
@@ -283,7 +285,7 @@ async function setup(maxPendingDeliveries = 128) {
     return a;
   }
   const caller = (a = state.parent!): OwnerCaller => ({
-    workerId: a.workerId,
+    principal: { kind: "worker" as const, workerId: a.workerId },
     ownerEpoch: 1,
     assignmentId: a.assignmentId,
     sessionId: a.sessionId,
@@ -852,13 +854,15 @@ test("Processor child Actions retain stable delivery identity and existing inher
         authenticateReceipt() {},
       });
       await boundary.acquire(0);
-      const source =
-        (await boundary.execute({ workerId: "seed", ownerEpoch: 1 }, {
-          kind: "seed",
-          domain: "logical",
-          key: "seed",
-          intent: null,
-        })).result as { eventId: string; deliveryId: string };
+      const source = (await boundary.execute({
+        principal: { kind: "worker" as const, workerId: "seed" },
+        ownerEpoch: 1,
+      }, {
+        kind: "seed",
+        domain: "logical",
+        key: "seed",
+        intent: null,
+      })).result as { eventId: string; deliveryId: string };
       const assignment: OwnerProcessorAssignment = {
         kind: "processor",
         ownerId,
@@ -874,7 +878,7 @@ test("Processor child Actions retain stable delivery identity and existing inher
         settlementGranted: true,
       };
       const caller: OwnerCaller = {
-        workerId: "worker",
+        principal: { kind: "worker" as const, workerId: "worker" },
         ownerEpoch: 1,
         assignmentId: "assignment",
         sessionId: "session",

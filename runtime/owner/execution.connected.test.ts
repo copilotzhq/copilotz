@@ -95,7 +95,9 @@ for (const transport of ["in-process", "websocket"] as const) {
               caller.sessionId,
               caller.sessionGeneration,
               caller.workerAttemptId,
-              caller.workerId,
+              caller.principal.kind === "worker"
+                ? caller.principal.workerId
+                : undefined,
             ],
           );
           if (current.rows.length !== 1) {
@@ -176,7 +178,10 @@ for (const transport of ["in-process", "websocket"] as const) {
             ctxGranted: row.ctx_granted,
             settlementGranted: row.settlement_granted,
             caller: {
-              workerId: context.fence.identity.workerId,
+              principal: {
+                kind: "worker" as const,
+                workerId: context.fence.identity.workerId,
+              },
               ownerEpoch: 1,
               assignmentId: parent.streamId,
               sessionId: context.fence.connectionId,

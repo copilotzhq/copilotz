@@ -21,7 +21,7 @@ function deferred<T = void>() {
   return { promise, resolve };
 }
 const caller = (ownerEpoch = 1, workerId = "worker-a"): OwnerCaller => ({
-  workerId,
+  principal: { kind: "worker" as const, workerId },
   ownerEpoch,
   authenticated: true,
 });
@@ -666,7 +666,7 @@ test("durable outcomes are JSON-only and command SQL capabilities expire", async
         async put(intent, ctx) {
           leaked = ctx.tx;
           Object.assign(ctx.command, { key: "changed" });
-          Object.assign(ctx.caller, { workerId: "changed" });
+          Object.assign(ctx.caller.principal, { workerId: "changed" });
           return await put(intent, ctx);
         },
         async unsafe(intent, ctx) {
@@ -749,16 +749,16 @@ test("authorization and handler copies cannot poison persisted receipt identity 
   await fixture(async (db) => {
     const owner = createOwnerCommandBoundary(options(db, {
       authorize(_tx, who, request) {
-        Object.assign(who, { workerId: "poisoned" });
+        Object.assign(who.principal, { workerId: "poisoned" });
         Object.assign(request, { key: "poisoned", kind: "poisoned" });
         Object.assign(request.intent as object, { id: "poisoned" });
       },
       authenticateReceipt(_tx, who) {
-        Object.assign(who, { workerId: "poisoned" });
+        Object.assign(who.principal, { workerId: "poisoned" });
       },
       handlers: {
         async put(intent, ctx) {
-          Object.assign(ctx.caller, { workerId: "poisoned" });
+          Object.assign(ctx.caller.principal, { workerId: "poisoned" });
           Object.assign(ctx.command, { key: "poisoned" });
           return await put(intent, ctx);
         },
@@ -1216,7 +1216,7 @@ test("acquisition refuses the old worker-partitioned receipt schema", async () =
       "ALTER TABLE public.owner_receipts DROP CONSTRAINT owner_receipts_pkey",
     );
     await db.query(
-      "ALTER TABLE public.owner_receipts ADD PRIMARY KEY(owner,worker_id,domain,key)",
+      "ALTER TABLE public.owner_receipts ADD PRIMARY KEY(owner,principal_kind,principal_id,domain,key)",
     );
     const owner = createOwnerCommandBoundary(options(db));
     await assert.rejects(

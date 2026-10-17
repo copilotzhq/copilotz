@@ -33,7 +33,7 @@ const provenance = {
 };
 const metadata = { label: "private-metadata-marker" };
 const caller = (workerId = "ingress-a", ownerEpoch = 1): OwnerCaller => ({
-  workerId,
+  principal: { kind: "worker" as const, workerId },
   ownerEpoch,
   authenticated: true,
 });
@@ -251,7 +251,9 @@ async function setup(
           provenance: OwnerJson;
           metadata: OwnerJson;
           live: boolean;
-        }>("SELECT * FROM fixture_ingress WHERE worker_id=$1", [who.workerId]))
+        }>("SELECT * FROM fixture_ingress WHERE worker_id=$1", [
+          who.principal.kind === "worker" ? who.principal.workerId : undefined,
+        ]))
           .rows[0];
         if (!trusted?.live) {
           throw new Error("current ingress authority revoked");

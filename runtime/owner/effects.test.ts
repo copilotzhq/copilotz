@@ -17,7 +17,7 @@ const ref = { ...scope, step: "send" };
 const evidence = { source: "dispatch", reference: "host-proof" };
 const safeOutcome = { messageId: "provider-1" };
 const caller = (epoch = 1): OwnerCaller => ({
-  workerId: "worker-1",
+  principal: { kind: "worker" as const, workerId: "worker-1" },
   ownerEpoch: epoch,
   sessionId: "connection-1",
   assignmentId: "assignment-1",
@@ -98,7 +98,10 @@ async function fixture() {
       assert.equal(target.namespace, scope.namespace, "wrong namespace");
       assert.equal(target.actionRunId, scope.actionRunId, "wrong invocation");
       if (
-        who.workerId !== row.worker_id || who.sessionId !== row.session_id ||
+        (who.principal.kind === "worker"
+            ? who.principal.workerId
+            : undefined) !== row.worker_id ||
+        who.sessionId !== row.session_id ||
         who.dispatchAttemptId !== row.attempt_id ||
         who.assignmentId !== "assignment-1" ||
         !(mode === "begin" ? row.begin_granted : row.settlement_granted)
@@ -149,7 +152,10 @@ async function fixture() {
       projections: effects.projections,
       authorize: effects.authorize,
       authenticateReceipt(_tx, who) {
-        assert.equal(who.workerId, "worker-1");
+        assert.equal(
+          who.principal.kind === "worker" ? who.principal.workerId : undefined,
+          "worker-1",
+        );
       },
     });
   let boundary = makeBoundary("holder-1");
@@ -429,7 +435,7 @@ test("a current replacement worker replays the same logical effect without recei
     );
     f.state.who = {
       ...caller(),
-      workerId: "worker-2",
+      principal: { kind: "worker", workerId: "worker-2" },
       sessionId: "connection-2",
       dispatchAttemptId: "attempt-2",
     };

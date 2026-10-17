@@ -35,7 +35,7 @@ async function fixture() {
       ? { evidence: { source: "dispatch", reference: "verified" } }
       : {};
     await db.query(
-      "INSERT INTO owner_receipts(owner,worker_id,domain,key,kind,intent,result) VALUES('owner','worker','logical',$1,$2,$3::jsonb,$4::jsonb)",
+      "INSERT INTO owner_receipts(owner,principal_kind,principal_id,domain,key,kind,intent,result) VALUES('owner','worker','[\"worker\"]','logical',$1,$2,$3::jsonb,$4::jsonb)",
       [
         ownerEffectKey("owner", ref, operation),
         `effect.${operation}`,

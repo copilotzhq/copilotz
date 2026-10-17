@@ -96,7 +96,11 @@ async function fixture() {
     async authorize(tx, caller, command) {
       const grant = await tx.query(
         "SELECT allowed, invocation, namespace FROM current_grants WHERE worker_id = $1",
-        [caller.workerId],
+        [
+          caller.principal.kind === "worker"
+            ? caller.principal.workerId
+            : undefined,
+        ],
       );
       if (
         grant.rows[0]?.invocation !== caller.invocation ||
@@ -110,12 +114,16 @@ async function fixture() {
       }
     },
     authenticateReceipt(_tx, caller) {
-      if (caller.workerId !== "worker") throw new Error("unauthenticated");
+      if (
+        (caller.principal.kind === "worker"
+          ? caller.principal.workerId
+          : undefined) !== "worker"
+      ) throw new Error("unauthenticated");
     },
   });
   const epoch = await boundary.acquire(0);
   const caller = {
-    workerId: "worker",
+    principal: { kind: "worker" as const, workerId: "worker" },
     ownerEpoch: epoch,
     invocation: "invocation",
     namespace: "authorized-space",
@@ -298,7 +306,7 @@ test("Collection event identities do not depend on the executing worker", async 
           [workerId],
         );
       }
-      f.caller.workerId = workerId;
+      f.caller.principal.workerId = workerId;
       const outcome = await f.execute("stable-step", [
         f.create("stable-record"),
       ]);

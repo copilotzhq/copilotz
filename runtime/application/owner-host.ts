@@ -413,7 +413,12 @@ export async function createOwnerHost(options: OwnerHostOptions) {
     controlTokens.add(token);
     try {
       return await run({
-        workerId: `owner:${ownerId}`,
+        principal: {
+          kind: "owner-control",
+          ownerId,
+          epoch: owner.epoch!,
+          holderId,
+        },
         ownerEpoch: owner.epoch!,
         hostControl: token,
       });
@@ -423,7 +428,10 @@ export async function createOwnerHost(options: OwnerHostOptions) {
   }
   function assertControl(caller: OwnerCaller) {
     if (
-      caller.workerId !== `owner:${ownerId}` ||
+      caller.principal.kind !== "owner-control" ||
+      caller.principal.ownerId !== ownerId ||
+      caller.principal.holderId !== holderId ||
+      caller.principal.epoch !== owner.epoch ||
       caller.ownerEpoch !== owner.epoch ||
       typeof caller.hostControl !== "string" ||
       !controlTokens.has(caller.hostControl)
@@ -436,7 +444,7 @@ export async function createOwnerHost(options: OwnerHostOptions) {
     maxWitnesses: maxPending,
     hasProcessor: (id) =>
       registry.processorForConsumer(`processor:${id}`)?.id === id,
-    getOwner: () => closed ? undefined : owner,
+    getOwnerAuthority: () => closed ? undefined : { boundary: owner, holderId },
     sessions: {
       assertCurrent: (fence) => {
         if (!transport) unavailable();
@@ -460,7 +468,8 @@ export async function createOwnerHost(options: OwnerHostOptions) {
       ? ingressTokens.get(caller.hostIngress)
       : undefined;
     if (
-      !witness || caller.workerId !== witness.fence.identity.workerId ||
+      !witness || caller.principal.kind !== "worker" ||
+      caller.principal.workerId !== witness.fence.identity.workerId ||
       caller.ownerEpoch !== owner.epoch || !current(witness.fence) ||
       witness.context.signal.aborted
     ) unavailable();
@@ -1357,7 +1366,8 @@ export async function createOwnerHost(options: OwnerHostOptions) {
     authenticateReceipt(_tx, caller) {
       if (
         ![...receiptCalls].some((context) =>
-          context.fence.identity.workerId === caller.workerId &&
+          caller.principal.kind === "worker" &&
+          context.fence.identity.workerId === caller.principal.workerId &&
           current(context.fence) && !context.signal.aborted
         )
       ) unavailable();
@@ -1570,7 +1580,10 @@ export async function createOwnerHost(options: OwnerHostOptions) {
       }
       if (witness.route !== route) return undefined;
       return {
-        workerId: witness.fence.identity.workerId,
+        principal: {
+          kind: "worker",
+          workerId: witness.fence.identity.workerId,
+        },
         ownerEpoch: owner.epoch!,
         hostIngress: witness.token,
       };

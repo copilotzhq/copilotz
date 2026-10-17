@@ -229,7 +229,12 @@ for (const transportKind of ["in-process", "websocket"]) {
           },
         },
         authorize(_tx, caller, command) {
-          assert.equal(caller.workerId, "worker");
+          assert.equal(
+            caller.principal.kind === "worker"
+              ? caller.principal.workerId
+              : undefined,
+            "worker",
+          );
           assert.equal(caller.connectionId, currentConnection);
           assert.equal(caller.invocation, "invocation");
           assert.equal(caller.namespace, "authorized-space");
@@ -244,7 +249,12 @@ for (const transportKind of ["in-process", "websocket"]) {
           );
         },
         authenticateReceipt(_tx, caller) {
-          assert.equal(caller.workerId, "worker");
+          assert.equal(
+            caller.principal.kind === "worker"
+              ? caller.principal.workerId
+              : undefined,
+            "worker",
+          );
         },
       });
       const epoch = await boundary.acquire(0);
@@ -257,7 +267,10 @@ for (const transportKind of ["in-process", "websocket"]) {
             ownerId: "owner",
             ctxGranted: true,
             caller: {
-              workerId: context.fence.identity.workerId,
+              principal: {
+                kind: "worker" as const,
+                workerId: context.fence.identity.workerId,
+              },
               ownerEpoch: epoch,
               connectionId: context.fence.connectionId,
               invocation: "invocation",
@@ -483,7 +496,7 @@ for (const transportKind of ["in-process", "websocket"]) {
             // Change durable source data and View behavior between attempts.
             // The same command identity must recover captured text unchanged.
             await boundary.execute({
-              workerId: "worker",
+              principal: { kind: "worker" as const, workerId: "worker" },
               ownerEpoch: epoch,
               connectionId: currentConnection,
               invocation: "invocation",

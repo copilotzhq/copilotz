@@ -264,7 +264,15 @@ async function fixture(
   }
   const owner = boundary();
   await owner.acquire(0);
-  const caller: OwnerCaller = { workerId: "host", ownerEpoch: 1 };
+  const caller: OwnerCaller = {
+    principal: {
+      kind: "owner-control",
+      ownerId: "owner",
+      epoch: 1,
+      holderId: "first",
+    },
+    ownerEpoch: 1,
+  };
   let count = 0;
   async function seed(
     input: { namespace?: string; parent?: string; status?: string } = {},
@@ -557,10 +565,27 @@ test("owner settlement savepoint/outer rollback and lost COMMIT preserve atomic 
         assert.equal(f.owner.state, "stopped");
         successor = f.boundary("second");
         await successor.acquire(1);
-        const receipt = await successor.readReceipt({
-          ...f.caller,
+        const successorCaller: OwnerCaller = {
+          principal: {
+            kind: "owner-control",
+            ownerId: "owner",
+            epoch: 2,
+            holderId: "second",
+          },
           ownerEpoch: 2,
-        }, { domain: "occurrence", key: command.key });
+        };
+        await assert.rejects(
+          successor.readReceipt(successorCaller, {
+            domain: "occurrence",
+            key: command.key,
+          }),
+          { code: "owner_receipt_principal_refused" },
+        );
+        // SQL is a fixture witness only. Successor settlement uses its named control route.
+        const receipt = (await f.db.query<{ result: OwnerJson }>(
+          "SELECT result FROM owner_receipts WHERE owner='owner' AND domain='occurrence' AND key=$1",
+          [command.key],
+        )).rows[0];
         if (scenario === "lost") {
           assert.deepEqual(receipt?.result, {
             status: "terminal",
@@ -571,7 +596,7 @@ test("owner settlement savepoint/outer rollback and lost COMMIT preserve atomic 
           assert.deepEqual(
             await f.settlement.run({
               boundary: successor,
-              caller: { ...f.caller, ownerEpoch: 2 },
+              caller: successorCaller,
               target,
               occurrence: "successor-check",
             }),
@@ -949,10 +974,17 @@ test("settlement deadline during noncooperative COMMIT is unknown and retains ch
     assert.equal(f.state.publications.length, 0);
     f.state.gateRelease.resolve();
     await new Promise((resolve) => setTimeout(resolve, 0));
-    const receipt = await f.owner.readReceipt(f.caller, {
-      domain: "occurrence",
-      key: ownerOperationSettlementKey("owner", target, "commit-hung"),
-    });
+    await assert.rejects(
+      f.owner.readReceipt(f.caller, {
+        domain: "occurrence",
+        key: ownerOperationSettlementKey("owner", target, "commit-hung"),
+      }),
+      { code: "owner_receipt_principal_refused" },
+    );
+    const receipt = (await f.db.query<{ result: OwnerJson }>(
+      "SELECT result FROM owner_receipts WHERE owner='owner' AND domain='occurrence' AND key=$1",
+      [ownerOperationSettlementKey("owner", target, "commit-hung")],
+    )).rows[0];
     assert.deepEqual(receipt?.result, {
       status: "terminal",
       state: "completed",
@@ -960,6 +992,27 @@ test("settlement deadline during noncooperative COMMIT is unknown and retains ch
     assert.equal((await f.events()).rows.length, 1);
   } finally {
     f.state.gateRelease.resolve();
+    f.owner.stop();
+    await f.db.close();
+  }
+});
+
+test("settlement requires tagged control even with permissive host policy", async () => {
+  const f = await fixture();
+  try {
+    await assert.rejects(
+      f.settlement.authorize(f.db, {
+        principal: { kind: "worker", workerId: "owner:owner" },
+        ownerEpoch: 1,
+      }, {
+        kind: OWNER_OPERATION_READINESS,
+        domain: "occurrence",
+        key: "read",
+        intent: { namespace: "space", operationId: "root" },
+      }, end),
+      { code: "ActionOwnershipLost" },
+    );
+  } finally {
     f.owner.stop();
     await f.db.close();
   }

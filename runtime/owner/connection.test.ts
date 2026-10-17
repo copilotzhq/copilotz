@@ -32,7 +32,7 @@ const request: OwnerCommand = {
 };
 const identity = { domain: "logical" as const, key: "step" };
 const caller: OwnerCaller = {
-  workerId: "worker",
+  principal: { kind: "worker" as const, workerId: "worker" },
   ownerEpoch: 1,
   connectionId: "connection",
   attemptId: "assignment",
@@ -142,7 +142,38 @@ test("private admission refuses forged owner/worker/grant authority and parentle
       {
         ownerId: "tenant",
         ctxGranted: true,
-        caller: { ...caller, workerId: "forged" },
+        caller: {
+          ...caller,
+          principal: {
+            kind: "owner-control" as const,
+            ownerId: "tenant",
+            epoch: 1,
+            holderId: "holder",
+          },
+        },
+      },
+      {
+        ownerId: "tenant",
+        ctxGranted: true,
+        caller: {
+          ...caller,
+          principal: {
+            kind: "owner-local" as const,
+            ownerId: "tenant",
+            epoch: 1,
+            holderId: "holder",
+            deliveryId: "delivery",
+            attemptId: "attempt",
+          },
+        },
+      },
+      {
+        ownerId: "tenant",
+        ctxGranted: true,
+        caller: {
+          ...caller,
+          principal: { kind: "worker" as const, workerId: "forged" },
+        },
       },
     ]
   ) {
@@ -157,7 +188,11 @@ test("private admission refuses forged owner/worker/grant authority and parentle
 });
 
 test("private admission snapshots host caller data and never trusts parent metadata for authority", async () => {
-  const binding = { ...caller, grant: { scope: "authorized" } };
+  const binding = {
+    ...caller,
+    principal: { ...caller.principal },
+    grant: { scope: "authorized" },
+  };
   let captured: OwnerCaller | undefined;
   const owner = recordingBoundary({
     execute(who) {
@@ -180,6 +215,7 @@ test("private admission snapshots host caller data and never trusts parent metad
   }).admit(original);
   assert.ok(handler);
   binding.grant.scope = "mutated-after-admission";
+  Object.assign(binding.principal, { workerId: "mutated-after-admission" });
   const reply = decode(
     await handler({
       input: stream(request),
@@ -188,6 +224,7 @@ test("private admission snapshots host caller data and never trusts parent metad
   );
   assert.equal(reply.ok, true);
   assert.equal((captured?.grant as { scope: string }).scope, "authorized");
+  assert.deepEqual(captured?.principal, { kind: "worker", workerId: "worker" });
   assert.deepEqual({
     metadata: original.metadata,
     parent: original.parent,
@@ -230,7 +267,10 @@ test("unassigned receipt recovery uses only authenticated stable worker identity
     new TextDecoder().decode(bytes).includes("never-on-wire"),
     false,
   );
-  assert.deepEqual(reads, [{ workerId: "worker", ownerEpoch: 0 }]);
+  assert.deepEqual(reads, [{
+    principal: { kind: "worker" as const, workerId: "worker" },
+    ownerEpoch: 0,
+  }]);
   assert.equal(assignments, 0);
   const forged = decode(
     await handler({
@@ -463,7 +503,7 @@ async function fixture(
         const grant = await tx.query<
           { allowed: boolean; connection_id: string }
         >("SELECT allowed,connection_id FROM grants WHERE worker_id=$1", [
-          who.workerId,
+          who.principal.kind === "worker" ? who.principal.workerId : undefined,
         ]);
         if (
           !grant.rows[0]?.allowed ||
@@ -471,7 +511,11 @@ async function fixture(
         ) throw new Error("current grant revoked");
       },
       authenticateReceipt(_tx, who) {
-        if (who.workerId !== "worker") {
+        if (
+          (who.principal.kind === "worker"
+            ? who.principal.workerId
+            : undefined) !== "worker"
+        ) {
           throw new Error("worker identity unauthenticated");
         }
       },
@@ -1472,7 +1516,7 @@ test("ingress revocation and owner replacement during body streaming refuse befo
       resolveOwner: () => current,
       resolveIngress: () =>
         live
-          ? { ...caller, principal: changed ? "replacement" : "original" }
+          ? { ...caller, ingressWitness: changed ? "replacement" : "original" }
           : undefined,
     });
     const handler = await host.admitUnassigned(

@@ -36,7 +36,12 @@ async function fixture(processor = false) {
     hasProcessor: (id) => id === "observe",
   });
   const host = (epoch = 1): OwnerCaller => ({
-    workerId: "host",
+    principal: {
+      kind: "owner-control",
+      ownerId: "owner",
+      epoch,
+      holderId: epoch === 1 ? "first" : "second",
+    },
     ownerEpoch: epoch,
     host: true,
   });
@@ -132,8 +137,10 @@ async function fixture(processor = false) {
     key: `${ownerAssignmentKey("owner", binding)}:${kind}`,
     intent: binding,
   });
+  const { workerId, ...callerBinding } = value;
   const caller = (extra: Partial<OwnerCaller> = {}): OwnerCaller => ({
-    ...value,
+    ...callerBinding,
+    principal: { kind: "worker", workerId },
     ownerEpoch: 1,
     ...extra,
   });
@@ -212,9 +219,16 @@ test("assignment resolver compares exact worker provisioning session and parent 
   try {
     await f.owner.execute(f.host(), f.command());
     f.state.started = true;
+    assert.equal(
+      await f.control.resolveStarted(f.db, {
+        ...f.caller(),
+        workerId: "legacy",
+      }),
+      undefined,
+    );
     for (
       const change of [
-        { workerId: "other" },
+        { principal: { kind: "worker" as const, workerId: "other" } },
         { workerAttemptId: "new" },
         { sessionGeneration: 2 },
         { sessionId: "new" },
@@ -381,7 +395,7 @@ test("assignment resolver rechecks Started after delayed SQL and isolates callba
       schema: "public",
       authorizeControl() {},
       isCurrentStarted(who) {
-        (who as { workerId: string }).workerId = "changed";
+        Object.assign(who.principal, { workerId: "changed" });
         return true;
       },
     });
@@ -479,5 +493,28 @@ test("Processor assignment binds only its exact registered consumer and cannot r
   } finally {
     action.owner.stop();
     await action.db.close();
+  }
+});
+
+test("worker names cannot impersonate tagged assignment control", async () => {
+  const f = await fixture();
+  try {
+    for (const workerId of ["host", "owner:owner", '["owner",1,"first"]']) {
+      await assert.rejects(
+        f.owner.execute({
+          principal: { kind: "worker", workerId },
+          ownerEpoch: 1,
+          host: true,
+        }, f.command()),
+        /Assignment control principal required/,
+      );
+    }
+    assert.equal(
+      (await f.db.query("SELECT 1 FROM owner_assignments")).rows.length,
+      0,
+    );
+  } finally {
+    f.owner.stop();
+    await f.db.close();
   }
 });

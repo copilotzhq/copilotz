@@ -239,7 +239,8 @@ export function createOwnerProcessorCommands(
     ) text(a[key]);
     if (
       a.kind !== "processor" || a.ownerId !== options.ownerId ||
-      a.workerId !== caller.workerId ||
+      caller.principal.kind !== "worker" ||
+      a.workerId !== caller.principal.workerId ||
       a.assignmentId !== caller.assignmentId ||
       a.sessionId !== caller.sessionId ||
       a.dispatchAttemptId !== caller.dispatchAttemptId

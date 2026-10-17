@@ -103,12 +103,13 @@ async function fixture(
   };
   const scheduled = new Map<string, OwnerScheduledAssignment>();
   let owner: OwnerCommandBoundary;
+  let currentHolderId = "holder";
   const bridge = createOwnerDispatchBridge({
     ownerId: "owner",
     schema: "public",
     hasProcessor: (id) => id === "observe",
     ...config,
-    getOwner: () => owner,
+    getOwnerAuthority: () => ({ boundary: owner, holderId: currentHolderId }),
     sessions: {
       assertCurrent(current) {
         assert.deepEqual(current, state.fence);
@@ -189,7 +190,7 @@ async function fixture(
   await owner.acquire(0);
   async function seed(key: string) {
     const result = await owner.execute({
-      workerId: "host",
+      principal: { kind: "worker" as const, workerId: "host" },
       ownerEpoch: owner.epoch!,
       host: true,
     }, { kind: "seed", domain: "logical", key, intent: key });
@@ -293,9 +294,13 @@ async function fixture(
     get owner() {
       return owner;
     },
+    replaceHolderIdentity(holderId: string) {
+      currentHolderId = holderId;
+    },
     async replaceOwner() {
       const old = owner;
       owner = create("successor");
+      currentHolderId = "successor";
       await owner.acquire(old.epoch!);
       old.stop();
       return owner;
@@ -348,8 +353,13 @@ test("dispatch awaits durable bind before Open; reservation and onStart-shaped c
       undefined,
     );
     assert.equal("onStart" in f.bridge.lifecycle, false);
+    const { workerId, ...callerBinding } = row.binding;
     await assert.rejects(
-      f.resolve({ ...row.binding, ownerEpoch: 1 }),
+      f.resolve({
+        ...callerBinding,
+        principal: { kind: "worker", workerId },
+        ownerEpoch: 1,
+      }),
       /business policy denied/,
     );
     const call = await witness(f, opened.context());
@@ -429,7 +439,7 @@ test("fresh host control policy and unforgeable exact control command are mandat
     const binding = (await f.rows())[0].binding;
     await assert.rejects(
       f.owner.execute({
-        workerId: "owner:owner",
+        principal: { kind: "worker" as const, workerId: "owner:owner" },
         ownerEpoch: 1,
         host: true,
         ownerDispatchControl: "forged",
@@ -609,7 +619,7 @@ test("fresh exact session, parent, epoch, and all durable binding fields are che
     ) {
       await assert.rejects(
         f.resolve({ ...call.caller, ...change }),
-        /business policy denied|Caller owner epoch is stale/,
+        /business policy denied|Caller owner principal is stale or mismatched/,
       );
     }
     for (
@@ -1031,6 +1041,21 @@ test("Processor bridge preserves exact Started witness and rejects Action reinte
       signal: new AbortController().signal,
     });
     await assert.rejects(f.resolve(call.caller));
+  } finally {
+    await f.close();
+  }
+});
+
+test("control witness rechecks the exact owner holder after asynchronous policy", async () => {
+  const f = await fixture();
+  try {
+    f.state.beforePolicy = async () => {
+      await Promise.resolve();
+      f.replaceHolderIdentity("different-holder");
+    };
+    await assert.rejects(f.dispatch(), /unavailable/);
+    assert.equal(f.state.opened, 0);
+    assert.equal((await f.rows()).length, 0);
   } finally {
     await f.close();
   }

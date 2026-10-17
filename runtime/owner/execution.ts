@@ -35,10 +35,16 @@ import {
 } from "../execution/owner-port.ts";
 import { assertJsonValue } from "../json.ts";
 import { digestContent } from "../content/digest.ts";
-import { readExecutionClaim } from "../execution/recovery.ts";
+import {
+  OWNER_EFFECT_EXECUTION_CONTRACT,
+  readExecutionClaim,
+  type RegisteredExecutionContract,
+} from "../execution/recovery.ts";
+import { readOwnerOriginalExecutionContract } from "./execution-contract.ts";
 import type { RegisteredExecutionRecovery } from "../execution/recovery.ts";
 import { readOwnerEffectInventory } from "./effects.ts";
 import { ownerTableNames } from "./schema.ts";
+import { ownerPrincipalIdentity } from "./principal.ts";
 import type { PluginRegistry } from "../plugins/registry.ts";
 import {
   createOperationCatalogTables,
@@ -223,10 +229,13 @@ export function createOwnerExecutionCommands(
       | OwnerExecutionAssignment
       | undefined
       | Promise<OwnerExecutionAssignment | undefined>;
-    /** Transitional, SQL-only assertion that this registered Action and its
-     * adapters use the effect protocol. No caller data may establish this fact.
-     * Defaults to refusal for a lost prior attempt, even with no effect receipts.
-     * Rechecked on recovery projection and every ordinary mutation. */
+    /** Transitional SQL-only assertion about the exact assigned worker/session's
+     * registered Action and Adapter execution contract, not merely today's
+     * Action name. No worker data or current deployment change establishes the
+     * historical fact. A positive original fresh claim records the versioned
+     * contract atomically; missing/false evidence cannot later be upgraded.
+     * Defaults to recovery refusal, even with no effect receipts. Rechecked on
+     * retry admission, recovery projection and every ordinary mutation. */
     allowRecovery?(
       tx: SqlExecutor,
       assignment: OwnerExecutionAssignment,
@@ -268,6 +277,7 @@ export function createOwnerExecutionCommands(
     commandTime: string,
   ): Promise<OwnerExecutionAssignment>;
 }> {
+  const allowRecovery = options.allowRecovery;
   text(options.ownerId);
   if (options.catalog.databaseSchema !== options.schema) {
     throw new TypeError("Execution catalog schema does not match.");
@@ -306,7 +316,8 @@ export function createOwnerExecutionCommands(
     ) text(value);
     if (
       assignment.ownerId !== options.ownerId ||
-      assignment.workerId !== caller.workerId ||
+      caller.principal.kind !== "worker" ||
+      assignment.workerId !== caller.principal.workerId ||
       assignment.assignmentId !== caller.assignmentId ||
       assignment.sessionId !== caller.sessionId ||
       assignment.dispatchAttemptId !== caller.dispatchAttemptId
@@ -421,9 +432,15 @@ export function createOwnerExecutionCommands(
   ): Promise<RegisteredExecutionRecovery | undefined> {
     const a = state.assignment;
     const rows = await tx.query<
-      { worker_id: string; kind: string; intent: unknown; result: unknown }
+      {
+        principal_kind: string;
+        principal_id: string;
+        kind: string;
+        intent: unknown;
+        result: unknown;
+      }
     >(
-      `SELECT worker_id,kind,intent,result FROM ${
+      `SELECT principal_kind,principal_id,kind,intent,result FROM ${
         ownerTableNames(options.schema).receipts
       }
        WHERE owner=$1 AND domain='incarnation' AND key=$2`,
@@ -435,7 +452,9 @@ export function createOwnerExecutionCommands(
     const row = rows.rows[0];
     if (
       rows.rows.length !== 1 || row.kind !== "execution.claim" ||
-      row.worker_id !== a.workerId
+      row.principal_kind !== "worker" ||
+      row.principal_id !==
+        ownerPrincipalIdentity({ kind: "worker", workerId: a.workerId }).id
     ) {
       refuse("Execution has no exact durable claim.");
     }
@@ -455,7 +474,7 @@ export function createOwnerExecutionCommands(
     }
     if (!captured.recovery) return undefined;
     const permitted = captured.recovery.status === "eligible" &&
-      await options.allowRecovery?.(
+      await allowRecovery?.(
           tx,
           structuredClone(a),
           state.action.id,
@@ -666,23 +685,56 @@ export function createOwnerExecutionCommands(
       });
     }
     await schedule(delivery.settlementScopeId);
+    const permitted = await allowRecovery?.(
+      context.tx,
+      structuredClone(state.assignment),
+      state.action.id,
+      context.commandTime,
+    ) === true;
+    const original = delivery.attempts > 1
+      ? await readOwnerOriginalExecutionContract(context.tx, {
+        ownerId: context.ownerCommit.ownerId,
+        schema: options.schema,
+        epoch: context.ownerCommit.epoch,
+        namespace: state.assignment.namespace,
+        actionId: state.action.id,
+        actionRunId: state.assignment.invocation.actionRunId,
+        sourceEventId: delivery.eventId,
+        deliveryId: delivery.id,
+      })
+      : undefined;
     const recovery: RegisteredExecutionRecovery | undefined =
       delivery.attempts > 1
         ? {
-          status: await options.allowRecovery?.(
-              context.tx,
-              structuredClone(state.assignment),
-              state.action.id,
-              context.commandTime,
-            ) === true
-            ? "eligible"
-            : "blocked",
+          status: original && permitted ? "eligible" : "blocked",
           effects: await inventory(context.tx, state),
+        }
+        : undefined;
+    // Only the original fresh claim can attest its own execution contract.
+    // A new deployment, duplicate, retry, or absence of effects cannot create
+    // evidence about code which already ran under an older assignment.
+    const contract: RegisteredExecutionContract | undefined =
+      delivery.attempts === 1 && !captured && permitted
+        ? {
+          protocol: OWNER_EFFECT_EXECUTION_CONTRACT,
+          attempt: 1,
+          ownerEpoch: context.ownerCommit.epoch,
+          ownerId: context.ownerCommit.ownerId,
+          namespace: state.assignment.namespace,
+          actionId: state.action.id,
+          actionRunId: state.assignment.invocation.actionRunId,
+          sourceEventId: delivery.eventId,
+          deliveryId: delivery.id,
+          workerId: state.assignment.workerId,
+          assignmentId: state.assignment.assignmentId,
+          sessionId: state.assignment.sessionId,
+          dispatchAttemptId: state.assignment.dispatchAttemptId,
         }
         : undefined;
     return json({
       ...reference(state.assignment),
       ...(recovery ? { recovery } : {}),
+      ...(contract ? { contract } : {}),
     });
   };
   function leaseTiming(expiresAt: string, commandTime: string) {

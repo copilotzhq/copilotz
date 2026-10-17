@@ -21,7 +21,7 @@ function deferred<T = void>() {
   return { promise, resolve };
 }
 const caller = (): OwnerCaller => ({
-  workerId: "worker-a",
+  principal: { kind: "worker" as const, workerId: "worker-a" },
   ownerEpoch: 1,
   authenticated: true,
 });
@@ -127,7 +127,7 @@ test("input commands isolate source, normalized, authority, handler, and callbac
         assert.deepEqual(request.intent, expectedIntent);
         assert.deepEqual(input, expectedValue);
         assert.notEqual(input, normalized.value);
-        Object.assign(who, { workerId: "authority-poison" });
+        Object.assign(who.principal, { workerId: "authority-poison" });
         Object.assign(request, { key: "authority-poison" });
         Object.assign(request.intent as object, { id: "authority-poison" });
         (input as typeof expectedValue).payload.text = "authority-poison";
@@ -143,7 +143,12 @@ test("input commands isolate source, normalized, authority, handler, and callbac
           assert.deepEqual(intent, expectedIntent);
           assert.deepEqual(context.input, expectedValue);
           assert.equal(context.command.key, "original");
-          assert.equal(context.caller.workerId, "worker-a");
+          assert.equal(
+            context.caller.principal.kind === "worker"
+              ? context.caller.principal.workerId
+              : undefined,
+            "worker-a",
+          );
           await put(intent, context);
           Object.assign(intent as object, { id: "handler-poison" });
           (context.input as typeof expectedValue).payload.text =

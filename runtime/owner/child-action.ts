@@ -279,7 +279,8 @@ export function createOwnerChildActions(
     const binding = structuredClone(found);
     const a = binding.assignment;
     if (
-      a.ownerId !== options.ownerId || a.workerId !== caller.workerId ||
+      a.ownerId !== options.ownerId || caller.principal.kind !== "worker" ||
+      a.workerId !== caller.principal.workerId ||
       a.assignmentId !== caller.assignmentId ||
       a.sessionId !== caller.sessionId ||
       a.dispatchAttemptId !== caller.dispatchAttemptId ||

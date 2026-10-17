@@ -289,6 +289,9 @@ export function createOwnerAssignmentControl(
     time: string,
   ) {
     validate(command);
+    if (caller.principal.kind !== "owner-control") {
+      throw new Error("Assignment control principal required.");
+    }
     await options.authorizeControl(tx, caller, time);
   }
   const bind: OwnerCommandHandler = async (input, context) => {
@@ -401,8 +404,18 @@ export function createOwnerAssignmentControl(
     tx: SqlExecutor,
     caller: OwnerCaller,
   ): Promise<OwnerAssignmentBinding | undefined> {
-    const identity = { ...caller };
-    if (!options.isCurrentStarted({ ...identity })) return undefined;
+    if (
+      caller.principal.kind !== "worker" || Object.hasOwn(caller, "workerId")
+    ) return undefined;
+    const identity: OwnerCaller & {
+      principal: { kind: "worker"; workerId: string };
+    } = { ...caller, principal: { ...caller.principal } };
+    if (
+      !options.isCurrentStarted({
+        ...identity,
+        principal: { ...identity.principal },
+      })
+    ) return undefined;
     const result = await tx.query<{ binding: OwnerAssignmentBinding }>(
       `SELECT binding FROM ${name} WHERE owner=$1 AND epoch=$2 AND session_id=$3
        AND assignment_id=$4 AND retired=FALSE FOR SHARE`,
@@ -414,7 +427,13 @@ export function createOwnerAssignmentControl(
       ],
     );
     const value = result.rows[0]?.binding;
-    if (!value || !options.isCurrentStarted({ ...identity })) return undefined;
+    if (
+      !value ||
+      !options.isCurrentStarted({
+        ...identity,
+        principal: { ...identity.principal },
+      })
+    ) return undefined;
     for (
       const key of [
         "workerId",
@@ -425,7 +444,10 @@ export function createOwnerAssignmentControl(
         "assignmentId",
       ] as const
     ) {
-      if (value[key] !== identity[key]) return undefined;
+      if (
+        value[key] !==
+          (key === "workerId" ? identity.principal.workerId : identity[key])
+      ) return undefined;
     }
     return { ...value };
   }

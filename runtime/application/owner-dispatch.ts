@@ -82,6 +82,7 @@ type Entry = {
   request: Request;
   owner: OwnerCommandBoundary;
   epoch: number;
+  holderId: string;
   fence: Fence;
   binding?: OwnerAssignmentBinding;
   operationId: string;
@@ -115,6 +116,7 @@ type Witness = {
 type ControlWitness = {
   owner: OwnerCommandBoundary;
   epoch: number;
+  holderId: string;
   entry: Entry;
   command: OwnerCommand;
 };
@@ -175,6 +177,15 @@ function equalBinding(
         Object.hasOwn(right, "executionId"))
       : (Object.hasOwn(right, "kind") || Object.hasOwn(right, "processorId"))
   ) return false;
+  if ("principal" in right) {
+    const principal = (b as OwnerCaller).principal;
+    if (principal.kind !== "worker" || Object.hasOwn(right, "workerId")) {
+      return false;
+    }
+    return bindingFields(a).every((key) =>
+      left[key] === (key === "workerId" ? principal.workerId : right[key])
+    );
+  }
   return bindingFields(a).every((key) => left[key] === right[key]);
 }
 function equalFence(a: Fence, b: Fence) {
@@ -235,7 +246,10 @@ export function createOwnerDispatchBridge(
   options: Readonly<{
     ownerId: string;
     schema: string;
-    getOwner(): OwnerCommandBoundary | undefined;
+    /** Atomic trusted owner/holder pair; successor retirement gets fresh authority. */
+    getOwnerAuthority():
+      | Readonly<{ boundary: OwnerCommandBoundary; holderId: string }>
+      | undefined;
     sessions: Readonly<{
       assertCurrent(fence: Fence): Readonly<{ phase: string }>;
     }>;
@@ -254,6 +268,7 @@ export function createOwnerDispatchBridge(
     maxWitnesses?: number;
   }>,
 ) {
+  const getOwnerAuthority = options.getOwnerAuthority;
   const maxAssignments = capacity(options.maxAssignments ?? 128);
   const maxWitnesses = capacity(options.maxWitnesses ?? 128);
   const requests = new Map<string, Request>();
@@ -266,9 +281,26 @@ export function createOwnerDispatchBridge(
   let retirementArrival = false;
   let closed = false;
 
-  function currentOwner(owner: OwnerCommandBoundary, epoch: number) {
-    return options.getOwner() === owner && owner.state === "acquired" &&
-      owner.epoch === epoch;
+  function ownerAuthority() {
+    const current = getOwnerAuthority();
+    if (!current) return undefined;
+    const { boundary: owner, holderId } = current;
+    const epoch = owner.epoch;
+    if (
+      owner.state !== "acquired" || epoch === undefined ||
+      !Number.isSafeInteger(epoch) || epoch < 1 ||
+      typeof holderId !== "string" || !holderId.trim() || holderId.length > 1024
+    ) return undefined;
+    return { owner, holderId, epoch };
+  }
+  function currentOwner(
+    owner: OwnerCommandBoundary,
+    epoch: number,
+    holderId: string,
+  ) {
+    const current = ownerAuthority();
+    return current?.owner === owner && current.epoch === epoch &&
+      current.holderId === holderId;
   }
   function currentFence(fence: Fence, preOpen = false) {
     try {
@@ -283,7 +315,7 @@ export function createOwnerDispatchBridge(
     return !closed && entries.get(entry.operationId) === entry &&
       entry.state === (binding ? "binding" : "bound") &&
       !isAborted(entry.abort.signal) && !isAborted(entry.request.signal) &&
-      currentOwner(entry.owner, entry.epoch) &&
+      currentOwner(entry.owner, entry.epoch, entry.holderId) &&
       currentFence(entry.fence, binding);
   }
   function currentWitness(witness: Witness) {
@@ -323,9 +355,13 @@ export function createOwnerDispatchBridge(
     const token = caller[CONTROL];
     const witness = typeof token === "string" ? controls.get(token) : undefined;
     if (
-      !witness || !currentOwner(witness.owner, witness.epoch) ||
+      !witness ||
+      !currentOwner(witness.owner, witness.epoch, witness.holderId) ||
       caller.ownerEpoch !== witness.epoch ||
-      caller.workerId !== `owner:${options.ownerId}` ||
+      caller.principal.kind !== "owner-control" ||
+      caller.principal.ownerId !== options.ownerId ||
+      caller.principal.holderId !== witness.holderId ||
+      caller.principal.epoch !== witness.epoch ||
       (witness.command.kind === "assignment.bind" &&
         !currentEntry(witness.entry, true)) ||
       (witness.command.kind === "assignment.retire" &&
@@ -376,10 +412,18 @@ export function createOwnerDispatchBridge(
     entry: Entry,
     kind: "assignment.bind" | "assignment.retire",
   ) {
-    const owner = kind === "assignment.bind" ? entry.owner : options.getOwner();
-    if (!owner || owner.state !== "acquired" || owner.epoch === undefined) {
-      throw refused();
-    }
+    const authority = kind === "assignment.bind"
+      ? {
+        owner: entry.owner,
+        epoch: entry.epoch,
+        holderId: entry.holderId,
+      }
+      : ownerAuthority();
+    if (
+      !authority ||
+      !currentOwner(authority.owner, authority.epoch, authority.holderId)
+    ) throw refused();
+    const { owner, epoch, holderId } = authority;
     const command: OwnerCommand = {
       kind,
       domain: "incarnation",
@@ -387,12 +431,17 @@ export function createOwnerDispatchBridge(
       intent: { ...entry.binding! },
     };
     const token = crypto.randomUUID();
-    controls.set(token, { owner, epoch: owner.epoch, entry, command });
+    controls.set(token, { owner, epoch, holderId, entry, command });
     try {
       return await owner.execute(
         {
-          workerId: `owner:${options.ownerId}`,
-          ownerEpoch: owner.epoch,
+          principal: {
+            kind: "owner-control",
+            ownerId: options.ownerId,
+            holderId,
+            epoch,
+          },
+          ownerEpoch: epoch,
           [CONTROL]: token,
         },
         structuredClone(command),
@@ -457,14 +506,14 @@ export function createOwnerDispatchBridge(
     const request = typeof marker === "string"
       ? requests.get(marker)
       : undefined;
-    const owner = options.getOwner();
+    const authority = ownerAuthority();
     if (
       !request || request.claimed || request.entry || request.settled ||
       isAborted(request.signal) ||
       isAborted(context.signal) || closed ||
       context.workload !== request.workload ||
       entries.has(context.operationId) ||
-      !owner || owner.state !== "acquired" || owner.epoch === undefined ||
+      !authority ||
       !currentFence(context.assignment.fence, true)
     ) {
       throw refused();
@@ -475,8 +524,7 @@ export function createOwnerDispatchBridge(
     };
     const entry: Entry = {
       request,
-      owner,
-      epoch: owner.epoch,
+      ...authority,
       fence,
       operationId: context.operationId,
       streamId: context.assignment.streamId,
@@ -522,7 +570,7 @@ export function createOwnerDispatchBridge(
     } catch (error) {
       if (unknownOutcome(error)) {
         entry.durable = "unknown";
-        owner.stop(error);
+        entry.owner.stop(error);
       } else if (entry.durable === "pending") entry.durable = "none";
       retire(entry);
       if (entry.durable === "none") releaseEntry(entry);
@@ -623,10 +671,12 @@ export function createOwnerDispatchBridge(
     if (ownerId !== options.ownerId || !witness || !currentWitness(witness)) {
       return undefined;
     }
+    const { workerId, ...binding } = witness.entry.binding!;
     return {
       ownerId,
       caller: {
-        ...witness.entry.binding!,
+        ...binding,
+        principal: { kind: "worker" as const, workerId },
         ownerEpoch: witness.entry.epoch,
         [WITNESS]: witness.id,
       },

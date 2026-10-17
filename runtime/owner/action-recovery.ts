@@ -203,6 +203,7 @@ export function createOwnerActionRecovery(
       command: OwnerCommand,
       commandTime: string,
     ) {
+      if (caller.principal.kind !== "owner-control") return refuse();
       const data = command.intent as {
         namespace?: unknown;
         occurrence?: unknown;

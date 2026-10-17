@@ -692,3 +692,33 @@ writes do not require a publication callback; ordinary delivery transitions keep
 their existing callback requirement. Worker deadline checks and owner-control
 writes without local attempt authority are unchanged. Durable placement,
 owner-created local execution and old-epoch loss recovery remain unfinished.
+
+### Explicit principals and original-attempt recovery evidence
+
+The internal owner caller now distinguishes authenticated workers, current
+owner-control commands and exact owner-local attempts. Owner principals bind the
+owner ID, epoch and holder; local principals additionally bind delivery and
+attempt. The boundary checks these coordinates before command authorization.
+Transport routes construct worker principals from authenticated transport facts;
+request payloads cannot select control or local authority. Assignment liveness and
+current policy remain separate checks. These tags do not by themselves enable a
+local executor.
+
+Logical receipt identity remains owner/domain/key, independent of worker or
+attempt. Fresh private schemas store canonical tagged principal identities for
+provenance and reader associations. The ordinary recovery endpoint remains
+worker-only and requires the authenticated associated worker; control/local
+callers cannot use it as a general cross-epoch read capability. The previous
+private worker-only schema is refused rather than silently migrated. There is no
+production-data migration in this increment.
+
+Automatic retry eligibility must have evidence from the original admitted
+attempt. A prospective versioned execution-contract witness binds that attempt's
+registered Action, source/run/delivery and exact worker assignment. It is recorded
+only on a fresh first claim that the trusted host explicitly authorizes under the
+converted effect protocol. A later deployment or policy change cannot upgrade an
+old receipt or add missing historical evidence. Replacement execution still
+requires current exact-assignment approval, captured-input authorization and the
+effect-recovery barrier. The witness does not authorize dispatch, prove that an
+external effect did not start, or complete restart readiness. Logical operation
+identities do not incorporate deployment hashes.

@@ -278,7 +278,13 @@ export async function fixture(
         }
       >(
         "SELECT binding,ctx_granted,settlement_granted FROM fixture_assignments WHERE assignment_id=$1 AND session_id=$2 AND worker_id=$3 AND live=TRUE",
-        [caller.assignmentId, caller.sessionId, caller.workerId],
+        [
+          caller.assignmentId,
+          caller.sessionId,
+          caller.principal.kind === "worker"
+            ? caller.principal.workerId
+            : undefined,
+        ],
       )).rows[0];
       return row
         ? {
@@ -364,7 +370,11 @@ export async function fixture(
     async authenticateReceipt(tx, caller) {
       const found = await tx.query(
         "SELECT 1 FROM fixture_assignments WHERE worker_id=$1 AND receipt_authenticated=TRUE",
-        [caller.workerId],
+        [
+          caller.principal.kind === "worker"
+            ? caller.principal.workerId
+            : undefined,
+        ],
       );
       if (!found.rows.length) throw new Error("receipt authentication refused");
     },
@@ -444,8 +454,10 @@ export async function fixture(
       JSON.stringify(binding),
     ],
   );
-  const caller = (): OwnerCaller => ({
-    workerId: binding.workerId,
+  const caller = (): OwnerCaller & {
+    principal: { kind: "worker"; workerId: string };
+  } => ({
+    principal: { kind: "worker" as const, workerId: binding.workerId },
     ownerEpoch: 1,
     assignmentId: binding.assignmentId,
     sessionId: binding.sessionId,

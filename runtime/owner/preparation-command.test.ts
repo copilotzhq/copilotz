@@ -4,6 +4,7 @@ import { defineAction } from "../actions/define.ts";
 import { createPluginRegistry } from "../plugins/registry.ts";
 import { createOwnerPreparations, ownerPreparationKey } from "./preparation.ts";
 import type { OwnerJson } from "./boundary.ts";
+import { ownerPreparationIntent } from "./preparation-intent.ts";
 function unavailable(): never {
   throw new Error("Normalization cannot read or execute");
 }
@@ -318,4 +319,31 @@ test("named preparation refuses a captured namespace different from its current 
   );
   assert.equal(mapped, 0);
   assert.equal(appended, 0);
+});
+
+test("named preparation uses byte-identical pure history intent for semantic inputs", async () => {
+  const c = commands();
+  for (
+    const change of [
+      {},
+      { recordId: 'note:é/"\\' },
+      { operationKey: "nested:[]" },
+      { parent: { ...input().parent, operationKey: "root/part:one" } },
+    ]
+  ) {
+    const raw = { ...input(), ...change };
+    const normalized = await c.inputDefinition.normalize(raw);
+    assert.deepEqual(
+      normalized.intent,
+      await ownerPreparationIntent({
+        preparation: raw.preparation,
+        operationKey: raw.operationKey,
+        parentOperationKey: raw.parent.operationKey,
+        source: "messages",
+        recordId: raw.recordId,
+        actionId: "fixture.send",
+        hints: { mode: raw.hints.mode, renderer: "text" },
+      }),
+    );
+  }
 });

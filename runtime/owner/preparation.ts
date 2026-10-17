@@ -1,7 +1,7 @@
 /** Private registered preparation -> child Action capture. The only durable
  * input owner is the child's existing requested event/body/catalog lifecycle.
  * No renderer, SQL, resource value or rendered text is accepted from the wire. */
-import { digestContent } from "../content/digest.ts";
+import { ownerPreparationIntent } from "./preparation-intent.ts";
 import { assertJsonValue } from "../json.ts";
 import type { SqlExecutor } from "../events/session.ts";
 import type { DurableEvent } from "../events/types.ts";
@@ -50,6 +50,15 @@ export {
   OWNER_CHILD_ACTION_PREPARATION,
   ownerPreparationKey,
 } from "../execution/preparation-call.ts";
+/** Detached constructor facts for the bounded startup compatibility proof.
+ * These facts neither authorize a caller nor include current renderer/value data. */
+export type OwnerPreparationHistoryRegistration = Readonly<{
+  name: string;
+  source: string;
+  actionId: string;
+  modes: readonly string[];
+  resources: readonly PreparationResourceCoordinate[];
+}>;
 export type OwnerPreparationRegistration = Readonly<{
   source: string;
   actionAlias: string;
@@ -231,7 +240,13 @@ export function createOwnerPreparations(
         !modes.length || new Set(modes).size !== modes.length ||
         typeof registration.mapInput !== "function"
       ) fail();
+      // Capture once, then validate the same inert coordinates in the resource
+      // helper. History facts must not re-read mutable registration options.
+      const resourceCoordinates = json(
+        registration.resources ?? [],
+      ) as readonly PreparationResourceCoordinate[];
       return [name, {
+        resourceCoordinates,
         source,
         actionAlias,
         actionId,
@@ -240,7 +255,7 @@ export function createOwnerPreparations(
         mapInput: registration.mapInput,
         resources: createOwnerPreparationResources({
           registry: options.registry,
-          resources: registration.resources ?? [],
+          resources: resourceCoordinates,
           projectResource: options.projectResource,
           authorizeResource: options.authorizeResource,
           maxBytes: options.maxBytes,
@@ -294,7 +309,7 @@ export function createOwnerPreparations(
         source: registered.source,
         hints: { mode: String(hints.mode), renderer: "text" },
       };
-      const digest = await digestContent(new TextEncoder().encode(canonical({
+      const intent = await ownerPreparationIntent({
         preparation,
         operationKey: input.operationKey,
         parentOperationKey: input.parent.operationKey,
@@ -302,10 +317,10 @@ export function createOwnerPreparations(
         recordId: input.recordId,
         actionId: input.actionId,
         hints: input.hints,
-      })));
+      });
       return {
         value: input,
-        intent: { encoding: "copilotz.preparation.v1", digest },
+        intent,
       };
     },
   };
@@ -441,6 +456,15 @@ export function createOwnerPreparations(
     );
   };
   return {
+    historyRegistrations(): readonly OwnerPreparationHistoryRegistration[] {
+      return [...registrations].map(([name, registration]) => ({
+        name,
+        source: registration.source,
+        actionId: registration.actionId,
+        modes: [...registration.modes],
+        resources: structuredClone(registration.resourceCoordinates),
+      }));
+    },
     inputDefinition,
     handler,
     snapshot: renderer.snapshot,

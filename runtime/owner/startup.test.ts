@@ -795,7 +795,7 @@ test("startup requires exact Action request identity, event scope association an
       }
       await f.takeover();
       const result = (await f.repair()).result as {
-        blockers: { reason: string }[];
+        blockers: { reason: string; id: string }[];
       };
       assert.ok(result.blockers.some((blocker) =>
         blocker.reason ===
@@ -805,8 +805,18 @@ test("startup requires exact Action request identity, event scope association an
             ? "delivery_scope_association_invalid"
             : kind === "subscription"
             ? "processor_subscription_or_scope_changed"
+            : kind === "preparation"
+            ? "prepared_history_incompatible"
             : "action_invocation_or_input_unsupported")
       ));
+      if (kind === "preparation") {
+        assert.ok(
+          result.blockers.some((blocker) =>
+            blocker.reason === "prepared_history_incompatible" &&
+            blocker.id === "startup.prepared"
+          ),
+        );
+      }
       await assert.rejects(f.proof(), /unresolved/);
     } finally {
       await f.close();

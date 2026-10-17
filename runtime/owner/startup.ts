@@ -3,7 +3,16 @@
  * Lost/retried execution, open Actions, local attempts, content storage and streams
  * stay blocked. Ordinary graph compatibility requires explicit namespace coverage;
  * it proves current structure only, never historical authority or content safety. */
+import { assertJsonValue } from "../json.ts";
+import { OWNER_CHILD_ACTION_PREPARATION } from "../execution/preparation-call.ts";
+import {
+  type OwnerClosedActionHistory,
+  type OwnerPreparedHistoryRegistration,
+  validateClosedPreparedHistories,
+} from "./startup-prepared.ts";
 import { parseActionLifecycleEvent } from "../actions/event.ts";
+import { actionSchemaHasSecrets } from "../actions/secret.ts";
+import { PROTECTED_VALUE_NODE_TYPE } from "../actions/protected-value.ts";
 import { actionDefinitionHasSecrets } from "../actions/protected-lifecycle.ts";
 import { encodeEventBody, eventDataRef } from "../events/body-store.ts";
 import {
@@ -150,6 +159,9 @@ export function createOwnerStartupProof(
     /** Explicit trusted namespace coverage, never inferred from graph rows or
      * registration. Omission retains the graph-empty startup subset. */
     namespaces?: readonly string[];
+    /** Explicit complete ordinary-record preparation coverage. Omission cannot
+     * resolve retained prepared histories or a prior startup.prepared alarm. */
+    prepared?: readonly OwnerPreparedHistoryRegistration[];
     /** Aggregate configuration, raw inventory and derived graph item budget. */
     maxItems?: number;
     /** Aggregate configuration/SQL JSON/derived graph bytes. Raw evidence is
@@ -206,10 +218,85 @@ export function createOwnerStartupProof(
   const graphCollections = namespaces === undefined
     ? []
     : captureOwnerGraphCollections(Object.values(options.registry.collections));
-  const configuration = namespaces === undefined ? null : {
-    namespaces,
-    collections: graphCollections,
-  };
+  let prepared: readonly OwnerPreparedHistoryRegistration[] | undefined;
+  if (options.prepared !== undefined) {
+    assertJsonValue(options.prepared, { maxDepth: 6, maxNodes: maxItems });
+    if (!Array.isArray(options.prepared)) {
+      throw new TypeError("Invalid startup preparation inventory.");
+    }
+    const names = new Set<string>();
+    prepared = options.prepared.map((entry) => {
+      const row = object(entry, [
+        "name",
+        "actionId",
+        "source",
+        "modes",
+        "resources",
+      ]);
+      text(row.name);
+      text(row.actionId);
+      if (names.has(row.name)) {
+        throw new TypeError("Ambiguous startup preparation.");
+      }
+      names.add(row.name);
+      const source = object(row.source, ["name", "kind", "selection"]);
+      text(source.name);
+      text(source.kind);
+      if (
+        source.selection !== "record" ||
+        !graphCollections.some((collection) =>
+          collection.name === source.kind &&
+          !["asset", PROTECTED_VALUE_NODE_TYPE, "@copilotz/action-content"]
+            .includes(collection.name) &&
+          collection.content === undefined && collection.schema !== null &&
+          typeof collection.schema === "object" &&
+          !Array.isArray(collection.schema) &&
+          collection.schema.type === "object" &&
+          !actionSchemaHasSecrets(collection.schema)
+        ) ||
+        !Array.isArray(row.modes) || !row.modes.length ||
+        new Set(row.modes).size !== row.modes.length ||
+        !Array.isArray(row.resources) || row.resources.length > 32
+      ) {
+        throw new TypeError("Unsupported startup preparation registration.");
+      }
+      const modes = row.modes.map((value) => {
+        text(value);
+        return value;
+      });
+      const resourceKeys = new Set<string>();
+      const resources = row.resources.map((value) => {
+        const ref = object(value, ["namespace", "alias"]);
+        text(ref.namespace);
+        text(ref.alias);
+        const key = JSON.stringify([ref.namespace, ref.alias]);
+        if (resourceKeys.has(key)) {
+          throw new TypeError("Ambiguous preparation resource.");
+        }
+        resourceKeys.add(key);
+        return { namespace: ref.namespace, alias: ref.alias };
+      });
+      return {
+        name: row.name,
+        actionId: row.actionId,
+        source: {
+          name: source.name,
+          kind: source.kind,
+          selection: "record" as const,
+        },
+        modes,
+        resources,
+      };
+    });
+  }
+  const configuration = namespaces === undefined && prepared === undefined
+    ? null
+    : {
+      ...(namespaces === undefined
+        ? {}
+        : { namespaces, collections: graphCollections }),
+      ...(prepared === undefined ? {} : { prepared }),
+    };
   let configurationItems = 0;
   const pendingConfiguration: unknown[] = configuration === null
     ? []
@@ -248,6 +335,14 @@ export function createOwnerStartupProof(
       !action.content && !action.resolve && !actionDefinitionHasSecrets(action)
     ) {
       actions.add(action.id);
+    }
+  }
+  for (const registration of prepared ?? []) {
+    if (
+      !actions.has(registration.actionId) ||
+      actionCounts.get(registration.actionId) !== 1
+    ) {
+      throw new TypeError("Unsupported startup preparation target.");
     }
   }
   for (const processor of Object.values(options.registry.processors)) {
@@ -342,6 +437,7 @@ export function createOwnerStartupProof(
       present.add(targetKey(target));
       return target;
     }
+    const preparedTarget = ref("blocker", null, "startup.prepared");
     const graphTarget = ref("blocker", null, "startup.graph");
     const legacyGraphTargets = ["nodes", "edges"].map((name) =>
       ref("blocker", null, `startup.${name}`)
@@ -407,7 +503,7 @@ export function createOwnerStartupProof(
     const streams = await rows(catalog.operationStreams);
     const receipts = await rows(
       owner.receipts,
-      "kind IN ('execution.claim','processor.claim') OR key LIKE '[\"execution.claim\",%' OR key LIKE '[\"processor.claim\",%' OR kind LIKE 'effect.%' OR left(key,10)='[\"effect\",'",
+      "kind IN ('execution.claim','processor.claim') OR key LIKE '[\"execution.claim\",%' OR key LIKE '[\"processor.claim\",%' OR kind LIKE 'effect.%' OR left(key,10)='[\"effect\",' OR kind='action.child-prepare' OR key LIKE '[\"action.child-prepare\",%'",
     );
     const alarms = await rows(owner.alarms);
     plan.deliveries = deliveries.length;
@@ -438,6 +534,18 @@ export function createOwnerStartupProof(
         terminalId: unknown;
       }
     >();
+    const closedActions: OwnerClosedActionHistory[] = [];
+    const preparedCandidates = new Map<string, {
+      namespace: string;
+      runId: string;
+      histories: OwnerStoredAssignment[];
+    }>();
+    function preparationReceipt(row: Row): boolean {
+      return row.kind === OWNER_CHILD_ACTION_PREPARATION ||
+        (typeof row.key === "string" &&
+          row.key.startsWith('["action.child-prepare",'));
+    }
+    const preparationReceipts = receipts.filter(preparationReceipt);
     const allowed = new Set<string>();
     const pendingScopes = new Set<string>();
     const requiredAlarms = new Map<string, string>();
@@ -697,8 +805,7 @@ export function createOwnerStartupProof(
             !metadata.actionMetadata ||
             typeof metadata.actionMetadata !== "object" ||
             Array.isArray(metadata.actionMetadata) ||
-            !ordinary(metadata.actionMetadata) ||
-            Object.hasOwn(metadata, OWNER_PREPARATION_METADATA)
+            !ordinary(metadata.actionMetadata)
           ) throw new TypeError("Unsupported immutable Action metadata.");
           const data = eventDataRef(source.payload);
           const key = JSON.stringify([namespace, data.eventBodyId]);
@@ -819,6 +926,10 @@ export function createOwnerStartupProof(
             invocation.actionRunId === runId &&
             terminal.owner_id === ownerId &&
             terminal.causation_id === source.id &&
+            terminal.correlation_id === source.correlation_id &&
+            indexMap.get(terminal.id)?.namespace === namespace &&
+            indexMap.get(terminal.id)?.operation_id ===
+              row.settlement_scope_id &&
             metadata.sourceDeliveryId === row.id &&
             metadata.actionId === actionId &&
             metadata.actionStatus === status &&
@@ -827,8 +938,35 @@ export function createOwnerStartupProof(
             terminal.type === `${actionId}.${status}` &&
             invoked.owner_id === ownerId &&
             invoked.causation_id === source.id &&
+            invoked.correlation_id === source.correlation_id &&
+            indexMap.get(invoked.id)?.namespace === namespace &&
+            indexMap.get(invoked.id)?.operation_id ===
+              row.settlement_scope_id &&
             invokedMetadata.sourceDeliveryId === row.id;
+          // The prepared adapter consumes only canonical body/catalog/event
+          // facts, never a worker marker or a globally blocked source event.
+          closed = closed &&
+            [source, invoked, terminal, root].every((event) =>
+              !blocked.has(
+                targetKey({
+                  kind: "operation",
+                  namespace,
+                  id: String(event.id),
+                }),
+              )
+            );
           if (closed) {
+            closedActions.push({
+              namespace,
+              actionId: String(actionId),
+              executionId: String(runId),
+              eventId: String(source.id),
+              deliveryId: String(row.id),
+              invokedId: String(invoked.id),
+              terminalId: String(terminal.id),
+              settlementScopeId: String(row.settlement_scope_id),
+              rootEventId: String(root.id),
+            });
             terminalRuns.set(JSON.stringify([namespace, runId]), {
               actionId: String(actionId),
               deliveryId: String(row.id),
@@ -839,6 +977,20 @@ export function createOwnerStartupProof(
         } catch {
           closed = false;
         }
+      }
+      if (Object.hasOwn(metadata, OWNER_PREPARATION_METADATA)) {
+        // Pending/lost/unsupported prepared work is outside this closed-history
+        // proof. Do not add dispatch/settlement authority or retire its attempt.
+        if (!closed || prepared === undefined || processor) {
+          block(preparedTarget, "prepared_history_incompatible");
+        } else {
+          preparedCandidates.set(String(row.id), {
+            namespace,
+            runId: String(runId),
+            histories,
+          });
+        }
+        continue;
       }
       if (!neverClaimed && !closed) {
         block(target, "execution_recovery_required");
@@ -911,11 +1063,18 @@ export function createOwnerStartupProof(
       }
     }
     const checkedEffects = new Set<string>();
+    const invalidEffectRuns = new Set<string>();
     for (const receipt of receipts) {
       if (
-        receipt.kind === "execution.claim" || receipt.kind === "processor.claim"
+        receipt.kind === "execution.claim" ||
+        receipt.kind === "processor.claim" ||
+        preparationReceipt(receipt)
       ) continue;
       const intent = receipt.intent as Row | null;
+      const intentRun = JSON.stringify([
+        intent?.namespace,
+        intent?.actionRunId,
+      ]);
       const target = ref(
         "effect",
         typeof intent?.namespace === "string" ? intent.namespace : null,
@@ -931,6 +1090,7 @@ export function createOwnerStartupProof(
         key[2] !== intent?.namespace || key[3] !== intent?.actionRunId ||
         !terminalRuns.has(JSON.stringify([key[2], key[3]]))
       ) {
+        invalidEffectRuns.add(intentRun);
         block(target, "effect_without_canonical_terminal");
         continue;
       }
@@ -945,13 +1105,141 @@ export function createOwnerStartupProof(
             actionRunId: String(key[3]),
           });
           if (effects.some((effect) => effect.status === "begun")) {
+            invalidEffectRuns.add(group);
             block(target, "effect_reconciliation_required");
             continue;
           }
         }
         resolved.add(targetKey(target));
       } catch {
+        invalidEffectRuns.add(intentRun);
         block(target, "effect_inventory_invalid");
+      }
+    }
+    const hasPreparedEvents = events.some((event) =>
+      Object.hasOwn(event.metadata as object, OWNER_PREPARATION_METADATA)
+    );
+    if (prepared === undefined) {
+      if (hasPreparedEvents || preparationReceipts.length) {
+        block(preparedTarget, "prepared_coverage_missing");
+      }
+      // Omitted coverage deliberately leaves preparedTarget unresolved, so a
+      // previous reconciliation alarm survives even after its rows disappear.
+    } else if (!hasPreparedEvents && !preparationReceipts.length) {
+      resolved.add(targetKey(preparedTarget));
+    } else {
+      const string = (value: unknown): string => {
+        text(value);
+        return value;
+      };
+      const nullable = (value: unknown): string | null =>
+        value === null ? null : string(value);
+      const proof = await validateClosedPreparedHistories({
+        ownerId,
+        epoch: commit.epoch,
+        registrations: prepared,
+        events: events.map((event) => ({
+          id: string(event.id),
+          ownerId: string(event.owner_id),
+          namespace: string(event.namespace),
+          type: string(event.type),
+          metadata: event.metadata as Record<string, unknown>,
+          deduplicationId: nullable(event.deduplication_id),
+          causationId: nullable(event.causation_id),
+          correlationId: nullable(event.correlation_id),
+        })),
+        deliveries: deliveries.map((row) => ({
+          id: string(row.id),
+          eventId: string(row.event_id),
+          consumerId: string(row.consumer_id),
+          settlementScopeId: nullable(row.settlement_scope_id),
+          actionScopeId: nullable(row.action_scope_id),
+          status: string(row.status),
+          attempts: Number(row.attempts),
+          leaseOwner: nullable(row.lease_owner),
+          leaseExpiresAt: row.lease_expires_at === null
+            ? null
+            : timestamp(row.lease_expires_at),
+        })),
+        receipts: receipts.filter((row) =>
+          row.kind === "execution.claim" || preparationReceipt(row)
+        ).map((row) => ({
+          owner: string(row.owner),
+          principalKind: string(row.principal_kind),
+          principalId: string(row.principal_id),
+          domain: string(row.domain),
+          // Receipt keys can legitimately exceed one alarm identity. Their
+          // size is already charged by the shared SQL/derived byte budget;
+          // only the stable startup.prepared target is made durable below.
+          key: typeof row.key === "string"
+            ? row.key
+            : refuse("Invalid receipt key."),
+          kind: string(row.kind),
+          intent: row.intent,
+          result: row.result,
+        })),
+        closedActions: closedActions.filter((value) => {
+          const targets: OwnerReconciliationTarget[] = [
+            {
+              kind: "action",
+              namespace: value.namespace,
+              id: value.executionId,
+            },
+            {
+              kind: "delivery",
+              namespace: value.namespace,
+              id: value.deliveryId,
+            },
+            {
+              kind: "assignment",
+              namespace: value.namespace,
+              id: value.deliveryId,
+            },
+            ...[
+              value.eventId,
+              value.invokedId,
+              value.terminalId,
+              value.rootEventId,
+            ]
+              .map((id) => ({
+                kind: "operation" as const,
+                namespace: value.namespace,
+                id,
+              })),
+          ];
+          return !targets.some((target) => blocked.has(targetKey(target))) &&
+            !invalidEffectRuns.has(
+              JSON.stringify([value.namespace, value.executionId]),
+            );
+        }),
+        assignments: stored,
+        maxDerivedItems: remainingItems,
+        maxDerivedBytes: remainingBytes,
+      });
+      remainingItems -= proof.derivedItems;
+      remainingBytes -= proof.derivedBytes;
+      if (proof.blockers.length) {
+        block(preparedTarget, "prepared_history_incompatible");
+      } else resolved.add(targetKey(preparedTarget));
+      for (const id of proof.matchedDeliveryIds) {
+        const candidate = preparedCandidates.get(id);
+        if (!candidate) {
+          block(preparedTarget, "prepared_history_incompatible");
+          continue;
+        }
+        const { namespace, runId, histories } = candidate;
+        allowed.add(id);
+        terminalDeliveries.add(JSON.stringify([namespace, id]));
+        for (
+          const target of [
+            { kind: "delivery" as const, namespace, id },
+            { kind: "assignment" as const, namespace, id },
+            { kind: "action" as const, namespace, id: runId },
+          ]
+        ) resolved.add(targetKey(target));
+        for (const history of histories) {
+          if (!history.retired) plan.retirements.push(history);
+        }
       }
     }
     for (const scope of operations) {

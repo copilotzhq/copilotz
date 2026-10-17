@@ -36,6 +36,17 @@ export type OwnerPreparationRecordSourceOptions =
       OwnerPreparationSourceOptions["authorizeReference"]
     >;
   }>;
+export type OwnerPreparationRecordHistorySource = Readonly<{
+  name: string;
+  kind: string;
+  selection: "record";
+}>;
+export type OwnerPreparationRecordSource =
+  & OwnerPreparationSource
+  & Readonly<{
+    /** Detached validated registration facts, never record values or permission. */
+    historySources(): readonly OwnerPreparationRecordHistorySource[];
+  }>;
 type Context = Parameters<OwnerProjectionHandler>[1];
 const encoder = new TextEncoder();
 function fail(code = "preparation_invalid"): never {
@@ -94,7 +105,7 @@ function privateContext(context: Context): Context {
 }
 export function createOwnerPreparationRecordSource(
   options: OwnerPreparationRecordSourceOptions,
-): OwnerPreparationSource {
+): OwnerPreparationRecordSource {
   const ownerId = text(options.ownerId);
   const tables = createCoreTableNames(options.schema);
   const maxBytes = options.maxBytes ?? 1_048_576;
@@ -271,6 +282,13 @@ export function createOwnerPreparationRecordSource(
     return result;
   }
   return {
+    historySources() {
+      return [...sources].map(([name, source]) => ({
+        name,
+        kind: source.kind,
+        selection: "record" as const,
+      }));
+    },
     capture: read,
     projections: {
       "preparation.source": async (input, context) =>

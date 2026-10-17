@@ -1122,3 +1122,229 @@ test("blocked recovery refuses before capability creation and forged barrier pay
     assert.equal(executed, false);
   }
 });
+
+test("registered Action child calls use exact durable parent and normalized local keys; known failures stay tracked", async () => {
+  const calls: unknown[] = [];
+  const f = fixture({
+    action: action(async (_value, ctx) => {
+      for (
+        const operationKey of [
+          " named ",
+          undefined,
+          "  ",
+          "explicit",
+          undefined,
+        ]
+      ) {
+        try {
+          await ctx.actions.action({ ordinary: true }, { operationKey });
+        } catch { /* A settled child failure still prevents parent success. */ }
+      }
+      return null;
+    }),
+    port: {
+      invokeAction(input) {
+        calls.push(input);
+        return Promise.reject(
+          new Error(
+            "Named child result is deliberately unavailable in this unit fixture.",
+          ),
+        );
+      },
+    },
+  });
+  f.projection.invocation = {
+    ...f.projection.invocation,
+    actionRunId: ref.executionId,
+    operationKey: ref.executionId,
+  };
+  await f.worker.execute(hint);
+  assert.deepEqual(
+    calls,
+    ["named", "1", "2", "explicit", "3"].map((operationKey) => ({
+      reference: ref,
+      actionAlias: "action",
+      input: { ordinary: true },
+      operationKey,
+    })),
+  );
+  assert.deepEqual(f.state.completions, [{
+    status: "failed",
+    code: "action_failed",
+  }]);
+});
+
+test("registered Action child capability refuses unsupported frame and overrides before dispatch", async () => {
+  for (
+    const mode of [
+      "custom",
+      "run",
+      "metadata",
+      "identity",
+      "prepare",
+      "property",
+      "alias",
+    ] as const
+  ) {
+    let calls = 0;
+    const f = fixture({
+      action: action(async (_value, ctx) => {
+        try {
+          if (mode === "prepare") {
+            void ctx.actions.action.prepare;
+          } else if (mode === "property") {
+            void (ctx.actions.action as unknown as {
+              missing: { nested: unknown };
+            }).missing.nested;
+          } else if (mode === "alias") {
+            void (ctx.actions as unknown as { missing: { nested: unknown } })
+              .missing.nested;
+          } else {
+            await ctx.actions.action(
+              null,
+              mode === "metadata"
+                ? { metadata: {} }
+                : mode === "identity"
+                ? { identity: {} }
+                : {},
+            );
+          }
+        } catch { /* Unsupported access remains latched. */ }
+        return null;
+      }),
+      port: {
+        invokeAction() {
+          calls++;
+          return Promise.reject(
+            new Error("Must not dispatch unsupported child invocation."),
+          );
+        },
+      },
+    });
+    f.projection.invocation = {
+      ...f.projection.invocation,
+      actionRunId: mode === "run" ? "foreign-run" : ref.executionId,
+      operationKey: mode === "custom" ? "custom-key" : ref.executionId,
+    };
+    await f.worker.execute(hint);
+    assert.equal(calls, 0, mode);
+    assert.deepEqual(f.state.completions, [{
+      status: "failed",
+      code: "action_capability_unsupported",
+    }], mode);
+  }
+});
+
+for (const mode of ["caught", "unawaited"] as const) {
+  test(`registered Action ${mode} uncertain child admission never writes a terminal or reruns`, async () => {
+    const unknown = Object.assign(new Error("Interrupted child admission."), {
+      code: "action_admission_unknown",
+      outcome: "unknown",
+      indeterminate: true,
+    });
+    let calls = 0;
+    const f = fixture({
+      action: action(async (_value, ctx) => {
+        const pending = ctx.actions.action(null, { operationKey: "child" });
+        if (mode === "caught") {
+          try {
+            await pending;
+          } catch { /* Uncertainty cannot become success. */ }
+        }
+        return null;
+      }),
+      port: {
+        invokeAction() {
+          calls++;
+          return Promise.reject(unknown);
+        },
+      },
+    });
+    f.projection.invocation = {
+      ...f.projection.invocation,
+      actionRunId: ref.executionId,
+      operationKey: ref.executionId,
+    };
+    await assert.rejects(f.worker.execute(hint), (error) => error === unknown);
+    await assert.rejects(f.worker.execute(hint), (error) => error === unknown);
+    assert.equal(calls, 1);
+    assert.deepEqual(f.state.completions, []);
+  });
+}
+
+test("registered Action child caller closes with parent lifetime", async () => {
+  let retained!: ActionContext;
+  let calls = 0;
+  const f = fixture({
+    action: action((_value, ctx) => {
+      retained = ctx;
+      return null;
+    }),
+    port: {
+      invokeAction() {
+        calls++;
+        return Promise.reject(new Error("No late child dispatch."));
+      },
+    },
+  });
+  f.projection.invocation = {
+    ...f.projection.invocation,
+    actionRunId: ref.executionId,
+    operationKey: ref.executionId,
+  };
+  await f.worker.execute(hint);
+  assert.throws(() => retained.actions.action(null), {
+    code: "registered_worker_context_closed",
+  });
+  assert.equal(calls, 0);
+});
+
+test("direct Action effect ambiguity preserves only its fixed literal terminal code", async () => {
+  for (
+    const code of [
+      "effect_indeterminate",
+      ["effect_indeterminate"],
+      "provider-secret-code",
+      undefined,
+    ]
+  ) {
+    const f = fixture({
+      action: action(() => {
+        throw Object.assign(new Error("PRIVATE_PROVIDER_DETAIL"), { code });
+      }),
+    });
+    await f.worker.execute(hint);
+    assert.deepEqual(f.state.completions, [{
+      status: "failed",
+      code: code === "effect_indeterminate"
+        ? "effect_indeterminate"
+        : "action_failed",
+    }]);
+  }
+});
+
+test("direct Action effect ambiguity retains unknown and cancellation precedence", async () => {
+  for (const mode of ["unknown", "cancelled"] as const) {
+    const signal = new AbortController();
+    const error = Object.assign(new Error("PRIVATE_PROVIDER_DETAIL"), {
+      code: "effect_indeterminate",
+      ...(mode === "unknown" ? { outcome: "unknown" } : {}),
+    });
+    const f = fixture({
+      action: action(() => {
+        if (mode === "cancelled") signal.abort();
+        throw error;
+      }),
+    });
+    if (mode === "unknown") {
+      await assert.rejects(f.worker.execute(hint), (value) => value === error);
+      assert.deepEqual(f.state.completions, []);
+    } else {
+      await f.worker.execute(hint, { signal: signal.signal });
+      assert.deepEqual(f.state.completions, [{
+        status: "cancelled",
+        code: "action_cancelled",
+      }]);
+    }
+  }
+});

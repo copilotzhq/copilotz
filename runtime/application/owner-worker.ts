@@ -211,6 +211,10 @@ export function createOwnerConnectedWorker(
           // Work body cannot provide Action inputs; only the owner projection can.
           await context.input.cancel();
           const connection = createOwnerConnection({ ownerId, callHost });
+          let childActions:
+            | ReturnType<typeof createOwnerChildActionPort>
+            | undefined;
+          let childReference: string | undefined;
           const execution = createRegisteredActionWorker({
             registry,
             owner: {
@@ -219,6 +223,46 @@ export function createOwnerConnectedWorker(
                 namespace,
                 port: connection,
               }),
+              invokeAction(request, callOptions) {
+                const key = JSON.stringify([
+                  request.reference.executionId,
+                  request.reference.deliveryId,
+                  request.reference.dispatchAttemptId,
+                ]);
+                if (childReference !== undefined && childReference !== key) {
+                  throw new TypeError("Child Action parent cannot be rebound.");
+                }
+                childReference = key;
+                childActions ??= createOwnerChildActionPort({
+                  ownerId,
+                  namespace,
+                  parentOperationKey: request.reference.executionId,
+                  registry,
+                  port: {
+                    executeInput: connection.admitChildAction,
+                    project(kind, input, options) {
+                      if (kind !== "action.child-result") {
+                        return Promise.reject(
+                          new TypeError(
+                            "Unsupported child Action projection.",
+                          ),
+                        );
+                      }
+                      return connection.childActionResult(input, options);
+                    },
+                  },
+                });
+                return childActions.call(
+                  {
+                    deliveryId: request.reference.deliveryId,
+                    dispatchAttemptId: request.reference.dispatchAttemptId,
+                  },
+                  request.actionAlias,
+                  request.input,
+                  request.operationKey,
+                  callOptions,
+                );
+              },
               effects: {
                 execute: connection.execute,
                 settle: connection.effectSettle,

@@ -76,6 +76,17 @@ export type RegisteredOwnerExecutionPort = Readonly<{
   /** Separately admitted effect routes, bound to this live assignment. Missing
    * capability refuses ctx.effect; never substitutes worker-local receipts. */
   effects?: OwnerEffectPort;
+  /** Ordinary parent-bound child invocation. The owner independently derives
+   * durable parent identity and authority; no root-ingress fallback is valid. */
+  invokeAction?(
+    input: Readonly<{
+      reference: RegisteredExecutionReference;
+      actionAlias: string;
+      input: OwnerJson;
+      operationKey: string;
+    }>,
+    options: OwnerCommandExecuteOptions,
+  ): Promise<OwnerJson>;
   claim(
     assignment: RegisteredWorkerAssignment,
     options: OwnerCommandExecuteOptions,
@@ -154,6 +165,7 @@ import { actionTransactionIdentity } from "../actions/transaction-identity.ts";
 import { actionSchemaHasSecrets } from "../actions/secret.ts";
 import { isActionDeferral } from "../actions/deferral.ts";
 import type {
+  ActionCallOptions,
   ActionContext,
   ActionReconcileResult,
   ActionTransactionOptions,
@@ -490,7 +502,55 @@ export function createRegisteredActionWorker(
           signal: exposed.signal,
         });
         check();
-        const nested = Object.assign(unsupported, { prepare: unsupported });
+        let actionIndex = 0;
+        const nestedActions = new Proxy(
+          Object.fromEntries(
+            Object.keys(registry.actions).map((actionAlias) => [
+              actionAlias,
+              new Proxy(
+                Object.assign(
+                  (input: unknown, callOptions: ActionCallOptions = {}) => {
+                    if (
+                      !port.invokeAction ||
+                      callOptions.identity !== undefined ||
+                      callOptions.metadata !== undefined ||
+                      projection.invocation.operationKey !==
+                        projection.invocation.actionRunId ||
+                      projection.invocation.actionRunId !== ref.executionId
+                    ) return unsupported();
+                    const localKey = callOptions.operationKey?.trim() ||
+                      String(++actionIndex);
+                    identifier(localKey);
+                    return track(() =>
+                      port.invokeAction!({
+                        reference: snapshot(ref),
+                        actionAlias,
+                        input: snapshot(input) as OwnerJson,
+                        operationKey: localKey,
+                      }, {
+                        signal: callOptions.signal
+                          ? AbortSignal.any([
+                            control.signal,
+                            callOptions.signal,
+                          ])
+                          : control.signal,
+                      })
+                    );
+                  },
+                  { prepare: unsupported },
+                ),
+                { get: unsupported },
+              ),
+            ]),
+          ),
+          {
+            get(target, property) {
+              return Object.hasOwn(target, property)
+                ? Reflect.get(target, property)
+                : unsupported();
+            },
+          },
+        );
         const absentEffect = (): never => {
           capabilityFailure = true;
           throw failure("action_effect_unavailable");
@@ -557,7 +617,7 @@ export function createRegisteredActionWorker(
             signal: exposed.signal,
             nextActionIndex: unsupported,
           },
-          actions: new Proxy({}, { get: () => nested }),
+          actions: nestedActions,
           progress: unsupported,
           registerDeferredWait: unsupported,
         });
@@ -611,7 +671,9 @@ export function createRegisteredActionWorker(
             status: "failed",
             code: capabilityFailure
               ? "action_capability_unsupported"
-              : effectIndeterminate
+              : effectIndeterminate ||
+                  (error !== null && typeof error === "object" &&
+                    "code" in error && error.code === "effect_indeterminate")
               ? "effect_indeterminate"
               : "action_failed",
           };

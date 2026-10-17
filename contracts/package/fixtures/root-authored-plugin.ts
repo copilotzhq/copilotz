@@ -1,5 +1,8 @@
 /** Ordinary plugin source: every primitive is authored through the package root. */
 import {
+  type ActionNamedPreparation,
+  type ActionPrepareNamedOptions,
+  type BoundActionCaller,
   contribution,
   defineAction,
   defineCollection,
@@ -74,3 +77,24 @@ const inferredOutput: EchoOutput = "test";
 const inferredMode: "context" = contributed.resources.presentations.note.mode;
 void inferredOutput;
 void inferredMode;
+
+// Compile-only: both authoring roles preserve target output without a shipped factory.
+async function namedTypes(caller: BoundActionCaller<typeof action>) {
+  const request: ActionNamedPreparation = {
+    preparation: "context.note",
+    recordId: "note",
+    mode: "context",
+  };
+  const options: ActionPrepareNamedOptions = { operationKey: "reply" };
+  const output: string = await caller.prepareNamed(request, options);
+  // @ts-expect-error Named preparation requires an explicit local key.
+  await caller.prepareNamed(request);
+  // @ts-expect-error No caller authority is part of named options.
+  await caller.prepareNamed(request, { operationKey: "reply", identity: {} });
+  // @ts-expect-error Named preparation does not accept factory closures.
+  await caller.prepareNamed(() => ({ input: { text: "wrong" } }), options);
+  // @ts-expect-error The bound Action output remains string.
+  const wrong: number = await caller.prepareNamed(request, options);
+  return { output, wrong };
+}
+void namedTypes;

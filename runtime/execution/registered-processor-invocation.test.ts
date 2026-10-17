@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { ActionCallOptions } from "../actions/types.ts";
+import type { ActionCallOptions, RuntimeContext } from "../actions/types.ts";
 import { defineAction } from "../actions/define.ts";
 import { defineCollection } from "../collections/definition.ts";
 import { markNonRetryable } from "../failure.ts";
@@ -10,6 +10,7 @@ import {
   type Processor,
   type ProcessorContext,
 } from "../plugins/processor.ts";
+import type { AnyProcessor } from "../plugins/types.ts";
 import { createPluginRegistry } from "../plugins/registry.ts";
 import type { RegisteredProcessorInvocation } from "./registered-invocation.ts";
 import { runRegisteredProcessorInvocation } from "./registered-processor-invocation.ts";
@@ -37,7 +38,10 @@ function gate<T = void>() {
   });
   return { promise, resolve, reject };
 }
-function fixture(processor: Processor, overrides: Partial<Options> = {}) {
+function fixture<P extends AnyProcessor>(
+  processor: P,
+  overrides: Partial<Options> = {},
+) {
   const commands: OwnerCommand[] = [];
   const children: unknown[] = [];
   const control = new AbortController();
@@ -516,4 +520,133 @@ test("neutral Processor refuses an already-revoked lifetime before capability co
   });
   assert.equal(capabilities, 0);
   assert.equal(executions, 0);
+});
+
+test("neutral Processor named preparation retains data-only key and unknown failure", async () => {
+  for (const unknown of [false, true]) {
+    const calls: unknown[] = [];
+    const error = Object.assign(new Error("lost"), {
+      code: "action_admission_unknown",
+      outcome: "unknown",
+      indeterminate: true,
+    });
+    const f = fixture(
+      defineProcessor({
+        id: "processor",
+        on: [{ eventType: "source" }],
+        async handle(_event, ctx: RuntimeContext) {
+          try {
+            await ctx.actions.child.prepareNamed({
+              preparation: "context.note",
+              recordId: "note",
+              mode: "context",
+            }, { operationKey: " named " });
+          } catch { /* unknown must remain pending */ }
+        },
+      }),
+    );
+    const running = runRegisteredProcessorInvocation({
+      ...f.options,
+      calls: {
+        ...f.options.calls,
+        prepareAction(input) {
+          calls.push(input);
+          return unknown ? Promise.reject(error) : Promise.resolve(null);
+        },
+      },
+    });
+    if (unknown) await assert.rejects(running, (value) => value === error);
+    else assert.equal((await running).status, "succeeded");
+    assert.deepEqual(calls, [{
+      actionAlias: "child",
+      preparation: "context.note",
+      recordId: "note",
+      mode: "context",
+      operationKey: "named",
+    }]);
+  }
+});
+
+test("Processor worker prebinds named preparation and its exact reference before capability awaits", async () => {
+  const ready = gate();
+  const resume = gate();
+  const called: string[] = [];
+  const f = fixture(
+    defineProcessor({
+      id: "processor",
+      on: [{ eventType: "source" }],
+      async handle(_event, ctx: RuntimeContext) {
+        await ctx.actions.child.prepareNamed({
+          preparation: "context.note",
+          recordId: "note",
+          mode: "context",
+        }, { operationKey: "named" });
+      },
+    }),
+    {
+      async createCapabilities() {
+        ready.resolve();
+        await resume.promise;
+        return { resources: {}, adapters: {} };
+      },
+    },
+  );
+  const reference = { deliveryId: "delivery", dispatchAttemptId: "attempt" };
+  const lease = { remainingMs: 30_000, renewAfterMs: 10_000 };
+  const { deliveryId: _deliveryId, ...projection } = f.invocation;
+  const port: import("./registered-processor.ts").RegisteredProcessorOwnerPort =
+    {
+      claim: () => Promise.resolve({ status: "committed", result: reference }),
+      project: () =>
+        Promise.resolve({ ...projection, workerId: "worker", lease }),
+      renew: () =>
+        Promise.resolve({
+          status: "committed",
+          result: { ...reference, lease },
+        }),
+      complete: (_reference, completion) =>
+        Promise.resolve({
+          status: "committed",
+          result: {
+            ...reference,
+            status: completion.status === "failed"
+              ? "dead_letter"
+              : completion.status,
+          },
+        }),
+      readCompletion: () => Promise.resolve(undefined),
+      execute: f.options.calls.execute,
+      prepareAction(input) {
+        assert.equal(this, port);
+        assert.deepEqual(input, {
+          reference,
+          actionAlias: "child",
+          preparation: "context.note",
+          recordId: "note",
+          mode: "context",
+          operationKey: "named",
+        });
+        called.push("original");
+        return Promise.resolve(null);
+      },
+    };
+  const worker = createRegisteredProcessorWorker({
+    registry: f.registry,
+    owner: port,
+    createCapabilities: f.options.createCapabilities,
+  });
+  const result = worker.execute({
+    assignmentId: "assignment",
+    sessionId: "session",
+  });
+  await ready.promise;
+  Object.defineProperty(port, "prepareAction", {
+    value: () => {
+      called.push("replacement");
+      return Promise.resolve(null);
+    },
+  });
+  resume.resolve();
+  assert.equal((await result).receipt.status, "succeeded");
+  assert.deepEqual(called, ["original"]);
 });

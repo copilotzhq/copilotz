@@ -84,6 +84,14 @@ test("ordinary facade never retries unknown admission and refuses unsupported op
     }, { operationKey: "key" }),
     /action_prepare_unavailable/,
   );
+  await assert.rejects(
+    facade.actions.run.prepareNamed({
+      preparation: "context.note",
+      recordId: "note",
+      mode: "context",
+    }, { operationKey: "key" }),
+    /action_prepare_unavailable/,
+  );
   assert.equal(prepared, false);
   assert.equal(calls, 1);
 });

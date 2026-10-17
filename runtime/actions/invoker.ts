@@ -748,6 +748,13 @@ function actionCaller(
     }
   };
   const caller = Object.assign(invoke, {
+    prepareNamed(): Promise<never> {
+      return Promise.reject(
+        Object.assign(new Error("action_prepare_unavailable"), {
+          code: "action_prepare_unavailable",
+        }),
+      );
+    },
     async prepare(
       factory: ActionPrepareFactory<unknown>,
       options: ActionPrepareOptions,

@@ -68,6 +68,19 @@ export type RegisteredInvocationCalls = Readonly<{
     command: OwnerCommand,
     options?: OwnerCommandExecuteOptions,
   ): Promise<OwnerCommandOutcome>;
+  /** Optional named preparation, bound to the same real parent. */
+  prepareAction?(
+    input: Readonly<
+      {
+        actionAlias: string;
+        preparation: string;
+        recordId: string;
+        mode: string;
+        operationKey: string;
+      }
+    >,
+    options: OwnerCommandExecuteOptions,
+  ): Promise<OwnerJson>;
   /** Already bound to the real parent. No placement reference crosses here. */
   invokeAction?(
     input: Readonly<{

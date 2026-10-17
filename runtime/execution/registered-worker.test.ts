@@ -1348,3 +1348,46 @@ test("direct Action effect ambiguity retains unknown and cancellation precedence
     }
   }
 });
+
+test("registered Action named preparation binds exact live reference and refuses unsupported frame", async () => {
+  for (const valid of [true, false]) {
+    const calls: unknown[] = [];
+    const f = fixture({
+      action: action((_input, ctx) =>
+        ctx.actions.action.prepareNamed({
+          preparation: "context.note",
+          recordId: "note",
+          mode: "context",
+        }, { operationKey: " named " })
+      ),
+      port: {
+        prepareAction(input) {
+          calls.push(input);
+          return Promise.resolve({ answer: 7 });
+        },
+      },
+    });
+    if (valid) {
+      f.projection.invocation = {
+        ...f.projection.invocation,
+        actionRunId: ref.executionId,
+        operationKey: ref.executionId,
+      };
+    }
+    const result = await f.worker.execute(hint);
+    assert.equal(result.receipt.status, valid ? "completed" : "failed");
+    assert.deepEqual(
+      calls,
+      valid
+        ? [{
+          reference: ref,
+          actionAlias: "action",
+          preparation: "context.note",
+          recordId: "note",
+          mode: "context",
+          operationKey: "named",
+        }]
+        : [],
+    );
+  }
+});

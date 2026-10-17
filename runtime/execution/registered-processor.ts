@@ -89,6 +89,19 @@ export type RegisteredProcessorOwnerPort = Readonly<{
   ): Promise<OwnerCommandOutcome>;
   /** Parent-bound named invocation. The owner derives authority, original event,
    * scopes and canonical input. Never substitute root/ingress admission here. */
+  prepareAction?(
+    input: Readonly<
+      {
+        reference: RegisteredProcessorReference;
+        actionAlias: string;
+        preparation: string;
+        recordId: string;
+        mode: string;
+        operationKey: string;
+      }
+    >,
+    options: OwnerCommandExecuteOptions,
+  ): Promise<OwnerJson>;
   invokeAction?(
     input: Readonly<
       {
@@ -229,6 +242,7 @@ export function createRegisteredProcessorOwnerPort(
       ): Promise<Pick<OwnerReceipt, "kind" | "result"> | undefined>;
     }>;
     invokeAction?: RegisteredProcessorOwnerPort["invokeAction"];
+    prepareAction?: RegisteredProcessorOwnerPort["prepareAction"];
   }>,
 ): RegisteredProcessorOwnerPort {
   const { ownerId, port } = options;
@@ -362,6 +376,7 @@ export function createRegisteredProcessorOwnerPort(
     readCompletion,
     execute: (command, callOptions) => port.execute(command, callOptions),
     ...(options.invokeAction ? { invokeAction: options.invokeAction } : {}),
+    ...(options.prepareAction ? { prepareAction: options.prepareAction } : {}),
   };
 }
 
@@ -504,6 +519,7 @@ export function createRegisteredProcessorWorker(
         },
       });
       const invokeAction = port.invokeAction?.bind(port);
+      const prepareAction = port.prepareAction?.bind(port);
       const execute = port.execute.bind(port);
       let result: RegisteredProcessorCompletion;
       try {
@@ -529,6 +545,15 @@ export function createRegisteredProcessorWorker(
           },
           calls: {
             execute,
+            ...(prepareAction
+              ? {
+                prepareAction: (input, callOptions) =>
+                  prepareAction(
+                    { reference: snapshot(ref), ...input },
+                    callOptions,
+                  ),
+              }
+              : {}),
             ...(invokeAction
               ? {
                 invokeAction: (input, callOptions) =>

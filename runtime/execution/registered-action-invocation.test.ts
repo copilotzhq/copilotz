@@ -458,3 +458,186 @@ test("Action worker prebinds owner execute before capability preparation awaits"
   assert.equal((await result).receipt.status, "completed");
   assert.deepEqual(called, ["original"]);
 });
+
+test("neutral Action named preparation is data-only, explicit-key and bound before capability awaits", async () => {
+  const ready = gate(), resume = gate();
+  const calls: unknown[] = [];
+  const action = defineAction({
+    id: "action",
+    execute: (_input: unknown, ctx: ActionContext) =>
+      ctx.actions.action.prepareNamed({
+        preparation: "context.note",
+        recordId: "note",
+        mode: "context",
+      }, { operationKey: " named " }),
+  });
+  const f = fixture(action, {
+    async createCapabilities() {
+      ready.resolve();
+      await resume.promise;
+      return { resources: {}, adapters: {} };
+    },
+  });
+  const originalCalls = {
+    ...f.options.calls,
+    prepareAction(input: unknown) {
+      assert.equal(this, originalCalls);
+      calls.push(input);
+      return Promise.resolve({ answer: 7 });
+    },
+  };
+  const running = runRegisteredActionInvocation({
+    ...f.options,
+    calls: originalCalls,
+  });
+  await ready.promise;
+  originalCalls.prepareAction = () => {
+    throw new Error("replacement must not run");
+  };
+  resume.resolve();
+  assert.deepEqual(await running, {
+    status: "completed",
+    output: { answer: 7 },
+  });
+  assert.deepEqual(calls, [{
+    actionAlias: "action",
+    preparation: "context.note",
+    recordId: "note",
+    mode: "context",
+    operationKey: "named",
+  }]);
+});
+
+test("neutral Action named calls latch missing capability, invalid requests and unknown outcomes", async () => {
+  for (const mode of ["missing", "blank", "extra", "unknown"]) {
+    let called = 0;
+    const unknown = Object.assign(new Error("lost admission"), {
+      code: "action_admission_unknown",
+      outcome: "unknown",
+      indeterminate: true,
+    });
+    const action = defineAction({
+      id: "action",
+      async execute(_input: unknown, ctx: ActionContext) {
+        try {
+          await ctx.actions.action.prepareNamed({
+            preparation: "context.note",
+            recordId: "note",
+            mode: "context",
+            ...(mode === "extra" ? { ownerId: "forged" } : {}),
+          }, { operationKey: mode === "blank" ? " " : "key" });
+        } catch {
+          /* A caught failure remains part of invocation settlement. */
+        }
+        return "must not succeed";
+      },
+    });
+    const f = fixture(action);
+    const calls = {
+      ...f.options.calls,
+      ...(mode === "missing" ? {} : {
+        prepareAction: () => {
+          called++;
+          return Promise.reject(unknown);
+        },
+      }),
+    };
+    if (mode === "unknown") {
+      await assert.rejects(
+        runRegisteredActionInvocation({ ...f.options, calls }),
+        (error) => error === unknown,
+      );
+    } else {assert.equal(
+        (await runRegisteredActionInvocation({ ...f.options, calls })).status,
+        "failed",
+      );}
+    assert.equal(called, mode === "unknown" ? 1 : 0);
+  }
+});
+
+test("neutral Action unawaited named admission drains and captured caller closes privately", async () => {
+  const started = gate(),
+    finish = gate<import("../owner/boundary.ts").OwnerJson>();
+  let saved: ActionContext["actions"][string]["prepareNamed"] | undefined;
+  let called = 0, settled = false;
+  const f = fixture(
+    defineAction({
+      id: "action",
+      execute(_input: unknown, ctx: ActionContext) {
+        saved = ctx.actions.action.prepareNamed;
+        void saved({
+          preparation: "context.note",
+          recordId: "note",
+          mode: "context",
+        }, { operationKey: "key" });
+        return null;
+      },
+    }),
+  );
+  const running = runRegisteredActionInvocation({
+    ...f.options,
+    calls: {
+      ...f.options.calls,
+      prepareAction() {
+        called++;
+        started.resolve();
+        return finish.promise;
+      },
+    },
+  }).then((value) => {
+    settled = true;
+    return value;
+  });
+  await started.promise;
+  await Promise.resolve();
+  assert.equal(settled, false);
+  finish.resolve(null);
+  assert.equal((await running).status, "completed");
+  assert.throws(
+    () =>
+      saved!(
+        { preparation: "context.note", recordId: "note", mode: "context" },
+        { operationKey: "late" },
+      ),
+    /context_closed/,
+  );
+  assert.equal(called, 1);
+});
+
+test("neutral named preparation cannot reopen a privately cancelled context through exposed signal mutation", async () => {
+  const ready = gate(), resume = gate();
+  let called = 0;
+  const f = fixture(
+    defineAction({
+      id: "action",
+      async execute(_input: unknown, ctx: ActionContext) {
+        ready.resolve();
+        await resume.promise;
+        Object.defineProperty(ctx.signal, "aborted", { value: false });
+        return await ctx.actions.action.prepareNamed({
+          preparation: "context.note",
+          recordId: "note",
+          mode: "context",
+        }, { operationKey: "key", signal: ctx.signal });
+      },
+    }),
+  );
+  const running = runRegisteredActionInvocation({
+    ...f.options,
+    calls: {
+      ...f.options.calls,
+      prepareAction() {
+        called++;
+        return Promise.resolve(null);
+      },
+    },
+  });
+  await ready.promise;
+  f.cancel();
+  resume.resolve();
+  assert.deepEqual(await running, {
+    status: "cancelled",
+    code: "action_cancelled",
+  });
+  assert.equal(called, 0);
+});

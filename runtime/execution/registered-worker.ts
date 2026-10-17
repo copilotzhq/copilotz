@@ -73,6 +73,19 @@ export type RegisteredOwnerExecutionPort = Readonly<{
   effects?: OwnerEffectPort;
   /** Ordinary parent-bound child invocation. The owner independently derives
    * durable parent identity and authority; no root-ingress fallback is valid. */
+  prepareAction?(
+    input: Readonly<
+      {
+        reference: RegisteredExecutionReference;
+        actionAlias: string;
+        preparation: string;
+        recordId: string;
+        mode: string;
+        operationKey: string;
+      }
+    >,
+    options: OwnerCommandExecuteOptions,
+  ): Promise<OwnerJson>;
   invokeAction?(
     input: Readonly<{
       reference: RegisteredExecutionReference;
@@ -361,6 +374,11 @@ export function createRegisteredActionWorker(
           projection.invocation.actionRunId === ref.executionId
         ? port.invokeAction?.bind(port)
         : undefined;
+      const prepareAction = projection.invocation.operationKey ===
+            projection.invocation.actionRunId &&
+          projection.invocation.actionRunId === ref.executionId
+        ? port.prepareAction?.bind(port)
+        : undefined;
       const execute = port.execute.bind(port);
       let completion: RegisteredExecutionCompletion;
       try {
@@ -385,6 +403,15 @@ export function createRegisteredActionWorker(
           },
           calls: {
             execute,
+            ...(prepareAction
+              ? {
+                prepareAction: (input, callOptions) =>
+                  prepareAction(
+                    { reference: snapshot(ref), ...input },
+                    callOptions,
+                  ),
+              }
+              : {}),
             ...(invokeAction
               ? {
                 invokeAction: (input, callOptions) =>

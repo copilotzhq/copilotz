@@ -8,6 +8,7 @@ import {
 import type { PluginRegistry } from "../plugins/registry.ts";
 import {
   createRegisteredActionWorker,
+  type RegisteredExecutionReference,
   type RegisteredWorkerOptions,
 } from "../execution/registered-worker.ts";
 import { createRegisteredOwnerExecutionPort } from "../execution/owner-port.ts";
@@ -15,6 +16,7 @@ import {
   createRegisteredProcessorOwnerPort,
   createRegisteredProcessorWorker,
   ownerProcessorOperationKey,
+  type RegisteredProcessorReference,
 } from "../execution/registered-processor.ts";
 import { createOwnerChildActionPort } from "../execution/child-action-port.ts";
 import {
@@ -131,50 +133,75 @@ export function createOwnerConnectedWorker(
                 | ReturnType<typeof createOwnerChildActionPort>
                 | undefined;
               let childReference: string | undefined;
+              const getChildActions = (
+                reference: RegisteredProcessorReference,
+              ) => {
+                const key = JSON.stringify([
+                  reference.deliveryId,
+                  reference.dispatchAttemptId,
+                ]);
+                if (
+                  childReference !== undefined && childReference !== key
+                ) {
+                  throw new TypeError(
+                    "Child Action parent cannot be rebound.",
+                  );
+                }
+                childReference = key;
+                childActions ??= createOwnerChildActionPort({
+                  maxWaitMs: childWaitMs,
+                  ownerId,
+                  namespace,
+                  parentOperationKey: ownerProcessorOperationKey(
+                    reference.deliveryId,
+                  ),
+                  registry,
+                  port: {
+                    executeInput: connection.admitChildAction,
+                    prepareInput: connection.prepareChildAction,
+                    project(kind, input, options) {
+                      if (kind !== "action.child-result") {
+                        return Promise.reject(
+                          new TypeError(
+                            "Unsupported child Action projection.",
+                          ),
+                        );
+                      }
+                      return connection.childActionResult(input, options);
+                    },
+                  },
+                });
+                return childActions;
+              };
               const execution = createRegisteredProcessorWorker({
                 registry,
                 owner: createRegisteredProcessorOwnerPort({
                   ownerId,
                   port: connection,
                   invokeAction(request, callOptions) {
-                    const key = JSON.stringify([
-                      request.reference.deliveryId,
-                      request.reference.dispatchAttemptId,
-                    ]);
-                    if (
-                      childReference !== undefined && childReference !== key
-                    ) {
-                      throw new TypeError(
-                        "Child Action parent cannot be rebound.",
-                      );
-                    }
-                    childReference = key;
-                    childActions ??= createOwnerChildActionPort({
-                      maxWaitMs: childWaitMs,
-                      ownerId,
-                      namespace,
-                      parentOperationKey: ownerProcessorOperationKey(
-                        request.reference.deliveryId,
-                      ),
-                      registry,
-                      port: {
-                        executeInput: connection.admitChildAction,
-                        project(kind, input, options) {
-                          if (kind !== "action.child-result") {
-                            return Promise.reject(
-                              new TypeError(
-                                "Unsupported child Action projection.",
-                              ),
-                            );
-                          }
-                          return connection.childActionResult(input, options);
-                        },
+                    return getChildActions(request.reference).call(
+                      {
+                        deliveryId: request.reference.deliveryId,
+                        dispatchAttemptId: request.reference.dispatchAttemptId,
                       },
-                    });
-                    return childActions.call(
-                      request.reference,
                       request.actionAlias,
                       request.input,
+                      request.operationKey,
+                      callOptions,
+                    );
+                  },
+                  prepareAction(request, callOptions) {
+                    return getChildActions(request.reference).prepare(
+                      {
+                        deliveryId: request.reference.deliveryId,
+                        dispatchAttemptId: request.reference.dispatchAttemptId,
+                      },
+                      request.actionAlias,
+                      {
+                        preparation: request.preparation,
+                        recordId: request.recordId,
+                        mode: request.mode,
+                      },
                       request.operationKey,
                       callOptions,
                     );
@@ -225,6 +252,39 @@ export function createOwnerConnectedWorker(
             | ReturnType<typeof createOwnerChildActionPort>
             | undefined;
           let childReference: string | undefined;
+          const getChildActions = (reference: RegisteredExecutionReference) => {
+            const key = JSON.stringify([
+              reference.executionId,
+              reference.deliveryId,
+              reference.dispatchAttemptId,
+            ]);
+            if (childReference !== undefined && childReference !== key) {
+              throw new TypeError("Child Action parent cannot be rebound.");
+            }
+            childReference = key;
+            childActions ??= createOwnerChildActionPort({
+              maxWaitMs: childWaitMs,
+              ownerId,
+              namespace,
+              parentOperationKey: reference.executionId,
+              registry,
+              port: {
+                executeInput: connection.admitChildAction,
+                prepareInput: connection.prepareChildAction,
+                project(kind, input, options) {
+                  if (kind !== "action.child-result") {
+                    return Promise.reject(
+                      new TypeError(
+                        "Unsupported child Action projection.",
+                      ),
+                    );
+                  }
+                  return connection.childActionResult(input, options);
+                },
+              },
+            });
+            return childActions;
+          };
           const execution = createRegisteredActionWorker({
             registry,
             owner: {
@@ -234,42 +294,29 @@ export function createOwnerConnectedWorker(
                 port: connection,
               }),
               invokeAction(request, callOptions) {
-                const key = JSON.stringify([
-                  request.reference.executionId,
-                  request.reference.deliveryId,
-                  request.reference.dispatchAttemptId,
-                ]);
-                if (childReference !== undefined && childReference !== key) {
-                  throw new TypeError("Child Action parent cannot be rebound.");
-                }
-                childReference = key;
-                childActions ??= createOwnerChildActionPort({
-                  maxWaitMs: childWaitMs,
-                  ownerId,
-                  namespace,
-                  parentOperationKey: request.reference.executionId,
-                  registry,
-                  port: {
-                    executeInput: connection.admitChildAction,
-                    project(kind, input, options) {
-                      if (kind !== "action.child-result") {
-                        return Promise.reject(
-                          new TypeError(
-                            "Unsupported child Action projection.",
-                          ),
-                        );
-                      }
-                      return connection.childActionResult(input, options);
-                    },
-                  },
-                });
-                return childActions.call(
+                return getChildActions(request.reference).call(
                   {
                     deliveryId: request.reference.deliveryId,
                     dispatchAttemptId: request.reference.dispatchAttemptId,
                   },
                   request.actionAlias,
                   request.input,
+                  request.operationKey,
+                  callOptions,
+                );
+              },
+              prepareAction(request, callOptions) {
+                return getChildActions(request.reference).prepare(
+                  {
+                    deliveryId: request.reference.deliveryId,
+                    dispatchAttemptId: request.reference.dispatchAttemptId,
+                  },
+                  request.actionAlias,
+                  {
+                    preparation: request.preparation,
+                    recordId: request.recordId,
+                    mode: request.mode,
+                  },
                   request.operationKey,
                   callOptions,
                 );

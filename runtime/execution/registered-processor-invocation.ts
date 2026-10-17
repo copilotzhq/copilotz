@@ -1,3 +1,4 @@
+import { normalizeActionNamedPreparation } from "./preparation-call.ts";
 /** Ordinary Processor context/invocation kernel, independent of placement.
  * Retry/onError semantics remain distinct from Action completion and effects. */
 import type {
@@ -76,6 +77,7 @@ export async function runRegisteredProcessorInvocation(
   const projection = snapshot(options.invocation);
   const { check, isCancelled, commandSignal, exposedSignal } = options.lifetime;
   const { execute, invokeAction } = options.calls;
+  const prepareAction = options.calls.prepareAction?.bind(options.calls);
   let registering = true;
   let capabilityFailure = false;
   let pendingFailure: unknown;
@@ -201,33 +203,62 @@ export async function runRegisteredProcessorInvocation(
     const onError = processor.onError;
     const capabilities = await createCapabilities();
     check();
+    const prepareNamed =
+      (actionAlias: string) => (request: unknown, callOptions: unknown) =>
+        track(() => {
+          if (!prepareAction) {
+            capabilityFailure = true;
+            throw failure("action_prepare_unavailable");
+          }
+          const normalized = normalizeActionNamedPreparation(
+            request,
+            callOptions,
+          );
+          return prepareAction({
+            actionAlias,
+            ...normalized.request,
+            operationKey: normalized.operationKey,
+          }, {
+            signal: normalized.signal
+              ? AbortSignal.any([commandSignal, normalized.signal])
+              : commandSignal,
+          });
+        });
     const actions = Object.fromEntries(
       Object.keys(registry.actions).map((
         actionAlias,
       ) => [
         actionAlias,
         new Proxy(
-          (input: unknown, callOptions: ActionCallOptions = {}) => {
-            if (
-              !invokeAction || callOptions.identity !== undefined ||
-              callOptions.metadata !== undefined
-            ) return unsupported();
-            const localKey = callOptions.operationKey?.trim() ||
-              String(++actionIndex);
-            text(localKey);
-            return track(() =>
-              invokeAction({
-                actionAlias,
-                input: snapshot(input) as OwnerJson,
-                operationKey: localKey,
-              }, {
-                signal: callOptions.signal
-                  ? AbortSignal.any([commandSignal, callOptions.signal])
-                  : commandSignal,
-              })
-            );
+          Object.assign(
+            (input: unknown, callOptions: ActionCallOptions = {}) => {
+              if (
+                !invokeAction || callOptions.identity !== undefined ||
+                callOptions.metadata !== undefined
+              ) return unsupported();
+              const localKey = callOptions.operationKey?.trim() ||
+                String(++actionIndex);
+              text(localKey);
+              return track(() =>
+                invokeAction({
+                  actionAlias,
+                  input: snapshot(input) as OwnerJson,
+                  operationKey: localKey,
+                }, {
+                  signal: callOptions.signal
+                    ? AbortSignal.any([commandSignal, callOptions.signal])
+                    : commandSignal,
+                })
+              );
+            },
+            { prepareNamed: prepareNamed(actionAlias) },
+          ),
+          {
+            get: (target, property) =>
+              property === "prepareNamed"
+                ? Reflect.get(target, property)
+                : unsupported(),
           },
-          { get: unsupported },
         ),
       ]),
     );

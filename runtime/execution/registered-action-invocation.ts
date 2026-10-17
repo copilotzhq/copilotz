@@ -1,3 +1,4 @@
+import { normalizeActionNamedPreparation } from "./preparation-call.ts";
 /** Ordinary Action context/invocation kernel, independent of placement.
  * This returns a safe completion proposal, never a durable terminal receipt. */
 import type { PluginRegistry } from "../plugins/registry.ts";
@@ -92,6 +93,7 @@ export async function runRegisteredActionInvocation(
   const projection = snapshot(options.invocation);
   const { check, isCancelled, commandSignal, exposedSignal } = options.lifetime;
   const { execute, invokeAction } = options.calls;
+  const prepareAction = options.calls.prepareAction?.bind(options.calls);
   let capabilityFailure = false;
   let registrationOpen = true;
   // The bound counts calls over the whole invocation; settled calls stay here.
@@ -209,6 +211,27 @@ export async function runRegisteredActionInvocation(
     const capabilities = await createCapabilities();
     check();
     let actionIndex = 0;
+    const prepareNamed =
+      (actionAlias: string) => (request: unknown, callOptions: unknown) =>
+        track(() => {
+          if (!prepareAction) {
+            capabilityFailure = true;
+            throw failure("action_prepare_unavailable");
+          }
+          const normalized = normalizeActionNamedPreparation(
+            request,
+            callOptions,
+          );
+          return prepareAction({
+            actionAlias,
+            ...normalized.request,
+            operationKey: normalized.operationKey,
+          }, {
+            signal: normalized.signal
+              ? AbortSignal.any([commandSignal, normalized.signal])
+              : commandSignal,
+          });
+        });
     const nestedActions = new Proxy(
       Object.fromEntries(
         Object.keys(registry.actions).map((actionAlias) => [
@@ -239,9 +262,14 @@ export async function runRegisteredActionInvocation(
                   })
                 );
               },
-              { prepare: unsupported },
+              { prepare: unsupported, prepareNamed: prepareNamed(actionAlias) },
             ),
-            { get: unsupported },
+            {
+              get: (target, property) =>
+                property === "prepareNamed"
+                  ? Reflect.get(target, property)
+                  : unsupported(),
+            },
           ),
         ]),
       ),

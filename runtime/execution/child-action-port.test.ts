@@ -423,3 +423,216 @@ test("synchronous transport rejection on abort cannot erase interrupted admissio
     },
   );
 });
+
+test("named child port uses separate route, bound target and existing prepared-child identity", async () => {
+  const calls: OwnerInputCommand[] = [];
+  const transport = {
+    executeInput(): Promise<never> {
+      throw new Error("ordinary route must not run");
+    },
+    prepareInput(command: OwnerInputCommand) {
+      assert.equal(this, transport);
+      calls.push(structuredClone(command));
+      return Promise.resolve({
+        status: "committed" as const,
+        result: {
+          namespace: "space",
+          actionId: "fixture.child",
+          executionId:
+            'parent/action:fixture.child:prepare:["context.note","named"]',
+          eventId: "event",
+          deliveryId: "delivery",
+        },
+      });
+    },
+    project: () =>
+      Promise.resolve({ status: "completed", output: { value: 7 } }),
+  };
+  const port = createOwnerChildActionPort({
+    ownerId: "owner",
+    namespace: "space",
+    parentOperationKey: "parent",
+    registry,
+    port: transport,
+  });
+  transport.prepareInput = () => {
+    throw new Error("replacement must not run");
+  };
+  assert.deepEqual(
+    await port.prepare(reference, "child", {
+      preparation: "context.note",
+      recordId: "note",
+      mode: "context",
+    }, " named "),
+    { value: 7 },
+  );
+  assert.deepEqual(calls, [{
+    kind: "action.child-prepare",
+    domain: "logical",
+    key: JSON.stringify([
+      "action.child-prepare",
+      "owner",
+      "space",
+      "parent",
+      "context.note",
+      "named",
+    ]),
+    input: {
+      parent: { ...reference, operationKey: "parent" },
+      targetActionId: "fixture.child",
+      preparation: "context.note",
+      recordId: "note",
+      hints: { mode: "context", renderer: "text" },
+      operationKey: "named",
+    },
+  }]);
+});
+
+test("named child port refuses missing route or malformed returned target without ordinary fallback", async () => {
+  const f = setup();
+  await assert.rejects(
+    f.port.prepare(reference, "child", {
+      preparation: "context.note",
+      recordId: "note",
+      mode: "context",
+    }, "key"),
+    errorCode("action_prepare_unavailable"),
+  );
+  assert.equal(f.calls.length, 0);
+  let projected = 0;
+  const port = createOwnerChildActionPort({
+    ownerId: "owner",
+    namespace: "space",
+    parentOperationKey: "parent",
+    registry,
+    port: {
+      executeInput: () => Promise.reject(new Error("No fallback")),
+      prepareInput: () =>
+        Promise.resolve({
+          status: "committed",
+          result: {
+            namespace: "space",
+            actionId: "fixture.other",
+            executionId:
+              'parent/action:fixture.other:prepare:["context.note","key"]',
+            eventId: "event",
+            deliveryId: "delivery",
+          },
+        }),
+      project: () => {
+        projected++;
+        return Promise.resolve(null);
+      },
+    },
+  });
+  await assert.rejects(
+    port.prepare(reference, "child", {
+      preparation: "context.note",
+      recordId: "note",
+      mode: "context",
+    }, "key"),
+    errorCode("action_admission_unknown"),
+  );
+  assert.equal(projected, 0);
+});
+
+test("named admission timeout retains raw occupancy shared with ordinary children until actual settlement", async () => {
+  let reject!: (error: unknown) => void;
+  let started = 0;
+  const pending = new Promise<never>((_resolve, fail) => reject = fail);
+  const port = createOwnerChildActionPort({
+    ownerId: "owner",
+    namespace: "space",
+    parentOperationKey: "parent",
+    registry,
+    maxWaitMs: 20,
+    maxPendingCalls: 1,
+    port: {
+      executeInput: () => {
+        started++;
+        return Promise.reject(new Error("ordinary refused"));
+      },
+      prepareInput: () => {
+        started++;
+        return pending;
+      },
+      project: () => Promise.resolve(null),
+    },
+  });
+  await assert.rejects(
+    port.prepare(reference, "child", {
+      preparation: "context.note",
+      recordId: "note",
+      mode: "context",
+    }, "key"),
+    errorCode("action_admission_unknown"),
+  );
+  await assert.rejects(
+    port.call(reference, "child", null, "other"),
+    errorCode("owner_admission_refused"),
+  );
+  assert.equal(started, 1);
+  reject(new Error("actual transport settled"));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await assert.rejects(
+    port.call(reference, "child", null, "other"),
+    /ordinary refused/,
+  );
+  assert.equal(started, 2);
+});
+
+test("oversized composite preparation key cannot consume the shared child slot", async () => {
+  let calls = 0;
+  const port = createOwnerChildActionPort({
+    ownerId: "owner",
+    namespace: "space",
+    parentOperationKey: "parent",
+    registry: createPluginRegistry({
+      actions: {
+        child: defineAction({
+          id: "fixture.child",
+          execute: (x: unknown) => x,
+        }),
+      },
+    }),
+    maxPendingCalls: 1,
+    maxWaitMs: 5,
+    pollMs: 1,
+    port: {
+      executeInput() {
+        calls++;
+        return Promise.resolve({
+          status: "committed",
+          result: {
+            namespace: "space",
+            actionId: "fixture.child",
+            executionId: "parent/action:fixture.child:valid",
+            eventId: "event",
+            deliveryId: "delivery",
+          },
+        });
+      },
+      prepareInput() {
+        calls++;
+        throw new Error("should not submit invalid key");
+      },
+      project() {
+        return Promise.resolve({ status: "completed", output: "ok" });
+      },
+    },
+  });
+  const ref = {
+    deliveryId: "parent-delivery",
+    dispatchAttemptId: "parent-attempt",
+  };
+  await assert.rejects(
+    port.prepare(ref, "child", {
+      preparation: "p".repeat(600),
+      recordId: "record",
+      mode: "context",
+    }, "k".repeat(600)),
+  );
+  assert.equal(calls, 0);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(await port.call(ref, "child", {}, "valid"), "ok");
+});

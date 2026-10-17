@@ -1,4 +1,12 @@
 import type {
+  ActionNamedPreparation,
+  ActionPrepareNamedOptions,
+} from "../execution/preparation-call.ts";
+export type {
+  ActionNamedPreparation,
+  ActionPrepareNamedOptions,
+} from "../execution/preparation-call.ts";
+import type {
   ActionDeferral,
   ActionResolution,
   DeferredAction,
@@ -68,6 +76,10 @@ export type RuntimeActionCallers = Readonly<
       prepare(
         factory: ActionPrepareFactory,
         options: ActionPrepareOptions,
+      ): Promise<unknown>;
+      prepareNamed(
+        request: ActionNamedPreparation,
+        options: ActionPrepareNamedOptions,
       ): Promise<unknown>;
     }>
   >
@@ -382,6 +394,12 @@ export type BoundActionCaller<A extends AnyActionDefinition> =
     prepare(
       factory: ActionPrepareFactory<ActionInput<A>>,
       options: ActionPrepareOptions,
+    ): Promise<ActionOutput<A>>;
+    /** Calls a fixed owner registration; no factory closure crosses the connection.
+     * Requires a live parent-bound capability and an explicit local key. */
+    prepareNamed(
+      request: ActionNamedPreparation,
+      options: ActionPrepareNamedOptions,
     ): Promise<ActionOutput<A>>;
   }>;
 

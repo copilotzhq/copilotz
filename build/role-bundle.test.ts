@@ -40,6 +40,7 @@ Deno.test("worker role audits root reexports and side effects before tree shakin
     for (
       const path of [
         "runtime/execution/registered-action-invocation.ts",
+        "runtime/execution/preparation-call.ts",
         "runtime/execution/registered-processor-invocation.ts",
       ]
     ) {

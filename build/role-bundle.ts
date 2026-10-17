@@ -34,6 +34,7 @@ const runtimeModules = new Set([
   "runtime/events/types.ts",
   "runtime/events/workflow-id.ts",
   "runtime/execution/child-action-port.ts",
+  "runtime/execution/preparation-call.ts",
   "runtime/execution/execution-heartbeat.ts",
   "runtime/execution/owner-port.ts",
   "runtime/execution/recovery.ts",

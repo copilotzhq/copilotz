@@ -11,6 +11,7 @@ const workerAllowed = new Set([
   "runtime/execution/registered-processor-invocation.ts",
   "runtime/execution/registered-processor.ts",
   "runtime/execution/child-action-port.ts",
+  "runtime/execution/preparation-call.ts",
   "runtime/plugins/match.ts",
   "runtime/application/owner-worker.ts",
   "dependencies/oxian-worker.ts",

@@ -638,6 +638,39 @@ malformed or oversized history. This bounds returned data, not database work:
 the exact-key-prefix query still needs an indexed query-plan and scale proof
 against large owner receipt histories before production readiness.
 
+### Named owner preparation
+
+The connected invocation capability also has an additive data-only method:
+
+```ts
+await ctx.actions.reply.prepareNamed(
+  { preparation: "notes.reply-context", recordId: note.id, mode: "context" },
+  { operationKey: "reply" },
+);
+```
+
+The bound Action supplies the target. The owner checks that target against its
+fixed preparation registration before fresh capture or compatible replay. The
+request carries a registered name, record identifier and semantic mode; it
+cannot carry a renderer, factory, source record, namespace or caller authority.
+The explicit nonblank `operationKey` names the call in the parent invocation.
+The returned promise resolves to the child Action's normal output. Existing
+`prepare(factory, options)` retains its separate meaning.
+
+This requires a live parent-bound preparation capability and owner registration.
+Root ingress, legacy hosts and drivers without that capability refuse with
+`action_prepare_unavailable` before admission. The private connected plumbing
+and named owner command are implemented; activation of registrations in the
+production owner host is a separate integration step. This API alone does not
+activate default channel rendering, protected-value delivery or full content
+catalog support.
+
+A local timeout stops waiting, not an already-admitted child. A possibly
+committed admission remains unknown and is never automatically retried; its
+underlying call retains bounded capacity until it actually settles. Invocation
+completion drains named calls even if business code forgets to await them, and
+caught unknown outcomes cannot become a successful terminal.
+
 ## What this unlocks
 
 - One validated, inspectable operation shared by Processors, other Actions,

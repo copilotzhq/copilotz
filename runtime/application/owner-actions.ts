@@ -250,6 +250,7 @@ export function createOwnerActionCallers<A extends ActionMap>(
     };
     actions[alias] = Object.assign(call, {
       prepare: () => Promise.reject(failure("action_prepare_unavailable")),
+      prepareNamed: () => Promise.reject(failure("action_prepare_unavailable")),
     });
   }
   return {

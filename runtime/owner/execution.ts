@@ -233,7 +233,7 @@ export function createOwnerExecutionCommands(
       actionId: string,
       commandTime: string,
     ): boolean | Promise<boolean>;
-    /** Mandatory current input policy. Called before capture and each projection.
+    /** Mandatory current input policy. Called before capture, projection and mutation.
      * It may inspect current policy through tx; it must perform no external I/O.
      * This subset returns the complete ordinary captured input only when allowed. */
     authorizeInput(
@@ -871,15 +871,25 @@ export function createOwnerExecutionCommands(
           data.executionId !== a.invocation.actionRunId
         ) refuse("Completion identity is not assigned.");
         const result = completion(data.completion);
+        if (state.cancelled && result.status !== "cancelled") {
+          refuse("Scope cancellation takes precedence over worker completion.");
+        }
+        if (result.status === "completed") {
+          await recoveryBarrier(tx, state, commandTime);
+          if (
+            (await inventory(tx, state)).some((effect) =>
+              effect.status === "begun"
+            )
+          ) {
+            return indeterminate();
+          }
+        }
         if (result.status === "completed" && state.action.outputSchema) {
           validateAgainstJsonSchema(
             state.action.outputSchema,
             result.output,
             "Action output",
           );
-        }
-        if (state.cancelled && result.status !== "cancelled") {
-          refuse("Scope cancellation takes precedence over worker completion.");
         }
       } else if (mode === "renew") {
         const data = object(command.intent, ["reference", "sequence"]);
@@ -905,6 +915,14 @@ export function createOwnerExecutionCommands(
     },
     async authorizeLive(tx, caller, commandTime) {
       const state = await current(tx, caller, commandTime, "mutation");
+      const captured = await invoked(tx, state);
+      if (!captured) refuse("Execution has no captured invocation.");
+      await options.authorizeInput(
+        tx,
+        structuredClone(state.assignment),
+        json(captured.input),
+        commandTime,
+      );
       await recoveryBarrier(tx, state, commandTime);
       return state.assignment;
     },

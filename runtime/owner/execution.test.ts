@@ -6,6 +6,7 @@ import type { AnyActionDefinition } from "../actions/types.ts";
 import { ownerRenewalKey } from "../execution/owner-port.ts";
 import { createOperationCatalog } from "../streams/catalog.ts";
 import { createOwnerOperationSettlement } from "./settlement.ts";
+import { createOwnerTransactionPlanner } from "./transaction.ts";
 import type { OwnerCommand, OwnerInputCommand, OwnerJson } from "./boundary.ts";
 import {
   at,
@@ -913,12 +914,11 @@ test("owner Action accepts the exact safe effect_indeterminate failure code", as
 });
 
 test("owner Action claim and completion schedule settlement atomically, but renewal and duplicate commands do not", async () => {
-  let settlement: ReturnType<typeof createOwnerOperationSettlement>;
   const woke: string[] = [];
   const f = await fixture({
     scheduleSettlement: (ctx, target) => settlement.schedule(ctx, target),
   });
-  settlement = createOwnerOperationSettlement({
+  const settlement = createOwnerOperationSettlement({
     ownerId: "owner",
     schema: "public",
     session: f.db,
@@ -969,7 +969,6 @@ test("owner Action claim and completion schedule settlement atomically, but rene
 });
 
 test("settlement scheduling failure rolls back claim, alarm, receipt and staged wake together", async () => {
-  let settlement: ReturnType<typeof createOwnerOperationSettlement>;
   let reject = true;
   let wakes = 0;
   const f = await fixture({
@@ -978,7 +977,7 @@ test("settlement scheduling failure rolls back claim, alarm, receipt and staged 
       if (reject) throw new Error("schedule rollback");
     },
   });
-  settlement = createOwnerOperationSettlement({
+  const settlement = createOwnerOperationSettlement({
     ownerId: "owner",
     schema: "public",
     session: f.db,
@@ -1110,6 +1109,64 @@ test("completion digest canonicalizes ordered facts and refuses direct execution
         "run:action:terminal",
       ),
       null,
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+test("revoked captured Action input refuses new effect begin while restricted settlement remains", async () => {
+  const f = await fixture();
+  try {
+    await f.port().claim(f.hint(), {});
+    await f.port().project(f.reference(), {});
+    const write = createOwnerTransactionPlanner({
+      collections: f.registry.collections,
+      identity: {
+        ownerId: "owner",
+        workerId: f.caller().workerId,
+        invocationId: "run",
+      },
+      execute: (command, options) =>
+        f.boundary.execute(f.caller(), command, options),
+    });
+    const mutation = (key: string) =>
+      write({
+        operationKey: `root/work/${key}`,
+        execute: async (ctx) => {
+          await ctx.collections.notes.create({ id: key, title: "safe" });
+        },
+      });
+    await mutation("before-revocation");
+    const prior = await f.effects().begin("before-revocation");
+    assert.equal(prior.status, "proceed");
+    await f.set("input_granted", false);
+    await assert.rejects(
+      mutation("before-revocation"),
+      /input authorization revoked/,
+    );
+    await assert.rejects(
+      mutation("after-revocation"),
+      /input authorization revoked/,
+    );
+    await assert.rejects(
+      () => f.effects().begin("before-revocation"),
+      /input authorization revoked/,
+    );
+    await assert.rejects(
+      () => f.effects().begin("after-revocation"),
+      /input authorization revoked/,
+    );
+    assert.equal(
+      (await f.db.query(
+        "SELECT 1 FROM owner_receipts WHERE kind='effect.begin'",
+      )).rows.length,
+      1,
+    );
+    await f.effects().confirm("before-revocation", { providerId: "safe" });
+    await f.boundary.executeInput(
+      f.caller(),
+      f.completeCommand({ status: "failed", code: "action_failed" }),
     );
   } finally {
     await f.close();

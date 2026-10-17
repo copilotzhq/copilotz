@@ -636,3 +636,16 @@ its fixed safe envelope. The migration passed 105 typed compatibility cases,
 focused canonical-order/changed-fact/identity/bypass checks and all 14 actual
 in-process/WebSocket sibling transport cases. Protected/content output and the
 published dependency integration remain separate requirements.
+
+### Current captured-input authorization before mutations
+
+Action Collection/child/effect-begin authority now rechecks the current input
+policy against detached copies of the original captured input and assignment.
+Revocation refuses both new commands and compatible mutation replay, while the
+separate restricted settlement route can record already-started effects and safe
+failure completion. Completion success also checks cancellation/effect recovery
+before output validation and before receipt lookup, preserving the existing
+fixed uncertainty classification. The revoked-input failure was reproduced
+before fixing; final serial execution29 and recovery11 pass, independently41
+including the original reproduction. An earlier concurrent rerun was killed with
+exit137 and is not counted as completed evidence.

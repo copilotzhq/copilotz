@@ -31,6 +31,7 @@ import {
   type OwnerCaller,
   type OwnerCommand,
   type OwnerCommandContext,
+  type OwnerInputCommand,
   type OwnerJson,
 } from "./boundary.ts";
 import { createOwnerCollectionCommand } from "./collections.ts";
@@ -340,7 +341,8 @@ export async function fixture(
       collections: collection,
     },
     projections: { ...execution.projections, ...effects.projections },
-    async authorize(tx, caller, command, time) {
+    inputDefinitions: execution.inputDefinitions,
+    async authorize(tx, caller, command, time, normalizedInput) {
       state.commitKind = command.kind;
       if (command.kind === "collections") {
         const assignment = await execution.authorizeLive(tx, caller, time);
@@ -351,7 +353,13 @@ export async function fixture(
         );
       } else if (command.kind.startsWith("effect.")) {
         await effects.authorize(tx, caller, command, time);
-      } else await execution.authorize(tx, caller, command, time);
+      } else {await execution.authorize(
+          tx,
+          caller,
+          command,
+          time,
+          normalizedInput,
+        );}
     },
     async authenticateReceipt(tx, caller) {
       const found = await tx.query(
@@ -472,7 +480,11 @@ export async function fixture(
           return value;
         },
         async complete(command, options) {
-          const value = await boundary.execute(authenticated, command, options);
+          const value = await boundary.executeInput(
+            authenticated,
+            command,
+            options,
+          );
           if (state.lostCompletion) {
             state.lostCompletion = false;
             throw Object.assign(new Error("lost committed completion reply"), {
@@ -519,11 +531,11 @@ export async function fixture(
   });
   const completeCommand = (
     completion: RegisteredExecutionCompletion,
-  ): OwnerCommand => ({
+  ): OwnerInputCommand => ({
     kind: "execution.complete",
     domain: "logical",
     key: ownerCompletionKey("owner", "space", "run"),
-    intent: { namespace: "space", executionId: "run", completion },
+    input: { namespace: "space", executionId: "run", completion },
   });
   return {
     db,
@@ -548,6 +560,8 @@ export async function fixture(
     hint,
     claimCommand,
     completeCommand,
+    normalizeCompletion:
+      execution.inputDefinitions["execution.complete"].normalize,
     reference: () => ({
       executionId: "run",
       deliveryId: binding.deliveryId,

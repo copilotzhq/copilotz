@@ -932,7 +932,10 @@ export async function createOwnerHost(options: OwnerHostOptions) {
         return !!grants && current(fence);
       },
     },
-    inputDefinitions: { [OWNER_ACTION_ADMISSION]: admission.inputDefinition },
+    inputDefinitions: {
+      ...execution.inputDefinitions,
+      [OWNER_ACTION_ADMISSION]: admission.inputDefinition,
+    },
     async authorize(tx, caller, command, time, normalized) {
       if (command.kind.startsWith("host.")) {
         assertControl(caller);
@@ -1033,7 +1036,7 @@ export async function createOwnerHost(options: OwnerHostOptions) {
         });
         return;
       }
-      return await execution.authorize(tx, caller, command, time);
+      return await execution.authorize(tx, caller, command, time, normalized);
     },
     authenticateReceipt(_tx, caller) {
       if (

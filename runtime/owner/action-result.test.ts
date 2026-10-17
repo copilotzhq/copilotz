@@ -329,7 +329,10 @@ async function setup() {
       [OWNER_ACTION_ADMISSION]: admission.handler,
       ...execution.handlers,
     },
-    inputDefinitions: { [OWNER_ACTION_ADMISSION]: admission.inputDefinition },
+    inputDefinitions: {
+      ...execution.inputDefinitions,
+      [OWNER_ACTION_ADMISSION]: admission.inputDefinition,
+    },
     projections: {
       ...execution.projections,
       ...Object.fromEntries(projections.map((p) => [p.kind, p.handler])),
@@ -345,7 +348,7 @@ async function setup() {
         assert.deepEqual(normalized.metadata, metadata);
         return;
       }
-      return await execution.authorize(tx, who, command, time);
+      return await execution.authorize(tx, who, command, time, normalized);
     },
     authenticateReceipt(_tx, who) {
       if (!["ingress", "worker"].includes(who.workerId)) {
@@ -390,7 +393,7 @@ async function setup() {
       execute: (command, options) =>
         owner.execute(workerCaller(), command, options),
       complete: (command, options) =>
-        owner.execute(workerCaller(), command, options),
+        owner.executeInput(workerCaller(), command, options),
       project: (kind, value, options) =>
         owner.project(workerCaller(), kind, value, options),
       readReceipt: (identity) => owner.readReceipt(workerCaller(), identity),

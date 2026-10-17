@@ -371,13 +371,17 @@ export function createOwnerWorkerCallAdmission(
         }
         if (isCompletion) {
           const command = object(payload);
+          const valueField = command.kind === "execution.complete"
+            ? "input"
+            : "intent";
           if (
             !((command.kind === "execution.complete" &&
               command.domain === "logical") ||
               (command.kind === "processor.complete" &&
                 command.domain === "incarnation")) ||
+            !Object.hasOwn(command, valueField) ||
             Object.keys(command).some((key) =>
-              !["kind", "domain", "key", "intent"].includes(key)
+              !["kind", "domain", "key", valueField].includes(key)
             )
           ) {
             throw new TypeError("Invalid restricted completion command.");
@@ -451,7 +455,8 @@ export function createOwnerWorkerCallAdmission(
         }
         const result =
           context.workload === ACTION || context.workload === ACTION_CALL ||
-            context.workload === CHILD_ACTION
+            context.workload === CHILD_ACTION ||
+            (isCompletion && object(payload).kind === "execution.complete")
             ? await owner.executeInput(admitted, payload as OwnerInputCommand, {
               signal,
             })
@@ -705,7 +710,7 @@ export function createOwnerConnection(
     },
     /** Restricted current-assignment settlement, separate from general ctx grants. */
     async complete(
-      command: OwnerCommand,
+      command: OwnerCommand | OwnerInputCommand,
       callOptions?: Readonly<{ signal?: AbortSignal; deadlineAtMs?: number }>,
     ): Promise<OwnerCommandOutcome> {
       if (

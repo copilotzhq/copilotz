@@ -6,7 +6,11 @@ import {
   ownerCompletionKey,
   ownerRenewalKey,
 } from "./owner-port.ts";
-import type { OwnerCommand, OwnerJson } from "../owner/boundary.ts";
+import type {
+  OwnerCommand,
+  OwnerInputCommand,
+  OwnerJson,
+} from "../owner/boundary.ts";
 const ref = {
   executionId: "run",
   deliveryId: "delivery",
@@ -15,7 +19,7 @@ const ref = {
 const done = { ...ref, status: "completed" as const };
 function fixture() {
   const commands: OwnerCommand[] = [];
-  const completions: OwnerCommand[] = [];
+  const completions: OwnerInputCommand[] = [];
   const projections: unknown[] = [];
   const reads: string[] = [];
   const receipts = new Map<string, { kind: string; result: OwnerJson }>();
@@ -74,7 +78,7 @@ test("owner execution mapper shares deterministic data-only claim and terminal k
     kind: "execution.complete",
     domain: "logical",
     key: ownerCompletionKey("owner", "space", "run"),
-    intent: {
+    input: {
       namespace: "space",
       executionId: "run",
       completion: { status: "completed", output: { ok: true } },

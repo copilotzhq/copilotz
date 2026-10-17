@@ -9,6 +9,7 @@ import {
   type OwnerCaller,
   type OwnerCommand,
   type OwnerCommandBoundary,
+  type OwnerInputCommand,
   type OwnerJson,
 } from "./boundary.ts";
 import {
@@ -439,6 +440,9 @@ async function fixture(
       holderId: "holder",
       maxGroup: 1,
       inputDefinitions: {
+        "execution.complete": {
+          normalize: (input) => ({ intent: null, value: input }),
+        },
         "action.admit": {
           normalize: (input) => ({ intent: { fixture: true }, value: input }),
         },
@@ -1038,10 +1042,10 @@ test("projection adapter suppresses data if authority cancellation wins after re
 });
 
 test("restricted completion admission survives ctx revocation without granting other commands", async () => {
-  const calls: OwnerCommand[] = [];
+  const calls: OwnerInputCommand[] = [];
   const port = admission(
     recordingBoundary({
-      execute(_caller, command) {
+      executeInput(_caller, command) {
         calls.push(command);
         return Promise.resolve({
           status: "committed",
@@ -1065,7 +1069,7 @@ test("restricted completion admission survives ctx revocation without granting o
     kind: "execution.complete",
     domain: "logical",
     key: "terminal",
-    intent: { status: "completed" },
+    input: { status: "completed" },
   };
   assert.equal(
     decode(
@@ -1139,7 +1143,7 @@ test("restricted completion rechecks settlement authority after streamed admissi
           kind: "execution.complete",
           domain: "logical",
           key: "terminal",
-          intent: null,
+          input: null,
         }),
       ),
     );
@@ -1179,7 +1183,7 @@ test("completion client selects only the restricted route and preserves terminal
       kind: "execution.complete",
       domain: "logical",
       key: "terminal",
-      intent: null,
+      input: null,
     }),
     (error: unknown) =>
       error instanceof OwnerCallRejected &&

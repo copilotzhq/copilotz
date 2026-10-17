@@ -622,3 +622,17 @@ included in this same coherent checkpoint because the child capability and
 Processor graph depend on one another. Full general-plugin host transport
 remains the next proof; owner-local mode is still separate from this leased
 worker path.
+
+### Digest-bound ordinary Action completion
+
+Action completion uses the registered normalized-input boundary. A versioned
+canonical digest binds namespace, stable run identity and every terminal fact;
+ordinary output is retained in the existing lifecycle body rather than command
+receipt intent. Current assignment, immutable registered target and output policy
+are checked before receipt lookup. Plain command execution cannot bypass this
+normalizer. Settled attempts retain the existing restricted safe-receipt recovery
+rules, without regaining execution or input authority. Processor completion keeps
+its fixed safe envelope. The migration passed 105 typed compatibility cases,
+focused canonical-order/changed-fact/identity/bypass checks and all 14 actual
+in-process/WebSocket sibling transport cases. Protected/content output and the
+published dependency integration remain separate requirements.

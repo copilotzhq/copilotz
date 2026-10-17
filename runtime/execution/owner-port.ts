@@ -3,6 +3,7 @@ import type {
   OwnerCommand,
   OwnerCommandExecuteOptions,
   OwnerCommandOutcome,
+  OwnerInputCommand,
   OwnerJson,
   OwnerReceipt,
 } from "../owner/boundary.ts";
@@ -49,7 +50,7 @@ type DataPort = Readonly<{
     options?: OwnerCommandExecuteOptions,
   ): Promise<OwnerCommandOutcome>;
   complete(
-    command: OwnerCommand,
+    command: OwnerInputCommand,
     options?: OwnerCommandExecuteOptions,
   ): Promise<OwnerCommandOutcome>;
   project(
@@ -257,7 +258,7 @@ export function createRegisteredOwnerExecutionPort(
         kind: "execution.complete",
         domain: "logical",
         key: ownerCompletionKey(ownerId, namespace, ref.executionId),
-        intent: { namespace, executionId: ref.executionId, completion },
+        input: { namespace, executionId: ref.executionId, completion },
       }, callOptions);
       return { status: outcome.status, result: terminal(outcome.result, ref) };
     },

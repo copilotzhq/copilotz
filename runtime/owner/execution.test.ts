@@ -6,7 +6,7 @@ import type { AnyActionDefinition } from "../actions/types.ts";
 import { ownerRenewalKey } from "../execution/owner-port.ts";
 import { createOperationCatalog } from "../streams/catalog.ts";
 import { createOwnerOperationSettlement } from "./settlement.ts";
-import type { OwnerCommand } from "./boundary.ts";
+import type { OwnerCommand, OwnerInputCommand, OwnerJson } from "./boundary.ts";
 import {
   at,
   deferred,
@@ -218,7 +218,7 @@ test("expiry, replacement assignment and stale epoch cannot hydrate or settle", 
       { code: "ActionOwnershipLost" },
     );
     await assert.rejects(
-      f.boundary.execute(
+      f.boundary.executeInput(
         { ...f.caller(), ownerEpoch: 0 },
         f.completeCommand({ status: "cancelled", code: "action_cancelled" }),
       ),
@@ -355,7 +355,7 @@ test("command keys, namespace and invocation are reauthorized on duplicate claim
         },
         {
           ...f.completeCommand({ status: "failed", code: "action_failed" }),
-          intent: {
+          input: {
             namespace: "other",
             executionId: "run",
             completion: { status: "failed", code: "action_failed" },
@@ -364,7 +364,9 @@ test("command keys, namespace and invocation are reauthorized on duplicate claim
       ]
     ) {
       await assert.rejects(
-        f.boundary.execute(f.caller(), command as OwnerCommand),
+        command.kind === "execution.complete"
+          ? f.boundary.executeInput(f.caller(), command as OwnerInputCommand)
+          : f.boundary.execute(f.caller(), command as OwnerCommand),
         { code: "ActionOwnershipLost" },
       );
     }
@@ -525,12 +527,12 @@ test("unknown outer claim or completion rolls back all effects and stops the own
       // Direct command avoids the separate recovery-read transaction consuming
       // this deliberately injected outer-command failure.
       await assert.rejects(
-        f.boundary.execute(
-          f.caller(),
-          terminal
-            ? f.completeCommand({ status: "failed", code: "action_failed" })
-            : f.claimCommand(),
-        ),
+        terminal
+          ? f.boundary.executeInput(
+            f.caller(),
+            f.completeCommand({ status: "failed", code: "action_failed" }),
+          )
+          : f.boundary.execute(f.caller(), f.claimCommand()),
         { code: "owner_commit_unknown" },
       );
       assert.deepEqual(await snapshot(f.db), before);
@@ -1020,6 +1022,94 @@ test("settlement scheduling failure rolls back claim, alarm, receipt and staged 
     assert.equal(
       (await f.db.query("SELECT * FROM owner_alarms")).rows.length,
       1,
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+test("Action completion retains output only in lifecycle body, not durable receipt intent", async () => {
+  const f = await fixture();
+  try {
+    await f.worker().execute(f.hint());
+    const receipts = await f.db.query(
+      "SELECT * FROM owner_receipts WHERE kind='execution.complete'",
+    );
+    assert.equal(receipts.rows.length, 1);
+    assert.equal(JSON.stringify(receipts.rows).includes("hello world!"), false);
+    const terminal = await createActionLifecycleLoader({ store: f.store })(
+      "space",
+      "run:action:terminal",
+    );
+    assert.equal(terminal?.status, "completed");
+    assert(terminal && terminal.status === "completed");
+    assert.equal(
+      (terminal.output as { message: string }).message,
+      "hello world!",
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+test("completion digest canonicalizes ordered facts and refuses direct execution or wrong identity", async () => {
+  const f = await fixture();
+  try {
+    const value = {
+      namespace: "space",
+      executionId: "run",
+      completion: { status: "completed", output: { a: 1, b: { x: 2, y: 3 } } },
+    };
+    const first = await f.normalizeCompletion(value);
+    const reordered = await f.normalizeCompletion({
+      completion: { output: { b: { y: 3, x: 2 }, a: 1 }, status: "completed" },
+      executionId: "run",
+      namespace: "space",
+    });
+    assert.deepEqual(first.intent, reordered.intent);
+    for (
+      const completion of [
+        { status: "completed", output: { a: 2, b: { x: 2, y: 3 } } },
+        { status: "failed", code: "action_failed" },
+        { status: "failed", code: "effect_indeterminate" },
+        { status: "cancelled", code: "action_cancelled" },
+      ] as OwnerJson[]
+    ) {
+      const changed = await f.normalizeCompletion({ ...value, completion });
+      assert.notDeepEqual(changed.intent, first.intent);
+    }
+    await f.boundary.execute(f.caller(), f.claimCommand());
+    const command = f.completeCommand({
+      status: "failed",
+      code: "action_failed",
+    });
+    await assert.rejects(f.boundary.execute(f.caller(), {
+      kind: command.kind,
+      domain: command.domain,
+      key: command.key,
+      intent: first.intent,
+    }));
+    for (const field of ["namespace", "executionId"]) {
+      await assert.rejects(f.boundary.executeInput(f.caller(), {
+        ...command,
+        input: {
+          ...command.input as Record<string, OwnerJson>,
+          [field]: "other",
+        },
+      }));
+    }
+    assert.equal(
+      (await f.db.query(
+        "SELECT * FROM owner_receipts WHERE kind='execution.complete'",
+      )).rows.length,
+      0,
+    );
+    assert.equal(
+      await createActionLifecycleLoader({ store: f.store })(
+        "space",
+        "run:action:terminal",
+      ),
+      null,
     );
   } finally {
     await f.close();

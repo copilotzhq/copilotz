@@ -34,6 +34,7 @@ import {
   ownerRenewalKey,
 } from "../execution/owner-port.ts";
 import { assertJsonValue } from "../json.ts";
+import { digestContent } from "../content/digest.ts";
 import { readExecutionClaim } from "../execution/recovery.ts";
 import type { RegisteredExecutionRecovery } from "../execution/recovery.ts";
 import { readOwnerEffectInventory } from "./effects.ts";
@@ -49,6 +50,7 @@ import type {
   OwnerCommand,
   OwnerCommandContext,
   OwnerCommandHandler,
+  OwnerCommandInputDefinition,
   OwnerJson,
   OwnerProjectionHandler,
 } from "./boundary.ts";
@@ -117,6 +119,38 @@ function json(input: unknown): OwnerJson {
   }
   return structuredClone(input) as OwnerJson;
 }
+function ordered(value: OwnerJson): OwnerJson {
+  if (Array.isArray(value)) return value.map(ordered);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.keys(value).sort().map(
+        (key) => [key, ordered((value as Record<string, OwnerJson>)[key])],
+      ),
+    );
+  }
+  return value;
+}
+const completionInput: OwnerCommandInputDefinition = {
+  async normalize(input) {
+    const data = object(input, ["namespace", "executionId", "completion"]);
+    text(data.namespace);
+    text(data.executionId);
+    const value = ordered(
+      json({
+        namespace: data.namespace,
+        executionId: data.executionId,
+        completion: completion(data.completion),
+      }),
+    );
+    const digest = await digestContent(
+      new TextEncoder().encode(JSON.stringify(value)),
+    );
+    return {
+      intent: { encoding: "copilotz.action-completion.v1", digest },
+      value,
+    };
+  },
+};
 function reference(
   assignment: OwnerExecutionAssignment,
 ): RegisteredExecutionReference {
@@ -210,6 +244,7 @@ export function createOwnerExecutionCommands(
     ): void | Promise<void>;
   }>,
 ): Readonly<{
+  inputDefinitions: Readonly<Record<string, OwnerCommandInputDefinition>>;
   handlers: Readonly<Record<string, OwnerCommandHandler>>;
   projections: Readonly<Record<string, OwnerProjectionHandler>>;
   authorize(
@@ -217,6 +252,7 @@ export function createOwnerExecutionCommands(
     caller: OwnerCaller,
     command: OwnerCommand,
     commandTime: string,
+    normalizedInput?: OwnerJson,
   ): Promise<void>;
   /** Narrow current-attempt settlement capability, including after ctx
    * revocation. The caller must separately bind the effect reference. */
@@ -682,9 +718,14 @@ export function createOwnerExecutionCommands(
       ),
     });
   };
-  const complete: OwnerCommandHandler = async (intent, context) => {
+  const complete: OwnerCommandHandler = async (_intent, context) => {
     const state = requireAuthorized(context.tx);
-    const data = completion((intent as { completion: OwnerJson }).completion);
+    const value = object(context.input, [
+      "namespace",
+      "executionId",
+      "completion",
+    ]);
+    const data = completion(value.completion);
     const captured = await invoked(context.tx, state);
     if (!captured) refuse("Execution has no captured invocation.");
     if (data.status === "completed") {
@@ -778,13 +819,20 @@ export function createOwnerExecutionCommands(
     });
   };
   return {
+    inputDefinitions: { "execution.complete": completionInput },
     handlers: {
       "execution.claim": claim,
       "execution.complete": complete,
       "execution.renew": renew,
     },
     projections: { "execution.input": project },
-    async authorize(tx, caller, command, commandTime) {
+    async authorize(
+      tx,
+      caller,
+      command,
+      commandTime,
+      normalizedInput?: OwnerJson,
+    ) {
       const mode = command.kind === "execution.claim"
         ? "claim"
         : command.kind === "execution.complete"
@@ -806,7 +854,7 @@ export function createOwnerExecutionCommands(
           data.assignmentId !== a.assignmentId || data.sessionId !== a.sessionId
         ) refuse("Claim identity is not assigned.");
       } else if (mode === "complete") {
-        const data = object(command.intent, [
+        const data = object(normalizedInput, [
           "namespace",
           "executionId",
           "completion",
@@ -823,6 +871,13 @@ export function createOwnerExecutionCommands(
           data.executionId !== a.invocation.actionRunId
         ) refuse("Completion identity is not assigned.");
         const result = completion(data.completion);
+        if (result.status === "completed" && state.action.outputSchema) {
+          validateAgainstJsonSchema(
+            state.action.outputSchema,
+            result.output,
+            "Action output",
+          );
+        }
         if (state.cancelled && result.status !== "cancelled") {
           refuse("Scope cancellation takes precedence over worker completion.");
         }

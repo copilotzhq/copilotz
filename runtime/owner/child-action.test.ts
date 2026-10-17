@@ -212,6 +212,7 @@ async function setup(maxPendingDeliveries = 128) {
       ...execution.handlers,
     },
     inputDefinitions: {
+      ...execution.inputDefinitions,
       [OWNER_ACTION_ADMISSION]: root.inputDefinition,
       [OWNER_CHILD_ACTION_ADMISSION]: child.inputDefinition,
     },
@@ -229,7 +230,7 @@ async function setup(maxPendingDeliveries = 128) {
           command.kind,
         )
       ) return await child.authorize(tx, caller, command, time, input);
-      await execution.authorize(tx, caller, command, time);
+      await execution.authorize(tx, caller, command, time, input);
     },
     authenticateReceipt() {
       throw new Error("No child receipt hydration route");
@@ -340,11 +341,11 @@ async function setup(maxPendingDeliveries = 128) {
   async function complete(ref: OwnerChildActionReference, output: OwnerJson) {
     const a = assign(ref, `child:${ref.actionId}`, rootRef.executionId);
     await claim(a);
-    return await boundary.execute(caller(a), {
+    return await boundary.executeInput(caller(a), {
       kind: "execution.complete",
       domain: "logical",
       key: ownerCompletionKey(ownerId, namespace, ref.executionId),
-      intent: {
+      input: {
         namespace,
         executionId: ref.executionId,
         completion: { status: "completed", output },

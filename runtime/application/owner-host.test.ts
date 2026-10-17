@@ -8,6 +8,7 @@ import {
   type OwnerHostTransportOptions,
 } from "./owner-host.ts";
 import { createOwnerConnectedWorker } from "./owner-worker.ts";
+import { createOwnerActionCallers } from "./owner-actions.ts";
 import type { ActionContext } from "../actions/types.ts";
 import { defineAction } from "../actions/define.ts";
 import { defineCollection } from "../collections/definition.ts";
@@ -604,6 +605,28 @@ for (const mode of ["in-process", "websocket"] as const) {
           "SELECT metadata FROM events WHERE type='copilotz.owner.action.requested' AND metadata->>'requestId' LIKE 'root-call%' ORDER BY position LIMIT 1",
         )).rows[0];
         assert.deepEqual(captured.metadata.ingress, provenance());
+        const facade = createOwnerActionCallers({
+          actions: appRegistry.actions,
+          namespace: "space",
+          port: connection,
+        });
+        try {
+          assert.equal(
+            await facade.actions.work("facade", { operationKey: "facade" }),
+            "done:facade",
+          );
+          assert.equal(
+            await facade.actions.work("facade", { operationKey: "facade" }),
+            "done:facade",
+          );
+          authorized = false;
+          await assert.rejects(
+            facade.actions.work("facade", { operationKey: "facade" }),
+          );
+          authorized = true;
+        } finally {
+          facade.close();
+        }
         const effectRequest = {
           ...command,
           key: ownerActionAdmissionKey("owner", "space", "effect-request"),

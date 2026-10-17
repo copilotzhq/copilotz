@@ -561,3 +561,16 @@ Processor/child host composition, actual dropped-Start negative proof,
 owner-local execution, public factory, protected/content/stream support and
 default Views remain open. Transport fixtures still require the explicit
 unpublished sibling mapping.
+
+### Common ordinary Action caller
+
+The internal typed ActionCaller component shares output semantics across owner
+placements. It preserves trimmed/blank operation-key behavior, admits once and
+polls only current-authorized ordinary terminal results. Duration and concurrent
+waits are bounded; noncooperative requests retain reservations. Interrupted or
+malformed admission replies remain indeterminate with the requested identity;
+interruption after a known admission retains a safe reference and does not imply
+durable cancellation. Unsupported options and prepare refuse before admission.
+Eight independent typed cases and the five actual host cases using this facade
+pass. This is the common Action component, not the complete public constructor
+or Collection/content/protected facade.

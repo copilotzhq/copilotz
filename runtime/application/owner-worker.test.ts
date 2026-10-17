@@ -17,7 +17,7 @@ function deferred<T = void>() {
   });
   return { promise, resolve, reject };
 }
-function fixture() {
+function fixture(childWaitMs?: number) {
   let lifecycle!: NonNullable<WorkerLifecycleCallbacks>;
   let connectionId = "first";
   let stopped = 0;
@@ -50,6 +50,7 @@ function fixture() {
     registry: createPluginRegistry({}),
     ownerId: "owner",
     namespace: "space",
+    childWaitMs,
     worker: {
       id: "worker",
       transport: { type: "in-process", config: { topic: "unused" } },
@@ -118,4 +119,29 @@ test("current session handshake refusal retires transport even after initial rea
   await delay(0);
   assert.equal(f.worker.snapshot().ownerReady, false);
   assert.equal(f.stopped(), 1);
+});
+
+test("private child wait timeout is bounded before worker transport creation", async () => {
+  for (const childWaitMs of [0, -1, 1.5, 60_001, NaN, Infinity]) {
+    let opened = false;
+    const factory = (() => {
+      opened = true;
+      throw new Error("Unexpected transport construction.");
+    }) as unknown as typeof createWorker;
+    assert.throws(() =>
+      createOwnerConnectedWorker({
+        registry: createPluginRegistry({}),
+        ownerId: "owner",
+        namespace: "space",
+        worker: {} as never,
+        childWaitMs,
+        createCapabilities: () => ({ resources: {}, adapters: {} }),
+      }, factory), /Child Action wait timeout is invalid/);
+    assert.equal(opened, false);
+  }
+  for (const childWaitMs of [1, 60_000]) {
+    const f = fixture(childWaitMs);
+    await f.worker.close();
+    assert.equal(f.stopped(), 1);
+  }
 });

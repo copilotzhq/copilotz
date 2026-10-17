@@ -35,6 +35,8 @@ export type OwnerConnectedWorkerOptions = Readonly<{
     typeof createRegisteredProcessorWorker
   >[0]["createCapabilities"];
   ownerReadyTimeoutMs?: number;
+  /** Local child wait bound only; it never grants or extends a parent lease. */
+  childWaitMs?: number;
 }>;
 type HostWorker = Worker & { callHost?: OwnerHostCaller };
 function deferred() {
@@ -71,6 +73,13 @@ export function createOwnerConnectedWorker(
   const timeout = options.ownerReadyTimeoutMs ?? 10_000;
   if (!Number.isSafeInteger(timeout) || timeout < 1 || timeout > 120_000) {
     throw new TypeError("Owner readiness timeout is invalid.");
+  }
+  const childWaitMs = options.childWaitMs ?? 30_000;
+  if (
+    !Number.isSafeInteger(childWaitMs) || childWaitMs < 1 ||
+    childWaitMs > 60_000
+  ) {
+    throw new TypeError("Child Action wait timeout is invalid.");
   }
   const first = deferred();
   type Session = {
@@ -141,6 +150,7 @@ export function createOwnerConnectedWorker(
                     }
                     childReference = key;
                     childActions ??= createOwnerChildActionPort({
+                      maxWaitMs: childWaitMs,
                       ownerId,
                       namespace,
                       parentOperationKey: ownerProcessorOperationKey(
@@ -234,6 +244,7 @@ export function createOwnerConnectedWorker(
                 }
                 childReference = key;
                 childActions ??= createOwnerChildActionPort({
+                  maxWaitMs: childWaitMs,
                   ownerId,
                   namespace,
                   parentOperationKey: request.reference.executionId,

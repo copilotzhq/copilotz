@@ -15,11 +15,16 @@ Action puts one Telegram request behind the owner's effect protocol.
 
 ## How to use it
 
-Compose `telegramChannelPlugin`, an external-egress channel resource, and the
-existing `adapters.channelProviders[channelId]` config/transport. Invoke its
-`telegramSendText` Action only through the owner-backed execution path. Missing
-effect authority fails before any provider request. Credentials stay in the
-prebound adapter; protected-slot hydration is separate unfinished integration.
+The currently tested owner composition registers the standalone
+`telegramSendTextAction` under the `telegramSendText` alias, with an
+external-egress channel resource and the existing
+`adapters.channelProviders[channelId]` config/transport. Invoke that Action only
+through the owner-backed execution path. The complete `telegramChannelPlugin`
+inherits core content and deferred-Action capabilities that the current fresh
+owner host still refuses; full plugin activation awaits those conversions.
+Missing effect authority fails before any provider request. Credentials stay in
+the prebound adapter; protected-slot hydration is separate unfinished
+integration.
 
 ## How it works
 
@@ -47,3 +52,30 @@ The source fixture also does not certify a database-free deployable provider
 artifact. Existing public plugin barrels still reach host implementation
 modules; role-specific build resolution and its emitted-closure proof remain a
 separate package gate.
+
+## Actual transport proof
+
+`transport.integration.test.ts` uses the real owner host, registered Action
+worker, ingress connection, owner receipts, and explicit unpublished Oxian
+sibling over both in-process and WebSocket transports. Provider fetch remains
+injected. With a capacity-one worker, a duplicate does not send again and the
+next distinct Action succeeds on the same connection.
+
+The fault cases disconnect that worker after a known owner command commit but
+before the reply reaches it. Lost begin acknowledgements send nothing. Another
+case disconnects after injected provider acceptance but before its response
+reaches the Action: it retains the begun receipt and one request, without
+inferring `not_started`. Lost confirm acknowledgements retain confirmation and
+one provider request; lost terminal acknowledgements retain the completed
+lifecycle and one request. The retired connection cannot complete or send later,
+and all cases retain the three-attempt delivery policy. These are transport-loss
+tests, not uncertain database-COMMIT tests.
+
+The fresh-only host currently stops after an opened-work transport failure, even
+when the terminal command committed. The tests assert bounded refusal, preserved
+durable obligations, and no resend; result/receipt recovery and continued
+service after that disconnect remain host-recovery work. Direct fixture database
+inspection is not evidence of an authorized recovery route. The tests are opt-in
+through `COPILOTZ_OXIAN_SOURCE_ROOT` and the same ephemeral source-mapping
+config prepared by `scripts/test-owner-connected.mjs`; they do not change
+published dependency pins.

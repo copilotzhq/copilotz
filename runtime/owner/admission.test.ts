@@ -127,6 +127,9 @@ async function setup(
     ],
   );
   const state = {
+    group: undefined as
+      | { key: string; actorId?: string; threadId?: string }
+      | undefined,
     scheduled: [] as OwnerJson[],
     authorized: 0,
     handled: 0,
@@ -212,6 +215,7 @@ async function setup(
     schema: "public",
     registry,
     catalog: createOperationCatalog(db, "public"),
+    admissionGroup: () => state.group,
     schedule(reference) {
       assert.equal(state.inTransaction, false);
       state.scheduled.push(reference);
@@ -926,15 +930,85 @@ test("root admission explicitly refuses content-shaped JSON that would lose orig
     }
     assert.equal(state.authorized, 0);
     assert.deepEqual(await snapshot(db), baseline);
-    // Descriptor-only data is unchanged by shared body encoding and remains
-    // legal ordinary JSON. This does not grant content hydration authority.
-    const command = request({
-      input: { text: "ordinary", nested: [{ ...ref, resolve: false }] },
-    });
-    await owner.executeInput(caller(), command);
-    assert.deepEqual(
-      (await db.query("SELECT body FROM event_bodies")).rows[0].body,
-      (command.input as Record<string, OwnerJson>).input,
+    // Even unchanged descriptors are outside the same facade's ordinary result
+    // projection subset. Refuse before capture rather than strand admitted work.
+    await assert.rejects(
+      owner.executeInput(
+        caller(),
+        request({
+          input: { text: "ordinary", nested: [{ ...ref, resolve: false }] },
+        }),
+      ),
+      /nested ContentRef/,
     );
+    assert.deepEqual(await snapshot(db), baseline);
+  });
+});
+
+test("trusted group admission is atomic at32 and compatible replay retains original grouping", async () => {
+  await fixture(async ({ owner, db, state }) => {
+    state.group = {
+      key: "conversation",
+      actorId: "actor-a",
+      threadId: "thread-a",
+    };
+    const commands = Array.from(
+      { length: 34 },
+      (_, i) => request({ requestId: `group-${i}` }),
+    );
+    const results = await Promise.allSettled(
+      commands.map((command) => owner.executeInput(caller(), command)),
+    );
+    assert.equal(
+      results.filter((result) => result.status === "fulfilled").length,
+      32,
+    );
+    assert.equal(
+      results.filter((result) => result.status === "rejected").length,
+      2,
+    );
+    assert.equal(
+      (await db.query("SELECT count(*)::int AS count FROM copilotz_operations"))
+        .rows[0].count,
+      32,
+    );
+    const before = await snapshot(db);
+    const original = await owner.executeInput(caller(), commands[0]);
+    assert.equal(original.status, "duplicate");
+    state.group = { key: "new-policy-group", actorId: "actor-a" };
+    assert.equal(
+      (await owner.executeInput(caller(), commands[0])).status,
+      "duplicate",
+    );
+    assert.deepEqual(await snapshot(db), before);
+    const stored = (await db.query(
+      "SELECT metadata FROM copilotz_operations WHERE metadata->'operationMetadata'->>'httpIdempotencyKey'='group-0'",
+    ))
+      .rows[0].metadata as Record<string, unknown>;
+    assert.deepEqual(stored.operationMetadata, {
+      httpAdmissionKey: "conversation",
+      actorId: "actor-a",
+      threadId: "thread-a",
+      httpIdempotencyKey: "group-0",
+    });
+    await db.query("UPDATE fixture_ingress SET live=FALSE");
+    await assert.rejects(owner.executeInput(caller(), commands[0]), /revoked/);
+  });
+});
+
+test("trusted group capacity separates actors and rolls back with source capture", async () => {
+  await fixture(async ({ owner, db, state }) => {
+    state.group = { key: "conversation", actorId: "actor-a" };
+    state.failReaders = true;
+    const before = await snapshot(db);
+    await assert.rejects(owner.executeInput(caller(), request()), /injected/);
+    assert.deepEqual(await snapshot(db), before);
+    await owner.executeInput(caller(), request());
+    state.group = { key: "conversation", actorId: "actor-b" };
+    await owner.executeInput(caller(), request({ requestId: "actor-b" }));
+    const rows = (await db.query(
+      "SELECT metadata->'operationMetadata'->>'actorId' AS actor FROM copilotz_operations ORDER BY actor",
+    )).rows;
+    assert.deepEqual(rows.map((row) => row.actor), ["actor-a", "actor-b"]);
   });
 });

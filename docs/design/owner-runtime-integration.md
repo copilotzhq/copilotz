@@ -425,3 +425,18 @@ independently reviewed actual- table cases cover exact source/run/delivery
 binding, current policy, cancellation, rollback and historical
 protected/content-shaped value refusal. Production ingress and facade wiring
 remain pending; projection never infers operation completion.
+
+### Trusted admission groups and metadata restrictions
+
+New admissions can select their trusted group through current host policy inside
+the fenced transaction. The existing key/actor grouping is capped atomically
+at32 accepted/running catalog operations and recorded with the original
+operation. Compatible replay does not allocate a slot or rewrite that original
+group when policy grouping changes; current authorization still precedes replay.
+The separate owner pending-delivery cap remains128. A private values/absentKeys
+codec preserves explicit undefined metadata restrictions across transport; null
+and omission do not satisfy absence. Independent16 admission plus3 codec tests
+pass. Nested ContentRef inputs now refuse before capture to match this
+ordinary-result subset. Actual ingress must reconstruct and enforce current
+trusted policy using these seams; the codecs and selectors do not themselves
+confer authority.

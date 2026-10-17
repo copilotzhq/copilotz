@@ -5,14 +5,19 @@ import type { PluginRegistry } from "../plugins/registry.ts";
 import { actionDefinitionHasSecrets } from "../actions/secret.ts";
 import { validateAgainstJsonSchema } from "../collections/validate.ts";
 import { digestContent } from "../content/digest.ts";
+import { isContentRef } from "../content/schema.ts";
 import { canonicalizeContentRefs } from "../content/input.ts";
 import { createCoreTableNames } from "../events/schema.ts";
 import { deriveWorkflowId } from "../events/workflow-id.ts";
 import { createEventStore } from "../events/store.ts";
-import type { SqlSession } from "../events/session.ts";
-import type { OperationCatalog } from "../streams/catalog.ts";
+import type { SqlExecutor, SqlSession } from "../events/session.ts";
+import {
+  createOperationCatalogTables,
+  type OperationCatalog,
+} from "../streams/catalog.ts";
 import { assertJsonValue } from "../json.ts";
 import type {
+  OwnerCaller,
   OwnerCommand,
   OwnerCommandHandler,
   OwnerCommandInputDefinition,
@@ -37,6 +42,15 @@ function object(value: unknown): asserts value is Record<string, OwnerJson> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new TypeError("Admission requires an object.");
   }
+}
+function rejectContent(value: OwnerJson): void {
+  if (!value || typeof value !== "object") return;
+  if (isContentRef(value)) {
+    throw new TypeError(
+      "Owner ordinary admission does not yet support nested ContentRef values.",
+    );
+  }
+  for (const child of Object.values(value)) rejectContent(child);
 }
 function text(value: unknown): asserts value is string {
   if (
@@ -100,6 +114,21 @@ export function createOwnerActionAdmission(
     catalog: OperationCatalog;
     /** Owner-schema unsettled delivery bound. Duplicates need no new slot. */
     maxPendingDeliveries?: number;
+    /** Current trusted policy for new admissions, evaluated under the owner fence.
+     * The host must still authorize every call before receipt lookup. Changing
+     * current grouping does not change a compatible request's original capture. */
+    admissionGroup?(
+      tx: SqlExecutor,
+      caller: OwnerCaller,
+      value: OwnerActionAdmissionValue,
+      commandTime: string,
+    ):
+      | Readonly<{ key: string; actorId?: string; threadId?: string }>
+      | undefined
+      | Promise<
+        | Readonly<{ key: string; actorId?: string; threadId?: string }>
+        | undefined
+      >;
     /** Schedules durable references only; must not await dependent worker capacity. */
     schedule(reference: OwnerJson): void;
   }>,
@@ -170,6 +199,7 @@ export function createOwnerActionAdmission(
           "Owner root admission does not yet support content-shaped data that changes when persisted.",
         );
       }
+      rejectContent(raw.input);
       const value = ordered({ ...raw, actionId: action.id });
       const digest = await digestContent(
         new TextEncoder().encode(JSON.stringify(value)),
@@ -203,6 +233,52 @@ export function createOwnerActionAdmission(
           code: "owner_admission_refused",
         },
       );
+    }
+    const selectedGroup = await options.admissionGroup?.(
+      context.tx,
+      structuredClone(context.caller),
+      structuredClone(value),
+      context.commandTime,
+    );
+    const operationMetadata: Record<string, OwnerJson> = {};
+    if (selectedGroup !== undefined) {
+      const group = structuredClone(selectedGroup);
+      if (
+        Object.keys(group).some((key) =>
+          !["key", "actorId", "threadId"].includes(key)
+        )
+      ) {
+        throw new TypeError("Invalid trusted admission group.");
+      }
+      text(group.key);
+      if (group.actorId !== undefined) text(group.actorId);
+      if (group.threadId !== undefined) text(group.threadId);
+      const match = {
+        httpAdmissionKey: group.key,
+        ...(group.actorId === undefined ? {} : { actorId: group.actorId }),
+      };
+      const operations =
+        createOperationCatalogTables(options.schema).operations;
+      const active = await context.tx.query<{ count: string | number }>(
+        `SELECT COUNT(*) AS count FROM (
+          SELECT 1 FROM ${operations}
+          WHERE namespace=$1 AND state IN ('accepted','running')
+          AND metadata->'operationMetadata' @> $2::jsonb LIMIT 32
+        ) AS active`,
+        [value.namespace, JSON.stringify(match)],
+      );
+      if (Number(active.rows[0].count) >= 32) {
+        throw Object.assign(
+          new Error("Admission group has 32 active operations."),
+          {
+            code: "owner_admission_refused",
+          },
+        );
+      }
+      Object.assign(operationMetadata, match, {
+        httpIdempotencyKey: value.requestId,
+        ...(group.threadId === undefined ? {} : { threadId: group.threadId }),
+      });
     }
     const runId = await deriveWorkflowId(
       "action",
@@ -239,6 +315,7 @@ export function createOwnerActionAdmission(
           requestId: value.requestId,
           actionMetadata: value.metadata,
           ingress: value.provenance,
+          ...(selectedGroup === undefined ? {} : { operationMetadata }),
         },
         deduplicationId: runId,
         correlationId: runId,

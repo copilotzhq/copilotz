@@ -100,6 +100,8 @@ export type OwnerCommandExecuteOptions = Readonly<{ signal?: AbortSignal }>;
 export type OwnerCommandBoundary = Readonly<{
   readonly state: "unacquired" | "acquired" | "stopped";
   readonly epoch: number | undefined;
+  /** Terminal notification only, after private state revocation. It grants no authority. */
+  readonly stopped: Promise<void>;
   acquire(expectedEpoch: number): Promise<number>;
   execute(
     caller: OwnerCaller,
@@ -356,6 +358,8 @@ export function createOwnerCommandBoundary(
     );
   }
   const now = options.now ?? (() => new Date().toISOString());
+  let resolveStopped!: () => void;
+  const terminal = new Promise<void>((resolve) => resolveStopped = resolve);
   let state: "unacquired" | "acquired" | "stopped" = "unacquired";
   let epoch: number | undefined;
   let stopReason: unknown;
@@ -381,6 +385,7 @@ export function createOwnerCommandBoundary(
       item.removeAbort?.();
       item.reject(stopped());
     }
+    resolveStopped();
   }
   function assertAcquired(): void {
     if (state === "stopped") throw stopped();
@@ -846,6 +851,7 @@ export function createOwnerCommandBoundary(
     }
   }
   return {
+    stopped: terminal,
     get state() {
       return state;
     },

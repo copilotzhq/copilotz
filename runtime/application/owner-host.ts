@@ -96,9 +96,9 @@ import {
 } from "../owner/settlement.ts";
 import {
   createOwnerDispatchBridge,
-  type OwnerScheduledAssignment,
   type OwnerDispatchAdmissions,
   type OwnerDispatchLifecycle,
+  type OwnerScheduledAssignment,
 } from "./owner-dispatch.ts";
 import {
   OWNER_ACTION_WORKLOAD,
@@ -349,6 +349,8 @@ export async function createOwnerHost(options: OwnerHostOptions) {
   await provisionOwnerAssignments(session, schema);
   const catalog = createOperationCatalog(session, schema);
   const abort = new AbortController();
+  let notifyStopped!: () => void;
+  const stopped = new Promise<void>((resolve) => notifyStopped = resolve);
   let transport: Hypervisor | undefined;
   let initialized = false;
   let closed = false;
@@ -382,12 +384,14 @@ export async function createOwnerHost(options: OwnerHostOptions) {
     } catch { /* diagnostics cannot change durability */ }
   }
   function stop(error?: unknown) {
+    if (abort.signal.aborted) return;
     fault ??= error;
     initialized = false;
     clearTimeout(alarmTimer);
     owner?.stop(error);
     abort.abort(error);
     bridge.stop();
+    notifyStopped();
     report(error);
   }
   function ready() {
@@ -1360,6 +1364,14 @@ export async function createOwnerHost(options: OwnerHostOptions) {
     },
     onPostCommitError: report,
   });
+  // Boundary self-fencing (including ingress COMMIT uncertainty) can happen
+  // without a dispatched Work failure. Observe the authoritative transition;
+  // diagnostics and transport capacity refusals are not terminal signals.
+  void owner.stopped.then(() => {
+    if (!closed && !abort.signal.aborted) {
+      stop(new Error("Owner command boundary stopped."));
+    }
+  });
   function pump() {
     if (pumping || !ready() || !transport) return;
     pumping = true;
@@ -1681,6 +1693,9 @@ export async function createOwnerHost(options: OwnerHostOptions) {
     throw error;
   }
   return {
+    /** Authority is already revoked when this resolves; close() owns cleanup.
+     * Never expose the private enforcement AbortSignal to observers. */
+    stopped,
     prepare: transport.prepare.bind(transport),
     listener: {
       prepare: transport.prepare.bind(transport),
@@ -1705,6 +1720,7 @@ export async function createOwnerHost(options: OwnerHostOptions) {
       clearTimeout(alarmTimer);
       abort.abort(new Error(reason));
       bridge.stop();
+      notifyStopped();
       await transport!.shutdown(reason);
       await Promise.allSettled([...active.values()]);
       await settlementPump;

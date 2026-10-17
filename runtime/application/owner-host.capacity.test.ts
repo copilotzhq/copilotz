@@ -141,6 +141,8 @@ for (const mode of ["in-process", "websocket"] as const) {
           },
           createTransport: createHypervisor,
         });
+        let stoppedNotifications = 0;
+        void host.stopped.then(() => stoppedNotifications++);
         const listener = mode === "websocket"
           ? await serve({ hypervisor: host.listener })
           : undefined;
@@ -296,6 +298,11 @@ for (const mode of ["in-process", "websocket"] as const) {
             )).rows[0];
             assert.equal(terminal.status, "succeeded");
           }
+          assert.equal(
+            stoppedNotifications,
+            0,
+            "capacity diagnostics do not retire the owner",
+          );
           assert.equal(host.snapshot().ready, true);
         } catch (error) {
           throw new Error(
@@ -316,6 +323,8 @@ for (const mode of ["in-process", "websocket"] as const) {
           await ingress.stop("fixture finished");
           await worker.close("fixture finished");
           await host.close();
+          await host.stopped;
+          assert.equal(stoppedNotifications, 1, "explicit close notifies once");
           await listener?.shutdown();
           await db.close();
         }

@@ -84,6 +84,7 @@ function recordingBoundary(
   return {
     state: "acquired",
     epoch: 1,
+    stopped: new Promise<void>(() => {}),
     acquire: () => Promise.resolve(1),
     stop() {},
     project: () => Promise.reject(new Error("Unused projection capability")),

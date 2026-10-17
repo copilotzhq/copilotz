@@ -522,6 +522,7 @@ for (const committed of [true, false]) {
           errorCode("owner_commit_unknown")(result.reason)
         ),
       );
+      await owner.stopped;
       assert.equal(owner.state, "stopped");
       assert.equal(callbacks, 0);
       await assert.rejects(
@@ -583,6 +584,15 @@ test("bounded admission counts active work, and explicit stop rolls back active 
       }),
     );
     await owner.acquire(0);
+    let stoppedNotifications = 0;
+    void owner.stopped.then(() => {
+      assert.equal(
+        owner.state,
+        "stopped",
+        "authority is revoked before notification",
+      );
+      stoppedNotifications++;
+    });
     const first = owner.execute(caller(), command("first"));
     const second = owner.execute(caller(), command("second"));
     const all = Promise.allSettled([first, second]);
@@ -591,7 +601,12 @@ test("bounded admission counts active work, and explicit stop rolls back active 
       owner.execute(caller(), command("overflow")),
       errorCode("owner_admission_refused"),
     );
+    assert.equal(stoppedNotifications, 0, "capacity refusal is nonterminal");
     owner.stop();
+    await owner.stopped;
+    owner.stop(new Error("repeat stop"));
+    await Promise.resolve();
+    assert.equal(stoppedNotifications, 1);
     release.resolve();
     assert.ok((await all).every((result) => result.status === "rejected"));
     assert.deepEqual(await nodeIds(db), []);

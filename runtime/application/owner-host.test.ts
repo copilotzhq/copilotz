@@ -42,7 +42,7 @@ async function within<T>(promise: Promise<T>): Promise<T> {
     clearTimeout(timer);
   }
 }
-async function eventually(check: () => Promise<boolean>) {
+async function eventually(check: () => boolean | Promise<boolean>) {
   await within((async () => {
     while (!await check()) {
       await new Promise((resolve) => setTimeout(resolve, 10));
@@ -323,6 +323,130 @@ test("owner host releases aborted unstarted ingress and bounds cancelled asynchr
   }
 });
 
+test("owner host terminal notification follows ingress COMMIT uncertainty, not diagnostics", async () => {
+  const db = await createTestDatabase({ pgliteMemoryProfile: "low-memory" });
+  let loseAdmissionReply = false;
+  let admissions!: OwnerHostTransportOptions["workerCalls"];
+  let shutdowns = 0;
+  const diagnostics: unknown[] = [];
+  const session: SqlSession = {
+    query: db.query,
+    async transaction(run) {
+      let rootAdmission = false;
+      const result = await db.transaction((tx) =>
+        run({
+          async query(sql, params) {
+            if (
+              sql.startsWith("INSERT INTO") && sql.includes("owner_receipts") &&
+              params?.includes("action.admit")
+            ) rootAdmission = true;
+            return await tx.query(sql, params);
+          },
+        })
+      );
+      if (rootAdmission && loseAdmissionReply) {
+        loseAdmissionReply = false;
+        throw new Error("fixture lost committed admission reply");
+      }
+      return result;
+    },
+  };
+  const host = await createOwnerHost(options(session, {
+    onError: (error) => diagnostics.push(error),
+    createTransport(config) {
+      admissions = config.workerCalls;
+      return {
+        sessions: { assertCurrent: () => ({ phase: "ready" }) },
+        prepare() {},
+        snapshot: () => ({}),
+        shutdown() {
+          shutdowns++;
+          return Promise.resolve();
+        },
+      } as never;
+    },
+  }));
+  let notifications = 0;
+  void host.stopped.then(() => {
+    assert.equal(host.snapshot().ready, false);
+    assert.equal(host.snapshot().state, "stopped");
+    notifications++;
+  });
+  const controller = new AbortController();
+  const context = {
+    workload: "copilotz.owner.action-call",
+    metadata: { ownerId: "owner" },
+    signal: controller.signal,
+    fence: {
+      identity: { workerId: "ingress", attemptId: "attempt", epoch: 1 },
+      connectionId: "connection",
+      sessionGeneration: 1,
+    },
+  };
+  try {
+    assert.equal(notifications, 0);
+    const handler = await admissions.admitUnassigned!(context);
+    assert.ok(handler);
+    loseAdmissionReply = true;
+    const reply = JSON.parse(new TextDecoder().decode(
+      await handler({
+        input: new ReadableStream({
+          start(stream) {
+            stream.enqueue(
+              new TextEncoder().encode(
+                JSON.stringify({
+                  actionAlias: "work",
+                  input: "uncertain",
+                  operationKey: "uncertain",
+                }),
+              ),
+            );
+            stream.close();
+          },
+        }),
+        signal: controller.signal,
+      }),
+    ));
+    assert.deepEqual(reply, {
+      ok: false,
+      outcome: "unknown",
+      code: "owner_commit_unknown",
+    });
+    await within(host.stopped);
+    assert.equal(notifications, 1);
+    assert.equal(host.snapshot().recoveryRequired, true);
+    assert.equal(
+      host.snapshot().pending,
+      0,
+      "unknown commit never schedules execution",
+    );
+    assert.equal(
+      (await db.query(
+        "SELECT key FROM owner_receipts WHERE kind='action.admit'",
+      )).rows.length,
+      1,
+      "committed receipt remains durable for successor recovery",
+    );
+    assert.equal(await admissions.admitUnassigned!(context), undefined);
+    assert.equal(
+      diagnostics.length,
+      1,
+      "reentrant boundary and host retirement report once",
+    );
+    assert.equal(
+      shutdowns,
+      0,
+      "terminal notification is separate from transport cleanup",
+    );
+  } finally {
+    await host.close();
+    await host.stopped;
+    assert.equal(notifications, 1);
+    assert.equal(shutdowns, 1);
+    await db.close();
+  }
+});
+
 const sourceRoot = process.env.COPILOTZ_OXIAN_SOURCE_ROOT;
 for (const mode of ["in-process", "websocket"] as const) {
   test(
@@ -502,7 +626,7 @@ for (const mode of ["in-process", "websocket"] as const) {
           (await db.query("SELECT state FROM copilotz_operations")).rows[0]
             ?.state === "completed"
         );
-        await eventually(async () => host.snapshot().active === 0);
+        await eventually(() => host.snapshot().active === 0);
         assert.equal(
           (await db.query(
             "SELECT max_attempts FROM event_deliveries WHERE consumer_id='registered:fixture.work'",
@@ -674,7 +798,7 @@ for (const mode of ["in-process", "websocket"] as const) {
           2,
         );
         ctxGranted = true;
-        await eventually(async () => host.snapshot().active === 0);
+        await eventually(() => host.snapshot().active === 0);
         assert.deepEqual(errors, []);
         ctxGranted = false;
         const refusedRef = (await connection.callAction({
@@ -707,7 +831,7 @@ for (const mode of ["in-process", "websocket"] as const) {
             status: string;
           }).status === "completed"
         );
-        await eventually(async () => host.snapshot().active === 0);
+        await eventually(() => host.snapshot().active === 0);
         await worker.close("saturation fixture");
         for (let index = 0; index < 32; index++) {
           const requestId = `queued-${index}`;

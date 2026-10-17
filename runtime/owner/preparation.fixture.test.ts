@@ -64,6 +64,7 @@ export const namespace = "space";
 export async function fixture(
   options: {
     generic?: boolean;
+    mapInput?(text: string): OwnerJson;
     executionGuard?: boolean;
     childGuard?: boolean;
     deferParentClaim?: boolean;
@@ -301,7 +302,7 @@ export async function fixture(
         resources: [{ namespace: "channel", alias: "style" }],
         mapInput(text) {
           state.mapped++;
-          return { text };
+          return options.mapInput ? options.mapInput(text) : { text };
         },
       },
     },

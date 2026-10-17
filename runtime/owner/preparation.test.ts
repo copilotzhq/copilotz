@@ -467,3 +467,35 @@ test("named preparation rejects missing or mismatched target before fresh and du
     await f.close();
   }
 });
+
+test("named preparation refuses mapper-generated protected families before child capture", async () => {
+  const f = await fixture({
+    mapInput(text) {
+      return {
+        text,
+        unsupported: { schema: "copilotz.action.lifecycle.protected.v2" },
+      };
+    },
+  });
+  try {
+    const counts = () =>
+      Promise.all(
+        ["events", "event_bodies", "event_deliveries", "owner_receipts"].map(
+          async (table) =>
+            Number(
+              (await f.db.query<{ n: string }>(
+                `SELECT COUNT(*) AS n FROM ${table}`,
+              )).rows[0].n,
+            ),
+        ),
+      );
+    const before = await counts();
+    await assert.rejects(f.prepare(), /preparation_unsupported/);
+    assert.deepEqual(await counts(), before);
+    assert.equal(f.state.rendered, 1);
+    assert.equal(f.state.mapped, 1);
+    assert.equal(f.state.scheduled.length, 0);
+  } finally {
+    await f.close();
+  }
+});

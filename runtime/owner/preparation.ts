@@ -23,6 +23,7 @@ import type {
   OwnerJson,
 } from "./boundary.ts";
 import { ownerTableNames } from "./schema.ts";
+import { assertOwnerOrdinaryValue } from "./ordinary-value.ts";
 import {
   OWNER_PREPARATION_SCHEMA,
   type OwnerPreparationCapture,
@@ -391,6 +392,18 @@ export function createOwnerPreparations(
       signal: context.signal,
       mapInput: registered.mapInput,
     });
+    // Registered mappers are trusted evaluation code, but this capture path
+    // accepts only ordinary input. They cannot introduce unsupported protected
+    // or content protocols into the child's lifecycle-owned body.
+    try {
+      assertOwnerOrdinaryValue(rendered.input);
+    } catch (error) {
+      if (
+        error && typeof error === "object" && "code" in error &&
+        error.code === "ordinary_value_unsupported"
+      ) fail("preparation_unsupported");
+      throw error;
+    }
     const preparation = parseOwnerPreparationCapture({
       schema: OWNER_PREPARATION_SCHEMA,
       preparation: input.preparation,

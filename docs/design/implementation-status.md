@@ -1,6 +1,6 @@
 # Owner, worker and Views implementation checklist
 
-Updated: 17 October 2026, 12:16 UTC.
+Updated: 17 October 2026, 12:35 UTC.
 
 This is the maintained coordination checklist for
 [Copilotz PR #93](https://github.com/copilotzhq/copilotz/pull/93). It tracks
@@ -10,13 +10,13 @@ production-ready. All changes remain draft: **no merge or publication**.
 
 ## Current work
 
-| Task                                         | Status                                | Next acceptance gate                                                                               |
-| -------------------------------------------- | ------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| Local Processor bound owner adapter          | In progress                           | Exact attempt binding, raw-call accounting and real owner lifecycle tests                          |
-| Local Processor one-attempt execution driver | Reviewed checkpoint                   | 18 direct tests, 21 independent cases and 19 kernel compatibility cases; connect the bound adapter |
-| Faster test orchestration                    | Waiting on reference-test reliability | Experimental runner reviewed; measure equivalent same-source speed only after reference is stable  |
-| Reference-test reliability                   | Investigating                         | Diagnose the repeat PGlite unavailable-root terminal-cursor failure before comparing speed         |
-| Local Processor host generations             | Next                                  | Known ended-attempt receipt, predecessor revocation/drain, exact retry wake and shared capacity    |
+| Task                                         | Status               | Next acceptance gate                                                                               |
+| -------------------------------------------- | -------------------- | -------------------------------------------------------------------------------------------------- |
+| Local Processor bound owner adapter          | Next implementation  | Exact attempt binding, raw-call accounting and real owner lifecycle tests                          |
+| Local Processor one-attempt execution driver | Reviewed checkpoint  | 18 direct tests, 21 independent cases and 19 kernel compatibility cases; connect the bound adapter |
+| Faster test orchestration                    | Ready for comparison | Resume equivalent same-source benchmark after committing the reviewed identity correction          |
+| Reference-test reliability                   | Reviewed correction  | 137 affected cases, independent 29-case check and three complete pipeline repeats passed           |
+| Local Processor host generations             | Next                 | Known ended-attempt receipt, predecessor revocation/drain, exact retry wake and shared capacity    |
 
 ## 1. Programming model and composition
 
@@ -66,6 +66,8 @@ production-ready. All changes remain draft: **no merge or publication**.
       prerequisites
 - [ ] General takeover/readiness across open, lost, retrying and effect-bearing
       histories
+- [ ] Verify current Tool cursors and already-admitted stages on replay, beyond
+      the corrected explicit Action identity
 - [ ] Retained local history and restart parity
 - [ ] `awaitOperation`, parked execution, durable handoff and exactly-once
       resumption admission
@@ -113,8 +115,9 @@ production-ready. All changes remain draft: **no merge or publication**.
 - [x] Fix bounded jq worker admission and executor shutdown defects found by the
       earlier full run
 - [x] Experimental checked serial-batching runner setup review
-- [ ] Resolve the separately repeated reference-test flake; preserve the passing
-      full-run evidence and failing repeat separately
+- [x] Correct the reference-test Action identity defect, independently reviewed;
+      137 affected cases passed, ten PostgreSQL-only skips, plus three complete
+      seven-case pipeline repeats; preserve the original failed repeat
 - [ ] Measure batched/per-file coverage equivalence, speed and resource bounds
 - [ ] Adopt faster developer/PR feedback and complete regression workflows after
       evidence
@@ -137,6 +140,10 @@ Connected acceptance currently uses explicit reviewed sibling source mappings.
 Published dependency pins are unchanged. Browser/edge bundle smoke checks use
 Node VM environments; they are not a real browser-engine or Cloudflare
 deployment.
+
+The [Processor Action identity correction](processor-action-identity.md) changes
+durable IDs in the legacy context. Existing in-flight IDs are not automatically
+translated; production rollout requires a separate cutover decision.
 
 Specific hosting adapters, production data migration, Compass cutover and the
 preserved original unpushed work remain separate choices. They are not silently

@@ -329,3 +329,118 @@ Deno.test("unscoped observed publication rejection retains an exact terminal", a
     "incomplete",
   );
 });
+
+Deno.test("explicit Processor Action keys survive reordered delivery retries", async () => {
+  const { defineAction } = await import("../actions/define.ts");
+  const terminal = new Map<
+    string,
+    import("../actions/types.ts").ActionLifecycleInput
+  >();
+  const invoked: string[] = [];
+  const captures = new Map<
+    string,
+    import("../actions/types.ts").ActionInvokedData
+  >();
+  let executions = 0;
+  const action = defineAction({
+    id: "test.stable-tool",
+    execute(input: unknown) {
+      executions++;
+      return input;
+    },
+  });
+  const other = defineAction({
+    id: "test.stable-tool.other",
+    execute(input: unknown) {
+      executions++;
+      return input;
+    },
+  });
+  const lifecycle = {
+    emit(event: import("../actions/types.ts").ActionLifecycleInput) {
+      if (event.status === "invoked") {
+        if (captures.has(event.actionRunId)) {
+          return Promise.resolve({ deduplicated: true });
+        }
+        invoked.push(event.actionRunId);
+        captures.set(event.actionRunId, event);
+      }
+      if (["completed", "failed", "cancelled"].includes(event.status)) {
+        terminal.set(event.actionRunId, event);
+      }
+      return Promise.resolve({ deduplicated: false });
+    },
+    invoked: (id: string) => Promise.resolve(captures.get(id) ?? null),
+    terminal: (id: string) => Promise.resolve(terminal.get(id) ?? null),
+  };
+  const make = (key: string) =>
+    createProcessorContext({
+      base: {
+        databaseSchema: "public",
+        event: createEphemeralEvent({
+          type: "test",
+          namespace: "space",
+          correlationId: "correlation",
+          payload: {},
+        }),
+        signal: new AbortController().signal,
+        idempotencyKey: key,
+        createMutationIdentity: () => ({
+          deduplicationId: "unused",
+          correlationId: "correlation",
+        }),
+      },
+      registry: createPluginRegistry({ actions: { action, other } }),
+      streamBodyStore: createMemoryBodyStore(),
+      streamBodyPrefix: "",
+      operationCatalog: {},
+      collections: { vectors: () => ({}), withScope: () => ({}) },
+      assets: {},
+      preparer: {},
+      resolver: {},
+      eventHub: {},
+      actionLifecycle: lifecycle,
+    } as unknown as CreateProcessorContextOptions);
+  const caller = (context: ReturnType<typeof make>, alias = "action") =>
+    context.actions[alias] as (
+      input: unknown,
+      options?: { operationKey: string },
+    ) => Promise<unknown>;
+  const first = make("delivery:one");
+  await caller(first)({ phase: "message" }, { operationKey: "message" });
+  await caller(first)({ phase: "tool" }, { operationKey: "tool" });
+  await caller(first)({ phase: "tool" }, { operationKey: " tool " });
+  const retry = make("delivery:one");
+  await caller(retry)({ phase: "tool" }, { operationKey: "tool" });
+  await caller(retry)({ phase: "message" }, { operationKey: "message" });
+  assertEquals(
+    executions,
+    2,
+    "explicit keys cannot acquire a new identity when order changes",
+  );
+  await caller(make("delivery:two"))({ phase: "tool" }, {
+    operationKey: "tool",
+  });
+  assertEquals(
+    executions,
+    3,
+    "different deliveries retain separate identities",
+  );
+  const unnamed = make("delivery:unnamed");
+  await caller(unnamed)({});
+  await caller(unnamed)({}, { operationKey: "interleaved" });
+  await caller(unnamed)({});
+  const unnamedRetry = make("delivery:unnamed");
+  await caller(unnamedRetry)({});
+  await caller(unnamedRetry)({});
+  assertEquals(executions, 6, "named calls do not consume unnamed ordinals");
+  const isolated = make("delivery:isolated");
+  await caller(isolated)({}, { operationKey: "key" });
+  await caller(isolated, "other")({}, { operationKey: "key" });
+  assertEquals(
+    executions,
+    8,
+    "Distinct Action IDs retain separate identities for the same key",
+  );
+  assertEquals(new Set(invoked).size, 8);
+});

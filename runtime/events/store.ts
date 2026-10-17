@@ -145,6 +145,23 @@ export type OwnerEventCommitContext = Readonly<{
   afterCommit?(callback: () => void | Promise<void>): void;
 }>;
 
+/** Internal exact lost-attempt transition. The owner recovery command must first
+ * prove prior-epoch assignment/claim authority and effect-safe disposition. This
+ * data selects one row; it does not establish that a lost attempt is replay-safe. */
+export type OwnerLostDeliveryTransition = Readonly<{
+  namespace: string;
+  id: string;
+  eventId: string;
+  consumerId: string;
+  settlementScopeId: string;
+  actionScopeId?: string;
+  leaseOwner: string;
+  leaseExpiresAt: string;
+  attempts: number;
+  maxAttempts: number;
+  disposition: "retry" | "exhausted" | "cancelled";
+}>;
+
 export type CreateEventStoreOptions = {
   ownerCommit?: OwnerEventCommitContext;
   session: SqlSession;
@@ -297,6 +314,10 @@ export type EventStore = {
   recoverExpiredDeliveries(
     options?: { namespace?: string; limit?: number },
   ): Promise<readonly EventDelivery[]>;
+  /** Owner-only exact prior-attempt transition; never grants execution authority. */
+  recoverLostDelivery(
+    transition: OwnerLostDeliveryTransition,
+  ): Promise<EventDelivery | null>;
   nextRecoveryDelayMs(): Promise<number | null>;
   scopeSettlement(
     namespace: string,
@@ -652,6 +673,8 @@ export function createEventStore(
   const defaultMaxAttempts = boundedInteger(options.maxAttempts, 3, 1);
   const retryBaseMs = boundedInteger(options.retryBaseMs, 250, 0);
   const retryCapMs = boundedInteger(options.retryCapMs, 30_000, 0);
+  const lockSettlementScope = options.lockSettlementScope;
+  const settleActionOwners = options.settleActionOwners;
   const indexOperationEvent = options.indexOperationEvent;
   const indexOperationEventSql = options.indexOperationEventSql;
   const commandTimestamp = (params: unknown[]): string =>
@@ -1223,7 +1246,7 @@ export function createEventStore(
     schedulePublication = owner?.afterCommit,
   ): Promise<EventDelivery | null> => {
     if (owner) {
-      await options.lockSettlementScope?.(
+      await lockSettlementScope?.(
         owner.transaction,
         current.settlementScopeId,
       );
@@ -1232,7 +1255,7 @@ export function createEventStore(
         result &&
         ["succeeded", "cancelled", "dead_letter"].includes(result.status)
       ) {
-        const publish = await options.settleActionOwners?.(
+        const publish = await settleActionOwners?.(
           owner.transaction,
           result,
         );
@@ -1240,10 +1263,10 @@ export function createEventStore(
       }
       return result;
     }
-    if (!options.settleActionOwners) return await update(session);
+    if (!settleActionOwners) return await update(session);
     let afterCommit: (() => Promise<void>) | undefined;
     const settled = await session.transaction(async (transaction) => {
-      await options.lockSettlementScope?.(
+      await lockSettlementScope?.(
         transaction,
         current.settlementScopeId,
       );
@@ -1252,7 +1275,7 @@ export function createEventStore(
         result &&
         ["succeeded", "cancelled", "dead_letter"].includes(result.status)
       ) {
-        afterCommit = await options.settleActionOwners!(transaction, result) ??
+        afterCommit = await settleActionOwners(transaction, result) ??
           undefined;
       }
       return result;
@@ -1638,6 +1661,123 @@ export function createEventStore(
       }
       return recovered;
     },
+    async recoverLostDelivery(input) {
+      // This method is deliberately unavailable to legacy stores and to a live
+      // owner-local capability. A worker receives neither SQL nor this method.
+      if (!owner || localAttempt) {
+        return ownerUnsupported("lost-attempt recovery without owner control");
+      }
+      const transition = { ...input };
+      const required = [
+        "namespace",
+        "id",
+        "eventId",
+        "consumerId",
+        "settlementScopeId",
+        "leaseOwner",
+        "leaseExpiresAt",
+        "attempts",
+        "maxAttempts",
+        "disposition",
+      ];
+      const expected = transition.actionScopeId === undefined
+        ? required
+        : [...required, "actionScopeId"];
+      if (
+        Object.keys(transition).sort().join(",") !==
+          expected.sort().join(",") ||
+        [
+          transition.namespace,
+          transition.id,
+          transition.eventId,
+          transition.consumerId,
+          transition.settlementScopeId,
+          transition.leaseOwner,
+          transition.actionScopeId ?? "scope",
+        ]
+          .some((value) =>
+            typeof value !== "string" || !value.trim() ||
+            value !== value.trim() || value.length > 1024
+          ) ||
+        typeof transition.leaseExpiresAt !== "string" ||
+        transition.leaseExpiresAt.length > 128 ||
+        !Number.isFinite(Date.parse(transition.leaseExpiresAt)) ||
+        !Number.isSafeInteger(transition.attempts) || transition.attempts < 1 ||
+        !Number.isSafeInteger(transition.maxAttempts) ||
+        transition.maxAttempts < 1 ||
+        !["retry", "exhausted", "cancelled"].includes(transition.disposition)
+      ) throw new TypeError("Invalid lost delivery transition.");
+      if (
+        typeof lockSettlementScope !== "function" ||
+        (transition.disposition !== "retry" &&
+          typeof settleActionOwners !== "function")
+      ) {
+        return ownerUnsupported(
+          "lost-attempt recovery without canonical settlement hooks",
+        );
+      }
+      await ownerDeliveryExecutor();
+      const current = await getDelivery(transition.id);
+      if (!current) return null;
+      return await commitDeliverySettlement(current, async (transaction) => {
+        const params: unknown[] = [
+          transition.id,
+          transition.eventId,
+          transition.consumerId,
+          transition.settlementScopeId,
+          transition.actionScopeId ?? null,
+          transition.leaseOwner,
+          transition.leaseExpiresAt,
+          transition.attempts,
+          transition.maxAttempts,
+          transition.namespace,
+          owner.ownerId,
+        ];
+        const timestamp = commandTimestamp(params);
+        const retry = transition.disposition === "retry";
+        const status = retry
+          ? "retry_wait"
+          : transition.disposition === "cancelled"
+          ? "cancelled"
+          : "dead_letter";
+        const attemptCondition = retry
+          ? "attempts < max_attempts"
+          : transition.disposition === "exhausted"
+          ? "attempts >= max_attempts"
+          : "TRUE";
+        const error = transition.disposition === "exhausted"
+          ? `$${
+            params.push(JSON.stringify({
+              name: "DeliveryLeaseExpired",
+              message: "The delivery lease was lost after its final attempt.",
+            }))
+          }::jsonb`
+          : "";
+        // Do not fabricate expiry or backoff. In particular, availability,
+        // attempts and max_attempts are unchanged; only the next genuine claim
+        // consumes an attempt. The old lease may still have time remaining.
+        const result = await transaction.query<DeliveryRow>(
+          `UPDATE ${tables.event_deliveries} AS d
+           SET status = '${status}', lease_owner = NULL, lease_expires_at = NULL,
+             updated_at = ${timestamp}, settled_at = ${
+            retry ? "NULL" : timestamp
+          }
+             ${error ? `,last_error = ${error}` : ""}
+           WHERE d.id=$1 AND d.event_id=$2 AND d.consumer_id=$3
+             AND d.settlement_scope_id=$4 AND d.action_scope_id IS NOT DISTINCT FROM $5::text
+             AND d.status='leased' AND d.lease_owner=$6
+             AND d.lease_expires_at=$7::timestamptz
+             AND d.attempts=$8 AND d.max_attempts=$9 AND ${attemptCondition}
+             AND EXISTS(SELECT 1 FROM ${tables.events} e WHERE e.id=d.event_id
+               AND e.namespace=$10 AND e.owner_id=$11)
+           RETURNING d.*`,
+          params,
+        );
+        return result.rows[0]
+          ? mapDelivery(result.rows[0], databaseSchema)
+          : null;
+      });
+    },
     async nextRecoveryDelayMs() {
       const params: unknown[] = [];
       const timestamp = commandTimestamp(params);
@@ -1723,7 +1863,7 @@ export function createEventStore(
       if (owner) return ownerUnsupported("scope cancellation");
       let afterCommit: (() => Promise<void>) | undefined;
       const result = await session.transaction(async (transaction) => {
-        await options.lockSettlementScope?.(transaction, settlementScopeId);
+        await lockSettlementScope?.(transaction, settlementScopeId);
         const cancelled = await transaction.query<{ id: string }>(
           `UPDATE ${tables.event_deliveries} AS delivery
            SET status = 'cancelled', lease_owner = NULL, lease_expires_at = NULL,

@@ -399,3 +399,17 @@ Ten actual-table cases and independent review cover tuple mismatches, no-Open
 recovery, rollback, currentness races and exact schema validation. The original
 nullable-retired schema defect was reproduced and fixed. Real PostgreSQL schema
 validation and production pre-Open dispatch wiring remain separate gates.
+
+### External-effect receipt core
+
+Fixed logical effect steps record begun/confirmed/not-started state through the
+same fenced receipt boundary. A stored receipt never contains a reusable proceed
+permission: only a fresh known-committed begin acknowledgement permits dispatch;
+duplicate or ambiguous replies consult current state and cannot resend. Confirm
+and not-started are mutually exclusive, with current settlement authorization
+and owner-verified exact dispatch evidence. Nineteen independently reviewed
+owner/client/emitted-closure cases cover lost commit replies, takeover,
+conflicting outcomes, forged evidence and revocation-safe settlement. The pure
+worker client has no persistence runtime imports. Action context/reconcile
+integration, provider conversion and effect-aware lost-delivery recovery remain
+subsequent gates.

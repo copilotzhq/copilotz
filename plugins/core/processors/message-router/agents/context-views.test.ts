@@ -378,6 +378,15 @@ test("real callLlm.prepare captures authorized View text once and replays durabl
     content,
     collections: { message: { list: () => Promise.resolve([]) } },
   } as unknown as CoreProcessorContext);
+  // This legacy fixture exercises capture, not the owner effect protocol.
+  const unavailableEffect = (): never => {
+    throw Object.assign(
+      new Error("This fixture has no owner effect capability."),
+      {
+        code: "action_effect_unavailable",
+      },
+    );
+  };
   const callers = () =>
     createActionCallers(registry.actions, {
       actionLifecycle: lifecycle,
@@ -388,6 +397,12 @@ test("real callLlm.prepare captures authorized View text once and replays durabl
         return {
           ...processorContext(),
           actions,
+          effect: {
+            begin: unavailableEffect,
+            inspect: unavailableEffect,
+            confirm: unavailableEffect,
+            notStarted: unavailableEffect,
+          },
           action: {
             id: frame.actionId,
             runId: frame.actionRunId,

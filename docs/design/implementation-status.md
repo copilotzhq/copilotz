@@ -1,6 +1,6 @@
 # Owner, worker and Views implementation checklist
 
-Updated: 17 October 2026, 22:10 UTC.
+Updated: 17 October 2026, 22:54 UTC.
 
 This is the maintained coordination checklist for
 [Copilotz PR #93](https://github.com/copilotzhq/copilotz/pull/93). It tracks
@@ -10,19 +10,20 @@ production-ready. All changes remain draft: **no merge or publication**.
 
 ## Current work
 
-| Task                                 | Status                  | Next acceptance gate                                                                                                                       |
-| ------------------------------------ | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| Local Processor bound owner adapter  | Reviewed checkpoint     | Reviewed: independent 30 pure and seven real PostgreSQL cases; 83-case compatibility passed                                                |
-| Local nested Action authority        | Reviewed checkpoint     | Independent 144 pure and 114 PostgreSQL cases; private fresh same-owner mixed placement complete                                           |
-| Local Action effect capabilities     | Reviewed checkpoint     | Private fresh local effects: 300 PostgreSQL-gate cases, 71 pure and 12 role-bundle cases pass                                              |
-| Local named preparation / Views      | Reviewed checkpoint     | Fresh local Action/Processor preparation and retry capture pass; public/history gates remain                                               |
-| Faster test orchestration            | Representative measured | 16 files: 15.4% faster, 7.7% higher peak RSS; reordered files require broader isolation validation                                         |
-| Reference-test reliability           | Reviewed correction     | 137 affected cases, independent 29-case check and three complete pipeline repeats passed                                                   |
-| Local Processor host generations     | Reviewed checkpoint     | PostgreSQL 14 host plus two caller-facing helper cases pass; fresh same-owner retry scope complete                                         |
-| Ordinary registered Collection reads | Reviewed checkpoint     | PostgreSQL SQL43/Processor 53, final canonical 252, invocation222 and role 12 pass; public snapshot/content gates remain                   |
-| Shared SQL transaction lifetime      | Reviewed prerequisite   | Ominipg 65 cases, Copilotz 31 plus five steps, four cleanup probes; owner snapshot activation remains gated                                |
-| Pooled SQL timeout progress          | Reviewed prerequisite   | Ominipg 77, Copilotz 31 plus five steps, four cleanup probes and one retained-listener diagnostic; reserved snapshot capacity remains open |
-| Architecture cleanup                 | In progress             | Shared local-port bookkeeping consolidated; migrate callers and retire superseded paths next                                               |
+| Task                                 | Status                  | Next acceptance gate                                                                                                                                 |
+| ------------------------------------ | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Local Processor bound owner adapter  | Reviewed checkpoint     | Reviewed: independent 30 pure and seven real PostgreSQL cases; 83-case compatibility passed                                                          |
+| Local nested Action authority        | Reviewed checkpoint     | Independent 144 pure and 114 PostgreSQL cases; private fresh same-owner mixed placement complete                                                     |
+| Local Action effect capabilities     | Reviewed checkpoint     | Private fresh local effects: 300 PostgreSQL-gate cases, 71 pure and 12 role-bundle cases pass                                                        |
+| Local named preparation / Views      | Reviewed checkpoint     | Fresh local Action/Processor preparation and retry capture pass; public/history gates remain                                                         |
+| Faster test orchestration            | Representative measured | 16 files: 15.4% faster, 7.7% higher peak RSS; reordered files require broader isolation validation                                                   |
+| Reference-test reliability           | Reviewed correction     | 137 affected cases, independent 29-case check and three complete pipeline repeats passed                                                             |
+| Local Processor host generations     | Reviewed checkpoint     | PostgreSQL 14 host plus two caller-facing helper cases pass; fresh same-owner retry scope complete                                                   |
+| Ordinary registered Collection reads | Reviewed checkpoint     | PostgreSQL SQL43/Processor 53, final canonical 252, invocation222 and role 12 pass; public snapshot/content gates remain                             |
+| Shared SQL transaction lifetime      | Reviewed prerequisite   | Ominipg 65 cases, Copilotz 31 plus five steps, four cleanup probes; owner snapshot activation remains gated                                          |
+| Pooled SQL timeout progress          | Reviewed prerequisite   | Ominipg 77, Copilotz 31 plus five steps, four cleanup probes and one retained-listener diagnostic; reserved snapshot capacity remains open           |
+| Accounted snapshot pool capacity     | Reviewed prerequisite   | One existing pool, bounded pair admission; full scoped 102 Ominipg/31 Copilotz plus five steps; final 25 PG pool cases, seven probes and static pass |
+| Architecture cleanup                 | In progress             | Shared local-port bookkeeping consolidated; migrate callers and retire superseded paths next                                                         |
 
 The approved [lease-free owner attempt contract](owner-attempt-authority.md) is
 implemented and independently checked in this scoped checkpoint. Both placements
@@ -122,6 +123,15 @@ cases with two explicit PostgreSQL skips. The listener connection remains
 charged after unsubscribe; no extra pool, connection budget or lane registry is
 introduced.
 
+The accounted PostgreSQL pool prerequisite now reserves snapshot/control
+capacity within the existing connection total, including queued borrows and
+retained LISTEN connections. It adds no second pool or execution lease.
+Independent scoped gates pass 102 Ominipg and 31 Copilotz cases plus five steps;
+a final test-only lint correction passes 25 actual-PostgreSQL pool cases, seven
+fault/causal probes and static checks. Cleanup retry and reentrant shutdown
+regressions are covered; failed physical cleanup is never treated as success.
+The callback/control capability and owner snapshot activation remain open.
+
 The next snapshot prerequisite must preserve F5 isolation and default PGlite
 behavior: PostgreSQL has separate pooled transactions, while PGlite serializes
 its single engine. No weaker snapshot fallback or hidden external-database
@@ -155,6 +165,8 @@ what it simplifies and eliminates before adding machinery.
 - [x] Pooled timeout progress through existing request facts, immutable routing
       capture, independent unsubscribe and encoding-failure cleanup; PGlite
       retains its global gate and listener capacity remains charged
+- [x] Shared PostgreSQL pool accounting and bounded two-client reservation,
+      including queued checkouts/LISTEN and raw cleanup; no extra pool or budget
 - [x] Actual worker Action/Processor/Collection/child-Action flow
 - [x] Current authority, assignment/claim, connection lifetime, cancellation and
       terminal settlement boundaries

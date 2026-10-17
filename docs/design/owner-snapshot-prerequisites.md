@@ -69,6 +69,32 @@ terminal-only, mutable-envelope, unsubscribe-progress and encoding failures
 remain preserved. This does not establish reserved snapshot/control capacity or
 activate owner snapshots.
 
+## Accounted pool capacity
+
+The internal PostgreSQL reservation now shares the existing pool with ordinary
+queries, transactions and LISTEN/reconnect. Pending checkouts count before
+awaiting the provider. At most one two-client reservation can be admitted, and
+only when it fits within the configured total; no second pool or increased
+connection limit is introduced. Saturated admission refuses before BEGIN.
+
+Release seals pair executors, drains actual admitted statements and resets both
+clients before returning capacity. Failed returns retain their charge; partial
+or aborted acquisition waits for both raw outcomes and returns late clients. A
+retained pool owner can retry failed cleanup before physical shutdown starts.
+Once raw pool shutdown starts, its result is retained. The engine's existing
+close operation still caches its outcome; engine-level retry is not claimed.
+
+Independent full scoped gates pass 102 Ominipg and 31 Copilotz cases plus five
+steps, with actual PostgreSQL enabled. Four retained cleanup probes and three
+causal probes pass. A test-only prefer-const correction then passes all 25 pool
+cases on actual PostgreSQL, the same seven probes, and the full static task. The
+original cleanup-retry, reentrant-shutdown and lint failures are preserved;
+final source hashes and disposable database export/drop/stop were verified.
+
+This is an internal backend prerequisite. It does not expose the owner snapshot
+callback, current-authority control lane, PGlite exclusivity capability,
+generation forwarding or historical-read permission.
+
 ## Remaining backend and authority gates
 
 A read-only REPEATABLE READ snapshot owns a separate transaction outside the

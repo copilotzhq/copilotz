@@ -7,11 +7,14 @@ import type {
   OwnerCommandBoundary,
   OwnerCommandOutcome,
   OwnerIdentityDomain,
+  OwnerInputCommand,
   OwnerJson,
   OwnerReceipt,
 } from "./boundary.ts";
 import { assertJsonValue } from "../json.ts";
 
+const ACTION = "copilotz.owner.action";
+const ACTION_RESULT = "copilotz.owner.action-result";
 const COMMAND = "copilotz.owner.command";
 const READY = "copilotz.owner.ready";
 const PROTOCOL = "copilotz.owner.v1";
@@ -160,6 +163,16 @@ export function createOwnerWorkerCallAdmission(
       context: OwnerWorkerCallContext,
       ownerId: string,
     ): boolean | Promise<boolean>;
+    /** Independently authenticate a current ingress connection and original route.
+     * Parentless readiness/receipt or worker grants never imply ingress authority.
+     * The boundary must recheck current policy with normalized facts before replay
+     * or result hydration. The returned binding is snapshotted and revalidated
+     * after body streaming; selectors and request provenance are not authority. */
+    resolveIngress?(
+      context: OwnerWorkerCallContext,
+      ownerId: string,
+      route: "action" | "action-result",
+    ): OwnerCaller | undefined | Promise<OwnerCaller | undefined>;
     /** Resolve host-owned assignment state and grants, not request metadata.
      * Current session/execution/policy must also be checked inside boundary.authorize. */
     resolveAssignment(
@@ -195,12 +208,15 @@ export function createOwnerWorkerCallAdmission(
     if (
       context.workload !== COMMAND && context.workload !== RECEIPT &&
       context.workload !== PROJECT && context.workload !== COMPLETE &&
-      context.workload !== READY
+      context.workload !== READY && context.workload !== ACTION &&
+      context.workload !== ACTION_RESULT
     ) {
       return undefined;
     }
     if (
-      recoveryOnly && context.workload !== RECEIPT && context.workload !== READY
+      recoveryOnly && context.workload !== RECEIPT &&
+      context.workload !== READY &&
+      context.workload !== ACTION && context.workload !== ACTION_RESULT
     ) return undefined;
     const ownerId = context.metadata.ownerId;
     if (
@@ -217,9 +233,25 @@ export function createOwnerWorkerCallAdmission(
         !await options.authorizeReadiness?.(context, ownerId) ||
         !currentOwner() || context.signal.aborted)
     ) return undefined;
+    const ingressRoute = context.workload === ACTION
+      ? "action"
+      : context.workload === ACTION_RESULT
+      ? "action-result"
+      : undefined;
+    if (
+      ingressRoute &&
+      (context.parent || !currentOwner() || context.signal.aborted)
+    ) return undefined;
+    const ingress = ingressRoute
+      ? await options.resolveIngress?.(context, ownerId, ingressRoute)
+      : undefined;
+    if (
+      ingressRoute && (!ingress || !currentOwner() || context.signal.aborted)
+    ) return undefined;
     const isCompletion = context.workload === COMPLETE;
     const isCommand = context.workload === COMMAND || isCompletion;
-    const isAssigned = context.workload !== RECEIPT && !isReadiness;
+    const isAssigned = context.workload !== RECEIPT && !isReadiness &&
+      !ingressRoute;
     if (isAssigned && !context.parent) return undefined;
     const assignment = isAssigned
       ? await options.resolveAssignment(context, ownerId)
@@ -233,10 +265,13 @@ export function createOwnerWorkerCallAdmission(
     ) return undefined;
     const caller = isAssigned
       ? assignment!.caller
+      : ingressRoute
+      ? ingress!
       : { workerId: context.fence.identity.workerId, ownerEpoch: 0 };
     if (!caller || caller.workerId !== context.fence.identity.workerId) {
       return undefined;
     }
+    assertJsonValue(caller, { maxDepth: 32, maxNodes: 10_000 });
     const admitted = structuredClone(caller);
     return async ({ input, signal }) => {
       let committed = false;
@@ -244,6 +279,20 @@ export function createOwnerWorkerCallAdmission(
         signal.throwIfAborted();
         const payload = await read(input, signal);
         signal.throwIfAborted();
+        if (ingressRoute) {
+          const fresh = await options.resolveIngress?.(
+            context,
+            ownerId,
+            ingressRoute,
+          );
+          if (
+            !fresh || !currentOwner() || context.signal.aborted ||
+            JSON.stringify(fresh) !== JSON.stringify(admitted)
+          ) {
+            throw new TypeError("Ingress authority is no longer current.");
+          }
+          signal.throwIfAborted();
+        }
         if (isReadiness) {
           const request = object(payload);
           if (
@@ -275,7 +324,31 @@ export function createOwnerWorkerCallAdmission(
             throw new TypeError("Invalid restricted completion command.");
           }
         }
-        const result = isCommand
+        if (context.workload === ACTION) {
+          const command = object(payload);
+          if (
+            command.kind !== "action.admit" || command.domain !== "logical" ||
+            typeof command.key !== "string" ||
+            !Object.hasOwn(command, "input") ||
+            Object.keys(command).some((key) =>
+              !["kind", "domain", "key", "input"].includes(key)
+            )
+          ) {
+            throw new TypeError("Invalid named Action admission request.");
+          }
+        }
+        const result = context.workload === ACTION
+          ? await owner.executeInput(admitted, payload as OwnerInputCommand, {
+            signal,
+          })
+          : context.workload === ACTION_RESULT
+          ? await owner.project(
+            admitted,
+            "action.result",
+            payload as OwnerJson,
+            { signal },
+          )
+          : isCommand
           ? await owner.execute(admitted, object(payload) as OwnerCommand, {
             signal,
           })
@@ -298,8 +371,13 @@ export function createOwnerWorkerCallAdmission(
             );
           })()
           : await owner.readReceipt(admitted, receiptIdentity(payload));
-        committed = isCommand;
-        if (context.workload === PROJECT) signal.throwIfAborted();
+        committed = isCommand || context.workload === ACTION;
+        if (
+          context.workload === PROJECT || context.workload === ACTION_RESULT
+        ) {
+          signal.throwIfAborted();
+          context.signal.throwIfAborted();
+        }
         const reply = context.workload === RECEIPT && result
           ? {
             kind: (result as OwnerReceipt).kind,
@@ -441,6 +519,22 @@ export function createOwnerConnection(
       ) {
         throw new TypeError("Owner readiness protocol mismatch.");
       }
+    },
+    /** Fixed root route, requiring separately authenticated current ingress policy. */
+    async admitAction(
+      command: OwnerInputCommand,
+      callOptions?: Readonly<{ signal?: AbortSignal; deadlineAtMs?: number }>,
+    ): Promise<OwnerCommandOutcome> {
+      if (command.kind !== "action.admit" || command.domain !== "logical") {
+        throw new TypeError("Invalid named Action admission request.");
+      }
+      return await call(ACTION, command, callOptions) as OwnerCommandOutcome;
+    },
+    async actionResult(
+      reference: OwnerJson,
+      callOptions?: Readonly<{ signal?: AbortSignal; deadlineAtMs?: number }>,
+    ): Promise<OwnerJson> {
+      return await call(ACTION_RESULT, reference, callOptions) as OwnerJson;
     },
     async execute(
       command: OwnerCommand,

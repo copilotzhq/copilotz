@@ -438,7 +438,23 @@ async function fixture(
       ownerId: "tenant",
       holderId: "holder",
       maxGroup: 1,
-      async authorize(tx, who) {
+      inputDefinitions: {
+        "action.admit": {
+          normalize: (input) => ({ intent: { fixture: true }, value: input }),
+        },
+      },
+      async authorize(tx, who, command, _time, input) {
+        if (command.kind === "action.admit") {
+          const facts = input as {
+            provenance?: unknown;
+            constraints?: unknown;
+          };
+          assert.deepEqual(facts.provenance, { route: "trusted-wrapper" });
+          assert.deepEqual(facts.constraints, {
+            values: { actorId: "actor" },
+            absentKeys: ["privateKind"],
+          });
+        }
         const grant = await tx.query<
           { allowed: boolean; connection_id: string }
         >("SELECT allowed,connection_id FROM grants WHERE worker_id=$1", [
@@ -456,6 +472,7 @@ async function fixture(
       },
       handlers: {
         "execution.complete": () => null,
+        "action.admit": () => ({ eventId: "safe-root" }),
         async put(intent, ctx) {
           await ctx.tx.query(
             "INSERT INTO nodes(id,namespace,type,name) VALUES($1,'test','note','note')",
@@ -1328,4 +1345,268 @@ test("readiness never advertises an owner stopped or replaced during async autho
       }
     }
   }
+});
+
+const ROOT = "copilotz.owner.action";
+const ROOT_RESULT = "copilotz.owner.action-result";
+const rootCommand = {
+  kind: "action.admit",
+  domain: "logical",
+  key: "root",
+  input: { actionAlias: "work", provenance: { route: "untrusted" } },
+} as const;
+
+test("fixed parentless Action ingress needs independent current authority", async () => {
+  const owner = recordingBoundary();
+  const base = admission(owner);
+  assert.equal(
+    await base.admitUnassigned(context({ workload: ROOT, parent: undefined })),
+    undefined,
+  );
+  assert.equal(
+    await base.admitUnassigned(
+      context({ workload: ROOT_RESULT, parent: undefined }),
+    ),
+    undefined,
+  );
+  let resolves = 0;
+  const enabled = admission(owner, {
+    resolveIngress: () => {
+      resolves++;
+      return caller;
+    },
+  });
+  assert.equal(await enabled.admit(context({ workload: ROOT })), undefined);
+  assert.equal(
+    await enabled.admitUnassigned(
+      context({
+        workload: ROOT,
+        parent: undefined,
+        metadata: { ownerId: "other" },
+      }),
+    ),
+    undefined,
+  );
+  assert.equal(resolves, 0);
+  assert(
+    await enabled.admitUnassigned(
+      context({ workload: ROOT, parent: undefined }),
+    ),
+  );
+  assert(
+    await enabled.admitUnassigned(
+      context({ workload: ROOT_RESULT, parent: undefined }),
+    ),
+  );
+});
+
+test("Action ingress dispatches only named input admission and fixed ordinary result purpose", async () => {
+  const calls: unknown[] = [];
+  const owner = recordingBoundary({
+    executeInput: (who, command) => {
+      calls.push([who, command]);
+      return Promise.resolve({
+        status: "committed",
+        result: { eventId: "safe" },
+      });
+    },
+    project: (who, kind, input) => {
+      calls.push([who, kind, input]);
+      return Promise.resolve({ status: "completed", output: "value" });
+    },
+  });
+  const host = admission(owner, { resolveIngress: () => caller });
+  const handler = await host.admitUnassigned(
+    context({ workload: ROOT, parent: undefined }),
+  );
+  assert(handler);
+  const signal = new AbortController().signal;
+  for (
+    const payload of [
+      { ...rootCommand, kind: "execution.complete" },
+      { ...rootCommand, domain: "incarnation" },
+      { ...rootCommand, intent: {} },
+      { kind: "action.admit", domain: "logical", key: "root" },
+    ]
+  ) {
+    assert.equal(
+      decode(await handler({ input: stream(payload), signal })).ok,
+      false,
+    );
+  }
+  assert.equal(calls.length, 0);
+  assert.equal(
+    decode(await handler({ input: stream(rootCommand), signal })).ok,
+    true,
+  );
+  assert.deepEqual(calls[0], [caller, rootCommand]);
+  const resultHandler = await host.admitUnassigned(
+    context({ workload: ROOT_RESULT, parent: undefined }),
+  );
+  assert(resultHandler);
+  const ref = { eventId: "safe", kind: "action.operation-result" };
+  await resultHandler({ input: stream(ref), signal });
+  assert.deepEqual(calls[1], [caller, "action.result", ref]);
+});
+
+test("ingress revocation and owner replacement during body streaming refuse before execution", async () => {
+  for (const change of ["revoke", "replace", "abort", "binding"] as const) {
+    let writes = 0;
+    const owner = recordingBoundary({
+      executeInput: () => {
+        writes++;
+        return Promise.resolve({ status: "committed", result: null });
+      },
+    });
+    let current = owner;
+    let live = true;
+    let changed = false;
+    const lifetime = new AbortController();
+    const host = admission(owner, {
+      resolveOwner: () => current,
+      resolveIngress: () =>
+        live
+          ? { ...caller, principal: changed ? "replacement" : "original" }
+          : undefined,
+    });
+    const handler = await host.admitUnassigned(
+      context({ workload: ROOT, parent: undefined, signal: lifetime.signal }),
+    );
+    assert(handler);
+    let writer!: ReadableStreamDefaultController<Uint8Array>;
+    const input = new ReadableStream<Uint8Array>({
+      start(controller) {
+        writer = controller;
+      },
+    });
+    const reply = handler({ input, signal: new AbortController().signal });
+    if (change === "revoke") live = false;
+    if (change === "replace") current = recordingBoundary();
+    if (change === "abort") lifetime.abort("session gone");
+    if (change === "binding") changed = true;
+    writer.enqueue(encoder.encode(JSON.stringify(rootCommand)));
+    writer.close();
+    assert.equal(decode(await reply).ok, false);
+    assert.equal(writes, 0);
+  }
+});
+
+test("ingress admission rechecks holder after asynchronous authentication", async () => {
+  const gate = deferred();
+  let state: "acquired" | "stopped" = "acquired";
+  const owner = recordingBoundary({
+    get state() {
+      return state;
+    },
+  });
+  // Object spread copies accessors in the fixture; use a separate live resolver.
+  let current: OwnerCommandBoundary | undefined = owner;
+  const host = admission(owner, {
+    resolveOwner: () => current,
+    resolveIngress: async () => {
+      await gate.promise;
+      return caller;
+    },
+  });
+  const opening = host.admitUnassigned(
+    context({ workload: ROOT, parent: undefined }),
+  );
+  state = "stopped";
+  current = undefined;
+  gate.resolve();
+  assert.equal(await opening, undefined);
+});
+
+test("root client preserves unknown outcome and never retries admission", async () => {
+  let calls = 0;
+  const client = createOwnerConnection({
+    ownerId: "tenant",
+    callHost: (input) => {
+      calls++;
+      assert.equal(input.workload, ROOT);
+      return Promise.resolve({
+        output: stream({
+          ok: false,
+          outcome: "unknown",
+          code: "owner_commit_unknown",
+        }),
+        completed: Promise.resolve(),
+        cancel: () => Promise.resolve(),
+      });
+    },
+  });
+  await assert.rejects(
+    client.admitAction(rootCommand),
+    (error) =>
+      error instanceof OwnerCallRejected && error.outcome === "unknown",
+  );
+  assert.equal(calls, 1);
+  await assert.rejects(
+    client.admitAction({ ...rootCommand, kind: "put" }),
+    /Invalid named/,
+  );
+  assert.equal(calls, 1);
+});
+
+test("root boundary rejects forged provenance and changed absence restrictions and rechecks queued grants", async () => {
+  await fixture(async (owner, db, releaseBlock, blockEntered) => {
+    const host = admission(owner, { resolveIngress: () => caller });
+    const handler = await host.admitUnassigned(
+      context({ workload: ROOT, parent: undefined }),
+    );
+    assert(handler);
+    const valid = {
+      ...rootCommand,
+      input: {
+        provenance: { route: "trusted-wrapper" },
+        constraints: {
+          values: { actorId: "actor" },
+          absentKeys: ["privateKind"],
+        },
+      },
+    };
+    const signal = new AbortController().signal;
+    for (
+      const input of [{
+        ...valid.input,
+        provenance: { route: "generic-public" },
+      }, {
+        ...valid.input,
+        constraints: {
+          values: { actorId: "actor", privateKind: null },
+          absentKeys: [],
+        },
+      }, {
+        ...valid.input,
+        constraints: { values: { actorId: "actor" }, absentKeys: [] },
+      }]
+    ) {
+      assert.equal(
+        decode(await handler({ input: stream({ ...valid, input }), signal }))
+          .ok,
+        false,
+      );
+    }
+    assert.equal(
+      (await db.query("SELECT 1 FROM owner_receipts")).rows.length,
+      0,
+    );
+    const blocker = owner.execute(caller, {
+      kind: "block",
+      domain: "logical",
+      key: "block-root",
+      intent: null,
+    });
+    await blockEntered.promise;
+    const queued = handler({ input: stream(valid), signal });
+    await delay(0);
+    releaseBlock.resolve();
+    await blocker;
+    assert.equal(decode(await queued).ok, false);
+    assert.equal(
+      (await db.query("SELECT 1 FROM owner_receipts WHERE kind='action.admit'"))
+        .rows.length,
+      0,
+    );
+  });
 });

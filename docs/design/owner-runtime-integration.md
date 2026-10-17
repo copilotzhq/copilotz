@@ -474,3 +474,16 @@ closure remains database-free. The reviewed checkpoint passes72 focused cases,8
 native Node pure cases and46 independent cases. Restricted transport effect
 routes, provider conversion and effect-aware owner recovery remain required
 before general retry.
+
+### Fixed root Action transport routes
+
+Parentless Action admission and ordinary result projection have separate,
+default-deny current ingress authentication. Readiness, receipt recovery and
+worker ctx grants confer no root route authority. Exact owner and immutable host
+binding are rechecked after body streaming; SQL authorization still checks
+current policy/provenance/absence restrictions before replay or hydration. The
+route only admits the registered Action input command and fixes result purpose
+to ordinary Action terminal semantics. Independent36 connection cases pass,
+including queued revocation, forged route/constraints and unknown admission
+without retries. Final principal/route-policy and public facade composition
+remain separate work.

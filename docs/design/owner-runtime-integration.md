@@ -385,3 +385,17 @@ policy remains unchanged. Protected/content/deferred Actions and data that the
 legacy content canonicalizer would alter are explicitly refused in this subset.
 The trusted constraints absent-key codec and admission-group policy remain
 integration work. Public scheduling is not enabled before effect-aware recovery.
+
+### Durable assignment reservations
+
+A narrow owner assignment control table binds the exact worker provisioning,
+connection/session generation, parent stream/operation and dispatch attempt to
+existing source event/delivery and logical Action refs. Reservation is fenced,
+capacity-bounded and unique per live delivery. It does not grant execution:
+resolution checks fresh current Started transport state before and after SQL.
+Retirement revokes future commands without touching business/effect outcomes or
+receipt-reader associations; successor owners can retire old-epoch reservations.
+Ten actual-table cases and independent review cover tuple mismatches, no-Open
+recovery, rollback, currentness races and exact schema validation. The original
+nullable-retired schema defect was reproduced and fixed. Real PostgreSQL schema
+validation and production pre-Open dispatch wiring remain separate gates.

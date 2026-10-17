@@ -18,11 +18,24 @@ import {
 
 export const OWNER_CHILD_ACTION_ADMISSION = "action.child-admit";
 export const OWNER_CHILD_ACTION_RESULT = "action.child-result";
-export type OwnerChildActionParentReference = Readonly<{
+export type OwnerWorkerChildActionParentSelector = Readonly<{
   deliveryId: string;
   dispatchAttemptId: string;
-  operationKey: string;
 }>;
+export type OwnerLocalChildActionParentSelector = Readonly<{
+  placement: "owner-local";
+  deliveryId: string;
+  attemptId: string;
+}>;
+export type OwnerChildActionParentSelector =
+  | OwnerWorkerChildActionParentSelector
+  | OwnerLocalChildActionParentSelector;
+export type OwnerWorkerChildActionParentReference =
+  & OwnerWorkerChildActionParentSelector
+  & Readonly<{ operationKey: string }>;
+export type OwnerChildActionParentReference =
+  & OwnerChildActionParentSelector
+  & Readonly<{ operationKey: string }>;
 export type OwnerChildActionReference = Readonly<{
   namespace: string;
   actionId: string;
@@ -51,6 +64,47 @@ function text(value: unknown): asserts value is string {
     typeof value !== "string" || !value.trim() || value !== value.trim() ||
     value.length > 1024
   ) throw new TypeError("Invalid child Action coordinate.");
+}
+function parentCoordinates(value: unknown, operation: boolean) {
+  if (
+    !value || typeof value !== "object" || Array.isArray(value) ||
+    ![Object.prototype, null].includes(Object.getPrototypeOf(value))
+  ) {
+    throw new TypeError("Invalid child Action parent selector.");
+  }
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  const local = Object.hasOwn(descriptors, "placement");
+  const keys = local
+    ? ["placement", "deliveryId", "attemptId"]
+    : ["deliveryId", "dispatchAttemptId"];
+  if (operation) keys.push("operationKey");
+  if (Reflect.ownKeys(value).length !== keys.length) {
+    throw new TypeError("Invalid child Action parent selector.");
+  }
+  const result: Record<string, string> = {};
+  for (const key of keys) {
+    const descriptor = descriptors[key];
+    if (!descriptor?.enumerable || !("value" in descriptor)) {
+      throw new TypeError("Invalid child Action parent selector.");
+    }
+    text(descriptor.value);
+    result[key] = descriptor.value;
+  }
+  if (local && result.placement !== "owner-local") {
+    throw new TypeError("Invalid child Action placement.");
+  }
+  return result;
+}
+/** Closed coordinates only; actual caller/attempt authority is owner-derived. */
+export function parseOwnerChildActionParentSelector(
+  value: unknown,
+): OwnerChildActionParentSelector {
+  return parentCoordinates(value, false) as OwnerChildActionParentSelector;
+}
+export function parseOwnerChildActionParentReference(
+  value: unknown,
+): OwnerChildActionParentReference {
+  return parentCoordinates(value, true) as OwnerChildActionParentReference;
 }
 function fail(code: string): never {
   throw Object.assign(new Error(code), { code });
@@ -176,7 +230,7 @@ export function createOwnerChildActionPort(
     !Number.isSafeInteger(limit) || limit < 1 || limit > 128
   ) throw new TypeError("Child Action waits require positive bounded timing.");
   async function run(
-    reference: Readonly<{ deliveryId: string; dispatchAttemptId: string }>,
+    reference: OwnerChildActionParentSelector,
     actionAlias: string,
     input: OwnerJson,
     operationKey: string,
@@ -188,21 +242,11 @@ export function createOwnerChildActionPort(
         "Child Action metadata, identity and preparation are unsupported.",
       );
     }
-    if (
-      !reference || Object.keys(reference).length !== 2 ||
-      !Object.hasOwn(reference, "deliveryId") ||
-      !Object.hasOwn(reference, "dispatchAttemptId")
-    ) throw new TypeError("Invalid child Action parent selector.");
-    for (
-      const value of [
-        reference.deliveryId,
-        reference.dispatchAttemptId,
-        actionAlias,
-        operationKey,
-      ]
-    ) {
-      text(value);
+    const selector = parseOwnerChildActionParentSelector(reference);
+    if (prepared && "placement" in selector) {
+      return fail("action_prepare_unavailable");
     }
+    for (const value of [actionAlias, operationKey]) text(value);
     const actionId = Object.hasOwn(actions, actionAlias)
       ? actions[actionAlias]
       : undefined;
@@ -215,7 +259,7 @@ export function createOwnerChildActionPort(
       rejectNegativeZero: true,
     });
     const parent: OwnerChildActionParentReference = {
-      ...reference,
+      ...selector,
       operationKey: parentOperationKey,
     };
     const childKey = prepared
@@ -425,7 +469,7 @@ export function createOwnerChildActionPort(
   }
   return {
     call(
-      reference: Readonly<{ deliveryId: string; dispatchAttemptId: string }>,
+      reference: OwnerChildActionParentSelector,
       actionAlias: string,
       input: OwnerJson,
       operationKey: string,
@@ -434,7 +478,7 @@ export function createOwnerChildActionPort(
       return run(reference, actionAlias, input, operationKey, callOptions);
     },
     prepare(
-      reference: Readonly<{ deliveryId: string; dispatchAttemptId: string }>,
+      reference: OwnerWorkerChildActionParentSelector,
       actionAlias: string,
       preparation: ActionNamedPreparation,
       operationKey: string,

@@ -289,6 +289,7 @@ async function fixture(stage: "start" | "completion") {
           return result;
         },
         project: (...args) => boundary.project(...args),
+        executeInput: (...args) => boundary.executeInput(...args),
       },
     });
   const scheduled = {

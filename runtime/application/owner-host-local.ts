@@ -1,6 +1,6 @@
 import { ownConfiguration } from "./owner-local-configuration.ts";
 /** Private fresh-only local Action composition. No public placement option,
- * worker identity, restart adoption, child, preparation or effect capability. */
+ * worker identity, restart adoption, preparation or effect capability. */
 import type { SqlExecutor } from "../events/session.ts";
 import {
   createCoreTableNames,
@@ -74,6 +74,7 @@ export type OwnerHostLocalActionOptions = Readonly<{
   createCapabilities: RegisteredLocalActionOptions["createCapabilities"];
   maxEntries?: number;
   maxPendingCalls?: number;
+  childWaitMs?: number;
 }>;
 function refuse(
   message = "Current local host authority is unavailable.",
@@ -118,7 +119,7 @@ export function captureOwnerHostLocalActions(
     "actionIds",
     "policy",
     "createCapabilities",
-  ], ["maxEntries", "maxPendingCalls"]);
+  ], ["maxEntries", "maxPendingCalls", "childWaitMs"]);
   const callbacks = ownConfiguration(input.policy, [
     "grants",
     "input",
@@ -165,6 +166,17 @@ export function captureOwnerHostLocalActions(
   ) {
     throw new TypeError("Invalid private local Action capacity.");
   }
+  const childWaitMs = Object.hasOwn(input, "childWaitMs")
+    ? input.childWaitMs
+    : 30_000;
+  if (
+    typeof childWaitMs !== "number" || !Number.isSafeInteger(childWaitMs) ||
+    childWaitMs < 1 || childWaitMs > 60_000
+  ) {
+    throw new TypeError(
+      "Local child waits require a bound between 1 and 60000 milliseconds.",
+    );
+  }
   const selected = new Set(ids);
   const policy = callbacks as OwnerHostLocalActionOptions["policy"];
   const createCapabilities = input
@@ -175,6 +187,7 @@ export function captureOwnerHostLocalActions(
     createCapabilities,
     maxEntries,
     maxPendingCalls,
+    childWaitMs,
   };
 }
 
@@ -284,6 +297,7 @@ export function createOwnerHostLocalActions(
   const policy = { ...configuration.policy };
   const createCapabilities = configuration.createCapabilities;
   const maxPendingCalls = configuration.maxPendingCalls;
+  const childWaitMs = configuration.childWaitMs;
   const controlCaller = copy(options.controlCaller);
   const p = controlCaller.principal;
   if (p.kind !== "owner-control") refuse();
@@ -410,6 +424,7 @@ export function createOwnerHostLocalActions(
   return {
     selects,
     stop: controller.stop,
+    current: controller.resolveCurrentLocal,
     resolve,
     execution: {
       authorizeStart,
@@ -473,6 +488,7 @@ export function createOwnerHostLocalActions(
         onStarted: entry.onStarted,
         onTerminal: entry.onTerminal,
         maxPendingCalls,
+        children: { registry, maxWaitMs: childWaitMs },
       });
       const driver = createRegisteredLocalActionExecution({
         registry,

@@ -24,6 +24,7 @@ import {
   ownerChildActionKey,
   type OwnerChildActionParentReference,
   type OwnerChildActionReference,
+  parseOwnerChildActionParentReference,
 } from "../execution/child-action-port.ts";
 import { assertJsonValue } from "../json.ts";
 import { isOwnerProtectedSchemaFamily } from "./ordinary-value.ts";
@@ -41,8 +42,18 @@ import type {
   OwnerJson,
   OwnerProjectionHandler,
 } from "./boundary.ts";
-import type { OwnerWorkerExecutionAssignment } from "./execution.ts";
-import type { OwnerProcessorAssignment } from "./processor.ts";
+import type { OwnerExecutionAssignment } from "./execution.ts";
+import type {
+  OwnerLocalProcessorAssignment,
+  OwnerProcessorAssignment,
+} from "./processor.ts";
+import {
+  assertOwnerAttemptCaller,
+  type OwnerAttemptAuthority,
+  ownerAttemptIsLive,
+  ownerAttemptToken,
+  ownerEventCommitForAttempt,
+} from "./attempt-authority.ts";
 import type { OwnerPreparedInputContext } from "./preparation.ts";
 import {
   OWNER_PREPARATION_METADATA,
@@ -57,8 +68,13 @@ export {
   ownerChildActionKey,
 };
 export type OwnerChildActionBinding =
-  | Readonly<{ kind: "action"; assignment: OwnerWorkerExecutionAssignment }>
-  | Readonly<{ kind: "processor"; assignment: OwnerProcessorAssignment }>;
+  | Readonly<{ kind: "action"; assignment: OwnerExecutionAssignment }>
+  | Readonly<
+    {
+      kind: "processor";
+      assignment: OwnerProcessorAssignment | OwnerLocalProcessorAssignment;
+    }
+  >;
 /** Derived immutable original facts for current host policy. These do not become
  * Action call metadata; absent call metadata keeps the existing {} semantics. */
 export type OwnerChildActionParent = Readonly<{
@@ -161,14 +177,31 @@ function ordinary(value: OwnerJson, schemaValue = false): void {
     ordinary(child, key === "schema" || (array && schemaValue));
   }
 }
-function parentReference(value: unknown): OwnerChildActionParentReference {
-  const data = object(value, [
-    "deliveryId",
-    "dispatchAttemptId",
-    "operationKey",
-  ]);
-  for (const value of Object.values(data)) text(value);
-  return data as OwnerChildActionParentReference;
+const parentReference = parseOwnerChildActionParentReference;
+function attemptAuthority(
+  binding: OwnerChildActionBinding,
+): OwnerAttemptAuthority {
+  const a = binding.assignment;
+  if ("placement" in a) return a;
+  if (binding.kind !== "processor") refuse("Action placement is required.");
+  return { ...a, placement: "worker" };
+}
+function assertParentSelector(
+  ref: OwnerChildActionParentReference,
+  binding: OwnerChildActionBinding,
+): void {
+  const authority = attemptAuthority(binding);
+  const local = authority.placement === "owner-local";
+  if (
+    ref.deliveryId !== authority.deliveryId || local !== ("placement" in ref) ||
+    ownerAttemptToken(authority) !==
+      ("placement" in ref ? ref.attemptId : ref.dispatchAttemptId)
+  ) refuse();
+}
+function requireWorkerParent(ref: OwnerChildActionParentReference): void {
+  if ("placement" in parentReference(ref)) {
+    refuse("Local named preparation is unavailable.");
+  }
 }
 function childReference(value: unknown): OwnerChildActionReference {
   const data = object(value, [
@@ -259,7 +292,7 @@ export function createOwnerChildActions(
   >();
   type ParentProof = Readonly<{
     bodies: string;
-    leaseExpiresAt: string;
+    leaseExpiresAt: string | null;
     invokedEventId: string | null;
     parent: OwnerChildActionParent;
     binding: OwnerChildActionBinding;
@@ -398,15 +431,10 @@ export function createOwnerChildActions(
       return parent;
     };
     const a = binding.assignment;
-    if (
-      a.ownerId !== options.ownerId || caller.principal.kind !== "worker" ||
-      a.workerId !== caller.principal.workerId ||
-      a.assignmentId !== caller.assignmentId ||
-      a.sessionId !== caller.sessionId ||
-      a.dispatchAttemptId !== caller.dispatchAttemptId ||
-      a.ctxGranted !== true || a.deliveryId !== ref.deliveryId ||
-      a.dispatchAttemptId !== ref.dispatchAttemptId
-    ) refuse();
+    const authority = attemptAuthority(binding);
+    assertOwnerAttemptCaller(caller, authority, options.ownerId);
+    assertParentSelector(ref, binding);
+    if (a.ctxGranted !== true) refuse();
     const store = readStore(tx);
     const initial = await store.getDelivery(a.deliveryId);
     if (!initial) refuse();
@@ -423,7 +451,9 @@ export function createOwnerChildActions(
       `SELECT lease_expires_at::text AS lease_expires_at FROM ${tables.event_deliveries} WHERE id=$1 FOR UPDATE`,
       [a.deliveryId],
     )).rows[0];
-    if (!locked?.lease_expires_at) refuse();
+    if (
+      !locked || (authority.placement === "worker" && !locked.lease_expires_at)
+    ) refuse();
     const leaseExpiresAt = locked.lease_expires_at;
     const delivery = await store.getDelivery(a.deliveryId);
     const source = delivery && await store.getEvent(delivery.eventId);
@@ -431,16 +461,16 @@ export function createOwnerChildActions(
       !delivery || !source || source.ownerId !== options.ownerId ||
       source.namespace !== a.namespace ||
       delivery.settlementScopeId !== initial.settlementScopeId ||
-      delivery.status !== "leased" ||
-      delivery.leaseOwner !== a.dispatchAttemptId ||
-      !(Date.parse(delivery.leaseExpiresAt ?? "") > Date.parse(time))
+      !ownerAttemptIsLive(delivery, authority, time)
     ) refuse();
     bodyProofs.push(await captureBody(tx, source));
     if (binding.kind === "processor") {
       if (
         source.id !== binding.assignment.sourceEventId ||
         delivery.consumerId !== `processor:${binding.assignment.processorId}` ||
-        ref.operationKey !== `delivery:${delivery.id}`
+        ref.operationKey !== `delivery:${delivery.id}` ||
+        ("placement" in binding.assignment &&
+          binding.assignment.attemptOrdinal !== delivery.attempts)
       ) refuse();
       return remember({
         namespace: a.namespace,
@@ -531,7 +561,7 @@ export function createOwnerChildActions(
     parent: OwnerChildActionParent,
     binding: OwnerChildActionBinding,
   ): Promise<void> {
-    // Reauthorize current worker grant/input policy as well as the private
+    // Reauthorize current parent grant/input policy as well as the private
     // Started lifetime. The synchronous witness alone is not business policy.
     const returned = await options.resolveParent(
       tx,
@@ -541,11 +571,10 @@ export function createOwnerChildActions(
     if (!returned || !same(returned, binding)) refuse();
     privateCurrent(caller, binding);
     const a = binding.assignment;
-    if (
-      ref.deliveryId !== a.deliveryId ||
-      ref.dispatchAttemptId !== a.dispatchAttemptId ||
-      ref.operationKey !== parent.operationKey
-    ) refuse();
+    const authority = attemptAuthority(binding);
+    assertOwnerAttemptCaller(caller, authority, options.ownerId);
+    assertParentSelector(ref, binding);
+    if (ref.operationKey !== parent.operationKey) refuse();
     const proof = parentProofs.get(parent);
     if (
       !proof || !same(proof.parent, parent) || !same(proof.binding, binding)
@@ -571,7 +600,9 @@ export function createOwnerChildActions(
       }
     >(
       `SELECT (
-         d.max_attempts=$3 AND d.lease_expires_at=$4::timestamptz AND d.lease_expires_at>$5::timestamptz
+         d.max_attempts=$3 AND d.lease_expires_at IS NOT DISTINCT FROM $4::timestamptz
+         AND (($10::boolean AND d.lease_expires_at IS NULL) OR
+           (NOT $10::boolean AND d.lease_expires_at>$5::timestamptz))
          AND NOT EXISTS (
            SELECT 1 FROM jsonb_array_elements($6::jsonb) expected
            LEFT JOIN ${tables.event_bodies} b ON b.namespace=expected->>'namespace' AND b.event_body_id=expected->>'id'
@@ -598,6 +629,7 @@ export function createOwnerChildActions(
         parent.actionRunId ?? null,
         binding.kind === "action" ? binding.assignment.actionId : null,
         proof.invokedEventId,
+        authority.placement === "owner-local",
       ],
     )).rows[0];
     if (
@@ -609,8 +641,9 @@ export function createOwnerChildActions(
       row.settlement_scope_id !== parent.delivery.settlementScopeId ||
       row.action_scope_id !== (parent.delivery.actionScopeId ?? null) ||
       row.status !== "leased" || row.attempts !== parent.delivery.attempts ||
-      row.lease_owner !== a.dispatchAttemptId ||
-      !(Date.parse(row.lease_expires_at ?? "") > Date.parse(time)) ||
+      row.lease_owner !== ownerAttemptToken(authority) ||
+      (binding.kind === "processor" && "placement" in binding.assignment &&
+        row.attempts !== binding.assignment.attemptOrdinal) ||
       !["accepted", "running"].includes(row.operation_state) ||
       row.cancellation_requested_at != null
     ) refuse();
@@ -712,7 +745,10 @@ export function createOwnerChildActions(
     const store = createEventStore({
       schema: options.schema,
       session: options.session,
-      ownerCommit: context.ownerCommit,
+      ownerCommit: ownerEventCommitForAttempt(
+        context,
+        attemptAuthority(binding),
+      ),
       lockSettlementScope: (tx, scope) => options.catalog.lockScope(tx, scope),
       admitOperationEventSql: (value, param) =>
         options.catalog.admitEventSql(value, param),
@@ -755,7 +791,7 @@ export function createOwnerChildActions(
           : {}),
         deliveryLease: {
           deliveryId: parent.delivery.id,
-          owner: input.parent.dispatchAttemptId,
+          owner: ownerAttemptToken(attemptAuthority(binding)),
         },
       },
       body: { id: bodyId, json: input.input },
@@ -958,6 +994,7 @@ export function createOwnerChildActions(
     operationKey: string,
     time: string,
   ) {
+    requireWorkerParent(ref);
     text(actionAlias);
     text(operationKey);
     const parent = await current(
@@ -993,6 +1030,7 @@ export function createOwnerChildActions(
       reference: OwnerChildActionReference,
       time: string,
     ): Promise<DurableEvent> {
+      requireWorkerParent(ref);
       if (!authorizePreparedInput) {
         refuse("Prepared input authority is unavailable.");
       }
@@ -1032,6 +1070,7 @@ export function createOwnerChildActions(
       >,
       context: OwnerCommandContext,
     ): Promise<OwnerChildActionReference> {
+      requireWorkerParent(raw.parent);
       if (!authorizePreparedInput) {
         refuse("Prepared input authority is unavailable.");
       }

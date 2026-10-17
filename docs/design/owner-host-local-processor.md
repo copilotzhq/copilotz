@@ -78,11 +78,13 @@ source lint and formatting checks passed.
 
 ## Remaining scope
 
-Retained local history/restart, cross-owner recovery, local nested Actions,
-effects, named preparation, public placement selection and full capability
-parity remain open. Completing those replacements must retire the superseded
-public runtime paths under the [cleanup plan](refactor-cleanup.md); this private
-host increment does not close that broader migration.
+Retained local history/restart, cross-owner recovery, effects, named
+preparation, public placement selection and full capability parity remain open.
+Private ordinary local nested Actions now share the
+[owner child path](owner-runtime-integration.md#private-local-parents-and-mixed-child-placement).
+Completing those replacements must retire the superseded public runtime paths
+under the [cleanup plan](refactor-cleanup.md); this private host increment does
+not close that broader migration.
 
 The supplementary frozen test/runner checkpoint passes all fourteen host cases
 and both caller-facing helper cases on PostgreSQL 17.11, with zero
@@ -90,5 +92,5 @@ skips/failures. All sixteen disposable databases were dropped and the service
 stopped; no dump or export was performed. The 1,597-file isolated source
 snapshot, four overlay hashes, configs and sibling sources stayed unchanged.
 Runner setup tests pass 11/11; lint/format pass on the four changed files. The
-expanded canonical runner now declares seventeen files and 136 cases; its
-combined run is still pending.
+expanded canonical runner at that checkpoint declared seventeen files and 136
+cases; the current inventory is tracked in the connected-testing guide.

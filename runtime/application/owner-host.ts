@@ -1299,8 +1299,30 @@ export async function createOwnerHost(
     maxPendingDeliveries: maxPending,
     authorizePreparedInput,
     isCurrentParent(caller, parent) {
-      if (!ready() || caller.principal.kind !== "worker") return false;
-      const actual = bridge.currentStarted(caller), a = parent.assignment;
+      if (!ready()) return false;
+      const a = parent.assignment;
+      if ("placement" in a && a.placement === "owner-local") {
+        if (caller.principal.kind !== "owner-local" || a.ctxGranted !== true) {
+          return false;
+        }
+        const actual = parent.kind === "action"
+          ? local?.current(caller)
+          : localProcessor?.current(caller);
+        if (!actual || !ready()) return false;
+        const reference = "reference" in actual ? actual.reference : actual;
+        if (
+          !Object.entries(reference).every(([key, value]) =>
+            (a as unknown as Record<string, unknown>)[key] === value
+          )
+        ) return false;
+        return parent.kind === "action" ||
+          ("attemptOrdinal" in actual && "attemptOrdinal" in a &&
+            actual.attemptOrdinal === a.attemptOrdinal);
+      }
+      if (caller.principal.kind !== "worker" || !("workerId" in a)) {
+        return false;
+      }
+      const actual = bridge.currentStarted(caller);
       if (
         !actual || !ready() || a.ownerId !== ownerId || a.ctxGranted !== true ||
         actual.workerId !== a.workerId ||
@@ -1322,6 +1344,24 @@ export async function createOwnerHost(
             parent.assignment.invocation.identity?.causationId;
     },
     async resolveParent(tx, caller, time) {
+      if (caller.principal.kind === "owner-local") {
+        if (local?.current(caller)) {
+          const assignment = await execution.authorizeLive(tx, caller, time);
+          return assignment.placement === "owner-local"
+            ? { kind: "action", assignment }
+            : undefined;
+        }
+        if (!localProcessor?.current(caller)) return undefined;
+        const { assignment } = await processor.authorizeLocalLive(
+          tx,
+          caller,
+          time,
+        );
+        return "placement" in assignment &&
+            assignment.placement === "owner-local"
+          ? { kind: "processor", assignment }
+          : undefined;
+      }
       const current = await bridge.resolveStarted(tx, caller);
       if (!current) return undefined;
       return "kind" in current

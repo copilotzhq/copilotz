@@ -349,6 +349,10 @@ test("local host options refuse resume and malformed selection before SQL or tra
         ...localOptions(),
         maxEntries,
       })),
+      ...[0, -1, 1.5, 60001, NaN, "1", null, undefined].map((childWaitMs) => ({
+        ...localOptions(),
+        childWaitMs,
+      })),
       ...[0, -1, 1.5, 129, NaN, "1", null, undefined].map((
         maxPendingCalls,
       ) => ({
@@ -1029,7 +1033,7 @@ test(
 );
 
 test(
-  "local host leaves effects, child Actions and named preparation unavailable",
+  "local host leaves effects and named preparation unavailable",
   { skip: !sourceRoot, timeout: 30_000 },
   async () => {
     let childCalls = 0;
@@ -1043,8 +1047,6 @@ test(
             try {
               if (kind === "effect") {
                 await ctx.effect.begin("send");
-              } else if (kind === "child") {
-                await ctx.actions.child("input", { operationKey: "child" });
               } else {await ctx.actions.child.prepareNamed({
                   preparation: "notes.context",
                   recordId: "record",
@@ -1067,19 +1069,19 @@ test(
     });
     const f = await fixture({ registry });
     try {
-      for (const kind of ["effect", "child", "preparation"]) {
+      for (const kind of ["effect", "preparation"]) {
         await assert.rejects(
           f.facade.actions.work(kind, { operationKey: kind }),
         );
         await eventually(() => f.host.snapshot().active === 0);
       }
-      assert.deepEqual(observed, ["effect", "child", "preparation"]);
+      assert.deepEqual(observed, ["effect", "preparation"]);
       assert.equal(childCalls, 0);
       assert.equal(f.counts().workerActionFactories, 0);
       const deliveries = (await f.db.query(
         "SELECT consumer_id,status,attempts FROM event_deliveries",
       )).rows;
-      assert.equal(deliveries.length, 3);
+      assert.equal(deliveries.length, 2);
       assert.ok(
         deliveries.every((row) =>
           row.consumer_id === "registered:fixture.local" &&
@@ -2108,3 +2110,483 @@ test(
     }
   },
 );
+
+for (const mode of ["in-process", "websocket"] as const) {
+  for (
+    const [parentPlacement, childPlacement] of [["owner-local", "worker"], [
+      "owner-local",
+      "owner-local",
+    ], ["worker", "owner-local"]] as const
+  ) {
+    test(
+      `${
+        parentPlacement === "owner-local" ? "local" : "worker"
+      } Action parent calls ${childPlacement} child over ${mode} with one logical result`,
+      { skip: !sourceRoot, timeout: 30_000 },
+      async () => {
+        let childCalls = 0, policyCalls = 0, localFactories = 0;
+        const release = deferred();
+        const registry = createPluginRegistry({
+          collections: { notes },
+          actions: {
+            work: defineAction({
+              id: "fixture.local",
+              inputSchema: { type: "string" } as const,
+              async execute(value: string, ctx: ActionContext) {
+                const one = await ctx.actions.child(value, {
+                  operationKey: "child",
+                });
+                const two = await ctx.actions.child(value, {
+                  operationKey: "child",
+                });
+                return `root:${one}:${two}`;
+              },
+            }),
+            child: defineAction({
+              id: "fixture.child",
+              inputSchema: { type: "string" } as const,
+              async execute(value: string, ctx: ActionContext) {
+                childCalls++;
+                await release.promise;
+                await ctx.transaction(
+                  ({ collections }) =>
+                    collections.notes.create({
+                      id: "nested-note",
+                      title: value,
+                    }),
+                  { operationKey: "write" },
+                );
+                return `child:${value}`;
+              },
+            }),
+          },
+        });
+        const f = await fixture({
+          registry,
+          mode,
+          local: localOptions({
+            actionIds: [
+              ...(parentPlacement === "owner-local" ? ["fixture.local"] : []),
+              ...(childPlacement === "owner-local" ? ["fixture.child"] : []),
+            ],
+            createCapabilities() {
+              localFactories++;
+              return { resources: {}, adapters: {} };
+            },
+          }),
+          policy: {
+            child(_tx, parent, actionId) {
+              policyCalls++;
+              assert.equal(actionId, "fixture.child");
+              assert.equal(parent.originalMetadata.source, "trusted-ingress");
+            },
+          },
+        });
+        try {
+          let ended = false;
+          const pending = outcome(
+            f.facade.actions.work("hello", { operationKey: "nested" }),
+          ).then((result) => {
+            ended = true;
+            return result;
+          });
+          await eventually(() => childCalls > 0 || ended);
+          assert.equal(
+            childCalls,
+            1,
+            JSON.stringify({ snapshot: f.host.snapshot(), errors: f.errors }),
+          );
+          assert.equal(
+            f.host.snapshot().active,
+            2,
+            "waiting parent remains charged alongside its child",
+          );
+          const rows = (await f.db.query<
+            { consumer_id: string; lease_expires_at: unknown }
+          >("SELECT consumer_id,lease_expires_at FROM event_deliveries WHERE status='leased'"))
+            .rows;
+          assert.equal(rows.length, 2);
+          assert.equal(
+            rows.find((r) => r.consumer_id === "registered:fixture.local")
+              ?.lease_expires_at === null,
+            parentPlacement === "owner-local",
+          );
+          assert.equal(
+            rows.find((r) => r.consumer_id === "registered:fixture.child")
+              ?.lease_expires_at === null,
+            childPlacement === "owner-local",
+          );
+          release.resolve();
+          const result = await pending;
+          assert.equal(result.error, undefined);
+          assert.equal(result.value, "root:child:hello:child:hello");
+          await eventually(() => f.host.snapshot().active === 0);
+          assert.equal(childCalls, 1);
+          assert.ok(policyCalls >= 2);
+          assert.equal(
+            localFactories,
+            Number(parentPlacement === "owner-local") +
+              Number(childPlacement === "owner-local"),
+          );
+          assert.equal(
+            f.counts().workerActionFactories,
+            Number(parentPlacement === "worker") +
+              Number(childPlacement === "worker"),
+          );
+          assert.equal(
+            (await f.db.query("SELECT * FROM nodes WHERE id='nested-note'"))
+              .rows.length,
+            1,
+          );
+          assert.equal(
+            (await f.db.query(
+              "SELECT * FROM owner_receipts WHERE kind='action.child-admit'",
+            )).rows.length,
+            1,
+          );
+          assert.equal(f.host.snapshot().recoveryRequired, false);
+          assert.deepEqual(f.errors, []);
+        } finally {
+          release.resolve();
+          await f.close();
+        }
+      },
+    );
+  }
+}
+
+test(
+  "local child admission at one slot refuses boundedly and retains its parent through terminal commit",
+  { skip: !sourceRoot, timeout: 30_000 },
+  async () => {
+    const entered = deferred(), release = deferred();
+    let childCalls = 0, activeAtRefusal = 0, failureCode: unknown, held = false;
+    const registry = createPluginRegistry({
+      actions: {
+        work: defineAction({
+          id: "fixture.local",
+          async execute(_input: unknown, ctx: ActionContext) {
+            try {
+              return await ctx.actions.child(null, { operationKey: "child" });
+            } catch (error) {
+              activeAtRefusal = f.host.snapshot().active;
+              failureCode = (error as { code?: unknown }).code;
+              throw error;
+            }
+          },
+        }),
+        child: defineAction({
+          id: "fixture.child",
+          execute() {
+            childCalls++;
+            return "unexpected";
+          },
+        }),
+      },
+    });
+    const f = await fixture({
+      registry,
+      maxActive: 1,
+      policy: { child() {} },
+      local: localOptions({
+        actionIds: ["fixture.local", "fixture.child"],
+        childWaitMs: 1000,
+      }),
+      session(db) {
+        return {
+          query: db.query.bind(db),
+          transaction(run) {
+            return db.transaction(async (tx) => {
+              let selected = false;
+              const result = await run({
+                async query<TRow extends Record<string, unknown>>(
+                  sql: string,
+                  values?: unknown[],
+                ) {
+                  const result = await tx.query<TRow>(sql, values);
+                  if (
+                    !held &&
+                    sql.startsWith('INSERT INTO "public"."owner_receipts"(') &&
+                    values?.[5] === "execution.complete"
+                  ) {
+                    selected = true;
+                    held = true;
+                  }
+                  return result;
+                },
+              });
+              if (selected) {
+                entered.resolve();
+                await release.promise;
+              }
+              return result;
+            });
+          },
+        };
+      },
+    });
+    try {
+      const started = Date.now();
+      let settled = false;
+      const pending = outcome(
+        f.facade.actions.work("input", { operationKey: "one-slot" }),
+      ).then((result) => {
+        settled = true;
+        return result;
+      });
+      await entered.promise;
+      assert.equal(failureCode, "owner_host_unavailable");
+      assert.equal(activeAtRefusal, 1);
+      assert.equal(f.host.snapshot().active, 1);
+      assert.equal(childCalls, 0);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      assert.equal(
+        settled,
+        false,
+        "parent outcome cannot precede its terminal COMMIT",
+      );
+      assert.equal(f.host.snapshot().active, 1);
+      release.resolve();
+      assert.ok((await pending).error);
+      assert.ok(
+        Date.now() - started < 5000,
+        "capacity refusal must not starve forever",
+      );
+      await eventually(() => f.host.snapshot().active === 0);
+      assert.equal(childCalls, 0);
+      assert.equal(f.counts().workerActionFactories, 0);
+      assert.equal(
+        (await f.db.query(
+          "SELECT * FROM owner_receipts WHERE kind='action.child-admit'",
+        )).rows.length,
+        0,
+      );
+      const rows = (await f.db.query(
+        "SELECT consumer_id,status,attempts FROM event_deliveries",
+      )).rows;
+      assert.deepEqual(rows.map((r) => [r.consumer_id, r.status, r.attempts]), [
+        ["registered:fixture.local", "dead_letter", 1],
+      ]);
+      await eventually(async () =>
+        (await f.db.query("SELECT state FROM copilotz_operations")).rows[0]
+          .state === "failed"
+      );
+      assert.equal(f.host.snapshot().ready, true);
+      assert.equal(f.host.snapshot().recoveryRequired, false);
+    } finally {
+      release.resolve();
+      await f.close();
+    }
+  },
+);
+
+test(
+  "local parent grant revocation prevents a completed worker child output from escaping",
+  { skip: !sourceRoot, timeout: 30_000 },
+  async () => {
+    let ctxGranted = true, exposed = false, childCalls = 0;
+    const registry = createPluginRegistry({
+      actions: {
+        work: defineAction({
+          id: "fixture.local",
+          async execute(_input: unknown, ctx: ActionContext) {
+            const result = await ctx.actions.child(null, {
+              operationKey: "child",
+            });
+            exposed = true;
+            return result;
+          },
+        }),
+        child: defineAction({
+          id: "fixture.child",
+          execute() {
+            childCalls++;
+            ctxGranted = false;
+            return { private: "must not escape" };
+          },
+        }),
+      },
+    });
+    const f = await fixture({
+      registry,
+      policy: { child() {} },
+      local: localOptions({
+        policy: {
+          grants: () => ({ ctx: ctxGranted, settlement: true }),
+          input() {},
+          collections: () => ({}),
+        },
+      }),
+    });
+    try {
+      await assert.rejects(
+        f.facade.actions.work("input", { operationKey: "revoked-child" }),
+      );
+      await eventually(() => f.host.snapshot().active === 0);
+      assert.equal(childCalls, 1);
+      assert.equal(exposed, false);
+      assert.equal(
+        (await f.db.query(
+          "SELECT status FROM event_deliveries WHERE consumer_id='registered:fixture.child'",
+        )).rows[0].status,
+        "succeeded",
+      );
+      assert.equal(
+        (await f.db.query(
+          "SELECT status FROM event_deliveries WHERE consumer_id='registered:fixture.local'",
+        )).rows[0].status,
+        "dead_letter",
+      );
+      assert.equal(f.host.snapshot().ready, true);
+    } finally {
+      await f.close();
+    }
+  },
+);
+
+for (
+  const stage of ["unknown-committed", "unknown-aborted", "held-reply"] as const
+) {
+  test(
+    `local child ${stage} admission retains the parent until actual drain without replay`,
+    { skip: !sourceRoot, timeout: 30_000 },
+    async () => {
+      const entered = deferred(), release = deferred();
+      let injected = 0, childCalls = 0, closed = false;
+      const registry = createPluginRegistry({
+        actions: {
+          work: defineAction({
+            id: "fixture.local",
+            execute: async (_input: unknown, ctx: ActionContext) =>
+              await ctx.actions.child(null, { operationKey: "child" }),
+          }),
+          child: defineAction({
+            id: "fixture.child",
+            execute() {
+              childCalls++;
+              return "unexpected";
+            },
+          }),
+        },
+      });
+      const f = await fixture({
+        registry,
+        maxActive: 2,
+        policy: { child() {} },
+        local: localOptions({ actionIds: ["fixture.local", "fixture.child"] }),
+        session(db) {
+          return {
+            query: db.query.bind(db),
+            async transaction(run) {
+              let selected = false;
+              const unknown = () =>
+                Object.assign(new Error(`child ${stage}`), {
+                  code: "persistence_indeterminate",
+                });
+              const result = await db.transaction(async (tx) => {
+                const result = await run({
+                  async query<TRow extends Record<string, unknown>>(
+                    sql: string,
+                    values?: unknown[],
+                  ) {
+                    const result = await tx.query<TRow>(sql, values);
+                    if (
+                      !injected &&
+                      sql.startsWith(
+                        'INSERT INTO "public"."owner_receipts"(',
+                      ) && values?.[5] === "action.child-admit"
+                    ) {
+                      injected++;
+                      selected = true;
+                    }
+                    return result;
+                  },
+                });
+                if (selected && stage === "unknown-aborted") throw unknown();
+                return result;
+              });
+              if (selected && stage === "unknown-committed") throw unknown();
+              if (selected && stage === "held-reply") {
+                entered.resolve();
+                await release.promise;
+              }
+              return result;
+            },
+          };
+        },
+      });
+      try {
+        const pending = outcome(
+          f.facade.actions.work("input", { operationKey: stage }),
+        );
+        if (stage === "held-reply") {
+          await entered.promise;
+          assert.equal(f.host.snapshot().active, 1);
+          const closing = f.host.close().then(() => {
+            closed = true;
+          });
+          await f.host.stopped;
+          await new Promise((resolve) => setTimeout(resolve, 20));
+          assert.equal(
+            closed,
+            false,
+            "shutdown cannot outrun the held raw acknowledgement",
+          );
+          assert.equal(f.host.snapshot().active, 1);
+          release.resolve();
+          await closing;
+        } else {
+          await eventually(() => injected === 1 && !f.host.snapshot().ready);
+          await f.host.stopped;
+          await f.host.close();
+        }
+        await pending;
+        assert.equal(injected, 1);
+        assert.equal(childCalls, 0);
+        assert.equal(
+          f.host.snapshot().active,
+          1,
+          "drain is not a parent terminal witness",
+        );
+        assert.equal(
+          f.host.snapshot().recoveryRequired,
+          stage !== "held-reply",
+        );
+        assert.equal(f.counts().workerActionFactories, 0);
+        const childRows = (await f.db.query(
+          "SELECT status,attempts FROM event_deliveries WHERE consumer_id='registered:fixture.child'",
+        )).rows;
+        assert.equal(childRows.length, stage === "unknown-aborted" ? 0 : 1);
+        if (childRows.length) {
+          assert.deepEqual([childRows[0].status, childRows[0].attempts], [
+            "pending",
+            0,
+          ]);
+        }
+        assert.equal(
+          (await f.db.query(
+            "SELECT * FROM owner_receipts WHERE kind='action.child-admit'",
+          )).rows.length,
+          stage === "unknown-aborted" ? 0 : 1,
+        );
+        assert.equal(
+          (await f.db.query(
+            "SELECT status FROM event_deliveries WHERE consumer_id='registered:fixture.local'",
+          )).rows[0].status,
+          "leased",
+        );
+        assert.equal(
+          (await f.db.query("SELECT retired FROM owner_assignments")).rows[0]
+            .retired,
+          false,
+        );
+        await f.host.wake();
+        assert.equal(injected, 1);
+        assert.equal(childCalls, 0);
+      } finally {
+        release.resolve();
+        await f.close();
+      }
+    },
+  );
+}

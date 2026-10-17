@@ -36,7 +36,10 @@ const sourceRoot = process.env.COPILOTZ_OXIAN_SOURCE_ROOT;
 const cases: readonly {
   placement: "worker" | "owner-local";
   mode: "in-process" | "websocket";
+  nestedChildren?: boolean;
+  localChild?: boolean;
   fault?:
+    | "child-ordinal"
     | "predecessor-grant"
     | "predecessor-event"
     | "retry-identity"
@@ -51,6 +54,23 @@ const cases: readonly {
   ...(["worker", "owner-local"] as const).flatMap((placement) =>
     (["in-process", "websocket"] as const).map((mode) => ({ placement, mode }))
   ),
+  ...(["in-process", "websocket"] as const).map((mode) => ({
+    placement: "owner-local" as const,
+    mode,
+    nestedChildren: true,
+  })),
+  ...(["in-process", "websocket"] as const).map((mode) => ({
+    placement: "owner-local" as const,
+    mode,
+    nestedChildren: true,
+    localChild: true,
+  })),
+  {
+    placement: "owner-local",
+    mode: "in-process",
+    nestedChildren: true,
+    fault: "child-ordinal",
+  },
   ...([
     "predecessor-grant",
     "predecessor-event",
@@ -69,10 +89,16 @@ const cases: readonly {
       fault,
     })),
 ];
-for (const { placement, mode, fault } of cases) {
+for (const { placement, mode, fault, nestedChildren, localChild } of cases) {
   test(
     `owner whole-plugin ${mode} ${placement}${
-      fault ? ` ${fault}` : ""
+      fault
+        ? ` ${fault}`
+        : localChild
+        ? " nested-local-child"
+        : nestedChildren
+        ? " nested-child"
+        : ""
     }: Collection → Processor, detached scope and due retry`,
     {
       skip: !sourceRoot,
@@ -175,6 +201,7 @@ for (const { placement, mode, fault } of cases) {
       }
       const errors: unknown[] = [];
       const observed: string[] = [];
+      const childRuns = new Map<string, number>();
       const collection = (name: string) =>
         defineCollection({
           name,
@@ -224,6 +251,7 @@ for (const { placement, mode, fault } of cases) {
               inputSchema: { type: "string" } as const,
               outputSchema: { type: "string" } as const,
               async execute(value: string, ctx: ActionContext) {
+                childRuns.set(value, (childRuns.get(value) ?? 0) + 1);
                 await ctx.transaction(
                   ({ collections }) =>
                     collections.replies.create({
@@ -251,7 +279,9 @@ for (const { placement, mode, fault } of cases) {
                   firstStarted = true;
                   await release.promise;
                 }
-                if (value === "retry" && ++retryCalls === 1) {
+                if (
+                  value === "retry" && ++retryCalls === 1 && !nestedChildren
+                ) {
                   throw new Error("retry before any effect");
                 }
                 if (value === "revoked") {
@@ -287,7 +317,7 @@ for (const { placement, mode, fault } of cases) {
                   }
                   throw new Error("current event policy revoked");
                 }
-                if (placement === "owner-local") {
+                if (placement === "owner-local" && !nestedChildren) {
                   await ctx.transaction(
                     ({ collections }) =>
                       collections.replies.create({
@@ -305,6 +335,9 @@ for (const { placement, mode, fault } of cases) {
                     operationKey: "child",
                   });
                   assert.equal(result, `child:${value}`);
+                  if (nestedChildren && value === "retry" && retryCalls === 1) {
+                    throw new Error("retry after known child result");
+                  }
                 }
                 (ctx.adapters.recorder as { record(value: string): void })
                   .record(value);
@@ -372,9 +405,26 @@ for (const { placement, mode, fault } of cases) {
             throw new Error("fixture event policy revoked");
           }
         },
-        child(_tx: unknown, parent: { namespace: string }, actionId: string) {
+        async child(
+          tx: unknown,
+          parent: {
+            namespace: string;
+            delivery: { id: string; consumerId: string };
+          },
+          actionId: string,
+        ) {
           assert.equal(parent.namespace, "space");
           assert.equal(actionId, "fixture.child");
+          if (
+            fault === "child-ordinal" && !faultInjected &&
+            parent.delivery.consumerId === "processor:fixture.follow"
+          ) {
+            await (tx as SqlExecutor).query(
+              "UPDATE event_deliveries SET attempts=attempts+1 WHERE id=$1",
+              [parent.delivery.id],
+            );
+            faultInjected = true;
+          }
         },
         effectOutcome: () => false,
         effectNotStarted: () => false,
@@ -425,10 +475,10 @@ for (const { placement, mode, fault } of cases) {
         undefined,
         placement === "owner-local"
           ? {
-            ...(fault === "mixed-capacity"
+            ...(fault === "mixed-capacity" || localChild
               ? {
                 actions: {
-                  actionIds: ["fixture.root"],
+                  actionIds: localChild ? ["fixture.child"] : ["fixture.root"],
                   policy: {
                     grants: () => ({ ctx: true, settlement: true }),
                     input() {},
@@ -436,7 +486,8 @@ for (const { placement, mode, fault } of cases) {
                   },
                   createCapabilities: () => {
                     localActionFactories++;
-                    assert.equal(host.snapshot().active, 1);
+                    if (localChild) assert.ok(host.snapshot().active >= 2);
+                    else assert.equal(host.snapshot().active, 1);
                     return {
                       resources: registry.resources,
                       adapters: registry.adapters,
@@ -687,6 +738,33 @@ for (const { placement, mode, fault } of cases) {
           }),
         );
         release.resolve();
+        if (fault === "child-ordinal") {
+          await eventually(() => faultInjected && host.snapshot().active === 0);
+          const parent = (await db.query(
+            "SELECT status,attempts FROM event_deliveries WHERE consumer_id='processor:fixture.follow'",
+          )).rows[0];
+          assert.deepEqual(
+            [parent.status, parent.attempts],
+            ["retry_wait", 1],
+            "changed ordinal is refused and rolled back",
+          );
+          assert.equal(childRuns.size, 0);
+          assert.equal(
+            (await db.query(
+              "SELECT id FROM event_deliveries WHERE consumer_id='registered:fixture.child'",
+            )).rows.length,
+            0,
+          );
+          assert.equal(
+            (await db.query(
+              "SELECT key FROM owner_receipts WHERE kind='action.child-admit'",
+            )).rows.length,
+            0,
+          );
+          assert.equal(host.snapshot().ready, true);
+          assert.deepEqual(errors, []);
+          return;
+        }
         await eventually(async () =>
           (await db.query("SELECT id FROM nodes WHERE id='reply:first'")).rows
               .length === 1 && observed.includes("first")
@@ -904,6 +982,20 @@ for (const { placement, mode, fault } of cases) {
         }
         await eventually(() => observed.includes("retry"));
         assert.equal(retryCalls, 2);
+        if (nestedChildren) {
+          assert.equal(
+            childRuns.get("retry"),
+            1,
+            "new local Processor attempt reuses the logical child result",
+          );
+          assert.equal(
+            (await db.query(
+              "SELECT id FROM events WHERE type='copilotz.owner.action.requested' AND metadata->>'parentDeliveryId'=$1",
+              [retry.id],
+            )).rows.length,
+            1,
+          );
+        }
         assert.equal(
           (await db.query(
             "SELECT attempts FROM event_deliveries WHERE id=$1",
@@ -962,10 +1054,8 @@ for (const { placement, mode, fault } of cases) {
         await eventually(() => Promise.resolve(replayDenied && childDenied));
         await eventually(() => host.snapshot().active === 0);
         assert.ok(
-          policyDenials >= (placement === "owner-local" ? 1 : 2),
-          placement === "owner-local"
-            ? "current event policy is rerun before Collection replay; local child capability is unavailable"
-            : "current event policy is rerun before Collection receipt replay and child admission",
+          policyDenials >= 2,
+          "current event policy is rerun before Collection receipt replay and child admission",
         );
         assert.equal(
           (await db.query("SELECT id FROM nodes WHERE id='policy:revoked'"))

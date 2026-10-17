@@ -54,6 +54,7 @@ connection when supplied.
 The [private generation-aware host](owner-host-local-processor.md) now combines
 known ended receipts, predecessor revocation and drain, SQL due-time checks,
 alarms and shared local/worker capacity, with its own scoped integration
-evidence. Local nested Actions, effects, public mixed placement selection and
-restart parity remain separate gates. This adapter does not add a heartbeat or
-make a database prerequisite for ordinary embedded Copilotz use.
+evidence. Ordinary local child calls now use the shared raw-accounted child
+adapter. Effects, public mixed placement selection and restart parity remain
+separate gates. This adapter does not add a heartbeat or make a database
+prerequisite for ordinary embedded Copilotz use.

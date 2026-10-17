@@ -8,6 +8,8 @@ import {
   OWNER_CHILD_ACTION_ADMISSION,
   OWNER_CHILD_ACTION_RESULT,
   ownerChildActionKey,
+  parseOwnerChildActionParentReference,
+  parseOwnerChildActionParentSelector,
 } from "./child-action-port.ts";
 
 const registry = createPluginRegistry({
@@ -635,4 +637,120 @@ test("oversized composite preparation key cannot consume the shared child slot",
   assert.equal(calls, 0);
   await new Promise((resolve) => setTimeout(resolve, 10));
   assert.equal(await port.call(ref, "child", {}, "valid"), "ok");
+});
+
+test("child parent selectors are disjoint closed detached coordinates", () => {
+  const worker = {
+    deliveryId: "delivery",
+    dispatchAttemptId: "worker-attempt",
+  };
+  const local = {
+    placement: "owner-local" as const,
+    deliveryId: "delivery",
+    attemptId: "local-attempt",
+  };
+  for (const selector of [worker, local]) {
+    assert.deepEqual(parseOwnerChildActionParentSelector(selector), selector);
+    assert.deepEqual(
+      parseOwnerChildActionParentReference({
+        ...selector,
+        operationKey: "parent",
+      }),
+      { ...selector, operationKey: "parent" },
+    );
+    assert.throws(() => parseOwnerChildActionParentReference(selector));
+    assert.throws(() =>
+      parseOwnerChildActionParentSelector({
+        ...selector,
+        operationKey: "parent",
+      })
+    );
+  }
+  const detached = parseOwnerChildActionParentSelector(local);
+  local.attemptId = "changed";
+  assert.equal("attemptId" in detached && detached.attemptId, "local-attempt");
+  let accessed = 0;
+  for (
+    const invalid of [
+      { ...worker, attemptId: "mixed" },
+      { ...local, dispatchAttemptId: "mixed" },
+      { ...worker, placement: undefined },
+      { ...local, placement: "worker" },
+      { deliveryId: "delivery", attemptId: "missing-placement" },
+      { ...worker, dispatchAttemptId: undefined },
+      { ...local, attemptId: " " },
+      Object.create(worker),
+      Object.assign([], worker),
+      Object.defineProperty({ deliveryId: "delivery" }, "dispatchAttemptId", {
+        enumerable: true,
+        get() {
+          accessed++;
+          return "attempt";
+        },
+      }),
+      { ...local, [Symbol("hidden")]: "extra" },
+    ]
+  ) assert.throws(() => parseOwnerChildActionParentSelector(invalid));
+  assert.equal(accessed, 0);
+});
+test("local child selectors preserve the worker logical key without fake dispatch identity", async () => {
+  const local = {
+    placement: "owner-local" as const,
+    deliveryId: "local-delivery",
+    attemptId: "local-attempt",
+  };
+  const f = setup(true), worker = setup(true);
+  assert.deepEqual(
+    await f.port.call(local, "child", { ordinary: true }, "same"),
+    { value: 7 },
+  );
+  await worker.port.call(reference, "child", { ordinary: true }, "same");
+  assert.equal(f.calls[0].key, worker.calls[0].key);
+  const expected = { ...local, operationKey: "parent" };
+  assert.deepEqual(
+    (f.calls[0].input as Record<string, OwnerJson>).parent,
+    expected,
+  );
+  assert.deepEqual(
+    (f.projections[0] as Record<string, OwnerJson>).parent,
+    expected,
+  );
+  assert.equal(Object.hasOwn(expected, "dispatchAttemptId"), false);
+});
+test("local child selector refuses named preparation even when a preparation port exists", async () => {
+  let called = 0;
+  const port = createOwnerChildActionPort({
+    ownerId: "owner",
+    namespace: "space",
+    parentOperationKey: "parent",
+    registry,
+    port: {
+      executeInput() {
+        called++;
+        throw new Error("must not admit");
+      },
+      prepareInput() {
+        called++;
+        throw new Error("must not prepare");
+      },
+      project() {
+        called++;
+        throw new Error("must not project");
+      },
+    },
+  });
+  await assert.rejects(
+    port.prepare(
+      {
+        placement: "owner-local",
+        deliveryId: "delivery",
+        attemptId: "attempt",
+      } as never,
+      "child",
+      { preparation: "prepare", recordId: "one", mode: "context" },
+      "step",
+    ),
+    errorCode("action_prepare_unavailable"),
+  );
+  assert.equal(called, 0);
 });

@@ -34,17 +34,28 @@ test("local Processor configuration snapshots callbacks, IDs and omitted-only bo
     policy: { ...configuration().policy },
     maxEntries: 1,
     maxPendingCalls: 1,
+    childWaitMs: 25,
   };
   const captured = captureOwnerHostLocalProcessors(input, registry),
     original = input.policy.grants;
   input.processorIds[0] = "changed";
   input.policy.grants = () => undefined;
   input.maxEntries = 0;
+  input.childWaitMs = 1;
   assert.equal(captured.selects("fixture.follow"), true);
   assert.equal(captured.selects("changed"), false);
   assert.equal(captured.policy.grants, original);
   assert.equal(captured.maxEntries, 1);
   assert.equal(captured.maxPendingCalls, 1);
+  assert.equal(captured.childWaitMs, 25);
+  for (const childWaitMs of [undefined, null, 0, -1, 1.5, 60001, NaN, "1"]) {
+    assert.throws(() =>
+      captureOwnerHostLocalProcessors(
+        { ...configuration(), childWaitMs } as never,
+        registry,
+      )
+    );
+  }
   assert.equal(
     captureOwnerHostLocalProcessors(configuration(), registry).maxEntries,
     4096,
@@ -163,6 +174,9 @@ test("local Processor Collection policy captures synchronous returns before micr
     registry,
     schema: "public",
     boundary: {
+      executeInput() {
+        throw new Error("unexpected child admission");
+      },
       execute() {
         throw new Error("unexpected boundary");
       },

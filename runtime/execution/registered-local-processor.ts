@@ -5,6 +5,7 @@ import type {
   OwnerCommand,
   OwnerCommandExecuteOptions,
   OwnerCommandOutcome,
+  OwnerJson,
 } from "../owner/boundary.ts";
 import {
   type OwnerLocalProcessorAssignmentBinding,
@@ -52,6 +53,12 @@ export type RegisteredLocalProcessorPort = Readonly<{
     command: OwnerCommand,
     options?: OwnerCommandExecuteOptions,
   ): Promise<OwnerCommandOutcome>;
+  invokeAction?(
+    input: Readonly<
+      { actionAlias: string; input: OwnerJson; operationKey: string }
+    >,
+    options: OwnerCommandExecuteOptions,
+  ): Promise<OwnerJson>;
   sealInvocationCalls(): void;
   drainRawCalls(): Promise<void>;
   settlementState(
@@ -324,6 +331,7 @@ export function createRegisteredLocalProcessorExecution(
   const start = owner.start.bind(owner);
   const project = owner.project.bind(owner);
   const execute = owner.execute.bind(owner);
+  const invokeAction = owner.invokeAction?.bind(owner);
   const state = owner.settlementState.bind(owner);
   const complete = owner.complete.bind(owner);
   const seal = owner.sealInvocationCalls.bind(owner);
@@ -521,6 +529,25 @@ export function createRegisteredLocalProcessorExecution(
                 exposedSignal: exposed.signal,
               },
               calls: {
+                ...(invokeAction
+                  ? {
+                    invokeAction: async (input, callOptions) => {
+                      check();
+                      try {
+                        const result = await invokeAction(
+                          snapshot(input),
+                          callOptions,
+                        );
+                        check();
+                        return snapshot(result);
+                      } catch (error) {
+                        if (unknown(error)) throw indeterminate(error);
+                        current();
+                        throw error;
+                      }
+                    },
+                  }
+                  : {}),
                 execute: async (input, callOptions) => {
                   check();
                   let result: OwnerCommandOutcome;

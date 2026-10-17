@@ -413,6 +413,7 @@ async function setup(maxPendingDeliveries = 128) {
   return {
     db,
     boundary,
+    child,
     state,
     registry,
     request,
@@ -1321,6 +1322,42 @@ test("ordinary child preserves application schemas and innocent reserved-looking
       status: "completed",
       output: value,
     });
+  } finally {
+    await f.close();
+  }
+});
+
+test("child physical local selector preserves logical intent but cannot impersonate a worker parent", async () => {
+  const f = await setup();
+  try {
+    const worker = f.request();
+    const raw = structuredClone(worker.input) as Record<string, OwnerJson>;
+    const parent = raw.parent as Record<string, OwnerJson>;
+    const local = {
+      ...worker,
+      input: {
+        ...raw,
+        parent: {
+          placement: "owner-local",
+          deliveryId: parent.deliveryId,
+          attemptId: parent.dispatchAttemptId,
+          operationKey: parent.operationKey,
+        },
+      },
+    };
+    const a = await f.child.inputDefinition.normalize(worker.input);
+    const b = await f.child.inputDefinition.normalize(local.input);
+    assert.deepEqual(
+      a.intent,
+      b.intent,
+      "physical placement never changes a logical child mutation",
+    );
+    await f.admit(worker);
+    const before = await snapshotChildTables(f.db),
+      reads = f.state.receiptReads;
+    await assert.rejects(f.admit(local), errorCode("ActionOwnershipLost"));
+    assert.equal(f.state.receiptReads, reads);
+    assert.deepEqual(await snapshotChildTables(f.db), before);
   } finally {
     await f.close();
   }

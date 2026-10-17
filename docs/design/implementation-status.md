@@ -1,6 +1,6 @@
 # Owner, worker and Views implementation checklist
 
-Updated: 17 October 2026, 15:49 UTC.
+Updated: 17 October 2026, 16:36 UTC.
 
 This is the maintained coordination checklist for
 [Copilotz PR #93](https://github.com/copilotzhq/copilotz/pull/93). It tracks
@@ -10,14 +10,15 @@ production-ready. All changes remain draft: **no merge or publication**.
 
 ## Current work
 
-| Task                                | Status                  | Next acceptance gate                                                                                    |
-| ----------------------------------- | ----------------------- | ------------------------------------------------------------------------------------------------------- |
-| Local Processor bound owner adapter | Reviewed checkpoint     | Reviewed: independent 30 pure and seven real PostgreSQL cases; 83-case compatibility passed             |
-| Local nested Action authority       | Shared gates reviewed   | Current-parent and ordinary-format gates reviewed; activate exact local parent selectors and ports next |
-| Faster test orchestration           | Representative measured | 16 files: 15.4% faster, 7.7% higher peak RSS; reordered files require broader isolation validation      |
-| Reference-test reliability          | Reviewed correction     | 137 affected cases, independent 29-case check and three complete pipeline repeats passed                |
-| Local Processor host generations    | Reviewed checkpoint     | PostgreSQL 14 host plus two caller-facing helper cases pass; fresh same-owner retry scope complete      |
-| Architecture cleanup                | In progress             | Shared local-port bookkeeping consolidated; migrate callers and retire superseded paths next            |
+| Task                                | Status                  | Next acceptance gate                                                                               |
+| ----------------------------------- | ----------------------- | -------------------------------------------------------------------------------------------------- |
+| Local Processor bound owner adapter | Reviewed checkpoint     | Reviewed: independent 30 pure and seven real PostgreSQL cases; 83-case compatibility passed        |
+| Local nested Action authority       | Reviewed checkpoint     | Independent 144 pure and 114 PostgreSQL cases; private fresh same-owner mixed placement complete   |
+| Local Action effect capabilities    | Next implementation     | Extend exact local attempt authority and raw-call accounting to the existing effect flow           |
+| Faster test orchestration           | Representative measured | 16 files: 15.4% faster, 7.7% higher peak RSS; reordered files require broader isolation validation |
+| Reference-test reliability          | Reviewed correction     | 137 affected cases, independent 29-case check and three complete pipeline repeats passed           |
+| Local Processor host generations    | Reviewed checkpoint     | PostgreSQL 14 host plus two caller-facing helper cases pass; fresh same-owner retry scope complete |
+| Architecture cleanup                | In progress             | Shared local-port bookkeeping consolidated; migrate callers and retire superseded paths next       |
 
 ## 1. Programming model and composition
 
@@ -67,9 +68,13 @@ production-ready. All changes remain draft: **no merge or publication**.
       retained. Ordinary protected-format family refusal separately passes
       PostgreSQL53 plus one fixture cleanup probe, preserving ordinary
       application field names
-- [ ] Local nested Action authority and mixed parent/child placement; activate
-      exact local parent selectors and bound ports next. Prepared receipt proofs
-      remain a separate gate
+- [x] Private fresh same-owner local nested Action authority and mixed
+      parent/child placement, including Processor retries: independent 144 pure
+      and 114 PostgreSQL cases pass, all112 fixture databases dropped and the
+      service stopped. Exact current authority, fail-fast capacity and raw-call
+      drain are preserved. Local preparation, effects, restart and public
+      placement remain separate gates; the 152-case canonical inventory is not a
+      claim of a combined canonical or full-suite run
 - [ ] Local Action effect capability parity
 - [ ] Public local placement activation and complete parity matrix
 

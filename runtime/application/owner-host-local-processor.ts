@@ -81,6 +81,7 @@ export type OwnerHostLocalProcessorOptions = Readonly<{
   createCapabilities: RegisteredLocalProcessorOptions["createCapabilities"];
   maxEntries?: number;
   maxPendingCalls?: number;
+  childWaitMs?: number;
 }>;
 function refuse(
   message = "Current local Processor host authority is unavailable.",
@@ -118,7 +119,7 @@ export function captureOwnerHostLocalProcessors(
     "processorIds",
     "policy",
     "createCapabilities",
-  ], ["maxEntries", "maxPendingCalls"]);
+  ], ["maxEntries", "maxPendingCalls", "childWaitMs"]);
   const policy = ownConfiguration(input.policy, [
     "grants",
     "event",
@@ -158,6 +159,17 @@ export function captureOwnerHostLocalProcessors(
     !Number.isSafeInteger(maxPendingCalls) || maxPendingCalls < 1 ||
     maxPendingCalls > 128
   ) throw new TypeError("Invalid private local Processor capacity.");
+  const childWaitMs = Object.hasOwn(input, "childWaitMs")
+    ? input.childWaitMs
+    : 30_000;
+  if (
+    typeof childWaitMs !== "number" || !Number.isSafeInteger(childWaitMs) ||
+    childWaitMs < 1 || childWaitMs > 60_000
+  ) {
+    throw new TypeError(
+      "Local child waits require a bound between 1 and 60000 milliseconds.",
+    );
+  }
   const selected = new Set(ids);
   return {
     selects: (id: string) => selected.has(id),
@@ -168,6 +180,7 @@ export function captureOwnerHostLocalProcessors(
       ],
     maxEntries,
     maxPendingCalls,
+    childWaitMs,
   };
 }
 export function createOwnerHostLocalProcessors(
@@ -175,7 +188,10 @@ export function createOwnerHostLocalProcessors(
     configuration: ReturnType<typeof captureOwnerHostLocalProcessors>;
     registry: PluginRegistry;
     schema: string;
-    boundary: Pick<OwnerCommandBoundary, "execute" | "project">;
+    boundary: Pick<
+      OwnerCommandBoundary,
+      "execute" | "executeInput" | "project"
+    >;
     controlCaller: OwnerCaller;
     maxActive: number;
     capacity: Readonly<
@@ -198,13 +214,19 @@ export function createOwnerHostLocalProcessors(
     onIndeterminate,
     requestWake,
   } = options;
-  const { selects, createCapabilities, maxPendingCalls, maxEntries } =
-    options.configuration;
+  const {
+    selects,
+    createCapabilities,
+    maxPendingCalls,
+    maxEntries,
+    childWaitMs,
+  } = options.configuration;
   const policy = { ...options.configuration.policy };
   const controlCaller = copy(options.controlCaller),
     p = controlCaller.principal;
   if (p.kind !== "owner-control") refuse();
   const { ownerId, epoch, holderId } = p;
+  const executeInput = options.boundary.executeInput.bind(options.boundary);
   const execute = options.boundary.execute.bind(options.boundary),
     project = options.boundary.project.bind(options.boundary);
   const operationTables = createOperationCatalogTables(schema);
@@ -333,6 +355,7 @@ export function createOwnerHostLocalProcessors(
   return {
     selects,
     stop,
+    current: controller.resolveCurrent,
     resolve,
     processor: {
       authorizeStart,
@@ -497,6 +520,7 @@ export function createOwnerHostLocalProcessors(
               ? entry.executeStart(caller, command, callOptions)
               : execute(caller, command, callOptions),
           project,
+          executeInput,
         },
         reference: entry.reference,
         attemptOrdinal: entry.attemptOrdinal,
@@ -506,6 +530,7 @@ export function createOwnerHostLocalProcessors(
         onStarted: entry.onStarted,
         onEnded: entry.onEnded,
         maxPendingCalls,
+        children: { registry, maxWaitMs: childWaitMs },
       });
       const driver = createRegisteredLocalProcessorExecution({
         registry,

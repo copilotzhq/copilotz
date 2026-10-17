@@ -3,6 +3,10 @@
 import { assertJsonValue } from "../json.ts";
 import { createLocalPortCalls } from "./local-port-calls.ts";
 import {
+  createLocalChildActionCall,
+  type LocalChildActionOptions,
+} from "./local-child-action-port.ts";
+import {
   parseLocalProcessorAttemptReceipt,
   parseLocalProcessorProjection,
   type RegisteredLocalProcessorPort,
@@ -67,10 +71,12 @@ function localReference(value: unknown): OwnerLocalProcessorAssignmentBinding {
 
 export function createOwnerLocalProcessorPort(
   options: Readonly<{
-    boundary: Pick<
-      OwnerCommandBoundary,
-      "execute" | "project"
-    >;
+    boundary:
+      & Pick<
+        OwnerCommandBoundary,
+        "execute" | "project"
+      >
+      & Partial<Pick<OwnerCommandBoundary, "executeInput">>;
     reference: OwnerLocalProcessorAssignmentBinding;
     attemptOrdinal: number;
     /** Actual pre-authorized host principals, including their private witnesses.
@@ -84,6 +90,7 @@ export function createOwnerLocalProcessorPort(
     onStarted(receipt: OwnerLocalProcessorStartReceipt): void;
     onEnded(receipt: OwnerLocalProcessorAttemptReceipt): void;
     maxPendingCalls?: number;
+    children?: LocalChildActionOptions;
   }>,
 ): RegisteredLocalProcessorPort {
   const reference = localReference(options.reference);
@@ -104,6 +111,7 @@ export function createOwnerLocalProcessorPort(
     Object.hasOwn(localCaller, "workerId")
   ) throw failure("owner_local_port_control_invalid");
   assertOwnerAttemptCaller(localCaller, reference, reference.ownerId);
+  const children = options.children;
   const boundary = options.boundary;
   const execute = boundary.execute.bind(boundary);
   const project = boundary.project.bind(boundary);
@@ -190,7 +198,24 @@ export function createOwnerLocalProcessorPort(
     signal: loss.signal,
     maxPendingCalls: limit,
   });
+  const executeInput = boundary.executeInput?.bind(boundary);
+  if (children && !executeInput) {
+    throw new TypeError("Local children require owner input admission.");
+  }
   return {
+    ...(children
+      ? {
+        invokeAction: createLocalChildActionCall({
+          children,
+          reference,
+          caller: localCaller,
+          boundary: { executeInput: executeInput!, project },
+          calls,
+          invocation,
+          maxPendingCalls: limit,
+        }),
+      }
+      : {}),
     start(callOptions = {}) {
       if (startPromise) return startPromise;
       let resolve!: (

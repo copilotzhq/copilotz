@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { defineAction } from "../actions/define.ts";
 import {
   defineProcessor,
   type ProcessorContext,
@@ -25,6 +26,7 @@ function fixture(
   handle: (ctx: ProcessorContext) => void | Promise<void> = () => {},
   ports: Partial<RegisteredLocalProcessorPort> = {},
   ordinal = 1,
+  withChild = false,
 ) {
   const reference: OwnerLocalProcessorAssignmentBinding = {
     placement: "owner-local",
@@ -74,6 +76,11 @@ function fixture(
   const unknown: unknown[] = [];
   const state = { current: true, cancelled: false, executions: 0 };
   const registry = createPluginRegistry({
+    ...(withChild
+      ? {
+        actions: { child: defineAction({ id: "child", execute: () => null }) },
+      }
+      : {}),
     processors: {
       processor: defineProcessor({
         id: "processor",
@@ -536,4 +543,72 @@ test("retained exposed signal is aborted and ordinal must be a positive safe int
       /ordinal_invalid/,
     );
   }
+});
+
+test("local Processor forwards an ordinary child call through its captured bound port", async () => {
+  let result: unknown;
+  const calls: unknown[] = [];
+  const f = fixture(
+    async (ctx) => {
+      const invoke = ctx.actions.child as (
+        input: unknown,
+        options: { operationKey: string },
+      ) => Promise<unknown>;
+      result = await invoke({ value: 1 }, { operationKey: "child" });
+    },
+    {
+      invokeAction(input) {
+        calls.push(input);
+        return Promise.resolve({ value: 2 });
+      },
+    },
+    1,
+    true,
+  );
+  const driver = f.create();
+  Object.assign(f.owner, {
+    invokeAction: () => {
+      throw new Error("replacement must not run");
+    },
+  });
+  assert.equal((await driver.run()).receipt.status, "succeeded");
+  assert.deepEqual(result, { value: 2 });
+  assert.deepEqual(calls, [{
+    actionAlias: "child",
+    input: { value: 1 },
+    operationKey: "child",
+  }]);
+});
+test("local Processor child admission uncertainty cannot become a retry or terminal receipt", async () => {
+  let calls = 0;
+  const f = fixture(
+    async (ctx) => {
+      try {
+        const invoke = ctx.actions.child as (
+          input: unknown,
+          options: { operationKey: string },
+        ) => Promise<unknown>;
+        await invoke(null, { operationKey: "child" });
+      } catch { /* authored catch cannot settle unknown work */ }
+    },
+    {
+      invokeAction() {
+        calls++;
+        return Promise.reject(
+          Object.assign(new Error("unknown child admission"), {
+            code: "action_admission_unknown",
+            indeterminate: true,
+          }),
+        );
+      },
+    },
+    1,
+    true,
+  );
+  const driver = f.create();
+  await assert.rejects(driver.run(), /indeterminate/);
+  await assert.rejects(driver.run(), /indeterminate/);
+  assert.equal(calls, 1);
+  assert.equal(f.unknown.length, 1);
+  assert.equal(f.events.includes("complete"), false);
 });

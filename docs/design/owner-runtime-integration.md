@@ -572,8 +572,9 @@ not be equivalent to leaving those commands unfenced. This closes
 receipt-reader, handler, savepoint and caller-visible completion windows after
 the last awaited check. Lost authority rolls back pre-commit work; post-commit
 loss suppresses the reply without pretending that durable work did not commit.
-Prepared admission is not silently opted into the ordinary command proof, and
-local parent activation is still a separate milestone.
+Prepared admission is not silently opted into the ordinary command proof.
+Private fresh local parents use the same ordinary proof as described below;
+local named preparation remains unavailable.
 
 Ordinary child input and result traversal refuses all four reserved protected
 schema families, including bare, future-version, malformed-suffix and
@@ -582,6 +583,44 @@ The shared scalar family predicate does not impose the preparation/startup
 guard's broader reserved-key policy: ordinary application fields such as
 `assetId`, `location` and secret-looking labels remain valid unless they form an
 existing ContentRef or carry a reserved protected schema marker.
+
+### Private local parents and mixed child placement
+
+The private fresh owner host now composes ordinary child calls for both local
+Actions and local Processors. Local parents can call worker or local children;
+worker parents can call selected local Actions. The public placement selector,
+retained local history and cross-owner recovery are not activated by this step.
+
+Worker parent wire coordinates remain `deliveryId` / `dispatchAttemptId`. Local
+coordinates are explicitly `placement: "owner-local"`, `deliveryId` /
+`attemptId`; mixed, inherited, accessor and own-undefined fields are refused.
+These selectors never grant authority. The owner resolves the actual private
+handle, current business grants, durable reservation, epoch/holder, exact
+NULL-lease representation and, for Processors, the exact attempt ordinal. The
+logical child key/digest excludes placement and physical attempt, so a new local
+Processor attempt can reuse its one previously completed child.
+
+One shared local adapter wraps the existing child waiter. Each actual input
+admission and result projection is charged through the parent's raw-call
+tracker, below cancellation/timeout races. The parent remains charged while it
+waits; unresolved raw work delays shutdown. Unknown admission cannot become a
+retry or terminal receipt, and revocation cannot expose a late result. Local
+EventStore mutations derive their `localAttempt` from the verified binding.
+
+The existing aggregate capacity guard remains in force: fresh child admission at
+full capacity refuses before creating a child event or receipt. It does not park
+the parent or silently release its slot. Compatible receipt reuse remains
+possible at capacity. A parent slot releases only after a known terminal commit
+and actual drain. The private captured `childWaitMs` budget defaults to
+30,000ms, accepts integers from 1 through 60,000, and does not cancel durable
+child work. Timing out before an admission reply remains an unknown outcome,
+distinct from a known capacity refusal.
+
+Local named preparation is rejected both at the bound capability and the owner
+entry; local effects remain unavailable. Ordinary children retain the shared
+ContentRef/protected-format refusal without adopting a broader reserved-key
+policy. This is private same-owner capability parity, not a public configuration
+or restart migration.
 
 ### Fresh ordinary Action owner host
 
@@ -815,12 +854,11 @@ rules remain in force; terminal settlement retires the reservation atomically
 and retains the same logical completion digest as worker placement. Publication
 and returned values remain behind the outer commit.
 
-This is a dormant owner command seam. The current application host and child
-binding surface remain explicitly worker-only, with unsupported local results
-refused. A genuine local invocation driver, placement-aware Collection/child
-composition and scheduling, local Processor behavior and exact old-epoch local
-loss handling still require separate integration and acceptance. In-process
-transport tests continue to exercise leased workers, not owner-local execution.
+At the original command-only checkpoint this seam was dormant and the host was
+worker-only. Subsequent private host, Processor and ordinary child wiring is
+described above. Public local placement and exact old-epoch local loss handling
+remain separate integration and acceptance gates; in-process worker transport
+must still not be confused with owner-local execution.
 
 ### Child result physical lineage prerequisite
 
@@ -874,8 +912,9 @@ continuations absorb rejection without invoking overridden callback methods.
 The complete boundary fixture passes 38 ordinary-checked PGlite cases, including
 fresh-handler rollback, duplicate lookup, reader insert, savepoint release,
 later-command group revocation and post-COMMIT publication. This prerequisite is
-opt-in; the child route must still install its own exact proof and
-current-parent witness before claiming those new protections for child calls.
+opt-in; its original tests preceded the child consumer's exact proof and
+current-parent witness. The later ordinary child wiring above installs those
+proofs with explicit command-kind scope.
 
 Independent ordinary-checked PostgreSQL validation also passes all 38 boundary
 cases and the five unchanged explicit-URL PostgreSQL cases (including four

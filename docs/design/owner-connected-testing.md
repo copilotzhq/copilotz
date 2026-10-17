@@ -49,7 +49,7 @@ The runner:
    implementation/typing modules resolve their worker dependency to the selected
    public worker entry; legacy runtime workers retain their published
    dependency. No global package override or repository-local link is created
-4. Runs these exact seventeen files (136 declared cases) serially with type
+4. Runs these exact seventeen files (152 declared cases) serially with type
    checking, including in-process and Node WebSocket transports:
    - `runtime/owner/connected.integration.test.ts`
    - `runtime/owner/execution.connected.test.ts`
@@ -69,7 +69,7 @@ The runner:
    - `runtime/application/owner-composition.restart.test.ts`
    - `build/role-bundle.connected.test.ts`
 
-   The selected source enables 90 opt-in cases; the other 46 cases are
+   The selected source enables 106 opt-in cases; the other 46 cases are
    unconditional. The local-host file covers private fresh local Actions, and
    the preparation-restart file covers closed prepared context over both
    transports. The terminal-recovery file covers private exact-target resume
@@ -177,7 +177,10 @@ of the selected fixtures establishes published-package compatibility, complete
 channel/content recovery, or the full retained-suite and release acceptance
 gates.
 
-The 136-case inventory includes fourteen Processor host cases and two additional
-actual-boundary/helper caller-facing reply cases. The older frozen
-full-acceptance checkpoint ran 122 cases; that historical evidence does not
-claim a complete 136-case canonical run of the newer tree.
+The 152-case inventory includes nineteen Processor host cases, thirty-three
+local Action host cases and two actual-boundary/helper caller-facing reply
+cases. The added local-child rows exercise mixed placement, result reuse across
+local Processor retries, current authority, raw-call shutdown and capacity
+refusal. The older frozen full-acceptance checkpoint ran 122 cases; that
+historical evidence does not claim a complete 152-case canonical run of the
+newer tree.

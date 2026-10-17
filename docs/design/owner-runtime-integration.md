@@ -440,3 +440,9 @@ pass. Nested ContentRef inputs now refuse before capture to match this
 ordinary-result subset. Actual ingress must reconstruct and enforce current
 trusted policy using these seams; the codecs and selectors do not themselves
 confer authority.
+
+The group selector carries generic trusted operation metadata; conversational
+field mapping stays in the server/host layer. Reserved identity-key collisions
+are rejected. The unchanged architecture rule caught the initial conversational
+field in this runtime seam; the retained correction passes focused group tests
+and all four filtered runtime architecture checks without changing the rule.

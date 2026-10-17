@@ -123,10 +123,22 @@ export function createOwnerActionAdmission(
       value: OwnerActionAdmissionValue,
       commandTime: string,
     ):
-      | Readonly<{ key: string; actorId?: string; threadId?: string }>
+      | Readonly<
+        {
+          key: string;
+          actorId?: string;
+          metadata?: Readonly<Record<string, OwnerJson>>;
+        }
+      >
       | undefined
       | Promise<
-        | Readonly<{ key: string; actorId?: string; threadId?: string }>
+        | Readonly<
+          {
+            key: string;
+            actorId?: string;
+            metadata?: Readonly<Record<string, OwnerJson>>;
+          }
+        >
         | undefined
       >;
     /** Schedules durable references only; must not await dependent worker capacity. */
@@ -240,19 +252,43 @@ export function createOwnerActionAdmission(
       structuredClone(value),
       context.commandTime,
     );
+    context.signal.throwIfAborted();
     const operationMetadata: Record<string, OwnerJson> = {};
     if (selectedGroup !== undefined) {
+      assertJsonValue(selectedGroup, {
+        maxDepth: 32,
+        maxNodes: 10_000,
+        rejectNegativeZero: true,
+      });
       const group = structuredClone(selectedGroup);
       if (
         Object.keys(group).some((key) =>
-          !["key", "actorId", "threadId"].includes(key)
+          !["key", "actorId", "metadata"].includes(key)
         )
       ) {
         throw new TypeError("Invalid trusted admission group.");
       }
       text(group.key);
       if (group.actorId !== undefined) text(group.actorId);
-      if (group.threadId !== undefined) text(group.threadId);
+      if (group.metadata !== undefined) {
+        object(group.metadata);
+        assertJsonValue(group.metadata, {
+          maxDepth: 32,
+          maxNodes: 10_000,
+          rejectNegativeZero: true,
+        });
+        if (
+          new TextEncoder().encode(JSON.stringify(group.metadata)).byteLength >
+            64 * 1024 ||
+          ["httpAdmissionKey", "httpIdempotencyKey", "actorId"].some((key) =>
+            Object.hasOwn(group.metadata!, key)
+          )
+        ) {
+          throw new TypeError(
+            "Trusted operation metadata is oversized or collides with reserved identity.",
+          );
+        }
+      }
       const match = {
         httpAdmissionKey: group.key,
         ...(group.actorId === undefined ? {} : { actorId: group.actorId }),
@@ -277,7 +313,7 @@ export function createOwnerActionAdmission(
       }
       Object.assign(operationMetadata, match, {
         httpIdempotencyKey: value.requestId,
-        ...(group.threadId === undefined ? {} : { threadId: group.threadId }),
+        ...group.metadata,
       });
     }
     const runId = await deriveWorkflowId(

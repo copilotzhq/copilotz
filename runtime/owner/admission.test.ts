@@ -128,7 +128,11 @@ async function setup(
   );
   const state = {
     group: undefined as
-      | { key: string; actorId?: string; threadId?: string }
+      | {
+        key: string;
+        actorId?: string;
+        metadata?: Readonly<Record<string, OwnerJson>>;
+      }
       | undefined,
     scheduled: [] as OwnerJson[],
     authorized: 0,
@@ -950,7 +954,7 @@ test("trusted group admission is atomic at32 and compatible replay retains origi
     state.group = {
       key: "conversation",
       actorId: "actor-a",
-      threadId: "thread-a",
+      metadata: { threadId: "thread-a" },
     };
     const commands = Array.from(
       { length: 34 },
@@ -1010,5 +1014,21 @@ test("trusted group capacity separates actors and rolls back with source capture
       "SELECT metadata->'operationMetadata'->>'actorId' AS actor FROM copilotz_operations ORDER BY actor",
     )).rows;
     assert.deepEqual(rows.map((row) => row.actor), ["actor-a", "actor-b"]);
+  });
+});
+
+test("trusted operation metadata refuses identity collisions and non-JSON values before capture", async () => {
+  await fixture(async ({ owner, db, state }) => {
+    const before = await snapshot(db);
+    for (const key of ["actorId", "httpAdmissionKey", "httpIdempotencyKey"]) {
+      state.group = { key: "group", metadata: { [key]: "forged" } };
+      await assert.rejects(owner.executeInput(caller(), request()), /collides/);
+    }
+    state.group = {
+      key: "group",
+      metadata: { nested: { value: undefined } } as never,
+    };
+    await assert.rejects(owner.executeInput(caller(), request()), /JSON/);
+    assert.deepEqual(await snapshot(db), before);
   });
 });

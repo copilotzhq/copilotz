@@ -663,3 +663,16 @@ in-process/WebSocket acceptance passed11/11. This still excludes restart/takeove
 owner-local epoch-only execution, protected/content/deferred/custom frames and
 full output/continuation recovery. Ordinary Action terminal results remain
 distinct from operation settlement.
+
+### Owner-local delivery authority prerequisite
+
+An internal EventStore command can bind one exact local delivery/attempt under
+its current owner epoch/holder fence. Such a claim has no wall-clock deadline;
+settlement checks the exact token and NULL deadline, and local heartbeat,
+claimNext and generic recovery remain refused. Worker deadlines and heartbeat
+semantics are unchanged; a worker row with NULL expiry grants no authority.
+The supplied tuple is privately copied. Five new cases plus existing delivery
+and event-store compatibility passed36 tests with one existing PostgreSQL skip;
+independent local/owner delivery acceptance passed11. This does not enable an
+owner-local host yet: Action writer fencing, durable placement and takeover
+classification remain separate prerequisites.

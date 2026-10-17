@@ -138,6 +138,9 @@ export type OwnerEventCommitContext = Readonly<{
   epoch: number;
   holderId: string;
   commandTime: string;
+  /** Internal owner-local attempt, never inferred from transport or a NULL lease.
+   * Exact delivery/token authority is valid only under this command's epoch fence. */
+  localAttempt?: Readonly<{ deliveryId: string; attemptId: string }>;
   /** Required before delivery mutations; insertion-only callers may omit it. */
   afterCommit?(callback: () => void | Promise<void>): void;
 }>;
@@ -614,6 +617,18 @@ export function createEventStore(
   options: CreateEventStoreOptions,
 ): EventStore {
   const owner = options.ownerCommit ? { ...options.ownerCommit } : undefined;
+  const localAttempt = owner?.localAttempt
+    ? { ...owner.localAttempt }
+    : undefined;
+  if (
+    owner?.localAttempt !== undefined && (
+      !localAttempt || Object.keys(localAttempt).length !== 2 ||
+      [localAttempt.deliveryId, localAttempt.attemptId].some((value) =>
+        typeof value !== "string" || !value.trim() || value !== value.trim() ||
+        value.length > 1024
+      )
+    )
+  ) throw new TypeError("Invalid owner-local delivery attempt.");
   const ownerUnsupported = (operation: string): never => {
     throw createEventStoreError(
       "event_transaction_unavailable",
@@ -661,7 +676,15 @@ export function createEventStore(
   };
   const deliveryMutationExecutor = (
     attempt: string | undefined,
+    deliveryId?: string,
   ): Promise<SqlExecutor> => {
+    if (
+      localAttempt &&
+      (deliveryId !== localAttempt.deliveryId ||
+        attempt !== localAttempt.attemptId)
+    ) {
+      return ownerUnsupported("a different local delivery attempt");
+    }
     if (owner && (typeof attempt !== "string" || !attempt.trim())) {
       return ownerUnsupported("delivery mutations without an attempt token");
     }
@@ -1131,20 +1154,28 @@ export function createEventStore(
     owner: string;
     leaseMs?: number;
   }): Promise<EventDelivery | null> => {
-    const executor = await deliveryMutationExecutor(claim.owner);
+    const executor = await deliveryMutationExecutor(claim.owner, claim.id);
     const leaseMs = boundedInteger(claim.leaseMs, defaultLeaseMs, 0);
-    const params: unknown[] = [claim.id, claim.owner, leaseMs];
+    const params: unknown[] = localAttempt
+      ? [claim.id, claim.owner]
+      : [claim.id, claim.owner, leaseMs];
     const timestamp = commandTimestamp(params);
     const result = await executor.query<DeliveryRow>(
       `UPDATE ${tables.event_deliveries}
        SET status = 'leased', attempts = attempts + 1,
            lease_owner = $2,
-           lease_expires_at = ${timestamp} + ($3 * INTERVAL '1 millisecond'),
+           lease_expires_at = ${
+        localAttempt ? "NULL" : `${timestamp} + ($3 * INTERVAL '1 millisecond')`
+      },
            updated_at = ${timestamp}, settled_at = NULL
        WHERE id = $1 AND attempts < max_attempts
          AND (
            (status IN ('pending', 'retry_wait') AND available_at <= ${timestamp})
-           OR (status = 'leased' AND lease_expires_at <= ${timestamp})
+           ${
+        localAttempt
+          ? ""
+          : `OR (status = 'leased' AND lease_expires_at <= ${timestamp})`
+      }
          )
        RETURNING *`,
       params,
@@ -1204,17 +1235,19 @@ export function createEventStore(
     if (owner && !leaseOwner) {
       return ownerUnsupported("delivery settlement without an attempt token");
     }
-    await deliveryMutationExecutor(leaseOwner);
+    await deliveryMutationExecutor(leaseOwner, id);
     const current = await getDelivery(id);
     if (!current) return null;
     const params: unknown[] = [id, status];
     const timestamp = commandTimestamp(params);
     const ownerFilter = leaseOwner
-      ? `AND lease_owner = $${
-        params.push(leaseOwner)
-      } AND lease_expires_at > ${timestamp}`
+      ? `AND lease_owner = $${params.push(leaseOwner)} AND ${
+        localAttempt
+          ? "lease_expires_at IS NULL"
+          : `lease_expires_at > ${timestamp}`
+      }`
       : "";
-    const allowed = status === "succeeded"
+    const allowed = status === "succeeded" || localAttempt
       ? "status = 'leased'"
       : "status IN ('pending', 'leased', 'retry_wait')";
     return await commitDeliverySettlement(current, async (transaction) => {
@@ -1273,6 +1306,7 @@ export function createEventStore(
     consumerIds?: readonly string[];
     leaseMs?: number;
   }): Promise<EventDelivery | null> => {
+    if (localAttempt) return ownerUnsupported("local claimNext");
     const executor = await deliveryMutationExecutor(claim.owner);
     const leaseMs = boundedInteger(claim.leaseMs, defaultLeaseMs, 0);
     const params: unknown[] = [claim.owner, leaseMs];
@@ -1415,6 +1449,7 @@ export function createEventStore(
     claimDelivery,
     claimNext,
     async heartbeatDelivery(heartbeat) {
+      if (localAttempt) return ownerUnsupported("local heartbeat");
       const executor = await deliveryMutationExecutor(heartbeat.owner);
       const leaseMs = boundedInteger(
         heartbeat.leaseMs,
@@ -1441,7 +1476,7 @@ export function createEventStore(
       return settleDelivery(id, "cancelled", owner);
     },
     async failDelivery(failure) {
-      await deliveryMutationExecutor(failure.owner);
+      await deliveryMutationExecutor(failure.owner, failure.id);
       const current = await getDelivery(failure.id);
       if (
         !current || current.status !== "leased" ||
@@ -1480,7 +1515,11 @@ export function createEventStore(
              settled_at = CASE WHEN $5 = FALSE OR attempts >= max_attempts
                THEN ${timestamp} ELSE NULL END
          WHERE id = $1 AND status = 'leased' AND lease_owner = $2
-           AND lease_expires_at > ${timestamp}
+           AND ${
+            localAttempt
+              ? "lease_expires_at IS NULL"
+              : `lease_expires_at > ${timestamp}`
+          }
          RETURNING *`,
           params,
         );
@@ -1491,6 +1530,9 @@ export function createEventStore(
     },
     listRecoverable,
     async recoverExpiredDeliveries(recovery = {}) {
+      if (localAttempt) {
+        return ownerUnsupported("recovery from a local attempt");
+      }
       // Recovery belongs to the fenced owner, not an expired execution attempt.
       // Keep selection and settlement on this command's executor and clock.
       const executor = await ownerDeliveryExecutor();

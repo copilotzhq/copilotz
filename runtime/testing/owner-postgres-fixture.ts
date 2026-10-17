@@ -270,6 +270,27 @@ export async function ownerFixture(
       }),
     ],
   });
+  const unavailable = (): Promise<never> =>
+    Promise.reject(
+      new Error("Unexpected execution through PostgreSQL output sink."),
+    );
+  const executor: DeliveryExecutor = {
+    ownership: "injected_dispatcher",
+    workload: "owner.pg.output-sink",
+    workloads: {},
+    scheduleDelivery(delivery) {
+      notify({
+        type: "dispatched",
+        id: typeof delivery === "string" ? delivery : delivery.id,
+      });
+    },
+    dispatchWork: unavailable,
+    dispatchDelivery: unavailable,
+    dispatchRecoverable: unavailable,
+    settleOutputs: unavailable,
+    awaitScopeProgress: unavailable,
+    shutdown: unavailable,
+  };
   const handler = createOwnerCollectionCommand({
     session: db,
     schema,
@@ -279,14 +300,7 @@ export async function ownerFixture(
     publish(event) {
       notify({ type: "published", id: event.durable ? event.id : undefined });
     },
-    executor: {
-      scheduleDelivery(delivery) {
-        notify({
-          type: "dispatched",
-          id: typeof delivery === "string" ? delivery : delivery.id,
-        });
-      },
-    } as DeliveryExecutor,
+    executor,
   });
   const owner = createOwnerCommandBoundary({
     session: db,

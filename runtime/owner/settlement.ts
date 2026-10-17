@@ -206,8 +206,22 @@ export function createOwnerOperationSettlement(
     publish?: EventPublisher;
   }>,
 ) {
-  text(options.ownerId);
-  if (options.catalog.databaseSchema !== options.schema) {
+  // SQL/catalog/boundary ports remain trusted capabilities. Snapshot their
+  // identities and give policy/relay callbacks only independent data copies.
+  const {
+    ownerId,
+    schema,
+    session,
+    catalog,
+    authorizeControl,
+    selectDrains,
+    authorizeDrain,
+    drain,
+    wake,
+    publish,
+  } = options;
+  text(ownerId);
+  if (catalog.databaseSchema !== schema) {
     throw new TypeError("Settlement catalog schema does not match.");
   }
   for (
@@ -219,7 +233,15 @@ export function createOwnerOperationSettlement(
       "wake",
     ] as const
   ) {
-    if (typeof options[name] !== "function") {
+    if (
+      typeof {
+        authorizeControl,
+        selectDrains,
+        authorizeDrain,
+        drain,
+        wake,
+      }[name] !== "function"
+    ) {
       throw new TypeError(`${name} is required.`);
     }
   }
@@ -269,7 +291,7 @@ export function createOwnerOperationSettlement(
       );
     }
     const entry: DrainEntry = {
-      target,
+      target: { ...target },
       settled: false,
       terminalized: false,
       promise: Promise.resolve(false),
@@ -277,7 +299,7 @@ export function createOwnerOperationSettlement(
     // Caller cancellation detaches its wait, not another caller's shared relay.
     // The host must independently fence its transport/attempt throughout drain.
     entry.promise = Promise.resolve().then(() =>
-      options.drain(target, ref, { epoch })
+      drain({ ...target }, { ...ref }, { epoch })
     ).then((success) => {
       entry.settled = true;
       if (entry.terminalized) drains.delete(key);
@@ -319,8 +341,8 @@ export function createOwnerOperationSettlement(
       signal.removeEventListener("abort", abort);
     }
   }
-  const tables = ownerTableNames(options.schema);
-  const core = createCoreTableNames(options.schema);
+  const tables = ownerTableNames(schema);
+  const core = createCoreTableNames(schema);
   const authorized = new WeakMap<
     SqlExecutor,
     { kind: string; target: OperationSettlementScope }
@@ -341,7 +363,10 @@ export function createOwnerOperationSettlement(
     // A failed sibling does not discard another successful current attempt's
     // final output. Eligibility belongs to each attempt, not the scope outcome.
     const refs = drainReferences(
-      await options.selectDrains(tx, caller, current, time),
+      await selectDrains(tx, structuredClone(caller), {
+        namespace: current.namespace,
+        operationId: current.operationId,
+      }, time),
       maxDrains,
     );
     for (const ref of refs) {
@@ -353,7 +378,16 @@ export function createOwnerOperationSettlement(
       );
       if (
         !success.rows.length ||
-        await options.authorizeDrain(tx, caller, current, ref, time) !== true
+        await authorizeDrain(
+            tx,
+            structuredClone(caller),
+            {
+              namespace: current.namespace,
+              operationId: current.operationId,
+            },
+            { ...ref },
+            time,
+          ) !== true
       ) {
         refuse("Operation output attempt is no longer successful and current.");
       }
@@ -363,14 +397,14 @@ export function createOwnerOperationSettlement(
   async function fence(context: OwnerCommandContext) {
     const commit = context.ownerCommit;
     if (
-      commit.transaction !== context.tx || commit.ownerId !== options.ownerId ||
+      commit.transaction !== context.tx || commit.ownerId !== ownerId ||
       commit.commandTime !== context.commandTime
     ) {
       refuse("Settlement must join its owner command.");
     }
     const current = await context.tx.query(
       `SELECT owner FROM ${tables.epochs} WHERE owner=$1 AND epoch=$2 AND holder=$3 FOR UPDATE`,
-      [options.ownerId, commit.epoch, commit.holderId],
+      [ownerId, commit.epoch, commit.holderId],
     );
     if (!current.rows.length) {
       refuse("Operation settlement owner is no longer current.");
@@ -384,7 +418,7 @@ export function createOwnerOperationSettlement(
     await fence(context);
     const current = await readOperationSettlement(
       context.tx,
-      options.schema,
+      schema,
       target,
     );
     if (!current || !live(current)) return;
@@ -392,13 +426,13 @@ export function createOwnerOperationSettlement(
       `INSERT INTO ${tables.alarms}(owner,name,due_at) VALUES($1,$2,$3::timestamptz)
        ON CONFLICT(owner,name) DO UPDATE SET due_at=LEAST(${tables.alarms}.due_at,excluded.due_at)`,
       [
-        options.ownerId,
+        ownerId,
         ownerOperationSettlementAlarm(target),
         context.commandTime,
       ],
     );
     context.afterCommit(() => {
-      options.wake(target);
+      wake({ ...target });
     });
   }
   const readiness: OwnerProjectionHandler = async (
@@ -408,7 +442,7 @@ export function createOwnerOperationSettlement(
     const target = bound(context.tx, OWNER_OPERATION_READINESS);
     const current = await readOperationSettlement(
       context.tx,
-      options.schema,
+      schema,
       target,
     );
     if (!current) return { status: "missing" };
@@ -445,7 +479,7 @@ export function createOwnerOperationSettlement(
     let emitted = false;
     const current = await terminalizeOperationSettlement(
       context.tx,
-      options.schema,
+      schema,
       target,
       {
         commandTime: context.commandTime,
@@ -463,18 +497,17 @@ export function createOwnerOperationSettlement(
             refuse("Operation output reservations changed during drain.");
           }
           const store = createEventStore({
-            session: options.session,
-            schema: options.schema,
+            session: session,
+            schema: schema,
             ownerCommit: {
               ...context.ownerCommit,
               afterCommit: context.afterCommit,
             },
             admitOperationEventSql: (value, param) =>
-              options.catalog.admitEventSql(value, param),
+              catalog.admitEventSql(value, param),
             indexOperationEventSql: (value, param) =>
-              options.catalog.indexEventSql(value, param),
-            indexOperationEvent: (tx, value) =>
-              options.catalog.indexEvent(tx, value),
+              catalog.indexEventSql(value, param),
+            indexOperationEvent: (tx, value) => catalog.indexEvent(tx, value),
           });
           const result = await store.commitMutation({
             transaction: context.tx,
@@ -492,7 +525,7 @@ export function createOwnerOperationSettlement(
               settlementScopeId: target.operationId,
               deduplicationId: JSON.stringify([
                 OWNER_OPERATION_SETTLED_EVENT,
-                options.ownerId,
+                ownerId,
                 target.namespace,
                 target.operationId,
               ]),
@@ -508,12 +541,12 @@ export function createOwnerOperationSettlement(
           context.afterCommit(async () => {
             store.confirmCommitted?.(result.event.id);
             await publishCommittedOperationSettlement(
-              options.session,
-              options.schema,
+              session,
+              schema,
               snapshot,
             );
-            await options.publish?.(result.event, {
-              databaseSchema: options.schema,
+            await publish?.(result.event, {
+              databaseSchema: schema,
               settlementScopeId: target.operationId,
             });
           });
@@ -523,7 +556,7 @@ export function createOwnerOperationSettlement(
     if (!current || !live(current)) {
       await context.tx.query(
         `DELETE FROM ${tables.alarms} WHERE owner=$1 AND name=$2`,
-        [options.ownerId, ownerOperationSettlementAlarm(target)],
+        [ownerId, ownerOperationSettlementAlarm(target)],
       );
       return current
         ? { status: "terminal", state: current.state }
@@ -553,10 +586,11 @@ export function createOwnerOperationSettlement(
       if (caller.principal.kind !== "owner-control") {
         refuse("Operation settlement requires owner control.");
       }
+      const kind = command.kind;
       let target: OperationSettlementScope;
-      if (command.kind === OWNER_OPERATION_READINESS) {
+      if (kind === OWNER_OPERATION_READINESS) {
         target = scope(command.intent);
-      } else if (command.kind === OWNER_OPERATION_SETTLEMENT) {
+      } else if (kind === OWNER_OPERATION_SETTLEMENT) {
         const data = object(command.intent, ["occurrence", "ticket"]);
         text(data.occurrence);
         const plan = ticket(data.ticket, maxDrains);
@@ -568,7 +602,7 @@ export function createOwnerOperationSettlement(
           command.domain !== "occurrence" ||
           command.key !==
             ownerOperationSettlementKey(
-              options.ownerId,
+              ownerId,
               target,
               data.occurrence,
             )
@@ -577,14 +611,14 @@ export function createOwnerOperationSettlement(
         }
       } else throw new TypeError("Unknown operation settlement command.");
       if (
-        await options.authorizeControl(
+        await authorizeControl(
           tx,
           structuredClone(caller),
-          target,
+          { ...target },
           commandTime,
         ) !== true
       ) refuse("Operation settlement control authority was revoked.");
-      authorized.set(tx, { kind: command.kind, target });
+      authorized.set(tx, { kind, target });
     },
     /** One bounded check, invoked by host scheduling/alarm work. A failed drain or
      * pending check keeps its durable alarm. The next check needs a new occurrence.
@@ -601,7 +635,18 @@ export function createOwnerOperationSettlement(
       >,
     ): Promise<OwnerJson> {
       const target = scope(input.target);
-      text(input.occurrence);
+      const occurrence = input.occurrence;
+      text(occurrence);
+      const caller = structuredClone(input.caller);
+      const boundary = input.boundary;
+      const project = boundary.project.bind(boundary);
+      const execute = boundary.execute.bind(boundary);
+      const callerSignal = input.signal;
+      const commandKey = ownerOperationSettlementKey(
+        ownerId,
+        target,
+        occurrence,
+      );
       if (activeChecks >= maxConcurrentChecks) {
         throw Object.assign(
           new Error("Operation settlement check capacity is occupied."),
@@ -619,17 +664,17 @@ export function createOwnerOperationSettlement(
           ),
         drainTimeoutMs,
       );
-      const signal = input.signal
-        ? AbortSignal.any([input.signal, deadline.signal])
+      const signal = callerSignal
+        ? AbortSignal.any([callerSignal, deadline.signal])
         : deadline.signal;
       let submitted = false;
       const task = (async (): Promise<OwnerJson> => {
         try {
           signal.throwIfAborted();
-          const prepared = await input.boundary.project(
-            input.caller,
+          const prepared = await project(
+            structuredClone(caller),
             OWNER_OPERATION_READINESS,
-            target,
+            { ...target },
             { signal },
           ) as Prepared;
           signal.throwIfAborted();
@@ -645,15 +690,11 @@ export function createOwnerOperationSettlement(
           }
           signal.throwIfAborted();
           submitted = true;
-          const result = (await input.boundary.execute(input.caller, {
+          const result = (await execute(structuredClone(caller), {
             kind: OWNER_OPERATION_SETTLEMENT,
             domain: "occurrence",
-            key: ownerOperationSettlementKey(
-              options.ownerId,
-              target,
-              input.occurrence,
-            ),
-            intent: { occurrence: input.occurrence, ticket: plan },
+            key: commandKey,
+            intent: { occurrence, ticket: plan },
           }, { signal })).result;
           if ((result as { status?: unknown })?.status === "terminal") {
             releaseSettled(target);
@@ -678,11 +719,7 @@ export function createOwnerOperationSettlement(
             {
               code: "owner_settlement_unknown",
               indeterminate: true,
-              commandKey: ownerOperationSettlementKey(
-                options.ownerId,
-                target,
-                input.occurrence,
-              ),
+              commandKey,
             },
           );
         }

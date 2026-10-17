@@ -68,6 +68,13 @@ async function fixture(
   const state = {
     time: start,
     allowed: true,
+    mutateCallbacks: false,
+    callbackViews: [] as {
+      stage: string;
+      target: OperationSettlementScope;
+      caller?: OwnerCaller;
+      ref?: OwnerSettlementDrain;
+    }[],
     drainAllowed: true,
     refs: [] as OwnerSettlementDrain[],
     drained: [] as string[],
@@ -120,6 +127,33 @@ async function fixture(
       return result;
     },
   };
+  function observeCallback(
+    stage: string,
+    target: OperationSettlementScope,
+    caller?: OwnerCaller,
+    ref?: OwnerSettlementDrain,
+  ) {
+    if (!state.mutateCallbacks) return;
+    state.callbackViews.push(
+      structuredClone({
+        stage,
+        target,
+        ...(caller ? { caller } : {}),
+        ...(ref ? { ref } : {}),
+      }),
+    );
+    Object.assign(target, {
+      namespace: "substitute",
+      operationId: "substitute",
+    });
+    if (caller) Object.assign(caller.principal, { holderId: "substitute" });
+    if (ref) {
+      Object.assign(ref, {
+        deliveryId: "substitute",
+        dispatchAttemptId: "substitute",
+      });
+    }
+  }
   const catalog = createOperationCatalog(unavailable);
   const settlement = createOwnerOperationSettlement({
     ownerId: "owner",
@@ -127,18 +161,28 @@ async function fixture(
     session: unavailable,
     catalog,
     ...limits,
-    authorizeControl: () => state.allowed,
-    selectDrains: (_tx, _caller, target) =>
-      state.refs.filter((ref) => !ref.deliveryId.startsWith("other:")),
-    authorizeDrain: () => state.drainAllowed,
-    async drain(_target, ref) {
+    authorizeControl(_tx, caller, target) {
+      observeCallback("control", target, caller);
+      return state.allowed;
+    },
+    selectDrains(_tx, caller, target) {
+      observeCallback("select", target, caller);
+      return state.refs.filter((ref) => !ref.deliveryId.startsWith("other:"));
+    },
+    authorizeDrain(_tx, caller, target, ref) {
+      observeCallback("authorize-drain", target, caller, ref);
+      return state.drainAllowed;
+    },
+    async drain(target, ref) {
       assert.equal(state.gated, false);
       state.drained.push(ref.deliveryId);
+      observeCallback("drain", target, undefined, ref);
       await state.duringDrain();
       return state.drainAllowed;
     },
     wake(target) {
-      state.wakes.push(target);
+      state.wakes.push({ ...target });
+      observeCallback("wake", target);
     },
     publish(event) {
       state.publications.push({
@@ -1011,6 +1055,56 @@ test("settlement requires tagged control even with permissive host policy", asyn
         intent: { namespace: "space", operationId: "root" },
       }, end),
       { code: "ActionOwnershipLost" },
+    );
+  } finally {
+    f.owner.stop();
+    await f.db.close();
+  }
+});
+
+test("settlement callbacks cannot redirect actual catalog drain event or receipt scope", async () => {
+  const f = await fixture();
+  try {
+    f.state.mutateCallbacks = true;
+    const root = await f.seed();
+    const target = { namespace: root.namespace, operationId: root.operationId };
+    const ref = {
+      deliveryId: root.deliveryId,
+      dispatchAttemptId: `attempt:${root.deliveryId}`,
+    };
+    f.state.refs = [ref];
+    assert.deepEqual(await f.run(target, "isolated"), {
+      status: "terminal",
+      state: "completed",
+    });
+    await within(f.state.published.promise);
+    assert.equal((await f.status(target)).state, "completed");
+    assert.deepEqual(f.state.drained, [root.deliveryId]);
+    assert.deepEqual(f.state.wakes, [target]);
+    assert.deepEqual(
+      new Set(f.state.callbackViews.map((view) => view.stage)),
+      new Set(["control", "select", "authorize-drain", "drain", "wake"]),
+    );
+    for (const view of f.state.callbackViews) {
+      assert.deepEqual(view.target, target, view.stage);
+      if (view.caller) assert.deepEqual(view.caller, f.caller, view.stage);
+      if (view.ref) assert.deepEqual(view.ref, ref, view.stage);
+    }
+    const events = (await f.events()).rows;
+    assert.equal(events.length, 1);
+    assert.equal(events[0].namespace, "space");
+    assert.deepEqual(
+      (await f.db.query(
+        "SELECT result FROM owner_receipts WHERE owner='owner' AND key=$1",
+        [ownerOperationSettlementKey("owner", target, "isolated")],
+      )).rows[0].result,
+      { status: "terminal", state: "completed" },
+    );
+    assert.equal(
+      (await f.db.query(
+        "SELECT * FROM copilotz_operations WHERE namespace='substitute'",
+      )).rows.length,
+      0,
     );
   } finally {
     f.owner.stop();

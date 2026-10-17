@@ -13,6 +13,7 @@ import type {
 import { assertJsonValue } from "../json.ts";
 
 const COMMAND = "copilotz.owner.command";
+const PROJECT = "copilotz.owner.project";
 const RECEIPT = "copilotz.owner.receipt";
 const LIMIT = 1_100_000;
 const ERROR_CODES = new Set([
@@ -169,7 +170,10 @@ export function createOwnerWorkerCallAdmission(
     context: OwnerWorkerCallContext,
     recoveryOnly: boolean,
   ): Promise<HostHandler | undefined> => {
-    if (context.workload !== COMMAND && context.workload !== RECEIPT) {
+    if (
+      context.workload !== COMMAND && context.workload !== RECEIPT &&
+      context.workload !== PROJECT
+    ) {
       return undefined;
     }
     if (recoveryOnly && context.workload !== RECEIPT) return undefined;
@@ -181,16 +185,17 @@ export function createOwnerWorkerCallAdmission(
     const owner = options.resolveOwner(ownerId);
     if (!owner) return undefined;
     const isCommand = context.workload === COMMAND;
-    if (isCommand && !context.parent) return undefined;
-    const assignment = isCommand
+    const isAssigned = context.workload !== RECEIPT;
+    if (isAssigned && !context.parent) return undefined;
+    const assignment = isAssigned
       ? await options.resolveAssignment(context, ownerId)
       : undefined;
     if (
-      isCommand &&
+      isAssigned &&
       (!assignment || assignment.ownerId !== ownerId ||
         assignment.ctxGranted !== true)
     ) return undefined;
-    const caller = isCommand
+    const caller = isAssigned
       ? assignment!.caller
       : { workerId: context.fence.identity.workerId, ownerEpoch: 0 };
     if (!caller || caller.workerId !== context.fence.identity.workerId) {
@@ -207,9 +212,28 @@ export function createOwnerWorkerCallAdmission(
           ? await owner.execute(admitted, object(payload) as OwnerCommand, {
             signal,
           })
+          : context.workload === PROJECT
+          ? await (() => {
+            const request = object(payload);
+            if (
+              Object.keys(request).some((key) =>
+                key !== "kind" && key !== "input"
+              ) || typeof request.kind !== "string" ||
+              !Object.hasOwn(request, "input")
+            ) {
+              throw new TypeError("Invalid owner projection request.");
+            }
+            return owner.project(
+              admitted,
+              request.kind,
+              request.input as OwnerJson,
+              { signal },
+            );
+          })()
           : await owner.readReceipt(admitted, receiptIdentity(payload));
         committed = isCommand;
-        const reply = !isCommand && result
+        if (context.workload === PROJECT) signal.throwIfAborted();
+        const reply = context.workload === RECEIPT && result
           ? {
             kind: (result as OwnerReceipt).kind,
             result: (result as OwnerReceipt).result,
@@ -341,6 +365,13 @@ export function createOwnerConnection(
       callOptions?: Readonly<{ signal?: AbortSignal; deadlineAtMs?: number }>,
     ): Promise<OwnerCommandOutcome> {
       return await call(COMMAND, command, callOptions) as OwnerCommandOutcome;
+    },
+    async project(
+      kind: string,
+      input: OwnerJson,
+      callOptions?: Readonly<{ signal?: AbortSignal; deadlineAtMs?: number }>,
+    ): Promise<OwnerJson> {
+      return await call(PROJECT, { kind, input }, callOptions) as OwnerJson;
     },
     async readReceipt(
       identity: ReceiptIdentity,

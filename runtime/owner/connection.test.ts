@@ -921,3 +921,97 @@ test("completed owner refusal does not abort or cancel the terminal transport", 
   assert.equal(cancelled, 0);
   assert.equal(forwarded?.aborted, false);
 });
+
+test("ephemeral projection route requires a live ctx assignment and never uses receipt recovery", async () => {
+  let calls = 0;
+  const owner = recordingBoundary({
+    project(who, kind, input) {
+      assert.deepEqual(who, caller);
+      assert.equal(kind, "execution.input");
+      assert.deepEqual(input, { deliveryId: "delivery" });
+      calls++;
+      return Promise.resolve({ value: "authorized" });
+    },
+  });
+  const port = admission(owner);
+  const requestContext = context({ workload: "copilotz.owner.project" });
+  assert.equal(await port.admitUnassigned(requestContext), undefined);
+  assert.equal(
+    await port.admit({ ...requestContext, parent: undefined }),
+    undefined,
+  );
+  assert.equal(
+    await admission(owner, {
+      resolveAssignment: () => ({
+        ownerId: "tenant",
+        ctxGranted: false,
+        caller,
+      }),
+    }).admit(requestContext),
+    undefined,
+  );
+  const handler = await port.admit(requestContext);
+  assert.ok(handler);
+  const client = createOwnerConnection({
+    ownerId: "tenant",
+    async callHost(input) {
+      assert.equal(input.workload, "copilotz.owner.project");
+      const response = await handler({
+        input: new ReadableStream({
+          start(controller) {
+            controller.enqueue(input.body as Uint8Array);
+            controller.close();
+          },
+        }),
+        signal: input.signal!,
+      });
+      return {
+        output: new ReadableStream({
+          start(controller) {
+            controller.enqueue(response);
+            controller.close();
+          },
+        }),
+        completed: Promise.resolve(),
+        cancel: () => Promise.resolve(),
+      };
+    },
+  });
+  assert.deepEqual(
+    await client.project("execution.input", { deliveryId: "delivery" }),
+    { value: "authorized" },
+  );
+  assert.equal(calls, 1);
+  const malformed = decode(
+    await handler({
+      input: stream({
+        kind: "execution.input",
+        input: null,
+        authority: "admin",
+      }),
+      signal: new AbortController().signal,
+    }),
+  );
+  assert.equal(malformed.ok, false);
+  assert.equal(calls, 1);
+});
+
+test("projection adapter suppresses data if authority cancellation wins after read completion", async () => {
+  const abort = new AbortController();
+  const handler = await admission(recordingBoundary({
+    project() {
+      abort.abort(new Error("authority revoked"));
+      return Promise.resolve({ privateValue: "must not serialize" });
+    },
+  })).admit(context({ workload: "copilotz.owner.project" }));
+  assert.ok(handler);
+  const response = await handler({
+    input: stream({ kind: "execution.input", input: null }),
+    signal: abort.signal,
+  });
+  assert.equal(decode(response).ok, false);
+  assert.equal(
+    new TextDecoder().decode(response).includes("must not serialize"),
+    false,
+  );
+});

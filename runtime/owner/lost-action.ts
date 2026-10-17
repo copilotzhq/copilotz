@@ -331,6 +331,9 @@ export function createOwnerLostActionRecovery(
       ) return await block("unsupported_action");
       text(actionId);
       text(actionRunId);
+      if (source.deduplicationId !== actionRunId) {
+        return await block("source_run_mismatch");
+      }
       // Lock operation -> delivery -> assignment -> open Action. The epoch fence
       // already excludes old mutators, even while an old external call may run.
       const scope = (await context.tx.query<
@@ -508,8 +511,38 @@ export function createOwnerLostActionRecovery(
         !invokedEvent || invokedEvent.id !== open[0].invoked_event_id ||
         invokedEvent.ownerId !== ownerId ||
         invokedEvent.causationId !== source.id ||
+        invokedEvent.correlationId !== source.correlationId ||
         invokedEvent.metadata.sourceDeliveryId !== delivery.id
       ) return await block("invoked_identity_mismatch");
+      // A matching lifecycle body is not sufficient provenance. Both immutable
+      // events must be indexed in this exact delivery scope. Compare positions
+      // in SQL so bigint coordinates never cross a lossy JS numeric boundary.
+      // Do not filter by expected namespace/scope: conflicting rows must refuse.
+      const indexed = (await context.tx.query<{
+        event_id: string;
+        namespace_matches: boolean;
+        scope_matches: boolean;
+        position_matches: boolean;
+      }>(
+        `SELECT i.event_id,(i.namespace=$3) AS namespace_matches,(i.operation_id=$4) AS scope_matches,(i.event_position=e.position) AS position_matches FROM ${operations.operationEvents} i JOIN ${core.events} e ON e.id=i.event_id WHERE i.event_id IN ($1,$2) ORDER BY i.event_id LIMIT 3 FOR UPDATE OF i`,
+        [
+          source.id,
+          invokedEvent.id,
+          target.namespace,
+          delivery.settlementScopeId,
+        ],
+      )).rows;
+      if (
+        indexed.length !== 2 ||
+        indexed.filter((row) => row.event_id === source.id).length !== 1 ||
+        indexed.filter((row) => row.event_id === invokedEvent.id).length !==
+          1 ||
+        indexed.some((row) =>
+          row.namespace_matches !== true ||
+          row.scope_matches !== true ||
+          row.position_matches !== true
+        )
+      ) return await block("lifecycle_catalog_mismatch");
       let invokedBodyId: string;
       try {
         invokedBodyId = eventDataRef(invokedEvent.payload).eventBodyId;

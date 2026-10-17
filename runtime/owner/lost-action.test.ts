@@ -42,8 +42,12 @@ const start = "2020-01-01T00:00:00.000Z";
 const at = (offset: number) =>
   new Date(Date.parse(start) + offset).toISOString();
 async function fixture(
-  options: { eligible?: boolean; maxAssignments?: number; policy?: boolean } =
-    {},
+  options: {
+    eligible?: boolean;
+    maxAssignments?: number;
+    maxAttempts?: number;
+    policy?: boolean;
+  } = {},
 ) {
   const db = await createTestDatabase({ pgliteMemoryProfile: "low-memory" });
   for (const sql of createCoreSchemaStatements("public")) await db.query(sql);
@@ -287,9 +291,10 @@ async function fixture(
                 },
               },
               metadata: { actionId: "work", actionRunId: "run" },
-              deduplicationId: "source",
+              deduplicationId: "run",
             },
             body: { id: "source-body", json: "value" },
+            maxAttempts: options.maxAttempts,
             consumers: [{
               consumerId: "registered:work",
               settlement: "inherit",
@@ -736,3 +741,165 @@ test("lost second attempt retains a distinct retired original contract, while cu
     }
   }
 });
+
+test("lost Action canonical provenance baseline uses one genuine exhausted claim", async () => {
+  const f = await fixture({ maxAttempts: 1, eligible: false });
+  try {
+    const source = await f.store.getEvent(f.refs.eventId);
+    const invoked = await f.store.getEventByDeduplicationId(
+      "space",
+      "run:action:invoked",
+    );
+    assert.equal(source?.deduplicationId, "run");
+    assert.equal(invoked?.correlationId, source?.correlationId);
+    const indexes = await f.db.query<{ event_id: string; matches: boolean }>(
+      `SELECT i.event_id,(i.namespace=e.namespace AND i.operation_id=$1 AND i.event_position=e.position) AS matches FROM copilotz_operation_events i JOIN events e ON e.id=i.event_id WHERE i.event_id IN ($1,$2) ORDER BY i.event_id`,
+      [f.refs.eventId, invoked!.id],
+    );
+    assert.equal(indexes.rows.length, 2);
+    assert.ok(indexes.rows.every((row) => row.matches));
+    const claims = await f.db.query<{ result: { contract?: unknown } }>(
+      "SELECT result FROM owner_receipts WHERE kind='execution.claim'",
+    );
+    assert.equal(claims.rows.length, 1);
+    assert.equal(claims.rows[0].result.contract, undefined);
+    await f.takeover();
+    assert.equal(
+      ((await f.recover()).result as { disposition: string }).disposition,
+      "exhausted",
+    );
+    const delivery = await f.store.getDelivery(f.refs.deliveryId);
+    assert.equal(delivery?.status, "dead_letter");
+    assert.equal(delivery?.attempts, 1);
+    assert.equal(delivery?.maxAttempts, 1);
+    assert.equal((await f.terminal())?.status, "failed");
+    assert.equal(f.state.executions, 0);
+  } finally {
+    await f.close();
+  }
+});
+
+for (
+  const corruption of [
+    "source-deduplication",
+    "invoked-correlation",
+    "source-index-missing",
+    "source-index-namespace",
+    "source-index-scope",
+    "source-index-position",
+    "invoked-index-missing",
+    "invoked-index-namespace",
+    "invoked-index-scope",
+    "invoked-index-position",
+  ] as const
+) {
+  test(`lost Action canonical provenance blocks ${corruption} before terminal mutation`, async () => {
+    const f = await fixture({ maxAttempts: 1, eligible: false });
+    try {
+      await f.effect("begin");
+      const invoked = await f.store.getEventByDeduplicationId(
+        "space",
+        "run:action:invoked",
+      );
+      assert.ok(invoked);
+      if (
+        corruption === "source-deduplication" ||
+        corruption === "invoked-correlation"
+      ) {
+        // Fixture-only corruption. The sole immutable-event trigger is restored
+        // inside this transaction; an error also rolls back the trigger DDL.
+        await f.db.transaction(async (tx) => {
+          await tx.query(
+            'ALTER TABLE events DISABLE TRIGGER "copilotz_events_immutable"',
+          );
+          await tx.query(
+            corruption === "source-deduplication"
+              ? "UPDATE events SET deduplication_id='wrong-run' WHERE id=$1"
+              : "UPDATE events SET correlation_id='wrong-correlation' WHERE id=$1",
+            [
+              corruption === "source-deduplication"
+                ? f.refs.eventId
+                : invoked.id,
+            ],
+          );
+          await tx.query(
+            'ALTER TABLE events ENABLE TRIGGER "copilotz_events_immutable"',
+          );
+        });
+      } else {
+        const id = corruption.startsWith("source-")
+          ? f.refs.eventId
+          : invoked.id;
+        const mutation = corruption.endsWith("missing")
+          ? "DELETE FROM copilotz_operation_events WHERE event_id=$1"
+          : corruption.endsWith("namespace")
+          ? "UPDATE copilotz_operation_events SET namespace='foreign' WHERE event_id=$1"
+          : corruption.endsWith("scope")
+          ? "UPDATE copilotz_operation_events SET operation_id='foreign-scope' WHERE event_id=$1"
+          : "UPDATE copilotz_operation_events SET event_position=event_position+9007199254740993 WHERE event_id=$1";
+        await f.db.query(mutation, [id]);
+      }
+      await f.takeover();
+      const snapshot = async () => {
+        const data: Record<string, unknown> = {};
+        for (
+          const [table, order] of [
+            ["events", "id"],
+            ["event_bodies", "event_body_id"],
+            ["event_deliveries", "id"],
+            ["owner_assignments", "assignment_key"],
+            ["open_actions", "action_run_id"],
+            ["copilotz_operation_events", "event_id"],
+            ["copilotz_operations", "operation_id"],
+          ]
+        ) {
+          data[table] =
+            (await f.db.query(`SELECT * FROM ${table} ORDER BY ${order}`)).rows;
+        }
+        data.effects = (await f.db.query(
+          "SELECT * FROM owner_receipts WHERE kind LIKE 'effect.%' ORDER BY key",
+        )).rows;
+        return data;
+      };
+      const before = await snapshot();
+      const notifications = {
+        publications: [...f.state.publications],
+        scheduled: [...f.state.scheduled],
+        wakes: f.state.wakes,
+      };
+      const result = (await f.recover()).result as {
+        disposition: string;
+        reason: string;
+      };
+      assert.equal(result.disposition, "blocked");
+      assert.equal(
+        result.reason,
+        corruption === "source-deduplication"
+          ? "source_run_mismatch"
+          : corruption === "invoked-correlation"
+          ? "invoked_identity_mismatch"
+          : "lifecycle_catalog_mismatch",
+      );
+      assert.deepEqual(await snapshot(), before);
+      assert.equal(await f.terminal(), null);
+      assert.deepEqual(f.state.publications, notifications.publications);
+      assert.deepEqual(f.state.scheduled, notifications.scheduled);
+      assert.equal(f.state.executions, 0);
+      // A known blocker intentionally records its command receipt and exact
+      // reconciliation alarm, and may issue the non-authoritative wake hint.
+      assert.equal(
+        (await f.db.query("SELECT 1 FROM owner_receipts WHERE kind=$1", [
+          OWNER_LOST_ACTION_RECOVERY,
+        ])).rows.length,
+        1,
+      );
+      assert.equal(
+        (await f.db.query("SELECT 1 FROM owner_alarms")).rows.length,
+        1,
+      );
+      assert.equal(f.state.wakes, notifications.wakes + 1);
+    } finally {
+      await f.close();
+    }
+  });
+}

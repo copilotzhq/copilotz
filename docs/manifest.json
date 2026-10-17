@@ -149,6 +149,11 @@
           "description": "Compose plugins and write retry-safe Processors."
         },
         {
+          "title": "View foundation",
+          "slug": "views",
+          "description": "Experimental scoped one-shot text rendering and composition resolution."
+        },
+        {
           "title": "Collections",
           "slug": "collections",
           "description": "Schema-checked state, retry-safe writes, commands, queries and transactions."
@@ -312,6 +317,11 @@
           "title": "Contributing to Built-In Plugins",
           "slug": "plugin-layout",
           "description": "Built-in plugin layout, generated indexes, boundaries and repository checks."
+        },
+        {
+          "title": "Owner Runtime Integration",
+          "slug": "design/owner-runtime-integration",
+          "description": "Internal implementation progress, bounded transaction and transport fixtures, and unfinished public integration."
         }
       ]
     }

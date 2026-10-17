@@ -1,8 +1,15 @@
 import type {
   ContributionActions,
   ContributionPlugins,
+  ContributionViews,
   ResolvedNamespaces,
 } from "./contribution.ts";
+import {
+  type AnyViewDefinition,
+  createViewResolver,
+  type ViewMap,
+  type ViewShows,
+} from "../views/index.ts";
 import type { ActionMap } from "../actions/types.ts";
 import type { CollectionDefinition } from "../collections/definition.ts";
 import type {
@@ -38,12 +45,14 @@ export type PluginComposition<
   TProcessors extends ProcessorMap = ProcessorMap,
   TResources extends PluginResources = PluginResources,
   TAdapters extends PluginAdapters = PluginAdapters,
+  TViews extends ViewMap = ViewMap,
 > = PluginTypeComposition<
   TCollections,
   TActions,
   TProcessors,
   TResources,
-  TAdapters
+  TAdapters,
+  TViews
 >;
 
 export type RegistryComposition<
@@ -53,6 +62,7 @@ export type RegistryComposition<
   TActions extends ActionMap = EmptyMap,
   TCollections extends CollectionMap = EmptyMap,
   TProcessors extends ProcessorMap = EmptyMap,
+  TViews extends ViewMap = EmptyMap,
 > = ComposePlugins<
   readonly [
     ...TPlugins,
@@ -74,7 +84,11 @@ export type RegistryComposition<
     OverlayPluginNamespaces<
       TPluginsComposition["adapters"],
       ResolvedNamespaces<TAdapters>
-    >
+    >,
+    & TPluginsComposition["views"]
+    & TViews
+    & ContributionViews<TResources>
+    & ContributionViews<TAdapters>
   >
   : never;
 
@@ -112,6 +126,12 @@ export type PluginRegistry<
   processors: TComposition["processors"];
   resources: TComposition["resources"];
   adapters: TComposition["adapters"];
+  views: TComposition["views"];
+  resolveView(
+    shows: ViewShows,
+    mode: string,
+    renderer: string,
+  ): AnyViewDefinition | undefined;
   matchDurable(
     draft: DurableEventDraft,
     data?: unknown,
@@ -130,11 +150,13 @@ export type CreatePluginRegistryOptions<
   TActions extends ActionMap = EmptyMap,
   TCollections extends CollectionMap = EmptyMap,
   TProcessors extends ProcessorMap = EmptyMap,
+  TViews extends ViewMap = EmptyMap,
 > = Readonly<{
   plugins?: TPlugins;
   collections?: TCollections;
   actions?: TActions;
   processors?: TProcessors;
+  views?: TViews;
   resources?: TResources;
   adapters?: TAdapters;
 }>;
@@ -181,6 +203,7 @@ export function createPluginRegistry<
   const TActions extends ActionMap = EmptyMap,
   const TCollections extends CollectionMap = EmptyMap,
   const TProcessors extends ProcessorMap = EmptyMap,
+  const TViews extends ViewMap = EmptyMap,
 >(
   options: CreatePluginRegistryOptions<
     TPlugins,
@@ -188,7 +211,8 @@ export function createPluginRegistry<
     TAdapters,
     TActions,
     TCollections,
-    TProcessors
+    TProcessors,
+    TViews
   > = {},
 ): PluginRegistry<
   RegistryComposition<
@@ -197,22 +221,25 @@ export function createPluginRegistry<
     TAdapters,
     TActions,
     TCollections,
-    TProcessors
+    TProcessors,
+    TViews
   >
 > {
   const collections = new Map<string, CollectionDefinition>();
   const actions = new Map<string, ActionMap[string]>();
   const processors = new Map<string, AnyProcessor>();
+  const views = new Map<string, AnyViewDefinition>();
   const collectionIds = new Map<string, string>();
   const actionIds = new Map<string, string>();
   const processorIds = new Map<string, string>();
+  const viewIds = new Map<string, string>();
   const resourceNamespaces = new Map<string, Map<string, unknown>>();
   const adapterNamespaces = new Map<string, Map<string, unknown>>();
   const plugins: AnyCopilotzPlugin[] = [];
   const pluginIds = new Map<string, AnyCopilotzPlugin>();
 
   const addDefinitions = <T extends object>(
-    kind: "collection" | "action" | "processor",
+    kind: "collection" | "action" | "processor" | "view",
     definitions: Readonly<Record<string, T>>,
     aliases: Map<string, T>,
     stableIds: Map<string, string>,
@@ -291,6 +318,21 @@ export function createPluginRegistry<
       processorIds,
       (definition) => definition.id,
     );
+    // Previously authored plugins have the same marker and only five maps.
+    const pluginViews = plugin.views === undefined ? {} : plugin.views;
+    if (
+      !pluginViews || typeof pluginViews !== "object" ||
+      Array.isArray(pluginViews)
+    ) {
+      throw new TypeError(`Plugin '${plugin.id}' views must be an alias map.`);
+    }
+    addDefinitions(
+      "view",
+      pluginViews,
+      views,
+      viewIds,
+      (definition) => definition.id,
+    );
     mergeNamespaces(resourceNamespaces, plugin.resources);
     mergeNamespaces(adapterNamespaces, plugin.adapters);
   };
@@ -302,11 +344,18 @@ export function createPluginRegistry<
     collections: options.collections,
     actions: options.actions,
     processors: options.processors,
+    views: options.views,
     resources: options.resources as PluginResources,
     adapters: options.adapters as PluginAdapters,
   });
   register(rootPlugin);
 
+  const registeredViews = recordFromMap(views);
+  const resolvedResources = namespacesFromMap(resourceNamespaces);
+  const resolveView = createViewResolver(
+    registeredViews,
+    resolvedResources.views?.prefer,
+  );
   const registeredProcessors = recordFromMap(processors);
   const processorById = new Map(
     Object.values(registeredProcessors).map((
@@ -325,7 +374,9 @@ export function createPluginRegistry<
     collections: recordFromMap(collections),
     actions: recordFromMap(actions),
     processors: registeredProcessors,
-    resources: namespacesFromMap(resourceNamespaces),
+    resources: resolvedResources,
+    views: registeredViews,
+    resolveView,
     adapters: namespacesFromMap(adapterNamespaces),
     matchDurable,
     durableConsumers(draft, data) {
@@ -346,7 +397,8 @@ export function createPluginRegistry<
       TAdapters,
       TActions,
       TCollections,
-      TProcessors
+      TProcessors,
+      TViews
     >
   >;
 }

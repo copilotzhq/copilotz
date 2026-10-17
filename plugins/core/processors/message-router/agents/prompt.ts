@@ -22,6 +22,7 @@ import {
 import { collectPromptInstructions } from "../collection.ts";
 import { getPublicThreadMetadata } from "../../../shared/thread-metadata.ts";
 import { prepareLlmInput } from "../../../shared/agents/prepared-transcript.ts";
+import type { ContextContributionRenderer } from "./context-views.ts";
 
 type RenderedContext = Readonly<{
   title: string;
@@ -233,6 +234,9 @@ export async function buildCoreLlmRequest(
     messageIds: readonly string[];
     tools: readonly CoreToolEntry[];
     contributions?: readonly CollectedContextContribution[];
+    /** Private host seam. Call this builder inside callLlm.prepare so receipt
+     * replay reuses the captured request without projection or rendering. */
+    renderContextContribution?: ContextContributionRenderer;
     historyByteLimit?: number;
     onHistoryPrepared?: (
       transcript:
@@ -277,14 +281,26 @@ export async function buildCoreLlmRequest(
     { byteLimit: input.historyByteLimit },
   );
   input.onHistoryPrepared?.(prepared.transcript);
-  const rendered: readonly RenderedContext[] = contributions.map((
-    item,
-    index,
-  ) => ({
-    title: item.title,
-    role: item.role,
-    text: renderContextContent(prepared.contextValues[index]),
-  }));
+  const rendered: readonly RenderedContext[] = await Promise.all(
+    contributions.map(async (
+      item,
+      index,
+    ) => ({
+      title: item.title,
+      role: item.role,
+      text: await input.renderContextContribution?.({
+        contribution: item,
+        content: prepared.contextValues[index],
+        scope: {
+          namespace: context.namespace,
+          agentId: input.agent.id,
+          participantId: participant.id,
+          threadId: thread.id,
+        },
+        signal: context.signal,
+      }) ?? renderContextContent(prepared.contextValues[index]),
+    })),
+  );
   const messages = prepared.transcript.map((entry) => entry.message);
   const agents = Object.values(context.resources.agents ?? {}).filter(
     (value): value is AgentResource => Boolean(value),

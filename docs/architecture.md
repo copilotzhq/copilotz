@@ -87,11 +87,11 @@ flowchart LR
 
 ### Who owns what
 
-| Owner                  | Owns                                                                                                                                      | Example in Notes                                         |
-| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- |
-| **Plugin definitions** | Stable IDs and contracts: Collections, Actions, Processors, Resources, Adapters. Pure modules with no environment reads or I/O on import. | `notes-plugin.ts`: `note`, `notes.save`, `notes.capture` |
-| **Host composition**   | Namespace, database, credentials, live integrations, which plugins compose.                                                               | `composition.ts`: `team-notes`, `file://./data`          |
-| **Runtime**            | Persistence, deliveries, leases and recovery, operation settlement, Action lifecycle, content adoption, execution transport.              | Created by `createCopilotz`                              |
+| Owner                  | Owns                                                                                                                                             | Example in Notes                                         |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------- |
+| **Plugin definitions** | Stable IDs and contracts: Collections, Actions, Processors, Resources, Adapters, Views. Pure modules with no environment reads or I/O on import. | `notes-plugin.ts`: `note`, `notes.save`, `notes.capture` |
+| **Host composition**   | Namespace, database, credentials, live integrations, which plugins compose.                                                                      | `composition.ts`: `team-notes`, `file://./data`          |
+| **Runtime**            | Persistence, deliveries, leases and recovery, operation settlement, Action lifecycle, content adoption, execution transport.                     | Created by `createCopilotz`                              |
 
 The runtime never imports a concrete plugin. The agent harness under
 `@copilotz/copilotz/core` is a set of plugins on top of the same primitives:

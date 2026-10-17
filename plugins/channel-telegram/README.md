@@ -31,3 +31,8 @@ discovery.
 
 See [convention-first authoring](../../docs/convention-authoring.md) for the
 shared file structure, compiler, configuration locations, and migration guide.
+
+The explicit [send-text Action](actions/send-text/README.md) is the first
+owner-effect-aware provider path. It sends one bounded ordinary text request;
+automatic legacy egress, content/View routing, media and protected credential
+hydration are not yet converted.

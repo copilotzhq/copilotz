@@ -13,7 +13,7 @@ import {
   type ActionTransactionOptions,
   createActionCallers,
 } from "../actions/index.ts";
-import { createActionInvocationContext } from "../actions/host.ts";
+import { createActionInvocationContext } from "../actions/execution-context.ts";
 import type { ProcessorContext } from "../plugins/index.ts";
 import type {
   CreateProcessorContextOptions,
@@ -503,8 +503,15 @@ export function createProcessorContext(
     },
     signal: options.base.signal,
     invocationScope: processorOperationKey,
-    createInvocationKey: (actionId) =>
-      `${processorOperationKey}:action:${++rootActionIndex}:${actionId}`,
+    // Named calls replay by logical key even when a retry skips earlier work.
+    // Only unnamed calls use the invocation ordinal. The invoker appends the
+    // normalized explicit key to this stable prefix.
+    createInvocationKey: (actionId, operationKey) =>
+      operationKey
+        ? `${encodeURIComponent(processorOperationKey)}:action:named:${
+          encodeURIComponent(actionId)
+        }`
+        : `${processorOperationKey}:action:${++rootActionIndex}:${actionId}`,
     identity: contextIdentity,
     rearmDeferredAction: (actionRunId) =>
       deferredWaits.rearmAction(actionRunId),

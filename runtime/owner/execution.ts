@@ -22,6 +22,11 @@ import { createCoreTableNames } from "../events/schema.ts";
 import type { SqlExecutor, SqlSession } from "../events/session.ts";
 import { createEventStore, type EventStore } from "../events/store.ts";
 import type { EventDelivery } from "../events/types.ts";
+import type { OwnerPreparedInputContext } from "./preparation.ts";
+import {
+  OWNER_PREPARATION_METADATA,
+  preparationCaptureFromMetadata,
+} from "./preparation-capture.ts";
 import type { DeliveryExecutor } from "../execution/types.ts";
 import type {
   RegisteredExecutionCompletion,
@@ -79,6 +84,8 @@ export type OwnerExecutionAssignment = Readonly<{
 }>;
 
 type Authorized = Readonly<{
+  caller: OwnerCaller;
+  prepared: boolean;
   assignment: OwnerExecutionAssignment;
   action: AnyActionDefinition;
   delivery: EventDelivery;
@@ -242,6 +249,13 @@ export function createOwnerExecutionCommands(
       actionId: string,
       commandTime: string,
     ): boolean | Promise<boolean>;
+    /** Mandatory for lifecycle input with preparation metadata. Runs before
+     * claim/input/mutation receipts and again before captured input release.
+     * Safe completion and effect settlement do not reacquire source permission. */
+    authorizePreparedInput?(
+      tx: SqlExecutor,
+      context: OwnerPreparedInputContext,
+    ): void | Promise<void>;
     /** Mandatory current input policy. Called before capture, projection and mutation.
      * It may inspect current policy through tx; it must perform no external I/O.
      * This subset returns the complete ordinary captured input only when allowed. */
@@ -278,6 +292,7 @@ export function createOwnerExecutionCommands(
   ): Promise<OwnerExecutionAssignment>;
 }> {
   const allowRecovery = options.allowRecovery;
+  const authorizePreparedInput = options.authorizePreparedInput;
   text(options.ownerId);
   if (options.catalog.databaseSchema !== options.schema) {
     throw new TypeError("Execution catalog schema does not match.");
@@ -347,9 +362,14 @@ export function createOwnerExecutionCommands(
     }
     // Match the established operation -> delivery -> open Action lock order.
     const initial = await tx.query<
-      { settlement_scope_id: string; namespace: string; correlation_id: string }
+      {
+        settlement_scope_id: string;
+        namespace: string;
+        correlation_id: string;
+        metadata: Record<string, unknown>;
+      }
     >(
-      `SELECT d.settlement_scope_id,e.namespace,e.correlation_id FROM ${tables.event_deliveries} d JOIN ${tables.events} e ON e.id=d.event_id WHERE d.id=$1`,
+      `SELECT d.settlement_scope_id,e.namespace,e.correlation_id,e.metadata FROM ${tables.event_deliveries} d JOIN ${tables.events} e ON e.id=d.event_id WHERE d.id=$1`,
       [assignment.deliveryId],
     );
     const source = initial.rows[0];
@@ -405,13 +425,68 @@ export function createOwnerExecutionCommands(
       `${assignment.invocation.actionRunId}:action:terminal`,
     );
     if (terminal) refuse("Execution already has a terminal lifecycle.");
-    return {
+    const state: Authorized = {
+      caller: structuredClone(caller),
+      prepared: Object.hasOwn(source.metadata, OWNER_PREPARATION_METADATA),
       assignment,
       action,
       delivery,
       cancelled,
       correlationId: source.correlation_id,
     };
+    if (mode === "claim" || mode === "input" || mode === "mutation") {
+      await guardPrepared(tx, state, commandTime, mode);
+    }
+    return state;
+  }
+  async function guardPrepared(
+    tx: SqlExecutor,
+    state: Authorized,
+    commandTime: string,
+    purpose: "claim" | "input" | "mutation",
+    signal: AbortSignal = new AbortController().signal,
+  ): Promise<void> {
+    signal.throwIfAborted();
+    if (!state.prepared) return;
+    const store = createEventStore({
+      schema: options.schema,
+      session: {
+        query: tx.query.bind(tx),
+        transaction() {
+          throw new Error("Prepared input reads cannot open transactions.");
+        },
+      },
+    });
+    const source = await store.getEvent(state.delivery.eventId);
+    if (!source) refuse("Execution source event is unavailable.");
+    const capture = preparationCaptureFromMetadata(source.metadata);
+    if (!capture) return;
+    const a = state.assignment;
+    if (
+      source.ownerId !== options.ownerId || source.namespace !== a.namespace ||
+      source.type !== "copilotz.owner.action.requested" ||
+      source.metadata.actionId !== a.actionId ||
+      source.metadata.actionRunId !== a.invocation.actionRunId ||
+      source.deduplicationId !== a.invocation.actionRunId ||
+      state.delivery.consumerId !== `registered:${a.actionId}` ||
+      capture.source.source.namespace !== a.namespace
+    ) {
+      refuse("Prepared input does not match its assigned child.");
+    }
+    if (!authorizePreparedInput) {
+      refuse("Prepared input authority is unavailable.");
+    }
+    await authorizePreparedInput(tx, {
+      caller: structuredClone(state.caller),
+      sourceEventId: source.id,
+      deliveryId: state.delivery.id,
+      actionId: a.actionId,
+      namespace: a.namespace,
+      purpose,
+      commandTime,
+      signal: AbortSignal.any([signal]),
+    });
+    signal.throwIfAborted();
   }
   const inventory = (tx: SqlExecutor, state: Authorized) =>
     readOwnerEffectInventory(tx, {
@@ -670,6 +745,13 @@ export function createOwnerExecutionCommands(
         "Action input",
       );
     }
+    await guardPrepared(
+      context.tx,
+      state,
+      context.commandTime,
+      "claim",
+      context.signal,
+    );
     if (!captured) {
       await lifecycle(state).emit({
         ...state.assignment.invocation,
@@ -852,6 +934,13 @@ export function createOwnerExecutionCommands(
       context.commandTime,
     );
     const barrier = await recovery(context.tx, state, context.commandTime);
+    await guardPrepared(
+      context.tx,
+      state,
+      context.commandTime,
+      "input",
+      context.signal,
+    );
     return json({
       ...(barrier ? { recovery: barrier } : {}),
       actionId: captured.actionId,
@@ -976,6 +1065,7 @@ export function createOwnerExecutionCommands(
         commandTime,
       );
       await recoveryBarrier(tx, state, commandTime);
+      await guardPrepared(tx, state, commandTime, "mutation");
       return state.assignment;
     },
   };

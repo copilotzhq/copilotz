@@ -124,6 +124,55 @@ executable primitives. The existing build discovers and deterministically emits
 them in `plugin.generated.ts`. Full owner/worker/web output separation remains a
 later slice; V1 does not claim its import-graph conformance.
 
+### Private owner preparation capture
+
+The experimental owner modules expose a registered `action.child-prepare`
+command for the ordinary database-backed content subset. This is internal
+composition plumbing, not a new public `Action.prepare(factory)` overload or the
+complete default channel route. The host registers the source Collection/content
+path, child Action, allowed modes, real View selection and pure text-to-input
+mapper. The worker supplies only a current parent reference, preparation name,
+local key, source record ID and semantic hints. This first composition uses the
+existing worker-parent Action/Processor assignment checks; owner-local parent
+admission is a separate integration step.
+
+First capture reads a current-authorized source projection and immutable logical
+content versions, then evaluates the registered View and allowed ordinary
+Resources. The generic fallback still uses only the authorized projection. The
+result becomes the child Action's existing requested-event body; bounded
+original source, content, resource and View/fallback provenance lives in its
+metadata. The event, body, inherited delivery/catalog obligation and
+reference-only receipt share the fenced transaction. Dispatch is scheduled only
+after its outer commit. There is no separate preparation body registry.
+
+Compatible duplicate calls reauthorize the original capture and return its child
+reference without reprojecting today's record or rerendering. Changed semantic
+input under the same key conflicts. Current policy must explicitly authorize the
+whole original projected version, including fields: continued record visibility
+or a matching digest is insufficient. The original source and content facts are
+checked before body reads and at the output gate. Original resource permission
+is also rechecked without substituting today's resource value.
+
+The host must compose `authorizeCaptured` into both child-result and execution
+prepared-input guards. Missing guards and malformed/present-null provenance fail
+closed. Guards run before claim/input/live-mutation replay and before input or
+completed-result release. Narrow current-attempt failure/effect settlement
+remains available after source permission or `ctx` revocation. These policies
+are trusted transaction-local checks; they must use the host's current
+assignment facts and must not recursively reenter the same prepared execution
+guard.
+
+Rendering has finite admission, byte and deadline limits. Actual registered View
+and mapper promises retain their capacity until settlement after timeout or
+cancellation; late evaluation has no SQL or append capability. This initial
+capture rejects nested View/Collection reads whose source provenance is not yet
+accounted for. Ordinary and prepared child admissions cannot adopt one another's
+captured input.
+
+Protected slots, non-database bodies, F9 current-copy/catalog migration and
+retention/scaling proof, binary/multipart egress, full channel activation and
+production owner-host/worker transport composition remain separate work.
+
 ## What this unlocks
 
 First-party plugins can supply reusable, scoped one-shot text presentations.

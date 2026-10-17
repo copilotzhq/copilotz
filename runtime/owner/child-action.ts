@@ -30,6 +30,7 @@ import {
 import type {
   OwnerCaller,
   OwnerCommand,
+  OwnerCommandContext,
   OwnerCommandHandler,
   OwnerCommandInputDefinition,
   OwnerJson,
@@ -37,6 +38,13 @@ import type {
 } from "./boundary.ts";
 import type { OwnerExecutionAssignment } from "./execution.ts";
 import type { OwnerProcessorAssignment } from "./processor.ts";
+import type { OwnerPreparedInputContext } from "./preparation.ts";
+import {
+  OWNER_PREPARATION_METADATA,
+  type OwnerPreparationCapture,
+  parseOwnerPreparationCapture,
+  preparationCaptureFromMetadata,
+} from "./preparation-capture.ts";
 
 export {
   OWNER_CHILD_ACTION_ADMISSION,
@@ -194,12 +202,19 @@ export function createOwnerChildActions(
       actionId: string,
       time: string,
     ): void | Promise<void>;
+    /** Required for prepared lifecycle input/result access. Absence fails closed
+     * whenever the requested event contains preparation metadata. */
+    authorizePreparedInput?(
+      tx: SqlExecutor,
+      context: OwnerPreparedInputContext,
+    ): void | Promise<void>;
     /** Enqueue references only after COMMIT; never await child execution here. */
     schedule(reference: OwnerChildActionReference): void;
     maxPendingDeliveries?: number;
     maxDepth?: number;
   }>,
 ) {
+  const authorizePreparedInput = options.authorizePreparedInput;
   text(options.ownerId);
   if (options.catalog.databaseSchema !== options.schema) {
     throw new TypeError("Child Action catalog schema does not match.");
@@ -444,11 +459,25 @@ export function createOwnerChildActions(
       };
     },
   };
-  const handler: OwnerCommandHandler = async (_intent, context) => {
-    const state = authorized.get(context.tx);
-    authorized.delete(context.tx);
-    if (!state?.input || !same(context.input, state.input)) refuse();
-    const { parent, input } = state;
+  async function append(
+    parent: OwnerChildActionParent,
+    input: ChildInput,
+    context: OwnerCommandContext,
+    preparation?: OwnerPreparationCapture,
+  ): Promise<OwnerChildActionReference> {
+    const runId =
+      `${parent.operationKey}/action:${input.actionId}:${input.operationKey}`;
+    text(runId);
+    // Compatible duplicates are resolved by their authorized command receipt.
+    // Never adopt another ordinary/prepared admission's existing input body.
+    if (
+      await readStore(context.tx).getEventByDeduplicationId(
+        parent.namespace,
+        runId,
+      )
+    ) {
+      refuse("Child Action input already belongs to another admission.");
+    }
     const count = (await context.tx.query<{ count: string | number }>(
       `SELECT COUNT(*) AS count FROM (SELECT 1 FROM ${tables.event_deliveries} WHERE status IN ('pending','leased','retry_wait') LIMIT $1) pending`,
       [maxPending],
@@ -459,9 +488,6 @@ export function createOwnerChildActions(
         { code: "owner_admission_refused" },
       );
     }
-    const runId =
-      `${parent.operationKey}/action:${input.actionId}:${input.operationKey}`;
-    text(runId);
     const bodyId = await deriveWorkflowId("action-input", runId);
     const store = createEventStore({
       schema: options.schema,
@@ -495,6 +521,7 @@ export function createOwnerChildActions(
           localOperationKey: input.operationKey,
           rootKey: parent.rootKey,
           childDepth: parent.depth + 1,
+          ...(preparation ? { [OWNER_PREPARATION_METADATA]: preparation } : {}),
           ...(parent.actionRunId
             ? { parentActionRunId: parent.actionRunId }
             : {}),
@@ -524,18 +551,60 @@ export function createOwnerChildActions(
       eventId: result.event.id,
       deliveryId: result.deliveries[0].id,
     };
+    if (preparation) {
+      await guardPrepared(
+        context.tx,
+        result.event,
+        result.deliveries[0],
+        context.caller,
+        "input",
+        context.commandTime,
+        context.signal,
+      );
+    }
+    context.signal.throwIfAborted();
     context.afterCommit(() => options.schedule(structuredClone(reference)));
     return reference;
-  };
-  const projection: OwnerProjectionHandler = async (
-    _input,
-    context,
-  ): Promise<OwnerJson> => {
+  }
+  const handler: OwnerCommandHandler = async (_intent, context) => {
     const state = authorized.get(context.tx);
     authorized.delete(context.tx);
-    if (!state?.reference) unavailable();
-    const { parent, reference: ref, action } = state;
-    const store = readStore(context.tx);
+    if (!state?.input || !same(context.input, state.input)) refuse();
+    return await append(state.parent, state.input, context);
+  };
+  async function guardPrepared(
+    tx: SqlExecutor,
+    source: DurableEvent,
+    delivery: EventDelivery,
+    caller: OwnerCaller,
+    purpose: "input" | "result",
+    commandTime: string,
+    signal: AbortSignal,
+  ): Promise<void> {
+    const capture = preparationCaptureFromMetadata(source.metadata);
+    if (!capture) return;
+    if (!authorizePreparedInput) {
+      refuse("Prepared input authority is unavailable.");
+    }
+    signal.throwIfAborted();
+    await authorizePreparedInput(tx, {
+      caller: structuredClone(caller),
+      sourceEventId: source.id,
+      deliveryId: delivery.id,
+      actionId: String(source.metadata.actionId),
+      namespace: source.namespace,
+      purpose,
+      commandTime,
+      signal: AbortSignal.any([signal]),
+    });
+    signal.throwIfAborted();
+  }
+  async function inspect(
+    tx: SqlExecutor,
+    parent: OwnerChildActionParent,
+    ref: OwnerChildActionReference,
+  ): Promise<{ source: DurableEvent; delivery: EventDelivery }> {
+    const store = readStore(tx);
     const source = await store.getEvent(ref.eventId);
     const delivery = await store.getDelivery(ref.deliveryId);
     if (
@@ -560,6 +629,27 @@ export function createOwnerChildActions(
       ref.executionId !==
         `${parent.operationKey}/action:${ref.actionId}:${local}`
     ) unavailable();
+    return { source, delivery };
+  }
+  const projection: OwnerProjectionHandler = async (
+    _input,
+    context,
+  ): Promise<OwnerJson> => {
+    const state = authorized.get(context.tx);
+    authorized.delete(context.tx);
+    if (!state?.reference) unavailable();
+    const { parent, reference: ref, action } = state;
+    const store = readStore(context.tx);
+    const { source, delivery } = await inspect(context.tx, parent, ref);
+    await guardPrepared(
+      context.tx,
+      source,
+      delivery,
+      context.caller,
+      "result",
+      context.commandTime,
+      context.signal,
+    );
     const event = await store.getEventByDeduplicationId(
       ref.namespace,
       `${ref.executionId}:action:terminal`,
@@ -579,27 +669,144 @@ export function createOwnerChildActions(
         !["completed", "failed", "cancelled"].includes(terminal.status)
       ) unavailable();
     }
+    let result: OwnerJson;
     if (delivery.status === "cancelled" || terminal?.status === "cancelled") {
-      return { status: "cancelled", code: "action_cancelled" };
-    }
-    if (delivery.status === "dead_letter" || terminal?.status === "failed") {
-      return { status: "failed", code: "action_failed" };
-    }
-    if (
+      result = { status: "cancelled", code: "action_cancelled" };
+    } else if (
+      delivery.status === "dead_letter" || terminal?.status === "failed"
+    ) {
+      result = { status: "failed", code: "action_failed" };
+    } else if (
       !terminal && ["pending", "leased", "retry_wait"].includes(delivery.status)
-    ) return { status: "pending" };
-    if (
+    ) {
+      result = { status: "pending" };
+    } else if (
       !terminal || terminal.status !== "completed" ||
       delivery.status !== "succeeded"
-    ) return { status: "failed", code: "action_not_completed" };
-    const output = json(terminal.output);
-    ordinary(output);
-    if (action.outputSchema) {
-      validateAgainstJsonSchema(action.outputSchema, output, "Action output");
+    ) {
+      result = { status: "failed", code: "action_not_completed" };
+    } else {
+      const output = json(terminal.output);
+      ordinary(output);
+      if (action.outputSchema) {
+        validateAgainstJsonSchema(action.outputSchema, output, "Action output");
+      }
+      result = { status: "completed", output };
     }
-    return { status: "completed", output };
+    await guardPrepared(
+      context.tx,
+      source,
+      delivery,
+      context.caller,
+      "result",
+      context.commandTime,
+      context.signal,
+    );
+    return result;
   };
+  async function authorizeTarget(
+    tx: SqlExecutor,
+    caller: OwnerCaller,
+    ref: OwnerChildActionParentReference,
+    actionAlias: string,
+    operationKey: string,
+    time: string,
+  ) {
+    text(actionAlias);
+    text(operationKey);
+    const parent = await current(
+      tx,
+      structuredClone(caller),
+      parentReference(ref),
+      time,
+    );
+    const registered = Object.hasOwn(options.registry.actions, actionAlias)
+      ? options.registry.actions[actionAlias]
+      : undefined;
+    if (!registered) throw new TypeError("Unknown registered child Action.");
+    const action = actionById(registered.id);
+    await options.authorizeChild(
+      tx,
+      structuredClone(caller),
+      structuredClone(parent),
+      action.id,
+      time,
+    );
+    return { parent: structuredClone(parent), actionId: action.id };
+  }
   return {
+    authorizeTarget,
+    async inspectPrepared(
+      tx: SqlExecutor,
+      caller: OwnerCaller,
+      ref: OwnerChildActionParentReference,
+      reference: OwnerChildActionReference,
+      time: string,
+    ): Promise<DurableEvent> {
+      if (!authorizePreparedInput) {
+        refuse("Prepared input authority is unavailable.");
+      }
+      const parent = await current(
+        tx,
+        structuredClone(caller),
+        parentReference(ref),
+        time,
+      );
+      const parsed = childReference(reference);
+      const action = actionById(parsed.actionId);
+      await options.authorizeChild(
+        tx,
+        structuredClone(caller),
+        structuredClone(parent),
+        action.id,
+        time,
+      );
+      const { source } = await inspect(tx, parent, parsed);
+      if (!preparationCaptureFromMetadata(source.metadata)) {
+        refuse("Prepared input is absent.");
+      }
+      return structuredClone(source);
+    },
+    async admitPrepared(
+      raw: Readonly<
+        {
+          parent: OwnerChildActionParentReference;
+          actionAlias: string;
+          operationKey: string;
+          input: OwnerJson;
+          preparation: OwnerPreparationCapture;
+        }
+      >,
+      context: OwnerCommandContext,
+    ): Promise<OwnerChildActionReference> {
+      if (!authorizePreparedInput) {
+        refuse("Prepared input authority is unavailable.");
+      }
+      const preparation = parseOwnerPreparationCapture(raw.preparation);
+      const normalized = await inputDefinition.normalize({
+        parent: raw.parent,
+        actionAlias: raw.actionAlias,
+        operationKey: raw.operationKey,
+        input: raw.input,
+      });
+      const input = normalized.value as ChildInput;
+      const target = await authorizeTarget(
+        context.tx,
+        context.caller,
+        input.parent,
+        input.actionAlias,
+        input.operationKey,
+        context.commandTime,
+      );
+      if (
+        target.actionId !== input.actionId ||
+        preparation.source.source.namespace !== target.parent.namespace
+      ) {
+        refuse();
+      }
+      context.signal.throwIfAborted();
+      return await append(target.parent, input, context, preparation);
+    },
     inputDefinition,
     handler,
     projection,
@@ -644,6 +851,16 @@ export function createOwnerChildActions(
           action.id,
           time,
         );
+        const original = await readStore(tx).getEventByDeduplicationId(
+          parent.namespace,
+          `${parent.operationKey}/action:${action.id}:${input.operationKey}`,
+        );
+        if (
+          original &&
+          Object.hasOwn(original.metadata, OWNER_PREPARATION_METADATA)
+        ) {
+          refuse("Prepared input cannot be adopted by ordinary admission.");
+        }
         authorized.set(tx, { parent, input, action });
       } else if (
         command.kind === OWNER_CHILD_ACTION_RESULT &&

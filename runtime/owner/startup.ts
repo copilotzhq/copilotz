@@ -1,7 +1,8 @@
 /** Private bounded pending/terminal restart proof. A repair receipt is historical
  * progress only: readiness requires the independent, receipt-free current proof.
- * Lost/retried execution, open Actions, local attempts, graph/content storage and
- * streams stay blocked. This is not a general graph or content recovery proof. */
+ * Lost/retried execution, open Actions, local attempts, content storage and streams
+ * stay blocked. Ordinary graph compatibility requires explicit namespace coverage;
+ * it proves current structure only, never historical authority or content safety. */
 import { parseActionLifecycleEvent } from "../actions/event.ts";
 import { actionDefinitionHasSecrets } from "../actions/protected-lifecycle.ts";
 import { encodeEventBody, eventDataRef } from "../events/body-store.ts";
@@ -11,6 +12,11 @@ import {
   validateCopilotzSchema,
 } from "../events/schema.ts";
 import type { SqlExecutor } from "../events/session.ts";
+import {
+  captureOwnerGraphCollections,
+  validateOwnerCollectionGraph,
+} from "./startup-graph.ts";
+import { validateOwnerGraphSchema } from "./startup-graph-schema.ts";
 import { ownerClaimKey } from "../execution/owner-port.ts";
 import { readExecutionClaim } from "../execution/recovery.ts";
 import { ownerProcessorClaimKey } from "../execution/registered-processor.ts";
@@ -141,9 +147,14 @@ export function createOwnerStartupProof(
     ownerId: string;
     schema: string;
     registry: PluginRegistry;
-    /** Aggregate row budget across all scanned obligation/history tables. */
+    /** Explicit trusted namespace coverage, never inferred from graph rows or
+     * registration. Omission retains the graph-empty startup subset. */
+    namespaces?: readonly string[];
+    /** Aggregate configuration, raw inventory and derived graph item budget. */
     maxItems?: number;
-    /** Aggregate SQL JSON/text bytes, checked before evidence is hydrated. */
+    /** Aggregate configuration/SQL JSON/derived graph bytes. Raw evidence is
+     * preflighted before hydration. Physical catalog validation has separate
+     * fixed metadata caps (1,000 rows, 8,192 bytes per expression/predicate). */
     maxBytes?: number;
     authorizeControl(
       tx: SqlExecutor,
@@ -166,6 +177,62 @@ export function createOwnerStartupProof(
     !Number.isSafeInteger(maxBytes) || maxBytes < 1024 ||
     maxBytes > 32 * 1024 * 1024
   ) throw new TypeError("Invalid startup inventory budget.");
+  // Capture configured graph coverage and data-only declarations before any
+  // await. Neither later option mutation nor callback output can widen it.
+  let namespaces: readonly string[] | undefined;
+  if (options.namespaces !== undefined) {
+    const supplied = options.namespaces;
+    if (!Array.isArray(supplied) || supplied.length > 1024) {
+      throw new TypeError("Invalid startup namespace inventory.");
+    }
+    const descriptors = Object.getOwnPropertyDescriptors(supplied);
+    if (Reflect.ownKeys(descriptors).length !== supplied.length + 1) {
+      throw new TypeError("Invalid startup namespace inventory.");
+    }
+    const copied: string[] = [];
+    for (let index = 0; index < supplied.length; index++) {
+      const descriptor = descriptors[String(index)];
+      if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
+        throw new TypeError("Invalid startup namespace inventory.");
+      }
+      text(descriptor.value);
+      if (copied.includes(descriptor.value)) {
+        throw new TypeError("Ambiguous startup namespace inventory.");
+      }
+      copied.push(descriptor.value);
+    }
+    namespaces = copied;
+  }
+  const graphCollections = namespaces === undefined
+    ? []
+    : captureOwnerGraphCollections(Object.values(options.registry.collections));
+  const configuration = namespaces === undefined ? null : {
+    namespaces,
+    collections: graphCollections,
+  };
+  let configurationItems = 0;
+  const pendingConfiguration: unknown[] = configuration === null
+    ? []
+    : [configuration];
+  while (pendingConfiguration.length) {
+    const value = pendingConfiguration.pop();
+    if (++configurationItems > maxItems) {
+      throw new TypeError(
+        "Startup configuration exceeds its inventory budget.",
+      );
+    }
+    if (value !== null && typeof value === "object") {
+      pendingConfiguration.push(...Object.values(value));
+    }
+  }
+  // Reserve four copies, as for raw SQL evidence below, including the helper's
+  // detached capture during each physical/schema and graph validation pass.
+  const configurationBytes = configuration === null
+    ? 0
+    : new TextEncoder().encode(JSON.stringify(configuration)).length * 4;
+  if (configurationBytes > maxBytes) {
+    throw new TypeError("Startup configuration exceeds its inventory budget.");
+  }
   const core = createCoreTableNames(schema);
   const catalog = createOperationCatalogTables(schema);
   const owner = ownerTableNames(schema);
@@ -207,10 +274,15 @@ export function createOwnerStartupProof(
       deliveries: 0,
       operations: 0,
     };
-    let remainingItems = maxItems, remainingBytes = maxBytes;
+    let remainingItems = maxItems - configurationItems,
+      remainingBytes = maxBytes - configurationBytes;
     // Size before SELECT: both row count and combined retained data are bounded.
     // LIMIT bounds retention, not database query-plan cost on large histories.
-    async function rows(table: string, where = "TRUE"): Promise<Row[]> {
+    async function rows(
+      table: string,
+      where = "TRUE",
+      lossless = false,
+    ): Promise<Row[]> {
       const budget = (await tx.query<{ count: number; bytes: string }>(
         `SELECT count(*)::int AS count,COALESCE(sum(octet_length(to_jsonb(candidate)::text)),0)::text AS bytes
          FROM (SELECT * FROM ${table} WHERE ${where} LIMIT $1) candidate`,
@@ -230,10 +302,17 @@ export function createOwnerStartupProof(
       }
       remainingItems -= budget.count;
       remainingBytes -= bytes;
-      const result = (await tx.query<Row>(
-        `SELECT * FROM ${table} WHERE ${where} LIMIT $1`,
-        [budget.count + 1],
-      )).rows;
+      // Graph timestamps must remain SQL JSON strings: a driver's Date has
+      // already discarded microseconds and cannot establish exact equality.
+      const result = lossless
+        ? (await tx.query<{ value: Row }>(
+          `SELECT to_jsonb(candidate) AS value FROM (SELECT * FROM ${table} WHERE ${where} LIMIT $1) candidate`,
+          [budget.count + 1],
+        )).rows.map((row) => row.value)
+        : (await tx.query<Row>(
+          `SELECT * FROM ${table} WHERE ${where} LIMIT $1`,
+          [budget.count + 1],
+        )).rows;
       if (result.length !== budget.count) {
         refuse("Startup inventory changed during the fenced proof.");
       }
@@ -263,16 +342,48 @@ export function createOwnerStartupProof(
       present.add(targetKey(target));
       return target;
     }
-    // This first readiness prerequisite has no graph/content compatibility
-    // capability. Check from those tables themselves, including schemas with no
-    // event obligations. Scalar existence checks never hydrate graph/body data.
-    for (
-      const [name, table] of [["nodes", core.nodes], ["edges", core.edges]]
-    ) {
-      const target = ref("blocker", null, `startup.${name}`);
-      const found = await tx.query(`SELECT 1 FROM ${table} LIMIT 1`);
-      if (found.rows.length) block(target, "graph_recovery_unsupported");
-      else resolved.add(targetKey(target));
+    const graphTarget = ref("blocker", null, "startup.graph");
+    const legacyGraphTargets = ["nodes", "edges"].map((name) =>
+      ref("blocker", null, `startup.${name}`)
+    );
+    if (namespaces === undefined) {
+      // Without trusted coverage, retain the original graph-empty subset.
+      // An existing startup.graph alarm requires the stronger explicit catalog
+      // and graph proof below, even if its rows have subsequently disappeared.
+      for (const [index, table] of [core.nodes, core.edges].entries()) {
+        const target = legacyGraphTargets[index];
+        const found = await tx.query(`SELECT 1 FROM ${table} LIMIT 1`);
+        if (found.rows.length) {
+          block(target, "graph_recovery_unsupported");
+        } else resolved.add(targetKey(target));
+      }
+    } else {
+      // Read-only catalog compatibility uses separate fixed metadata bounds;
+      // all configured/raw/derived graph evidence shares this scan's budget.
+      await validateOwnerGraphSchema(tx, schema, graphCollections);
+      const nodes = await rows(core.nodes, "TRUE", true);
+      const edges = await rows(core.edges, "TRUE", true);
+      const graph = validateOwnerCollectionGraph({
+        ownerId,
+        schema,
+        namespaces,
+        collections: graphCollections,
+        nodes,
+        edges,
+        maxDerivedItems: remainingItems,
+        maxDerivedBytes: remainingBytes,
+        maxBlockers: Math.min(maxItems, 1000),
+      });
+      remainingItems -= graph.derivedItems;
+      remainingBytes -= graph.derivedBytes;
+      if (graph.blockers.length) {
+        // Snapshot-local row references must never become durable identities.
+        block(graphTarget, "graph_current_state_incompatible");
+      } else {
+        for (const target of [graphTarget, ...legacyGraphTargets]) {
+          resolved.add(targetKey(target));
+        }
+      }
     }
     for (const name of ["content_bodies", "content_body_parts"]) {
       const target = ref("blocker", null, `startup.${name}`);

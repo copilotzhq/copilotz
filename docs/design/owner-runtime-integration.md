@@ -279,3 +279,13 @@ data-only shared worker port maps fixed claim/input/completion operations and
 safe receipt recovery. It can recover a settled exact assignment from reference
 receipts, but an incomplete prior claim refuses execution rather than guessing
 whether business work previously ran. No SQL implementation enters this mapper.
+
+The private inert readiness probe verifies the exact owner protocol/features
+through a separately authenticated parentless route. Its host readiness check
+runs again after body admission, and stopped/replaced owners cannot reply ready
+after an asynchronous policy check. This confers no context or input authority.
+Connected worker composition must repeat it for each transport session and gate
+all user execution on that session's result. The data-only execution mapper is
+per immutable authenticated parent assignment and privately binds its successful
+claim reference before allowing completion; it cannot be rebound to another
+assignment or complete using an old delivery/attempt reference.

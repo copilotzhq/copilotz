@@ -1168,3 +1168,162 @@ test("completion client selects only the restricted route and preserves terminal
   assert.deepEqual(workloads, ["copilotz.owner.complete"]);
   assert.equal(cancels, 0);
 });
+
+test("owner readiness handshake is inert, exact-owner and separately admitted", async () => {
+  let ready = false;
+  let commands = 0;
+  let receipts = 0;
+  let projections = 0;
+  const owner = recordingBoundary({
+    execute() {
+      commands++;
+      throw new Error("no mutation");
+    },
+    readReceipt() {
+      receipts++;
+      throw new Error("no recovery");
+    },
+    project() {
+      projections++;
+      throw new Error("no hydration");
+    },
+  });
+  const options = {
+    resolveOwner: (id: string) => id === "tenant" ? owner : undefined,
+    resolveAssignment: () => undefined,
+    authorizeReadiness: () => ready,
+  };
+  const port = createOwnerWorkerCallAdmission(options);
+  const ctx = context({ workload: "copilotz.owner.ready", parent: undefined });
+  assert.equal(await port.admitUnassigned(ctx), undefined);
+  ready = true;
+  const handler = await port.admitUnassigned(ctx);
+  assert.ok(handler);
+  assert.deepEqual(
+    decode(
+      await handler({
+        input: stream({ protocol: "copilotz.owner.v1" }),
+        signal: ctx.signal,
+      }),
+    ),
+    {
+      ok: true,
+      value: {
+        protocol: "copilotz.owner.v1",
+        ownerId: "tenant",
+        features: ["commands", "projections", "settlement"],
+      },
+    },
+  );
+  assert.equal(
+    await port.admitUnassigned({ ...ctx, metadata: { ownerId: "foreign" } }),
+    undefined,
+  );
+  assert.equal(
+    await port.admitUnassigned({
+      ...ctx,
+      metadata: { ownerId: "tenant", ctxGranted: true },
+    }),
+    undefined,
+  );
+  ready = false;
+  assert.equal(
+    decode(
+      await handler({
+        input: stream({ protocol: "copilotz.owner.v1" }),
+        signal: ctx.signal,
+      }),
+    ).ok,
+    false,
+  );
+  assert.equal(commands + receipts + projections, 0);
+});
+
+test("readiness client validates exact protocol features and probes again for every session", async () => {
+  let calls = 0;
+  let reply: unknown = {
+    protocol: "copilotz.owner.v1",
+    ownerId: "tenant",
+    features: ["commands", "projections", "settlement"],
+  };
+  const client = createOwnerConnection({
+    ownerId: "tenant",
+    callHost(input) {
+      assert.equal(input.workload, "copilotz.owner.ready");
+      calls++;
+      return Promise.resolve({
+        output: stream({ ok: true, value: reply }),
+        completed: Promise.resolve(),
+        cancel: () => Promise.resolve(),
+      });
+    },
+  });
+  await client.ready();
+  await client.ready();
+  assert.equal(calls, 2);
+  for (
+    const invalid of [null, {
+      protocol: "old",
+      ownerId: "tenant",
+      features: [],
+    }, {
+      protocol: "copilotz.owner.v1",
+      ownerId: "foreign",
+      features: ["commands", "projections", "settlement"],
+    }, {
+      protocol: "copilotz.owner.v1",
+      ownerId: "tenant",
+      features: ["commands"],
+    }]
+  ) {
+    reply = invalid;
+    await assert.rejects(client.ready());
+  }
+  assert.equal(calls, 6);
+});
+
+test("readiness never advertises an owner stopped or replaced during async authorization", async () => {
+  for (const stage of [1, 2]) {
+    for (const change of ["stop", "replace"]) {
+      let stopped = false;
+      let checks = 0;
+      const original: OwnerCommandBoundary = {
+        ...recordingBoundary(),
+        get state() {
+          return stopped ? "stopped" : "acquired";
+        },
+      };
+      let current = original;
+      const port = createOwnerWorkerCallAdmission({
+        resolveOwner: () => current,
+        resolveAssignment: () => undefined,
+        async authorizeReadiness() {
+          if (++checks === stage) {
+            await delay(0);
+            if (change === "stop") stopped = true;
+            else current = recordingBoundary();
+          }
+          return true;
+        },
+      });
+      const ctx = context({
+        workload: "copilotz.owner.ready",
+        parent: undefined,
+      });
+      const handler = await port.admitUnassigned(ctx);
+      if (stage === 1) assert.equal(handler, undefined);
+      else {
+        assert.ok(handler);
+        assert.equal(
+          decode(
+            await handler({
+              input: stream({ protocol: "copilotz.owner.v1" }),
+              signal: ctx.signal,
+            }),
+          ).ok,
+          false,
+        );
+      }
+    }
+  }
+});

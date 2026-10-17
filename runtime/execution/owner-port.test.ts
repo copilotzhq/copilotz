@@ -144,3 +144,27 @@ test("routing coordinates and references are required without implying authority
   );
   assert.equal(f.reads.length + f.commands.length + f.projections.length, 0);
 });
+
+test("mapper refuses old references and rebinding before calling restricted completion", async () => {
+  const f = fixture();
+  await f.adapter.claim(
+    { assignmentId: "assignment", sessionId: "session" },
+    {},
+  );
+  await assert.rejects(
+    f.adapter.complete({ ...ref, dispatchAttemptId: "old-attempt" }, {
+      status: "completed",
+      output: null,
+    }, {}),
+  );
+  assert.equal(f.completions.length, 0);
+  await assert.rejects(
+    f.adapter.claim({ assignmentId: "replacement", sessionId: "session" }, {}),
+  );
+  assert.equal(f.commands.length, 1);
+  const fresh = fixture();
+  await assert.rejects(
+    fresh.adapter.complete(ref, { status: "completed", output: null }, {}),
+  );
+  assert.equal(fresh.completions.length, 0);
+});

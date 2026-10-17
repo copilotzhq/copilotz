@@ -98,7 +98,9 @@ function terminal(
 }
 /** Routing coordinates are not authority; the owner resolves current assignment
  * identity independently. Recovery returns only exact safe references and never
- * supplies input or permission to rerun an ambiguously claimed invocation. */
+ * supplies input or permission to rerun an ambiguously claimed invocation.
+ * The supplied data port must be permanently bound to one authenticated parent
+ * WorkContext/session; never share or rebind it across concurrent assignments. */
 export function createRegisteredOwnerExecutionPort(
   options: Readonly<{ ownerId: string; namespace: string; port: DataPort }>,
 ): RegisteredOwnerExecutionPort {
@@ -108,6 +110,17 @@ export function createRegisteredOwnerExecutionPort(
       typeof value === "string" && value.trim()
     )
   ) throw new TypeError("Owner routing coordinates must be nonempty.");
+  let assignmentKey: string | undefined;
+  let attemptedClaim = false;
+  let claimed: RegisteredExecutionReference | undefined;
+  const requireClaim = (ref: RegisteredExecutionReference) => {
+    if (
+      !claimed ||
+      Object.keys(claimed).some((key) =>
+        claimed![key as keyof typeof claimed] !== ref[key as keyof typeof ref]
+      )
+    ) return refuse();
+  };
   const readCompletion: RegisteredOwnerExecutionPort["readCompletion"] = async (
     input,
     callOptions,
@@ -130,6 +143,8 @@ export function createRegisteredOwnerExecutionPort(
         )
       ) throw new TypeError("Assignment routing coordinates must be nonempty.");
       const key = ownerClaimKey(ownerId, assignmentId, sessionId);
+      if (assignmentKey !== undefined && assignmentKey !== key) return refuse();
+      assignmentKey = key;
       const prior = await port.readReceipt(
         { domain: "incarnation", key },
         callOptions,
@@ -140,13 +155,17 @@ export function createRegisteredOwnerExecutionPort(
         if (!await readCompletion(ref, callOptions)) return refuse();
         return { status: "duplicate", result: ref };
       }
+      if (attemptedClaim) return refuse();
+      attemptedClaim = true;
       const outcome = await port.execute({
         kind: "execution.claim",
         domain: "incarnation",
         key,
         intent: { assignmentId, sessionId },
       }, callOptions);
-      return { status: outcome.status, result: reference(outcome.result) };
+      const ref = reference(outcome.result);
+      if (outcome.status === "committed") claimed = ref;
+      return { status: outcome.status, result: { ...ref } };
     },
     async project(input, callOptions) {
       return await port.project(
@@ -157,6 +176,7 @@ export function createRegisteredOwnerExecutionPort(
     },
     async complete(input, completion, callOptions) {
       const ref = reference(input);
+      requireClaim(ref);
       const outcome = await port.complete({
         kind: "execution.complete",
         domain: "logical",

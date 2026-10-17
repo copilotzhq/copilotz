@@ -13,6 +13,9 @@ import type {
 import { assertJsonValue } from "../json.ts";
 
 const COMMAND = "copilotz.owner.command";
+const READY = "copilotz.owner.ready";
+const PROTOCOL = "copilotz.owner.v1";
+const FEATURES = ["commands", "projections", "settlement"] as const;
 const COMPLETE = "copilotz.owner.complete";
 const PROJECT = "copilotz.owner.project";
 const RECEIPT = "copilotz.owner.receipt";
@@ -151,6 +154,12 @@ function receiptIdentity(value: unknown): ReceiptIdentity {
 export function createOwnerWorkerCallAdmission(
   options: Readonly<{
     resolveOwner(ownerId: string): OwnerCommandBoundary | undefined;
+    /** Optional inert readiness admission: authenticate this exact session and
+     * return true only after actual owner reconciliation/handler readiness. */
+    authorizeReadiness?(
+      context: OwnerWorkerCallContext,
+      ownerId: string,
+    ): boolean | Promise<boolean>;
     /** Resolve host-owned assignment state and grants, not request metadata.
      * Current session/execution/policy must also be checked inside boundary.authorize. */
     resolveAssignment(
@@ -185,11 +194,14 @@ export function createOwnerWorkerCallAdmission(
   ): Promise<HostHandler | undefined> => {
     if (
       context.workload !== COMMAND && context.workload !== RECEIPT &&
-      context.workload !== PROJECT && context.workload !== COMPLETE
+      context.workload !== PROJECT && context.workload !== COMPLETE &&
+      context.workload !== READY
     ) {
       return undefined;
     }
-    if (recoveryOnly && context.workload !== RECEIPT) return undefined;
+    if (
+      recoveryOnly && context.workload !== RECEIPT && context.workload !== READY
+    ) return undefined;
     const ownerId = context.metadata.ownerId;
     if (
       typeof ownerId !== "string" || !ownerId.trim() ||
@@ -197,9 +209,17 @@ export function createOwnerWorkerCallAdmission(
     ) return undefined;
     const owner = options.resolveOwner(ownerId);
     if (!owner) return undefined;
+    const currentOwner = () =>
+      owner.state === "acquired" && options.resolveOwner(ownerId) === owner;
+    const isReadiness = context.workload === READY;
+    if (
+      isReadiness && (context.parent || !currentOwner() ||
+        !await options.authorizeReadiness?.(context, ownerId) ||
+        !currentOwner() || context.signal.aborted)
+    ) return undefined;
     const isCompletion = context.workload === COMPLETE;
     const isCommand = context.workload === COMMAND || isCompletion;
-    const isAssigned = context.workload !== RECEIPT;
+    const isAssigned = context.workload !== RECEIPT && !isReadiness;
     if (isAssigned && !context.parent) return undefined;
     const assignment = isAssigned
       ? await options.resolveAssignment(context, ownerId)
@@ -224,6 +244,25 @@ export function createOwnerWorkerCallAdmission(
         signal.throwIfAborted();
         const payload = await read(input, signal);
         signal.throwIfAborted();
+        if (isReadiness) {
+          const request = object(payload);
+          if (
+            Object.keys(request).length !== 1 ||
+            request.protocol !== PROTOCOL ||
+            !currentOwner() ||
+            !await options.authorizeReadiness?.(context, ownerId) ||
+            !currentOwner() || context.signal.aborted
+          ) {
+            throw new TypeError(
+              "Owner is not ready for this protocol/session.",
+            );
+          }
+          signal.throwIfAborted();
+          return encode({
+            ok: true,
+            value: { protocol: PROTOCOL, ownerId, features: FEATURES },
+          });
+        }
         if (isCompletion) {
           const command = object(payload);
           if (
@@ -388,6 +427,21 @@ export function createOwnerConnection(
     }
   }
   return {
+    /** Must be repeated for each new transport session; this grants no ctx authority. */
+    async ready(
+      callOptions?: Readonly<{ signal?: AbortSignal; deadlineAtMs?: number }>,
+    ): Promise<void> {
+      const reply = object(
+        await call(READY, { protocol: PROTOCOL }, callOptions),
+      );
+      if (
+        Object.keys(reply).length !== 3 || reply.protocol !== PROTOCOL ||
+        reply.ownerId !== ownerId ||
+        JSON.stringify(reply.features) !== JSON.stringify(FEATURES)
+      ) {
+        throw new TypeError("Owner readiness protocol mismatch.");
+      }
+    },
     async execute(
       command: OwnerCommand,
       callOptions?: Readonly<{ signal?: AbortSignal; deadlineAtMs?: number }>,

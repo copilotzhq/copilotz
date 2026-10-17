@@ -736,3 +736,25 @@ semantics. Authored reconciliation callbacks cannot receive the private effect
 controller as their JavaScript receiver. The production role graph includes only
 the two executable kernels; the shared type module is erased. This extraction
 does not itself provide the owner-local attempt driver or restart readiness.
+
+### Explicit placement reservation storage
+
+The fresh private assignment schema uses one tagged assignment key and one live
+reservation per owner/delivery across worker and owner-local placements. Worker
+bindings retain their exact authenticated transport coordinates. Local bindings
+instead retain owner/epoch/holder, delivery/attempt, immutable source and a
+closed Action or Processor target. Neither binding representation grants
+execution by itself. Worker resolution still requires current transport Started
+evidence; local resolution requires the host's exact private handle plus the
+current owner fence. Both validate the durable source owner, namespace and
+registered target.
+
+History lookup is capped, checks complete stored bindings and refuses incomplete
+or malformed evidence. Its unfiltered delivery-leading index also supports the
+reconciliation anomaly scan without hiding foreign-owner rows. Prior retirement
+matches the exact original binding and prior epoch under the successor fence.
+The previous private transport-column schema is refused; this is not a data
+migration. The existing conservative classifier validates local identities but
+leaves them blocked pending a genuine local start/execution and loss-recovery
+path. Resolving a pending local reservation does not prove a committed claim or
+permit invoking plugin code.

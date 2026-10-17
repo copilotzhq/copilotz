@@ -1,5 +1,5 @@
-/** Narrow owner control metadata. Business lifecycle stays in deliveries/actions;
- * a durable reservation alone never proves Started or an external effect. */
+/** Narrow owner control metadata. A reservation alone never proves current
+ * execution authority, Started, readiness, or an external effect. */
 import {
   createCoreTableNames,
   quoteEventIdentifier,
@@ -11,8 +11,10 @@ import type {
   OwnerCommandHandler,
   OwnerJson,
 } from "./boundary.ts";
+import { ownerPrincipalIdentity } from "./principal.ts";
 
 type OwnerAssignmentBase = Readonly<{
+  placement: "worker";
   workerId: string;
   workerAttemptId: string;
   sessionGeneration: number;
@@ -36,15 +38,63 @@ export type OwnerProcessorAssignmentBinding =
     kind: "processor";
     processorId: string;
   }>;
+/** Worker-only: a local reservation must never reach a Started API. */
 export type OwnerAssignmentBinding =
   | OwnerActionAssignmentBinding
   | OwnerProcessorAssignmentBinding;
+type OwnerLocalAssignmentBase = Readonly<{
+  placement: "owner-local";
+  ownerId: string;
+  epoch: number;
+  holderId: string;
+  attemptId: string;
+  namespace: string;
+  sourceEventId: string;
+  deliveryId: string;
+}>;
+export type OwnerLocalActionAssignmentBinding =
+  & OwnerLocalAssignmentBase
+  & Readonly<{
+    kind: "action";
+    actionId: string;
+    actionRunId: string;
+  }>;
+export type OwnerLocalProcessorAssignmentBinding =
+  & OwnerLocalAssignmentBase
+  & Readonly<{
+    kind: "processor";
+    processorId: string;
+    consumerId: string;
+  }>;
+export type OwnerLocalAssignmentBinding =
+  | OwnerLocalActionAssignmentBinding
+  | OwnerLocalProcessorAssignmentBinding;
+export type OwnerPlacementBinding =
+  | OwnerAssignmentBinding
+  | OwnerLocalAssignmentBinding;
+export type OwnerStoredAssignment = Readonly<{
+  owner: string;
+  epoch: number;
+  key: string;
+  binding: OwnerPlacementBinding;
+  retired: boolean;
+}>;
 export function isOwnerProcessorAssignmentBinding(
   value: OwnerAssignmentBinding,
 ): value is OwnerProcessorAssignmentBinding {
   return "kind" in value && value.kind === "processor";
 }
-const commonFields = [
+function identifier(value: unknown): asserts value is string {
+  if (
+    typeof value !== "string" || !value || value !== value.trim() ||
+    value.length > 1024
+  ) {
+    throw new TypeError("Invalid assignment identifier.");
+  }
+}
+export const OWNER_ASSIGNMENT_BINDING_MAX_BYTES = 16_384;
+const workerFields = [
+  "placement",
   "workerId",
   "workerAttemptId",
   "sessionGeneration",
@@ -56,50 +106,185 @@ const commonFields = [
   "sourceEventId",
   "deliveryId",
 ] as const;
-function binding(value: OwnerJson): OwnerAssignmentBinding {
-  const processor = value && typeof value === "object" &&
-    !Array.isArray(value) &&
-    (value as Record<string, OwnerJson>).kind === "processor";
-  const fields = [
-    ...commonFields,
-    ...(processor ? ["kind", "processorId"] : ["actionId", "executionId"]),
-  ];
+const localFields = [
+  "placement",
+  "ownerId",
+  "epoch",
+  "holderId",
+  "attemptId",
+  "namespace",
+  "sourceEventId",
+  "deliveryId",
+  "kind",
+] as const;
+/** Closed, exact and detached. Stored JSON and private callback facts use the
+ * same decoder; missing tags, coercion and foreign placement fields fail closed. */
+function assignmentRecord(value: unknown): Record<string, unknown> {
   if (
     !value || typeof value !== "object" || Array.isArray(value) ||
-    Object.keys(value).length !== fields.length ||
-    fields.some((key) => !Object.hasOwn(value, key))
+    ![Object.prototype, null].includes(Object.getPrototypeOf(value))
+  ) {
+    throw new TypeError("Invalid owner assignment record.");
+  }
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  const entries: [string, unknown][] = [];
+  for (const key of Reflect.ownKeys(descriptors)) {
+    const descriptor = typeof key === "string" ? descriptors[key] : undefined;
+    if (!descriptor || !descriptor.enumerable || !("value" in descriptor)) {
+      throw new TypeError("Invalid owner assignment record property.");
+    }
+    entries.push([key as string, descriptor.value]);
+  }
+  return Object.fromEntries(entries);
+}
+export function parseOwnerPlacementBinding(
+  value: unknown,
+): OwnerPlacementBinding {
+  const input = assignmentRecord(value);
+  let fields: readonly string[];
+  if (input.placement === "worker") {
+    if (Object.hasOwn(input, "kind") && input.kind !== "processor") {
+      throw new TypeError("Invalid worker assignment target.");
+    }
+    fields = [
+      ...workerFields,
+      ...(input.kind === "processor"
+        ? ["kind", "processorId"]
+        : ["actionId", "executionId"]),
+    ];
+  } else if (
+    input.placement === "owner-local" &&
+    (input.kind === "action" || input.kind === "processor")
+  ) {
+    fields = [
+      ...localFields,
+      ...(input.kind === "processor"
+        ? ["processorId", "consumerId"]
+        : ["actionId", "actionRunId"]),
+    ];
+  } else {
+    throw new TypeError("Invalid owner assignment placement or target.");
+  }
+  if (
+    Object.keys(input).length !== fields.length ||
+    fields.some((key) => !Object.hasOwn(input, key))
   ) {
     throw new TypeError("Invalid owner assignment binding.");
   }
-  const input = value as Record<string, OwnerJson>;
+  const copy: Record<string, unknown> = {};
   for (const key of fields) {
     const item = input[key];
-    if (key === "sessionGeneration") {
-      if (!Number.isSafeInteger(item) || Number(item) < 0) {
-        throw new TypeError("Invalid session generation.");
+    if (key === "sessionGeneration" || key === "epoch") {
+      if (
+        !Number.isSafeInteger(item) || Number(item) < (key === "epoch" ? 1 : 0)
+      ) {
+        throw new TypeError("Invalid assignment generation or epoch.");
       }
-    } else if (
-      typeof item !== "string" || !item.trim() || item !== item.trim() ||
-      item.length > 1024
-    ) {
-      throw new TypeError("Invalid assignment identifier.");
-    }
+    } else identifier(item);
+    copy[key] = item;
   }
-  return { ...input } as OwnerAssignmentBinding;
+  if (
+    copy.placement === "owner-local" && copy.kind === "processor" &&
+    copy.consumerId !== `processor:${copy.processorId}`
+  ) {
+    throw new TypeError("Invalid registered Processor assignment consumer.");
+  }
+  // PostgreSQL JSONB text adds one space after each colon and comma. Budget
+  // the flat serialized form, including UTF-8 and JSON escaping, before a write.
+  const encoded = `{${
+    Object.entries(copy).map(([key, item]) =>
+      `${JSON.stringify(key)}: ${JSON.stringify(item)}`
+    ).join(", ")
+  }}`;
+  if (
+    new TextEncoder().encode(encoded).byteLength >
+      OWNER_ASSIGNMENT_BINDING_MAX_BYTES
+  ) {
+    throw new TypeError(
+      "Owner assignment binding exceeds its encoded byte limit.",
+    );
+  }
+  return copy as OwnerPlacementBinding;
 }
 function table(schema: string) {
   return `${quoteEventIdentifier(schema)}."owner_assignments"`;
 }
+type AssignmentKeyIdentity =
+  | Pick<OwnerAssignmentBase, "placement" | "sessionId" | "assignmentId">
+  | Pick<
+    OwnerLocalAssignmentBase,
+    "placement" | "epoch" | "deliveryId" | "attemptId"
+  >;
+/** Versioned, tagged fixed-order tuples are unambiguous across placements. */
 export function ownerAssignmentKey(
   ownerId: string,
-  value: Pick<OwnerAssignmentBinding, "sessionId" | "assignmentId">,
+  value: AssignmentKeyIdentity,
 ): string {
+  identifier(ownerId);
+  if (value.placement === "worker") {
+    identifier(value.sessionId);
+    identifier(value.assignmentId);
+    return JSON.stringify([
+      "owner-assignment",
+      1,
+      "worker",
+      ownerId,
+      value.sessionId,
+      value.assignmentId,
+    ]);
+  }
+  if (
+    value.placement !== "owner-local" || !Number.isSafeInteger(value.epoch) ||
+    value.epoch < 1
+  ) {
+    throw new TypeError("Invalid assignment key placement or epoch.");
+  }
+  identifier(value.deliveryId);
+  identifier(value.attemptId);
   return JSON.stringify([
-    "assignment",
+    "owner-assignment",
+    1,
+    "owner-local",
     ownerId,
-    value.sessionId,
-    value.assignmentId,
+    value.epoch,
+    value.deliveryId,
+    value.attemptId,
   ]);
+}
+/** Decode a complete SQL row and reject inconsistent control coordinates. */
+export function parseOwnerStoredAssignment(
+  row: Readonly<Record<string, unknown>>,
+): OwnerStoredAssignment {
+  const input = assignmentRecord(row);
+  identifier(input.owner);
+  const epoch =
+    typeof input.epoch === "string" && /^[1-9][0-9]*$/.test(input.epoch)
+      ? Number(input.epoch)
+      : input.epoch;
+  if (
+    !Number.isSafeInteger(epoch) || Number(epoch) < 1 ||
+    typeof input.retired !== "boolean"
+  ) {
+    throw new TypeError("Invalid stored assignment epoch or retirement.");
+  }
+  const binding = parseOwnerPlacementBinding(input.binding);
+  if (
+    input.assignment_key !== ownerAssignmentKey(input.owner, binding) ||
+    input.delivery_id !== binding.deliveryId ||
+    (binding.placement === "owner-local" &&
+      (binding.ownerId !== input.owner || binding.epoch !== epoch))
+  ) {
+    throw new TypeError(
+      "Stored assignment coordinates do not match its binding.",
+    );
+  }
+  return {
+    owner: input.owner,
+    epoch: epoch as number,
+    key: input.assignment_key as string,
+    binding,
+    retired: input.retired,
+  };
 }
 /** Explicit fresh-schema provisioning; no production-data migration. */
 export async function provisionOwnerAssignments(
@@ -120,14 +305,19 @@ export async function provisionOwnerAssignments(
       owner TEXT NOT NULL REFERENCES ${
       quoteEventIdentifier(schema)
     }.owner_epochs(owner),
-      epoch BIGINT NOT NULL CHECK(epoch>0), session_id TEXT NOT NULL,
-      assignment_id TEXT NOT NULL, delivery_id TEXT NOT NULL REFERENCES ${tables.event_deliveries}(id),
+      epoch BIGINT NOT NULL CHECK(epoch>0), assignment_key TEXT NOT NULL,
+      delivery_id TEXT NOT NULL REFERENCES ${tables.event_deliveries}(id),
       binding JSONB NOT NULL, retired BOOLEAN NOT NULL DEFAULT FALSE,
       created_at TIMESTAMPTZ NOT NULL, retired_at TIMESTAMPTZ,
-      PRIMARY KEY(owner,session_id,assignment_id))`);
+      PRIMARY KEY(owner,assignment_key))`);
     await tx.query(
       `CREATE UNIQUE INDEX IF NOT EXISTS owner_assignments_live_delivery_idx
       ON ${table(schema)}(owner,delivery_id) WHERE retired=FALSE`,
+    );
+    await tx.query(
+      `CREATE INDEX IF NOT EXISTS owner_assignments_delivery_history_idx ON ${
+        table(schema)
+      }(delivery_id,owner)`,
     );
     await validateOwnerAssignments(tx, schema);
   });
@@ -151,24 +341,23 @@ export async function validateOwnerAssignments(
   const expectedTypes: Record<string, string> = {
     owner: "text",
     epoch: "bigint",
-    session_id: "text",
-    assignment_id: "text",
+    assignment_key: "text",
     delivery_id: "text",
     binding: "jsonb",
     retired: "boolean",
     created_at: "timestamp with time zone",
     retired_at: "timestamp with time zone",
   };
-  const validColumns = Object.entries(expectedTypes).every(([name, type]) => {
-    const column = actual.get(name);
-    return column?.data_type === type &&
-      column.is_nullable === (name === "retired_at" ? "YES" : "NO");
-  }) && actual.get("retired")?.column_default === "false";
+  const validColumns = actual.size === Object.keys(expectedTypes).length &&
+    Object.entries(expectedTypes).every(([name, type]) => {
+      const column = actual.get(name);
+      return column?.data_type === type &&
+        column.is_nullable === (name === "retired_at" ? "YES" : "NO");
+    }) && actual.get("retired")?.column_default === "false";
   const required = [
     "owner",
     "epoch",
-    "session_id",
-    "assignment_id",
+    "assignment_key",
     "delivery_id",
     "binding",
     "retired",
@@ -176,26 +365,47 @@ export async function validateOwnerAssignments(
     "retired_at",
   ];
   const indexes = await tx.query<
-    { primary: boolean; columns: string[]; predicate: string | null }
+    {
+      primary: boolean;
+      unique: boolean;
+      method: string;
+      key_count: number;
+      attribute_count: number;
+      simple: boolean;
+      columns: string[];
+      predicate: string | null;
+    }
   >(
-    `SELECT i.indisprimary AS primary,
+    `SELECT i.indisprimary AS primary,i.indisunique AS unique,am.amname AS method,
+      i.indnkeyatts AS key_count,i.indnatts AS attribute_count,i.indexprs IS NULL AS simple,
       ARRAY(SELECT a.attname::text FROM unnest(i.indkey) WITH ORDINALITY k(num,ord)
         JOIN pg_catalog.pg_attribute a ON a.attrelid=c.oid AND a.attnum=k.num ORDER BY k.ord) AS columns,
       pg_catalog.pg_get_expr(i.indpred,i.indrelid) AS predicate
      FROM pg_catalog.pg_index i JOIN pg_catalog.pg_class c ON c.oid=i.indrelid
      JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
-     WHERE n.nspname=$1 AND c.relname='owner_assignments' AND i.indisunique AND i.indisvalid`,
+     JOIN pg_catalog.pg_class idx ON idx.oid=i.indexrelid JOIN pg_catalog.pg_am am ON am.oid=idx.relam
+     WHERE n.nspname=$1 AND c.relname='owner_assignments' AND i.indisvalid AND i.indisready`,
     [schema],
   );
   const primary = indexes.rows.some((row) =>
-    row.primary && row.predicate === null &&
+    row.primary && row.unique && row.method === "btree" && row.simple &&
+    row.key_count === 2 && row.attribute_count === 2 &&
+    row.predicate === null &&
     JSON.stringify(row.columns) ===
-      JSON.stringify(["owner", "session_id", "assignment_id"])
+      JSON.stringify(["owner", "assignment_key"])
   );
   const live = indexes.rows.some((row) =>
-    !row.primary &&
+    !row.primary && row.unique && row.method === "btree" && row.simple &&
+    row.key_count === 2 && row.attribute_count === 2 &&
     JSON.stringify(row.columns) === JSON.stringify(["owner", "delivery_id"]) &&
     /^(?:\(?retired = false\)?|\(?NOT retired\)?)$/.test(row.predicate ?? "")
+  );
+  // The live partial index cannot bound a lookup that includes retired history.
+  const history = indexes.rows.some((row) =>
+    !row.primary && !row.unique && row.method === "btree" && row.simple &&
+    row.key_count === 2 && row.attribute_count === 2 &&
+    row.predicate === null &&
+    JSON.stringify(row.columns) === JSON.stringify(["delivery_id", "owner"])
   );
   const foreign = await tx.query<
     {
@@ -236,6 +446,7 @@ export async function validateOwnerAssignments(
   if (
     !validColumns || !positiveEpoch ||
     required.some((name) => !actual.has(name)) || !primary || !live ||
+    !history ||
     !hasReference("owner", "owner_epochs", "owner") ||
     !hasReference("delivery_id", "event_deliveries", "id")
   ) {
@@ -249,34 +460,45 @@ export function createOwnerAssignmentControl(
     ownerId: string;
     schema: string;
     maxActive?: number;
-    /** Private host control authority, never worker-supplied command metadata. */
+    /** Private host control authority, never worker-supplied metadata. */
     authorizeControl(
       tx: SqlExecutor,
       caller: OwnerCaller,
       commandTime: string,
     ): void | Promise<void>;
-    /** Synchronous fresh transport lookup, called inside each owner transaction.
-     * Must verify the exact current session and Started parent assignment. */
+    /** Fresh, synchronous transport lookup of exact current Started authority. */
     isCurrentStarted(caller: OwnerCaller): boolean;
-    /** Explicit host registry capability. Missing means Processor reservations
-     * are unsupported, while the existing exact Action binding is unchanged. */
+    /** Host-private current handle lookup. A principal tag alone grants nothing.
+     * The complete expected binding is checked before and after durable reads. */
+    resolveCurrentLocal?(
+      caller: OwnerCaller,
+    ): OwnerLocalAssignmentBinding | undefined;
+    hasAction?(actionId: string): boolean;
     hasProcessor?(processorId: string): boolean;
   }>,
 ) {
+  const ownerId = options.ownerId;
+  identifier(ownerId);
   const name = table(options.schema);
+  const epochs = `${quoteEventIdentifier(options.schema)}."owner_epochs"`;
   const tables = createCoreTableNames(options.schema);
   const maxActive = options.maxActive ?? 128;
+  const currentStarted = options.isCurrentStarted;
+  const authorizeControl = options.authorizeControl;
+  const hasAction = options.hasAction;
+  const hasProcessor = options.hasProcessor;
+  const currentLocal = options.resolveCurrentLocal;
   if (
     !Number.isSafeInteger(maxActive) || maxActive < 1 || maxActive > 100_000
   ) {
     throw new TypeError("Assignment reservation capacity is invalid.");
   }
-  function validate(command: OwnerCommand): OwnerAssignmentBinding {
-    const value = binding(command.intent);
+  function validate(command: OwnerCommand): OwnerPlacementBinding {
+    const value = parseOwnerPlacementBinding(command.intent);
     if (
       !["assignment.bind", "assignment.retire"].includes(command.kind) ||
-      command.domain !== "incarnation" || command.key !==
-        `${ownerAssignmentKey(options.ownerId, value)}:${command.kind}`
+      command.domain !== "incarnation" ||
+      command.key !== `${ownerAssignmentKey(ownerId, value)}:${command.kind}`
     ) {
       throw new TypeError("Assignment command identity is invalid.");
     }
@@ -292,59 +514,85 @@ export function createOwnerAssignmentControl(
     if (caller.principal.kind !== "owner-control") {
       throw new Error("Assignment control principal required.");
     }
-    await options.authorizeControl(tx, caller, time);
+    await authorizeControl(tx, {
+      ...caller,
+      principal: { ...caller.principal },
+    }, time);
   }
-  const bind: OwnerCommandHandler = async (input, context) => {
-    const value = binding(input);
-    const current = await context.tx.query<
-      {
-        binding: OwnerAssignmentBinding;
-        epoch: string | number;
-        retired: boolean;
-      }
-    >(
-      `SELECT binding,epoch,retired FROM ${name} WHERE owner=$1 AND session_id=$2 AND assignment_id=$3 FOR UPDATE`,
-      [options.ownerId, value.sessionId, value.assignmentId],
+  function isProcessor(
+    value: OwnerPlacementBinding,
+  ): value is
+    | OwnerProcessorAssignmentBinding
+    | OwnerLocalProcessorAssignmentBinding {
+    return "kind" in value && value.kind === "processor";
+  }
+  const bind: OwnerCommandHandler = async (
+    input,
+    context,
+  ): Promise<OwnerJson> => {
+    const value = parseOwnerPlacementBinding(input);
+    const key = ownerAssignmentKey(ownerId, value);
+    if (
+      value.placement === "owner-local" &&
+      (value.ownerId !== ownerId || value.epoch !== context.ownerCommit.epoch ||
+        value.holderId !== context.ownerCommit.holderId)
+    ) {
+      throw new Error(
+        "Local assignment does not match current owner authority.",
+      );
+    }
+    const current = await context.tx.query(
+      `SELECT assignment_key FROM ${name} WHERE owner=$1 AND assignment_key=$2 FOR UPDATE`,
+      [ownerId, key],
     );
     if (current.rows.length) {
       throw new Error("Assignment identity is already reserved.");
     }
-    if (
-      isOwnerProcessorAssignmentBinding(value) &&
-      options.hasProcessor?.(value.processorId) !== true
-    ) {
+    const processor = isProcessor(value);
+    if (processor && hasProcessor?.(value.processorId) !== true) {
       throw new TypeError(
         "Registered Processor is unavailable for assignment.",
       );
     }
-    const eligible = isOwnerProcessorAssignmentBinding(value)
+    if (
+      value.placement === "owner-local" && value.kind === "action" &&
+      hasAction?.(value.actionId) !== true
+    ) {
+      throw new TypeError(
+        "Registered Action is unavailable for local assignment.",
+      );
+    }
+    const eligible = processor
       ? await context.tx.query(
         `SELECT d.id FROM ${tables.event_deliveries} d JOIN ${tables.events} e ON e.id=d.event_id
          WHERE d.id=$1 AND d.event_id=$2 AND e.namespace=$3
            AND d.status IN ('pending','retry_wait') AND d.available_at <= $4::timestamptz
-           AND d.attempts < d.max_attempts AND d.consumer_id=$5 FOR UPDATE OF d`,
+           AND d.attempts < d.max_attempts AND d.consumer_id=$5 AND e.owner_id=$6 FOR UPDATE OF d`,
         [
           value.deliveryId,
           value.sourceEventId,
           value.namespace,
           context.commandTime,
           `processor:${value.processorId}`,
+          ownerId,
         ],
       )
       : await context.tx.query(
         `SELECT d.id FROM ${tables.event_deliveries} d JOIN ${tables.events} e ON e.id=d.event_id
          WHERE d.id=$1 AND d.event_id=$2 AND e.namespace=$3
+           AND jsonb_typeof(e.metadata->'actionId')='string' AND jsonb_typeof(e.metadata->'actionRunId')='string'
            AND e.metadata->>'actionId'=$4 AND e.metadata->>'actionRunId'=$5
            AND d.status IN ('pending','retry_wait') AND d.available_at <= $6::timestamptz
-           AND d.attempts < d.max_attempts AND d.consumer_id=$7 FOR UPDATE OF d`,
+           AND d.attempts < d.max_attempts AND d.consumer_id=$7 AND e.owner_id=$8 FOR UPDATE OF d`,
         [
           value.deliveryId,
           value.sourceEventId,
           value.namespace,
           value.actionId,
-          value.executionId,
+          value.placement === "worker" ? value.executionId : value.actionRunId,
           context.commandTime,
           `registered:${value.actionId}`,
+          ownerId,
         ],
       );
     if (!eligible.rows.length) {
@@ -352,54 +600,81 @@ export function createOwnerAssignmentControl(
     }
     const count = await context.tx.query<{ count: string | number }>(
       `SELECT COUNT(*) AS count FROM ${name} WHERE owner=$1 AND retired=FALSE`,
-      [options.ownerId],
+      [ownerId],
     );
     if (Number(count.rows[0].count) >= maxActive) {
       throw new Error("Owner assignment capacity exceeded.");
     }
     await context.tx.query(
-      `INSERT INTO ${name}
-      (owner,epoch,session_id,assignment_id,delivery_id,binding,created_at)
-      VALUES($1,$2,$3,$4,$5,$6::jsonb,$7::timestamptz)`,
+      `INSERT INTO ${name} (owner,epoch,assignment_key,delivery_id,binding,created_at)
+       VALUES($1,$2,$3,$4,$5::jsonb,$6::timestamptz)`,
       [
-        options.ownerId,
+        ownerId,
         context.ownerCommit.epoch,
-        value.sessionId,
-        value.assignmentId,
+        key,
         value.deliveryId,
         JSON.stringify(value),
         context.commandTime,
       ],
     );
-    return {
-      assignmentId: value.assignmentId,
-      sessionId: value.sessionId,
-      deliveryId: value.deliveryId,
-    };
+    return value.placement === "worker"
+      ? {
+        assignmentId: value.assignmentId,
+        sessionId: value.sessionId,
+        deliveryId: value.deliveryId,
+      }
+      : {
+        assignmentKey: key,
+        attemptId: value.attemptId,
+        deliveryId: value.deliveryId,
+      };
   };
-  const retire: OwnerCommandHandler = async (input, context) => {
-    const value = binding(input);
+  const retire: OwnerCommandHandler = async (
+    input,
+    context,
+  ): Promise<OwnerJson> => {
+    const value = parseOwnerPlacementBinding(input);
+    const key = ownerAssignmentKey(ownerId, value);
     const result = await context.tx.query(
       `UPDATE ${name} SET retired=TRUE,retired_at=$1::timestamptz
-      WHERE owner=$2 AND epoch<=$3 AND session_id=$4 AND assignment_id=$5 AND binding=$6::jsonb RETURNING assignment_id`,
+       WHERE owner=$2 AND epoch<=$3 AND assignment_key=$4 AND delivery_id=$5 AND binding=$6::jsonb AND retired=FALSE RETURNING assignment_key`,
       [
         context.commandTime,
-        options.ownerId,
+        ownerId,
         context.ownerCommit.epoch,
-        value.sessionId,
-        value.assignmentId,
+        key,
+        value.deliveryId,
         JSON.stringify(value),
       ],
     );
     if (!result.rows.length) {
       throw new Error("Current assignment does not match retirement.");
     }
-    return {
-      assignmentId: value.assignmentId,
-      sessionId: value.sessionId,
-      retired: true,
-    };
+    return value.placement === "worker"
+      ? {
+        assignmentId: value.assignmentId,
+        sessionId: value.sessionId,
+        retired: true,
+      }
+      : { assignmentKey: key, attemptId: value.attemptId, retired: true };
   };
+  function matchesSource(
+    row: Record<string, unknown>,
+    value: OwnerPlacementBinding,
+  ): boolean {
+    if (
+      row.source_owner !== ownerId ||
+      row.source_event_id !== value.sourceEventId ||
+      row.source_namespace !== value.namespace
+    ) return false;
+    if ("kind" in value && value.kind === "processor") {
+      return row.source_consumer === `processor:${value.processorId}`;
+    }
+    return row.source_consumer === `registered:${value.actionId}` &&
+      row.source_action_id === value.actionId &&
+      row.source_action_run_id ===
+        (value.placement === "worker" ? value.executionId : value.actionRunId);
+  }
   async function resolveStarted(
     tx: SqlExecutor,
     caller: OwnerCaller,
@@ -407,35 +682,45 @@ export function createOwnerAssignmentControl(
     if (
       caller.principal.kind !== "worker" || Object.hasOwn(caller, "workerId")
     ) return undefined;
-    const identity: OwnerCaller & {
-      principal: { kind: "worker"; workerId: string };
-    } = { ...caller, principal: { ...caller.principal } };
+    const identity: OwnerCaller & { principal: typeof caller.principal } = {
+      ...caller,
+      principal: { ...caller.principal },
+    };
     if (
-      !options.isCurrentStarted({
-        ...identity,
-        principal: { ...identity.principal },
-      })
+      !currentStarted({ ...identity, principal: { ...identity.principal } })
     ) return undefined;
-    const result = await tx.query<{ binding: OwnerAssignmentBinding }>(
-      `SELECT binding FROM ${name} WHERE owner=$1 AND epoch=$2 AND session_id=$3
-       AND assignment_id=$4 AND retired=FALSE FOR SHARE`,
-      [
-        options.ownerId,
-        identity.ownerEpoch,
-        identity.sessionId,
-        identity.assignmentId,
-      ],
+    let key: string;
+    try {
+      key = ownerAssignmentKey(ownerId, {
+        placement: "worker",
+        sessionId: identity.sessionId as string,
+        assignmentId: identity.assignmentId as string,
+      });
+    } catch {
+      return undefined;
+    }
+    const result = await tx.query(
+      `SELECT a.owner,a.epoch,a.assignment_key,a.delivery_id,
+         CASE WHEN octet_length(a.binding::text)<=${OWNER_ASSIGNMENT_BINDING_MAX_BYTES} THEN a.binding ELSE '{}'::jsonb END AS binding,a.retired,
+         e.owner_id AS source_owner,e.id AS source_event_id,e.namespace AS source_namespace,CASE WHEN jsonb_typeof(e.metadata->'actionId')='string' AND char_length(e.metadata->>'actionId')<=1024 THEN e.metadata->>'actionId' END AS source_action_id,
+         CASE WHEN jsonb_typeof(e.metadata->'actionRunId')='string' AND char_length(e.metadata->>'actionRunId')<=1024 THEN e.metadata->>'actionRunId' END AS source_action_run_id,d.consumer_id AS source_consumer
+       FROM ${name} a JOIN ${tables.event_deliveries} d ON d.id=a.delivery_id JOIN ${tables.events} e ON e.id=d.event_id
+       WHERE a.owner=$1 AND a.epoch=$2 AND a.assignment_key=$3 AND a.retired=FALSE FOR SHARE OF a`,
+      [ownerId, identity.ownerEpoch, key],
     );
-    const value = result.rows[0]?.binding;
     if (
-      !value ||
-      !options.isCurrentStarted({
-        ...identity,
-        principal: { ...identity.principal },
-      })
+      !currentStarted({ ...identity, principal: { ...identity.principal } })
+    ) return undefined;
+    if (!result.rows.length) return undefined;
+    const row = parseOwnerStoredAssignment(result.rows[0]);
+    const value = row.binding;
+    if (
+      value.placement !== "worker" || row.owner !== ownerId ||
+      row.epoch !== identity.ownerEpoch || row.key !== key || row.retired ||
+      !matchesSource(result.rows[0], value)
     ) return undefined;
     for (
-      const key of [
+      const field of [
         "workerId",
         "workerAttemptId",
         "sessionGeneration",
@@ -445,15 +730,88 @@ export function createOwnerAssignmentControl(
       ] as const
     ) {
       if (
-        value[key] !==
-          (key === "workerId" ? identity.principal.workerId : identity[key])
+        value[field] !==
+          (field === "workerId" ? identity.principal.workerId : identity[field])
       ) return undefined;
     }
     return { ...value };
+  }
+  /** Resolve reservation facts inside the actual owner command transaction.
+   * The supplied executor must retain the owner-row lock through the assignment
+   * read. An ambient session or a returned binding is not execution authority. */
+  async function resolveLocal(
+    tx: SqlExecutor,
+    caller: OwnerCaller,
+  ): Promise<OwnerLocalAssignmentBinding | undefined> {
+    if (
+      !currentLocal || caller.principal.kind !== "owner-local" ||
+      Object.hasOwn(caller, "workerId")
+    ) return undefined;
+    const identity: OwnerCaller & { principal: typeof caller.principal } = {
+      ...caller,
+      principal: { ...caller.principal },
+    };
+    try {
+      ownerPrincipalIdentity(identity.principal);
+    } catch {
+      return undefined;
+    }
+    const principal = identity.principal;
+    if (
+      principal.ownerId !== ownerId || principal.epoch !== identity.ownerEpoch
+    ) return undefined;
+    const expected = (): OwnerLocalAssignmentBinding | undefined => {
+      const supplied = currentLocal({
+        ...identity,
+        principal: { ...principal },
+      });
+      if (supplied === undefined) return undefined;
+      const value = parseOwnerPlacementBinding(supplied);
+      if (
+        value.placement !== "owner-local" || value.ownerId !== ownerId ||
+        value.epoch !== principal.epoch ||
+        value.holderId !== principal.holderId ||
+        value.deliveryId !== principal.deliveryId ||
+        value.attemptId !== principal.attemptId
+      ) return undefined;
+      return value;
+    };
+    const before = expected();
+    if (!before) return undefined;
+    const key = ownerAssignmentKey(ownerId, before);
+    // Direct internal resolution preserves the owner -> assignment lock order.
+    const fence = await tx.query(
+      `SELECT owner FROM ${epochs} WHERE owner=$1 AND epoch=$2 AND holder=$3 FOR SHARE`,
+      [ownerId, principal.epoch, principal.holderId],
+    );
+    if (fence.rows.length !== 1) return undefined;
+    const result = await tx.query(
+      `SELECT a.owner,a.epoch,a.assignment_key,a.delivery_id,
+         CASE WHEN octet_length(a.binding::text)<=${OWNER_ASSIGNMENT_BINDING_MAX_BYTES} THEN a.binding ELSE '{}'::jsonb END AS binding,a.retired,
+         e.owner_id AS source_owner,e.id AS source_event_id,e.namespace AS source_namespace,CASE WHEN jsonb_typeof(e.metadata->'actionId')='string' AND char_length(e.metadata->>'actionId')<=1024 THEN e.metadata->>'actionId' END AS source_action_id,
+         CASE WHEN jsonb_typeof(e.metadata->'actionRunId')='string' AND char_length(e.metadata->>'actionRunId')<=1024 THEN e.metadata->>'actionRunId' END AS source_action_run_id,d.consumer_id AS source_consumer
+       FROM ${name} a JOIN ${tables.event_deliveries} d ON d.id=a.delivery_id JOIN ${tables.events} e ON e.id=d.event_id
+       WHERE a.owner=$1 AND a.epoch=$2 AND a.assignment_key=$3 AND a.retired=FALSE
+         FOR SHARE OF a`,
+      [ownerId, principal.epoch, key],
+    );
+    const after = expected();
+    if (!after || !result.rows.length) return undefined;
+    const row = parseOwnerStoredAssignment(result.rows[0]);
+    if (
+      row.owner !== ownerId || row.epoch !== principal.epoch ||
+      row.key !== key || row.retired ||
+      row.binding.placement !== "owner-local" ||
+      !matchesSource(result.rows[0], row.binding) ||
+      JSON.stringify(row.binding) !== JSON.stringify(before) ||
+      JSON.stringify(after) !== JSON.stringify(before)
+    ) return undefined;
+    return { ...row.binding };
   }
   return {
     handlers: { "assignment.bind": bind, "assignment.retire": retire },
     authorize,
     resolveStarted,
+    resolveLocal,
   };
 }

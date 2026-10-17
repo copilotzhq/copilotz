@@ -17,6 +17,10 @@ import type {
   OwnerProjectionHandler,
 } from "./boundary.ts";
 import { readOwnerEffectInventory } from "./effects.ts";
+import {
+  ownerAssignmentKey,
+  parseOwnerPlacementBinding,
+} from "./assignments.ts";
 import { ownerTableNames } from "./schema.ts";
 
 export const OWNER_RECONCILIATION_INVENTORY = "reconciliation.inventory";
@@ -232,8 +236,7 @@ export function createOwnerReconciliation(
   type AssignmentRow = {
     owner: string;
     epoch: number | string;
-    session_id: string;
-    assignment_id: string;
+    assignment_key: string;
     binding: Record<string, unknown>;
     retired: boolean;
   };
@@ -290,12 +293,22 @@ export function createOwnerReconciliation(
       scope.root_namespace !== source.namespace
     ) return result("blocked", "scope_identity_mismatch");
     const rows = (await tx.query<AssignmentRow>(
-      `SELECT owner,epoch,session_id,assignment_id,CASE WHEN octet_length(binding::text)<=16384 THEN binding ELSE '{}'::jsonb END AS binding,retired FROM ${assignments} WHERE delivery_id=$1 ORDER BY epoch,session_id,assignment_id LIMIT $2 FOR UPDATE`,
+      `SELECT owner,epoch,assignment_key,CASE WHEN octet_length(binding::text)<=16384 THEN binding ELSE '{}'::jsonb END AS binding,retired FROM ${assignments} WHERE delivery_id=$1 LIMIT $2 FOR UPDATE`,
       [delivery.id, maxAssignments + 1],
     )).rows;
     if (rows.length > maxAssignments) {
       return result("blocked", "assignment_inventory_incomplete");
     }
+    // Stop at cap+1 through the delivery-leading history index before sorting.
+    // Foreign-owner evidence remains visible to the validation below.
+    rows.sort((left, right) =>
+      Number(left.epoch) - Number(right.epoch) ||
+      (left.assignment_key < right.assignment_key
+        ? -1
+        : left.assignment_key > right.assignment_key
+        ? 1
+        : 0)
+    );
     const processor = delivery.consumerId.startsWith("processor:");
     const actionId = source.metadata.actionId;
     const runId = source.metadata.actionRunId;
@@ -309,45 +322,44 @@ export function createOwnerReconciliation(
       return result("blocked", "unsupported_consumer_or_source");
     }
     for (const row of rows) {
-      const b = row.binding;
-      const fields = [
-        "workerId",
-        "workerAttemptId",
-        "sessionGeneration",
-        "sessionId",
-        "parentOperationId",
-        "assignmentId",
-        "dispatchAttemptId",
-        "namespace",
-        "sourceEventId",
-        "deliveryId",
-        ...(processor ? ["kind", "processorId"] : ["actionId", "executionId"]),
-      ];
-      const exact = b && typeof b === "object" && !Array.isArray(b) &&
-        Object.keys(b).sort().join(",") === fields.sort().join(",") &&
-        fields.every((key) =>
-          key === "sessionGeneration"
-            ? Number.isSafeInteger(b[key]) && Number(b[key]) >= 0
-            : typeof b[key] === "string" && !!(b[key] as string).trim() &&
-              (b[key] as string).length <= 1024
-        );
-      if (
-        !exact ||
-        row.owner !== ownerId ||
-        !Number.isSafeInteger(Number(row.epoch)) || Number(row.epoch) <= 0 ||
-        !b ||
-        b.namespace !== source.namespace || b.deliveryId !== delivery.id ||
-        b.sourceEventId !== source.id || b.assignmentId !== row.assignment_id ||
-        b.sessionId !== row.session_id ||
-        typeof b.dispatchAttemptId !== "string" || !b.dispatchAttemptId ||
-        (processor
-          ? b.kind !== "processor" ||
-            b.processorId !== delivery.consumerId.slice(10)
-          : b.kind !== undefined || b.actionId !== actionId ||
-            b.executionId !== runId)
-      ) {
+      let b;
+      try {
+        b = parseOwnerPlacementBinding(row.binding);
+      } catch {
         return result("blocked", "assignment_identity_mismatch");
       }
+      if (
+        row.owner !== ownerId ||
+        !Number.isSafeInteger(Number(row.epoch)) || Number(row.epoch) <= 0 ||
+        b.namespace !== source.namespace || b.deliveryId !== delivery.id ||
+        b.sourceEventId !== source.id ||
+        ownerAssignmentKey(ownerId, b) !== row.assignment_key
+      ) return result("blocked", "assignment_identity_mismatch");
+      if (b.placement === "owner-local") {
+        if (
+          b.ownerId !== row.owner || b.epoch !== Number(row.epoch) ||
+          (processor
+            ? b.kind !== "processor" ||
+              b.processorId !== delivery.consumerId.slice(10) ||
+              b.consumerId !== delivery.consumerId
+            : b.kind !== "action" || b.actionId !== actionId ||
+              b.actionRunId !== runId)
+        ) {
+          return result("blocked", "assignment_identity_mismatch");
+        }
+        return result(
+          "blocked",
+          Number(row.epoch) > epoch
+            ? "future_epoch_binding"
+            : "local_recovery_required",
+        );
+      }
+      if (
+        processor
+          ? !("kind" in b) || b.kind !== "processor" ||
+            b.processorId !== delivery.consumerId.slice(10)
+          : "kind" in b || b.actionId !== actionId || b.executionId !== runId
+      ) return result("blocked", "assignment_identity_mismatch");
       if (Number(row.epoch) > epoch) {
         return result("blocked", "future_epoch_binding");
       }
@@ -448,14 +460,13 @@ export function createOwnerReconciliation(
       if (row.retired) continue;
       // Exact prior epoch and immutable binding equality; never retire current.
       const changed = await tx.query(
-        `UPDATE ${assignments} SET retired=TRUE,retired_at=$1::timestamptz WHERE owner=$2 AND epoch=$3 AND epoch<$4 AND session_id=$5 AND assignment_id=$6 AND delivery_id=$7 AND binding=$8::jsonb AND retired=FALSE RETURNING assignment_id`,
+        `UPDATE ${assignments} SET retired=TRUE,retired_at=$1::timestamptz WHERE owner=$2 AND epoch=$3 AND epoch<$4 AND assignment_key=$5 AND delivery_id=$6 AND binding=$7::jsonb AND retired=FALSE RETURNING assignment_key`,
         [
           time,
           ownerId,
           Number(row.epoch),
           epoch,
-          row.session_id,
-          row.assignment_id,
+          row.assignment_key,
           delivery.id,
           JSON.stringify(row.binding),
         ],

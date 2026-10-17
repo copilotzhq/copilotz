@@ -268,7 +268,7 @@ async function fixture(
   async function rows() {
     return (await db.query<
       { binding: OwnerAssignmentBinding; retired: boolean }
-    >("SELECT binding,retired FROM owner_assignments ORDER BY assignment_id"))
+    >("SELECT binding,retired FROM owner_assignments ORDER BY assignment_key"))
       .rows;
   }
   async function close() {
@@ -634,7 +634,10 @@ test("fresh exact session, parent, epoch, and all durable binding fields are che
       await f.db.query("UPDATE owner_assignments SET binding=$1::jsonb", [
         JSON.stringify({ ...row.binding, ...change }),
       ]);
-      await assert.rejects(f.resolve(call.caller), /business policy denied/);
+      await assert.rejects(
+        f.resolve(call.caller),
+        /business policy denied|Stored assignment coordinates do not match its binding/,
+      );
     }
     await f.db.query("UPDATE owner_assignments SET binding=$1::jsonb", [
       JSON.stringify(row.binding),

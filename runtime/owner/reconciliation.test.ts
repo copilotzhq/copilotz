@@ -293,6 +293,7 @@ async function fixture(
     });
     const ref = outcome.result as { eventId: string; deliveryId: string };
     const binding: OwnerAssignmentBinding = {
+      placement: "worker",
       workerId: "worker",
       workerAttemptId: `worker:${id}`,
       sessionGeneration: 1,
@@ -538,7 +539,7 @@ test("canonical committed Action terminal permits old reservation retirement; de
     );
     assert.deepEqual(
       (await f.db.query(
-        "SELECT retired FROM owner_assignments ORDER BY assignment_id",
+        "SELECT retired FROM owner_assignments ORDER BY assignment_key",
       )).rows.map((row) => row.retired),
       [true, false],
     );
@@ -772,6 +773,60 @@ test("reconciliation requires tagged control even with permissive host policy", 
         intent: { cursor: null },
       }, start),
       { code: "owner_reconciliation_refused" },
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+test("local placement history remains blocked and cannot hide changed target identity", async () => {
+  const f = await fixture();
+  try {
+    const work = await f.seed("local-history");
+    const changed = await f.seed("local-changed");
+    for (
+      const [item, run] of [[work, "local-history"], [
+        changed,
+        "different-run",
+      ]] as const
+    ) {
+      await item.bind();
+      const binding = {
+        placement: "owner-local" as const,
+        ownerId: "owner",
+        epoch: 1,
+        holderId: "first",
+        attemptId: `local:${item.deliveryId}`,
+        namespace: "space",
+        sourceEventId: item.eventId,
+        deliveryId: item.deliveryId,
+        kind: "action" as const,
+        actionId: "work",
+        actionRunId: run,
+      };
+      await f.db.query(
+        "UPDATE owner_assignments SET assignment_key=$1,binding=$2::jsonb WHERE delivery_id=$3",
+        [
+          ownerAssignmentKey("owner", binding),
+          JSON.stringify(binding),
+          item.deliveryId,
+        ],
+      );
+    }
+    await f.takeover();
+    assert.equal(
+      (await f.classify(work.selected)).reason,
+      "local_recovery_required",
+    );
+    assert.equal(
+      (await f.classify(changed.selected)).reason,
+      "assignment_identity_mismatch",
+    );
+    assert.deepEqual(
+      (await f.db.query("SELECT retired FROM owner_assignments")).rows.map(
+        (row) => row.retired,
+      ),
+      [false, false],
     );
   } finally {
     await f.close();

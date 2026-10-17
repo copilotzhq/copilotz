@@ -145,6 +145,7 @@ const MARKER = "copilotzOwnerDispatch";
 const CONTROL = "ownerDispatchControl";
 const WITNESS = "ownerDispatchWitness";
 const commonBindingFields = [
+  "placement",
   "workerId",
   "workerAttemptId",
   "sessionGeneration",
@@ -183,7 +184,12 @@ function equalBinding(
       return false;
     }
     return bindingFields(a).every((key) =>
-      left[key] === (key === "workerId" ? principal.workerId : right[key])
+      left[key] ===
+        (key === "placement"
+          ? "worker"
+          : key === "workerId"
+          ? principal.workerId
+          : right[key])
     );
   }
   return bindingFields(a).every((key) => left[key] === right[key]);
@@ -548,6 +554,7 @@ export function createOwnerDispatchBridge(
       const value = await options.resolveScheduled(request.scheduledKey);
       if (!value || !currentEntry(entry, true)) throw refused();
       entry.binding = {
+        placement: "worker",
         workerId: fence.identity.workerId,
         workerAttemptId: fence.identity.attemptId,
         sessionGeneration: fence.sessionGeneration,

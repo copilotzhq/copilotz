@@ -1,6 +1,6 @@
 # Owner, worker and Views implementation checklist
 
-Updated: 17 October 2026, 13:04 UTC.
+Updated: 17 October 2026, 13:06 UTC.
 
 This is the maintained coordination checklist for
 [Copilotz PR #93](https://github.com/copilotzhq/copilotz/pull/93). It tracks
@@ -50,7 +50,9 @@ production-ready. All changes remain draft: **no merge or publication**.
 - [x] Local Processor bound owner adapter and actual lifecycle integration,
       including Collection writes/replay and unknown outcomes
 - [ ] Generation-aware local Processor retry lifecycle and alarms
-- [ ] Correct the analogous local Action receipt-hook reentrant-drain gap
+- [x] Correct the analogous local Action receipt-hook reentrant-drain gap; both
+      causal regressions retained, 124 compatibility cases and independent
+      114-case pure review passed
 - [ ] Local nested Action authority and mixed parent/child placement
 - [ ] Local Action effect capability parity
 - [ ] Public local placement activation and complete parity matrix

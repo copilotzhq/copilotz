@@ -236,10 +236,9 @@ export function createOwnerLocalActionPort(
       throw error;
     });
   };
-  const observeHook = (returned: unknown) => {
-    if (returned === undefined) return;
-    // A faulty asynchronous private hook cannot make quiescence appear early.
-    // Observe and charge its raw work even after the private lifetime was lost.
+  const observeHook = <T>(hook: (value: T) => void, value: T) => {
+    // Reserve before invoking even a private hook: it can reenter drain and
+    // accidentally return asynchronous work. Never certify quiescence early.
     let release!: () => void;
     const settled = new Promise<void>((resolve) => release = resolve);
     const entry = { settled, release };
@@ -248,6 +247,17 @@ export function createOwnerLocalActionPort(
       pending.delete(entry);
       release();
     };
+    let returned: unknown;
+    try {
+      returned = hook(copy(value));
+    } catch (error) {
+      finish();
+      throw error;
+    }
+    if (returned === undefined) {
+      finish();
+      return;
+    }
     Promise.resolve(returned).then(finish, finish);
     throw failure("owner_local_port_async_hook_refused");
   };
@@ -283,7 +293,7 @@ export function createOwnerLocalActionPort(
             throw failure("owner_local_port_fresh_start_required");
           }
           // Record a raw known start even if revocation raced its reply.
-          observeHook(onStarted(copy(binding)));
+          observeHook(onStarted, binding);
           started = true;
           current();
           return {
@@ -398,7 +408,7 @@ export function createOwnerLocalActionPort(
         }
         const receipt = { reference: binding, status: submitted.status };
         terminalKnown = true;
-        observeHook(onTerminal(copy(receipt)));
+        observeHook(onTerminal, receipt);
         current();
         return { status: result.status, result: receipt };
       } catch (error) {

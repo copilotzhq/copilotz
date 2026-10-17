@@ -625,7 +625,7 @@ test("completion validation uses the submitted snapshot after an awaited reply",
   await port.start();
   port.sealInvocationCalls();
   const mutable = {
-    status: "completed" as "completed",
+    status: "completed" as const,
     output: { value: "original" },
   };
   const done = port.complete(mutable);
@@ -747,3 +747,40 @@ test("unfrozen local driver keeps construction/projection/capability/receipt ref
   assert.equal(driver.run(), driver.run());
   assert.equal(submitted.length, 2);
 });
+
+for (const phase of ["start", "terminal"] as const) {
+  test(`local Action ${phase} hook retains occupancy before reentrant raw drain`, async () => {
+    const f = fixture(), held = gate<void>();
+    let drained = false;
+    let drain: Promise<void> | undefined;
+    const port = createOwnerLocalActionPort({
+      ...f.options,
+      [phase === "start" ? "onStarted" : "onTerminal"]() {
+        drain = port.drainRawCalls().then(() => {
+          drained = true;
+        });
+        return held.promise;
+      },
+    });
+    if (phase === "terminal") {
+      await port.start();
+      await port.project();
+      port.sealInvocationCalls();
+    }
+    await assert.rejects(
+      phase === "start"
+        ? port.start()
+        : port.complete({ status: "completed", output: null }),
+      /indeterminate/,
+    );
+    await tick();
+    assert.equal(
+      drained,
+      false,
+      "a receipt hook cannot report drain before its returned work settles",
+    );
+    held.resolve();
+    await drain;
+    assert.equal(drained, true);
+  });
+}

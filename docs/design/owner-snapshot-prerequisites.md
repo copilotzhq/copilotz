@@ -117,10 +117,39 @@ probe is a documented caller-contract boundary: the internal executor accepts
 trusted compiled reads only, not transaction-control or session-changing SQL.
 Public Collection operations must never expose raw worker SQL.
 
-This helper is not yet an engine/session snapshot API. Synchronous resource
-claim, prior-operation drain, sync exclusion, host-close progress, framed
-open/query/end, generation forwarding and owner authorization remain open. This
-is scoped prerequisite evidence, not a new full Copilotz acceptance.
+The helper alone does not establish engine/session resource ownership. The next
+section records that integration gate. Callback capability, generation
+forwarding and owner authorization remain open. This is scoped prerequisite
+evidence, not a new full Copilotz acceptance.
+
+## Engine and session resource flow
+
+The backend now wires bounded snapshot resources through typed session
+open/query/close operations. PGlite claims admission synchronously, drains prior
+ordinary work, excludes sync and checks actual SQL-idle state before native
+opening. PostgreSQL uses its reserved snapshot/current pair. A resource closes
+without blocking on ordinary checkouts that need its pins returned.
+
+Current-state and snapshot requests have separate pending scopes, and server
+lane keys use tagged tuples rather than colliding textual prefixes. Explicit
+transport close and EOF seal new snapshot admission, release its pins, drain
+already-accepted ordinary lanes and finally close the engine. Legacy queued
+UPDATE/COMMIT work is preserved. Unknown cleanup quarantines admission and
+remains observable even after its resource record clears; confirmed admission
+failure keeps ordinary usage available.
+
+Independent frozen acceptance passes 136 Ominipg cases with actual PostgreSQL
+and PGlite, 31 Copilotz cases plus five steps, eight additional reviewer probes,
+and canonical static/documentation checks. Source hashes and disposable database
+export/drop/stop are verified. The initial cancelled-open rollback reporting and
+partial-acquisition cleanup failures are preserved alongside their corrections.
+Later-close reporting, lane collision, EOF progress and accepted ordinary-work
+drain have explicit coverage.
+
+This is backend/session acceptance. The callback-level database API,
+managed-generation forwarding and actual owner historical-read rules/expiry
+remain separate. No newer full Copilotz acceptance or owner activation is
+claimed.
 
 ## Remaining backend and authority gates
 

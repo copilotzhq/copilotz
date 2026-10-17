@@ -1,6 +1,6 @@
 # Owner, worker and Views implementation checklist
 
-Updated: 17 October 2026, 23:20 UTC.
+Updated: 17 October 2026, 23:45 UTC.
 
 This is the maintained coordination checklist for
 [Copilotz PR #93](https://github.com/copilotzhq/copilotz/pull/93). It tracks
@@ -23,7 +23,8 @@ production-ready. All changes remain draft: **no merge or publication**.
 | Shared SQL transaction lifetime      | Reviewed prerequisite   | Ominipg 65 cases, Copilotz 31 plus five steps, four cleanup probes; owner snapshot activation remains gated                                          |
 | Pooled SQL timeout progress          | Reviewed prerequisite   | Ominipg 77, Copilotz 31 plus five steps, four cleanup probes and one retained-listener diagnostic; reserved snapshot capacity remains open           |
 | Accounted snapshot pool capacity     | Reviewed prerequisite   | One existing pool, bounded pair admission; full scoped 102 Ominipg/31 Copilotz plus five steps; final 25 PG pool cases, seven probes and static pass |
-| Native PGlite snapshot lifecycle     | Reviewed prerequisite   | Native mutex/idle/readiness and trusted provider/config scope; 14 typed cases, four probes and static pass; engine/session activation remains open   |
+| Native PGlite snapshot lifecycle     | Reviewed prerequisite   | Native mutex/idle/readiness and trusted provider/config scope; 14 typed cases, four probes and static pass; owner activation remains open            |
+| Snapshot engine/session resources    | Reviewed backend flow   | 136 Ominipg, 31 Copilotz plus five steps, eight probes and static pass; callback/generation/owner activation remain open                             |
 | Architecture cleanup                 | In progress             | Shared local-port bookkeeping consolidated; migrate callers and retire superseded paths next                                                         |
 
 The approved [lease-free owner attempt contract](owner-attempt-authority.md) is
@@ -138,8 +139,16 @@ query lifetime, raw drain and explicit rollback. Actual idle-state/readiness and
 narrow provider/configuration certification avoid another lock or SQL parser.
 Fourteen typed cases, four independent probes and static checks pass. The
 executor is internal for trusted compiled reads; it is not arbitrary-SQL
-confinement. Engine/session resource admission, close progress and owner
-authorization remain to be wired.
+confinement. The helper alone does not establish engine/session admission or
+owner authorization; the next checkpoint records the backend integration.
+
+The backend now carries snapshots through engine/session open, query and close.
+It preserves independent PostgreSQL control-lane progress and native PGlite
+exclusivity, handles EOF/close without pin deadlock, and retains cleanup
+failures after resource removal. Accepted ordinary queued lane work still drains
+before graceful shutdown. Independent gates pass 136 Ominipg, 31 Copilotz plus
+five steps, eight reviewer probes and static checks. Client callback capability,
+generation forwarding and actual owner authorization are next.
 
 The next snapshot prerequisite must preserve F5 isolation and default PGlite
 behavior: PostgreSQL has separate pooled transactions, while PGlite serializes
@@ -179,6 +188,8 @@ what it simplifies and eliminates before adding machinery.
 - [x] Internal native PGlite snapshot lifecycle and narrow
       provider/configuration certification; actual idle/readiness, sealed raw
       drain and confirmed rollback
+- [x] Bounded snapshot engine/session resource flow: scoped lanes, prior-work
+      drain, sync exclusion, cleanup quarantine, EOF/close and legacy lane drain
 - [x] Actual worker Action/Processor/Collection/child-Action flow
 - [x] Current authority, assignment/claim, connection lifetime, cancellation and
       terminal settlement boundaries

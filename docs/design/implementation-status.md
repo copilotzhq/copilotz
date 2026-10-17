@@ -1,6 +1,6 @@
 # Owner, worker and Views implementation checklist
 
-Updated: 17 October 2026, 13:23 UTC.
+Updated: 17 October 2026, 13:47 UTC.
 
 This is the maintained coordination checklist for
 [Copilotz PR #93](https://github.com/copilotzhq/copilotz/pull/93). It tracks
@@ -16,7 +16,7 @@ production-ready. All changes remain draft: **no merge or publication**.
 | Local Processor one-attempt execution driver | Reviewed checkpoint     | Driver and bound adapter reviewed; connect the generation-aware host next                          |
 | Faster test orchestration                    | Representative measured | 16 files: 15.4% faster, 7.7% higher peak RSS; reordered files require broader isolation validation |
 | Reference-test reliability                   | Reviewed correction     | 137 affected cases, independent 29-case check and three complete pipeline repeats passed           |
-| Local Processor host generations             | Designing               | Known ended-attempt receipt, predecessor revocation/drain, exact retry wake and shared capacity    |
+| Local Processor host generations             | Controller reviewed     | Pure ledger and 19 tests accepted; actual SQL host wiring, retry alarms and mixed-capacity proof next |
 | Architecture cleanup                         | In progress             | Shared local-port bookkeeping consolidated; migrate callers and retire superseded paths next       |
 
 ## 1. Programming model and composition
@@ -50,10 +50,14 @@ production-ready. All changes remain draft: **no merge or publication**.
       validation
 - [x] Local Processor bound owner adapter and actual lifecycle integration,
       including Collection writes/replay and unknown outcomes
-- [ ] Generation-aware local Processor retry lifecycle and alarms
+- [ ] Generation-aware local Processor retry lifecycle and alarms; the private
+      [generation ledger](owner-local-processor-placement.md) is reviewed, with
+      19 checked cases, but actual host activation remains open
 - [x] Correct the analogous local Action receipt-hook reentrant-drain gap; both
       causal regressions retained, 124 compatibility cases and independent
-      114-case pure review passed
+      114-case pure review passed; separately fix Action controller revocation
+      during owner-current callbacks, with a retained causal regression and
+      113-case controller/port compatibility check
 - [ ] Local nested Action authority and mixed parent/child placement
 - [ ] Local Action effect capability parity
 - [ ] Public local placement activation and complete parity matrix

@@ -1199,6 +1199,27 @@ export async function createOwnerHost(
     executor,
     scheduleSettlement: settlement.schedule,
     resolveAssignment: resolveExecution,
+    isCurrentAssignment(caller, assignment) {
+      if (!ready()) return false;
+      if (assignment.placement === "owner-local") {
+        const actual = local?.current(caller);
+        return !!actual && ready() &&
+          Object.entries(actual).every(([key, value]) =>
+            (assignment as unknown as Record<string, unknown>)[key] === value
+          );
+      }
+      const actual = bridge.currentStarted(caller);
+      return !!actual && !("kind" in actual) && ready() &&
+        actual.workerId === assignment.workerId &&
+        actual.assignmentId === assignment.assignmentId &&
+        actual.sessionId === assignment.sessionId &&
+        actual.dispatchAttemptId === assignment.dispatchAttemptId &&
+        actual.deliveryId === assignment.deliveryId &&
+        actual.namespace === assignment.namespace &&
+        actual.actionId === assignment.actionId &&
+        actual.executionId === assignment.invocation.actionRunId &&
+        actual.sourceEventId === assignment.invocation.identity?.causationId;
+    },
     ...(localConfiguration
       ? {
         local: {
@@ -1453,6 +1474,13 @@ export async function createOwnerHost(
   const effects = createOwnerEffectCommands({
     ownerId,
     schema,
+    isCurrentEffect(caller, ref) {
+      if (!ready() || caller.principal.kind !== "worker") return false;
+      const actual = bridge.currentStarted(caller);
+      return !!actual && !("kind" in actual) && ready() &&
+        actual.namespace === ref.namespace &&
+        actual.executionId === ref.actionRunId;
+    },
     async authorizeEffect(tx, caller, ref, mode, time) {
       await effectAssignment(tx, caller, ref, mode, time);
       return true;
@@ -1655,11 +1683,23 @@ export async function createOwnerHost(
     currentAuthorizationKinds: [
       OWNER_CHILD_ACTION_ADMISSION,
       OWNER_CHILD_ACTION_RESULT,
+      "effect.begin",
+      "effect.confirm",
+      "effect.notStarted",
+      "effect.state",
+      "collections",
     ],
     isCurrentAuthorization(tx, caller, command, time) {
       return command.kind === OWNER_CHILD_ACTION_ADMISSION ||
           command.kind === OWNER_CHILD_ACTION_RESULT
         ? child.isCurrentAuthorization(tx, caller, command, time)
+        : command.kind.startsWith("effect.")
+        ? effects.isCurrentAuthorization(tx, caller, command, time)
+        : command.kind === "collections"
+        ? ready() && (caller.principal.kind === "owner-local"
+          ? !!(local?.current(caller) ?? localProcessor?.current(caller))
+          : !!bridge.currentStarted(caller)) &&
+          ready()
         : true;
     },
     session,

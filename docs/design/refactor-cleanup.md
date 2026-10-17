@@ -61,7 +61,9 @@ coordination mechanisms when owner serialization plus tests covers their
 invariant. However, §4.2 explicitly retains worker leases/heartbeats while
 removing them for local execution. The user approved changing this split on 17
 October 2026. The [amended attempt contract](owner-attempt-authority.md) is now
-the target; the code migration is not yet complete.
+the accepted scoped runtime checkpoint: per-job renewals and running-attempt
+alarm classifiers are removed. F9 quiet-writer protection, general retained
+history migration and full-suite release acceptance remain separate gates.
 
 The proposed replacement retains owner epoch/holder fencing and authenticated
 session/assignment/attempt authority. Review worker renewal commands, projected

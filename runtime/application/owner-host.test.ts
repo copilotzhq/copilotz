@@ -88,7 +88,11 @@ function policies(): OwnerHostPolicy {
   };
 }
 function registry(
-  hooks: { afterEffectBegin?(): void; deniedMutation?(): void } = {},
+  hooks: {
+    beforeEffectBegin?(value: string): void;
+    afterEffectBegin?(): void;
+    deniedMutation?(): void;
+  } = {},
 ) {
   return createPluginRegistry({
     collections: {
@@ -117,7 +121,11 @@ function registry(
               collections.notes.create({ id: value, title: value }),
             { operationKey: "write" },
           );
-          if (value === "effect" || value === "effect-denied") {
+          if (
+            value === "effect" || value === "effect-denied" ||
+            value === "effect-final-policy"
+          ) {
+            hooks.beforeEffectBegin?.(value);
             const begin = await ctx.effect.begin("send");
             if (begin.status !== "proceed") {
               throw new Error("expected first effect proceed");
@@ -469,6 +477,9 @@ for (const mode of ["in-process", "websocket"] as const) {
       let currentScope = structuredClone(scope);
       let ctxGranted = true;
       let deniedMutations = 0;
+      let finalEffectPolicy = false;
+      let effectInputChecks = 0;
+      let effectProceeds = 0;
       let calls = 0;
       const errors: unknown[] = [];
       const reached = deferred(), release = deferred();
@@ -497,7 +508,12 @@ for (const mode of ["in-process", "websocket"] as const) {
           }),
       };
       const appRegistry = registry({
+        beforeEffectBegin(value) {
+          finalEffectPolicy = value === "effect-final-policy";
+          effectInputChecks = 0;
+        },
         afterEffectBegin() {
+          effectProceeds++;
           ctxGranted = false;
         },
         deniedMutation() {
@@ -519,6 +535,11 @@ for (const mode of ["in-process", "websocket"] as const) {
           },
           worker() {
             return { ctx: ctxGranted, settlement: true };
+          },
+          input() {
+            if (finalEffectPolicy && ++effectInputChecks === 2) {
+              ctxGranted = false;
+            }
           },
         },
         transport: {
@@ -797,6 +818,38 @@ for (const mode of ["in-process", "websocket"] as const) {
           )).rows[0].count,
           2,
         );
+        ctxGranted = true;
+        const beginsBefore = effectProceeds;
+        const revokedEffect = (await connection.callAction({
+          actionAlias: "work",
+          input: "effect-final-policy",
+          operationKey: "effect-final-policy",
+        })).result;
+        await eventually(async () =>
+          (await connection.actionResult(revokedEffect) as { status: string })
+            .status !== "pending"
+        );
+        assert.equal(
+          effectInputChecks,
+          2,
+          "revocation happens in the final effect input policy",
+        );
+        assert.deepEqual(await connection.actionResult(revokedEffect), {
+          status: "failed",
+          code: "action_failed",
+        });
+        assert.equal(
+          effectProceeds,
+          beginsBefore,
+          "stale policy cannot release first-send permission",
+        );
+        assert.equal(
+          (await db.query(
+            "SELECT COUNT(*)::int AS count FROM owner_receipts WHERE kind='effect.begin'",
+          )).rows[0].count,
+          2,
+        );
+        finalEffectPolicy = false;
         ctxGranted = true;
         await eventually(() => host.snapshot().active === 0);
         assert.deepEqual(errors, []);

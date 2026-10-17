@@ -98,6 +98,7 @@ async function fixture(
     input: true,
     prepared: true,
     revokeDuringInput: false,
+    revokeAfterBodyRead: false,
     rollback: false,
     beforeCommit: undefined as undefined | (() => Promise<void>),
     holdInput: undefined as undefined | (() => Promise<void>),
@@ -152,12 +153,22 @@ async function fixture(
       state.unknown = "";
       const result = await db.transaction(async (tx) => {
         const result = await run({
-          query(sql, params) {
+          async query<
+            TRow extends Record<string, unknown> = Record<string, unknown>,
+          >(sql: string, params?: unknown[]) {
             if (state.rollback && sql === "RELEASE SAVEPOINT owner_command_0") {
               state.rollback = false;
               throw new Error("command rollback");
             }
-            return tx.query(sql, params);
+            const result = await tx.query<TRow>(sql, params);
+            if (
+              state.revokeAfterBodyRead &&
+              sql.includes("SELECT namespace, event_body_id")
+            ) {
+              state.revokeAfterBodyRead = false;
+              state.current = false;
+            }
+            return result;
           },
         });
         await state.beforeCommit?.();
@@ -200,6 +211,7 @@ async function fixture(
   });
   const execution = createOwnerExecutionCommands({
     ownerId: "owner",
+    isCurrentAssignment: () => state.current,
     session: {
       query() {
         throw new Error("ambient query");
@@ -454,7 +466,7 @@ test("fresh local Action start atomically reserves, captures and projects immuta
         key: "renew",
         intent: { reference: f.binding, sequence: 1 },
       }),
-      { code: "ActionOwnershipLost" },
+      { code: "owner_command_invalid" },
     );
     await assert.rejects(
       f.boundary.execute(f.caller(), {
@@ -1126,5 +1138,26 @@ test("local mutation rechecks private handle and ctx after both awaited input an
     } finally {
       await f.close();
     }
+  }
+});
+
+test("local private witness is rechecked after the final captured-body read", async () => {
+  const f = await fixture();
+  try {
+    await f.start();
+    const before = await snapshot(f.db);
+    f.state.holdInput = () => {
+      f.state.revokeAfterBodyRead = true;
+      return Promise.resolve();
+    };
+    await assert.rejects(f.project(), { code: "ActionOwnershipLost" });
+    assert.equal(
+      f.state.current,
+      false,
+      "private handle must be revoked after policy during the final SQL read",
+    );
+    assert.deepEqual(await snapshot(f.db), before);
+  } finally {
+    await f.close();
   }
 });

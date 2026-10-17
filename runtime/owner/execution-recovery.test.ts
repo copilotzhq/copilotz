@@ -5,7 +5,7 @@ import type { ActionContext, AnyActionDefinition } from "../actions/types.ts";
 import { createActionLifecycleLoader } from "../actions/persistence.ts";
 import { createOwnerTransactionPlanner } from "./transaction.ts";
 import { readOwnerEffectInventory } from "./effects.ts";
-import { at, fixture } from "./execution.fixture.test.ts";
+import { fixture } from "./execution.fixture.test.ts";
 
 const scope = {
   ownerId: "owner",
@@ -14,7 +14,7 @@ const scope = {
   actionRunId: "run",
 };
 async function lost(f: Awaited<ReturnType<typeof fixture>>) {
-  f.state.time = at(1001);
+  await f.seedRetiredAttemptForBarrier();
   await f.replace({ workerId: "replacement-worker" });
 }
 function mutation(f: Awaited<ReturnType<typeof fixture>>) {

@@ -183,7 +183,7 @@ export function createOwnerEffectCommands(
     ownerId: string;
     schema: string;
     /** Mandatory, SQL-only current host authority. Bind invocation to the exact
-     * authenticated assignment/session/attempt and live lease (or local attempt).
+     * authenticated assignment/session/attempt and owner-controlled delivery.
      * Begin needs current ctx/effect grants; settlement must remain narrowly
      * available for started work after ctx revocation, never for a stale attempt.
      * Return true explicitly; payload reference fields grant no authority. */
@@ -194,6 +194,14 @@ export function createOwnerEffectCommands(
       mode: "begin" | "settlement",
       commandTime: string,
     ): boolean | Promise<boolean>;
+    /** Runtime hosts supply their exact synchronous private Started witness.
+     * SQL-only protocol fixtures may omit it; a real host must install this and
+     * wire isCurrentAuthorization into the existing boundary fence. */
+    isCurrentEffect?(
+      caller: OwnerCaller,
+      ref: OwnerEffectReference,
+      mode: "begin" | "settlement",
+    ): boolean;
     /** Validate the registered outcome schema and safe durable representation.
      * Protected plaintext must be sealed/replaced by references outside this API.
      * Do not perform external I/O in any of these transaction callbacks. */
@@ -216,6 +224,12 @@ export function createOwnerEffectCommands(
 ): Readonly<{
   handlers: Readonly<Record<string, OwnerCommandHandler>>;
   projections: Readonly<Record<string, OwnerProjectionHandler>>;
+  isCurrentAuthorization(
+    tx: SqlExecutor,
+    caller: OwnerCaller,
+    command: OwnerCommand,
+    commandTime: string,
+  ): boolean;
   authorize(
     tx: SqlExecutor,
     caller: OwnerCaller,
@@ -223,60 +237,122 @@ export function createOwnerEffectCommands(
     commandTime: string,
   ): Promise<void>;
 }> {
-  text(options.ownerId);
+  const {
+    ownerId,
+    schema,
+    authorizeEffect,
+    validateOutcome,
+    verifyNotStarted,
+    isCurrentEffect,
+  } = options;
+  text(ownerId);
   for (
-    const key of [
-      "authorizeEffect",
-      "validateOutcome",
-      "verifyNotStarted",
-    ] as const
+    const [key, callback] of Object.entries({
+      authorizeEffect,
+      validateOutcome,
+      verifyNotStarted,
+    })
   ) {
-    if (typeof options[key] !== "function") {
+    if (typeof callback !== "function") {
       fail("effect_configuration_invalid", `${key} is required.`);
     }
   }
-  const tables = ownerTableNames(options.schema);
+  if (isCurrentEffect !== undefined && typeof isCurrentEffect !== "function") {
+    fail("effect_configuration_invalid", "isCurrentEffect must be a function.");
+  }
+  const tables = ownerTableNames(schema);
   const authorized = new WeakMap<
     SqlExecutor,
-    Readonly<{ ref: OwnerEffectReference; kind: string }>
+    Readonly<
+      {
+        ref: OwnerEffectReference;
+        kind: string;
+        caller: OwnerCaller;
+        command: OwnerCommand;
+        time: string;
+        mode: "begin" | "settlement";
+      }
+    >
   >();
+  function privateCurrent(
+    caller: OwnerCaller,
+    ref: OwnerEffectReference,
+    mode: "begin" | "settlement",
+  ): void {
+    if (!isCurrentEffect) return;
+    let answer: unknown;
+    try {
+      answer = isCurrentEffect(copy(caller), copy(ref), mode);
+      if (answer instanceof Promise) {
+        Promise.prototype.then.call(answer, undefined, () => undefined);
+      }
+    } catch {
+      fail(
+        "effect_authority_refused",
+        "Current private effect authority refused.",
+      );
+    }
+    if (answer !== true) {
+      fail(
+        "effect_authority_refused",
+        "Current private effect authority refused.",
+      );
+    }
+  }
   async function read(
     tx: SqlExecutor,
     ref: OwnerEffectReference,
   ): Promise<OwnerEffectRecord> {
     const operations = ["begin", "confirm", "notStarted"] as const;
-    const keys = operations.map((op) =>
-      ownerEffectKey(options.ownerId, ref, op)
-    );
+    const keys = operations.map((op) => ownerEffectKey(ownerId, ref, op));
     const rows = await tx.query<
       EffectRow
     >(
       `SELECT key,kind,domain,intent,result,(intent->'outcome') IS NOT DISTINCT FROM (result->'outcome') AS outcomes_equal FROM ${tables.receipts} WHERE owner=$1 AND domain='logical' AND key=ANY($2::text[])`,
-      [options.ownerId, keys],
+      [ownerId, keys],
     );
-    return storedState(options.ownerId, ref, rows.rows);
+    return storedState(ownerId, ref, rows.rows);
   }
 
-  function bound(tx: SqlExecutor, kind: string): OwnerEffectReference {
+  function bound(
+    tx: SqlExecutor,
+    kind: string,
+    caller: OwnerCaller,
+    time: string,
+  ): OwnerEffectReference {
     const current = authorized.get(tx);
-    if (!current || current.kind !== kind) {
+    if (
+      !current || current.kind !== kind || current.time !== time ||
+      JSON.stringify(current.caller) !== JSON.stringify(copy(caller))
+    ) {
       fail(
         "effect_authority_refused",
         "Effect handler requires current boundary authorization.",
       );
     }
-    return current.ref;
+    privateCurrent(caller, current.ref, current.mode);
+    return copy(current.ref);
   }
   const handlers: Readonly<Record<string, OwnerCommandHandler>> = {
     "effect.begin": async (_input, context) => {
-      const ref = bound(context.tx, "effect.begin");
+      const ref = bound(
+        context.tx,
+        "effect.begin",
+        context.caller,
+        context.commandTime,
+      );
       if ((await read(context.tx, ref)).status !== "none") {
         fail("effect_transition_conflict", "Effect already began.");
       }
       return { ...ref, status: "begun" };
     },
     "effect.confirm": async (input, context) => {
-      const ref = bound(context.tx, "effect.confirm");
+      const ref = bound(
+        context.tx,
+        "effect.confirm",
+        context.caller,
+        context.commandTime,
+      );
       if ((await read(context.tx, ref)).status !== "begun") {
         fail(
           "effect_transition_conflict",
@@ -290,7 +366,12 @@ export function createOwnerEffectCommands(
       };
     },
     "effect.notStarted": async (_input, context) => {
-      const ref = bound(context.tx, "effect.notStarted");
+      const ref = bound(
+        context.tx,
+        "effect.notStarted",
+        context.caller,
+        context.commandTime,
+      );
       if ((await read(context.tx, ref)).status !== "begun") {
         fail(
           "effect_transition_conflict",
@@ -303,10 +384,35 @@ export function createOwnerEffectCommands(
   return {
     handlers,
     projections: {
-      "effect.state": async (_input, context) =>
-        await read(context.tx, bound(context.tx, "effect.state")),
+      "effect.state": async (_input, context) => {
+        const ref = bound(
+          context.tx,
+          "effect.state",
+          context.caller,
+          context.commandTime,
+        );
+        const value = await read(context.tx, ref);
+        bound(context.tx, "effect.state", context.caller, context.commandTime);
+        return value;
+      },
+    },
+    isCurrentAuthorization(tx, caller, command, commandTime) {
+      const proof = authorized.get(tx);
+      try {
+        if (
+          !proof || proof.time !== commandTime ||
+          JSON.stringify(proof.caller) !== JSON.stringify(copy(caller)) ||
+          JSON.stringify(proof.command) !== JSON.stringify(copy(command))
+        ) return false;
+        privateCurrent(caller, proof.ref, proof.mode);
+        return authorized.get(tx) === proof;
+      } catch {
+        authorized.delete(tx);
+        return false;
+      }
     },
     async authorize(tx, caller, command, commandTime) {
+      authorized.delete(tx);
       const op = command.kind.slice("effect.".length) as OwnerEffectOperation;
       const projection = command.kind === "effect.state";
       if (
@@ -318,7 +424,7 @@ export function createOwnerEffectCommands(
       const data = intent(command.intent, projection ? undefined : op);
       if (
         !projection &&
-        command.key !== ownerEffectKey(options.ownerId, data.ref, op)
+        command.key !== ownerEffectKey(ownerId, data.ref, op)
       ) {
         fail(
           "effect_binding_invalid",
@@ -326,9 +432,9 @@ export function createOwnerEffectCommands(
         );
       }
       if (
-        await options.authorizeEffect(
+        await authorizeEffect(
           tx,
-          caller,
+          copy(caller),
           copy(data.ref),
           op === "begin" ? "begin" : "settlement",
           commandTime,
@@ -336,9 +442,9 @@ export function createOwnerEffectCommands(
       ) fail("effect_authority_refused", "Current effect authority refused.");
       if (
         op === "confirm" &&
-        await options.validateOutcome(
+        await validateOutcome(
             tx,
-            caller,
+            copy(caller),
             copy(data.ref),
             copy(data.outcome!),
             commandTime,
@@ -351,9 +457,9 @@ export function createOwnerEffectCommands(
       }
       if (
         op === "notStarted" &&
-        await options.verifyNotStarted(
+        await verifyNotStarted(
             tx,
-            caller,
+            copy(caller),
             copy(data.ref),
             copy(data.evidence!),
             commandTime,
@@ -364,8 +470,8 @@ export function createOwnerEffectCommands(
       const current = await read(tx, data.ref);
       if (op === "begin" && current.status === "none") {
         const inventory = await readOwnerEffectInventory(tx, {
-          ownerId: options.ownerId,
-          schema: options.schema,
+          ownerId: ownerId,
+          schema: schema,
           ...data.ref,
         });
         if (inventory.length >= OWNER_EFFECT_STEP_LIMIT) {
@@ -386,7 +492,29 @@ export function createOwnerEffectCommands(
           "Effect transition is no longer legal.",
         );
       }
-      authorized.set(tx, { ref: data.ref, kind: command.kind });
+      // Policy and inventory callbacks may await and revoke authority. Never
+      // reuse the permission sampled before them, including on duplicate replay.
+      const mode = op === "begin" ? "begin" : "settlement";
+      if (
+        await authorizeEffect(
+          tx,
+          copy(caller),
+          copy(data.ref),
+          mode,
+          commandTime,
+        ) !== true
+      ) {
+        fail("effect_authority_refused", "Current effect authority refused.");
+      }
+      privateCurrent(caller, data.ref, mode);
+      authorized.set(tx, {
+        ref: copy(data.ref),
+        kind: command.kind,
+        caller: copy(caller),
+        command: copy(command),
+        time: commandTime,
+        mode,
+      });
     },
   };
 }

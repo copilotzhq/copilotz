@@ -1,6 +1,6 @@
 # Owner, worker and Views implementation checklist
 
-Updated: 17 October 2026, 17:58 UTC.
+Updated: 17 October 2026, 18:41 UTC.
 
 This is the maintained coordination checklist for
 [Copilotz PR #93](https://github.com/copilotzhq/copilotz/pull/93). It tracks
@@ -10,15 +10,15 @@ production-ready. All changes remain draft: **no merge or publication**.
 
 ## Current work
 
-| Task                                | Status                  | Next acceptance gate                                                                                     |
-| ----------------------------------- | ----------------------- | -------------------------------------------------------------------------------------------------------- |
-| Local Processor bound owner adapter | Reviewed checkpoint     | Reviewed: independent 30 pure and seven real PostgreSQL cases; 83-case compatibility passed              |
-| Local nested Action authority       | Reviewed checkpoint     | Independent 144 pure and 114 PostgreSQL cases; private fresh same-owner mixed placement complete         |
-| Local Action effect capabilities    | Next implementation     | Correct current effect authorization after awaited policy; then add local parity using the existing flow |
-| Faster test orchestration           | Representative measured | 16 files: 15.4% faster, 7.7% higher peak RSS; reordered files require broader isolation validation       |
-| Reference-test reliability          | Reviewed correction     | 137 affected cases, independent 29-case check and three complete pipeline repeats passed                 |
-| Local Processor host generations    | Reviewed checkpoint     | PostgreSQL 14 host plus two caller-facing helper cases pass; fresh same-owner retry scope complete       |
-| Architecture cleanup                | In progress             | Shared local-port bookkeeping consolidated; migrate callers and retire superseded paths next             |
+| Task                                | Status                          | Next acceptance gate                                                                               |
+| ----------------------------------- | ------------------------------- | -------------------------------------------------------------------------------------------------- |
+| Local Processor bound owner adapter | Reviewed checkpoint             | Reviewed: independent 30 pure and seven real PostgreSQL cases; 83-case compatibility passed        |
+| Local nested Action authority       | Reviewed checkpoint             | Independent 144 pure and 114 PostgreSQL cases; private fresh same-owner mixed placement complete   |
+| Local Action effect capabilities    | Authority prerequisite reviewed | Extend the existing bound local port and shared effect policy to local placement                   |
+| Faster test orchestration           | Representative measured         | 16 files: 15.4% faster, 7.7% higher peak RSS; reordered files require broader isolation validation |
+| Reference-test reliability          | Reviewed correction             | 137 affected cases, independent 29-case check and three complete pipeline repeats passed           |
+| Local Processor host generations    | Reviewed checkpoint             | PostgreSQL 14 host plus two caller-facing helper cases pass; fresh same-owner retry scope complete |
+| Architecture cleanup                | In progress                     | Shared local-port bookkeeping consolidated; migrate callers and retire superseded paths next       |
 
 The approved [lease-free owner attempt contract](owner-attempt-authority.md) is
 implemented and independently checked in this scoped checkpoint. Both placements
@@ -37,12 +37,26 @@ correction evidence, not a claim of one all-green 156 run or a new full-suite
 acceptance. The first migration typecheck failure and its explicit worker-only
 fixture narrowing are also retained.
 
-Next is current effect authorization followed by local effect parity. The two
-causal effect-policy regression tests remain a separate uncommitted
-prerequisite; their failures are not hidden by this checkpoint. Quiet-writer
-content protection, open-history takeover and public local placement remain
-separate gates. Every slice must name what it simplifies and eliminates before
-adding machinery.
+The [current effect-authority prerequisite](owner-effect-authority.md) is now
+independently checked: 313 scoped PostgreSQL cases pass on one frozen candidate
+(canonical 156, core 77, related recovery 73 and lost delivery 7), with ordinary
+typechecking and no skips. Final SQL/policy and private lifetime checks protect
+fresh effects, duplicates, projections and late COMMIT replies. The same
+existing boundary fence now covers Collection calls. Exact captured
+input/metadata is compared after policy, including valid body-plus-digest
+replacement.
+
+The wider gate also found lease-era recovery test setup and a real terminal
+cleanup defect. Fixtures now explicitly seed an ended predecessor rather than
+infer recovery from elapsed time. Terminal abandoned-Action cleanup uses the
+existing owner recovery writer in the same fenced transaction; live writes keep
+their exact attempt restriction. Original failures and corrections are retained.
+These are scoped gates, not a new full-suite acceptance.
+
+Next is private local effect parity through the existing port/client/receipt
+protocol. Quiet-writer content protection, open-history takeover and public
+local placement remain separate gates. Every slice must name what it simplifies
+and eliminates before adding machinery.
 
 ## 1. Programming model and composition
 
@@ -104,6 +118,9 @@ adding machinery.
       loss recovery replace expiry. Connection liveness and genuine legacy
       EventStore behavior remain; F9 quiet-writer protection is still a separate
       implementation gate
+- [x] Current effect authority after awaited policies and receipt reads, exact
+      captured lifecycle equality, private effect/Collection boundary fences,
+      and same-transaction terminal abandoned-obligation cleanup
 - [ ] Local Action effect capability parity
 - [ ] Public local placement activation and complete parity matrix
 

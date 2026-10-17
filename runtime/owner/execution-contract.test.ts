@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { readOwnerOriginalExecutionContract } from "./execution-contract.ts";
-import { at, fixture } from "./execution.fixture.test.ts";
+import { fixture } from "./execution.fixture.test.ts";
 
 test("a newly converted deployment cannot upgrade an old unconverted attempt's empty effect history", async () => {
   let allowed = false;
@@ -25,7 +25,7 @@ test("a newly converted deployment cannot upgrade an old unconverted attempt's e
       ])).rows[0].result,
       original,
     );
-    f.state.time = at(1001);
+    await f.seedRetiredAttemptForBarrier();
     await f.replace({ workerId: "new-converted-worker" });
     await f.port().claim(f.hint(), {});
     assert.equal(
@@ -137,7 +137,7 @@ test("original eligible claim records exact historical provenance without changi
       await readOwnerOriginalExecutionContract(f.db, scope),
       contract,
     );
-    f.state.time = at(1001);
+    await f.seedRetiredAttemptForBarrier();
     await f.replace();
     await f.port().claim(f.hint(), {});
     assert.equal(

@@ -352,6 +352,7 @@ export async function fixture(
       };
     },
   });
+  const barrierSeedControl = crypto.randomUUID();
   const boundary = createOwnerCommandBoundary({
     session,
     schema: "public",
@@ -362,12 +363,85 @@ export async function fixture(
       ...execution.handlers,
       ...effects.handlers,
       collections: collection,
+      async "fixture.seed-retired-attempt"(intent, context) {
+        // Deliberately construct an ended predecessor for the lower-level
+        // recovery barrier tests, including ineligible histories. This is not
+        // production recovery eligibility or evidence of remote quiescence.
+        const target = intent as {
+          deliveryId: string;
+          dispatchAttemptId: string;
+        };
+        assert.deepEqual(target, {
+          deliveryId: binding.deliveryId,
+          dispatchAttemptId: binding.dispatchAttemptId,
+        });
+        const commandStore = createEventStore({
+          session,
+          schema: "public",
+          ownerCommit: {
+            ...context.ownerCommit,
+            afterCommit: context.afterCommit,
+          },
+          lockSettlementScope: (tx, scope) => catalog.lockScope(tx, scope),
+        });
+        const before = await commandStore.getDelivery(target.deliveryId);
+        assert.ok(
+          before && before.status === "leased" &&
+            before.leaseOwner === target.dispatchAttemptId,
+        );
+        assert.equal(before.leaseExpiresAt, undefined);
+        const evidence = (await context.tx.query(
+          "SELECT * FROM owner_receipts WHERE kind LIKE 'effect.%' ORDER BY key",
+        )).rows;
+        const revoked = await context.tx.query(
+          "UPDATE fixture_assignments SET live=FALSE WHERE assignment_id=$1 AND session_id=$2 AND binding->>'dispatchAttemptId'=$3 AND live=TRUE RETURNING assignment_id",
+          [binding.assignmentId, binding.sessionId, target.dispatchAttemptId],
+        );
+        assert.equal(revoked.rows.length, 1);
+        const next = await commandStore.recoverLostDelivery({
+          namespace: binding.namespace,
+          id: before.id,
+          eventId: before.eventId,
+          consumerId: before.consumerId,
+          settlementScopeId: before.settlementScopeId,
+          ...(before.actionScopeId
+            ? { actionScopeId: before.actionScopeId }
+            : {}),
+          leaseOwner: target.dispatchAttemptId,
+          leaseExpiresAt: null,
+          attempts: before.attempts,
+          maxAttempts: before.maxAttempts,
+          disposition: "retry",
+        });
+        assert.ok(next);
+        assert.equal(next.status, "retry_wait");
+        assert.equal(next.attempts, before.attempts);
+        assert.equal(next.maxAttempts, before.maxAttempts);
+        assert.equal(next.availableAt, before.availableAt);
+        assert.deepEqual(
+          (await context.tx.query(
+            "SELECT * FROM owner_receipts WHERE kind LIKE 'effect.%' ORDER BY key",
+          )).rows,
+          evidence,
+        );
+        return { status: next.status, availableAt: next.availableAt };
+      },
     },
     projections: { ...execution.projections, ...effects.projections },
     inputDefinitions: execution.inputDefinitions,
     async authorize(tx, caller, command, time, normalizedInput) {
       state.commitKind = command.kind;
-      if (command.kind === "collections") {
+      if (command.kind === "fixture.seed-retired-attempt") {
+        assert.deepEqual(caller.principal, {
+          kind: "owner-control",
+          ownerId: "owner",
+          epoch: 1,
+          holderId: "holder",
+        });
+        assert.equal(caller.ownerEpoch, 1);
+        assert.equal(caller.fixtureControl, barrierSeedControl);
+        assert.equal(command.domain, "incarnation");
+      } else if (command.kind === "collections") {
         state.collectionAttempts++;
         const assignment = await execution.authorizeLive(tx, caller, time);
         assert.equal(command.domain, "logical");
@@ -601,6 +675,35 @@ export async function fixture(
         | "receipt_authenticated",
       value: boolean,
     ) => db.query(`UPDATE fixture_assignments SET ${column}=$1`, [value]),
+    async seedRetiredAttemptForBarrier() {
+      const result = await boundary.execute({
+        principal: {
+          kind: "owner-control",
+          ownerId: "owner",
+          epoch: 1,
+          holderId: "holder",
+        },
+        ownerEpoch: 1,
+        fixtureControl: barrierSeedControl,
+      }, {
+        kind: "fixture.seed-retired-attempt",
+        domain: "incarnation",
+        key: JSON.stringify([
+          "fixture.seed-retired-attempt",
+          binding.deliveryId,
+          binding.dispatchAttemptId,
+        ]),
+        intent: {
+          deliveryId: binding.deliveryId,
+          dispatchAttemptId: binding.dispatchAttemptId,
+        },
+      });
+      const availableAt =
+        (result.result as { availableAt: string }).availableAt;
+      if (Date.parse(state.time) < Date.parse(availableAt)) {
+        state.time = availableAt;
+      }
+    },
     async replace(overrides: Partial<OwnerWorkerExecutionAssignment> = {}) {
       binding = {
         ...binding,

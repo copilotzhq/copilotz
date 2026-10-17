@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { defineAction } from "../actions/define.ts";
 import { createActionLifecycleLoader } from "../actions/persistence.ts";
+import { encodeEventBody } from "../events/body-store.ts";
 import type { AnyActionDefinition } from "../actions/types.ts";
 import { createOperationCatalog } from "../streams/catalog.ts";
 import { createOwnerOperationSettlement } from "./settlement.ts";
@@ -913,3 +914,116 @@ test("revoked captured Action input refuses new effect begin while restricted se
     await f.close();
   }
 });
+
+for (
+  const mutation of [
+    "grant",
+    "attempt",
+    "ordinal",
+    "source",
+    "cancel",
+    "open-action",
+    "captured-input",
+    "captured-metadata",
+  ] as const
+) {
+  test(`effect final input policy cannot retain stale ${mutation} authority`, async () => {
+    let armed = false;
+    let checks = 0;
+    const f = await fixture({
+      async inputPolicy(tx, assignment, _value, time) {
+        if (!armed || ++checks !== 2) return;
+        if (mutation === "grant") {
+          await tx.query("UPDATE fixture_assignments SET ctx_granted=FALSE");
+        } else if (mutation === "attempt") {
+          await tx.query(
+            "UPDATE event_deliveries SET lease_owner='stale-attempt' WHERE id=$1",
+            [assignment.deliveryId],
+          );
+        } else if (mutation === "ordinal") {
+          await tx.query(
+            "UPDATE event_deliveries SET attempts=attempts+1 WHERE id=$1",
+            [assignment.deliveryId],
+          );
+        } else if (mutation === "source") {
+          await tx.query(
+            "UPDATE event_deliveries SET event_id=(SELECT id FROM events WHERE deduplication_id=$2) WHERE id=$1",
+            [
+              assignment.deliveryId,
+              `${assignment.invocation.actionRunId}:action:invoked`,
+            ],
+          );
+        } else if (mutation === "cancel") {
+          await tx.query(
+            "UPDATE copilotz_operations SET cancellation_requested_at=$1 WHERE operation_id=(SELECT settlement_scope_id FROM event_deliveries WHERE id=$2)",
+            [time, assignment.deliveryId],
+          );
+        } else if (
+          mutation === "captured-input" || mutation === "captured-metadata"
+        ) {
+          const body = (await tx.query<
+            { event_body_id: string; body: Record<string, unknown> }
+          >(
+            "SELECT b.event_body_id,b.body FROM events e JOIN event_bodies b ON b.namespace=e.namespace AND b.event_body_id=e.payload->'dataRef'->>'eventBodyId' WHERE e.deduplication_id=$1",
+            [`${assignment.invocation.actionRunId}:action:invoked`],
+          )).rows[0];
+          assert.equal(body.body.status, "invoked");
+          const changed = mutation === "captured-input"
+            ? { ...body.body, input: "changed-valid-input" }
+            : {
+              ...body.body,
+              metadata: {
+                ...body.body.metadata as Record<string, unknown>,
+                changed: true,
+              },
+            };
+          const encoded = await encodeEventBody(changed);
+          await tx.query(
+            "UPDATE event_bodies SET body=$1::jsonb,digest=$2 WHERE event_body_id=$3",
+            [encoded.body, encoded.digest, body.event_body_id],
+          );
+        } else {
+          await tx.query(
+            "DELETE FROM open_actions WHERE owner_delivery_id=$1",
+            [assignment.deliveryId],
+          );
+        }
+      },
+    });
+    try {
+      await f.port().claim(f.hint(), {});
+      await f.port().project(f.reference(), {});
+      const before = await snapshot(f.db);
+      const assignments = (await f.db.query(
+        "SELECT * FROM fixture_assignments ORDER BY assignment_id",
+      )).rows;
+      const operations = (await f.db.query(
+        "SELECT * FROM copilotz_operations ORDER BY operation_id",
+      )).rows;
+      armed = true;
+      await assert.rejects(f.effects().begin("send"), {
+        code: "ActionOwnershipLost",
+      });
+      assert.equal(
+        checks,
+        2,
+        "mutation must occur in the final effect input policy",
+      );
+      assert.deepEqual(await snapshot(f.db), before);
+      assert.deepEqual(
+        (await f.db.query(
+          "SELECT * FROM fixture_assignments ORDER BY assignment_id",
+        )).rows,
+        assignments,
+      );
+      assert.deepEqual(
+        (await f.db.query(
+          "SELECT * FROM copilotz_operations ORDER BY operation_id",
+        )).rows,
+        operations,
+      );
+    } finally {
+      await f.close();
+    }
+  });
+}

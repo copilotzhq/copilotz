@@ -20,7 +20,11 @@ import {
 } from "../events/coordinator.ts";
 import { createCoreTableNames } from "../events/schema.ts";
 import type { SqlExecutor, SqlSession } from "../events/session.ts";
-import { createEventStore, type EventStore } from "../events/store.ts";
+import {
+  createEventStore,
+  type CreateEventStoreOptions,
+  type EventStore,
+} from "../events/store.ts";
 import type { EventDelivery } from "../events/types.ts";
 import type { OwnerPreparedInputContext } from "./preparation.ts";
 import {
@@ -309,6 +313,12 @@ export function createOwnerExecutionCommands(
     catalog: OperationCatalog;
     executor: DeliveryExecutor;
     publish?: EventPublisher;
+    /** Runtime hosts supply an exact synchronous private witness. This runs
+     * after the final SQL read and does not replace durable/policy checks. */
+    isCurrentAssignment?(
+      caller: OwnerCaller,
+      assignment: OwnerExecutionAssignment,
+    ): boolean;
     /** Dormant host-private local composition. Missing capability fails closed.
      * authorizeStart must affirm the exact current control/capacity entry and
      * current permission to start this Action and access its input. */
@@ -422,6 +432,14 @@ export function createOwnerExecutionCommands(
 
   const tables = createCoreTableNames(options.schema);
   const operationTables = createOperationCatalogTables(options.schema);
+  const isCurrentAssignment = options.isCurrentAssignment;
+  if (
+    isCurrentAssignment !== undefined &&
+    typeof isCurrentAssignment !== "function"
+  ) {
+    throw new TypeError("isCurrentAssignment must be a function.");
+  }
+
   const authorized = new WeakMap<SqlExecutor, Authorized>();
   const localStarts = new WeakMap<
     SqlExecutor,
@@ -712,58 +730,102 @@ export function createOwnerExecutionCommands(
     });
     signal.throwIfAborted();
   }
-  /** Local data is released only after awaited policies have finished. The
-   * initial private handle check cannot survive revocation inside those policies.
-   * Delivery remains locked; the final resolver independently rechecks its exact
-   * current private handle and durable reservation without rerunning input policy. */
-  async function recheckLocalAuthority(
+  /** Re-resolve grants after policy awaits, then reread locked durable facts.
+   * No input/preparation policy is called recursively. Runtime private lifetime
+   * remains the host/driver's synchronous fence after these SQL awaits. */
+  async function recheckAuthority(
     tx: SqlExecutor,
     state: Authorized,
     commandTime: string,
     grant: "ctx" | "settlement",
-  ): Promise<void> {
-    if (state.assignment.placement !== "owner-local") return;
-    const delivery = await createEventStore({
-      schema: options.schema,
-      session: {
-        query: tx.query.bind(tx),
-        transaction() {
-          throw new TypeError("Nested local authority reads are forbidden.");
-        },
-      },
-    }).getDelivery(state.assignment.deliveryId);
-    const current = await options.resolveAssignment(
+    captured: ActionInvokedData,
+  ): Promise<{ cancelled: boolean }> {
+    const found = await options.resolveAssignment(
       tx,
       structuredClone(state.caller),
       commandTime,
     );
+    const current = found ? structuredClone(found) : undefined;
     if (
-      !current || current.placement !== "owner-local" ||
+      !current || current.placement !== state.assignment.placement ||
       (grant === "ctx" ? current.ctxGranted : current.settlementGranted) !==
         true ||
-      current.invocation.actionRunId !== current.actionRunId
+      current.namespace !== state.assignment.namespace ||
+      current.actionId !== state.assignment.actionId ||
+      current.deliveryId !== state.assignment.deliveryId ||
+      current.invocation.actionRunId !==
+        state.assignment.invocation.actionRunId ||
+      ownerAttemptToken(current) !== ownerAttemptToken(state.assignment)
     ) {
-      refuse(
-        `Local execution ${
-          grant === "ctx" ? "input" : "settlement"
-        } authority was revoked.`,
-      );
+      refuse("Execution authority changed after policy.");
     }
     assertOwnerAttemptCaller(state.caller, current, options.ownerId);
     if (
-      JSON.stringify(localBinding(current)) !==
-        JSON.stringify(localBinding(state.assignment)) ||
-      !delivery || delivery.eventId !== current.sourceEventId ||
-      delivery.attempts !== 1 ||
-      delivery.settlementScopeId !== state.delivery.settlementScopeId ||
-      !ownerAttemptIsLive(delivery, current)
+      current.placement === "owner-local" &&
+      (state.assignment.placement !== "owner-local" ||
+        current.invocation.actionRunId !== current.actionRunId ||
+        JSON.stringify(localBinding(current)) !==
+          JSON.stringify(localBinding(state.assignment)))
     ) {
-      refuse(
-        `Local execution ${
-          grant === "ctx" ? "input" : "settlement"
-        } authority changed.`,
-      );
+      refuse("Local execution binding changed after policy.");
     }
+    const scope =
+      (await tx.query<{ state: string; cancellation_requested_at: unknown }>(
+        `SELECT state,cancellation_requested_at FROM ${operationTables.operations} WHERE namespace=$1 AND operation_id=$2 FOR UPDATE`,
+        [current.namespace, state.delivery.settlementScopeId],
+      )).rows[0];
+    if (
+      !scope || !["accepted", "running"].includes(scope.state) ||
+      (grant === "ctx" && scope.cancellation_requested_at != null)
+    ) {
+      refuse("Execution scope authority changed after policy.");
+    }
+    const store = createEventStore({
+      schema: options.schema,
+      session: {
+        query: tx.query.bind(tx),
+        transaction() {
+          throw new TypeError("Nested authority reads are forbidden.");
+        },
+      },
+    });
+    const delivery = await store.getDelivery(current.deliveryId);
+    if (
+      !delivery ||
+      JSON.stringify(delivery) !== JSON.stringify(state.delivery) ||
+      !ownerAttemptIsLive(delivery, current) ||
+      await store.getEventByDeduplicationId(
+        current.namespace,
+        `${current.invocation.actionRunId}:action:terminal`,
+      )
+    ) {
+      refuse("Execution durable attempt changed after policy.");
+    }
+    const currentCapture = await invoked(tx, state);
+    if (
+      !currentCapture ||
+      JSON.stringify(json(currentCapture)) !== JSON.stringify(json(captured))
+    ) {
+      refuse("Execution captured input changed after policy.");
+    }
+    if (isCurrentAssignment) {
+      let answer: unknown;
+      try {
+        answer = isCurrentAssignment(
+          structuredClone(state.caller),
+          structuredClone(current),
+        );
+        if (answer instanceof Promise) {
+          Promise.prototype.then.call(answer, undefined, () => undefined);
+        }
+      } catch {
+        refuse("Current private execution authority refused.");
+      }
+      if (answer !== true) {
+        refuse("Current private execution authority refused.");
+      }
+    }
+    return { cancelled: scope.cancellation_requested_at != null };
   }
   const inventory = (tx: SqlExecutor, state: Authorized) =>
     readOwnerEffectInventory(tx, {
@@ -876,21 +938,44 @@ export function createOwnerExecutionCommands(
       await options.scheduleSettlement(context, { namespace, operationId });
       scheduled.add(operationId);
     };
-    const store: EventStore = createEventStore({
+    const ownerStoreOptions: CreateEventStoreOptions = {
       session: options.session,
       schema: options.schema,
-      ownerCommit,
       lockSettlementScope: (tx, scope) => options.catalog.lockScope(tx, scope),
       admitOperationEventSql: (input, param) =>
         options.catalog.admitEventSql(input, param),
       indexOperationEvent: (tx, input) => options.catalog.indexEvent(tx, input),
       indexOperationEventSql: (input, param) =>
         options.catalog.indexEventSql(input, param),
+    };
+    const coordinatorFor = (store: EventStore) =>
+      createEventCoordinator({
+        store,
+        registry: options.registry,
+        executor: options.executor,
+        publish: options.publish,
+        scheduleOnly: true,
+      });
+    const store: EventStore = createEventStore({
+      ...ownerStoreOptions,
+      ownerCommit,
       settleActionOwners: async (tx, delivery) => {
+        // Settlement has already made this delivery terminal in the same owner
+        // transaction. Its abandoned obligations use the existing recovery
+        // writer, not an expired live-attempt capability. Keep that owner-control
+        // view private to this callback; never weaken the normal attempt store.
+        const settledStore = createEventStore({
+          ...ownerStoreOptions,
+          ownerCommit: {
+            ...context.ownerCommit,
+            transaction: tx,
+            afterCommit: context.afterCommit,
+          },
+        });
         const publish = await recoverDeliveryActions(
           {
-            store,
-            coordinator,
+            store: settledStore,
+            coordinator: coordinatorFor(settledStore),
             catalog: options.catalog,
             actions: options.registry.actions,
             commandTime: context.commandTime,
@@ -909,13 +994,7 @@ export function createOwnerExecutionCommands(
         return publish;
       },
     });
-    const coordinator = createEventCoordinator({
-      store,
-      registry: options.registry,
-      executor: options.executor,
-      publish: options.publish,
-      scheduleOnly: true,
-    });
+    const coordinator = coordinatorFor(store);
     const lifecycle = (state: Authorized, cancellation = false) => {
       const append = createActionLifecycleAppender({
         store,
@@ -1273,14 +1352,13 @@ export function createOwnerExecutionCommands(
       "input",
       context.signal,
     );
-    if (state.assignment.placement === "owner-local") {
-      await recheckLocalAuthority(
-        context.tx,
-        state,
-        context.commandTime,
-        "ctx",
-      );
-    }
+    await recheckAuthority(
+      context.tx,
+      state,
+      context.commandTime,
+      "ctx",
+      captured,
+    );
     return json({
       ...(barrier ? { recovery: barrier } : {}),
       actionId: captured.actionId,
@@ -1312,18 +1390,20 @@ export function createOwnerExecutionCommands(
     if (state.assignment.placement !== "owner-local") {
       refuse("Local settlement state requires a local Action attempt.");
     }
-    if (!await invoked(context.tx, state)) {
+    const captured = await invoked(context.tx, state);
+    if (!captured) {
       refuse("Execution has no captured invocation.");
     }
-    await recheckLocalAuthority(
+    const checked = await recheckAuthority(
       context.tx,
       state,
       context.commandTime,
       "settlement",
+      captured,
     );
     return json({
       reference: localBinding(state.assignment),
-      cancellationRequested: state.cancelled,
+      cancellationRequested: checked.cancelled,
     });
   };
   async function authorizeLocalStart(
@@ -1484,9 +1564,11 @@ export function createOwnerExecutionCommands(
     },
     async authorizeSettlement(tx, caller, commandTime) {
       const state = await current(tx, caller, commandTime, "complete");
-      if (!await invoked(tx, state)) {
+      const captured = await invoked(tx, state);
+      if (!captured) {
         refuse("Execution has no captured invocation.");
       }
+      await recheckAuthority(tx, state, commandTime, "settlement", captured);
       return state.assignment;
     },
     async authorizeLive(tx, caller, commandTime) {
@@ -1501,9 +1583,7 @@ export function createOwnerExecutionCommands(
       );
       await recoveryBarrier(tx, state, commandTime);
       await guardPrepared(tx, state, commandTime, "mutation");
-      if (state.assignment.placement === "owner-local") {
-        await recheckLocalAuthority(tx, state, commandTime, "ctx");
-      }
+      await recheckAuthority(tx, state, commandTime, "ctx", captured);
       return state.assignment;
     },
   };

@@ -19,19 +19,24 @@ test("normal delivery settlement retains and classifies abandoned nested Action 
     const effect = { namespace: "space", actionRunId: "nested", step: "send" };
     await f.db.transaction(async (tx) => {
       const catalog = createOperationCatalog(f.db, "public");
+      const ownerCommit = {
+        transaction: tx,
+        ownerId: "owner",
+        epoch: 1,
+        holderId: "holder",
+        commandTime: start,
+        ownerAttempt: {
+          deliveryId: f.reference().deliveryId,
+          attemptId: f.reference().dispatchAttemptId,
+        },
+        afterCommit() {
+          throw new Error("seed must not publish");
+        },
+      };
       const store = createEventStore({
         session: f.db,
         schema: "public",
-        ownerCommit: {
-          transaction: tx,
-          ownerId: "owner",
-          epoch: 1,
-          holderId: "holder",
-          commandTime: start,
-          afterCommit() {
-            throw new Error("seed must not publish");
-          },
-        },
+        ownerCommit,
         admitOperationEventSql: (input, param) =>
           catalog.admitEventSql(input, param),
         indexOperationEvent: (transaction, input) =>
@@ -54,15 +59,17 @@ test("normal delivery settlement retains and classifies abandoned nested Action 
         namespace: "space",
         metadata: { sourceDeliveryId: f.reference().deliveryId },
         append: createActionLifecycleAppender({
+          schema: "public",
           store,
           coordinator,
           actions: f.registry.actions,
           transaction: tx,
           commandTime: start,
+          ownerAuthority: ownerCommit,
           writer: {
-            kind: "delivery",
+            kind: "owner-attempt",
             deliveryId: f.reference().deliveryId,
-            leaseOwner: f.reference().dispatchAttemptId,
+            attemptId: f.reference().dispatchAttemptId,
           },
         }),
       });

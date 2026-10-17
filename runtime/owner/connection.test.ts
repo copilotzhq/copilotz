@@ -1760,3 +1760,111 @@ test("restricted effect settlement revalidates SQL authority after admission", a
     );
   });
 });
+
+test("simple Action calls require host normalization and reject forged trusted fields", async () => {
+  const calls: unknown[] = [];
+  const owner = recordingBoundary({
+    executeInput: (who, command) => {
+      calls.push([who, command]);
+      return Promise.resolve({ status: "committed", result: null });
+    },
+  });
+  const ctx = context({
+    workload: "copilotz.owner.action-call",
+    parent: undefined,
+  });
+  assert.equal(
+    await admission(owner, { resolveIngress: () => caller }).admitUnassigned(
+      ctx,
+    ),
+    undefined,
+  );
+  const host = admission(owner, {
+    resolveIngress: () => caller,
+    prepareIngressAction: (_context, _id, who, request) => {
+      assert.deepEqual(who, caller);
+      assert.deepEqual(request, {
+        actionAlias: "run",
+        input: { value: 1 },
+        operationKey: "local",
+      });
+      return Promise.resolve(rootCommand);
+    },
+  });
+  const handler = await host.admitUnassigned(ctx);
+  assert(handler);
+  const signal = new AbortController().signal;
+  for (
+    const payload of [
+      { actionAlias: "run", input: {}, provenance: {} },
+      { actionAlias: "run", input: {}, metadata: {} },
+      { actionAlias: "run", input: {}, operationKey: "" },
+      { actionAlias: "run" },
+    ]
+  ) {
+    assert.equal(
+      decode(await handler({ input: stream(payload), signal })).ok,
+      false,
+    );
+  }
+  assert.equal(calls.length, 0);
+  assert.equal(
+    decode(
+      await handler({
+        input: stream({
+          actionAlias: "run",
+          input: { value: 1 },
+          operationKey: "local",
+        }),
+        signal,
+      }),
+    ).ok,
+    true,
+  );
+  assert.deepEqual(calls, [[caller, rootCommand]]);
+});
+
+test("simple Action normalization rechecks current binding and owner after its await", async () => {
+  for (const change of ["caller", "owner", "abort"] as const) {
+    let writes = 0;
+    let currentCaller: OwnerCaller | undefined = caller;
+    const owner = recordingBoundary({
+      executeInput: () => {
+        writes++;
+        return Promise.resolve({ status: "committed", result: null });
+      },
+    });
+    const entered = deferred();
+    const release = deferred();
+    const controller = new AbortController();
+    const host = admission(owner, {
+      resolveIngress: () => currentCaller,
+      prepareIngressAction: async () => {
+        entered.resolve();
+        await release.promise;
+        return rootCommand;
+      },
+    });
+    const handler = await host.admitUnassigned(
+      context({
+        workload: "copilotz.owner.action-call",
+        parent: undefined,
+        signal: controller.signal,
+      }),
+    );
+    assert(handler);
+    const pending = handler({
+      input: stream({ actionAlias: "run", input: null }),
+      signal: controller.signal,
+    });
+    await entered.promise;
+    if (change === "caller") currentCaller = undefined;
+    if (change === "owner") {
+      Object.defineProperty(owner, "state", { value: "stopped" });
+    }
+    if (change === "abort") controller.abort();
+    release.resolve();
+    assert.equal(decode(await pending).ok, false);
+    assert.equal(writes, 0);
+  }
+});

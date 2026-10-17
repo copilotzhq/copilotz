@@ -511,3 +511,14 @@ passes; independent connection coverage is 39 cases plus the original
 reproducer. Two wrapper lifecycle cases also pass. The expanded worker closure
 and effect-aware retry gate are a separate pending checkpoint; provider
 conversion remains open.
+
+### Host-normalized ordinary Action calls
+
+A private fixed Action-call route accepts only registered alias, ordinary input
+and an optional local operation key. A mandatory host hook derives trusted
+principal/route facts; current owner, ingress binding and cancellation are
+rechecked after normalization. The derived named admission command is bounded
+and independently authorized in SQL before replay. Unsupported call-option
+fields refuse rather than disappear. All 41 connection tests pass independently.
+Actual host policy normalization and the common public facade remain separate
+work.

@@ -16,6 +16,7 @@ import { assertJsonValue } from "../json.ts";
 const EFFECT_SETTLE = "copilotz.owner.effect-settle";
 const EFFECT_STATE = "copilotz.owner.effect-state";
 const ACTION = "copilotz.owner.action";
+const ACTION_CALL = "copilotz.owner.action-call";
 const ACTION_RESULT = "copilotz.owner.action-result";
 const COMMAND = "copilotz.owner.command";
 const READY = "copilotz.owner.ready";
@@ -48,6 +49,27 @@ const ERROR_CODES = new Set([
   "effect_data_invalid",
   "effect_indeterminate",
 ]);
+export type OwnerActionCallRequest = Readonly<{
+  actionAlias: string;
+  input: OwnerJson;
+  operationKey?: string;
+}>;
+function actionCallRequest(value: unknown): OwnerActionCallRequest {
+  const request = object(value);
+  if (
+    Object.keys(request).some((key) =>
+      !["actionAlias", "input", "operationKey"].includes(key)
+    ) ||
+    typeof request.actionAlias !== "string" || !request.actionAlias.trim() ||
+    !Object.hasOwn(request, "input") ||
+    (Object.hasOwn(request, "operationKey") &&
+      (typeof request.operationKey !== "string" ||
+        !request.operationKey.trim()))
+  ) {
+    throw new TypeError("Invalid Action call request.");
+  }
+  return structuredClone(request) as OwnerActionCallRequest;
+}
 type JsonObject = Readonly<Record<string, OwnerJson>>;
 
 export type OwnerHostCaller = (
@@ -184,6 +206,16 @@ export function createOwnerWorkerCallAdmission(
       ownerId: string,
       route: "action" | "action-result",
     ): OwnerCaller | undefined | Promise<OwnerCaller | undefined>;
+    /** Host-only normalization must derive trusted facts under current policy.
+     * Its result is checked again against the current ingress binding before SQL
+     * admission; the command itself must independently reauthorize before replay. */
+    prepareIngressAction?(
+      context: OwnerWorkerCallContext,
+      ownerId: string,
+      caller: OwnerCaller,
+      request: OwnerActionCallRequest,
+      signal: AbortSignal,
+    ): Promise<OwnerInputCommand>;
     /** Resolve host-owned assignment state and grants, not request metadata.
      * Current session/execution/policy must also be checked inside boundary.authorize. */
     resolveAssignment(
@@ -220,7 +252,7 @@ export function createOwnerWorkerCallAdmission(
       context.workload !== COMMAND && context.workload !== RECEIPT &&
       context.workload !== PROJECT && context.workload !== COMPLETE &&
       context.workload !== READY && context.workload !== ACTION &&
-      context.workload !== ACTION_RESULT &&
+      context.workload !== ACTION_RESULT && context.workload !== ACTION_CALL &&
       context.workload !== EFFECT_SETTLE &&
       context.workload !== EFFECT_STATE
     ) {
@@ -229,7 +261,8 @@ export function createOwnerWorkerCallAdmission(
     if (
       recoveryOnly && context.workload !== RECEIPT &&
       context.workload !== READY &&
-      context.workload !== ACTION && context.workload !== ACTION_RESULT
+      context.workload !== ACTION && context.workload !== ACTION_RESULT &&
+      context.workload !== ACTION_CALL
     ) return undefined;
     const ownerId = context.metadata.ownerId;
     if (
@@ -246,15 +279,19 @@ export function createOwnerWorkerCallAdmission(
         !await options.authorizeReadiness?.(context, ownerId) ||
         !currentOwner() || context.signal.aborted)
     ) return undefined;
-    const ingressRoute = context.workload === ACTION
-      ? "action"
-      : context.workload === ACTION_RESULT
-      ? "action-result"
-      : undefined;
+    const ingressRoute =
+      context.workload === ACTION || context.workload === ACTION_CALL
+        ? "action"
+        : context.workload === ACTION_RESULT
+        ? "action-result"
+        : undefined;
     if (
       ingressRoute &&
       (context.parent || !currentOwner() || context.signal.aborted)
     ) return undefined;
+    if (context.workload === ACTION_CALL && !options.prepareIngressAction) {
+      return undefined;
+    }
     const ingress = ingressRoute
       ? await options.resolveIngress?.(context, ownerId, ingressRoute)
       : undefined;
@@ -294,7 +331,7 @@ export function createOwnerWorkerCallAdmission(
       let committed = false;
       try {
         signal.throwIfAborted();
-        const payload = await read(input, signal);
+        let payload = await read(input, signal);
         signal.throwIfAborted();
         if (ingressRoute) {
           const fresh = await options.resolveIngress?.(
@@ -355,7 +392,32 @@ export function createOwnerWorkerCallAdmission(
             throw new TypeError("Invalid restricted effect settlement.");
           }
         }
-        if (context.workload === ACTION) {
+        if (context.workload === ACTION_CALL) {
+          payload = await options.prepareIngressAction!(
+            context,
+            ownerId,
+            structuredClone(admitted),
+            actionCallRequest(payload),
+            signal,
+          );
+          signal.throwIfAborted();
+          const fresh = await options.resolveIngress?.(
+            context,
+            ownerId,
+            "action",
+          );
+          if (
+            !fresh || !currentOwner() || context.signal.aborted ||
+            JSON.stringify(fresh) !== JSON.stringify(admitted)
+          ) {
+            throw new TypeError(
+              "Ingress authority changed during normalization.",
+            );
+          }
+          encode(payload); // Bound the derived command as well as the wire request.
+          payload = structuredClone(payload);
+        }
+        if (context.workload === ACTION || context.workload === ACTION_CALL) {
           const command = object(payload);
           if (
             command.kind !== "action.admit" || command.domain !== "logical" ||
@@ -368,48 +430,50 @@ export function createOwnerWorkerCallAdmission(
             throw new TypeError("Invalid named Action admission request.");
           }
         }
-        const result = context.workload === ACTION
-          ? await owner.executeInput(admitted, payload as OwnerInputCommand, {
-            signal,
-          })
-          : context.workload === ACTION_RESULT
-          ? await owner.project(
-            admitted,
-            "action.result",
-            payload as OwnerJson,
-            { signal },
-          )
-          : isEffectState
-          ? await owner.project(
-            admitted,
-            "effect.state",
-            payload as OwnerJson,
-            { signal },
-          )
-          : isCommand
-          ? await owner.execute(admitted, object(payload) as OwnerCommand, {
-            signal,
-          })
-          : context.workload === PROJECT
-          ? await (() => {
-            const request = object(payload);
-            if (
-              Object.keys(request).some((key) =>
-                key !== "kind" && key !== "input"
-              ) || typeof request.kind !== "string" ||
-              !Object.hasOwn(request, "input")
-            ) {
-              throw new TypeError("Invalid owner projection request.");
-            }
-            return owner.project(
+        const result =
+          context.workload === ACTION || context.workload === ACTION_CALL
+            ? await owner.executeInput(admitted, payload as OwnerInputCommand, {
+              signal,
+            })
+            : context.workload === ACTION_RESULT
+            ? await owner.project(
               admitted,
-              request.kind,
-              request.input as OwnerJson,
+              "action.result",
+              payload as OwnerJson,
               { signal },
-            );
-          })()
-          : await owner.readReceipt(admitted, receiptIdentity(payload));
-        committed = isCommand || context.workload === ACTION;
+            )
+            : isEffectState
+            ? await owner.project(
+              admitted,
+              "effect.state",
+              payload as OwnerJson,
+              { signal },
+            )
+            : isCommand
+            ? await owner.execute(admitted, object(payload) as OwnerCommand, {
+              signal,
+            })
+            : context.workload === PROJECT
+            ? await (() => {
+              const request = object(payload);
+              if (
+                Object.keys(request).some((key) =>
+                  key !== "kind" && key !== "input"
+                ) || typeof request.kind !== "string" ||
+                !Object.hasOwn(request, "input")
+              ) {
+                throw new TypeError("Invalid owner projection request.");
+              }
+              return owner.project(
+                admitted,
+                request.kind,
+                request.input as OwnerJson,
+                { signal },
+              );
+            })()
+            : await owner.readReceipt(admitted, receiptIdentity(payload));
+        committed = isCommand || context.workload === ACTION ||
+          context.workload === ACTION_CALL;
         if (
           context.workload === PROJECT || context.workload === ACTION_RESULT ||
           isEffectState
@@ -568,6 +632,16 @@ export function createOwnerConnection(
         throw new TypeError("Invalid named Action admission request.");
       }
       return await call(ACTION, command, callOptions) as OwnerCommandOutcome;
+    },
+    async callAction(
+      request: OwnerActionCallRequest,
+      callOptions?: Readonly<{ signal?: AbortSignal; deadlineAtMs?: number }>,
+    ): Promise<OwnerCommandOutcome> {
+      return await call(
+        ACTION_CALL,
+        actionCallRequest(request),
+        callOptions,
+      ) as OwnerCommandOutcome;
     },
     async actionResult(
       reference: OwnerJson,

@@ -158,7 +158,6 @@ export function createOwnerTransactionPlanner<
             "record",
             JSON.stringify([
               identity.ownerId,
-              identity.workerId,
               identity.invocationId,
               key,
               index,

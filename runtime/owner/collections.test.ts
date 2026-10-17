@@ -286,3 +286,31 @@ test("owner Collection failed command rolls back rows and sequence without losin
     await f.close();
   }
 });
+
+test("Collection event identities do not depend on the executing worker", async () => {
+  const outcomes: unknown[] = [];
+  for (const workerId of ["worker", "replacement"]) {
+    const f = await fixture();
+    try {
+      if (workerId !== "worker") {
+        await f.db.query(
+          "INSERT INTO current_grants VALUES ($1,TRUE,'invocation','authorized-space')",
+          [workerId],
+        );
+      }
+      f.caller.workerId = workerId;
+      const outcome = await f.execute("stable-step", [
+        f.create("stable-record"),
+      ]);
+      outcomes.push({
+        recordIds: (outcome.result as { recordIds: string[] }).recordIds,
+        events: (await f.db.query(
+          "SELECT deduplication_id,subject_id FROM events ORDER BY seq",
+        )).rows,
+      });
+    } finally {
+      await f.close();
+    }
+  }
+  assert.deepEqual(outcomes[0], outcomes[1]);
+});

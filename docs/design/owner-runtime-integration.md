@@ -234,3 +234,16 @@ Cancellation or owner retirement while COMMIT is in flight suppresses projected
 output, even after its handler has finished. Durable mutation receipt semantics
 are unchanged. Transport delivery and full claim/attempt integration remain
 separate acceptance gates.
+
+### Logical identity and replacement workers
+
+Owner command identity is `(owner, domain, key)`. The original `worker_id` on a
+receipt is provenance, not an extra deduplication dimension. An authorized
+compatible replay records a receipt-reader association in the same transaction;
+only those associated authenticated workers can use parentless recovery.
+Guessing a key or submitting conflicting intent never grants that read
+association. Record IDs and Collection/event step identities bind stable
+invocation identity, not the current execution worker. Exact
+attempt/session/epoch checks still gate commands independently of logical
+replay. The private schema validator rejects the older worker-partitioned
+receipt key; this is fresh-schema support, not an existing-data migration.

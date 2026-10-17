@@ -142,7 +142,6 @@ export function createOwnerCollectionCommand(
       "owner-command",
       JSON.stringify([
         context.ownerCommit.ownerId,
-        context.caller.workerId,
         context.command.domain,
         context.command.key,
       ]),

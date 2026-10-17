@@ -1145,3 +1145,119 @@ for (const retire of ["abort", "stop"] as const) {
     });
   });
 }
+
+test("logical replay survives authorized worker replacement without opening receipt recovery", async () => {
+  await fixture(async (db) => {
+    const owner = createOwnerCommandBoundary(options(db));
+    await owner.acquire(0);
+    const step = command("invocation/step", { id: "same-logical-record" });
+    await owner.execute(caller(1, "original"), step);
+    assert.equal(
+      await owner.readReceipt(caller(1, "replacement"), {
+        domain: "logical",
+        key: step.key,
+      }),
+      undefined,
+    );
+    const replay = await owner.execute(caller(1, "replacement"), step);
+    assert.equal(replay.status, "duplicate");
+    assert.equal(
+      (await db.query<{ writes: number }>(
+        "SELECT (data->>'writes')::int AS writes FROM public.nodes",
+      )).rows[0].writes,
+      1,
+    );
+    await assert.rejects(
+      owner.execute(caller(1, "third"), command(step.key, { id: "different" })),
+      errorCode("owner_intent_conflict"),
+    );
+    assert.equal(
+      await owner.readReceipt(caller(1, "third"), {
+        domain: "logical",
+        key: step.key,
+      }),
+      undefined,
+    );
+    assert.deepEqual(
+      (await owner.readReceipt(caller(1, "replacement"), {
+        domain: "logical",
+        key: step.key,
+      }))?.result,
+      replay.result,
+    );
+    assert.equal(
+      (await db.query("SELECT * FROM public.owner_receipts")).rows.length,
+      1,
+    );
+  });
+});
+
+test("acquisition refuses the old worker-partitioned receipt schema", async () => {
+  await fixture(async (db) => {
+    await db.query(
+      "ALTER TABLE public.owner_receipt_readers DROP CONSTRAINT owner_receipt_readers_owner_domain_key_fkey",
+    );
+    await db.query(
+      "ALTER TABLE public.owner_receipts DROP CONSTRAINT owner_receipts_pkey",
+    );
+    await db.query(
+      "ALTER TABLE public.owner_receipts ADD PRIMARY KEY(owner,worker_id,domain,key)",
+    );
+    const owner = createOwnerCommandBoundary(options(db));
+    await assert.rejects(
+      owner.acquire(0),
+      errorCode("owner_schema_not_provisioned"),
+    );
+  });
+});
+
+test("authorized replay reader association rolls back with the outer transaction", async () => {
+  await fixture(async (db) => {
+    let fail = false;
+    const session: SqlSession = {
+      query: (sql, params) => db.query(sql, params),
+      transaction: (run) =>
+        db.transaction(async (tx) => {
+          const value = await run(tx);
+          if (fail) throw new Error("definitive transaction rollback");
+          return value;
+        }),
+    };
+    const owner = createOwnerCommandBoundary(options(session));
+    await owner.acquire(0);
+    const step = command("same-logical-step");
+    await owner.execute(caller(1, "original"), step);
+    fail = true;
+    await assert.rejects(
+      owner.execute(caller(1, "replacement"), step),
+      errorCode("owner_commit_unknown"),
+    );
+    assert.equal(owner.state, "stopped");
+    fail = false;
+    const successor = createOwnerCommandBoundary(
+      options(session, { holderId: "holder-b" }),
+    );
+    await successor.acquire(1);
+    assert.equal(
+      await successor.readReceipt(caller(1, "replacement"), {
+        domain: "logical",
+        key: step.key,
+      }),
+      undefined,
+    );
+    assert.equal(
+      (await db.query("SELECT * FROM owner_receipt_readers")).rows.length,
+      1,
+    );
+    assert.equal(
+      (await successor.execute(caller(2, "replacement"), step)).status,
+      "duplicate",
+    );
+    assert.ok(
+      await successor.readReceipt(caller(1, "replacement"), {
+        domain: "logical",
+        key: step.key,
+      }),
+    );
+  });
+});

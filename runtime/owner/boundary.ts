@@ -490,13 +490,8 @@ export function createOwnerCommandBoundary(
                     { kind: string; intent: OwnerJson; result: OwnerJson }
                   >(
                     `SELECT kind,intent,result FROM ${tables.receipts}
-                WHERE owner=$1 AND worker_id=$2 AND domain=$3 AND key=$4`,
-                    [
-                      ownerId,
-                      pending.caller.workerId,
-                      pending.command.domain,
-                      pending.command.key,
-                    ],
+                WHERE owner=$1 AND domain=$2 AND key=$3`,
+                    [ownerId, pending.command.domain, pending.command.key],
                   );
                 let outcome: OwnerCommandOutcome;
                 if (receipt.rows.length) {
@@ -592,6 +587,19 @@ export function createOwnerCommandBoundary(
                     );
                   }
                   outcome = { status: "committed", result };
+                }
+                if (!pending.projection) {
+                  // Only an authorized compatible execution/replay grants this
+                  // stable worker narrow receipt recovery across owner epochs.
+                  await tx.query(
+                    `INSERT INTO ${tables.receiptReaders}(owner,domain,key,worker_id) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING`,
+                    [
+                      ownerId,
+                      pending.command.domain,
+                      pending.command.key,
+                      pending.caller.workerId,
+                    ],
+                  );
                 }
                 checkPendingAbort(pending);
                 active = false;
@@ -862,7 +870,7 @@ export function createOwnerCommandBoundary(
         const found = await tx.query<
           { kind: string; intent: OwnerJson; result: OwnerJson }
         >(
-          `SELECT kind,intent,result FROM ${tables.receipts} WHERE owner=$1 AND worker_id=$2 AND domain=$3 AND key=$4`,
+          `SELECT r.kind,r.intent,r.result FROM ${tables.receipts} r JOIN ${tables.receiptReaders} a USING(owner,domain,key) WHERE r.owner=$1 AND a.worker_id=$2 AND r.domain=$3 AND r.key=$4`,
           [
             ownerId,
             authenticated.workerId,

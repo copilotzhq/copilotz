@@ -208,11 +208,11 @@ for (const mode of ["direct", "encoded"] as const) {
         }),
       },
       authorize(_tx, caller, command) {
-        assert.equal(caller.workerId, "worker");
+        assert.ok(["worker", "replacement"].includes(caller.workerId));
         assert.ok(command.key.startsWith("invocation:"));
       },
       authenticateReceipt(_tx, caller) {
-        assert.equal(caller.workerId, "worker");
+        assert.ok(["worker", "replacement"].includes(caller.workerId));
       },
     });
     const ownerEpoch = await boundary.acquire(0);
@@ -230,7 +230,11 @@ for (const mode of ["direct", "encoded"] as const) {
           metadata: request.metadata ?? {},
           signal,
           fence: {
-            identity: { workerId: "worker", attemptId: "attempt", epoch: 1 },
+            identity: {
+              workerId: caller.workerId,
+              attemptId: "attempt",
+              epoch: 1,
+            },
             connectionId: "connection",
             sessionGeneration: 1,
           },
@@ -264,7 +268,7 @@ for (const mode of ["direct", "encoded"] as const) {
         };
       },
     });
-    const transaction = createOwnerTransactionPlanner({
+    let transaction = createOwnerTransactionPlanner({
       collections: { notes },
       identity,
       execute: mode === "direct"
@@ -297,6 +301,24 @@ for (const mode of ["direct", "encoded"] as const) {
       assert.deepEqual(first.outcome.result, duplicate.outcome.result);
       assert.equal(businessMutations - before, 1);
       assert.equal(callbacks, 2);
+      const eventsBeforeReplacement =
+        (await db.query("SELECT id,seq FROM events ORDER BY seq")).rows;
+      caller.workerId = "replacement";
+      transaction = createOwnerTransactionPlanner({
+        collections: { notes },
+        identity: { ...identity, workerId: "replacement" },
+        execute: mode === "direct"
+          ? (command, options) => boundary.execute(caller, command, options)
+          : connection.execute,
+      });
+      const replaced = await run("initial", "replacement local return");
+      assert.equal(replaced.outcome.status, "duplicate");
+      assert.deepEqual(replaced.outcome.result, first.outcome.result);
+      assert.equal(businessMutations - before, 1);
+      assert.deepEqual(
+        (await db.query("SELECT id,seq FROM events ORDER BY seq")).rows,
+        eventsBeforeReplacement,
+      );
       await assert.rejects(run("changed", null));
       await assert.rejects(
         transaction({
@@ -435,4 +457,24 @@ test("planner refuses missing or blank required stable identity fields", () => {
       /identities are required/,
     );
   }
+});
+
+test("generated record IDs are stable across execution worker replacement", async () => {
+  const commands: OwnerCommand[] = [];
+  for (const workerId of ["original", "replacement"]) {
+    const transaction = createOwnerTransactionPlanner({
+      collections: { notes },
+      identity: { ...identity, workerId },
+      execute(command) {
+        commands.push(command);
+        return Promise.resolve(committed);
+      },
+    });
+    await transaction({
+      operationKey: "same-invocation/step",
+      execute: async ({ collections }) =>
+        await collections.notes.create({ title: "same" }),
+    });
+  }
+  assert.deepEqual(commands[0], commands[1]);
 });

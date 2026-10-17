@@ -5,44 +5,46 @@ import ts from "typescript";
 
 const root = new URL("../../", import.meta.url);
 
-test("registered Action and Processor worker runtime closure excludes database and body-store implementations", async () => {
-  const allowed = new Set([
-    "runtime/execution/registered-worker.ts",
-    "runtime/execution/registered-processor.ts",
-    "runtime/execution/child-action-port.ts",
-    "runtime/plugins/match.ts",
-    "runtime/application/owner-worker.ts",
-    "dependencies/oxian-worker.ts",
-    "runtime/owner/connection.ts",
-    "runtime/execution/owner-port.ts",
-    "runtime/execution/recovery.ts",
-    "runtime/execution/execution-heartbeat.ts",
-    "runtime/actions/execution-context.ts",
-    "runtime/actions/effects.ts",
-    "runtime/owner/effects-client.ts",
-    "runtime/actions/secret.ts",
-    "runtime/actions/deferral.ts",
-    "runtime/actions/value.ts",
-    "runtime/json.ts",
-    "runtime/content/input.ts",
-    "runtime/content/schema.ts",
-    "runtime/content/errors.ts",
-    "runtime/content/digest.ts",
-    "runtime/collections/validate.ts",
-    "runtime/collections/errors.ts",
-    "runtime/failure.ts",
-    "runtime/events/workflow-id.ts",
-    "runtime/owner/transaction.ts",
-    "dependencies/ajv.ts",
-    "runtime/actions/transaction-identity.ts",
-    "runtime/actions/protected-context.ts",
-  ]);
+const workerAllowed = new Set([
+  "runtime/execution/registered-worker.ts",
+  "runtime/execution/registered-action-invocation.ts",
+  "runtime/execution/registered-processor-invocation.ts",
+  "runtime/execution/registered-processor.ts",
+  "runtime/execution/child-action-port.ts",
+  "runtime/plugins/match.ts",
+  "runtime/application/owner-worker.ts",
+  "dependencies/oxian-worker.ts",
+  "runtime/owner/connection.ts",
+  "runtime/execution/owner-port.ts",
+  "runtime/execution/recovery.ts",
+  "runtime/execution/execution-heartbeat.ts",
+  "runtime/actions/execution-context.ts",
+  "runtime/actions/effects.ts",
+  "runtime/owner/effects-client.ts",
+  "runtime/actions/secret.ts",
+  "runtime/actions/deferral.ts",
+  "runtime/actions/value.ts",
+  "runtime/json.ts",
+  "runtime/content/input.ts",
+  "runtime/content/schema.ts",
+  "runtime/content/errors.ts",
+  "runtime/content/digest.ts",
+  "runtime/collections/validate.ts",
+  "runtime/collections/errors.ts",
+  "runtime/failure.ts",
+  "runtime/events/workflow-id.ts",
+  "runtime/owner/transaction.ts",
+  "dependencies/ajv.ts",
+  "runtime/actions/transaction-identity.ts",
+  "runtime/actions/protected-context.ts",
+]);
+
+async function runtimeClosure(
+  entrypoints: readonly string[],
+  allowed: ReadonlySet<string>,
+): Promise<ReadonlySet<string>> {
   const visited = new Set<string>();
-  const pending = [
-    new URL("runtime/application/owner-worker.ts", root),
-    new URL("runtime/execution/registered-worker.ts", root),
-    new URL("runtime/execution/owner-port.ts", root),
-  ];
+  const pending = entrypoints.map((path) => new URL(path, root));
   while (pending.length) {
     const file = pending.pop()!;
     const path = file.href.slice(root.href.length);
@@ -114,5 +116,35 @@ test("registered Action and Processor worker runtime closure excludes database a
     };
     visit(tree);
   }
-  assert.deepEqual([...visited].sort(), [...allowed].sort());
+  return visited;
+}
+
+test("registered Action and Processor worker runtime closure excludes database and body-store implementations", async () => {
+  const visited = await runtimeClosure([
+    "runtime/application/owner-worker.ts",
+    "runtime/execution/registered-worker.ts",
+    "runtime/execution/owner-port.ts",
+  ], workerAllowed);
+  assert.deepEqual([...visited].sort(), [...workerAllowed].sort());
+});
+
+test("neutral invocation kernels exclude placement drivers, transport and heartbeat implementations", async () => {
+  const placementOnly = new Set([
+    "runtime/execution/registered-worker.ts",
+    "runtime/execution/registered-processor.ts",
+    "runtime/execution/child-action-port.ts",
+    "runtime/application/owner-worker.ts",
+    "dependencies/oxian-worker.ts",
+    "runtime/owner/connection.ts",
+    "runtime/execution/owner-port.ts",
+    "runtime/execution/execution-heartbeat.ts",
+  ]);
+  const neutralAllowed = new Set(
+    [...workerAllowed].filter((path) => !placementOnly.has(path)),
+  );
+  const visited = await runtimeClosure([
+    "runtime/execution/registered-action-invocation.ts",
+    "runtime/execution/registered-processor-invocation.ts",
+  ], neutralAllowed);
+  assert.deepEqual([...visited].sort(), [...neutralAllowed].sort());
 });

@@ -13,11 +13,8 @@ import type {
   OwnerJson,
 } from "../owner/boundary.ts";
 import type { OwnerEffectPort } from "../owner/effects-client.ts";
-import { createOwnerEffectClient } from "../owner/effects-client.ts";
-import { createActionEffectController } from "../actions/effects.ts";
 
 import { createExecutionHeartbeat } from "./execution-heartbeat.ts";
-import { readExecutionRecovery } from "./recovery.ts";
 import type { RegisteredExecutionRecovery } from "./recovery.ts";
 
 /** Host-derived live assignment identity. These hints never grant authority. */
@@ -30,9 +27,7 @@ export type RegisteredExecutionReference = Readonly<{
   deliveryId: string;
   dispatchAttemptId: string;
 }>;
-export type RegisteredExecutionCompletion =
-  | Readonly<{ status: "completed"; output: OwnerJson }>
-  | Readonly<{ status: "failed" | "cancelled"; code: string }>;
+export type { RegisteredExecutionCompletion } from "./registered-invocation.ts";
 export type RegisteredExecutionReceipt =
   & RegisteredExecutionReference
   & Readonly<{
@@ -160,20 +155,9 @@ export type RegisteredWorkerOptions = Readonly<{
   maxAssignments?: number;
 }>;
 
-import { createActionInvocationContext } from "../actions/execution-context.ts";
-import { actionTransactionIdentity } from "../actions/transaction-identity.ts";
-import { actionSchemaHasSecrets } from "../actions/secret.ts";
-import { isActionDeferral } from "../actions/deferral.ts";
-import type {
-  ActionCallOptions,
-  ActionContext,
-  ActionReconcileResult,
-  ActionTransactionOptions,
-  RuntimeContext,
-} from "../actions/types.ts";
-import { validateAgainstJsonSchema } from "../collections/validate.ts";
 import { assertJsonValue } from "../json.ts";
-import { createOwnerTransactionPlanner } from "../owner/transaction.ts";
+import { runRegisteredActionInvocation } from "./registered-action-invocation.ts";
+import type { RegisteredExecutionCompletion } from "./registered-invocation.ts";
 
 function failure(code: string): Error & { code: string } {
   return Object.assign(new Error(code), {
@@ -245,17 +229,6 @@ function unknownOutcome(error: unknown): boolean {
       String(value.code),
     );
 }
-function sameIdentity(left: unknown, right: unknown): boolean {
-  const normalize = (value: unknown): string => {
-    if (value === undefined) return "";
-    const copied = snapshot(value) as Record<string, unknown>;
-    return JSON.stringify(
-      Object.keys(copied).sort().map((key) => [key, copied[key]]),
-    );
-  };
-  return normalize(left) === normalize(right);
-}
-
 /** Ordinary function lifetime only; open response-body renewal is unsupported. */
 function executionHeartbeat(input: {
   port: RegisteredOwnerExecutionPort;
@@ -383,302 +356,55 @@ export function createRegisteredActionWorker(
           exposed.abort();
         },
       });
-      let capabilityFailure = false;
-      let registrationOpen = true;
-      const pending: Promise<unknown>[] = [];
-      let pendingFailure: unknown;
-      let hasPendingFailure = false;
-      let effectIndeterminate = false;
-      const unsupported = (): never => {
-        capabilityFailure = true;
-        throw failure("registered_worker_capability_unsupported");
-      };
-      const unavailable = () => new Proxy({}, { get: unsupported });
-      const track = <T>(start: () => Promise<T>): Promise<T> => {
-        check();
-        if (!registrationOpen) {
-          throw failure("registered_worker_context_closed");
-        }
-        if (pending.length >= 100) return unsupported();
-        let promise: Promise<T>;
-        try {
-          promise = start();
-        } catch (error) {
-          promise = Promise.reject(error);
-        }
-        pending.push(promise.catch((error) => {
-          if (
-            error && typeof error === "object" && "code" in error &&
-            error.code === "effect_indeterminate"
-          ) {
-            effectIndeterminate = true;
-          }
-          if (!hasPendingFailure || unknownOutcome(error)) {
-            hasPendingFailure = true;
-            pendingFailure = error;
-          }
-        }));
-        return promise;
-      };
-      const planner = createOwnerTransactionPlanner({
-        collections: registry.collections,
-        identity: {
-          ownerId: projection.ownerId,
-          workerId: projection.workerId,
-          invocationId: projection.invocation.actionRunId,
-        },
-        execute(command, executeOptions) {
-          check();
-          if (capabilityFailure) return unsupported();
-          return port.execute(command, executeOptions);
-        },
-      });
-      const transaction = <T>(
-        callback: (context: unknown) => T | Promise<T>,
-        transactionOptions: ActionTransactionOptions = {},
-      ): Promise<T> => {
-        check();
-        if (!registrationOpen) {
-          throw failure("registered_worker_context_closed");
-        }
-        if (pending.length >= 100) return unsupported();
-        if (
-          !sameIdentity(
-            transactionOptions.identity,
-            actionTransactionIdentity(
-              projection.invocation.identity,
-              undefined,
-            ),
-          )
-        ) return unsupported();
-        return track(() =>
-          planner({
-            operationKey: transactionOptions.operationKey ?? "",
-            signal: transactionOptions.signal
-              ? AbortSignal.any([control.signal, transactionOptions.signal])
-              : control.signal,
-            execute: (context) =>
-              callback({
-                ...context,
-                relations: unavailable(),
-                vectors: unavailable(),
-              }),
-          }).then(({ value }) => value)
-        );
-      };
+      const invokeAction = projection.invocation.operationKey ===
+            projection.invocation.actionRunId &&
+          projection.invocation.actionRunId === ref.executionId
+        ? port.invokeAction?.bind(port)
+        : undefined;
+      const execute = port.execute.bind(port);
       let completion: RegisteredExecutionCompletion;
       try {
-        check();
-        const actions = Object.values(registry.actions).filter((action) =>
-          action.id === projection.actionId
-        );
-        if (actions.length !== 1) {
-          throw failure("registered_worker_action_unavailable");
-        }
-        const action = actions[0];
-        if (
-          action.content || action.resolve ||
-          actionSchemaHasSecrets(action.inputSchema) ||
-          actionSchemaHasSecrets(action.outputSchema)
-        ) unsupported();
-        if (action.inputSchema) {
-          validateAgainstJsonSchema(
-            action.inputSchema,
-            projection.input,
-            "Action input",
-          );
-        }
-        const recovery = projection.recovery === undefined
-          ? undefined
-          : readExecutionRecovery(projection.recovery);
-        if (recovery?.status === "blocked") {
-          effectIndeterminate = true;
-          throw failure("effect_indeterminate");
-        }
-        const capabilities = await createCapabilities({
+        completion = await runRegisteredActionInvocation({
           registry,
-          reference: snapshot(ref),
-          projection: snapshot(projection),
-          signal: exposed.signal,
-        });
-        check();
-        let actionIndex = 0;
-        const nestedActions = new Proxy(
-          Object.fromEntries(
-            Object.keys(registry.actions).map((actionAlias) => [
-              actionAlias,
-              new Proxy(
-                Object.assign(
-                  (input: unknown, callOptions: ActionCallOptions = {}) => {
-                    if (
-                      !port.invokeAction ||
-                      callOptions.identity !== undefined ||
-                      callOptions.metadata !== undefined ||
-                      projection.invocation.operationKey !==
-                        projection.invocation.actionRunId ||
-                      projection.invocation.actionRunId !== ref.executionId
-                    ) return unsupported();
-                    const localKey = callOptions.operationKey?.trim() ||
-                      String(++actionIndex);
-                    identifier(localKey);
-                    return track(() =>
-                      port.invokeAction!({
-                        reference: snapshot(ref),
-                        actionAlias,
-                        input: snapshot(input) as OwnerJson,
-                        operationKey: localKey,
-                      }, {
-                        signal: callOptions.signal
-                          ? AbortSignal.any([
-                            control.signal,
-                            callOptions.signal,
-                          ])
-                          : control.signal,
-                      })
-                    );
-                  },
-                  { prepare: unsupported },
-                ),
-                { get: unsupported },
-              ),
-            ]),
-          ),
-          {
-            get(target, property) {
-              return Object.hasOwn(target, property)
-                ? Reflect.get(target, property)
-                : unsupported();
-            },
-          },
-        );
-        const absentEffect = (): never => {
-          capabilityFailure = true;
-          throw failure("action_effect_unavailable");
-        };
-        const effects = port.effects
-          ? createActionEffectController({
-            client: createOwnerEffectClient({
-              ownerId: projection.ownerId,
-              namespace: projection.namespace,
-              actionRunId: projection.invocation.actionRunId,
-              port: port.effects,
-            }),
-            signal: control.signal,
-            check,
-            track,
-            context: () => context,
-            reconcile: action.reconcile as
-              | ((
-                step: string,
-                context: ActionContext,
-              ) =>
-                | ActionReconcileResult
-                | Promise<ActionReconcileResult>)
-              | undefined,
-          })
-          : undefined;
-        const context = createActionInvocationContext({
-          effect: effects?.effect ?? {
-            begin: absentEffect,
-            inspect: absentEffect,
-            confirm: absentEffect,
-            notStarted: absentEffect,
-          },
-          host: {
+          invocation: {
+            actionId: projection.actionId,
+            ...(projection.recovery === undefined
+              ? {}
+              : { recovery: projection.recovery }),
+            input: projection.input,
             namespace: projection.namespace,
             databaseSchema: projection.databaseSchema,
-            resources: capabilities.resources,
-            adapters: capabilities.adapters,
-            collections: new Proxy({}, { get: () => unavailable() }),
-            vectors: unavailable(),
-            content: Object.fromEntries(
-              [
-                "authorize",
-                "prepare",
-                "materialize",
-                "publish",
-                "get",
-                "getMany",
-                "resolve",
-                "resolveMany",
-                "open",
-              ].map((name) => [name, unsupported]),
-            ),
-            streams: { open: unsupported, follow: unsupported },
-            signal: exposed.signal,
-            now: () => new Date(),
-            transaction,
-            readSnapshot: unsupported,
-            signalDeferredWait: unsupported,
-          } as unknown as RuntimeContext,
-          frame: {
-            ...snapshot(projection.invocation),
-            actionId: projection.actionId,
-            signal: exposed.signal,
-            nextActionIndex: unsupported,
+            ownerId: projection.ownerId,
+            invocation: projection.invocation,
           },
-          actions: nestedActions,
-          progress: unsupported,
-          registerDeferredWait: unsupported,
+          lifetime: {
+            check,
+            isCancelled: () => cancelled,
+            commandSignal: control.signal,
+            exposedSignal: exposed.signal,
+          },
+          calls: {
+            execute,
+            ...(invokeAction
+              ? {
+                invokeAction: (input, callOptions) =>
+                  invokeAction({
+                    reference: snapshot(ref),
+                    ...input,
+                  }, callOptions),
+              }
+              : {}),
+          },
+          effects: port.effects,
+          createCapabilities: () =>
+            createCapabilities({
+              registry,
+              reference: snapshot(ref),
+              projection: snapshot(projection),
+              signal: exposed.signal,
+            }),
         });
-        let output: unknown;
-        try {
-          for (const item of recovery?.effects ?? []) {
-            if (item.status !== "begun") continue;
-            if (!effects) {
-              effectIndeterminate = true;
-              throw failure("effect_indeterminate");
-            }
-            await effects.recover(item.step);
-          }
-          // A caught/unawaited reconciliation failure cannot reopen execution.
-          await Promise.all(pending);
-          if (hasPendingFailure) throw pendingFailure;
-          check();
-          output = await (action.execute as (
-            input: unknown,
-            context: ActionContext,
-          ) => unknown)(snapshot(projection.input), context);
-        } finally {
-          registrationOpen = false;
-          await Promise.all(pending);
-        }
-        if (hasPendingFailure) throw pendingFailure;
-        check();
-        if (
-          capabilityFailure || output instanceof ReadableStream ||
-          isActionDeferral(output)
-        ) unsupported();
-        const data = snapshot(
-          output === undefined ? null : output,
-        ) as OwnerJson;
-        if (action.outputSchema) {
-          validateAgainstJsonSchema(action.outputSchema, data, "Action output");
-        }
-        completion = { status: "completed", output: data };
-      } catch (error) {
-        if (
-          unknownOutcome(error) ||
-          (hasPendingFailure && unknownOutcome(pendingFailure))
-        ) {
-          throw hasPendingFailure && unknownOutcome(pendingFailure)
-            ? pendingFailure
-            : error;
-        }
-        completion = cancelled
-          ? { status: "cancelled", code: "action_cancelled" }
-          : {
-            status: "failed",
-            code: capabilityFailure
-              ? "action_capability_unsupported"
-              : effectIndeterminate ||
-                  (error !== null && typeof error === "object" &&
-                    "code" in error && error.code === "effect_indeterminate")
-              ? "effect_indeterminate"
-              : "action_failed",
-          };
       } finally {
-        registrationOpen = false;
         ownerOpen = false;
         exposed.abort();
         await heartbeat.stop();

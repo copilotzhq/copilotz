@@ -44,7 +44,6 @@ const notes = defineCollection({
 });
 const identity = {
   ownerId: "owner",
-  workerId: "worker",
   invocationId: "invocation",
 };
 const committed: OwnerCommandOutcome = {
@@ -317,7 +316,7 @@ for (const mode of ["direct", "encoded"] as const) {
       caller.principal.workerId = "replacement";
       transaction = createOwnerTransactionPlanner({
         collections: { notes },
-        identity: { ...identity, workerId: "replacement" },
+        identity,
         execute: mode === "direct"
           ? (command, options) => boundary.execute(caller, command, options)
           : connection.execute,
@@ -453,7 +452,7 @@ test("pre-aborted plans never invoke callbacks; generated references bind stable
 
 test("planner refuses missing or blank required stable identity fields", () => {
   for (
-    const invalid of [{}, { ownerId: "owner" }, { ...identity, workerId: "" }, {
+    const invalid of [{}, { ownerId: "owner" }, { ...identity, ownerId: "" }, {
       ...identity,
       invocationId: " ",
     }]
@@ -470,13 +469,18 @@ test("planner refuses missing or blank required stable identity fields", () => {
   }
 });
 
-test("generated record IDs are stable across execution worker replacement", async () => {
+test("generated record IDs require no worker identity across execution replacement", async () => {
   const commands: OwnerCommand[] = [];
+  const executionWorkers: string[] = [];
   for (const workerId of ["original", "replacement"]) {
     const transaction = createOwnerTransactionPlanner({
       collections: { notes },
-      identity: { ...identity, workerId },
+      identity: {
+        ownerId: identity.ownerId,
+        invocationId: identity.invocationId,
+      },
       execute(command) {
+        executionWorkers.push(workerId);
         commands.push(command);
         return Promise.resolve(committed);
       },
@@ -488,4 +492,5 @@ test("generated record IDs are stable across execution worker replacement", asyn
     });
   }
   assert.deepEqual(commands[0], commands[1]);
+  assert.deepEqual(executionWorkers, ["original", "replacement"]);
 });

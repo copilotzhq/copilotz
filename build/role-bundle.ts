@@ -37,6 +37,8 @@ const runtimeModules = new Set([
   "runtime/execution/execution-heartbeat.ts",
   "runtime/execution/owner-port.ts",
   "runtime/execution/recovery.ts",
+  "runtime/execution/registered-action-invocation.ts",
+  "runtime/execution/registered-processor-invocation.ts",
   "runtime/execution/registered-processor.ts",
   "runtime/execution/registered-worker.ts",
   "runtime/failure.ts",

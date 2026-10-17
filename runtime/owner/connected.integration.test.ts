@@ -367,7 +367,6 @@ for (const transportKind of ["in-process", "websocket"]) {
               collections: { notes },
               identity: {
                 ownerId: "owner",
-                workerId: "worker",
                 invocationId: metadata.invocation,
               },
               execute(command, options) {

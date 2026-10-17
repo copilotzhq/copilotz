@@ -43,7 +43,7 @@ export function createOwnerTransactionPlanner<
     collections: C;
     /** Stable host-assigned identity, not a transient connection or owner epoch. */
     identity: Readonly<
-      { ownerId: string; workerId: string; invocationId: string }
+      { ownerId: string; invocationId: string }
     >;
     execute(
       command: OwnerCommand,
@@ -54,7 +54,6 @@ export function createOwnerTransactionPlanner<
 ) {
   const identity = {
     ownerId: options.identity?.ownerId,
-    workerId: options.identity?.workerId,
     invocationId: options.identity?.invocationId,
   };
   if (
@@ -63,7 +62,7 @@ export function createOwnerTransactionPlanner<
     )
   ) {
     throw new TypeError(
-      "Stable owner, worker and invocation identities are required.",
+      "Stable owner and invocation identities are required.",
     );
   }
   const registrations = Object.entries(options.collections).map((

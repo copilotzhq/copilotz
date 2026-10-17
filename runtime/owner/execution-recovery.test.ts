@@ -22,7 +22,6 @@ function mutation(f: Awaited<ReturnType<typeof fixture>>) {
     collections: f.registry.collections,
     identity: {
       ownerId: "owner",
-      workerId: f.caller().principal.workerId,
       invocationId: "run",
     },
     execute: (command, options) =>

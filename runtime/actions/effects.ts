@@ -40,6 +40,8 @@ export function createActionEffectController(
   effect: ActionEffect;
   recover(step: string): Promise<void>;
 }> {
+  // Author code must never receive these private controller options as `this`.
+  const reconcile = options.reconcile;
   const reconciliations = new Map<string, Promise<void>>();
   const check = (signal: AbortSignal) => {
     options.check();
@@ -65,7 +67,7 @@ export function createActionEffectController(
       status: "not_started";
     }
   > => {
-    if (!options.reconcile) return indeterminate();
+    if (!reconcile) return indeterminate();
     let pending = reconciliations.get(step);
     // Two concurrent hooks must not wait on each other's recovery. Only
     // ordinary execution callers may join an existing reconciliation.
@@ -93,7 +95,7 @@ export function createActionEffectController(
         const context = { ...options.context(), effect };
         let result: ActionReconcileResult;
         try {
-          result = copy(await options.reconcile!(step, context));
+          result = copy(await reconcile(step, context));
         } catch (error) {
           // Transport ambiguity from nested owner calls must stay unknown.
           if (unknownOutcome(error)) throw error;

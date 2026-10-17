@@ -1,13 +1,9 @@
 /** Private no-database Processor execution over the same named owner calls on
  * embedded and connected hosts. Business identity belongs to the delivery. */
 import type {
-  ActionCallOptions,
-  ActionTransactionOptions,
-  RuntimeContext,
   RuntimeContextNamespaces,
   RuntimeIdentity,
 } from "../actions/types.ts";
-import { isNonRetryableError } from "../failure.ts";
 import { assertJsonValue } from "../json.ts";
 import type {
   OwnerCommand,
@@ -16,18 +12,11 @@ import type {
   OwnerJson,
   OwnerReceipt,
 } from "../owner/boundary.ts";
-import {
-  createOwnerTransactionPlanner,
-  type OwnerTransactionContext,
-} from "../owner/transaction.ts";
-import { matchProcessor } from "../plugins/match.ts";
-import type {
-  Processor,
-  ProcessorContext,
-  ProcessorEvent,
-} from "../plugins/processor.ts";
+import type { ProcessorEvent } from "../plugins/processor.ts";
 import type { PluginRegistry } from "../plugins/registry.ts";
 import { createExecutionHeartbeat } from "./execution-heartbeat.ts";
+import { runRegisteredProcessorInvocation } from "./registered-processor-invocation.ts";
+import type { RegisteredProcessorCompletion } from "./registered-invocation.ts";
 
 export type RegisteredProcessorAssignment = Readonly<
   { assignmentId: string; sessionId: string }
@@ -35,10 +24,7 @@ export type RegisteredProcessorAssignment = Readonly<
 export type RegisteredProcessorReference = Readonly<
   { deliveryId: string; dispatchAttemptId: string }
 >;
-export type RegisteredProcessorCompletion =
-  | Readonly<{ status: "succeeded" }>
-  | Readonly<{ status: "cancelled"; code: "processor_cancelled" }>
-  | Readonly<{ status: "failed"; code: string; retryable: boolean }>;
+export type { RegisteredProcessorCompletion } from "./registered-invocation.ts";
 export type RegisteredProcessorReceipt =
   & RegisteredProcessorReference
   & Readonly<{
@@ -219,21 +205,6 @@ function receipt(
   );
   return data;
 }
-function unknownOutcome(error: unknown) {
-  if (!error || typeof error !== "object") return false;
-  const value = error as {
-    code?: unknown;
-    indeterminate?: unknown;
-    outcome?: unknown;
-    execution?: unknown;
-  };
-  return value.indeterminate === true || value.outcome === "unknown" ||
-    value.execution === "indeterminate" ||
-    ["owner_commit_unknown", "persistence_indeterminate"].includes(
-      String(value.code),
-    );
-}
-
 /** One permanently bound data port for one authenticated Started assignment. */
 export function createRegisteredProcessorOwnerPort(
   options: Readonly<{
@@ -532,310 +503,51 @@ export function createRegisteredProcessorWorker(
           exposed.abort();
         },
       });
-      let registering = true;
-      let capabilityFailure = false;
-      let pendingFailure: unknown;
-      let hasPendingFailure = false;
-      let pendingFailures: unknown[] = [];
-      const pending: Promise<unknown>[] = [];
-      const unsupported = (): never => {
-        capabilityFailure = true;
-        throw failure("processor_capability_unsupported");
-      };
-      const unavailable = () => new Proxy({}, { get: unsupported });
-      const supported = <T extends object>(target: T): T =>
-        new Proxy(target, {
-          get: (value, property) =>
-            Object.hasOwn(value, property)
-              ? Reflect.get(value, property)
-              : unsupported(),
-        });
-      const plannedCollections = (
-        context: OwnerTransactionContext<typeof registry.collections>,
-      ) =>
-        supported(Object.fromEntries(
-          Object.entries(registry.collections).map(([alias, definition]) => {
-            const collection = context.collections[alias];
-            const method = <T extends (...args: never[]) => unknown>(
-              call: T,
-            ): T =>
-              new Proxy(call, {
-                get: unsupported,
-                apply(target, receiver, args) {
-                  if (definition.content?.fields.length || args.length > 1) {
-                    return unsupported();
-                  }
-                  return Reflect.apply(target, receiver, args);
-                },
-              });
-            return [
-              alias,
-              supported({
-                create: method(collection.create),
-                update: method(collection.update),
-                delete: method(collection.delete),
-                commands: supported(Object.fromEntries(
-                  Object.keys(definition.commands ?? {}).map((
-                    name,
-                  ) => [name, method(collection.commands[name])]),
-                )),
-              }),
-            ];
-          }),
-        ));
-      const track = <T>(start: () => Promise<T>): Promise<T> => {
-        check();
-        if (!registering) throw failure("processor_context_closed");
-        if (pending.length >= 100) return unsupported();
-        let task: Promise<T>;
-        try {
-          task = start();
-        } catch (error) {
-          task = Promise.reject(error);
-        }
-        pending.push(task.catch((error) => {
-          pendingFailures.push(error);
-          if (!hasPendingFailure || unknownOutcome(error)) {
-            hasPendingFailure = true;
-            pendingFailure = error;
-          }
-        }));
-        return task;
-      };
-      const planner = createOwnerTransactionPlanner({
-        collections: registry.collections,
-        identity: {
-          ownerId: projection.ownerId,
-          workerId: projection.workerId,
-          invocationId: ref.deliveryId,
-        },
-        execute(command, callOptions) {
-          check();
-          if (capabilityFailure) return unsupported();
-          return port.execute(command, callOptions);
-        },
-      });
-      let transactionIndex = 0;
-      let actionIndex = 0;
-      const transaction: RuntimeContext["transaction"] = (
-        callback,
-        callOptions: ActionTransactionOptions = {},
-      ) => {
-        if (callOptions.identity !== undefined) return unsupported();
-        const localKey = callOptions.operationKey ??
-          `transaction:${++transactionIndex}`;
-        text(localKey);
-        return track(() =>
-          planner({
-            operationKey: `${projection.operationKey}:${localKey}`,
-            signal: callOptions.signal
-              ? AbortSignal.any([control.signal, callOptions.signal])
-              : control.signal,
-            execute: (context) =>
-              callback(
-                {
-                  ...context,
-                  collections: plannedCollections(context),
-                  relations: unavailable(),
-                  vectors: unavailable(),
-                } as never,
-              ),
-          }).then(({ value }) => value)
-        );
-      };
+      const invokeAction = port.invokeAction?.bind(port);
+      const execute = port.execute.bind(port);
       let result: RegisteredProcessorCompletion;
       try {
-        const processor = Object.values(registry.processors).find((item) =>
-          item.id === projection.processorId
-        ) as Processor | undefined;
-        if (
-          !processor ||
-          !matchProcessor(processor, projection.event, projection.event.data)
-        ) throw failure("processor_unavailable");
-        const capabilities = await createCapabilities({
+        result = await runRegisteredProcessorInvocation({
           registry,
-          reference: snapshot(ref),
-          projection: snapshot(projection),
-          signal: exposed.signal,
-        });
-        check();
-        const actions = Object.fromEntries(
-          Object.keys(registry.actions).map((
-            actionAlias,
-          ) => [
-            actionAlias,
-            new Proxy(
-              (input: unknown, callOptions: ActionCallOptions = {}) => {
-                if (
-                  !port.invokeAction || callOptions.identity !== undefined ||
-                  callOptions.metadata !== undefined
-                ) return unsupported();
-                const localKey = callOptions.operationKey?.trim() ||
-                  String(++actionIndex);
-                text(localKey);
-                return track(() =>
-                  port.invokeAction!({
+          invocation: {
+            processorId: projection.processorId,
+            ownerId: projection.ownerId,
+            namespace: projection.namespace,
+            databaseSchema: projection.databaseSchema,
+            deliveryId: ref.deliveryId,
+            event: projection.event,
+            attempts: projection.attempts,
+            maxAttempts: projection.maxAttempts,
+            operationKey: projection.operationKey,
+            identity: projection.identity,
+          },
+          lifetime: {
+            check,
+            isCancelled: () => cancelled,
+            commandSignal: control.signal,
+            exposedSignal: exposed.signal,
+          },
+          calls: {
+            execute,
+            ...(invokeAction
+              ? {
+                invokeAction: (input, callOptions) =>
+                  invokeAction({
                     reference: snapshot(ref),
-                    actionAlias,
-                    input: snapshot(input) as OwnerJson,
-                    operationKey: localKey,
-                  }, {
-                    signal: callOptions.signal
-                      ? AbortSignal.any([control.signal, callOptions.signal])
-                      : control.signal,
-                  })
-                );
-              },
-              { get: unsupported },
-            ),
-          ]),
-        );
-        const directCollections = Object.fromEntries(
-          Object.entries(registry.collections).map((
-            [alias, definition],
-          ) => [
-            alias,
-            new Proxy({
-              create: (input: Record<string, unknown>, extra?: unknown) => {
-                if (extra !== undefined) return unsupported();
-                return transaction(({ collections }) =>
-                  collections[alias].create(input)
-                );
-              },
-              update: (
-                input: Record<string, unknown> & { id: string },
-                extra?: unknown,
-              ) => {
-                if (extra !== undefined) return unsupported();
-                return transaction(({ collections }) =>
-                  collections[alias].update(input)
-                );
-              },
-              delete: (input: { id: string }, extra?: unknown) => {
-                if (extra !== undefined) return unsupported();
-                return transaction(({ collections }) =>
-                  collections[alias].delete(input)
-                );
-              },
-              commands: new Proxy(
-                Object.fromEntries(
-                  Object.keys(definition.commands ?? {}).map((
-                    name,
-                  ) => [
-                    name,
-                    (
-                      input: Record<string, unknown> & { id: string },
-                      extra?: unknown,
-                    ) => {
-                      if (extra !== undefined) return unsupported();
-                      return transaction(({ collections }) =>
-                        collections[alias].commands[name](input)
-                      );
-                    },
-                  ]),
-                ),
-                {
-                  get: (target, property) =>
-                    Object.hasOwn(target, property)
-                      ? Reflect.get(target, property)
-                      : unsupported(),
-                },
-              ),
-            }, {
-              get: (target, property) =>
-                Object.hasOwn(target, property)
-                  ? Reflect.get(target, property)
-                  : unsupported(),
+                    ...input,
+                  }, callOptions),
+              }
+              : {}),
+          },
+          createCapabilities: () =>
+            createCapabilities({
+              registry,
+              reference: snapshot(ref),
+              projection: snapshot(projection),
+              signal: exposed.signal,
             }),
-          ]),
-        );
-        const context = {
-          namespace: projection.namespace,
-          databaseSchema: projection.databaseSchema,
-          operationKey: projection.operationKey,
-          identity: snapshot(projection.identity),
-          resources: capabilities.resources,
-          adapters: capabilities.adapters,
-          actions: new Proxy(actions, {
-            get: (target, property) =>
-              Object.hasOwn(target, property)
-                ? Reflect.get(target, property)
-                : unsupported(),
-          }),
-          collections: new Proxy(directCollections, {
-            get: (target, property) =>
-              Object.hasOwn(target, property)
-                ? Reflect.get(target, property)
-                : unsupported(),
-          }),
-          vectors: unavailable(),
-          content: unavailable(),
-          streams: unavailable(),
-          signal: exposed.signal,
-          now: () => new Date(),
-          transaction,
-          readSnapshot: unsupported,
-          signalDeferredWait: unsupported,
-        } as unknown as ProcessorContext;
-        try {
-          try {
-            await processor.handle(snapshot(projection.event), context);
-          } catch (error) {
-            await Promise.all(pending);
-            if (hasPendingFailure && unknownOutcome(pendingFailure)) {
-              throw pendingFailure;
-            }
-            check();
-            if (unknownOutcome(error)) throw error;
-            const terminal = isNonRetryableError(error) ||
-              projection.attempts >= projection.maxAttempts;
-            const precedingFailures = pendingFailures.length;
-            if (
-              capabilityFailure || !terminal ||
-              !await processor.onError?.(
-                error,
-                snapshot(projection.event),
-                context,
-              )
-            ) throw error;
-            // onError may acknowledge precisely the known settled failure that
-            // reached handle. Independent/unawaited failures and anything newly
-            // raised by onError stay latched; uncertainty is never cleared.
-            pendingFailures = pendingFailures.filter((failure, index) =>
-              index >= precedingFailures || failure !== error
-            );
-            hasPendingFailure = pendingFailures.length > 0;
-            pendingFailure = pendingFailures.find(unknownOutcome) ??
-              pendingFailures[0];
-          }
-        } finally {
-          registering = false;
-          await Promise.all(pending);
-        }
-        if (hasPendingFailure) throw pendingFailure;
-        check();
-        if (capabilityFailure) unsupported();
-        result = { status: "succeeded" };
-      } catch (error) {
-        if (
-          unknownOutcome(error) ||
-          (hasPendingFailure && unknownOutcome(pendingFailure))
-        ) {
-          throw hasPendingFailure && unknownOutcome(pendingFailure)
-            ? pendingFailure
-            : error;
-        }
-        result = cancelled
-          ? { status: "cancelled", code: "processor_cancelled" }
-          : {
-            status: "failed",
-            code: capabilityFailure
-              ? "processor_capability_unsupported"
-              : "processor_failed",
-            retryable: !capabilityFailure && !isNonRetryableError(error),
-          };
+        });
       } finally {
-        registering = false;
         open = false;
         exposed.abort();
         await heartbeat.stop();

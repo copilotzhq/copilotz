@@ -271,3 +271,83 @@ test("preflight recovery never begins or grants proceed and leaves closed steps 
   });
   assert.equal(absent.stats().begins, 0);
 });
+
+test("authored reconcile cannot receive private controller ports as this", async () => {
+  let receiver: unknown;
+  let state: "begun" | "confirmed" = "begun";
+  const controller = createActionEffectController({
+    signal: new AbortController().signal,
+    check() {},
+    track: (run) => run(),
+    context: () => ({} as ActionContext),
+    client: {
+      begin: () => Promise.resolve({ status: "indeterminate" as const }),
+      inspect: () =>
+        Promise.resolve(
+          state === "begun"
+            ? { status: "indeterminate" as const }
+            : { status: "replay" as const, outcome: null },
+        ),
+      confirm() {
+        state = "confirmed";
+        return Promise.resolve();
+      },
+      notStarted() {
+        return Promise.resolve();
+      },
+    },
+    reconcile(this: unknown) {
+      receiver = this;
+      return { status: "confirmed", outcome: null };
+    },
+  });
+  assert.deepEqual(await controller.effect.begin("step"), {
+    status: "replay",
+    outcome: null,
+  });
+  assert.equal(
+    receiver,
+    undefined,
+    "reconcile leaked controller options, including raw client and private lifetime check",
+  );
+});
+
+test("authored reconcile cannot replace the controller private lifetime check", async () => {
+  let current = true;
+  let state: "begun" | "confirmed" = "begun";
+  const controller = createActionEffectController({
+    signal: new AbortController().signal,
+    check() {
+      if (!current) throw new Error("private authority revoked");
+    },
+    track: (run) => run(),
+    context: () => ({} as ActionContext),
+    client: {
+      begin: () => Promise.resolve({ status: "indeterminate" as const }),
+      inspect: () =>
+        Promise.resolve(
+          state === "begun"
+            ? { status: "indeterminate" as const }
+            : { status: "replay" as const, outcome: null },
+        ),
+      confirm() {
+        state = "confirmed";
+        return Promise.resolve();
+      },
+      notStarted() {
+        return Promise.resolve();
+      },
+    },
+    reconcile(this: unknown) {
+      if (this && typeof this === "object" && "check" in this) {
+        (this as { check: () => void }).check = () => {};
+      }
+      current = false;
+      return { status: "confirmed", outcome: null };
+    },
+  });
+  await assert.rejects(
+    controller.effect.begin("step"),
+    /private authority revoked/,
+  );
+});

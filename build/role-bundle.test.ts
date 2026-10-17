@@ -37,6 +37,19 @@ Deno.test("worker role audits root reexports and side effects before tree shakin
         m.source === core("runtime/execution/registered-processor.ts")
       ),
     );
+    for (
+      const path of [
+        "runtime/execution/registered-action-invocation.ts",
+        "runtime/execution/registered-processor-invocation.ts",
+      ]
+    ) {
+      assert(graph.modules.some((module) => module.source === core(path)));
+    }
+    assert(
+      !graph.modules.some((module) =>
+        module.source === core("runtime/execution/registered-invocation.ts")
+      ),
+    );
     assert(
       !graph.modules.some((m) =>
         /\/(persistence|engine|storage)\//.test(m.source)

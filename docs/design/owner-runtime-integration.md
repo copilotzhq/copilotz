@@ -722,3 +722,17 @@ requires current exact-assignment approval, captured-input authorization and the
 effect-recovery barrier. The witness does not authorize dispatch, prove that an
 external effect did not start, or complete restart readiness. Logical operation
 identities do not incorporate deployment hashes.
+
+### Placement-neutral invocation kernels
+
+Action and Processor invocation/context assembly is shared independently of the
+leased worker drivers. The drivers still own claim, projection, heartbeat,
+completion, assignment replay and lifetime accounting. The pure kernels receive
+prebound capabilities and ordinary logical coordinates; Collection planning needs
+only owner and invocation identity. Worker replacement remains an authorization
+concern and does not change generated record IDs. Pending calls, effect recovery,
+Processor error acknowledgement and unknown completion retain their existing
+semantics. Authored reconciliation callbacks cannot receive the private effect
+controller as their JavaScript receiver. The production role graph includes only
+the two executable kernels; the shared type module is erased. This extraction
+does not itself provide the owner-local attempt driver or restart readiness.

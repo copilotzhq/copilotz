@@ -59,8 +59,9 @@ and obtain the user's amendment before changing it.
 The recovered approved F5 owner contract §3 already calls for removing old
 coordination mechanisms when owner serialization plus tests covers their
 invariant. However, §4.2 explicitly retains worker leases/heartbeats while
-removing them for local execution. Removing worker per-job renewal therefore
-requires an explicit spec amendment; it is currently proposed, not implemented.
+removing them for local execution. The user approved changing this split on 17
+October 2026. The [amended attempt contract](owner-attempt-authority.md) is now
+the target; the code migration is not yet complete.
 
 The proposed replacement retains owner epoch/holder fencing and authenticated
 session/assignment/attempt authority. Review worker renewal commands, projected

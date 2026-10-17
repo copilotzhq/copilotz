@@ -1,6 +1,6 @@
 # Owner, worker and Views implementation checklist
 
-Updated: 17 October 2026, 16:36 UTC.
+Updated: 17 October 2026, 16:56 UTC.
 
 This is the maintained coordination checklist for
 [Copilotz PR #93](https://github.com/copilotzhq/copilotz/pull/93). It tracks
@@ -10,15 +10,22 @@ production-ready. All changes remain draft: **no merge or publication**.
 
 ## Current work
 
-| Task                                | Status                  | Next acceptance gate                                                                               |
-| ----------------------------------- | ----------------------- | -------------------------------------------------------------------------------------------------- |
-| Local Processor bound owner adapter | Reviewed checkpoint     | Reviewed: independent 30 pure and seven real PostgreSQL cases; 83-case compatibility passed        |
-| Local nested Action authority       | Reviewed checkpoint     | Independent 144 pure and 114 PostgreSQL cases; private fresh same-owner mixed placement complete   |
-| Local Action effect capabilities    | Next implementation     | Extend exact local attempt authority and raw-call accounting to the existing effect flow           |
-| Faster test orchestration           | Representative measured | 16 files: 15.4% faster, 7.7% higher peak RSS; reordered files require broader isolation validation |
-| Reference-test reliability          | Reviewed correction     | 137 affected cases, independent 29-case check and three complete pipeline repeats passed           |
-| Local Processor host generations    | Reviewed checkpoint     | PostgreSQL 14 host plus two caller-facing helper cases pass; fresh same-owner retry scope complete |
-| Architecture cleanup                | In progress             | Shared local-port bookkeeping consolidated; migrate callers and retire superseded paths next       |
+| Task                                | Status                    | Next acceptance gate                                                                               |
+| ----------------------------------- | ------------------------- | -------------------------------------------------------------------------------------------------- |
+| Local Processor bound owner adapter | Reviewed checkpoint       | Reviewed: independent 30 pure and seven real PostgreSQL cases; 83-case compatibility passed        |
+| Local nested Action authority       | Reviewed checkpoint       | Independent 144 pure and 114 PostgreSQL cases; private fresh same-owner mixed placement complete   |
+| Local Action effect capabilities    | Paused for simplification | Extend exact local attempt authority and raw-call accounting to the existing effect flow           |
+| Faster test orchestration           | Representative measured   | 16 files: 15.4% faster, 7.7% higher peak RSS; reordered files require broader isolation validation |
+| Reference-test reliability          | Reviewed correction       | 137 affected cases, independent 29-case check and three complete pipeline repeats passed           |
+| Local Processor host generations    | Reviewed checkpoint       | PostgreSQL 14 host plus two caller-facing helper cases pass; fresh same-owner retry scope complete |
+| Architecture cleanup                | In progress               | Shared local-port bookkeeping consolidated; migrate callers and retire superseded paths next       |
+
+The next implementation is the approved
+[lease-free owner attempt contract](owner-attempt-authority.md). This replaces
+per-job worker renewal with exact owner/session/assignment authority. The
+recovered specification is amended; the runtime migration and replacement tests
+are pending. Every slice must name what it simplifies and eliminates before
+adding further machinery.
 
 ## 1. Programming model and composition
 
@@ -75,6 +82,9 @@ production-ready. All changes remain draft: **no merge or publication**.
       drain are preserved. Local preparation, effects, restart and public
       placement remain separate gates; the 152-case canonical inventory is not a
       claim of a combined canonical or full-suite run
+- [ ] Remove owner-path worker per-job leases/renewal and replace expiry
+      recovery with exact attempt revocation, retaining session and content
+      protection
 - [ ] Local Action effect capability parity
 - [ ] Public local placement activation and complete parity matrix
 

@@ -618,11 +618,19 @@ This transitional path requires an internal, current host assertion that the
 registered Action and its adapters have been converted to the effect protocol.
 It defaults to refusal (`effect_indeterminate`), including when no receipt
 exists. It is not a public retry policy or an author-supplied safety flag.
-Actual external-effect adapters still need conversion. Exhausted-attempt
-recovery still needs effect-aware failure classification and evidence retention
-in the existing fenced terminal path; it must not receive additional mutation
-attempts. The delivery default remains three attempts; recording a failed Action
-terminal does not authorize rerunning it.
+Actual external-effect adapters still need conversion. The private owner-only
+exhausted-delivery sweep uses the existing fenced failure path, preserves
+`DeliveryLeaseExpired` on the delivery and leaves effect receipts intact. A
+begun effect yields a fixed `effect_indeterminate` Action failure; a durable
+scope cancellation takes precedence. Exhaustion grants no new mutation attempt
+or provider dispatch. The delivery default remains three attempts; recording a
+failed Action terminal does not authorize rerunning it.
+
+Recovery registers ordinary failure/cancellation consumers, the terminal event,
+body, receipt, sequence and settlement alarm atomically, publishing and waking
+only after the outer commit. This does not yet implement the new
+`awaitOperation` resumption protocol or startup/takeover readiness and
+scheduling; those remain separate integration work.
 
 A run is limited to 100 distinct effect steps; the owner enforces this before a
 fresh begin. The inventory returns only bounded safe references and refuses

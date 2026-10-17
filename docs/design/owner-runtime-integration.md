@@ -574,3 +574,16 @@ durable cancellation. Unsupported options and prepare refuse before admission.
 Eight independent typed cases and the five actual host cases using this facade
 pass. This is the common Action component, not the complete public constructor
 or Collection/content/protected facade.
+
+### Exhausted and abandoned effect recovery
+
+The existing fenced delivery failure/cancellation path now retains begun effect
+receipts while recording a safe effect-indeterminate Action failure when needed.
+Exhaustion remains DeliveryLeaseExpired; no extra mutation attempts or invented
+recovery delivery are added. Ordinary failure consumers and settlement alarms
+commit atomically, and a bounded wake batch avoids callback-cap starvation.
+Abandoned nested obligations use the same effect inventory. Independent ten-case
+recovery review, local20 recovery/compatibility and32 execution/architecture
+cases pass. Startup/takeover composition and declared awaitOperation
+continuations are still open; ordinary failure-consumer delivery is not a
+substitute for resume.

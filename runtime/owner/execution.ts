@@ -479,6 +479,13 @@ export function createOwnerExecutionCommands(
             catalog: options.catalog,
             actions: options.registry.actions,
             commandTime: context.commandTime,
+            async hasUnresolvedEffect(transaction, ref) {
+              return (await readOwnerEffectInventory(transaction, {
+                ...ref,
+                ownerId: options.ownerId,
+                schema: options.schema,
+              })).some((effect) => effect.status === "begun");
+            },
           },
           tx,
           delivery,

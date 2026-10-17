@@ -758,3 +758,29 @@ migration. The existing conservative classifier validates local identities but
 leaves them blocked pending a genuine local start/execution and loss-recovery
 path. Resolving a pending local reservation does not prove a committed claim or
 permit invoking plugin code.
+
+### Atomic fresh owner-local Action prerequisite
+
+A private control-authorized start now joins local reservation, exact
+NULL-deadline claim and invoked-input capture in one fenced command transaction.
+The host must explicitly authorize the current private start handle before
+replay lookup and again after awaited input/preparation policy. A duplicate
+start receipt does not permit another execution, and an ambiguous start outcome
+cannot be retried as a new invocation. This fresh-only path does not manufacture
+a historical recovery contract.
+
+Subsequent local input and mutation authority uses the exact local principal,
+current private handle, owner epoch/holder and delivery/attempt tuple. It
+rechecks local liveness after awaited input and prepared-source policy before
+releasing input or admitting mutation. Local attempts have no wall-clock lease
+or heartbeat. Shared cancellation, effect-recovery and successful-completion
+rules remain in force; terminal settlement retires the reservation atomically
+and retains the same logical completion digest as worker placement. Publication
+and returned values remain behind the outer commit.
+
+This is a dormant owner command seam. The current application host and child
+binding surface remain explicitly worker-only, with unsupported local results
+refused. A genuine local invocation driver, placement-aware Collection/child
+composition and scheduling, local Processor behavior and exact old-epoch local
+loss handling still require separate integration and acceptance. In-process
+transport tests continue to exercise leased workers, not owner-local execution.

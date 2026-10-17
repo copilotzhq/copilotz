@@ -78,6 +78,7 @@ import type {
 import {
   createOwnerExecutionCommands,
   type OwnerExecutionAssignment,
+  type OwnerWorkerExecutionAssignment,
 } from "../owner/execution.ts";
 import {
   decodeOwnerMetadataConstraints,
@@ -144,13 +145,13 @@ export type OwnerHostPolicy = Readonly<{
     | Promise<Readonly<{ ctx: boolean; settlement: boolean }> | undefined>;
   input(
     tx: SqlExecutor,
-    assignment: OwnerExecutionAssignment,
+    assignment: OwnerWorkerExecutionAssignment,
     value: OwnerJson,
     time: string,
   ): void | Promise<void>;
   collections(
     tx: SqlExecutor,
-    assignment: OwnerExecutionAssignment | OwnerProcessorAssignment,
+    assignment: OwnerWorkerExecutionAssignment | OwnerProcessorAssignment,
     intent: OwnerCollectionIntent,
     time: string,
   ):
@@ -174,14 +175,14 @@ export type OwnerHostPolicy = Readonly<{
   ): void | Promise<void>;
   effectOutcome(
     tx: SqlExecutor,
-    assignment: OwnerExecutionAssignment,
+    assignment: OwnerWorkerExecutionAssignment,
     ref: OwnerEffectReference,
     value: OwnerJson,
     time: string,
   ): boolean | Promise<boolean>;
   effectNotStarted(
     tx: SqlExecutor,
-    assignment: OwnerExecutionAssignment,
+    assignment: OwnerWorkerExecutionAssignment,
     ref: OwnerEffectReference,
     evidence: OwnerEffectEvidence,
     time: string,
@@ -221,6 +222,15 @@ export type OwnerHostOptions = Readonly<{
   now?: () => string;
   onError?(error: unknown): void;
 }>;
+/** This host currently schedules leased worker placement only. */
+function workerAssignment(
+  value: OwnerExecutionAssignment,
+): OwnerWorkerExecutionAssignment {
+  if (value.placement !== "worker") {
+    unavailable("Local placement is unavailable in this host.");
+  }
+  return value;
+}
 function unavailable(message = "Owner host authority is unavailable."): never {
   throw Object.assign(new Error(message), { code: "owner_host_unavailable" });
 }
@@ -572,7 +582,7 @@ export async function createOwnerHost(options: OwnerHostOptions) {
     tx: SqlExecutor,
     caller: OwnerCaller,
     time: string,
-  ): Promise<OwnerExecutionAssignment | undefined> {
+  ): Promise<OwnerWorkerExecutionAssignment | undefined> {
     const current = await resolveCurrentAssignment(tx, caller, time);
     if (!current || "kind" in current.binding) return undefined;
     const { binding, grants } = current;
@@ -600,6 +610,7 @@ export async function createOwnerHost(options: OwnerHostOptions) {
     const parentActionRunId = source.metadata.parentActionRunId;
     if (parentActionRunId !== undefined) text(parentActionRunId);
     return {
+      placement: "worker",
       ownerId,
       workerId: binding.workerId,
       assignmentId: binding.assignmentId,
@@ -823,7 +834,7 @@ export async function createOwnerHost(options: OwnerHostOptions) {
     scheduleSettlement: settlement.schedule,
     resolveAssignment: resolveExecution,
     authorizeInput: (tx, assignment, value, time) =>
-      policy.input(tx, copy(assignment), copy(value), time),
+      policy.input(tx, copy(workerAssignment(assignment)), copy(value), time),
   });
   const processor = createOwnerProcessorCommands({
     ownerId,
@@ -882,7 +893,9 @@ export async function createOwnerHost(options: OwnerHostOptions) {
         }
         : {
           kind: "action",
-          assignment: await execution.authorizeLive(tx, caller, time),
+          assignment: workerAssignment(
+            await execution.authorizeLive(tx, caller, time),
+          ),
         };
     },
     authorizeChild(tx, _caller, parent, actionId, time) {
@@ -900,9 +913,11 @@ export async function createOwnerHost(options: OwnerHostOptions) {
     mode: "begin" | "settlement",
     time: string,
   ) {
-    const assignment = mode === "begin"
-      ? await execution.authorizeLive(tx, caller, time)
-      : await execution.authorizeSettlement(tx, caller, time);
+    const assignment = workerAssignment(
+      mode === "begin"
+        ? await execution.authorizeLive(tx, caller, time)
+        : await execution.authorizeSettlement(tx, caller, time),
+    );
     if (
       assignment.namespace !== ref.namespace ||
       assignment.invocation.actionRunId !== ref.actionRunId
@@ -1305,7 +1320,9 @@ export async function createOwnerHost(options: OwnerHostOptions) {
       if (command.kind === "collections") {
         const binding = await bridge.resolveStarted(tx, caller);
         if (!binding) unavailable();
-        let assignment: OwnerExecutionAssignment | OwnerProcessorAssignment;
+        let assignment:
+          | OwnerWorkerExecutionAssignment
+          | OwnerProcessorAssignment;
         let prefix: string;
         let identity: OwnerCollectionScope["identity"];
         if ("kind" in binding) {
@@ -1330,7 +1347,9 @@ export async function createOwnerHost(options: OwnerHostOptions) {
             },
           };
         } else {
-          assignment = await execution.authorizeLive(tx, caller, time);
+          assignment = workerAssignment(
+            await execution.authorizeLive(tx, caller, time),
+          );
           prefix = `${assignment.invocation.operationKey}/`;
           identity = {
             ...copy(assignment.invocation.identity),

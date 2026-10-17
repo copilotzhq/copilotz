@@ -43,7 +43,7 @@ import {
 } from "./child-action.ts";
 import {
   createOwnerExecutionCommands,
-  type OwnerExecutionAssignment,
+  type OwnerWorkerExecutionAssignment,
 } from "./execution.ts";
 import { provisionOwnerCommandSchema } from "./schema.ts";
 
@@ -76,9 +76,9 @@ async function setup(maxPendingDeliveries = 128) {
     hold: false,
     receiptReads: 0,
     mutateReturned: false,
-    returnedParent: undefined as OwnerExecutionAssignment | undefined,
+    returnedParent: undefined as OwnerWorkerExecutionAssignment | undefined,
     inTransaction: false,
-    parent: undefined as OwnerExecutionAssignment | undefined,
+    parent: undefined as OwnerWorkerExecutionAssignment | undefined,
   };
   const session: SqlSession = {
     query() {
@@ -153,7 +153,7 @@ async function setup(maxPendingDeliveries = 128) {
     createContext: createTestProcessorContext,
     workerId: "unused",
   });
-  const assignments = new Map<string, OwnerExecutionAssignment>();
+  const assignments = new Map<string, OwnerWorkerExecutionAssignment>();
   const execution = createOwnerExecutionCommands({
     ownerId,
     schema: "public",
@@ -178,6 +178,9 @@ async function setup(maxPendingDeliveries = 128) {
     maxPendingDeliveries,
     async resolveParent(tx, caller, time) {
       const assignment = await execution.authorizeLive(tx, caller, time);
+      if (assignment.placement !== "worker") {
+        throw new Error("fixture requires worker placement");
+      }
       state.returnedParent = assignment;
       return { kind: "action", assignment };
     },
@@ -257,8 +260,9 @@ async function setup(maxPendingDeliveries = 128) {
     ref: OwnerChildActionReference,
     id: string,
     parentActionRunId?: string,
-  ): OwnerExecutionAssignment {
-    const a: OwnerExecutionAssignment = {
+  ): OwnerWorkerExecutionAssignment {
+    const a: OwnerWorkerExecutionAssignment = {
+      placement: "worker",
       ownerId,
       workerId: `worker:${id}`,
       assignmentId: id,
@@ -291,7 +295,7 @@ async function setup(maxPendingDeliveries = 128) {
     sessionId: a.sessionId,
     dispatchAttemptId: a.dispatchAttemptId,
   });
-  async function claim(a: OwnerExecutionAssignment) {
+  async function claim(a: OwnerWorkerExecutionAssignment) {
     return await boundary.execute(caller(a), {
       kind: "execution.claim",
       domain: "incarnation",

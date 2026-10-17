@@ -50,6 +50,17 @@ import type { RegisteredExecutionRecovery } from "../execution/recovery.ts";
 import { readOwnerEffectInventory } from "./effects.ts";
 import { ownerTableNames } from "./schema.ts";
 import { ownerPrincipalIdentity } from "./principal.ts";
+import {
+  type OwnerLocalActionAssignmentBinding,
+  parseOwnerPlacementBinding,
+} from "./assignments.ts";
+import {
+  assertOwnerAttemptCaller,
+  ownerAttemptIsLive,
+  ownerAttemptToken,
+  ownerEventCommitForAttempt,
+} from "./attempt-authority.ts";
+import type { RegisteredActionInvocation } from "../execution/registered-invocation.ts";
 import type { PluginRegistry } from "../plugins/registry.ts";
 import {
   createOperationCatalogTables,
@@ -69,7 +80,8 @@ import type {
 /** Current, host-owned state. The resolver must verify the live parent transport
  * assignment/session, not reproduce bindings supplied in a command payload.
  * Each dispatchAttemptId is host-issued and never reused by a replacement. */
-export type OwnerExecutionAssignment = Readonly<{
+export type OwnerWorkerExecutionAssignment = Readonly<{
+  placement: "worker";
   ownerId: string;
   workerId: string;
   assignmentId: string;
@@ -82,6 +94,75 @@ export type OwnerExecutionAssignment = Readonly<{
   settlementGranted: boolean;
   invocation: RegisteredExecutionProjection["invocation"];
 }>;
+
+export type OwnerLocalExecutionAssignment =
+  & OwnerLocalActionAssignmentBinding
+  & Readonly<{
+    ctxGranted: boolean;
+    settlementGranted: boolean;
+    invocation: RegisteredActionInvocation["invocation"];
+  }>;
+export type OwnerExecutionAssignment =
+  | OwnerWorkerExecutionAssignment
+  | OwnerLocalExecutionAssignment;
+/** Internal projection only. It never enters the worker projection decoder. */
+export type OwnerLocalActionProjection =
+  & RegisteredActionInvocation
+  & Readonly<{
+    reference: OwnerLocalActionAssignmentBinding;
+  }>;
+function localBinding(
+  value: OwnerLocalActionAssignmentBinding,
+): OwnerLocalActionAssignmentBinding {
+  if (
+    !value || typeof value !== "object" || Array.isArray(value) ||
+    ![Object.prototype, null].includes(Object.getPrototypeOf(value))
+  ) {
+    throw new TypeError("Local Action binding required.");
+  }
+  const fields = [
+    "placement",
+    "ownerId",
+    "epoch",
+    "holderId",
+    "attemptId",
+    "namespace",
+    "sourceEventId",
+    "deliveryId",
+    "kind",
+    "actionId",
+    "actionRunId",
+  ];
+  const snapshot: Record<string, unknown> = {};
+  for (const field of fields) {
+    const property = Object.getOwnPropertyDescriptor(value, field);
+    if (!property?.enumerable || !("value" in property)) {
+      throw new TypeError(
+        "Local Action binding requires own data coordinates.",
+      );
+    }
+    snapshot[field] = property.value;
+  }
+  const binding = parseOwnerPlacementBinding(snapshot);
+  if (binding.placement !== "owner-local" || binding.kind !== "action") {
+    throw new TypeError("Local Action binding required.");
+  }
+  return binding;
+}
+export function ownerLocalActionStartKey(
+  binding: OwnerLocalActionAssignmentBinding,
+): string {
+  const value = localBinding(binding);
+  return JSON.stringify([
+    "owner.local-start",
+    1,
+    value.ownerId,
+    value.epoch,
+    value.holderId,
+    value.deliveryId,
+    value.attemptId,
+  ]);
+}
 
 type Authorized = Readonly<{
   caller: OwnerCaller;
@@ -166,7 +247,12 @@ const completionInput: OwnerCommandInputDefinition = {
 };
 function reference(
   assignment: OwnerExecutionAssignment,
-): RegisteredExecutionReference {
+):
+  | RegisteredExecutionReference
+  | Readonly<{ reference: OwnerLocalActionAssignmentBinding }> {
+  if (assignment.placement === "owner-local") {
+    return { reference: localBinding(assignment) };
+  }
   return {
     executionId: assignment.invocation.actionRunId,
     deliveryId: assignment.deliveryId,
@@ -177,12 +263,19 @@ function checkReference(
   input: unknown,
   assignment: OwnerExecutionAssignment,
 ): void {
+  if (assignment.placement === "owner-local") {
+    const value = parseOwnerPlacementBinding(input);
+    if (JSON.stringify(value) !== JSON.stringify(localBinding(assignment))) {
+      refuse("Local execution reference is not current.");
+    }
+    return;
+  }
   const data = object(input, [
     "executionId",
     "deliveryId",
     "dispatchAttemptId",
   ]);
-  const expected = reference(assignment);
+  const expected = reference(assignment) as RegisteredExecutionReference;
   for (const key of Object.keys(expected) as (keyof typeof expected)[]) {
     if (data[key] !== expected[key]) {
       refuse("Execution reference is not current.");
@@ -221,6 +314,25 @@ export function createOwnerExecutionCommands(
     executor: DeliveryExecutor;
     publish?: EventPublisher;
     leaseMs?: number;
+    /** Dormant host-private local composition. Missing capability fails closed.
+     * authorizeStart must affirm the exact current control/capacity entry and
+     * current permission to start this Action and access its input. */
+    local?: Readonly<{
+      authorizeStart(
+        tx: SqlExecutor,
+        caller: OwnerCaller,
+        binding: OwnerLocalActionAssignmentBinding,
+        commandTime: string,
+      ): boolean | Promise<boolean>;
+      reserveLocal(
+        context: OwnerCommandContext,
+        binding: OwnerLocalActionAssignmentBinding,
+      ): Promise<void>;
+      retireLocal(
+        context: OwnerCommandContext,
+        binding: OwnerLocalActionAssignmentBinding,
+      ): Promise<void>;
+    }>;
     /** Joins the current command and only enqueues a check after outer commit.
      * No drain or dependent execution may be awaited here. */
     scheduleSettlement?(
@@ -277,6 +389,16 @@ export function createOwnerExecutionCommands(
     commandTime: string,
     normalizedInput?: OwnerJson,
   ): Promise<void>;
+  authorizeLocalStart(
+    tx: SqlExecutor,
+    caller: OwnerCaller,
+    binding: OwnerLocalActionAssignmentBinding,
+    commandTime: string,
+  ): Promise<void>;
+  startLocal(
+    binding: OwnerLocalActionAssignmentBinding,
+    context: OwnerCommandContext,
+  ): Promise<OwnerJson>;
   /** Narrow current-attempt settlement capability, including after ctx
    * revocation. The caller must separately bind the effect reference. */
   authorizeSettlement(
@@ -292,6 +414,11 @@ export function createOwnerExecutionCommands(
   ): Promise<OwnerExecutionAssignment>;
 }> {
   const allowRecovery = options.allowRecovery;
+  const local = options.local && {
+    authorizeStart: options.local.authorizeStart,
+    reserveLocal: options.local.reserveLocal,
+    retireLocal: options.local.retireLocal,
+  };
   const authorizePreparedInput = options.authorizePreparedInput;
   text(options.ownerId);
   if (options.catalog.databaseSchema !== options.schema) {
@@ -304,41 +431,89 @@ export function createOwnerExecutionCommands(
   const tables = createCoreTableNames(options.schema);
   const operationTables = createOperationCatalogTables(options.schema);
   const authorized = new WeakMap<SqlExecutor, Authorized>();
+  const localStarts = new WeakMap<
+    SqlExecutor,
+    Readonly<{ state: Authorized; time: string }>
+  >();
+  async function authorizeStart(
+    tx: SqlExecutor,
+    caller: OwnerCaller,
+    binding: OwnerLocalActionAssignmentBinding,
+    commandTime: string,
+  ) {
+    const principal = caller.principal;
+    ownerPrincipalIdentity(principal);
+    if (
+      !local || principal.kind !== "owner-control" ||
+      principal.ownerId !== options.ownerId ||
+      binding.ownerId !== options.ownerId ||
+      principal.epoch !== binding.epoch ||
+      caller.ownerEpoch !== binding.epoch ||
+      principal.holderId !== binding.holderId
+    ) {
+      refuse("Current private local-start authority is required.");
+    }
+    const fence = await tx.query(
+      `SELECT owner FROM ${ownerTableNames(options.schema).epochs}
+      WHERE owner=$1 AND epoch=$2 AND holder=$3 FOR SHARE`,
+      [binding.ownerId, binding.epoch, binding.holderId],
+    );
+    if (
+      fence.rows.length !== 1 ||
+      await local.authorizeStart(
+          tx,
+          structuredClone(caller),
+          localBinding(binding),
+          commandTime,
+        ) !== true
+    ) {
+      refuse("Current private local-start authority is required.");
+    }
+  }
 
   async function current(
     tx: SqlExecutor,
     caller: OwnerCaller,
     commandTime: string,
     mode: "claim" | "input" | "complete" | "mutation" | "renew",
+    candidate?: OwnerLocalActionAssignmentBinding,
   ): Promise<Authorized> {
-    const found = await options.resolveAssignment(tx, caller, commandTime);
+    const found = candidate
+      ? {
+        ...candidate,
+        ctxGranted: true,
+        settlementGranted: true,
+        invocation: {
+          actionRunId: candidate.actionRunId,
+          rootKey: candidate.actionRunId,
+          operationKey: candidate.actionRunId,
+          metadata: {},
+        },
+      }
+      : await options.resolveAssignment(tx, caller, commandTime);
     if (!found) refuse("Execution assignment is no longer current.");
-    const assignment = structuredClone(found);
+    let assignment: OwnerExecutionAssignment = structuredClone(found);
+    if (candidate) await authorizeStart(tx, caller, candidate, commandTime);
+    else assertOwnerAttemptCaller(caller, assignment, options.ownerId);
+    if (assignment.placement === "owner-local") {
+      if (
+        !local ||
+        assignment.invocation.actionRunId !== assignment.actionRunId ||
+        (!candidate && (mode === "claim" || mode === "renew"))
+      ) {
+        refuse("Local Actions require fresh control start and cannot renew.");
+      }
+    }
     for (
       const value of [
-        assignment.ownerId,
-        assignment.workerId,
-        assignment.assignmentId,
-        assignment.sessionId,
         assignment.namespace,
         assignment.actionId,
         assignment.deliveryId,
-        assignment.dispatchAttemptId,
         assignment.invocation.actionRunId,
         assignment.invocation.rootKey,
         assignment.invocation.operationKey,
       ]
     ) text(value);
-    if (
-      assignment.ownerId !== options.ownerId ||
-      caller.principal.kind !== "worker" ||
-      assignment.workerId !== caller.principal.workerId ||
-      assignment.assignmentId !== caller.assignmentId ||
-      assignment.sessionId !== caller.sessionId ||
-      assignment.dispatchAttemptId !== caller.dispatchAttemptId
-    ) {
-      refuse("Execution assignment does not match the authenticated caller.");
-    }
     if (
       mode === "complete"
         ? assignment.settlementGranted !== true
@@ -364,17 +539,65 @@ export function createOwnerExecutionCommands(
     const initial = await tx.query<
       {
         settlement_scope_id: string;
+        action_scope_id: string | null;
+        event_id: string;
+        owner_id: string;
+        type: string;
+        deduplication_id: string;
+        consumer_id: string;
         namespace: string;
         correlation_id: string;
         metadata: Record<string, unknown>;
       }
     >(
-      `SELECT d.settlement_scope_id,e.namespace,e.correlation_id,e.metadata FROM ${tables.event_deliveries} d JOIN ${tables.events} e ON e.id=d.event_id WHERE d.id=$1`,
+      `SELECT d.settlement_scope_id,d.action_scope_id,d.consumer_id,e.id AS event_id,e.owner_id,e.type,e.deduplication_id,e.namespace,e.correlation_id,e.metadata FROM ${tables.event_deliveries} d JOIN ${tables.events} e ON e.id=d.event_id WHERE d.id=$1`,
       [assignment.deliveryId],
     );
     const source = initial.rows[0];
     if (!source || source.namespace !== assignment.namespace) {
       refuse("Execution delivery does not belong to this namespace.");
+    }
+    if (assignment.placement === "owner-local") {
+      if (
+        source.owner_id !== options.ownerId ||
+        source.event_id !== assignment.sourceEventId ||
+        source.type !== "copilotz.owner.action.requested" ||
+        source.deduplication_id !== assignment.actionRunId ||
+        source.consumer_id !== `registered:${assignment.actionId}` ||
+        source.metadata.actionId !== assignment.actionId ||
+        source.metadata.actionRunId !== assignment.actionRunId
+      ) {
+        refuse("Local Action source and target do not match.");
+      }
+      const rootKey = source.metadata.rootKey ?? assignment.actionRunId;
+      text(rootKey);
+      const parentActionRunId = source.metadata.parentActionRunId;
+      if (parentActionRunId !== undefined) text(parentActionRunId);
+      const metadata = json(source.metadata.actionMetadata);
+      if (
+        !metadata || typeof metadata !== "object" || Array.isArray(metadata)
+      ) {
+        throw new TypeError("Invalid immutable Action metadata.");
+      }
+      assignment = {
+        ...assignment,
+        invocation: {
+          actionRunId: assignment.actionRunId,
+          rootKey,
+          operationKey: assignment.actionRunId,
+          ...(parentActionRunId ? { parentActionRunId } : {}),
+          metadata:
+            metadata as RegisteredActionInvocation["invocation"]["metadata"],
+          identity: {
+            causationId: source.event_id,
+            correlationId: source.correlation_id,
+            settlementScopeId: source.settlement_scope_id,
+            ...(source.action_scope_id
+              ? { actionScopeId: source.action_scope_id }
+              : {}),
+          },
+        },
+      };
     }
     const scopes = await tx.query<
       { state: string; cancellation_requested_at: unknown }
@@ -408,18 +631,30 @@ export function createOwnerExecutionCommands(
       !delivery || delivery.settlementScopeId !== source.settlement_scope_id
     ) refuse("Execution delivery changed.");
     const time = Date.parse(commandTime);
-    const live = delivery.status === "leased" &&
-      delivery.leaseOwner === assignment.dispatchAttemptId &&
-      Date.parse(delivery.leaseExpiresAt ?? "") > time;
-    if (mode === "claim") {
+    const live = ownerAttemptIsLive(delivery, assignment, commandTime);
+    if (candidate) {
+      if (
+        delivery.status !== "pending" || delivery.attempts !== 0 ||
+        delivery.attempts >= delivery.maxAttempts ||
+        Date.parse(delivery.availableAt) > time
+      ) {
+        refuse("Local Action start requires an untouched fresh delivery.");
+      }
+    } else if (mode === "claim") {
       const eligible = delivery.attempts < delivery.maxAttempts &&
         ((["pending", "retry_wait"].includes(delivery.status) &&
           Date.parse(delivery.availableAt) <= time) ||
           (delivery.status === "leased" &&
             Date.parse(delivery.leaseExpiresAt ?? "") <= time &&
-            delivery.leaseOwner !== assignment.dispatchAttemptId));
+            delivery.leaseOwner !== ownerAttemptToken(assignment)));
       if (!eligible && !live) refuse("Execution delivery is not claimable.");
-    } else if (!live) refuse("Execution attempt lease is no longer live.");
+    } else if (!live) refuse("Execution attempt is no longer live.");
+    if (
+      assignment.placement === "owner-local" && !candidate &&
+      delivery.attempts !== 1
+    ) {
+      refuse("Local Action historical recovery is not enabled.");
+    }
     const terminal = await store.getEventByDeduplicationId(
       assignment.namespace,
       `${assignment.invocation.actionRunId}:action:terminal`,
@@ -488,6 +723,49 @@ export function createOwnerExecutionCommands(
     });
     signal.throwIfAborted();
   }
+  /** Local input is released only after awaited policies have finished. The
+   * initial private handle check cannot survive revocation inside those policies.
+   * Delivery remains locked; the final resolver independently rechecks its exact
+   * current private handle and durable reservation without rerunning input policy. */
+  async function recheckLocalInputAuthority(
+    tx: SqlExecutor,
+    state: Authorized,
+    commandTime: string,
+  ): Promise<void> {
+    if (state.assignment.placement !== "owner-local") return;
+    const delivery = await createEventStore({
+      schema: options.schema,
+      session: {
+        query: tx.query.bind(tx),
+        transaction() {
+          throw new TypeError("Nested local authority reads are forbidden.");
+        },
+      },
+    }).getDelivery(state.assignment.deliveryId);
+    const current = await options.resolveAssignment(
+      tx,
+      structuredClone(state.caller),
+      commandTime,
+    );
+    if (
+      !current || current.placement !== "owner-local" ||
+      current.ctxGranted !== true ||
+      current.invocation.actionRunId !== current.actionRunId
+    ) {
+      refuse("Local execution input authority was revoked.");
+    }
+    assertOwnerAttemptCaller(state.caller, current, options.ownerId);
+    if (
+      JSON.stringify(localBinding(current)) !==
+        JSON.stringify(localBinding(state.assignment)) ||
+      !delivery || delivery.eventId !== current.sourceEventId ||
+      delivery.attempts !== 1 ||
+      delivery.settlementScopeId !== state.delivery.settlementScopeId ||
+      !ownerAttemptIsLive(delivery, current, commandTime)
+    ) {
+      refuse("Local execution input authority changed.");
+    }
+  }
   const inventory = (tx: SqlExecutor, state: Authorized) =>
     readOwnerEffectInventory(tx, {
       ownerId: options.ownerId,
@@ -506,6 +784,10 @@ export function createOwnerExecutionCommands(
     commandTime: string,
   ): Promise<RegisteredExecutionRecovery | undefined> {
     const a = state.assignment;
+    if (a.placement === "owner-local") {
+      if (state.delivery.attempts !== 1) return indeterminate();
+      return undefined;
+    }
     const rows = await tx.query<
       {
         principal_kind: string;
@@ -584,6 +866,10 @@ export function createOwnerExecutionCommands(
     return result;
   }
   function runtime(context: OwnerCommandContext) {
+    const ownerCommit = ownerEventCommitForAttempt(
+      context,
+      requireAuthorized(context.tx).assignment,
+    );
     const scheduled = new Set<string>();
     const schedule = async (operationId: string) => {
       if (!options.scheduleSettlement || scheduled.has(operationId)) return;
@@ -594,7 +880,7 @@ export function createOwnerExecutionCommands(
     const store: EventStore = createEventStore({
       session: options.session,
       schema: options.schema,
-      ownerCommit: { ...context.ownerCommit, afterCommit: context.afterCommit },
+      ownerCommit,
       lockSettlementScope: (tx, scope) => options.catalog.lockScope(tx, scope),
       admitOperationEventSql: (input, param) =>
         options.catalog.admitEventSql(input, param),
@@ -638,11 +924,19 @@ export function createOwnerExecutionCommands(
         actions: options.registry.actions,
         transaction: context.tx,
         commandTime: context.commandTime,
+        ownerAuthority: ownerCommit,
+        schema: options.schema,
         writer: cancellation
           ? {
             kind: "cancellation",
             namespace: state.assignment.namespace,
             operationId: state.delivery.settlementScopeId,
+          }
+          : state.assignment.placement === "owner-local"
+          ? {
+            kind: "owner-local",
+            deliveryId: state.delivery.id,
+            attemptId: state.assignment.attemptId,
           }
           : {
             kind: "delivery",
@@ -654,6 +948,30 @@ export function createOwnerExecutionCommands(
         namespace: state.assignment.namespace,
         metadata: { sourceDeliveryId: state.delivery.id },
         append: async (input) => {
+          // Scope cancellation retains its special writer/admission semantics,
+          // while the local EventStore independently requires this exact tuple.
+          if (state.assignment.placement === "owner-local") {
+            const existing = input.draft.deliveryLease;
+            if (
+              existing &&
+              (existing.deliveryId !== state.assignment.deliveryId ||
+                existing.owner !== state.assignment.attemptId)
+            ) {
+              refuse("Local lifecycle delivery authority differs.");
+            }
+            if (!existing) {
+              input = {
+                ...input,
+                draft: {
+                  ...input.draft,
+                  deliveryLease: {
+                    deliveryId: state.assignment.deliveryId,
+                    owner: state.assignment.attemptId,
+                  },
+                },
+              };
+            }
+          }
           const result = await append(input);
           context.afterCommit(async () => {
             await coordinator.flushCommitted(result);
@@ -706,37 +1024,44 @@ export function createOwnerExecutionCommands(
     }
     return data;
   }
-  const claim: OwnerCommandHandler = async (_intent, context) => {
-    const state = requireAuthorized(context.tx);
-    const { store, lifecycle, schedule } = runtime(context);
-    const captured = await invoked(context.tx, state);
-    const delivery = await store.claimDelivery({
-      id: state.delivery.id,
-      owner: state.assignment.dispatchAttemptId,
-      leaseMs,
-    });
-    // A receiptless live attempt is not a new execution entitlement.
-    if (!delivery) refuse("Execution claim did not acquire a fresh attempt.");
+  async function prepareClaimInput(
+    tx: SqlExecutor,
+    state: Authorized,
+    commandTime: string,
+    signal: AbortSignal,
+    captured: ActionInvokedData | null,
+  ) {
+    if (state.assignment.placement === "owner-local" && captured) {
+      refuse("Local Action start cannot reuse an invoked capture.");
+    }
     let input: OwnerJson;
     if (captured) input = json(captured.input);
     else {
-      const event = await store.getEvent(delivery.eventId);
+      const event = await createEventStore({
+        schema: options.schema,
+        session: {
+          query: tx.query.bind(tx),
+          transaction() {
+            throw new Error("Nested input reads are forbidden.");
+          },
+        },
+      }).getEvent(state.delivery.eventId);
       if (!event || event.namespace !== state.assignment.namespace) {
         refuse("Execution source event is unavailable.");
       }
       input = json(
         await readEventBody(
-          { transaction: context.tx, tables },
+          { transaction: tx, tables },
           event.namespace,
           eventDataRef(event.payload),
         ),
       );
     }
     await options.authorizeInput(
-      context.tx,
+      tx,
       structuredClone(state.assignment),
       json(input),
-      context.commandTime,
+      commandTime,
     );
     if (state.action.inputSchema) {
       validateAgainstJsonSchema(
@@ -746,12 +1071,51 @@ export function createOwnerExecutionCommands(
       );
     }
     await guardPrepared(
+      tx,
+      state,
+      commandTime,
+      "claim",
+      signal,
+    );
+    return { captured, input };
+  }
+  const claim: OwnerCommandHandler = async (_intent, context) => {
+    const state = requireAuthorized(context.tx);
+    const { store, lifecycle, schedule } = runtime(context);
+    const captured = await invoked(context.tx, state);
+    const acquire = async () => {
+      const delivery = await store.claimDelivery({
+        id: state.delivery.id,
+        owner: ownerAttemptToken(state.assignment),
+        leaseMs,
+      });
+      // A receiptless live attempt is never a new execution entitlement.
+      if (!delivery) refuse("Execution claim did not acquire a fresh attempt.");
+      return delivery;
+    };
+    // Preserve worker policy's established transaction view: claim first, then
+    // hydrate and authorize input. Local start checks policy before any writes.
+    let delivery = state.assignment.placement === "worker"
+      ? await acquire()
+      : undefined;
+    const { input } = await prepareClaimInput(
       context.tx,
       state,
       context.commandTime,
-      "claim",
       context.signal,
+      captured,
     );
+    if (state.assignment.placement === "owner-local") {
+      await authorizeStart(
+        context.tx,
+        context.caller,
+        localBinding(state.assignment),
+        context.commandTime,
+      );
+      await local!.reserveLocal(context, localBinding(state.assignment));
+      delivery = await acquire();
+    }
+    if (!delivery) refuse("Execution claim did not acquire a fresh attempt.");
     if (!captured) {
       await lifecycle(state).emit({
         ...state.assignment.invocation,
@@ -767,6 +1131,12 @@ export function createOwnerExecutionCommands(
       });
     }
     await schedule(delivery.settlementScopeId);
+    if (state.assignment.placement === "owner-local") {
+      return json({
+        binding: localBinding(state.assignment),
+        attempts: delivery.attempts,
+      });
+    }
     const permitted = await allowRecovery?.(
       context.tx,
       structuredClone(state.assignment),
@@ -831,6 +1201,9 @@ export function createOwnerExecutionCommands(
   }
   const renew: OwnerCommandHandler = async (_intent, context) => {
     const state = requireAuthorized(context.tx);
+    if (state.assignment.placement !== "worker") {
+      refuse("Local attempts cannot renew.");
+    }
     if (!await invoked(context.tx, state)) {
       refuse("Execution has no captured invocation.");
     }
@@ -906,20 +1279,23 @@ export function createOwnerExecutionCommands(
     const settled = data.status === "completed"
       ? await store.succeedDelivery(
         state.delivery.id,
-        state.assignment.dispatchAttemptId,
+        ownerAttemptToken(state.assignment),
       )
       : data.status === "cancelled"
       ? await store.cancelDelivery(
         state.delivery.id,
-        state.assignment.dispatchAttemptId,
+        ownerAttemptToken(state.assignment),
       )
       : await store.failDelivery({
         id: state.delivery.id,
-        owner: state.assignment.dispatchAttemptId,
+        owner: ownerAttemptToken(state.assignment),
         error: { name: "ActionExecutionFailed", message: data.code },
         retryable: false,
       });
     if (!settled) refuse("Execution settlement lost its attempt.");
+    if (state.assignment.placement === "owner-local") {
+      await local!.retireLocal(context, localBinding(state.assignment));
+    }
     return json({ ...reference(state.assignment), status: data.status });
   };
   const project: OwnerProjectionHandler = async (_input, context) => {
@@ -941,15 +1317,25 @@ export function createOwnerExecutionCommands(
       "input",
       context.signal,
     );
+    if (state.assignment.placement === "owner-local") {
+      await recheckLocalInputAuthority(context.tx, state, context.commandTime);
+    }
     return json({
       ...(barrier ? { recovery: barrier } : {}),
       actionId: captured.actionId,
-      lease: leaseTiming(state.delivery.leaseExpiresAt!, context.commandTime),
+      ...(state.assignment.placement === "worker"
+        ? {
+          lease: leaseTiming(
+            state.delivery.leaseExpiresAt!,
+            context.commandTime,
+          ),
+          workerId: state.assignment.workerId,
+        }
+        : { reference: localBinding(state.assignment) }),
       input,
       namespace: state.assignment.namespace,
       databaseSchema: options.schema,
       ownerId: options.ownerId,
-      workerId: state.assignment.workerId,
       invocation: {
         ...state.assignment.invocation,
         metadata: captured.metadata,
@@ -959,9 +1345,64 @@ export function createOwnerExecutionCommands(
       },
     });
   };
+  async function authorizeLocalStart(
+    tx: SqlExecutor,
+    caller: OwnerCaller,
+    binding: OwnerLocalActionAssignmentBinding,
+    commandTime: string,
+  ): Promise<void> {
+    // Fail-closed duplicates are deliberate: this minimal receipt is neither
+    // permission to execute twice nor a historical recovery contract. A driver
+    // must stop on an unknown start outcome, pending a separate reconciliation.
+    const value = parseOwnerPlacementBinding(binding);
+    if (value.placement !== "owner-local" || value.kind !== "action") {
+      throw new TypeError("Local Action binding required.");
+    }
+    const state = await current(tx, caller, commandTime, "claim", value);
+    // Boundary authorization has no request signal. The real boundary checks
+    // pending cancellation before the handler; this read-only policy must settle
+    // first, retaining its command/capacity occupancy rather than detaching work.
+    await prepareClaimInput(
+      tx,
+      state,
+      commandTime,
+      new AbortController().signal,
+      await invoked(tx, state),
+    );
+    await authorizeStart(tx, caller, value, commandTime);
+    authorized.set(tx, state);
+    localStarts.set(tx, { state, time: commandTime });
+  }
+  async function startLocal(
+    binding: OwnerLocalActionAssignmentBinding,
+    context: OwnerCommandContext,
+  ): Promise<OwnerJson> {
+    const value = parseOwnerPlacementBinding(binding);
+    const ready = localStarts.get(context.tx);
+    localStarts.delete(context.tx);
+    if (
+      value.placement !== "owner-local" || value.kind !== "action" || !ready ||
+      ready.time !== context.commandTime ||
+      ready.state !== authorized.get(context.tx) ||
+      ready.state.assignment.placement !== "owner-local" ||
+      JSON.stringify(value) !==
+        JSON.stringify(localBinding(ready.state.assignment)) ||
+      context.command.kind !== "owner.local-start" ||
+      context.command.domain !== "incarnation" ||
+      context.command.key !== ownerLocalActionStartKey(value)
+    ) {
+      refuse("Local start requires matching command-local authorization.");
+    }
+    ownerEventCommitForAttempt(context, ready.state.assignment);
+    return await claim(value, context);
+  }
   return {
     inputDefinitions: { "execution.complete": completionInput },
+    authorizeLocalStart,
+    startLocal,
     handlers: {
+      "owner.local-start": (binding, context) =>
+        startLocal(binding as OwnerLocalActionAssignmentBinding, context),
       "execution.claim": claim,
       "execution.complete": complete,
       "execution.renew": renew,
@@ -974,6 +1415,18 @@ export function createOwnerExecutionCommands(
       commandTime,
       normalizedInput?: OwnerJson,
     ) {
+      if (command.kind === "owner.local-start") {
+        const value = parseOwnerPlacementBinding(command.intent);
+        if (
+          value.placement !== "owner-local" || value.kind !== "action" ||
+          command.domain !== "incarnation" ||
+          command.key !== ownerLocalActionStartKey(value)
+        ) {
+          refuse("Local start command identity does not match.");
+        }
+        await authorizeLocalStart(tx, caller, value, commandTime);
+        return;
+      }
       const mode = command.kind === "execution.claim"
         ? "claim"
         : command.kind === "execution.complete"
@@ -987,6 +1440,9 @@ export function createOwnerExecutionCommands(
       const state = await current(tx, caller, commandTime, mode);
       const a = state.assignment;
       if (mode === "claim") {
+        if (a.placement !== "worker") {
+          refuse("Worker claim requires worker placement.");
+        }
         const data = object(command.intent, ["assignmentId", "sessionId"]);
         if (
           command.domain !== "incarnation" ||
@@ -1013,7 +1469,7 @@ export function createOwnerExecutionCommands(
         ) refuse("Completion identity is not assigned.");
         const result = completion(data.completion);
         if (state.cancelled && result.status !== "cancelled") {
-          refuse("Scope cancellation takes precedence over worker completion.");
+          refuse("Scope cancellation takes precedence over completion.");
         }
         if (result.status === "completed") {
           await recoveryBarrier(tx, state, commandTime);
@@ -1033,6 +1489,9 @@ export function createOwnerExecutionCommands(
           );
         }
       } else if (mode === "renew") {
+        if (a.placement !== "worker") {
+          refuse("Worker renewal requires worker placement.");
+        }
         const data = object(command.intent, ["reference", "sequence"]);
         if (
           !Number.isSafeInteger(data.sequence) || Number(data.sequence) < 1 ||
@@ -1066,6 +1525,9 @@ export function createOwnerExecutionCommands(
       );
       await recoveryBarrier(tx, state, commandTime);
       await guardPrepared(tx, state, commandTime, "mutation");
+      if (state.assignment.placement === "owner-local") {
+        await recheckLocalInputAuthority(tx, state, commandTime);
+      }
       return state.assignment;
     },
   };

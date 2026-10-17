@@ -40,7 +40,7 @@ import {
 } from "./boundary.ts";
 import {
   createOwnerExecutionCommands,
-  type OwnerExecutionAssignment,
+  type OwnerWorkerExecutionAssignment,
 } from "./execution.ts";
 import { provisionOwnerCommandSchema } from "./schema.ts";
 
@@ -237,9 +237,10 @@ async function setup() {
       state.scheduled.push(ref);
     },
   });
-  function assignment(): OwnerExecutionAssignment {
+  function assignment(): OwnerWorkerExecutionAssignment {
     const ref = state.reference!;
     return {
+      placement: "worker",
       ownerId,
       workerId: "worker",
       assignmentId: "assignment",

@@ -8,6 +8,7 @@ import type { SqlExecutor, SqlSession } from "../events/session.ts";
 import type {
   OwnerCaller,
   OwnerCommand,
+  OwnerCommandContext,
   OwnerCommandHandler,
   OwnerJson,
 } from "./boundary.ts";
@@ -808,10 +809,65 @@ export function createOwnerAssignmentControl(
     ) return undefined;
     return { ...row.binding };
   }
+  async function validateLocalContext(
+    context: OwnerCommandContext,
+    binding: OwnerLocalAssignmentBinding,
+    reserve: boolean,
+  ): Promise<OwnerLocalAssignmentBinding> {
+    const value = parseOwnerPlacementBinding(binding);
+    const owner = context.ownerCommit;
+    const principal = context.caller.principal;
+    ownerPrincipalIdentity(principal);
+    if (
+      value.placement !== "owner-local" || owner.transaction !== context.tx ||
+      owner.ownerId !== ownerId || value.ownerId !== ownerId ||
+      owner.epoch !== value.epoch || owner.holderId !== value.holderId ||
+      owner.commandTime !== context.commandTime ||
+      context.caller.ownerEpoch !== value.epoch ||
+      principal.kind === "worker" ||
+      (reserve && principal.kind !== "owner-control") ||
+      principal.ownerId !== ownerId || principal.epoch !== value.epoch ||
+      principal.holderId !== value.holderId ||
+      (principal.kind === "owner-local" &&
+        (principal.deliveryId !== value.deliveryId ||
+          principal.attemptId !== value.attemptId))
+    ) {
+      throw new Error(
+        "Local reservation requires exact current command authority.",
+      );
+    }
+    const fence = await context.tx.query(
+      `SELECT owner FROM ${epochs} WHERE owner=$1 AND epoch=$2 AND holder=$3 FOR SHARE`,
+      [ownerId, value.epoch, value.holderId],
+    );
+    if (fence.rows.length !== 1) {
+      throw new Error("Local assignment owner fence is no longer current.");
+    }
+    return value;
+  }
+  /** Internal SQL-only seam. The caller has already proved its private start
+   * capability and locked operation -> delivery before reserving this entry. */
+  async function reserveLocal(
+    context: OwnerCommandContext,
+    binding: OwnerLocalAssignmentBinding,
+  ): Promise<void> {
+    const value = await validateLocalContext(context, binding, true);
+    await bind(value, context);
+  }
+  /** Exact current-epoch retirement joins completion and its outer commit. */
+  async function retireLocal(
+    context: OwnerCommandContext,
+    binding: OwnerLocalAssignmentBinding,
+  ): Promise<void> {
+    const value = await validateLocalContext(context, binding, false);
+    await retire(value, context);
+  }
   return {
     handlers: { "assignment.bind": bind, "assignment.retire": retire },
     authorize,
     resolveStarted,
     resolveLocal,
+    reserveLocal,
+    retireLocal,
   };
 }

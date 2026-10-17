@@ -36,7 +36,7 @@ import type {
   OwnerJson,
   OwnerProjectionHandler,
 } from "./boundary.ts";
-import type { OwnerExecutionAssignment } from "./execution.ts";
+import type { OwnerWorkerExecutionAssignment } from "./execution.ts";
 import type { OwnerProcessorAssignment } from "./processor.ts";
 import type { OwnerPreparedInputContext } from "./preparation.ts";
 import {
@@ -52,7 +52,7 @@ export {
   ownerChildActionKey,
 };
 export type OwnerChildActionBinding =
-  | Readonly<{ kind: "action"; assignment: OwnerExecutionAssignment }>
+  | Readonly<{ kind: "action"; assignment: OwnerWorkerExecutionAssignment }>
   | Readonly<{ kind: "processor"; assignment: OwnerProcessorAssignment }>;
 /** Derived immutable original facts for current host policy. These do not become
  * Action call metadata; absent call metadata keeps the existing {} semantics. */

@@ -37,7 +37,7 @@ import {
 import { createOwnerCollectionCommand } from "./collections.ts";
 import {
   createOwnerExecutionCommands,
-  type OwnerExecutionAssignment,
+  type OwnerWorkerExecutionAssignment,
 } from "./execution.ts";
 import { createOwnerEffectCommands } from "./effects.ts";
 import { createOwnerEffectClient } from "./effects-client.ts";
@@ -272,7 +272,7 @@ export async function fixture(
       await input.validateCaller?.(tx, caller);
       const row = (await tx.query<
         {
-          binding: OwnerExecutionAssignment;
+          binding: OwnerWorkerExecutionAssignment;
           ctx_granted: boolean;
           settlement_granted: boolean;
         }
@@ -295,6 +295,10 @@ export async function fixture(
         : undefined;
     },
     async authorizeInput(tx, assignment, value, time) {
+      assert.equal(assignment.placement, "worker");
+      if (assignment.placement !== "worker") {
+        throw new Error("fixture requires worker placement");
+      }
       state.projections++;
       const row = (await tx.query(
         "SELECT input_granted FROM fixture_assignments WHERE assignment_id=$1 AND session_id=$2 AND live=TRUE",
@@ -423,7 +427,8 @@ export async function fixture(
       maxAttempts: 4,
     })
   );
-  let binding: OwnerExecutionAssignment = {
+  let binding: OwnerWorkerExecutionAssignment = {
+    placement: "worker",
     ownerId: "owner",
     workerId: "worker",
     assignmentId: "assignment",
@@ -588,7 +593,7 @@ export async function fixture(
         | "receipt_authenticated",
       value: boolean,
     ) => db.query(`UPDATE fixture_assignments SET ${column}=$1`, [value]),
-    async replace(overrides: Partial<OwnerExecutionAssignment> = {}) {
+    async replace(overrides: Partial<OwnerWorkerExecutionAssignment> = {}) {
       binding = {
         ...binding,
         dispatchAttemptId: "attempt-2",

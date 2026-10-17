@@ -18,7 +18,7 @@ import type { OwnerChildActionReference } from "../execution/child-action-port.t
 import type { RegisteredExecutionReference } from "../execution/registered-worker.ts";
 import type { OwnerCaller } from "./boundary.ts";
 import type { OwnerActionAssignmentBinding } from "./assignments.ts";
-import type { OwnerExecutionAssignment } from "./execution.ts";
+import type { OwnerWorkerExecutionAssignment } from "./execution.ts";
 import {
   createOwnerConnection,
   createOwnerWorkerCallAdmission,
@@ -65,7 +65,7 @@ type Fence = OwnerWorkerCallContext["fence"];
 type Binding = {
   fence: Fence;
   operationId: string;
-  assignment: OwnerExecutionAssignment;
+  assignment: OwnerWorkerExecutionAssignment;
   started: boolean;
   committed: boolean;
 };

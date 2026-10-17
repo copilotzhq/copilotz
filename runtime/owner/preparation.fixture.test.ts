@@ -42,7 +42,7 @@ import {
 import { createOwnerChildActions } from "./child-action.ts";
 import {
   createOwnerExecutionCommands,
-  type OwnerExecutionAssignment,
+  type OwnerWorkerExecutionAssignment,
 } from "./execution.ts";
 import {
   createOwnerPreparations,
@@ -69,7 +69,7 @@ export async function fixture(
     deferParentClaim?: boolean;
     transportAuthority?: {
       isCurrentStarted(caller: OwnerCaller): boolean;
-      caller(assignment: OwnerExecutionAssignment): OwnerCaller;
+      caller(assignment: OwnerWorkerExecutionAssignment): OwnerCaller;
       authenticateReceipt(caller: OwnerCaller): boolean;
     };
     now?(): string;
@@ -93,7 +93,7 @@ export async function fixture(
     executed: 0,
     duringInputAuthorization: undefined as
       | undefined
-      | ((assignment: OwnerExecutionAssignment) => void),
+      | ((assignment: OwnerWorkerExecutionAssignment) => void),
     rollBack: false,
     inTransaction: false,
     renderVersion: "original",
@@ -190,7 +190,7 @@ export async function fixture(
       isCurrentStarted: options.transportAuthority.isCurrentStarted,
     })
     : undefined;
-  const assignments = new Map<string, OwnerExecutionAssignment>();
+  const assignments = new Map<string, OwnerWorkerExecutionAssignment>();
   const guard = (tx: SqlExecutor, context: OwnerPreparedInputContext) =>
     preparations.authorizeCaptured(tx, context);
   const makeExecution = (guarded: boolean) =>
@@ -215,6 +215,9 @@ export async function fixture(
         return a ? { ...a, ctxGranted: state.ctx } : undefined;
       },
       authorizeInput(_tx, assignment) {
+        if (assignment.placement !== "worker") {
+          throw new Error("fixture requires worker placement");
+        }
         state.duringInputAuthorization?.(assignment);
       },
       allowRecovery: () => true,
@@ -229,9 +232,13 @@ export async function fixture(
       registry,
       catalog,
       async resolveParent(tx, caller, time) {
+        const assignment = await execution.authorizeLive(tx, caller, time);
+        if (assignment.placement !== "worker") {
+          throw new Error("fixture requires worker placement");
+        }
         return {
           kind: "action",
-          assignment: await execution.authorizeLive(tx, caller, time),
+          assignment,
         };
       },
       authorizeChild() {
@@ -388,8 +395,9 @@ export async function fixture(
     ref: OwnerChildActionReference,
     id: string,
     binding?: { workerId: string; sessionId: string },
-  ): OwnerExecutionAssignment {
-    const a: OwnerExecutionAssignment = {
+  ): OwnerWorkerExecutionAssignment {
+    const a: OwnerWorkerExecutionAssignment = {
+      placement: "worker",
       ownerId,
       workerId: binding?.workerId ?? `worker:${id}`,
       assignmentId: id,
@@ -435,7 +443,7 @@ export async function fixture(
       sessionId: a.sessionId,
       dispatchAttemptId: a.dispatchAttemptId,
     });
-  const claim = (a: OwnerExecutionAssignment) =>
+  const claim = (a: OwnerWorkerExecutionAssignment) =>
     boundary.execute(caller(a), {
       kind: "execution.claim",
       domain: "incarnation",
@@ -514,7 +522,7 @@ export async function fixture(
       reference: ref,
     });
   const complete = (
-    a: OwnerExecutionAssignment,
+    a: OwnerWorkerExecutionAssignment,
     completion: OwnerJson = { status: "completed", output: { ok: true } },
   ) =>
     boundary.executeInput(caller(a), {

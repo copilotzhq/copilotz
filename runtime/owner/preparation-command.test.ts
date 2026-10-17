@@ -44,13 +44,46 @@ const input = () => ({
     operationKey: "parent",
   },
   preparation: "channelText",
+  targetActionId: "fixture.send",
   operationKey: "reply",
   recordId: "message-1",
   hints: { mode: "channel", renderer: "text" },
 });
+test("named preparation requires the bound target assertion before normalization", async () => {
+  const c = commands();
+  const { targetActionId: _target, ...missing } = input();
+  await assert.rejects(
+    async () => await c.inputDefinition.normalize(missing),
+    /preparation_/,
+  );
+  for (const targetActionId of ["fixture.other", "", ["fixture.send"], null]) {
+    await assert.rejects(
+      async () =>
+        await c.inputDefinition.normalize({ ...input(), targetActionId }),
+      /preparation_/,
+    );
+  }
+  const normalized = await c.inputDefinition.normalize({
+    ...input(),
+    targetActionId: "fixture.send",
+  });
+  assert.equal(
+    (normalized.value as { actionId: string }).actionId,
+    "fixture.send",
+  );
+  assert.equal(
+    Object.hasOwn(normalized.value as object, "targetActionId"),
+    false,
+  );
+});
 test("named preparation intent binds semantic registered input while excluding transport attempt coordinates", async () => {
   const c = commands();
   const first = await c.inputDefinition.normalize(input());
+  assert.deepEqual(first.intent, {
+    encoding: "copilotz.preparation.v1",
+    digest:
+      "sha256:95398fa5240dc9dc7e9eaf8a5a46db15c60481e8511645c44f48fbb8a14dbc1c",
+  });
   const replacement = await c.inputDefinition.normalize({
     ...input(),
     parent: {
@@ -73,7 +106,10 @@ test("named preparation intent binds semantic registered input while excluding t
     );
   }
   assert.notDeepEqual(
-    (await commands("fixture.changed").inputDefinition.normalize(input()))
+    (await commands("fixture.changed").inputDefinition.normalize({
+      ...input(),
+      targetActionId: "fixture.changed",
+    }))
       .intent,
     first.intent,
   );

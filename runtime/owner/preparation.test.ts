@@ -414,3 +414,56 @@ test("duplicate preparation rechecks its current parent after original-reference
     await f.close();
   }
 });
+
+test("named preparation rejects missing or mismatched target before fresh and duplicate access", async () => {
+  const f = await fixture();
+  try {
+    const original = f.request();
+    const { targetActionId: _target, ...missing } = original.input;
+    for (const duplicate of [false, true]) {
+      if (duplicate) {
+        await f.prepare();
+        const deadline = Date.now() + 1_000;
+        while (!f.state.scheduled.length && Date.now() < deadline) {
+          await new Promise((resolve) => setTimeout(resolve, 1));
+        }
+        assert.equal(f.state.scheduled.length, 1);
+      }
+      const counts = [
+        f.state.rendered,
+        f.state.projected,
+        f.state.resourceProjected,
+        f.state.mapped,
+        f.state.scheduled.length,
+      ];
+      for (
+        const input of [missing, {
+          ...original.input,
+          targetActionId: "fixture.other",
+        }]
+      ) {
+        await assert.rejects(
+          f.boundary.executeInput(f.caller(), { ...original, input }),
+          /preparation_/,
+        );
+      }
+      assert.deepEqual([
+        f.state.rendered,
+        f.state.projected,
+        f.state.resourceProjected,
+        f.state.mapped,
+        f.state.scheduled.length,
+      ], counts);
+      assert.equal(
+        (await f.db.query(
+          "SELECT key FROM owner_receipts WHERE kind='action.child-prepare'",
+        )).rows.length,
+        duplicate ? 1 : 0,
+      );
+    }
+    assert.equal((await f.prepare()).status, "duplicate");
+    assert.equal(f.state.rendered, 1);
+  } finally {
+    await f.close();
+  }
+});

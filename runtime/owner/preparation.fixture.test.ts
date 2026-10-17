@@ -469,6 +469,7 @@ export async function fixture(
     input: {
       parent: parentRef(),
       preparation: "channel.text",
+      targetActionId: "fixture.child",
       operationKey,
       recordId: "message-1",
       hints: { mode, renderer: "text" },

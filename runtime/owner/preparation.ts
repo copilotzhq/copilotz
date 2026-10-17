@@ -40,22 +40,15 @@ import {
 } from "./preparation-resources.ts";
 import type { OwnerPreparationSource } from "./preparation-source.ts";
 
-export const OWNER_CHILD_ACTION_PREPARATION = "action.child-prepare";
-export const ownerPreparationKey = (
-  ownerId: string,
-  namespace: string,
-  parentOperationKey: string,
-  preparation: string,
-  operationKey: string,
-): string =>
-  JSON.stringify([
-    OWNER_CHILD_ACTION_PREPARATION,
-    ownerId,
-    namespace,
-    parentOperationKey,
-    preparation,
-    operationKey,
-  ]);
+import {
+  OWNER_CHILD_ACTION_PREPARATION,
+  ownerPreparationChildKey,
+  ownerPreparationKey,
+} from "../execution/preparation-call.ts";
+export {
+  OWNER_CHILD_ACTION_PREPARATION,
+  ownerPreparationKey,
+} from "../execution/preparation-call.ts";
 export type OwnerPreparationRegistration = Readonly<{
   source: string;
   actionAlias: string;
@@ -177,8 +170,7 @@ function childReference(input: unknown): OwnerChildActionReference {
   Object.values(value).forEach(text);
   return value as OwnerChildActionReference;
 }
-const childKey = (name: string, localKey: string) =>
-  text(`prepare:${JSON.stringify([name, localKey])}`);
+const childKey = ownerPreparationChildKey;
 type PreparationInput = Readonly<{
   parent: OwnerChildActionParentReference;
   preparation: string;
@@ -277,10 +269,16 @@ export function createOwnerPreparations(
         "operationKey",
         "recordId",
         "hints",
+        "targetActionId",
       ]);
       const preparation = text(value.preparation);
       const registered = registrations.get(preparation);
       if (!registered) fail();
+      // This asserted target is supplied by the bound Action caller. It cannot
+      // change the registered target, including on compatible receipt replay.
+      if (text(value.targetActionId) !== registered.actionId) {
+        fail("preparation_forbidden");
+      }
       const hints = exact(value.hints, ["mode", "renderer"]);
       if (
         !registered.modes.includes(text(hints.mode)) ||

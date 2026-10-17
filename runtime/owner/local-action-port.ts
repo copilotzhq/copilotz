@@ -11,7 +11,7 @@ import {
   record as effectRecord,
 } from "./effects-client.ts";
 import {
-  createLocalChildActionCall,
+  createLocalChildActionCalls,
   type LocalChildActionOptions,
 } from "./local-child-action-port.ts";
 import type {
@@ -282,17 +282,15 @@ export function createOwnerLocalActionPort(
   return {
     effects,
     ...(children
-      ? {
-        invokeAction: createLocalChildActionCall({
-          children,
-          reference,
-          caller: localCaller,
-          boundary: { executeInput, project },
-          calls,
-          invocation,
-          maxPendingCalls: limit,
-        }),
-      }
+      ? createLocalChildActionCalls({
+        children,
+        reference,
+        caller: localCaller,
+        boundary: { executeInput, project },
+        calls,
+        invocation,
+        maxPendingCalls: limit,
+      })
       : {}),
     start(callOptions = {}) {
       if (startPromise) return startPromise;

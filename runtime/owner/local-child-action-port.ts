@@ -1,4 +1,4 @@
-/** One local attempt's ordinary child calls. The shared waiter may finish on
+/** One local attempt's direct and named child calls. The shared waiter may finish on
  * cancellation before a raw call does; the local tracker still owns that call. */
 import type { PluginRegistry } from "../plugins/registry.ts";
 import {
@@ -6,8 +6,14 @@ import {
   OWNER_CHILD_ACTION_ADMISSION,
   OWNER_CHILD_ACTION_RESULT,
 } from "../execution/child-action-port.ts";
+import { OWNER_CHILD_ACTION_PREPARATION } from "../execution/preparation-call.ts";
 import type { RegisteredInvocationCalls } from "../execution/registered-invocation.ts";
-import type { OwnerCaller, OwnerCommandBoundary } from "./boundary.ts";
+import type {
+  OwnerCaller,
+  OwnerCommandBoundary,
+  OwnerCommandExecuteOptions,
+  OwnerInputCommand,
+} from "./boundary.ts";
 import {
   type OwnerLocalAssignmentBinding,
   parseOwnerPlacementBinding,
@@ -20,7 +26,7 @@ export type LocalChildActionOptions = Readonly<{
   maxWaitMs?: number;
 }>;
 
-export function createLocalChildActionCall(
+export function createLocalChildActionCalls(
   options: Readonly<{
     children: LocalChildActionOptions;
     reference: OwnerLocalAssignmentBinding;
@@ -30,7 +36,7 @@ export function createLocalChildActionCall(
     invocation(): void;
     maxPendingCalls: number;
   }>,
-): NonNullable<RegisteredInvocationCalls["invokeAction"]> {
+): Required<Pick<RegisteredInvocationCalls, "invokeAction" | "prepareAction">> {
   const reference = parseOwnerPlacementBinding(options.reference);
   if (reference.placement !== "owner-local") {
     throw new TypeError("Local child calls require a local binding.");
@@ -40,6 +46,27 @@ export function createLocalChildActionCall(
   const executeInput = options.boundary.executeInput.bind(options.boundary);
   const project = options.boundary.project.bind(options.boundary);
   const { invocation, calls } = options;
+  const admission = (kind: string) =>
+  async (
+    command: OwnerInputCommand,
+    callOptions?: OwnerCommandExecuteOptions,
+  ) => {
+    invocation();
+    if (command.kind !== kind) {
+      throw new TypeError("Unsupported local child admission.");
+    }
+    const result = await calls.run(
+      (execution) => executeInput(structuredClone(caller), command, execution),
+      callOptions,
+    );
+    invocation();
+    return result;
+  };
+  const selector = {
+    placement: "owner-local" as const,
+    deliveryId: reference.deliveryId,
+    attemptId: reference.attemptId,
+  };
   const child = createOwnerChildActionPort({
     ownerId: reference.ownerId,
     namespace: reference.namespace,
@@ -50,19 +77,8 @@ export function createLocalChildActionCall(
     maxWaitMs: options.children.maxWaitMs,
     maxPendingCalls: options.maxPendingCalls,
     port: {
-      async executeInput(command, callOptions) {
-        invocation();
-        if (command.kind !== OWNER_CHILD_ACTION_ADMISSION) {
-          throw new TypeError("Unsupported local child admission.");
-        }
-        const result = await calls.run(
-          (execution) =>
-            executeInput(structuredClone(caller), command, execution),
-          callOptions,
-        );
-        invocation();
-        return result;
-      },
+      executeInput: admission(OWNER_CHILD_ACTION_ADMISSION),
+      prepareInput: admission(OWNER_CHILD_ACTION_PREPARATION),
       async project(kind, input, callOptions) {
         invocation();
         if (kind !== OWNER_CHILD_ACTION_RESULT) {
@@ -78,20 +94,34 @@ export function createLocalChildActionCall(
       },
     },
   });
-  return async (request, callOptions) => {
-    invocation();
-    const result = await child.call(
-      {
-        placement: "owner-local",
-        deliveryId: reference.deliveryId,
-        attemptId: reference.attemptId,
-      },
-      request.actionAlias,
-      request.input,
-      request.operationKey,
-      callOptions,
-    );
-    invocation();
-    return result;
+  return {
+    async invokeAction(request, callOptions) {
+      invocation();
+      const result = await child.call(
+        selector,
+        request.actionAlias,
+        request.input,
+        request.operationKey,
+        callOptions,
+      );
+      invocation();
+      return result;
+    },
+    async prepareAction(request, callOptions) {
+      invocation();
+      const result = await child.prepare(
+        selector,
+        request.actionAlias,
+        {
+          preparation: request.preparation,
+          recordId: request.recordId,
+          mode: request.mode,
+        },
+        request.operationKey,
+        callOptions,
+      );
+      invocation();
+      return result;
+    },
   };
 }

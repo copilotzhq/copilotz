@@ -93,6 +93,17 @@ test("named preparation intent binds semantic registered input while excluding t
       dispatchAttemptId: "attempt-2",
     },
   });
+  const local = await c.inputDefinition.normalize({
+    ...input(),
+    parent: {
+      placement: "owner-local",
+      deliveryId: "local-delivery",
+      attemptId: "local-attempt",
+      operationKey: "parent",
+    },
+  });
+  assert.deepEqual(local.intent, first.intent);
+  assert.notDeepEqual(local.value, first.value);
   assert.deepEqual(first.intent, replacement.intent);
   assert.notDeepEqual(first.value, replacement.value);
   for (

@@ -243,9 +243,6 @@ export function createOwnerChildActionPort(
       );
     }
     const selector = parseOwnerChildActionParentSelector(reference);
-    if (prepared && "placement" in selector) {
-      return fail("action_prepare_unavailable");
-    }
     for (const value of [actionAlias, operationKey]) text(value);
     const actionId = Object.hasOwn(actions, actionAlias)
       ? actions[actionAlias]
@@ -478,7 +475,7 @@ export function createOwnerChildActionPort(
       return run(reference, actionAlias, input, operationKey, callOptions);
     },
     prepare(
-      reference: OwnerWorkerChildActionParentSelector,
+      reference: OwnerChildActionParentSelector,
       actionAlias: string,
       preparation: ActionNamedPreparation,
       operationKey: string,

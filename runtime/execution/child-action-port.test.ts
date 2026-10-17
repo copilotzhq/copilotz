@@ -1,5 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import {
+  ownerPreparationChildKey,
+  ownerPreparationKey,
+} from "./preparation-call.ts";
 import { defineAction } from "../actions/define.ts";
 import { createPluginRegistry } from "../plugins/registry.ts";
 import type { OwnerInputCommand, OwnerJson } from "../owner/boundary.ts";
@@ -717,40 +721,68 @@ test("local child selectors preserve the worker logical key without fake dispatc
   );
   assert.equal(Object.hasOwn(expected, "dispatchAttemptId"), false);
 });
-test("local child selector refuses named preparation even when a preparation port exists", async () => {
-  let called = 0;
+test("local named child selector preserves logical identity and shares its direct-call budget", async () => {
+  const commands: OwnerInputCommand[] = [];
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const local = {
+    placement: "owner-local" as const,
+    deliveryId: "delivery",
+    attemptId: "attempt",
+  };
   const port = createOwnerChildActionPort({
     ownerId: "owner",
     namespace: "space",
     parentOperationKey: "parent",
     registry,
+    maxPendingCalls: 1,
     port: {
       executeInput() {
-        called++;
-        throw new Error("must not admit");
+        throw new Error("shared budget must refuse before direct admission");
       },
-      prepareInput() {
-        called++;
-        throw new Error("must not prepare");
+      async prepareInput(command) {
+        commands.push(command);
+        await held;
+        return {
+          status: "committed",
+          result: {
+            namespace: "space",
+            actionId: "fixture.child",
+            executionId: `parent/action:fixture.child:${
+              ownerPreparationChildKey("prepare", "step")
+            }`,
+            eventId: "event",
+            deliveryId: "child-delivery",
+          },
+        };
       },
-      project() {
-        called++;
-        throw new Error("must not project");
-      },
+      project: () =>
+        Promise.resolve({ status: "completed", output: "prepared" }),
     },
   });
-  await assert.rejects(
-    port.prepare(
-      {
-        placement: "owner-local",
-        deliveryId: "delivery",
-        attemptId: "attempt",
-      } as never,
-      "child",
-      { preparation: "prepare", recordId: "one", mode: "context" },
-      "step",
-    ),
-    errorCode("action_prepare_unavailable"),
-  );
-  assert.equal(called, 0);
+  const named = port.prepare(local, "child", {
+    preparation: "prepare",
+    recordId: "one",
+    mode: "context",
+  }, "step");
+  try {
+    await assert.rejects(
+      port.call(local, "child", null, "ordinary"),
+      errorCode("owner_admission_refused"),
+    );
+    assert.equal(commands.length, 1);
+    assert.deepEqual((commands[0].input as Record<string, OwnerJson>).parent, {
+      ...local,
+      operationKey: "parent",
+    });
+    assert.equal(
+      commands[0].key,
+      ownerPreparationKey("owner", "space", "parent", "prepare", "step"),
+    );
+  } finally {
+    release();
+  }
+  assert.equal(await named, "prepared");
 });

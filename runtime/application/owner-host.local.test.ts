@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { resolveOxianSource } from "../../scripts/test-owner-connected.mjs";
 import { defineAction } from "../actions/define.ts";
-import type { ActionContext } from "../actions/types.ts";
+import type { ActionContext, RuntimeActionCallers } from "../actions/types.ts";
+import { defineView } from "../views/definition.ts";
+import type { OwnerHostLocalProcessorOptions } from "./owner-host-local-processor.ts";
 import { defineCollection } from "../collections/definition.ts";
 import type { SqlSession } from "../events/session.ts";
 import { createOwnerConnection } from "../owner/connection.ts";
@@ -133,8 +135,11 @@ async function fixture(input: {
   registry?: PluginRegistry;
   mode?: Mode;
   maxActive?: number;
+  callWaitMs?: number;
   local?: OwnerHostLocalActionOptions;
   policy?: Partial<OwnerHostPolicy>;
+  preparation?: OwnerHostOptions["preparation"];
+  processors?: OwnerHostLocalProcessorOptions;
   session?(db: SqlSession): SqlSession;
   beforeReady?(): Promise<void>;
   shutdownFailure?: Readonly<{ error: Error; observed(): void }>;
@@ -156,6 +161,7 @@ async function fixture(input: {
     policy: { ...baseOptions(db, registry).policy, ...input.policy },
     maxActive: input.maxActive ?? 4,
     maxPending: 32,
+    ...(input.preparation ? { preparation: input.preparation } : {}),
 
     onError: (error) => errors.push(error),
     transport: {
@@ -197,7 +203,10 @@ async function fixture(input: {
   const starting = createOwnerHost(
     options,
     undefined,
-    { actions: input.local ?? localOptions() },
+    {
+      actions: input.local ?? localOptions(),
+      ...(input.processors ? { processors: input.processors } : {}),
+    },
   );
   let host: Awaited<ReturnType<typeof createOwnerHost>>;
   try {
@@ -251,7 +260,7 @@ async function fixture(input: {
   const facade = createOwnerActionCallers({
     actions: registry.actions,
     namespace: "space",
-    maxWaitMs: 15_000,
+    maxWaitMs: input.callWaitMs ?? 15_000,
     port: createOwnerConnection({
       ownerId: "owner",
       callHost: ingress.callHost,
@@ -1033,7 +1042,7 @@ test(
 );
 
 test(
-  "local host leaves named preparation unavailable",
+  "local host refuses named preparation without owner registration",
   { skip: !sourceRoot, timeout: 30_000 },
   async () => {
     let childCalls = 0;
@@ -3239,5 +3248,415 @@ for (const mode of ["in-process", "websocket"] as const) {
         await f.close();
       }
     });
+  }
+}
+
+for (const mode of ["in-process", "websocket"] as const) {
+  for (const parentKind of ["action", "processor"] as const) {
+    for (const retry of parentKind === "processor" ? [false, true] : [false]) {
+      for (const childPlacement of ["owner-local", "worker"] as const) {
+        for (
+          const denial
+            of parentKind === "action" && childPlacement === "owner-local"
+              ? [
+                "none",
+                "claim",
+                "input",
+                "result",
+                "duplicate",
+                "parent-replay",
+                "unknown-committed",
+                "unknown-aborted",
+                "held-reply",
+              ]
+              : ["none"]
+        ) {
+          test(
+            `local ${mode} ${parentKind}/${
+              retry ? "retry" : "fresh"
+            } prepares View input for ${childPlacement} child once / ${denial}`,
+            { skip: !sourceRoot, timeout: 40_000 },
+            async () => {
+              let parentAttempts = 0;
+              let parentDelivery: string | undefined;
+              let denied = false;
+              let injected = 0;
+              const held = deferred(), release = deferred();
+              let armReplay = false, replayReads = 0;
+              let rendered = 0,
+                mapped = 0,
+                childCalls = 0,
+                version = "original";
+              const outputs: string[] = [], checks: string[] = [];
+              const prepare = async (ctx: ActionContext | ProcessorContext) => {
+                const child = ctx.actions.child as RuntimeActionCallers[string];
+                assert.equal(typeof child.prepareNamed, "function");
+                const request = {
+                  preparation: "notes.context",
+                  recordId: "prepared-record",
+                  mode: "context",
+                };
+                const first = await child.prepareNamed(request, {
+                  operationKey: "prepared",
+                });
+                await ctx.transaction(({ collections }) => {
+                  collections.notes.update({
+                    id: "prepared-record",
+                    set: { title: "changed" },
+                  });
+                }, { operationKey: "edit-source" });
+                version = "changed";
+                armReplay = denial === "parent-replay";
+                const second = await child.prepareNamed(request, {
+                  operationKey: "prepared",
+                });
+                outputs.push(String(first), String(second));
+              };
+              const registry = createPluginRegistry({
+                collections: { notes },
+                views: {
+                  note: defineView({
+                    id: "local.note.context",
+                    shows: "local_note",
+                    renderer: "text",
+                    modes: ["context"],
+                    render(value: { record: { title: string } }) {
+                      rendered++;
+                      return `${value.record.title}:${version}`;
+                    },
+                  }),
+                },
+                actions: {
+                  work: defineAction({
+                    id: "fixture.local",
+                    inputSchema: { type: "string" } as const,
+                    async execute(_value: string, ctx: ActionContext) {
+                      await ctx.transaction(({ collections }) => {
+                        collections.notes.create({
+                          id: "prepared-record",
+                          title: "first",
+                        });
+                      }, { operationKey: "source" });
+                      if (parentKind === "action") await prepare(ctx);
+                      return "done";
+                    },
+                  }),
+                  child: defineAction({
+                    id: "fixture.child",
+                    inputSchema: { type: "string" } as const,
+                    execute(value: string) {
+                      childCalls++;
+                      return `child:${value}`;
+                    },
+                  }),
+                },
+                ...(parentKind === "processor"
+                  ? {
+                    processors: {
+                      follow: defineProcessor({
+                        id: "fixture.prepare",
+                        on: [{ eventType: "local_note.created" }],
+                        async handle(_event, ctx) {
+                          parentAttempts++;
+                          await prepare(ctx);
+                          if (retry && parentAttempts === 1) {
+                            throw new Error(
+                              "retry parent after confirmed child",
+                            );
+                          }
+                        },
+                      }),
+                    },
+                  }
+                  : {}),
+              });
+              const preparation: NonNullable<OwnerHostOptions["preparation"]> =
+                {
+                  records: {
+                    sources: { notes: { collectionAlias: "notes" } },
+                    authorize(_tx, context) {
+                      // Original-source checks reuse this scope callback for the
+                      // child as well as its parent, including pre-assignment start.
+                      const principal = context.caller.principal;
+                      if (principal.kind === "owner-local") {
+                        parentDelivery ??= principal.deliveryId;
+                      }
+                      if (principal.kind === "worker") {
+                        assert.equal(principal.workerId, "execution");
+                      } else {
+                        assert.equal(principal.ownerId, "owner");
+                        assert.equal(principal.epoch, 1);
+                        assert.equal(principal.holderId, "holder");
+                        if (principal.kind === "owner-control") {
+                          assert.equal(
+                            typeof context.caller.localPlacementStart,
+                            "string",
+                          );
+                        }
+                      }
+                      assert.equal(context.request.recordId, "prepared-record");
+                      return { namespace: "space", audience: "test-reader" };
+                    },
+                    projectRecord: (record) => ({ title: record.title }),
+                    authorizeReference(_tx, context) {
+                      // The host has already proven this actual caller's authority.
+                      // Claim-time local children still carry the genuine controller.
+                      checks.push(context.caller.principal.kind);
+                      const principal = context.caller.principal;
+                      if (
+                        (denial === "claim" &&
+                          principal.kind === "owner-control") ||
+                        (denial === "input" && context.purpose === "input" &&
+                          principal.kind === "owner-local" &&
+                          principal.deliveryId !== parentDelivery) ||
+                        (denial === "result" && context.purpose === "result") ||
+                        (denial === "duplicate" &&
+                          context.purpose === "duplicate")
+                      ) {
+                        denied = true;
+                        throw new Error("original prepared source denied");
+                      }
+                      assert.equal(context.reference.source.namespace, "space");
+                      assert.equal(context.reference.audience, "test-reader");
+                      return true;
+                    },
+                  },
+                  registrations: {
+                    "notes.context": {
+                      source: "notes",
+                      actionAlias: "child",
+                      shows: "local_note",
+                      modes: ["context"],
+                      mapInput(text) {
+                        mapped++;
+                        return text;
+                      },
+                    },
+                  },
+                  projectResource() {
+                    throw new Error("No resources configured");
+                  },
+                  authorizeResource() {
+                    throw new Error("No resources configured");
+                  },
+                };
+              const f = await fixture({
+                mode,
+                registry,
+                preparation,
+                ...(denial === "parent-replay" || denial === "held-reply" ||
+                    denial.startsWith("unknown-")
+                  ? {
+                    session(db: SqlSession): SqlSession {
+                      return {
+                        ...db,
+                        async transaction(run) {
+                          let selected = false;
+                          const unknown = () =>
+                            Object.assign(
+                              new Error("unknown preparation COMMIT"),
+                              { code: "persistence_indeterminate" },
+                            );
+                          const value = await db.transaction(async (tx) => {
+                            const output = await run({
+                              async query<
+                                T extends Record<string, unknown> = Record<
+                                  string,
+                                  unknown
+                                >,
+                              >(sql: string, params?: unknown[]) {
+                                const result = await tx.query<T>(sql, params);
+                                if (
+                                  armReplay &&
+                                  sql.includes("SELECT kind,intent,result") &&
+                                  ++replayReads === 2
+                                ) {
+                                  denied = true;
+                                  assert.ok(closeHost);
+                                  closeHost();
+                                }
+                                if (
+                                  (denial.startsWith("unknown-") ||
+                                    denial === "held-reply") &&
+                                  !injected &&
+                                  sql.startsWith(
+                                    'INSERT INTO "public"."owner_receipts"(',
+                                  ) && params?.[5] === "action.child-prepare"
+                                ) {
+                                  selected = true;
+                                  denied = true;
+                                  injected++;
+                                }
+                                return result;
+                              },
+                            });
+                            if (
+                              selected && denial === "unknown-aborted"
+                            ) throw unknown();
+                            return output;
+                          });
+                          if (
+                            selected && denial === "unknown-committed"
+                          ) throw unknown();
+                          if (selected && denial === "held-reply") {
+                            held.resolve();
+                            await release.promise;
+                          }
+                          return value;
+                        },
+                      };
+                    },
+                  }
+                  : {}),
+                ...(denial !== "none" ? { callWaitMs: 5000 } : {}),
+                policy: {
+                  child(_tx, parent, actionId) {
+                    assert.equal(parent.namespace, "space");
+                    assert.equal(actionId, "fixture.child");
+                  },
+                },
+                local: localOptions({
+                  actionIds: childPlacement === "owner-local"
+                    ? ["fixture.local", "fixture.child"]
+                    : ["fixture.local"],
+                }),
+                ...(parentKind === "processor"
+                  ? {
+                    processors: {
+                      processorIds: ["fixture.prepare"],
+                      policy: {
+                        grants: () => ({ ctx: true, settlement: true }),
+                        event() {},
+                        collections: () => ({}),
+                      },
+                      createCapabilities: () => ({
+                        resources: {},
+                        adapters: {},
+                      }),
+                    },
+                  }
+                  : {}),
+              });
+              let closing: Promise<void> | undefined;
+              const closeHost = () => {
+                closing ??= f.host.close();
+              };
+              try {
+                if (denial === "held-reply") {
+                  const pending = outcome(
+                    f.facade.actions.work("start", { operationKey: "source" }),
+                  );
+                  await held.promise;
+                  let closed = false;
+                  const stopping = f.host.close().then(() => {
+                    closed = true;
+                  });
+                  await f.host.stopped;
+                  await new Promise((resolve) => setTimeout(resolve, 20));
+                  assert.equal(closed, false);
+                  assert.equal(f.host.snapshot().active, 1);
+                  assert.equal(
+                    (await f.db.query(
+                      "SELECT kind FROM owner_receipts WHERE kind='action.child-prepare'",
+                    )).rows.length,
+                    1,
+                  );
+                  release.resolve();
+                  await stopping;
+                  assert.ok((await pending).error);
+                  assert.equal(injected, 1);
+                  assert.equal(childCalls, 0);
+                  assert.deepEqual(outputs, []);
+                  assert.equal(f.host.snapshot().active, 1);
+                  assert.equal(f.host.snapshot().recoveryRequired, false);
+                  return;
+                }
+                if (denial !== "none") {
+                  await assert.rejects(
+                    f.facade.actions.work("start", { operationKey: "source" }),
+                  );
+                  assert.equal(denied, true);
+                  assert.deepEqual(outputs, []);
+                  assert.equal(
+                    childCalls,
+                    denial === "claim" || denial === "input" ||
+                      denial.startsWith("unknown-")
+                      ? 0
+                      : 1,
+                  );
+                  assert.equal(rendered, 1);
+                  assert.equal(mapped, 1);
+                  if (denial.startsWith("unknown-")) {
+                    await f.host.stopped;
+                    assert.equal(injected, 1);
+                    assert.equal(f.host.snapshot().recoveryRequired, true);
+                    assert.equal(f.host.snapshot().active, 1);
+                    assert.equal(
+                      (await f.db.query(
+                        "SELECT kind FROM owner_receipts WHERE kind='action.child-prepare'",
+                      )).rows.length,
+                      denial === "unknown-committed" ? 1 : 0,
+                    );
+                    assert.equal(
+                      (await f.db.query(
+                        "SELECT id FROM events WHERE metadata ? 'preparation'",
+                      )).rows.length,
+                      denial === "unknown-committed" ? 1 : 0,
+                    );
+                  }
+                  if (denial === "parent-replay") {
+                    assert.equal(replayReads, 2);
+                    await closing;
+                  }
+                  return;
+                }
+                assert.equal(
+                  await f.facade.actions.work("start", {
+                    operationKey: "source",
+                  }),
+                  "done",
+                );
+                await eventually(() =>
+                  outputs.length === (retry ? 4 : 2) &&
+                  f.host.snapshot().active === 0
+                );
+                assert.deepEqual(
+                  outputs,
+                  Array(retry ? 4 : 2).fill("child:first:original"),
+                );
+                if (parentKind === "processor") {
+                  assert.equal(parentAttempts, retry ? 2 : 1);
+                }
+                assert.deepEqual([rendered, mapped, childCalls], [1, 1, 1]);
+                assert.equal(
+                  (await f.db.query(
+                    "SELECT metadata FROM events WHERE type='copilotz.owner.action.requested' AND metadata ? 'preparation'",
+                  )).rows.length,
+                  1,
+                );
+                assert.equal(
+                  (await f.db.query(
+                    "SELECT data->>'title' AS title FROM nodes WHERE id='prepared-record'",
+                  )).rows[0].title,
+                  "changed",
+                );
+                assert.ok(checks.includes("owner-local"));
+                assert.ok(
+                  checks.includes(
+                    childPlacement === "owner-local"
+                      ? "owner-control"
+                      : "worker",
+                  ),
+                );
+                assert.deepEqual(f.errors, []);
+              } finally {
+                release.resolve();
+                await f.close();
+              }
+            },
+          );
+        }
+      }
+    }
   }
 }

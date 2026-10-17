@@ -567,23 +567,23 @@ bridge; copying a caller tuple does not create a Started witness.
 
 After awaited child policy, and around admission/result work, the owner rechecks
 its original parent coordinates, operation cancellation, open Action, absence of
-parent terminal history, retry limit and exact PostgreSQL lease instant. It
+parent terminal history, retry limit and exact non-expiring owner attempt. It
 compares the initially verified source/invoked bodies, including their contents
 and digests, rather than assuming `event_bodies` is immutable. At most two
 bodies are retained under the child JSON limits. The private proof follows an
 internally returned parent clone; policy argument copies receive no proof.
 
-Ordinary admission/result commands also opt into the transaction boundary's
-final synchronous authorization fence through a captured, validated
-`currentAuthorizationKinds` allowlist. Other host commands retain their existing
-acknowledgement behavior; returning `true` from a globally installed fence would
-not be equivalent to leaving those commands unfenced. This closes
-receipt-reader, handler, savepoint and caller-visible completion windows after
-the last awaited check. Lost authority rolls back pre-commit work; post-commit
-loss suppresses the reply without pretending that durable work did not commit.
-Prepared admission is not silently opted into the ordinary command proof.
-Private fresh local parents use the same ordinary proof as described below;
-local named preparation remains unavailable.
+Child admission/result and configured named-preparation commands opt into the
+transaction boundary's final synchronous authorization fence through a captured,
+validated `currentAuthorizationKinds` allowlist. Prepared admission binds its
+full command to the existing child proof map; it is included only when its
+handler is configured. Other command families retain their own authority and
+acknowledgement contracts. This closes receipt-reader, handler, savepoint and
+caller-visible completion windows after the last awaited check. Lost authority
+rolls back pre-commit work; post-commit loss suppresses the reply without
+pretending that durable work did not commit. Private fresh local parents use
+that same child proof. Named preparation shares the tagged parent selector and
+final private check described below.
 
 Ordinary child input and result traversal refuses all four reserved protected
 schema families, including bare, future-version, malformed-suffix and
@@ -625,13 +625,26 @@ and actual drain. The private captured `childWaitMs` budget defaults to
 child work. Timing out before an admission reply remains an unknown outcome,
 distinct from a known capacity refusal.
 
-Local named preparation is rejected both at the bound capability and the owner
-entry. Private local Action effects now reuse the shared owner protocol and
-policy, with the same exact-attempt and raw-call drain checks; local effect
-activation does not enable Processor effects or retained local history. Ordinary
-children retain the shared ContentRef/protected-format refusal without adopting
-a broader reserved-key policy. This is private same-owner capability parity, not
-a public configuration or restart migration.
+Local Actions and Processors expose named preparation through the same adapter
+instance as direct child calls. Both routes share their wait and raw-call
+bounds, result projection and immutable capture. A Processor retry retains the
+logical preparation key, so changing the record or renderer does not rerender
+its already captured child. Original source/reference permission is still
+required on reuse.
+
+A prepared local child's claim-time source check receives the genuine private
+owner-control caller after execution has authenticated the pending start. No
+live local assignment is fabricated before that start, and the marker alone
+confers no permission. Later input/mutation/result checks use their real current
+caller. Policy must explicitly permit each intended context; no separate local
+source policy or renderer is introduced.
+
+Private local Action effects reuse the shared owner protocol and policy, with
+the same exact-attempt and raw-call drain checks; these capabilities do not
+enable Processor effects or retained local history. Ordinary children retain the
+shared ContentRef/protected-format refusal without adopting a broader
+reserved-key policy. This is private same-owner capability parity, not a public
+configuration or restart migration.
 
 ### Fresh ordinary Action owner host
 

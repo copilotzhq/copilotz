@@ -5,7 +5,6 @@ import type {
   OwnerCommand,
   OwnerCommandExecuteOptions,
   OwnerCommandOutcome,
-  OwnerJson,
 } from "../owner/boundary.ts";
 import type { OwnerEffectPort } from "../owner/effects-client.ts";
 import type { OwnerLocalActionProjection } from "../owner/execution.ts";
@@ -19,6 +18,7 @@ import type {
   RegisteredActionInvocation,
   RegisteredContextCapabilities,
   RegisteredExecutionCompletion,
+  RegisteredInvocationCalls,
 } from "./registered-invocation.ts";
 
 export type RegisteredLocalActionReference = OwnerLocalActionAssignmentBinding;
@@ -63,14 +63,8 @@ export type RegisteredLocalActionPort = Readonly<{
     options?: OwnerCommandExecuteOptions,
   ): Promise<OwnerCommandOutcome>;
   effects?: OwnerEffectPort;
-  invokeAction?(
-    input: Readonly<{
-      actionAlias: string;
-      input: OwnerJson;
-      operationKey: string;
-    }>,
-    options: OwnerCommandExecuteOptions,
-  ): Promise<OwnerJson>;
+  invokeAction?: RegisteredInvocationCalls["invokeAction"];
+  prepareAction?: RegisteredInvocationCalls["prepareAction"];
   /** Synchronously stop new invocation registrations, retaining only narrowly
    * authorized already-admitted settlement and driver terminal/state calls. */
   sealInvocationCalls(): void;
@@ -256,6 +250,7 @@ export function createRegisteredLocalActionExecution(
   const project = owner.project.bind(owner);
   const execute = owner.execute.bind(owner);
   const invokeAction = owner.invokeAction?.bind(owner);
+  const prepareAction = owner.prepareAction?.bind(owner);
   const settlementState = owner.settlementState.bind(owner);
   const complete = owner.complete.bind(owner);
   const seal = owner.sealInvocationCalls.bind(owner);
@@ -504,6 +499,12 @@ export function createRegisteredLocalActionExecution(
                 exposedSignal: exposed.signal,
               },
               calls: {
+                ...(prepareAction
+                  ? {
+                    prepareAction: (input, callOptions) =>
+                      call(() => prepareAction(input, callOptions)),
+                  }
+                  : {}),
                 execute: (input, callOptions) =>
                   commandCall(() => execute(input, callOptions)),
                 ...(invokeAction

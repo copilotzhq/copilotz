@@ -199,11 +199,6 @@ function assertParentSelector(
       ("placement" in ref ? ref.attemptId : ref.dispatchAttemptId)
   ) refuse();
 }
-function requireWorkerParent(ref: OwnerChildActionParentReference): void {
-  if ("placement" in parentReference(ref)) {
-    refuse("Local named preparation is unavailable.");
-  }
-}
 function childReference(value: unknown): OwnerChildActionReference {
   const data = object(value, [
     "namespace",
@@ -987,7 +982,6 @@ export function createOwnerChildActions(
     operationKey: string,
     time: string,
   ) {
-    requireWorkerParent(ref);
     text(actionAlias);
     text(operationKey);
     const parent = await current(
@@ -1056,7 +1050,6 @@ export function createOwnerChildActions(
       reference: OwnerChildActionReference,
       time: string,
     ): Promise<DurableEvent> {
-      requireWorkerParent(ref);
       if (!authorizePreparedInput) {
         refuse("Prepared input authority is unavailable.");
       }
@@ -1096,7 +1089,6 @@ export function createOwnerChildActions(
       >,
       context: OwnerCommandContext,
     ): Promise<OwnerChildActionReference> {
-      requireWorkerParent(raw.parent);
       if (!authorizePreparedInput) {
         refuse("Prepared input authority is unavailable.");
       }

@@ -20,6 +20,7 @@ import type {
 import type { PluginRegistry } from "../plugins/registry.ts";
 import type {
   RegisteredContextCapabilities,
+  RegisteredInvocationCalls,
   RegisteredProcessorCompletion,
   RegisteredProcessorInvocation,
 } from "./registered-invocation.ts";
@@ -53,12 +54,8 @@ export type RegisteredLocalProcessorPort = Readonly<{
     command: OwnerCommand,
     options?: OwnerCommandExecuteOptions,
   ): Promise<OwnerCommandOutcome>;
-  invokeAction?(
-    input: Readonly<
-      { actionAlias: string; input: OwnerJson; operationKey: string }
-    >,
-    options: OwnerCommandExecuteOptions,
-  ): Promise<OwnerJson>;
+  invokeAction?: RegisteredInvocationCalls["invokeAction"];
+  prepareAction?: RegisteredInvocationCalls["prepareAction"];
   sealInvocationCalls(): void;
   drainRawCalls(): Promise<void>;
   settlementState(
@@ -332,6 +329,7 @@ export function createRegisteredLocalProcessorExecution(
   const project = owner.project.bind(owner);
   const execute = owner.execute.bind(owner);
   const invokeAction = owner.invokeAction?.bind(owner);
+  const prepareAction = owner.prepareAction?.bind(owner);
   const state = owner.settlementState.bind(owner);
   const complete = owner.complete.bind(owner);
   const seal = owner.sealInvocationCalls.bind(owner);
@@ -391,6 +389,20 @@ export function createRegisteredLocalProcessorExecution(
     current();
     if (cancelled) throw failure("processor_cancelled");
     if (!open) throw failure("local_processor_context_closed");
+  };
+  const childCall = async (
+    operation: () => Promise<OwnerJson>,
+  ): Promise<OwnerJson> => {
+    check();
+    try {
+      const result = await operation();
+      check();
+      return snapshot(result);
+    } catch (error) {
+      if (unknown(error)) throw indeterminate(error);
+      current();
+      throw error;
+    }
   };
   const close = () => {
     open = false;
@@ -529,23 +541,20 @@ export function createRegisteredLocalProcessorExecution(
                 exposedSignal: exposed.signal,
               },
               calls: {
+                ...(prepareAction
+                  ? {
+                    prepareAction: (input, callOptions) =>
+                      childCall(() =>
+                        prepareAction(snapshot(input), callOptions)
+                      ),
+                  }
+                  : {}),
                 ...(invokeAction
                   ? {
-                    invokeAction: async (input, callOptions) => {
-                      check();
-                      try {
-                        const result = await invokeAction(
-                          snapshot(input),
-                          callOptions,
-                        );
-                        check();
-                        return snapshot(result);
-                      } catch (error) {
-                        if (unknown(error)) throw indeterminate(error);
-                        current();
-                        throw error;
-                      }
-                    },
+                    invokeAction: (input, callOptions) =>
+                      childCall(() =>
+                        invokeAction(snapshot(input), callOptions)
+                      ),
                   }
                   : {}),
                 execute: async (input, callOptions) => {

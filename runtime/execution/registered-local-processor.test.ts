@@ -612,3 +612,43 @@ test("local Processor child admission uncertainty cannot become a retry or termi
   assert.equal(f.unknown.length, 1);
   assert.equal(f.events.includes("complete"), false);
 });
+
+test("local Processor named preparation captures its bound callback before execution", async () => {
+  const requests: unknown[] = [];
+  let result: unknown;
+  const f = fixture(
+    async (ctx) => {
+      const child = ctx.actions
+        .child as import("../actions/types.ts").RuntimeActionCallers[string];
+      assert.equal(typeof child.prepareNamed, "function");
+      result = await child.prepareNamed({
+        preparation: "notes.context",
+        recordId: "record",
+        mode: "context",
+      }, { operationKey: "named" });
+    },
+    {
+      prepareAction(input) {
+        requests.push(input);
+        return Promise.resolve("prepared");
+      },
+    },
+    1,
+    true,
+  );
+  const driver = f.create();
+  Object.assign(f.owner, {
+    prepareAction() {
+      throw new Error("replacement must not run");
+    },
+  });
+  assert.equal((await driver.run()).receipt.status, "succeeded");
+  assert.equal(result, "prepared");
+  assert.deepEqual(requests, [{
+    actionAlias: "child",
+    preparation: "notes.context",
+    recordId: "record",
+    mode: "context",
+    operationKey: "named",
+  }]);
+});

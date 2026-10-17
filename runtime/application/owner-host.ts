@@ -1179,12 +1179,9 @@ export async function createOwnerHost(
     tx: SqlExecutor,
     context: OwnerPreparedInputContext,
   ) {
-    if (
-      context.caller.principal.kind === "owner-local" ||
-      Object.hasOwn(context.caller, "localPlacementStart")
-    ) {
-      unavailable("Prepared input is unavailable for private local Actions.");
-    }
+    // Execution has already authenticated live or exact private control-start
+    // authority. Keep that genuine caller for original-source policies; a local
+    // assignment is deliberately not active yet during the claim-time check.
     if (!preparations) unavailable("Prepared input authority is unavailable.");
     // Execution/child modules own their current assignment checks. Calling
     // authorizeLive here would recursively reenter this prepared-input gate.

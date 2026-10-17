@@ -1,6 +1,6 @@
 # Owner, worker and Views implementation checklist
 
-Updated: 17 October 2026, 19:35 UTC.
+Updated: 17 October 2026, 19:58 UTC.
 
 This is the maintained coordination checklist for
 [Copilotz PR #93](https://github.com/copilotzhq/copilotz/pull/93). It tracks
@@ -15,7 +15,7 @@ production-ready. All changes remain draft: **no merge or publication**.
 | Local Processor bound owner adapter | Reviewed checkpoint     | Reviewed: independent 30 pure and seven real PostgreSQL cases; 83-case compatibility passed        |
 | Local nested Action authority       | Reviewed checkpoint     | Independent 144 pure and 114 PostgreSQL cases; private fresh same-owner mixed placement complete   |
 | Local Action effect capabilities    | Reviewed checkpoint     | Private fresh local effects: 300 PostgreSQL-gate cases, 71 pure and 12 role-bundle cases pass      |
-| Local named preparation / Views     | In progress             | Prepared lifetime fence reviewed; local parent/control-start and shared View capture next          |
+| Local named preparation / Views     | Reviewed checkpoint     | Fresh local Action/Processor preparation and retry capture pass; public/history gates remain       |
 | Faster test orchestration           | Representative measured | 16 files: 15.4% faster, 7.7% higher peak RSS; reordered files require broader isolation validation |
 | Reference-test reliability          | Reviewed correction     | 137 affected cases, independent 29-case check and three complete pipeline repeats passed           |
 | Local Processor host generations    | Reviewed checkpoint     | PostgreSQL 14 host plus two caller-facing helper cases pass; fresh same-owner retry scope complete |
@@ -69,7 +69,15 @@ plus 12 role-bundle and 21 PGlite source-fixture cases, with independent source
 and evidence review. The initial mock typecheck, fixture JSON encoding and
 unconditional registration failures are retained alongside their corrections.
 
-Next is local named preparation and the View-to-child flow using that fence.
+[Private local named preparation](owner-local-preparation.md) is now reviewed:
+the broad independent gates pass PostgreSQL-configured 421 cases (preparation
+87, core 114, canonical 220), pure 95 and role-bundle 12. Two lint-only
+corrections then pass a separately frozen PostgreSQL replay-close pair, pure 95,
+role 12 and all static/package checks. Original failures and split evidence are
+preserved. One shared adapter carries direct/named calls for local Actions and
+Processors; retry reuses the original View capture without rerendering.
+
+Next is the bounded historical finite-deadline precision correction.
 Quiet-writer content protection, open-history takeover and public local
 placement remain separate gates. Every slice must name what it simplifies and
 eliminates before adding machinery.
@@ -197,7 +205,10 @@ eliminates before adding machinery.
 - [ ] Complete default model-context/message-router integration
 - [ ] Default channel rendering/egress, multipart/media and remaining provider
       conversions
-- [ ] Local named preparation and broader content/protected preparation
+- [x] Private fresh same-owner local Action/Processor named preparation through
+      the shared adapter, with mixed child placement, immutable retry capture,
+      original-source gates and raw-call drain
+- [ ] Broader content/protected preparation
 - [ ] Live browser/React Views and UI support
 - [ ] Consumer/plugin migration and compatibility completion
 

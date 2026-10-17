@@ -1091,3 +1091,38 @@ test("local throwing private-current checks latch authority loss across later tr
     await f.execution.quiescent;
   }
 });
+
+test("local Action named preparation captures its bound callback before execution", async () => {
+  const requests: unknown[] = [];
+  const f = fixture(
+    defineAction({
+      id: "action",
+      async execute(_input: unknown, ctx: ActionContext) {
+        return await ctx.actions.action.prepareNamed({
+          preparation: "notes.context",
+          recordId: "record",
+          mode: "context",
+        }, { operationKey: "named" });
+      },
+    }),
+    {
+      prepareAction(input) {
+        requests.push(input);
+        return Promise.resolve("prepared");
+      },
+    },
+  );
+  Object.assign(f.owner, {
+    prepareAction() {
+      throw new Error("replacement must not run");
+    },
+  });
+  assert.equal((await f.execution.run()).completion.status, "completed");
+  assert.deepEqual(requests, [{
+    actionAlias: "action",
+    preparation: "notes.context",
+    recordId: "record",
+    mode: "context",
+    operationKey: "named",
+  }]);
+});

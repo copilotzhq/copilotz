@@ -49,7 +49,7 @@ The runner:
    implementation/typing modules resolve their worker dependency to the selected
    public worker entry; legacy runtime workers retain their published
    dependency. No global package override or repository-local link is created
-4. Runs these exact seventeen files (192 declared cases) serially with type
+4. Runs these exact seventeen files (220 declared cases) serially with type
    checking, including in-process and Node WebSocket transports:
    - `runtime/owner/connected.integration.test.ts`
    - `runtime/owner/execution.connected.test.ts`
@@ -69,10 +69,13 @@ The runner:
    - `runtime/application/owner-composition.restart.test.ts`
    - `build/role-bundle.connected.test.ts`
 
-   The selected source enables 144 opt-in cases; the other 48 cases are
+   The selected source enables 172 opt-in cases; the other 48 cases are
    unconditional. The local-host file covers private fresh local Actions and
-   their shared effect protocol, including unknown outcomes and raw-call drain;
-   the preparation-restart file covers closed prepared context over both
+   their shared effect protocol and local named preparation, including Processor
+   retry capture, original-source denial, unknown outcomes and raw-call drain.
+   Its prepared transaction-acknowledgement holds block the owner command pump;
+   raw SQL observations during those holds are not concurrent owner commands.
+   The preparation-restart file covers closed prepared context over both
    transports. The terminal-recovery file covers private exact-target resume
    cleanup and real continuation/cancellation over both transports. The imported
    preparation fixture declares no cases of its own

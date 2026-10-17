@@ -3,7 +3,7 @@
 import { assertJsonValue } from "../json.ts";
 import { createLocalPortCalls } from "./local-port-calls.ts";
 import {
-  createLocalChildActionCall,
+  createLocalChildActionCalls,
   type LocalChildActionOptions,
 } from "./local-child-action-port.ts";
 import {
@@ -204,17 +204,15 @@ export function createOwnerLocalProcessorPort(
   }
   return {
     ...(children
-      ? {
-        invokeAction: createLocalChildActionCall({
-          children,
-          reference,
-          caller: localCaller,
-          boundary: { executeInput: executeInput!, project },
-          calls,
-          invocation,
-          maxPendingCalls: limit,
-        }),
-      }
+      ? createLocalChildActionCalls({
+        children,
+        reference,
+        caller: localCaller,
+        boundary: { executeInput: executeInput!, project },
+        calls,
+        invocation,
+        maxPendingCalls: limit,
+      })
       : {}),
     start(callOptions = {}) {
       if (startPromise) return startPromise;

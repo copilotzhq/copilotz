@@ -6,9 +6,10 @@ import { assertJsonValue } from "../json.ts";
 import type { SqlExecutor } from "../events/session.ts";
 import type { DurableEvent } from "../events/types.ts";
 import { createEventStore } from "../events/store.ts";
-import type {
-  OwnerChildActionParentReference,
-  OwnerChildActionReference,
+import {
+  type OwnerChildActionParentReference,
+  type OwnerChildActionReference,
+  parseOwnerChildActionParentReference,
 } from "../execution/child-action-port.ts";
 import type { PluginRegistry } from "../plugins/registry.ts";
 import type { ViewShows } from "../views/definition.ts";
@@ -162,13 +163,11 @@ function canonical(value: OwnerJson): string {
   return JSON.stringify(value);
 }
 function parentReference(input: unknown): OwnerChildActionParentReference {
-  const value = exact(input, [
-    "deliveryId",
-    "dispatchAttemptId",
-    "operationKey",
-  ]);
-  Object.values(value).forEach(text);
-  return value as OwnerChildActionParentReference;
+  try {
+    return parseOwnerChildActionParentReference(input);
+  } catch {
+    fail();
+  }
 }
 function childReference(input: unknown): OwnerChildActionReference {
   const value = exact(input, [

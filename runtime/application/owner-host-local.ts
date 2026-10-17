@@ -1,7 +1,7 @@
 import { ownConfiguration } from "./owner-local-configuration.ts";
 /** Private fresh-only local Action composition. No public placement option,
- * worker identity, restart adoption or named preparation. Effects reuse the shared
- * owner protocol and policy with the exact local attempt. */
+ * worker identity or restart adoption. Effects and named preparation reuse the
+ * shared owner protocols and policies with the exact local attempt. */
 import type { SqlExecutor } from "../events/session.ts";
 import { createCoreTableNames } from "../events/schema.ts";
 import { assertJsonValue } from "../json.ts";

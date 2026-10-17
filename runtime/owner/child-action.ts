@@ -616,6 +616,8 @@ export function createOwnerChildActions(
       source.metadata.actionRunId !== ref.executionId ||
       source.deduplicationId !== ref.executionId ||
       source.metadata.parentOperationKey !== parent.operationKey ||
+      source.metadata.parentDeliveryId !== parent.delivery.id ||
+      source.causationId !== parent.source.id ||
       source.metadata.parentActionRunId !== parent.actionRunId ||
       source.correlationId !== parent.source.correlationId ||
       delivery.eventId !== source.id ||

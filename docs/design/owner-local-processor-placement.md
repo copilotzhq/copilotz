@@ -53,5 +53,5 @@ Four additional reviewer regressions were reproduced by reconstructing the
 observed earlier callback blocks; they are explicitly reconstructed causal
 checks, not an archived committed baseline. Actual host composition, SQL
 predecessor retirement, retry alarms, mixed capacity and shutdown integration
-now have their own scoped host evidence. The remaining caller-facing reply and
-precision probes are tracked with that composition.
+now have their own scoped host evidence. Caller-facing reply and full-host
+precision probes are also independently verified with that composition.

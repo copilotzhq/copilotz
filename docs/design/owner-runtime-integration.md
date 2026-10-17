@@ -786,3 +786,26 @@ refused. A genuine local invocation driver, placement-aware Collection/child
 composition and scheduling, local Processor behavior and exact old-epoch local
 loss handling still require separate integration and acceptance. In-process
 transport tests continue to exercise leased workers, not owner-local execution.
+
+### Child result physical lineage prerequisite
+
+Before exposing a pending, failed or completed child result, the shared child
+reader now checks both the stored `parentDeliveryId` against the actual parent's
+delivery and the child's source-event `causationId` against the actual parent's
+source event. These supplement the existing logical run, correlation and scope
+checks; they do not change child admission keys or receipt digests.
+
+Six actual-history regressions independently corrupt either field after genuine
+admission/completion and require refusal in all three result states. The fixture
+only disables its immutable-event trigger inside its disposable corruption
+transaction and restores it before commit. Refusal leaves every public base
+table, receipt-read count and scheduled-publication list unchanged. This narrow
+correction does not activate local parents, change ordinary-value policy, or
+stand in for the separate final current-parent rechecks.
+
+The corrected full child fixture passes 18 ordinary-checked cases on PGlite and
+independent PostgreSQL, with no failures/skips. The independent run created and
+dropped 19 fixture databases and stopped PostgreSQL; source/config/sibling
+hashes and lint/format were verified. The six missing-rejection failures from
+the committed pre-fix source are retained separately from an initial
+failure-code setup correction.

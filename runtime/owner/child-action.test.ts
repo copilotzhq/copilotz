@@ -968,3 +968,96 @@ test("Processor child Actions retain stable delivery identity and existing inher
     }
   }
 });
+
+for (const field of ["parentDeliveryId", "causationId"] as const) {
+  for (const terminal of ["pending", "completed", "failed"] as const) {
+    test(`child result refuses corrupted ${field} before exposing ${terminal} state`, async () => {
+      const f = await setup();
+      try {
+        const ref = (await f.admit()).result as OwnerChildActionReference;
+        if (terminal === "completed") {
+          await f.complete(ref, { answer: "private-child-output" });
+        }
+        if (terminal === "failed") {
+          const assignment = f.assign(
+            ref,
+            `child:${ref.actionId}`,
+            f.rootRef.executionId,
+          );
+          await f.claim(assignment);
+          await f.boundary.executeInput(f.caller(assignment), {
+            kind: "execution.complete",
+            domain: "logical",
+            key: ownerCompletionKey(ownerId, namespace, ref.executionId),
+            input: {
+              namespace,
+              executionId: ref.executionId,
+              completion: { status: "failed", code: "action_failed" },
+            },
+          });
+        }
+        assert.equal(
+          (await f.project(ref) as { status: string }).status,
+          terminal,
+        );
+        // Deliberate corruption in this disposable fixture only. Restore the
+        // immutable-event trigger before committing the fixture transaction.
+        await f.db.transaction(async (tx) => {
+          await tx.query(
+            'ALTER TABLE events DISABLE TRIGGER "copilotz_events_immutable"',
+          );
+          try {
+            if (field === "parentDeliveryId") {
+              await tx.query(
+                "UPDATE events SET metadata=jsonb_set(metadata,'{parentDeliveryId}','\"foreign-delivery\"'::jsonb) WHERE id=$1",
+                [ref.eventId],
+              );
+            } else {await tx.query(
+                "UPDATE events SET causation_id='foreign-source' WHERE id=$1",
+                [ref.eventId],
+              );}
+          } finally {
+            await tx.query(
+              'ALTER TABLE events ENABLE TRIGGER "copilotz_events_immutable"',
+            );
+          }
+        });
+        const snapshot = async () => {
+          const tables = (await f.db.query<{ table_name: string }>(
+            "SELECT table_name FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE' ORDER BY table_name",
+          )).rows;
+          const result: Record<string, unknown> = {};
+          for (const { table_name } of tables) {
+            const name = `"${table_name.replaceAll('"', '""')}"`;
+            result[table_name] = (await f.db.query(
+              `SELECT row_to_json(t) AS data FROM ${name} t ORDER BY row_to_json(t)::text`,
+            )).rows;
+          }
+          return result;
+        };
+        const before = await snapshot(),
+          receiptReads = f.state.receiptReads,
+          scheduled = structuredClone(f.state.scheduled);
+        await assert.rejects(
+          f.project(ref),
+          errorCode("action_result_unavailable"),
+        );
+        assert.deepEqual(
+          await snapshot(),
+          before,
+          "refusal cannot mutate events, bodies, sequences, receipts or catalog",
+        );
+        assert.equal(f.state.receiptReads, receiptReads);
+        assert.deepEqual(f.state.scheduled, scheduled);
+        assert.equal(
+          (await f.db.query(
+            "SELECT tgenabled FROM pg_trigger WHERE tgname='copilotz_events_immutable' AND tgrelid='events'::regclass",
+          )).rows[0].tgenabled,
+          "O",
+        );
+      } finally {
+        await f.close();
+      }
+    });
+  }
+}

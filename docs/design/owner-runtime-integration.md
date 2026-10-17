@@ -575,6 +575,14 @@ loss suppresses the reply without pretending that durable work did not commit.
 Prepared admission is not silently opted into the ordinary command proof, and
 local parent activation is still a separate milestone.
 
+Ordinary child input and result traversal refuses all four reserved protected
+schema families, including bare, future-version, malformed-suffix and
+array-wrapped markers. This adds no protected-format reader or decryption path.
+The shared scalar family predicate does not impose the preparation/startup
+guard's broader reserved-key policy: ordinary application fields such as
+`assetId`, `location` and secret-looking labels remain valid unless they form an
+existing ContentRef or carry a reserved protected schema marker.
+
 ### Fresh ordinary Action owner host
 
 A private fresh-schema host composes the real fenced boundary, current ingress

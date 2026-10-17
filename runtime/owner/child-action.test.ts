@@ -392,8 +392,12 @@ async function setup(maxPendingDeliveries = 128) {
       },
       reference: ref,
     });
-  async function complete(ref: OwnerChildActionReference, output: OwnerJson) {
-    const a = assign(ref, `child:${ref.actionId}`, rootRef.executionId);
+  async function complete(
+    ref: OwnerChildActionReference,
+    output: OwnerJson,
+    assignmentKey = `child:${ref.actionId}`,
+  ) {
+    const a = assign(ref, assignmentKey, rootRef.executionId);
     await claim(a);
     return await boundary.executeInput(caller(a), {
       kind: "execution.complete",
@@ -1245,3 +1249,79 @@ for (
     }
   });
 }
+
+const unsupportedChildFamilies = [
+  "copilotz.event.protected-value",
+  "copilotz.action.lifecycle.protected",
+  "copilotz.action.protected-value",
+  "copilotz.action.protected-value-aad",
+];
+for (const family of unsupportedChildFamilies) {
+  for (const route of ["input", "result"] as const) {
+    test(`ordinary child ${route} refuses protected family ${family}`, async () => {
+      const f = await setup();
+      try {
+        const markers: OwnerJson[] = [
+          family,
+          `${family}.v1`,
+          `${family}.v2`,
+          `${family}.`,
+          `${family}.broken`,
+          [`${family}.v3`, "app.Other"],
+          [[family]],
+        ];
+        for (const [index, schema] of markers.entries()) {
+          const value = { nested: [{ schema, private: "must stay closed" }] };
+          const ref = route === "result"
+            ? (await f.admit(
+              f.request("child", { ordinary: true }, `family-${index}`),
+            )).result as OwnerChildActionReference
+            : undefined;
+          if (ref) {
+            await f.complete(ref, value, `child:${ref.actionId}:${index}`);
+          }
+          const before = await snapshotChildTables(f.db),
+            scheduled = structuredClone(f.state.scheduled);
+          await assert.rejects(
+            ref
+              ? f.project(ref)
+              : f.admit(f.request("child", value, `family-${index}`)),
+            /ordinary JSON/,
+          );
+          assert.deepEqual(await snapshotChildTables(f.db), before);
+          assert.deepEqual(f.state.scheduled, scheduled);
+        }
+      } finally {
+        await f.close();
+      }
+    });
+  }
+}
+test("ordinary child preserves application schemas and innocent reserved-looking fields", async () => {
+  const f = await setup();
+  try {
+    const value = {
+      schema: "app.Invoice.v1",
+      assetId: "application-id",
+      bodyId: "body-label",
+      ownerNodeId: "node-label",
+      location: "Lisbon",
+      "$copilotz-secret": "ordinary-label",
+      schemas: unsupportedChildFamilies.flatMap((family): OwnerJson[] => [
+        { schema: `${family}Extra.v2` },
+        { schema: `${family}-custom.v1` },
+        { description: family },
+        { schema: [`${family}Extra.v3`] },
+      ]),
+    };
+    const ref = (await f.admit(f.request("child", value)))
+      .result as OwnerChildActionReference;
+    await f.complete(ref, value);
+    assert.deepEqual(await f.project(ref), {
+      status: "completed",
+      output: value,
+    });
+  } finally {
+    await f.close();
+  }
+});

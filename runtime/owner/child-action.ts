@@ -26,6 +26,7 @@ import {
   type OwnerChildActionReference,
 } from "../execution/child-action-port.ts";
 import { assertJsonValue } from "../json.ts";
+import { isOwnerProtectedSchemaFamily } from "./ordinary-value.ts";
 import type { PluginRegistry } from "../plugins/registry.ts";
 import {
   createOperationCatalogTables,
@@ -144,20 +145,21 @@ function ordered(value: OwnerJson): OwnerJson {
 function same(a: unknown, b: unknown) {
   return JSON.stringify(ordered(json(a))) === JSON.stringify(ordered(json(b)));
 }
-function ordinary(value: OwnerJson): void {
+function ordinary(value: OwnerJson, schemaValue = false): void {
+  if (typeof value === "string") {
+    if (schemaValue && isOwnerProtectedSchemaFamily(value)) {
+      throw new TypeError("Child Actions support ordinary JSON only.");
+    }
+    return;
+  }
   if (!value || typeof value !== "object") return;
-  const schema = (value as Record<string, OwnerJson>).schema;
-  if (
-    isContentRef(value) ||
-    [
-      "copilotz.event.protected-value.v1",
-      "copilotz.action.lifecycle.protected.v1",
-      "copilotz.action.protected-value.v1",
-    ].includes(String(schema))
-  ) {
+  if (isContentRef(value)) {
     throw new TypeError("Child Actions support ordinary JSON only.");
   }
-  for (const child of Object.values(value)) ordinary(child);
+  const array = Array.isArray(value);
+  for (const [key, child] of Object.entries(value)) {
+    ordinary(child, key === "schema" || (array && schemaValue));
+  }
 }
 function parentReference(value: unknown): OwnerChildActionParentReference {
   const data = object(value, [

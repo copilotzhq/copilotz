@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { assertOwnerOrdinaryValue } from "./ordinary-value.ts";
+import {
+  assertOwnerOrdinaryValue,
+  isOwnerProtectedSchemaFamily,
+} from "./ordinary-value.ts";
 
 test("ordinary owner values refuse reserved protected families and partial references", () => {
   for (
@@ -112,4 +115,42 @@ test("ordinary owner value traversal has finite depth and node bounds", () => {
     () => assertOwnerOrdinaryValue(Array(20_000).fill(null)),
     /ordinary_value_unsupported/,
   );
+});
+
+test("protected schema family predicate is scalar, exact-boundary and non-coercing", () => {
+  let coerced = 0;
+  for (
+    const family of [
+      "copilotz.event.protected-value",
+      "copilotz.action.lifecycle.protected",
+      "copilotz.action.protected-value",
+      "copilotz.action.protected-value-aad",
+    ]
+  ) {
+    for (const suffix of ["", ".", ".v1", ".v99", ".malformed"]) {
+      assert.equal(isOwnerProtectedSchemaFamily(family + suffix), true);
+    }
+    for (
+      const value of [
+        null,
+        undefined,
+        1,
+        false,
+        [family],
+        { schema: family },
+        `app.${family}`,
+        `${family}Extra.v1`,
+        `${family}-custom.v1`,
+        {
+          toString() {
+            coerced++;
+            return family;
+          },
+        },
+      ]
+    ) {
+      assert.equal(isOwnerProtectedSchemaFamily(value), false);
+    }
+  }
+  assert.equal(coerced, 0);
 });

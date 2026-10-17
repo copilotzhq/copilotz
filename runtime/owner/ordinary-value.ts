@@ -25,6 +25,14 @@ function refuse(): never {
     code: "ordinary_value_unsupported",
   });
 }
+/** Reserved protected-format family marker only. This does not validate a
+ * protocol, inspect application field names, coerce a value or grant access. */
+export function isOwnerProtectedSchemaFamily(value: unknown): boolean {
+  return typeof value === "string" &&
+    protectedFamilies.some((family) =>
+      value === family || value.startsWith(`${family}.`)
+    );
+}
 /** Accepts only detached ordinary JSON, including null-prototype records.
  * Array-wrapped schema names also refuse; this does not coerce a schema value.
  * Cycles, capabilities, accessors, symbols and non-JSON values fail closed.
@@ -42,9 +50,7 @@ export function assertOwnerOrdinaryValue(value: unknown): void {
     if (typeof value === "string") {
       if (
         schemaValue &&
-        protectedFamilies.some((family) =>
-          value === family || value.startsWith(`${family}.`)
-        )
+        isOwnerProtectedSchemaFamily(value)
       ) refuse();
       return;
     }

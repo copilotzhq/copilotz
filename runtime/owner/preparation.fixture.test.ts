@@ -61,23 +61,40 @@ import {
 
 export const ownerId = "owner";
 export const namespace = "space";
-export async function fixture(
-  options: {
-    generic?: boolean;
-    mapInput?(text: string): OwnerJson;
-    executionGuard?: boolean;
-    childGuard?: boolean;
-    deferParentClaim?: boolean;
-    transportAuthority?: {
-      isCurrentStarted(caller: OwnerCaller): boolean;
-      caller(assignment: OwnerWorkerExecutionAssignment): OwnerCaller;
-      authenticateReceipt(caller: OwnerCaller): boolean;
-    };
-    now?(): string;
-    leaseMs?: number;
-  } = {},
-) {
+type PreparationFixtureOptions = {
+  generic?: boolean;
+  mapInput?(text: string): OwnerJson;
+  executionGuard?: boolean;
+  childGuard?: boolean;
+  deferParentClaim?: boolean;
+  transportAuthority?: {
+    isCurrentStarted(caller: OwnerCaller): boolean;
+    caller(assignment: OwnerWorkerExecutionAssignment): OwnerCaller;
+    authenticateReceipt(caller: OwnerCaller): boolean;
+  };
+  now?(): string;
+  leaseMs?: number;
+};
+export async function fixture(options: PreparationFixtureOptions = {}) {
   const db = await createTestDatabase({ pgliteMemoryProfile: "low-memory" });
+  try {
+    return await initializeFixture(db, options);
+  } catch (error) {
+    try {
+      await db.close();
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        "Preparation fixture setup and cleanup failed.",
+      );
+    }
+    throw error;
+  }
+}
+async function initializeFixture(
+  db: Awaited<ReturnType<typeof createTestDatabase>>,
+  options: PreparationFixtureOptions,
+) {
   for (const sql of createCoreSchemaStatements("public")) await db.query(sql);
   await provisionOperationCatalog(db, "public");
   await provisionOwnerCommandSchema(db, "public");
@@ -529,7 +546,7 @@ export async function fixture(
   const ref = await addAsset("asset-1", "body");
   await db.query(
     "UPDATE nodes SET data=jsonb_set(data,'{content}',$1::jsonb) WHERE id='message-1'",
-    [[ref]],
+    [JSON.stringify([ref])],
   );
   const input = async (ref: OwnerChildActionReference) => {
     const event = await store.getEvent(ref.eventId);

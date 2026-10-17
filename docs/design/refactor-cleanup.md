@@ -34,6 +34,45 @@ arbitrary line quota or fewer safety checks.
 - One supported public behavior contract after migration, rather than permanent
   parallel legacy and owner-specific facades
 
+## Simplification review before every implementation slice
+
+Begin with the guarantees required by the owner architecture, not a port of
+existing mechanisms. For every slice, record:
+
+1. Which invariant the old mechanism protects and which component now owns it
+2. Whether owner serialization, epoch fencing, authenticated session/attempt
+   authority or an existing shared capability already supplies that guarantee
+3. What can be eliminated, what can be consolidated and what remains necessary;
+   name the concrete callers, options, commands, timers and persisted fields
+4. The counterexample tests that prove the replacement, including interruption,
+   unknown outcomes, stale authority and external-effect ambiguity where
+   relevant
+5. The exact deletion in this slice, or a named blocker and follow-on deletion
+
+Apply this review before adding new layers, not only during final cleanup.
+Preserving a guarantee does not require preserving its old implementation. Where
+the approved specification explicitly requires the mechanism, raise the conflict
+and obtain the user's amendment before changing it.
+
+### First architecture-level candidate: worker delivery leases
+
+The recovered approved F5 owner contract §3 already calls for removing old
+coordination mechanisms when owner serialization plus tests covers their
+invariant. However, §4.2 explicitly retains worker leases/heartbeats while
+removing them for local execution. Removing worker per-job renewal therefore
+requires an explicit spec amendment; it is currently proposed, not implemented.
+
+The proposed replacement retains owner epoch/holder fencing and authenticated
+session/assignment/attempt authority. Review worker renewal commands, projected
+lease budgets, heartbeat drivers, EventStore mutation predicates, expiry alarms,
+recovery and retained formats together. A disconnected worker is unauthorized,
+not proven physically stopped: remote capacity accounting and external effects
+need their own evidence. Connection liveness, retry availability/backoff and
+optional execution deadlines are independent concerns. F9 open-body lifetime
+renewal and observation head heartbeats must be assessed separately rather than
+removed by a broad heartbeat search. Legacy consumers require an explicit
+migration or retirement gate.
+
 ## Replacement map and deletion gates
 
 | Current responsibility                                                                                                         | Replacement or consolidation                                                                                   | Gate before removal                                                                                                                  |

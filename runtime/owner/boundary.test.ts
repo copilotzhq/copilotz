@@ -1276,3 +1276,319 @@ test("authorized replay reader association rolls back with the outer transaction
     );
   });
 });
+
+test("private authorization fence is captured, detached and literal-true only", async () => {
+  await fixture(async (db) => {
+    for (const invalid of [null, false, "fence", {}]) {
+      assert.throws(() =>
+        createOwnerCommandBoundary(
+          options(db, { isCurrentAuthorization: invalid as never }),
+        ), /fence/);
+    }
+    let calls = 0;
+    const configured = options(db, {
+      isCurrentAuthorization(_tx, who, cmd) {
+        calls++;
+        assert.equal(who.principal.kind, "worker");
+        Object.assign(who, { authenticated: false });
+        (cmd.intent as { id: string }).id = "poison";
+        return true;
+      },
+    });
+    const owner = createOwnerCommandBoundary(configured);
+    Object.assign(configured, { isCurrentAuthorization: () => false });
+    await owner.acquire(0);
+    await owner.execute(caller(), command("captured"));
+    assert.ok(calls >= 5);
+    assert.deepEqual(await nodeIds(db), ["captured"]);
+    assert.ok(
+      await owner.readReceipt(caller(), { domain: "logical", key: "captured" }),
+    );
+    owner.stop();
+  });
+  for (
+    const answer of [
+      () => false,
+      () => undefined,
+      () => 1,
+      () => "true",
+      () => Promise.resolve(true),
+      () => Promise.reject(new Error("async fence forbidden")),
+    ]
+  ) {
+    await fixture(async (db) => {
+      const owner = createOwnerCommandBoundary(
+        options(db, { isCurrentAuthorization: answer as never }),
+      );
+      await owner.acquire(0);
+      await assert.rejects(
+        owner.execute(caller(), command("denied")),
+        errorCode("owner_authorization_lost"),
+      );
+      assert.deepEqual(await nodeIds(db), []);
+      assert.equal(
+        (await db.query("SELECT * FROM owner_receipts")).rows.length,
+        0,
+      );
+      assert.equal(owner.state, "acquired");
+      owner.stop();
+    });
+  }
+});
+for (
+  const stage of ["receipt-read", "reader-insert", "savepoint-release"] as const
+) {
+  test(`private authorization fence catches ${stage} loss without exposing or associating a duplicate`, async () => {
+    await fixture(async (db) => {
+      let current = true, armed = false, reached = false;
+      const session: SqlSession = {
+        query: db.query,
+        transaction: (run) =>
+          db.transaction((tx) =>
+            run({
+              async query<TRow extends Record<string, unknown>>(
+                sql: string,
+                params?: unknown[],
+              ) {
+                const result = await tx.query<TRow>(sql, params);
+                if (
+                  armed &&
+                  ((stage === "receipt-read" &&
+                    sql.includes("SELECT kind,intent,result")) ||
+                    (stage === "reader-insert" &&
+                      sql.startsWith(
+                        'INSERT INTO "public"."owner_receipt_readers"',
+                      )) ||
+                    (stage === "savepoint-release" &&
+                      sql.startsWith("RELEASE SAVEPOINT")))
+                ) {
+                  current = false;
+                  reached = true;
+                }
+                return result;
+              },
+            })
+          ),
+      };
+      const owner = createOwnerCommandBoundary(
+        options(session, { isCurrentAuthorization: () => current }),
+      );
+      await owner.acquire(0);
+      await owner.execute(caller(), command("same"));
+      const readers =
+        (await db.query("SELECT * FROM owner_receipt_readers")).rows;
+      armed = true;
+      await assert.rejects(
+        owner.execute(caller(1, "replacement"), command("same")),
+        errorCode("owner_authorization_lost"),
+      );
+      assert.equal(reached, true);
+      assert.deepEqual(
+        (await db.query("SELECT * FROM owner_receipt_readers")).rows,
+        readers,
+      );
+      assert.deepEqual(await nodeIds(db), ["same"]);
+      assert.equal(
+        (await db.query(
+          "SELECT data->>'writes' AS writes FROM nodes WHERE id='same'",
+        )).rows[0].writes,
+        "1",
+      );
+      assert.equal(owner.state, "acquired");
+      owner.stop();
+    });
+  });
+}
+test("private authorization loss in a later grouped command rolls the group back before definitive individual retries", async () => {
+  await fixture(async (db) => {
+    let current = true;
+    const publications: string[] = [];
+    const executed: string[] = [];
+    const owner = createOwnerCommandBoundary(options(db, {
+      isCurrentAuthorization: (_tx, _who, cmd) =>
+        cmd.kind === "revoke" || current,
+      handlers: {
+        async put(intent, ctx) {
+          executed.push("put");
+          const result = await put(intent, ctx);
+          ctx.afterCommit(() => {
+            publications.push("put");
+          });
+          return result;
+        },
+        async revoke(intent, ctx) {
+          executed.push("revoke");
+          current = false;
+          const result = await put(intent, ctx);
+          ctx.afterCommit(() => {
+            publications.push("revoke");
+          });
+          return result;
+        },
+      },
+    }));
+    await owner.acquire(0);
+    const results = await Promise.allSettled([
+      owner.execute(caller(), command("first")),
+      owner.execute(caller(), command("second", { id: "second" }, "revoke")),
+    ]);
+    assert.equal(results[0].status, "rejected");
+    if (results[0].status === "rejected") {
+      assert.equal(results[0].reason.code, "owner_authorization_lost");
+    }
+    assert.equal(results[1].status, "fulfilled");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.deepEqual(executed, ["put", "revoke", "revoke"]);
+    assert.deepEqual(await nodeIds(db), ["second"]);
+    assert.deepEqual(publications, ["revoke"]);
+    assert.equal(
+      (await db.query("SELECT key FROM owner_receipts")).rows[0].key,
+      "second",
+    );
+    assert.equal(owner.state, "acquired");
+    owner.stop();
+  });
+});
+test("post-COMMIT private authorization loss hides output but preserves committed receipts and exactly-once publication", async () => {
+  await fixture(async (db) => {
+    let current = true, hold = false;
+    const entered = deferred(), release = deferred();
+    let writes = 0, published = 0;
+    const session: SqlSession = {
+      query: db.query,
+      async transaction(run) {
+        const result = await db.transaction(run);
+        if (hold) {
+          entered.resolve();
+          await release.promise;
+        }
+        return result;
+      },
+    };
+    const owner = createOwnerCommandBoundary(options(session, {
+      isCurrentAuthorization: () => current,
+      handlers: {
+        async put(intent, ctx) {
+          writes++;
+          const result = await put(intent, ctx);
+          ctx.afterCommit(() => {
+            published++;
+          });
+          return result;
+        },
+      },
+    }));
+    await owner.acquire(0);
+    hold = true;
+    const pending = owner.execute(caller(), command("committed"));
+    const denied = assert.rejects(
+      pending,
+      errorCode("owner_authorization_lost"),
+    );
+    await entered.promise;
+    assert.deepEqual(await nodeIds(db), ["committed"]);
+    assert.equal(
+      (await db.query("SELECT * FROM owner_receipts")).rows.length,
+      1,
+    );
+    assert.equal(published, 0);
+    current = false;
+    release.resolve();
+    await denied;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(writes, 1);
+    assert.equal(published, 1);
+    assert.deepEqual(await nodeIds(db), ["committed"]);
+    assert.equal(
+      (await db.query("SELECT * FROM owner_receipt_readers")).rows.length,
+      1,
+    );
+    assert.equal(owner.state, "acquired");
+    owner.stop();
+  });
+});
+
+test("private authorization true cannot mask reentrant owner stop", async () => {
+  await fixture(async (db) => {
+    const owner: ReturnType<typeof createOwnerCommandBoundary> =
+      createOwnerCommandBoundary(options(db, {
+        isCurrentAuthorization() {
+          owner.stop(new Error("stop during private fence"));
+          return true;
+        },
+      }));
+    await owner.acquire(0);
+    await assert.rejects(owner.execute(caller(), command("must-not-write")));
+    assert.equal(owner.state, "stopped");
+    assert.deepEqual(await nodeIds(db), []);
+    assert.equal(
+      (await db.query("SELECT * FROM owner_receipts")).rows.length,
+      0,
+    );
+  });
+});
+
+test("private authorization revoked inside a fresh handler rolls back writes, receipts and publication", async () => {
+  await fixture(async (db) => {
+    let current = true, published = 0;
+    const owner = createOwnerCommandBoundary(options(db, {
+      isCurrentAuthorization: () => current,
+      handlers: {
+        async put(intent, ctx) {
+          const result = await put(intent, ctx);
+          ctx.afterCommit(() => {
+            published++;
+          });
+          current = false;
+          return result;
+        },
+      },
+    }));
+    await owner.acquire(0);
+    await assert.rejects(
+      owner.execute(caller(), command("rolled-back")),
+      errorCode("owner_authorization_lost"),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.deepEqual(await nodeIds(db), []);
+    assert.equal(
+      (await db.query("SELECT * FROM owner_receipts")).rows.length,
+      0,
+    );
+    assert.equal(
+      (await db.query("SELECT * FROM owner_receipt_readers")).rows.length,
+      0,
+    );
+    assert.equal(published, 0);
+    assert.equal(owner.state, "acquired");
+    owner.stop();
+  });
+});
+test("private authorization rejects async return without invoking overridden promise methods", async () => {
+  await fixture(async (db) => {
+    let overridden = 0;
+    const owner = createOwnerCommandBoundary(options(db, {
+      isCurrentAuthorization: (() =>
+        Object.assign(Promise.reject(new Error("async forbidden")), {
+          catch() {
+            overridden++;
+            throw new Error("overridden catch");
+          },
+          then() {
+            overridden++;
+            throw new Error("overridden then");
+          },
+        })) as never,
+    }));
+    await owner.acquire(0);
+    await assert.rejects(
+      owner.execute(caller(), command("async-denied")),
+      errorCode("owner_authorization_lost"),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(overridden, 0);
+    assert.deepEqual(await nodeIds(db), []);
+    assert.equal(owner.state, "acquired");
+    owner.stop();
+  });
+});

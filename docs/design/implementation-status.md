@@ -1,6 +1,6 @@
 # Owner, worker and Views implementation checklist
 
-Updated: 17 October 2026, 14:27 UTC.
+Updated: 17 October 2026, 14:54 UTC.
 
 This is the maintained coordination checklist for
 [Copilotz PR #93](https://github.com/copilotzhq/copilotz/pull/93). It tracks
@@ -13,7 +13,7 @@ production-ready. All changes remain draft: **no merge or publication**.
 | Task                                         | Status                  | Next acceptance gate                                                                               |
 | -------------------------------------------- | ----------------------- | -------------------------------------------------------------------------------------------------- |
 | Local Processor bound owner adapter          | Reviewed checkpoint     | Reviewed: independent 30 pure and seven real PostgreSQL cases; 83-case compatibility passed        |
-| Local nested Action authority                | Inspecting shared boundary | Generalize existing parent checks; preserve logical identity, current policy and raw-call drain |
+| Local nested Action authority                | Hardening shared boundary | Physical lineage and final boundary fence reviewed; wire exact current-parent proofs next |
 | Faster test orchestration                    | Representative measured | 16 files: 15.4% faster, 7.7% higher peak RSS; reordered files require broader isolation validation |
 | Reference-test reliability                   | Reviewed correction     | 137 affected cases, independent 29-case check and three complete pipeline repeats passed           |
 | Local Processor host generations             | Reviewed checkpoint     | PostgreSQL 14 host plus two caller-facing helper cases pass; fresh same-owner retry scope complete |
@@ -60,7 +60,10 @@ production-ready. All changes remain draft: **no merge or publication**.
       114-case pure review passed; separately fix Action controller revocation
       during owner-current callbacks, with a retained causal regression and
       113-case controller/port compatibility check
-- [ ] Local nested Action authority and mixed parent/child placement
+- [ ] Local nested Action authority and mixed parent/child placement; shared
+      physical-lineage checks pass 18 PostgreSQL cases and the opt-in final
+      boundary fence passes 38 plus five native/fixture PostgreSQL cases;
+      consumer-specific current proofs and local parent activation remain open
 - [ ] Local Action effect capability parity
 - [ ] Public local placement activation and complete parity matrix
 

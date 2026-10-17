@@ -809,3 +809,44 @@ dropped 19 fixture databases and stopped PostgreSQL; source/config/sibling
 hashes and lint/format were verified. The six missing-rejection failures from
 the committed pre-fix source are retained separately from an initial
 failure-code setup correction.
+
+### Optional final private-authorization fence
+
+The owner boundary now accepts an optional, captured
+`isCurrentAuthorization(tx, caller, command, time)` callback. It is a
+synchronous private-lifetime witness, separate from the existing SQL/policy
+`authorize` operation. Only literal `true` admits. Caller and command values are
+detached; callback mutation cannot change persisted identity. The scoped
+transaction is an identity token for this callback, not permission to run SQL
+after its lifetime. An omitted callback preserves existing behavior and adds no
+command JSON copy.
+
+The fence runs after receipt lookup, after the handler/projection, before and
+after reader association, and again for every successful command before the
+outer transaction callback returns. This last check covers savepoint release and
+revocation by a later command in the same group. Such pre-COMMIT loss uses
+`owner_authorization_lost`, rolls back the relevant transaction, and follows the
+existing definitive individual-retry rules without treating private caller loss
+as owner-epoch loss.
+
+It also runs before returning a scoped committed outcome. A loss during COMMIT
+acknowledgement hides that outcome but does not retry or undo the committed
+mutation, receipt or reader association. Every committed publication remains
+eligible exactly once. Callback-induced owner stop or cancellation cannot be
+masked by returning true. Async results are rejected and native Promise
+continuations absorb rejection without invoking overridden callback methods.
+
+The complete boundary fixture passes 38 ordinary-checked PGlite cases, including
+fresh-handler rollback, duplicate lookup, reader insert, savepoint release,
+later-command group revocation and post-COMMIT publication. This prerequisite is
+opt-in; the child route must still install its own exact proof and
+current-parent witness before claiming those new protections for child calls.
+
+Independent ordinary-checked PostgreSQL validation also passes all 38 boundary
+cases and the five unchanged explicit-URL PostgreSQL cases (including four
+native child-process/proxy crash cases), with zero failures/skips. The two
+frozen source hashes, 1,597-file archive, configs and sibling sources were
+unchanged; lint/format passed. All 45 fixture databases were dropped and both
+PostgreSQL runs stopped. The intentionally failing, not-yet-wired child
+current-parent regressions were excluded from this isolated boundary
+prerequisite.

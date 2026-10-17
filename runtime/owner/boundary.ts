@@ -91,6 +91,16 @@ export type OwnerCommandBoundaryOptions = Readonly<{
     commandTime: string,
     normalizedInput?: OwnerJson,
   ): void | Promise<void>;
+  /** Optional private lifetime fence, separate from SQL/policy authorization.
+   * Synchronous and literal-true only. The scoped tx is an identity token here;
+   * this hook must not perform SQL, including after its savepoint/COMMIT.
+   * Post-COMMIT refusal hides the outcome but cannot undo receipts/publication. */
+  isCurrentAuthorization?(
+    tx: SqlExecutor,
+    caller: OwnerCaller,
+    command: OwnerCommand,
+    commandTime: string,
+  ): boolean;
   authenticateReceipt(
     tx: SqlExecutor,
     caller: OwnerCaller,
@@ -153,6 +163,7 @@ type Completion = {
   error?: unknown;
   failed?: boolean;
   callbacks: Array<() => void | Promise<void>>;
+  checkAuthorization?: () => void;
 };
 
 function failure(
@@ -313,6 +324,7 @@ export function createOwnerCommandBoundary(
     holderId,
     authorize,
     authenticateReceipt,
+    isCurrentAuthorization,
     onPostCommitError,
   } = options;
   nonempty(ownerId, "ownerId");
@@ -323,6 +335,14 @@ export function createOwnerCommandBoundary(
   ) {
     throw new TypeError(
       "Owner command and receipt authentication callbacks are required.",
+    );
+  }
+  if (
+    isCurrentAuthorization !== undefined &&
+    typeof isCurrentAuthorization !== "function"
+  ) {
+    throw new TypeError(
+      "Current authorization fence must be a synchronous function.",
     );
   }
   const tables = ownerTableNames(schema);
@@ -429,17 +449,21 @@ export function createOwnerCommandBoundary(
       outstanding--;
       item.pending.removeAbort?.();
       if (item.failed) item.pending.reject(item.error);
-      else if (item.pending.projection) {
-        // Ephemeral authorized data has no durable delivery entitlement. The
-        // assignment may end while COMMIT is in flight, after its savepoint.
+      else {
         try {
-          assertAcquired();
-          checkPendingAbort(item.pending);
+          if (item.pending.projection) {
+            // Ephemeral data has no durable delivery entitlement after COMMIT.
+            assertAcquired();
+            checkPendingAbort(item.pending);
+          }
+          // A committed mutation stays committed and its publications remain
+          // eligible even if its current caller can no longer see the result.
+          item.checkAuthorization?.();
           item.pending.resolve(item.outcome!);
         } catch (error) {
           item.pending.reject(error);
         }
-      } else item.pending.resolve(item.outcome!);
+      }
       if (!item.callbacks.length) postCommitReserved--;
       else publications.push(item.callbacks);
     }
@@ -569,6 +593,50 @@ export function createOwnerCommandBoundary(
                   pending.inputCommand ? copyJson(normalizedInput) : undefined,
                 );
                 checkPendingAbort(pending);
+                const authorizationCommand = isCurrentAuthorization
+                  ? {
+                    ...pending.command,
+                    intent: copyJson(pending.command.intent),
+                  }
+                  : pending.command;
+                const checkAuthorization = isCurrentAuthorization
+                  ? () => {
+                    let result: unknown;
+                    try {
+                      result = isCurrentAuthorization(
+                        tx,
+                        copyCaller(pending.caller),
+                        {
+                          ...authorizationCommand,
+                          intent: copyJson(authorizationCommand.intent),
+                        },
+                        commandTime,
+                      );
+                    } catch (error) {
+                      throw failure(
+                        "owner_authorization_lost",
+                        "Current private command authorization is unavailable.",
+                        error,
+                      );
+                    }
+                    if (result instanceof Promise) {
+                      // Do not invoke a callback-controlled catch/then override.
+                      Promise.prototype.then.call(result, undefined, () =>
+                        undefined);
+                    }
+                    if (result !== true) {
+                      throw failure(
+                        "owner_authorization_lost",
+                        "Current private command authorization is unavailable.",
+                      );
+                    }
+                    // The trusted callback can reenter stop()/cancellation.
+                    // Its true return cannot restore owner or request lifetime.
+                    assertAcquired();
+                    checkPendingAbort(pending);
+                  }
+                  : undefined;
+                checkAuthorization?.();
                 const receipt = pending.projection
                   ? { rows: [] }
                   : await tx.query<
@@ -578,6 +646,7 @@ export function createOwnerCommandBoundary(
                 WHERE owner=$1 AND domain=$2 AND key=$3`,
                     [ownerId, pending.command.domain, pending.command.key],
                   );
+                checkAuthorization?.();
                 let outcome: OwnerCommandOutcome;
                 if (receipt.rows.length) {
                   const existing = receipt.rows[0];
@@ -661,6 +730,7 @@ export function createOwnerCommandBoundary(
                       ),
                   );
                   checkPendingAbort(pending);
+                  checkAuthorization?.();
                   if (!pending.projection) {
                     await tx.query(
                       `INSERT INTO ${tables.receipts}(owner,principal_kind,principal_id,domain,key,kind,intent,result) VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb)`,
@@ -678,6 +748,7 @@ export function createOwnerCommandBoundary(
                   }
                   outcome = { status: "committed", result };
                 }
+                checkAuthorization?.();
                 if (!pending.projection) {
                   // Compatible authorized replay associates only this exact tagged
                   // principal. Generic cross-epoch reads remain worker-only.
@@ -693,9 +764,15 @@ export function createOwnerCommandBoundary(
                   );
                 }
                 checkPendingAbort(pending);
+                checkAuthorization?.();
                 active = false;
                 await transaction.query(`RELEASE SAVEPOINT ${savepoint}`);
-                completed.push({ pending, outcome, callbacks });
+                completed.push({
+                  pending,
+                  outcome,
+                  callbacks,
+                  checkAuthorization,
+                });
               } catch (error) {
                 active = false;
                 if (isIndeterminate(error)) throw error;
@@ -705,6 +782,12 @@ export function createOwnerCommandBoundary(
               }
             }
             assertAcquired();
+            // RELEASE and later commands in this group may revoke an earlier
+            // successful caller. A loss here rolls back the whole transaction;
+            // the existing definitive retry path may retry commands alone.
+            for (const completion of completed) {
+              if (!completion.failed) completion.checkAuthorization?.();
+            }
             return completed;
           } catch (error) {
             callbackFailed = true;

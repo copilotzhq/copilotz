@@ -12,7 +12,7 @@ import type {
   OwnerJson,
 } from "./boundary.ts";
 
-export type OwnerAssignmentBinding = Readonly<{
+type OwnerAssignmentBase = Readonly<{
   workerId: string;
   workerAttemptId: string;
   sessionGeneration: number;
@@ -21,12 +21,30 @@ export type OwnerAssignmentBinding = Readonly<{
   assignmentId: string;
   dispatchAttemptId: string;
   namespace: string;
-  actionId: string;
-  executionId: string;
   sourceEventId: string;
   deliveryId: string;
 }>;
-const fields = [
+export type OwnerActionAssignmentBinding =
+  & OwnerAssignmentBase
+  & Readonly<{
+    actionId: string;
+    executionId: string;
+  }>;
+export type OwnerProcessorAssignmentBinding =
+  & OwnerAssignmentBase
+  & Readonly<{
+    kind: "processor";
+    processorId: string;
+  }>;
+export type OwnerAssignmentBinding =
+  | OwnerActionAssignmentBinding
+  | OwnerProcessorAssignmentBinding;
+export function isOwnerProcessorAssignmentBinding(
+  value: OwnerAssignmentBinding,
+): value is OwnerProcessorAssignmentBinding {
+  return "kind" in value && value.kind === "processor";
+}
+const commonFields = [
   "workerId",
   "workerAttemptId",
   "sessionGeneration",
@@ -35,12 +53,17 @@ const fields = [
   "assignmentId",
   "dispatchAttemptId",
   "namespace",
-  "actionId",
-  "executionId",
   "sourceEventId",
   "deliveryId",
 ] as const;
 function binding(value: OwnerJson): OwnerAssignmentBinding {
+  const processor = value && typeof value === "object" &&
+    !Array.isArray(value) &&
+    (value as Record<string, OwnerJson>).kind === "processor";
+  const fields = [
+    ...commonFields,
+    ...(processor ? ["kind", "processorId"] : ["actionId", "executionId"]),
+  ];
   if (
     !value || typeof value !== "object" || Array.isArray(value) ||
     Object.keys(value).length !== fields.length ||
@@ -235,6 +258,9 @@ export function createOwnerAssignmentControl(
     /** Synchronous fresh transport lookup, called inside each owner transaction.
      * Must verify the exact current session and Started parent assignment. */
     isCurrentStarted(caller: OwnerCaller): boolean;
+    /** Explicit host registry capability. Missing means Processor reservations
+     * are unsupported, while the existing exact Action binding is unchanged. */
+    hasProcessor?(processorId: string): boolean;
   }>,
 ) {
   const name = table(options.schema);
@@ -280,22 +306,44 @@ export function createOwnerAssignmentControl(
     if (current.rows.length) {
       throw new Error("Assignment identity is already reserved.");
     }
-    const eligible = await context.tx.query(
-      `SELECT d.id FROM ${tables.event_deliveries} d JOIN ${tables.events} e ON e.id=d.event_id
-       WHERE d.id=$1 AND d.event_id=$2 AND e.namespace=$3
-         AND e.metadata->>'actionId'=$4 AND e.metadata->>'actionRunId'=$5
-         AND d.status IN ('pending','retry_wait') AND d.available_at <= $6::timestamptz
-         AND d.attempts < d.max_attempts AND d.consumer_id=$7 FOR UPDATE OF d`,
-      [
-        value.deliveryId,
-        value.sourceEventId,
-        value.namespace,
-        value.actionId,
-        value.executionId,
-        context.commandTime,
-        `registered:${value.actionId}`,
-      ],
-    );
+    if (
+      isOwnerProcessorAssignmentBinding(value) &&
+      options.hasProcessor?.(value.processorId) !== true
+    ) {
+      throw new TypeError(
+        "Registered Processor is unavailable for assignment.",
+      );
+    }
+    const eligible = isOwnerProcessorAssignmentBinding(value)
+      ? await context.tx.query(
+        `SELECT d.id FROM ${tables.event_deliveries} d JOIN ${tables.events} e ON e.id=d.event_id
+         WHERE d.id=$1 AND d.event_id=$2 AND e.namespace=$3
+           AND d.status IN ('pending','retry_wait') AND d.available_at <= $4::timestamptz
+           AND d.attempts < d.max_attempts AND d.consumer_id=$5 FOR UPDATE OF d`,
+        [
+          value.deliveryId,
+          value.sourceEventId,
+          value.namespace,
+          context.commandTime,
+          `processor:${value.processorId}`,
+        ],
+      )
+      : await context.tx.query(
+        `SELECT d.id FROM ${tables.event_deliveries} d JOIN ${tables.events} e ON e.id=d.event_id
+         WHERE d.id=$1 AND d.event_id=$2 AND e.namespace=$3
+           AND e.metadata->>'actionId'=$4 AND e.metadata->>'actionRunId'=$5
+           AND d.status IN ('pending','retry_wait') AND d.available_at <= $6::timestamptz
+           AND d.attempts < d.max_attempts AND d.consumer_id=$7 FOR UPDATE OF d`,
+        [
+          value.deliveryId,
+          value.sourceEventId,
+          value.namespace,
+          value.actionId,
+          value.executionId,
+          context.commandTime,
+          `registered:${value.actionId}`,
+        ],
+      );
     if (!eligible.rows.length) {
       throw new Error("Delivery is not eligible for assignment.");
     }

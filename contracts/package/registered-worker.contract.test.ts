@@ -5,9 +5,12 @@ import ts from "typescript";
 
 const root = new URL("../../", import.meta.url);
 
-test("registered Action worker runtime closure excludes database and body-store implementations", async () => {
+test("registered Action and Processor worker runtime closure excludes database and body-store implementations", async () => {
   const allowed = new Set([
     "runtime/execution/registered-worker.ts",
+    "runtime/execution/registered-processor.ts",
+    "runtime/execution/child-action-port.ts",
+    "runtime/plugins/match.ts",
     "runtime/application/owner-worker.ts",
     "dependencies/oxian-worker.ts",
     "runtime/owner/connection.ts",

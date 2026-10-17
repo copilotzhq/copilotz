@@ -596,3 +596,29 @@ and index detached Processor scopes in the same outer transaction. The retained
 regression proves the actual parent event/catalog relationship and complete
 rollback; no operation row is fabricated by the fixture. Four independently
 reviewed Collection cases pass. Host Processor routing remains a separate step.
+
+### Named child Action admission and result capability
+
+Child commands reconstruct current durable Action/Processor parent authority,
+retain inherited/detached scope and target-scoped logical identity, and
+authorize before replay or result hydration. Stable parent identity excludes
+transient attempt coordinates. The pure port admits once, bounds waits/capacity
+and retains unresolved reservations; interrupted admission is unknown, while a
+known admitted wait retains safe recovery references. Independent21
+owner/port/reproducer cases and final10 strict-codec/abort cases pass. Actual
+general-plugin host dispatch and Action nested-call wrappers remain separate
+integration work.
+
+### Registered Processor owner execution
+
+Current-table Processor claim, projection, renewal and settlement now share the
+owner fence and command timestamp. Current event policy is rechecked before
+Collection/child replay; restricted settlement remains possible after ctx
+revocation. The database-free worker preserves onError acknowledgment, existing
+retry/backoff and detached scope semantics, latches unsupported capabilities and
+uses exact literal completion codes. Independent64 cases plus16 final
+owner-policy cases pass. Assignment/bridge unions and the connected workload are
+included in this same coherent checkpoint because the child capability and
+Processor graph depend on one another. Full general-plugin host transport
+remains the next proof; owner-local mode is still separate from this leased
+worker path.

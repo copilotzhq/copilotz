@@ -12,17 +12,28 @@ import {
 } from "../execution/registered-worker.ts";
 import { createRegisteredOwnerExecutionPort } from "../execution/owner-port.ts";
 import {
+  createRegisteredProcessorOwnerPort,
+  createRegisteredProcessorWorker,
+  ownerProcessorOperationKey,
+} from "../execution/registered-processor.ts";
+import { createOwnerChildActionPort } from "../execution/child-action-port.ts";
+import {
   createOwnerConnection,
   type OwnerHostCaller,
 } from "../owner/connection.ts";
 
 export const OWNER_ACTION_WORKLOAD = "copilotz.action.execute";
+export const OWNER_PROCESSOR_WORKLOAD = "copilotz.processor.execute";
 export type OwnerConnectedWorkerOptions = Readonly<{
   registry: PluginRegistry;
   ownerId: string;
   namespace: string;
   worker: Omit<WorkerOptions, "workloads">;
   createCapabilities: RegisteredWorkerOptions["createCapabilities"];
+  /** Optional explicit registered Processor placement; no legacy fallback. */
+  createProcessorCapabilities?: Parameters<
+    typeof createRegisteredProcessorWorker
+  >[0]["createCapabilities"];
   ownerReadyTimeoutMs?: number;
 }>;
 type HostWorker = Worker & { callHost?: OwnerHostCaller };
@@ -45,7 +56,13 @@ export function createOwnerConnectedWorker(
   options: OwnerConnectedWorkerOptions,
   factory: typeof createWorker = createWorker,
 ) {
-  const { registry, ownerId, namespace, createCapabilities } = options;
+  const {
+    registry,
+    ownerId,
+    namespace,
+    createCapabilities,
+    createProcessorCapabilities,
+  } = options;
   if (
     ![ownerId, namespace].every((value) =>
       typeof value === "string" && value.trim()
@@ -73,6 +90,105 @@ export function createOwnerConnectedWorker(
   const worker = factory({
     ...options.worker,
     workloads: {
+      ...(createProcessorCapabilities
+        ? {
+          [OWNER_PROCESSOR_WORKLOAD]: async (
+            context: Parameters<
+              NonNullable<WorkerOptions["workloads"]>[string]
+            >[0],
+          ) => {
+            const session = current;
+            if (!session) throw unavailable();
+            const cancelled = deferred();
+            const abort = () =>
+              cancelled.reject(context.signal.reason ?? unavailable());
+            context.signal.addEventListener("abort", abort, { once: true });
+            if (context.signal.aborted) abort();
+            try {
+              await Promise.race([session.gate.promise, cancelled.promise]);
+              if (
+                current !== session || !session.ready ||
+                session.signal.aborted || context.signal.aborted
+              ) throw unavailable();
+              const callHost =
+                (context as unknown as { callHost?: OwnerHostCaller }).callHost;
+              if (typeof callHost !== "function") {
+                throw new Error("Oxian worker-originated calls are required.");
+              }
+              // Only an authorized owner projection supplies the durable event.
+              await context.input.cancel();
+              const connection = createOwnerConnection({ ownerId, callHost });
+              let childActions:
+                | ReturnType<typeof createOwnerChildActionPort>
+                | undefined;
+              let childReference: string | undefined;
+              const execution = createRegisteredProcessorWorker({
+                registry,
+                owner: createRegisteredProcessorOwnerPort({
+                  ownerId,
+                  port: connection,
+                  invokeAction(request, callOptions) {
+                    const key = JSON.stringify([
+                      request.reference.deliveryId,
+                      request.reference.dispatchAttemptId,
+                    ]);
+                    if (
+                      childReference !== undefined && childReference !== key
+                    ) {
+                      throw new TypeError(
+                        "Child Action parent cannot be rebound.",
+                      );
+                    }
+                    childReference = key;
+                    childActions ??= createOwnerChildActionPort({
+                      ownerId,
+                      namespace,
+                      parentOperationKey: ownerProcessorOperationKey(
+                        request.reference.deliveryId,
+                      ),
+                      registry,
+                      port: {
+                        executeInput: connection.admitChildAction,
+                        project(kind, input, options) {
+                          if (kind !== "action.child-result") {
+                            return Promise.reject(
+                              new TypeError(
+                                "Unsupported child Action projection.",
+                              ),
+                            );
+                          }
+                          return connection.childActionResult(input, options);
+                        },
+                      },
+                    });
+                    return childActions.call(
+                      request.reference,
+                      request.actionAlias,
+                      request.input,
+                      request.operationKey,
+                      callOptions,
+                    );
+                  },
+                }),
+                createCapabilities: createProcessorCapabilities,
+                maxAssignments: 1,
+              });
+              const result = await execution.execute({
+                assignmentId: context.streamId,
+                sessionId: session.id,
+              }, { signal: context.signal });
+              return new TextEncoder().encode(
+                JSON.stringify({
+                  status: result.status,
+                  receipt: result.receipt,
+                }),
+              );
+            } finally {
+              context.signal.removeEventListener("abort", abort);
+            }
+          },
+        }
+        : {}),
       [OWNER_ACTION_WORKLOAD]: async (context) => {
         const session = current;
         if (!session) throw unavailable();

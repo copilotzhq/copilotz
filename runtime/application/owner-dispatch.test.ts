@@ -67,7 +67,11 @@ const fence: Fence = {
   sessionGeneration: 1,
 };
 async function fixture(
-  config: { maxAssignments?: number; maxWitnesses?: number } = {},
+  config: {
+    maxAssignments?: number;
+    maxWitnesses?: number;
+    processor?: boolean;
+  } = {},
 ) {
   const db = await createTestDatabase({ pgliteMemoryProfile: "low-memory" });
   for (const sql of createCoreSchemaStatements("public")) await db.query(sql);
@@ -102,6 +106,7 @@ async function fixture(
   const bridge = createOwnerDispatchBridge({
     ownerId: "owner",
     schema: "public",
+    hasProcessor: (id) => id === "observe",
     ...config,
     getOwner: () => owner,
     sessions: {
@@ -137,18 +142,23 @@ async function fixture(
               type: "requested",
               namespace: "space",
               payload: { secret: "input-only" },
-              metadata: { actionId: "work", actionRunId: String(key) },
+              metadata: config.processor
+                ? {}
+                : { actionId: "work", actionRunId: String(key) },
               deduplicationId: String(key),
             },
             consumers: [{
-              consumerId: "registered:work",
+              consumerId: config.processor
+                ? "processor:observe"
+                : "registered:work",
               settlement: "inherit",
             }],
           });
           return {
             namespace: "space",
-            actionId: "work",
-            executionId: String(key),
+            ...(config.processor
+              ? { kind: "processor" as const, processorId: "observe" }
+              : { actionId: "work", executionId: String(key) }),
             sourceEventId: result.event.id,
             deliveryId: result.deliveries[0].id,
           };
@@ -367,7 +377,11 @@ test("two concurrent host requests use their exact trusted scheduled facts; copi
     const rows = await f.rows();
     assert.equal(rows.length, 2);
     assert.deepEqual(
-      new Set(rows.map((row) => row.binding.executionId)),
+      new Set(
+        rows.map((row) =>
+          "executionId" in row.binding ? row.binding.executionId : undefined
+        ),
+      ),
       new Set(["one", "two"]),
     );
     assert.notEqual(
@@ -985,6 +999,38 @@ test("metadata depth/node/byte and identifier bounds reject before reserving cap
     assert.equal(f.bridge.snapshot().requests, 0);
     await f.dispatch();
     assert.equal(f.state.opened, 1);
+  } finally {
+    await f.close();
+  }
+});
+
+test("Processor bridge preserves exact Started witness and rejects Action reinterpretation", async () => {
+  const f = await fixture({ processor: true });
+  try {
+    const opened = await f.dispatch();
+    const [row] = await f.rows();
+    assert.equal("kind" in row.binding && row.binding.kind, "processor");
+    assert.equal("actionId" in row.binding, false);
+    assert.equal("executionId" in row.binding, false);
+    assert.equal(
+      f.bridge.resolveAssignment(opened.context(), "owner"),
+      undefined,
+    );
+    const call = await witness(f, opened.context());
+    assert.deepEqual(await f.resolve(call.caller), row.binding);
+    for (
+      const changed of [
+        { processorId: "foreign" },
+        { kind: "action" },
+        { actionId: "work", executionId: "one" },
+        { sourceEventId: "foreign" },
+      ]
+    ) await assert.rejects(f.resolve({ ...call.caller, ...changed }));
+    await call.handler({
+      input: stream(),
+      signal: new AbortController().signal,
+    });
+    await assert.rejects(f.resolve(call.caller));
   } finally {
     await f.close();
   }

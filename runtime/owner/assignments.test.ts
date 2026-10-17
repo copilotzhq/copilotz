@@ -17,7 +17,7 @@ import {
   validateOwnerAssignments,
 } from "./assignments.ts";
 
-async function fixture() {
+async function fixture(processor = false) {
   const db = await createTestDatabase({ pgliteMemoryProfile: "low-memory" });
   for (const sql of createCoreSchemaStatements("public")) await db.query(sql);
   await provisionOwnerCommandSchema(db, "public");
@@ -33,6 +33,7 @@ async function fixture() {
       }
     },
     isCurrentStarted: () => state.started,
+    hasProcessor: (id) => id === "observe",
   });
   const host = (epoch = 1): OwnerCaller => ({
     workerId: "host",
@@ -68,11 +69,13 @@ async function fixture() {
               type: "requested",
               namespace: "space",
               payload: {},
-              metadata: { actionId: "work", actionRunId: "run" },
+              metadata: processor
+                ? {}
+                : { actionId: "work", actionRunId: "run" },
               deduplicationId: "seed",
             },
             consumers: [{
-              consumerId: "registered:work",
+              consumerId: processor ? "processor:observe" : "registered:work",
               settlement: "inherit",
             }],
           });
@@ -114,14 +117,15 @@ async function fixture() {
     assignmentId: "stream",
     dispatchAttemptId: "dispatch",
     namespace: "space",
-    actionId: "work",
-    executionId: "run",
+    ...(processor
+      ? { kind: "processor" as const, processorId: "observe" }
+      : { actionId: "work", executionId: "run" }),
     sourceEventId: refs.eventId,
     deliveryId: refs.deliveryId,
   };
   const command = (
     kind = "assignment.bind",
-    binding = value,
+    binding: OwnerAssignmentBinding = value,
   ): OwnerCommand => ({
     kind,
     domain: "incarnation",
@@ -421,5 +425,59 @@ test("assignment schema refuses nullable control columns and nonpositive epoch c
   } finally {
     f.owner.stop();
     await f.db.close();
+  }
+});
+
+test("Processor assignment binds only its exact registered consumer and cannot reinterpret an Action", async () => {
+  const f = await fixture(true);
+  try {
+    for (
+      const change of [
+        { processorId: "foreign" },
+        { sourceEventId: "foreign" },
+        { namespace: "foreign" },
+        { actionId: "work", executionId: "run" },
+      ]
+    ) {
+      await assert.rejects(
+        f.owner.execute(
+          f.host(),
+          f.command("assignment.bind", { ...f.value, ...change }),
+        ),
+      );
+    }
+    await f.owner.execute(f.host(), f.command());
+    assert.equal(await f.owner.project(f.caller(), "binding", null), null);
+    f.state.started = true;
+    assert.deepEqual(
+      await f.owner.project(f.caller(), "binding", null),
+      f.value,
+    );
+    assert.equal("actionId" in f.value, false);
+    assert.equal("executionId" in f.value, false);
+    await f.owner.execute(f.host(), f.command("assignment.retire"));
+    assert.equal(await f.owner.project(f.caller(), "binding", null), null);
+  } finally {
+    f.owner.stop();
+    await f.db.close();
+  }
+  const action = await fixture();
+  try {
+    const { actionId: _actionId, executionId: _executionId, ...base } = action
+      .value as import("./assignments.ts").OwnerActionAssignmentBinding;
+    await assert.rejects(
+      action.owner.execute(
+        action.host(),
+        action.command("assignment.bind", {
+          ...base,
+          kind: "processor",
+          processorId: "observe",
+        }),
+      ),
+      /eligible/,
+    );
+  } finally {
+    action.owner.stop();
+    await action.db.close();
   }
 });

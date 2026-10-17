@@ -6,8 +6,11 @@
  */
 import {
   createOwnerAssignmentControl,
+  isOwnerProcessorAssignmentBinding,
+  type OwnerActionAssignmentBinding,
   type OwnerAssignmentBinding,
   ownerAssignmentKey,
+  type OwnerProcessorAssignmentBinding,
 } from "../owner/assignments.ts";
 import type {
   OwnerCaller,
@@ -50,10 +53,15 @@ type Handle = Readonly<{
   completed: Promise<unknown>;
   cancel(reason?: string): Promise<unknown>;
 }>;
-export type OwnerScheduledAssignment = Pick<
-  OwnerAssignmentBinding,
-  "namespace" | "actionId" | "executionId" | "sourceEventId" | "deliveryId"
->;
+export type OwnerScheduledAssignment =
+  | Pick<
+    OwnerActionAssignmentBinding,
+    "namespace" | "actionId" | "executionId" | "sourceEventId" | "deliveryId"
+  >
+  | Pick<
+    OwnerProcessorAssignmentBinding,
+    "kind" | "processorId" | "namespace" | "sourceEventId" | "deliveryId"
+  >;
 type Assigned = Readonly<{
   operationId: string;
   workload: string;
@@ -125,7 +133,7 @@ function copyFence(fence: Fence): Fence {
 const MARKER = "copilotzOwnerDispatch";
 const CONTROL = "ownerDispatchControl";
 const WITNESS = "ownerDispatchWitness";
-const bindingFields = [
+const commonBindingFields = [
   "workerId",
   "workerAttemptId",
   "sessionGeneration",
@@ -134,16 +142,31 @@ const bindingFields = [
   "assignmentId",
   "dispatchAttemptId",
   "namespace",
-  "actionId",
-  "executionId",
   "sourceEventId",
   "deliveryId",
 ] as const;
+function bindingFields(value: OwnerAssignmentBinding) {
+  return [
+    ...commonBindingFields,
+    ...(isOwnerProcessorAssignmentBinding(value)
+      ? ["kind", "processorId"]
+      : ["actionId", "executionId"]),
+  ];
+}
 function equalBinding(
   a: OwnerAssignmentBinding,
   b: OwnerCaller | OwnerAssignmentBinding,
 ) {
-  return bindingFields.every((key) => a[key] === b[key]);
+  const left = a as unknown as Record<string, unknown>;
+  const right = b as unknown as Record<string, unknown>;
+  const processor = isOwnerProcessorAssignmentBinding(a);
+  if (
+    processor
+      ? (Object.hasOwn(right, "actionId") ||
+        Object.hasOwn(right, "executionId"))
+      : (Object.hasOwn(right, "kind") || Object.hasOwn(right, "processorId"))
+  ) return false;
+  return bindingFields(a).every((key) => left[key] === right[key]);
 }
 function equalFence(a: Fence, b: Fence) {
   return a.connectionId === b.connectionId &&
@@ -217,6 +240,7 @@ export function createOwnerDispatchBridge(
     authorizeControl(tx: SqlExecutor, caller: OwnerCaller, time: string):
       | void
       | Promise<void>;
+    hasProcessor?(processorId: string): boolean;
     maxAssignments?: number;
     maxWitnesses?: number;
   }>,
@@ -306,6 +330,7 @@ export function createOwnerDispatchBridge(
     ownerId: options.ownerId,
     schema: options.schema,
     maxActive: maxAssignments,
+    hasProcessor: options.hasProcessor,
     async authorizeControl(tx, caller, time) {
       controlWitness(caller);
       await options.authorizeControl(tx, caller, time);
@@ -326,7 +351,8 @@ export function createOwnerDispatchBridge(
       command.key !== witness.command.key ||
       !command.intent || typeof command.intent !== "object" ||
       Array.isArray(command.intent) ||
-      Object.keys(command.intent).length !== bindingFields.length ||
+      Object.keys(command.intent).length !==
+        bindingFields(witness.entry.binding!).length ||
       !equalBinding(
         witness.entry.binding!,
         command.intent as OwnerAssignmentBinding,
@@ -473,8 +499,9 @@ export function createOwnerDispatchBridge(
         assignmentId: entry.streamId,
         dispatchAttemptId: crypto.randomUUID(),
         namespace: value.namespace,
-        actionId: value.actionId,
-        executionId: value.executionId,
+        ...("kind" in value
+          ? { kind: value.kind, processorId: value.processorId }
+          : { actionId: value.actionId, executionId: value.executionId }),
         sourceEventId: value.sourceEventId,
         deliveryId: value.deliveryId,
       };

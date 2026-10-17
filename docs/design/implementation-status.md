@@ -1,6 +1,6 @@
 # Owner, worker and Views implementation checklist
 
-Updated: 17 October 2026, 12:35 UTC.
+Updated: 17 October 2026, 12:53 UTC.
 
 This is the maintained coordination checklist for
 [Copilotz PR #93](https://github.com/copilotzhq/copilotz/pull/93). It tracks
@@ -12,11 +12,11 @@ production-ready. All changes remain draft: **no merge or publication**.
 
 | Task                                         | Status               | Next acceptance gate                                                                               |
 | -------------------------------------------- | -------------------- | -------------------------------------------------------------------------------------------------- |
-| Local Processor bound owner adapter          | Next implementation  | Exact attempt binding, raw-call accounting and real owner lifecycle tests                          |
+| Local Processor bound owner adapter          | Reviewed checkpoint  | Reviewed: independent 30 pure and seven real PostgreSQL cases; 83-case compatibility passed        |
 | Local Processor one-attempt execution driver | Reviewed checkpoint  | 18 direct tests, 21 independent cases and 19 kernel compatibility cases; connect the bound adapter |
 | Faster test orchestration                    | Ready for comparison | Resume equivalent same-source benchmark after committing the reviewed identity correction          |
 | Reference-test reliability                   | Reviewed correction  | 137 affected cases, independent 29-case check and three complete pipeline repeats passed           |
-| Local Processor host generations             | Next                 | Known ended-attempt receipt, predecessor revocation/drain, exact retry wake and shared capacity    |
+| Local Processor host generations             | Designing            | Known ended-attempt receipt, predecessor revocation/drain, exact retry wake and shared capacity    |
 
 ## 1. Programming model and composition
 
@@ -47,8 +47,10 @@ production-ready. All changes remain draft: **no merge or publication**.
       PGlite and PostgreSQL
 - [x] Private one-attempt local Processor driver with strict receipt/lifetime
       validation
-- [ ] Local Processor bound owner adapter and actual lifecycle integration
+- [x] Local Processor bound owner adapter and actual lifecycle integration,
+      including Collection writes/replay and unknown outcomes
 - [ ] Generation-aware local Processor retry lifecycle and alarms
+- [ ] Correct the analogous local Action receipt-hook reentrant-drain gap
 - [ ] Local nested Action authority and mixed parent/child placement
 - [ ] Local Action effect capability parity
 - [ ] Public local placement activation and complete parity matrix

@@ -1,4 +1,10 @@
 import assert from "node:assert/strict";
+import { defineCollection } from "../collections/definition.ts";
+import type { DeliveryExecutor } from "../execution/types.ts";
+import {
+  createOwnerCollectionCommand,
+  type OwnerCollectionScope,
+} from "./collections.ts";
 import process from "node:process";
 import { test } from "node:test";
 import { encodeEventBody } from "../events/body-store.ts";
@@ -9,7 +15,9 @@ import {
 import type { SqlExecutor, SqlSession } from "../events/session.ts";
 import { createEventStore } from "../events/store.ts";
 import { ownerProcessorOperationKey } from "../execution/registered-processor.ts";
-import { defineProcessor } from "../plugins/processor.ts";
+import { defineProcessor, type Processor } from "../plugins/processor.ts";
+import { createOwnerLocalProcessorPort } from "./local-processor-port.ts";
+import { createRegisteredLocalProcessorExecution } from "../execution/registered-local-processor.ts";
 import { createPluginRegistry } from "../plugins/registry.ts";
 import { definePlugin } from "../plugins/types.ts";
 import {
@@ -81,6 +89,7 @@ type Entry = {
  * plus actual raw-promise drain releases its capacity. Transaction hooks below
  * touch SQL exclusively; they cannot activate or release that private entry. */
 async function fixture(options: {
+  handle?: Processor["handle"];
   localDisabled?: boolean;
   detached?: boolean;
   data?: OwnerJson;
@@ -223,16 +232,26 @@ async function fixture(options: {
   const processor = defineProcessor({
     id: "fixture.observe",
     on: [{ eventType: "fixture.source" }],
-    handle() {
+    handle(event, context) {
       state.executions++;
+      if (options.handle) return options.handle(event, context);
       throw new Error("Durable commands must never invoke authored code");
     },
+  });
+  const notes = defineCollection({
+    name: "note",
+    schema: {
+      type: "object",
+      properties: { id: { type: "string" }, title: { type: "string" } },
+      required: ["title"],
+    } as const,
   });
   const registry = createPluginRegistry({
     plugins: [definePlugin({
       id: "fixture",
       version: "1",
       processors: { observe: processor },
+      collections: { notes },
     })],
   });
   const catalog = createOperationCatalog(db, schema);
@@ -382,6 +401,35 @@ async function fixture(options: {
       });
     },
   });
+  const scopes = new WeakMap<SqlExecutor, OwnerCollectionScope>();
+  const refuseDispatch = () => {
+    throw new Error("No matching collection consumers expected");
+  };
+  const executor: DeliveryExecutor = {
+    ownership: "injected_dispatcher",
+    workload: "unused",
+    workloads: {},
+    scheduleDelivery() {},
+    dispatchWork: refuseDispatch,
+    dispatchDelivery: refuseDispatch,
+    dispatchRecoverable: refuseDispatch,
+    settleOutputs: () => Promise.resolve(),
+    awaitScopeProgress: () => Promise.resolve(false),
+    shutdown: () => Promise.resolve(),
+  };
+  const collections = createOwnerCollectionCommand({
+    session,
+    schema,
+    registry,
+    collections: { notes },
+    executor,
+    catalog,
+    scope(context) {
+      const result = scopes.get(context.tx);
+      assert.ok(result);
+      return result;
+    },
+  });
   const boundary = createOwnerCommandBoundary({
     session,
     schema,
@@ -390,6 +438,7 @@ async function fixture(options: {
     now: () => state.time,
     handlers: {
       ...commands.handlers,
+      collections,
       async seed(_intent, context) {
         const store = createEventStore({
           schema,
@@ -434,6 +483,31 @@ async function fixture(options: {
     async authorize(tx, who, command, time) {
       if (command.kind === "seed") {
         assert.equal(who.privateControl, controlWitness);
+        return;
+      }
+      if (command.kind === "collections") {
+        scopes.delete(tx);
+        const live = await commands.authorizeLocalLive(tx, who, time);
+        if (
+          command.domain !== "logical" ||
+          !command.key.startsWith(`delivery:${live.delivery.id}:`) ||
+          command.key.length <= `delivery:${live.delivery.id}:`.length
+        ) throw new Error("Collection key refused");
+        const entry = privateCurrent(who);
+        assert.ok(entry);
+        scopes.set(tx, {
+          namespace: live.assignment.namespace,
+          attempt: entry.binding,
+          identity: {
+            causationId: live.event.id,
+            correlationId: live.event.correlationId,
+            settlementScopeId: live.delivery.settlementScopeId,
+            deliveryLease: {
+              deliveryId: live.delivery.id,
+              owner: entry.binding.attemptId,
+            },
+          },
+        });
         return;
       }
       await commands.authorize(tx, who, command, time);
@@ -527,6 +601,7 @@ async function fixture(options: {
     first,
     source,
     processor,
+    registry,
     assignments,
     commands,
     boundary,
@@ -646,12 +721,16 @@ test("local Processor constructor captures a closed own-data callback set withou
   let replacedResolutions = 0;
   let accessorReads = 0;
   const session: SqlSession = {
-    async query() {
+    query() {
       queries++;
-      throw new Error("The constructor probe must not open a database");
+      return Promise.reject(
+        new Error("The constructor probe must not open a database"),
+      );
     },
-    async transaction() {
-      throw new Error("The constructor probe must not open a transaction");
+    transaction() {
+      return Promise.reject(
+        new Error("The constructor probe must not open a transaction"),
+      );
     },
   };
   const base = {
@@ -878,7 +957,10 @@ test("local Processor claims a real NULL-deadline delivery and projects ordinary
         attempts: 1,
         status: "succeeded",
       });
-      assert.equal((await f.exactDelivery()).status, "succeeded");
+      assert.equal(
+        (await f.exactDelivery()).status,
+        "succeeded",
+      );
       assert.equal(f.state.capacityWitness, f.first.witness);
       await f.drain();
       assert.equal(f.state.capacityWitness, "");
@@ -1788,5 +1870,196 @@ test("local Processor raw nonobject metadata cannot hide protected or reference 
     } finally {
       await f.close();
     }
+  }
+});
+
+for (
+  const mode of [
+    "success",
+    "retry",
+    "exhausted",
+    "unknown-completion",
+    "unknown-collection",
+    "collection",
+  ] as const
+) {
+  test(`actual bound local Processor driver: ${mode} (${postgres ? "PostgreSQL" : "PGlite"})`, async () => {
+    let observed: unknown;
+    const f = await fixture({
+      postgres,
+      maxAttempts: mode === "exhausted" ? 1 : 3,
+      async handle(event, context) {
+        if (mode === "collection" || mode === "unknown-collection") {
+          const write = () =>
+            context.transaction(({ collections }) => {
+              const notes = collections.notes as unknown as {
+                create(input: { title: string }): unknown;
+              };
+              return notes.create({ title: "written" });
+            }, { operationKey: "write" });
+          await write();
+          await write();
+        }
+        observed = {
+          data: event.data,
+          namespace: context.namespace,
+          operationKey: context.operationKey,
+        };
+        if (mode === "retry" || mode === "exhausted") {
+          throw new Error("ordinary failure");
+        }
+      },
+    });
+    const entry = f.first;
+    const unknown: unknown[] = [];
+    const port = createOwnerLocalProcessorPort({
+      boundary: {
+        project: f.boundary.project,
+        execute(who, command, options) {
+          if (
+            (mode === "unknown-completion" &&
+              command.kind === "processor.local-complete") ||
+            (mode === "unknown-collection" && command.kind === "collections")
+          ) f.state.unknown = "committed";
+          return f.boundary.execute(who, command, options);
+        },
+      },
+      reference: entry.binding,
+      attemptOrdinal: entry.ordinal,
+      controlCaller: f.controlCaller(),
+      localCaller: f.caller(),
+      isCurrent: () => f.state.current && !entry.revoked && !entry.quarantined,
+      onStarted(receipt) {
+        f.observeStart({ status: "committed", result: receipt });
+      },
+      onEnded(receipt) {
+        entry.knownEnd = structuredClone(receipt);
+      },
+    });
+    const driver = createRegisteredLocalProcessorExecution({
+      registry: f.registry,
+      reference: entry.binding,
+      attemptOrdinal: entry.ordinal,
+      owner: port,
+      createCapabilities: () => ({ resources: {}, adapters: {} }),
+      isCurrent: () => f.state.current && !entry.revoked && !entry.quarantined,
+      onIndeterminate(error) {
+        unknown.push(error);
+        entry.quarantined = true;
+      },
+    });
+    try {
+      if (mode === "unknown-completion" || mode === "unknown-collection") {
+        await assert.rejects(driver.run(), /indeterminate/);
+        assert.equal(entry.knownEnd, undefined);
+        assert.equal(unknown.length, 1);
+        assert.equal(
+          (await f.exactDelivery()).status,
+          mode === "unknown-collection" ? "leased" : "succeeded",
+        );
+        assert.equal(f.state.capacityWitness, entry.witness);
+      } else {
+        const result = await driver.run();
+        assert.equal(
+          result.receipt.status,
+          mode === "retry"
+            ? "retry_wait"
+            : mode === "exhausted"
+            ? "dead_letter"
+            : "succeeded",
+        );
+        assert.deepEqual(entry.knownEnd, result.receipt);
+        const row = await f.exactDelivery();
+        assert.equal(row.status, result.receipt.status);
+        assert.equal(row.lease_owner, null);
+        assert.equal(row.lease_expires_at, null);
+        if (result.receipt.status === "retry_wait") {
+          assert.equal(result.receipt.availableAt, row.available_at);
+        }
+        assert.equal(unknown.length, 0);
+      }
+      await driver.quiescent;
+      if (mode === "collection" || mode === "unknown-collection") {
+        const rows = await f.db.query(
+          `SELECT data FROM ${f.q}.nodes WHERE type = $1`,
+          ["note"],
+        );
+        assert.equal(rows.rows.length, 1);
+        assert.equal((rows.rows[0].data as { title: string }).title, "written");
+      }
+      assert.equal(f.state.executions, 1);
+      if (mode !== "unknown-collection") {
+        assert.deepEqual(observed, {
+          data: { title: "hello" },
+          namespace: "space",
+          operationKey: `delivery:${f.source.deliveryId}`,
+        });
+      }
+      await assert.rejects(port.project());
+      entry.revoked = true;
+      await port.drainRawCalls();
+      await f.drain(entry);
+      assert.equal(
+        f.state.capacityWitness,
+        mode.startsWith("unknown-") ? entry.witness : "",
+      );
+    } finally {
+      await f.close();
+    }
+  });
+}
+
+test(`actual local Processor Collection receipt replay rechecks source authority (${postgres ? "PostgreSQL" : "PGlite"})`, async () => {
+  const f = await fixture({ postgres });
+  const entry = f.first;
+  const port = createOwnerLocalProcessorPort({
+    boundary: f.boundary,
+    reference: entry.binding,
+    attemptOrdinal: entry.ordinal,
+    controlCaller: f.controlCaller(),
+    localCaller: f.caller(),
+    isCurrent: () => f.state.current && !entry.revoked && !entry.quarantined,
+    onStarted(receipt) {
+      f.observeStart({ status: "committed", result: receipt });
+    },
+    onEnded(receipt) {
+      entry.knownEnd = structuredClone(receipt);
+    },
+  });
+  const command: OwnerCommand = {
+    kind: "collections",
+    domain: "logical",
+    key: `delivery:${entry.binding.deliveryId}:write`,
+    intent: {
+      operations: [{
+        collection: "notes",
+        operation: "create",
+        input: { title: "written" },
+      }],
+    },
+  };
+  try {
+    await port.start();
+    await port.project();
+    const first = await port.execute(command);
+    assert.equal(first.status, "committed");
+    assert.equal((await port.execute(command)).status, "duplicate");
+    const before = await f.snapshot();
+    f.state.event = false;
+    await assert.rejects(
+      port.execute(command),
+      /local event authority revoked/,
+    );
+    assert.deepEqual(await f.snapshot(), before);
+    f.state.event = true;
+    port.sealInvocationCalls();
+    await port.drainRawCalls();
+    const ended = await port.complete({ status: "succeeded" });
+    assert.equal(ended.status, "committed");
+    entry.revoked = true;
+    await f.drain(entry);
+    assert.equal(f.state.capacityWitness, "");
+  } finally {
+    await f.close();
   }
 });

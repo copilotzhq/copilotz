@@ -167,7 +167,8 @@ function exact(value: unknown, expected: OwnerLocalProcessorAssignmentBinding) {
   }
   return actual;
 }
-function projection(
+/** Internal shared decoder for the driver and actual bound owner port. */
+export function parseLocalProcessorProjection(
   value: unknown,
   expected: OwnerLocalProcessorAssignmentBinding,
   ordinal: number,
@@ -266,6 +267,40 @@ function projection(
   const { reference: _reference, ...invocation } = data;
   return invocation as RegisteredProcessorInvocation;
 }
+/** Internal shared decoder; a valid ended receipt is not permission to retry. */
+export function parseLocalProcessorAttemptReceipt(
+  value: unknown,
+  expected: OwnerLocalProcessorAssignmentBinding,
+  ordinal: number,
+  completion: RegisteredProcessorCompletion,
+  maxAttempts: number | undefined,
+): OwnerLocalProcessorAttemptReceipt {
+  const receipt = object(value, ["reference", "attempts", "status"], [
+    "availableAt",
+  ]);
+  exact(receipt.reference, expected);
+  if (receipt.attempts !== ordinal) {
+    throw failure("local_processor_completion_invalid");
+  }
+  const allowed = completion.status === "failed"
+    ? completion.retryable ? ["retry_wait", "dead_letter"] : ["dead_letter"]
+    : [completion.status];
+  if (
+    typeof receipt.status !== "string" || !allowed.includes(receipt.status)
+  ) {
+    throw failure("local_processor_completion_conflict");
+  }
+  if (receipt.status === "retry_wait") {
+    if (maxAttempts === undefined || ordinal >= maxAttempts) {
+      throw failure("local_processor_completion_invalid");
+    }
+    timestamp(receipt.availableAt);
+  } else if (Object.hasOwn(receipt, "availableAt")) {
+    throw failure("local_processor_completion_invalid");
+  }
+  return receipt as OwnerLocalProcessorAttemptReceipt;
+}
+
 function unknown(error: unknown) {
   if (!error || typeof error !== "object") return false;
   const value = error as Record<string, unknown>;
@@ -414,30 +449,13 @@ export function createRegisteredLocalProcessorExecution(
       if (data.status !== "committed" && data.status !== "duplicate") {
         throw failure("local_processor_completion_invalid");
       }
-      const receipt = object(data.result, ["reference", "attempts", "status"], [
-        "availableAt",
-      ]);
-      exact(receipt.reference, expected);
-      if (receipt.attempts !== ordinal) {
-        throw failure("local_processor_completion_invalid");
-      }
-      const allowed = completion.status === "failed"
-        ? completion.retryable ? ["retry_wait", "dead_letter"] : ["dead_letter"]
-        : [completion.status];
-      if (
-        typeof receipt.status !== "string" || !allowed.includes(receipt.status)
-      ) {
-        throw failure("local_processor_completion_conflict");
-      }
-      if (receipt.status === "retry_wait") {
-        if (maxAttempts === undefined || ordinal >= maxAttempts) {
-          throw failure("local_processor_completion_invalid");
-        }
-        timestamp(receipt.availableAt);
-      } else if (Object.hasOwn(receipt, "availableAt")) {
-        throw failure("local_processor_completion_invalid");
-      }
-      return receipt as OwnerLocalProcessorAttemptReceipt;
+      return parseLocalProcessorAttemptReceipt(
+        data.result,
+        expected,
+        ordinal,
+        completion,
+        maxAttempts,
+      );
     } catch (error) {
       throw indeterminate(error);
     }
@@ -480,7 +498,11 @@ export function createRegisteredLocalProcessorExecution(
           current();
           let invocation: RegisteredProcessorInvocation;
           try {
-            invocation = projection(value, expected, ordinal);
+            invocation = parseLocalProcessorProjection(
+              value,
+              expected,
+              ordinal,
+            );
           } catch (error) {
             throw indeterminate(error);
           }

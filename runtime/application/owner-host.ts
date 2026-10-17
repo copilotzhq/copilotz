@@ -1,5 +1,5 @@
-/** Private fresh-schema ordinary Action host. Every worker, including embedded
- * workers, uses the same Oxian transport. Restart/takeover, Processors, streams,
+/** Private fresh-schema ordinary Action/Processor host. Every worker, including embedded
+ * workers, uses the same Oxian transport. Restart/takeover, streams,
  * protected/content/deferred Actions and general reads are deliberately refused. */
 import type {
   Hypervisor,
@@ -14,6 +14,7 @@ import {
 } from "../events/schema.ts";
 import { deriveWorkflowId } from "../events/workflow-id.ts";
 import type { SqlExecutor, SqlSession } from "../events/session.ts";
+import type { DurableEvent } from "../events/types.ts";
 import type { DeliveryExecutor } from "../execution/types.ts";
 import { assertJsonValue } from "../json.ts";
 import type { PluginRegistry } from "../plugins/registry.ts";
@@ -43,8 +44,9 @@ import {
 import {
   createOwnerCommandBoundary,
   type OwnerCaller,
-  type OwnerCommand,
   type OwnerCommandBoundary,
+  type OwnerCommandContext,
+  type OwnerCommandHandler,
   type OwnerInputCommand,
   type OwnerJson,
 } from "../owner/boundary.ts";
@@ -59,6 +61,16 @@ import {
   type OwnerWorkerCallContext,
 } from "../owner/connection.ts";
 import { createOwnerEffectCommands } from "../owner/effects.ts";
+import {
+  createOwnerChildActions,
+  OWNER_CHILD_ACTION_ADMISSION,
+  OWNER_CHILD_ACTION_RESULT,
+  type OwnerChildActionParent,
+} from "../owner/child-action.ts";
+import {
+  createOwnerProcessorCommands,
+  type OwnerProcessorAssignment,
+} from "../owner/processor.ts";
 import type {
   OwnerEffectEvidence,
   OwnerEffectReference,
@@ -85,8 +97,13 @@ import {
 import {
   createOwnerDispatchBridge,
   type OwnerScheduledAssignment,
+  type OwnerDispatchAdmissions,
+  type OwnerDispatchLifecycle,
 } from "./owner-dispatch.ts";
-import { OWNER_ACTION_WORKLOAD } from "./owner-worker.ts";
+import {
+  OWNER_ACTION_WORKLOAD,
+  OWNER_PROCESSOR_WORKLOAD,
+} from "./owner-worker.ts";
 
 type Fence = OwnerWorkerCallContext["fence"];
 type JsonObject = Readonly<Record<string, OwnerJson>>;
@@ -133,12 +150,28 @@ export type OwnerHostPolicy = Readonly<{
   ): void | Promise<void>;
   collections(
     tx: SqlExecutor,
-    assignment: OwnerExecutionAssignment,
+    assignment: OwnerExecutionAssignment | OwnerProcessorAssignment,
     intent: OwnerCollectionIntent,
     time: string,
   ):
     | Pick<OwnerCollectionScope, "conditions">
     | Promise<Pick<OwnerCollectionScope, "conditions">>;
+  /** Required when Processors are registered; rerun on input and ctx mutations. */
+  processorEvent?(
+    tx: SqlExecutor,
+    assignment: OwnerProcessorAssignment,
+    event: DurableEvent,
+    data: OwnerJson,
+    time: string,
+  ): void | Promise<void>;
+  /** Operation-specific nested authority, distinct from public Action exposure.
+   * An absent callback explicitly refuses child admission and result access. */
+  child?(
+    tx: SqlExecutor,
+    parent: OwnerChildActionParent,
+    actionId: string,
+    time: string,
+  ): void | Promise<void>;
   effectOutcome(
     tx: SqlExecutor,
     assignment: OwnerExecutionAssignment,
@@ -155,7 +188,7 @@ export type OwnerHostPolicy = Readonly<{
   ): boolean | Promise<boolean>;
 }>;
 type Bridge = ReturnType<typeof createOwnerDispatchBridge>;
-type Admissions = ReturnType<Bridge["wrapWorkerCalls"]>;
+type Admissions = OwnerDispatchAdmissions;
 /** The released Oxian dependency lacks workerCalls. A selected compatible
  * transport factory is mandatory; production pins are not silently replaced. */
 export type OwnerHostTransportOptions =
@@ -178,11 +211,13 @@ export type OwnerHostOptions = Readonly<{
   transport: Omit<HypervisorOptions, "workerCalls">;
   createTransport(
     options: OwnerHostTransportOptions,
-    lifecycle: Bridge["lifecycle"] & Readonly<{ onReady(): void }>,
+    lifecycle: OwnerDispatchLifecycle & Readonly<{ onReady(): void }>,
   ): Hypervisor;
   maxPending?: number;
   maxActive?: number;
   leaseMs?: number;
+  /** Bounds transport admission only; opened work is lease/session controlled. */
+  dispatchWaitMs?: number;
   now?: () => string;
   onError?(error: unknown): void;
 }>;
@@ -278,8 +313,11 @@ export async function createOwnerHost(options: OwnerHostOptions) {
       "A compatible Oxian worker-call transport factory is required.",
     );
   }
-  if (Object.keys(options.registry.processors).length) {
-    throw new TypeError("Owner host Processor execution is not implemented.");
+  if (
+    Object.keys(options.registry.processors).length &&
+    typeof options.policy.processorEvent !== "function"
+  ) {
+    throw new TypeError("Current Processor event policy is required.");
   }
   for (const action of Object.values(options.registry.actions)) {
     if (
@@ -295,6 +333,7 @@ export async function createOwnerHost(options: OwnerHostOptions) {
   }
   const maxPending = limit(options.maxPending ?? 128);
   const maxActive = limit(options.maxActive ?? 16);
+  const dispatchWaitMs = limit(options.dispatchWaitMs ?? 10_000);
   if (maxActive > maxPending) {
     throw new TypeError("Active capacity exceeds pending capacity.");
   }
@@ -310,7 +349,6 @@ export async function createOwnerHost(options: OwnerHostOptions) {
   await provisionOwnerAssignments(session, schema);
   const catalog = createOperationCatalog(session, schema);
   const abort = new AbortController();
-  let owner!: OwnerCommandBoundary;
   let transport: Hypervisor | undefined;
   let initialized = false;
   let closed = false;
@@ -392,6 +430,8 @@ export async function createOwnerHost(options: OwnerHostOptions) {
     schema,
     maxAssignments: maxActive,
     maxWitnesses: maxPending,
+    hasProcessor: (id) =>
+      registry.processorForConsumer(`processor:${id}`)?.id === id,
     getOwner: () => closed ? undefined : owner,
     sessions: {
       assertCurrent: (fence) => {
@@ -486,13 +526,13 @@ export async function createOwnerHost(options: OwnerHostOptions) {
       unavailable("Current metadata constraints refuse this operation.");
     }
   }
-  async function resolveExecution(
+  async function resolveCurrentAssignment(
     tx: SqlExecutor,
     caller: OwnerCaller,
     time: string,
-  ): Promise<OwnerExecutionAssignment | undefined> {
+  ) {
     const binding = await bridge.resolveStarted(tx, caller);
-    if (!binding || "kind" in binding || !ready()) {
+    if (!binding || !ready()) {
       return undefined;
     }
     // The live bridge witness has the exact incarnation. Obtain its fence from
@@ -513,16 +553,28 @@ export async function createOwnerHost(options: OwnerHostOptions) {
     );
     const grants = returnedGrants && copy(returnedGrants);
     if (!grants || !await bridge.resolveStarted(tx, caller)) return undefined;
+    return { binding: copy(binding), grants };
+  }
+  async function resolveExecution(
+    tx: SqlExecutor,
+    caller: OwnerCaller,
+    time: string,
+  ): Promise<OwnerExecutionAssignment | undefined> {
+    const current = await resolveCurrentAssignment(tx, caller, time);
+    if (!current || "kind" in current.binding) return undefined;
+    const { binding, grants } = current;
     const source = (await tx.query<
       {
         metadata: Record<string, OwnerJson>;
         namespace: string;
         id: string;
         correlation_id: string;
+        settlement_scope_id: string;
+        action_scope_id: string | null;
       }
     >(
-      `SELECT id,namespace,metadata,correlation_id FROM ${tables.events} WHERE id=$1 AND owner_id=$2`,
-      [binding.sourceEventId, ownerId],
+      `SELECT e.id,e.namespace,e.metadata,e.correlation_id,d.settlement_scope_id,d.action_scope_id FROM ${tables.events} e JOIN ${tables.event_deliveries} d ON d.event_id=e.id WHERE e.id=$1 AND e.owner_id=$2 AND d.id=$3`,
+      [binding.sourceEventId, ownerId, binding.deliveryId],
     )).rows[0];
     if (
       !source || source.namespace !== binding.namespace ||
@@ -530,6 +582,10 @@ export async function createOwnerHost(options: OwnerHostOptions) {
       source.metadata.actionRunId !== binding.executionId
     ) unavailable();
     const metadata = copy(source.metadata.actionMetadata) as JsonObject;
+    const rootKey = source.metadata.rootKey ?? binding.executionId;
+    text(rootKey);
+    const parentActionRunId = source.metadata.parentActionRunId;
+    if (parentActionRunId !== undefined) text(parentActionRunId);
     return {
       ownerId,
       workerId: binding.workerId,
@@ -543,16 +599,51 @@ export async function createOwnerHost(options: OwnerHostOptions) {
       settlementGranted: grants.settlement === true,
       invocation: {
         actionRunId: binding.executionId,
-        rootKey: binding.executionId,
+        rootKey,
         operationKey: binding.executionId,
+        ...(parentActionRunId ? { parentActionRunId } : {}),
         metadata,
         identity: {
           causationId: source.id,
           correlationId: source.correlation_id,
-          settlementScopeId: source.id,
+          settlementScopeId: source.settlement_scope_id,
+          ...(source.action_scope_id
+            ? { actionScopeId: source.action_scope_id }
+            : {}),
         },
       },
     };
+  }
+  async function resolveProcessor(
+    tx: SqlExecutor,
+    caller: OwnerCaller,
+    time: string,
+  ): Promise<OwnerProcessorAssignment | undefined> {
+    const current = await resolveCurrentAssignment(tx, caller, time);
+    if (!current || !("kind" in current.binding)) return undefined;
+    const { binding, grants } = current;
+    return {
+      kind: "processor",
+      ownerId,
+      workerId: binding.workerId,
+      assignmentId: binding.assignmentId,
+      sessionId: binding.sessionId,
+      namespace: binding.namespace,
+      processorId: binding.processorId,
+      sourceEventId: binding.sourceEventId,
+      deliveryId: binding.deliveryId,
+      dispatchAttemptId: binding.dispatchAttemptId,
+      ctxGranted: grants.ctx === true,
+      settlementGranted: grants.settlement === true,
+    };
+  }
+  function enqueueScheduled(data: OwnerScheduledAssignment) {
+    if (!ready()) unavailable();
+    if (!pending.has(data.deliveryId) && pending.size >= maxPending) {
+      unavailable("Owner scheduling queue is full; durable alarm retained.");
+    }
+    pending.set(data.deliveryId, copy(data));
+    queueMicrotask(pump);
   }
   function enqueue(value: OwnerJson) {
     const data = copy(value) as unknown as {
@@ -562,18 +653,102 @@ export async function createOwnerHost(options: OwnerHostOptions) {
       eventId: string;
       deliveryId: string;
     };
-    if (!ready()) unavailable();
-    if (!pending.has(data.deliveryId) && pending.size >= maxPending) {
-      unavailable("Owner scheduling queue is full; durable alarm retained.");
-    }
-    pending.set(data.deliveryId, {
+    enqueueScheduled({
       namespace: data.namespace,
       actionId: data.actionId,
       executionId: data.executionId,
       sourceEventId: data.eventId,
       deliveryId: data.deliveryId,
     });
-    queueMicrotask(pump);
+  }
+  const deliveryAlarm = (namespace: string, id: string) =>
+    JSON.stringify(["host.delivery", namespace, id]);
+  type ScheduledRow = {
+    id: string;
+    event_id: string;
+    namespace: string;
+    consumer_id: string;
+    status: string;
+    attempts: number;
+    available_at: string;
+    lease_expires_at: string | null;
+    metadata: Record<string, OwnerJson>;
+    type: string;
+  };
+  function scheduledReference(row: ScheduledRow): OwnerScheduledAssignment {
+    const processor = registry.processorForConsumer(row.consumer_id);
+    if (processor) {
+      return {
+        kind: "processor",
+        processorId: processor.id,
+        namespace: row.namespace,
+        sourceEventId: row.event_id,
+        deliveryId: row.id,
+      };
+    }
+    const actionId = row.metadata.actionId;
+    const executionId = row.metadata.actionRunId;
+    text(actionId);
+    text(executionId);
+    if (
+      row.type !== "copilotz.owner.action.requested" ||
+      row.consumer_id !== `registered:${actionId}` ||
+      !Object.values(registry.actions).some((action) => action.id === actionId)
+    ) {
+      unavailable("Delivery requires an unsupported registered capability.");
+    }
+    return {
+      namespace: row.namespace,
+      actionId,
+      executionId,
+      sourceEventId: row.event_id,
+      deliveryId: row.id,
+    };
+  }
+  async function setDeliveryAlarm(
+    context: OwnerCommandContext,
+    namespace: string,
+    id: string,
+    due: string,
+  ) {
+    await context.tx.query(
+      `INSERT INTO ${ownerTables.alarms}(owner,name,due_at) VALUES($1,$2,$3::timestamptz) ON CONFLICT(owner,name) DO UPDATE SET due_at=EXCLUDED.due_at`,
+      [ownerId, deliveryAlarm(namespace, id), due],
+    );
+  }
+  /** Exhaustive bounded selection, including deliveries attached to older events.
+   * All durable wakes share the command transaction; only references escape. */
+  function withDeliveryAlarms(
+    handler: OwnerCommandHandler,
+  ): OwnerCommandHandler {
+    return async (intent, context) => {
+      const result = await handler(intent, context);
+      const rows = (await context.tx.query<ScheduledRow>(
+        `SELECT d.id,d.event_id,d.consumer_id,d.status,d.attempts,d.available_at,d.lease_expires_at,e.namespace,e.metadata,e.type FROM ${tables.event_deliveries} d JOIN ${tables.events} e ON e.id=d.event_id WHERE e.owner_id=$1 AND d.status IN ('pending','retry_wait','leased') ORDER BY d.available_at,d.created_at,d.id LIMIT $2`,
+        [ownerId, maxPending + 1],
+      )).rows;
+      if (rows.length > maxPending) {
+        unavailable("Owner durable delivery capacity exceeded.");
+      }
+      const due: OwnerScheduledAssignment[] = [];
+      for (const row of rows) {
+        const ref = scheduledReference(row);
+        const deadline = row.status === "leased"
+          ? row.lease_expires_at
+          : row.available_at;
+        if (!deadline) unavailable("Leased delivery has no deadline.");
+        await setDeliveryAlarm(context, row.namespace, row.id, deadline);
+        if (
+          row.status !== "leased" &&
+          new Date(row.available_at).getTime() <=
+            Date.parse(context.commandTime)
+        ) due.push(ref);
+      }
+      context.afterCommit(() => {
+        for (const ref of due) enqueueScheduled(ref);
+      });
+      return result;
+    };
   }
   function wake(target: OperationSettlementScope) {
     const key = canonical(target);
@@ -607,14 +782,16 @@ export async function createOwnerHost(options: OwnerHostOptions) {
     workload: OWNER_ACTION_WORKLOAD,
     workloads: {},
     scheduleDelivery() {
-      unavailable(
-        "Processor/child delivery scheduling is not implemented by this host.",
-      );
+      // The in-command wrapper already persisted the wake. A callback is only a
+      // hint; derive current delivery facts again under the owner fence.
+      queueMicrotask(() => {
+        void wakeAlarms().catch(report);
+      });
     },
     dispatchWork: () =>
       Promise.reject(new Error("Direct dispatch is not an owner capability.")),
     dispatchDelivery: () =>
-      Promise.reject(new Error("Processor execution is unavailable.")),
+      Promise.reject(new Error("Direct delivery dispatch is unavailable.")),
     dispatchRecoverable: () =>
       Promise.reject(new Error("Restart recovery is unavailable.")),
     settleOutputs: () =>
@@ -634,6 +811,74 @@ export async function createOwnerHost(options: OwnerHostOptions) {
     resolveAssignment: resolveExecution,
     authorizeInput: (tx, assignment, value, time) =>
       policy.input(tx, copy(assignment), copy(value), time),
+  });
+  const processor = createOwnerProcessorCommands({
+    ownerId,
+    schema,
+    session,
+    registry,
+    catalog,
+    leaseMs: options.leaseMs,
+    resolveAssignment: resolveProcessor,
+    authorizeEvent(tx, assignment, event, data, time) {
+      if (!policy.processorEvent) {
+        unavailable("Current Processor event policy is unavailable.");
+      }
+      return policy.processorEvent(
+        tx,
+        copy(assignment),
+        copy(event),
+        copy(data),
+        time,
+      );
+    },
+    scheduleSettlement: settlement.schedule,
+    async scheduleRetry(context, delivery) {
+      const assigned = await resolveProcessor(
+        context.tx,
+        context.caller,
+        context.commandTime,
+      );
+      if (!assigned || assigned.deliveryId !== delivery.id) unavailable();
+      await setDeliveryAlarm(
+        context,
+        assigned.namespace,
+        delivery.id,
+        delivery.availableAt,
+      );
+      context.afterCommit(() => {
+        void wakeAlarms().catch(report);
+      });
+    },
+  });
+  const child = createOwnerChildActions({
+    ownerId,
+    schema,
+    session,
+    registry,
+    catalog,
+    maxPendingDeliveries: maxPending,
+    async resolveParent(tx, caller, time) {
+      const current = await bridge.resolveStarted(tx, caller);
+      if (!current) return undefined;
+      return "kind" in current
+        ? {
+          kind: "processor",
+          assignment:
+            (await processor.authorizeLive(tx, caller, time)).assignment,
+        }
+        : {
+          kind: "action",
+          assignment: await execution.authorizeLive(tx, caller, time),
+        };
+    },
+    authorizeChild(tx, _caller, parent, actionId, time) {
+      if (!policy.child) {
+        unavailable("Current child Action policy is unavailable.");
+      }
+      return policy.child(tx, copy(parent), actionId, time);
+    },
+    schedule: (reference) => enqueue(reference),
   });
   async function effectAssignment(
     tx: SqlExecutor,
@@ -721,6 +966,7 @@ export async function createOwnerHost(options: OwnerHostOptions) {
     registry,
     collections: registry.collections,
     executor,
+    catalog,
     scope(context) {
       const scope = collectionScopes.get(context.tx);
       collectionScopes.delete(context.tx);
@@ -728,9 +974,7 @@ export async function createOwnerHost(options: OwnerHostOptions) {
       return scope;
     },
   });
-  const deliveryAlarm = (namespace: string, id: string) =>
-    JSON.stringify(["host.delivery", namespace, id]);
-  owner = createOwnerCommandBoundary({
+  const owner: OwnerCommandBoundary = createOwnerCommandBoundary({
     session,
     schema,
     ownerId,
@@ -740,10 +984,30 @@ export async function createOwnerHost(options: OwnerHostOptions) {
     maxPostCommitGroups: maxPending,
     handlers: {
       ...bridge.assignmentHandlers,
-      ...execution.handlers,
+      ...Object.fromEntries(
+        Object.entries(execution.handlers).map((
+          [kind, handler],
+        ) => [kind, withDeliveryAlarms(handler)]),
+      ),
+      ...Object.fromEntries(
+        Object.entries(processor.handlers).map((
+          [kind, handler],
+        ) => [kind, withDeliveryAlarms(handler)]),
+      ),
       ...effects.handlers,
       ...settlement.handlers,
-      collections: collection,
+      collections: withDeliveryAlarms(collection),
+      [OWNER_CHILD_ACTION_ADMISSION]: withDeliveryAlarms(
+        async (intent, context) => {
+          // This check runs only for a fresh admission, after compatible receipt
+          // lookup. This is fail-fast protection, not a capacity reservation:
+          // concurrent work can still take the spare slot after child admission.
+          if (active.size >= maxActive) {
+            unavailable("Child Action execution capacity is full.");
+          }
+          return await child.handler(intent, context);
+        },
+      ),
       [OWNER_ACTION_ADMISSION]: async (intent, context) => {
         const ref = await admission.handler(intent, context);
         await context.tx.query(
@@ -762,11 +1026,24 @@ export async function createOwnerHost(options: OwnerHostOptions) {
       "host.delivery-finished": async (input, context) => {
         const id = (input as { deliveryId: string }).deliveryId;
         const row = (await context.tx.query<
-          { status: string; settlement_scope_id: string; namespace: string }
+          {
+            status: string;
+            settlement_scope_id: string;
+            namespace: string;
+            consumer_id: string;
+            available_at: string;
+          }
         >(
-          `SELECT d.status,d.settlement_scope_id,e.namespace FROM ${tables.event_deliveries} d JOIN ${tables.events} e ON e.id=d.event_id WHERE d.id=$1 AND e.owner_id=$2 FOR UPDATE OF d`,
+          `SELECT d.status,d.settlement_scope_id,d.consumer_id,d.available_at,e.namespace FROM ${tables.event_deliveries} d JOIN ${tables.events} e ON e.id=d.event_id WHERE d.id=$1 AND e.owner_id=$2 FOR UPDATE OF d`,
           [id, ownerId],
         )).rows[0];
+        if (
+          row?.status === "retry_wait" &&
+          registry.processorForConsumer(row.consumer_id)
+        ) {
+          await setDeliveryAlarm(context, row.namespace, id, row.available_at);
+          return { status: row.status };
+        }
         if (
           !row ||
           !["succeeded", "dead_letter", "cancelled"].includes(row.status)
@@ -788,6 +1065,8 @@ export async function createOwnerHost(options: OwnerHostOptions) {
     },
     projections: {
       ...execution.projections,
+      ...processor.projections,
+      [OWNER_CHILD_ACTION_RESULT]: child.projection,
       ...effects.projections,
       ...settlement.projections,
       [result.kind]: result.handler,
@@ -880,16 +1159,8 @@ export async function createOwnerHost(options: OwnerHostOptions) {
           if (kind === OWNER_OPERATION_SETTLEMENT) {
             found.push({ kind: "settlement", namespace, operationId: id });
           } else if (kind === "host.delivery") {
-            const delivery = (await context.tx.query<
-              {
-                id: string;
-                event_id: string;
-                status: string;
-                attempts: number;
-                metadata: Record<string, OwnerJson>;
-              }
-            >(
-              `SELECT d.id,d.event_id,d.status,d.attempts,e.metadata FROM ${tables.event_deliveries} d JOIN ${tables.events} e ON e.id=d.event_id WHERE d.id=$1 AND e.namespace=$2 AND e.owner_id=$3 AND e.type='copilotz.owner.action.requested'`,
+            const delivery = (await context.tx.query<ScheduledRow>(
+              `SELECT d.id,d.event_id,d.consumer_id,d.status,d.attempts,d.available_at,d.lease_expires_at,e.namespace,e.metadata,e.type FROM ${tables.event_deliveries} d JOIN ${tables.events} e ON e.id=d.event_id WHERE d.id=$1 AND e.namespace=$2 AND e.owner_id=$3`,
               [id, namespace, ownerId],
             )).rows[0];
             if (!delivery) {
@@ -897,11 +1168,7 @@ export async function createOwnerHost(options: OwnerHostOptions) {
             }
             found.push({
               kind: "delivery",
-              namespace,
-              deliveryId: id,
-              eventId: delivery.event_id,
-              actionId: delivery.metadata.actionId,
-              executionId: delivery.metadata.actionRunId,
+              reference: scheduledReference(delivery),
               status: delivery.status,
               attempts: delivery.attempts,
             });
@@ -910,15 +1177,15 @@ export async function createOwnerHost(options: OwnerHostOptions) {
         return found;
       },
       "host.assignment-grants": async (input, context) => {
-        const assignment = await resolveExecution(
+        const assignment = await resolveCurrentAssignment(
           context.tx,
           input as OwnerCaller,
           context.commandTime,
         );
         return assignment
           ? {
-            ctx: assignment.ctxGranted,
-            settlement: assignment.settlementGranted,
+            ctx: assignment.grants.ctx === true,
+            settlement: assignment.grants.settlement === true,
           }
           : null;
       },
@@ -935,6 +1202,7 @@ export async function createOwnerHost(options: OwnerHostOptions) {
     inputDefinitions: {
       ...execution.inputDefinitions,
       [OWNER_ACTION_ADMISSION]: admission.inputDefinition,
+      [OWNER_CHILD_ACTION_ADMISSION]: child.inputDefinition,
     },
     async authorize(tx, caller, command, time, normalized) {
       if (command.kind.startsWith("host.")) {
@@ -949,7 +1217,6 @@ export async function createOwnerHost(options: OwnerHostOptions) {
           // here. New dispatch needs current ctx authority, even if this same
           // worker remains eligible for old settlement and receipt reads.
           const binding = copy(command.intent) as OwnerAssignmentBinding;
-          if ("kind" in binding) unavailable();
           const sessionView = transport!.sessions.get(binding.workerId);
           if (
             !sessionView || sessionView.connectionId !== binding.sessionId ||
@@ -1005,6 +1272,15 @@ export async function createOwnerHost(options: OwnerHostOptions) {
         return await result.authorize(tx, caller, command, time);
       }
       if (
+        command.kind === OWNER_CHILD_ACTION_ADMISSION ||
+        command.kind === OWNER_CHILD_ACTION_RESULT
+      ) {
+        return await child.authorize(tx, caller, command, time, normalized);
+      }
+      if (command.kind.startsWith("processor.")) {
+        return await processor.authorize(tx, caller, command, time);
+      }
+      if (
         command.kind === OWNER_OPERATION_SETTLEMENT ||
         command.kind === OWNER_OPERATION_READINESS
       ) {
@@ -1014,10 +1290,46 @@ export async function createOwnerHost(options: OwnerHostOptions) {
         return await effects.authorize(tx, caller, command, time);
       }
       if (command.kind === "collections") {
-        const assignment = await execution.authorizeLive(tx, caller, time);
+        const binding = await bridge.resolveStarted(tx, caller);
+        if (!binding) unavailable();
+        let assignment: OwnerExecutionAssignment | OwnerProcessorAssignment;
+        let prefix: string;
+        let identity: OwnerCollectionScope["identity"];
+        if ("kind" in binding) {
+          const live = await processor.authorizeLive(tx, caller, time);
+          assignment = live.assignment;
+          prefix = `delivery:${live.delivery.id}:`;
+          identity = {
+            causationId: live.event.id,
+            correlationId: live.event.correlationId,
+            settlementScopeId: live.delivery.settlementScopeId,
+            ...(live.delivery.actionScopeId
+              ? { actionScopeId: live.delivery.actionScopeId }
+              : {}),
+            deliveryLease: {
+              deliveryId: live.delivery.id,
+              owner: live.assignment.dispatchAttemptId,
+            },
+            metadata: {
+              sourceEventId: live.event.id,
+              sourceDeliveryId: live.delivery.id,
+              sourceConsumerId: live.delivery.consumerId,
+            },
+          };
+        } else {
+          assignment = await execution.authorizeLive(tx, caller, time);
+          prefix = `${assignment.invocation.operationKey}/`;
+          identity = {
+            ...copy(assignment.invocation.identity),
+            deliveryLease: {
+              deliveryId: assignment.deliveryId,
+              owner: assignment.dispatchAttemptId,
+            },
+          };
+        }
         if (
           command.domain !== "logical" ||
-          !command.key.startsWith(`${assignment.invocation.operationKey}/`)
+          !command.key.startsWith(prefix) || command.key.length <= prefix.length
         ) {
           unavailable();
         }
@@ -1031,7 +1343,7 @@ export async function createOwnerHost(options: OwnerHostOptions) {
         );
         collectionScopes.set(tx, {
           namespace: assignment.namespace,
-          identity: copy(assignment.invocation.identity),
+          identity,
           conditions: conditions.conditions,
         });
         return;
@@ -1058,12 +1370,29 @@ export async function createOwnerHost(options: OwnerHostOptions) {
         const task = (async () => {
           let dispatched = false;
           try {
-            const handle = await bridge.dispatch(transport!, {
-              workload: OWNER_ACTION_WORKLOAD,
-              body: new Uint8Array(),
-              signal: abort.signal,
-              deadlineAtMs: Date.now() + 10_000,
-            }, key);
+            const admission = new AbortController();
+            const timer = setTimeout(
+              () =>
+                admission.abort(
+                  new Error("Owner dispatch admission wait expired."),
+                ),
+              dispatchWaitMs,
+            );
+            const handle = await (async () => {
+              try {
+                // Keep waiting on the real dispatch promise, including a
+                // noncooperative implementation, so its reservation stays bounded.
+                return await bridge.dispatch(transport!, {
+                  workload: "kind" in ref
+                    ? OWNER_PROCESSOR_WORKLOAD
+                    : OWNER_ACTION_WORKLOAD,
+                  body: new Uint8Array(),
+                  signal: AbortSignal.any([abort.signal, admission.signal]),
+                }, key);
+              } finally {
+                clearTimeout(timer);
+              }
+            })();
             dispatched = true;
             // Consume protocol output, but never interpret it as durable success.
             const drain = (async () => {
@@ -1153,7 +1482,8 @@ export async function createOwnerHost(options: OwnerHostOptions) {
             operationId: String(alarm.operationId),
           });
         } else {
-          const id = String(alarm.deliveryId);
+          const ref = alarm.reference as OwnerScheduledAssignment;
+          const id = ref.deliveryId;
           if (active.has(id)) continue;
           if (
             ["succeeded", "dead_letter", "cancelled"].includes(
@@ -1169,14 +1499,12 @@ export async function createOwnerHost(options: OwnerHostOptions) {
               })
             );
             pending.delete(id);
-          } else if (alarm.status === "pending" && alarm.attempts === 0) {
-            enqueue({
-              namespace: alarm.namespace,
-              actionId: alarm.actionId,
-              executionId: alarm.executionId,
-              eventId: alarm.eventId,
-              deliveryId: alarm.deliveryId,
-            });
+          } else if (
+            (alarm.status === "pending" && alarm.attempts === 0) ||
+            ("kind" in ref &&
+              ["pending", "retry_wait"].includes(String(alarm.status)))
+          ) {
+            enqueueScheduled(ref);
           } else {
             stop(
               new Error(

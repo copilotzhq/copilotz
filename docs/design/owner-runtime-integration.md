@@ -649,3 +649,17 @@ fixed uncertainty classification. The revoked-input failure was reproduced
 before fixing; final serial execution29 and recovery11 pass, independently41
 including the original reproduction. An earlier concurrent rerun was killed with
 exit137 and is not counted as completed evidence.
+
+### Fresh general-plugin host composition
+
+The fresh owner now dispatches registered Actions and Processors, including
+Action-to-child and Collection-to-Processor-to-child mutation flows. Current
+parent/event policies are checked before writes and replay. Inherited/detached
+catalog scopes, three-attempt retry timing and renewed lease alarm deadlines
+remain durable. Capacity-one and concurrent-root saturation refuse or time out
+boundedly without stopping the owner; an already admitted child remains durable
+and can finish when a slot becomes free. Independent actual-table sibling
+in-process/WebSocket acceptance passed11/11. This still excludes restart/takeover,
+owner-local epoch-only execution, protected/content/deferred/custom frames and
+full output/continuation recovery. Ordinary Action terminal results remain
+distinct from operation settlement.

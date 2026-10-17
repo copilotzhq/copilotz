@@ -69,6 +69,15 @@ type Assigned = Readonly<{
   signal: AbortSignal;
   assignment: Readonly<{ fence: Fence; streamId: string }>;
 }>;
+/** Explicit transport hook contract; no inferred private bridge state escapes. */
+export type OwnerDispatchAdmissions = Admissions;
+export type OwnerDispatchLifecycle = Readonly<{
+  onWorkAssigned(context: Assigned): Promise<void>;
+  onComplete(
+    context: Readonly<{ operationId: string; streamId: string; fence: Fence }>,
+  ): void;
+  onDisconnect(context: Readonly<{ fence: Fence }>): void;
+}>;
 type Entry = {
   request: Request;
   owner: OwnerCommandBoundary;

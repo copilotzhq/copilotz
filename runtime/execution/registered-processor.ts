@@ -1,3 +1,8 @@
+import {
+  OWNER_COLLECTION_READ,
+  parseOwnerCollectionReadRequest,
+} from "./collection-read-call.ts";
+import type { RegisteredInvocationCalls } from "./registered-invocation.ts";
 /** Private no-database Processor execution over the same named owner calls on
  * embedded and connected hosts. Business identity belongs to the delivery. */
 import type {
@@ -42,6 +47,7 @@ export type RegisteredProcessorProjection = Readonly<{
   identity: RuntimeIdentity;
 }>;
 export type RegisteredProcessorOwnerPort = Readonly<{
+  readCollection?: RegisteredInvocationCalls["readCollection"];
   claim(
     assignment: RegisteredProcessorAssignment,
     options: OwnerCommandExecuteOptions,
@@ -307,6 +313,16 @@ export function createRegisteredProcessorOwnerPort(
     },
     readCompletion,
     execute: (command, callOptions) => port.execute(command, callOptions),
+    async readCollection(request, options) {
+      if (!projected || closed) refuse();
+      const result = await port.project(
+        OWNER_COLLECTION_READ,
+        parseOwnerCollectionReadRequest(request) as unknown as OwnerJson,
+        options,
+      );
+      if (!projected || closed) refuse();
+      return result;
+    },
     ...(options.invokeAction ? { invokeAction: options.invokeAction } : {}),
     ...(options.prepareAction ? { prepareAction: options.prepareAction } : {}),
   };
@@ -419,6 +435,7 @@ export function createRegisteredProcessorWorker(
       const invokeAction = port.invokeAction?.bind(port);
       const prepareAction = port.prepareAction?.bind(port);
       const execute = port.execute.bind(port);
+      const readCollection = port.readCollection?.bind(port);
       let result: RegisteredProcessorCompletion;
       try {
         result = await runRegisteredProcessorInvocation({
@@ -443,6 +460,7 @@ export function createRegisteredProcessorWorker(
           },
           calls: {
             execute,
+            ...(readCollection ? { readCollection } : {}),
             ...(prepareAction
               ? {
                 prepareAction: (input, callOptions) =>

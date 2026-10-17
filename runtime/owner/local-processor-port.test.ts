@@ -562,3 +562,48 @@ test("local Processor port captures options and isolates private hook snapshots"
   assert.equal(f.starts.length, 1);
   assert.equal(f.ends.length, 1);
 });
+
+test("local processor Collection read retains raw occupancy and suppresses revoked reply", async () => {
+  const response = gate<OwnerJson>();
+  const f = fixture();
+  const original = f.boundary.project;
+  let received: unknown;
+  f.boundary.project = (caller, kind, input, options) => {
+    if (kind !== "collections.read") {
+      return original(caller, kind, input, options);
+    }
+    received = input;
+    return response.promise;
+  };
+  const port = f.create();
+  await port.start();
+  await port.project();
+  const request = {
+    collectionAlias: "notes",
+    operation: "get" as const,
+    id: "a",
+  };
+  const pending = port.readCollection!(request, {}).then(
+    () => "disclosed",
+    () => "refused",
+  );
+  request.id = "changed";
+  assert.deepEqual(received, {
+    collectionAlias: "notes",
+    operation: "get",
+    id: "a",
+  });
+  port.sealInvocationCalls();
+  let drained = false;
+  const drain = port.drainRawCalls().then(() => {
+    drained = true;
+  });
+  await tick();
+  assert.equal(drained, false);
+  f.state.current = false;
+  response.resolve(null);
+  assert.equal(await pending, "refused");
+  await drain;
+  assert.equal(drained, true);
+  await assert.rejects(port.readCollection!(request, {}));
+});

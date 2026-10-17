@@ -1,3 +1,7 @@
+import {
+  OWNER_COLLECTION_READ,
+  parseOwnerCollectionReadRequest,
+} from "../execution/collection-read-call.ts";
 /** Private actual-boundary adapter for one local Processor attempt. No scheduler,
  * host activation, retry generation, receipt recovery or noncommit inference. */
 import { assertJsonValue } from "../json.ts";
@@ -24,6 +28,7 @@ import type {
   OwnerCommand,
   OwnerCommandBoundary,
   OwnerCommandOutcome,
+  OwnerJson,
 } from "./boundary.ts";
 import { parseOwnerPlacementBinding } from "./placement-binding.ts";
 import { assertOwnerAttemptCaller } from "./attempt-authority.ts";
@@ -203,6 +208,19 @@ export function createOwnerLocalProcessorPort(
     throw new TypeError("Local children require owner input admission.");
   }
   return {
+    async readCollection(request, callOptions) {
+      invocation();
+      const input = parseOwnerCollectionReadRequest(
+        request,
+      ) as unknown as OwnerJson;
+      const result = await calls.run(
+        (execution) =>
+          project(copy(localCaller), OWNER_COLLECTION_READ, input, execution),
+        callOptions,
+      );
+      invocation();
+      return copy(result);
+    },
     ...(children
       ? createLocalChildActionCalls({
         children,

@@ -42,9 +42,23 @@ Deno.test("worker role audits root reexports and side effects before tree shakin
         "runtime/execution/registered-action-invocation.ts",
         "runtime/execution/preparation-call.ts",
         "runtime/execution/registered-processor-invocation.ts",
+        "runtime/execution/collection-read-call.ts",
+        "runtime/execution/collection-read-capability.ts",
+        "runtime/owner/ordinary-value.ts",
       ]
     ) {
       assert(graph.modules.some((module) => module.source === core(path)));
+    }
+    for (
+      const path of [
+        "runtime/owner/collection-read.ts",
+        "runtime/owner/ordinary-source-sql.ts",
+        "runtime/collections/query.ts",
+        "runtime/collections/aggregate.ts",
+        "runtime/collections/read-budget.ts",
+      ]
+    ) {
+      assert(!graph.modules.some((module) => module.source === core(path)));
     }
     assert(
       !graph.modules.some((module) =>
@@ -351,8 +365,10 @@ Deno.test("worker package loader supports only its local or pinned JSR config UR
   globalThis.fetch = async (input, options) => {
     requested.push(String(input));
     assertEquals(options?.redirect, "error");
-    return new Response(
-      '{"name":"@copilotz/copilotz","exports":{"./worker":"./worker.ts"}}',
+    return await Promise.resolve(
+      new Response(
+        '{"name":"@copilotz/copilotz","exports":{"./worker":"./worker.ts"}}',
+      ),
     );
   };
   try {

@@ -141,6 +141,9 @@ async function fixture(options: {
         facts: OwnerLocalProcessorStartFacts,
       ) => Promise<void>),
     eventPolicy: undefined as undefined | ((tx: SqlExecutor) => Promise<void>),
+    resolvePolicy: undefined as
+      | undefined
+      | ((tx: SqlExecutor) => Promise<void>),
     afterRead: undefined as undefined | ((sql: string) => void | Promise<void>),
     beforeCommit: undefined as undefined | (() => Promise<void>),
     schedulePolicy: undefined as
@@ -294,6 +297,7 @@ async function fixture(options: {
           if (!entry) return undefined;
           const resolved = await assignments.resolveLocal(tx, who);
           if (!resolved || resolved.kind !== "processor") return undefined;
+          await state.resolvePolicy?.(tx);
           return {
             ...resolved,
             ctxGranted: state.ctx,
@@ -2059,6 +2063,57 @@ test(`actual local Processor Collection receipt replay rechecks source authority
     entry.revoked = true;
     await f.drain(entry);
     assert.equal(f.state.capacityWitness, "");
+  } finally {
+    await f.close();
+  }
+});
+
+test("local Processor final grant recheck cannot replace the authorized body", async () => {
+  const f = await fixture();
+  try {
+    await f.start();
+    let armed = false, changed = false;
+    const replacement = await encodeEventBody({
+      title: "changed after event policy",
+    });
+    const before = await f.snapshot();
+    f.state.eventPolicy = () => {
+      armed = true;
+      return Promise.resolve();
+    };
+    f.state.resolvePolicy = async (tx) => {
+      if (!armed) return;
+      changed = true;
+      await tx.query(
+        `UPDATE ${f.q}.event_bodies SET body=$1::jsonb,digest=$2 WHERE namespace='space' AND event_body_id='source-body'`,
+        [JSON.stringify(replacement.body), replacement.digest],
+      );
+    };
+    await assert.rejects(
+      f.db.transaction((tx) =>
+        f.commands.authorizeLocalLive(tx, f.caller(), f.state.time)
+      ),
+    );
+    assert.equal(changed, true);
+    assert.deepEqual(await f.snapshot(), before);
+  } finally {
+    await f.close();
+  }
+});
+
+test("local Processor settlement recheck ignores unrelated ctx revocation", async () => {
+  const f = await fixture();
+  try {
+    await f.start();
+    let grants = 0;
+    f.state.resolvePolicy = () => {
+      if (++grants === 2) f.state.ctx = false;
+      return Promise.resolve();
+    };
+    await f.complete();
+    assert.equal(f.first.knownEnd?.status, "succeeded");
+    assert.equal(f.state.ctx, false);
+    assert.equal(f.state.settlement, true);
   } finally {
     await f.close();
   }

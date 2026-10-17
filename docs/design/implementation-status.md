@@ -1,6 +1,6 @@
 # Owner, worker and Views implementation checklist
 
-Updated: 17 October 2026, 20:09 UTC.
+Updated: 17 October 2026, 21:12 UTC.
 
 This is the maintained coordination checklist for
 [Copilotz PR #93](https://github.com/copilotzhq/copilotz/pull/93). It tracks
@@ -10,16 +10,17 @@ production-ready. All changes remain draft: **no merge or publication**.
 
 ## Current work
 
-| Task                                | Status                  | Next acceptance gate                                                                               |
-| ----------------------------------- | ----------------------- | -------------------------------------------------------------------------------------------------- |
-| Local Processor bound owner adapter | Reviewed checkpoint     | Reviewed: independent 30 pure and seven real PostgreSQL cases; 83-case compatibility passed        |
-| Local nested Action authority       | Reviewed checkpoint     | Independent 144 pure and 114 PostgreSQL cases; private fresh same-owner mixed placement complete   |
-| Local Action effect capabilities    | Reviewed checkpoint     | Private fresh local effects: 300 PostgreSQL-gate cases, 71 pure and 12 role-bundle cases pass      |
-| Local named preparation / Views     | Reviewed checkpoint     | Fresh local Action/Processor preparation and retry capture pass; public/history gates remain       |
-| Faster test orchestration           | Representative measured | 16 files: 15.4% faster, 7.7% higher peak RSS; reordered files require broader isolation validation |
-| Reference-test reliability          | Reviewed correction     | 137 affected cases, independent 29-case check and three complete pipeline repeats passed           |
-| Local Processor host generations    | Reviewed checkpoint     | PostgreSQL 14 host plus two caller-facing helper cases pass; fresh same-owner retry scope complete |
-| Architecture cleanup                | In progress             | Shared local-port bookkeeping consolidated; migrate callers and retire superseded paths next       |
+| Task                                 | Status                  | Next acceptance gate                                                                                                     |
+| ------------------------------------ | ----------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| Local Processor bound owner adapter  | Reviewed checkpoint     | Reviewed: independent 30 pure and seven real PostgreSQL cases; 83-case compatibility passed                              |
+| Local nested Action authority        | Reviewed checkpoint     | Independent 144 pure and 114 PostgreSQL cases; private fresh same-owner mixed placement complete                         |
+| Local Action effect capabilities     | Reviewed checkpoint     | Private fresh local effects: 300 PostgreSQL-gate cases, 71 pure and 12 role-bundle cases pass                            |
+| Local named preparation / Views      | Reviewed checkpoint     | Fresh local Action/Processor preparation and retry capture pass; public/history gates remain                             |
+| Faster test orchestration            | Representative measured | 16 files: 15.4% faster, 7.7% higher peak RSS; reordered files require broader isolation validation                       |
+| Reference-test reliability           | Reviewed correction     | 137 affected cases, independent 29-case check and three complete pipeline repeats passed                                 |
+| Local Processor host generations     | Reviewed checkpoint     | PostgreSQL 14 host plus two caller-facing helper cases pass; fresh same-owner retry scope complete                       |
+| Ordinary registered Collection reads | Reviewed checkpoint     | PostgreSQL SQL43/Processor 53, final canonical 252, invocation222 and role 12 pass; public snapshot/content gates remain |
+| Architecture cleanup                 | In progress             | Shared local-port bookkeeping consolidated; migrate callers and retire superseded paths next                             |
 
 The approved [lease-free owner attempt contract](owner-attempt-authority.md) is
 implemented and independently checked in this scoped checkpoint. Both placements
@@ -84,11 +85,28 @@ the existing CAS; NULL deadlines, original recovery eligibility and all
 authority gates stay unchanged. No new parser, query or execution lease is
 introduced.
 
-Next is owner-mediated ordinary Collection reads in registered execution,
-reusing the existing query/aggregate implementation. Quiet-writer content
-protection, open-history takeover and public local placement remain separate
-gates. Every slice must name what it simplifies and eliminates before adding
-machinery.
+[Ordinary registered Collection reads](owner-collection-reads.md) are now
+independently checked: PostgreSQL-configured SQL/read 43 and Processor 53 cases,
+222 invocation/port/driver cases, final canonical 252 and role 12 cases pass.
+The four-file packaging correction followed retained 250/2 canonical and 9/3
+role results; it admits only three pure worker modules and tests real artifact
+reads. Original 29 implementation/test paths remain byte-identical across the
+freezes. All six architecture/package gates pass (46 exports / 730 production
+modules).
+
+Local/worker Actions and Processors share get/list/aggregate through the
+existing owner projection, query engine and raw-call tracker. No new read
+receipt, cache, transport route, timer or job lease is added. Causal regressions
+cover late Processor grant/body changes, protected aggregate/cursor sources, SQL
+error disclosure and independent ctx/settlement grants. This is scoped
+acceptance, not a new full-suite or public/history activation claim.
+
+The next snapshot prerequisite must preserve F5 isolation and default PGlite
+behavior: PostgreSQL has separate pooled transactions, while PGlite serializes
+its single engine. No weaker snapshot fallback or hidden external-database
+requirement has been selected. Quiet-writer content protection, open-history
+takeover and public local placement remain separate gates. Every slice must name
+what it simplifies and eliminates before adding machinery.
 
 ## 1. Programming model and composition
 
@@ -189,6 +207,9 @@ machinery.
       boundaries
 - [x] Immutable ordinary-record/database-content preparation references and
       original-source reauthorization
+- [x] Ordinary registered get/list/aggregate in local/worker Actions and
+      Processors, bounded owner scope and source checks, current authority and
+      raw drain
 - [ ] Complete read/query, vector, snapshot and subscription integration
 - [ ] Full logical content/current-copy catalog, body ownership, retention and
       retirement

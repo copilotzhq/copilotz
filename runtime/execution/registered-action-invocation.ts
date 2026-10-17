@@ -1,3 +1,4 @@
+import { createCollectionReadCapability } from "./collection-read-capability.ts";
 import { normalizeActionNamedPreparation } from "./preparation-call.ts";
 /** Ordinary Action context/invocation kernel, independent of placement.
  * This returns a safe completion proposal, never a durable terminal receipt. */
@@ -94,6 +95,7 @@ export async function runRegisteredActionInvocation(
   const { check, isCancelled, commandSignal, exposedSignal } = options.lifetime;
   const { execute, invokeAction } = options.calls;
   const prepareAction = options.calls.prepareAction?.bind(options.calls);
+  const readCollection = options.calls.readCollection?.bind(options.calls);
   let capabilityFailure = false;
   let registrationOpen = true;
   // The bound counts calls over the whole invocation; settled calls stay here.
@@ -319,7 +321,35 @@ export async function runRegisteredActionInvocation(
         databaseSchema: projection.databaseSchema,
         resources: capabilities.resources,
         adapters: capabilities.adapters,
-        collections: new Proxy({}, { get: () => unavailable() }),
+        collections: new Proxy(
+          Object.fromEntries(
+            Object.keys(registry.collections).map((alias) => [
+              alias,
+              new Proxy(
+                createCollectionReadCapability({
+                  alias,
+                  read: readCollection,
+                  signal: commandSignal,
+                  check,
+                  unsupported,
+                  track,
+                }),
+                {
+                  get: (target, key) =>
+                    Object.hasOwn(target, key)
+                      ? Reflect.get(target, key)
+                      : unsupported(),
+                },
+              ),
+            ]),
+          ),
+          {
+            get: (target, key) =>
+              Object.hasOwn(target, key)
+                ? Reflect.get(target, key)
+                : unsupported(),
+          },
+        ),
         vectors: unavailable(),
         content: Object.fromEntries(
           [

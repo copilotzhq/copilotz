@@ -14,6 +14,7 @@ import type {
 } from "../owner/boundary.ts";
 import type { ProcessorEvent } from "../plugins/processor.ts";
 import type { RegisteredExecutionRecovery } from "./recovery.ts";
+import type { OwnerCollectionReadRequest } from "./collection-read-call.ts";
 
 export type RegisteredExecutionCompletion =
   | Readonly<{ status: "completed"; output: OwnerJson }>
@@ -64,6 +65,10 @@ export type RegisteredInvocationLifetime = Readonly<{
   exposedSignal: AbortSignal;
 }>;
 export type RegisteredInvocationCalls = Readonly<{
+  readCollection?(
+    request: OwnerCollectionReadRequest,
+    options: OwnerCommandExecuteOptions,
+  ): Promise<OwnerJson>;
   execute(
     command: OwnerCommand,
     options?: OwnerCommandExecuteOptions,

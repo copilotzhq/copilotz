@@ -630,3 +630,74 @@ test("neutral named preparation cannot reopen a privately cancelled context thro
   });
   assert.equal(called, 0);
 });
+
+test("neutral Action reads capture capability before awaits and retain unawaited work", async () => {
+  const response = gate<null>();
+  const entered = gate();
+  let reads = 0;
+  const f = fixture(
+    defineAction({
+      id: "action",
+      execute(_input: unknown, ctx: ActionContext) {
+        void ctx.collections.notes.get({ id: "a" });
+        entered.resolve();
+        return "done";
+      },
+    }),
+  );
+  const calls = {
+    ...f.options.calls,
+    readCollection() {
+      reads++;
+      return response.promise;
+    },
+  };
+  f.options = { ...f.options, calls };
+  const pending = runRegisteredActionInvocation(f.options);
+  calls.readCollection = () => {
+    throw new Error("replacement callback");
+  };
+  await entered.promise;
+  let finished = false;
+  void pending.then(() => {
+    finished = true;
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(finished, false);
+  response.resolve(null);
+  assert.deepEqual(await pending, { status: "completed", output: "done" });
+  assert.equal(reads, 1);
+});
+
+test("neutral Action suppresses a read result after private cancellation", async () => {
+  const response = gate<null>(), entered = gate();
+  let disclosed = false;
+  const f = fixture(
+    defineAction({
+      id: "action",
+      async execute(_input: unknown, ctx: ActionContext) {
+        try {
+          await ctx.collections.notes.get({ id: "a" });
+          disclosed = true;
+        } catch { /* lifecycle still refuses */ }
+        return "caught";
+      },
+    }),
+  );
+  const pending = runRegisteredActionInvocation({
+    ...f.options,
+    calls: {
+      ...f.options.calls,
+      readCollection() {
+        entered.resolve();
+        return response.promise;
+      },
+    },
+  });
+  await entered.promise;
+  f.cancel();
+  Object.defineProperty(f.exposed.signal, "aborted", { value: false });
+  response.resolve(null);
+  assert.equal((await pending).status, "cancelled");
+  assert.equal(disclosed, false);
+});

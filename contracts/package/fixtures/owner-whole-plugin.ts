@@ -11,6 +11,29 @@ import {
   type ProcessorContext,
 } from "@copilotz/copilotz";
 
+/** The built-artifact fixture exercises actual read calls, not just graph import. */
+async function verifyArtifactReads(
+  ctx: ActionContext | ProcessorContext,
+  value: string,
+) {
+  if (value !== "artifact") return;
+  const id = `note:${value}`;
+  const record = await ctx.collections.notes.get({ id });
+  const page = await ctx.collections.notes.list({ where: { id }, limit: 1 });
+  const groups = await ctx.collections.notes.aggregate({
+    where: { id },
+    metrics: { n: { op: "count" } },
+  });
+  if (
+    record?.title !== value || page.length !== 1 || page[0].id !== id ||
+    groups[0]?.n !== 1
+  ) {
+    throw new Error(
+      "Built worker Collection reads did not use the owner result.",
+    );
+  }
+}
+
 const collection = (name: string) =>
   defineCollection({
     name,
@@ -42,6 +65,7 @@ export const plugin = definePlugin({
         if (!(local instanceof Map) || local.get("local") !== value) {
           throw new Error("local callback return changed");
         }
+        await verifyArtifactReads(ctx, value);
         return (ctx.adapters.formatting.label as (value: string) => string)(
           value,
         );
@@ -71,6 +95,7 @@ export const plugin = definePlugin({
         }
         const value =
           (event.data as { record: { title: string } }).record.title;
+        await verifyArtifactReads(ctx, value);
         await (ctx.actions.child as (
           input: string,
           options: { operationKey: string },

@@ -5,13 +5,13 @@
  * neither grants permission nor opens, hydrates or recognizes new protocols.
  * Traversal is bounded to depth 32 and 20,000 nodes; schemas are never coerced.
  */
-const protectedFamilies = [
+export const OWNER_PROTECTED_FAMILIES = [
   "copilotz.event.protected-value",
   "copilotz.action.lifecycle.protected",
   "copilotz.action.protected-value",
   "copilotz.action.protected-value-aad",
-];
-const reservedKeys = new Set([
+] as const;
+export const OWNER_RESERVED_VALUE_KEYS = [
   "assetId",
   "bodyId",
   "ownerNodeId",
@@ -19,7 +19,8 @@ const reservedKeys = new Set([
   "$copilotz-secret",
   "$copilotz-protected",
   "x-copilotz-secret",
-]);
+] as const;
+const reservedKeys = new Set<string>(OWNER_RESERVED_VALUE_KEYS);
 function refuse(): never {
   throw Object.assign(new Error("ordinary_value_unsupported"), {
     code: "ordinary_value_unsupported",
@@ -29,7 +30,7 @@ function refuse(): never {
  * protocol, inspect application field names, coerce a value or grant access. */
 export function isOwnerProtectedSchemaFamily(value: unknown): boolean {
   return typeof value === "string" &&
-    protectedFamilies.some((family) =>
+    OWNER_PROTECTED_FAMILIES.some((family) =>
       value === family || value.startsWith(`${family}.`)
     );
 }

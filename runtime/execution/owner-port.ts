@@ -1,3 +1,7 @@
+import {
+  OWNER_COLLECTION_READ,
+  parseOwnerCollectionReadRequest,
+} from "./collection-read-call.ts";
 /** Data-only mapping shared by in-process and connected registered workers. */
 import type {
   OwnerCommand,
@@ -191,6 +195,13 @@ export function createRegisteredOwnerExecutionPort(
       return { status: outcome.status, result: terminal(outcome.result, ref) };
     },
     readCompletion,
+    readCollection(request, options) {
+      return port.project(
+        OWNER_COLLECTION_READ,
+        parseOwnerCollectionReadRequest(request) as unknown as OwnerJson,
+        options,
+      );
+    },
     execute: (command, callOptions) => port.execute(command, callOptions),
   };
 }

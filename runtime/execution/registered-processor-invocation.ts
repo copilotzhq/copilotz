@@ -1,3 +1,4 @@
+import { createCollectionReadCapability } from "./collection-read-capability.ts";
 import { normalizeActionNamedPreparation } from "./preparation-call.ts";
 /** Ordinary Processor context/invocation kernel, independent of placement.
  * Retry/onError semantics remain distinct from Action completion and effects. */
@@ -78,6 +79,7 @@ export async function runRegisteredProcessorInvocation(
   const { check, isCancelled, commandSignal, exposedSignal } = options.lifetime;
   const { execute, invokeAction } = options.calls;
   const prepareAction = options.calls.prepareAction?.bind(options.calls);
+  const readCollection = options.calls.readCollection?.bind(options.calls);
   let registering = true;
   let capabilityFailure = false;
   let pendingFailure: unknown;
@@ -268,6 +270,14 @@ export async function runRegisteredProcessorInvocation(
       ) => [
         alias,
         new Proxy({
+          ...createCollectionReadCapability({
+            alias,
+            read: readCollection,
+            signal: commandSignal,
+            check,
+            unsupported,
+            track,
+          }),
           create: (input: Record<string, unknown>, extra?: unknown) => {
             if (extra !== undefined) return unsupported();
             return transaction(({ collections }) =>

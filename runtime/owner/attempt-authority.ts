@@ -10,6 +10,21 @@ import {
 import type { OwnerCaller, OwnerCommandContext } from "./boundary.ts";
 import { ownerPrincipalIdentity } from "./principal.ts";
 
+/** Compare stable assignment facts independently of unrelated capability grants.
+ * The caller must separately require the grant for its current phase. */
+export type OwnerAssignmentFacts<T> = T extends unknown
+  ? Omit<T, "ctxGranted" | "settlementGranted">
+  : never;
+export function ownerAssignmentFacts<
+  T extends Readonly<{
+    ctxGranted: boolean;
+    settlementGranted: boolean;
+  }>,
+>(value: T): OwnerAssignmentFacts<T> {
+  const { ctxGranted: _ctx, settlementGranted: _settlement, ...facts } = value;
+  return facts as OwnerAssignmentFacts<T>;
+}
+
 /** Structural subset of a verified, host-owned worker assignment. Rich Action
  * and Processor assignments may carry business facts alongside these fields. */
 export type OwnerWorkerAttemptAuthority = Readonly<{

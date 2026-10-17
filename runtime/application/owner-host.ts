@@ -10,6 +10,11 @@ import type {
   Hypervisor,
   HypervisorOptions,
 } from "../../dependencies/oxian-hypervisor.ts";
+import {
+  createOwnerCollectionRead,
+  type OwnerCollectionReadPolicy,
+} from "../owner/collection-read.ts";
+import { OWNER_COLLECTION_READ } from "../execution/collection-read-call.ts";
 import { defineCollection } from "../collections/definition.ts";
 import {
   provisionCollectionIndexes,
@@ -75,6 +80,7 @@ import {
   createOwnerChildActions,
   OWNER_CHILD_ACTION_ADMISSION,
   OWNER_CHILD_ACTION_RESULT,
+  type OwnerChildActionBinding,
   type OwnerChildActionParent,
 } from "../owner/child-action.ts";
 import {
@@ -179,6 +185,9 @@ export type OwnerHostIngressScope = Readonly<{
   group: Readonly<{ key: string; actorId?: string }>;
 }>;
 export type OwnerHostPolicy = Readonly<{
+  /** Explicit whole-record/aggregate read grant. Row constraints apply before SQL
+   * pagination; absence denies across worker and private local placements. */
+  collectionRead?: OwnerCollectionReadPolicy;
   /** SQL-only reconstruction of current principal, original endpoint exposure,
    * constraints and bounded group. Undefined denies; no default allow. */
   ingress(
@@ -1322,6 +1331,50 @@ export async function createOwnerHost(
       });
     },
   });
+  async function resolveInvocation(
+    tx: SqlExecutor,
+    caller: OwnerCaller,
+    time: string,
+  ): Promise<OwnerChildActionBinding | undefined> {
+    if (caller.principal.kind === "owner-local") {
+      if (local?.current(caller)) {
+        const assignment = await execution.authorizeLive(tx, caller, time);
+        return assignment.placement === "owner-local"
+          ? { kind: "action", assignment }
+          : undefined;
+      }
+      if (!localProcessor?.current(caller)) return undefined;
+      const { assignment } = await processor.authorizeLocalLive(
+        tx,
+        caller,
+        time,
+      );
+      return "placement" in assignment &&
+          assignment.placement === "owner-local"
+        ? { kind: "processor", assignment }
+        : undefined;
+    }
+    const current = await bridge.resolveStarted(tx, caller);
+    if (!current) return undefined;
+    return "kind" in current
+      ? {
+        kind: "processor",
+        assignment:
+          (await processor.authorizeLive(tx, caller, time)).assignment,
+      }
+      : {
+        kind: "action",
+        assignment: workerAssignment(
+          await execution.authorizeLive(tx, caller, time),
+        ),
+      };
+  }
+  const readCollections = createOwnerCollectionRead({
+    schema,
+    registry,
+    resolve: resolveInvocation,
+    authorize: policy.collectionRead,
+  });
   const child = createOwnerChildActions({
     ownerId,
     schema,
@@ -1375,40 +1428,7 @@ export async function createOwnerHost(
           actual.sourceEventId ===
             parent.assignment.invocation.identity?.causationId;
     },
-    async resolveParent(tx, caller, time) {
-      if (caller.principal.kind === "owner-local") {
-        if (local?.current(caller)) {
-          const assignment = await execution.authorizeLive(tx, caller, time);
-          return assignment.placement === "owner-local"
-            ? { kind: "action", assignment }
-            : undefined;
-        }
-        if (!localProcessor?.current(caller)) return undefined;
-        const { assignment } = await processor.authorizeLocalLive(
-          tx,
-          caller,
-          time,
-        );
-        return "placement" in assignment &&
-            assignment.placement === "owner-local"
-          ? { kind: "processor", assignment }
-          : undefined;
-      }
-      const current = await bridge.resolveStarted(tx, caller);
-      if (!current) return undefined;
-      return "kind" in current
-        ? {
-          kind: "processor",
-          assignment:
-            (await processor.authorizeLive(tx, caller, time)).assignment,
-        }
-        : {
-          kind: "action",
-          assignment: workerAssignment(
-            await execution.authorizeLive(tx, caller, time),
-          ),
-        };
-    },
+    resolveParent: resolveInvocation,
     authorizeChild(tx, _caller, parent, actionId, time) {
       if (!policy.child) {
         unavailable("Current child Action policy is unavailable.");
@@ -1690,6 +1710,7 @@ export async function createOwnerHost(
       "effect.notStarted",
       "effect.state",
       "collections",
+      OWNER_COLLECTION_READ,
     ],
     isCurrentAuthorization(tx, caller, command, time) {
       return command.kind === OWNER_CHILD_ACTION_ADMISSION ||
@@ -1698,7 +1719,8 @@ export async function createOwnerHost(
         ? child.isCurrentAuthorization(tx, caller, command, time)
         : command.kind.startsWith("effect.")
         ? effects.isCurrentAuthorization(tx, caller, command, time)
-        : command.kind === "collections"
+        : command.kind === "collections" ||
+            command.kind === OWNER_COLLECTION_READ
         ? ready() && (caller.principal.kind === "owner-local"
           ? !!(local?.current(caller) ?? localProcessor?.current(caller))
           : !!bridge.currentStarted(caller)) &&
@@ -1832,6 +1854,7 @@ export async function createOwnerHost(
       },
     },
     projections: {
+      [OWNER_COLLECTION_READ]: readCollections,
       ...startup.projections,
       ...(terminal
         ? {
@@ -2111,6 +2134,8 @@ export async function createOwnerHost(
           if (command.kind.startsWith("effect.")) {
             return await effects.authorize(tx, caller, command, time);
           }
+          // The read handler owns request/scope/live checks lexically.
+          if (command.kind === OWNER_COLLECTION_READ) return;
           if (command.kind === "collections") {
             if (caller.principal.kind === "owner-local") {
               if (

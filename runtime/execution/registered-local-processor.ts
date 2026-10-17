@@ -56,6 +56,7 @@ export type RegisteredLocalProcessorPort = Readonly<{
   ): Promise<OwnerCommandOutcome>;
   invokeAction?: RegisteredInvocationCalls["invokeAction"];
   prepareAction?: RegisteredInvocationCalls["prepareAction"];
+  readCollection?: RegisteredInvocationCalls["readCollection"];
   sealInvocationCalls(): void;
   drainRawCalls(): Promise<void>;
   settlementState(
@@ -330,6 +331,7 @@ export function createRegisteredLocalProcessorExecution(
   const execute = owner.execute.bind(owner);
   const invokeAction = owner.invokeAction?.bind(owner);
   const prepareAction = owner.prepareAction?.bind(owner);
+  const readCollection = owner.readCollection?.bind(owner);
   const state = owner.settlementState.bind(owner);
   const complete = owner.complete.bind(owner);
   const seal = owner.sealInvocationCalls.bind(owner);
@@ -541,6 +543,14 @@ export function createRegisteredLocalProcessorExecution(
                 exposedSignal: exposed.signal,
               },
               calls: {
+                ...(readCollection
+                  ? {
+                    readCollection: (input, callOptions) =>
+                      childCall(() =>
+                        readCollection(snapshot(input), callOptions)
+                      ),
+                  }
+                  : {}),
                 ...(prepareAction
                   ? {
                     prepareAction: (input, callOptions) =>

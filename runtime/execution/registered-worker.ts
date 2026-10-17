@@ -1,3 +1,4 @@
+import type { RegisteredInvocationCalls } from "./registered-invocation.ts";
 /** Internal ordinary-JSON Action execution over named, host-bound owner ports.
  * No public worker factory or complete Action lifecycle is implied. */
 import type { PluginRegistry } from "../plugins/registry.ts";
@@ -54,6 +55,7 @@ export type RegisteredExecutionProjection = Readonly<{
  * Claim/completion receipts contain references only; project rechecks the exact
  * current assignment, session, attempt and epoch before exposing input. */
 export type RegisteredOwnerExecutionPort = Readonly<{
+  readCollection?: RegisteredInvocationCalls["readCollection"];
   /** Separately admitted effect routes, bound to this live assignment. Missing
    * capability refuses ctx.effect; never substitutes worker-local receipts. */
   effects?: OwnerEffectPort;
@@ -294,6 +296,7 @@ export function createRegisteredActionWorker(
         ? port.prepareAction?.bind(port)
         : undefined;
       const execute = port.execute.bind(port);
+      const readCollection = port.readCollection?.bind(port);
       let completion: RegisteredExecutionCompletion;
       try {
         completion = await runRegisteredActionInvocation({
@@ -317,6 +320,7 @@ export function createRegisteredActionWorker(
           },
           calls: {
             execute,
+            ...(readCollection ? { readCollection } : {}),
             ...(prepareAction
               ? {
                 prepareAction: (input, callOptions) =>

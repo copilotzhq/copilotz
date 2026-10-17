@@ -3660,3 +3660,474 @@ for (const mode of ["in-process", "websocket"] as const) {
     }
   }
 }
+
+for (const mode of ["in-process", "websocket"] as const) {
+  for (const kind of ["action", "processor"] as const) {
+    for (const placement of ["owner-local", "worker"] as const) {
+      test(
+        `ordinary Collection reads use real ${placement} ${kind} / ${mode}`,
+        {
+          skip: !sourceRoot,
+        },
+        async () => {
+          let readCompleted = false;
+          const bindings: string[] = [];
+          const readTraces: Record<string, unknown>[] = [];
+          const verify = async (ctx: ActionContext | ProcessorContext) => {
+            const note = await ctx.collections.notes.get({ id: "a" });
+            assert.equal(note?.count, 0);
+            assert.equal(
+              await ctx.collections.notes.get({ id: "0-hidden" }),
+              null,
+            );
+            assert.deepEqual(
+              (await ctx.collections.notes.list({ limit: 1 })).map((r) => r.id),
+              ["a"],
+            );
+            assert.deepEqual(
+              (await ctx.collections.notes.list({ after: "a", limit: 1 })).map((
+                r,
+              ) => r.id),
+              ["b"],
+            );
+            assert.deepEqual(
+              await ctx.collections.notes.aggregate({
+                groupBy: ["title"],
+                metrics: { total: { op: "count" } },
+              }),
+              [{ title: "visible", total: 2 }],
+            );
+            await ctx.transaction(({ collections }) => {
+              collections.notes.update({ id: "a", set: { count: 1 } });
+            }, { operationKey: "change-after-read" });
+            assert.equal(
+              (await ctx.collections.notes.get({ id: "a" }))?.count,
+              1,
+            );
+            readCompleted = true;
+          };
+          const registry = createPluginRegistry({
+            collections: { notes },
+            actions: {
+              idle: defineAction({ id: "fixture.idle", execute: () => null }),
+              work: defineAction({
+                id: "fixture.local",
+                inputSchema: { type: "string" } as const,
+                async execute(_value: string, ctx: ActionContext) {
+                  await ctx.transaction(({ collections }) => {
+                    for (const id of ["0-hidden", "a", "b", "trigger"]) {
+                      collections.notes.create({
+                        id,
+                        title: ["a", "b"].includes(id) ? "visible" : "hidden",
+                        count: 0,
+                      });
+                    }
+                  }, { operationKey: "seed" });
+                  if (kind === "action") await verify(ctx);
+                  return "done";
+                },
+              }),
+            },
+            ...(kind === "processor"
+              ? {
+                processors: {
+                  read: defineProcessor({
+                    id: "fixture.read",
+                    on: [{
+                      eventType: "local_note.created",
+                      data: { record: { id: "trigger" } },
+                    }],
+                    async handle(_event, ctx) {
+                      await verify(ctx);
+                    },
+                  }),
+                },
+              }
+              : {}),
+          });
+          const f = await fixture({
+            registry,
+            mode,
+            local: localOptions({
+              actionIds: kind === "action" && placement === "worker"
+                ? ["fixture.idle"]
+                : ["fixture.local"],
+            }),
+            ...(kind === "processor" && placement === "owner-local"
+              ? {
+                processors: {
+                  processorIds: ["fixture.read"],
+                  policy: {
+                    grants: () => ({ ctx: true, settlement: true }),
+                    event() {},
+                    collections: () => ({}),
+                  },
+                  createCapabilities: () => ({ resources: {}, adapters: {} }),
+                },
+              }
+              : {}),
+            policy: {
+              async collectionRead(tx, binding, request) {
+                readTraces.push(
+                  (await tx.query(
+                    "SELECT (SELECT count(*) FROM events) AS events, (SELECT count(*) FROM owner_receipts) AS receipts",
+                  )).rows[0],
+                );
+                assert.equal(binding.kind, kind);
+                assert.equal(binding.assignment.namespace, "space");
+                assert.equal(request.collectionAlias, "notes");
+                bindings.push(
+                  "placement" in binding.assignment
+                    ? binding.assignment.placement
+                    : "worker",
+                );
+                return { where: { title: "visible" } };
+              },
+            },
+          });
+          try {
+            assert.equal(
+              await f.facade.actions.work("read", {
+                operationKey: `reads-${kind}-${placement}`,
+              }),
+              "done",
+            );
+            await eventually(() => readCompleted);
+            assert.deepEqual([...new Set(bindings)], [placement]);
+            assert.equal(readTraces.length, 12);
+            for (let i = 0; i < readTraces.length; i += 2) {
+              assert.deepEqual(readTraces[i], readTraces[i + 1]);
+            }
+            assert.equal(
+              (await f.db.query(
+                "SELECT key FROM owner_receipts WHERE kind='collections.read'",
+              )).rows.length,
+              0,
+            );
+            assert.deepEqual(f.errors, []);
+          } finally {
+            await f.close();
+          }
+        },
+      );
+    }
+  }
+}
+
+for (const mode of ["in-process", "websocket"] as const) {
+  for (const placement of ["owner-local", "worker"] as const) {
+    for (
+      const denial of [
+        "missing-policy",
+        "changed-scope",
+        "last-policy-revocation",
+        "foreign-cursor",
+      ] as const
+    ) {
+      test(
+        `ordinary Collection read refuses ${denial} / ${placement} / ${mode}`,
+        { skip: !sourceRoot },
+        async () => {
+          let ctxGranted = true,
+            policyCalls = 0,
+            disclosed = false,
+            caught = false;
+          const registry = createPluginRegistry({
+            collections: { notes },
+            actions: {
+              idle: defineAction({ id: "fixture.idle", execute: () => null }),
+              work: defineAction({
+                id: "fixture.local",
+                inputSchema: { type: "string" } as const,
+                async execute(_value: string, ctx: ActionContext) {
+                  await ctx.transaction(({ collections }) => {
+                    collections.notes.create({
+                      id: "private",
+                      title: "private",
+                    });
+                    collections.notes.create({
+                      id: "visible",
+                      title: "visible",
+                    });
+                  }, { operationKey: "seed" });
+                  try {
+                    await ctx.collections.notes.list(
+                      denial === "foreign-cursor" ? { after: "private" } : {},
+                    );
+                    disclosed = true;
+                  } catch {
+                    caught = true;
+                  }
+                  return "caught";
+                },
+              }),
+            },
+          });
+          const f = await fixture({
+            registry,
+            mode,
+            callWaitMs: 5000,
+            local: localOptions({
+              actionIds: placement === "owner-local"
+                ? ["fixture.local"]
+                : ["fixture.idle"],
+              policy: {
+                grants: () => ({ ctx: ctxGranted, settlement: true }),
+                input() {},
+                collections: () => ({}),
+              },
+            }),
+            policy: {
+              worker: () => ({ ctx: ctxGranted, settlement: true }),
+              ...(denial === "missing-policy" ? {} : {
+                collectionRead() {
+                  policyCalls++;
+                  if (
+                    policyCalls === 2 && denial === "last-policy-revocation"
+                  ) ctxGranted = false;
+                  return policyCalls === 2 && denial === "changed-scope"
+                    ? {}
+                    : { where: { title: "visible" } };
+                },
+              }),
+            },
+          });
+          try {
+            await assert.rejects(
+              f.facade.actions.work("read", { operationKey: `deny-${denial}` }),
+            );
+            assert.equal(caught, true);
+            assert.equal(disclosed, false);
+            assert.equal(
+              policyCalls,
+              denial === "missing-policy"
+                ? 0
+                : denial === "foreign-cursor"
+                ? 1
+                : 2,
+            );
+            assert.equal(
+              (await f.db.query(
+                "SELECT key FROM owner_receipts WHERE kind='collections.read'",
+              )).rows.length,
+              0,
+            );
+          } finally {
+            await f.close();
+          }
+        },
+      );
+    }
+  }
+}
+
+for (const mode of ["in-process", "websocket"] as const) {
+  for (const placement of ["owner-local", "worker"] as const) {
+    test(
+      `ordinary Processor read closes final event-policy grant window / ${placement} / ${mode}`,
+      { skip: !sourceRoot },
+      async () => {
+        let ctxGranted = true,
+          readPolicies = 0,
+          disclosed = false,
+          caught = false;
+        const registry = createPluginRegistry({
+          collections: { notes },
+          actions: {
+            work: defineAction({
+              id: "fixture.local",
+              inputSchema: { type: "string" } as const,
+              async execute(_value: string, ctx: ActionContext) {
+                await ctx.transaction(
+                  ({ collections }) =>
+                    collections.notes.create({
+                      id: "trigger",
+                      title: "visible",
+                    }),
+                  { operationKey: "seed" },
+                );
+                return "done";
+              },
+            }),
+          },
+          processors: {
+            read: defineProcessor({
+              id: "fixture.read",
+              on: [{ eventType: "local_note.created" }],
+              async handle(_event, ctx: ProcessorContext) {
+                try {
+                  await ctx.collections.notes.get({ id: "trigger" });
+                  disclosed = true;
+                } catch {
+                  caught = true;
+                }
+              },
+            }),
+          },
+        });
+        const eventPolicy = () => {
+          if (readPolicies === 2) ctxGranted = false;
+        };
+        const f = await fixture({
+          registry,
+          mode,
+          ...(placement === "owner-local"
+            ? {
+              processors: {
+                processorIds: ["fixture.read"],
+                policy: {
+                  grants: () => ({ ctx: ctxGranted, settlement: true }),
+                  event: eventPolicy,
+                  collections: () => ({}),
+                },
+                createCapabilities: () => ({ resources: {}, adapters: {} }),
+              },
+            }
+            : {}),
+          policy: {
+            worker: () => ({ ctx: ctxGranted, settlement: true }),
+            processorEvent: eventPolicy,
+            collectionRead() {
+              readPolicies++;
+              return {};
+            },
+          },
+        });
+        const run = outcome(
+          f.facade.actions.work("read", { operationKey: "event-window" }),
+        );
+        try {
+          await eventually(() => caught || disclosed);
+          assert.equal(
+            disclosed,
+            false,
+            "final event policy must not disclose with its stale ctx grant",
+          );
+          assert.equal(caught, true);
+        } finally {
+          await f.close();
+          await run;
+        }
+      },
+    );
+  }
+}
+
+for (const mode of ["in-process", "websocket"] as const) {
+  for (const kind of ["action", "processor"] as const) {
+    test(
+      `ordinary local ${kind} read keeps raw COMMIT acknowledgement charged through close / ${mode}`,
+      { skip: !sourceRoot },
+      async () => {
+        const release = deferred();
+        let held = false, disclosed = false, closed = false;
+        const read = async (ctx: ActionContext | ProcessorContext) => {
+          try {
+            await ctx.collections.notes.get({ id: "trigger" });
+            disclosed = true;
+          } catch { /* private close still owns completion */ }
+        };
+        const registry = createPluginRegistry({
+          collections: { notes },
+          actions: {
+            work: defineAction({
+              id: "fixture.local",
+              inputSchema: { type: "string" } as const,
+              async execute(_value: string, ctx: ActionContext) {
+                await ctx.transaction(
+                  ({ collections }) =>
+                    collections.notes.create({
+                      id: "trigger",
+                      title: "visible",
+                    }),
+                  { operationKey: "seed" },
+                );
+                if (kind === "action") await read(ctx);
+                return "done";
+              },
+            }),
+          },
+          ...(kind === "processor"
+            ? {
+              processors: {
+                read: defineProcessor({
+                  id: "fixture.read",
+                  on: [{ eventType: "local_note.created" }],
+                  async handle(_event, ctx: ProcessorContext) {
+                    await read(ctx);
+                  },
+                }),
+              },
+            }
+            : {}),
+        });
+        const f = await fixture({
+          registry,
+          mode,
+          policy: { collectionRead: () => ({}) },
+          ...(kind === "processor"
+            ? {
+              processors: {
+                processorIds: ["fixture.read"],
+                policy: {
+                  grants: () => ({ ctx: true, settlement: true }),
+                  event() {},
+                  collections: () => ({}),
+                },
+                createCapabilities: () => ({ resources: {}, adapters: {} }),
+              },
+            }
+            : {}),
+          session(db) {
+            return {
+              ...db,
+              async transaction(run) {
+                let reading = false;
+                const result = await db.transaction((tx) =>
+                  run({
+                    query(sql, params) {
+                      if (sql.includes("AS bounded_value")) reading = true;
+                      return tx.query(sql, params);
+                    },
+                  })
+                );
+                // The actual COMMIT happened; only its raw acknowledgement is held.
+                if (reading && !held) {
+                  held = true;
+                  await release.promise;
+                }
+                return result;
+              },
+            };
+          },
+        });
+        const running = outcome(
+          f.facade.actions.work("read", { operationKey: "held-read" }),
+        );
+        try {
+          await eventually(() => held);
+          const closing = f.host.close().then(() => {
+            closed = true;
+          });
+          await new Promise((resolve) => setTimeout(resolve, 20));
+          assert.equal(closed, false);
+          assert.equal(disclosed, false);
+          // Independent SQL observation; the serialized owner pump is still held.
+          assert.equal(
+            (await f.db.query(
+              "SELECT key FROM owner_receipts WHERE kind='collections.read'",
+            )).rows.length,
+            0,
+          );
+          release.resolve();
+          await closing;
+          assert.equal(disclosed, false);
+        } finally {
+          release.resolve();
+          await f.close();
+          await running;
+        }
+      },
+    );
+  }
+}

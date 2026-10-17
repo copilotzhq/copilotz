@@ -20,6 +20,7 @@ import type { RegisteredProcessorInvocation } from "../execution/registered-invo
 import { ownerAssignmentKey } from "./assignments.ts";
 import {
   assertOwnerAttemptCaller,
+  ownerAssignmentFacts,
   ownerAttemptIsLive,
   ownerEventCommitForAttempt,
 } from "./attempt-authority.ts";
@@ -523,7 +524,7 @@ export function createOwnerProcessorCommands(
     if (!value) refuse("Processor handler requires boundary authorization.");
     return value;
   }
-  async function projectData(tx: SqlExecutor, state: Authorized, time: string) {
+  async function readData(tx: SqlExecutor, state: Authorized) {
     const payload = matchDataFromPayload(state.event.payload);
     const data = json(
       payload === undefined
@@ -539,6 +540,10 @@ export function createOwnerProcessorCommands(
     if (!matchProcessor(state.processor, state.event, data)) {
       refuse("Processor no longer matches its assigned event.");
     }
+    return data;
+  }
+  async function projectData(tx: SqlExecutor, state: Authorized, time: string) {
+    const data = await readData(tx, state);
     await options.authorizeEvent(
       tx,
       structuredClone(state.assignment),
@@ -547,6 +552,25 @@ export function createOwnerProcessorCommands(
       time,
     );
     return data;
+  }
+  async function recheckWorker(
+    tx: SqlExecutor,
+    caller: OwnerCaller,
+    time: string,
+    state: Authorized,
+    data: OwnerJson,
+    mode: "claim" | "input" | "mutation",
+  ) {
+    // Re-resolve grants after event policy without recursively invoking it.
+    // Then reread durable facts and the separately stored event body.
+    const after = await current(tx, caller, time, mode);
+    if (
+      exact(ownerAssignmentFacts(after.assignment)) !==
+        exact(ownerAssignmentFacts(state.assignment)) ||
+      exact(after.delivery) !== exact(state.delivery) ||
+      exact(after.event) !== exact(state.event) ||
+      exact(await readData(tx, after)) !== exact(data)
+    ) refuse("Processor state changed across authorization.");
   }
   type LocalRead = Readonly<{
     delivery: EventDelivery;
@@ -560,6 +584,7 @@ export function createOwnerProcessorCommands(
     snapshot: string;
   }>;
   type LocalAuthorized = Readonly<{
+    data?: OwnerJson;
     assignment: OwnerLocalProcessorAssignment;
     read: LocalRead;
     phase: LocalPhase;
@@ -769,12 +794,7 @@ export function createOwnerProcessorCommands(
       (read.cancelled && phase !== "settlement")
     ) refuse("Local Processor attempt, grant or ordinal is no longer live.");
   }
-  async function localData(
-    tx: SqlExecutor,
-    a: OwnerLocalProcessorAssignment,
-    read: LocalRead,
-    time: string,
-  ) {
+  async function readLocalData(tx: SqlExecutor, read: LocalRead) {
     const payload = matchDataFromPayload(read.event.payload);
     const data = json(
       payload === undefined
@@ -789,6 +809,15 @@ export function createOwnerProcessorCommands(
     if (!matchProcessor(read.processor, read.event, data)) {
       refuse("Local Processor no longer matches its source.");
     }
+    return data;
+  }
+  async function localData(
+    tx: SqlExecutor,
+    a: OwnerLocalProcessorAssignment,
+    read: LocalRead,
+    time: string,
+  ) {
+    const data = await readLocalData(tx, read);
     await local!.authorizeEvent(
       tx,
       structuredClone(a),
@@ -796,21 +825,6 @@ export function createOwnerProcessorCommands(
       structuredClone(data),
       time,
     );
-    // Bodies are separate SQL records. A policy await must not authorize one
-    // captured body and then release/claim another, even within this transaction.
-    if (payload === undefined) {
-      const after = json(
-        await readEventBody(
-          { transaction: tx, tables },
-          read.event.namespace,
-          eventDataRef(read.event.payload),
-        ),
-      );
-      assertOwnerOrdinaryValue(after);
-      if (exact(after) !== exact(data)) {
-        refuse("Local Processor body changed across authorization.");
-      }
-    }
     return data;
   }
   async function currentLocal(
@@ -838,14 +852,39 @@ export function createOwnerProcessorCommands(
     tx: SqlExecutor,
     caller: OwnerCaller,
     time: string,
-    state: Pick<LocalAuthorized, "assignment" | "read" | "phase">,
+    state: Pick<LocalAuthorized, "assignment" | "read" | "phase" | "data">,
   ) {
+    if (state.phase !== "start") {
+      const found = await local!.resolveAssignment(
+        tx,
+        structuredClone(caller),
+        time,
+      );
+      if (!found) refuse("Local Processor assignment is no longer current.");
+      const actual = localAssignment(found);
+      if (
+        (state.phase === "ctx"
+            ? actual.ctxGranted
+            : actual.settlementGranted) !== true ||
+        exact(ownerAssignmentFacts(actual)) !==
+          exact(ownerAssignmentFacts(state.assignment))
+      ) {
+        refuse("Local Processor grants changed across authorization.");
+      }
+    }
     const read = await readLocal(tx, bindingOf(state.assignment), time);
     if (read.snapshot !== state.read.snapshot) {
       refuse("Local Processor state changed across authorization.");
     }
     if (state.phase !== "start") {
       liveLocal(read, state.assignment, state.phase);
+    }
+    if (
+      state.phase !== "settlement" &&
+      (state.data === undefined ||
+        exact(await readLocalData(tx, read)) !== exact(state.data))
+    ) {
+      refuse("Local Processor body changed across authorization.");
     }
     privateCurrent(caller, state.assignment, state.phase);
     return read;
@@ -922,7 +961,10 @@ export function createOwnerProcessorCommands(
       state.read,
       context.commandTime,
     );
-    await recheckLocal(context.tx, context.caller, context.commandTime, state);
+    await recheckLocal(context.tx, context.caller, context.commandTime, {
+      ...state,
+      data,
+    });
     const a = state.assignment, read = state.read;
     const value: OwnerLocalProcessorProjection = {
       reference: bindingOf(a),
@@ -1078,7 +1120,11 @@ export function createOwnerProcessorCommands(
       : command.kind === "processor.local-input"
       ? "ctx"
       : "settlement";
-    let state: { assignment: OwnerLocalProcessorAssignment; read: LocalRead };
+    let state: {
+      assignment: OwnerLocalProcessorAssignment;
+      read: LocalRead;
+      data?: OwnerJson;
+    };
     if (start) {
       const binding = localBinding(command.intent);
       if (
@@ -1131,7 +1177,7 @@ export function createOwnerProcessorCommands(
         },
         read,
       };
-      await localData(tx, state.assignment, read, time);
+      state.data = await localData(tx, state.assignment, read, time);
     } else {
       state = await currentLocal(
         tx,
@@ -1157,7 +1203,7 @@ export function createOwnerProcessorCommands(
         refuse("Local Processor projection identity is invalid.");
       }
       if (phase === "ctx") {
-        await localData(tx, state.assignment, state.read, time);
+        state.data = await localData(tx, state.assignment, state.read, time);
       }
     }
     await recheckLocal(tx, caller, time, { ...state, phase });
@@ -1178,7 +1224,15 @@ export function createOwnerProcessorCommands(
 
   const claim: OwnerCommandHandler = async (_intent, context) => {
     const state = bound(context.tx);
-    await projectData(context.tx, state, context.commandTime);
+    const data = await projectData(context.tx, state, context.commandTime);
+    await recheckWorker(
+      context.tx,
+      context.caller,
+      context.commandTime,
+      state,
+      data,
+      "claim",
+    );
     const delivery = await runtime(context).claimDelivery({
       id: state.delivery.id,
       owner: state.assignment.dispatchAttemptId,
@@ -1210,6 +1264,14 @@ export function createOwnerProcessorCommands(
   const project: OwnerProjectionHandler = async (_intent, context) => {
     const state = bound(context.tx);
     const data = await projectData(context.tx, state, context.commandTime);
+    await recheckWorker(
+      context.tx,
+      context.caller,
+      context.commandTime,
+      state,
+      data,
+      "input",
+    );
     return json({
       processorId: state.processor.id,
       ownerId: options.ownerId,
@@ -1310,20 +1372,21 @@ export function createOwnerProcessorCommands(
     ) {
       localAuthorized.delete(tx);
       const state = await currentLocal(tx, caller, time, "ctx");
-      await localData(tx, state.assignment, state.read, time);
-      await recheckLocal(tx, caller, time, { ...state, phase: "ctx" });
+      const data = await localData(tx, state.assignment, state.read, time);
+      await recheckLocal(tx, caller, time, { ...state, phase: "ctx", data });
       return {
         assignment: state.assignment,
         delivery: state.read.delivery,
         event: state.read.event,
       };
     },
-    /** Host composes Collection/nested-Action policy after this fresh lease fence. */
+    /** Host composes Collection/nested-Action policy after this live attempt fence. */
     async authorizeLive(tx: SqlExecutor, caller: OwnerCaller, time: string) {
       const state = await current(tx, caller, time, "mutation");
       // Current event policy also gates dependent writes and child admission,
       // including receipt replay. Settlement remains separately authorized.
-      await projectData(tx, state, time);
+      const data = await projectData(tx, state, time);
+      await recheckWorker(tx, caller, time, state, data, "mutation");
       return {
         assignment: state.assignment,
         delivery: state.delivery,

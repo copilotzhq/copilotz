@@ -65,6 +65,7 @@ export type RegisteredLocalActionPort = Readonly<{
   effects?: OwnerEffectPort;
   invokeAction?: RegisteredInvocationCalls["invokeAction"];
   prepareAction?: RegisteredInvocationCalls["prepareAction"];
+  readCollection?: RegisteredInvocationCalls["readCollection"];
   /** Synchronously stop new invocation registrations, retaining only narrowly
    * authorized already-admitted settlement and driver terminal/state calls. */
   sealInvocationCalls(): void;
@@ -251,6 +252,7 @@ export function createRegisteredLocalActionExecution(
   const execute = owner.execute.bind(owner);
   const invokeAction = owner.invokeAction?.bind(owner);
   const prepareAction = owner.prepareAction?.bind(owner);
+  const readCollection = owner.readCollection?.bind(owner);
   const settlementState = owner.settlementState.bind(owner);
   const complete = owner.complete.bind(owner);
   const seal = owner.sealInvocationCalls.bind(owner);
@@ -499,6 +501,12 @@ export function createRegisteredLocalActionExecution(
                 exposedSignal: exposed.signal,
               },
               calls: {
+                ...(readCollection
+                  ? {
+                    readCollection: (input, callOptions) =>
+                      call(() => readCollection(snapshot(input), callOptions)),
+                  }
+                  : {}),
                 ...(prepareAction
                   ? {
                     prepareAction: (input, callOptions) =>

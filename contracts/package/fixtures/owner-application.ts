@@ -78,6 +78,7 @@ export async function ownerApplicationFixture(
       session,
       initialization: "fresh",
       policy: {
+        collectionRead: () => ({}),
         ingress: (_tx, { fence }) =>
           ["embedded", "remote"].includes(fence.identity.workerId)
             ? {

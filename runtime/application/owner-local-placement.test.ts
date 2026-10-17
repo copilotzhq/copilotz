@@ -125,6 +125,7 @@ function fixture() {
     ownerEpoch: 1,
     privateHostControl: "real-host-control-witness",
   };
+  let currentHook: (() => void) | undefined;
   let beforeStart: (() => void) | undefined;
   let afterAuthorize: (() => void) | undefined;
   let authorize = true;
@@ -170,6 +171,7 @@ function fixture() {
     capacity: shared,
     maxEntries: 10,
     isCurrent() {
+      currentHook?.();
       if (current instanceof Error) throw current;
       return current as boolean;
     },
@@ -207,6 +209,9 @@ function fixture() {
     authenticate,
     start(entry: OwnerLocalPlacementEntry) {
       return entry.executeStart(entry.controlCaller, command());
+    },
+    onCurrent(callback: () => void) {
+      currentHook = callback;
     },
     setCurrent(value: unknown) {
       current = value;
@@ -1086,4 +1091,13 @@ test("local placement raw rejection after an alarm-only scan closes that classif
   await assert.rejects(pending);
   assert.equal(f.controller.classifyNullLease(ctx, evidence()), undefined);
   assert.equal(f.stats().releases, 0);
+});
+
+test("local placement rechecks revocation after the owner current callback", async () => {
+  const f = fixture();
+  const entry = f.reserve();
+  await started(f, entry);
+  f.onCurrent(() => entry.revoke(new Error("revoked during current check")));
+  assert.equal(f.controller.resolveCurrentLocal(entry.localCaller), undefined);
+  assert.equal(f.stats().revokes, 1);
 });

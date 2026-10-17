@@ -244,8 +244,13 @@ export function createOwnerLocalPlacementController(
       caller: canonical(localCaller),
       startCaller: canonical(controlCaller),
       revoke: (reason) => revoke(reason),
-      current: () =>
-        !revoked && !state.quarantined && !state.released && current(),
+      current: () => {
+        if (revoked || state.quarantined || state.released || !current()) {
+          return false;
+        }
+        // The owner callback can synchronously revoke or quarantine this entry.
+        return !revoked && !state.quarantined && !state.released;
+      },
       rawPending: false,
       startKnown: false,
       startObserved: false,

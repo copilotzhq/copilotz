@@ -487,3 +487,15 @@ to ordinary Action terminal semantics. Independent36 connection cases pass,
 including queued revocation, forged route/constraints and unknown admission
 without retries. Final principal/route-policy and public facade composition
 remain separate work.
+
+### Durable dispatch bridge
+
+The private host bridge waits for known durable assignment binding before Open,
+keeps bounded scheduled-reference and call-witness maps, and revokes authority
+synchronously on cancellation/completion. Only Oxian's validated live Started
+reverse-call admission establishes a call witness; the earlier onStart callback
+cannot grant execution. Current exact session/owner/full binding is checked in
+SQL. Unknown binds stop the owner, and unresolved retirement stays visible and
+charged for authoritative recovery. Nineteen independently reviewed table/port
+cases and six unchanged architecture checks pass. Actual transport drop-Start
+and assembled owner-host readiness remain the next integration proofs.

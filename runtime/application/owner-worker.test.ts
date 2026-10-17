@@ -3,11 +3,11 @@ import { test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { createOwnerConnectedWorker } from "./owner-worker.ts";
 import { createPluginRegistry } from "../plugins/registry.ts";
-import type {
-  createWorker,
-  WorkerLifecycleCallbacks,
-} from "../../dependencies/oxian-worker.ts";
 import type { OwnerHostCaller } from "../owner/connection.ts";
+type WorkerFactory = NonNullable<
+  Parameters<typeof createOwnerConnectedWorker>[1]
+>;
+type WorkerLifecycleCallbacks = Parameters<WorkerFactory>[1];
 function deferred<T = void>() {
   let resolve!: (v: T) => void;
   let reject!: (e: unknown) => void;
@@ -27,7 +27,7 @@ function fixture(childWaitMs?: number) {
     response: ReturnType<typeof deferred<Awaited<ReturnType<OwnerHostCaller>>>>;
   }[] = [];
   const factory = ((
-    _options: Parameters<typeof createWorker>[0],
+    _options: Parameters<WorkerFactory>[0],
     callbacks: WorkerLifecycleCallbacks,
   ) => {
     lifecycle = callbacks!;
@@ -45,7 +45,7 @@ function fixture(childWaitMs?: number) {
         return response.promise;
       },
     };
-  }) as unknown as typeof createWorker;
+  }) as unknown as WorkerFactory;
   const worker = createOwnerConnectedWorker({
     registry: createPluginRegistry({}),
     ownerId: "owner",
@@ -127,7 +127,7 @@ test("private child wait timeout is bounded before worker transport creation", a
     const factory = (() => {
       opened = true;
       throw new Error("Unexpected transport construction.");
-    }) as unknown as typeof createWorker;
+    }) as unknown as WorkerFactory;
     assert.throws(() =>
       createOwnerConnectedWorker({
         registry: createPluginRegistry({}),

@@ -87,9 +87,21 @@ async function invokedInputRef(
 
 export function createActionLifecycleAppender(
   options:
-    & Readonly<{ coordinator: EventCoordinator }>
+    & Readonly<{
+      coordinator: EventCoordinator;
+      /** Trusted owner-boundary clock for delivery authority; defaults to SQL NOW(). */
+      commandTime?: string;
+    }>
     & ActionLifecyclePersistenceOptions,
 ): ActionLifecycleAppender {
+  const commandTime = options.commandTime;
+  if (
+    commandTime !== undefined &&
+    (typeof commandTime !== "string" ||
+      !Number.isFinite(Date.parse(commandTime)))
+  ) {
+    throw new TypeError("Action commandTime must be a valid timestamp.");
+  }
   return async ({ draft, data }) => {
     const deduplicationId = draft.deduplicationId?.trim();
     if (!deduplicationId) {
@@ -158,6 +170,7 @@ export function createActionLifecycleAppender(
                 options.writer,
                 tables,
                 param,
+                commandTime,
               ),
               ...(inStatement
                 ? [composeActionInputRetention(retention!, tables, param)]

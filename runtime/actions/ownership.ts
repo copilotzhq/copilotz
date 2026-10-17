@@ -21,7 +21,16 @@ export function actionOwnershipStatement(
   writer: ActionWriter | undefined,
   tables: Readonly<Record<CoreTableName, string>>,
   param: (value: unknown) => string,
+  /** Trusted boundary-captured clock, never a worker-supplied value. */
+  commandTime?: string,
 ): EventStatement<void> {
+  if (
+    commandTime !== undefined &&
+    (typeof commandTime !== "string" ||
+      !Number.isFinite(Date.parse(commandTime)))
+  ) {
+    throw new TypeError("Action commandTime must be a valid timestamp.");
+  }
   const { data, draft } = input;
   if (data.status === "deferred" && writer?.kind !== "delivery") {
     throw new TypeError("Deferred Actions require a durable delivery owner.");
@@ -56,7 +65,11 @@ export function actionOwnershipStatement(
       writer.kind === "delivery"
         ? `status = 'leased' AND lease_owner = ${
           param(writer.leaseOwner)
-        } AND lease_expires_at > NOW()`
+        } AND lease_expires_at > ${
+          commandTime === undefined
+            ? "NOW()"
+            : `${param(commandTime)}::timestamptz`
+        }`
         : "status IN ('dead_letter', 'cancelled', 'succeeded')"
     }
       FOR UPDATE

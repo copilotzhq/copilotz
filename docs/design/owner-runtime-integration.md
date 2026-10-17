@@ -264,3 +264,9 @@ Processor dispatch, public factory or default HTTP execution. Its capacity is a
 worker-lifetime assignment bound including completed entries and ambiguous
 attempts; a full instance requires host-coordinated recovery/replacement, rather
 than silently recycling unresolved execution identities.
+
+Owner-backed lifecycle insertion can pass the captured command timestamp through
+`createActionLifecycleAppender` into its existing delivery lease predicate.
+Legacy callers retain their database-time behavior. Receipt replay still needs
+current assignment/lease authorization before deduplication; insertion-time
+ownership checks alone do not authorize replay.

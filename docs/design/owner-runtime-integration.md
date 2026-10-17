@@ -413,3 +413,15 @@ conflicting outcomes, forged evidence and revocation-safe settlement. The pure
 worker client has no persistence runtime imports. Action context/reconcile
 integration, provider conversion and effect-aware lost-delivery recovery remain
 subsequent gates.
+
+### Authorized Action results
+
+Current-authorized projections read original admission and lifecycle data
+through the owner transaction without adding receipts. Distinct internal
+purposes preserve three waiting boundaries: ordinary Action calls wait for their
+terminal receipt, HTTP results additionally wait for that Action's own streams,
+and operation results wait for authoritative catalog settlement. Sixteen
+independently reviewed actual- table cases cover exact source/run/delivery
+binding, current policy, cancellation, rollback and historical
+protected/content-shaped value refusal. Production ingress and facade wiring
+remain pending; projection never infers operation completion.

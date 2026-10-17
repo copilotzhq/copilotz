@@ -1,6 +1,6 @@
 # Owner, worker and Views implementation checklist
 
-Updated: 17 October 2026, 21:12 UTC.
+Updated: 17 October 2026, 21:39 UTC.
 
 This is the maintained coordination checklist for
 [Copilotz PR #93](https://github.com/copilotzhq/copilotz/pull/93). It tracks
@@ -20,6 +20,7 @@ production-ready. All changes remain draft: **no merge or publication**.
 | Reference-test reliability           | Reviewed correction     | 137 affected cases, independent 29-case check and three complete pipeline repeats passed                                 |
 | Local Processor host generations     | Reviewed checkpoint     | PostgreSQL 14 host plus two caller-facing helper cases pass; fresh same-owner retry scope complete                       |
 | Ordinary registered Collection reads | Reviewed checkpoint     | PostgreSQL SQL43/Processor 53, final canonical 252, invocation222 and role 12 pass; public snapshot/content gates remain |
+| Shared SQL transaction lifetime      | Reviewed prerequisite   | Ominipg 65 cases, Copilotz 31 plus five steps, four cleanup probes; owner snapshot activation remains gated              |
 | Architecture cleanup                 | In progress             | Shared local-port bookkeeping consolidated; migrate callers and retire superseded paths next                             |
 
 The approved [lease-free owner attempt contract](owner-attempt-authority.md) is
@@ -101,6 +102,15 @@ cover late Processor grant/body changes, protected aggregate/cursor sources, SQL
 error disclosure and independent ctx/settlement grants. This is scoped
 acceptance, not a new full-suite or public/history activation claim.
 
+The [shared transaction lifetime prerequisite](owner-snapshot-prerequisites.md)
+now has passing independent scoped gates: Ominipg 65, Copilotz 31 plus five
+steps, and four cleanup probes. One lifecycle replaces duplicated PGlite/pooled
+callback handling. Unknown BEGIN cleanup, retained executors, raw query drain
+and failed rollback are covered; the review-found early public-close defect and
+initial dependency/typecheck setup failures are preserved. Canonical CI
+node-modules mode passes Drizzle without weakening its test. This dependency
+work remains in Ominipg PR #4 with published pins unchanged.
+
 The next snapshot prerequisite must preserve F5 isolation and default PGlite
 behavior: PostgreSQL has separate pooled transactions, while PGlite serializes
 its single engine. No weaker snapshot fallback or hidden external-database
@@ -128,6 +138,9 @@ what it simplifies and eliminates before adding machinery.
       and event sequences
 - [x] Placement-independent logical mutation identity and local callback return
       semantics
+- [x] Shared SQL transaction lifetime prerequisite: unknown BEGIN cleanup,
+      callback executor sealing and raw drain, with fail-closed rollback and
+      public close drain; registered snapshots remain unavailable
 - [x] Actual worker Action/Processor/Collection/child-Action flow
 - [x] Current authority, assignment/claim, connection lifetime, cancellation and
       terminal settlement boundaries

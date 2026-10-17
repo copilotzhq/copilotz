@@ -284,6 +284,7 @@ export function createOwnerConnection(
     signal.addEventListener("abort", onAbort, { once: true });
     if (signal.aborted) onAbort();
     let handle: Awaited<ReturnType<OwnerHostCaller>> | undefined;
+    let transportComplete = false;
     try {
       const opening = callHost({
         workload,
@@ -310,6 +311,7 @@ export function createOwnerConnection(
         ]),
       );
       await Promise.race([handle.completed, aborted]);
+      transportComplete = true;
       if (reply.ok === false && typeof reply.code === "string") {
         throw new OwnerCallRejected(
           reply.code,
@@ -321,8 +323,12 @@ export function createOwnerConnection(
       }
       return reply.value;
     } catch (error) {
-      controller.abort(error);
-      void handle?.cancel("owner call failed").catch(() => undefined);
+      // A decoded application refusal after terminal completion needs no wire
+      // cancellation; a late Cancel can target an already retired stream.
+      if (!transportComplete) {
+        controller.abort(error);
+        void handle?.cancel("owner call failed").catch(() => undefined);
+      }
       throw error;
     } finally {
       callOptions.signal?.removeEventListener("abort", abort);

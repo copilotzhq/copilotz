@@ -629,7 +629,8 @@ test("client preserves owner unknown outcomes and does not automatically retry",
       error.code === "owner_commit_unknown" && error.outcome === "unknown",
   );
   assert.equal(calls, 1);
-  assert.equal(cancellations, 1);
+  // The transport ended successfully even though the owner outcome is unknown.
+  assert.equal(cancellations, 0);
 });
 
 test("client preserves indeterminate transport loss without retry after output EOF", async () => {
@@ -887,4 +888,35 @@ test("host and client codec envelopes accept boundary-compatible JSON depth and 
     assert.equal(actual.status, "committed");
     assert.deepEqual(actual.result, result);
   }
+});
+
+test("completed owner refusal does not abort or cancel the terminal transport", async () => {
+  let cancelled = 0;
+  let forwarded: AbortSignal | undefined;
+  const client = createOwnerConnection({
+    ownerId: "tenant",
+    callHost(input) {
+      forwarded = input.signal;
+      return Promise.resolve({
+        output: stream({
+          ok: false,
+          outcome: "refused",
+          code: "owner_intent_conflict",
+        }),
+        completed: Promise.resolve(),
+        cancel() {
+          cancelled++;
+          return Promise.resolve();
+        },
+      });
+    },
+  });
+  await assert.rejects(
+    client.execute(request),
+    (error) =>
+      error instanceof OwnerCallRejected &&
+      error.code === "owner_intent_conflict",
+  );
+  assert.equal(cancelled, 0);
+  assert.equal(forwarded?.aborted, false);
 });

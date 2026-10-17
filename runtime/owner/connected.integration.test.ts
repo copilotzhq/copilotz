@@ -17,9 +17,10 @@ import {
 import { createDeliveryExecutor } from "../execution/index.ts";
 import { createTestProcessorContext } from "../testing/processor-context.ts";
 import { createTextRenderer, defineView } from "../views/index.ts";
-import { createOwnerCommandBoundary } from "./boundary.ts";
+import { createOwnerCommandBoundary, type OwnerCommand } from "./boundary.ts";
 import { createOwnerCollectionCommand } from "./collections.ts";
 import { provisionOwnerCommandSchema } from "./schema.ts";
+import { createOwnerTransactionPlanner } from "./transaction.ts";
 import {
   createOwnerConnection,
   createOwnerWorkerCallAdmission,
@@ -64,7 +65,7 @@ const notes = defineCollection({
 const root = process.env.COPILOTZ_OXIAN_SOURCE_ROOT;
 for (const transportKind of ["in-process", "websocket"]) {
   test(
-    `unpublished Oxian ${transportKind}: occupied worker commits Collection, publishes Processor, renders View and recovers receipt`,
+    `unpublished Oxian ${transportKind}: occupied worker plans Collection writes, replays local values, publishes Processor, renders View and recovers receipt`,
     {
       skip: !root,
       timeout: 30_000,
@@ -107,6 +108,10 @@ for (const transportKind of ["in-process", "websocket"]) {
       let renderCalls = 0;
       let projectionCalls = 0;
       let viewPrefix = "";
+      let planningCalls = 0;
+      const submittedPlans: OwnerCommand[] = [];
+      const reverseResponses: string[] = [];
+      const localOnlyMarker = "LOCAL_CALLBACK_VALUE";
       const observations: {
         eventId: string;
         records: number;
@@ -228,6 +233,10 @@ for (const transportKind of ["in-process", "websocket"]) {
           assert.equal(caller.connectionId, currentConnection);
           assert.equal(caller.invocation, "invocation");
           assert.equal(caller.namespace, "authorized-space");
+          assert.equal(
+            JSON.stringify(command).includes(localOnlyMarker),
+            false,
+          );
           assert.ok(
             command.key === `invocation:${command.kind}` ||
               (command.kind === "collections" &&
@@ -312,34 +321,103 @@ for (const transportKind of ["in-process", "websocket"]) {
         }),
         reconnectDelay: false,
         workloads: {
-          action: async ({ callHost }: { callHost: OwnerHostCaller }) => {
+          action: async ({ callHost, metadata }: {
+            callHost: OwnerHostCaller;
+            metadata: Readonly<Record<string, unknown>>;
+          }) => {
+            // Invocation identity comes from the host's assignment, and the
+            // owner independently authorizes it on every reverse command.
+            assert.equal(metadata.invocation, "invocation");
             const connection = createOwnerConnection({
               ownerId: "owner",
-              callHost,
+              async callHost(request) {
+                const handle = await callHost(request);
+                const decoder = new TextDecoder();
+                let response = "";
+                return {
+                  ...handle,
+                  output: handle.output.pipeThrough(
+                    new TransformStream<Uint8Array, Uint8Array>({
+                      transform(bytes, controller) {
+                        response += decoder.decode(bytes, { stream: true });
+                        controller.enqueue(bytes);
+                      },
+                      flush() {
+                        reverseResponses.push(response + decoder.decode());
+                      },
+                    }),
+                  ),
+                };
+              },
             });
-            const outcome = await connection.execute({
-              kind: "collections",
-              domain: "logical",
-              key: "invocation:collections",
-              intent: {
-                operations: ["a", "b"].map((id) => ({
-                  collection: "notes",
-                  operation: "create",
-                  input: {
+            const transaction = createOwnerTransactionPlanner({
+              collections: { notes },
+              identity: {
+                ownerId: "owner",
+                workerId: "worker",
+                invocationId: metadata.invocation,
+              },
+              execute(command, options) {
+                submittedPlans.push(structuredClone(command));
+                return connection.execute(command, options);
+              },
+            });
+            type LocalValue = {
+              marker: string;
+              fn: () => number;
+              ids: Map<string, string[]>;
+              self?: LocalValue;
+            };
+            let localValue: LocalValue | undefined;
+            const reversePlan = metadata.reversePlan === true;
+            const planned = transaction({
+              operationKey: "invocation:collections",
+              async execute({ collections }) {
+                const callback = ++planningCalls;
+                const ids = [];
+                for (const id of reversePlan ? ["b", "a"] : ["a", "b"]) {
+                  const ref = await collections.notes.create({
                     id,
                     title: `Note ${id}`,
                     privateMemo: `PRIVATE_FIXTURE_${id}`,
-                  },
-                })),
+                  });
+                  assert.deepEqual(ref, { id });
+                  ids.push(ref.id);
+                }
+                localValue = {
+                  marker: localOnlyMarker,
+                  fn: () => callback,
+                  ids: new Map([["planned", ids]]),
+                };
+                localValue.self = localValue;
+                return localValue;
               },
             });
+            if (reversePlan) {
+              await assert.rejects(planned, { code: "owner_intent_conflict" });
+              return new TextEncoder().encode(JSON.stringify({
+                conflict: "owner_intent_conflict",
+              }));
+            }
+            const { value, outcome } = await planned;
+            assert.equal(value, localValue);
+            assert.equal(value.self, value);
+            assert.ok(value.ids instanceof Map);
+            assert.throws(() => JSON.stringify(value), TypeError);
+            assert.equal(value.marker, localOnlyMarker);
             const view = await connection.execute({
               kind: "render",
               domain: "logical",
               key: "invocation:render",
               intent: {},
             });
-            return new TextEncoder().encode(JSON.stringify({ outcome, view }));
+            // Only explicit ordinary observations cross the workload stream.
+            // The cyclic callback T remains the exact worker-local object.
+            return new TextEncoder().encode(JSON.stringify({
+              outcome,
+              view,
+              local: { callback: value.fn(), ids: value.ids.get("planned") },
+            }));
           },
         },
       });
@@ -375,6 +453,11 @@ for (const transportKind of ["in-process", "websocket"]) {
           }
           const reply = await output;
           assert.equal(reply.outcome.status, status);
+          assert.deepEqual(reply.local, {
+            callback: status === "committed" ? 1 : 2,
+            ids: ["a", "b"],
+          });
+          assert.equal(planningCalls, status === "committed" ? 1 : 2);
           assert.equal(reply.view.status, status);
           assert.deepEqual(reply.view.result, { text: "a: Note a\nb: Note b" });
           assert.equal(
@@ -419,6 +502,52 @@ for (const transportKind of ["in-process", "websocket"]) {
             });
             viewPrefix = "replacement View: ";
           }
+        }
+        assert.deepEqual(submittedPlans[1], submittedPlans[0]);
+        const snapshot = async () => ({
+          nodes: (await db.query("SELECT * FROM nodes ORDER BY id")).rows,
+          events: (await db.query("SELECT * FROM events ORDER BY seq")).rows,
+          receipts:
+            (await db.query("SELECT * FROM owner_receipts ORDER BY key"))
+              .rows,
+          epochs: (await db.query("SELECT * FROM owner_epochs ORDER BY owner"))
+            .rows,
+          processorStarts,
+          projectionCalls,
+          renderCalls,
+        });
+        const beforeConflict = await snapshot();
+        const changed = await host.dispatch({
+          workload: "action",
+          metadata: { invocation: "invocation", reversePlan: true },
+          deadlineAtMs: Date.now() + 5000,
+        });
+        assert.deepEqual(await new Response(changed.output).json(), {
+          conflict: "owner_intent_conflict",
+        });
+        assert.equal((await changed.completed).status, "completed");
+        assert.equal(planningCalls, 3);
+        assert.equal(submittedPlans.length, 3);
+        const initialIntent = submittedPlans[0].intent as {
+          operations: unknown[];
+        };
+        assert.deepEqual(submittedPlans[2], {
+          ...submittedPlans[0],
+          intent: { operations: [...initialIntent.operations].reverse() },
+        });
+        assert.deepEqual(await snapshot(), beforeConflict);
+        assert.equal(
+          JSON.stringify(submittedPlans).includes(localOnlyMarker),
+          false,
+        );
+        assert.equal(
+          JSON.stringify(beforeConflict.receipts).includes(localOnlyMarker),
+          false,
+        );
+        assert.equal(reverseResponses.length, 5);
+        for (const response of reverseResponses) {
+          assert.equal(response.includes(localOnlyMarker), false);
+          assert.equal(response.includes("PRIVATE_FIXTURE"), false);
         }
         await within(
           observed.promise,

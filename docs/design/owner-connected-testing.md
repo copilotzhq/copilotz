@@ -80,10 +80,15 @@ characters, manifest/export/source validation, scoped imports, unchanged pins,
 child failures, termination and temporary-file cleanup. They also run under the
 existing repository test runner without adding Deno APIs to the tooling.
 
-The connected fixture verifies registered Collection writes on real PGlite
-tables, commit-gated output, a real postcommit Processor, authorized View
-projection, captured-text replay, receipts and capacity-one reverse calls. It
-does not prove a production HTTP/Action adapter, PostgreSQL crash recovery,
+The connected fixture uses the shared owner transaction planner for registered
+Collection writes over actual capacity-one reverse calls, on both transports. It
+verifies real PGlite tables, commit-gated output, a real postcommit Processor,
+authorized View projection, captured-text replay and receipts. Each attempt
+reruns the planning callback; its cyclic object containing a function and Map
+remains local, while only the ordered Collection plan reaches the owner. The
+same key replays the durable outcome, and reversing the same operations under
+that key fails with `owner_intent_conflict` without new effects. It does not
+prove a production HTTP/Action adapter, PostgreSQL crash recovery,
 published-package compatibility or complete authority coverage.
 
 The npm build/pack/link/reset workflow, Copilotz npm migration, and remaining

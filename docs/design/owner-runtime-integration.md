@@ -202,3 +202,19 @@ Content writers, snapshots, full readiness/reconciliation, cross-shard routing,
 live change repair, complete host-specific builds and live React rendering
 retain their separate obligations. A narrow Collection fixture is not phase
 completion.
+
+### Capability-only Action context seam
+
+The existing direct Action host and engine now share
+`runtime/actions/execution-context.ts` for invocation context assembly. Its
+executable dependency closure contains only that assembly, transaction identity
+composition and the private protected-event resolver attachment. Storage-related
+types are erased imports; no persistence constructor, SQL driver, Collection
+kernel or content storage implementation is loaded by this seam.
+
+This is a behavior-preserving prerequisite. The existing host and engine still
+own their previous persistence/lifecycle behavior. A database-free general
+worker must additionally supply owner-bound capabilities, named owner
+preparation, claim/lease/settlement authority and explicit refusals for
+capabilities that have not been converted. This extraction alone does not
+establish that worker or public embedded/connected parity.

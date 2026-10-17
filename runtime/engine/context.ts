@@ -13,7 +13,7 @@ import {
   type ActionTransactionOptions,
   createActionCallers,
 } from "../actions/index.ts";
-import { createActionInvocationContext } from "../actions/host.ts";
+import { createActionInvocationContext } from "../actions/execution-context.ts";
 import type { ProcessorContext } from "../plugins/index.ts";
 import type {
   CreateProcessorContextOptions,

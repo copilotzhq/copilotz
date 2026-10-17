@@ -25,8 +25,23 @@ export type OwnerCommitContext = Readonly<{
   holderId: string;
   commandTime: string;
 }>;
+/** Registered local normalization, never a caller-supplied digest or closure.
+ * Must only validate/canonicalize bounded data; no external I/O or effects. */
+export type OwnerCommandInputDefinition = Readonly<{
+  normalize(input: OwnerJson):
+    | Readonly<{ intent: OwnerJson; value: OwnerJson }>
+    | Promise<Readonly<{ intent: OwnerJson; value: OwnerJson }>>;
+}>;
+export type OwnerInputCommand = Readonly<{
+  kind: string;
+  domain: OwnerIdentityDomain;
+  key: string;
+  input: OwnerJson;
+}>;
 export type OwnerCommandContext = Readonly<{
   tx: SqlExecutor;
+  /** Present only for a registered input definition; never stored in receipts. */
+  input?: OwnerJson;
   caller: OwnerCaller;
   command: Readonly<Pick<OwnerCommand, "kind" | "domain" | "key">>;
   commandTime: string;
@@ -59,6 +74,7 @@ export type OwnerCommandBoundaryOptions = Readonly<{
   holderId: string;
   handlers: Readonly<Record<string, OwnerCommandHandler>>;
   projections?: Readonly<Record<string, OwnerProjectionHandler>>;
+  inputDefinitions?: Readonly<Record<string, OwnerCommandInputDefinition>>;
   /** Revalidate current assignment/session/execution authority under the owner
    * lock. Bind key to its stable invocation and semantic target (e.g. namespace)
    * on every call, including receipt duplicates; transient fences are not intent. */
@@ -67,6 +83,7 @@ export type OwnerCommandBoundaryOptions = Readonly<{
     caller: OwnerCaller,
     command: OwnerCommand,
     commandTime: string,
+    normalizedInput?: OwnerJson,
   ): void | Promise<void>;
   authenticateReceipt(
     tx: SqlExecutor,
@@ -89,6 +106,11 @@ export type OwnerCommandBoundary = Readonly<{
     command: OwnerCommand,
     options?: OwnerCommandExecuteOptions,
   ): Promise<OwnerCommandOutcome>;
+  executeInput(
+    caller: OwnerCaller,
+    command: OwnerInputCommand,
+    options?: OwnerCommandExecuteOptions,
+  ): Promise<OwnerCommandOutcome>;
   project(
     caller: OwnerCaller,
     kind: string,
@@ -104,6 +126,8 @@ export type OwnerCommandBoundary = Readonly<{
 
 type Pending = {
   projection: boolean;
+  inputCommand: boolean;
+  rawInput?: OwnerJson;
   caller: OwnerCaller;
   command: OwnerCommand;
   canonical: string;
@@ -296,6 +320,16 @@ export function createOwnerCommandBoundary(
   const tables = ownerTableNames(schema);
   const handlers = new Map(Object.entries(options.handlers));
   const projections = new Map(Object.entries(options.projections ?? {}));
+  const normalizers = new Map(
+    Object.entries(options.inputDefinitions ?? {}).map(([kind, definition]) =>
+      [kind, definition?.normalize] as const
+    ),
+  );
+  if (
+    [...normalizers].some(([kind, normalize]) =>
+      !handlers.has(kind) || typeof normalize !== "function"
+    )
+  ) throw new TypeError("Input definitions require a handler and normalizer.");
   if (
     [...projections.values()].some((handler) => typeof handler !== "function")
   ) {
@@ -474,6 +508,39 @@ export function createOwnerCommandBoundary(
                     "Caller owner epoch is stale.",
                   );
                 }
+                let normalizedInput: OwnerJson | undefined;
+                if (pending.inputCommand) {
+                  checkPendingAbort(pending);
+                  const normalized = await normalizers.get(
+                    pending.command.kind,
+                  )!(
+                    copyJson(pending.rawInput),
+                  );
+                  checkPendingAbort(pending);
+                  assertAcquired();
+                  if (!active) {
+                    throw failure("owner_command_closed", "Command is closed.");
+                  }
+                  if (
+                    !normalized || typeof normalized !== "object" ||
+                    Object.keys(normalized).length !== 2 ||
+                    !Object.hasOwn(normalized, "intent") ||
+                    !Object.hasOwn(normalized, "value")
+                  ) {
+                    throw failure(
+                      "owner_command_invalid",
+                      "Invalid normalized command input.",
+                    );
+                  }
+                  const intent = copyJson(normalized.intent);
+                  normalizedInput = copyJson(normalized.value);
+                  pending.command = { ...pending.command, intent };
+                  pending.canonical = canonicalJson({
+                    kind: pending.command.kind,
+                    intent,
+                  });
+                }
+                assertAcquired();
                 await authorize(
                   tx,
                   copyCaller(pending.caller),
@@ -482,6 +549,7 @@ export function createOwnerCommandBoundary(
                     intent: copyJson(pending.command.intent),
                   },
                   commandTime,
+                  pending.inputCommand ? copyJson(normalizedInput) : undefined,
                 );
                 checkPendingAbort(pending);
                 const receipt = pending.projection
@@ -519,6 +587,9 @@ export function createOwnerCommandBoundary(
                   };
                   const context: OwnerCommandContext = {
                     tx,
+                    ...(pending.inputCommand
+                      ? { input: copyJson(normalizedInput) }
+                      : {}),
                     caller: copyCaller(pending.caller),
                     command,
                     commandTime,
@@ -555,6 +626,7 @@ export function createOwnerCommandBoundary(
                     },
                   };
                   checkPendingAbort(pending);
+                  assertAcquired();
                   const result = copyJson(
                     pending.projection
                       ? await projections.get(pending.command.kind)!(
@@ -681,6 +753,7 @@ export function createOwnerCommandBoundary(
     command: OwnerCommand,
     execution: OwnerCommandExecuteOptions = {},
     projection = false,
+    inputCommand = false,
   ): Promise<OwnerCommandOutcome> {
     const sourceSignal = execution.signal;
     try {
@@ -697,6 +770,13 @@ export function createOwnerCommandBoundary(
           "Command kind is not registered.",
         );
       }
+      if (!projection && normalizers.has(command.kind) !== inputCommand) {
+        throw failure(
+          "owner_command_invalid",
+          "Command input route does not match its definition.",
+        );
+      }
+      const rawInput = inputCommand ? copyJson(command.intent) : undefined;
       const authenticated = copyCaller(caller);
       const copied: OwnerCommand = {
         kind: command.kind,
@@ -722,6 +802,8 @@ export function createOwnerCommandBoundary(
         const handlerController = new AbortController();
         const pending: Pending = {
           projection,
+          inputCommand,
+          rawInput,
           caller: authenticated,
           command: copied,
           canonical,
@@ -843,6 +925,19 @@ export function createOwnerCommandBoundary(
     },
     execute: (caller, command, execution) =>
       enqueue(caller, command, execution),
+    executeInput: (caller, command, execution) =>
+      enqueue(
+        caller,
+        {
+          kind: command.kind,
+          domain: command.domain,
+          key: command.key,
+          intent: command.input,
+        },
+        execution,
+        false,
+        true,
+      ),
     async project(caller, kind, input, execution) {
       const outcome = await enqueue(
         caller,

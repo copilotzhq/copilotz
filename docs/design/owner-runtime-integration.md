@@ -358,3 +358,16 @@ them. A reproduced timeout/abort race is latched as uncertainty rather than safe
 failure. Independent54 worker/mapper/actual-table cases and14 real sibling
 transport cases pass, including Actions longer than their original lease. This
 does not implement open-body renewal or effect-aware recovery.
+
+### Named input normalization boundary
+
+Private executeInput commands snapshot bounded payloads and run their registered
+normalizer inside the command savepoint before current authorization or receipt
+lookup. Caller-provided digests cannot bypass that definition. Authorization and
+the handler receive separate normalized snapshots; receipts store only the
+derived canonical intent and safe result. Plain execute refuses these kinds.
+Nine real-table tests cover payload mutation, current-policy duplicate checks,
+rollback, bounds, cancellation and owner stop during normalization. The stopped
+owner lifetime gap was reproduced before fixing. Existing boundary/connection
+compatibility passes59 cases. Root admission and its public transport remain
+separate integration work.

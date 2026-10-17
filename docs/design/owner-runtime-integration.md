@@ -270,3 +270,12 @@ Owner-backed lifecycle insertion can pass the captured command timestamp through
 Legacy callers retain their database-time behavior. Receipt replay still needs
 current assignment/lease authorization before deduplication; insertion-time
 ownership checks alone do not authorize replay.
+
+The private `copilotz.owner.complete` route is limited to logical
+`execution.complete` commands. Its current host assignment settlement grant is
+separate from the general context grant; parentless completion is refused. The
+boundary still revalidates current assignment/lease authority before replay. A
+data-only shared worker port maps fixed claim/input/completion operations and
+safe receipt recovery. It can recover a settled exact assignment from reference
+receipts, but an incomplete prior claim refuses execution rather than guessing
+whether business work previously ran. No SQL implementation enters this mapper.

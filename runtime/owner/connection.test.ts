@@ -453,6 +453,7 @@ async function fixture(
         }
       },
       handlers: {
+        "execution.complete": () => null,
         async put(intent, ctx) {
           await ctx.tx.query(
             "INSERT INTO nodes(id,namespace,type,name) VALUES($1,'test','note','note')",
@@ -1014,4 +1015,156 @@ test("projection adapter suppresses data if authority cancellation wins after re
     new TextDecoder().decode(response).includes("must not serialize"),
     false,
   );
+});
+
+test("restricted completion admission survives ctx revocation without granting other commands", async () => {
+  const calls: OwnerCommand[] = [];
+  const port = admission(
+    recordingBoundary({
+      execute(_caller, command) {
+        calls.push(command);
+        return Promise.resolve({
+          status: "committed",
+          result: { status: "completed" },
+        });
+      },
+    }),
+    {
+      resolveAssignment: () => ({
+        ownerId: "tenant",
+        ctxGranted: false,
+        settlementGranted: true,
+        caller,
+      }),
+    },
+  );
+  const completionContext = context({ workload: "copilotz.owner.complete" });
+  const handler = await port.admit(completionContext);
+  assert.ok(handler);
+  const complete = {
+    kind: "execution.complete",
+    domain: "logical",
+    key: "terminal",
+    intent: { status: "completed" },
+  };
+  assert.equal(
+    decode(
+      await handler({
+        input: stream(complete),
+        signal: completionContext.signal,
+      }),
+    ).ok,
+    true,
+  );
+  for (
+    const invalid of [request, { ...complete, domain: "incarnation" }, {
+      ...complete,
+      kind: "execution.claim",
+    }, { ...complete, extra: true }]
+  ) {
+    assert.equal(
+      decode(
+        await handler({
+          input: stream(invalid),
+          signal: completionContext.signal,
+        }),
+      ).ok,
+      false,
+    );
+  }
+  assert.equal(calls.length, 1);
+  assert.equal(await port.admit(context()), undefined);
+  assert.equal(
+    await port.admit(context({ workload: "copilotz.owner.project" })),
+    undefined,
+  );
+  assert.equal(
+    await port.admit({ ...completionContext, parent: undefined }),
+    undefined,
+  );
+  assert.equal(await port.admitUnassigned(completionContext), undefined);
+  assert.equal(
+    await admission(recordingBoundary()).admit(completionContext),
+    undefined,
+  );
+});
+
+test("restricted completion rechecks settlement authority after streamed admission", async () => {
+  await fixture(async (owner, db) => {
+    const port = admission(owner, {
+      resolveAssignment: () => ({
+        ownerId: "tenant",
+        ctxGranted: false,
+        settlementGranted: true,
+        caller,
+      }),
+    });
+    const handler = await port.admit(
+      context({ workload: "copilotz.owner.complete" }),
+    );
+    assert.ok(handler);
+    let controller!: ReadableStreamDefaultController<Uint8Array>;
+    const pending = handler({
+      input: new ReadableStream({
+        start(value) {
+          controller = value;
+        },
+      }),
+      signal: new AbortController().signal,
+    });
+    await db.query("UPDATE grants SET allowed=FALSE");
+    controller.enqueue(
+      encoder.encode(
+        JSON.stringify({
+          kind: "execution.complete",
+          domain: "logical",
+          key: "terminal",
+          intent: null,
+        }),
+      ),
+    );
+    controller.close();
+    assert.equal(decode(await pending).ok, false);
+    assert.equal(
+      (await db.query("SELECT 1 FROM owner_receipts")).rows.length,
+      0,
+    );
+  });
+});
+
+test("completion client selects only the restricted route and preserves terminal refusal", async () => {
+  const workloads: string[] = [];
+  let cancels = 0;
+  const client = createOwnerConnection({
+    ownerId: "tenant",
+    callHost(input) {
+      workloads.push(input.workload);
+      return Promise.resolve({
+        output: stream({
+          ok: false,
+          outcome: "refused",
+          code: "ActionOwnershipLost",
+        }),
+        completed: Promise.resolve(),
+        cancel() {
+          cancels++;
+          return Promise.resolve();
+        },
+      });
+    },
+  });
+  await assert.rejects(client.complete(request), /restricted completion/);
+  await assert.rejects(
+    client.complete({
+      kind: "execution.complete",
+      domain: "logical",
+      key: "terminal",
+      intent: null,
+    }),
+    (error: unknown) =>
+      error instanceof OwnerCallRejected &&
+      error.code === "ActionOwnershipLost",
+  );
+  assert.deepEqual(workloads, ["copilotz.owner.complete"]);
+  assert.equal(cancels, 0);
 });

@@ -8,6 +8,7 @@ const root = new URL("../../", import.meta.url);
 test("registered Action worker runtime closure excludes database and body-store implementations", async () => {
   const allowed = new Set([
     "runtime/execution/registered-worker.ts",
+    "runtime/execution/owner-port.ts",
     "runtime/actions/execution-context.ts",
     "runtime/actions/secret.ts",
     "runtime/actions/deferral.ts",
@@ -27,7 +28,10 @@ test("registered Action worker runtime closure excludes database and body-store 
     "runtime/actions/protected-context.ts",
   ]);
   const visited = new Set<string>();
-  const pending = [new URL("runtime/execution/registered-worker.ts", root)];
+  const pending = [
+    new URL("runtime/execution/registered-worker.ts", root),
+    new URL("runtime/execution/owner-port.ts", root),
+  ];
   while (pending.length) {
     const file = pending.pop()!;
     const path = file.href.slice(root.href.length);

@@ -13,6 +13,7 @@ import type {
 import { assertJsonValue } from "../json.ts";
 
 const COMMAND = "copilotz.owner.command";
+const COMPLETE = "copilotz.owner.complete";
 const PROJECT = "copilotz.owner.project";
 const RECEIPT = "copilotz.owner.receipt";
 const LIMIT = 1_100_000;
@@ -156,11 +157,23 @@ export function createOwnerWorkerCallAdmission(
       context: OwnerWorkerCallContext,
       ownerId: string,
     ):
-      | Readonly<{ ownerId: string; ctxGranted: boolean; caller: OwnerCaller }>
+      | Readonly<
+        {
+          ownerId: string;
+          ctxGranted: boolean;
+          settlementGranted?: boolean;
+          caller: OwnerCaller;
+        }
+      >
       | undefined
       | Promise<
         | Readonly<
-          { ownerId: string; ctxGranted: boolean; caller: OwnerCaller }
+          {
+            ownerId: string;
+            ctxGranted: boolean;
+            settlementGranted?: boolean;
+            caller: OwnerCaller;
+          }
         >
         | undefined
       >;
@@ -172,7 +185,7 @@ export function createOwnerWorkerCallAdmission(
   ): Promise<HostHandler | undefined> => {
     if (
       context.workload !== COMMAND && context.workload !== RECEIPT &&
-      context.workload !== PROJECT
+      context.workload !== PROJECT && context.workload !== COMPLETE
     ) {
       return undefined;
     }
@@ -184,7 +197,8 @@ export function createOwnerWorkerCallAdmission(
     ) return undefined;
     const owner = options.resolveOwner(ownerId);
     if (!owner) return undefined;
-    const isCommand = context.workload === COMMAND;
+    const isCompletion = context.workload === COMPLETE;
+    const isCommand = context.workload === COMMAND || isCompletion;
     const isAssigned = context.workload !== RECEIPT;
     if (isAssigned && !context.parent) return undefined;
     const assignment = isAssigned
@@ -193,7 +207,9 @@ export function createOwnerWorkerCallAdmission(
     if (
       isAssigned &&
       (!assignment || assignment.ownerId !== ownerId ||
-        assignment.ctxGranted !== true)
+        (isCompletion
+          ? assignment.settlementGranted !== true
+          : assignment.ctxGranted !== true))
     ) return undefined;
     const caller = isAssigned
       ? assignment!.caller
@@ -208,6 +224,18 @@ export function createOwnerWorkerCallAdmission(
         signal.throwIfAborted();
         const payload = await read(input, signal);
         signal.throwIfAborted();
+        if (isCompletion) {
+          const command = object(payload);
+          if (
+            command.kind !== "execution.complete" ||
+            command.domain !== "logical" ||
+            Object.keys(command).some((key) =>
+              !["kind", "domain", "key", "intent"].includes(key)
+            )
+          ) {
+            throw new TypeError("Invalid restricted completion command.");
+          }
+        }
         const result = isCommand
           ? await owner.execute(admitted, object(payload) as OwnerCommand, {
             signal,
@@ -365,6 +393,18 @@ export function createOwnerConnection(
       callOptions?: Readonly<{ signal?: AbortSignal; deadlineAtMs?: number }>,
     ): Promise<OwnerCommandOutcome> {
       return await call(COMMAND, command, callOptions) as OwnerCommandOutcome;
+    },
+    /** Restricted current-assignment settlement, separate from general ctx grants. */
+    async complete(
+      command: OwnerCommand,
+      callOptions?: Readonly<{ signal?: AbortSignal; deadlineAtMs?: number }>,
+    ): Promise<OwnerCommandOutcome> {
+      if (
+        command.kind !== "execution.complete" || command.domain !== "logical"
+      ) {
+        throw new TypeError("Invalid restricted completion command.");
+      }
+      return await call(COMPLETE, command, callOptions) as OwnerCommandOutcome;
     },
     async project(
       kind: string,

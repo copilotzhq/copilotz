@@ -5,12 +5,15 @@ import {
   assertRejects,
   assertStringIncludes,
 } from "@std/assert";
+import { createOwnerCommandBoundary } from "../owner/boundary.ts";
+import { provisionOwnerCommandSchema } from "../owner/schema.ts";
 import { createTestDatabase, type TestDatabase } from "../testing/ominipg.ts";
 import {
   createCoreSchemaStatements,
   createCoreTableNames,
   createEventStore,
   createSqlSession,
+  type EventDelivery,
   type EventStore,
   isEventStoreError,
   provisionCopilotzSchema,
@@ -822,6 +825,121 @@ for (
       }
     },
   });
+
+  for (const failFirstPublication of [false, true]) {
+    Deno.test({
+      name: failFirstPublication
+        ? `generic owner expiry recovery attempts all twenty callbacks after an earlier failure (${backend.name})`
+        : `generic owner expiry recovery delays twenty callbacks behind one outer commit reservation (${backend.name})`,
+      ignore: backend.ignore,
+      async fn() {
+        const f = await createOwnerExpiryFixture(backend.url, {
+          count: 20,
+          failFirstPublication,
+        });
+        try {
+          const expected = f.targets.map((delivery) => delivery.id).sort();
+          assertEquals(
+            new Set(f.targets.map((delivery) => delivery.settlementScopeId))
+              .size,
+            20,
+          );
+          let exposed = false;
+          const pending = f.recover().then((outcome) => {
+            exposed = true;
+            return outcome;
+          });
+          await expiryWithin(f.beforeCommit.promise);
+          // This gate is inside the real transaction callback, before its
+          // return permits the underlying session to issue COMMIT.
+          assertEquals(f.state.outerCommitted, false);
+          assertEquals(exposed, false);
+          assertEquals(f.state.prepared, expected);
+          assertEquals(f.state.reservations, 1);
+          assertEquals(f.state.started, []);
+          assertEquals(f.state.completed, []);
+          assertEquals(f.state.errors, []);
+
+          f.allowCommit.resolve();
+          assertEquals(await expiryWithin(pending), {
+            status: "committed",
+            result: { deliveryIds: expected },
+          });
+          await expiryWithin(f.firstCallback.promise);
+          assertEquals(f.state.outerCommitted, true);
+          assertEquals(f.state.outerTransactions, 1);
+          // An async callback can remain pending after command completion.
+          // Later callbacks must await it, while every delivery is durable.
+          assertEquals(f.state.started, expected.slice(0, 1));
+          assertEquals(f.state.completed, []);
+          await assertOwnerExpiryRows(f, expected);
+          f.allowCallbacks.resolve();
+          await expiryWithin(f.groupFinished.promise);
+          if (failFirstPublication) {
+            await expiryWithin(f.errorReported.promise);
+            assertEquals(f.state.errors.length, 1);
+            const error = f.state.errors[0];
+            assert(error instanceof AggregateError);
+            assertEquals(
+              error.message,
+              "Delivery recovery publication failed.",
+            );
+            assertEquals(error.errors, [f.publicationFailure]);
+          } else {
+            assertEquals(f.state.errors, []);
+          }
+          assertEquals(f.state.started, expected);
+          assertEquals(
+            f.state.completed,
+            failFirstPublication ? expected.slice(1) : expected,
+          );
+          assertEquals(f.state.reservations, 1);
+          await assertOwnerExpiryRows(f, expected);
+        } finally {
+          await f.close();
+        }
+      },
+    });
+  }
+
+  for (
+    const bound of [
+      { count: 8, limit: 7, recovered: 7 },
+      { count: 101, limit: 1_000, recovered: 100 },
+    ]
+  ) {
+    Deno.test({
+      name:
+        `generic owner expiry recovery honors namespace and bound ${bound.limit} (${backend.name})`,
+      ignore: backend.ignore,
+      async fn() {
+        const f = await createOwnerExpiryFixture(backend.url, bound);
+        try {
+          const expected = f.targets.map((delivery) => delivery.id).sort()
+            .slice(0, bound.recovered);
+          const pending = f.recover();
+          await expiryWithin(f.beforeCommit.promise);
+          assertEquals(f.state.prepared, expected);
+          assertEquals(f.state.reservations, 1);
+          assertEquals(f.state.started, []);
+          f.allowCallbacks.resolve();
+          f.allowCommit.resolve();
+          assertEquals(await expiryWithin(pending), {
+            status: "committed",
+            result: { deliveryIds: expected },
+          });
+          await expiryWithin(f.groupFinished.promise);
+          assertEquals(f.state.outerTransactions, 1);
+          assertEquals(f.state.started, expected);
+          assertEquals(f.state.completed, expected);
+          assertEquals(f.state.errors, []);
+          await assertOwnerExpiryRows(f, expected);
+        } finally {
+          await f.close();
+        }
+      },
+    });
+  }
 }
 
 Deno.test("delivery recovery and claims order by availability, creation time, then ID", async () => {
@@ -1500,3 +1618,302 @@ Deno.test("A55 event core is runtime-neutral and factory-first", async () => {
     );
   }
 });
+
+// These tests compose the real boundary and store. The settlement hook below
+// observes the store's generic publication seam; it does not implement Action
+// recovery, namespace authorization, callback grouping, or settlement wakes.
+function expiryDeferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => resolve = done);
+  return { promise, resolve };
+}
+
+async function expiryWithin<T>(promise: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error("owner expiry fixture timed out")),
+          10_000,
+        );
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function createOwnerExpiryFixture(
+  url: string,
+  options: Readonly<{
+    count: number;
+    limit?: number;
+    failFirstPublication?: boolean;
+  }>,
+) {
+  const schema = `owner_expiry_${crypto.randomUUID().replaceAll("-", "")}`;
+  const f = await createFixture(url, schema);
+  const ownerId = "event-store-owner";
+  const holderId = "event-store-holder";
+  const seedTime = "2020-01-01T00:00:00.000Z";
+  const recoveryTime = "2020-01-01T00:00:01.000Z";
+  const beforeCommit = expiryDeferred();
+  const allowCommit = expiryDeferred();
+  const firstCallback = expiryDeferred();
+  const allowCallbacks = expiryDeferred();
+  const groupFinished = expiryDeferred();
+  const errorReported = expiryDeferred();
+  const publicationFailure = new Error("injected first publication failure");
+  const targets: EventDelivery[] = [];
+  const excluded: EventDelivery[] = [];
+  const state = {
+    recovering: false,
+    outerTransactions: 0,
+    outerCommitted: false,
+    reservations: 0,
+    prepared: [] as string[],
+    started: [] as string[],
+    completed: [] as string[],
+    errors: [] as unknown[],
+  };
+  let boundary: ReturnType<typeof createOwnerCommandBoundary> | undefined;
+  let pending:
+    | ReturnType<ReturnType<typeof createOwnerCommandBoundary>["execute"]>
+    | undefined;
+  let nextId = 0;
+  const session: SqlSession = {
+    query: f.session.query,
+    async transaction(operation) {
+      const recovering = state.recovering;
+      if (recovering) state.outerTransactions++;
+      const result = await f.session.transaction(async (tx) => {
+        const value = await operation(tx);
+        if (recovering) {
+          beforeCommit.resolve();
+          await allowCommit.promise;
+        }
+        return value;
+      });
+      // Acknowledge only after the real session's transaction has resolved.
+      // Releasing the gate above is not itself proof that COMMIT happened.
+      if (recovering) state.outerCommitted = true;
+      return result;
+    },
+  };
+  async function close() {
+    allowCommit.resolve();
+    allowCallbacks.resolve();
+    try {
+      const outcome = pending
+        ? await expiryWithin(pending).catch(() => undefined)
+        : undefined;
+      // A failed handler discards its registered callbacks even when the
+      // enclosing transaction commits the savepoint rollback.
+      if (outcome?.status === "committed" && state.reservations) {
+        await expiryWithin(groupFinished.promise);
+      }
+    } finally {
+      boundary?.stop();
+      try {
+        if (url !== ":memory:") {
+          await f.session.query(`DROP SCHEMA "${schema}" CASCADE`);
+        }
+      } finally {
+        await closeFixture(f);
+      }
+    }
+  }
+  try {
+    // Owner schema installation must precede all real event insertion.
+    await provisionOwnerCommandSchema(f.session, schema);
+    boundary = createOwnerCommandBoundary({
+      session,
+      schema,
+      ownerId,
+      holderId,
+      maxCallbacksPerCommand: 1,
+      now: () => state.recovering ? recoveryTime : seedTime,
+      authorize(_tx, caller) {
+        assertEquals(caller.principal.kind, "owner-control");
+      },
+      authenticateReceipt() {
+        throw new Error("fixture has no generic receipt-read authority");
+      },
+      onPostCommitError(error) {
+        state.errors.push(error);
+        errorReported.resolve();
+      },
+      handlers: {
+        async "test.seed"(_intent, context) {
+          const store = createEventStore({
+            session,
+            schema,
+            // Ordered IDs make all earlier foreign/ineligible rows precede
+            // eligible target rows without editing timestamps or attempts.
+            createId: () => `expiry-${String(++nextId).padStart(5, "0")}`,
+            ownerCommit: {
+              ...context.ownerCommit,
+              afterCommit: context.afterCommit,
+            },
+          });
+          async function seed(
+            namespace: string,
+            maxAttempts = 1,
+            leaseMs = 0,
+            claim = true,
+          ): Promise<EventDelivery> {
+            const inserted = await store.commitMutation({
+              transaction: context.tx,
+              draft: { type: "test.expiry", namespace, payload: {} },
+              consumers: [{ consumerId: "worker", settlement: "inherit" }],
+              maxAttempts,
+            });
+            const delivery = inserted.deliveries[0];
+            assertEquals(delivery.attempts, 0);
+            if (!claim) return delivery;
+            const claimed = await store.claimDelivery({
+              id: delivery.id,
+              owner: `dispatch-${delivery.id}`,
+              leaseMs,
+            });
+            assertExists(claimed);
+            assertEquals(claimed.attempts, 1);
+            assertEquals(claimed.maxAttempts, maxAttempts);
+            assertEquals(claimed.status, "leased");
+            return claimed;
+          }
+          excluded.push(
+            await seed("tenant-b"),
+            await seed("tenant-a", 2),
+            await seed("tenant-a", 1, 60_000),
+            await seed("tenant-a", 1, 0, false),
+          );
+          for (let index = 0; index < options.count; index++) {
+            targets.push(await seed("tenant-a"));
+          }
+          return { seeded: targets.length + excluded.length };
+        },
+        async "test.recover"(_intent, context) {
+          const store = createEventStore({
+            session,
+            schema,
+            ownerCommit: {
+              ...context.ownerCommit,
+              afterCommit(callback) {
+                state.reservations++;
+                context.afterCommit(async () => {
+                  try {
+                    await callback();
+                  } finally {
+                    groupFinished.resolve();
+                  }
+                });
+              },
+            },
+            settleActionOwners(tx, delivery) {
+              assertEquals(tx, context.tx);
+              assertEquals(delivery.status, "dead_letter");
+              assertEquals(delivery.attempts, 1);
+              assertEquals(delivery.maxAttempts, 1);
+              state.prepared.push(delivery.id);
+              return Promise.resolve(async () => {
+                assertEquals(state.outerCommitted, true);
+                state.started.push(delivery.id);
+                if (state.started.length === 1) {
+                  firstCallback.resolve();
+                  await allowCallbacks.promise;
+                  if (options.failFirstPublication) throw publicationFailure;
+                }
+                // This is an ordinary read after the committed transaction,
+                // not a query through the now-closed command executor.
+                assertEquals(
+                  (await f.store.getDelivery(delivery.id))?.status,
+                  "dead_letter",
+                );
+                state.completed.push(delivery.id);
+              });
+            },
+          });
+          const recovered = await store.recoverExpiredDeliveries({
+            namespace: "tenant-a",
+            ...(options.limit === undefined ? {} : { limit: options.limit }),
+          });
+          return { deliveryIds: recovered.map((delivery) => delivery.id) };
+        },
+      },
+    });
+    const epoch = await boundary.acquire(0);
+    assertEquals(epoch, 1);
+    const caller = {
+      principal: { kind: "owner-control" as const, ownerId, epoch, holderId },
+      ownerEpoch: epoch,
+    };
+    assertEquals(
+      (await boundary.execute(caller, {
+        kind: "test.seed",
+        domain: "logical",
+        key: "seed",
+        intent: {},
+      })).status,
+      "committed",
+    );
+    return {
+      ...f,
+      state,
+      targets,
+      excluded,
+      recoveryTime,
+      beforeCommit,
+      allowCommit,
+      firstCallback,
+      allowCallbacks,
+      groupFinished,
+      errorReported,
+      publicationFailure,
+      recover() {
+        assertEquals(pending, undefined);
+        state.recovering = true;
+        pending = boundary!.execute(caller, {
+          kind: "test.recover",
+          domain: "occurrence",
+          key: "recover",
+          intent: {},
+        });
+        return pending;
+      },
+      close,
+    };
+  } catch (error) {
+    await close();
+    throw error;
+  }
+}
+
+async function assertOwnerExpiryRows(
+  fixture: Awaited<ReturnType<typeof createOwnerExpiryFixture>>,
+  recoveredIds: readonly string[],
+): Promise<void> {
+  const recovered = new Set(recoveredIds);
+  for (const original of [...fixture.targets, ...fixture.excluded]) {
+    const current = await fixture.store.getDelivery(original.id);
+    assertExists(current);
+    if (!recovered.has(original.id)) {
+      // Foreign namespace, still-budgeted, live, pending and over-limit rows
+      // retain their complete original delivery record.
+      assertEquals(current, original);
+      continue;
+    }
+    assertEquals(current.status, "dead_letter");
+    assertEquals(current.attempts, 1);
+    assertEquals(current.maxAttempts, 1);
+    assertEquals(current.leaseOwner, undefined);
+    assertEquals(current.leaseExpiresAt, undefined);
+    assertEquals(current.settledAt, fixture.recoveryTime);
+    assertEquals(current.lastError, {
+      name: "DeliveryLeaseExpired",
+      message: "The delivery lease expired after its final attempt.",
+    });
+  }
+}

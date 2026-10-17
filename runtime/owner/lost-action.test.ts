@@ -23,30 +23,59 @@ import {
   createOwnerCommandBoundary,
   type OwnerCaller,
   type OwnerCommand,
+  type OwnerCommandContext,
 } from "./boundary.ts";
 import { createOwnerExecutionCommands } from "./execution.ts";
 import {
   createOwnerEffectCommands,
   readOwnerEffectInventory,
 } from "./effects.ts";
-import { ownerEffectKey } from "./effects-client.ts";
+import { OWNER_EFFECT_STEP_LIMIT, ownerEffectKey } from "./effects-client.ts";
 import {
   createOwnerLostActionRecovery,
   OWNER_LOST_ACTION_RECOVERY,
   ownerLostActionKey,
 } from "./lost-action.ts";
 import { provisionOwnerCommandSchema } from "./schema.ts";
-import { createOwnerOperationSettlement } from "./settlement.ts";
+import { ownerReconciliationAlarm } from "./reconciliation.ts";
+import {
+  createOwnerOperationSettlement,
+  ownerOperationSettlementAlarm,
+} from "./settlement.ts";
 
 const start = "2020-01-01T00:00:00.000Z";
 const at = (offset: number) =>
   new Date(Date.parse(start) + offset).toISOString();
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => resolve = done);
+  return { promise, resolve };
+}
+async function within<T>(promise: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error("fixture timed out")),
+          10_000,
+        );
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+const flushNotifications = () =>
+  new Promise((resolve) => setTimeout(resolve, 0));
 async function fixture(
   options: {
     eligible?: boolean;
     maxAssignments?: number;
     maxAttempts?: number;
     policy?: boolean;
+    permissiveControl?: boolean;
   } = {},
 ) {
   const db = await createTestDatabase({ pgliteMemoryProfile: "low-memory" });
@@ -59,6 +88,9 @@ async function fixture(
     eligible: options.eligible ?? true,
     policy: options.policy ?? true,
     control: true,
+    controlCalls: 0,
+    hold: false,
+    commits: 0,
     rollback: false,
     unknown: false,
     wakes: 0,
@@ -68,18 +100,34 @@ async function fixture(
     mutatePolicy: false,
     noncooperativeWake: false,
     executions: 0,
+    dispatches: 0,
+    settlementWakes: [] as { namespace: string; operationId: string }[],
+    notificationOrder: [] as string[],
+    failPublish: false,
+    failPlacement: false,
+    failSettlementWake: false,
+    lateRegistration: undefined as
+      | OwnerCommandContext["afterCommit"]
+      | undefined,
   };
+  const gate = { reached: deferred(), release: deferred() };
   const session: SqlSession = {
     query: db.query,
     async transaction(run) {
       const result = await db.transaction(async (tx) => {
         const value = await run(tx);
+        if (state.hold) {
+          state.hold = false;
+          gate.reached.resolve();
+          await gate.release.promise;
+        }
         if (state.rollback) {
           state.rollback = false;
           throw new Error("injected rollback");
         }
         return value;
       });
+      state.commits++;
       if (state.unknown) {
         state.unknown = false;
         throw new Error("lost COMMIT reply");
@@ -119,18 +167,22 @@ async function fixture(
       }
     },
   });
+  const refuseDispatch = () => {
+    state.dispatches++;
+    return Promise.reject(new Error("recovery cannot execute"));
+  };
   const executor: DeliveryExecutor = {
     ownership: "injected_dispatcher",
     workload: "schedule-only",
     workloads: {},
     scheduleDelivery(value) {
       state.scheduled.push(typeof value === "string" ? value : value.id);
+      state.notificationOrder.push("placement");
+      if (state.failPlacement) throw new Error("injected placement failure");
     },
-    dispatchWork: () => Promise.reject(new Error("recovery cannot execute")),
-    dispatchDelivery: () =>
-      Promise.reject(new Error("recovery cannot execute")),
-    dispatchRecoverable: () =>
-      Promise.reject(new Error("recovery cannot execute")),
+    dispatchWork: refuseDispatch,
+    dispatchDelivery: refuseDispatch,
+    dispatchRecoverable: refuseDispatch,
     settleOutputs: () => Promise.resolve(),
     awaitScopeProgress: () => Promise.resolve(false),
     shutdown: () => Promise.resolve(),
@@ -188,7 +240,13 @@ async function fixture(
     selectDrains: () => [],
     authorizeDrain: () => false,
     drain: () => Promise.resolve(false),
-    wake() {},
+    wake(scope) {
+      state.settlementWakes.push(scope);
+      state.notificationOrder.push("settlement");
+      if (state.failSettlementWake) {
+        throw new Error("injected settlement wake failure");
+      }
+    },
   });
   const recovery = createOwnerLostActionRecovery({
     ownerId: "owner",
@@ -199,8 +257,10 @@ async function fixture(
     executor,
     maxAssignments: options.maxAssignments,
     authorizeControl(_tx, caller) {
+      state.controlCalls++;
       const permitted = state.control &&
-        caller.principal.kind === "owner-control";
+        (options.permissiveControl ||
+          caller.principal.kind === "owner-control");
       if (state.mutatePolicy) {
         Object.assign(caller, { ownerEpoch: 999 });
         Object.assign(caller.principal, { holderId: "mutated" });
@@ -215,12 +275,18 @@ async function fixture(
       }
       return permitted;
     },
-    scheduleSettlement: (ctx, scope) => settlement.schedule(ctx, scope),
+    async scheduleSettlement(ctx, scope) {
+      await settlement.schedule(ctx, scope);
+      state.lateRegistration = ctx.afterCommit;
+    },
     publish(event) {
       state.publications.push(event.type);
+      state.notificationOrder.push("publication");
+      if (state.failPublish) throw new Error("injected publisher failure");
     },
     wake() {
       state.wakes++;
+      state.notificationOrder.push("reconciliation");
       if (state.noncooperativeWake) return new Promise<never>(() => {});
     },
   });
@@ -399,6 +465,7 @@ async function fixture(
   return {
     db,
     state,
+    gate,
     store,
     first,
     refs,
@@ -478,6 +545,7 @@ async function fixture(
     terminal: () =>
       createActionLifecycleLoader({ store })("space", "run:action:terminal"),
     async close() {
+      gate.release.resolve();
       for (const boundary of allBoundaries) boundary.stop();
       await db.close();
     },
@@ -903,3 +971,604 @@ for (
     }
   });
 }
+
+// Regression migration from the dormant namespace sweep. These fixtures use the
+// real exact-target command, lifecycle, EventStore and settlement scheduler.
+type LostFixture = Awaited<ReturnType<typeof fixture>>;
+type EffectState = "none" | "begun" | "confirmed" | "not_started";
+const effectStates: readonly EffectState[] = [
+  "none",
+  "begun",
+  "confirmed",
+  "not_started",
+];
+async function terminalFixture(
+  effect: EffectState,
+  cancelled = false,
+  finalAttempt = true,
+) {
+  // A first genuine claim exhausts maxAttempts=1. The still-budgeted cancellation
+  // case deliberately retains the ordinary default budget of three attempts.
+  const f = await fixture({
+    maxAttempts: finalAttempt ? 1 : undefined,
+    eligible: false,
+    policy: false,
+  });
+  try {
+    if (effect !== "none") await f.effect("begin");
+    if (effect === "confirmed") await f.effect("confirm");
+    if (effect === "not_started") await f.effect("notStarted");
+    if (cancelled) {
+      await f.db.query(
+        "UPDATE copilotz_operations SET cancellation_requested_at=$1 WHERE namespace='space' AND operation_id=$2",
+        [at(99), f.refs.eventId],
+      );
+    }
+    await f.takeover();
+    return f;
+  } catch (error) {
+    await f.close();
+    throw error;
+  }
+}
+async function effectBytes(f: LostFixture) {
+  return (await f.db.query(
+    "SELECT row_to_json(r)::text AS bytes FROM owner_receipts r WHERE kind LIKE 'effect.%' ORDER BY key",
+  )).rows;
+}
+async function durableSnapshot(f: LostFixture) {
+  const snapshot: Record<string, unknown> = {};
+  for (
+    const table of [
+      "events",
+      "event_bodies",
+      "event_deliveries",
+      "open_actions",
+      "nodes",
+      "owner_receipts",
+      "owner_receipt_readers",
+      "owner_epochs",
+      "owner_assignments",
+      "owner_alarms",
+      "copilotz_operations",
+      "copilotz_operation_events",
+    ]
+  ) {
+    snapshot[table] = (await f.db.query(
+      `SELECT row_to_json(r)::text AS bytes FROM ${table} r ORDER BY row_to_json(r)::text`,
+    )).rows;
+  }
+  return snapshot;
+}
+async function continuationIds(f: LostFixture) {
+  return (await f.db.query<{ id: string }>(
+    "SELECT id FROM event_deliveries WHERE consumer_id='processor:after' ORDER BY id",
+  )).rows.map((row) => row.id);
+}
+async function assertTerminalAlarms(f: LostFixture) {
+  const alarms = await f.db.query<
+    { owner: string; name: string; due_now: boolean }
+  >(
+    "SELECT owner,name,(due_at=$1::timestamptz) AS due_now FROM owner_alarms ORDER BY name",
+    [f.state.time],
+  );
+  assert.deepEqual(
+    alarms.rows,
+    [
+      ownerOperationSettlementAlarm({
+        namespace: "space",
+        operationId: f.refs.eventId,
+      }),
+      ownerReconciliationAlarm("owner", {
+        kind: "delivery",
+        namespace: "space",
+        id: f.refs.deliveryId,
+      }),
+    ].sort().map((name) => ({ owner: "owner", name, due_now: true })),
+  );
+}
+function assertNoNotifications(f: LostFixture) {
+  assert.deepEqual(f.state.publications, []);
+  assert.deepEqual(f.state.scheduled, []);
+  assert.deepEqual(f.state.settlementWakes, []);
+  assert.equal(f.state.wakes, 0);
+  assert.deepEqual(f.state.notificationOrder, []);
+  assert.equal(f.state.executions, 0);
+  assert.equal(f.state.dispatches, 0);
+}
+async function assertCanonicalTerminal(
+  f: LostFixture,
+  effect: EffectState,
+  cancelled: boolean,
+) {
+  const terminal = await f.terminal();
+  assert.ok(terminal);
+  assert.equal(terminal.status, cancelled ? "cancelled" : "failed");
+  assert.ok(terminal.status === "failed" || terminal.status === "cancelled");
+  assert.equal(
+    terminal.error?.name,
+    cancelled
+      ? "AbortError"
+      : effect === "begun"
+      ? "ActionEffectIndeterminate"
+      : "ActionDeliveryExhausted",
+  );
+  assert.equal(
+    terminal.error?.code,
+    !cancelled && effect === "begun" ? "effect_indeterminate" : undefined,
+  );
+  assert.equal(
+    (await f.db.query(
+      "SELECT 1 FROM events WHERE namespace='space' AND deduplication_id='run:action:terminal'",
+    )).rows.length,
+    1,
+  );
+  assert.equal((await f.db.query("SELECT 1 FROM open_actions")).rows.length, 0);
+  assert.deepEqual(
+    (await f.db.query(
+      "SELECT status,attempts,lease_owner,lease_expires_at FROM event_deliveries WHERE consumer_id='processor:after'",
+    )).rows,
+    [{
+      status: cancelled ? "cancelled" : "pending",
+      attempts: 0,
+      lease_owner: null,
+      lease_expires_at: null,
+    }],
+  );
+  assert.deepEqual(
+    (await f.db.query(
+      "SELECT retired FROM owner_assignments ORDER BY assignment_key",
+    )).rows,
+    [{ retired: true }],
+  );
+  await assertTerminalAlarms(f);
+  assert.equal(f.state.executions, 0);
+  assert.equal(f.state.dispatches, 0);
+}
+
+test("lost final first claim retains the complete effect matrix and exact terminal duplicates", async () => {
+  for (const effect of effectStates) {
+    const f = await terminalFixture(effect);
+    try {
+      const before = await f.store.getDelivery(f.refs.deliveryId);
+      assert.equal(before?.attempts, 1);
+      assert.equal(before?.maxAttempts, 1);
+      assert.equal(
+        (await f.db.query(
+          "SELECT 1 FROM owner_receipts WHERE kind='execution.claim'",
+        )).rows.length,
+        1,
+      );
+      const evidence = await effectBytes(f);
+      const outcome = await f.recover();
+      assert.equal(outcome.status, "committed");
+      assert.deepEqual(outcome.result, {
+        ...f.target,
+        disposition: "exhausted",
+        reason: "canonical_terminal_written",
+      });
+      const delivery = await f.store.getDelivery(f.refs.deliveryId);
+      assert.equal(delivery?.status, "dead_letter");
+      assert.equal(delivery?.attempts, before?.attempts);
+      assert.equal(delivery?.maxAttempts, before?.maxAttempts);
+      assert.equal(delivery?.availableAt, before?.availableAt);
+      assert.equal(delivery?.leaseOwner, undefined);
+      assert.equal(delivery?.leaseExpiresAt, undefined);
+      assert.deepEqual(delivery?.lastError, {
+        name: "DeliveryLeaseExpired",
+        message: "The delivery lease was lost after its final attempt.",
+      });
+      assert.deepEqual(await effectBytes(f), evidence);
+      assert.deepEqual(
+        await readOwnerEffectInventory(f.db, {
+          ownerId: "owner",
+          schema: "public",
+          namespace: "space",
+          actionRunId: "run",
+        }),
+        effect === "none" ? [] : [{ step: "send", status: effect }],
+      );
+      await assertCanonicalTerminal(f, effect, false);
+      await flushNotifications();
+      assert.deepEqual(f.state.publications, ["work.failed"]);
+      assert.deepEqual(f.state.scheduled, await continuationIds(f));
+      assert.deepEqual(f.state.settlementWakes, [{
+        namespace: "space",
+        operationId: f.refs.eventId,
+      }]);
+      assert.equal(f.state.wakes, 1);
+      const committed = await durableSnapshot(f);
+      const order = [...f.state.notificationOrder];
+      assert.deepEqual(await f.recover(), {
+        status: "duplicate",
+        result: outcome.result,
+      });
+      await flushNotifications();
+      assert.deepEqual(await durableSnapshot(f), committed);
+      assert.deepEqual(f.state.notificationOrder, order);
+      assert.deepEqual(f.state.errors, []);
+    } finally {
+      await f.close();
+    }
+  }
+});
+
+test("lost cancellation takes precedence over every effect state with budget remaining or exhausted", async () => {
+  for (const finalAttempt of [false, true]) {
+    for (const effect of effectStates) {
+      const f = await terminalFixture(effect, true, finalAttempt);
+      try {
+        const before = await f.store.getDelivery(f.refs.deliveryId);
+        assert.equal(before?.attempts, 1);
+        assert.equal(before?.maxAttempts, finalAttempt ? 1 : 3);
+        assert.equal(
+          (await f.db.query(
+            "SELECT 1 FROM owner_receipts WHERE kind='execution.claim'",
+          )).rows.length,
+          1,
+        );
+        const evidence = await effectBytes(f);
+        const outcome = await f.recover();
+        assert.deepEqual(outcome.result, {
+          ...f.target,
+          disposition: "cancelled",
+          reason: "canonical_terminal_written",
+        });
+        const delivery = await f.store.getDelivery(f.refs.deliveryId);
+        assert.equal(delivery?.status, "cancelled");
+        assert.equal(delivery?.attempts, before?.attempts);
+        assert.equal(delivery?.maxAttempts, before?.maxAttempts);
+        assert.equal(delivery?.availableAt, before?.availableAt);
+        assert.equal(delivery?.leaseOwner, undefined);
+        assert.equal(delivery?.leaseExpiresAt, undefined);
+        assert.deepEqual(delivery?.lastError, before?.lastError);
+        assert.deepEqual(await effectBytes(f), evidence);
+        await assertCanonicalTerminal(f, effect, true);
+        await flushNotifications();
+        assert.deepEqual(f.state.publications, ["work.cancelled"]);
+        // Cancellation emits the notification delivery already cancelled. It
+        // is durable evidence, never a newly runnable continuation.
+        assert.deepEqual(f.state.scheduled, []);
+        assert.deepEqual(f.state.settlementWakes, [{
+          namespace: "space",
+          operationId: f.refs.eventId,
+        }]);
+        assert.equal(f.state.wakes, 1);
+        const committed = await durableSnapshot(f);
+        const order = [...f.state.notificationOrder];
+        assert.deepEqual(await f.recover(), {
+          status: "duplicate",
+          result: outcome.result,
+        });
+        await flushNotifications();
+        assert.deepEqual(await durableSnapshot(f), committed);
+        assert.deepEqual(f.state.notificationOrder, order);
+        assert.deepEqual(f.state.errors, []);
+      } finally {
+        await f.close();
+      }
+    }
+  }
+});
+
+test("lost terminal output and all hints wait for a real outer COMMIT and vanish on rollback", async () => {
+  for (const rollback of [false, true]) {
+    const f = await terminalFixture("begun");
+    try {
+      const before = await durableSnapshot(f);
+      const commits = f.state.commits;
+      f.state.hold = true;
+      f.state.rollback = rollback;
+      let exposed = false;
+      const pending = f.recover().finally(() => {
+        exposed = true;
+      });
+      const completed = rollback
+        ? assert.rejects(pending, { code: "owner_commit_unknown" })
+        : pending;
+      await within(f.gate.reached.promise);
+      assert.equal(exposed, false);
+      assert.equal(f.state.commits, commits);
+      assertNoNotifications(f);
+      f.gate.release.resolve();
+      await within<unknown>(completed);
+      await flushNotifications();
+      assert.equal(exposed, true);
+      assert.equal(f.state.commits, commits + (rollback ? 0 : 1));
+      if (rollback) {
+        assert.equal(f.current.state, "stopped");
+        assert.deepEqual(await durableSnapshot(f), before);
+        assertNoNotifications(f);
+      } else {
+        await assertCanonicalTerminal(f, "begun", false);
+        assert.deepEqual(f.state.publications, ["work.failed"]);
+        assert.deepEqual(f.state.scheduled, await continuationIds(f));
+        assert.deepEqual(f.state.settlementWakes, [{
+          namespace: "space",
+          operationId: f.refs.eventId,
+        }]);
+        assert.equal(f.state.wakes, 1);
+        assert.deepEqual(f.state.notificationOrder, [
+          "publication",
+          "placement",
+          "settlement",
+          "reconciliation",
+        ]);
+      }
+    } finally {
+      await f.close();
+    }
+  }
+});
+
+test("lost terminal duplicates reauthorize current control and exact epoch and target", async () => {
+  const f = await terminalFixture("begun");
+  try {
+    const outcome = await f.recover();
+    await flushNotifications();
+    const before = await durableSnapshot(f);
+    const order = [...f.state.notificationOrder];
+    const command = f.command();
+    assert.deepEqual(JSON.parse(command.key), [
+      OWNER_LOST_ACTION_RECOVERY,
+      "owner",
+      2,
+      "space",
+      f.refs.deliveryId,
+      "once",
+    ]);
+    await assert.rejects(
+      f.current.execute({
+        ...f.host(2),
+        principal: { kind: "worker", workerId: "owner:owner" },
+      }, command),
+      { code: "owner_lost_action_refused" },
+    );
+    await assert.rejects(
+      f.current.execute({ ...f.host(2), ownerEpoch: 1 }, command),
+      {
+        code: "ActionOwnershipLost",
+      },
+    );
+    await assert.rejects(
+      f.current.execute({ ...f.host(1), ownerEpoch: 2 }, command),
+      {
+        code: "ActionOwnershipLost",
+      },
+    );
+    for (
+      const changed of [
+        { ...command, key: ownerLostActionKey("owner", 1, f.target, "once") },
+        {
+          ...command,
+          intent: { ...f.target, namespace: "foreign", occurrence: "once" },
+        },
+        {
+          ...command,
+          intent: { ...f.target, deliveryId: "foreign", occurrence: "once" },
+        },
+      ]
+    ) {
+      await assert.rejects(f.current.execute(f.host(2), changed), {
+        code: "owner_lost_action_refused",
+      });
+    }
+    const calls = f.state.controlCalls;
+    f.state.control = false;
+    await assert.rejects(f.recover(), { code: "owner_lost_action_refused" });
+    assert.equal(f.state.controlCalls, calls + 1);
+    f.state.control = true;
+    assert.deepEqual(await f.recover(), {
+      status: "duplicate",
+      result: outcome.result,
+    });
+    assert.equal(f.state.controlCalls, calls + 2);
+    await flushNotifications();
+    assert.deepEqual(await durableSnapshot(f), before);
+    assert.deepEqual(f.state.notificationOrder, order);
+    assert.equal(f.state.executions, 0);
+    assert.equal(f.state.dispatches, 0);
+  } finally {
+    await f.close();
+  }
+});
+
+test("lost exhausted and cancelled unknown COMMIT keeps both durable fates unexposed", async () => {
+  for (const cancelled of [false, true]) {
+    for (const rollback of [false, true]) {
+      const f = await terminalFixture("begun", cancelled);
+      try {
+        const before = await durableSnapshot(f);
+        const evidence = await effectBytes(f);
+        const delivery = await f.store.getDelivery(f.refs.deliveryId);
+        const key = f.command().key;
+        f.state.rollback = rollback;
+        f.state.unknown = !rollback;
+        await assert.rejects(f.recover(), { code: "owner_commit_unknown" });
+        assert.equal(f.current.state, "stopped");
+        await flushNotifications();
+        assertNoNotifications(f);
+        // Observe commit fate with fixture SQL, never owner-control receipt read
+        // authority or an automatic second command. Successor accounting is a
+        // separate host regression because lost-action keys include the epoch.
+        assert.equal(
+          (await f.db.query(
+            "SELECT 1 FROM owner_receipts WHERE kind=$1 AND key=$2",
+            [OWNER_LOST_ACTION_RECOVERY, key],
+          )).rows.length,
+          rollback ? 0 : 1,
+        );
+        if (rollback) {
+          assert.deepEqual(await durableSnapshot(f), before);
+          assert.equal(await f.terminal(), null);
+        } else {
+          await assertCanonicalTerminal(f, "begun", cancelled);
+          const row = await f.store.getDelivery(f.refs.deliveryId);
+          assert.equal(row?.status, cancelled ? "cancelled" : "dead_letter");
+          assert.equal(row?.attempts, delivery?.attempts);
+          assert.equal(row?.maxAttempts, delivery?.maxAttempts);
+          assert.equal(row?.availableAt, delivery?.availableAt);
+        }
+        assert.deepEqual(await effectBytes(f), evidence);
+        assert.equal(
+          (await f.db.query(
+            "SELECT 1 FROM owner_receipts WHERE kind='execution.claim'",
+          )).rows.length,
+          1,
+        );
+        assert.deepEqual(f.state.errors, []);
+      } finally {
+        await f.close();
+      }
+    }
+  }
+});
+
+test("lost terminal malformed or oversized effect inventory rolls back every partial transition", async () => {
+  for (const oversized of [false, true]) {
+    const f = await terminalFixture("begun");
+    try {
+      if (oversized) {
+        // Corrupt retained evidence beyond the public step limit, in addition
+        // to the genuine begun step. No attempts or claim facts are fabricated.
+        for (let index = 0; index < OWNER_EFFECT_STEP_LIMIT; index++) {
+          const ref = {
+            namespace: "space",
+            actionRunId: "run",
+            step: `extra-${index}`,
+          };
+          await f.db.query(
+            "INSERT INTO owner_receipts(owner,principal_kind,principal_id,domain,key,kind,intent,result) VALUES('owner','worker','[\"worker\"]','logical',$1,'effect.begin',$2::jsonb,$3::jsonb)",
+            [
+              ownerEffectKey("owner", ref, "begin"),
+              JSON.stringify(ref),
+              JSON.stringify({ ...ref, status: "begun" }),
+            ],
+          );
+        }
+      } else {
+        await f.db.query(
+          "UPDATE owner_receipts SET kind='effect.invalid' WHERE kind='effect.begin'",
+        );
+      }
+      const before = await durableSnapshot(f);
+      await assert.rejects(f.recover(), {
+        code: oversized ? "effect_step_limit" : "effect_state_invalid",
+      });
+      assert.equal(f.current.state, "acquired");
+      assert.deepEqual(await durableSnapshot(f), before);
+      assert.equal(await f.terminal(), null);
+      await flushNotifications();
+      assertNoNotifications(f);
+      assert.deepEqual(f.state.errors, []);
+    } finally {
+      await f.close();
+    }
+  }
+});
+
+test("lost terminal publication and settlement failures preserve every remaining hint and close registration", async () => {
+  for (const failure of ["publisher", "placement", "settlement"] as const) {
+    const f = await terminalFixture("begun");
+    try {
+      f.state.failPublish = failure === "publisher";
+      f.state.failPlacement = failure === "placement";
+      f.state.failSettlementWake = failure === "settlement";
+      assert.equal((await f.recover()).status, "committed");
+      await flushNotifications();
+      await assertCanonicalTerminal(f, "begun", false);
+      assert.deepEqual(f.state.publications, ["work.failed"]);
+      assert.deepEqual(f.state.scheduled, await continuationIds(f));
+      assert.deepEqual(f.state.settlementWakes, [{
+        namespace: "space",
+        operationId: f.refs.eventId,
+      }]);
+      assert.equal(f.state.wakes, 1);
+      assert.deepEqual(f.state.notificationOrder, [
+        "publication",
+        "placement",
+        "settlement",
+        "reconciliation",
+      ]);
+      if (failure === "publisher") {
+        // The real coordinator intentionally absorbs publisher exceptions and
+        // still places the continuation. Do not change that live contract.
+        assert.deepEqual(f.state.errors, []);
+      } else {
+        // Placement throws from the genuine earlier terminal-publication group;
+        // settlement throws from the real scheduler's staged callback. In both
+        // cases the final bounded reconciliation hint must still be attempted.
+        assert.equal(f.state.errors.length, 1);
+        const error = f.state.errors[0];
+        assert.ok(error instanceof AggregateError);
+        assert.match(error.message, /Lost Action scheduling failed/);
+        assert.equal(error.errors.length, 1);
+        assert.equal(
+          error.errors[0].message,
+          failure === "placement"
+            ? "injected placement failure"
+            : "injected settlement wake failure",
+        );
+      }
+      const before = await durableSnapshot(f);
+      const order = [...f.state.notificationOrder];
+      assert.ok(f.state.lateRegistration);
+      let lateCalls = 0;
+      assert.throws(() =>
+        f.state.lateRegistration!(() => {
+          lateCalls++;
+        }), {
+        code: "owner_lost_action_refused",
+      });
+      await flushNotifications();
+      assert.equal(lateCalls, 0);
+      assert.deepEqual(f.state.notificationOrder, order);
+      assert.deepEqual(await durableSnapshot(f), before);
+    } finally {
+      await f.close();
+    }
+  }
+});
+
+test("lost Action authorize requires the owner-control tag even with permissive policy", async () => {
+  const f = await fixture({ maxAttempts: 1, permissiveControl: true });
+  try {
+    await f.takeover();
+    const calls = f.state.controlCalls;
+    for (
+      const principal of [
+        { kind: "worker", workerId: "owner" },
+        { kind: "worker", workerId: "owner:owner" },
+        {
+          kind: "owner-local",
+          ownerId: "owner",
+          epoch: 2,
+          holderId: "holder-2",
+          deliveryId: f.refs.deliveryId,
+          attemptId: "attempt:1",
+        },
+        { ownerId: "owner", epoch: 2, holderId: "holder-2" },
+      ]
+    ) {
+      await assert.rejects(
+        f.recovery.authorize(
+          f.db,
+          {
+            principal: principal as OwnerCaller["principal"],
+            ownerEpoch: 2,
+          },
+          f.command(),
+          f.state.time,
+        ),
+        { code: "owner_lost_action_refused" },
+      );
+    }
+    assert.equal(f.state.controlCalls, calls);
+    await f.recovery.authorize(f.db, f.host(2), f.command(), f.state.time);
+    assert.equal(f.state.controlCalls, calls + 1);
+    assert.equal(await f.terminal(), null);
+    assertNoNotifications(f);
+  } finally {
+    await f.close();
+  }
+});

@@ -49,15 +49,20 @@ The runner:
    implementation/typing modules resolve their worker dependency to the selected
    public worker entry; legacy runtime workers retain their published
    dependency. No global package override or repository-local link is created
-4. Runs these exact files serially with type checking, over in-process and Node
-   WebSocket transports:
+4. Runs these exact thirteen files (68 declared cases) serially with type
+   checking, including in-process and Node WebSocket transports:
    - `runtime/owner/connected.integration.test.ts`
    - `runtime/owner/execution.connected.test.ts`
+   - `runtime/owner/preparation.connected.test.ts`
    - `runtime/application/owner-host.test.ts`
    - `runtime/application/owner-host.processor.test.ts`
    - `runtime/application/owner-host.capacity.test.ts`
+   - `runtime/application/owner-host.recovery.test.ts`
+   - `runtime/application/owner-host.startup.test.ts`
+   - `runtime/application/owner-host.preparation.test.ts`
    - `plugins/channel-telegram/actions/send-text/transport.integration.test.ts`
    - `runtime/application/owner-composition.connected.test.ts`
+   - `runtime/application/owner-composition.restart.test.ts`
    - `build/role-bundle.connected.test.ts`
 
    It then removes its temporary config on success, test failure, startup error
@@ -88,10 +93,12 @@ option alone does not alter the parent environment.
 node --test scripts/test-owner-connected.test.ts
 ```
 
-These adjacent Node tests cover explicit selection, spaces and URL-sensitive
-characters, manifest/export/source validation, scoped imports, unchanged pins,
-child failures, termination and temporary-file cleanup. They also run under the
-existing repository test runner without adding Deno APIs to the tooling.
+These eleven adjacent Node tests cover explicit selection, spaces and
+URL-sensitive characters, manifest/export/source validation, the exact target
+list, scoped imports, unchanged pins, child failures, termination and
+temporary-file cleanup. They also run under the existing repository test runner
+without adding Deno APIs to the tooling. Setup-test success does not establish
+that any connected case ran; retain the actual selected-source run separately.
 
 The connected fixture uses the shared owner transaction planner for registered
 Collection writes over actual capacity-one reverse calls, on both transports. It
@@ -129,8 +136,32 @@ retain the fresh-host recovery limitation. They do not establish restart
 readiness, owner-local epoch-only placement, complete channel/content support or
 released-package compatibility.
 
-The public composition and role-artifact fixtures use the same bounded fresh
+The fresh public composition and role-artifact fixtures use the same bounded
 storage/owner API and root-authored multi-primitive plugin. The artifact is
 checked before tree shaking and runs without persistence implementation imports.
-Public readiness covers this ordinary fresh composition only; the same explicit
-recovery/content/owner-local limitations apply.
+The separate public restart fixture resumes actual ordinary Collection,
+Processor and child Action history on both transports. This proves that bounded
+composition, not arbitrary lost execution, content recovery or owner-local
+epoch-only placement.
+
+The separate host startup cases validate declared indexes, refuse invalid resume
+configuration before SQL or transport creation, and keep readiness unpublished
+after uncertain commits or unresolved obligations. Their bounded restart cases
+execute pending work once and replay canonical terminals across a second
+takeover on both transports. The lost-Action recovery cases verify that actual
+fresh-host history cannot acquire an absent original execution contract during
+takeover; they do not turn blocked execution into recoverable work. These are
+explicitly bounded source fixtures, not general crash-recovery acceptance.
+
+The named-preparation reverse-call cases exercise lifecycle capture, real child
+execution, immutable replay and current input/result authorization gates on both
+transports. Their occupied parent is test scaffolding; these cases alone do not
+prove public owner-host preparation composition. The separate public host
+preparation cases create ordinary source records through owner Collection
+commands, capture View output once, and reuse a registered child through the
+public factory on both transports. They also exercise generic fallback,
+malformed configuration, current input/result/parent revocation, missing
+registration, bounded nested capacity and registration/policy snapshotting. None
+of the selected fixtures establishes published-package compatibility, complete
+channel/content recovery, or the full retained-suite and release acceptance
+gates.

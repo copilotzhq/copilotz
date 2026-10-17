@@ -189,11 +189,16 @@ export async function prepareOwnerConnectedTest(
   const testFiles = [
     "runtime/owner/connected.integration.test.ts",
     "runtime/owner/execution.connected.test.ts",
+    "runtime/owner/preparation.connected.test.ts",
     "runtime/application/owner-host.test.ts",
     "runtime/application/owner-host.processor.test.ts",
     "runtime/application/owner-host.capacity.test.ts",
+    "runtime/application/owner-host.recovery.test.ts",
+    "runtime/application/owner-host.startup.test.ts",
+    "runtime/application/owner-host.preparation.test.ts",
     "plugins/channel-telegram/actions/send-text/transport.integration.test.ts",
     "runtime/application/owner-composition.connected.test.ts",
+    "runtime/application/owner-composition.restart.test.ts",
     "build/role-bundle.connected.test.ts",
   ].map((path) => join(root, path));
   for (const testFile of testFiles) {

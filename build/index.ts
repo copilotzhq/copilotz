@@ -1,5 +1,11 @@
 /** Build-host-only plugin discovery and source generation. Never imported by runtime. @module */
 import ts from "typescript";
+import { buildWorkerRole } from "./role-bundle.ts";
+export { buildWorkerRole };
+export type {
+  WorkerRoleBundleOptions,
+  WorkerRoleGraph,
+} from "./role-bundle.ts";
 import { dirname, join, relative, resolve } from "node:path";
 import { readdir, readFile } from "node:fs/promises";
 
@@ -328,35 +334,63 @@ export async function build(
 
 if (import.meta.main) {
   const [command, ...args] = Deno.args;
-  if (command !== "build") {
-    throw new Error(
-      "Usage: copilotz build [roots...] [--source-only] [--check] [--output=path] [--platform=browser|deno]",
+  if (command === "bundle") {
+    const known = ["--role=worker"];
+    const unknown = args.find((arg) =>
+      arg.startsWith("--") && !known.includes(arg) &&
+      !["--output=", "--platform=", "--config="].some((prefix) =>
+        arg.startsWith(prefix)
+      )
     );
-  }
-  const unknown = args.find((arg) =>
-    arg.startsWith("--") && !["--source-only", "--check"].includes(arg) &&
-    !arg.startsWith("--output=") && !arg.startsWith("--platform=")
-  );
-  if (unknown) throw new Error(`Unknown argument ${unknown}`);
-  const platform = args.find((arg) =>
-    arg.startsWith("--platform=")
-  )?.slice(11) ?? "browser";
-  if (platform !== "browser" && platform !== "deno") {
-    throw new Error("platform must be browser or deno");
-  }
-  const roots = args.filter((arg) => !arg.startsWith("--"));
-  if (!roots.length) roots.push(".");
-  const output = args.find((arg) => arg.startsWith("--output="))?.slice(9);
-  if (roots.length > 1 && output) {
-    throw new Error("--output requires a single root.");
-  }
-  // Inventory all explicit roots before checking dependency imports between them.
-  for (const root of roots) {
-    await build(root, { sourceOnly: true, check: args.includes("--check") });
-  }
-  if (!args.includes("--source-only") && !args.includes("--check")) {
+    const entries = args.filter((arg) => !arg.startsWith("--"));
+    const output = args.find((arg) => arg.startsWith("--output="))?.slice(9);
+    const platform = args.find((arg) =>
+      arg.startsWith("--platform=")
+    )?.slice(11) ?? "browser";
+    if (
+      unknown || !args.includes("--role=worker") || entries.length !== 1 ||
+      !output || !["browser", "deno"].includes(platform)
+    ) {
+      throw new Error(
+        "Usage: copilotz bundle <entry> --role=worker --output=path [--platform=browser|deno] [--config=path]",
+      );
+    }
+    await buildWorkerRole(entries[0], {
+      output,
+      platform: platform as "browser" | "deno",
+      config: args.find((arg) => arg.startsWith("--config="))?.slice(9),
+    });
+  } else {
+    if (command !== "build") {
+      throw new Error(
+        "Usage: copilotz build [roots...] [--source-only] [--check] [--output=path] [--platform=browser|deno]",
+      );
+    }
+    const unknown = args.find((arg) =>
+      arg.startsWith("--") && !["--source-only", "--check"].includes(arg) &&
+      !arg.startsWith("--output=") && !arg.startsWith("--platform=")
+    );
+    if (unknown) throw new Error(`Unknown argument ${unknown}`);
+    const platform = args.find((arg) =>
+      arg.startsWith("--platform=")
+    )?.slice(11) ?? "browser";
+    if (platform !== "browser" && platform !== "deno") {
+      throw new Error("platform must be browser or deno");
+    }
+    const roots = args.filter((arg) => !arg.startsWith("--"));
+    if (!roots.length) roots.push(".");
+    const output = args.find((arg) => arg.startsWith("--output="))?.slice(9);
+    if (roots.length > 1 && output) {
+      throw new Error("--output requires a single root.");
+    }
+    // Inventory all explicit roots before checking dependency imports between them.
     for (const root of roots) {
-      await build(root, { platform, output });
+      await build(root, { sourceOnly: true, check: args.includes("--check") });
+    }
+    if (!args.includes("--source-only") && !args.includes("--check")) {
+      for (const root of roots) {
+        await build(root, { platform, output });
+      }
     }
   }
 }

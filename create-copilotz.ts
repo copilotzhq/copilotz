@@ -1,3 +1,16 @@
+import { createOwnerConnectedApplication } from "./runtime/application/owner-composition.ts";
+import { createOwnerStorageApplication } from "./runtime/application/owner-storage-composition.ts";
+import type {
+  OwnerApplication,
+  OwnerConnectionOptions,
+  OwnerStorageOptions,
+} from "./runtime/application/owner-composition-types.ts";
+export type {
+  OwnerApplication,
+  OwnerApplicationActionOptions,
+  OwnerConnectionOptions,
+  OwnerStorageOptions,
+} from "./runtime/application/owner-composition-types.ts";
 import { createServerFacadeFetchHandler } from "./server/facade.ts";
 import { createCopilotz as createEmbeddedCopilotz } from "./runtime/application/copilotz.ts";
 import type { CreateCopilotzOptions as RuntimeEmbeddedOptions } from "./runtime/application/copilotz.ts";
@@ -13,18 +26,28 @@ import type { CopilotzApplication } from "./runtime/application/types.ts";
 import type { RegistryComposition } from "./runtime/plugins/index.ts";
 import type { InternalCopilotzGateway } from "./runtime/application/gateway.ts";
 
-type EmbeddedOptions = RuntimeEmbeddedOptions & Readonly<{ role?: "embedded" }>;
+type LegacyPlacement = Readonly<{ owner?: never; storage?: never }>;
+type EmbeddedOptions =
+  & RuntimeEmbeddedOptions
+  & LegacyPlacement
+  & Readonly<{ role?: "embedded" }>;
 
 type GatewayOptions =
   & RuntimeGatewayOptions
+  & LegacyPlacement
   & Readonly<{
     role: "gateway";
   }>;
 
-type WorkerOptions = RuntimeWorkerOptions & Readonly<{ role: "worker" }>;
+type WorkerOptions =
+  & RuntimeWorkerOptions
+  & LegacyPlacement
+  & Readonly<{ role: "worker" }>;
 
 /** One discriminated factory contract for embedded, Gateway, and Worker roles. */
 export type CreateCopilotzOptions =
+  | OwnerConnectionOptions
+  | OwnerStorageOptions
   | EmbeddedOptions
   | GatewayOptions
   | WorkerOptions;
@@ -82,6 +105,15 @@ function serverFetch(
       Promise.resolve(new Response(null, { status: 404 }));
 }
 
+/** Experimental ordinary-Action placements. Both use current admitted owner
+ * authority and leased whole-plugin workers. Storage is fresh-only and single
+ * owner per schema; neither overload claims restart or owner-local support. */
+export function createCopilotz<const T extends OwnerStorageOptions>(
+  options: T,
+): Promise<OwnerApplication<T>>;
+export function createCopilotz<const T extends OwnerConnectionOptions>(
+  options: T,
+): Promise<OwnerApplication<T>>;
 export function createCopilotz<const T extends GatewayOptions>(
   options: T,
 ): Promise<GatewayApplication<T>>;
@@ -94,9 +126,23 @@ export function createCopilotz<const T extends EmbeddedOptions = {}>(
 /** Composes exactly the plugins, resources, and adapters supplied by the caller. */
 export async function createCopilotz(
   options: CreateCopilotzOptions = {},
-): Promise<CopilotzApplication | GatewayApplication | WorkerFactoryResult> {
-  if (options.role === "worker") {
-    const { role: _role, ...workerOptions } = options;
+): Promise<
+  | CopilotzApplication
+  | GatewayApplication
+  | WorkerFactoryResult
+  | OwnerApplication
+> {
+  if (Object.hasOwn(options, "storage")) {
+    return await createOwnerStorageApplication(options as OwnerStorageOptions);
+  }
+  if (Object.hasOwn(options, "owner")) {
+    return await createOwnerConnectedApplication(
+      options as OwnerConnectionOptions,
+    );
+  }
+  const legacy = options as EmbeddedOptions | GatewayOptions | WorkerOptions;
+  if (legacy.role === "worker") {
+    const { role: _role, ...workerOptions } = legacy;
     const worker = await createWorker(workerOptions);
     return ({
       ready: worker.ready.then(() => undefined),
@@ -105,11 +151,11 @@ export async function createCopilotz(
     } as const);
   }
 
-  if (options.role === "gateway") {
+  if (legacy.role === "gateway") {
     const {
       role: _role,
       ...gatewayOptions
-    } = options;
+    } = legacy;
     const gateway = await createGateway(gatewayOptions);
     try {
       const fetch = serverFetch(gateway);
@@ -136,7 +182,7 @@ export async function createCopilotz(
     }
   }
 
-  const { role: _role, ...embeddedOptions } = options;
+  const { role: _role, ...embeddedOptions } = legacy;
   return await createEmbeddedCopilotz(
     embeddedOptions,
     embeddedOptions.databaseLifecycle,

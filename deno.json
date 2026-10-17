@@ -5,6 +5,7 @@
   "license": "MIT",
   "exports": {
     ".": "./index.ts",
+    "./worker": "./worker.ts",
     "./admin": "./plugins/admin/index.ts",
     "./adapters/deno": "./runtime/adapters/deno/index.ts",
     "./application": "./runtime/application/public.ts",
@@ -58,6 +59,7 @@
       "deno.json",
       "index.ts",
       "authoring.ts",
+      "worker.ts",
       "create-copilotz.ts",
       "plugins/**/*.ts",
       "plugins/**/*.md",
@@ -93,6 +95,7 @@
   ],
   "imports": {
     "@copilotz/copilotz": "./index.ts",
+    "@copilotz/copilotz/worker": "./worker.ts",
     "@copilotz/copilotz/admin": "./plugins/admin/index.ts",
     "@copilotz/copilotz/adapters/deno": "./runtime/adapters/deno/index.ts",
     "@copilotz/copilotz/application": "./runtime/application/public.ts",

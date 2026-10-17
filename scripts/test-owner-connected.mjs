@@ -216,10 +216,14 @@ export async function prepareOwnerConnectedTest(
       ...scopes(manifest.scopes, root, "Copilotz scopes"),
       ...siblingScopes,
       [sourceScope]: { ...siblingImports, ...siblingScopes[sourceScope] },
-      [pathToFileURL(join(root, "runtime/application/owner-worker.ts")).href]: {
+      ...Object.fromEntries([
+        "runtime/application/owner-worker.ts",
+        "runtime/application/owner-composition.ts",
+        "runtime/application/owner-composition-types.ts",
+      ].map((path) => [pathToFileURL(join(root, path)).href, {
         [pathToFileURL(join(root, "dependencies/oxian-worker.ts")).href]:
           entrypoints["./worker"],
-      },
+      }])),
     },
     compilerOptions: manifest.compilerOptions,
     unstable: manifest.unstable,

@@ -95,6 +95,33 @@ This is an internal backend prerequisite. It does not expose the owner snapshot
 callback, current-authority control lane, PGlite exclusivity capability,
 generation forwarding or historical-read permission.
 
+## Native PGlite exclusive lifecycle prerequisite
+
+The internal helper now reuses the native transaction mutex instead of adding
+another lock. It keeps native handles private, seals and drains scoped queries,
+explicitly confirms rollback, and quarantines the database when cleanup is
+unproved. The actual SQL-engine isInTransaction predicate prevents joining an
+already-open manual transaction; native WASM readiness is awaited first.
+
+The adapter compares the actual constructor against a recognized built-in
+Deno/Node descriptor using a lazy dynamic import. Its effective configuration is
+restricted to primitive startParams/relaxedDurability options, excluding custom
+extension/filesystem bypasses. Ordinary custom-provider operation is unchanged;
+unsupported snapshot configurations refuse rather than claim exclusivity.
+
+Independent final checks pass 14 typed cases, including actual PGlite, four
+additional lifecycle/descriptor probes, and the canonical static task. Final
+source hashes and documentation formatting are verified. Initial readiness, lint
+and doc-format failures remain preserved. The deliberate arbitrary-SQL escape
+probe is a documented caller-contract boundary: the internal executor accepts
+trusted compiled reads only, not transaction-control or session-changing SQL.
+Public Collection operations must never expose raw worker SQL.
+
+This helper is not yet an engine/session snapshot API. Synchronous resource
+claim, prior-operation drain, sync exclusion, host-close progress, framed
+open/query/end, generation forwarding and owner authorization remain open. This
+is scoped prerequisite evidence, not a new full Copilotz acceptance.
+
 ## Remaining backend and authority gates
 
 A read-only REPEATABLE READ snapshot owns a separate transaction outside the

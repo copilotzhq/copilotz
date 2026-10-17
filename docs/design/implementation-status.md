@@ -1,6 +1,6 @@
 # Owner, worker and Views implementation checklist
 
-Updated: 17 October 2026, 22:54 UTC.
+Updated: 17 October 2026, 23:20 UTC.
 
 This is the maintained coordination checklist for
 [Copilotz PR #93](https://github.com/copilotzhq/copilotz/pull/93). It tracks
@@ -23,6 +23,7 @@ production-ready. All changes remain draft: **no merge or publication**.
 | Shared SQL transaction lifetime      | Reviewed prerequisite   | Ominipg 65 cases, Copilotz 31 plus five steps, four cleanup probes; owner snapshot activation remains gated                                          |
 | Pooled SQL timeout progress          | Reviewed prerequisite   | Ominipg 77, Copilotz 31 plus five steps, four cleanup probes and one retained-listener diagnostic; reserved snapshot capacity remains open           |
 | Accounted snapshot pool capacity     | Reviewed prerequisite   | One existing pool, bounded pair admission; full scoped 102 Ominipg/31 Copilotz plus five steps; final 25 PG pool cases, seven probes and static pass |
+| Native PGlite snapshot lifecycle     | Reviewed prerequisite   | Native mutex/idle/readiness and trusted provider/config scope; 14 typed cases, four probes and static pass; engine/session activation remains open   |
 | Architecture cleanup                 | In progress             | Shared local-port bookkeeping consolidated; migrate callers and retire superseded paths next                                                         |
 
 The approved [lease-free owner attempt contract](owner-attempt-authority.md) is
@@ -132,6 +133,14 @@ fault/causal probes and static checks. Cleanup retry and reentrant shutdown
 regressions are covered; failed physical cleanup is never treated as success.
 The callback/control capability and owner snapshot activation remain open.
 
+The native PGlite prerequisite now reuses its transaction mutex, with sealed
+query lifetime, raw drain and explicit rollback. Actual idle-state/readiness and
+narrow provider/configuration certification avoid another lock or SQL parser.
+Fourteen typed cases, four independent probes and static checks pass. The
+executor is internal for trusted compiled reads; it is not arbitrary-SQL
+confinement. Engine/session resource admission, close progress and owner
+authorization remain to be wired.
+
 The next snapshot prerequisite must preserve F5 isolation and default PGlite
 behavior: PostgreSQL has separate pooled transactions, while PGlite serializes
 its single engine. No weaker snapshot fallback or hidden external-database
@@ -167,6 +176,9 @@ what it simplifies and eliminates before adding machinery.
       retains its global gate and listener capacity remains charged
 - [x] Shared PostgreSQL pool accounting and bounded two-client reservation,
       including queued checkouts/LISTEN and raw cleanup; no extra pool or budget
+- [x] Internal native PGlite snapshot lifecycle and narrow
+      provider/configuration certification; actual idle/readiness, sealed raw
+      drain and confirmed rollback
 - [x] Actual worker Action/Processor/Collection/child-Action flow
 - [x] Current authority, assignment/claim, connection lifetime, cancellation and
       terminal settlement boundaries

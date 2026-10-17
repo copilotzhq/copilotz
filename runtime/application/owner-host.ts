@@ -1,5 +1,7 @@
 /** Private ordinary Action/Processor host. Every worker, including embedded
- * workers, uses the same Oxian transport. Resume requires bounded compatible
+ * workers, uses the same Oxian transport. A separate private fresh-Action seam
+ * can select genuine owner-local execution without changing public composition.
+ * Resume requires bounded compatible
  * event history and, when declared, ordinary Collection namespace coverage.
  * Lost/retried attempts, prepared/content state, streams and protected/deferred
  * histories remain explicit startup blockers. */
@@ -130,6 +132,13 @@ import {
   OWNER_ACTION_WORKLOAD,
   OWNER_PROCESSOR_WORKLOAD,
 } from "./owner-worker.ts";
+
+import {
+  captureOwnerHostLocalActions,
+  createOwnerHostCommandContexts,
+  createOwnerHostLocalActions,
+  type OwnerHostLocalActionOptions,
+} from "./owner-host-local.ts";
 
 type Fence = OwnerWorkerCallContext["fence"];
 type JsonObject = Readonly<Record<string, OwnerJson>>;
@@ -349,6 +358,7 @@ function provenance(scope: OwnerHostIngressScope): JsonObject {
 export async function createOwnerHost(
   options: OwnerHostOptions,
   namespaceInventory?: readonly string[],
+  localActions?: OwnerHostLocalActionOptions,
 ) {
   for (const value of [options.ownerId, options.holderId, options.schema]) {
     text(value);
@@ -382,6 +392,14 @@ export async function createOwnerHost(
       (initialization.maxPasses ?? 4) > 16
     ) throw new TypeError("Invalid owner host resume options.");
   }
+  if (localActions !== undefined && initialization !== "fresh") {
+    throw new TypeError(
+      "Private local Actions require fresh initialization; local resume is unavailable.",
+    );
+  }
+  const localConfiguration = localActions === undefined
+    ? undefined
+    : captureOwnerHostLocalActions(localActions, options.registry);
   for (
     const name of [
       "ingress",
@@ -508,9 +526,17 @@ export async function createOwnerHost(
   let transport: Hypervisor | undefined;
   let initialized = false;
   let closed = false;
+  let closing: Promise<void> | undefined;
   let fault: unknown;
   const pending = new Map<string, OwnerScheduledAssignment>();
-  const active = new Map<string, Promise<void>>();
+  const placements = new Map<string, "worker" | "owner-local">();
+  const active = new Map<
+    string,
+    Readonly<{ placement: "worker" | "owner-local"; token: object }>
+  >();
+  const runningTasks = new Set<Promise<void>>();
+  let local: ReturnType<typeof createOwnerHostLocalActions> | undefined;
+  let localControlToken: string | undefined;
   const settlements = new Map<string, OperationSettlementScope>();
   let pumping = false;
   let settlementPump: Promise<void> | undefined;
@@ -518,6 +544,7 @@ export async function createOwnerHost(
   let alarmPass: Promise<void> | undefined;
   type ControlPurpose =
     | "runtime"
+    | "local-start"
     | "fresh"
     | "schema"
     | "startup"
@@ -557,6 +584,8 @@ export async function createOwnerHost(
     fault ??= error;
     initialized = false;
     clearTimeout(alarmTimer);
+    local?.stop(error);
+    if (localControlToken) controlTokens.delete(localControlToken);
     owner?.stop(error);
     abort.abort(error);
     bridge.stop();
@@ -566,6 +595,39 @@ export async function createOwnerHost(
   function ready() {
     return initialized && !closed && owner.state === "acquired" &&
       !abort.signal.aborted;
+  }
+  const commandContexts = createOwnerHostCommandContexts({
+    ownerId,
+    holderId,
+    epoch: () => owner.epoch,
+    isCurrent: ready,
+  });
+  function reserveActive(key: string, placement: "worker" | "owner-local") {
+    if (
+      !ready() || active.has(key) || active.size >= maxActive ||
+      !pending.has(key) || placements.get(key) !== placement
+    ) return undefined;
+    const entry = { placement, token: {} };
+    active.set(key, entry);
+    let released = false;
+    return {
+      release() {
+        if (released || active.get(key) !== entry) {
+          unavailable("Execution capacity release is not current.");
+        }
+        released = true;
+        active.delete(key);
+        if (placement === "owner-local") {
+          pending.delete(key);
+          placements.delete(key);
+        }
+        if (ready() && !pending.has(key)) queueMicrotask(pump);
+      },
+    };
+  }
+  function trackTask(task: Promise<void>) {
+    runningTasks.add(task);
+    void task.finally(() => runningTasks.delete(task));
   }
   function current(fence: Fence): boolean {
     if (!transport || !ready()) return false;
@@ -630,7 +692,9 @@ export async function createOwnerHost(
     },
     resolveScheduled: (key) => {
       const value = pending.get(key);
-      return value && copy(value);
+      return value && placements.get(key) === "worker"
+        ? copy(value)
+        : undefined;
     },
     authorizeControl(_tx, caller) {
       if (!ready() || caller.ownerEpoch !== owner.epoch) unavailable();
@@ -749,7 +813,10 @@ export async function createOwnerHost(
     tx: SqlExecutor,
     caller: OwnerCaller,
     time: string,
-  ): Promise<OwnerWorkerExecutionAssignment | undefined> {
+  ): Promise<OwnerExecutionAssignment | undefined> {
+    if (caller.principal.kind === "owner-local") {
+      return await local?.resolve(tx, caller, time);
+    }
     const current = await resolveCurrentAssignment(tx, caller, time);
     if (!current || "kind" in current.binding) return undefined;
     const { binding, grants } = current;
@@ -833,7 +900,20 @@ export async function createOwnerHost(
     if (!pending.has(data.deliveryId) && pending.size >= maxPending) {
       unavailable("Owner scheduling queue is full; durable alarm retained.");
     }
-    pending.set(data.deliveryId, copy(data));
+    const existing = pending.get(data.deliveryId);
+    if (existing) {
+      if (!same(existing, data)) {
+        unavailable("Queued delivery identity changed.");
+      }
+    } else {
+      pending.set(data.deliveryId, copy(data));
+      placements.set(
+        data.deliveryId,
+        !("kind" in data) && localConfiguration?.selects(data.actionId)
+          ? "owner-local"
+          : "worker",
+      );
+    }
     queueMicrotask(pump);
   }
   function enqueue(value: OwnerJson) {
@@ -913,32 +993,54 @@ export async function createOwnerHost(
     handler: OwnerCommandHandler,
   ): OwnerCommandHandler {
     return async (intent, context) => {
-      const result = await handler(intent, context);
-      const rows = (await context.tx.query<ScheduledRow>(
-        `SELECT d.id,d.event_id,d.consumer_id,d.status,d.attempts,d.available_at,d.lease_expires_at,e.namespace,e.metadata,e.type FROM ${tables.event_deliveries} d JOIN ${tables.events} e ON e.id=d.event_id WHERE e.owner_id=$1 AND d.status IN ('pending','retry_wait','leased') ORDER BY d.available_at,d.created_at,d.id LIMIT $2`,
-        [ownerId, maxPending + 1],
-      )).rows;
-      if (rows.length > maxPending) {
-        unavailable("Owner durable delivery capacity exceeded.");
-      }
-      const due: OwnerScheduledAssignment[] = [];
-      for (const row of rows) {
-        const ref = scheduledReference(row);
-        const deadline = row.status === "leased"
-          ? row.lease_expires_at
-          : row.available_at;
-        if (!deadline) unavailable("Leased delivery has no deadline.");
-        await setDeliveryAlarm(context, row.namespace, row.id, deadline);
-        if (
-          row.status !== "leased" &&
-          new Date(row.available_at).getTime() <=
-            Date.parse(context.commandTime)
-        ) due.push(ref);
-      }
-      context.afterCommit(() => {
-        for (const ref of due) enqueueScheduled(ref);
-      });
-      return result;
+      const run = async () => {
+        const result = await handler(intent, context);
+        const rows = (await context.tx.query<ScheduledRow>(
+          `SELECT d.id,d.event_id,d.consumer_id,d.status,d.attempts,d.available_at,d.lease_expires_at,e.namespace,e.metadata,e.type FROM ${tables.event_deliveries} d JOIN ${tables.events} e ON e.id=d.event_id WHERE e.owner_id=$1 AND d.status IN ('pending','retry_wait','leased') ORDER BY d.available_at,d.created_at,d.id LIMIT $2`,
+          [ownerId, maxPending + 1],
+        )).rows;
+        if (rows.length > maxPending) {
+          unavailable("Owner durable delivery capacity exceeded.");
+        }
+        const due: OwnerScheduledAssignment[] = [];
+        for (const row of rows) {
+          const ref = scheduledReference(row);
+          const deadline = row.status === "leased"
+            ? row.lease_expires_at
+            : row.available_at;
+          if (row.status === "leased" && deadline === null) {
+            try {
+              if (!local || !await local.classifyNullLease(context, row.id)) {
+                unavailable(
+                  "NULL leased delivery has no current private local authority.",
+                );
+              }
+              await context.tx.query(
+                `DELETE FROM ${ownerTables.alarms} WHERE owner=$1 AND name=$2`,
+                [ownerId, deliveryAlarm(row.namespace, row.id)],
+              );
+            } catch (error) {
+              stop(error);
+              throw error;
+            }
+            continue;
+          }
+          if (!deadline) unavailable("Leased delivery has no deadline.");
+          await setDeliveryAlarm(context, row.namespace, row.id, deadline);
+          if (
+            row.status !== "leased" &&
+            new Date(row.available_at).getTime() <=
+              Date.parse(context.commandTime)
+          ) due.push(ref);
+        }
+        context.afterCommit(() => {
+          for (const ref of due) enqueueScheduled(ref);
+        });
+        return result;
+      };
+      return localConfiguration
+        ? await commandContexts.run(context, run)
+        : await run();
     };
   }
   function wake(target: OperationSettlementScope) {
@@ -1000,6 +1102,12 @@ export async function createOwnerHost(
     tx: SqlExecutor,
     context: OwnerPreparedInputContext,
   ) {
+    if (
+      context.caller.principal.kind === "owner-local" ||
+      Object.hasOwn(context.caller, "localPlacementStart")
+    ) {
+      unavailable("Prepared input is unavailable for private local Actions.");
+    }
     if (!preparations) unavailable("Prepared input authority is unavailable.");
     // Execution/child modules own their current assignment checks. Calling
     // authorizeLive here would recursively reenter this prepared-input gate.
@@ -1015,9 +1123,30 @@ export async function createOwnerHost(
     leaseMs,
     scheduleSettlement: settlement.schedule,
     resolveAssignment: resolveExecution,
+    ...(localConfiguration
+      ? {
+        local: {
+          authorizeStart: (tx, caller, binding, time) =>
+            local?.execution.authorizeStart(tx, caller, binding, time) ?? false,
+          reserveLocal: (context, binding) => {
+            if (!local) unavailable();
+            return local.execution.reserveLocal(context, binding);
+          },
+          retireLocal: (context, binding) => {
+            if (!local) unavailable();
+            return local.execution.retireLocal(context, binding);
+          },
+        },
+      }
+      : {}),
     authorizePreparedInput,
-    authorizeInput: (tx, assignment, value, time) =>
-      policy.input(tx, copy(workerAssignment(assignment)), copy(value), time),
+    authorizeInput: (tx, assignment, value, time) => {
+      if (assignment.placement === "owner-local") {
+        if (!local) unavailable();
+        return local.input(tx, assignment, value, time);
+      }
+      return policy.input(tx, copy(assignment), copy(value), time);
+    },
   });
   const processor = createOwnerProcessorCommands({
     ownerId,
@@ -1503,6 +1632,15 @@ export async function createOwnerHost(
             if (!delivery) {
               unavailable("Owner alarm has no matching durable delivery.");
             }
+            if (
+              delivery.status === "leased" && delivery.lease_expires_at === null
+            ) {
+              const error = new Error(
+                "NULL leased delivery retained an inconsistent alarm; local recovery is unavailable.",
+              );
+              stop(error);
+              throw error;
+            }
             found.push({
               kind: "delivery",
               reference: scheduledReference(delivery),
@@ -1545,197 +1683,264 @@ export async function createOwnerHost(
         : {}),
     },
     async authorize(tx, caller, command, time, normalized) {
-      if (command.kind === "host.initialize-fresh") {
-        assertControl(caller, "fresh");
-        if (
-          initialization !== "fresh" || initialized ||
-          command.domain !== "occurrence" || command.key !== freshKey ||
-          command.intent !== null
-        ) unavailable();
-        await validateSchemas(tx);
-        // Runs before receipt lookup, so a duplicate cannot bypass emptiness.
-        await assertFreshEmpty(tx, false);
-        return;
-      }
-      if (command.kind === "host.schema-ready") {
-        assertControl(caller, "schema");
-        if (initialized || command.intent !== null) unavailable();
-        return;
-      }
-      if (
-        command.kind === OWNER_STARTUP_REPAIR ||
-        command.kind === OWNER_STARTUP_PROOF
-      ) {
-        if (initialization === "fresh" || initialized) unavailable();
-        return await startup.authorize(tx, caller, command, time);
-      }
-      if (
-        !ready() &&
-        (command.kind === OWNER_OPERATION_SETTLEMENT ||
-          command.kind === OWNER_OPERATION_READINESS)
-      ) {
-        assertControl(caller, "startup-settlement");
-        return await settlement.authorize(tx, caller, command, time);
-      }
-      if (command.kind.startsWith("host.")) {
-        assertControl(caller);
-        if (!ready()) unavailable();
-        return;
-      }
-      if (!ready()) unavailable();
-      if (command.kind.startsWith("assignment.")) {
-        await bridge.authorizeAssignment(tx, caller, command, time);
-        if (command.kind === "assignment.bind") {
-          // Only the bridge's already-validated private control witness can get
-          // here. New dispatch needs current ctx authority, even if this same
-          // worker remains eligible for old settlement and receipt reads.
-          const binding = copy(command.intent) as OwnerAssignmentBinding;
-          const sessionView = transport!.sessions.get(binding.workerId);
-          if (
-            !sessionView || sessionView.connectionId !== binding.sessionId ||
-            sessionView.sessionGeneration !== binding.sessionGeneration ||
-            sessionView.identity.attemptId !== binding.workerAttemptId
-          ) unavailable();
-          const fence: Fence = {
-            identity: { ...sessionView.identity },
-            connectionId: binding.sessionId,
-            sessionGeneration: binding.sessionGeneration,
-          };
-          if (!current(fence)) unavailable();
-          const returned = await policy.worker(
-            tx,
-            copy({ fence, assignment: binding }),
-            time,
-          );
-          const grants = returned && copy(returned);
-          if (grants?.ctx !== true || !current(fence)) {
-            unavailable("Current worker policy refuses new execution.");
+      return await commandContexts.authorize(
+        tx,
+        caller,
+        command,
+        time,
+        async () => {
+          if (command.kind === "host.initialize-fresh") {
+            assertControl(caller, "fresh");
+            if (
+              initialization !== "fresh" || initialized ||
+              command.domain !== "occurrence" || command.key !== freshKey ||
+              command.intent !== null
+            ) unavailable();
+            await validateSchemas(tx);
+            // Runs before receipt lookup, so a duplicate cannot bypass emptiness.
+            await assertFreshEmpty(tx, false);
+            return;
           }
-        }
-        return;
-      }
-      if (command.kind === "action.prepare") {
-        const request = copy(
-          command.intent,
-        ) as unknown as OwnerActionCallRequest;
-        if (
-          !request || typeof request !== "object" || Array.isArray(request) ||
-          Object.keys(request).some((key) =>
-            !["actionAlias", "input", "operationKey"].includes(key)
-          ) || !Object.hasOwn(request, "input")
-        ) unavailable();
-        text(request.actionAlias);
-        if (request.operationKey !== undefined) text(request.operationKey);
-        const scope = await scopeFor(tx, caller, time);
-        if (!scope.allowedActions.includes(request.actionAlias)) unavailable();
-        preparedScopes.set(tx, { scope, request });
-        return;
-      }
-      if (command.kind === OWNER_ACTION_ADMISSION) {
-        validateOwnerActionAdmissionIdentity(ownerId, command, normalized);
-        const scope = await scopeFor(tx, caller, time);
-        await assertIngress(tx, scope, normalized);
-        if (
-          !scope.allowedActions.includes(normalized.actionAlias)
-        ) unavailable();
-        admissionScopes.set(tx, scope);
-        return;
-      }
-      if (command.kind === result.kind) {
-        return await result.authorize(tx, caller, command, time);
-      }
-      if (command.kind === OWNER_CHILD_ACTION_PREPARATION) {
-        if (!preparations) unavailable("Named preparation is unavailable.");
-        return await preparations.authorize(
-          tx,
-          caller,
-          command,
-          time,
-          normalized,
-        );
-      }
-      if (
-        command.kind === OWNER_CHILD_ACTION_ADMISSION ||
-        command.kind === OWNER_CHILD_ACTION_RESULT
-      ) {
-        return await child.authorize(tx, caller, command, time, normalized);
-      }
-      if (command.kind.startsWith("processor.")) {
-        return await processor.authorize(tx, caller, command, time);
-      }
-      if (
-        command.kind === OWNER_OPERATION_SETTLEMENT ||
-        command.kind === OWNER_OPERATION_READINESS
-      ) {
-        return await settlement.authorize(tx, caller, command, time);
-      }
-      if (command.kind.startsWith("effect.")) {
-        return await effects.authorize(tx, caller, command, time);
-      }
-      if (command.kind === "collections") {
-        const binding = await bridge.resolveStarted(tx, caller);
-        if (!binding) unavailable();
-        let assignment:
-          | OwnerWorkerExecutionAssignment
-          | OwnerProcessorAssignment;
-        let prefix: string;
-        let identity: OwnerCollectionScope["identity"];
-        if ("kind" in binding) {
-          const live = await processor.authorizeLive(tx, caller, time);
-          assignment = live.assignment;
-          prefix = `delivery:${live.delivery.id}:`;
-          identity = {
-            causationId: live.event.id,
-            correlationId: live.event.correlationId,
-            settlementScopeId: live.delivery.settlementScopeId,
-            ...(live.delivery.actionScopeId
-              ? { actionScopeId: live.delivery.actionScopeId }
-              : {}),
-            deliveryLease: {
-              deliveryId: live.delivery.id,
-              owner: live.assignment.dispatchAttemptId,
-            },
-            metadata: {
-              sourceEventId: live.event.id,
-              sourceDeliveryId: live.delivery.id,
-              sourceConsumerId: live.delivery.consumerId,
-            },
-          };
-        } else {
-          assignment = workerAssignment(
-            await execution.authorizeLive(tx, caller, time),
-          );
-          prefix = `${assignment.invocation.operationKey}/`;
-          identity = {
-            ...copy(assignment.invocation.identity),
-            deliveryLease: {
-              deliveryId: assignment.deliveryId,
-              owner: assignment.dispatchAttemptId,
-            },
-          };
-        }
-        if (
-          command.domain !== "logical" ||
-          !command.key.startsWith(prefix) || command.key.length <= prefix.length
-        ) {
-          unavailable();
-        }
-        const conditions = copy(
-          await policy.collections(
+          if (command.kind === "host.schema-ready") {
+            assertControl(caller, "schema");
+            if (initialized || command.intent !== null) unavailable();
+            return;
+          }
+          if (
+            command.kind === OWNER_STARTUP_REPAIR ||
+            command.kind === OWNER_STARTUP_PROOF
+          ) {
+            if (initialization === "fresh" || initialized) unavailable();
+            return await startup.authorize(tx, caller, command, time);
+          }
+          if (
+            !ready() &&
+            (command.kind === OWNER_OPERATION_SETTLEMENT ||
+              command.kind === OWNER_OPERATION_READINESS)
+          ) {
+            assertControl(caller, "startup-settlement");
+            return await settlement.authorize(tx, caller, command, time);
+          }
+          if (command.kind.startsWith("host.")) {
+            assertControl(caller);
+            if (!ready()) unavailable();
+            return;
+          }
+          if (!ready()) unavailable();
+          if (command.kind.startsWith("assignment.")) {
+            await bridge.authorizeAssignment(tx, caller, command, time);
+            if (command.kind === "assignment.bind") {
+              // Only the bridge's already-validated private control witness can get
+              // here. New dispatch needs current ctx authority, even if this same
+              // worker remains eligible for old settlement and receipt reads.
+              const binding = copy(command.intent) as OwnerAssignmentBinding;
+              const sessionView = transport!.sessions.get(binding.workerId);
+              if (
+                !sessionView ||
+                sessionView.connectionId !== binding.sessionId ||
+                sessionView.sessionGeneration !== binding.sessionGeneration ||
+                sessionView.identity.attemptId !== binding.workerAttemptId
+              ) unavailable();
+              const fence: Fence = {
+                identity: { ...sessionView.identity },
+                connectionId: binding.sessionId,
+                sessionGeneration: binding.sessionGeneration,
+              };
+              if (!current(fence)) unavailable();
+              const returned = await policy.worker(
+                tx,
+                copy({ fence, assignment: binding }),
+                time,
+              );
+              const grants = returned && copy(returned);
+              if (grants?.ctx !== true || !current(fence)) {
+                unavailable("Current worker policy refuses new execution.");
+              }
+            }
+            return;
+          }
+          if (command.kind === "action.prepare") {
+            const request = copy(
+              command.intent,
+            ) as unknown as OwnerActionCallRequest;
+            if (
+              !request || typeof request !== "object" ||
+              Array.isArray(request) ||
+              Object.keys(request).some((key) =>
+                !["actionAlias", "input", "operationKey"].includes(key)
+              ) || !Object.hasOwn(request, "input")
+            ) unavailable();
+            text(request.actionAlias);
+            if (request.operationKey !== undefined) text(request.operationKey);
+            const scope = await scopeFor(tx, caller, time);
+            if (
+              !scope.allowedActions.includes(request.actionAlias)
+            ) unavailable();
+            preparedScopes.set(tx, { scope, request });
+            return;
+          }
+          if (command.kind === OWNER_ACTION_ADMISSION) {
+            validateOwnerActionAdmissionIdentity(ownerId, command, normalized);
+            const scope = await scopeFor(tx, caller, time);
+            await assertIngress(tx, scope, normalized);
+            if (
+              !scope.allowedActions.includes(normalized.actionAlias)
+            ) unavailable();
+            admissionScopes.set(tx, scope);
+            return;
+          }
+          if (command.kind === result.kind) {
+            return await result.authorize(tx, caller, command, time);
+          }
+          if (command.kind === OWNER_CHILD_ACTION_PREPARATION) {
+            if (!preparations) unavailable("Named preparation is unavailable.");
+            return await preparations.authorize(
+              tx,
+              caller,
+              command,
+              time,
+              normalized,
+            );
+          }
+          if (
+            command.kind === OWNER_CHILD_ACTION_ADMISSION ||
+            command.kind === OWNER_CHILD_ACTION_RESULT
+          ) {
+            return await child.authorize(tx, caller, command, time, normalized);
+          }
+          if (command.kind.startsWith("processor.")) {
+            return await processor.authorize(tx, caller, command, time);
+          }
+          if (
+            command.kind === OWNER_OPERATION_SETTLEMENT ||
+            command.kind === OWNER_OPERATION_READINESS
+          ) {
+            return await settlement.authorize(tx, caller, command, time);
+          }
+          if (command.kind.startsWith("effect.")) {
+            return await effects.authorize(tx, caller, command, time);
+          }
+          if (command.kind === "collections") {
+            if (caller.principal.kind === "owner-local") {
+              if (!local) unavailable();
+              const assignment = await execution.authorizeLive(
+                tx,
+                caller,
+                time,
+              );
+              if (assignment.placement !== "owner-local") unavailable();
+              const {
+                invocation,
+                ctxGranted: _ctx,
+                settlementGranted: _settlement,
+                ...attempt
+              } = assignment;
+              const prefix = `${invocation.operationKey}/`;
+              if (
+                command.domain !== "logical" ||
+                !command.key.startsWith(prefix) ||
+                command.key.length <= prefix.length
+              ) unavailable();
+              const conditions = await local.collections(
+                tx,
+                assignment,
+                copy(command.intent) as unknown as OwnerCollectionIntent,
+                time,
+              );
+              const rechecked = await execution.authorizeLive(tx, caller, time);
+              if (
+                rechecked.placement !== "owner-local" ||
+                rechecked.attemptId !== assignment.attemptId ||
+                rechecked.deliveryId !== assignment.deliveryId ||
+                rechecked.sourceEventId !== assignment.sourceEventId ||
+                !same(rechecked.invocation, invocation)
+              ) unavailable();
+              collectionScopes.set(tx, {
+                namespace: assignment.namespace,
+                identity: {
+                  ...copy(invocation.identity),
+                  deliveryLease: {
+                    deliveryId: assignment.deliveryId,
+                    owner: assignment.attemptId,
+                  },
+                },
+                conditions: conditions.conditions,
+                attempt,
+              });
+              return;
+            }
+            const binding = await bridge.resolveStarted(tx, caller);
+            if (!binding) unavailable();
+            let assignment:
+              | OwnerWorkerExecutionAssignment
+              | OwnerProcessorAssignment;
+            let prefix: string;
+            let identity: OwnerCollectionScope["identity"];
+            if ("kind" in binding) {
+              const live = await processor.authorizeLive(tx, caller, time);
+              assignment = live.assignment;
+              prefix = `delivery:${live.delivery.id}:`;
+              identity = {
+                causationId: live.event.id,
+                correlationId: live.event.correlationId,
+                settlementScopeId: live.delivery.settlementScopeId,
+                ...(live.delivery.actionScopeId
+                  ? { actionScopeId: live.delivery.actionScopeId }
+                  : {}),
+                deliveryLease: {
+                  deliveryId: live.delivery.id,
+                  owner: live.assignment.dispatchAttemptId,
+                },
+                metadata: {
+                  sourceEventId: live.event.id,
+                  sourceDeliveryId: live.delivery.id,
+                  sourceConsumerId: live.delivery.consumerId,
+                },
+              };
+            } else {
+              assignment = workerAssignment(
+                await execution.authorizeLive(tx, caller, time),
+              );
+              prefix = `${assignment.invocation.operationKey}/`;
+              identity = {
+                ...copy(assignment.invocation.identity),
+                deliveryLease: {
+                  deliveryId: assignment.deliveryId,
+                  owner: assignment.dispatchAttemptId,
+                },
+              };
+            }
+            if (
+              command.domain !== "logical" ||
+              !command.key.startsWith(prefix) ||
+              command.key.length <= prefix.length
+            ) {
+              unavailable();
+            }
+            const conditions = copy(
+              await policy.collections(
+                tx,
+                copy(assignment),
+                copy(command.intent) as unknown as OwnerCollectionIntent,
+                time,
+              ),
+            );
+            collectionScopes.set(tx, {
+              namespace: assignment.namespace,
+              identity,
+              conditions: conditions.conditions,
+            });
+            return;
+          }
+          return await execution.authorize(
             tx,
-            copy(assignment),
-            copy(command.intent) as unknown as OwnerCollectionIntent,
+            caller,
+            command,
             time,
-          ),
-        );
-        collectionScopes.set(tx, {
-          namespace: assignment.namespace,
-          identity,
-          conditions: conditions.conditions,
-        });
-        return;
-      }
-      return await execution.authorize(tx, caller, command, time, normalized);
+            normalized,
+          );
+        },
+      );
     },
     authenticateReceipt(_tx, caller) {
       if (
@@ -1763,6 +1968,14 @@ export async function createOwnerHost(
       for (const [key, ref] of pending) {
         if (active.size >= maxActive) break;
         if (active.has(key)) continue;
+        if (placements.get(key) === "owner-local") {
+          if (!local) unavailable();
+          const task = local.run(copy(ref)).catch((error) => stop(error));
+          trackTask(task);
+          continue;
+        }
+        const reservation = reserveActive(key, "worker");
+        if (!reservation) break;
         const task = (async () => {
           let dispatched = false;
           try {
@@ -1811,14 +2024,15 @@ export async function createOwnerHost(
               })
             );
             pending.delete(key);
+            placements.delete(key);
           } catch (error) {
             if (dispatched) stop(error);
             else report(error);
           } finally {
-            active.delete(key);
+            reservation.release();
           }
         })();
-        active.set(key, task);
+        trackTask(task);
         void task.finally(() => {
           if (ready() && !pending.has(key)) queueMicrotask(pump);
         });
@@ -1895,6 +2109,7 @@ export async function createOwnerHost(
               })
             );
             pending.delete(id);
+            placements.delete(id);
           } else if (
             (alarm.status === "pending" && alarm.attempts === 0) ||
             ("kind" in ref &&
@@ -2155,6 +2370,47 @@ export async function createOwnerHost(
     if (owner.state !== "acquired" || abort.signal.aborted || closed) {
       unavailable();
     }
+    if (localConfiguration) {
+      localControlToken = crypto.randomUUID();
+      controlTokens.set(localControlToken, { purpose: "local-start" });
+      local = createOwnerHostLocalActions({
+        configuration: localConfiguration,
+        registry,
+        schema,
+        boundary: owner,
+        controlCaller: {
+          principal: {
+            kind: "owner-control",
+            ownerId,
+            epoch: owner.epoch!,
+            holderId,
+          },
+          ownerEpoch: owner.epoch!,
+          hostControl: localControlToken,
+        },
+        maxActive,
+        capacity: {
+          reserve(binding) {
+            const scheduled = pending.get(binding.deliveryId);
+            if (
+              !scheduled || "kind" in scheduled ||
+              scheduled.namespace !== binding.namespace ||
+              scheduled.sourceEventId !== binding.sourceEventId ||
+              scheduled.actionId !== binding.actionId ||
+              scheduled.executionId !== binding.actionRunId
+            ) return undefined;
+            return reserveActive(binding.deliveryId, "owner-local");
+          },
+        },
+        contexts: commandContexts,
+        isCurrent: ready,
+        assertControl(caller) {
+          if (!ready()) unavailable();
+          assertControl(caller, "local-start");
+        },
+        onIndeterminate: stop,
+      });
+    }
     initialized = true;
     armAlarm();
   } catch (error) {
@@ -2187,20 +2443,43 @@ export async function createOwnerHost(
       recoveryRequired: fault !== undefined ||
         (!closed && owner.state === "stopped"),
     }),
-    async close(reason = "owner host closed") {
-      if (closed) return;
-      closed = true;
-      initialized = false;
-      clearTimeout(alarmTimer);
-      abort.abort(new Error(reason));
-      bridge.stop();
-      notifyStopped();
-      await transport!.shutdown(reason);
-      await Promise.allSettled([...active.values()]);
-      await settlementPump;
-      await alarmPass?.catch(() => undefined);
-      await bridge.retryRetirements();
-      owner.stop(reason);
+    close(reason = "owner host closed"): Promise<void> {
+      if (closing) return closing;
+      let resolve!: () => void;
+      let reject!: (error: unknown) => void;
+      // Publish before revocation can synchronously reenter close through an
+      // exposed abort listener. Every caller observes this same actual drain.
+      closing = new Promise<void>((yes, no) => {
+        resolve = yes;
+        reject = no;
+      });
+      const cleanup = (async () => {
+        closed = true;
+        initialized = false;
+        clearTimeout(alarmTimer);
+        local?.stop(new Error(reason));
+        if (localControlToken) controlTokens.delete(localControlToken);
+        abort.abort(new Error(reason));
+        bridge.stop();
+        notifyStopped();
+        // Transport cleanup may fail independently of actual local/raw work.
+        // Keep waiting for that work, and preserve the original shutdown error.
+        const cleanup = await Promise.allSettled([
+          Promise.resolve().then(() => transport!.shutdown(reason)),
+          (async () => {
+            await Promise.allSettled([...runningTasks]);
+            await settlementPump;
+            await alarmPass?.catch(() => undefined);
+            await bridge.retryRetirements();
+          })(),
+        ]);
+        owner.stop(reason);
+        for (const result of cleanup) {
+          if (result.status === "rejected") throw result.reason;
+        }
+      })();
+      cleanup.then(resolve, reject);
+      return closing;
     },
   };
 }

@@ -1,0 +1,577 @@
+/** Private fresh-only local Action composition. No public placement option,
+ * worker identity, restart adoption, child, preparation or effect capability. */
+import type { SqlExecutor } from "../events/session.ts";
+import {
+  createCoreTableNames,
+  quoteEventIdentifier,
+} from "../events/schema.ts";
+import { assertJsonValue } from "../json.ts";
+import type { PluginRegistry } from "../plugins/registry.ts";
+import {
+  createRegisteredLocalActionExecution,
+  type RegisteredLocalActionOptions,
+} from "../execution/registered-local.ts";
+import {
+  createOwnerAssignmentControl,
+  OWNER_ASSIGNMENT_BINDING_MAX_BYTES,
+  parseOwnerStoredAssignment,
+} from "../owner/assignments.ts";
+import type { OwnerLocalActionAssignmentBinding } from "../owner/placement-binding.ts";
+import type {
+  OwnerCaller,
+  OwnerCommand,
+  OwnerCommandBoundary,
+  OwnerCommandContext,
+  OwnerJson,
+} from "../owner/boundary.ts";
+import type {
+  OwnerCollectionIntent,
+  OwnerCollectionScope,
+} from "../owner/collections.ts";
+import {
+  ownerLocalActionStartKey,
+  type OwnerLocalExecutionAssignment,
+} from "../owner/execution.ts";
+import { createOwnerLocalActionPort } from "../owner/local-action-port.ts";
+import {
+  createOwnerLocalPlacementController,
+  type OwnerLocalNullLeaseEvidence,
+} from "./owner-local-placement.ts";
+import type { OwnerScheduledAssignment } from "./owner-dispatch.ts";
+
+type Binding = OwnerLocalActionAssignmentBinding;
+type Grant = Readonly<{ ctx: boolean; settlement: boolean }>;
+export type OwnerHostLocalActionAuthority = Readonly<{
+  placement: "owner-local";
+  phase: "start" | "current";
+  binding: Binding;
+}>;
+export type OwnerHostLocalActionOptions = Readonly<{
+  /** Stable registered Action IDs selected only by trusted owner composition. */
+  actionIds: readonly string[];
+  policy: Readonly<{
+    grants(
+      tx: SqlExecutor,
+      authority: OwnerHostLocalActionAuthority,
+      time: string,
+    ): Grant | undefined | Promise<Grant | undefined>;
+    input(
+      tx: SqlExecutor,
+      assignment: OwnerLocalExecutionAssignment,
+      value: OwnerJson,
+      time: string,
+    ): void | Promise<void>;
+    collections(
+      tx: SqlExecutor,
+      assignment: OwnerLocalExecutionAssignment,
+      intent: OwnerCollectionIntent,
+      time: string,
+    ):
+      | Pick<OwnerCollectionScope, "conditions">
+      | Promise<Pick<OwnerCollectionScope, "conditions">>;
+  }>;
+  createCapabilities: RegisteredLocalActionOptions["createCapabilities"];
+  maxEntries?: number;
+  maxPendingCalls?: number;
+}>;
+function refuse(
+  message = "Current local host authority is unavailable.",
+): never {
+  throw Object.assign(new Error(message), {
+    code: "owner_host_local_unavailable",
+  });
+}
+function copy<T>(value: T): T {
+  assertJsonValue(value, {
+    maxDepth: 64,
+    maxNodes: 100_000,
+    rejectNegativeZero: true,
+  });
+  return structuredClone(value);
+}
+function exact(a: unknown, b: unknown): boolean {
+  const canonical = (value: unknown): string =>
+    JSON.stringify(
+      value,
+      (_, item) =>
+        item && typeof item === "object" && !Array.isArray(item)
+          ? Object.fromEntries(
+            Object.keys(item).sort().map((key) => [key, item[key]]),
+          )
+          : item,
+    );
+  return canonical(copy(a)) === canonical(copy(b));
+}
+function text(value: unknown): asserts value is string {
+  if (
+    typeof value !== "string" || !value.trim() || value !== value.trim() ||
+    value.length > 1024
+  ) refuse("Invalid local host identifier.");
+}
+function ownConfiguration(
+  value: unknown,
+  required: readonly string[],
+  optional: readonly string[] = [],
+): Record<string, unknown> {
+  if (
+    !value || typeof value !== "object" || Array.isArray(value) ||
+    ![Object.prototype, null].includes(Object.getPrototypeOf(value))
+  ) {
+    throw new TypeError(
+      "Private local configuration requires a plain own-data object.",
+    );
+  }
+  const captured: Record<string, unknown> = {};
+  for (const key of Reflect.ownKeys(value)) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (
+      typeof key !== "string" || !descriptor?.enumerable ||
+      !("value" in descriptor) ||
+      ![...required, ...optional].includes(key)
+    ) {
+      throw new TypeError(
+        "Private local configuration requires closed own-data fields.",
+      );
+    }
+    captured[key] = descriptor.value;
+  }
+  if (required.some((key) => !Object.hasOwn(captured, key))) {
+    throw new TypeError("Private local configuration is incomplete.");
+  }
+  return captured;
+}
+/** Capture configuration before the host's first provisioning/initialization await. */
+export function captureOwnerHostLocalActions(
+  supplied: OwnerHostLocalActionOptions,
+  registry: PluginRegistry,
+) {
+  const input = ownConfiguration(supplied, [
+    "actionIds",
+    "policy",
+    "createCapabilities",
+  ], ["maxEntries", "maxPendingCalls"]);
+  const callbacks = ownConfiguration(input.policy, [
+    "grants",
+    "input",
+    "collections",
+  ]);
+  if (
+    !Array.isArray(input.actionIds) ||
+    Object.getPrototypeOf(input.actionIds) !== Array.prototype ||
+    !input.actionIds.length || input.actionIds.length > 4096 ||
+    [
+      callbacks.grants,
+      callbacks.input,
+      callbacks.collections,
+      input.createCapabilities,
+    ]
+      .some((callback) => typeof callback !== "function")
+  ) {
+    throw new TypeError("Invalid private local Action configuration.");
+  }
+  const ids = copy(input.actionIds);
+  const registered = new Set(
+    Object.values(registry.actions).map((action) => action.id),
+  );
+  ids.forEach(text);
+  if (
+    new Set(ids).size !== ids.length || ids.some((id) => !registered.has(id))
+  ) {
+    throw new TypeError(
+      "Local selection requires distinct registered Action IDs.",
+    );
+  }
+  const maxEntries = Object.hasOwn(input, "maxEntries")
+    ? input.maxEntries
+    : 4096;
+  const maxPendingCalls = Object.hasOwn(input, "maxPendingCalls")
+    ? input.maxPendingCalls
+    : 32;
+  if (
+    typeof maxEntries !== "number" || !Number.isSafeInteger(maxEntries) ||
+    maxEntries < 1 || maxEntries > 4096 ||
+    typeof maxPendingCalls !== "number" ||
+    !Number.isSafeInteger(maxPendingCalls) || maxPendingCalls < 1 ||
+    maxPendingCalls > 128
+  ) {
+    throw new TypeError("Invalid private local Action capacity.");
+  }
+  const selected = new Set(ids);
+  const policy = callbacks as OwnerHostLocalActionOptions["policy"];
+  const createCapabilities = input
+    .createCapabilities as OwnerHostLocalActionOptions["createCapabilities"];
+  return {
+    selects: (id: string) => selected.has(id),
+    policy,
+    createCapabilities,
+    maxEntries,
+    maxPendingCalls,
+  };
+}
+
+/** The actual boundary's successful authorization is distinct from a matching
+ * structural context. Only the exact currently executing wrapped handler is live. */
+export function createOwnerHostCommandContexts(
+  options: Readonly<{
+    ownerId: string;
+    holderId: string;
+    epoch(): number | undefined;
+    isCurrent(): boolean;
+  }>,
+) {
+  const { ownerId, holderId, epoch, isCurrent } = options;
+  const authorized = new WeakMap<
+    SqlExecutor,
+    Readonly<{
+      caller: OwnerCaller;
+      command: OwnerCommandContext["command"];
+      time: string;
+    }>
+  >();
+  const live = new WeakSet<OwnerCommandContext>();
+  function matches(context: OwnerCommandContext): boolean {
+    const found = authorized.get(context.tx);
+    return !!found && isCurrent() === true && !context.signal.aborted &&
+      context.ownerCommit.transaction === context.tx &&
+      context.ownerCommit.ownerId === ownerId &&
+      context.ownerCommit.holderId === holderId &&
+      context.ownerCommit.epoch === epoch() &&
+      context.ownerCommit.commandTime === context.commandTime &&
+      found.time === context.commandTime &&
+      exact(found.caller, context.caller) &&
+      exact(found.command, context.command);
+  }
+  return {
+    async authorize(
+      tx: SqlExecutor,
+      caller: OwnerCaller,
+      command: OwnerCommand,
+      time: string,
+      run: () => void | Promise<void>,
+    ): Promise<void> {
+      authorized.delete(tx);
+      const captured = copy({
+        caller,
+        command: {
+          kind: command.kind,
+          domain: command.domain,
+          key: command.key,
+        },
+        time,
+      });
+      await run();
+      authorized.set(tx, captured);
+    },
+    async run<T>(
+      context: OwnerCommandContext,
+      run: () => T | Promise<T>,
+    ): Promise<T> {
+      if (!matches(context) || live.has(context)) {
+        refuse("Unauthenticated local alarm command context.");
+      }
+      live.add(context);
+      try {
+        return await run();
+      } finally {
+        live.delete(context);
+      }
+    },
+    isCurrent(context: OwnerCommandContext): boolean {
+      return live.has(context) && matches(context);
+    },
+  };
+}
+
+export function createOwnerHostLocalActions(
+  options: Readonly<{
+    configuration: ReturnType<typeof captureOwnerHostLocalActions>;
+    registry: PluginRegistry;
+    schema: string;
+    boundary: Pick<
+      OwnerCommandBoundary,
+      "execute" | "executeInput" | "project"
+    >;
+    controlCaller: OwnerCaller;
+    maxActive: number;
+    capacity: Readonly<{
+      reserve(binding: Binding): Readonly<{ release(): void }> | undefined;
+    }>;
+    contexts: ReturnType<typeof createOwnerHostCommandContexts>;
+    isCurrent(): boolean;
+    assertControl(caller: OwnerCaller): void;
+    onIndeterminate(error: unknown): void;
+  }>,
+) {
+  const {
+    registry,
+    schema,
+    maxActive,
+    isCurrent,
+    assertControl,
+    onIndeterminate,
+  } = options;
+  const configuration = options.configuration;
+  const selects = configuration.selects;
+  const policy = { ...configuration.policy };
+  const createCapabilities = configuration.createCapabilities;
+  const maxPendingCalls = configuration.maxPendingCalls;
+  const controlCaller = copy(options.controlCaller);
+  const p = controlCaller.principal;
+  if (p.kind !== "owner-control") refuse();
+  const { ownerId, epoch, holderId } = p;
+  const boundary = options.boundary;
+  const execute = boundary.execute.bind(boundary);
+  const executeInput = boundary.executeInput.bind(boundary);
+  const project = boundary.project.bind(boundary);
+  const tables = createCoreTableNames(schema);
+  const assignmentTable = `${quoteEventIdentifier(schema)}."owner_assignments"`;
+  const authorizeAlarmContext = options.contexts.isCurrent;
+  const controller = createOwnerLocalPlacementController({
+    controlCaller,
+    boundary: { execute },
+    isCurrent,
+    capacity: options.capacity,
+    maxEntries: configuration.maxEntries,
+    authorizeAlarmContext,
+  });
+  const assignments = createOwnerAssignmentControl({
+    ownerId,
+    schema,
+    maxActive,
+    authorizeControl: (_tx, caller) => assertControl(caller),
+    isCurrentStarted: () => false,
+    resolveCurrentLocal: controller.resolveCurrentLocal,
+    hasAction: selects,
+  });
+  async function grants(
+    tx: SqlExecutor,
+    binding: Binding,
+    phase: "start" | "current",
+    time: string,
+  ) {
+    const returned = policy.grants(
+      tx,
+      copy({ placement: "owner-local", phase, binding }),
+      time,
+    );
+    const value = returned instanceof Promise ? await returned : returned;
+    return value === undefined ? undefined : copy(value);
+  }
+  async function authorizeStart(
+    tx: SqlExecutor,
+    caller: OwnerCaller,
+    binding: Binding,
+    time: string,
+  ) {
+    assertControl(caller);
+    if (
+      !selects(binding.actionId) ||
+      !controller.authorizeStart(tx, caller, binding, time)
+    ) return false;
+    const permission = await grants(tx, binding, "start", time);
+    assertControl(caller);
+    return permission?.ctx === true &&
+      controller.authorizeStart(tx, caller, binding, time);
+  }
+  async function resolve(
+    tx: SqlExecutor,
+    caller: OwnerCaller,
+    time: string,
+  ): Promise<OwnerLocalExecutionAssignment | undefined> {
+    const binding = await assignments.resolveLocal(tx, caller);
+    if (!binding || binding.kind !== "action" || !selects(binding.actionId)) {
+      return undefined;
+    }
+    const permission = await grants(tx, binding, "current", time);
+    const again = await assignments.resolveLocal(tx, caller);
+    if (!permission || !again || !exact(binding, again)) return undefined;
+    const source = (await tx.query<{
+      id: string;
+      namespace: string;
+      metadata: Record<string, OwnerJson>;
+      correlation_id: string;
+      settlement_scope_id: string;
+      action_scope_id: string | null;
+      type: string;
+      deduplication_id: string;
+      consumer_id: string;
+    }>(
+      `SELECT e.id,e.namespace,e.metadata,e.correlation_id,e.type,e.deduplication_id,d.consumer_id,d.settlement_scope_id,d.action_scope_id FROM ${tables.events} e JOIN ${tables.event_deliveries} d ON d.event_id=e.id WHERE e.id=$1 AND e.owner_id=$2 AND d.id=$3`,
+      [binding.sourceEventId, ownerId, binding.deliveryId],
+    )).rows[0];
+    const privateBinding = controller.resolveCurrentLocal(caller);
+    if (
+      !source || !privateBinding || !exact(binding, privateBinding) ||
+      source.namespace !== binding.namespace ||
+      source.type !== "copilotz.owner.action.requested" ||
+      source.deduplication_id !== binding.actionRunId ||
+      source.consumer_id !== `registered:${binding.actionId}` ||
+      source.metadata.actionId !== binding.actionId ||
+      source.metadata.actionRunId !== binding.actionRunId
+    ) return undefined;
+    const rootKey = source.metadata.rootKey ?? binding.actionRunId;
+    text(rootKey);
+    const parentActionRunId = source.metadata.parentActionRunId;
+    if (parentActionRunId !== undefined) text(parentActionRunId);
+    const metadata = copy(source.metadata.actionMetadata);
+    if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+      refuse();
+    }
+    return {
+      ...binding,
+      ctxGranted: permission.ctx === true,
+      settlementGranted: permission.settlement === true,
+      invocation: {
+        actionRunId: binding.actionRunId,
+        rootKey,
+        operationKey: binding.actionRunId,
+        ...(parentActionRunId ? { parentActionRunId } : {}),
+        metadata: metadata as Readonly<Record<string, OwnerJson>>,
+        identity: {
+          causationId: source.id,
+          correlationId: source.correlation_id,
+          settlementScopeId: source.settlement_scope_id,
+          ...(source.action_scope_id
+            ? { actionScopeId: source.action_scope_id }
+            : {}),
+        },
+      },
+    };
+  }
+  return {
+    selects,
+    stop: controller.stop,
+    resolve,
+    execution: {
+      authorizeStart,
+      reserveLocal: assignments.reserveLocal,
+      retireLocal: assignments.retireLocal,
+    },
+    input: (
+      tx: SqlExecutor,
+      assignment: OwnerLocalExecutionAssignment,
+      value: OwnerJson,
+      time: string,
+    ) => policy.input(tx, copy(assignment), copy(value), time),
+    async collections(
+      tx: SqlExecutor,
+      assignment: OwnerLocalExecutionAssignment,
+      intent: OwnerCollectionIntent,
+      time: string,
+    ) {
+      const returned = policy.collections(
+        tx,
+        copy(assignment),
+        copy(intent),
+        time,
+      );
+      return copy(returned instanceof Promise ? await returned : returned);
+    },
+    async run(scheduled: OwnerScheduledAssignment): Promise<void> {
+      if ("kind" in scheduled || !selects(scheduled.actionId)) {
+        refuse("Local Action was not selected.");
+      }
+      const binding: Binding = {
+        placement: "owner-local",
+        kind: "action",
+        ownerId,
+        epoch,
+        holderId,
+        namespace: scheduled.namespace,
+        sourceEventId: scheduled.sourceEventId,
+        deliveryId: scheduled.deliveryId,
+        actionId: scheduled.actionId,
+        actionRunId: scheduled.executionId,
+        attemptId: crypto.randomUUID(),
+      };
+      const entry = controller.reserve(
+        binding,
+        ownerLocalActionStartKey(binding),
+      );
+      const port = createOwnerLocalActionPort({
+        boundary: {
+          execute: (caller, command, callOptions) =>
+            command.kind === "owner.local-start"
+              ? entry.executeStart(caller, command, callOptions)
+              : execute(caller, command, callOptions),
+          executeInput,
+          project,
+        },
+        reference: entry.reference,
+        controlCaller: entry.controlCaller,
+        localCaller: entry.localCaller,
+        isCurrent: entry.isCurrent,
+        onStarted: entry.onStarted,
+        onTerminal: entry.onTerminal,
+        maxPendingCalls,
+      });
+      const driver = createRegisteredLocalActionExecution({
+        registry,
+        reference: entry.reference,
+        owner: port,
+        createCapabilities,
+        isCurrent: entry.isCurrent,
+        onIndeterminate(error) {
+          entry.revoke(error);
+          onIndeterminate(error);
+        },
+      });
+      entry.attachDriver(driver);
+      await driver.run();
+    },
+    /** All evidence is loaded under this exact live owner command transaction. */
+    async classifyNullLease(
+      context: OwnerCommandContext,
+      deliveryId: string,
+    ): Promise<"pending-start" | "running" | undefined> {
+      if (!authorizeAlarmContext(context)) return undefined;
+      const rows = (await context.tx.query(
+        `SELECT a.owner,a.epoch,a.assignment_key,a.delivery_id,a.retired,
+          CASE WHEN octet_length(a.binding::text)<=${OWNER_ASSIGNMENT_BINDING_MAX_BYTES} THEN a.binding ELSE '{}'::jsonb END AS binding,
+          d.id,d.event_id,d.consumer_id,d.status,d.attempts,d.lease_owner,d.lease_expires_at,
+          e.owner_id AS source_owner,e.namespace,e.type,e.deduplication_id,
+          CASE WHEN jsonb_typeof(e.metadata->'actionId')='string' AND char_length(e.metadata->>'actionId')<=1024 THEN e.metadata->>'actionId' END AS action_id,
+          CASE WHEN jsonb_typeof(e.metadata->'actionRunId')='string' AND char_length(e.metadata->>'actionRunId')<=1024 THEN e.metadata->>'actionRunId' END AS action_run_id
+         FROM ${assignmentTable} a JOIN ${tables.event_deliveries} d ON d.id=a.delivery_id JOIN ${tables.events} e ON e.id=d.event_id
+         WHERE a.owner=$1 AND a.delivery_id=$2 AND a.retired=FALSE FOR SHARE OF a`,
+        [ownerId, deliveryId],
+      )).rows;
+      if (rows.length !== 1 || !authorizeAlarmContext(context)) {
+        return undefined;
+      }
+      const row = rows[0];
+      const stored = parseOwnerStoredAssignment(row);
+      const binding = stored.binding;
+      if (
+        binding.placement !== "owner-local" || binding.kind !== "action" ||
+        row.source_owner !== ownerId ||
+        row.type !== "copilotz.owner.action.requested" ||
+        row.deduplication_id !== binding.actionRunId
+      ) return undefined;
+      const evidence = {
+        assignment: {
+          owner: stored.owner,
+          epoch: stored.epoch,
+          binding,
+          retired: stored.retired,
+        },
+        delivery: {
+          id: row.id,
+          eventId: row.event_id,
+          consumerId: row.consumer_id,
+          status: row.status,
+          attempts: row.attempts,
+          leaseOwner: row.lease_owner,
+          leaseExpiresAt: row.lease_expires_at,
+        },
+        source: {
+          id: row.event_id,
+          namespace: row.namespace,
+          actionId: row.action_id,
+          actionRunId: row.action_run_id,
+        },
+      } as OwnerLocalNullLeaseEvidence;
+      return controller.classifyNullLease(context, evidence);
+    },
+  };
+}

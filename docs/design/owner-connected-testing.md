@@ -45,8 +45,12 @@ The runner:
 3. Generates a temporary configuration outside both checkouts. Copilotz's
    imports retain their existing published versions. Oxian's own imports,
    including its exact `ws` pin, apply only within the selected sibling source
-   scope. No global package override or repository-local link is created
-4. Runs `runtime/owner/connected.integration.test.ts` with type checking, over
+   scope. The actual owner-worker wrapper alone resolves its worker dependency
+   to the selected public worker entry; legacy runtime workers retain their
+   published dependency. No global package override or repository-local link is
+   created
+4. Runs `runtime/owner/connected.integration.test.ts` and
+   `runtime/owner/execution.connected.test.ts` with type checking, over
    in-process and Node WebSocket transports, then removes its temporary config
    on success, test failure, startup error or handled interruption. Child exit
    failures and termination remain nonzero. An uncatchable process kill can
@@ -54,7 +58,7 @@ The runner:
 
 Missing or invalid source is an error for this explicit command. It never turns
 into a skipped success or falls back to another checkout. Ordinary repository
-test runs still skip these two opt-in cases when no source is selected. Run the
+test runs still skip these opt-in cases when no source is selected. Run the
 script, rather than setting the source variable on an otherwise unconfigured
 test invocation, so the sibling dependency scope is present.
 
@@ -95,3 +99,13 @@ The npm build/pack/link/reset workflow, Copilotz npm migration, and remaining
 test-layout debt retain their own acceptance gates. Do not replace a published
 dependency pin with a local path in a committed manifest to make this fixture
 run.
+
+The registered execution fixture additionally exercises the database-free worker
+wrapper and real owner Action lifecycle tables over both transports. It gates
+readiness, claim and completion; rejects a stale authenticated parent; permits
+only restricted completion after ctx revocation; and refuses automatic execution
+after an ambiguous claim reply. Each assignment has a separate immutable parent
+call port. The whole plugin registry is loaded, and its Action uses Resource,
+Adapter and owner-backed Collection capabilities. Its postcommit Processor
+observer still uses the legacy executor. This is not yet the public factory,
+owner-only Processor execution, HTTP ingress, or long-running lease renewal.

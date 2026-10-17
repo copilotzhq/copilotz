@@ -72,6 +72,10 @@ async function fixture(
       join(root, "runtime/owner/connected.integration.test.ts"),
       "// Fixture setup only.",
     );
+    await put(
+      join(root, "runtime/owner/execution.connected.test.ts"),
+      "// Execution fixture setup only.",
+    );
     await put(join(source, "deno.json"), {
       name: "@oxian/oxian-js",
       exports,
@@ -145,6 +149,16 @@ test("setup resolves relative paths and scoped sibling imports without changing 
       pathToFileURL(root + sep).href,
     );
     assert.equal(Object.hasOwn(plan.config.imports, "ws"), false);
+    assert.equal(plan.testFiles.length, 2);
+    assert.equal(
+      plan.config
+        .scopes[
+          pathToFileURL(join(root, "runtime/application/owner-worker.ts")).href
+        ][
+          pathToFileURL(join(root, "dependencies/oxian-worker.ts")).href
+        ],
+      new URL("src/worker/index.ts", sourceScope).href,
+    );
     assert.deepEqual(plan.config.scopes[sourceScope], {
       ws: "npm:ws@8.22.0",
       "@std/path": "jsr:@std/path@1.1.1",
@@ -299,6 +313,7 @@ test("runner selects exact source, uses argument arrays and cleans config after 
         assert.deepEqual(args.slice(3), [
           "--allow-all",
           join(root, "runtime/owner/connected.integration.test.ts"),
+          join(root, "runtime/owner/execution.connected.test.ts"),
         ]);
         configPath = args[2];
         const config = JSON.parse(await readFile(configPath, "utf8"));

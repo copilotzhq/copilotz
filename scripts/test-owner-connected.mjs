@@ -179,7 +179,7 @@ export async function resolveOxianSource(source, cwd = process.cwd()) {
 export async function prepareOwnerConnectedTest(
   { source, root = repositoryRoot, cwd = process.cwd() },
 ) {
-  const { sourceRoot, sourceManifest, siblingImports } =
+  const { sourceRoot, sourceManifest, siblingImports, entrypoints } =
     await resolveOxianSource(source, cwd);
   root = await realpath(root);
   const manifest = await json(join(root, "deno.json"), "Copilotz manifest");
@@ -187,7 +187,14 @@ export async function prepareOwnerConnectedTest(
     throw new Error("Runner root must be the @copilotz/copilotz checkout.");
   }
   const testFile = join(root, "runtime/owner/connected.integration.test.ts");
-  if (!(await stat(testFile)).isFile()) {
+  const executionTestFile = join(
+    root,
+    "runtime/owner/execution.connected.test.ts",
+  );
+  if (
+    !(await stat(testFile)).isFile() ||
+    !(await stat(executionTestFile)).isFile()
+  ) {
     throw new Error("Connected owner fixture is missing.");
   }
   const sourceScope = fileBase(sourceRoot);
@@ -209,6 +216,10 @@ export async function prepareOwnerConnectedTest(
       ...scopes(manifest.scopes, root, "Copilotz scopes"),
       ...siblingScopes,
       [sourceScope]: { ...siblingImports, ...siblingScopes[sourceScope] },
+      [pathToFileURL(join(root, "runtime/application/owner-worker.ts")).href]: {
+        [pathToFileURL(join(root, "dependencies/oxian-worker.ts")).href]:
+          entrypoints["./worker"],
+      },
     },
     compilerOptions: manifest.compilerOptions,
     unstable: manifest.unstable,
@@ -216,7 +227,13 @@ export async function prepareOwnerConnectedTest(
     minimumDependencyAge: manifest.minimumDependencyAge,
     lock: false,
   };
-  return { root, sourceRoot, testFile, config };
+  return {
+    root,
+    sourceRoot,
+    testFile,
+    testFiles: [testFile, executionTestFile],
+    config,
+  };
 }
 
 /** Read-only provenance; a source archive remains usable when Git metadata is absent. */
@@ -318,7 +335,7 @@ export async function runOwnerConnectedTests(
       "--config",
       configPath,
       "--allow-all",
-      plan.testFile,
+      ...plan.testFiles,
     ], {
       cwd: plan.root,
       env: { ...process.env, COPILOTZ_OXIAN_SOURCE_ROOT: plan.sourceRoot },

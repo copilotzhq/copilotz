@@ -8,6 +8,9 @@ const root = new URL("../../", import.meta.url);
 test("registered Action worker runtime closure excludes database and body-store implementations", async () => {
   const allowed = new Set([
     "runtime/execution/registered-worker.ts",
+    "runtime/application/owner-worker.ts",
+    "dependencies/oxian-worker.ts",
+    "runtime/owner/connection.ts",
     "runtime/execution/owner-port.ts",
     "runtime/actions/execution-context.ts",
     "runtime/actions/secret.ts",
@@ -29,6 +32,7 @@ test("registered Action worker runtime closure excludes database and body-store 
   ]);
   const visited = new Set<string>();
   const pending = [
+    new URL("runtime/application/owner-worker.ts", root),
     new URL("runtime/execution/registered-worker.ts", root),
     new URL("runtime/execution/owner-port.ts", root),
   ];
@@ -49,14 +53,13 @@ test("registered Action worker runtime closure excludes database and body-store 
     );
     const add = (specifier: string) => {
       if (!specifier.startsWith(".")) {
-        assert.equal(
-          path,
-          "dependencies/ajv.ts",
-          "Only the central schema-validator dependency seam may import an external runtime",
-        );
+        const dependencies: Record<string, readonly string[]> = {
+          "dependencies/ajv.ts": ["ajv", "ajv-formats"],
+          "dependencies/oxian-worker.ts": ["@oxian/oxian-js/worker"],
+        };
         assert.ok(
-          ["ajv", "ajv-formats"].includes(specifier),
-          `Unexpected external worker implementation: ${specifier}`,
+          dependencies[path]?.includes(specifier),
+          `Unexpected external worker implementation: ${path} -> ${specifier}`,
         );
         return;
       }

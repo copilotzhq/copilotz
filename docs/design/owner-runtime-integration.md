@@ -309,3 +309,19 @@ competing terminal outcomes. The Processor in this fixture still uses the legacy
 executor. Owner-only general Processor execution, lease renewal for long
 Actions, complete readiness/recovery, and the common public factory remain
 separate gates.
+
+### Connected registered execution checkpoint
+
+The private database-free owner-worker wrapper now composes the actual
+registered Action lifecycle adapter over in-process and WebSocket transports. An
+inert session-scoped readiness probe gates user execution; each WorkContext
+receives its own immutable parent-bound owner port. Stale probes cannot stop a
+replacement session, and a failed current probe stops that worker. The
+selected-sibling runner covers readiness/claim/terminal output gates, current
+SQL parent binding, restricted completion after ctx revocation, and ambiguous
+claim refusal without rerunning user code. Twelve actual transport cases pass,
+with separate lifecycle, source-import-closure and runner setup checks.
+
+This remains internal composition. Its Processor observer uses the legacy
+executor. Public common factory/facade, owner-only Processors, general lease
+renewal, full readiness/recovery and HTTP ingress still have separate gates.
